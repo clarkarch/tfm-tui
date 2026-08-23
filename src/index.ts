@@ -188,17 +188,7 @@ async function listDir(dir: string): Promise<Entry[]> {
     .sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name));
 }
 
-const makeFileRow = (e: Entry) =>
-  Box(
-    { width: "100%", height: 1 },
-    Text({
-      content: ` ${e.isDir ? nerd.folder : nerd.file} ${e.name}`,
-      fg: e.isDir ? colors.accent : colors.sidebarFg,
-    }),
-  );
-
 const cwd = process.cwd();
-const fileRows = (await listDir(cwd)).map(makeFileRow);
 
 // --- Layout ---
 const container = Box(
@@ -207,7 +197,7 @@ const container = Box(
   Box(
     { flexGrow: 1, height: "100%", backgroundColor: colors.bg, flexDirection: "column" },
     makeToolbar(cwd),
-    Box({ flexGrow: 1, width: "100%", flexDirection: "column" }, ...fileRows),
+    Box({ id: "tfm-files", flexGrow: 1, width: "100%", flexDirection: "column" }),
   ),
 );
 
@@ -215,11 +205,38 @@ const renderer = await createCliRenderer({ exitOnCtrlC: true });
 activeRenderer = renderer;
 renderer.root.add(container);
 
+// --- Runtime SVG pipeline: tint + rasterize at exact cell pixels, cached ---
+const iconCache = new Map<string, Uint8Array>();
+
+const iconPng = (name: string, fg: string, bg: string): Uint8Array => {
+  const res = renderer.resolution;
+  const termW = renderer.terminalWidth || 1;
+  const termH = renderer.terminalHeight || 1;
+  const cellW = res ? res.width / termW : 10;
+  const cellH = res ? res.height / termH : 20;
+  const pxH = Math.round(cellH * 2);            // icons are 2 cells tall
+  const pxW = Math.round(pxH * (cellW / cellH)); // square in real pixels
+  const key = `${name}:${fg}:${bg}:${pxW}x${pxH}`;
+  const hit = iconCache.get(key);
+  if (hit) return hit;
+
+  const svgPath = `${import.meta.dir}/../assets/icons/${name}.svg`;
+  const text = require("node:fs").readFileSync(svgPath, "utf8");
+  const tinted = text.replace(/#[0-9a-fA-F]{6}/g, fg);
+  const out = require("child_process").spawnSync(
+    ["rsvg-convert", "--background-color", bg, "-w", String(pxW), "-h", String(pxH)],
+    { input: tinted },
+  );
+  const bytes = new Uint8Array(out.stdout);
+  iconCache.set(key, bytes);
+  return bytes;
+};
+
 try {
   const btn: any = renderer.root.findDescendantById("tfm-search-btn");
   const img = new ImageRenderable(renderer, {
     id: "tfm-search-img",
-    source: `${import.meta.dir}/../assets/icons/search-32-bg.png`,
+    source: iconPng("search", colors.sidebarFg, colors.bg),
     width: 2,
     height: 1,
     fit: "fit",
@@ -237,6 +254,46 @@ try {
     })
     .catch(() => {});
 } catch {}
+
+const TILE_W = 20;
+const TILE_H = 4;
+
+const buildGrid = async () => {
+  const pane: any = renderer.root.findDescendantById("tfm-files");
+  if (!pane) return;
+  const cols = Math.max(1, Math.floor((renderer.terminalWidth - sw - 2) / TILE_W));
+  const entries = await listDir(cwd);
+
+  for (let i = 0; i < entries.length; i += cols) {
+    const row = Box({ height: TILE_H, flexDirection: "row" });
+    for (const e of entries.slice(i, i + cols)) {
+      const tile = Box({
+        width: TILE_W,
+        height: TILE_H,
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+      });
+
+      const img = new ImageRenderable(renderer, {
+        source: iconPng(e.isDir ? "folder" : "file", colors.sidebarFg, colors.bg),
+        fit: "fit",
+        protocol: "auto",
+      });
+      const aspect = (img as any).cellAspectRatio ?? 2;
+      img.width = Math.max(1, Math.round(aspect * 2));
+      img.height = 2;
+      tile.add(img);
+
+      const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
+      tile.add(Text({ content: label, fg: colors.sidebarFg }));
+
+      row.add(tile);
+    }
+    pane.add(row);
+  }
+};
+buildGrid();
 
 renderer.keyInput.on("keypress", (e) => {
   const el: any = renderer.root.findDescendantById("tfm-search");
