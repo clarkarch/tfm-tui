@@ -284,7 +284,7 @@ const buildGrid = async () => {
         height: TILE_H,
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        justifyContent: "flex-start",
       });
 
       const aspect = cellH > 0 ? cellH / cellW : 2;
