@@ -223,8 +223,9 @@ const iconPng = (name: string, fg: string, bg: string): Uint8Array => {
   const svgPath = `${import.meta.dir}/../assets/icons/${name}.svg`;
   const text = require("node:fs").readFileSync(svgPath, "utf8");
   const tinted = text.replace(/#[0-9a-fA-F]{6}/g, fg);
-  const out = require("child_process").spawnSync(
-    ["rsvg-convert", "--background-color", bg, "-w", String(pxW), "-h", String(pxH)],
+  const out = require("node:child_process").spawnSync(
+    "rsvg-convert",
+    ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)],
     { input: tinted },
   );
   const bytes = new Uint8Array(out.stdout);
