@@ -215,7 +215,7 @@ const iconPng = (name: string, fg: string, bg: string): Uint8Array => {
   const cellW = res ? res.width / termW : 10;
   const cellH = res ? res.height / termH : 20;
   const pxH = Math.round(cellH * 2);            // icons are 2 cells tall
-  const pxW = Math.round(pxH * (cellW / cellH)); // square in real pixels
+  const pxW = pxH;                              // square source raster
   const key = `${name}:${fg}:${bg}:${pxW}x${pxH}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
