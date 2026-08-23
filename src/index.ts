@@ -208,14 +208,14 @@ renderer.root.add(container);
 // --- Runtime SVG pipeline: tint + rasterize at exact cell pixels, cached ---
 const iconCache = new Map<string, Uint8Array>();
 
-const iconPng = (name: string, fg: string, bg: string): Uint8Array => {
+const iconPng = (name: string, fg: string, bg: string, pxW?: number, pxH?: number): Uint8Array => {
   const res = renderer.resolution;
   const termW = renderer.terminalWidth || 1;
   const termH = renderer.terminalHeight || 1;
   const cellW = res ? res.width / termW : 10;
   const cellH = res ? res.height / termH : 20;
-  const pxH = Math.round(cellH * 2);            // icons are 2 cells tall
-  const pxW = pxH;                              // square source raster
+  pxH ??= Math.round(cellH * 2);
+  pxW ??= pxH;
   const key = `${name}:${fg}:${bg}:${pxW}x${pxH}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
@@ -257,11 +257,22 @@ try {
 } catch {}
 
 const TILE_W = 20;
-const TILE_H = 4;
+const TILE_H = 5;
+const ICON_CELLS_H = 3;
+
+const waitForResolution = async () => {
+  for (let i = 0; i < 40 && !renderer.resolution; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
 
 const buildGrid = async () => {
   const pane: any = renderer.root.findDescendantById("tfm-files");
   if (!pane) return;
+  await waitForResolution();
+  const res: any = renderer.resolution;
+  const cellW = res ? res.width / renderer.terminalWidth : 10;
+  const cellH = res ? res.height / renderer.terminalHeight : 20;
   const cols = Math.max(1, Math.floor((renderer.terminalWidth - sw - 2) / TILE_W));
   const entries = await listDir(cwd);
 
@@ -276,15 +287,29 @@ const buildGrid = async () => {
         justifyContent: "center",
       });
 
+      const aspect = cellH > 0 ? cellH / cellW : 2;
+      const slotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
       const img = new ImageRenderable(renderer, {
-        source: iconPng(e.isDir ? "folder" : "file", colors.sidebarFg, colors.bg),
+        source: iconPng(
+          e.isDir ? "folder" : "file",
+          colors.sidebarFg,
+          colors.bg,
+          Math.round(slotW * cellW),
+          Math.round(ICON_CELLS_H * cellH),
+        ),
         fit: "fit",
         protocol: "auto",
       });
-      const aspect = (img as any).cellAspectRatio ?? 2;
-      img.width = Math.max(1, Math.round(aspect * 2));
-      img.height = 2;
-      tile.add(img);
+      const iconSlot = Box({
+        width: slotW,
+        height: ICON_CELLS_H,
+        flexDirection: "row",
+        justifyContent: "center",
+      });
+      img.width = slotW;
+      img.height = ICON_CELLS_H;
+      iconSlot.add(img);
+      tile.add(iconSlot);
 
       const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
       tile.add(Text({ content: label, fg: colors.sidebarFg }));
