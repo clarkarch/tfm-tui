@@ -1,0 +1,122 @@
+---
+title: Layout
+description: Size and position renderables in terminal cells with OpenTUI's Yoga options
+skill:
+  entry: true
+  intents: [layout, flexbox, yoga, positioning]
+---
+
+# Layout
+
+OpenTUI uses Yoga to compute a renderable tree on a grid of terminal cells. It supports a defined set of Flexbox-like properties, not all browser CSS.
+
+A horizontal size is a count of terminal columns. A vertical size is a count of terminal rows. These values are never character counts.
+
+```typescript
+import { BoxRenderable, TextRenderable, createCliRenderer } from "@opentui/core"
+
+const renderer = await createCliRenderer()
+
+const row = new BoxRenderable(renderer, {
+  width: "100%",
+  height: 5,
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 1,
+})
+
+row.add(new TextRenderable(renderer, { content: "Status" }))
+row.add(new TextRenderable(renderer, { content: "Ready", flexGrow: 1 }))
+renderer.root.add(row)
+```
+
+The same layout properties work across the built-in renderable classes.
+
+## Supported options
+
+`RenderableOptions` supplies the shared renderable layout values. `BoxOptions` adds the three gap values.
+
+| Group         | Options                                                                                         | Accepted values                                             | Default                                             |
+| ------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------- |
+| Position      | `position`                                                                                      | `"relative"` or `"absolute"`                                | `"relative"`                                        |
+| Edges         | `top`, `right`, `bottom`, `left`                                                                | number, `"auto"`, or percentage                             | unset                                               |
+| Dimensions    | `width`, `height`                                                                               | number, `"auto"`, or percentage                             | `"auto"`                                            |
+| Limits        | `minWidth`, `minHeight`, `maxWidth`, `maxHeight`                                                | number or percentage                                        | unset                                               |
+| Margin        | `margin`, `marginX`, `marginY`, `marginTop`, `marginRight`, `marginBottom`, `marginLeft`        | number, `"auto"`, or percentage                             | `0`                                                 |
+| Padding       | `padding`, `paddingX`, `paddingY`, `paddingTop`, `paddingRight`, `paddingBottom`, `paddingLeft` | number or percentage                                        | `0`                                                 |
+| Flex size     | `flexGrow`                                                                                      | number                                                      | `0`                                                 |
+| Flex size     | `flexShrink`                                                                                    | number                                                      | `0` for an initial numeric dimension, otherwise `1` |
+| Flex size     | `flexBasis`                                                                                     | number or `"auto"`                                          | `"auto"`                                            |
+| Flow          | `flexDirection`                                                                                 | `"column"`, `"column-reverse"`, `"row"`, or `"row-reverse"` | `"column"`                                          |
+| Flow          | `flexWrap`                                                                                      | `"no-wrap"`, `"wrap"`, or `"wrap-reverse"`                  | `"no-wrap"`                                         |
+| Alignment     | `alignItems`                                                                                    | Yoga align value                                            | `"stretch"`                                         |
+| Alignment     | `alignSelf`                                                                                     | Yoga align value                                            | `"auto"`                                            |
+| Alignment     | `justifyContent`                                                                                | start, end, center, or space distribution                   | `"flex-start"`                                      |
+| Gaps on `Box` | `gap`, `rowGap`, `columnGap`                                                                    | number or percentage                                        | `0`                                                 |
+| Clipping      | `overflow`                                                                                      | `"visible"`, `"hidden"`, or `"scroll"`                      | `"visible"`                                         |
+
+Yoga align values are `"auto"`, `"flex-start"`, `"center"`, `"flex-end"`, `"stretch"`, `"baseline"`, `"space-between"`, `"space-around"`, and `"space-evenly"`.
+
+`justifyContent` accepts the same start, center, end, and three space-distribution values. It does not accept `"auto"`, `"stretch"`, or `"baseline"`.
+
+`PositionTypeString` also includes `"static"`, but renderable option validation does not implement it. Use `"relative"` or `"absolute"`.
+
+The public TypeScript interface includes `"auto"` for min and max dimensions. The current runtime ignores that value for those four options.
+
+## Automatic and intrinsic size
+
+An `"auto"` dimension lets Yoga derive size from children or a renderable's measure function. Text and editor renderables supply native measure targets.
+
+Yoga calls a measure target with exact, at-most, or unconstrained dimensions. Text measurement uses display-cell width and the active wrap mode.
+
+`wrapMode: "word"` and `"char"` can increase measured height under a width constraint. `wrapMode: "none"` keeps the intrinsic line width.
+
+A percentage dimension resolves against the parent's corresponding size. If that parent lacks a definite size, the result can differ from a browser layout assumption.
+
+Min and max dimensions constrain the result. Padding and borders consume space inside the computed box.
+
+## Relative and absolute flow
+
+Relative children take part in flex layout. Their edge values offset the Yoga position.
+
+Absolute children do not consume space in normal flex flow. Their edges position them against the containing layout box.
+
+Absolute text also uses its intrinsic measure without the relative child's at-most clamp. Set a width when you need predictable wrapping.
+
+Use absolute positioning for overlays and fixed geometry. Use flex flow for ordinary page structure.
+
+## Cell rounding
+
+Yoga uses a point scale factor of `1`. It rounds computed edges to whole terminal cells while preserving the layout total.
+
+Percentage and flex calculations can produce fractions before this step. Adjacent children can therefore receive different rounded widths.
+
+Renderable getters expose computed integer geometry after a layout pass. OpenTUI clamps exposed `width` and `height` to at least one cell.
+
+## Resize behavior
+
+A terminal resize keeps the same renderable instances. The renderer resizes its root and runs Yoga again with the new column and row counts.
+
+Computed `x`, `y`, `width`, and `height` can all change. Buffered renderables resize their frame buffers before `onResize(width, height)` runs.
+
+`FrameBufferRenderable` resizes its public `frameBuffer` in its `onResize()` override, then calls the base hook.
+
+The base `onResize()` calls `onSizeChange` and emits the renderable's `"resize"` event. The layout resize path then requests another render.
+
+Renderer `resize` listeners receive the render-region width and height.
+
+Custom streams must call `renderer.resize(columns, rows)`. Local `process.stdout` sessions use `SIGWINCH` automatically.
+
+## Common failures
+
+- A numeric initial `width` or `height` sets the default `flexShrink` to `0`. Set `flexShrink` when the node must contract.
+- An absolute child does not increase its parent's automatic size.
+- A percentage needs a useful parent size.
+- `overflow: "scroll"` clips like a Yoga overflow mode, but it does not add scroll state. Use [ScrollBox](/docs/components/scrollbox).
+- Gap options belong to [Box](/docs/components/box), not every renderable class.
+- `visible = false` removes a renderable from layout.
+- Text can contain fewer graphemes than cells or more UTF-16 units than cells. See [Text and terminal cells](/docs/core-concepts/text-and-cells).
+
+## Next
+
+Read [Renderables](/docs/core-concepts/renderables) for tree mutation. Use the advanced [Yoga API](/docs/reference/yoga) only when the shared options do not cover your case.

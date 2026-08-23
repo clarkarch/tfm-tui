@@ -1,0 +1,95 @@
+---
+title: Renderables
+description: Create, mutate, reparent, and destroy imperative renderable tree nodes
+---
+
+# Renderables
+
+A renderable is an imperative node in OpenTUI's retained tree. It stores layout, visual state, children, event handlers, and native resources.
+
+Create a renderable with a render context. A `CliRenderer` implements that context.
+
+```typescript
+import { BoxRenderable, TextRenderable, createCliRenderer } from "@opentui/core"
+
+const renderer = await createCliRenderer()
+
+const panel = new BoxRenderable(renderer, {
+  id: "panel",
+  width: 30,
+  padding: 1,
+  border: true,
+})
+const status = new TextRenderable(renderer, {
+  id: "status",
+  content: "Waiting",
+})
+
+panel.add(status)
+renderer.root.add(panel)
+
+status.content = "Ready"
+```
+
+Setters such as `content`, `width`, `visible`, and `zIndex` request another render when their state changes.
+
+## Tree membership
+
+Each renderable has at most one parent. `add()` reparents an existing node when necessary.
+
+```typescript
+const first = new BoxRenderable(renderer, { id: "first" })
+const second = new BoxRenderable(renderer, { id: "second" })
+const child = new TextRenderable(renderer, { id: "message", content: "Moved" })
+
+first.add(child)
+second.add(child)
+
+console.log(child.parent === second) // true
+console.log(first.getChildrenCount()) // 0
+```
+
+`add(child, index)` inserts at an index. `insertBefore(child, anchor)` inserts before a direct child. Both methods return the inserted index, or `-1` when they cannot add the value.
+
+Use these methods to inspect the tree:
+
+- `getChildren()` returns a new array of direct children.
+- `getChildrenCount()` returns the direct-child count.
+- `getRenderable(id)` finds a direct child.
+- `findDescendantById(id)` searches descendants recursively.
+
+`remove(child)` only detaches a direct child. It does not destroy that child, so you can add the child elsewhere.
+
+Reparenting calls `remove()` on the old parent. As a result, `onRemove()` runs for a temporary detach and for a reparent.
+
+Do not release final owned resources in `onRemove()`. Release them in `destroySelf()`, which runs only during destruction. See [Lifecycle and cleanup](/docs/core-concepts/lifecycle).
+
+## Layout properties
+
+Renderables participate in the [Yoga-based layout model](/docs/core-concepts/layout). Their computed `x`, `y`, `width`, and `height` can change after layout or terminal resize.
+
+`visible = false` sets the Yoga node to `display: none`. The node does not receive layout or render work while hidden. Hiding a focused node also blurs it.
+
+`zIndex` changes sibling render and hit-test order without changing layout order. `translateX` and `translateY` move drawing and hit bounds without changing the Yoga result.
+
+`opacity` applies to the node and its descendants. `overflow: "hidden"` or `"scroll"` clips rendering and mouse hit bounds to the node.
+
+Shared mouse, focus, and selection behavior belongs to [Interaction, focus, and selection](/docs/core-concepts/interaction). Keyboard routing belongs to [Keyboard input](/docs/core-concepts/keyboard).
+
+## Destruction
+
+`destroy()` is idempotent. It detaches the node, releases its frame buffer and Yoga node, removes listeners, and calls `destroySelf()`.
+
+`destroy()` detaches direct children but does not destroy them. Use `destroyRecursively()` when this node owns the complete subtree.
+
+```typescript
+panel.destroyRecursively()
+```
+
+The renderer destroys its root recursively during renderer cleanup. Do not add a destroyed renderable to another parent.
+
+Subclass render hooks, measurement, buffering, and resource examples belong to [Custom renderables](/docs/extend/custom-renderables).
+
+## Next
+
+Use the [components overview](/docs/components) to choose a built-in renderable.
