@@ -1,4 +1,4 @@
-# test-ui
+# tfm-tui
 
 To install dependencies:
 

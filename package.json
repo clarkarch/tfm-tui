@@ -1,5 +1,5 @@
 {
-  "name": "test-ui",
+  "name": "tfm-tui",
   "module": "src/index.tsx",
   "type": "module",
   "private": true,
