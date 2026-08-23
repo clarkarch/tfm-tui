@@ -24,6 +24,7 @@ const nerd = {
   usb: "\u{F0553}",        // nf-md-usb
   eject: "\u{F01EA}",      // nf-md-eject
   search: "\u{F002}",      // fa-search (heaviest stroke of the plain magnifiers)
+  file: "\u{F0214}",       // nf-md-file
 };
 
 const sections = [
@@ -175,14 +176,38 @@ const makeSearch = () => {
   return wrap;
 };
 
+// --- Real directory listing ---
+import { readdir } from "node:fs/promises";
+
+type Entry = { name: string; isDir: boolean };
+
+async function listDir(dir: string): Promise<Entry[]> {
+  const dirents = await readdir(dir, { withFileTypes: true });
+  return dirents
+    .map((d) => ({ name: d.name, isDir: d.isDirectory() }))
+    .sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name));
+}
+
+const makeFileRow = (e: Entry) =>
+  Box(
+    { width: "100%", height: 1 },
+    Text({
+      content: ` ${e.isDir ? nerd.folder : nerd.file} ${e.name}`,
+      fg: e.isDir ? colors.accent : colors.sidebarFg,
+    }),
+  );
+
+const cwd = process.cwd();
+const fileRows = (await listDir(cwd)).map(makeFileRow);
+
 // --- Layout ---
 const container = Box(
   { width: "100%", height: "100%", flexDirection: "row" },
   Box({ width: sw, height: "100%", backgroundColor: colors.sidebarBg, flexDirection: "column" }, ...children),
   Box(
     { flexGrow: 1, height: "100%", backgroundColor: colors.bg, flexDirection: "column" },
-    makeToolbar(process.cwd()),
-    Box({ flexGrow: 1 }),
+    makeToolbar(cwd),
+    Box({ flexGrow: 1, width: "100%", flexDirection: "column" }, ...fileRows),
   ),
 );
 
