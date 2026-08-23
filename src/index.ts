@@ -1,16 +1,16 @@
 import { ASCIIFont, Box, ImageRenderable, Input, Text, createCliRenderer } from "@opentui/core";
 
-// --- Color palette (Catppuccin Mocha) ---
+// --- Color palette (Tokyo Night) ---
 const colors = {
-  bg: "#1e1e2e",
-  sidebarBg: "#181825",
-  sidebarFg: "#cdd6f4",
-  sidebarFgMuted: "#6c7086",
-  accent: "#89b4fa",
-  accentBg: "#313244",
-  border: "#45475a",
-  divider: "#313244",
-  white: "#cdd6f4",
+  bg: "#1a1b26",          // bg
+  sidebarBg: "#16161e",   // bg_dark
+  sidebarFg: "#c0caf5",   // fg
+  sidebarFgMuted: "#565f89", // comment
+  accent: "#7aa2f7",      // blue
+  accentBg: "#292e42",    // bg_highlight
+  border: "#292e42",      // bg_highlight
+  divider: "#292e42",
+  white: "#c0caf5",       // fg
 };
 
 // --- Nerd Font icons (Material Design, nf-md-* — verified against font cmap) ---
@@ -74,8 +74,6 @@ const makeTitle = () =>
     ASCIIFont({ text: "tfm", font: "tiny", color: colors.accent }),
     Text({ content: " terminal file manager", fg: colors.sidebarFgMuted }),
   );
-
-const makeSpacer = () => Box({ width: sw, height: 1 });
 
 const makeDivider = () =>
   Box(

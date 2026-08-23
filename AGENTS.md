@@ -22,10 +22,10 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 
 - SVG sources live in `assets/icons/*.svg` (single color, path-only, no `<text>`).
 - Never commit pre-rasterized PNGs as icons. Use `iconPng(name, fg, bg)` in `src/index.ts`: it tints hex colors to the theme, rasterizes via `rsvg-convert` at exact cell pixels (square output), flattens onto bg (kitty alpha is unreliable → causes tint), and caches by `name:fg:bg:WxH`.
-- Nerd font glyphs are the fallback. **Verify codepoints against the font cmap before using** — icon-set comments in old code were wrong. Check with python fontTools (`getBestCmap`) against `/usr/share/fonts/TTF/MesloLGLDZNerdFontMono-Regular.ttf`.
+- Nerd font glyphs are the fallback. **Verify codepoints against the font cmap before using** — icon-set comments in old code were wrong. Check with python fontTools (`getBestCmap`) against `/usr/share/fonts/TTF/MesloLGLDZ Nerd Font Mono (see fc-list)`.
 
 ## Conventions
 
-- Theme = the `colors` object (Catppuccin Mocha) in `src/index.ts`. All colors come from there.
+- Theme = the `colors` object (Tokyo Night) in `src/index.ts`. All colors come from there.
 - UI is one file (`src/index.ts`), built imperatively at module level; runtime mutation goes through ids + `findDescendantById`.
 - `.gitignore`d: `node_modules/`, `nautilus/`, `opentui/` (reference clones, not project code).
