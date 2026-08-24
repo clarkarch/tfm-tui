@@ -894,7 +894,7 @@ const renderMenuContent = () => {
     Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
   ));
 
-  const row = (icon: string | undefined, label: string, hint: string | undefined, active: boolean, onClick: () => void) =>
+  const row = (icon: string | undefined, label: string, hint: string | undefined, active: boolean, onClick: (ev?: any) => void) =>
     Box(
       {
         width: "100%",
@@ -917,24 +917,29 @@ const renderMenuContent = () => {
             active ? 1 : 0,
           ).el]
         : []),
-      Text({ content: ` ${label}`, fg: active ? colors.white : colors.sidebarFg }),
+      Text({ content: icon ? label : ` ${label}`, fg: active ? colors.white : colors.sidebarFg }),
       Box({ flexGrow: 1 }),
       ...(hint ? [Text({ content: hint + " ", fg: colors.sidebarFgMuted })] : []),
     );
+
+  const activateRow = (fn: () => void) => (ev: any) => {
+    try { ev.stopPropagation?.(); } catch {}
+    fn();
+  };
 
   if (menuView === "root") {
     const items: (MenuEntry & { icon?: string })[] = [
       { label: "Settings", icon: "cog", action: () => {} },
       { label: "Quit", icon: "power", hint: "ctrl+q", action: () => {} },
     ];
-    items.forEach((it, i) => panel.add(row(it.icon, it.label, it.hint, i === menuIdx, menuActivate)));
+    items.forEach((it, i) => panel.add(row(it.icon, it.label, it.hint, i === menuIdx, activateRow(menuActivate))));
   } else {
-    panel.add(row(state.showHidden ? "eye" : "eye-off", `hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, menuActivate));
+    panel.add(row(state.showHidden ? "eye" : "eye-off", `hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, activateRow(menuActivate)));
     panel.add(Box(
       { width: "100%", height: 1, paddingLeft: 1 },
       Text({ content: ` theme from ${configPath().replace(home, "~")}`, fg: colors.sidebarFgMuted }),
     ));
-    panel.add(row("chevron-left", "back", undefined, menuIdx === 1, menuActivate));
+    panel.add(row("chevron-left", "back", undefined, menuIdx === 1, activateRow(menuActivate)));
   }
 
   panel.add(Box(
@@ -972,6 +977,9 @@ const openMenu = () => {
         backgroundColor: colors.sidebarBg,
         paddingTop: 1,
         paddingBottom: 1,
+        onMouseDown: (ev: any) => {
+          try { ev.stopPropagation?.(); } catch {}
+        },
       },
     ),
   );
