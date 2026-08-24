@@ -583,10 +583,7 @@ const renderCrumbs = () => {
       input = new InputRenderable(renderer, {
         id: "tfm-path-input",
         flexGrow: 1,
-        value: (() => {
-          const cwdAbs = path.resolve(state.cwd);
-          return cwdAbs.startsWith(home) ? "~" + cwdAbs.slice(home.length) : cwdAbs;
-        })(),
+        value: path.resolve(state.cwd),
         backgroundColor: colors.accentBg,
         focusedBackgroundColor: colors.accentBg,
         textColor: colors.white,
@@ -609,7 +606,7 @@ const renderCrumbs = () => {
         return prevHandler ? prevHandler(key) : false;
       };
     } else {
-      try { input.value = path.resolve(state.cwd).startsWith(home) ? "~" + path.resolve(state.cwd).slice(home.length) : path.resolve(state.cwd); } catch {}
+      try { input.value = path.resolve(state.cwd); } catch {}
     }
     try { input.visible = true; } catch {}
     setTimeout(() => { try { input.focus(); } catch {} }, 20);
