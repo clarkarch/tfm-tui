@@ -555,6 +555,8 @@ const crumbSep = () => Text({ content: " › ", fg: colors.sidebarFgMuted });
 
 let pathEditMode = false;
 let crumbClickAt = 0;
+// toolbar siblings detached while the location input owns the row
+let pathEditSaved: any[] | null = null;
 
 const exitPathEdit = () => {
   if (!pathEditMode) return;
@@ -575,14 +577,12 @@ const renderCrumbs = () => {
   const toolbarRow: any = renderer.root.findDescendantById("tfm-toolbar");
 
   if (pathEditMode) {
-    // nautilus-style location entry: input takes over the whole top bar
-    const hideIds = new Set(["tfm-nav-back", "tfm-nav-fwd", "tfm-search-wrap"]);
-    if (toolbarRow) {
-      [...toolbarRow.getChildren()].forEach((c: any) => {
-        if (hideIds.has(c.id)) { try { c.visible = false; } catch {} }
-      });
+    // nautilus-style location entry: detach everything else from the row
+    // (.visible alone doesn't free layout space — yoga keeps the node sized)
+    if (!pathEditSaved) {
+      pathEditSaved = [...toolbarRow.getChildren()];
+      pathEditSaved.forEach((c: any) => { try { toolbarRow.remove(c); } catch {} });
     }
-    [...box.getChildren()].forEach((c: any) => box.remove(c));
     let input: any = renderer.root.findDescendantById("tfm-path-input");
     if (!input) {
       input = Input({
@@ -596,7 +596,8 @@ const renderCrumbs = () => {
         focusedBackgroundColor: colors.accentBg,
         textColor: colors.white,
       });
-      box.add(input);
+      box.remove(input);
+      toolbarRow.add(input);
       const real: any = renderer.root.findDescendantById("tfm-path-input");
       real?.on?.("enter", () => {
         const target = String((real as any).value ?? "").replace(/^~(?=\/|$)/, home);
@@ -613,17 +614,12 @@ const renderCrumbs = () => {
     return;
   }
 
-  // leaving edit mode restores the hidden toolbar sections
-  const showIds = new Set(["tfm-nav-back", "tfm-nav-fwd", "tfm-search-wrap"]);
-  if (toolbarRow) {
-    [...toolbarRow.getChildren()].forEach((c: any) => {
-      if (showIds.has(c.id)) { try { c.visible = true; } catch {} }
-    });
-  }
-  const staleInput: any = renderer.root.findDescendantById("tfm-path-input");
-  if (staleInput) {
-    const p: any = staleInput.parent ?? box;
-    try { p.remove(staleInput); } catch {}
+  // leaving edit mode: detach the input, restore the saved row children
+  if (pathEditSaved) {
+    const inp: any = renderer.root.findDescendantById("tfm-path-input");
+    if (inp) { try { toolbarRow.remove(inp); } catch {} }
+    pathEditSaved.forEach((c: any) => { try { toolbarRow.add(c); } catch {} });
+    pathEditSaved = null;
   }
 
   // rebuild from scratch — appending would duplicate crumbs every nav
