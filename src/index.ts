@@ -792,6 +792,9 @@ const drainThumbs = async () => {
           protocol: "auto",
         });
         await img.loadPromise!;
+        // let the layout pass settle before first placement, or the image
+        // can get positioned at pre-layout coordinates and stick there
+        await sleep(35);
         [...slot.getChildren()].forEach((c: any) => { try { slot.remove(c); } catch {} });
         slot.add(img);
       } catch {}
@@ -866,6 +869,7 @@ const drainIconQueue = async () => {
     const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
     // glyph stays in the slot (hidden) so the scrim can fall back to it
     if (glyphNode) { try { glyphNode.visible = false; } catch {} }
+    await sleep(35);
     imgs.forEach((im) => slot.add(im));
   }));
 };
