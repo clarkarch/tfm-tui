@@ -576,9 +576,10 @@ const renderCrumbs = () => {
 
   if (pathEditMode) {
     // nautilus-style location entry: input takes over the whole top bar
+    const hideIds = new Set(["tfm-nav-back", "tfm-nav-fwd", "tfm-search-wrap"]);
     if (toolbarRow) {
       [...toolbarRow.getChildren()].forEach((c: any) => {
-        if (c.id !== "tfm-path-input") { try { c.visible = false; } catch {} }
+        if (hideIds.has(c.id)) { try { c.visible = false; } catch {} }
       });
     }
     [...box.getChildren()].forEach((c: any) => box.remove(c));
@@ -613,9 +614,10 @@ const renderCrumbs = () => {
   }
 
   // leaving edit mode restores the hidden toolbar sections
+  const showIds = new Set(["tfm-nav-back", "tfm-nav-fwd", "tfm-search-wrap"]);
   if (toolbarRow) {
     [...toolbarRow.getChildren()].forEach((c: any) => {
-      if (c.id !== "tfm-path-input") { try { c.visible = true; } catch {} }
+      if (showIds.has(c.id)) { try { c.visible = true; } catch {} }
     });
   }
   const staleInput: any = renderer.root.findDescendantById("tfm-path-input");
@@ -659,7 +661,7 @@ const renderCrumbs = () => {
 };
 
 const makeSearch = () => {
-  const wrap = Box({ height: 1, flexDirection: "row" });
+  const wrap = Box({ id: "tfm-search-wrap", height: 1, flexDirection: "row" });
 
   const input = Input({
     id: "tfm-search",
