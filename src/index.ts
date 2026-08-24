@@ -521,7 +521,7 @@ const renderSidebar = () => {
     if (gi < groups.length - 1) hostBox.add(makeDivider());
   });
   if (sidebarActive && placeIdx >= 0) {
-    applyPlaceLook(Math.min(placeIdx, placesHost.length - 1), "hover");
+    normalizePlaces();
   }
 };
 
@@ -1027,25 +1027,28 @@ let placeIdx = -1;
 
 const setSidebarFocus = (idx: number): boolean => {
   if (idx < 0 || idx >= placesHost.length) return false;
-  if (placeIdx >= 0 && placeIdx !== idx) applyPlaceLook(placeIdx, "normal");
   placeIdx = idx;
-  applyPlaceLook(idx, "hover");
+  normalizePlaces();
   return true;
 };
 
 const leaveSidebarToGrid = () => {
-  if (sidebarActive && placeIdx >= 0) applyPlaceLook(placeIdx, "normal");
   sidebarActive = false;
+  normalizePlaces();
 };
 
-const applyPlaceLook = (idx: number, mode: "hover" | "normal") => {
-  const rec = placesHost[idx];
-  if (!rec || rec.selected) return;
-  const row: any = renderer.root.findDescendantById(rec.rowId);
-  const label: any = renderer.root.findDescendantById(rec.labelId);
-  try { if (row) row.backgroundColor = mode === "hover" ? colors.hoverBg : colors.sidebarBg; } catch {}
-  rec.specs.forEach((s) => setIconState(s, mode === "hover" ? 1 : 0));
-  try { if (label) label.fg = colors.sidebarFg; } catch {}
+// single source of truth: exactly one accent (cwd-selected) and optionally
+// one keyboard-hover highlight; wipes any stray styles deterministically
+const normalizePlaces = () => {
+  placesHost.forEach((rec, i) => {
+    const isSel = rec.selected;
+    const isHover = sidebarActive && i === placeIdx && !isSel;
+    const row: any = renderer.root.findDescendantById(rec.rowId);
+    const label: any = renderer.root.findDescendantById(rec.labelId);
+    try { if (row) row.backgroundColor = isSel ? colors.accentBg : isHover ? colors.hoverBg : colors.sidebarBg; } catch {}
+    rec.specs.forEach((s) => setIconState(s, isSel ? 2 : isHover ? 1 : 0));
+    try { if (label) label.fg = isSel ? colors.accent : colors.sidebarFg; } catch {}
+  });
 };
 
 const setFocusedIdx = (idx: number): boolean => {
