@@ -617,9 +617,15 @@ const renderCrumbs = () => {
     [...toolbarRow.getChildren()].forEach((c: any) => {
       if (c.id !== "tfm-path-input") { try { c.visible = true; } catch {} }
     });
-    const staleInput: any = renderer.root.findDescendantById("tfm-path-input");
-    if (staleInput) { try { toolbarRow.remove(staleInput); } catch {} }
   }
+  const staleInput: any = renderer.root.findDescendantById("tfm-path-input");
+  if (staleInput) {
+    const p: any = staleInput.parent ?? box;
+    try { p.remove(staleInput); } catch {}
+  }
+
+  // rebuild from scratch — appending would duplicate crumbs every nav
+  [...box.getChildren()].forEach((c: any) => box.remove(c));
 
   const cwdAbs = path.resolve(state.cwd);
   const inHome = cwdAbs === home || cwdAbs.startsWith(home + path.sep);
