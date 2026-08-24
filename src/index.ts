@@ -1,7 +1,7 @@
 import { ASCIIFont, Box, ImageRenderable, Input, InputRenderable, RGBA, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { readdir, readFile, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -35,6 +35,10 @@ const glyph = {
   power: "\u{F0425}",
   eye: "\u{F0208}",
   "eye-off": "\u{F0209}",
+  "content-copy": "\u{F018F}",
+  "content-cut": "\u{F0190}",
+  pencil: "\u{F03EB}",
+  "folder-plus": "\u{F0770}",
 };
 
 // --- File type categories (extension -> icon); generic `file` is the fallback,
@@ -1051,7 +1055,106 @@ const clearTileSelection = () => {
 
 const updateSelectionStatus: () => void = () => updateSelectionStatusReal();
 
-// --- Rubber band selection ---
+// --- File operations ---
+type ClipItem = { path: string; isDir: boolean };
+let clipboard: { mode: "copy" | "cut"; items: ClipItem[] } | null = null;
+
+let statusMsgTimer: any = null;
+const setStatusMsg = (text: string) => {
+  const status: any = renderer.root.findDescendantById("tfm-status-label");
+  if (status) { try { status.content = text; } catch {} }
+  if (statusMsgTimer) clearTimeout(statusMsgTimer);
+  statusMsgTimer = setTimeout(() => updateSelectionStatusReal(), 2500);
+};
+
+const selPaths = (): ClipItem[] => {
+  const out: ClipItem[] = [];
+  tileRefsByKey.forEach((r, k) => { if (r.selected) out.push({ path: k, isDir: r.isDir }); });
+  return out;
+};
+
+const setClipboard = (mode: "copy" | "cut", items: ClipItem[]) => {
+  clipboard = items.length ? { mode, items } : null;
+  setStatusMsg(clipboard ? `${mode === "cut" ? "Cut" : "Copied"} ${items.length} item${items.length === 1 ? "" : "s"}` : "");
+};
+
+const uniqueTarget = (dir: string, base: string): string => {
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  for (let i = 2; ; i++) {
+    const cand = i === 2 ? path.join(dir, `${stem} (copy)${ext}`) : path.join(dir, `${stem} (copy ${i - 1})${ext}`);
+    if (!existsSync(cand)) return cand;
+  }
+};
+
+const fsMove = async (src: string, dest: string): Promise<void> => {
+  try {
+    await fsRename(src, dest);
+  } catch (err: any) {
+    if (err?.code !== "EXDEV") throw err;
+    await cp(src, dest, { recursive: true });
+    await rm(src, { recursive: true });
+  }
+};
+
+const doPaste = async (dest: string): Promise<void> => {
+  if (!clipboard || clipboard.items.length === 0) return;
+  const mode = clipboard.mode;
+  const items = clipboard.items;
+  clipboard = null;
+  let ok = 0;
+  for (const it of items) {
+    const targetBase = path.basename(it.path);
+    let target = path.join(dest, targetBase);
+    if (target === it.path && mode === "copy") target = uniqueTarget(dest, targetBase);
+    else if (existsSync(target)) target = uniqueTarget(dest, targetBase);
+    try {
+      if (mode === "copy") await cp(it.path, target, { recursive: true });
+      else await fsMove(it.path, target);
+      ok++;
+    } catch {}
+  }
+  renderAll();
+  setStatusMsg(`${mode === "cut" ? "Moved" : "Copied"} ${ok} item${ok === 1 ? "" : "s"}`);
+};
+
+const xdgTrashMove = async (p: string): Promise<void> => {
+  const trashDir = path.join(home, ".local/share/Trash");
+  const filesDir = path.join(trashDir, "files");
+  const infoDir = path.join(trashDir, "info");
+  await mkdir(filesDir, { recursive: true });
+  await mkdir(infoDir, { recursive: true });
+  const base = path.basename(p);
+  let name = base;
+  for (let i = 2; existsSync(path.join(filesDir, name)); i++) name = `${base}.${i}`;
+  const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  await writeFile(path.join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${p}\nDeletionDate=${stamp}\n`);
+  await fsMove(p, path.join(filesDir, name));
+};
+
+const trashPaths = (paths: string[]): void => {
+  void (async () => {
+    let ok = 0;
+    for (const p of paths) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn("gio", ["trash", p], { stdio: "ignore" });
+          proc.on("close", (c) => (c === 0 ? resolve() : reject(new Error(`gio ${c}`))));
+          proc.on("error", reject);
+        });
+        ok++;
+      } catch {
+        try {
+          await xdgTrashMove(p);
+          ok++;
+        } catch {}
+      }
+    }
+    renderAll();
+    if (paths.length) setStatusMsg(ok === paths.length ? `Trashed ${ok} item${ok === 1 ? "" : "s"}` : `Trashed ${ok}/${paths.length}`);
+  })();
+};
 let bandStart: { x: number; y: number } | null = null;
 const BAND_ID = "tfm-band";
 
@@ -1151,6 +1254,10 @@ const renderGrid = async () => {
       justifyContent: "flex-start",
       onMouseDown: (ev: any) => {
         try { ev.stopPropagation?.(); } catch {}
+        if (ev.button === 2) {
+          openFileMenuFor(key, e.isDir);
+          return;
+        }
         const now = Date.now();
         if (now - lastClick < config.ui.doubleClickMs) {
           if (e.isDir) navigate(key);
@@ -1231,6 +1338,174 @@ const renderGrid = async () => {
   void drainThumbs();
 };
 
+// --- Prompt modal (rename / new folder) ---
+let promptOpen = false;
+
+const closePrompt = () => {
+  const scrim: any = renderer.root.findDescendantById("tfm-prompt");
+  scrim?.parent?.remove(scrim);
+  promptOpen = false;
+};
+
+const openPrompt = (title: string, initial: string, onSubmit: (value: string) => void) => {
+  if (promptOpen || !renderer.resolution) return;
+  promptOpen = true;
+  const scrim = Box(
+    {
+      id: "tfm-prompt",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
+      zIndex: 3200,
+      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      onMouseDown: () => { closePrompt(); },
+    },
+    Box(
+      {
+        id: "tfm-prompt-panel",
+        width: MENU_W,
+        backgroundColor: colors.sidebarBg,
+        paddingTop: 1,
+        paddingBottom: 1,
+        flexDirection: "column",
+        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
+      },
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1 },
+        Text({ content: ` ${title}`, fg: colors.accent }),
+      ),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
+      ),
+    ),
+  );
+  renderer.root.add(scrim);
+
+  const panel: any = renderer.root.findDescendantById("tfm-prompt-panel");
+  const input = new InputRenderable(renderer, {
+    id: "tfm-prompt-input",
+    flexGrow: 1,
+    value: initial,
+    backgroundColor: colors.accentBg,
+    focusedBackgroundColor: colors.accentBg,
+    textColor: colors.white,
+  });
+  panel.add(input);
+  const prevHandler = input.handleKeyPress?.bind(input);
+  input.handleKeyPress = (key: any) => {
+    if (key?.name === "escape") { closePrompt(); return true; }
+    if (key?.name === "return") {
+      const v = String((input as any).value ?? "").trim();
+      closePrompt();
+      if (v) onSubmit(v);
+      return true;
+    }
+    return prevHandler ? prevHandler(key) : false;
+  };
+  setTimeout(() => { try { input.focus(); } catch {} }, 20);
+  stripSelectable();
+};
+
+// --- File context menu (right-click a tile) ---
+type ListEntry = { icon?: string; label: string; hint?: string; action: () => void };
+let fileMenuState: { idx: number; entries: ListEntry[] } | null = null;
+
+const closeFileMenu = () => {
+  const scrim: any = renderer.root.findDescendantById("tfm-filemenu");
+  scrim?.parent?.remove(scrim);
+  fileMenuState = null;
+};
+
+const renderFileMenu = () => {
+  const panel: any = renderer.root.findDescendantById("tfm-filemenu-panel");
+  if (!panel || !fileMenuState) return;
+  [...panel.getChildren()].forEach((c: any) => panel.remove(c));
+  const row = (entry: ListEntry, i: number) =>
+    Box(
+      {
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        columnGap: 1,
+        paddingLeft: 1,
+        paddingRight: 1,
+        backgroundColor: i === fileMenuState!.idx ? colors.accentBg : undefined,
+        onMouseDown: (ev: any) => {
+          try { ev.stopPropagation?.(); } catch {}
+          entry.action();
+        },
+        onMouseOver: () => {
+          if (fileMenuState && fileMenuState.idx !== i) { fileMenuState.idx = i; renderFileMenu(); }
+        },
+      },
+      ...(entry.icon ? [makeIconSlot(entry.icon, [{ fg: colors.sidebarFg, bg: i === fileMenuState!.idx ? colors.accentBg : colors.sidebarBg }, { fg: colors.white, bg: colors.accentBg }], 1, i === fileMenuState!.idx ? 1 : 0).el] : []),
+      Text({ content: entry.label, fg: i === fileMenuState!.idx ? colors.white : colors.sidebarFg }),
+      Box({ flexGrow: 1 }),
+      ...(entry.hint ? [Text({ content: entry.hint + " ", fg: colors.sidebarFgMuted })] : []),
+    );
+  panel.add(Box(
+    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+    Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
+  ));
+  fileMenuState.entries.forEach((e2, i) => panel.add(row(e2, i)));
+  void drainIconQueue();
+};
+
+const openFileMenuFor = (targetPath: string, isDir: boolean): void => {
+  const entries: ListEntry[] = [];
+  if (isDir) entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(targetPath); } });
+  else entries.push({ icon: "eye", label: "Open", action: () => { closeFileMenu(); spawn("xdg-open", [targetPath], { stdio: "ignore", detached: true }).unref?.(); } });
+  entries.push(
+    { icon: "content-copy", label: "Copy", action: () => { closeFileMenu(); setClipboard("copy", [{ path: targetPath, isDir }]); } },
+    { icon: "content-cut", label: "Cut", action: () => { closeFileMenu(); setClipboard("cut", [{ path: targetPath, isDir }]); } },
+    { icon: "pencil", label: "Rename…", action: () => {
+        closeFileMenu();
+        openPrompt("rename", path.basename(targetPath), (v) => {
+          const dest = path.join(path.dirname(targetPath), v);
+          fsRename(targetPath, dest)
+            .then(() => { renderAll(); setStatusMsg("Renamed"); })
+            .catch(() => setStatusMsg("Rename failed"));
+        });
+      } },
+    { icon: "trash-can", label: "Trash", action: () => { closeFileMenu(); trashPaths([targetPath]); } },
+  );
+  fileMenuState = { idx: 0, entries };
+  const scrim = Box(
+    {
+      id: "tfm-filemenu",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
+      zIndex: 3100,
+      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      onMouseDown: () => closeFileMenu(),
+    },
+    Box(
+      {
+        id: "tfm-filemenu-panel",
+        width: MENU_W,
+        backgroundColor: colors.sidebarBg,
+        paddingTop: 1,
+        paddingBottom: 1,
+        flexDirection: "column",
+        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
+      },
+    ),
+  );
+  renderer.root.add(scrim);
+  renderFileMenu();
+  stripSelectable();
+};
+
 // --- ESC menu (scrim pattern stolen from opencode's Dialog) ---
 type MenuEntry = { label: string; hint?: string; action: () => void };
 
@@ -1253,9 +1528,40 @@ const menuActivate = () => {
     renderMenuContent();
     return;
   }
-  if (menuIdx === 0) { menuView = "settings"; menuIdx = 0; renderMenuContent(); }
-  else quitApp();
+  const items = rootMenuItems();
+  const it = items[menuIdx] ?? items[0];
+  if (!it) return;
+  closeMenu();
+  it.action();
 };
+
+const rootMenuItems = (): { icon: string; label: string; hint?: string; action: () => void }[] => [
+  {
+    icon: "cog",
+    label: "Settings",
+    action: () => { menuView = "settings"; menuIdx = 0; renderMenuContent(); },
+  },
+  {
+    icon: "folder-plus",
+    label: "New Folder",
+    action: () => openPrompt("new folder", "Untitled folder", (v) => {
+      mkdir(path.join(state.cwd, v), { recursive: true })
+        .then(() => renderAll())
+        .catch(() => setStatusMsg("Create failed"));
+    }),
+  },
+  {
+    icon: "content-copy",
+    label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste",
+    action: () => { void doPaste(state.cwd); },
+  },
+  {
+    icon: "power",
+    label: "Quit",
+    hint: "ctrl+q",
+    action: quitApp,
+  },
+];
 
 const renderMenuContent = () => {
   const panel: any = renderer.root.findDescendantById("tfm-menu-panel");
@@ -1319,10 +1625,7 @@ const renderMenuContent = () => {
   };
 
   if (menuView === "root") {
-    const items: (MenuEntry & { icon?: string })[] = [
-      { label: "Settings", icon: "cog", action: () => {} },
-      { label: "Quit", icon: "power", hint: "ctrl+q", action: () => {} },
-    ];
+    const items = rootMenuItems();
     items.forEach((it, i) => panel.add(row(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))));
   } else {
     panel.add(row(state.showHidden ? "eye" : "eye-off", `hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, 0, activateRow(0)));
@@ -1390,7 +1693,7 @@ const closeMenu = () => {
 };
 
 const moveMenu = (delta: number) => {
-  const count = menuView === "settings" ? 2 : 2;
+  const count = menuView === "settings" ? 2 : rootMenuItems().length;
   menuIdx = (menuIdx + delta + count) % count;
   renderMenuContent();
 };
@@ -1460,6 +1763,7 @@ renderer.keyInput.on("keypress", (e: any) => {
     quitApp();
     return;
   }
+  if (promptOpen) return;
 
   if (menuOpen) {
     if (e.name === "escape") closeMenu();
@@ -1480,6 +1784,16 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
 
+  // file context menu open: arrows/enter navigate it, esc closes
+  if (fileMenuState) {
+    const count = fileMenuState.entries.length;
+    if (e.name === "escape") closeFileMenu();
+    else if (e.name === "up") { fileMenuState.idx = (fileMenuState.idx - 1 + count) % count; renderFileMenu(); }
+    else if (e.name === "down") { fileMenuState.idx = (fileMenuState.idx + 1) % count; renderFileMenu(); }
+    else if (e.name === "return") fileMenuState.entries[fileMenuState.idx]?.action();
+    return;
+  }
+
   if (el?.visible && (e.name === "escape" || e.name === "return")) {
     clearSearch();
     return;
@@ -1496,5 +1810,33 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   if (ctrl && (e.name === "r" || e.unicode === "r")) {
     void loadSystemPlaces().then(() => renderAll());
+  }
+
+  // --- file operations ---
+  const selected = selPaths();
+  if (e.name === "delete" && selected.length) {
+    trashPaths(selected.map((s) => s.path));
+    return;
+  }
+  if (e.name === "f2" && selected.length === 1 && selected[0]) {
+    const p = selected[0].path;
+    openPrompt("rename", path.basename(p), (v) => {
+      fsRename(p, path.join(path.dirname(p), v))
+        .then(() => { renderAll(); setStatusMsg("Renamed"); })
+        .catch(() => setStatusMsg("Rename failed"));
+    });
+    return;
+  }
+  if (ctrl && (e.name === "c" || e.unicode === "c") && selected.length) {
+    setClipboard("copy", selected);
+    return;
+  }
+  if (ctrl && (e.name === "x" || e.unicode === "x") && selected.length) {
+    setClipboard("cut", selected);
+    return;
+  }
+  if (ctrl && (e.name === "v" || e.unicode === "v")) {
+    void doPaste(state.cwd);
+    return;
   }
 });
