@@ -1474,9 +1474,6 @@ const openContextMenu = (x: number, y: number, title: string, entries: ListEntry
       width: w,
       zIndex: 3100,
       backgroundColor: colors.sidebarBg,
-      border: true,
-      borderStyle: "rounded",
-      borderColor: colors.border,
       flexDirection: "column",
     },
     Box(
