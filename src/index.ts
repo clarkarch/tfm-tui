@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, ImageRenderable, Input, RGBA, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, ImageRenderable, Input, InputRenderable, RGBA, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
@@ -585,7 +585,9 @@ const renderCrumbs = () => {
     }
     let input: any = renderer.root.findDescendantById("tfm-path-input");
     if (!input) {
-      input = Input({
+      // real class instance: proxied composition nodes don't mount under an
+      // already-mounted parent
+      input = new InputRenderable(renderer, {
         id: "tfm-path-input",
         flexGrow: 1,
         value: (() => {
@@ -596,11 +598,9 @@ const renderCrumbs = () => {
         focusedBackgroundColor: colors.accentBg,
         textColor: colors.white,
       });
-      box.remove(input);
       toolbarRow.add(input);
-      const real: any = renderer.root.findDescendantById("tfm-path-input");
-      real?.on?.("enter", () => {
-        const target = String((real as any).value ?? "").replace(/^~(?=\/|$)/, home);
+      input.on?.("enter", () => {
+        const target = String((input as any).value ?? "").replace(/^~(?=\/|$)/, home);
         pathEditMode = false;
         renderCrumbs();
         navigate(target);
