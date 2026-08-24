@@ -760,31 +760,33 @@ const drainThumbs = async () => {
   thumbJobs = [];
   if (!renderer.resolution || jobs.length === 0) return;
   const { cellW, cellH } = cellMetrics();
-  await Promise.all(jobs.map(async (j) => {
-    const slot: any = renderer.root.findDescendantById(j.slotId);
-    if (!slot) return;
-    try {
-      const bytes = await thumbPng(
-        j.path,
-        j.mtimeMs,
-        j.size,
-        Math.max(1, Math.round(j.wCells * cellW)),
-        Math.max(1, Math.round(ICON_CELLS_H * cellH)),
-        colors.bg,
-      );
-      const img = new ImageRenderable(renderer, {
-        id: `${j.slotId}-t`,
-        source: bytes,
-        width: j.wCells,
-        height: ICON_CELLS_H,
-        fit: "cover",
-        protocol: "auto",
-      });
-      await img.loadPromise!;
-      [...slot.getChildren()].forEach((c: any) => { try { slot.remove(c); } catch {} });
-      slot.add(img);
-    } catch {}
-  }));
+  // 2px inset so kitty's cell->pixel rounding never bleeds onto neighbors
+  const pxW = Math.max(1, Math.round(jobs[0]!.wCells * cellW) - 2);
+  const pxH = Math.max(1, Math.round(ICON_CELLS_H * cellH) - 2);
+  let idx = 0;
+  const worker = async () => {
+    while (idx < jobs.length) {
+      const j = jobs[idx++]!;
+      const slot: any = renderer.root.findDescendantById(j.slotId);
+      if (!slot) continue;
+      try {
+        const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, colors.bg);
+        const img = new ImageRenderable(renderer, {
+          id: `${j.slotId}-t`,
+          source: bytes,
+          width: j.wCells,
+          height: ICON_CELLS_H,
+          fit: "fit",
+          protocol: "auto",
+        });
+        await img.loadPromise!;
+        [...slot.getChildren()].forEach((c: any) => { try { slot.remove(c); } catch {} });
+        slot.add(img);
+      } catch {}
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
 };
 
 const dimHex = (hex: string, f: number): string => {
