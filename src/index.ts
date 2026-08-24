@@ -777,6 +777,7 @@ const updateBandRect = (ev: any) => {
     b.y = Math.min(bandStart.y, ev.y);
     b.width = Math.abs(ev.x - bandStart.x) + 1;
     b.height = Math.abs(ev.y - bandStart.y) + 1;
+    b.visible = true;
   } catch {}
 };
 
@@ -1078,15 +1079,8 @@ const boot = async () => {
     contentOptions: { flexDirection: "column" },
     onMouseDown: (ev: any) => {
       clearTileSelection();
-      if (ev.button === 0) {
-        bandStart = { x: ev.x, y: ev.y };
-        const b = bandNode();
-        if (b) {
-          try {
-            b.x = ev.x; b.y = ev.y; b.width = 1; b.height = 1; b.visible = true;
-          } catch {}
-        }
-      }
+      // band shows only once a drag actually moves the pointer
+      if (ev.button === 0) bandStart = { x: ev.x, y: ev.y };
     },
     onMouseDrag: (ev: any) => updateBandRect(ev),
     onMouseDragEnd: (ev: any) => finalizeBand(ev),
