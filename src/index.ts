@@ -726,16 +726,28 @@ const iconPng = async (name: string, fg: string, bg: string, pxW: number, pxH: n
 // --- Image thumbnails (magick resize flattened onto bg, cached per file version) ---
 const thumbCache = new Map<string, Promise<Uint8Array>>();
 
-const thumbPng = (path: string, mtimeMs: number, size: number, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
+const thumbPng = (
+  path: string,
+  mtimeMs: number,
+  size: number,
+  pxW: number,
+  pxH: number,
+  bg: string,
+  vector = false,
+): Promise<Uint8Array> => {
   const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}`;
   let p = thumbCache.get(key);
   if (!p) {
     p = new Promise<Uint8Array>((resolve, reject) => {
-      const proc = spawn("magick", [
+      // vectors must render at high density FIRST or we upscale a tiny
+      // intrinsic bitmap (a 24-unit icon svg would look like mush)
+      const args = [
+        ...(vector ? ["-density", "192"] : []),
         path, "-auto-orient", "-background", bg,
         "-thumbnail", `${pxW}x${pxH}^`, "-gravity", "center", "-extent", `${pxW}x${pxH}`,
         "png:-",
-      ]);
+      ];
+      const proc = spawn("magick", args);
       const chunks: Buffer[] = [];
       proc.stdout.on("data", (c: Buffer) => chunks.push(c));
       proc.on("error", reject);
@@ -752,7 +764,7 @@ const thumbPng = (path: string, mtimeMs: number, size: number, pxW: number, pxH:
   return p;
 };
 
-type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number };
+type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; vector: boolean };
 let thumbJobs: ThumbJob[] = [];
 
 const drainThumbs = async () => {
@@ -760,17 +772,17 @@ const drainThumbs = async () => {
   thumbJobs = [];
   if (!renderer.resolution || jobs.length === 0) return;
   const { cellW, cellH } = cellMetrics();
-  // 2px inset so kitty's cell->pixel rounding never bleeds onto neighbors
-  const pxW = Math.max(1, Math.round(jobs[0]!.wCells * cellW) - 2);
-  const pxH = Math.max(1, Math.round(ICON_CELLS_H * cellH) - 2);
   let idx = 0;
   const worker = async () => {
     while (idx < jobs.length) {
       const j = jobs[idx++]!;
       const slot: any = renderer.root.findDescendantById(j.slotId);
       if (!slot) continue;
+      // 2px inset so kitty's cell->pixel rounding never bleeds onto neighbors
+      const pxW = Math.max(1, Math.round(j.wCells * cellW) - 2);
+      const pxH = Math.max(1, Math.round(ICON_CELLS_H * cellH) - 2);
       try {
-        const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, colors.bg);
+        const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, colors.bg, j.vector);
         const img = new ImageRenderable(renderer, {
           id: `${j.slotId}-t`,
           source: bytes,
@@ -1049,11 +1061,18 @@ const renderGrid = async () => {
 
     tileRefsByKey.set(key, { iconSpec: iconSlot.spec, selected: false, baseFg, tileId, labelId });
 
-    if (!e.isDir && fileIsImage(e.name) && !e.name.toLowerCase().endsWith(".svg")) {
+    if (!e.isDir && fileIsImage(e.name)) {
       let st: any = null;
       try { st = statSync(key); } catch {}
       if (st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400) {
-        thumbJobs.push({ slotId: iconSlot.slotId, path: key, mtimeMs: st.mtimeMs ?? 0, size: st.size, wCells: slotW });
+        thumbJobs.push({
+          slotId: iconSlot.slotId,
+          path: key,
+          mtimeMs: st.mtimeMs ?? 0,
+          size: st.size,
+          wCells: slotW,
+          vector: e.name.toLowerCase().endsWith(".svg"),
+        });
       }
     }
 
