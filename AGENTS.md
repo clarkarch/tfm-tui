@@ -21,7 +21,8 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 ## Icons
 
 - SVG sources live in `assets/icons/*.svg` (single color, path-only, no `<text>`).
-- Never commit pre-rasterized PNGs as icons. Use `iconPng(name, fg, bg)` in `src/index.ts`: it tints hex colors to the theme, rasterizes via `rsvg-convert` at exact cell pixels (square output), flattens onto bg (kitty alpha is unreliable → causes tint), and caches by `name:fg:bg:WxH`.
+- Never commit pre-rasterized PNGs as icons. Icons flow through slots: `makeIconSlot(name, ...)` queues a fallback-glyph slot, `applyRasterIcons()` swaps in an async `iconPng(name, fg, bg, pxW, pxH)` raster — tints hex colors to the theme, rasterizes via `rsvg-convert` at exact cell pixels (square output), flattens onto bg (kitty alpha is unreliable → causes tint), caches by `name:fg:bg:WxH`.
+- **Slot names must match SVG filenames exactly** (`makeIconSlot("chevron-left")` → `assets/icons/chevron-left.svg`). The swap's `catch {}` swallows ENOENT silently — a wrong name just leaves the small fallback glyph in place forever (bit us: nav buttons queued `back`/`fwd`, files were `chevron-left.svg`/`chevron-right.svg`).
 - Nerd font glyphs are the fallback. **Verify codepoints against the font cmap before using** — icon-set comments in old code were wrong. Check with python fontTools (`getBestCmap`) against `/usr/share/fonts/TTF/MesloLGLDZ Nerd Font Mono (see fc-list)`.
 
 ## Conventions
