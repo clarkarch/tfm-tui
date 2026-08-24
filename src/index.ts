@@ -223,6 +223,7 @@ const goBack = () => { if (canBack()) { state.histIdx--; renderAll(); } };
 const goFwd = () => { if (canFwd()) { state.histIdx++; renderAll(); } };
 
 const navigate = (dir: string) => {
+  pathEditMode = false;
   let target: string;
   try {
     target = path.resolve(dir);
@@ -556,11 +557,13 @@ let pathEditMode = false;
 let crumbClickAt = 0;
 
 const exitPathEdit = () => {
+  if (!pathEditMode) return;
   pathEditMode = false;
   renderCrumbs();
 };
 
 const enterPathEdit = () => {
+  if (pathEditMode) return;
   pathEditMode = true;
   renderCrumbs();
 };
@@ -568,29 +571,54 @@ const enterPathEdit = () => {
 const renderCrumbs = () => {
   const box: any = renderer.root.findDescendantById("tfm-crumbs");
   if (!box) return;
-  [...box.getChildren()].forEach((c: any) => box.remove(c));
+
+  const toolbarRow: any = renderer.root.findDescendantById("tfm-toolbar");
 
   if (pathEditMode) {
-    const cwdAbs = path.resolve(state.cwd);
-    const shortCwd = cwdAbs.startsWith(home) ? "~" + cwdAbs.slice(home.length) : cwdAbs;
-    const input: any = Input({
-      id: "tfm-path-input",
-      flexGrow: 1,
-      value: shortCwd,
-      backgroundColor: colors.accentBg,
-      focusedBackgroundColor: colors.accentBg,
-      textColor: colors.white,
-    });
-    box.add(input);
+    // nautilus-style location entry: input takes over the whole top bar
+    if (toolbarRow) {
+      [...toolbarRow.getChildren()].forEach((c: any) => {
+        if (c.id !== "tfm-path-input") { try { c.visible = false; } catch {} }
+      });
+    }
+    [...box.getChildren()].forEach((c: any) => box.remove(c));
+    let input: any = renderer.root.findDescendantById("tfm-path-input");
+    if (!input) {
+      input = Input({
+        id: "tfm-path-input",
+        flexGrow: 1,
+        value: (() => {
+          const cwdAbs = path.resolve(state.cwd);
+          return cwdAbs.startsWith(home) ? "~" + cwdAbs.slice(home.length) : cwdAbs;
+        })(),
+        backgroundColor: colors.accentBg,
+        focusedBackgroundColor: colors.accentBg,
+        textColor: colors.white,
+      });
+      box.add(input);
+      const real: any = renderer.root.findDescendantById("tfm-path-input");
+      real?.on?.("enter", () => {
+        const target = String((real as any).value ?? "").replace(/^~(?=\/|$)/, home);
+        pathEditMode = false;
+        renderCrumbs();
+        navigate(target);
+      });
+    } else {
+      try { input.value = path.resolve(state.cwd).startsWith(home) ? "~" + path.resolve(state.cwd).slice(home.length) : path.resolve(state.cwd); } catch {}
+    }
+    try { input.visible = true; } catch {}
     setTimeout(() => { try { input.focus(); } catch {} }, 20);
-    input.on?.("enter", () => {
-      const target = String(input.value ?? "").replace(/^~(?=\/|$)/, home);
-      pathEditMode = false;
-      renderCrumbs();
-      navigate(target);
-    });
     stripSelectable();
     return;
+  }
+
+  // leaving edit mode restores the hidden toolbar sections
+  if (toolbarRow) {
+    [...toolbarRow.getChildren()].forEach((c: any) => {
+      if (c.id !== "tfm-path-input") { try { c.visible = true; } catch {} }
+    });
+    const staleInput: any = renderer.root.findDescendantById("tfm-path-input");
+    if (staleInput) { try { toolbarRow.remove(staleInput); } catch {} }
   }
 
   const cwdAbs = path.resolve(state.cwd);
@@ -660,7 +688,7 @@ const makeSearch = () => {
 
 const makeToolbarShell = (): ReturnType<typeof Box> =>
   Box(
-    { width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, paddingRight: 1, columnGap: 1 },
+    { id: "tfm-toolbar", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, paddingRight: 1, columnGap: 1 },
     Box(
       { height: 1, flexGrow: 1, flexBasis: 0, overflow: "hidden", flexDirection: "row", columnGap: 1 },
       makeNavButton("tfm-nav-back", "chevron-left", goBack),
@@ -1367,6 +1395,7 @@ const boot = async () => {
     viewportCulling: true,
     contentOptions: { flexDirection: "column" },
     onMouseDown: (ev: any) => {
+      if (pathEditMode) { exitPathEdit(); return; }
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
       if (ev.button === 0) bandStart = { x: ev.x, y: ev.y };
