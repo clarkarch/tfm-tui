@@ -71,11 +71,72 @@ for (const cat of new Set(Object.values(FILE_ICON_BY_EXT))) {
   if (!(cat in glyph)) glyph[cat as keyof typeof glyph] = glyph.file;
 }
 
+// shared-mime-info database (same data nautilus's GIO consults): ext -> mime,
+// highest-weight glob wins. Loaded once at boot; absent file degrades silently.
+let globs2ByExt: Map<string, string> | null = null;
+const globs2Weight = new Map<string, number>();
+
+async function loadGlobs2(): Promise<void> {
+  try {
+    const text = await readFile("/usr/share/mime/globs2", "utf8");
+    for (const line of text.split("\n")) {
+      if (!line || line.startsWith("#")) continue;
+      const parts = line.split(":");
+      if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) continue;
+      const weight = parseInt(parts[0], 10);
+      const mime = parts[1];
+      const glob = parts[2];
+      if (!Number.isFinite(weight) || !glob.startsWith("*.")) continue;
+      const ext = glob.slice(2).toLowerCase();
+      if (!ext || ext.includes("*") || ext.includes("?") || ext.includes("[")) continue;
+      const prevW = globs2Weight.get(ext);
+      if (prevW === undefined || weight > prevW) {
+        globs2ByExt ??= new Map();
+        globs2ByExt.set(ext, mime);
+        globs2Weight.set(ext, weight);
+      }
+    }
+  } catch {}
+}
+
+const ARCHIVE_MIMES = new Set([
+  "application/zip", "application/gzip", "application/x-gzip", "application/bzip2",
+  "application/x-bzip2", "application/x-xz", "application/x-7z-compressed",
+  "application/vnd.rar", "application/x-rar-compressed", "application/zstd",
+  "application/x-tar", "application/java-archive", "application/vnd.android.package-archive",
+]);
+
+const mimeCategory = (mime: string): string => {
+  const media = mime.split("/")[0] ?? "";
+  if (media === "image") return "file-image";
+  if (media === "video") return "file-video";
+  if (media === "audio") return "file-music";
+  if (ARCHIVE_MIMES.has(mime)) return "zip-box";
+  if (mime === "application/pdf") return "file-pdf-box";
+  if (
+    /^text\/x-/.test(mime) ||
+    ["text/html", "text/css", "application/javascript", "application/json", "application/xml", "application/yaml"].includes(mime) ||
+    mime.endsWith("+xml") || mime.endsWith("+json")
+  ) return "file-code";
+  if (media === "text" || /^(application\/msword|application\/rtf|application\/vnd\.oasis\.opendocument\.text)/.test(mime)) return "file-document";
+  return "file";
+};
+
 const fileIconFor = (name: string): string => {
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return "file";
   const ext = name.slice(dot + 1).toLowerCase();
-  return FILE_ICON_BY_EXT[ext] ?? "file";
+  return FILE_ICON_BY_EXT[ext]
+    ?? (globs2ByExt?.get(ext) ? mimeCategory(globs2ByExt.get(ext)!) : undefined)
+    ?? "file";
+};
+
+const fileIsImage = (name: string): boolean => {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  if (FILE_ICON_BY_EXT[ext] === "file-image") return true;
+  const mime = globs2ByExt?.get(ext);
+  return !!mime && mime.startsWith("image/");
 };
 
 // --- Icon slots ---
@@ -662,6 +723,70 @@ const iconPng = async (name: string, fg: string, bg: string, pxW: number, pxH: n
   return bytes;
 };
 
+// --- Image thumbnails (magick resize flattened onto bg, cached per file version) ---
+const thumbCache = new Map<string, Promise<Uint8Array>>();
+
+const thumbPng = (path: string, mtimeMs: number, size: number, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
+  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}`;
+  let p = thumbCache.get(key);
+  if (!p) {
+    p = new Promise<Uint8Array>((resolve, reject) => {
+      const proc = spawn("magick", [
+        path, "-auto-orient", "-background", bg,
+        "-thumbnail", `${pxW}x${pxH}^`, "-gravity", "center", "-extent", `${pxW}x${pxH}`,
+        "png:-",
+      ]);
+      const chunks: Buffer[] = [];
+      proc.stdout.on("data", (c: Buffer) => chunks.push(c));
+      proc.on("error", reject);
+      proc.on("close", (code) =>
+        code === 0 && chunks.length > 0
+          ? resolve(new Uint8Array(Buffer.concat(chunks)))
+          : reject(new Error(`magick exited ${code}`))
+      );
+      proc.stdin.end();
+    });
+    p.catch(() => thumbCache.delete(key));
+    thumbCache.set(key, p);
+  }
+  return p;
+};
+
+type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number };
+let thumbJobs: ThumbJob[] = [];
+
+const drainThumbs = async () => {
+  const jobs = thumbJobs;
+  thumbJobs = [];
+  if (!renderer.resolution || jobs.length === 0) return;
+  const { cellW, cellH } = cellMetrics();
+  await Promise.all(jobs.map(async (j) => {
+    const slot: any = renderer.root.findDescendantById(j.slotId);
+    if (!slot) return;
+    try {
+      const bytes = await thumbPng(
+        j.path,
+        j.mtimeMs,
+        j.size,
+        Math.max(1, Math.round(j.wCells * cellW)),
+        Math.max(1, Math.round(ICON_CELLS_H * cellH)),
+        colors.bg,
+      );
+      const img = new ImageRenderable(renderer, {
+        id: `${j.slotId}-t`,
+        source: bytes,
+        width: j.wCells,
+        height: ICON_CELLS_H,
+        fit: "cover",
+        protocol: "auto",
+      });
+      await img.loadPromise!;
+      [...slot.getChildren()].forEach((c: any) => { try { slot.remove(c); } catch {} });
+      slot.add(img);
+    } catch {}
+  }));
+};
+
 const dimHex = (hex: string, f: number): string => {
   if (f === 1) return hex;
   const m = hex.match(/^#([0-9a-fA-F]{6})$/);
@@ -922,6 +1047,14 @@ const renderGrid = async () => {
 
     tileRefsByKey.set(key, { iconSpec: iconSlot.spec, selected: false, baseFg, tileId, labelId });
 
+    if (!e.isDir && fileIsImage(e.name)) {
+      let st: any = null;
+      try { st = statSync(key); } catch {}
+      if (st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400) {
+        thumbJobs.push({ slotId: iconSlot.slotId, path: key, mtimeMs: st.mtimeMs ?? 0, size: st.size, wCells: slotW });
+      }
+    }
+
     return tile;
   };
 
@@ -932,6 +1065,7 @@ const renderGrid = async () => {
   }
 
   void drainIconQueue();
+  void drainThumbs();
 };
 
 // --- ESC menu (scrim pattern stolen from opencode's Dialog) ---
@@ -1138,6 +1272,7 @@ const boot = async () => {
     borderStyle: "rounded",
     borderColor: colors.accent,
   }));
+  await loadGlobs2();
   await loadSystemPlaces();
   renderAll();
 
