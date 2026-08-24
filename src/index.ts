@@ -1102,7 +1102,6 @@ const boot = async () => {
     border: true,
     borderStyle: "rounded",
     borderColor: colors.accent,
-    backgroundColor: RGBA.fromInts(122, 162, 247, 28),
   }));
   await loadSystemPlaces();
   renderAll();
