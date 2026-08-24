@@ -341,18 +341,20 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
   const specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
 
   const applyLook = (hovered: boolean) => {
-    if (selected) {
-      try { (rowNode as any).backgroundColor = colors.accentBg; } catch {}
-      specs.forEach((s) => setIconState(s, 2));
-      try { labelText.fg = selFg; } catch {}
-      return;
+    const rowReal: any = renderer.root.findDescendantById(`tfm-place-${idx}`);
+    if (rowReal) {
+      try {
+        rowReal.backgroundColor = selected ? colors.accentBg : hovered ? colors.hoverBg : colors.sidebarBg;
+      } catch {}
     }
-    try { (rowNode as any).backgroundColor = hovered ? colors.hoverBg : colors.sidebarBg; } catch {}
-    specs.forEach((s) => setIconState(s, hovered ? 1 : 0));
+    specs.forEach((s) => setIconState(s, selected ? 2 : hovered ? 1 : 0));
+    const labelReal: any = renderer.root.findDescendantById(`tfm-place-${idx}-label`);
+    if (labelReal) {
+      try { labelReal.fg = selected ? selFg : normFg; } catch {}
+    }
   };
 
-  let rowNode: ReturnType<typeof Box>;
-  rowNode = Box(
+  const rowNode = Box(
     {
       id: `tfm-place-${idx}`,
       width: sw,
@@ -714,8 +716,9 @@ const ICON_CELLS_H = config.ui.iconCells;
 
 let scroller: ScrollBoxRenderable | null = null;
 let gridGen = 0;
+let tileSeq = 0;
 
-type TileRefs = { iconSpec?: IconSpec; labelText: any; selected: boolean; baseFg: string; tileNode: any };
+type TileRefs = { iconSpec?: IconSpec; selected: boolean; baseFg: string; tileId: string; labelId: string };
 const tileRefsByKey = new Map<string, TileRefs>();
 
 const tileStates = (dim: boolean): IconState[] => {
@@ -731,10 +734,16 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   const refs = tileRefsByKey.get(key);
   if (!refs) return;
   setIconState(refs.iconSpec, mode);
-  try { refs.labelText.fg = mode === 2 ? colors.accent : refs.baseFg; } catch {}
-  try {
-    refs.tileNode.backgroundColor = mode === 0 ? colors.bg : mode === 1 ? colors.hoverBg : colors.accentBg;
-  } catch {}
+  const labelReal: any = renderer.root.findDescendantById(refs.labelId);
+  if (labelReal) {
+    try { labelReal.fg = mode === 2 ? colors.accent : refs.baseFg; } catch {}
+  }
+  const tileReal: any = renderer.root.findDescendantById(refs.tileId);
+  if (tileReal) {
+    try {
+      tileReal.backgroundColor = mode === 0 ? colors.bg : mode === 1 ? colors.hoverBg : colors.accentBg;
+    } catch {}
+  }
 };
 
 const clearGrid = () => {
@@ -771,7 +780,10 @@ const renderGrid = async () => {
   const buildTile = (e: Entry) => {
     const key = path.join(state.cwd, e.name);
     let lastClick = 0;
+    const tileId = `tfm-tile-${tileSeq++}`;
+    const labelId = `${tileId}-label`;
     const tile = Box({
+      id: tileId,
       width: TILE_W,
       height: TILE_H,
       flexDirection: "column",
@@ -810,10 +822,10 @@ const renderGrid = async () => {
     tile.add(tileBox);
 
     const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
-    const labelText: any = Text({ content: label, fg: baseFg });
+    const labelText: any = Text({ id: labelId, content: label, fg: baseFg });
     tile.add(labelText);
 
-    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, labelText, selected: false, baseFg, tileNode: tile });
+    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, selected: false, baseFg, tileId, labelId });
 
     return tile;
   };
