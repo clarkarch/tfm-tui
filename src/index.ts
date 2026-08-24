@@ -555,8 +555,6 @@ const crumbSep = () => Text({ content: " › ", fg: colors.sidebarFgMuted });
 
 let pathEditMode = false;
 let crumbClickAt = 0;
-// toolbar siblings detached while the location input owns the row
-let pathEditSaved: any[] | null = null;
 
 const exitPathEdit = () => {
   if (!pathEditMode) return;
@@ -577,12 +575,7 @@ const renderCrumbs = () => {
   const toolbarRow: any = renderer.root.findDescendantById("tfm-toolbar");
 
   if (pathEditMode) {
-    // nautilus-style location entry: detach everything else from the row
-    // (.visible alone doesn't free layout space — yoga keeps the node sized)
-    if (!pathEditSaved) {
-      pathEditSaved = [...toolbarRow.getChildren()];
-      pathEditSaved.forEach((c: any) => { try { toolbarRow.remove(c); } catch {} });
-    }
+    [...box.getChildren()].forEach((c: any) => box.remove(c));
     let input: any = renderer.root.findDescendantById("tfm-path-input");
     if (!input) {
       // real class instance: proxied composition nodes don't mount under an
@@ -598,13 +591,23 @@ const renderCrumbs = () => {
         focusedBackgroundColor: colors.accentBg,
         textColor: colors.white,
       });
-      toolbarRow.add(input);
+      box.add(input);
       input.on?.("enter", () => {
         const target = String((input as any).value ?? "").replace(/^~(?=\/|$)/, home);
         pathEditMode = false;
         renderCrumbs();
         navigate(target);
       });
+      // focused editors can consume keys before the global handler; intercept
+      // escape at the source so it always cancels
+      const prevHandler = input.handleKeyPress?.bind(input);
+      input.handleKeyPress = (key: any) => {
+        if (key?.name === "escape") {
+          exitPathEdit();
+          return true;
+        }
+        return prevHandler ? prevHandler(key) : false;
+      };
     } else {
       try { input.value = path.resolve(state.cwd).startsWith(home) ? "~" + path.resolve(state.cwd).slice(home.length) : path.resolve(state.cwd); } catch {}
     }
@@ -614,15 +617,7 @@ const renderCrumbs = () => {
     return;
   }
 
-  // leaving edit mode: detach the input, restore the saved row children
-  if (pathEditSaved) {
-    const inp: any = renderer.root.findDescendantById("tfm-path-input");
-    if (inp) { try { toolbarRow.remove(inp); } catch {} }
-    pathEditSaved.forEach((c: any) => { try { toolbarRow.add(c); } catch {} });
-    pathEditSaved = null;
-  }
-
-  // rebuild from scratch — appending would duplicate crumbs every nav
+  // rebuild crumbs from scratch — appending would duplicate them every nav
   [...box.getChildren()].forEach((c: any) => box.remove(c));
 
   const cwdAbs = path.resolve(state.cwd);
@@ -699,9 +694,12 @@ const makeToolbarShell = (): ReturnType<typeof Box> =>
       makeNavButton("tfm-nav-fwd", "chevron-right", goFwd),
       Box({
         id: "tfm-crumbs",
+        flexGrow: 1,
+        flexBasis: 0,
         height: 1,
         flexDirection: "row",
         columnGap: 1,
+        overflow: "hidden",
         onMouseDown: () => {
           const now = Date.now();
           if (pathEditMode) return;
