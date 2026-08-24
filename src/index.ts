@@ -1003,7 +1003,27 @@ const renderGrid = async () => {
   if (status) status.content = `${countStr}  ·  ${shortCwd}${state.showHidden ? "  ·  hidden" : ""}`;
 
   if (entries.length === 0) {
-    scroller.content.add(Text({ content: " empty folder", fg: colors.sidebarFgMuted }));
+    await waitForResolution();
+    if (gen !== gridGen) return;
+    const { aspect } = cellMetrics();
+    const iconCells = 8;
+    const slotW = Math.max(1, Math.round(aspect * iconCells));
+    const paneH = Math.max(8, renderer.terminalHeight - 3);
+    const emptyState = Box(
+      {
+        width: "100%",
+        height: paneH,
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: colors.bg,
+      },
+      makeIconSlot("folder", [{ fg: colors.sidebarFgMuted, bg: colors.bg }], iconCells).el,
+      Box({ height: 1 }),
+      Text({ content: q ? "no matches" : "this folder is empty", fg: colors.sidebarFgMuted }),
+    );
+    scroller.content.add(emptyState);
+    void drainIconQueue();
     return;
   }
 
