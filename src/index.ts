@@ -564,6 +564,12 @@ renderer.root.add(container);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const stripSelectable = (node: any = renderer.root): void => {
+  if (!node || node.isDestroyed) return;
+  try { if (node.selectable) node.selectable = false; } catch {}
+  node.getChildren?.().forEach((c: any) => stripSelectable(c));
+};
+
 const waitForResolution = async () => {
   for (let i = 0; i < 40 && !renderer.resolution; i++) await sleep(50);
 };
@@ -915,6 +921,7 @@ const renderMenuContent = () => {
     { width: "100%", height: 1, paddingLeft: 1 },
     Text({ content: " esc close · ↑↓ move · enter select", fg: colors.sidebarFgMuted }),
   ));
+  stripSelectable();
 };
 
 const openMenu = () => {
@@ -976,6 +983,7 @@ renderAll = () => {
   renderSidebar();
   void drainIconQueue();
   void renderGrid();
+  stripSelectable();
 };
 
 const boot = async () => {
