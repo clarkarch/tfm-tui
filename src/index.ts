@@ -764,7 +764,7 @@ const thumbPng = (
   return p;
 };
 
-type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; vector: boolean };
+type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; vector: boolean; fallbackGlyph: string };
 let thumbJobs: ThumbJob[] = [];
 
 const drainThumbs = async () => {
@@ -792,12 +792,15 @@ const drainThumbs = async () => {
           protocol: "auto",
         });
         await img.loadPromise!;
-        // let the layout pass settle before first placement, or the image
-        // can get positioned at pre-layout coordinates and stick there
-        await sleep(35);
         [...slot.getChildren()].forEach((c: any) => { try { slot.remove(c); } catch {} });
         slot.add(img);
-      } catch {}
+      } catch {
+        if (slot.getChildren().length === 0) {
+          try {
+            slot.add(Text({ content: j.fallbackGlyph, fg: colors.sidebarFgMuted }));
+          } catch {}
+        }
+      }
       await new Promise((r) => setTimeout(r, 0));
     }
   };
@@ -869,7 +872,6 @@ const drainIconQueue = async () => {
     const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
     // glyph stays in the slot (hidden) so the scrim can fall back to it
     if (glyphNode) { try { glyphNode.visible = false; } catch {} }
-    await sleep(35);
     imgs.forEach((im) => slot.add(im));
   }));
 };
@@ -1075,29 +1077,45 @@ const renderGrid = async () => {
     const dim = e.name.startsWith(".");
     const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
     const slotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
-    const iconSlot = makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), tileStates(dim), ICON_CELLS_H, 0);
-    const tileBox = Box({ width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" }, iconSlot.el);
+
+    // image tiles: empty slot until the thumbnail lands (no icon->photo swap);
+    // everything else queues its category raster as usual
+    const wantsThumb = !e.isDir && fileIsImage(e.name);
+    let st: any = null;
+    if (wantsThumb) { try { st = statSync(key); } catch {} }
+    const useThumb = wantsThumb && st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400;
+
+    let slotId: string;
+    let iconSpec: IconSpec | undefined;
+    let iconSlotEl: ReturnType<typeof Box>;
+    if (useThumb) {
+      slotId = `tfm-icon-${iconSeq++}`;
+      iconSlotEl = Box({ id: slotId, width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" });
+    } else {
+      const s = makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), tileStates(dim), ICON_CELLS_H, 0);
+      slotId = s.slotId;
+      iconSpec = s.spec;
+      iconSlotEl = s.el;
+    }
+    const tileBox = Box({ width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" }, iconSlotEl);
     tile.add(tileBox);
 
     const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
     const labelText: any = Text({ id: labelId, content: label, fg: baseFg });
     tile.add(labelText);
 
-    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, selected: false, baseFg, tileId, labelId });
+    tileRefsByKey.set(key, { iconSpec, selected: false, baseFg, tileId, labelId });
 
-    if (!e.isDir && fileIsImage(e.name)) {
-      let st: any = null;
-      try { st = statSync(key); } catch {}
-      if (st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400) {
+    if (useThumb && st) {
         thumbJobs.push({
-          slotId: iconSlot.slotId,
+          slotId,
           path: key,
           mtimeMs: st.mtimeMs ?? 0,
           size: st.size,
           wCells: slotW,
           vector: e.name.toLowerCase().endsWith(".svg"),
+          fallbackGlyph: glyph[fileIconFor(e.name) as keyof typeof glyph] ?? glyph.file!,
         });
-      }
     }
 
     return tile;
@@ -1323,9 +1341,11 @@ const boot = async () => {
 
   const inputEl: any = renderer.root.findDescendantById("tfm-search");
   if (inputEl?.on) {
+    let searchTimer: any = null;
     inputEl.on("input", () => {
       try { searchQuery = String(inputEl.value ?? ""); } catch {}
-      void renderGrid();
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { searchTimer = null; void renderGrid(); }, 150);
     });
     inputEl.on("enter", () => clearSearch());
   }
