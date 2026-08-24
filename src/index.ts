@@ -894,7 +894,14 @@ const renderMenuContent = () => {
     Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
   ));
 
-  const row = (icon: string | undefined, label: string, hint: string | undefined, active: boolean, onClick: (ev?: any) => void) =>
+  const row = (
+    icon: string | undefined,
+    label: string,
+    hint: string | undefined,
+    active: boolean,
+    index: number,
+    onClick: (ev?: any) => void,
+  ) =>
     Box(
       {
         width: "100%",
@@ -905,6 +912,12 @@ const renderMenuContent = () => {
         paddingRight: 1,
         backgroundColor: active ? colors.accentBg : undefined,
         onMouseDown: onClick,
+        onMouseOver: () => {
+          if (menuIdx !== index) {
+            menuIdx = index;
+            renderMenuContent();
+          }
+        },
       },
       ...(icon
         ? [makeIconSlot(
@@ -922,9 +935,10 @@ const renderMenuContent = () => {
       ...(hint ? [Text({ content: hint + " ", fg: colors.sidebarFgMuted })] : []),
     );
 
-  const activateRow = (fn: () => void) => (ev: any) => {
+  const activateRow = (index: number) => (ev: any) => {
     try { ev.stopPropagation?.(); } catch {}
-    fn();
+    menuIdx = index;
+    menuActivate();
   };
 
   if (menuView === "root") {
@@ -932,14 +946,14 @@ const renderMenuContent = () => {
       { label: "Settings", icon: "cog", action: () => {} },
       { label: "Quit", icon: "power", hint: "ctrl+q", action: () => {} },
     ];
-    items.forEach((it, i) => panel.add(row(it.icon, it.label, it.hint, i === menuIdx, activateRow(menuActivate))));
+    items.forEach((it, i) => panel.add(row(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))));
   } else {
-    panel.add(row(state.showHidden ? "eye" : "eye-off", `hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, activateRow(menuActivate)));
+    panel.add(row(state.showHidden ? "eye" : "eye-off", `hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, 0, activateRow(0)));
     panel.add(Box(
       { width: "100%", height: 1, paddingLeft: 1 },
       Text({ content: ` theme from ${configPath().replace(home, "~")}`, fg: colors.sidebarFgMuted }),
     ));
-    panel.add(row("chevron-left", "back", undefined, menuIdx === 1, activateRow(menuActivate)));
+    panel.add(row("chevron-left", "back", undefined, menuIdx === 1, 1, activateRow(1)));
   }
 
   panel.add(Box(
