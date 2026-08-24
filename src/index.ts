@@ -746,6 +746,19 @@ const container = Box(
       Text({ id: "tfm-status-label", content: "", fg: colors.sidebarFgMuted }),
     ),
   ),
+  ...(config.ui.previewEnabled
+    ? [Box(
+        {
+          id: "tfm-preview",
+          width: config.ui.previewWidth,
+          height: "100%",
+          backgroundColor: colors.sidebarBg,
+          flexDirection: "column",
+          paddingLeft: 1,
+          paddingRight: 1,
+        },
+      )]
+    : []),
 );
 
 // --- Renderer boot ---
@@ -1049,6 +1062,7 @@ const setFocusedIdx = (idx: number): boolean => {
   const key = focusKeys[idx]!;
   const refs = tileRefsByKey.get(key);
   if (refs) setTileVisual(key, refs.selected ? 2 : 1);
+  void renderPreview();
   if (scroller) {
     try {
       const row = Math.floor(idx / colsAtBuild);
@@ -1239,6 +1253,81 @@ const trashPaths = (paths: string[]): void => {
     if (paths.length) setStatusMsg(ok === paths.length ? `Trashed ${ok} item${ok === 1 ? "" : "s"}` : `Trashed ${ok}/${paths.length}`);
   })();
 };
+
+// --- Preview pane ---
+const TEXT_PREVIEW_MAX = 262144;
+const isTextLike = (name: string): boolean => {
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  if (FILE_ICON_BY_EXT[ext] === "file-image" || FILE_ICON_BY_EXT[ext] === "file-video") return false;
+  const mime = globs2ByExt?.get(ext);
+  if (mime) return mime.startsWith("text/") || /^(application\/(json|xml|javascript|x-yaml|x-sh))/.test(mime) || mime.endsWith("+xml");
+  return ["md", "markdown", "txt", "log", "json", "yaml", "yml", "toml", "ini", "conf", "html", "css", "csv"].includes(ext)
+    || FILE_ICON_BY_EXT[ext] === "file-code"
+    || FILE_ICON_BY_EXT[ext] === "file-document";
+};
+
+let previewGen = 0;
+
+const renderPreview = async () => {
+  if (!config.ui.previewEnabled) return;
+  const gen = ++previewGen;
+  const pane: any = renderer.root.findDescendantById("tfm-preview");
+  if (!pane) return;
+  [...pane.getChildren()].forEach((c: any) => pane.remove(c));
+
+  // target = focused tile, else single selected, else folder summary
+  let key: string | null = null;
+  if (focusIdx >= 0 && focusKeys[focusIdx]) key = focusKeys[focusIdx]!;
+  else {
+    let selCount = 0;
+    let selKey: string | null = null;
+    tileRefsByKey.forEach((r, k) => { if (r.selected) { selCount++; selKey = k; } });
+    if (selCount === 1 && selKey) key = selKey;
+    else if (selCount > 1) {
+      pane.add(Text({ content: `${selCount} items selected`, fg: colors.sidebarFg }));
+      return;
+    }
+  }
+
+  if (!key || !existsSync(key)) {
+    pane.add(Box({ height: 1 }));
+    pane.add(Text({ content: "no selection", fg: colors.sidebarFgMuted }));
+    return;
+  }
+
+  let st: any = null;
+  try { st = statSync(key); } catch { return; }
+  if (gen !== previewGen) return;
+  const isDirTarget = st.isDirectory();
+
+  pane.add(Text({ content: ` ${path.basename(key)}${isDirTarget ? "/" : ""}`, fg: colors.white }));
+  pane.add(Text({ content: "~".repeat(Math.max(0, config.ui.previewWidth - 2)), fg: colors.divider }));
+
+  if (isDirTarget) {
+    try {
+      const kids = await readdir(key);
+      if (gen !== previewGen) return;
+      const dirs = kids.filter((k) => { try { return statSync(path.join(key, k)).isDirectory(); } catch { return false; } }).length;
+      pane.add(Text({ content: ` ${kids.length} items`, fg: colors.sidebarFg }));
+      pane.add(Text({ content: ` ${dirs} folders · ${kids.length - dirs} files`, fg: colors.sidebarFgMuted }));
+    } catch {}
+    void drainIconQueue();
+    return;
+  }
+
+  pane.add(Text({ content: ` ${(st.size / 1024).toFixed(1)} KB`, fg: colors.sidebarFgMuted }));
+
+  if (!isTextLike(key) || st.size > TEXT_PREVIEW_MAX) return;
+
+  try {
+    const text = (await readFile(key, "utf8")).slice(0, 65536);
+    if (gen !== previewGen) return;
+    for (const line of text.split("\n")) {
+      pane.add(Text({ content: line.slice(0, config.ui.previewWidth - 2), fg: colors.sidebarFg }));
+    }
+  } catch {}
+};
+
 let bandStart: { x: number; y: number } | null = null;
 const BAND_ID = "tfm-band";
 
@@ -1276,6 +1365,7 @@ const finalizeBand = (ev: any) => {
     }
   });
   updateSelectionStatusReal();
+  void renderPreview();
 };
 
 const clearGrid = () => {
@@ -1355,6 +1445,7 @@ const renderGrid = async () => {
         const refs = tileRefsByKey.get(key);
         if (refs) { refs.selected = true; setTileVisual(key, 2); }
         updateSelectionStatusReal();
+        void renderPreview();
       },
       onMouseOver: () => {
         const refs = tileRefsByKey.get(key);
@@ -1791,6 +1882,7 @@ renderAll = () => {
   renderSidebar();
   void drainIconQueue();
   void renderGrid();
+  void renderPreview();
   stripSelectable();
 };
 

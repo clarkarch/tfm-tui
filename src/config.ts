@@ -23,6 +23,8 @@ export type UiConfig = {
   iconCells: number;
   doubleClickMs: number;
   showHidden: boolean;
+  previewEnabled: boolean;
+  previewWidth: number;
 };
 
 export type Config = { ui: UiConfig; theme: Theme };
@@ -35,6 +37,8 @@ export const defaultConfig: Config = {
     iconCells: 3,
     doubleClickMs: 400,
     showHidden: false,
+    previewEnabled: false,
+    previewWidth: 40,
   },
   theme: {
     bg: "#1a1b26",
@@ -97,6 +101,8 @@ export function loadConfig(): Config {
       iconCells: clampInt(uiRaw["icon-cells"], 1, 5, defaultConfig.ui.iconCells),
       doubleClickMs: clampInt(uiRaw["double-click-ms"], 100, 2000, defaultConfig.ui.doubleClickMs),
       showHidden: typeof uiRaw["show-hidden"] === "boolean" ? uiRaw["show-hidden"] : defaultConfig.ui.showHidden,
+      previewEnabled: typeof uiRaw["preview-enabled"] === "boolean" ? uiRaw["preview-enabled"] : defaultConfig.ui.previewEnabled,
+      previewWidth: clampInt(uiRaw["preview-width"], 20, 80, defaultConfig.ui.previewWidth),
     },
     theme: THEME_KEYS.reduce((acc, key) => {
       acc[key] = pickColor(themeRaw[key], defaultConfig.theme[key]);
