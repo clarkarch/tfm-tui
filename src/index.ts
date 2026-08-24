@@ -552,10 +552,46 @@ const refreshNav = () => {
 
 const crumbSep = () => Text({ content: " › ", fg: colors.sidebarFgMuted });
 
+let pathEditMode = false;
+let crumbClickAt = 0;
+
+const exitPathEdit = () => {
+  pathEditMode = false;
+  renderCrumbs();
+};
+
+const enterPathEdit = () => {
+  pathEditMode = true;
+  renderCrumbs();
+};
+
 const renderCrumbs = () => {
   const box: any = renderer.root.findDescendantById("tfm-crumbs");
   if (!box) return;
   [...box.getChildren()].forEach((c: any) => box.remove(c));
+
+  if (pathEditMode) {
+    const cwdAbs = path.resolve(state.cwd);
+    const shortCwd = cwdAbs.startsWith(home) ? "~" + cwdAbs.slice(home.length) : cwdAbs;
+    const input: any = Input({
+      id: "tfm-path-input",
+      flexGrow: 1,
+      value: shortCwd,
+      backgroundColor: colors.accentBg,
+      focusedBackgroundColor: colors.accentBg,
+      textColor: colors.white,
+    });
+    box.add(input);
+    setTimeout(() => { try { input.focus(); } catch {} }, 20);
+    input.on?.("enter", () => {
+      const target = String(input.value ?? "").replace(/^~(?=\/|$)/, home);
+      pathEditMode = false;
+      renderCrumbs();
+      navigate(target);
+    });
+    stripSelectable();
+    return;
+  }
 
   const cwdAbs = path.resolve(state.cwd);
   const inHome = cwdAbs === home || cwdAbs.startsWith(home + path.sep);
@@ -629,7 +665,22 @@ const makeToolbarShell = (): ReturnType<typeof Box> =>
       { height: 1, flexGrow: 1, flexBasis: 0, overflow: "hidden", flexDirection: "row", columnGap: 1 },
       makeNavButton("tfm-nav-back", "chevron-left", goBack),
       makeNavButton("tfm-nav-fwd", "chevron-right", goFwd),
-      Box({ id: "tfm-crumbs", height: 1, flexDirection: "row", columnGap: 1 }),
+      Box({
+        id: "tfm-crumbs",
+        height: 1,
+        flexDirection: "row",
+        columnGap: 1,
+        onMouseDown: () => {
+          const now = Date.now();
+          if (pathEditMode) return;
+          if (now - crumbClickAt < 350) {
+            crumbClickAt = 0;
+            enterPathEdit();
+          } else {
+            crumbClickAt = now;
+          }
+        },
+      }),
     ),
     makeSearch(),
   );
@@ -1369,6 +1420,16 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
 
   const el: any = renderer.root.findDescendantById("tfm-search");
+  const pathInput: any = renderer.root.findDescendantById("tfm-path-input");
+
+  if (pathInput?.visible || pathEditMode) {
+    if (e.name === "escape") {
+      exitPathEdit();
+      return;
+    }
+    return;
+  }
+
   if (el?.visible && (e.name === "escape" || e.name === "return")) {
     clearSearch();
     return;
