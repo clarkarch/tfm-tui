@@ -591,7 +591,27 @@ const iconPng = async (name: string, fg: string, bg: string, pxW: number, pxH: n
   return bytes;
 };
 
-const rasterStatesInto = async (slotId: string, name: string, states: IconState[], heightCells: number, wCells: number, initial: number) => {
+const dimHex = (hex: string, f: number): string => {
+  if (f === 1) return hex;
+  const m = hex.match(/^#([0-9a-fA-F]{6})$/);
+  if (!m || !m[1]) return hex;
+  const n = parseInt(m[1], 16);
+  const r = Math.round(((n >> 16) & 255) * f);
+  const g = Math.round(((n >> 8) & 255) * f);
+  const b = Math.round((n & 255) * f);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+};
+
+const rasterStatesInto = async (
+  slotId: string,
+  name: string,
+  states: IconState[],
+  heightCells: number,
+  wCells: number,
+  initial: number,
+  dimFactor = 1,
+  idPrefix = "s",
+) => {
   const { cellW, cellH } = cellMetrics();
   const imgs: any[] = [];
   for (let si = 0; si < states.length; si++) {
@@ -599,13 +619,13 @@ const rasterStatesInto = async (slotId: string, name: string, states: IconState[
       const st = states[si]!;
       const bytes = await iconPng(
         name,
-        st.fg,
-        st.bg,
+        dimHex(st.fg, dimFactor),
+        dimHex(st.bg, dimFactor),
         Math.max(1, Math.round(wCells * cellW)),
         Math.max(1, Math.round(heightCells * cellH)),
       );
       const img = new ImageRenderable(renderer, {
-        id: `${slotId}-s${si}`,
+        id: `${slotId}-${idPrefix}${si}`,
         source: bytes,
         width: wCells,
         height: heightCells,
@@ -629,14 +649,34 @@ const drainIconQueue = async () => {
     const slot: any = renderer.root.findDescendantById(spec.slotId);
     if (!slot) return;
     const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
-    const imgs = await rasterStatesInto(spec.slotId, spec.name, spec.states, spec.heightCells, wCells, spec.initialState);
-    if (imgs.length === 0) return;
-    slot.width = wCells;
-    const kids = slot.getChildren?.() ?? [];
-    const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
-    if (glyphNode) slot.remove(glyphNode);
-    imgs.forEach((im) => slot.add(im));
+    // normal states (-s*) + scrimmed variants (-d*) pre-blended to match the
+    // menu backdrop (black @ ~59% alpha), since kitty images sit above cells
+    for (const [prefix, dim] of [["s", false], ["d", true]] as const) {
+      const imgs = await rasterStatesInto(spec.slotId, spec.name, spec.states, spec.heightCells, wCells, spec.initialState, dim ? 0.41 : 1, prefix);
+      if (imgs.length === 0) continue;
+      if (prefix === "d") imgs.forEach((im) => { try { im.visible = false; } catch {} });
+      if (prefix === "s") {
+        slot.width = wCells;
+        const kids = slot.getChildren?.() ?? [];
+        const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
+        if (glyphNode) slot.remove(glyphNode);
+      }
+      imgs.forEach((im) => slot.add(im));
+    }
   }));
+};
+
+const setScrim = (on: boolean) => {
+  for (const spec of iconQueue) {
+    const slot: any = renderer.root.findDescendantById(spec.slotId);
+    if (!slot) continue;
+    const kids = (slot.getChildren?.() ?? []) as any[];
+    const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && !k.id.endsWith("-g"));
+    const dimImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-d`));
+    if (dimImgs.length !== stateImgs.length || dimImgs.length === 0) continue;
+    stateImgs.forEach((k, i) => { try { k.visible = !on && i === spec.initialState; } catch {} });
+    dimImgs.forEach((k, i) => { try { k.visible = on && i === spec.initialState; } catch {} });
+  }
 };
 
 // --- Grid (scrollable, culled, interactive) ---
@@ -839,7 +879,7 @@ const openMenu = () => {
   menuOpen = true;
   menuView = "root";
   menuIdx = 0;
-  try { if (scroller) scroller.visible = false; } catch {}
+  setScrim(true);
   const scrim = Box(
     {
       id: "tfm-menu",
@@ -873,7 +913,7 @@ const closeMenu = () => {
   menuOpen = false;
   const scrim: any = renderer.root.findDescendantById("tfm-menu");
   scrim?.parent?.remove(scrim);
-  try { scroller && (scroller.visible = true); } catch {}
+  setScrim(false);
 };
 
 const moveMenu = (delta: number) => {
