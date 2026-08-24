@@ -31,6 +31,10 @@ const glyph = {
   "chevron-left": "\u{F0141}",
   "chevron-right": "\u{F0142}",
   "desktop-tower": "\u{F01C5}",
+  cog: "\u{F0493}",
+  power: "\u{F0425}",
+  eye: "\u{F0208}",
+  "eye-off": "\u{F0209}",
 };
 
 // --- Icon slots ---
@@ -752,6 +756,12 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   }
 };
 
+const clearTileSelection = () => {
+  tileRefsByKey.forEach((refs, k) => {
+    if (refs.selected) { refs.selected = false; setTileVisual(k, 0); }
+  });
+};
+
 const clearGrid = () => {
   if (!scroller) return;
   const content: any = scroller.content;
@@ -795,7 +805,8 @@ const renderGrid = async () => {
       flexDirection: "column",
       alignItems: "center",
       justifyContent: "flex-start",
-      onMouseDown: () => {
+      onMouseDown: (ev: any) => {
+        try { ev.stopPropagation?.(); } catch {}
         const now = Date.now();
         if (now - lastClick < config.ui.doubleClickMs) {
           if (e.isDir) navigate(key);
@@ -804,9 +815,7 @@ const renderGrid = async () => {
           return;
         }
         lastClick = now;
-        tileRefsByKey.forEach((refs, k) => {
-          if (refs.selected) { refs.selected = false; setTileVisual(k, 0); }
-        });
+        clearTileSelection();
         const refs = tileRefsByKey.get(key);
         if (refs) { refs.selected = true; setTileVisual(key, 2); }
       },
@@ -885,7 +894,7 @@ const renderMenuContent = () => {
     Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
   ));
 
-  const row = (label: string, hint: string | undefined, active: boolean, onClick: () => void) =>
+  const row = (icon: string | undefined, label: string, hint: string | undefined, active: boolean, onClick: () => void) =>
     Box(
       {
         width: "100%",
@@ -897,24 +906,35 @@ const renderMenuContent = () => {
         backgroundColor: active ? colors.accentBg : undefined,
         onMouseDown: onClick,
       },
+      ...(icon
+        ? [makeIconSlot(
+            icon,
+            [
+              { fg: colors.sidebarFg, bg: active ? colors.accentBg : colors.sidebarBg },
+              { fg: colors.white, bg: colors.accentBg },
+            ],
+            1,
+            active ? 1 : 0,
+          ).el]
+        : []),
       Text({ content: ` ${label}`, fg: active ? colors.white : colors.sidebarFg }),
       Box({ flexGrow: 1 }),
       ...(hint ? [Text({ content: hint + " ", fg: colors.sidebarFgMuted })] : []),
     );
 
   if (menuView === "root") {
-    const items: MenuEntry[] = [
-      { label: "Settings", action: () => {} },
-      { label: "Quit", hint: "ctrl+q", action: () => {} },
+    const items: (MenuEntry & { icon?: string })[] = [
+      { label: "Settings", icon: "cog", action: () => {} },
+      { label: "Quit", icon: "power", hint: "ctrl+q", action: () => {} },
     ];
-    items.forEach((it, i) => panel.add(row(it.label, it.hint, i === menuIdx, menuActivate)));
+    items.forEach((it, i) => panel.add(row(it.icon, it.label, it.hint, i === menuIdx, menuActivate)));
   } else {
-    panel.add(row(`hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, menuActivate));
+    panel.add(row(state.showHidden ? "eye" : "eye-off", `hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, menuActivate));
     panel.add(Box(
       { width: "100%", height: 1, paddingLeft: 1 },
       Text({ content: ` theme from ${configPath().replace(home, "~")}`, fg: colors.sidebarFgMuted }),
     ));
-    panel.add(row("back", undefined, menuIdx === 1, menuActivate));
+    panel.add(row("chevron-left", "back", undefined, menuIdx === 1, menuActivate));
   }
 
   panel.add(Box(
@@ -922,6 +942,7 @@ const renderMenuContent = () => {
     Text({ content: " esc close · ↑↓ move · enter select", fg: colors.sidebarFgMuted }),
   ));
   stripSelectable();
+  void drainIconQueue();
 };
 
 const openMenu = () => {
@@ -949,9 +970,6 @@ const openMenu = () => {
         id: "tfm-menu-panel",
         width: MENU_W,
         backgroundColor: colors.sidebarBg,
-        border: true,
-        borderStyle: "rounded",
-        borderColor: colors.accent,
         paddingTop: 1,
         paddingBottom: 1,
       },
@@ -995,6 +1013,7 @@ const boot = async () => {
     scrollY: true,
     viewportCulling: true,
     contentOptions: { flexDirection: "column" },
+    onMouseDown: () => clearTileSelection(),
   });
   const host: any = renderer.root.findDescendantById("tfm-grid-host");
   host.add(scroller);
