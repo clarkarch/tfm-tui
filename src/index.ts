@@ -418,7 +418,7 @@ function buildSections(): Place[][] {
 
 // --- Places sidebar (rebuilt from scratch on every render, selection = cwd) ---
 
-const placesHost: { row: ReturnType<typeof Box> }[] = [];
+const placesHost: { row: ReturnType<typeof Box>; rowId: string; labelId: string; specs: IconSpec[]; selected: boolean; place: Place }[] = [];
 
 const sw = config.ui.sidebarWidth;
 
@@ -493,7 +493,14 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
   });
   rowNode.add(labelText);
   if (ejectSlot) rowNode.add(ejectSlot.el);
-  placesHost.push({ row: rowNode });
+  placesHost.push({
+    row: rowNode,
+    rowId: `tfm-place-${idx}`,
+    labelId: `tfm-place-${idx}-label`,
+    specs: ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec],
+    selected,
+    place,
+  });
   return rowNode;
 };
 
@@ -513,6 +520,9 @@ const renderSidebar = () => {
     for (const place of group) hostBox.add(makeRow(place));
     if (gi < groups.length - 1) hostBox.add(makeDivider());
   });
+  if (sidebarActive && placeIdx >= 0) {
+    applyPlaceLook(Math.min(placeIdx, placesHost.length - 1), "hover");
+  }
 };
 
 const makeTitle = () =>
@@ -1010,6 +1020,33 @@ let focusIdx = -1;
 let colsAtBuild = 1;
 let typeBuf = "";
 let typeTimer: any = null;
+
+// sidebar keyboard focus
+let sidebarActive = false;
+let placeIdx = -1;
+
+const setSidebarFocus = (idx: number): boolean => {
+  if (idx < 0 || idx >= placesHost.length) return false;
+  if (placeIdx >= 0 && placeIdx !== idx) applyPlaceLook(placeIdx, "normal");
+  placeIdx = idx;
+  applyPlaceLook(idx, "hover");
+  return true;
+};
+
+const leaveSidebarToGrid = () => {
+  if (sidebarActive && placeIdx >= 0) applyPlaceLook(placeIdx, "normal");
+  sidebarActive = false;
+};
+
+const applyPlaceLook = (idx: number, mode: "hover" | "normal") => {
+  const rec = placesHost[idx];
+  if (!rec || rec.selected) return;
+  const row: any = renderer.root.findDescendantById(rec.rowId);
+  const label: any = renderer.root.findDescendantById(rec.labelId);
+  try { if (row) row.backgroundColor = mode === "hover" ? colors.hoverBg : colors.sidebarBg; } catch {}
+  rec.specs.forEach((s) => setIconState(s, mode === "hover" ? 1 : 0));
+  try { if (label) label.fg = colors.sidebarFg; } catch {}
+};
 
 const setFocusedIdx = (idx: number): boolean => {
   if (idx < 0 || idx >= focusKeys.length) return false;
@@ -1870,10 +1907,47 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   if (el?.visible) return;
 
-  // --- grid keyboard navigation ---
+  // --- keyboard navigation: sidebar <-> grid ---
+  if (sidebarActive) {
+    if (e.name === "up") { setSidebarFocus(placeIdx - 1); return; }
+    if (e.name === "down") { setSidebarFocus(placeIdx + 1); return; }
+    if (e.name === "left" || e.name === "right") {
+      leaveSidebarToGrid();
+      setFocusedIdx(focusIdx >= 0 ? focusIdx : 0);
+      return;
+    }
+    if (e.name === "return") {
+      const rec = placesHost[placeIdx];
+      if (rec) {
+        closeFileMenu();
+        sidebarActive = false;
+        placeIdx = -1;
+        if (rec.place.path) navigate(rec.place.path);
+        else if (rec.place.mountDevice) mountDevice(rec.place.mountDevice);
+      }
+      return;
+    }
+    return;
+  }
+
   if (e.name === "up") { moveFocus(0, -1); return; }
   if (e.name === "down") { moveFocus(0, 1); return; }
-  if (e.name === "left") { moveFocus(-1, 0); return; }
+  if (e.name === "left") {
+    const atLeftEdge = focusIdx === -1 || focusIdx % colsAtBuild === 0;
+    if (atLeftEdge || focusKeys.length === 0) {
+      const selRec = placesHost.findIndex((p) => p.selected);
+      const pk = focusIdx >= 0 ? focusKeys[focusIdx] : undefined;
+      if (pk !== undefined) {
+        const pr = tileRefsByKey.get(pk);
+        if (pr && !pr.selected) setTileVisual(pk, 0);
+      }
+      sidebarActive = true;
+      setSidebarFocus(selRec >= 0 ? selRec : 0);
+      return;
+    }
+    moveFocus(-1, 0);
+    return;
+  }
   if (e.name === "right") { moveFocus(1, 0); return; }
   if (e.name === "return" && focusIdx >= 0) {
     const key = focusKeys[focusIdx];
