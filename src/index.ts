@@ -1038,7 +1038,7 @@ const updateSelectionStatusReal = () => {
     await Promise.all(dirs.map(async (d) => {
       try { contained += (await readdir(d.key)).length; } catch {}
     }));
-    setStatus(dirs.length === 1 && sel.length === 1 ? `${contained} items` : `${sel.length} selected · ${contained} items`);
+    setStatus(dirs.length === 1 && sel.length === 1 ? `${contained} items` : `${sel.length} selected`);
   })();
 };
 
