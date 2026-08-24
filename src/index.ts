@@ -1051,17 +1051,15 @@ const normalizePlaces = () => {
   });
 };
 
-const setFocusedIdx = (idx: number): boolean => {
+// arrows and clicks drive the SAME single selection; there is no separate
+// focus highlight
+const selectTileAt = (idx: number): boolean => {
   if (idx < 0 || idx >= focusKeys.length) return false;
-  const prevKey = focusKeys[focusIdx];
-  if (prevKey !== undefined && prevKey !== focusKeys[idx]) {
-    const prevRefs = tileRefsByKey.get(prevKey);
-    if (prevRefs && !prevRefs.selected) setTileVisual(prevKey, 0);
-  }
-  focusIdx = idx;
+  clearTileSelection();
   const key = focusKeys[idx]!;
   const refs = tileRefsByKey.get(key);
-  if (refs) setTileVisual(key, refs.selected ? 2 : 1);
+  if (refs) { refs.selected = true; setTileVisual(key, 2); }
+  focusIdx = idx;
   void renderPreview();
   if (scroller) {
     try {
@@ -1074,13 +1072,12 @@ const setFocusedIdx = (idx: number): boolean => {
   }
   return true;
 };
-
 const moveFocus = (dx: number, dy: number): boolean => {
   if (focusKeys.length === 0) return false;
   let next = focusIdx === -1 ? 0 : focusIdx + dx + dy * colsAtBuild;
   next = Math.max(0, Math.min(focusKeys.length - 1, next));
   if (next === focusIdx) return false;
-  return setFocusedIdx(next);
+  return selectTileAt(next);
 };
 
 const typeAhead = (ch: string): boolean => {
@@ -1089,7 +1086,7 @@ const typeAhead = (ch: string): boolean => {
   typeTimer = setTimeout(() => { typeBuf = ""; }, 800);
   for (let i = 0; i < focusKeys.length; i++) {
     const base = path.basename(focusKeys[i]!).toLowerCase();
-    if (base.startsWith(typeBuf)) return setFocusedIdx(i);
+    if (base.startsWith(typeBuf)) return selectTileAt(i);
   }
   return false;
 };
@@ -1995,7 +1992,7 @@ renderer.keyInput.on("keypress", (e: any) => {
     if (e.name === "down") { setSidebarFocus(placeIdx + 1); return; }
     if (e.name === "left" || e.name === "right") {
       leaveSidebarToGrid();
-      setFocusedIdx(focusIdx >= 0 ? focusIdx : 0);
+      selectTileAt(focusIdx >= 0 ? focusIdx : 0);
       return;
     }
     if (e.name === "return") {
