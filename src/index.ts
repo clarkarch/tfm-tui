@@ -1049,7 +1049,7 @@ const renderGrid = async () => {
 
     tileRefsByKey.set(key, { iconSpec: iconSlot.spec, selected: false, baseFg, tileId, labelId });
 
-    if (!e.isDir && fileIsImage(e.name)) {
+    if (!e.isDir && fileIsImage(e.name) && !e.name.toLowerCase().endsWith(".svg")) {
       let st: any = null;
       try { st = statSync(key); } catch {}
       if (st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400) {
