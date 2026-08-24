@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, ImageRenderable, Input, InputRenderable, RGBA, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { readdir, readFile, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
@@ -956,6 +956,9 @@ const drainIconQueue = async () => {
     if (imgs.length === 0) return;
     slot.width = wCells;
     const kids = slot.getChildren?.() ?? [];
+    // drop previous rasters (e.g. after a resize re-raster at new cell pixels)
+    kids.filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
+      .forEach((k: any) => { try { slot.remove(k); } catch {} });
     const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
     // glyph stays in the slot (hidden) so the scrim can fall back to it
     if (glyphNode) { try { glyphNode.visible = false; } catch {} }
@@ -1000,6 +1003,56 @@ const ICON_CELLS_H = config.ui.iconCells;
 let scroller: ScrollBoxRenderable | null = null;
 let gridGen = 0;
 let tileSeq = 0;
+
+// keyboard focus over tiles
+let focusKeys: string[] = [];
+let focusIdx = -1;
+let colsAtBuild = 1;
+let typeBuf = "";
+let typeTimer: any = null;
+
+const setFocusedIdx = (idx: number): boolean => {
+  if (idx < 0 || idx >= focusKeys.length) return false;
+  const prevKey = focusKeys[focusIdx];
+  if (prevKey !== undefined && prevKey !== focusKeys[idx]) {
+    const prevRefs = tileRefsByKey.get(prevKey);
+    if (prevRefs && !prevRefs.selected) setTileVisual(prevKey, 0);
+  }
+  focusIdx = idx;
+  const key = focusKeys[idx]!;
+  const refs = tileRefsByKey.get(key);
+  if (refs) setTileVisual(key, refs.selected ? 2 : 1);
+  if (scroller) {
+    try {
+      const row = Math.floor(idx / colsAtBuild);
+      const vh = renderer.terminalHeight - 3;
+      const top = scroller.scrollTop;
+      if (row * TILE_H < top) scroller.scrollTo({ x: 0, y: row * TILE_H });
+      else if ((row + 1) * TILE_H > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * TILE_H - vh });
+    } catch {}
+  }
+  return true;
+};
+
+const moveFocus = (dx: number, dy: number): boolean => {
+  if (focusKeys.length === 0) return false;
+  const cur = focusIdx === -1 ? 0 : focusIdx;
+  let next = focusIdx === -1 ? 0 : cur + dx + dy * colsAtBuild;
+  next = Math.max(0, Math.min(focusKeys.length - 1, next));
+  focusIdx = next;
+  return setFocusedIdx(next);
+};
+
+const typeAhead = (ch: string): boolean => {
+  typeBuf += ch.toLowerCase();
+  if (typeTimer) clearTimeout(typeTimer);
+  typeTimer = setTimeout(() => { typeBuf = ""; }, 800);
+  for (let i = 0; i < focusKeys.length; i++) {
+    const base = path.basename(focusKeys[i]!).toLowerCase();
+    if (base.startsWith(typeBuf)) return setFocusedIdx(i);
+  }
+  return false;
+};
 
 type TileRefs = { iconSpec?: IconSpec; selected: boolean; baseFg: string; tileId: string; labelId: string; isDir: boolean };
 const tileRefsByKey = new Map<string, TileRefs>();
@@ -1342,6 +1395,10 @@ const renderGrid = async () => {
 
   void drainIconQueue();
   void drainThumbs();
+  focusKeys = [...tileRefsByKey.keys()];
+  focusIdx = -1;
+  colsAtBuild = cols;
+  updateSelectionStatusReal();
 };
 
 // --- Prompt modal (rename / new folder) ---
@@ -1760,6 +1817,16 @@ const boot = async () => {
 };
 boot();
 
+// --- resize: repave rasters and rebuild layout ---
+let resizeTimer: any = null;
+renderer.on(CliRenderEvents.RESIZE, () => {
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    for (const s of iconQueue) s.done = false;
+    renderAll();
+  }, 150);
+});
+
 // --- Keyboard ---
 renderer.keyInput.on("keypress", (e: any) => {
   const ctrl = !!e.ctrl || !!e.control;
@@ -1803,6 +1870,30 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
   if (el?.visible) return;
+
+  // --- grid keyboard navigation ---
+  if (e.name === "up") { moveFocus(0, -1); return; }
+  if (e.name === "down") { moveFocus(0, 1); return; }
+  if (e.name === "left") { moveFocus(-1, 0); return; }
+  if (e.name === "right") { moveFocus(1, 0); return; }
+  if (e.name === "return" && focusIdx >= 0) {
+    const key = focusKeys[focusIdx];
+    const refs = key !== undefined ? tileRefsByKey.get(key) : undefined;
+    if (key && refs) {
+      if (refs.isDir) navigate(key);
+      else spawn("xdg-open", [key], { stdio: "ignore", detached: true }).unref?.();
+    }
+    return;
+  }
+  if (e.name === "backspace") {
+    const parent = path.dirname(path.resolve(state.cwd));
+    if (parent !== path.resolve(state.cwd)) navigate(parent);
+    return;
+  }
+  if (!ctrl && typeof e.name === "string" && e.name.length === 1 && /[a-z0-9._-]/i.test(e.name)) {
+    typeAhead(e.name);
+    return;
+  }
 
   if (e.name === "escape") {
     openMenu();
