@@ -1,6 +1,6 @@
-import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync, watch } from "node:fs";
 import { readdir, readFile, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,7 @@ const glyph = {
   pencil: "\u{F03EB}",
   "folder-plus": "\u{F0770}",
   "select-all": "\u{F0478}",
+  sort: "\u{F04BA}",
 };
 
 // --- File type categories (extension -> icon); generic `file` is the fallback,
@@ -210,6 +211,8 @@ type AppState = {
   history: string[];
   histIdx: number;
   showHidden: boolean;
+  sortBy: SortMode;
+  sortAsc: boolean;
 };
 
 const state: AppState = {
@@ -217,6 +220,8 @@ const state: AppState = {
   history: [process.cwd()],
   histIdx: 0,
   showHidden: config.ui.showHidden,
+  sortBy: "name",
+  sortAsc: true,
 };
 
 let renderAll: () => void = () => {};
@@ -468,6 +473,11 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
         if (place.path) navigate(place.path);
         else if (place.mountDevice) mountDevice(place.mountDevice);
       },
+      onMouseDrop: () => {
+        const keys = dragKeys;
+        finishDragState();
+        if (keys && place.path) void moveInto(place.path, keys.filter((k) => k.path !== place.path));
+      },
       onMouseOver: () => { mousePlaceIdx = idx; normalizePlaces(); },
       onMouseOut: () => { if (mousePlaceIdx === idx) { mousePlaceIdx = -1; normalizePlaces(); } },
     },
@@ -687,6 +697,21 @@ const makeSearch = () => {
   return wrap;
 };
 
+const makeSortButton = (): ReturnType<typeof Box> =>
+  Box(
+    {
+      id: "tfm-sort-btn",
+      height: 1,
+      width: 3,
+      justifyContent: "center",
+      onMouseDown: (ev: any) => {
+        closeFileMenu();
+        openContextMenu(ev.x, ev.y, "", sortEntries());
+      },
+    },
+    makeIconSlot("sort", [{ fg: colors.sidebarFg, bg: colors.bg }], 1).el,
+  );
+
 const makeToolbarShell = (): ReturnType<typeof Box> =>
   Box(
     { id: "tfm-toolbar", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, paddingRight: 1, columnGap: 1 },
@@ -715,18 +740,38 @@ const makeToolbarShell = (): ReturnType<typeof Box> =>
         },
       }),
     ),
+    makeSortButton(),
     makeSearch(),
   );
 
 // --- Directory listing ---
-type Entry = { name: string; isDir: boolean };
+type SortMode = "name" | "size" | "mtime" | "type";
+type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number };
 
 async function listDir(dir: string, showHidden: boolean): Promise<Entry[]> {
   const dirents = await readdir(dir, { withFileTypes: true });
-  return dirents
+  const out: Entry[] = dirents
     .filter((d) => showHidden || !d.name.startsWith("."))
-    .map((d) => ({ name: d.name, isDir: d.isDirectory() }))
-    .sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name));
+    .map((d) => ({ name: d.name, isDir: d.isDirectory() }));
+  if (state.sortBy === "size" || state.sortBy === "mtime") {
+    for (const e of out) {
+      try { const st = statSync(path.join(dir, e.name)); e.size = st.size; e.mtimeMs = st.mtimeMs ?? 0; } catch {}
+    }
+  }
+  const extOf = (n: string): string => {
+    const b = n.startsWith(".") ? n.slice(1) : n;
+    const i = b.lastIndexOf(".");
+    return i > 0 ? b.slice(i + 1).toLowerCase() : "";
+  };
+  const cmp = (a: Entry, b: Entry): number => {
+    switch (state.sortBy) {
+      case "size": return (a.size ?? 0) - (b.size ?? 0);
+      case "mtime": return (a.mtimeMs ?? 0) - (b.mtimeMs ?? 0);
+      case "type": return extOf(a.name).localeCompare(extOf(b.name)) || a.name.localeCompare(b.name);
+      default: return a.name.localeCompare(b.name);
+    }
+  };
+  return out.sort((a, b) => Number(b.isDir) - Number(a.isDir) || (state.sortAsc ? cmp(a, b) : -cmp(a, b)));
 }
 
 // --- Layout ---
@@ -762,7 +807,7 @@ const container = Box(
 );
 
 // --- Renderer boot ---
-const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 60, maxFps: 120 });
+const renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 60, maxFps: 120 });
 renderer.root.add(container);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1170,7 +1215,88 @@ const selPaths = (): ClipItem[] => {
 
 const setClipboard = (mode: "copy" | "cut", items: ClipItem[]) => {
   clipboard = items.length ? { mode, items } : null;
+  if (clipboard) toSystemClipboard(mode, items);
   setStatusMsg(clipboard ? `${mode === "cut" ? "Cut" : "Copied"} ${items.length} item${items.length === 1 ? "" : "s"}` : "");
+};
+
+// --- system clipboard bridge (Nautilus-style copied-files) ---
+// Nautilus publishes files on the CLIPBOARD selection as MIME
+// `x-special/gnome-copied-files`: first line = "copy"|"cut", then one
+// file:// URI per line. wl-copy/xclip let us publish the same thing.
+const CLIP_TYPE = "x-special/gnome-copied-files";
+
+const sysClipTool = (): { get: string; put: string; putBase: string[]; getArgs: string[] } | null => {
+  if (process.env.WAYLAND_DISPLAY) {
+    return { get: "wl-paste", put: "wl-copy", putBase: [], getArgs: ["-t", CLIP_TYPE] };
+  }
+  if (process.env.DISPLAY) {
+    // -l 4: serve a few requests (target probe + fetch) then exit so we don't own it forever
+    return { get: "xclip", put: "xclip", putBase: ["-selection", "clipboard", "-l", "4"], getArgs: ["-selection", "clipboard", "-o", "-t", CLIP_TYPE] };
+  }
+  return null;
+};
+
+// We publish PLAIN TEXT full paths (one per line): pasting after tfm-copy
+// yields e.g. /home/clark/test.md in any app. Wayland/X11 CLI tools can only
+// offer ONE mime type per selection owner, and Nautilus file-paste needs
+// x-special/gnome-copied-files — so text wins here; reading stays multi-type
+// (we still accept gnome-copied-files from other apps on paste).
+const toSystemClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
+  const t = sysClipTool();
+  if (!t || !items.length) return;
+  const payload = items.map((i) => i.path).join("\n");
+  try {
+    const p = spawn(t.put, [...t.putBase], { stdio: ["pipe", "ignore", "ignore"] });
+    p.stdin?.end(payload);
+    p.unref?.();
+    dlog(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (text paths)`);
+  } catch (err) {
+    dlog(`system clipboard FAILED: ${err}`);
+  }
+};
+
+const pasteSmart = (dest: string): void => {
+  if (clipboard?.items.length) {
+    dlog(`paste: internal clipboard (${clipboard.items.length} items)`);
+    void doPaste(dest);
+    return;
+  }
+  const t = sysClipTool();
+  if (!t) { dlog("paste: no system clipboard tool"); return; }
+  dlog(`paste: reading system clipboard via ${t.get}`);
+  void execFileP(t.get, t.getArgs)
+    .then(({ stdout }) => {
+      const text = String(stdout ?? "");
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      dlog(`paste: system clip lines=${lines.length} head=${JSON.stringify(lines.slice(0, 2))}`);
+      if (!lines.length) return;
+      const op: "copy" | "move" = lines[0] === "cut" ? "move" : "copy";
+      const body = lines[0] === "copy" || lines[0] === "cut" ? lines.slice(1) : lines;
+      const paths = body
+        .filter((l) => l.startsWith("file://"))
+        .map((l) => {
+          let u = l.slice(7);
+          if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
+          try { u = decodeURIComponent(u); } catch {}
+          return u;
+        });
+      if (!paths.length) { dlog("paste: no file:// uris in system clip"); return; }
+      void (async () => {
+        let ok = 0;
+        for (const src of paths) {
+          let target = path.join(dest, path.basename(src));
+          if (existsSync(target)) target = uniqueTarget(dest, path.basename(src));
+          try {
+            if (op === "move") await fsMove(src, target);
+            else await cp(src, target, { recursive: true });
+            ok++;
+          } catch {}
+        }
+        renderAll();
+        setStatusMsg(`${op === "move" ? "Moved" : "Pasted"} ${ok} item${ok === 1 ? "" : "s"} from clipboard`);
+      })();
+    })
+    .catch((err) => { dlog(`paste: system clipboard read failed: ${err}`); });
 };
 
 const uniqueTarget = (dir: string, base: string): string => {
@@ -1212,6 +1338,63 @@ const doPaste = async (dest: string): Promise<void> => {
   }
   renderAll();
   setStatusMsg(`${mode === "cut" ? "Moved" : "Copied"} ${ok} item${ok === 1 ? "" : "s"}`);
+};
+
+// --- drag-to-move (press tile → drag → drop on folder tile or sidebar place) ---
+let dragKeys: ClipItem[] | null = null;
+let dragCtrl = false; // ctrl+drag = internal move, plain drag = external OSC 72
+let dragActive = false;
+let dropTargetKey: string | null = null;
+let dragStartX = 0;
+let dragStartY = 0;
+
+const DRAG_GHOST_ID = "tfm-drag-ghost";
+
+const updateDragGhost = (x: number, y: number): void => {
+  const g: any = renderer.root.findDescendantById(DRAG_GHOST_ID);
+  if (!g) return;
+  try {
+    const n = dragKeys?.length ?? 0;
+    const label = `moving ${n} item${n === 1 ? "" : "s"}`;
+    const t: any = renderer.root.findDescendantById(`${DRAG_GHOST_ID}-label`);
+    if (t && t.content !== label) t.content = label;
+    g.width = label.length + 2;
+    g.left = Math.max(0, Math.min(x + 1, renderer.terminalWidth - label.length - 2));
+    g.top = Math.max(0, Math.min(y + 1, renderer.terminalHeight - 1));
+    g.visible = true;
+  } catch {}
+};
+
+const hideDragGhost = (): void => {
+  const g: any = renderer.root.findDescendantById(DRAG_GHOST_ID);
+  if (g) { try { g.visible = false; } catch {} }
+};
+
+const finishDragState = (): void => {
+  hideDragGhost();
+  dragCtrl = false;
+  if (dropTargetKey) {
+    const r = tileRefsByKey.get(dropTargetKey);
+    if (r && !r.selected) setTileVisual(dropTargetKey, 0);
+  }
+  dropTargetKey = null;
+  dragActive = false;
+  dragKeys = null;
+};
+
+// release fires on the source before `drop` reaches the target — defer cleanup
+const scheduleDragCleanup = (): void => { setTimeout(finishDragState, 0); };
+
+const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
+  let ok = 0;
+  for (const it of items) {
+    if (it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))) continue;
+    const target = path.join(destDir, path.basename(it.path));
+    if (existsSync(target)) continue;
+    try { await fsMove(it.path, target); ok++; } catch {}
+  }
+  renderAll();
+  setStatusMsg(`Moved ${ok} item${ok === 1 ? "" : "s"}`);
 };
 
 const xdgTrashMove = async (p: string): Promise<void> => {
@@ -1325,6 +1508,69 @@ const renderPreview = async () => {
   } catch {}
 };
 
+// --- Notifications (top-right, animated) ---
+type Toast = { id: number; nodeId: string; timer: any };
+let toasts: Toast[] = [];
+let toastSeq = 0;
+
+const animateLeft = (node: any, from: number, to: number, ms: number): void => {
+  const steps = 8;
+  let i = 0;
+  const tick = () => {
+    i++;
+    try { node.left = Math.round(from + ((to - from) * i) / steps); } catch {}
+    if (i < steps) setTimeout(tick, Math.max(16, ms / steps));
+  };
+  tick();
+};
+
+const notify = (message: string, title = "tfm"): void => {
+  const id = ++toastSeq;
+  const w = Math.max(24, Math.min(44, message.length + title.length + 6));
+  const y = 1 + toasts.length * 4;
+  const node: any = Box(
+    {
+      id: `tfm-toast-${id}`,
+      position: "absolute",
+      left: renderer.terminalWidth + 2,
+      top: y,
+      width: w,
+      height: 3,
+      zIndex: 3500,
+      backgroundColor: colors.accentBg,
+      flexDirection: "column",
+      paddingLeft: 1,
+    },
+    Text({ content: title.slice(0, w - 3), fg: colors.white }),
+    Text({ content: message.slice(0, w - 3), fg: colors.sidebarFgMuted }),
+  );
+  renderer.root.add(node);
+  // the proxy is dead weight post-mount — animate/dismiss via the real renderable
+  const real: any = renderer.root.findDescendantById(`tfm-toast-${id}`);
+  if (!real) return;
+  const targetX = Math.max(0, renderer.terminalWidth - w - 2);
+  animateLeft(real, renderer.terminalWidth + 2, targetX, 180);
+  const entry: Toast = { id, nodeId: `tfm-toast-${id}`, timer: null };
+  toasts.push(entry);
+  entry.timer = setTimeout(() => {
+    let op = 1;
+    const fade = () => {
+      op -= 0.18;
+      try { real.opacity = Math.max(0, op); } catch {}
+      if (op > 0) setTimeout(fade, 24);
+      else {
+        try { (real.parent ?? renderer.root).remove(real); } catch {}
+        toasts = toasts.filter((t) => t.id !== id);
+        toasts.forEach((t, i) => {
+          const n: any = renderer.root.findDescendantById(t.nodeId);
+          try { n.top = 1 + i * 4; } catch {}
+        });
+      }
+    };
+    fade();
+  }, 3000);
+};
+
 let bandStart: { x: number; y: number } | null = null;
 const BAND_ID = "tfm-band";
 
@@ -1409,7 +1655,8 @@ const renderGrid = async () => {
   await waitForResolution();
   if (gen !== gridGen) return;
   const { aspect } = cellMetrics();
-  const cols = Math.max(1, Math.floor((renderer.terminalWidth - sw - 3) / TILE_W));
+  const reservedRight = config.ui.previewEnabled ? config.ui.previewWidth : 0;
+  const cols = Math.max(1, Math.floor((renderer.terminalWidth - sw - reservedRight - 3) / TILE_W));
 
   const buildTile = (e: Entry) => {
     const key = path.join(state.cwd, e.name);
@@ -1427,9 +1674,20 @@ const renderGrid = async () => {
         try { ev.stopPropagation?.(); } catch {}
         closeFileMenu();
         if (ev.button === 2) {
+          // Nautilus behavior: right-click selects the tile unless it's already
+          // part of the live multi-selection
+          if (!tileRefsByKey.get(key)?.selected) {
+            clearTileSelection();
+            const r = tileRefsByKey.get(key);
+            if (r) { r.selected = true; setTileVisual(key, 2); }
+            updateSelectionStatusReal();
+            void renderPreview();
+          }
           openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir));
           return;
         }
+        // the ctrl modifier decides internal vs external for drags
+        // (see the OSC 72 offer handler)
         const now = Date.now();
         if (now - lastClick < config.ui.doubleClickMs) {
           if (e.isDir) navigate(key);
@@ -1438,17 +1696,60 @@ const renderGrid = async () => {
           return;
         }
         lastClick = now;
+        const prevSel = selPaths();
+        const wasSelected = !!tileRefsByKey.get(key)?.selected;
         clearTileSelection();
         const refs = tileRefsByKey.get(key);
-        if (refs) { refs.selected = true; setTileVisual(key, 2); }
+        if (refs) {
+          if (wasSelected && prevSel.length > 1) {
+            for (const s of prevSel) {
+              const r2 = tileRefsByKey.get(s.path);
+              if (r2) { r2.selected = true; setTileVisual(s.path, 2); }
+            }
+          } else {
+            refs.selected = true;
+            setTileVisual(key, 2);
+          }
+        }
         updateSelectionStatusReal();
         void renderPreview();
+        dragKeys = wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: e.isDir }];
+        dragActive = false;
+        dragStartX = ev.x;
+        dragStartY = ev.y;
+        dragCtrl = !!ev.modifiers?.ctrl;
+      },
+      onMouseUp: () => { if (dragKeys) scheduleDragCleanup(); },
+      onMouseDragEnd: () => { if (dragKeys) scheduleDragCleanup(); },
+      onMouseDrag: (ev: any) => {
+        if (!dragKeys) return;
+        if (!dragActive && (Math.abs(ev.x - dragStartX) > 1 || Math.abs(ev.y - dragStartY) > 1)) {
+          dragActive = true;
+          setStatusMsg(`Dragging ${dragKeys.length} item${dragKeys.length === 1 ? "" : "s"}…`);
+        }
+        if (dragActive) updateDragGhost(ev.x, ev.y);
+      },
+      onMouseDrop: () => {
+        const keys = dragKeys;
+        const dest = dropTargetKey;
+        finishDragState();
+        if (keys && dest && e.isDir) void moveInto(dest, keys.filter((k) => k.path !== dest));
       },
       onMouseOver: () => {
+        if (dragActive) {
+          const draggingSelf = !!dragKeys?.some((k) => k.path === key);
+          if (e.isDir && !draggingSelf) { dropTargetKey = key; setTileVisual(key, 2); }
+          return;
+        }
         const refs = tileRefsByKey.get(key);
         if (!refs?.selected) setTileVisual(key, 1);
       },
       onMouseOut: () => {
+        if (dragActive && dropTargetKey === key) {
+          dropTargetKey = null;
+          setTileVisual(key, 0);
+          return;
+        }
         const refs = tileRefsByKey.get(key);
         if (!refs?.selected) setTileVisual(key, 0);
       },
@@ -1507,6 +1808,9 @@ const renderGrid = async () => {
     scroller.content.add(row);
   }
 
+  // fresh Text nodes default selectable=true; strip AFTER the async rebuild or
+  // the renderer's text-selection drag hijacks file-drag events
+  stripSelectable();
   void drainIconQueue();
   void drainThumbs();
   focusKeys = [...tileRefsByKey.keys()];
@@ -1666,9 +1970,13 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
   const entries: ListEntry[] = [];
   if (isDir) entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(targetPath); } });
   else entries.push({ icon: "eye", label: "Open", action: () => { closeFileMenu(); spawn("xdg-open", [targetPath], { stdio: "ignore", detached: true }).unref?.(); } });
+  // actions apply to the whole live selection when the right-clicked tile is
+  // part of it (Nautilus behavior), otherwise just this tile
+  const inSel = !!tileRefsByKey.get(targetPath)?.selected;
+  const targets: ClipItem[] = inSel && selPaths().length > 1 ? selPaths() : [{ path: targetPath, isDir }];
   entries.push(
-    { icon: "content-copy", label: "Copy", action: () => { closeFileMenu(); setClipboard("copy", [{ path: targetPath, isDir }]); } },
-    { icon: "content-cut", label: "Cut", action: () => { closeFileMenu(); setClipboard("cut", [{ path: targetPath, isDir }]); } },
+    { icon: "content-copy", label: `Copy${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); setClipboard("copy", targets); } },
+    { icon: "content-cut", label: `Cut${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); setClipboard("cut", targets); } },
     { icon: "pencil", label: "Rename…", action: () => {
         closeFileMenu();
         openPrompt("rename", path.basename(targetPath), (v) => {
@@ -1678,10 +1986,18 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
             .catch(() => setStatusMsg("Rename failed"));
         });
       } },
-    { icon: "trash-can", label: "Trash", action: () => { closeFileMenu(); trashPaths([targetPath]); } },
+    { icon: "trash-can", label: `Trash${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); trashPaths(targets.map((t) => t.path)); } },
   );
   return entries;
 };
+
+const sortEntries = (): ListEntry[] => [
+  { label: `${state.sortBy === "name" ? "●" : "○"} Sort by Name`, action: () => { closeFileMenu(); state.sortBy = "name"; void renderGrid(); } },
+  { label: `${state.sortBy === "size" ? "●" : "○"} Sort by Size`, action: () => { closeFileMenu(); state.sortBy = "size"; void renderGrid(); } },
+  { label: `${state.sortBy === "mtime" ? "●" : "○"} Sort by Modified`, action: () => { closeFileMenu(); state.sortBy = "mtime"; void renderGrid(); } },
+  { label: `${state.sortBy === "type" ? "●" : "○"} Sort by Type`, action: () => { closeFileMenu(); state.sortBy = "type"; void renderGrid(); } },
+  { label: `${state.sortAsc ? "↑ Ascending" : "↓ Descending"} (toggle)`, action: () => { closeFileMenu(); state.sortAsc = !state.sortAsc; void renderGrid(); } },
+];
 
 const emptyAreaEntries = (): ListEntry[] => [
   { icon: "select-all", label: "Select all", action: () => {
@@ -1689,9 +2005,14 @@ const emptyAreaEntries = (): ListEntry[] => [
       tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
       updateSelectionStatusReal();
     } },
-  { icon: "content-copy", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); void doPaste(state.cwd); } },
+  { icon: "content-copy", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); pasteSmart(state.cwd); } },
   { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); openPrompt("new folder", "Untitled folder", (v) => {
       mkdir(path.join(state.cwd, v), { recursive: true })
+        .then(() => renderAll())
+        .catch(() => setStatusMsg("Create failed"));
+    }); } },
+  { icon: "file", label: "New File", action: () => { closeFileMenu(); openPrompt("new file", "Untitled.txt", (v) => {
+      writeFile(path.join(state.cwd, v), "")
         .then(() => renderAll())
         .catch(() => setStatusMsg("Create failed"));
     }); } },
@@ -1707,6 +2028,7 @@ let menuIdx = 0;
 const MENU_W = 36;
 
 const quitApp = () => {
+  disableDrops();
   try { renderer.destroy(); } catch {}
   process.exit(0);
 };
@@ -1883,6 +2205,7 @@ renderAll = () => {
   stripSelectable();
 };
 
+
 const boot = async () => {
   await waitForResolution();
   scroller = new ScrollBoxRenderable(renderer, {
@@ -1894,6 +2217,7 @@ const boot = async () => {
     contentOptions: { flexDirection: "column" },
     onMouseDown: (ev: any) => {
       closeFileMenu();
+      clearSearch();
       if (pathEditMode) { exitPathEdit(); return; }
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
@@ -1915,6 +2239,20 @@ const boot = async () => {
     borderStyle: "rounded",
     borderColor: colors.accent,
   }));
+  renderer.root.add(Box({
+    id: DRAG_GHOST_ID,
+    visible: false,
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: 12,
+    height: 1,
+    zIndex: 4000,
+    backgroundColor: colors.accent,
+    flexDirection: "row",
+    paddingLeft: 1,
+  }, Text({ id: `${DRAG_GHOST_ID}-label`, content: "moving 0 items", fg: colors.bg })));
+
   await loadGlobs2();
   await loadSystemPlaces();
   renderAll();
@@ -1931,6 +2269,321 @@ const boot = async () => {
   }
 };
 boot();
+
+// --- live config reload ---
+let cfgTimer: any = null;
+try {
+  const cfgPath = configPath();
+  const watcher = watch(path.dirname(cfgPath), (_event, filename) => {
+    if (!filename || filename !== path.basename(cfgPath)) return;
+    if (cfgTimer) clearTimeout(cfgTimer);
+    cfgTimer = setTimeout(() => {
+      try {
+        const fresh = loadConfig();
+        Object.assign(config.ui, fresh.ui);
+        Object.assign(config.theme, fresh.theme);
+        Object.assign(colors, fresh.theme);
+        // baked rasters carry old colors: full raster invalidation
+        iconCache.clear();
+        for (const s of iconQueue) s.done = false;
+        if (config.ui.previewEnabled !== fresh.ui.previewEnabled) {
+          const pv: any = renderer.root.findDescendantById("tfm-preview");
+          if (pv) { try { pv.visible = fresh.ui.previewEnabled; } catch {} }
+        }
+        renderAll();
+        setStatusMsg("config reloaded");
+      } catch {}
+    }, 250);
+  });
+  watcher.on("error", () => {});
+} catch {}
+
+// --- OSC 72 drop-in (kitty drag-and-drop): accept OS file drags onto the terminal ---
+// wire format per yazi's reference impl: enter(t=m)/ready(t=M) carry a plaintext
+// space-separated MIME list; data arrives as unpadded base64 chunks (t=r) that we
+// request with StartDrop and acknowledge with FinishDrop(copy).
+// Sequences are received via renderer.subscribeOsc — OpenTUI's stdin parser hands
+// every OSC it frames to subscribers, so no second reader races the renderer.
+const DND_LOG = "/tmp/tfm-dnd.log";
+const dlog = (msg: string): void => {
+  try { appendFileSync(DND_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+};
+
+const osc72Write = (s: string, label: string): void => {
+  dlog(`tx ${label}`);
+  try { process.stdout.write(s); } catch {}
+};
+
+const enableDrops = (): void => {
+  osc72Write("\x1b]72;t=o:x=1;\x1b\\", "enable drag-out"); // trailing ; = empty machine-id, byte-exact w/ yazi
+  osc72Write("\x1b]72;t=a;text/uri-list\x1b\\", "enable drop-in");
+};
+const disableDrops = (): void => osc72Write("\x1b]72;t=A\x1b\\", "disable drop");
+
+let osc72DropIdx = -1;
+const osc72Arrive: Record<number, string> = {};
+// outgoing drag session state
+let osc72DragPaths: string[] | null = null;
+let osc72DragOp = 1; // 1 copy / 2 move
+let osc72SelfHandled = false; // self-drop already moved/copied the files
+let osc72SelfTargetKey: string | null = null; // folder tile currently highlighted
+let osc72EndTimer: any = null;
+// NOTE: an experiment to detect cursor-exit mid-drag by flipping SGR pixel
+// mode (?1016) failed: OpenTUI's mouse parser drops negatives outright
+// (parse.mouse.ts returns null) and interprets pixel coords as cells, corrupting
+// dispatch/highlights app-wide. Kitty reports OOB motion only in that mode,
+// so internal->external handoff within one gesture is not implementable here.
+let osc72OfferSeen = false; // internal-first: we decline offers, remember the gesture happened
+let osc72Engaged = false; // handed off to the OS mid-gesture
+
+// resolve a terminal cell position to an internal drop target (folder tile or place)
+const resolveDropTargetAt = (x: number, y: number): { kind: "folder" | "place"; path: string } | null => {
+  try {
+    const num = renderer.hitTest(x, y);
+    if (!num) return null;
+    let cur: any = (Renderable as any).renderablesByNumber?.get(num);
+    while (cur) {
+      const id: unknown = cur.id;
+      if (typeof id === "string") {
+        if (id.startsWith("tfm-place-")) {
+          const rec = placesHost[parseInt(id.slice(10), 10)];
+          return rec?.place.path ? { kind: "place", path: rec.place.path } : null;
+        }
+        if (id.startsWith("tfm-tile-")) {
+          for (const [k, r] of tileRefsByKey) {
+            if (r.tileId === id) {
+              if (!r.isDir) return null;
+              if (osc72DragPaths?.includes(k)) return null; // dropping onto itself
+              return { kind: "folder", path: k };
+            }
+          }
+        }
+      }
+      cur = cur.parent;
+    }
+  } catch {}
+  return null;
+};
+
+const clearSelfDropHighlight = (): void => {
+  if (osc72SelfTargetKey) {
+    const r = tileRefsByKey.get(osc72SelfTargetKey);
+    if (r && !r.selected) setTileVisual(osc72SelfTargetKey, 0);
+    osc72SelfTargetKey = null;
+  }
+};
+
+// kitty renders this text badge next to the cursor for the whole drag session —
+// the visual feedback we lose by handing the pointer to the OS
+const sendDragIcon = (n: number): void => {
+  const label = `${n} item${n === 1 ? "" : "s"}`;
+  const b64 = Buffer.from(label, "utf8").toString("base64").replace(/=+$/, "");
+  // byte-exact w/ yazi: fmt:y / size cells:X,Y / opacity / m flag — NO terminator
+  osc72Write(`\x1b]72;t=p:x=-1:y=0:X=${label.length + 2}:Y=1:o=0:m=0;${b64}\x1b\\`, "drag icon");
+};
+
+const beginOsc72Drag = (paths: string[]): void => {
+  osc72DragPaths = paths;
+  osc72DragOp = 1;
+  osc72SelfHandled = false;
+  finishDragState(); // pointer is about to be grabbed by the terminal
+  osc72Write("\x1b]72;t=o:o=3;text/uri-list\x1b\\", "agree drag either");
+  presentDragUriList(paths);
+  sendDragIcon(paths.length);
+  osc72Write("\x1b]72;t=P:x=-1\x1b\\", "start drag");
+  setStatusMsg(`Dragging ${paths.length} item${paths.length === 1 ? "" : "s"} — drop into another app or a folder`);
+};
+
+// self-dropped back onto tfm: route to the folder/place under the cursor,
+// otherwise cancel — this is what makes one plain drag serve both worlds
+const handleSelfDropHover = (x: number, y: number): void => {
+  clearSelfDropHighlight();
+  const target = x >= 0 ? resolveDropTargetAt(x, y) : null;
+  dlog(`self hover ${x},${y} -> ${target ? target.kind + ":" + target.path : "none"}`);
+  if (!target) {
+    mousePlaceIdx = -1;
+    normalizePlaces();
+    return;
+  }
+  if (target.kind === "folder") {
+    osc72SelfTargetKey = target.path;
+    setTileVisual(target.path, 2);
+  } else {
+    const idx = placesHost.findIndex((p) => p.place.path === target.path);
+    if (idx >= 0) { mousePlaceIdx = idx; normalizePlaces(); }
+  }
+};
+
+const finishSelfDrop = async (x: number, y: number): Promise<void> => {
+  dlog(`self drop at ${x},${y}`);
+  if (osc72EndTimer) { clearTimeout(osc72EndTimer); osc72EndTimer = null; }
+  const paths = osc72DragPaths;
+  osc72SelfHandled = true;
+  const target = resolveDropTargetAt(x, y);
+  clearSelfDropHighlight();
+  osc72DragPaths = null;
+  osc72SelfHandled = false;
+  if (!paths?.length || !target) {
+    osc72Write("\x1b]72;t=r:o=0\x1b\\", "self drop rejected");
+    setStatusMsg("drag cancelled");
+    return;
+  }
+  const destDir = target.path;
+  let ok = 0;
+  for (const src of paths) {
+    if (src === destDir || destDir.startsWith(src + path.sep)) continue;
+    const dest = path.join(destDir, path.basename(src));
+    if (existsSync(dest)) continue;
+    try { await fsMove(src, dest); ok++; } catch {}
+  }
+  renderAll();
+  setStatusMsg(`Moved ${ok} item${ok === 1 ? "" : "s"}`);
+  notify(`Moved ${ok} item${ok === 1 ? "" : "s"} into ${path.basename(destDir) || destDir}`, "drag & drop");
+};
+
+const percentEncodePath = (p: string): string => encodeURIComponent(p).replace(/%2F/g, "/");
+
+const presentDragUriList = (paths: string[]): void => {
+  const b64 = Buffer.from(paths.map((p) => `file://${percentEncodePath(p)}`).join("\r\n"), "utf8")
+    .toString("base64")
+    .replace(/=+$/, ""); // unpadded, like yazi
+  osc72Write(`\x1b]72;t=p:x=0:m=0;${b64}\x1b\\`, `present drag ${b64.length} b64 chars`);
+  osc72Write("\x1b]72;t=p:x=0\x1b\\", "present drag end");
+};
+
+const uriListToPaths = (data: string): string[] =>
+  data
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("file://"))
+    .map((l) => {
+      let u = l.slice(7);
+      if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
+      try { u = decodeURIComponent(u); } catch {}
+      return u;
+    });
+
+const finishOsc72Drop = async (idx: number): Promise<void> => {
+  const b64 = osc72Arrive[idx];
+  delete osc72Arrive[idx];
+  osc72DropIdx = -1;
+  osc72Write(`\x1b]72;t=r:o=1\x1b\\`, `finish drop idx=${idx}`);
+  dlog(`drop complete, uri-list bytes=${b64 ? Buffer.from(b64, "base64").length : 0}`);
+  if (!b64) return;
+  const text = Buffer.from(b64, "base64").toString("utf8");
+  let paths = uriListToPaths(text);
+  // some sources deliver bare paths (text/plain) instead of file:// URIs
+  if (!paths.length) paths = text.split(/\r?\n/).filter((l) => l.startsWith("/"));
+  dlog(`paths: ${paths.join(" | ") || "(none)"}`);
+  let ok = 0;
+  for (const src of paths) {
+    let dest = path.join(state.cwd, path.basename(src));
+    if (existsSync(dest)) {
+      try { dest = uniqueTarget(state.cwd, path.basename(src)); } catch { continue; }
+    }
+    try { await cp(src, dest, { recursive: true }); ok++; } catch (err) { dlog(`cp failed ${src}: ${err}`); }
+  }
+  renderAll();
+  if (paths.length) {
+    setStatusMsg(`Copied ${ok}/${paths.length} dropped item${paths.length === 1 ? "" : "s"}`);
+    notify(`Dropped ${ok} item${ok === 1 ? "" : "s"} into ${path.basename(state.cwd) || "/"}`, "drag & drop");
+  }
+};
+
+const handleOsc72 = (meta: string, payload: string): void => {
+  let t = "";
+  let x = NaN, y = NaN, m = false;
+  for (const part of meta.split(":")) {
+    const [k, v] = part.split("=");
+    if (k === "t") t = v ?? "";
+    else if (k === "x") x = parseInt(v ?? "", 10);
+    else if (k === "y") y = parseInt(v ?? "", 10);
+    else if (k === "m") m = v === "1";
+  }
+
+  // --- outgoing drag session ---
+  // middle-button drags go external (OS session + icon badge); left drags are
+  // declined so the internal move flow keeps the pointer and its UI feedback
+  if (t === "o" && x >= 0) {
+    const want = !dragCtrl && !!dragKeys?.length && !promptOpen && !menuOpen && !fileMenuState;
+    dlog(`drag offer x=${x} y=${y} ctrl=${dragCtrl} accept=${want}`);
+    if (!want || !dragKeys) return; // left-drag: kitty falls back to normal mouse events
+    beginOsc72Drag(dragKeys.map((k) => k.path));
+    return;
+  }
+  if (t === "e") {
+    if (x === 2) { osc72DragOp = y === 2 ? 2 : 1; dlog(`drag op=${osc72DragOp === 2 ? "move" : "copy"}`); }
+    else if (x === 3) { dlog(`drag landed op=${osc72DragOp}`); }
+    else if (x === 4) {
+      const canceled = y !== 0;
+      dlog(`drag end canceled=${canceled} op=${osc72DragOp} selfHandled=${osc72SelfHandled}`);
+      const pathsAtEnd = osc72DragPaths;
+      const finishExternal = (): void => {
+        if (!canceled && pathsAtEnd && !osc72SelfHandled) {
+          // released over another app: honor move semantics by trashing our copies
+          if (osc72DragOp === 2) trashPaths(pathsAtEnd);
+          else notify(`Sent ${pathsAtEnd.length} item${pathsAtEnd.length === 1 ? "" : "s"}`, "drag & drop");
+        } else if (canceled) setStatusMsg("drag cancelled");
+        osc72DragPaths = null;
+        osc72SelfHandled = false;
+        clearSelfDropHighlight();
+      };
+      if (osc72EndTimer) { clearTimeout(osc72EndTimer); osc72EndTimer = null; }
+      // a self-drop M may still be in flight behind the end event — defer
+      if (!canceled && pathsAtEnd && !osc72SelfHandled) osc72EndTimer = setTimeout(finishExternal, 700);
+      else finishExternal();
+    }
+    else if (x === 5 && osc72DragPaths && !osc72SelfHandled) { dlog("drag send request"); presentDragUriList(osc72DragPaths); }
+    return;
+  }
+
+  // --- self-drop: hover/drop events landing back on tfm during OUR session ---
+  if ((t === "m" || t === "M") && osc72DragPaths) {
+    if (x === -1 && y === -1) { clearSelfDropHighlight(); mousePlaceIdx = -1; normalizePlaces(); return; }
+    if (t === "m") { handleSelfDropHover(x, y); return; }
+    void finishSelfDrop(x, y); // M — dropped on ourselves
+    return;
+  }
+
+  // DropLeave
+  if (t === "m" && x === -1 && y === -1) {
+    dlog("leave");
+    osc72DropIdx = -1;
+    for (const k of Object.keys(osc72Arrive)) delete osc72Arrive[Number(k)];
+    return;
+  }
+
+  if (t === "m" || t === "M") {
+    const mimes = payload.split(/\s+/).filter(Boolean);
+    const idx = mimes.indexOf("text/uri-list");
+    dlog(`${t === "M" ? "ready" : "enter"} mimes=[${mimes}] uriIdx=${idx} busy=${osc72DropIdx >= 0}`);
+    if (idx < 0 || osc72DropIdx >= 0) return;
+    osc72Write(`\x1b]72;t=m:o=1;text/uri-list\x1b\\`, "agree copy");
+    if (t === "M") {
+      // kitty's mime indices are 1-based (yazi requests ipairs index)
+      osc72DropIdx = idx + 1;
+      osc72Arrive[osc72DropIdx] = "";
+      osc72Write(`\x1b]72;t=r:x=${osc72DropIdx}\x1b\\`, `start drop uriIdx=${idx} wire=${osc72DropIdx}`);
+    }
+    return;
+  }
+  if (t === "r" && x === osc72DropIdx) {
+    osc72Arrive[x] += payload;
+    // presence of payload or m=1 means more chunks are coming
+    if (!payload && !m) void finishOsc72Drop(x);
+    return;
+  }
+  if (t === "R") { dlog(`drop error: ${payload}`); setStatusMsg("drop failed"); return; }
+  if (t === "E") { dlog(`drag offer error: ${payload}`); setStatusMsg("drag failed"); return; }
+  dlog(`unhandled osc72 type t=${JSON.stringify(t)} x=${x} y=${y} payloadLen=${payload.length}`);
+};
+
+renderer.subscribeOsc((seq: string) => {
+  const start = seq.indexOf("]72;");
+  if (start < 0) return;
+  const body = seq.slice(start + 4).replace(/(\x1b\\|\x07|\x9c)$/, "");
+  handleOsc72(body.slice(0, body.indexOf(";") < 0 ? body.length : body.indexOf(";")), body.indexOf(";") < 0 ? "" : body.slice(body.indexOf(";") + 1));
+});
+enableDrops();
 
 // --- resize: repave rasters and rebuild layout ---
 let resizeTimer: any = null;
@@ -1950,6 +2603,12 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
   if (promptOpen) return;
+
+  // notification test: ctrl+g (ctrl+i is indistinguishable from tab)
+  if (ctrl && e.name === "g") {
+    notify(`hello at ${new Date().toLocaleTimeString()}`, "debug");
+    return;
+  }
 
   if (menuOpen) {
     if (e.name === "escape") closeMenu();
@@ -2060,6 +2719,11 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
 
   // --- file operations ---
+  if (ctrl && (e.name === "a" || e.unicode === "a")) {
+    tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
+    updateSelectionStatusReal();
+    return;
+  }
   const selected = selPaths();
   if (e.name === "delete" && selected.length) {
     trashPaths(selected.map((s) => s.path));
@@ -2083,7 +2747,7 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
   if (ctrl && (e.name === "v" || e.unicode === "v")) {
-    void doPaste(state.cwd);
+    pasteSmart(state.cwd);
     return;
   }
 });
