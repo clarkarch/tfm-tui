@@ -39,6 +39,7 @@ const glyph = {
   "content-cut": "\u{F0190}",
   pencil: "\u{F03EB}",
   "folder-plus": "\u{F0770}",
+  "select-all": "\u{F0478}",
 };
 
 // --- File type categories (extension -> icon); generic `file` is the fallback,
@@ -228,6 +229,7 @@ const goFwd = () => { if (canFwd()) { state.histIdx++; renderAll(); } };
 
 const navigate = (dir: string) => {
   pathEditMode = false;
+  if (fileMenuState) closeFileMenu();
   let target: string;
   try {
     target = path.resolve(dir);
@@ -475,6 +477,7 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
       paddingLeft: 1,
       backgroundColor: selected ? colors.accentBg : colors.sidebarBg,
       onMouseDown: () => {
+        closeFileMenu();
         if (place.path) navigate(place.path);
         else if (place.mountDevice) mountDevice(place.mountDevice);
       },
@@ -544,7 +547,7 @@ const makeNavButton = (id: "tfm-nav-back" | "tfm-nav-fwd", iconName: string, onA
   );
   navSpecs[id] = slot.spec;
   return Box(
-    { id, height: 1, width: 3, justifyContent: "center", onMouseDown: onActivate },
+    { id, height: 1, width: 3, justifyContent: "center", onMouseDown: () => { closeFileMenu(); onActivate(); } },
     slot.el,
   );
 };
@@ -672,6 +675,7 @@ const makeSearch = () => {
       width: 3,
       justifyContent: "center",
       onMouseDown: () => {
+        closeFileMenu();
         const el: any = renderer.root.findDescendantById("tfm-search");
         if (!el) return;
         el.visible = !el.visible;
@@ -704,6 +708,7 @@ const makeToolbarShell = (): ReturnType<typeof Box> =>
         onMouseDown: () => {
           const now = Date.now();
           if (pathEditMode) return;
+          closeFileMenu();
           if (now - crumbClickAt < 350) {
             crumbClickAt = 0;
             enterPathEdit();
@@ -1254,6 +1259,7 @@ const renderGrid = async () => {
       justifyContent: "flex-start",
       onMouseDown: (ev: any) => {
         try { ev.stopPropagation?.(); } catch {}
+        closeFileMenu();
         if (ev.button === 2) {
           openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir));
           return;
@@ -1507,6 +1513,11 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
 };
 
 const emptyAreaEntries = (): ListEntry[] => [
+  { icon: "select-all", label: "Select all", action: () => {
+      closeFileMenu();
+      tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
+      updateSelectionStatusReal();
+    } },
   { icon: "content-copy", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); void doPaste(state.cwd); } },
   { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); openPrompt("new folder", "Untitled folder", (v) => {
       mkdir(path.join(state.cwd, v), { recursive: true })
@@ -1631,10 +1642,6 @@ const renderMenuContent = () => {
     panel.add(row("chevron-left", "back", undefined, menuIdx === 1, 1, activateRow(1)));
   }
 
-  panel.add(Box(
-    { width: "100%", height: 1, paddingLeft: 1 },
-    Text({ content: " esc close · ↑↓ move · enter select", fg: colors.sidebarFgMuted }),
-  ));
   stripSelectable();
   void drainIconQueue();
 };
