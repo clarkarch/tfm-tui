@@ -1255,7 +1255,7 @@ const renderGrid = async () => {
       onMouseDown: (ev: any) => {
         try { ev.stopPropagation?.(); } catch {}
         if (ev.button === 2) {
-          openFileMenuFor(key, e.isDir);
+          openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir));
           return;
         }
         const now = Date.now();
@@ -1456,7 +1456,39 @@ const renderFileMenu = () => {
   void drainIconQueue();
 };
 
-const openFileMenuFor = (targetPath: string, isDir: boolean): void => {
+// small unscoped box spawned at the cursor — no scrim
+const openContextMenu = (x: number, y: number, title: string, entries: ListEntry[]): void => {
+  closeFileMenu();
+  fileMenuState = { idx: 0, entries };
+  const w = MENU_W;
+  const h = entries.length + 2;
+  let px = x, py = y;
+  if (px + w > renderer.terminalWidth - 1) px = Math.max(0, renderer.terminalWidth - w - 1);
+  if (py + h > renderer.terminalHeight - 1) py = Math.max(0, renderer.terminalHeight - h - 1);
+  const menu = Box(
+    {
+      id: "tfm-filemenu",
+      position: "absolute",
+      left: px,
+      top: py,
+      width: w,
+      zIndex: 3100,
+      backgroundColor: colors.sidebarBg,
+      border: true,
+      borderStyle: "rounded",
+      borderColor: colors.border,
+      flexDirection: "column",
+    },
+    Box(
+      { id: "tfm-filemenu-panel", width: "100%", flexDirection: "column" },
+    ),
+  );
+  renderer.root.add(menu);
+  renderFileMenu();
+  stripSelectable();
+};
+
+const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
   const entries: ListEntry[] = [];
   if (isDir) entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(targetPath); } });
   else entries.push({ icon: "eye", label: "Open", action: () => { closeFileMenu(); spawn("xdg-open", [targetPath], { stdio: "ignore", detached: true }).unref?.(); } });
@@ -1474,37 +1506,17 @@ const openFileMenuFor = (targetPath: string, isDir: boolean): void => {
       } },
     { icon: "trash-can", label: "Trash", action: () => { closeFileMenu(); trashPaths([targetPath]); } },
   );
-  fileMenuState = { idx: 0, entries };
-  const scrim = Box(
-    {
-      id: "tfm-filemenu",
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: "100%",
-      height: "100%",
-      alignItems: "center",
-      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
-      zIndex: 3100,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-      onMouseDown: () => closeFileMenu(),
-    },
-    Box(
-      {
-        id: "tfm-filemenu-panel",
-        width: MENU_W,
-        backgroundColor: colors.sidebarBg,
-        paddingTop: 1,
-        paddingBottom: 1,
-        flexDirection: "column",
-        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
-      },
-    ),
-  );
-  renderer.root.add(scrim);
-  renderFileMenu();
-  stripSelectable();
+  return entries;
 };
+
+const emptyAreaEntries = (): ListEntry[] => [
+  { icon: "content-copy", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); void doPaste(state.cwd); } },
+  { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); openPrompt("new folder", "Untitled folder", (v) => {
+      mkdir(path.join(state.cwd, v), { recursive: true })
+        .then(() => renderAll())
+        .catch(() => setStatusMsg("Create failed"));
+    }); } },
+];
 
 // --- ESC menu (scrim pattern stolen from opencode's Dialog) ---
 type MenuEntry = { label: string; hint?: string; action: () => void };
@@ -1540,20 +1552,6 @@ const rootMenuItems = (): { icon: string; label: string; hint?: string; action: 
     icon: "cog",
     label: "Settings",
     action: () => { menuView = "settings"; menuIdx = 0; renderMenuContent(); },
-  },
-  {
-    icon: "folder-plus",
-    label: "New Folder",
-    action: () => openPrompt("new folder", "Untitled folder", (v) => {
-      mkdir(path.join(state.cwd, v), { recursive: true })
-        .then(() => renderAll())
-        .catch(() => setStatusMsg("Create failed"));
-    }),
-  },
-  {
-    icon: "content-copy",
-    label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste",
-    action: () => { void doPaste(state.cwd); },
   },
   {
     icon: "power",
@@ -1719,10 +1717,12 @@ const boot = async () => {
     viewportCulling: true,
     contentOptions: { flexDirection: "column" },
     onMouseDown: (ev: any) => {
+      closeFileMenu();
       if (pathEditMode) { exitPathEdit(); return; }
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
       if (ev.button === 0) bandStart = { x: ev.x, y: ev.y };
+      if (ev.button === 2) openContextMenu(ev.x, ev.y, "", emptyAreaEntries());
     },
     onMouseDrag: (ev: any) => updateBandRect(ev),
     onMouseDragEnd: (ev: any) => finalizeBand(ev),
