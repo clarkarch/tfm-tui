@@ -321,13 +321,38 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
   const selFg = colors.accent;
   const iconStates: IconState[] = [
     { fg: normFg, bg: colors.sidebarBg },
+    { fg: normFg, bg: colors.hoverBg },
     { fg: selFg, bg: colors.accentBg },
   ];
   const maxLabel = sw - 4 - (place.ejectable ? 3 : 0);
   const paddedLabel = place.label.padEnd(Math.max(0, maxLabel)).slice(0, maxLabel);
 
-  const iconSlot = makeIconSlot(place.icon, iconStates, 1, selected ? 1 : 0);
-  const row = Box(
+  const iconSlot = makeIconSlot(place.icon, iconStates, 1, selected ? 2 : 0);
+  let ejectSlot: ReturnType<typeof makeIconSlot> | undefined;
+  if (place.ejectable && place.device) {
+    ejectSlot = makeIconSlot(
+      "eject",
+      iconStates,
+      1,
+      selected ? 2 : 0,
+      () => ejectDevice(place.device!),
+    );
+  }
+  const specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
+
+  const applyLook = (hovered: boolean) => {
+    if (selected) {
+      try { (rowNode as any).backgroundColor = colors.accentBg; } catch {}
+      specs.forEach((s) => setIconState(s, 2));
+      try { labelText.fg = selFg; } catch {}
+      return;
+    }
+    try { (rowNode as any).backgroundColor = hovered ? colors.hoverBg : colors.sidebarBg; } catch {}
+    specs.forEach((s) => setIconState(s, hovered ? 1 : 0));
+  };
+
+  let rowNode: ReturnType<typeof Box>;
+  rowNode = Box(
     {
       id: `tfm-place-${idx}`,
       width: sw,
@@ -340,6 +365,8 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
         if (place.path) navigate(place.path);
         else if (place.mountDevice) mountDevice(place.mountDevice);
       },
+      onMouseOver: () => applyLook(true),
+      onMouseOut: () => applyLook(false),
     },
     iconSlot.el,
   );
@@ -348,19 +375,10 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
     content: paddedLabel,
     fg: selected ? selFg : normFg,
   });
-  row.add(labelText);
-  if (place.ejectable && place.device) {
-    const ejectSlot = makeIconSlot(
-      "eject",
-      [{ fg: normFg, bg: colors.sidebarBg }, { fg: selFg, bg: colors.accentBg }],
-      1,
-      selected ? 1 : 0,
-      () => ejectDevice(place.device!),
-    );
-    row.add(ejectSlot.el);
-  }
-  placesHost.push({ row });
-  return row;
+  rowNode.add(labelText);
+  if (ejectSlot) rowNode.add(ejectSlot.el);
+  placesHost.push({ row: rowNode });
+  return rowNode;
 };
 
 const ejectDevice = (device: string) => {
@@ -697,7 +715,7 @@ const ICON_CELLS_H = config.ui.iconCells;
 let scroller: ScrollBoxRenderable | null = null;
 let gridGen = 0;
 
-type TileRefs = { iconSpec?: IconSpec; labelText: any; selected: boolean; baseFg: string };
+type TileRefs = { iconSpec?: IconSpec; labelText: any; selected: boolean; baseFg: string; tileNode: any };
 const tileRefsByKey = new Map<string, TileRefs>();
 
 const tileStates = (dim: boolean): IconState[] => {
@@ -714,6 +732,9 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   if (!refs) return;
   setIconState(refs.iconSpec, mode);
   try { refs.labelText.fg = mode === 2 ? colors.accent : refs.baseFg; } catch {}
+  try {
+    refs.tileNode.backgroundColor = mode === 0 ? colors.bg : mode === 1 ? colors.hoverBg : colors.accentBg;
+  } catch {}
 };
 
 const clearGrid = () => {
@@ -792,7 +813,7 @@ const renderGrid = async () => {
     const labelText: any = Text({ content: label, fg: baseFg });
     tile.add(labelText);
 
-    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, labelText, selected: false, baseFg });
+    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, labelText, selected: false, baseFg, tileNode: tile });
 
     return tile;
   };
@@ -909,6 +930,9 @@ const openMenu = () => {
         id: "tfm-menu-panel",
         width: MENU_W,
         backgroundColor: colors.sidebarBg,
+        border: true,
+        borderStyle: "rounded",
+        borderColor: colors.accent,
         paddingTop: 1,
         paddingBottom: 1,
       },
