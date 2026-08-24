@@ -1020,11 +1020,23 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   }
 };
 
+const updateSelectionStatusReal = () => {
+  let n = 0;
+  tileRefsByKey.forEach((r) => { if (r.selected) n++; });
+  const status: any = renderer.root.findDescendantById("tfm-status-label");
+  if (status) {
+    try { status.content = n > 0 ? `${n} selected` : ""; } catch {}
+  }
+};
+
 const clearTileSelection = () => {
   tileRefsByKey.forEach((refs, k) => {
     if (refs.selected) { refs.selected = false; setTileVisual(k, 0); }
   });
+  updateSelectionStatus();
 };
+
+const updateSelectionStatus: () => void = () => updateSelectionStatusReal();
 
 // --- Rubber band selection ---
 let bandStart: { x: number; y: number } | null = null;
@@ -1063,6 +1075,7 @@ const finalizeBand = (ev: any) => {
       setTileVisual(key, 2);
     }
   });
+  updateSelectionStatusReal();
 };
 
 const clearGrid = () => {
@@ -1080,11 +1093,6 @@ const renderGrid = async () => {
   const allEntries = await listDir(state.cwd, state.showHidden || q.length > 0);
   const entries = q ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
   if (gen !== gridGen) return;
-
-  const status: any = renderer.root.findDescendantById("tfm-status-label");
-  const shortCwd = state.cwd.startsWith(home) ? "~" + state.cwd.slice(home.length) : state.cwd;
-  const countStr = q ? `${entries.length}/${allEntries.length} matches` : `${allEntries.length} item${allEntries.length === 1 ? "" : "s"}`;
-  if (status) status.content = `${countStr}  ·  ${shortCwd}${state.showHidden ? "  ·  hidden" : ""}`;
 
   if (entries.length === 0) {
     await waitForResolution();
@@ -1141,6 +1149,7 @@ const renderGrid = async () => {
         clearTileSelection();
         const refs = tileRefsByKey.get(key);
         if (refs) { refs.selected = true; setTileVisual(key, 2); }
+        updateSelectionStatusReal();
       },
       onMouseOver: () => {
         const refs = tileRefsByKey.get(key);
