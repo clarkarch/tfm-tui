@@ -1036,10 +1036,9 @@ const setFocusedIdx = (idx: number): boolean => {
 
 const moveFocus = (dx: number, dy: number): boolean => {
   if (focusKeys.length === 0) return false;
-  const cur = focusIdx === -1 ? 0 : focusIdx;
-  let next = focusIdx === -1 ? 0 : cur + dx + dy * colsAtBuild;
+  let next = focusIdx === -1 ? 0 : focusIdx + dx + dy * colsAtBuild;
   next = Math.max(0, Math.min(focusKeys.length - 1, next));
-  focusIdx = next;
+  if (next === focusIdx) return false;
   return setFocusedIdx(next);
 };
 
