@@ -27,6 +27,6 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 
 ## Conventions
 
-- Theme = the `colors` object (Tokyo Night) in `src/index.ts`. All colors come from there.
+- Theme = the `colors` object in `src/index.ts`; values come from TOML config (`src/config.ts`) at `~/.config/tfm/config.toml` (`$TFM_CONFIG` overrides). See `config.example.toml`. Invalid/missing keys fall back to defaults silently (parse errors warn once on stderr).
 - UI is one file (`src/index.ts`), built imperatively at module level; runtime mutation goes through ids + `findDescendantById`.
 - `.gitignore`d: `node_modules/`, `nautilus/`, `opentui/` (reference clones, not project code).

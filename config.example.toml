@@ -1,0 +1,24 @@
+# tfm configuration
+# Location: ~/.config/tfm/config.toml (or $XDG_CONFIG_HOME/tfm/config.toml)
+# Override path with $TFM_CONFIG. Missing file = all defaults.
+# Invalid values are ignored per-key (falls back to default), never fatal.
+
+[ui]
+sidebar-width = 26      # 16..60 cells
+tile-width = 20         # 10..40
+tile-height = 5         # 3..10
+icon-cells = 3          # grid icon height in rows, 1..5
+double-click-ms = 400   # 100..2000
+show-hidden = false     # start with dotfiles visible (ctrl+h toggles at runtime)
+
+[theme]
+bg = "#1a1b26"
+sidebar-bg = "#16161e"
+sidebar-fg = "#c0caf5"
+sidebar-fg-muted = "#565f89"
+accent = "#7aa2f7"
+accent-bg = "#292e42"
+hover-bg = "#24283b"
+border = "#292e42"
+divider = "#292e42"
+white = "#c0caf5"

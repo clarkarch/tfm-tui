@@ -1,26 +1,19 @@
-import { ASCIIFont, Box, ImageRenderable, Input, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, ImageRenderable, Input, RGBA, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { loadConfig, configPath, type Theme } from "./config";
 
 const execFileP = promisify(execFile);
 
-// --- Color palette (Tokyo Night) ---
-const colors = {
-  bg: "#1a1b26",
-  sidebarBg: "#16161e",
-  sidebarFg: "#c0caf5",
-  sidebarFgMuted: "#565f89",
-  accent: "#7aa2f7",
-  accentBg: "#292e42",
-  hoverBg: "#24283b",
-  border: "#292e42",
-  divider: "#292e42",
-  white: "#c0caf5",
-};
+// --- Config (TOML at ~/.config/tfm/config.toml, TFM_CONFIG overrides path) ---
+const config = loadConfig();
+
+// --- Color palette (theme from config; Tokyo Night defaults) ---
+const colors: Theme & Record<string, string> = { ...config.theme };
 
 // --- Nerd Font glyphs: FALLBACK ONLY ---
 const glyph = {
@@ -112,7 +105,7 @@ const state: AppState = {
   cwd: process.cwd(),
   history: [process.cwd()],
   histIdx: 0,
-  showHidden: false,
+  showHidden: config.ui.showHidden,
 };
 
 let renderAll: () => void = () => {};
@@ -135,12 +128,23 @@ const navigate = (dir: string) => {
   state.history = state.history.slice(0, state.histIdx + 1);
   state.history.push(target);
   state.histIdx++;
+  clearSearch();
   renderAll();
+};
+
+let searchQuery = "";
+
+const clearSearch = () => {
+  searchQuery = "";
+  try {
+    const el: any = renderer.root.findDescendantById("tfm-search");
+    if (el) { el.value = ""; el.visible = false; }
+  } catch {}
 };
 
 // --- System places sources (Nautilus-style: nothing hardcoded) ---
 
-type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string };
+type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string };
 
 type UserDir = { key: string; label: string; p: string };
 
@@ -230,22 +234,26 @@ function parseLsblk(json: any): { label: string; target: string; removable: bool
         if (Array.isArray(n?.children)) visit(n.children, rm);
         continue;
       }
-      if (!name.startsWith("loop")) {
-        let mps: string[] = [];
-        if (Array.isArray(n?.mountpoints)) {
-          mps = n.mountpoints.map((m: any) => (typeof m === "string" ? m : m?.mountpoint)).filter(Boolean);
-        } else if (typeof n?.mountpoint === "string") {
-          mps = [n.mountpoint];
+      const fstype: string | null | undefined = n?.fstype;
+      let mps: string[] = [];
+      if (Array.isArray(n?.mountpoints)) {
+        mps = n.mountpoints.map((m: any) => (typeof m === "string" ? m : m?.mountpoint)).filter(Boolean);
+      } else if (typeof n?.mountpoint === "string") {
+        mps = [n.mountpoint];
+      }
+      const device = n?.path ?? `/dev/${name}`;
+      if (mps.length === 0) {
+        // mounted-nowhere but has a filesystem -> clickable to mount (nautilus behavior)
+        if (fstype && !PSEUDO_FSTYPES.has(fstype)) {
+          out.push({ label: n?.label || name, target: "", removable: rm, device });
         }
-        for (const target of mps) {
-          if (!target || target.startsWith("[")) continue;
-          if (SYSTEM_MOUNTS.has(target)) continue;
-          if (target.startsWith("/snap") || target.startsWith("/var/lib/docker")) continue;
-          if (n?.fstype && PSEUDO_FSTYPES.has(n.fstype)) continue;
-          const label = n?.label || path.basename(target) || name;
-          const device = n?.path ?? `/dev/${name}`;
-          if (!out.some((o) => o.target === target)) out.push({ label, target, removable: rm, device });
-        }
+      }
+      for (const target of mps) {
+        if (!target || target.startsWith("[")) continue;
+        if (SYSTEM_MOUNTS.has(target)) continue;
+        if (target.startsWith("/snap") || target.startsWith("/var/lib/docker")) continue;
+        const label = n?.label || path.basename(target) || name;
+        if (!out.some((o) => o.target === target)) out.push({ label, target, removable: rm, device });
       }
       if (Array.isArray(n?.children)) visit(n.children, rm);
     }
@@ -281,9 +289,10 @@ function buildSections(): Place[][] {
     ...sysMounts.map((m): Place => ({
       icon: m.removable ? "usb" : "harddisk",
       label: m.label,
-      path: m.target,
-      ejectable: m.removable,
+      path: m.target || null,
+      ejectable: m.removable && !!m.target,
       device: m.device,
+      mountDevice: m.target ? undefined : m.device,
     })),
   ];
 
@@ -298,7 +307,12 @@ function buildSections(): Place[][] {
 
 const placesHost: { row: ReturnType<typeof Box> }[] = [];
 
-const sw = 26;
+const sw = config.ui.sidebarWidth;
+
+const mountDevice = (device: string) => {
+  spawn("udisksctl", ["mount", "-b", device], { stdio: "ignore" });
+  setTimeout(() => { void loadSystemPlaces().then(() => renderAll()); }, 1200);
+};
 
 const makeRow = (place: Place): ReturnType<typeof Box> => {
   const idx = placesHost.length;
@@ -322,7 +336,10 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
       columnGap: 1,
       paddingLeft: 1,
       backgroundColor: selected ? colors.accentBg : colors.sidebarBg,
-      onMouseDown: () => { if (place.path) navigate(place.path); },
+      onMouseDown: () => {
+        if (place.path) navigate(place.path);
+        else if (place.mountDevice) mountDevice(place.mountDevice);
+      },
     },
     iconSlot.el,
   );
@@ -623,27 +640,30 @@ const drainIconQueue = async () => {
 };
 
 // --- Grid (scrollable, culled, interactive) ---
-const TILE_W = 20;
-const TILE_H = 5;
-const ICON_CELLS_H = 3;
+const TILE_W = config.ui.tileWidth;
+const TILE_H = config.ui.tileHeight;
+const ICON_CELLS_H = config.ui.iconCells;
 
 let scroller: ScrollBoxRenderable | null = null;
 let gridGen = 0;
 
-type TileRefs = { iconSpec?: IconSpec; labelText: any; selected: boolean };
+type TileRefs = { iconSpec?: IconSpec; labelText: any; selected: boolean; baseFg: string };
 const tileRefsByKey = new Map<string, TileRefs>();
 
-const tileStates = (): IconState[] => [
-  { fg: colors.sidebarFg, bg: colors.bg },
-  { fg: colors.sidebarFg, bg: colors.hoverBg },
-  { fg: colors.accent, bg: colors.accentBg },
-];
+const tileStates = (dim: boolean): IconState[] => {
+  const norm = dim ? colors.sidebarFgMuted : colors.sidebarFg;
+  return [
+    { fg: norm, bg: colors.bg },
+    { fg: norm, bg: colors.hoverBg },
+    { fg: colors.accent, bg: colors.accentBg },
+  ];
+};
 
 const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   const refs = tileRefsByKey.get(key);
   if (!refs) return;
   setIconState(refs.iconSpec, mode);
-  try { refs.labelText.fg = mode === 2 ? colors.accent : colors.sidebarFg; } catch {}
+  try { refs.labelText.fg = mode === 2 ? colors.accent : refs.baseFg; } catch {}
 };
 
 const clearGrid = () => {
@@ -657,12 +677,15 @@ const renderGrid = async () => {
   if (!scroller) return;
   const gen = ++gridGen;
   clearGrid();
-  const entries = await listDir(state.cwd, state.showHidden);
+  const q = searchQuery.trim().toLowerCase();
+  const allEntries = await listDir(state.cwd, state.showHidden || q.length > 0);
+  const entries = q ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
   if (gen !== gridGen) return;
 
   const status: any = renderer.root.findDescendantById("tfm-status-label");
   const shortCwd = state.cwd.startsWith(home) ? "~" + state.cwd.slice(home.length) : state.cwd;
-  if (status) status.content = `${entries.length} item${entries.length === 1 ? "" : "s"}  ·  ${shortCwd}${state.showHidden ? "  ·  hidden" : ""}`;
+  const countStr = q ? `${entries.length}/${allEntries.length} matches` : `${allEntries.length} item${allEntries.length === 1 ? "" : "s"}`;
+  if (status) status.content = `${countStr}  ·  ${shortCwd}${state.showHidden ? "  ·  hidden" : ""}`;
 
   if (entries.length === 0) {
     scroller.content.add(Text({ content: " empty folder", fg: colors.sidebarFgMuted }));
@@ -685,8 +708,9 @@ const renderGrid = async () => {
       justifyContent: "flex-start",
       onMouseDown: () => {
         const now = Date.now();
-        if (now - lastClick < 400) {
+        if (now - lastClick < config.ui.doubleClickMs) {
           if (e.isDir) navigate(key);
+          else spawn("xdg-open", [key], { stdio: "ignore", detached: true }).unref?.();
           lastClick = 0;
           return;
         }
@@ -707,16 +731,18 @@ const renderGrid = async () => {
       },
     });
 
+    const dim = e.name.startsWith(".");
+    const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
     const slotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
-    const iconSlot = makeIconSlot(e.isDir ? "folder" : "file", tileStates(), ICON_CELLS_H, 0);
+    const iconSlot = makeIconSlot(e.isDir ? "folder" : "file", tileStates(dim), ICON_CELLS_H, 0);
     const tileBox = Box({ width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" }, iconSlot.el);
     tile.add(tileBox);
 
     const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
-    const labelText: any = Text({ content: label, fg: colors.sidebarFg });
+    const labelText: any = Text({ content: label, fg: baseFg });
     tile.add(labelText);
 
-    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, labelText, selected: false });
+    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, labelText, selected: false, baseFg });
 
     return tile;
   };
@@ -728,6 +754,132 @@ const renderGrid = async () => {
   }
 
   void drainIconQueue();
+};
+
+// --- ESC menu (scrim pattern stolen from opencode's Dialog) ---
+type MenuEntry = { label: string; hint?: string; action: () => void };
+
+let menuOpen = false;
+let menuView: "root" | "settings" = "root";
+let menuIdx = 0;
+
+const MENU_W = 36;
+
+const quitApp = () => {
+  try { renderer.destroy(); } catch {}
+  process.exit(0);
+};
+
+const menuActivate = () => {
+  if (menuView === "settings") {
+    if (menuIdx === 0) { state.showHidden = !state.showHidden; void renderGrid(); renderMenuContent(); return; }
+    menuView = "root";
+    menuIdx = 0;
+    renderMenuContent();
+    return;
+  }
+  if (menuIdx === 0) { menuView = "settings"; menuIdx = 0; renderMenuContent(); }
+  else quitApp();
+};
+
+const renderMenuContent = () => {
+  const panel: any = renderer.root.findDescendantById("tfm-menu-panel");
+  if (!panel) return;
+  [...panel.getChildren()].forEach((c: any) => panel.remove(c));
+
+  panel.add(Box(
+    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+    Text({ content: menuView === "root" ? " tfm" : " tfm — settings", fg: colors.accent }),
+  ));
+  panel.add(Box(
+    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+    Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
+  ));
+
+  const row = (label: string, hint: string | undefined, active: boolean, onClick: () => void) =>
+    Box(
+      {
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        columnGap: 1,
+        paddingLeft: 1,
+        paddingRight: 1,
+        backgroundColor: active ? colors.accentBg : undefined,
+        onMouseDown: onClick,
+      },
+      Text({ content: ` ${label}`, fg: active ? colors.white : colors.sidebarFg }),
+      Box({ flexGrow: 1 }),
+      ...(hint ? [Text({ content: hint + " ", fg: colors.sidebarFgMuted })] : []),
+    );
+
+  if (menuView === "root") {
+    const items: MenuEntry[] = [
+      { label: "Settings", action: () => {} },
+      { label: "Quit", hint: "ctrl+q", action: () => {} },
+    ];
+    items.forEach((it, i) => panel.add(row(it.label, it.hint, i === menuIdx, menuActivate)));
+  } else {
+    panel.add(row(`hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, menuActivate));
+    panel.add(Box(
+      { width: "100%", height: 1, paddingLeft: 1 },
+      Text({ content: ` theme from ${configPath().replace(home, "~")}`, fg: colors.sidebarFgMuted }),
+    ));
+    panel.add(row("back", undefined, menuIdx === 1, menuActivate));
+  }
+
+  panel.add(Box(
+    { width: "100%", height: 1, paddingLeft: 1 },
+    Text({ content: " esc close · ↑↓ move · enter select", fg: colors.sidebarFgMuted }),
+  ));
+};
+
+const openMenu = () => {
+  if (menuOpen) return;
+  menuOpen = true;
+  menuView = "root";
+  menuIdx = 0;
+  try { if (scroller) scroller.visible = false; } catch {}
+  const scrim = Box(
+    {
+      id: "tfm-menu",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
+      zIndex: 3000,
+      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      onMouseDown: () => closeMenu(),
+    },
+    Box(
+      {
+        id: "tfm-menu-panel",
+        width: MENU_W,
+        backgroundColor: colors.sidebarBg,
+        paddingTop: 1,
+        paddingBottom: 1,
+      },
+    ),
+  );
+  renderer.root.add(scrim);
+  renderMenuContent();
+};
+
+const closeMenu = () => {
+  if (!menuOpen) return;
+  menuOpen = false;
+  const scrim: any = renderer.root.findDescendantById("tfm-menu");
+  scrim?.parent?.remove(scrim);
+  try { scroller && (scroller.visible = true); } catch {}
+};
+
+const moveMenu = (delta: number) => {
+  const count = menuView === "settings" ? 2 : 2;
+  menuIdx = (menuIdx + delta + count) % count;
+  renderMenuContent();
 };
 
 // --- Orchestration ---
@@ -754,17 +906,45 @@ const boot = async () => {
   host.add(scroller);
   await loadSystemPlaces();
   renderAll();
+
+  const inputEl: any = renderer.root.findDescendantById("tfm-search");
+  if (inputEl?.on) {
+    inputEl.on("input", () => {
+      try { searchQuery = String(inputEl.value ?? ""); } catch {}
+      void renderGrid();
+    });
+    inputEl.on("enter", () => clearSearch());
+  }
 };
 boot();
 
 // --- Keyboard ---
 renderer.keyInput.on("keypress", (e: any) => {
-  const el: any = renderer.root.findDescendantById("tfm-search");
-  if (el?.visible && (e.name === "escape" || e.name === "return")) {
-    el.visible = false;
+  const ctrl = !!e.ctrl || !!e.control;
+  if (ctrl && (e.name === "q" || e.unicode === "q")) {
+    quitApp();
     return;
   }
-  const ctrl = !!e.ctrl || !!e.control;
+
+  if (menuOpen) {
+    if (e.name === "escape") closeMenu();
+    else if (e.name === "up") moveMenu(-1);
+    else if (e.name === "down") moveMenu(1);
+    else if (e.name === "return") menuActivate();
+    return;
+  }
+
+  const el: any = renderer.root.findDescendantById("tfm-search");
+  if (el?.visible && (e.name === "escape" || e.name === "return")) {
+    clearSearch();
+    return;
+  }
+  if (el?.visible) return;
+
+  if (e.name === "escape") {
+    openMenu();
+    return;
+  }
   if (ctrl && (e.name === "h" || e.unicode === "h")) {
     state.showHidden = !state.showHidden;
     renderGrid();
