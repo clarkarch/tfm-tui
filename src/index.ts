@@ -37,6 +37,47 @@ const glyph = {
   "eye-off": "\u{F0209}",
 };
 
+// --- File type categories (extension -> icon); generic `file` is the fallback,
+// mirroring nautilus's themed-icon fallback chain in spirit ---
+const FILE_ICON_BY_EXT: Record<string, string> = {
+  js: "file-code", jsx: "file-code", mjs: "file-code", cjs: "file-code",
+  ts: "file-code", tsx: "file-code", py: "file-code", rb: "file-code",
+  rs: "file-code", go: "file-code", c: "file-code", h: "file-code",
+  cpp: "file-code", cc: "file-code", hpp: "file-code", java: "file-code",
+  kt: "file-code", swift: "file-code", cs: "file-code", php: "file-code",
+  lua: "file-code", pl: "file-code", sh: "file-code", bash: "file-code",
+  zsh: "file-code", fish: "file-code", ps1: "file-code", vue: "file-code",
+  svelte: "file-code", html: "file-code", css: "file-code", scss: "file-code",
+  sql: "file-code", json: "file-code", yaml: "file-code", yml: "file-code",
+  toml: "file-code", xml: "file-code", ini: "file-code", conf: "file-code",
+  zig: "file-code", nim: "file-code", ex: "file-code", exs: "file-code",
+  hs: "file-code", ml: "file-code", r: "file-code", dart: "file-code",
+  md: "file-document", markdown: "file-document", txt: "file-document",
+  doc: "file-document", docx: "file-document", odt: "file-document",
+  rtf: "file-document", log: "file-document", eps: "file-document",
+  png: "file-image", jpg: "file-image", jpeg: "file-image", gif: "file-image",
+  webp: "file-image", svg: "file-image", bmp: "file-image", ico: "file-image",
+  tiff: "file-image", avif: "file-image", heic: "file-image", xcf: "file-image",
+  mp4: "file-video", mkv: "file-video", avi: "file-video", mov: "file-video",
+  webm: "file-video", wmv: "file-video", flv: "file-video", m4v: "file-video",
+  mp3: "file-music", flac: "file-music", wav: "file-music", ogg: "file-music",
+  oga: "file-music", m4a: "file-music", opus: "file-music", aac: "file-music",
+  zip: "zip-box", tar: "zip-box", gz: "zip-box", bz2: "zip-box", xz: "zip-box",
+  zst: "zip-box", "7z": "zip-box", rar: "zip-box", apk: "zip-box", jar: "zip-box",
+  pdf: "file-pdf-box",
+};
+
+for (const cat of new Set(Object.values(FILE_ICON_BY_EXT))) {
+  if (!(cat in glyph)) glyph[cat as keyof typeof glyph] = glyph.file;
+}
+
+const fileIconFor = (name: string): string => {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return "file";
+  const ext = name.slice(dot + 1).toLowerCase();
+  return FILE_ICON_BY_EXT[ext] ?? "file";
+};
+
 // --- Icon slots ---
 type IconState = { fg: string; bg: string };
 type IconSpec = {
@@ -871,7 +912,7 @@ const renderGrid = async () => {
     const dim = e.name.startsWith(".");
     const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
     const slotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
-    const iconSlot = makeIconSlot(e.isDir ? "folder" : "file", tileStates(dim), ICON_CELLS_H, 0);
+    const iconSlot = makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), tileStates(dim), ICON_CELLS_H, 0);
     const tileBox = Box({ width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" }, iconSlot.el);
     tile.add(tileBox);
 
