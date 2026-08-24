@@ -563,7 +563,7 @@ const container = Box(
 );
 
 // --- Renderer boot ---
-const renderer = await createCliRenderer({ exitOnCtrlC: true });
+const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 60, maxFps: 120 });
 renderer.root.add(container);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -759,6 +759,44 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
 const clearTileSelection = () => {
   tileRefsByKey.forEach((refs, k) => {
     if (refs.selected) { refs.selected = false; setTileVisual(k, 0); }
+  });
+};
+
+// --- Rubber band selection ---
+let bandStart: { x: number; y: number } | null = null;
+const BAND_ID = "tfm-band";
+
+const bandNode = (): any => renderer.root.findDescendantById(BAND_ID);
+
+const updateBandRect = (ev: any) => {
+  if (!bandStart) return;
+  const b = bandNode();
+  if (!b) return;
+  try {
+    b.x = Math.min(bandStart.x, ev.x);
+    b.y = Math.min(bandStart.y, ev.y);
+    b.width = Math.abs(ev.x - bandStart.x) + 1;
+    b.height = Math.abs(ev.y - bandStart.y) + 1;
+  } catch {}
+};
+
+const finalizeBand = (ev: any) => {
+  const start = bandStart;
+  bandStart = null;
+  const b = bandNode();
+  if (b) { try { b.visible = false; } catch {} }
+  if (!start) return;
+  const x0 = Math.min(start.x, ev.x), y0 = Math.min(start.y, ev.y);
+  const x1 = Math.max(start.x, ev.x), y1 = Math.max(start.y, ev.y);
+  clearTileSelection();
+  tileRefsByKey.forEach((refs, key) => {
+    const t: any = renderer.root.findDescendantById(refs.tileId);
+    if (!t) return;
+    const tx = t.screenX, ty = t.screenY, tw = t.width, th = t.height;
+    if (tx < x1 + 1 && tx + tw > x0 && ty < y1 + 1 && ty + th > y0) {
+      refs.selected = true;
+      setTileVisual(key, 2);
+    }
   });
 };
 
@@ -969,6 +1007,9 @@ const openMenu = () => {
   menuOpen = true;
   menuView = "root";
   menuIdx = 0;
+  bandStart = null;
+  const pendingBand = bandNode();
+  if (pendingBand) { try { pendingBand.visible = false; } catch {} }
   setScrim(true);
   const scrim = Box(
     {
@@ -1035,10 +1076,34 @@ const boot = async () => {
     scrollY: true,
     viewportCulling: true,
     contentOptions: { flexDirection: "column" },
-    onMouseDown: () => clearTileSelection(),
+    onMouseDown: (ev: any) => {
+      clearTileSelection();
+      if (ev.button === 0) {
+        bandStart = { x: ev.x, y: ev.y };
+        const b = bandNode();
+        if (b) {
+          try {
+            b.x = ev.x; b.y = ev.y; b.width = 1; b.height = 1; b.visible = true;
+          } catch {}
+        }
+      }
+    },
+    onMouseDrag: (ev: any) => updateBandRect(ev),
+    onMouseDragEnd: (ev: any) => finalizeBand(ev),
+    onMouseUp: (ev: any) => { if (bandStart) finalizeBand(ev); },
   });
   const host: any = renderer.root.findDescendantById("tfm-grid-host");
   host.add(scroller);
+  renderer.root.add(Box({
+    id: BAND_ID,
+    visible: false,
+    position: "absolute",
+    zIndex: 2500,
+    border: true,
+    borderStyle: "rounded",
+    borderColor: colors.accent,
+    backgroundColor: RGBA.fromInts(122, 162, 247, 28),
+  }));
   await loadSystemPlaces();
   renderAll();
 
