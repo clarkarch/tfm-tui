@@ -736,7 +736,7 @@ const container = Box(
     makeToolbarShell(),
     Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
     Box(
-      { id: "tfm-status", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, paddingRight: 1 },
+      { id: "tfm-status", width: "100%", height: 1, flexDirection: "row", justifyContent: "flex-end", paddingRight: 1 },
       Text({ id: "tfm-status-label", content: "", fg: colors.sidebarFgMuted }),
     ),
   ),
@@ -992,7 +992,7 @@ let scroller: ScrollBoxRenderable | null = null;
 let gridGen = 0;
 let tileSeq = 0;
 
-type TileRefs = { iconSpec?: IconSpec; selected: boolean; baseFg: string; tileId: string; labelId: string };
+type TileRefs = { iconSpec?: IconSpec; selected: boolean; baseFg: string; tileId: string; labelId: string; isDir: boolean };
 const tileRefsByKey = new Map<string, TileRefs>();
 
 const tileStates = (dim: boolean): IconState[] => {
@@ -1020,13 +1020,26 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   }
 };
 
+let selStatusGen = 0;
 const updateSelectionStatusReal = () => {
-  let n = 0;
-  tileRefsByKey.forEach((r) => { if (r.selected) n++; });
-  const status: any = renderer.root.findDescendantById("tfm-status-label");
-  if (status) {
-    try { status.content = n > 0 ? `${n} selected` : ""; } catch {}
-  }
+  const gen = ++selStatusGen;
+  const sel: { key: string; isDir: boolean }[] = [];
+  tileRefsByKey.forEach((r, k) => { if (r.selected) sel.push({ key: k, isDir: r.isDir }); });
+  const setStatus = (s: string) => {
+    if (gen !== selStatusGen) return;
+    const status: any = renderer.root.findDescendantById("tfm-status-label");
+    if (status) { try { status.content = s; } catch {} }
+  };
+  if (sel.length === 0) return setStatus("");
+  const dirs = sel.filter((s) => s.isDir);
+  if (dirs.length === 0) return setStatus(`${sel.length} selected`);
+  void (async () => {
+    let contained = 0;
+    await Promise.all(dirs.map(async (d) => {
+      try { contained += (await readdir(d.key)).length; } catch {}
+    }));
+    setStatus(dirs.length === 1 && sel.length === 1 ? `${contained} items` : `${sel.length} selected · ${contained} items`);
+  })();
 };
 
 const clearTileSelection = () => {
@@ -1191,7 +1204,7 @@ const renderGrid = async () => {
     const labelText: any = Text({ id: labelId, content: label, fg: baseFg });
     tile.add(labelText);
 
-    tileRefsByKey.set(key, { iconSpec, selected: false, baseFg, tileId, labelId });
+    tileRefsByKey.set(key, { iconSpec, selected: false, baseFg, tileId, labelId, isDir: e.isDir });
 
     if (useThumb && st) {
         thumbJobs.push({
