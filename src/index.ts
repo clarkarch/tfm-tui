@@ -649,33 +649,43 @@ const drainIconQueue = async () => {
     const slot: any = renderer.root.findDescendantById(spec.slotId);
     if (!slot) return;
     const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
-    // normal states (-s*) + scrimmed variants (-d*) pre-blended to match the
-    // menu backdrop (black @ ~59% alpha), since kitty images sit above cells
-    for (const [prefix, dim] of [["s", false], ["d", true]] as const) {
-      const imgs = await rasterStatesInto(spec.slotId, spec.name, spec.states, spec.heightCells, wCells, spec.initialState, dim ? 0.41 : 1, prefix);
-      if (imgs.length === 0) continue;
-      if (prefix === "d") imgs.forEach((im) => { try { im.visible = false; } catch {} });
-      if (prefix === "s") {
-        slot.width = wCells;
-        const kids = slot.getChildren?.() ?? [];
-        const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
-        if (glyphNode) slot.remove(glyphNode);
-      }
-      imgs.forEach((im) => slot.add(im));
-    }
+    const imgs = await rasterStatesInto(spec.slotId, spec.name, spec.states, spec.heightCells, wCells, spec.initialState);
+    if (imgs.length === 0) return;
+    slot.width = wCells;
+    const kids = slot.getChildren?.() ?? [];
+    const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
+    // glyph stays in the slot (hidden) so the scrim can fall back to it
+    if (glyphNode) { try { glyphNode.visible = false; } catch {} }
+    imgs.forEach((im) => slot.add(im));
   }));
 };
 
+// Kitty placements float above all cells, so the scrim can't dim them.
+// While the menu is open every slot falls back to its glyph, pre-darkened
+// to blend into the backdrop; rasters come back on close.
 const setScrim = (on: boolean) => {
   for (const spec of iconQueue) {
     const slot: any = renderer.root.findDescendantById(spec.slotId);
     if (!slot) continue;
     const kids = (slot.getChildren?.() ?? []) as any[];
-    const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && !k.id.endsWith("-g"));
-    const dimImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-d`));
-    if (dimImgs.length !== stateImgs.length || dimImgs.length === 0) continue;
-    stateImgs.forEach((k, i) => { try { k.visible = !on && i === spec.initialState; } catch {} });
-    dimImgs.forEach((k, i) => { try { k.visible = on && i === spec.initialState; } catch {} });
+    const glyphNode: any = kids.find((k) => k.id === `${spec.slotId}-g`);
+    if (!glyphNode) continue;
+    const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`));
+    if (stateImgs.length === 0 && !spec.done) continue;
+    if (on) {
+      stateImgs.forEach((k) => { try { k.visible = false; } catch {} });
+      try {
+        glyphNode.fg = dimHex(spec.states[spec.initialState]?.fg ?? colors.sidebarFg, 0.41);
+        glyphNode.visible = true;
+      } catch {}
+    } else {
+      if (stateImgs.length === 0) {
+        try { glyphNode.visible = true; } catch {}
+      } else {
+        try { glyphNode.visible = false; } catch {}
+        stateImgs.forEach((k, i) => { try { k.visible = i === spec.initialState; } catch {} });
+      }
+    }
   }
 };
 
