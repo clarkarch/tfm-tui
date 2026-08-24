@@ -419,6 +419,7 @@ function buildSections(): Place[][] {
 // --- Places sidebar (rebuilt from scratch on every render, selection = cwd) ---
 
 const placesHost: { row: ReturnType<typeof Box>; rowId: string; labelId: string; specs: IconSpec[]; selected: boolean; place: Place }[] = [];
+let mousePlaceIdx = -1;
 
 const sw = config.ui.sidebarWidth;
 
@@ -453,20 +454,6 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
   }
   const specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
 
-  const applyLook = (hovered: boolean) => {
-    const rowReal: any = renderer.root.findDescendantById(`tfm-place-${idx}`);
-    if (rowReal) {
-      try {
-        rowReal.backgroundColor = selected ? colors.accentBg : hovered ? colors.hoverBg : colors.sidebarBg;
-      } catch {}
-    }
-    specs.forEach((s) => setIconState(s, selected ? 2 : hovered ? 1 : 0));
-    const labelReal: any = renderer.root.findDescendantById(`tfm-place-${idx}-label`);
-    if (labelReal) {
-      try { labelReal.fg = selected ? selFg : normFg; } catch {}
-    }
-  };
-
   const rowNode = Box(
     {
       id: `tfm-place-${idx}`,
@@ -481,8 +468,8 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
         if (place.path) navigate(place.path);
         else if (place.mountDevice) mountDevice(place.mountDevice);
       },
-      onMouseOver: () => applyLook(true),
-      onMouseOut: () => applyLook(false),
+      onMouseOver: () => { mousePlaceIdx = idx; normalizePlaces(); },
+      onMouseOut: () => { if (mousePlaceIdx === idx) { mousePlaceIdx = -1; normalizePlaces(); } },
     },
     iconSlot.el,
   );
@@ -1042,7 +1029,7 @@ const leaveSidebarToGrid = () => {
 const normalizePlaces = () => {
   placesHost.forEach((rec, i) => {
     const isSel = rec.selected;
-    const isHover = sidebarActive && i === placeIdx && !isSel;
+    const isHover = !isSel && (sidebarActive ? i === placeIdx : i === mousePlaceIdx);
     const row: any = renderer.root.findDescendantById(rec.rowId);
     const label: any = renderer.root.findDescendantById(rec.labelId);
     try { if (row) row.backgroundColor = isSel ? colors.accentBg : isHover ? colors.hoverBg : colors.sidebarBg; } catch {}
