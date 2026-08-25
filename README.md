@@ -24,7 +24,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 ## Requirements
 
 - Linux
-- A terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty) — falls back to Nerd Font glyphs elsewhere
+- A terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) — **recommended: kitty** (full experience incl. cross-app drag & drop); ghostty gets thumbnails but not cross-app drag; others fall back to Nerd Font glyphs
 - `rsvg-convert` (icon rasterization), `wl-paste`/`xclip` (clipboard bridge)
 
 ## Install
