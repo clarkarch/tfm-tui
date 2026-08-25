@@ -861,7 +861,6 @@ const ensureSearchBar = (): InputBarRenderable | null => {
   searchBar = new InputBarRenderable(renderer, {
     id: "tfm-search",
     width: "100%",
-    visible: false,
     placeholder: "Search",
     backgroundColor: colors.accentBg,
     focusedBackgroundColor: colors.accentBg,
@@ -875,6 +874,8 @@ const ensureSearchBar = (): InputBarRenderable | null => {
     },
   });
   liveHost.add(searchBar as any);
+  // hidden until toggled — safe to set now that the node is mounted
+  try { searchBar.visible = false } catch {}
   return searchBar;
 };
 
@@ -4920,7 +4921,12 @@ renderer.keyInput.on("keypress", (e: any) => {
       exitPathEdit();
       return;
     }
-    return;
+    // caret/editing keys go to the bar; tfm binds stay live
+    const editing =
+      ["left", "right", "home", "end", "backspace", "delete"].includes(e.name) ||
+      (!!e.sequence && !e.ctrl && !e.super && !(e as any).meta &&
+        e.sequence.charCodeAt(0) >= 32);
+    if (!editing) return;
   }
 
   // file context menu open: arrows/enter navigate it, esc closes
@@ -4962,7 +4968,13 @@ renderer.keyInput.on("keypress", (e: any) => {
       }
       return;
     }
-    return;
+    // caret/editing keys belong to the bar — hand them off untouched.
+    // everything else (ctrl+h, ctrl+r, …) keeps working as a tfm keybind
+    const editing =
+      ["left", "right", "home", "end", "backspace", "delete"].includes(e.name) ||
+      (!!e.sequence && !e.ctrl && !e.super && !(e as any).meta &&
+        e.sequence.charCodeAt(0) >= 32);
+    if (!editing) return;
   }
 
   // --- keyboard navigation: sidebar <-> grid ---
@@ -5040,7 +5052,8 @@ renderer.keyInput.on("keypress", (e: any) => {
     if (parent !== path.resolve(state.cwd)) navigate(parent);
     return;
   }
-  if (!ctrl && !e.shift && typeof e.name === "string" && e.name.length === 1 && /[a-z0-9._-]/i.test(e.name)) {
+  // search already open: its bar owns typing — never re-seed
+  if (!(el as any)?.visible && !ctrl && !e.shift && typeof e.name === "string" && e.name.length === 1 && /[a-z0-9._-]/i.test(e.name)) {
     beginTypeToSearch(e.name);
     return;
   }

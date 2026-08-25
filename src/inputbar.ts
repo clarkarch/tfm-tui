@@ -219,7 +219,6 @@ export interface InputBarOptions {
   placeholderColor?: string
   cursorStyle?: "block" | "underline" | "line"
   maxLength?: number
-  visible?: boolean
   onChange?: (value: string) => void
   onSubmit?: (value: string) => void
   onCancel?: (value: string) => void
@@ -246,8 +245,6 @@ export class InputBarRenderable extends Renderable {
   private onCancel?: (v: string) => void
   private clipboardRead?: () => Promise<string | null>
   private onCopy?: (text: string) => void
-  private lastDown: { x: number; time: number } | null = null
-  private clickCount = 0
 
   constructor(ctx: ConstructorParameters<typeof Renderable>[0], options: InputBarOptions = {}) {
     super(ctx, {
@@ -271,11 +268,6 @@ export class InputBarRenderable extends Renderable {
     this.onCancel = options.onCancel
     this.clipboardRead = options.clipboardRead
     this.onCopy = options.onCopy
-    // visible's setter touches layout bookkeeping that only exists once the
-    // node joins the tree — defer any initial hidden state
-    if (options.visible === false) {
-      setTimeout(() => { try { this.visible = false } catch {} }, 0)
-    }
   }
 
   get value(): string {
@@ -619,27 +611,15 @@ export class InputBarRenderable extends Renderable {
     this.requestRender()
   }
 
-  // --- mouse: click places cursor, drag selects, double-click selects word
+  // --- mouse: click places cursor, drag selects
   protected override onMouseEvent(event: MouseEvent): void {
     switch (event.type) {
       case "down": {
         if (event.button !== 0) break
-        const now = Date.now()
-        const prev = this.lastDown
-        const multi = prev !== null && now - prev.time < 400 && Math.abs(event.x - prev.x) <= 2
-        this.clickCount = multi ? this.clickCount + 1 : 1
-        this.lastDown = { x: event.x, time: now }
         this.focus()
         const localCol = event.x - this._screenX + this.scrollX
-        const target = charIndexAtDisplayCol(this.textValue, Math.max(0, localCol))
-        if (this.clickCount === 2) {
-          const bounds = wordBoundsAt(this.textValue, target)
-          if (bounds) { this.anchor = bounds[0]; this.col = bounds[1] }
-          else { this.anchor = null; this.col = target }
-        } else {
-          this.anchor = null
-          this.col = target
-        }
+        this.anchor = null
+        this.col = charIndexAtDisplayCol(this.textValue, Math.max(0, localCol))
         this.ensureCursorVisible()
         this.requestRender()
         break
