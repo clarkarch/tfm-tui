@@ -1642,7 +1642,7 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
 };
 
 // --- inline rename: edit the tile label in place instead of a modal ---
-let renameEdit: { key: string; inputId: string } | null = null;
+let renameEdit: { key: string; inputId: string; createKind?: "file" | "folder" } | null = null;
 
 const tileLabelFor = (name: string): string =>
   name.length > TILE_W - 2 ? name.slice(0, TILE_W - 5) + "…" : name;
@@ -1662,7 +1662,21 @@ const finishInlineRename = (commit: boolean): void => {
     tile.add(labelText);
   }
   stripSelectable();
-  if (commit && value && value !== path.basename(edit.key)) void performRename(edit.key, value);
+  if (!commit || !value) {
+    if (edit.createKind) void rm(edit.key, { recursive: true }).then(() => renderAll());
+    return;
+  }
+  if (value !== path.basename(edit.key)) {
+    // create-unit is pushed BEFORE performRename so undo pops rename-back
+    // first, then removes the entry entirely
+    if (edit.createKind) pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(edit.key, { recursive: true })]);
+    void performRename(edit.key, value);
+    return;
+  }
+  if (edit.createKind) {
+    pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(edit.key, { recursive: true })]);
+    setStatusMsg(`Created ${value} · ctrl+z to undo`);
+  }
 };
 
 const startInlineRename = (key: string): void => {
@@ -1695,6 +1709,36 @@ const startInlineRename = (key: string): void => {
   };
   setTimeout(() => { try { input.focus(); } catch {} }, 20);
   stripSelectable();
+};
+
+const uniqueUntitledName = (dir: string, base: string): string => {
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  let n = base;
+  let i = 2;
+  while (existsSync(path.join(dir, n))) n = `${stem} ${i++}${ext}`;
+  return n;
+};
+
+// nautilus-style: the entry is created immediately with a default name, then
+// its label edits in place; esc/empty name deletes it again
+const startInlineCreate = (kind: "file" | "folder"): void => {
+  if (renameEdit) finishInlineRename(false);
+  if (isVirtualCwd() || inTrashView()) return;
+  const name = uniqueUntitledName(state.cwd, kind === "folder" ? "Untitled folder" : "Untitled.txt");
+  const target = path.join(state.cwd, name);
+  const made = kind === "folder"
+    ? mkdir(target, { recursive: true })
+    : writeFile(target, "");
+  void made
+    .then(() => renderGrid())
+    .then(() => {
+      const idx = focusKeys.indexOf(target);
+      if (idx >= 0) selectTileAt(idx);
+      startInlineRename(target);
+    })
+    .catch(() => setStatusMsg("Create failed"));
 };
 
 let selStatusGen = 0;
@@ -3895,7 +3939,7 @@ const openProperties = (targetPath: string): void => {
 };
 
 // --- File context menu (right-click a tile) ---
-type ListEntry = { icon?: string; label: string; hint?: string; action: () => void; sep?: boolean };
+type ListEntry = { icon?: string; label: string; hint?: string; hintIcon?: string; action: () => void; sep?: boolean };
 let fileMenuState: { idx: number; entries: ListEntry[] } | null = null;
 
 const closeFileMenu = () => {
@@ -3933,7 +3977,12 @@ const renderFileMenu = () => {
       ...(entry.icon ? [makeIconSlot(entry.icon, [{ fg: colors.sidebarFg, bg: i === fileMenuState!.idx ? colors.accentBg : colors.sidebarBg }, { fg: colors.white, bg: colors.accentBg }], 1, i === fileMenuState!.idx ? 1 : 0).el] : []),
       Text({ content: entry.label, fg: i === fileMenuState!.idx ? colors.white : colors.sidebarFg }),
       Box({ flexGrow: 1 }),
-      ...(entry.hint ? [Text({ content: entry.hint + " ", fg: colors.sidebarFgMuted })] : []),
+      ...(entry.hintIcon
+        ? [makeIconSlot(entry.hintIcon, [
+            { fg: colors.sidebarFgMuted, bg: i === fileMenuState!.idx ? colors.accentBg : colors.sidebarBg },
+            { fg: colors.white, bg: colors.accentBg },
+          ], 1, i === fileMenuState!.idx ? 1 : 0).el]
+        : entry.hint ? [Text({ content: entry.hint + " ", fg: colors.sidebarFgMuted })] : []),
     );
   };
   panel.add(Box(
@@ -4046,7 +4095,7 @@ const sortEntries = (): ListEntry[] => {
   };
   const entry = (key: SortMode, label: string, naturalAsc: boolean): ListEntry => ({
     label,
-    ...(state.sortBy === key ? { hint: state.sortAsc ? "↑" : "↓" } : {}),
+    ...(state.sortBy === key ? { hintIcon: state.sortAsc ? "arrow-up" : "arrow-down" } : {}),
     action: () => pick(key, naturalAsc),
   });
   return [
@@ -4074,18 +4123,8 @@ const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
     return entries;
   }
   entries.push(
-    { icon: "file", label: "New File", action: () => { closeFileMenu(); openPrompt("new file", "Untitled.txt", (v) => {
-        const p = path.join(state.cwd, v);
-        writeFile(p, "")
-          .then(() => { pushUndoBatch("new file", [() => rm(p, { recursive: true })]); renderAll(); })
-          .catch(() => setStatusMsg("Create failed"));
-      }); } },
-    { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); openPrompt("new folder", "Untitled folder", (v) => {
-        const p = path.join(state.cwd, v);
-        mkdir(p, { recursive: true })
-          .then(() => { pushUndoBatch("new folder", [() => rm(p, { recursive: true })]); renderAll(); })
-          .catch(() => setStatusMsg("Create failed"));
-      }); } },
+    { icon: "file", label: "New File", action: () => { closeFileMenu(); startInlineCreate("file"); } },
+    { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); startInlineCreate("folder"); } },
     { icon: "select-all", label: "Select all", action: () => {
       closeFileMenu();
       tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
@@ -4503,6 +4542,8 @@ const syncCwdWatcher = (): void => {
       if (cwdWatchTimer) clearTimeout(cwdWatchTimer);
       cwdWatchTimer = setTimeout(() => {
         cwdWatchTimer = null;
+        // our own create+inline-edit would wipe the editor mid-keystroke
+        if (renameEdit) return;
         if (path.resolve(state.cwd) === watchedDir) void renderGrid();
       }, 200);
     });
