@@ -21,16 +21,22 @@ Mouse-first file manager for the terminal. Nautilus-style places sidebar, grid v
 - A terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty) — falls back to Nerd Font glyphs elsewhere
 - `rsvg-convert` (icon rasterization), `wl-paste`/`xclip` (clipboard bridge)
 
-## Install & run
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/master/install.sh | bash
+```
+
+Installs to `~/.local/bin` as `tfm` (and `terminal-file-manager`). Prebuilt binaries for linux x86_64/aarch64 are on [Releases](https://github.com/clarkarch/tfm-tui/releases).
+
+From source:
 
 ```bash
 bun install
-bun run compile          # standalone binary in dist/
-cp dist/tfm ~/.local/bin/tfm
-tfm ~/some/path          # launches there; `terminal-file-manager` also works
+bun run compile && cp dist/tfm ~/.local/bin/
 ```
 
-Dev: `bun dev`.
+Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 
 ## Keys
 
