@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 
 export type Theme = {
   bg: string;
@@ -109,4 +110,33 @@ export function loadConfig(): Config {
       return acc;
     }, {} as Theme),
   };
+}
+
+// The settings UI writes this exact shape; loadConfig reads ui keys kebab-case
+// and theme keys camelCase, so the round-trip is stable. Comments in a
+// hand-edited file are not preserved (smol-toml cannot round-trip them).
+export function serializeConfig(cfg: Config): string {
+  const doc = {
+    ui: {
+      "sidebar-width": cfg.ui.sidebarWidth,
+      "tile-width": cfg.ui.tileWidth,
+      "tile-height": cfg.ui.tileHeight,
+      "icon-cells": cfg.ui.iconCells,
+      "double-click-ms": cfg.ui.doubleClickMs,
+      "show-hidden": cfg.ui.showHidden,
+      "preview-enabled": cfg.ui.previewEnabled,
+      "preview-width": cfg.ui.previewWidth,
+    },
+    theme: { ...cfg.theme },
+  };
+  const header = "# tfm configuration\n# Also editable live: press esc -> Settings in the app.\n\n";
+  return header + stringify(doc);
+}
+
+export async function saveConfig(cfg: Config): Promise<void> {
+  const file = configPath();
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, serializeConfig(cfg));
+  await rename(tmp, file);
 }

@@ -1,11 +1,12 @@
 import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, statSync, watch } from "node:fs";
-import { readdir, readFile, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
+import { readdir, readFile, stat, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { loadConfig, configPath, type Theme } from "./config";
+import { loadConfig, configPath, saveConfig, defaultConfig, type Config, type Theme } from "./config";
+import { THEME_PRESETS, type ThemePreset } from "./themes";
 
 const execFileP = promisify(execFile);
 
@@ -37,6 +38,7 @@ const glyph = {
   "eye-off": "\u{F0209}",
   "content-copy": "\u{F018F}",
   "content-cut": "\u{F0190}",
+  information: "\u{F02FD}",
   pencil: "\u{F03EB}",
   "folder-plus": "\u{F0770}",
   "select-all": "\u{F0478}",
@@ -152,6 +154,9 @@ type IconSpec = {
   name: string;
   heightCells: number;
   states: IconState[];
+  // slots that survive renderAll rebuilds (nav/search/sort) must derive fresh
+  // state colors on every re-raster, or a runtime theme swap leaves them stale
+  statesFactory?: () => IconState[];
   initialState: number;
   done?: boolean;
 };
@@ -165,10 +170,11 @@ const makeIconSlot = (
   heightCells = 1,
   initialState = 0,
   onMouseDown?: () => void,
+  statesFactory?: () => IconState[],
 ): { el: ReturnType<typeof Box>; slotId: string; spec: IconSpec } => {
   const slotId = `tfm-icon-${iconSeq++}`;
   const g = glyph[name as keyof typeof glyph] ?? "\u{FFFD}";
-  const spec: IconSpec = { slotId, name, heightCells, states, initialState };
+  const spec: IconSpec = { slotId, name, heightCells, states, initialState, ...(statesFactory ? { statesFactory } : {}) };
   iconQueue.push(spec);
   return {
     el: Box(
@@ -426,7 +432,8 @@ function buildSections(): Place[][] {
 const placesHost: { row: ReturnType<typeof Box>; rowId: string; labelId: string; specs: IconSpec[]; selected: boolean; place: Place }[] = [];
 let mousePlaceIdx = -1;
 
-const sw = config.ui.sidebarWidth;
+// mutable: applyConfig() rewrites these when settings change
+let sw = config.ui.sidebarWidth;
 
 const mountDevice = (device: string) => {
   spawn("udisksctl", ["mount", "-b", device], { stdio: "ignore" });
@@ -524,9 +531,9 @@ const renderSidebar = () => {
 
 const makeTitle = () =>
   Box(
-    { width: sw, height: 5, flexDirection: "column", justifyContent: "center", paddingLeft: 1 },
-    ASCIIFont({ text: "tfm", font: "tiny", color: colors.accent }),
-    Text({ content: " terminal file manager", fg: colors.sidebarFgMuted }),
+    { id: "tfm-title-box", width: sw, height: 5, flexDirection: "column", justifyContent: "center", paddingLeft: 1 },
+    ASCIIFont({ id: "tfm-title-font", text: "tfm", font: "tiny", color: colors.accent }),
+    Text({ id: "tfm-title-sub", content: " terminal file manager", fg: colors.sidebarFgMuted }),
   );
 
 const makeDivider = () =>
@@ -551,6 +558,11 @@ const makeNavButton = (id: "tfm-nav-back" | "tfm-nav-fwd", iconName: string, onA
     ],
     1,
     0,
+    undefined,
+    () => [
+      { fg: colors.sidebarFg, bg: colors.bg },
+      { fg: colors.sidebarFgMuted, bg: colors.bg },
+    ],
   );
   navSpecs[id] = slot.spec;
   return Box(
@@ -689,7 +701,14 @@ const makeSearch = () => {
         if (el.visible) el.focus();
       },
     },
-    makeIconSlot("search", [{ fg: colors.sidebarFg, bg: colors.bg }], 1).el,
+    makeIconSlot(
+      "search",
+      [{ fg: colors.sidebarFg, bg: colors.bg }],
+      1,
+      0,
+      undefined,
+      () => [{ fg: colors.sidebarFg, bg: colors.bg }],
+    ).el,
   );
 
   wrap.add(button);
@@ -709,7 +728,14 @@ const makeSortButton = (): ReturnType<typeof Box> =>
         openContextMenu(ev.x, ev.y, "", sortEntries());
       },
     },
-    makeIconSlot("sort", [{ fg: colors.sidebarFg, bg: colors.bg }], 1).el,
+    makeIconSlot(
+      "sort",
+      [{ fg: colors.sidebarFg, bg: colors.bg }],
+      1,
+      0,
+      undefined,
+      () => [{ fg: colors.sidebarFg, bg: colors.bg }],
+    ).el,
   );
 
 const makeToolbarShell = (): ReturnType<typeof Box> =>
@@ -778,12 +804,12 @@ async function listDir(dir: string, showHidden: boolean): Promise<Entry[]> {
 const container = Box(
   { width: "100%", height: "100%", flexDirection: "row" },
   Box(
-    { width: sw, height: "100%", backgroundColor: colors.sidebarBg, flexDirection: "column" },
+    { id: "tfm-sidebar-root", width: sw, height: "100%", backgroundColor: colors.sidebarBg, flexDirection: "column" },
     makeTitle(),
     Box({ id: "tfm-places", width: sw, flexDirection: "column" }),
   ),
   Box(
-    { flexGrow: 1, height: "100%", backgroundColor: colors.bg, flexDirection: "column" },
+    { id: "tfm-main", flexGrow: 1, height: "100%", backgroundColor: colors.bg, flexDirection: "column" },
     makeToolbarShell(),
     Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
     Box(
@@ -791,24 +817,24 @@ const container = Box(
       Text({ id: "tfm-status-label", content: "", fg: colors.sidebarFgMuted }),
     ),
   ),
-  ...(config.ui.previewEnabled
-    ? [Box(
-        {
-          id: "tfm-preview",
-          width: config.ui.previewWidth,
-          height: "100%",
-          backgroundColor: colors.sidebarBg,
-          flexDirection: "column",
-          paddingLeft: 1,
-          paddingRight: 1,
-        },
-      )]
-    : []),
+  Box(
+    {
+      id: "tfm-preview",
+      width: config.ui.previewWidth,
+      height: "100%",
+      visible: config.ui.previewEnabled, // display:none in yoga: takes no layout space when hidden
+      backgroundColor: colors.sidebarBg,
+      flexDirection: "column",
+      paddingLeft: 1,
+      paddingRight: 1,
+    },
+  ),
 );
 
 // --- Renderer boot ---
 const renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 60, maxFps: 120 });
 renderer.root.add(container);
+renderer.setBackgroundColor(colors.bg); // opencode-style: global bg lives on the renderer, not per-box
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -877,7 +903,8 @@ const thumbPng = (
   bg: string,
   vector = false,
 ): Promise<Uint8Array> => {
-  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}`;
+  // bg in the key: thumbnails are flattened onto it, so a theme swap must miss
+  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}`;
   let p = thumbCache.get(key);
   if (!p) {
     p = new Promise<Uint8Array>((resolve, reject) => {
@@ -906,7 +933,7 @@ const thumbPng = (
   return p;
 };
 
-type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; vector: boolean; fallbackGlyph: string };
+type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string };
 let thumbJobs: ThumbJob[] = [];
 
 const drainThumbs = async () => {
@@ -920,16 +947,18 @@ const drainThumbs = async () => {
       const j = jobs[idx++]!;
       const slot: any = renderer.root.findDescendantById(j.slotId);
       if (!slot) continue;
+      const hCells = j.hCells ?? ICON_CELLS_H;
+      const jobBg = j.bg ?? colors.bg;
       // 2px inset so kitty's cell->pixel rounding never bleeds onto neighbors
       const pxW = Math.max(1, Math.round(j.wCells * cellW) - 2);
-      const pxH = Math.max(1, Math.round(ICON_CELLS_H * cellH) - 2);
+      const pxH = Math.max(1, Math.round(hCells * cellH) - 2);
       try {
-        const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, colors.bg, j.vector);
+        const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector);
         const img = new ImageRenderable(renderer, {
           id: `${j.slotId}-t`,
           source: bytes,
           width: j.wCells,
-          height: ICON_CELLS_H,
+          height: hCells,
           fit: "fit",
           protocol: "auto",
         });
@@ -1006,6 +1035,9 @@ const drainIconQueue = async () => {
     spec.done = true;
     const slot: any = renderer.root.findDescendantById(spec.slotId);
     if (!slot) return;
+    if (spec.statesFactory) {
+      try { spec.states = spec.statesFactory(); } catch {}
+    }
     const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
     const imgs = await rasterStatesInto(spec.slotId, spec.name, spec.states, spec.heightCells, wCells, spec.initialState);
     if (imgs.length === 0) return;
@@ -1019,15 +1051,32 @@ const drainIconQueue = async () => {
     if (glyphNode) { try { glyphNode.visible = false; } catch {} }
     imgs.forEach((im) => slot.add(im));
   }));
+  // re-rasters made fresh images visible; while a modal scrim is up the icons
+  // must fall back to dimmed glyphs or they float over the menu
+  if (menuOpen) setScrim(true);
 };
 
 // Kitty placements float above all cells, so the scrim can't dim them.
-// While the menu is open every slot falls back to its glyph, pre-darkened
-// to blend into the backdrop; rasters come back on close.
+// While the menu is open every background slot falls back to its glyph,
+// pre-darkened to blend into the backdrop; rasters come back on close.
+// Slots INSIDE a modal (menu rows, context menus, prompts) sit above the
+// scrim and keep their crisp rasters.
+const MODAL_ROOT_IDS = new Set(["tfm-menu", "tfm-filemenu", "tfm-prompt"]);
+
+const isModalChild = (slot: any): boolean => {
+  let cur: any = slot?.parent;
+  while (cur) {
+    if (typeof cur?.id === "string" && MODAL_ROOT_IDS.has(cur.id)) return true;
+    cur = cur.parent;
+  }
+  return false;
+};
+
 const setScrim = (on: boolean) => {
   for (const spec of iconQueue) {
     const slot: any = renderer.root.findDescendantById(spec.slotId);
     if (!slot) continue;
+    if (on && isModalChild(slot)) continue;
     const kids = (slot.getChildren?.() ?? []) as any[];
     const glyphNode: any = kids.find((k) => k.id === `${spec.slotId}-g`);
     if (!glyphNode) continue;
@@ -1051,9 +1100,10 @@ const setScrim = (on: boolean) => {
 };
 
 // --- Grid (scrollable, culled, interactive) ---
-const TILE_W = config.ui.tileWidth;
-const TILE_H = config.ui.tileHeight;
-const ICON_CELLS_H = config.ui.iconCells;
+// mutable: applyConfig() rewrites these when settings change
+let TILE_W = config.ui.tileWidth;
+let TILE_H = config.ui.tileHeight;
+let ICON_CELLS_H = config.ui.iconCells;
 
 let scroller: ScrollBoxRenderable | null = null;
 let gridGen = 0;
@@ -1065,6 +1115,20 @@ let focusIdx = -1;
 let colsAtBuild = 1;
 let typeBuf = "";
 let typeTimer: any = null;
+// anchor tile for shift+click range selection (index into focusKeys)
+let selAnchor: number | null = null;
+
+const selectRange = (from: number, to: number): void => {
+  clearTileSelection();
+  if (focusKeys.length === 0) return;
+  const lo = Math.max(0, Math.min(from, to));
+  const hi = Math.min(focusKeys.length - 1, Math.max(from, to));
+  for (let i = lo; i <= hi; i++) {
+    const k = focusKeys[i]!;
+    const r = tileRefsByKey.get(k);
+    if (r) { r.selected = true; setTileVisual(k, 2); }
+  }
+};
 
 // sidebar keyboard focus
 let sidebarActive = false;
@@ -1434,6 +1498,85 @@ const trashPaths = (paths: string[]): void => {
   })();
 };
 
+// --- Trash management: restore / delete-permanently / empty ---
+const TRASH_DIR = path.join(home, ".local/share/Trash");
+
+const inTrashView = (): boolean => path.resolve(state.cwd) === path.join(TRASH_DIR, "files");
+
+const trashOrigPath = async (name: string): Promise<string | null> => {
+  try {
+    const raw = await readFile(path.join(TRASH_DIR, "info", `${name}.trashinfo`), "utf8");
+    const m = raw.match(/^Path=(.+)$/m);
+    if (!m?.[1]) return null;
+    let p = m[1].trim();
+    // spec says URL-encoded; nautilus writes bare encoded abs paths
+    if (p.startsWith("file://")) p = p.slice(7);
+    try { p = decodeURIComponent(p); } catch {}
+    return path.resolve(p);
+  } catch { return null; }
+};
+
+const restoreFromTrash = (paths: string[]): void => {
+  void (async () => {
+    let ok = 0;
+    for (const src of paths) {
+      const orig = await trashOrigPath(path.basename(src));
+      if (!orig) continue;
+      try {
+        await mkdir(path.dirname(orig), { recursive: true });
+        let dest = orig;
+        if (existsSync(dest)) dest = uniqueTarget(path.dirname(dest), path.basename(dest));
+        await fsMove(src, dest);
+        try { await rm(path.join(TRASH_DIR, "info", `${path.basename(src)}.trashinfo`)); } catch {}
+        ok++;
+      } catch {}
+    }
+    renderAll();
+    if (paths.length) setStatusMsg(`Restored ${ok} of ${paths.length}`);
+  })();
+};
+
+const deleteForever = (paths: string[]): void => {
+  void (async () => {
+    let ok = 0;
+    for (const p of paths) {
+      try {
+        await rm(p, { recursive: true });
+        try { await rm(path.join(TRASH_DIR, "info", `${path.basename(p)}.trashinfo`)); } catch {}
+        ok++;
+      } catch {}
+    }
+    renderAll();
+    if (paths.length) setStatusMsg(`Deleted ${ok} of ${paths.length}`);
+  })();
+};
+
+const emptyTrash = (): void => {
+  void (async () => {
+    const filesDir = path.join(TRASH_DIR, "files");
+    let n = 0;
+    try {
+      for (const k of await readdir(filesDir)) {
+        try {
+          await rm(path.join(filesDir, k), { recursive: true });
+          try { await rm(path.join(TRASH_DIR, "info", `${k}.trashinfo`)); } catch {}
+          n++;
+        } catch {}
+      }
+    } catch {}
+    renderAll();
+    notify(`Emptied ${n} item${n === 1 ? "" : "s"} from trash`, "trash");
+    setStatusMsg(`Trash emptied (${n})`);
+  })();
+};
+
+const confirmEmptyTrash = (x: number, y: number): void => {
+  openContextMenu(x, y, "", [
+    { label: "cancel", action: () => closeFileMenu() },
+    { label: "EMPTY TRASH", action: () => { closeFileMenu(); emptyTrash(); } },
+  ]);
+};
+
 // --- Preview pane ---
 const TEXT_PREVIEW_MAX = 262144;
 const isTextLike = (name: string): boolean => {
@@ -1444,6 +1587,85 @@ const isTextLike = (name: string): boolean => {
   return ["md", "markdown", "txt", "log", "json", "yaml", "yml", "toml", "ini", "conf", "html", "css", "csv"].includes(ext)
     || FILE_ICON_BY_EXT[ext] === "file-code"
     || FILE_ICON_BY_EXT[ext] === "file-document";
+};
+
+// --- properties helpers ---
+const fmtBytes = (n: number): string => {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${i === 0 ? v : v.toFixed(1)} ${units[i]}`;
+};
+
+// rwx triad -> plain words; execute means "run" for files, "enter" for folders
+const permWords = (mode: number, shift: number, isDir: boolean): string => {
+  const r = !!(mode & (4 << shift));
+  const w = !!(mode & (2 << shift));
+  const x = !!(mode & (1 << shift));
+  if (!r && !w && !x) return "no access";
+  const out: string[] = [];
+  if (r) out.push("read");
+  if (w) out.push("write");
+  if (x) out.push(isDir ? "enter" : "run");
+  return out.join(", ");
+};
+
+let idNameCache: Map<number, string> | null = null;
+const idName = (uid: number): string => {
+  idNameCache ??= (() => {
+    const m = new Map<number, string>();
+    try {
+      for (const line of readFileSync("/etc/passwd", "utf8").split("\n")) {
+        const p = line.split(":");
+        const uidN = Number(p[2]);
+        if (p[0] && Number.isFinite(uidN)) m.set(uidN, p[0]);
+      }
+    } catch {}
+    return m;
+  })();
+  return idNameCache.get(uid) ?? String(uid);
+};
+
+const fmtDate = (ms?: number): string => {
+  if (!ms) return "-";
+  const d = new Date(ms);
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+};
+
+const mimeLabelFor = (name: string): string => {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  const mime = globs2ByExt?.get(ext);
+  if (mime) return mime;
+  const cat = FILE_ICON_BY_EXT[ext];
+  return cat === "file-image" ? "image/*"
+    : cat === "file-video" ? "video/*"
+    : cat === "file-music" ? "audio/*"
+    : cat === "zip-box" ? "archive"
+    : cat === "file-pdf-box" ? "application/pdf"
+    : cat === "file-code" ? "code"
+    : cat === "file-document" ? "document"
+    : "data";
+};
+
+// recursive dir totals; null when the tree is absurdly large
+const dirWalkStats = async (root: string): Promise<{ bytes: number; files: number; folders: number } | null> => {
+  let bytes = 0, files = 0, folders = 0, count = 0;
+  const stack: string[] = [root];
+  while (stack.length) {
+    const dir = stack.pop()!;
+    let dirents;
+    try { dirents = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const d of dirents) {
+      if (++count > 200000) return null;
+      const p = path.join(dir, d.name);
+      if (d.isDirectory()) { folders++; stack.push(p); continue; }
+      files++;
+      try { bytes += (await stat(p)).size; } catch {}
+    }
+  }
+  return { bytes, files, folders };
 };
 
 let previewGen = 0;
@@ -1483,19 +1705,36 @@ const renderPreview = async () => {
   pane.add(Text({ content: ` ${path.basename(key)}${isDirTarget ? "/" : ""}`, fg: colors.white }));
   pane.add(Text({ content: "~".repeat(Math.max(0, config.ui.previewWidth - 2)), fg: colors.divider }));
 
+  // metadata lives in right-click -> Properties…; the pane shows content only
   if (isDirTarget) {
-    try {
-      const kids = await readdir(key);
-      if (gen !== previewGen) return;
-      const dirs = kids.filter((k) => { try { return statSync(path.join(key, k)).isDirectory(); } catch { return false; } }).length;
-      pane.add(Text({ content: ` ${kids.length} items`, fg: colors.sidebarFg }));
-      pane.add(Text({ content: ` ${dirs} folders · ${kids.length - dirs} files`, fg: colors.sidebarFgMuted }));
-    } catch {}
     void drainIconQueue();
     return;
   }
 
-  pane.add(Text({ content: ` ${(st.size / 1024).toFixed(1)} KB`, fg: colors.sidebarFgMuted }));
+  // pictures: render the actual image (svg included) instead of nothing
+  if (fileIsImage(key) && st.size > 0 && st.size <= 26214400) {
+    const w = Math.max(4, config.ui.previewWidth - 4);
+    const maxH = Math.max(4, renderer.terminalHeight - 8);
+    const h = Math.min(maxH, Math.max(3, Math.round(w / cellMetrics().aspect)));
+    const slotId = `tfm-icon-${iconSeq++}`;
+    pane.add(Box(
+      { width: "100%", flexDirection: "row", justifyContent: "center" },
+      Box({ id: slotId, width: w, height: h }),
+    ));
+    thumbJobs.push({
+      slotId,
+      path: key,
+      mtimeMs: st.mtimeMs ?? 0,
+      size: st.size,
+      wCells: w,
+      hCells: h,
+      bg: colors.sidebarBg,
+      vector: key.toLowerCase().endsWith(".svg"),
+      fallbackGlyph: glyph[fileIconFor(key) as keyof typeof glyph] ?? glyph.file!,
+    });
+    void drainThumbs();
+    return;
+  }
 
   if (!isTextLike(key) || st.size > TEXT_PREVIEW_MAX) return;
 
@@ -1592,6 +1831,7 @@ const updateBandRect = (ev: any) => {
 const finalizeBand = (ev: any) => {
   const start = bandStart;
   bandStart = null;
+  selAnchor = null;
   const b = bandNode();
   if (b) { try { b.visible = false; } catch {} }
   if (!start) return;
@@ -1658,7 +1898,7 @@ const renderGrid = async () => {
   const reservedRight = config.ui.previewEnabled ? config.ui.previewWidth : 0;
   const cols = Math.max(1, Math.floor((renderer.terminalWidth - sw - reservedRight - 3) / TILE_W));
 
-  const buildTile = (e: Entry) => {
+  const buildTile = (e: Entry, idx: number) => {
     const key = path.join(state.cwd, e.name);
     let lastClick = 0;
     const tileId = `tfm-tile-${tileSeq++}`;
@@ -1696,9 +1936,46 @@ const renderGrid = async () => {
           return;
         }
         lastClick = now;
+        const mods = ev.modifiers ?? {};
+
+        // ctrl+click (no movement): toggle membership — coexists with ctrl+drag
+        // which still means internal move once the drag threshold trips
+        if (mods.ctrl) {
+          const refs = tileRefsByKey.get(key);
+          if (refs) {
+            refs.selected = !refs.selected;
+            setTileVisual(key, refs.selected ? 2 : 0);
+          }
+          updateSelectionStatusReal();
+          void renderPreview();
+          dragKeys = selPaths();
+          dragActive = false;
+          dragStartX = ev.x;
+          dragStartY = ev.y;
+          dragCtrl = true;
+          return;
+        }
+
+        // shift+click / alt+click: range select. The anchor persists across
+        // clicks so each alt+click re-extends from the SAME origin; plain and
+        // ctrl clicks are what move/reset it.
+        if ((mods.shift || mods.alt)) {
+          if (selAnchor === null) selAnchor = focusIdx >= 0 ? focusIdx : 0;
+          selectRange(selAnchor, idx);
+          updateSelectionStatusReal();
+          void renderPreview();
+          dragKeys = selPaths();
+          dragActive = false;
+          dragStartX = ev.x;
+          dragStartY = ev.y;
+          dragCtrl = false;
+          return;
+        }
+
         const prevSel = selPaths();
         const wasSelected = !!tileRefsByKey.get(key)?.selected;
         clearTileSelection();
+        selAnchor = idx;
         const refs = tileRefsByKey.get(key);
         if (refs) {
           if (wasSelected && prevSel.length > 1) {
@@ -1802,9 +2079,10 @@ const renderGrid = async () => {
     return tile;
   };
 
+  let tileIdx = 0;
   for (let i = 0; i < entries.length; i += cols) {
     const row = Box({ height: TILE_H, flexDirection: "row" });
-    for (const e of entries.slice(i, i + cols)) row.add(buildTile(e));
+    for (const e of entries.slice(i, i + cols)) row.add(buildTile(e, tileIdx++));
     scroller.content.add(row);
   }
 
@@ -1815,6 +2093,7 @@ const renderGrid = async () => {
   void drainThumbs();
   focusKeys = [...tileRefsByKey.keys()];
   focusIdx = -1;
+  selAnchor = null;
   colsAtBuild = cols;
   updateSelectionStatusReal();
 };
@@ -1856,8 +2135,10 @@ const openPrompt = (title: string, initial: string, onSubmit: (value: string) =>
         onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
       },
       Box(
-        { width: "100%", height: 1, paddingLeft: 1 },
-        Text({ content: ` ${title}`, fg: colors.accent }),
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 1, paddingRight: 1 },
+        Text({ content: ` ${title}`.slice(0, MENU_W - 7), fg: colors.accent }),
+        Box({ flexGrow: 1 }),
+        Text({ content: "esc ", fg: colors.sidebarFgMuted }),
       ),
       Box(
         { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
@@ -1890,6 +2171,129 @@ const openPrompt = (title: string, initial: string, onSubmit: (value: string) =>
   };
   setTimeout(() => { try { input.focus(); } catch {} }, 20);
   stripSelectable();
+};
+
+// --- Properties dialog (floating, right-click -> Properties…) ---
+const PROPS_W = 46;
+let propsOpen = false;
+
+const closeProps = (): void => {
+  const scrim: any = renderer.root.findDescendantById("tfm-props");
+  scrim?.parent?.remove(scrim);
+  propsOpen = false;
+};
+
+const openProperties = (targetPath: string): void => {
+  closeFileMenu();
+  let st: any = null;
+  try { st = statSync(targetPath); } catch { return; }
+  if (propsOpen) closeProps();
+  const isDirTarget = st.isDirectory();
+  propsOpen = true;
+
+  const scrim = Box(
+    {
+      id: "tfm-props",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 4)),
+      zIndex: 3300,
+      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      onMouseDown: () => closeProps(),
+    },
+    Box(
+      {
+        id: "tfm-props-panel",
+        width: PROPS_W,
+        backgroundColor: colors.sidebarBg,
+        paddingTop: 1,
+        paddingBottom: 1,
+        flexDirection: "column",
+        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
+      },
+    ),
+  );
+  renderer.root.add(scrim);
+
+  const panel: any = renderer.root.findDescendantById("tfm-props-panel");
+  if (!panel) return;
+
+  panel.add(Box(
+    { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 1, paddingRight: 1 },
+    Text({ content: ` ${path.basename(targetPath).slice(0, PROPS_W - 10)}${isDirTarget ? "/" : ""}`, fg: colors.white }),
+    Box({ flexGrow: 1 }),
+    Text({ content: "esc ", fg: colors.sidebarFgMuted }),
+  ));
+
+  // hero: big category icon below the title, or the actual picture for images
+  const iconName = isDirTarget ? "folder" : fileIconFor(targetPath);
+  const ICON_H = 6;
+  const { aspect } = cellMetrics();
+  const heroW = Math.max(1, Math.round(aspect * ICON_H));
+  const wantsThumb = !isDirTarget && fileIsImage(targetPath) && st.size > 0 && st.size <= 26214400;
+  let heroEl: ReturnType<typeof Box>;
+  if (wantsThumb) {
+    const slotId = `tfm-icon-${iconSeq++}`;
+    heroEl = Box({ id: slotId, width: heroW, height: ICON_H });
+    thumbJobs.push({
+      slotId,
+      path: targetPath,
+      mtimeMs: st.mtimeMs ?? 0,
+      size: st.size,
+      wCells: heroW,
+      hCells: ICON_H,
+      bg: colors.sidebarBg,
+      vector: targetPath.toLowerCase().endsWith(".svg"),
+      fallbackGlyph: glyph[iconName as keyof typeof glyph] ?? glyph.file!,
+    });
+  } else {
+    heroEl = makeIconSlot(iconName, [{ fg: colors.sidebarFg, bg: colors.sidebarBg }], ICON_H).el;
+  }
+  panel.add(Box(
+    { width: "100%", height: ICON_H + 1, flexDirection: "row", justifyContent: "center", alignItems: "center" },
+    heroEl,
+  ));
+  panel.add(Box(
+    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+    Text({ content: " " + "~".repeat(PROPS_W - 2), fg: colors.divider }),
+  ));
+
+  const row = (label: string, value: string, id?: string) =>
+    Box({ width: "100%", height: 1, flexDirection: "row", paddingLeft: 1 },
+      Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
+      Text({ ...(id ? { id } : {}), content: String(value).slice(0, PROPS_W - 14), fg: colors.sidebarFg }));
+
+  if (isDirTarget) {
+    panel.add(row("size", "calculating…", "tfm-props-size"));
+    void dirWalkStats(targetPath).then((s) => {
+      if (!propsOpen || !s) {
+        if (propsOpen) {
+          const n: any = renderer.root.findDescendantById("tfm-props-size");
+          if (n) { try { n.content = "huge"; } catch {} }
+        }
+        return;
+      }
+      const n: any = renderer.root.findDescendantById("tfm-props-size");
+      if (n) { try { n.content = `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`; } catch {} }
+    });
+  } else {
+    panel.add(row("size", `${fmtBytes(st.size ?? 0)} (${st.size ?? 0} bytes)`));
+  }
+  panel.add(row("type", isDirTarget ? "inode/directory" : mimeLabelFor(targetPath)));
+  panel.add(row("location", path.dirname(targetPath).replace(home, "~").slice(0, PROPS_W - 14)));
+  panel.add(row("modified", fmtDate(st.mtimeMs)));
+  panel.add(row("accessed", fmtDate(st.atimeMs)));
+  panel.add(row("you", permWords(st.mode, 6, isDirTarget)));
+  panel.add(row("group", permWords(st.mode, 3, isDirTarget)));
+  panel.add(row("others", permWords(st.mode, 0, isDirTarget)));
+  panel.add(row("owner", `${idName(st.uid)}:${idName(st.gid)}`));
+  stripSelectable();
+  void drainIconQueue();
+  void drainThumbs();
 };
 
 // --- File context menu (right-click a tile) ---
@@ -1968,6 +2372,18 @@ const openContextMenu = (x: number, y: number, title: string, entries: ListEntry
 
 const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
   const entries: ListEntry[] = [];
+  // Nautilus trash semantics: Restore / Open / delete-for-real; no rename,
+  // clipboard ops or trashing inside the trash
+  if (inTrashView()) {
+    const inSel = !!tileRefsByKey.get(targetPath)?.selected;
+    const targets: ClipItem[] = inSel && selPaths().length > 1 ? selPaths() : [{ path: targetPath, isDir }];
+    entries.push(
+      { icon: "folder", label: `Restore${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); restoreFromTrash(targets.map((t) => t.path)); } },
+      { icon: "eye", label: "Open", action: () => { closeFileMenu(); spawn("xdg-open", [targetPath], { stdio: "ignore", detached: true }).unref?.(); } },
+      { icon: "trash-can", label: `Delete permanently`, action: () => { closeFileMenu(); deleteForever(targets.map((t) => t.path)); } },
+    );
+    return entries;
+  }
   if (isDir) entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(targetPath); } });
   else entries.push({ icon: "eye", label: "Open", action: () => { closeFileMenu(); spawn("xdg-open", [targetPath], { stdio: "ignore", detached: true }).unref?.(); } });
   // actions apply to the whole live selection when the right-clicked tile is
@@ -1988,6 +2404,7 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
       } },
     { icon: "trash-can", label: `Trash${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); trashPaths(targets.map((t) => t.path)); } },
   );
+  entries.push({ icon: "information", label: "Properties…", action: () => openProperties(targetPath) });
   return entries;
 };
 
@@ -1999,8 +2416,13 @@ const sortEntries = (): ListEntry[] => [
   { label: `${state.sortAsc ? "↑ Ascending" : "↓ Descending"} (toggle)`, action: () => { closeFileMenu(); state.sortAsc = !state.sortAsc; void renderGrid(); } },
 ];
 
-const emptyAreaEntries = (): ListEntry[] => [
-  { icon: "select-all", label: "Select all", action: () => {
+const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
+  const entries: ListEntry[] = [];
+  if (inTrashView()) {
+    entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(x, y); } });
+  }
+  entries.push(
+    { icon: "select-all", label: "Select all", action: () => {
       closeFileMenu();
       tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
       updateSelectionStatusReal();
@@ -2016,7 +2438,10 @@ const emptyAreaEntries = (): ListEntry[] => [
         .then(() => renderAll())
         .catch(() => setStatusMsg("Create failed"));
     }); } },
-];
+    { icon: "information", label: "Properties…", action: () => { closeFileMenu(); openProperties(state.cwd); } },
+  );
+  return entries;
+};
 
 // --- ESC menu (scrim pattern stolen from opencode's Dialog) ---
 type MenuEntry = { label: string; hint?: string; action: () => void };
@@ -2029,29 +2454,131 @@ const MENU_W = 36;
 
 const quitApp = () => {
   disableDrops();
+  // release the shift-capture request made at boot
+  try { process.stdout.write("\x1b[>0s"); } catch {}
   try { renderer.destroy(); } catch {}
   process.exit(0);
 };
 
+// --- Settings model: declarative rows drive both rendering and key/mouse input ---
+type SettingRow =
+  | { kind: "toggle"; label: string; get: () => boolean; set: (v: boolean) => void }
+  | { kind: "stepper"; label: string; min: number; max: number; step: number; fmt: (v: number) => string; get: () => number; set: (v: number) => void }
+  | { kind: "cycle"; label: string; names: string[]; getIdx: () => number; setIdx: (i: number) => void }
+  | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
+
+const themePresetIdx = (): number =>
+  THEME_PRESETS.findIndex((p) => JSON.stringify(p.theme) === JSON.stringify(config.theme));
+
+const commitSetting = (): void => {
+  applyConfig(config);
+  scheduleSaveConfig();
+};
+
+const resetToDefaults = (): void => {
+  const fresh = structuredClone(defaultConfig);
+  state.showHidden = fresh.ui.showHidden;
+  applyConfig(fresh);
+  scheduleSaveConfig();
+};
+
+const settingGroups = (): { header?: string; rows: SettingRow[] }[] => [
+  {
+    rows: [
+      { kind: "cycle", label: "theme", names: THEME_PRESETS.map((p) => p.name), getIdx: themePresetIdx,
+        setIdx: (i) => { applyConfig({ ui: { ...config.ui }, theme: { ...THEME_PRESETS[i]!.theme } }); scheduleSaveConfig(); } },
+      { kind: "toggle", label: "hidden files",
+        // state.showHidden is the effective runtime flag (ctrl+h writes it
+        // without persisting); config is only updated when the GUI commits
+        get: () => state.showHidden,
+        set: (v) => { config.ui.showHidden = v; state.showHidden = v; commitSetting(); } },
+      { kind: "toggle", label: "preview pane", get: () => config.ui.previewEnabled,
+        set: (v) => { config.ui.previewEnabled = v; commitSetting(); } },
+    ],
+  },
+  {
+    header: "layout",
+    rows: [
+      { kind: "stepper", label: "sidebar width", min: 16, max: 60, step: 1, fmt: (v) => `${v}`, get: () => config.ui.sidebarWidth, set: (v) => { config.ui.sidebarWidth = v; commitSetting(); } },
+      { kind: "stepper", label: "tile width", min: 10, max: 40, step: 1, fmt: (v) => `${v}`, get: () => config.ui.tileWidth, set: (v) => { config.ui.tileWidth = v; commitSetting(); } },
+      { kind: "stepper", label: "tile height", min: 3, max: 10, step: 1, fmt: (v) => `${v}`, get: () => config.ui.tileHeight, set: (v) => { config.ui.tileHeight = v; commitSetting(); } },
+      { kind: "stepper", label: "icon size", min: 1, max: 5, step: 1, fmt: (v) => `${v}`, get: () => config.ui.iconCells, set: (v) => { config.ui.iconCells = v; commitSetting(); } },
+      { kind: "stepper", label: "preview width", min: 20, max: 80, step: 2, fmt: (v) => `${v}`, get: () => config.ui.previewWidth, set: (v) => { config.ui.previewWidth = v; commitSetting(); } },
+    ],
+  },
+  {
+    header: "behavior",
+    rows: [
+      { kind: "stepper", label: "double-click ms", min: 100, max: 2000, step: 50, fmt: (v) => `${v}`, get: () => config.ui.doubleClickMs, set: (v) => { config.ui.doubleClickMs = v; commitSetting(); } },
+    ],
+  },
+  {
+    header: "config",
+    rows: [
+      { kind: "action", label: "reset to defaults", keepOpen: true, run: resetToDefaults },
+      { kind: "action", label: "edit config.toml…", run: () => { spawn("xdg-open", [configPath()], { stdio: "ignore", detached: true }).unref?.(); } },
+      { kind: "action", label: "back", keepOpen: true, run: () => { menuView = "root"; menuIdx = 0; } },
+    ],
+  },
+];
+
+const settingsFlatRows = (): SettingRow[] => settingGroups().flatMap((g) => g.rows);
+
+const applyAdjust = (row: SettingRow, dir: number): boolean => {
+  switch (row.kind) {
+    case "toggle": row.set(!row.get()); return true;
+    case "stepper": {
+      const next = Math.max(row.min, Math.min(row.max, row.get() + dir * row.step));
+      if (next !== row.get()) { row.set(next); return true; }
+      return false;
+    }
+    case "cycle": {
+      const n = row.names.length;
+      const cur = row.getIdx();
+      const next = cur < 0 ? (dir > 0 ? 0 : n - 1) : (cur + dir + n) % n;
+      row.setIdx(next);
+      return true;
+    }
+    default: return false;
+  }
+};
+
+const adjustSelectedSetting = (dir: number): void => {
+  if (menuView !== "settings") return;
+  const row = settingsFlatRows()[menuIdx];
+  if (!row || !applyAdjust(row, dir)) return;
+  renderMenuContent();
+};
+
 const menuActivate = () => {
   if (menuView === "settings") {
-    if (menuIdx === 0) { state.showHidden = !state.showHidden; void renderGrid(); renderMenuContent(); return; }
-    menuView = "root";
-    menuIdx = 0;
+    const row = settingsFlatRows()[menuIdx];
+    if (!row) return;
+    if (row.kind === "toggle") { applyAdjust(row, 1); renderMenuContent(); return; }
+    if (row.kind === "action") {
+      if (row.keepOpen) { row.run(); renderMenuContent(); }
+      else { closeMenu(); row.run(); }
+      return;
+    }
+    applyAdjust(row, 1);
     renderMenuContent();
     return;
   }
   const items = rootMenuItems();
   const it = items[menuIdx] ?? items[0];
   if (!it) return;
+  if (it.keepOpen) { it.action(); return; }
   closeMenu();
   it.action();
 };
 
-const rootMenuItems = (): { icon: string; label: string; hint?: string; action: () => void }[] => [
+const rootMenuItems = (): { icon: string; label: string; hint?: string; keepOpen?: boolean; action: () => void }[] => [
   {
     icon: "cog",
     label: "Settings",
+    // stays open: the action switches the menu to the settings view; closing
+    // first would destroy the scrim/panel the view renders into
+    keepOpen: true,
     action: () => { menuView = "settings"; menuIdx = 0; renderMenuContent(); },
   },
   {
@@ -2062,21 +2589,34 @@ const rootMenuItems = (): { icon: string; label: string; hint?: string; action: 
   },
 ];
 
+const SETTINGS_W = 44;
+const SET_LABEL_W = 17;
+
 const renderMenuContent = () => {
   const panel: any = renderer.root.findDescendantById("tfm-menu-panel");
   if (!panel) return;
   [...panel.getChildren()].forEach((c: any) => panel.remove(c));
 
+  const isSettings = menuView === "settings";
+  const panelW = isSettings ? SETTINGS_W : MENU_W;
+  try { panel.width = panelW; } catch {}
+
   panel.add(Box(
-    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-    Text({ content: menuView === "root" ? " tfm" : " tfm — settings", fg: colors.accent }),
+    { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+    Text({ content: isSettings ? "Menu — settings" : "Menu", fg: colors.accent }),
+    Box({ flexGrow: 1 }),
+    Text({ content: "esc ", fg: colors.sidebarFgMuted }),
   ));
   panel.add(Box(
     { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-    Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
+    Text({ content: " " + "~".repeat(panelW - 2), fg: colors.divider }),
   ));
 
-  const row = (
+  const hoverSelect = (index: number) => () => {
+    if (menuIdx !== index) { menuIdx = index; renderMenuContent(); }
+  };
+
+  const rootRow = (
     icon: string | undefined,
     label: string,
     hint: string | undefined,
@@ -2094,12 +2634,7 @@ const renderMenuContent = () => {
         paddingRight: 1,
         backgroundColor: active ? colors.accentBg : undefined,
         onMouseDown: onClick,
-        onMouseOver: () => {
-          if (menuIdx !== index) {
-            menuIdx = index;
-            renderMenuContent();
-          }
-        },
+        onMouseOver: hoverSelect(index),
       },
       ...(icon
         ? [makeIconSlot(
@@ -2123,16 +2658,110 @@ const renderMenuContent = () => {
     menuActivate();
   };
 
-  if (menuView === "root") {
+  // value column shared by stepper/cycle rows: ‹ value ›
+  const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) =>
+    Box(
+      {
+        width: 2,
+        justifyContent: "center",
+        onMouseDown: (ev: any) => {
+          try { ev.stopPropagation?.(); } catch {}
+          const changed = applyAdjust(rowSpec, dir);
+          if (menuIdx !== index || changed) {
+            menuIdx = index;
+            renderMenuContent();
+          }
+        },
+      },
+      Text({ content: dirText, fg: active ? colors.white : colors.sidebarFgMuted }),
+    );
+
+  const settingsRow = (rowSpec: SettingRow, index: number) => {
+    const active = menuIdx === index;
+    const labelFg = active ? colors.white : colors.sidebarFg;
+    let control: any;
+    let rowActivate: (ev?: any) => void = activateRow(index);
+
+    if (rowSpec.kind === "toggle") {
+      const on = rowSpec.get();
+      control = Box(
+        { width: 6, justifyContent: "flex-end" },
+        Text({ content: on ? "on" : "off", fg: on ? colors.accent : colors.sidebarFgMuted }),
+      );
+    } else if (rowSpec.kind === "stepper" || rowSpec.kind === "cycle") {
+      const value = rowSpec.kind === "stepper"
+        ? rowSpec.fmt(rowSpec.get())
+        : (() => { const i = rowSpec.getIdx(); return i >= 0 ? rowSpec.names[i] ?? "?" : "custom"; })();
+      control = Box(
+        { flexDirection: "row", alignItems: "center", onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} } },
+        chevron("‹", active, index, rowSpec, -1),
+        Box(
+          { width: 13, justifyContent: "flex-end", paddingRight: 1 },
+          Text({
+            content: value.length > 12 ? value.slice(0, 12) : value,
+            fg: active ? colors.white : colors.sidebarFgMuted,
+          }),
+        ),
+        chevron("›", active, index, rowSpec, 1),
+      );
+      rowActivate = (ev?: any) => {
+        try { ev?.stopPropagation?.(); } catch {}
+        menuIdx = index;
+        applyAdjust(rowSpec, 1);
+        renderMenuContent();
+      };
+    } else {
+      control = Box({ width: 6 });
+    }
+
+    return Box(
+      {
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        paddingLeft: 1,
+        paddingRight: 1,
+        backgroundColor: active ? colors.accentBg : undefined,
+        onMouseDown: rowActivate,
+        onMouseOver: hoverSelect(index),
+      },
+      Text({ content: ` ${rowSpec.label.slice(0, SET_LABEL_W).padEnd(SET_LABEL_W)}`, fg: labelFg }),
+      Box({ flexGrow: 1 }),
+      control,
+    );
+  };
+
+  if (!isSettings) {
     const items = rootMenuItems();
-    items.forEach((it, i) => panel.add(row(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))));
+    items.forEach((it, i) => panel.add(rootRow(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))));
   } else {
-    panel.add(row(state.showHidden ? "eye" : "eye-off", `hidden files  ${state.showHidden ? "on" : "off"}`, undefined, menuIdx === 0, 0, activateRow(0)));
+    let flatIdx = 0;
+    settingGroups().forEach((group, gi) => {
+      if (gi > 0) panel.add(Box({ width: "100%", height: 1 }));
+      if (group.header) {
+        panel.add(Box(
+          { width: "100%", height: 1, paddingLeft: 1 },
+          Text({ content: group.header.toUpperCase(), fg: colors.sidebarFgMuted }),
+        ));
+      }
+      for (const rowSpec of group.rows) {
+        panel.add(settingsRow(rowSpec, flatIdx));
+        flatIdx++;
+      }
+    });
+    panel.add(Box({ width: "100%", height: 1 }));
     panel.add(Box(
-      { width: "100%", height: 1, paddingLeft: 1 },
-      Text({ content: ` theme from ${configPath().replace(home, "~")}`, fg: colors.sidebarFgMuted }),
+      { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+      Text({ content: "←→ adjust · enter select", fg: colors.sidebarFgMuted }),
     ));
-    panel.add(row("chevron-left", "back", undefined, menuIdx === 1, 1, activateRow(1)));
+  }
+
+  // center the panel vertically based on its actual content height so tall
+  // views never overflow small terminals
+  const scrim: any = renderer.root.findDescendantById("tfm-menu");
+  if (scrim) {
+    const rows = [...panel.getChildren()].length;
+    try { scrim.paddingTop = Math.max(1, Math.floor((renderer.terminalHeight - rows - 2) / 2)); } catch {}
   }
 
   stripSelectable();
@@ -2188,14 +2817,37 @@ const closeMenu = () => {
 };
 
 const moveMenu = (delta: number) => {
-  const count = menuView === "settings" ? 2 : rootMenuItems().length;
+  const count = menuView === "settings" ? settingsFlatRows().length : rootMenuItems().length;
   menuIdx = (menuIdx + delta + count) % count;
   renderMenuContent();
+};
+
+// --- Live directory watching: external changes refresh the grid ---
+let cwdWatcher: ReturnType<typeof watch> | null = null;
+let watchedDir: string | null = null;
+let cwdWatchTimer: any = null;
+
+const syncCwdWatcher = (): void => {
+  const dir = path.resolve(state.cwd);
+  if (watchedDir === dir) return;
+  watchedDir = dir;
+  if (cwdWatcher) { try { cwdWatcher.close(); } catch {} cwdWatcher = null; }
+  try {
+    cwdWatcher = watch(dir, () => {
+      if (cwdWatchTimer) clearTimeout(cwdWatchTimer);
+      cwdWatchTimer = setTimeout(() => {
+        cwdWatchTimer = null;
+        if (path.resolve(state.cwd) === watchedDir) void renderGrid();
+      }, 200);
+    });
+    cwdWatcher.on("error", () => {});
+  } catch {}
 };
 
 // --- Orchestration ---
 renderAll = () => {
   state.cwd = state.history[state.histIdx] ?? state.cwd;
+  syncCwdWatcher();
   refreshNav();
   renderCrumbs();
   renderSidebar();
@@ -2222,7 +2874,7 @@ const boot = async () => {
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
       if (ev.button === 0) bandStart = { x: ev.x, y: ev.y };
-      if (ev.button === 2) openContextMenu(ev.x, ev.y, "", emptyAreaEntries());
+      if (ev.button === 2) openContextMenu(ev.x, ev.y, "", emptyAreaEntries(ev.x, ev.y));
     },
     onMouseDrag: (ev: any) => updateBandRect(ev),
     onMouseDragEnd: (ev: any) => finalizeBand(ev),
@@ -2270,6 +2922,102 @@ const boot = async () => {
 };
 boot();
 
+// --- Config application & persistence ---
+// Single path for every config change (file watcher, settings UI, reset):
+// mutate -> applyConfig -> scheduleSaveConfig. Geometry values that used to be
+// baked into consts are rewritten here, and raster caches are invalidated only
+// when colors actually changed.
+
+const setOnId = (id: string, fn: (n: any) => void): void => {
+  const n: any = renderer.root.findDescendantById(id);
+  if (!n) return;
+  try { fn(n); } catch {}
+};
+
+// Repaints widgets whose colors were baked at boot and which renderAll's
+// rebuilds never touch. Without this a runtime theme swap leaves the sidebar,
+// title, inputs, band, ghost and status bar in the old palette.
+const rethemeChrome = (): void => {
+  setOnId("tfm-sidebar-root", (n) => { n.backgroundColor = colors.sidebarBg; });
+  setOnId("tfm-main", (n) => { n.backgroundColor = colors.bg; });
+  setOnId("tfm-title-font", (n) => { n.color = colors.accent; });
+  setOnId("tfm-title-sub", (n) => { n.fg = colors.sidebarFgMuted; });
+  setOnId("tfm-preview", (n) => { n.backgroundColor = colors.sidebarBg; });
+  setOnId(BAND_ID, (n) => { n.borderColor = colors.accent; });
+  setOnId(DRAG_GHOST_ID, (n) => { n.backgroundColor = colors.accent; });
+  setOnId(`${DRAG_GHOST_ID}-label`, (n) => { n.fg = colors.bg; });
+  setOnId("tfm-status-label", (n) => { n.fg = colors.sidebarFgMuted; });
+  setOnId("tfm-prompt-panel", (n) => { n.backgroundColor = colors.sidebarBg; });
+  for (const id of ["tfm-search", "tfm-path-input", "tfm-prompt-input"]) {
+    setOnId(id, (n) => {
+      n.backgroundColor = colors.accentBg;
+      n.focusedBackgroundColor = colors.accentBg;
+      n.textColor = colors.white;
+    });
+  }
+  if (menuOpen) {
+    setOnId("tfm-menu-panel", (n) => { n.backgroundColor = colors.sidebarBg; });
+    renderMenuContent();
+  }
+  if (fileMenuState) {
+    setOnId("tfm-filemenu", (n) => { n.backgroundColor = colors.sidebarBg; });
+    renderFileMenu();
+  }
+};
+
+const applyConfig = (fresh: Config): void => {
+  const themeChanged = JSON.stringify(config.theme) !== JSON.stringify(fresh.theme);
+  Object.assign(config.ui, fresh.ui);
+  Object.assign(config.theme, fresh.theme);
+  Object.assign(colors, fresh.theme);
+
+  sw = config.ui.sidebarWidth;
+  TILE_W = config.ui.tileWidth;
+  TILE_H = config.ui.tileHeight;
+  ICON_CELLS_H = config.ui.iconCells;
+  for (const id of ["tfm-sidebar-root", "tfm-title-box", "tfm-places"]) {
+    setOnId(id, (n) => { n.width = sw; });
+  }
+  const pane: any = renderer.root.findDescendantById("tfm-preview");
+  if (pane) {
+    try {
+      pane.visible = config.ui.previewEnabled;
+      pane.width = config.ui.previewWidth;
+    } catch {}
+  }
+
+  if (themeChanged) {
+    iconCache.clear();
+    thumbCache.clear();
+    for (const s of iconQueue) s.done = false;
+    try { renderer.setBackgroundColor(colors.bg); } catch {}
+    // grid/sidebar rebuild picks up the new palette; everything else needs this
+    rethemeChrome();
+  }
+  renderAll();
+};
+
+let cfgSaveTimer: any = null;
+// signature of the last file WE wrote; the watcher skips it so saving doesn't
+// re-enter applyConfig and churn the rasters
+let lastSavedSig = "";
+let saveWarned = false;
+
+const scheduleSaveConfig = (): void => {
+  if (cfgSaveTimer) clearTimeout(cfgSaveTimer);
+  cfgSaveTimer = setTimeout(() => {
+    cfgSaveTimer = null;
+    saveConfig(config)
+      .then(async () => { try { lastSavedSig = JSON.stringify(loadConfig()); } catch {} })
+      .catch(() => {
+        if (!saveWarned) {
+          saveWarned = true;
+          console.error(`[tfm] could not write config to ${configPath()}`);
+        }
+      });
+  }, 500);
+};
+
 // --- live config reload ---
 let cfgTimer: any = null;
 try {
@@ -2280,17 +3028,8 @@ try {
     cfgTimer = setTimeout(() => {
       try {
         const fresh = loadConfig();
-        Object.assign(config.ui, fresh.ui);
-        Object.assign(config.theme, fresh.theme);
-        Object.assign(colors, fresh.theme);
-        // baked rasters carry old colors: full raster invalidation
-        iconCache.clear();
-        for (const s of iconQueue) s.done = false;
-        if (config.ui.previewEnabled !== fresh.ui.previewEnabled) {
-          const pv: any = renderer.root.findDescendantById("tfm-preview");
-          if (pv) { try { pv.visible = fresh.ui.previewEnabled; } catch {} }
-        }
-        renderAll();
+        if (JSON.stringify(fresh) === lastSavedSig) return;
+        applyConfig(fresh);
         setStatusMsg("config reloaded");
       } catch {}
     }, 250);
@@ -2584,6 +3323,10 @@ renderer.subscribeOsc((seq: string) => {
   handleOsc72(body.slice(0, body.indexOf(";") < 0 ? body.length : body.indexOf(";")), body.indexOf(";") < 0 ? "" : body.slice(body.indexOf(";") + 1));
 });
 enableDrops();
+// XTSHIFTESCAPE=1 (CSI > Ps s): ask the terminal (kitty, ghostty, xterm) to
+// forward shift+click instead of using it for native text selection.
+// Terminals that don't know the sequence ignore it; alt+click is the fallback.
+osc72Write("\x1b[>1s", "xtshiftescape on");
 
 // --- resize: repave rasters and rebuild layout ---
 let resizeTimer: any = null;
@@ -2604,6 +3347,12 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   if (promptOpen) return;
 
+  // floating properties dialog: esc/enter closes, everything else swallowed
+  if (propsOpen) {
+    if (e.name === "escape" || e.name === "return") closeProps();
+    return;
+  }
+
   // notification test: ctrl+g (ctrl+i is indistinguishable from tab)
   if (ctrl && e.name === "g") {
     notify(`hello at ${new Date().toLocaleTimeString()}`, "debug");
@@ -2614,6 +3363,8 @@ renderer.keyInput.on("keypress", (e: any) => {
     if (e.name === "escape") closeMenu();
     else if (e.name === "up") moveMenu(-1);
     else if (e.name === "down") moveMenu(1);
+    else if (e.name === "left") adjustSelectedSetting(-1);
+    else if (e.name === "right") adjustSelectedSetting(1);
     else if (e.name === "return") menuActivate();
     return;
   }
@@ -2646,6 +3397,22 @@ renderer.keyInput.on("keypress", (e: any) => {
   if (el?.visible) return;
 
   // --- keyboard navigation: sidebar <-> grid ---
+  // shift+arrows extend the selection from the anchor instead of moving it
+  const extendFromAnchor = (next: number): void => {
+    if (selAnchor === null) {
+      selAnchor = focusIdx >= 0 ? focusIdx : 0;
+    }
+    if (next === focusIdx || next < 0 || next >= focusKeys.length) return;
+    selectTileAt(next);
+    selectRange(selAnchor, next);
+    updateSelectionStatusReal();
+    void renderPreview();
+  };
+  if (e.shift && !ctrl && e.name === "up") { if (focusKeys.length) { selAnchor = selAnchor ?? (focusIdx >= 0 ? focusIdx : 0); extendFromAnchor(focusIdx < 0 ? 0 : focusIdx - colsAtBuild); } return; }
+  if (e.shift && !ctrl && e.name === "down") { if (focusKeys.length) { selAnchor = selAnchor ?? (focusIdx >= 0 ? focusIdx : 0); extendFromAnchor(focusIdx < 0 ? 0 : focusIdx + colsAtBuild); } return; }
+  if (e.shift && !ctrl && e.name === "left") { if (focusKeys.length && focusIdx > 0) extendFromAnchor(focusIdx - 1); return; }
+  if (e.shift && !ctrl && e.name === "right") { if (focusKeys.length && focusIdx < focusKeys.length - 1) extendFromAnchor(focusIdx + 1); return; }
+
   if (sidebarActive) {
     if (e.name === "up") { setSidebarFocus(placeIdx - 1); return; }
     if (e.name === "down") { setSidebarFocus(placeIdx + 1); return; }
@@ -2726,10 +3493,16 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   const selected = selPaths();
   if (e.name === "delete" && selected.length) {
-    trashPaths(selected.map((s) => s.path));
+    if (inTrashView()) deleteForever(selected.map((s) => s.path));
+    else trashPaths(selected.map((s) => s.path));
     return;
   }
   if (e.name === "f2" && selected.length === 1 && selected[0]) {
+    // in the trash F2 restores instead of renaming
+    if (inTrashView()) {
+      restoreFromTrash(selected.map((s) => s.path));
+      return;
+    }
     const p = selected[0].path;
     openPrompt("rename", path.basename(p), (v) => {
       fsRename(p, path.join(path.dirname(p), v))

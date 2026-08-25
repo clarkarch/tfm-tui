@@ -35,6 +35,14 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 - Dead ends (don't retry): releasing over your own window returns `end canceled=true`, **no drop event**; kitty sends no mouse events past the window edge in 1006 mode; `?1016` pixel mode does report OOB but OpenTUI's parser drops negatives and misreads pixels as cells → mid-gesture internal→external handoff is impossible. Split modes at mousedown instead (we use: plain drag = external, ctrl+drag = internal).
 - Debug log: `/tmp/tfm-dnd.log`.
 
+## Terminal quirks: kitty / ghostty / tmux
+
+- tfm sends XTSHIFTESCAPE at boot (`CSI > Ps s` — final byte is **s**, `n` is silently ignored) and releases it on quit, asking the terminal to forward shift+click while we own the mouse.
+- kitty STILL eats shift+left via its *default mouse_maps* (`shift+left press grabbed …`) — fixed by map-to-nothing overrides in `~/.config/kitty/kitty.conf` (see "forward shift+left-click" block). Ghostty just needs `mouse-shift-capture = true`.
+- Alt+click is the universal fallback for range-select.
+- tmux sends Ctrl+H as raw `\x08`, which OpenTUI's keyparser drops — that keybind can't be tested under tmux.
+- Synthetic SGR clicks (`tmux send-keys -H 1b 5b 3c …`) are a reliable way to test mouse paths headlessly.
+
 ## System clipboard bridge
 
 - CLI tools can offer only ONE mime type per selection owner — can't have both. We publish **plain-text full paths** (one per line) so paste-anywhere works; Nautilus file-paste from tfm needs `x-special/gnome-copied-files` which would lose that.
@@ -56,4 +64,7 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 
 - Theme = the `colors` object in `src/index.ts`; values come from TOML config (`src/config.ts`) at `~/.config/tfm/config.toml` (`$TFM_CONFIG` overrides). See `config.example.toml`. Invalid/missing keys fall back to defaults silently (parse errors warn once on stderr).
 - UI is one file (`src/index.ts`), built imperatively at module level; runtime mutation goes through ids + `findDescendantById`.
+- All config changes flow through ONE path: mutate → `applyConfig(fresh)` → `scheduleSaveConfig()` (debounced TOML write, atomic tmp+rename). `applyConfig` rewrites the mutable geometry lets (`sw`, `TILE_W/TILE_H/ICON_CELLS_H` — never bake these into consts), repaints boot-baked widgets via `rethemeChrome()` (extend it whenever you add a widget with baked colors), and invalidates icon/thumbnail caches on theme change. Boot-baked icon slots need a `statesFactory` or they keep stale palette rasters.
+- `src/themes.ts` is generated — edit via `bun scripts/gen-themes.ts <opencode-assets-dir>` (steals dark palettes from opencode's TUI assets, flattens alpha hex onto bg, skips transparent-background themes).
+- Selection model: plain click = anchor + select, ctrl+click = toggle (anchor untouched), shift/alt+click & shift+arrows = extend from anchor. Ctrl+drag stays internal-move DnD.
 - `.gitignore`d: `node_modules/`, `nautilus/`, `opentui/` (reference clones, not project code).
