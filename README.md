@@ -13,7 +13,7 @@ Mouse-first file manager for the terminal. Nautilus-style places sidebar, grid v
 - **Drag & drop**: move between folders (`ctrl+drag`), drag out to other apps, drop in from outside (kitty OSC 72)
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
 - **Previews**: kitty image thumbnails, tree-sitter syntax highlighting, folder stats
-- **Themes**: bundled color presets with live switching, fully configurable via `config.toml`
+- **Themes**: 30+ bundled presets (Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized, …) with live switching, fully configurable via `config.toml`
 
 ## Requirements
 
