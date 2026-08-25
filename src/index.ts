@@ -2965,7 +2965,37 @@ const renderGrid = async () => {
   if (renameEdit) renameEdit = null;
   clearGrid();
   const q = searchQuery.trim().toLowerCase();
-  const allEntries = await listDir(state.cwd, state.showHidden || q.length > 0);
+  let allEntries: Entry[];
+  try {
+    allEntries = await listDir(state.cwd, state.showHidden || q.length > 0);
+  } catch (err) {
+    // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
+    if (gen !== gridGen) return;
+    await waitForResolution();
+    if (gen !== gridGen) return;
+    const { aspect } = cellMetrics();
+    const iconCells = 8;
+    const slotW = Math.max(1, Math.round(aspect * iconCells));
+    const paneH = Math.max(8, renderer.terminalHeight - 3);
+    scroller.add(Box(
+      {
+        width: "100%",
+        height: paneH,
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: colors.bg,
+      },
+      makeIconSlot("close", [{ fg: colors.sidebarFgMuted, bg: colors.bg }], iconCells).el,
+      Box({ height: 1 }),
+      Text({ content: `can't open this folder (${fsErrText(err)})`, fg: colors.sidebarFgMuted }),
+      Text({ content: pathEditMode ? "" : "edit the path above to go elsewhere", fg: colors.divider }),
+      Box({ width: slotW, height: 0 }),
+    ));
+    stripSelectable();
+    void drainIconQueue();
+    return;
+  }
   const entries = q ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
   if (gen !== gridGen) return;
 
@@ -3662,20 +3692,25 @@ const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number
 };
 
 const sortEntries = (): ListEntry[] => {
-  const arrow = state.sortAsc ? "↑" : "↓";
   // nautilus convention: picking a different key sorts it in its natural
-  // direction; clicking the active key flips ascending/descending
+  // direction; clicking the active key flips ascending/descending.
+  // Direction arrow sits at the row's right edge via hint.
   const pick = (key: SortMode, naturalAsc: boolean): void => {
     closeFileMenu();
     if (state.sortBy === key) state.sortAsc = !state.sortAsc;
     else { state.sortBy = key; state.sortAsc = naturalAsc; }
     void renderGrid();
   };
+  const entry = (key: SortMode, label: string, naturalAsc: boolean): ListEntry => ({
+    label,
+    ...(state.sortBy === key ? { hint: state.sortAsc ? "↑" : "↓" } : {}),
+    action: () => pick(key, naturalAsc),
+  });
   return [
-    { label: `${state.sortBy === "name" ? `${arrow} ` : "○  "}Name`, action: () => pick("name", true) },
-    { label: `${state.sortBy === "size" ? `${arrow} ` : "○  "}Size`, action: () => pick("size", false) },
-    { label: `${state.sortBy === "mtime" ? `${arrow} ` : "○  "}Modified`, action: () => pick("mtime", true) },
-    { label: `${state.sortBy === "type" ? `${arrow} ` : "○  "}Type`, action: () => pick("type", true) },
+    entry("name", "Name", true),
+    entry("size", "Size", false),
+    entry("mtime", "Modified", true),
+    entry("type", "Type", true),
   ];
 };
 
