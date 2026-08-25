@@ -354,8 +354,29 @@ async function readBookmarks(): Promise<{ p: string; label: string }[]> {
   }
 }
 
-const PSEUDO_FSTYPES = new Set(["squashfs", "tmpfs", "devtmpfs", "proc", "sysfs", "efivarfs", "overlay", "ramfs", "devfs", "cgroup"]);
-const SYSTEM_MOUNTS = new Set(["/", "/boot", "/boot/efi", "/efi", "/swap"]);
+// --- GTK bookmark toggle (properties dialog; folders only, nautilus-compatible) ---
+const gtkBookmarksFile = (): string =>
+  path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "gtk-3.0", "bookmarks");
+
+const bookmarkUri = (p: string): string =>
+  "file://" + p.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/");
+
+const isBookmarked = (dir: string): boolean =>
+  sysBookmarks.some((b) => path.resolve(b.p) === path.resolve(dir));
+
+// rewrite preserving order + custom labels; additions go last (nautilus does too)
+const setBookmarked = async (dir: string, on: boolean): Promise<void> => {
+  const file = gtkBookmarksFile();
+  let lines: string[] = [];
+  try { lines = (await readFile(file, "utf8")).split("\n"); } catch {}
+  const uri = bookmarkUri(dir);
+  const kept = lines.filter((l) => l.trim() && l.split(" ")[0] !== uri);
+  if (on) kept.push(uri);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, kept.join("\n") + (kept.length ? "\n" : ""), "utf8");
+};
+
+const PSEUDO_FSTYPES = new Set(["squashfs", "tmpfs", "devtmpfs", "proc", "sysfs", "efivarfs", "overlay", "ramfs", "devfs", "cgroup"]);const SYSTEM_MOUNTS = new Set(["/", "/boot", "/boot/efi", "/efi", "/swap"]);
 
 function parseLsblk(json: any): { label: string; target: string; removable: boolean; device: string }[] {
   const out: { label: string; target: string; removable: boolean; device: string }[] = [];
@@ -2912,9 +2933,23 @@ const openProperties = (targetPath: string): void => {
       setIconState(starSlot.spec, starred ? 1 : 0);
     },
   ).catch(() => {});
+  // folders can be bookmarked (gtk bookmarks → sidebar); files can't.
+  // created unconditionally like starSlot — just not rendered for files
+  let bookmarked = isBookmarked(targetPath);
+  const bmSlot = makeIconSlot("bookmark", [
+    { fg: colors.sidebarFgMuted, bg: colors.sidebarBg },
+    { fg: colors.accent, bg: colors.sidebarBg },
+  ], 1, bookmarked ? 1 : 0, () => {
+    bookmarked = !bookmarked;
+    setIconState(bmSlot.spec, bookmarked ? 1 : 0);
+    void setBookmarked(targetPath, bookmarked)
+      .then(() => loadSystemPlaces())
+      .then(() => renderAll());
+  });
   panel.add(Box(
     { width: "100%", height: 1, flexDirection: "row", alignItems: "center" },
     Box({ paddingLeft: 1 }, starSlot.el),
+    ...(isDirTarget ? [Box({ paddingLeft: 1 }, bmSlot.el)] : []),
     Box({ flexGrow: 1 }),
     escHintBtn("tfm-esc-props", closeProps),
   ));
