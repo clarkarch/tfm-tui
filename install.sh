@@ -23,5 +23,5 @@ chmod +x "$TMP/tfm"
 mv "$TMP/tfm" "$DEST/tfm"
 ln -sf "$DEST/tfm" "$DEST/terminal-file-manager"
 
-echo "tfm: installed -> $DEST/tfm (also 'terminal-file-manager')"
+echo "tfm: installed -> $DEST/tfm (run it via \"tfm\" or \"terminal-file-manager\")"
 command -v tfm >/dev/null 2>&1 || echo "tfm: note: $DEST is not in your PATH — add it to use 'tfm'"
