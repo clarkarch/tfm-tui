@@ -1919,9 +1919,21 @@ const showProgressToast = (): void => {
     try { if (l) l.visible = !!prog.paused; } catch {}
   };
   // pause/play are different shapes → two slots stacked in one hit area
-  const progPauseSpec = makeIconSlot("pause", [{ fg: colors.white, bg: colors.accentBg }], 1, 0);
-  const progPlaySpec = makeIconSlot("play", [{ fg: colors.accent, bg: colors.accentBg }], 1, 0);
-  const progCloseSpec = makeIconSlot("close", [{ fg: colors.white, bg: colors.accentBg }], 1, 0);
+  // toast icons carry a hover state baked for the toast bg
+  const progBtnStates = (): IconState[] => [
+    { fg: colors.white, bg: colors.accentBg },
+    { fg: colors.white, bg: colors.hoverBg },
+  ];
+  const progPaint = (spec: IconSpec, btnId: string, on: boolean) => {
+    setIconState(spec, on ? 1 : 0);
+    try {
+      const n: any = renderer.root.findDescendantById(btnId);
+      if (n) n.backgroundColor = on ? colors.hoverBg : colors.accentBg;
+    } catch {}
+  };
+  const progPauseSpec = makeIconSlot("pause", progBtnStates(), 1, 0, undefined, progBtnStates);
+  const progPlaySpec = makeIconSlot("play", progBtnStates(), 1, 0, undefined, progBtnStates);
+  const progCloseSpec = makeIconSlot("close", progBtnStates(), 1, 0, undefined, progBtnStates);
   const scrimless = Box(
     {
       id: PROG_TOAST_ID,
@@ -1942,15 +1954,19 @@ const showProgressToast = (): void => {
       (() => {
         const btn = Box(
           {
+            id: "tfm-prog-pause",
             width: 2,
             height: 1,
             flexDirection: "row",
+            backgroundColor: colors.accentBg,
             onMouseDown: () => {
               prog.paused = !prog.paused;
               if (!prog.paused) { try { prog.currentRs?.resume(); } catch {} }
               else { try { prog.currentRs?.pause(); } catch {} }
               setPauseVisual();
             },
+            onMouseOver: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", true),
+            onMouseOut: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", false),
           },
           progPauseSpec.el,
           progPlaySpec.el,
@@ -1959,13 +1975,17 @@ const showProgressToast = (): void => {
       })(),
       Box(
         {
+          id: "tfm-prog-close",
           width: 2,
           height: 1,
           flexDirection: "row",
+          backgroundColor: colors.accentBg,
           onMouseDown: () => {
             prog.cancelled = true;
             try { prog.currentRs?.destroy(new Error("cancelled")); } catch {}
           },
+          onMouseOver: () => progPaint(progCloseSpec.spec, "tfm-prog-close", true),
+          onMouseOut: () => progPaint(progCloseSpec.spec, "tfm-prog-close", false),
         },
         progCloseSpec.el,
       ),
@@ -3238,20 +3258,32 @@ const renderGrid = async () => {
 
 // clickable "esc" hint shared by floating UIs (prompt/props/menu)
 const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => {
-  const setFg = (fg: string) => {
-    const n: any = renderer.root.findDescendantById(`${id}-t`);
-    if (n) { try { n.fg = fg; } catch {} }
+  // X (close) raster with hover swap — replaced the old text "esc" hint
+  const states = (): IconState[] => [
+    { fg: colors.sidebarFgMuted, bg: colors.sidebarBg },
+    { fg: colors.white, bg: colors.hoverBg },
+  ];
+  const slot = makeIconSlot("close", states(), 1, 0, undefined, states);
+  const paint = (on: boolean) => {
+    setIconState(slot.spec, on ? 1 : 0);
+    try {
+      const n: any = renderer.root.findDescendantById(id);
+      if (n) n.backgroundColor = on ? colors.hoverBg : colors.sidebarBg;
+    } catch {}
   };
   return Box(
     {
       id,
-      width: 4,
+      // extra cell keeps the X off the panel edge
+      width: 3,
       height: 1,
+      justifyContent: "center",
+      backgroundColor: colors.sidebarBg,
       onMouseDown: () => onClose(),
-      onMouseOver: () => setFg(colors.white),
-      onMouseOut: () => setFg(colors.sidebarFgMuted),
+      onMouseOver: () => paint(true),
+      onMouseOut: () => paint(false),
     },
-    Text({ id: `${id}-t`, content: "esc ", fg: colors.sidebarFgMuted }),
+    slot.el,
   );
 };
 
@@ -3518,15 +3550,21 @@ const openProperties = (targetPath: string): void => {
     });
     return [mk(6, "read & write"), mk(4, "read-only"), mk(0, "none")];
   };
-  const permRow = (label: string, cls: string, shift: number) =>
-    Box(
+  const permRow = (label: string, cls: string, shift: number) => {
+    const rowId = `tfm-props-perm-${cls}`;
+    return Box(
       {
+        id: rowId,
         width: "100%", height: 1, flexDirection: "row", paddingLeft: 1,
+        backgroundColor: colors.sidebarBg,
         onMouseDown: (ev: any) => openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
+        onMouseOver: () => setOnId(rowId, (n) => { n.backgroundColor = colors.hoverBg; }),
+        onMouseOut: () => setOnId(rowId, (n) => { n.backgroundColor = colors.sidebarBg; }),
       },
       Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
       Text({ id: permRowId(cls), content: permWords(st.mode, shift, isDirTarget), fg: colors.sidebarFg }),
     );
+  };
   panel.add(permRow("you", "owner", 6));
   panel.add(permRow("group", "group", 3));
   panel.add(permRow("others", "others", 0));
@@ -3560,9 +3598,12 @@ const openProperties = (targetPath: string): void => {
       try { if (b) b.visible = !on; } catch {}
     };
     panel.add(Box({ height: 1 }));
-    panel.add(Box(
+    const execRowId = "tfm-props-exec";
+    const execRow = Box(
       {
+        id: execRowId,
         width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1,
+        backgroundColor: colors.sidebarBg,
         onMouseDown: () => {
           let nm: number;
           if (st.mode & 0o100) nm = st.mode & ~0o111;
@@ -3572,10 +3613,13 @@ const openProperties = (targetPath: string): void => {
           }
           void applyMode(nm);
         },
+        onMouseOver: () => setOnId(execRowId, (n) => { n.backgroundColor = colors.hoverBg; }),
+        onMouseOut: () => setOnId(execRowId, (n) => { n.backgroundColor = colors.sidebarBg; }),
       },
       Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),
       Text({ content: "execute as program", fg: colors.sidebarFg }),
-    ));
+    );
+    panel.add(execRow);
     syncExecCheckbox();
   }
   stripSelectable();
@@ -3969,8 +4013,9 @@ const renderMenuContent = () => {
   };
 
   // value column shared by stepper/cycle rows: ‹ value ›
-  const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) =>
-    Box(
+  const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) => {
+    const tId = `tfm-chev-${index}-${dir}`;
+    return Box(
       {
         width: 2,
         justifyContent: "center",
@@ -3982,9 +4027,12 @@ const renderMenuContent = () => {
             renderMenuContent();
           }
         },
+        onMouseOver: () => setOnId(tId, (n) => { n.fg = colors.white; }),
+        onMouseOut: () => setOnId(tId, (n) => { n.fg = active ? colors.white : colors.sidebarFgMuted; }),
       },
-      Text({ content: dirText, fg: active ? colors.white : colors.sidebarFgMuted }),
+      Text({ id: tId, content: dirText, fg: active ? colors.white : colors.sidebarFgMuted }),
     );
+  };
 
   const settingsRow = (rowSpec: SettingRow, index: number) => {
     const active = menuIdx === index;
