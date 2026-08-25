@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, createReadStream, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
@@ -50,6 +50,7 @@ const glyph = {
   pause: "\u{F03E4}",
   play: "\u{F040A}",
   close: "\u{F0156}",
+  terminal: "\u{F120}",
 };
 
 // --- File type categories (extension -> icon); generic `file` is the fallback,
@@ -561,6 +562,7 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
       paddingLeft: 1,
       backgroundColor: selected ? colors.accentBg : colors.sidebarBg,
       onMouseDown: () => {
+        blurTerminal();
         closeFileMenu();
         const target = placeTarget();
         if (target) navigate(target);
@@ -702,6 +704,7 @@ const exitPathEdit = () => {
 
 const enterPathEdit = () => {
   if (pathEditMode) return;
+  blurTerminal();
   pathEditMode = true;
   renderCrumbs();
 };
@@ -865,6 +868,7 @@ const makeSearch = () => {
   wrap.add(
     hoverBtn("tfm-search-btn", "search", () => {
       closeFileMenu();
+      blurTerminal();
       const el: any = renderer.root.findDescendantById("tfm-search");
       if (!el) return;
       el.visible = !el.visible;
@@ -1134,6 +1138,8 @@ const container = Box(
     { id: "tfm-main", flexGrow: 1, height: "100%", backgroundColor: colors.bg, flexDirection: "column" },
     makeToolbarShell(),
     Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
+    // embedded terminal pane ("Open Terminal Here") — zero-height until opened
+    Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }),
     Box(
       { id: "tfm-status", width: "100%", height: 1, flexDirection: "row", justifyContent: "flex-end", paddingRight: 1 },
       Text({ id: "tfm-status-label", content: "", fg: colors.sidebarFgMuted }),
@@ -2419,6 +2425,92 @@ const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
     .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
     .map((it) => it.path);
   await runTransfer("move", destDir, srcs, `move to ${path.basename(destDir) || "/"}`);
+};
+
+// --- Embedded terminal pane ("Open Terminal Here") ---
+// OpenTUI's EmbeddedTerminalRenderable draws the VT stream; the PTY belongs to
+// Bun.spawn({ terminal }). Keys route to the shell while focused; clicking the
+// grid or sidebar hands focus back to tfm.
+const TERM_H = 12;
+let term: EmbeddedTerminalRenderable | null = null;
+let termChild: ReturnType<typeof Bun.spawn> | null = null;
+let termFocused = false;
+
+const blurTerminal = (): void => {
+  if (!termFocused) return;
+  try { term?.blur(); } catch {}
+  termFocused = false;
+};
+
+const closeTerminalPane = (): void => {
+  try { term?.blur(); } catch {};
+  try { termChild?.kill(); } catch {};
+  try { (termChild as any)?.terminal?.close(); } catch {};
+  termChild = null;
+  try { term?.destroy(); } catch {};
+  term = null;
+  termFocused = false;
+  const host: any = renderer.root.findDescendantById("tfm-term-host");
+  if (host) { [...host.getChildren()].forEach((c: any) => host.remove(c)); host.height = 0; }
+  renderAll();
+};
+
+const openTerminalHere = (): void => {
+  if (!renderer.resolution) return;
+  if (term) { try { term.focus(); } catch {}; termFocused = true; return; }
+  const host: any = renderer.root.findDescendantById("tfm-term-host");
+  if (!host) return;
+  const cwd = isVirtualCwd() ? home : state.cwd;
+  host.height = TERM_H + 1;
+  const header = Box(
+    { id: "tfm-term-header", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, backgroundColor: colors.sidebarBg },
+    Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
+    Box({ flexGrow: 1 }),
+    escHintBtn("tfm-esc-term", closeTerminalPane),
+  );
+  term = new EmbeddedTerminalRenderable(renderer, {
+    id: "tfm-term",
+    width: "100%",
+    height: TERM_H,
+    cols: Math.max(20, renderer.terminalWidth - sw),
+    rows: TERM_H,
+    maxScrollback: 20_000,
+    onData: (data: Uint8Array) => {
+      (termChild as any)?.terminal?.write(data);
+    },
+    onTerminalResize: (cols: number, rows: number) => {
+      try { (termChild as any)?.terminal?.resize(cols, rows); } catch {}
+    },
+  });
+  host.add(header);
+  host.add(term);
+  stripSelectable();
+  const shell = process.env.SHELL || "/bin/bash";
+  try {
+    termChild = Bun.spawn([shell], {
+      cwd,
+      env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+      terminal: {
+        cols: Math.max(20, renderer.terminalWidth - sw),
+        rows: TERM_H,
+        data(_pty: any, data: Uint8Array) {
+          try { term?.write(data); } catch {}
+        },
+      },
+    } as any);
+  } catch (err) {
+    notify(`terminal failed (${fsErrText(err)})`, "terminal");
+    closeTerminalPane();
+    return;
+  }
+  termChild.exited.then(() => { if (termChild) closeTerminalPane(); }).catch(() => {});
+  void drainIconQueue();
+  renderAll();
+  setTimeout(() => {
+    try { term?.focus(); termFocused = true; } catch {}
+    // early prompt bytes can compose before first layout — force a full redraw
+    try { term?.invalidate(); } catch {}
+  }, 30);
 };
 
 const xdgTrashMove = async (p: string): Promise<string> => {
@@ -3813,6 +3905,7 @@ const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
     return entries;
   }
   entries.push(
+    { icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(); } },
     { icon: "file", label: "New File", action: () => { closeFileMenu(); openPrompt("new file", "Untitled.txt", (v) => {
         const p = path.join(state.cwd, v);
         writeFile(p, "")
@@ -4273,6 +4366,7 @@ const boot = async () => {
     onMouseDown: (ev: any) => {
       closeFileMenu();
       clearSearch();
+      blurTerminal();
       if (pathEditMode) { exitPathEdit(); return; }
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
@@ -4353,6 +4447,7 @@ const rethemeChrome = (): void => {
   setOnId(`${DRAG_GHOST_ID}-label`, (n) => { n.fg = colors.bg; });
   setOnId("tfm-status-label", (n) => { n.fg = colors.sidebarFgMuted; });
   setOnId("tfm-prompt-panel", (n) => { n.backgroundColor = colors.sidebarBg; });
+  setOnId("tfm-term-header", (n) => { n.backgroundColor = colors.sidebarBg; });
   // toolbar hover buttons: box bg must track the new palette between raster swaps
   for (const id of ["tfm-nav-back", "tfm-nav-fwd", "tfm-search-btn", "tfm-sort-btn"]) {
     setOnId(id, (n) => {
@@ -4784,6 +4879,10 @@ renderer.keyInput.on("keypress", (e: any) => {
     else if (e.name === "return") menuActivate();
     return;
   }
+
+  // embedded terminal owns the keyboard while focused — everything below is
+  // host UI. Click the grid/sidebar (or ✕) to leave the shell.
+  if (termFocused) return;
 
   const el: any = renderer.root.findDescendantById("tfm-search");
   const pathInput: any = renderer.root.findDescendantById("tfm-path-input");
