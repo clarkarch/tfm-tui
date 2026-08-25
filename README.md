@@ -55,9 +55,8 @@ Dev: `bun dev`.
 - Cross-device moves are copy+delete (no atomic rename across filesystems)
 - Single pane — no tabs or split view yet
 
-## Status
-
-Alpha, single maintainer, kitty/Wayland tested. Expect rough edges — bug reports welcome.
+> [!WARNING]
+> tfm is alpha software built by a single dev. Destructive operations are trash-first and undoable, but bugs can still lose data. Don't point it at the only copy of anything you care about — yet.
 
 ## License
 
