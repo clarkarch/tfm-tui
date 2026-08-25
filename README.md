@@ -14,6 +14,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 - **Mouse-first**: click, rubber-band select, context menus, inline rename
 - **Drag & drop**: move between folders (`ctrl+drag`), drag out to other apps, drop in from outside (kitty OSC 72)
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
+- **Embedded terminal**: right-click empty space → **Open Terminal Here** runs `$SHELL` in a pane at the current folder; keys hand off to tfm when you click the grid
 - **Previews**: kitty image thumbnails, tree-sitter syntax highlighting, folder stats
 - **Themes**: 30+ bundled presets (Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized, …) with live switching, fully configurable via `config.toml`
 
