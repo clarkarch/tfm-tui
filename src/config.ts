@@ -15,6 +15,14 @@ export type Theme = {
   border: string;
   divider: string;
   white: string;
+  // syntax palette for the preview pane; opencode-style per-theme values,
+  // falling back to these tokyo-night hues when a config omits them
+  syntaxString: string;
+  syntaxNumber: string;
+  syntaxType: string;
+  syntaxFunction: string;
+  syntaxOperator: string;
+  syntaxProperty: string;
 };
 
 export type UiConfig = {
@@ -52,6 +60,12 @@ export const defaultConfig: Config = {
     border: "#292e42",
     divider: "#292e42",
     white: "#c0caf5",
+    syntaxString: "#9ece6a",
+    syntaxNumber: "#ff9e64",
+    syntaxType: "#2ac3de",
+    syntaxFunction: "#7aa2f7",
+    syntaxOperator: "#89ddff",
+    syntaxProperty: "#73daca",
   },
 };
 

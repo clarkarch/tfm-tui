@@ -104,6 +104,14 @@ for (const file of readdirSync(SRC_DIR).filter((f) => f.endsWith(".json")).sort(
     border: (borderSubtle ?? border)!,
     divider: (borderSubtle ?? border)!,
     white: fg,
+    // opencode assets carry per-theme syntax palettes; tokyo-night hues as
+    // fallback keep old/partial assets working
+    syntaxString: slot("syntaxString") ?? "#9ece6a",
+    syntaxNumber: slot("syntaxNumber") ?? "#ff9e64",
+    syntaxType: slot("syntaxType") ?? "#2ac3de",
+    syntaxFunction: slot("syntaxFunction") ?? "#7aa2f7",
+    syntaxOperator: slot("syntaxOperator") ?? "#89ddff",
+    syntaxProperty: slot("syntaxProperty") ?? "#73daca",
   };
   entries.push({
     file: slug,

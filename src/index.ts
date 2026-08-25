@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync, createReadStream, createWriteStream, existsSync, readFileSync, statSync, watch } from "node:fs";
 import { readdir, readFile, stat, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
@@ -1444,9 +1444,64 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   }
 };
 
+// --- inline rename: edit the tile label in place instead of a modal ---
+let renameEdit: { key: string; inputId: string } | null = null;
+
+const tileLabelFor = (name: string): string =>
+  name.length > TILE_W - 2 ? name.slice(0, TILE_W - 5) + "…" : name;
+
+// restores the plain label node; commit=true runs performRename afterwards
+const finishInlineRename = (commit: boolean): void => {
+  const edit = renameEdit;
+  if (!edit) return;
+  renameEdit = null;
+  const input: any = renderer.root.findDescendantById(edit.inputId);
+  const value = String(input?.value ?? "").trim();
+  if (input) { try { input.parent?.remove(input); } catch {} }
+  const refs = tileRefsByKey.get(edit.key);
+  const tile: any = refs ? renderer.root.findDescendantById(refs.tileId) : null;
+  if (refs && tile && !renderer.root.findDescendantById(refs.labelId)) {
+    const labelText: any = Text({ id: refs.labelId, content: tileLabelFor(path.basename(edit.key)), fg: refs.baseFg });
+    tile.add(labelText);
+  }
+  stripSelectable();
+  if (commit && value && value !== path.basename(edit.key)) void performRename(edit.key, value);
+};
+
+const startInlineRename = (key: string): void => {
+  if (renameEdit) finishInlineRename(false);
+  const refs = tileRefsByKey.get(key);
+  if (!refs) return;
+  const tile: any = renderer.root.findDescendantById(refs.tileId);
+  const label: any = renderer.root.findDescendantById(refs.labelId);
+  if (!tile || !label || !existsSync(key)) return;
+  // real class instance — mounts into the already-mounted tile
+  const inputId = `tfm-rename-input`;
+  const stale = renderer.root.findDescendantById(inputId);
+  if (stale) { try { (stale as any).parent?.remove(stale); } catch {} }
+  const input: any = new InputRenderable(renderer, {
+    id: inputId,
+    width: TILE_W - 2,
+    value: path.basename(key),
+    backgroundColor: colors.hoverBg,
+    focusedBackgroundColor: colors.accentBg,
+    textColor: colors.white,
+  });
+  try { tile.insertBefore(input, label); } catch { tile.add(input); }
+  try { tile.remove(label); } catch {}
+  renameEdit = { key, inputId };
+  input.on?.("enter", () => finishInlineRename(true));
+  const prevHandler = input.handleKeyPress?.bind(input);
+  input.handleKeyPress = (k: any) => {
+    if (k?.name === "escape") { finishInlineRename(false); return true; }
+    return prevHandler ? prevHandler(k) : false;
+  };
+  setTimeout(() => { try { input.focus(); } catch {} }, 20);
+  stripSelectable();
+};
+
 let selStatusGen = 0;
-const updateSelectionStatusReal = () => {
-  const gen = ++selStatusGen;
+const updateSelectionStatusReal = () => {  const gen = ++selStatusGen;
   const sel: { key: string; isDir: boolean }[] = [];
   tileRefsByKey.forEach((r, k) => { if (r.selected) sel.push({ key: k, isDir: r.isDir }); });
   const setStatus = (s: string) => {
@@ -2245,11 +2300,14 @@ const TEXT_PREVIEW_MAX = 262144;
 const isTextLike = (name: string): boolean => {
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
   if (FILE_ICON_BY_EXT[ext] === "file-image" || FILE_ICON_BY_EXT[ext] === "file-video") return false;
-  const mime = globs2ByExt?.get(ext);
-  if (mime) return mime.startsWith("text/") || /^(application\/(json|xml|javascript|x-yaml|x-sh))/.test(mime) || mime.endsWith("+xml");
-  return ["md", "markdown", "txt", "log", "json", "yaml", "yml", "toml", "ini", "conf", "html", "css", "csv"].includes(ext)
+  // known-text extensions win even when globs2 reports an odd mime
+  // (e.g. toml → application/toml used to fall through the cracks)
+  if (["md", "markdown", "txt", "log", "json", "yaml", "yml", "toml", "ini", "conf", "cfg", "html", "css", "csv", "lock", "env"].includes(ext)
     || FILE_ICON_BY_EXT[ext] === "file-code"
-    || FILE_ICON_BY_EXT[ext] === "file-document";
+    || FILE_ICON_BY_EXT[ext] === "file-document") return true;
+  const mime = globs2ByExt?.get(ext);
+  if (!mime) return false;
+  return mime.startsWith("text/") || /^(application\/(json|xml|javascript|x-yaml|x-sh|toml))/.test(mime) || mime.endsWith("+xml");
 };
 
 // --- properties helpers ---
@@ -2333,6 +2391,101 @@ const dirWalkStats = async (root: string): Promise<{ bytes: number; files: numbe
 
 let previewGen = 0;
 
+// --- syntax highlighting for the preview pane (tree-sitter via @opentui/core) ---
+// bundled grammars: javascript, typescript, markdown, zig. Extra languages are
+// registered opencode-style: wasm + query URLs, downloaded once and cached by
+// the client's download utils.
+const EXTRA_PARSERS = [
+  {
+    filetype: "json",
+    wasm: "https://github.com/tree-sitter/tree-sitter-json/releases/download/v0.24.8/tree-sitter-json.wasm",
+    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/json/highlights.scm"] },
+  },
+  {
+    filetype: "bash",
+    wasm: "https://github.com/tree-sitter/tree-sitter-bash/releases/download/v0.25.0/tree-sitter-bash.wasm",
+    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/bash/highlights.scm"] },
+  },
+  {
+    filetype: "python",
+    wasm: "https://github.com/tree-sitter/tree-sitter-python/releases/download/v0.23.6/tree-sitter-python.wasm",
+    queries: { highlights: ["https://github.com/tree-sitter/tree-sitter-python/raw/refs/heads/master/queries/highlights.scm"] },
+  },
+  {
+    filetype: "rust",
+    wasm: "https://github.com/tree-sitter/tree-sitter-rust/releases/download/v0.24.0/tree-sitter-rust.wasm",
+    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/rust/highlights.scm"] },
+  },
+  {
+    filetype: "go",
+    wasm: "https://github.com/tree-sitter/tree-sitter-go/releases/download/v0.25.0/tree-sitter-go.wasm",
+    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/go/highlights.scm"] },
+  },
+  {
+    filetype: "css",
+    wasm: "https://github.com/tree-sitter/tree-sitter-css/releases/download/v0.25.0/tree-sitter-css.wasm",
+    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/css/highlights.scm"] },
+  },
+  {
+    filetype: "yaml",
+    wasm: "https://github.com/tree-sitter-grammars/tree-sitter-yaml/releases/download/v0.7.2/tree-sitter-yaml.wasm",
+    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/yaml/highlights.scm"] },
+  },
+  {
+    filetype: "toml",
+    wasm: "https://github.com/tree-sitter-grammars/tree-sitter-toml/releases/download/v0.7.0/tree-sitter-toml.wasm",
+    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/master/queries/toml/highlights.scm"] },
+  },
+];
+addDefaultParsers(EXTRA_PARSERS);
+
+const PREVIEW_FT_BY_EXT: Record<string, string> = {
+  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascriptreact",
+  ts: "typescript", mts: "typescript", cts: "typescript", tsx: "typescriptreact",
+  md: "markdown", markdown: "markdown", mdx: "markdown",
+  zig: "zig",
+  json: "json", jsonc: "json",
+  sh: "bash", bash: "bash", zsh: "bash",
+  py: "python", rs: "rust", go: "go",
+  css: "css", scss: "css",
+  yml: "yaml", yaml: "yaml",
+  toml: "toml",
+};
+
+let previewSyntaxStyle: InstanceType<typeof SyntaxStyle> | null = null;
+let previewSyntaxSig = "";
+const getPreviewSyntaxStyle = () => {
+  const t = colors as Theme;
+  const sig = [t.accent, t.white, t.sidebarFg, t.sidebarFgMuted,
+    t.syntaxString, t.syntaxNumber, t.syntaxType, t.syntaxFunction, t.syntaxOperator, t.syntaxProperty].join("|");
+  if (!previewSyntaxStyle || previewSyntaxSig !== sig) {
+    try { previewSyntaxStyle?.destroy(); } catch {}
+    // cached nodes hold a reference to the old style
+    previewCodeCache = null;
+    previewSyntaxStyle = SyntaxStyle.fromStyles({
+      keyword: { fg: t.accent, bold: true },
+      string: { fg: t.syntaxString ?? "#9ece6a" },
+      comment: { fg: t.sidebarFgMuted, italic: true },
+      function: { fg: t.syntaxFunction ?? "#7aa2f7" },
+      method: { fg: t.syntaxFunction ?? "#7aa2f7" },
+      type: { fg: t.syntaxType ?? "#2ac3de" },
+      "type.builtin": { fg: t.syntaxType ?? "#2ac3de" },
+      number: { fg: t.syntaxNumber ?? "#ff9e64" },
+      constant: { fg: t.syntaxNumber ?? "#ff9e64" },
+      "constant.builtin": { fg: t.syntaxNumber ?? "#bb9af7" },
+      operator: { fg: t.syntaxOperator ?? t.white },
+      punctuation: { fg: t.sidebarFgMuted },
+      property: { fg: t.syntaxProperty ?? "#73daca" },
+      variable: { fg: t.sidebarFg },
+    });
+    previewSyntaxSig = sig;
+  }
+  return previewSyntaxStyle;
+};
+let previewCodeSeq = 0;
+// reuse the (already-parsed/highlighted) node when the same file is previewed again
+let previewCodeCache: { key: string; mtimeMs: number; size: number; node: any } | null = null;
+
 const renderPreview = async () => {
   if (!config.ui.previewEnabled) return;
   const gen = ++previewGen;
@@ -2404,9 +2557,26 @@ const renderPreview = async () => {
   try {
     const text = (await readFile(key, "utf8")).slice(0, 65536);
     if (gen !== previewGen) return;
-    for (const line of text.split("\n")) {
-      pane.add(Text({ content: line.slice(0, config.ui.previewWidth - 2), fg: colors.sidebarFg }));
+    const mtimeMs = st.mtimeMs ?? 0;
+    const size = st.size ?? 0;
+    if (previewCodeCache && previewCodeCache.key === key
+      && previewCodeCache.mtimeMs === mtimeMs && previewCodeCache.size === size) {
+      pane.add(previewCodeCache.node);
+      return;
     }
+    // real class instance (not a proxied helper) so it mounts into the live pane
+    const codeNode: any = new CodeRenderable(renderer, {
+      id: `tfm-preview-code-${previewCodeSeq++}`,
+      content: text,
+      filetype: PREVIEW_FT_BY_EXT[path.extname(key).slice(1).toLowerCase()],
+      syntaxStyle: getPreviewSyntaxStyle()!,
+      width: Math.max(8, config.ui.previewWidth - 2),
+      height: Math.max(1, renderer.terminalHeight - 6),
+      selectable: false,
+    });
+    previewCodeCache = { key, mtimeMs, size, node: codeNode };
+    pane.add(codeNode);
+    void drainIconQueue();
   } catch {}
 };
 
@@ -2524,6 +2694,8 @@ const clearGrid = () => {
 const renderGrid = async () => {
   if (!scroller) return;
   const gen = ++gridGen;
+  // a rebuild destroys the edit input; drop the state with it
+  if (renameEdit) renameEdit = null;
   clearGrid();
   const q = searchQuery.trim().toLowerCase();
   const allEntries = await listDir(state.cwd, state.showHidden || q.length > 0);
@@ -2582,6 +2754,7 @@ const renderGrid = async () => {
       onMouseDown: (ev: any) => {
         try { ev.stopPropagation?.(); } catch {}
         closeFileMenu();
+        if (renameEdit && renameEdit.key !== key) finishInlineRename(false);
         if (ev.button === 2) {
           // Nautilus behavior: right-click selects the tile unless it's already
           // part of the live multi-selection
@@ -3129,9 +3302,7 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
     { icon: "content-cut", label: `Cut${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); setClipboard("cut", targets); } },
     { icon: "pencil", label: "Rename…", action: () => {
         closeFileMenu();
-        openPrompt("rename", path.basename(targetPath), (v) => {
-          void performRename(targetPath, v);
-        });
+        startInlineRename(targetPath);
       } },
     { icon: "trash-can", label: `Trash${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); trashPaths(targets.map((t) => t.path)); } },
   );
@@ -4094,6 +4265,11 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
 
+  // inline rename: the focused Input consumes typing; swallow everything else
+  // so arrows/shortcuts don't move grid focus mid-edit (esc/enter handled at
+  // the source via handleKeyPress / "enter")
+  if (renameEdit) return;
+
   // floating properties dialog: esc/enter closes, everything else swallowed
   if (propsOpen) {
     if (e.name === "escape" || e.name === "return") closeProps();
@@ -4254,9 +4430,7 @@ renderer.keyInput.on("keypress", (e: any) => {
       return;
     }
     const p = selected[0].path;
-    openPrompt("rename", path.basename(p), (v) => {
-      void performRename(p, v);
-    });
+    startInlineRename(p);
     return;
   }
   if (ctrl && (e.name === "c" || e.unicode === "c") && selected.length) {
