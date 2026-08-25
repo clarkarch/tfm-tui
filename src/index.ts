@@ -1139,12 +1139,13 @@ const container = Box(
     { id: "tfm-main", flexGrow: 1, height: "100%", backgroundColor: colors.bg, flexDirection: "column" },
     makeToolbarShell(),
     Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
-    // embedded terminal pane ("Open Terminal Here") — zero-height until opened
-    Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }),
+    // status bar sits above the embedded terminal pane (zero-height until opened),
+    // so with a terminal open the bar hugs its top edge instead of sinking below it
     Box(
       { id: "tfm-status", width: "100%", height: 1, flexDirection: "row", justifyContent: "flex-end", paddingRight: 1 },
       Text({ id: "tfm-status-label", content: "", fg: colors.sidebarFgMuted }),
     ),
+    Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }),
   ),
   Box(
     {
@@ -2448,6 +2449,33 @@ const blurTerminal = (): void => {
   termFocused = false;
 };
 
+// "#rrggbb" -> xterm "rgb:RRRR/GGGG/BBBB" (8-bit channel doubled to 16-bit)
+const hexToRgb16 = (hex: string): string => {
+  const b = (/^#?([0-9a-f]{6})$/i.exec(hex.trim()) ?? [, "ffffff"])[1];
+  const ch = (i: number) => `${b.slice(i, i + 2)}${b.slice(i, i + 2)}`;
+  return `${ch(0)}/${ch(2)}/${ch(4)}`;
+};
+
+// make the embedded terminal match the tfm theme: OSC 4 sets the 16-color
+// palette (so ls/vim/prompts stop floating on stock xterm hues) and
+// OSC 10/11/12 set the default fg/bg/cursor
+const syncTerminalTheme = (): void => {
+  if (!term) return;
+  try {
+    const enc = new TextEncoder();
+    const spec = (hex: string) => `rgb:${hexToRgb16(hex)}`;
+    const osc4 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      .map((i) => `${i};${spec((colors as any)[`ansi${i}`] ?? colors.white)}`)
+      .join(";");
+    term.write(new Uint8Array([
+      ...enc.encode(`\x1b]4;${osc4}\x1b\\`),
+      ...enc.encode(`\x1b]10;${spec(colors.white)}\x1b\\`),
+      ...enc.encode(`\x1b]11;${spec(colors.bg)}\x1b\\`),
+      ...enc.encode(`\x1b]12;${spec(colors.accent)}\x1b\\`),
+    ]));
+  } catch {}
+};
+
 const closeTerminalPane = (): void => {
   try { term?.blur(); } catch {};
   try { termChild?.kill(); } catch {};
@@ -2510,6 +2538,7 @@ const openTerminalHere = (): void => {
     return;
   }
   termChild.exited.then(() => { if (termChild) closeTerminalPane(); }).catch(() => {});
+  syncTerminalTheme();
   void drainIconQueue();
   renderAll();
   setTimeout(() => {
@@ -4514,6 +4543,7 @@ const applyConfig = (fresh: Config): void => {
     try { renderer.setBackgroundColor(colors.bg); } catch {}
     // grid/sidebar rebuild picks up the new palette; everything else needs this
     rethemeChrome();
+    syncTerminalTheme();
   }
   renderAll();
 };

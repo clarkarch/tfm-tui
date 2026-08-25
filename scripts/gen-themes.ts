@@ -113,6 +113,26 @@ for (const file of readdirSync(SRC_DIR).filter((f) => f.endsWith(".json")).sort(
     syntaxOperator: slot("syntaxOperator") ?? "#89ddff",
     syntaxProperty: slot("syntaxProperty") ?? "#73daca",
   };
+  // ANSI 0-15 for the embedded terminal (OSC 4): derived from semantic slots
+  // where assets have them, tokyo-night hues as fallback. Brights mix toward
+  // fg so they stay on-palette.
+  const dull: string[] = [
+    panel,
+    slot("error") ?? "#f7768e",
+    slot("success") ?? slot("diffAdded") ?? "#9ece6a",
+    slot("warning") ?? "#e0af68",
+    accent,
+    slot("secondary") ?? "#bb9af7",
+    slot("syntaxType") ?? "#2ac3de",
+    fg,
+    muted,
+  ];
+  const bright = (i: number): string => mixHex(dull[i] ?? fg, fg, 0.3);
+  const rawAny = raw as Record<string, string>;
+  for (let i = 0; i < 16; i++) {
+    const base = i < 9 ? dull[i] ?? fg : i === 15 ? fg : bright(i - 7);
+    rawAny[`ansi${i}`] = base;
+  }
   entries.push({
     file: slug,
     name,

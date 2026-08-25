@@ -1,6 +1,6 @@
 {
   "name": "tfm-tui",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "module": "src/index.tsx",
   "type": "module",
   "private": true,

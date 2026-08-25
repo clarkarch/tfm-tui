@@ -7,6 +7,8 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 > [!WARNING]
 > Vibecoded experimental software — expect rough edges. Don't test on files you can't afford to lose.
 
+![tfm](screenshot.png)
+
 ## Features
 
 - **Mouse-first**: click, rubber-band select, context menus, inline rename

@@ -23,6 +23,22 @@ export type Theme = {
   syntaxFunction: string;
   syntaxOperator: string;
   syntaxProperty: string;
+  ansi0: string;
+  ansi1: string;
+  ansi2: string;
+  ansi3: string;
+  ansi4: string;
+  ansi5: string;
+  ansi6: string;
+  ansi7: string;
+  ansi8: string;
+  ansi9: string;
+  ansi10: string;
+  ansi11: string;
+  ansi12: string;
+  ansi13: string;
+  ansi14: string;
+  ansi15: string;
 };
 
 export type UiConfig = {
@@ -68,6 +84,24 @@ export const defaultConfig: Config = {
     syntaxFunction: "#7aa2f7",
     syntaxOperator: "#89ddff",
     syntaxProperty: "#73daca",
+    // ANSI 0-15 pushed into the embedded terminal via OSC 4 so programs inside
+    // (ls --color, vim, prompts) match the tfm palette instead of stock xterm
+    ansi0: "#16161e",
+    ansi1: "#f7768e",
+    ansi2: "#9ece6a",
+    ansi3: "#e0af68",
+    ansi4: "#7aa2f7",
+    ansi5: "#bb9af7",
+    ansi6: "#7dcfff",
+    ansi7: "#c0caf5",
+    ansi8: "#565f89",
+    ansi9: "#f7768e",
+    ansi10: "#9ece6a",
+    ansi11: "#e0af68",
+    ansi12: "#7aa2f7",
+    ansi13: "#bb9af7",
+    ansi14: "#7dcfff",
+    ansi15: "#c0caf5",
   },
 };
 
