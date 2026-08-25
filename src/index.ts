@@ -3411,16 +3411,30 @@ const openProperties = (targetPath: string): void => {
   const panel: any = renderer.root.findDescendantById("tfm-props-panel");
   if (!panel) return;
 
-  const starSlot = makeIconSlot("star", [
+  // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
+  // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps
+  const propsToggleStates = (): IconState[] => [
     { fg: colors.sidebarFgMuted, bg: colors.sidebarBg },
     { fg: colors.accent, bg: colors.sidebarBg },
-  ], 1, 0, () => {
+    { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
+    { fg: colors.accent, bg: colors.hoverBg },
+  ];
+  const propsTogglePaint = (btnId: string, spec: IconSpec, on: boolean, hover: boolean) => {
+    setIconState(spec, (on ? 1 : 0) + (hover ? 2 : 0));
+    try {
+      const n: any = renderer.root.findDescendantById(btnId);
+      if (n) n.backgroundColor = hover ? colors.hoverBg : colors.sidebarBg;
+    } catch {}
+  };
+
+  const starSlot = makeIconSlot("star", propsToggleStates(), 1, 0, () => {
     starred = !starred;
-    setIconState(starSlot.spec, starred ? 1 : 0);
+    propsTogglePaint("tfm-props-star", starSlot.spec, starred, starHover);
     if (starred) starredRegistryAdd(targetPath);
     else starredRegistryRemove(targetPath);
     void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""]).catch(() => {});
   });
+  let starHover = false;
   let starred = readStarredList().includes(targetPath);
   if (starred) setIconState(starSlot.spec, 1);
   void execFileP("gio", ["info", "-a", "metadata::starred", targetPath]).then(
@@ -3431,26 +3445,49 @@ const openProperties = (targetPath: string): void => {
         starred = true;
         starredRegistryAdd(targetPath); // adopt stars made outside tfm
       }
-      setIconState(starSlot.spec, starred ? 1 : 0);
+      setIconState(starSlot.spec, (starred ? 1 : 0) + (starHover ? 2 : 0));
     },
   ).catch(() => {});
   // folders can be bookmarked (gtk bookmarks → sidebar); files can't.
   // created unconditionally like starSlot — just not rendered for files
+  let bmHover = false;
   let bookmarked = isBookmarked(targetPath);
-  const bmSlot = makeIconSlot("bookmark", [
-    { fg: colors.sidebarFgMuted, bg: colors.sidebarBg },
-    { fg: colors.accent, bg: colors.sidebarBg },
-  ], 1, bookmarked ? 1 : 0, () => {
+  const bmSlot = makeIconSlot("bookmark", propsToggleStates(), 1, bookmarked ? 1 : 0, () => {
     bookmarked = !bookmarked;
-    setIconState(bmSlot.spec, bookmarked ? 1 : 0);
+    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, bmHover);
     void setBookmarked(targetPath, bookmarked)
       .then(() => loadSystemPlaces())
       .then(() => renderAll());
   });
   panel.add(Box(
     { width: "100%", height: 1, flexDirection: "row", alignItems: "center" },
-    Box({ paddingLeft: 1 }, starSlot.el),
-    ...(isDirTarget ? [Box({ paddingLeft: 1 }, bmSlot.el)] : []),
+    (() => {
+      const b = Box(
+        {
+          id: "tfm-props-star",
+          paddingLeft: 1,
+          backgroundColor: colors.sidebarBg,
+          onMouseOver: () => { starHover = true; propsTogglePaint("tfm-props-star", starSlot.spec, starred, true); },
+          onMouseOut: () => { starHover = false; propsTogglePaint("tfm-props-star", starSlot.spec, starred, false); },
+        },
+        starSlot.el,
+      );
+      return b;
+    })(),
+    ...(isDirTarget
+      ? [
+          Box(
+            {
+              id: "tfm-props-bm",
+              paddingLeft: 1,
+              backgroundColor: colors.sidebarBg,
+              onMouseOver: () => { bmHover = true; propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, true); },
+              onMouseOut: () => { bmHover = false; propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, false); },
+            },
+            bmSlot.el,
+          ),
+        ]
+      : []),
     Box({ flexGrow: 1 }),
     escHintBtn("tfm-esc-props", closeProps),
   ));
@@ -3688,7 +3725,9 @@ const openContextMenu = (x: number, y: number, title: string, entries: ListEntry
       left: px,
       top: py,
       width: w,
-      zIndex: 3100,
+      // above every modal (props/prompt/conflict/toast) — context menus can be
+      // spawned from inside any of them
+      zIndex: 3600,
       backgroundColor: colors.sidebarBg,
       flexDirection: "column",
     },
