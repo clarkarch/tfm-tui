@@ -1,7 +1,7 @@
 import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync, createReadStream, createWriteStream, existsSync, readFileSync, statSync, watch } from "node:fs";
-import { readdir, readFile, stat, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
+import { appendFileSync, closeSync, createReadStream, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
+import { readdir, readFile, stat, rename as fsRename, mkdir, writeFile, chmod, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -44,6 +44,11 @@ const glyph = {
   "folder-plus": "\u{F0770}",
   "select-all": "\u{F0478}",
   sort: "\u{F04BA}",
+  "checkbox-marked": "\u{F0132}",
+  "checkbox-blank": "\u{F0131}",
+  pause: "\u{F03E4}",
+  play: "\u{F040A}",
+  close: "\u{F0156}",
 };
 
 // --- File type categories (extension -> icon); generic `file` is the fallback,
@@ -232,6 +237,33 @@ const state: AppState = {
 };
 
 let renderAll: () => void = () => {};
+
+// --- session persistence: last folder survives restarts ---
+const sessionFile = (): string =>
+  path.join(process.env.XDG_STATE_HOME ?? path.join(home, ".local/state"), "tfm", "session.json");
+
+let sessionTimer: any = null;
+const scheduleSaveSession = (): void => {
+  if (sessionTimer) clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(() => {
+    sessionTimer = null;
+    if (isVirtualCwd()) return;
+    void mkdir(path.dirname(sessionFile()), { recursive: true })
+      .then(() => writeFile(sessionFile(), JSON.stringify({ cwd: state.cwd })))
+      .catch(() => {});
+  }, 400);
+};
+
+const restoreSession = (): void => {
+  try {
+    const doc = JSON.parse(readFileSync(sessionFile(), "utf8"));
+    const cwd = typeof doc?.cwd === "string" ? doc.cwd : "";
+    if (!cwd || cwd === RECENT_URI || cwd === STARRED_URI) return;
+    try {
+      if (statSync(cwd).isDirectory()) { state.cwd = cwd; state.history = [cwd]; state.histIdx = 0; }
+    } catch {}
+  } catch {}
+};
 
 const canBack = () => state.histIdx > 0;
 const canFwd = () => state.histIdx < state.history.length - 1;
@@ -522,7 +554,16 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
         const keys = dragKeys;
         finishDragState();
         const target = placeTarget();
-        if (keys && target && !place.scheme) void moveInto(target, keys.filter((k) => k.path !== target));
+        if (!keys || !target || place.scheme) return;
+        const rest = keys.filter((k) => k.path !== target);
+        if (!rest.length) return;
+        if (target === path.join(home, ".local/share/Trash/files")) {
+          // dropping onto the trash place must gio-trash, not plain-move —
+          // otherwise no .trashinfo is written and items can't be restored
+          void trashPaths(rest.map((k) => k.path));
+        } else {
+          void moveInto(target, rest);
+        }
       },
       onMouseOver: () => { mousePlaceIdx = idx; normalizePlaces(); },
       onMouseOut: () => { if (mousePlaceIdx === idx) { mousePlaceIdx = -1; normalizePlaces(); } },
@@ -1510,14 +1551,24 @@ const updateSelectionStatusReal = () => {  const gen = ++selStatusGen;
     if (status) { try { status.content = s; } catch {} }
   };
   if (sel.length === 0) return setStatus("");
+  // total size of the selected files (dirs contribute their item count instead)
+  let bytes = 0;
+  for (const s of sel) {
+    if (!s.isDir) { try { bytes += statSync(s.key).size; } catch {} }
+  }
   const dirs = sel.filter((s) => s.isDir);
-  if (dirs.length === 0) return setStatus(`${sel.length} selected`);
+  if (dirs.length === 0) {
+    return setStatus(`${sel.length} selected${bytes > 0 ? ` · ${fmtBytes(bytes)}` : ""}`);
+  }
   void (async () => {
     let contained = 0;
     await Promise.all(dirs.map(async (d) => {
       try { contained += (await readdir(d.key)).length; } catch {}
     }));
-    setStatus(dirs.length === 1 && sel.length === 1 ? `${contained} items` : `${sel.length} selected`);
+    const bits = [`${sel.length} selected`];
+    if (bytes > 0) bits.push(fmtBytes(bytes));
+    if (dirs.length === 1 && sel.length === 1) bits.push(`${contained} items`);
+    setStatus(bits.join(" · "));
   })();
 };
 
@@ -1705,7 +1756,6 @@ let progLastPaint = 0;
 const PROG_TOAST_ID = "tfm-prog-toast";
 const PROG_T_TITLE = "tfm-prog-title";
 const PROG_T_BAR = "tfm-prog-bar";
-const PROG_T_PAUSE = "tfm-prog-pause";
 const PROG_T_BTNS = "tfm-prog-btns";
 const PROG_W = 42;
 const PROG_BAR_CELLS = 14;
@@ -1738,7 +1788,16 @@ const showProgressToast = (): void => {
   if (prog.toastUp) return;
   prog.toastUp = true;
   const y = 1 + toasts.length * 4;
-  const setPauseLabel = () => progSetText(PROG_T_PAUSE, prog.paused ? "[ Resume ]" : "[ Pause ]");
+  const setPauseVisual = (): void => {
+    const p: any = renderer.root.findDescendantById(progPauseSpec.slotId);
+    const l: any = renderer.root.findDescendantById(progPlaySpec.slotId);
+    try { if (p) p.visible = !prog.paused; } catch {}
+    try { if (l) l.visible = !!prog.paused; } catch {}
+  };
+  // pause/play are different shapes → two slots stacked in one hit area
+  const progPauseSpec = makeIconSlot("pause", [{ fg: colors.white, bg: colors.accentBg }], 1, 0);
+  const progPlaySpec = makeIconSlot("play", [{ fg: colors.accent, bg: colors.accentBg }], 1, 0);
+  const progCloseSpec = makeIconSlot("close", [{ fg: colors.white, bg: colors.accentBg }], 1, 0);
   const scrimless = Box(
     {
       id: PROG_TOAST_ID,
@@ -1755,37 +1814,44 @@ const showProgressToast = (): void => {
     Box({ height: 1 }, Text({ id: PROG_T_TITLE, content: `${SPIN_FRAMES[0]} ${prog.verb}`, fg: colors.white })),
     Box({ height: 1 }, Text({ id: PROG_T_BAR, content: "", fg: colors.white })),
     Box(
-      { id: PROG_T_BTNS, height: 1, flexDirection: "row", paddingLeft: 1, columnGap: 2 },
+      { id: PROG_T_BTNS, height: 1, flexDirection: "row", paddingLeft: 1, columnGap: 1 },
       (() => {
-        const t = Text({ id: PROG_T_PAUSE, content: "[ Pause ]", fg: colors.white });
-        return Box(
+        const btn = Box(
           {
+            width: 2,
             height: 1,
-            onMouseOver: () => progSetText(PROG_T_PAUSE, "[ Pause ] "),
-            onMouseOut: () => setPauseLabel(),
+            flexDirection: "row",
             onMouseDown: () => {
               prog.paused = !prog.paused;
               if (!prog.paused) { try { prog.currentRs?.resume(); } catch {} }
               else { try { prog.currentRs?.pause(); } catch {} }
-              setPauseLabel();
+              setPauseVisual();
             },
           },
-          t,
+          progPauseSpec.el,
+          progPlaySpec.el,
         );
+        return btn;
       })(),
       Box(
         {
+          width: 2,
           height: 1,
+          flexDirection: "row",
           onMouseDown: () => {
             prog.cancelled = true;
             try { prog.currentRs?.destroy(new Error("cancelled")); } catch {}
           },
         },
-        Text({ content: "[ Cancel ]", fg: colors.white }),
+        progCloseSpec.el,
       ),
     ),
   );
   renderer.root.add(scrimless);
+  // button Texts must not enter text-selection mode or they hijack the clicks
+  stripSelectable();
+  setPauseVisual(); // play slot ships visible — hide until actually paused
+  void drainIconQueue();
   const real: any = renderer.root.findDescendantById(PROG_TOAST_ID);
   if (real) animateLeft(real, renderer.terminalWidth + 2, Math.max(0, renderer.terminalWidth - PROG_W - 2), 180);
   progSpinTimer = setInterval(() => {
@@ -3194,10 +3260,94 @@ const openProperties = (targetPath: string): void => {
   panel.add(row("location", path.dirname(targetPath).replace(home, "~").slice(0, PROPS_W - 14)));
   panel.add(row("modified", fmtDate(st.mtimeMs)));
   panel.add(row("accessed", fmtDate(st.atimeMs)));
-  panel.add(row("you", permWords(st.mode, 6, isDirTarget)));
-  panel.add(row("group", permWords(st.mode, 3, isDirTarget)));
-  panel.add(row("others", permWords(st.mode, 0, isDirTarget)));
+
+  // --- nautilus-style permissions editor: click a class to pick access,
+  // checkbox toggles the execute bit ---
+  const permRowId = (cls: string): string => `tfm-props-perm-${cls}`;
+  // assigned only when the exec checkbox exists (exec-capable files)
+  let syncExecCheckbox: () => void = () => {};
+  const refreshPermRows = (): void => {
+    progSetText(permRowId("owner"), permWords(st.mode, 6, isDirTarget));
+    progSetText(permRowId("group"), permWords(st.mode, 3, isDirTarget));
+    progSetText(permRowId("others"), permWords(st.mode, 0, isDirTarget));
+    syncExecCheckbox();
+  };
+  const applyMode = async (nm: number): Promise<void> => {
+    try { await chmod(targetPath, nm); } catch { setStatusMsg("chmod failed"); return; }
+    try { st.mode = statSync(targetPath).mode; } catch { return; }
+    refreshPermRows();
+  };
+  const permClassMenu = (shift: number): ListEntry[] => {
+    const cur = (st.mode >> shift) & 7;
+    const mk = (bits: number, label: string): ListEntry => ({
+      label: `${cur === bits ? "●" : "○"} ${label}`,
+      action: () => {
+        closeFileMenu();
+        void applyMode((st.mode & ~(7 << shift)) | (bits << shift));
+      },
+    });
+    return [mk(6, "read & write"), mk(4, "read-only"), mk(0, "none")];
+  };
+  const permRow = (label: string, cls: string, shift: number) =>
+    Box(
+      {
+        width: "100%", height: 1, flexDirection: "row", paddingLeft: 1,
+        onMouseDown: (ev: any) => openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
+      },
+      Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
+      Text({ id: permRowId(cls), content: permWords(st.mode, shift, isDirTarget), fg: colors.sidebarFg }),
+    );
+  panel.add(permRow("you", "owner", 6));
+  panel.add(permRow("group", "group", 3));
+  panel.add(permRow("others", "others", 0));
   panel.add(row("owner", `${idName(st.uid)}:${idName(st.gid)}`));
+
+  // "execute as program" only makes sense for things that can actually run:
+  // already-executable files, ELF binaries, shebang scripts, known script exts
+  const execCapable = ((): boolean => {
+    if (isDirTarget) return false;
+    if (st.mode & 0o111) return true;
+    const ext = path.extname(targetPath).slice(1).toLowerCase();
+    if (["sh", "bash", "zsh", "py", "pl", "rb", "run"].includes(ext)) return true;
+    try {
+      const head = Buffer.alloc(4);
+      const fd = openSync(targetPath, "r");
+      try { readSync(fd, head, 0, 4, 0); } finally { closeSync(fd); }
+      return (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46)
+        || (head[0] === 0x23 && head[1] === 0x21);
+    } catch { return false; }
+  })();
+  if (execCapable) {
+    // raster checkbox: two slots (marked/blank) stacked in one hit area,
+    // visibility flips with the exec bit
+    const cbOnSpec = makeIconSlot("checkbox-marked", [{ fg: colors.accent, bg: colors.sidebarBg }], 1, 0);
+    const cbOffSpec = makeIconSlot("checkbox-blank", [{ fg: colors.sidebarFgMuted, bg: colors.sidebarBg }], 1, 0);
+    syncExecCheckbox = (): void => {
+      const on = !!(st.mode & 0o100);
+      const a: any = renderer.root.findDescendantById(cbOnSpec.slotId);
+      const b: any = renderer.root.findDescendantById(cbOffSpec.slotId);
+      try { if (a) a.visible = on; } catch {}
+      try { if (b) b.visible = !on; } catch {}
+    };
+    panel.add(Box({ height: 1 }));
+    panel.add(Box(
+      {
+        width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1,
+        onMouseDown: () => {
+          let nm: number;
+          if (st.mode & 0o100) nm = st.mode & ~0o111;
+          else {
+            nm = st.mode;
+            for (const sh of [6, 3, 0]) { if ((st.mode >> sh) & 4) nm |= 1 << sh; }
+          }
+          void applyMode(nm);
+        },
+      },
+      Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),
+      Text({ content: "execute as program", fg: colors.sidebarFg }),
+    ));
+    syncExecCheckbox();
+  }
   stripSelectable();
   void drainIconQueue();
   void drainThumbs();
@@ -3775,6 +3925,7 @@ renderAll = () => {
   void renderGrid();
   void renderPreview();
   stripSelectable();
+  scheduleSaveSession();
 };
 
 
@@ -3826,6 +3977,7 @@ const boot = async () => {
   }, Text({ id: `${DRAG_GHOST_ID}-label`, content: "moving 0 items", fg: colors.bg })));
 
   await loadGlobs2();
+  restoreSession();
   await loadSystemPlaces();
   renderAll();
 
