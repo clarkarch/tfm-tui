@@ -5,7 +5,7 @@ Mouse-first file manager for the terminal. Nautilus-style places sidebar, grid v
 ![alpha](https://img.shields.io/badge/status-alpha-red)
 
 > [!WARNING]
-> tfm is alpha software built by a single dev. Destructive operations are trash-first and undoable, but bugs can still lose data. Don't point it at the only copy of anything you care about — yet.
+> Experimental software — expect rough edges. Don't test on files you can't afford to lose.
 
 ## Features
 
