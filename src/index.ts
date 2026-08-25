@@ -312,6 +312,18 @@ const clearSearch = () => {
   } catch {}
 };
 
+// nautilus-style type-to-search: a printable char with the grid focused opens
+// the search box seeded with that char instead of doing legacy jump-ahead
+const beginTypeToSearch = (ch: string): void => {
+  const el: any = renderer.root.findDescendantById("tfm-search");
+  if (!el) return;
+  el.visible = true;
+  el.value = ch;
+  searchQuery = ch;
+  void renderGrid();
+  setTimeout(() => { try { el.focus(); } catch {} }, 10);
+};
+
 // --- System places sources (Nautilus-style: nothing hardcoded) ---
 
 type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string; scheme?: "recent" | "starred" };
@@ -1491,8 +1503,6 @@ let tileSeq = 0;
 let focusKeys: string[] = [];
 let focusIdx = -1;
 let colsAtBuild = 1;
-let typeBuf = "";
-let typeTimer: any = null;
 // anchor tile for shift+click range selection (index into focusKeys)
 let selAnchor: number | null = null;
 
@@ -1565,17 +1575,6 @@ const moveFocus = (dx: number, dy: number): boolean => {
   next = Math.max(0, Math.min(focusKeys.length - 1, next));
   if (next === focusIdx) return false;
   return selectTileAt(next);
-};
-
-const typeAhead = (ch: string): boolean => {
-  typeBuf += ch.toLowerCase();
-  if (typeTimer) clearTimeout(typeTimer);
-  typeTimer = setTimeout(() => { typeBuf = ""; }, 800);
-  for (let i = 0; i < focusKeys.length; i++) {
-    const base = path.basename(focusKeys[i]!).toLowerCase();
-    if (base.startsWith(typeBuf)) return selectTileAt(i);
-  }
-  return false;
 };
 
 type TileRefs = { iconSpec?: IconSpec; selected: boolean; baseFg: string; tileId: string; labelId: string; isDir: boolean };
@@ -4235,7 +4234,8 @@ const boot = async () => {
       if (searchTimer) clearTimeout(searchTimer);
       searchTimer = setTimeout(() => { searchTimer = null; void renderGrid(); }, 150);
     });
-    inputEl.on("enter", () => clearSearch());
+    // enter/escape semantics live in the global key handler (enter commits
+    // into the first match; escape cancels) — no listener here by design
   }
 };
 boot();
@@ -4719,11 +4719,30 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
 
-  if (el?.visible && (e.name === "escape" || e.name === "return")) {
-    clearSearch();
+  if (el?.visible) {
+    if (e.name === "escape") {
+      const had = !!searchQuery;
+      clearSearch();
+      if (had) void renderGrid();
+      return;
+    }
+    // enter commits: open the first folder match (dirs sort first in the
+    // filtered grid); fall back to opening the first file match
+    if (e.name === "return") {
+      const firstDir = focusKeys.find((k) => tileRefsByKey.get(k)?.isDir);
+      const targetKey = firstDir ?? focusKeys[0];
+      const refs = targetKey !== undefined ? tileRefsByKey.get(targetKey) : undefined;
+      if (targetKey && refs) {
+        if (refs.isDir) navigate(targetKey);
+        else { openFileDefault(targetKey); clearSearch(); void renderGrid(); }
+      } else {
+        clearSearch();
+        void renderGrid();
+      }
+      return;
+    }
     return;
   }
-  if (el?.visible) return;
 
   // --- keyboard navigation: sidebar <-> grid ---
   // shift+arrows extend the selection from the anchor instead of moving it
@@ -4800,8 +4819,8 @@ renderer.keyInput.on("keypress", (e: any) => {
     if (parent !== path.resolve(state.cwd)) navigate(parent);
     return;
   }
-  if (!ctrl && typeof e.name === "string" && e.name.length === 1 && /[a-z0-9._-]/i.test(e.name)) {
-    typeAhead(e.name);
+  if (!ctrl && !e.shift && typeof e.name === "string" && e.name.length === 1 && /[a-z0-9._-]/i.test(e.name)) {
+    beginTypeToSearch(e.name);
     return;
   }
 
