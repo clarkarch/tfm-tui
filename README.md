@@ -62,6 +62,7 @@ Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 - Image thumbnails need a kitty-graphics-protocol terminal (kitty, ghostty); others fall back to Nerd Font glyphs
 - tmux hides rasters unless `allow-passthrough` is on; icons render but won't display images
 - Cross-device moves are copy+delete (no atomic rename across filesystems)
+- Drag & drop out of/into the terminal is kitty-only (OSC 72); other terminals are limited to in-app `ctrl+drag`
 - Single pane — no tabs or split view yet
 
 ## License
