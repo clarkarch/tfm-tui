@@ -15,7 +15,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 ## Features
 
 - **Mouse-first**: click, rubber-band select, context menus, inline rename
-- **Drag & drop**: move between folders (`ctrl+drag`), drag out to other apps, drop in from outside (kitty OSC 72)
+- **Drag & drop**: move between folders (`ctrl+drag`), drag out to other apps, drop in from outside — cross-app DnD is kitty-only (OSC 72), in-app drag works everywhere
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
 - **Embedded terminal**: right-click empty space → **Open Terminal Here** runs `$SHELL` in a pane at the current folder; keys hand off to tfm when you click the grid
 - **Previews**: kitty image thumbnails, tree-sitter syntax highlighting, folder stats
@@ -23,7 +23,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 
 ## Requirements
 
-- Linux + [Bun](https://bun.sh) (or use a compiled binary)
+- Linux
 - A terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty) — falls back to Nerd Font glyphs elsewhere
 - `rsvg-convert` (icon rasterization), `wl-paste`/`xclip` (clipboard bridge)
 
@@ -68,7 +68,7 @@ Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 - Image thumbnails need a kitty-graphics-protocol terminal (kitty, ghostty); others fall back to Nerd Font glyphs
 - tmux hides rasters unless `allow-passthrough` is on; icons render but won't display images
 - Cross-device moves are copy+delete (no atomic rename across filesystems)
-- Drag & drop out of/into the terminal is kitty-only (OSC 72); other terminals are limited to in-app `ctrl+drag`
+- Drag & drop to/from other apps is kitty-only (OSC 72): ghostty does image thumbnails and in-app drag (`ctrl+drag`), but cross-app drag **won't** work there
 - Single pane — no tabs or split view yet
 
 ## License
