@@ -1,5 +1,6 @@
 import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, createReadStream, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
 import { readdir, readFile, stat, lstat, readlink, symlink, rename as fsRename, mkdir, writeFile, chmod, cp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -1166,6 +1167,7 @@ const cellMetrics = () => {
 
 // --- Runtime SVG pipeline: tint + rasterize at exact cell pixels, cached, async ---
 const iconCache = new Map<string, Uint8Array>();
+const inflightIcons = new Map<string, Promise<Uint8Array>>();
 
 // In a `bun --compile` binary, assets/icons/*.svg are embedded as File blobs
 // named "<basename>-<hash>.svg" — plain readFileSync can't see them. Index by
@@ -1212,13 +1214,59 @@ const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, p
     proc.stdin.end(tinted);
   });
 
+// Disk cache for rendered rasters: keyed by everything that changes the output
+// (name, tint, bg, pixel size) plus a pipeline-version salt. Theme switches
+// naturally miss because fg/bg are part of the key.
+const ICON_DISK_VER = "v1";
+const iconDiskDir = (): string =>
+  path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
+const iconDiskPath = (key: string): string =>
+  path.join(iconDiskDir(), `${createHash("sha1").update(`${ICON_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
+let iconDirReady: Promise<void> | null = null;
+const ensureIconDir = (): Promise<void> =>
+  (iconDirReady ??= mkdir(iconDiskDir(), { recursive: true }).then(() => undefined).catch(() => {}));
+
+// Cap concurrent rsvg forks — boot fans out dozens of slots at once and a
+// thundering herd of librsvg processes is slower than a capped pipeline.
+const RASTER_CONCURRENCY = 12;
+let rasterActive = 0;
+const rasterWaiters: (() => void)[] = [];
+const acquireRasterSlot = async (): Promise<void> => {
+  if (rasterActive >= RASTER_CONCURRENCY) await new Promise<void>((r) => rasterWaiters.push(r));
+  rasterActive++;
+};
+const releaseRasterSlot = () => {
+  rasterActive--;
+  rasterWaiters.shift()?.();
+};
+
 const iconPng = async (name: string, fg: string, bg: string, pxW: number, pxH: number): Promise<Uint8Array> => {
   const key = `${name}:${fg}:${bg}:${pxW}x${pxH}`;
   const hit = iconCache.get(key);
   if (hit) return hit;
-  const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH);
-  iconCache.set(key, bytes);
-  return bytes;
+  // identical requests racing (e.g. 15 folder rows) share one render
+  const running = inflightIcons.get(key);
+  if (running) return running;
+  try {
+    const cached = readFileSync(iconDiskPath(key));
+    const bytes = new Uint8Array(cached);
+    iconCache.set(key, bytes);
+    return bytes;
+  } catch {}
+  const job = (async () => {
+    await acquireRasterSlot();
+    try {
+      const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH);
+      iconCache.set(key, bytes);
+      void ensureIconDir().then(() => writeFile(iconDiskPath(key), bytes).catch(() => {}));
+      return bytes;
+    } finally {
+      releaseRasterSlot();
+    }
+  })();
+  inflightIcons.set(key, job);
+  job.finally(() => inflightIcons.delete(key)).catch(() => {});
+  return job;
 };
 
 // --- Image thumbnails (magick resize flattened onto bg, cached per file version) ---
