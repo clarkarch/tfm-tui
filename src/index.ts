@@ -1,6 +1,6 @@
 import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, statSync, watch } from "node:fs";
+import { appendFileSync, createReadStream, createWriteStream, existsSync, readFileSync, statSync, watch } from "node:fs";
 import { readdir, readFile, stat, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -37,6 +37,7 @@ const glyph = {
   eye: "\u{F0208}",
   "eye-off": "\u{F0209}",
   "content-copy": "\u{F018F}",
+  "content-paste": "\u{F0192}",
   "content-cut": "\u{F0190}",
   information: "\u{F02FD}",
   pencil: "\u{F03EB}",
@@ -241,6 +242,15 @@ const goFwd = () => { if (canFwd()) { state.histIdx++; renderAll(); } };
 const navigate = (dir: string) => {
   pathEditMode = false;
   if (fileMenuState) closeFileMenu();
+  if (dir === RECENT_URI || dir === STARRED_URI) {
+    if (dir === state.cwd) { renderAll(); return; }
+    state.history = state.history.slice(0, state.histIdx + 1);
+    state.history.push(dir);
+    state.histIdx++;
+    clearSearch();
+    renderAll();
+    return;
+  }
   let target: string;
   try {
     target = path.resolve(dir);
@@ -268,7 +278,7 @@ const clearSearch = () => {
 
 // --- System places sources (Nautilus-style: nothing hardcoded) ---
 
-type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string };
+type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string; scheme?: "recent" | "starred" };
 
 type UserDir = { key: string; label: string; p: string };
 
@@ -400,8 +410,8 @@ function buildSections(): Place[][] {
   const hasTrash = (() => { try { return statSync(trashDir).isDirectory(); } catch { return false; } })();
 
   const defaults: Place[] = [{ icon: "home", label: "Home", path: home, ejectable: false }];
-  defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false });
-  defaults.push({ icon: "star", label: "Starred", path: null, ejectable: false });
+  defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false, scheme: "recent" });
+  defaults.push({ icon: "star", label: "Starred", path: null, ejectable: false, scheme: "starred" });
   if (hasTrash) defaults.push({ icon: "trash-can", label: "Trash", path: trashDir, ejectable: false });
 
   const dirs: Place[] = sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }));
@@ -442,7 +452,13 @@ const mountDevice = (device: string) => {
 
 const makeRow = (place: Place): ReturnType<typeof Box> => {
   const idx = placesHost.length;
-  const selected = !!place.path && path.resolve(place.path) === path.resolve(state.cwd);
+  const placeTarget = (): string | null =>
+    place.scheme === "recent" ? RECENT_URI
+    : place.scheme === "starred" ? STARRED_URI
+    : place.path;
+  const selected = !!place.path
+    ? path.resolve(place.path) === path.resolve(state.cwd)
+    : !!place.scheme && state.cwd === placeTarget();
   const normFg = colors.sidebarFg;
   const selFg = colors.accent;
   const iconStates: IconState[] = [
@@ -477,13 +493,15 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
       backgroundColor: selected ? colors.accentBg : colors.sidebarBg,
       onMouseDown: () => {
         closeFileMenu();
-        if (place.path) navigate(place.path);
+        const target = placeTarget();
+        if (target) navigate(target);
         else if (place.mountDevice) mountDevice(place.mountDevice);
       },
       onMouseDrop: () => {
         const keys = dragKeys;
         finishDragState();
-        if (keys && place.path) void moveInto(place.path, keys.filter((k) => k.path !== place.path));
+        const target = placeTarget();
+        if (keys && target && !place.scheme) void moveInto(target, keys.filter((k) => k.path !== target));
       },
       onMouseOver: () => { mousePlaceIdx = idx; normalizePlaces(); },
       onMouseOut: () => { if (mousePlaceIdx === idx) { mousePlaceIdx = -1; normalizePlaces(); } },
@@ -609,7 +627,7 @@ const renderCrumbs = () => {
       input = new InputRenderable(renderer, {
         id: "tfm-path-input",
         flexGrow: 1,
-        value: path.resolve(state.cwd),
+        value: isVirtualCwd() ? state.cwd : path.resolve(state.cwd),
         backgroundColor: colors.accentBg,
         focusedBackgroundColor: colors.accentBg,
         textColor: colors.white,
@@ -632,7 +650,7 @@ const renderCrumbs = () => {
         return prevHandler ? prevHandler(key) : false;
       };
     } else {
-      try { input.value = path.resolve(state.cwd); } catch {}
+      try { input.value = isVirtualCwd() ? state.cwd : path.resolve(state.cwd); } catch {}
     }
     try { input.visible = true; } catch {}
     setTimeout(() => { try { input.focus(); } catch {} }, 20);
@@ -644,11 +662,16 @@ const renderCrumbs = () => {
   [...box.getChildren()].forEach((c: any) => box.remove(c));
 
   const cwdAbs = path.resolve(state.cwd);
-  const inHome = cwdAbs === home || cwdAbs.startsWith(home + path.sep);
-  const baseLabel = inHome ? "Home" : os.hostname();
-  const baseIcon = inHome ? "home" : "desktop-tower";
-  const basePath = inHome ? home : "/";
-  const rest = path.relative(inHome ? home : "/", cwdAbs).split(path.sep).filter(Boolean);
+  const virtCrumb = state.cwd === RECENT_URI
+    ? { label: "Recent", icon: "clock" }
+    : state.cwd === STARRED_URI
+    ? { label: "Starred", icon: "star" }
+    : null;
+  const inHome = !virtCrumb && (cwdAbs === home || cwdAbs.startsWith(home + path.sep));
+  const baseLabel = virtCrumb ? virtCrumb.label : inHome ? "Home" : os.hostname();
+  const baseIcon = virtCrumb ? virtCrumb.icon! : inHome ? "home" : "desktop-tower";
+  const basePath = virtCrumb ? state.cwd : inHome ? home : "/";
+  const rest = virtCrumb ? [] : path.relative(inHome ? home : "/", cwdAbs).split(path.sep).filter(Boolean);
 
   const crumbs: { label: string; icon?: string; target: string }[] = [
     { label: baseLabel, icon: baseIcon, target: basePath },
@@ -772,16 +795,188 @@ const makeToolbarShell = (): ReturnType<typeof Box> =>
 
 // --- Directory listing ---
 type SortMode = "name" | "size" | "mtime" | "type";
-type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number };
+type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
+
+// --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred ---
+const RECENT_URI = "recent://";
+const STARRED_URI = "starred://";
+const isVirtualCwd = (p: string = state.cwd): boolean => p === RECENT_URI || p === STARRED_URI;
+
+const xdgDataHome = () => process.env.XDG_DATA_HOME ?? path.join(home, ".local/share");
+const xdgStateHome = () => process.env.XDG_STATE_HOME ?? path.join(home, ".local/state");
+
+type XbelItem = { path: string; modified: number };
+
+const xbelPath = (): string => path.join(xdgDataHome(), "recently-used.xbel");
+
+// XBEL timestamps are ISO-8601; Date.parse handles them
+const parseIso = (s: string): number => {
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : 0;
+};
+
+const uriToPath = (uri: string): string | null => {
+  if (!uri.startsWith("file://")) return null;
+  try { return decodeURIComponent(uri.slice(7)); } catch { return null; }
+};
+
+const readRecentXbel = (): XbelItem[] => {
+  let xml = "";
+  try { xml = readFileSync(xbelPath(), "utf8"); } catch { return []; }
+  const out: XbelItem[] = [];
+  const bmRe = /<bookmark\b[^>]*href="([^"]+)"[^>]*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = bmRe.exec(xml))) {
+    const p = uriToPath(m[1]!);
+    if (!p) continue;
+    // modified attr lives on the same tag; fall back to the application entry
+    const tag = m[0];
+    const mod = tag.match(/modified="([^"]+)"/)?.[1];
+    out.push({ path: p, modified: mod ? parseIso(mod) : 0 });
+  }
+  // newest first, one row per file
+  const seen = new Set<string>();
+  const uniq: XbelItem[] = [];
+  for (const it of out.sort((a, b) => b.modified - a.modified)) {
+    if (seen.has(it.path)) continue;
+    seen.add(it.path);
+    uniq.push(it);
+  }
+  return uniq;
+};
+
+let recordOpenTimer: any = null;
+let recordOpenPaths: string[] = [];
+
+// batch opens into one xbel rewrite (opening a selection of N files fires N times)
+const recordOpen = (p: string): void => {
+  if (inTrashView()) return;
+  recordOpenPaths.push(p);
+  if (recordOpenTimer) clearTimeout(recordOpenTimer);
+  recordOpenTimer = setTimeout(() => {
+    const paths = [...new Set(recordOpenPaths)];
+    recordOpenPaths = [];
+    recordOpenTimer = null;
+    void upsertRecentXbel(paths);
+  }, 150);
+};
+
+const xmlEscapeUri = (p: string): string =>
+  "file://" + p.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/");
+
+const upsertRecentXbel = async (paths: string[]): Promise<void> => {
+  try {
+    let xml = "";
+    try { xml = await readFile(xbelPath(), "utf8"); } catch {}
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    type Kept = { uri: string; block: string };
+    const kept: Kept[] = [];
+    const counts = new Map<string, number>();
+    const bmRe = /[ \t]*<bookmark\b[\s\S]*?<\/bookmark>[ \t]*\n?/g;
+    for (const blk of xml.match(bmRe) ?? []) {
+      const uri = blk.match(/href="([^"]+)"/)?.[1];
+      if (!uri) continue;
+      if (paths.some((p) => xmlEscapeUri(p) === uri)) {
+        counts.set(uri, parseInt(blk.match(/count="(\d+)"/)?.[1] ?? "0", 10) + 1);
+        continue;
+      }
+      kept.push({ uri, block: blk.trim() });
+    }
+    for (const p of paths) {
+      const uri = xmlEscapeUri(p);
+      const mime = globs2ByExt?.get(path.extname(p).slice(1).toLowerCase()) ?? "application/octet-stream";
+      const count = counts.get(uri) ?? 1;
+      kept.push({
+        uri,
+        block: `  <bookmark href="${uri}" added="${now}" modified="${now}" visited="${now}">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="${mime}"/>
+        <bookmark:applications>
+          <bookmark:application name="tfm" exec="&apos;tfm&apos;" modified="${now}" count="${count}"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>`,
+      });
+    }
+    const head = `<?xml version="1.0" encoding="UTF-8"?>
+<xbel version="1.0"
+      xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"
+      xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info">
+`;
+    const body = kept.slice(-500).map((k) => k.block).join("\n");
+    await writeFile(xbelPath(), `${head}${body}\n</xbel>\n`, "utf8");
+  } catch {}
+};
+
+const openFileDefault = (p: string): void => {
+  recordOpen(p);
+  spawn("xdg-open", [p], { stdio: "ignore", detached: true }).unref?.();
+};
+
+// Starred registry: tfm's own list, kept in sync with gvfs metadata so
+// nautilus sees the same stars (gio set metadata::starred).
+const starredListPath = (): string => path.join(xdgStateHome(), "tfm", "starred.list");
+
+const readStarredList = (): string[] => {
+  try {
+    return readFileSync(starredListPath(), "utf8")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+  } catch { return []; }
+};
+
+const writeStarredList = async (paths: string[]): Promise<void> => {
+  try {
+    await mkdir(path.dirname(starredListPath()), { recursive: true });
+    await writeFile(starredListPath(), [...new Set(paths)].join("\n") + "\n", "utf8");
+  } catch {}
+};
+
+const starredRegistryAdd = (p: string): void => { void writeStarredList([...readStarredList(), p]); };
+const starredRegistryRemove = (p: string): void => {
+  void writeStarredList(readStarredList().filter((x) => x !== p));
+};
+
+const recentEntries = async (): Promise<Entry[]> => {
+  const out: Entry[] = [];
+  for (const it of readRecentXbel()) {
+    let st: any = null;
+    try { st = statSync(it.path); } catch { continue; } // drop vanished files
+    out.push({ name: path.basename(it.path), isDir: st.isDirectory(), abs: it.path, size: st.size, mtimeMs: it.modified });
+  }
+  return out;
+};
+
+const starredEntries = async (): Promise<Entry[]> => {
+  const out: Entry[] = [];
+  for (const p of readStarredList()) {
+    let st: any = null;
+    try { st = statSync(p); } catch { continue; }
+    out.push({ name: path.basename(p), isDir: st.isDirectory(), abs: p, size: st.size, mtimeMs: st.mtimeMs ?? 0 });
+  }
+  return out;
+};
 
 async function listDir(dir: string, showHidden: boolean): Promise<Entry[]> {
+  let out: Entry[];
+  if (dir === RECENT_URI) {
+    out = await recentEntries();
+    // recency order wins over the global sort mode, like nautilus
+    return out.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
+  }
+  if (dir === STARRED_URI) out = await starredEntries();
+  else {
   const dirents = await readdir(dir, { withFileTypes: true });
-  const out: Entry[] = dirents
+  out = dirents
     .filter((d) => showHidden || !d.name.startsWith("."))
     .map((d) => ({ name: d.name, isDir: d.isDirectory() }));
+  }
   if (state.sortBy === "size" || state.sortBy === "mtime") {
     for (const e of out) {
-      try { const st = statSync(path.join(dir, e.name)); e.size = st.size; e.mtimeMs = st.mtimeMs ?? 0; } catch {}
+      try { const st = statSync(e.abs ?? path.join(dir, e.name)); e.size = st.size; e.mtimeMs = st.mtimeMs ?? 0; } catch {}
     }
   }
   const extOf = (n: string): string => {
@@ -1277,6 +1472,453 @@ const selPaths = (): ClipItem[] => {
   return out;
 };
 
+// --- Undo stack + override (conflict) prompt ---
+type ConflictChoice = "replace" | "keepBoth" | "skip";
+let conflictPolicy: ConflictChoice | null = null;
+
+type UndoUnit = () => Promise<void> | void;
+const undoStack: { label: string; units: UndoUnit[] }[] = [];
+
+const pushUndoBatch = (label: string, units: UndoUnit[]): void => {
+  if (!units.length) return;
+  undoStack.push({ label, units });
+  if (undoStack.length > 30) undoStack.shift();
+};
+
+const undoLast = (): void => {
+  const entry = undoStack.pop();
+  if (!entry) { setStatusMsg("Nothing to undo"); return; }
+  void (async () => {
+    let failed = 0;
+    for (let i = entry.units.length - 1; i >= 0; i--) {
+      const u = entry.units[i];
+      try { await u?.(); } catch { failed++; }
+    }
+    renderAll();
+    setStatusMsg(failed ? `Undid ${entry.label} (${failed} failed)` : `Undid: ${entry.label}`);
+  })();
+};
+
+let conflictOpen = false;
+let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
+
+const closeConflict = (c: ConflictChoice): void => {
+  const scrim: any = renderer.root.findDescendantById("tfm-conflict");
+  scrim?.parent?.remove(scrim);
+  conflictOpen = false;
+  const r = conflictResolveFn;
+  conflictResolveFn = null;
+  r?.(c);
+};
+
+const CONFLICT_W = 48;
+
+const promptConflict = (destPath: string, remaining: number): Promise<ConflictChoice> =>
+  new Promise<ConflictChoice>((resolve) => {
+    closeFileMenu();
+    if (propsOpen) closeProps();
+    conflictOpen = true;
+    conflictResolveFn = resolve;
+    const name = path.basename(destPath);
+    const parentName = path.basename(path.dirname(destPath)) || "/";
+    let bseq = 0;
+    const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> => {
+      const id = `tfm-conflict-b${bseq++}`;
+      const setBg = (bg: string) => {
+        const n: any = renderer.root.findDescendantById(id);
+        if (n) { try { n.backgroundColor = bg; } catch {} }
+      };
+      return Box(
+        {
+          id,
+          height: 1,
+          flexGrow: 1,
+          flexDirection: "row",
+          justifyContent: "center",
+          backgroundColor: colors.sidebarBg,
+          onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
+          onMouseOver: () => setBg(colors.hoverBg),
+          onMouseOut: () => setBg(colors.sidebarBg),
+        },
+        Text({ content: label, fg: colors.sidebarFg }),
+      );
+    };
+    const pick = (c: ConflictChoice, all?: ConflictChoice) => {
+      if (all) conflictPolicy = all;
+      closeConflict(c);
+    };
+    const rows: ReturnType<typeof Box>[] = [
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: ` Replace "${name.slice(0, CONFLICT_W - 14)}"?`, fg: colors.accent }),
+      ),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: " " + "~".repeat(CONFLICT_W - 2), fg: colors.divider }),
+      ),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: ` an item called "${name}" already exists in ${parentName}`.slice(0, CONFLICT_W - 1), fg: colors.sidebarFgMuted }),
+      ),
+      Box({ height: 1 }),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
+        mkBtn("[ Replace ]", () => pick("replace")),
+        mkBtn("[ Keep both ]", () => pick("keepBoth")),
+        mkBtn("[ Skip ]", () => pick("skip")),
+      ),
+    ];
+    if (remaining > 0) {
+      rows.push(
+        Box({ height: 1 }),
+        Box(
+          { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
+          mkBtn("[ Replace all ]", () => pick("replace", "replace")),
+          mkBtn("[ Keep both all ]", () => pick("keepBoth", "keepBoth")),
+          mkBtn("[ Skip rest ]", () => pick("skip", "skip")),
+        ),
+      );
+    }
+    const scrim = Box(
+      {
+        id: "tfm-conflict",
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: "100%",
+        height: "100%",
+        alignItems: "center",
+        paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
+        zIndex: 3400,
+        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+        onMouseDown: () => closeConflict("skip"),
+      },
+      Box(
+        {
+          id: "tfm-conflict-panel",
+          width: CONFLICT_W,
+          backgroundColor: colors.sidebarBg,
+          paddingTop: 1,
+          paddingBottom: 1,
+          flexDirection: "column",
+          onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
+        },
+        ...rows,
+      ),
+    );
+    renderer.root.add(scrim);
+    stripSelectable();
+    void drainIconQueue();
+  });
+
+// --- live copy progress: floating toast (top-right) with pause/cancel ---
+const prog = {
+  active: false,
+  verb: "copying",
+  doneFiles: 0,
+  totalFiles: 0,
+  bytes: 0,
+  totalBytes: 0,
+  paused: false,
+  cancelled: false,
+  currentRs: null as ReturnType<typeof createReadStream> | null,
+  toastUp: false,
+};
+let progLastPaint = 0;
+
+const PROG_TOAST_ID = "tfm-prog-toast";
+const PROG_T_TITLE = "tfm-prog-title";
+const PROG_T_BAR = "tfm-prog-bar";
+const PROG_T_PAUSE = "tfm-prog-pause";
+const PROG_T_BTNS = "tfm-prog-btns";
+const PROG_W = 42;
+const PROG_BAR_CELLS = 14;
+// braille spinner frames (same as ~/loading_animation.py)
+const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+let progSpinIdx = 0;
+let progSpinTimer: any = null;
+
+const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+const progSetText = (nodeId: string, s: string): void => {
+  const n: any = renderer.root.findDescendantById(nodeId);
+  if (n) { try { n.content = s; } catch {} }
+};
+
+const paintProgress = (force = false): void => {
+  if (!prog.active || !prog.toastUp) return;
+  const now = Date.now();
+  if (!force && now - progLastPaint < 120) return;
+  progLastPaint = now;
+  const pct = prog.totalBytes > 0 ? Math.min(100, Math.floor((prog.bytes / prog.totalBytes) * 100)) : 0;
+  const filled = Math.round((pct / 100) * PROG_BAR_CELLS);
+  const spin = prog.paused ? "⏸" : SPIN_FRAMES[progSpinIdx];
+  progSetText(PROG_T_TITLE, `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pct}%)`);
+  const line = "█".repeat(filled) + "░".repeat(Math.max(0, PROG_BAR_CELLS - filled)) + ` ${fmtBytes(prog.bytes)}/${fmtBytes(prog.totalBytes)}`;
+  progSetText(PROG_T_BAR, line.slice(0, PROG_W - 2));
+};
+
+const showProgressToast = (): void => {
+  if (prog.toastUp) return;
+  prog.toastUp = true;
+  const y = 1 + toasts.length * 4;
+  const setPauseLabel = () => progSetText(PROG_T_PAUSE, prog.paused ? "[ Resume ]" : "[ Pause ]");
+  const scrimless = Box(
+    {
+      id: PROG_TOAST_ID,
+      position: "absolute",
+      left: renderer.terminalWidth + 2,
+      top: y,
+      width: PROG_W,
+      height: 4,
+      zIndex: 3500,
+      backgroundColor: colors.accentBg,
+      flexDirection: "column",
+    },
+    // ids live on the TEXT nodes — boxes have no .content, mutating them no-ops
+    Box({ height: 1 }, Text({ id: PROG_T_TITLE, content: `${SPIN_FRAMES[0]} ${prog.verb}`, fg: colors.white })),
+    Box({ height: 1 }, Text({ id: PROG_T_BAR, content: "", fg: colors.white })),
+    Box(
+      { id: PROG_T_BTNS, height: 1, flexDirection: "row", paddingLeft: 1, columnGap: 2 },
+      (() => {
+        const t = Text({ id: PROG_T_PAUSE, content: "[ Pause ]", fg: colors.white });
+        return Box(
+          {
+            height: 1,
+            onMouseOver: () => progSetText(PROG_T_PAUSE, "[ Pause ] "),
+            onMouseOut: () => setPauseLabel(),
+            onMouseDown: () => {
+              prog.paused = !prog.paused;
+              if (!prog.paused) { try { prog.currentRs?.resume(); } catch {} }
+              else { try { prog.currentRs?.pause(); } catch {} }
+              setPauseLabel();
+            },
+          },
+          t,
+        );
+      })(),
+      Box(
+        {
+          height: 1,
+          onMouseDown: () => {
+            prog.cancelled = true;
+            try { prog.currentRs?.destroy(new Error("cancelled")); } catch {}
+          },
+        },
+        Text({ content: "[ Cancel ]", fg: colors.white }),
+      ),
+    ),
+  );
+  renderer.root.add(scrimless);
+  const real: any = renderer.root.findDescendantById(PROG_TOAST_ID);
+  if (real) animateLeft(real, renderer.terminalWidth + 2, Math.max(0, renderer.terminalWidth - PROG_W - 2), 180);
+  progSpinTimer = setInterval(() => {
+    progSpinIdx = (progSpinIdx + 1) % SPIN_FRAMES.length;
+    paintProgress(true);
+  }, 100);
+};
+
+// swap to a terminal state (✓/✗ passed in title), linger briefly, slide away
+const finishProgressToast = (title: string): void => {
+  if (!prog.toastUp) return;
+  prog.toastUp = false;
+  if (progSpinTimer) { clearInterval(progSpinTimer); progSpinTimer = null; }
+  progSetText(PROG_T_TITLE, title.slice(0, PROG_W - 2));
+  progSetText(PROG_T_BAR, "");
+  // done means the controls go away — nothing left to pause or cancel
+  const btns: any = renderer.root.findDescendantById(PROG_T_BTNS);
+  if (btns) { try { btns.visible = false; } catch {} }
+  setTimeout(() => {
+    const real: any = renderer.root.findDescendantById(PROG_TOAST_ID);
+    if (!real) return;
+    animateLeft(real, typeof real.left === "number" ? real.left : 0, renderer.terminalWidth + 2, 180);
+    setTimeout(() => {
+      try { (real.parent ?? renderer.root).remove(real); } catch {}
+    }, 200);
+  }, 1800);
+};
+
+// pause/cancel gates used between files AND mid-stream
+const pauseGate = async (): Promise<void> => {
+  while (prog.paused && !prog.cancelled) await sleepMs(80);
+};
+
+const scanTree = async (root: string): Promise<{ files: number; bytes: number }> => {
+  let files = 0, bytes = 0;
+  const stack = [root];
+  while (stack.length) {
+    const d = stack.pop()!;
+    let st;
+    try { st = await stat(d); } catch { continue; }
+    if (!st.isDirectory()) { files++; bytes += st.size ?? 0; continue; }
+    let kids;
+    try { kids = await readdir(d); } catch { continue; }
+    for (const k of kids) stack.push(path.join(d, k));
+  }
+  return { files, bytes };
+};
+
+const copyFileProgress = (src: string, dest: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const rs = createReadStream(src);
+    const ws = createWriteStream(dest);
+    prog.currentRs = rs;
+    rs.on("data", (c: any) => {
+      prog.bytes += c?.length ?? 0;
+      if (prog.paused) { try { rs.pause(); } catch {} }
+      if (prog.cancelled) { try { rs.destroy(new Error("cancelled")); } catch {} }
+      paintProgress();
+    });
+    const done = () => { if (prog.currentRs === rs) prog.currentRs = null; };
+    let settled = false;
+    ws.on("finish", () => { if (!settled) { settled = true; done(); resolve(); } });
+    const fail = (e: any) => { if (!settled) { settled = true; done(); reject(e); } };
+    ws.on("error", fail);
+    rs.on("error", fail);
+    rs.on("close", done);
+    rs.pipe(ws);
+  });
+
+const copyTreeProgress = async (src: string, dest: string): Promise<void> => {
+  const st = await stat(src);
+  if (st.isDirectory()) {
+    await mkdir(dest, { recursive: true });
+    for (const k of await readdir(src)) {
+      await pauseGate();
+      if (prog.cancelled) throw new Error("cancelled");
+      await copyTreeProgress(path.join(src, k), path.join(dest, k));
+    }
+  } else {
+    await pauseGate();
+    if (prog.cancelled) throw new Error("cancelled");
+    await mkdir(path.dirname(dest), { recursive: true });
+    await copyFileProgress(src, dest);
+    prog.doneFiles++;
+    paintProgress(true);
+  }
+};
+
+// every destructive-but-reversible file op funnels through here so overrides
+// are asked once and undo covers the whole batch
+async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void> {
+  conflictPolicy = null;
+  const units: UndoUnit[] = [];
+  let ok = 0, skipped = 0, replaced = 0;
+  const total = srcs.length;
+  const startedAt = Date.now();
+  if (op === "copy") {
+    // pre-scan so the progress toast has real totals from byte one
+    prog.paused = false;
+    prog.cancelled = false;
+    prog.doneFiles = 0;
+    prog.bytes = 0;
+    let files = 0, bytes = 0;
+    for (const s of srcs) {
+      try { const r = await scanTree(s); files += r.files; bytes += r.bytes; } catch {}
+    }
+    prog.totalFiles = files || Math.max(1, total);
+    prog.totalBytes = bytes;
+    // tiny transfers don't need a toast
+    if (prog.totalBytes > 4 * 1024 * 1024 || prog.totalFiles > 4) {
+      prog.active = true;
+      showProgressToast();
+      paintProgress(true);
+    }
+  }
+  let cancelled = false;
+  try {
+  for (const src of srcs) {
+    if (cancelled || prog.cancelled) { cancelled = true; break; }
+    await pauseGate();
+    const base = path.basename(src);
+    let target = path.join(destDir, base);
+    // nautilus semantics: paste-in-place never asks, it just makes "name (copy)"
+    if (target === src && op === "copy") { target = uniqueTarget(destDir, base); }
+    else if (target === src) { skipped++; continue; }
+    else if (existsSync(target)) {
+      const done = ok + skipped;
+      const choice = conflictPolicy ?? await promptConflict(target, Math.max(0, total - done - 1));
+      if (choice === "skip") { skipped++; continue; }
+      if (choice === "keepBoth") target = uniqueTarget(destDir, base);
+      else {
+        // stash the victim in the trash so ctrl+z can bring it back
+        try {
+          const victimDest = target;
+          const trashLoc = await xdgTrashMove(victimDest);
+          units.push(async () => {
+            await fsMove(trashLoc, victimDest);
+            try { await rm(path.join(TRASH_DIR, "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
+          });
+          replaced++;
+        } catch {}
+      }
+    }
+    try {
+      if (op === "copy") await copyTreeProgress(src, target);
+      else await fsMove(src, target);
+      const t = target, s = src;
+      if (op === "copy") units.push(() => rm(t, { recursive: true }));
+      else units.push(() => mkdir(path.dirname(s), { recursive: true }).then(() => fsMove(t, s)));
+      ok++;
+    } catch {
+      // don't leave half-copied files behind
+      if (op === "copy") { try { await rm(target, { recursive: true }); } catch {} }
+      if (prog.cancelled) { cancelled = true; break; }
+    }
+  }
+  } finally {
+    prog.active = false;
+  }
+  pushUndoBatch(label, units);
+  renderAll();
+  const bits = [`${op === "copy" ? "Copied" : "Moved"} ${ok} item${ok === 1 ? "" : "s"}`];
+  if (replaced) bits.push(`${replaced} replaced`);
+  if (skipped) bits.push(`${skipped} skipped`);
+  if (ok || replaced) bits.push("ctrl+z to undo");
+  setStatusMsg(bits.join(" · "));
+  if (prog.toastUp) {
+    finishProgressToast(cancelled ? "✗ Copy cancelled" : `✓ Copied ${ok} item${ok === 1 ? "" : "s"}`);
+  } else if (ok > 0 && Date.now() - startedAt > 4000 && op === "copy") {
+    // no progress toast was shown — use the regular notification
+    notify(`${bits[0]} to ~/${path.relative(home, destDir) || "/"}`, "tfm copy done");
+  }
+}
+
+// rename with nautilus-style collision handling: rename() would otherwise
+// silently overwrite the existing file
+const performRename = async (p: string, v: string): Promise<void> => {
+  const dest = path.join(path.dirname(p), v);
+  if (path.resolve(dest) === path.resolve(p)) { renderAll(); return; }
+  let finalDest = dest;
+  const units: UndoUnit[] = [];
+  if (existsSync(finalDest)) {
+    conflictPolicy = null;
+    const choice = await promptConflict(finalDest, 0);
+    if (choice === "skip") return;
+    if (choice === "keepBoth") {
+      finalDest = uniqueTarget(path.dirname(finalDest), path.basename(finalDest));
+    } else {
+      try {
+        const victim = finalDest;
+        const trashLoc = await xdgTrashMove(victim);
+        units.push(async () => {
+          await fsMove(trashLoc, victim);
+          try { await rm(path.join(TRASH_DIR, "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
+        });
+      } catch {}
+    }
+  }
+  try {
+    await fsRename(p, finalDest);
+    units.push(() => fsRename(finalDest, p));
+    pushUndoBatch("rename", units);
+    renderAll();
+    setStatusMsg(`Renamed to ${path.basename(finalDest)} · ctrl+z to undo`);
+  } catch {
+    setStatusMsg("Rename failed");
+  }
+};
+
 const setClipboard = (mode: "copy" | "cut", items: ClipItem[]) => {
   clipboard = items.length ? { mode, items } : null;
   if (clipboard) toSystemClipboard(mode, items);
@@ -1345,20 +1987,7 @@ const pasteSmart = (dest: string): void => {
           return u;
         });
       if (!paths.length) { dlog("paste: no file:// uris in system clip"); return; }
-      void (async () => {
-        let ok = 0;
-        for (const src of paths) {
-          let target = path.join(dest, path.basename(src));
-          if (existsSync(target)) target = uniqueTarget(dest, path.basename(src));
-          try {
-            if (op === "move") await fsMove(src, target);
-            else await cp(src, target, { recursive: true });
-            ok++;
-          } catch {}
-        }
-        renderAll();
-        setStatusMsg(`${op === "move" ? "Moved" : "Pasted"} ${ok} item${ok === 1 ? "" : "s"} from clipboard`);
-      })();
+      void runTransfer(op === "move" ? "move" : "copy", dest, paths, "system-clipboard paste");
     })
     .catch((err) => { dlog(`paste: system clipboard read failed: ${err}`); });
 };
@@ -1385,23 +2014,10 @@ const fsMove = async (src: string, dest: string): Promise<void> => {
 
 const doPaste = async (dest: string): Promise<void> => {
   if (!clipboard || clipboard.items.length === 0) return;
-  const mode = clipboard.mode;
-  const items = clipboard.items;
+  const mode = clipboard.mode === "copy" ? "copy" : "move";
+  const srcs = clipboard.items.map((i) => i.path);
   clipboard = null;
-  let ok = 0;
-  for (const it of items) {
-    const targetBase = path.basename(it.path);
-    let target = path.join(dest, targetBase);
-    if (target === it.path && mode === "copy") target = uniqueTarget(dest, targetBase);
-    else if (existsSync(target)) target = uniqueTarget(dest, targetBase);
-    try {
-      if (mode === "copy") await cp(it.path, target, { recursive: true });
-      else await fsMove(it.path, target);
-      ok++;
-    } catch {}
-  }
-  renderAll();
-  setStatusMsg(`${mode === "cut" ? "Moved" : "Copied"} ${ok} item${ok === 1 ? "" : "s"}`);
+  await runTransfer(mode, dest, srcs, mode === "copy" ? "paste" : "paste (move)");
 };
 
 // --- drag-to-move (press tile → drag → drop on folder tile or sidebar place) ---
@@ -1450,18 +2066,13 @@ const finishDragState = (): void => {
 const scheduleDragCleanup = (): void => { setTimeout(finishDragState, 0); };
 
 const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
-  let ok = 0;
-  for (const it of items) {
-    if (it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))) continue;
-    const target = path.join(destDir, path.basename(it.path));
-    if (existsSync(target)) continue;
-    try { await fsMove(it.path, target); ok++; } catch {}
-  }
-  renderAll();
-  setStatusMsg(`Moved ${ok} item${ok === 1 ? "" : "s"}`);
+  const srcs = items
+    .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
+    .map((it) => it.path);
+  await runTransfer("move", destDir, srcs, `move to ${path.basename(destDir) || "/"}`);
 };
 
-const xdgTrashMove = async (p: string): Promise<void> => {
+const xdgTrashMove = async (p: string): Promise<string> => {
   const trashDir = path.join(home, ".local/share/Trash");
   const filesDir = path.join(trashDir, "files");
   const infoDir = path.join(trashDir, "info");
@@ -1472,19 +2083,28 @@ const xdgTrashMove = async (p: string): Promise<void> => {
   for (let i = 2; existsSync(path.join(filesDir, name)); i++) name = `${base}.${i}`;
   const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   await writeFile(path.join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${p}\nDeletionDate=${stamp}\n`);
-  await fsMove(p, path.join(filesDir, name));
+  const finalPath = path.join(filesDir, name);
+  await fsMove(p, finalPath);
+  return finalPath;
 };
+
+const gioTrash = (p: string): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    const proc = spawn("gio", ["trash", p], { stdio: "ignore" });
+    proc.on("close", (c) => (c === 0 ? resolve() : reject(new Error(`gio ${c}`))));
+    proc.on("error", reject);
+  });
 
 const trashPaths = (paths: string[]): void => {
   void (async () => {
+    const filesDir = path.join(home, ".local/share/Trash/files");
+    let before = new Set<string>();
+    try { before = new Set(await readdir(filesDir)); } catch {}
+    const units: UndoUnit[] = [];
     let ok = 0;
     for (const p of paths) {
       try {
-        await new Promise<void>((resolve, reject) => {
-          const proc = spawn("gio", ["trash", p], { stdio: "ignore" });
-          proc.on("close", (c) => (c === 0 ? resolve() : reject(new Error(`gio ${c}`))));
-          proc.on("error", reject);
-        });
+        await gioTrash(p);
         ok++;
       } catch {
         try {
@@ -1493,8 +2113,30 @@ const trashPaths = (paths: string[]): void => {
         } catch {}
       }
     }
+    // figure out where the trashed items landed so ctrl+z can move them back
+    if (ok > 0 && paths.length) {
+      try {
+        const after = new Set(await readdir(filesDir));
+        const fresh = [...after].filter((n) => !before.has(n));
+        const claimed = new Set<string>();
+        for (const p of paths) {
+          const base = path.basename(p);
+          const hit = fresh.find((n) => !claimed.has(n) && (n === base || n.startsWith(`${base}.`)));
+          if (!hit) continue;
+          claimed.add(hit);
+          const from = path.join(filesDir, hit);
+          const to = p;
+          units.push(async () => {
+            await mkdir(path.dirname(to), { recursive: true });
+            await fsMove(from, to);
+            try { await rm(path.join(TRASH_DIR, "info", `${hit}.trashinfo`)); } catch {}
+          });
+        }
+      } catch {}
+    }
+    pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units);
     renderAll();
-    if (paths.length) setStatusMsg(ok === paths.length ? `Trashed ${ok} item${ok === 1 ? "" : "s"}` : `Trashed ${ok}/${paths.length}`);
+    if (paths.length) setStatusMsg(ok === paths.length ? `Trashed ${ok} item${ok === 1 ? "" : "s"} · ctrl+z to undo` : `Trashed ${ok}/${paths.length}`);
   })();
 };
 
@@ -1885,7 +2527,13 @@ const renderGrid = async () => {
       },
       makeIconSlot("folder", [{ fg: colors.sidebarFgMuted, bg: colors.bg }], iconCells).el,
       Box({ height: 1 }),
-      Text({ content: q ? "no matches" : "this folder is empty", fg: colors.sidebarFgMuted }),
+      Text({
+        content: q ? "no matches"
+          : state.cwd === RECENT_URI ? "no recent files"
+          : state.cwd === STARRED_URI ? "nothing starred yet"
+          : "this folder is empty",
+        fg: colors.sidebarFgMuted,
+      }),
     );
     scroller.content.add(emptyState);
     void drainIconQueue();
@@ -1899,7 +2547,7 @@ const renderGrid = async () => {
   const cols = Math.max(1, Math.floor((renderer.terminalWidth - sw - reservedRight - 3) / TILE_W));
 
   const buildTile = (e: Entry, idx: number) => {
-    const key = path.join(state.cwd, e.name);
+    const key = e.abs ?? path.join(state.cwd, e.name);
     let lastClick = 0;
     const tileId = `tfm-tile-${tileSeq++}`;
     const labelId = `${tileId}-label`;
@@ -1931,7 +2579,7 @@ const renderGrid = async () => {
         const now = Date.now();
         if (now - lastClick < config.ui.doubleClickMs) {
           if (e.isDir) navigate(key);
-          else spawn("xdg-open", [key], { stdio: "ignore", detached: true }).unref?.();
+          else openFileDefault(key);
           lastClick = 0;
           return;
         }
@@ -2098,6 +2746,25 @@ const renderGrid = async () => {
   updateSelectionStatusReal();
 };
 
+// clickable "esc" hint shared by floating UIs (prompt/props/menu)
+const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => {
+  const setFg = (fg: string) => {
+    const n: any = renderer.root.findDescendantById(`${id}-t`);
+    if (n) { try { n.fg = fg; } catch {} }
+  };
+  return Box(
+    {
+      id,
+      width: 4,
+      height: 1,
+      onMouseDown: () => onClose(),
+      onMouseOver: () => setFg(colors.white),
+      onMouseOut: () => setFg(colors.sidebarFgMuted),
+    },
+    Text({ id: `${id}-t`, content: "esc ", fg: colors.sidebarFgMuted }),
+  );
+};
+
 // --- Prompt modal (rename / new folder) ---
 let promptOpen = false;
 
@@ -2138,7 +2805,7 @@ const openPrompt = (title: string, initial: string, onSubmit: (value: string) =>
         { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 1, paddingRight: 1 },
         Text({ content: ` ${title}`.slice(0, MENU_W - 7), fg: colors.accent }),
         Box({ flexGrow: 1 }),
-        Text({ content: "esc ", fg: colors.sidebarFgMuted }),
+        escHintBtn("tfm-esc-prompt", closePrompt),
       ),
       Box(
         { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
@@ -2222,11 +2889,34 @@ const openProperties = (targetPath: string): void => {
   const panel: any = renderer.root.findDescendantById("tfm-props-panel");
   if (!panel) return;
 
+  const starSlot = makeIconSlot("star", [
+    { fg: colors.sidebarFgMuted, bg: colors.sidebarBg },
+    { fg: colors.accent, bg: colors.sidebarBg },
+  ], 1, 0, () => {
+    starred = !starred;
+    setIconState(starSlot.spec, starred ? 1 : 0);
+    if (starred) starredRegistryAdd(targetPath);
+    else starredRegistryRemove(targetPath);
+    void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""]).catch(() => {});
+  });
+  let starred = readStarredList().includes(targetPath);
+  if (starred) setIconState(starSlot.spec, 1);
+  void execFileP("gio", ["info", "-a", "metadata::starred", targetPath]).then(
+    ({ stdout }) => {
+      const m = stdout.match(/metadata::starred:\s*(\S+)/);
+      const gioStarred = !!m && m[1] !== "";
+      if (gioStarred && !starred) {
+        starred = true;
+        starredRegistryAdd(targetPath); // adopt stars made outside tfm
+      }
+      setIconState(starSlot.spec, starred ? 1 : 0);
+    },
+  ).catch(() => {});
   panel.add(Box(
-    { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 1, paddingRight: 1 },
-    Text({ content: ` ${path.basename(targetPath).slice(0, PROPS_W - 10)}${isDirTarget ? "/" : ""}`, fg: colors.white }),
+    { width: "100%", height: 1, flexDirection: "row", alignItems: "center" },
+    Box({ paddingLeft: 1 }, starSlot.el),
     Box({ flexGrow: 1 }),
-    Text({ content: "esc ", fg: colors.sidebarFgMuted }),
+    escHintBtn("tfm-esc-props", closeProps),
   ));
 
   // hero: big category icon below the title, or the actual picture for images
@@ -2258,6 +2948,18 @@ const openProperties = (targetPath: string): void => {
     heroEl,
   ));
   panel.add(Box(
+    { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
+    Text({ content: path.basename(targetPath).slice(0, PROPS_W - 4), fg: colors.white }),
+  ));
+  panel.add(Box(
+    { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
+    Text({
+      id: "tfm-props-size",
+      content: isDirTarget ? "calculating…" : `${fmtBytes(st.size ?? 0)} (${st.size ?? 0} bytes)`,
+      fg: colors.accent,
+    }),
+  ));
+  panel.add(Box(
     { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
     Text({ content: " " + "~".repeat(PROPS_W - 2), fg: colors.divider }),
   ));
@@ -2268,7 +2970,6 @@ const openProperties = (targetPath: string): void => {
       Text({ ...(id ? { id } : {}), content: String(value).slice(0, PROPS_W - 14), fg: colors.sidebarFg }));
 
   if (isDirTarget) {
-    panel.add(row("size", "calculating…", "tfm-props-size"));
     void dirWalkStats(targetPath).then((s) => {
       if (!propsOpen || !s) {
         if (propsOpen) {
@@ -2280,8 +2981,6 @@ const openProperties = (targetPath: string): void => {
       const n: any = renderer.root.findDescendantById("tfm-props-size");
       if (n) { try { n.content = `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`; } catch {} }
     });
-  } else {
-    panel.add(row("size", `${fmtBytes(st.size ?? 0)} (${st.size ?? 0} bytes)`));
   }
   panel.add(row("type", isDirTarget ? "inode/directory" : mimeLabelFor(targetPath)));
   panel.add(row("location", path.dirname(targetPath).replace(home, "~").slice(0, PROPS_W - 14)));
@@ -2379,13 +3078,13 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
     const targets: ClipItem[] = inSel && selPaths().length > 1 ? selPaths() : [{ path: targetPath, isDir }];
     entries.push(
       { icon: "folder", label: `Restore${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); restoreFromTrash(targets.map((t) => t.path)); } },
-      { icon: "eye", label: "Open", action: () => { closeFileMenu(); spawn("xdg-open", [targetPath], { stdio: "ignore", detached: true }).unref?.(); } },
+      { icon: "eye", label: "Open", action: () => { closeFileMenu(); openFileDefault(targetPath); } },
       { icon: "trash-can", label: `Delete permanently`, action: () => { closeFileMenu(); deleteForever(targets.map((t) => t.path)); } },
     );
     return entries;
   }
   if (isDir) entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(targetPath); } });
-  else entries.push({ icon: "eye", label: "Open", action: () => { closeFileMenu(); spawn("xdg-open", [targetPath], { stdio: "ignore", detached: true }).unref?.(); } });
+  else entries.push({ icon: "eye", label: "Open", action: () => { closeFileMenu(); openFileDefault(targetPath); } });
   // actions apply to the whole live selection when the right-clicked tile is
   // part of it (Nautilus behavior), otherwise just this tile
   const inSel = !!tileRefsByKey.get(targetPath)?.selected;
@@ -2396,10 +3095,7 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
     { icon: "pencil", label: "Rename…", action: () => {
         closeFileMenu();
         openPrompt("rename", path.basename(targetPath), (v) => {
-          const dest = path.join(path.dirname(targetPath), v);
-          fsRename(targetPath, dest)
-            .then(() => { renderAll(); setStatusMsg("Renamed"); })
-            .catch(() => setStatusMsg("Rename failed"));
+          void performRename(targetPath, v);
         });
       } },
     { icon: "trash-can", label: `Trash${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); trashPaths(targets.map((t) => t.path)); } },
@@ -2421,23 +3117,36 @@ const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
   if (inTrashView()) {
     entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(x, y); } });
   }
+  if (isVirtualCwd()) {
+    // read-only virtual views: nothing to paste or create here
+    entries.push(
+      { icon: "select-all", label: "Select all", action: () => {
+        closeFileMenu();
+        tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
+        updateSelectionStatusReal();
+      } },
+    );
+    return entries;
+  }
   entries.push(
+    { icon: "file", label: "New File", action: () => { closeFileMenu(); openPrompt("new file", "Untitled.txt", (v) => {
+        const p = path.join(state.cwd, v);
+        writeFile(p, "")
+          .then(() => { pushUndoBatch("new file", [() => rm(p, { recursive: true })]); renderAll(); })
+          .catch(() => setStatusMsg("Create failed"));
+      }); } },
+    { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); openPrompt("new folder", "Untitled folder", (v) => {
+        const p = path.join(state.cwd, v);
+        mkdir(p, { recursive: true })
+          .then(() => { pushUndoBatch("new folder", [() => rm(p, { recursive: true })]); renderAll(); })
+          .catch(() => setStatusMsg("Create failed"));
+      }); } },
     { icon: "select-all", label: "Select all", action: () => {
       closeFileMenu();
       tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
       updateSelectionStatusReal();
     } },
-  { icon: "content-copy", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); pasteSmart(state.cwd); } },
-  { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); openPrompt("new folder", "Untitled folder", (v) => {
-      mkdir(path.join(state.cwd, v), { recursive: true })
-        .then(() => renderAll())
-        .catch(() => setStatusMsg("Create failed"));
-    }); } },
-  { icon: "file", label: "New File", action: () => { closeFileMenu(); openPrompt("new file", "Untitled.txt", (v) => {
-      writeFile(path.join(state.cwd, v), "")
-        .then(() => renderAll())
-        .catch(() => setStatusMsg("Create failed"));
-    }); } },
+    { icon: "content-paste", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); pasteSmart(state.cwd); } },
     { icon: "information", label: "Properties…", action: () => { closeFileMenu(); openProperties(state.cwd); } },
   );
   return entries;
@@ -2605,7 +3314,7 @@ const renderMenuContent = () => {
     { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
     Text({ content: isSettings ? "Menu — settings" : "Menu", fg: colors.accent }),
     Box({ flexGrow: 1 }),
-    Text({ content: "esc ", fg: colors.sidebarFgMuted }),
+    escHintBtn("tfm-esc-menu", closeMenu),
   ));
   panel.add(Box(
     { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
@@ -2828,6 +3537,11 @@ let watchedDir: string | null = null;
 let cwdWatchTimer: any = null;
 
 const syncCwdWatcher = (): void => {
+  if (isVirtualCwd()) {
+    if (cwdWatcher) { try { cwdWatcher.close(); } catch {} cwdWatcher = null; }
+    watchedDir = null;
+    return;
+  }
   const dir = path.resolve(state.cwd);
   if (watchedDir === dir) return;
   watchedDir = dir;
@@ -3208,24 +3922,16 @@ const finishOsc72Drop = async (idx: number): Promise<void> => {
   osc72Write(`\x1b]72;t=r:o=1\x1b\\`, `finish drop idx=${idx}`);
   dlog(`drop complete, uri-list bytes=${b64 ? Buffer.from(b64, "base64").length : 0}`);
   if (!b64) return;
+  if (isVirtualCwd()) {
+    setStatusMsg("Drops land in a real folder");
+    return;
+  }
   const text = Buffer.from(b64, "base64").toString("utf8");
   let paths = uriListToPaths(text);
   // some sources deliver bare paths (text/plain) instead of file:// URIs
   if (!paths.length) paths = text.split(/\r?\n/).filter((l) => l.startsWith("/"));
   dlog(`paths: ${paths.join(" | ") || "(none)"}`);
-  let ok = 0;
-  for (const src of paths) {
-    let dest = path.join(state.cwd, path.basename(src));
-    if (existsSync(dest)) {
-      try { dest = uniqueTarget(state.cwd, path.basename(src)); } catch { continue; }
-    }
-    try { await cp(src, dest, { recursive: true }); ok++; } catch (err) { dlog(`cp failed ${src}: ${err}`); }
-  }
-  renderAll();
-  if (paths.length) {
-    setStatusMsg(`Copied ${ok}/${paths.length} dropped item${paths.length === 1 ? "" : "s"}`);
-    notify(`Dropped ${ok} item${ok === 1 ? "" : "s"} into ${path.basename(state.cwd) || "/"}`, "drag & drop");
-  }
+  if (paths.length) await runTransfer("copy", state.cwd, paths, "drop");
 };
 
 const handleOsc72 = (meta: string, payload: string): void => {
@@ -3347,6 +4053,12 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   if (promptOpen) return;
 
+  // override/conflict modal: esc = skip, everything else swallowed (mouse-driven)
+  if (conflictOpen) {
+    if (e.name === "escape") closeConflict("skip");
+    return;
+  }
+
   // floating properties dialog: esc/enter closes, everything else swallowed
   if (propsOpen) {
     if (e.name === "escape" || e.name === "return") closeProps();
@@ -3427,7 +4139,10 @@ renderer.keyInput.on("keypress", (e: any) => {
         closeFileMenu();
         sidebarActive = false;
         placeIdx = -1;
-        if (rec.place.path) navigate(rec.place.path);
+        const target = rec.place.scheme === "recent" ? RECENT_URI
+          : rec.place.scheme === "starred" ? STARRED_URI
+          : rec.place.path;
+        if (target) navigate(target);
         else if (rec.place.mountDevice) mountDevice(rec.place.mountDevice);
       }
       return;
@@ -3459,7 +4174,7 @@ renderer.keyInput.on("keypress", (e: any) => {
     const refs = key !== undefined ? tileRefsByKey.get(key) : undefined;
     if (key && refs) {
       if (refs.isDir) navigate(key);
-      else spawn("xdg-open", [key], { stdio: "ignore", detached: true }).unref?.();
+      else openFileDefault(key);
     }
     return;
   }
@@ -3505,9 +4220,7 @@ renderer.keyInput.on("keypress", (e: any) => {
     }
     const p = selected[0].path;
     openPrompt("rename", path.basename(p), (v) => {
-      fsRename(p, path.join(path.dirname(p), v))
-        .then(() => { renderAll(); setStatusMsg("Renamed"); })
-        .catch(() => setStatusMsg("Rename failed"));
+      void performRename(p, v);
     });
     return;
   }
@@ -3519,8 +4232,12 @@ renderer.keyInput.on("keypress", (e: any) => {
     setClipboard("cut", selected);
     return;
   }
-  if (ctrl && (e.name === "v" || e.unicode === "v")) {
+  if (ctrl && (e.name === "v" || e.unicode === "v") && !isVirtualCwd()) {
     pasteSmart(state.cwd);
+    return;
+  }
+  if (ctrl && (e.name === "z" || e.unicode === "z")) {
+    undoLast();
     return;
   }
 });
