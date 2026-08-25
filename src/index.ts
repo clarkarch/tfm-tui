@@ -1,4 +1,5 @@
-import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
+import { InputBarRenderable } from "./inputbar";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, createReadStream, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
@@ -304,6 +305,7 @@ const navigate = (dir: string) => {
 };
 
 let searchQuery = "";
+let searchDebounceTimer: any = null;
 
 const clearSearch = () => {
   searchQuery = "";
@@ -317,7 +319,7 @@ const clearSearch = () => {
 // the search box seeded with that char instead of doing legacy jump-ahead
 const beginTypeToSearch = (ch: string): void => {
   if (termHasFocus()) return; // shell owns the keyboard — never hijack into search
-  const el: any = renderer.root.findDescendantById("tfm-search");
+  const el: any = ensureSearchBar();
   if (!el) return;
   el.visible = true;
   el.value = ch;
@@ -722,31 +724,24 @@ const renderCrumbs = () => {
     if (!input) {
       // real class instance: proxied composition nodes don't mount under an
       // already-mounted parent
-      input = new InputRenderable(renderer, {
+      input = new InputBarRenderable(renderer, {
         id: "tfm-path-input",
         flexGrow: 1,
         value: isVirtualCwd() ? state.cwd : path.resolve(state.cwd),
         backgroundColor: colors.accentBg,
         focusedBackgroundColor: colors.accentBg,
         textColor: colors.white,
+        clipboardRead: readTextClipboard,
+        onCopy: copyTextClipboard,
+        onSubmit: (v: string) => {
+          const target = String(v ?? "").replace(/^~(?=\/|$)/, home);
+          pathEditMode = false;
+          renderCrumbs();
+          navigate(target);
+        },
+        onCancel: () => exitPathEdit(),
       });
       box.add(input);
-      input.on?.("enter", () => {
-        const target = String((input as any).value ?? "").replace(/^~(?=\/|$)/, home);
-        pathEditMode = false;
-        renderCrumbs();
-        navigate(target);
-      });
-      // focused editors can consume keys before the global handler; intercept
-      // escape at the source so it always cancels
-      const prevHandler = input.handleKeyPress?.bind(input);
-      input.handleKeyPress = (key: any) => {
-        if (key?.name === "escape") {
-          exitPathEdit();
-          return true;
-        }
-        return prevHandler ? prevHandler(key) : false;
-      };
     } else {
       try { input.value = isVirtualCwd() ? state.cwd : path.resolve(state.cwd); } catch {}
     }
@@ -853,30 +848,52 @@ const hoverBtn = (
   );
 };
 
-const makeSearch = () => {
-  const wrap = Box({ id: "tfm-search-wrap", height: 1, flexDirection: "row" });
+// the real bar mounts lazily — makeSearch runs before `renderer` exists
+let searchBar: InputBarRenderable | null = null;
+let searchHost: ReturnType<typeof Box> | null = null;
 
-  const input = Input({
+const ensureSearchBar = (): InputBarRenderable | null => {
+  if (searchBar) return searchBar;
+  if (!renderer || !searchHost) { dlog("ensuresb: no renderer/host"); return null; }
+  // attach to the LIVE node — adding to the pre-renderer proxy is lost on mount
+  const liveHost: any = renderer.root.findDescendantById("tfm-search-host");
+  if (!liveHost) { dlog("ensuresb: no live host"); return null; }
+  searchBar = new InputBarRenderable(renderer, {
     id: "tfm-search",
-    width: 16,
+    width: "100%",
     visible: false,
     placeholder: "Search",
     backgroundColor: colors.accentBg,
     focusedBackgroundColor: colors.accentBg,
     textColor: colors.white,
+    clipboardRead: readTextClipboard,
+    onCopy: copyTextClipboard,
+    onChange: (v: string) => {
+      searchQuery = v;
+      if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(() => { searchDebounceTimer = null; void renderGrid(); }, 150);
+    },
   });
+  liveHost.add(searchBar as any);
+  return searchBar;
+};
+
+const makeSearch = () => {
+  const wrap = Box({ id: "tfm-search-wrap", height: 1, flexDirection: "row" });
+
+  searchHost = Box({ id: "tfm-search-host", width: 16, height: 1 });
 
   wrap.add(
     hoverBtn("tfm-search-btn", "search", () => {
       closeFileMenu();
       blurTerminal();
-      const el: any = renderer.root.findDescendantById("tfm-search");
+      const el: any = ensureSearchBar();
       if (!el) return;
       el.visible = !el.visible;
       if (el.visible) el.focus();
     }),
   );
-  wrap.add(input);
+  wrap.add(searchHost!);
   return wrap;
 };
 
@@ -1647,23 +1664,21 @@ const startInlineRename = (key: string): void => {
   const inputId = `tfm-rename-input`;
   const stale = renderer.root.findDescendantById(inputId);
   if (stale) { try { (stale as any).parent?.remove(stale); } catch {} }
-  const input: any = new InputRenderable(renderer, {
+  const input: any = new InputBarRenderable(renderer, {
     id: inputId,
     width: TILE_W - 2,
     value: path.basename(key),
     backgroundColor: colors.hoverBg,
     focusedBackgroundColor: colors.accentBg,
     textColor: colors.white,
+    clipboardRead: readTextClipboard,
+    onCopy: copyTextClipboard,
+    onSubmit: () => finishInlineRename(true),
+    onCancel: () => finishInlineRename(false),
   });
   try { tile.insertBefore(input, label); } catch { tile.add(input); }
   try { tile.remove(label); } catch {}
   renameEdit = { key, inputId };
-  input.on?.("enter", () => finishInlineRename(true));
-  const prevHandler = input.handleKeyPress?.bind(input);
-  input.handleKeyPress = (k: any) => {
-    if (k?.name === "escape") { finishInlineRename(false); return true; }
-    return prevHandler ? prevHandler(k) : false;
-  };
   setTimeout(() => { try { input.focus(); } catch {} }, 20);
   stripSelectable();
 };
@@ -2276,6 +2291,20 @@ const setClipboard = (mode: "copy" | "cut", items: ClipItem[]) => {
 // `x-special/gnome-copied-files`: first line = "copy"|"cut", then one
 // file:// URI per line. wl-copy/xclip let us publish the same thing.
 const CLIP_TYPE = "x-special/gnome-copied-files";
+
+// plain-text clipboard bridge for input bars (ctrl+c/x/v)
+const readTextClipboard = (): Promise<string | null> => {
+  if (process.env.WAYLAND_DISPLAY) return execFileP("wl-paste", ["-n"]).then((r) => r.stdout ?? null).catch(() => null);
+  if (process.env.DISPLAY) return execFileP("xclip", ["-selection", "clipboard", "-o"]).then((r) => r.stdout ?? null).catch(() => null);
+  return Promise.resolve(null);
+};
+
+const copyTextClipboard = (text: string): void => {
+  try {
+    if (process.env.WAYLAND_DISPLAY) spawn("wl-copy", [], { stdio: ["pipe", "ignore", "ignore"] }).stdin?.end(text);
+    else if (process.env.DISPLAY) spawn("xclip", ["-selection", "clipboard", "-i"], { stdio: ["pipe", "ignore", "ignore"] }).stdin?.end(text);
+  } catch {}
+};
 
 const sysClipTool = (): { get: string; put: string; putBase: string[]; getArgs: string[] } | null => {
   if (process.env.WAYLAND_DISPLAY) {
@@ -3436,26 +3465,23 @@ const openPrompt = (title: string, initial: string, onSubmit: (value: string) =>
   renderer.root.add(scrim);
 
   const panel: any = renderer.root.findDescendantById("tfm-prompt-panel");
-  const input = new InputRenderable(renderer, {
+  const input: any = new InputBarRenderable(renderer, {
     id: "tfm-prompt-input",
     flexGrow: 1,
     value: initial,
     backgroundColor: colors.accentBg,
     focusedBackgroundColor: colors.accentBg,
     textColor: colors.white,
+    clipboardRead: readTextClipboard,
+    onCopy: copyTextClipboard,
+    onSubmit: (v: string) => {
+      const t = String(v ?? "").trim();
+      closePrompt();
+      if (t) onSubmit(t);
+    },
+    onCancel: () => closePrompt(),
   });
   panel.add(input);
-  const prevHandler = input.handleKeyPress?.bind(input);
-  input.handleKeyPress = (key: any) => {
-    if (key?.name === "escape") { closePrompt(); return true; }
-    if (key?.name === "return") {
-      const v = String((input as any).value ?? "").trim();
-      closePrompt();
-      if (v) onSubmit(v);
-      return true;
-    }
-    return prevHandler ? prevHandler(key) : false;
-  };
   setTimeout(() => { try { input.focus(); } catch {} }, 20);
   stripSelectable();
 };
@@ -4420,17 +4446,7 @@ const boot = async () => {
   await loadSystemPlaces();
   renderAll();
 
-  const inputEl: any = renderer.root.findDescendantById("tfm-search");
-  if (inputEl?.on) {
-    let searchTimer: any = null;
-    inputEl.on("input", () => {
-      try { searchQuery = String(inputEl.value ?? ""); } catch {}
-      if (searchTimer) clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => { searchTimer = null; void renderGrid(); }, 150);
-    });
-    // enter/escape semantics live in the global key handler (enter commits
-    // into the first match; escape cancels) — no listener here by design
-  }
+  void 0; // search onChange lives on the InputBarRenderable constructor now
 };
 boot();
 
@@ -4471,9 +4487,8 @@ const rethemeChrome = (): void => {
   refreshNav();
   for (const id of ["tfm-search", "tfm-path-input", "tfm-prompt-input"]) {
     setOnId(id, (n) => {
-      n.backgroundColor = colors.accentBg;
-      n.focusedBackgroundColor = colors.accentBg;
-      n.textColor = colors.white;
+      if (typeof n.applyColors === "function") n.applyColors({ bg: colors.accentBg, focusedBg: colors.accentBg, fg: colors.white });
+      else { n.backgroundColor = colors.accentBg; n.focusedBackgroundColor = colors.accentBg; n.textColor = colors.white; }
     });
   }
   if (menuOpen) {
