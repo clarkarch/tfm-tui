@@ -1,6 +1,6 @@
 # tfm — terminal file manager
 
-Mouse-first file manager for the terminal. Nautilus-style places sidebar, grid view, drag-and-drop, image thumbnails, syntax-highlighted previews.
+A modern, mouse-first file manager for the terminal — places sidebar, grid view, drag-and-drop, image thumbnails, syntax-highlighted previews.
 
 ![alpha](https://img.shields.io/badge/status-alpha-red)
 
