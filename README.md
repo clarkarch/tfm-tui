@@ -47,6 +47,14 @@ Dev: `bun dev`.
 
 `~/.config/tfm/config.toml` — see [`config.example.toml`](config.example.toml). Themes, tile size, session restore, glyph-only icon mode.
 
+## Limitations
+
+- Linux only; no macOS/Windows support
+- Image thumbnails need a kitty-graphics-protocol terminal (kitty, ghostty); others fall back to Nerd Font glyphs
+- tmux hides rasters unless `allow-passthrough` is on; icons render but won't display images
+- Cross-device moves are copy+delete (no atomic rename across filesystems)
+- Single pane — no tabs or split view yet
+
 ## Status
 
 Alpha, single maintainer, kitty/Wayland tested. Expect rough edges — bug reports welcome.
