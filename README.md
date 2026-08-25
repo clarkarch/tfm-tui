@@ -1,4 +1,4 @@
-# tfm — terminal file manager
+# tfm (terminal file manager)
 
 A modern, mouse-first file manager for the terminal — places sidebar, grid view, drag-and-drop, image thumbnails, syntax-highlighted previews.
 
