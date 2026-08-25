@@ -316,6 +316,7 @@ const clearSearch = () => {
 // nautilus-style type-to-search: a printable char with the grid focused opens
 // the search box seeded with that char instead of doing legacy jump-ahead
 const beginTypeToSearch = (ch: string): void => {
+  if (termHasFocus()) return; // shell owns the keyboard — never hijack into search
   const el: any = renderer.root.findDescendantById("tfm-search");
   if (!el) return;
   el.visible = true;
@@ -2435,6 +2436,11 @@ const TERM_H = 12;
 let term: EmbeddedTerminalRenderable | null = null;
 let termChild: ReturnType<typeof Bun.spawn> | null = null;
 let termFocused = false;
+
+// the flag can lag reality (click-refocus inside the pane bypasses our focus()
+// call) — ask the renderer who owns the keyboard before acting on keys
+const termHasFocus = (): boolean =>
+  !!term && renderer.currentFocusedRenderable === (term as any);
 
 const blurTerminal = (): void => {
   if (!termFocused) return;
@@ -4889,7 +4895,7 @@ renderer.keyInput.on("keypress", (e: any) => {
 
   // embedded terminal owns the keyboard while focused — everything below is
   // host UI. Click the grid/sidebar (or ✕) to leave the shell.
-  if (termFocused) return;
+  if (termFocused || termHasFocus()) return;
 
   const el: any = renderer.root.findDescendantById("tfm-search");
   const pathInput: any = renderer.root.findDescendantById("tfm-path-input");
