@@ -4,6 +4,9 @@ Mouse-first file manager for the terminal. Nautilus-style places sidebar, grid v
 
 ![alpha](https://img.shields.io/badge/status-alpha-red)
 
+> [!WARNING]
+> tfm is alpha software built by a single dev. Destructive operations are trash-first and undoable, but bugs can still lose data. Don't point it at the only copy of anything you care about — yet.
+
 ## Features
 
 - **Mouse-first**: click, rubber-band select, drag-and-drop (in-app and out to other apps via kitty OSC 72), context menus, inline rename
@@ -54,9 +57,6 @@ Dev: `bun dev`.
 - tmux hides rasters unless `allow-passthrough` is on; icons render but won't display images
 - Cross-device moves are copy+delete (no atomic rename across filesystems)
 - Single pane — no tabs or split view yet
-
-> [!WARNING]
-> tfm is alpha software built by a single dev. Destructive operations are trash-first and undoable, but bugs can still lose data. Don't point it at the only copy of anything you care about — yet.
 
 ## License
 
