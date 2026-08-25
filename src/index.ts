@@ -3661,13 +3661,23 @@ const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number
   return entries;
 };
 
-const sortEntries = (): ListEntry[] => [
-  { label: `${state.sortBy === "name" ? "●" : "○"} Sort by Name`, action: () => { closeFileMenu(); state.sortBy = "name"; void renderGrid(); } },
-  { label: `${state.sortBy === "size" ? "●" : "○"} Sort by Size`, action: () => { closeFileMenu(); state.sortBy = "size"; void renderGrid(); } },
-  { label: `${state.sortBy === "mtime" ? "●" : "○"} Sort by Modified`, action: () => { closeFileMenu(); state.sortBy = "mtime"; void renderGrid(); } },
-  { label: `${state.sortBy === "type" ? "●" : "○"} Sort by Type`, action: () => { closeFileMenu(); state.sortBy = "type"; void renderGrid(); } },
-  { label: `${state.sortAsc ? "↑ Ascending" : "↓ Descending"} (toggle)`, action: () => { closeFileMenu(); state.sortAsc = !state.sortAsc; void renderGrid(); } },
-];
+const sortEntries = (): ListEntry[] => {
+  const arrow = state.sortAsc ? "↑" : "↓";
+  // nautilus convention: picking a different key sorts it in its natural
+  // direction; clicking the active key flips ascending/descending
+  const pick = (key: SortMode, naturalAsc: boolean): void => {
+    closeFileMenu();
+    if (state.sortBy === key) state.sortAsc = !state.sortAsc;
+    else { state.sortBy = key; state.sortAsc = naturalAsc; }
+    void renderGrid();
+  };
+  return [
+    { label: `${state.sortBy === "name" ? `${arrow} ` : "○  "}Name`, action: () => pick("name", true) },
+    { label: `${state.sortBy === "size" ? `${arrow} ` : "○  "}Size`, action: () => pick("size", false) },
+    { label: `${state.sortBy === "mtime" ? `${arrow} ` : "○  "}Modified`, action: () => pick("mtime", true) },
+    { label: `${state.sortBy === "type" ? `${arrow} ` : "○  "}Type`, action: () => pick("type", true) },
+  ];
+};
 
 const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
   const entries: ListEntry[] = [];
