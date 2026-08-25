@@ -3757,7 +3757,7 @@ const openProperties = (targetPath: string): void => {
 };
 
 // --- File context menu (right-click a tile) ---
-type ListEntry = { icon?: string; label: string; hint?: string; action: () => void };
+type ListEntry = { icon?: string; label: string; hint?: string; action: () => void; sep?: boolean };
 let fileMenuState: { idx: number; entries: ListEntry[] } | null = null;
 
 const closeFileMenu = () => {
@@ -3770,8 +3770,12 @@ const renderFileMenu = () => {
   const panel: any = renderer.root.findDescendantById("tfm-filemenu-panel");
   if (!panel || !fileMenuState) return;
   [...panel.getChildren()].forEach((c: any) => panel.remove(c));
-  const row = (entry: ListEntry, i: number) =>
-    Box(
+  const row = (entry: ListEntry, i: number) => {
+    if (entry.sep) {
+      // plain spacer row — no divider glyph
+      return Box({ width: "100%", height: 1 });
+    }
+    return Box(
       {
         width: "100%",
         height: 1,
@@ -3793,6 +3797,7 @@ const renderFileMenu = () => {
       Box({ flexGrow: 1 }),
       ...(entry.hint ? [Text({ content: entry.hint + " ", fg: colors.sidebarFgMuted })] : []),
     );
+  };
   panel.add(Box(
     { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
     Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
@@ -3905,7 +3910,6 @@ const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
     return entries;
   }
   entries.push(
-    { icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(); } },
     { icon: "file", label: "New File", action: () => { closeFileMenu(); openPrompt("new file", "Untitled.txt", (v) => {
         const p = path.join(state.cwd, v);
         writeFile(p, "")
@@ -3925,6 +3929,9 @@ const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
     } },
     { icon: "content-paste", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); pasteSmart(state.cwd); } },
     { icon: "information", label: "Properties…", action: () => { closeFileMenu(); openProperties(state.cwd); } },
+    // nautilus puts shell access in its own group at the bottom
+    { sep: true, label: "", action: () => {} },
+    { icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(); } },
   );
   return entries;
 };
@@ -4897,11 +4904,18 @@ renderer.keyInput.on("keypress", (e: any) => {
 
   // file context menu open: arrows/enter navigate it, esc closes
   if (fileMenuState) {
-    const count = fileMenuState.entries.length;
+    const entries = fileMenuState.entries;
+    const count = entries.length;
+    const step = (d: number) => {
+      let i = (fileMenuState!.idx + d + count) % count;
+      while (entries[i]?.sep) i = (i + d + count) % count;
+      fileMenuState!.idx = i;
+      renderFileMenu();
+    };
     if (e.name === "escape") closeFileMenu();
-    else if (e.name === "up") { fileMenuState.idx = (fileMenuState.idx - 1 + count) % count; renderFileMenu(); }
-    else if (e.name === "down") { fileMenuState.idx = (fileMenuState.idx + 1) % count; renderFileMenu(); }
-    else if (e.name === "return") fileMenuState.entries[fileMenuState.idx]?.action();
+    else if (e.name === "up") step(-1);
+    else if (e.name === "down") step(1);
+    else if (e.name === "return") entries[fileMenuState.idx]?.action();
     return;
   }
 

@@ -5,7 +5,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 ![alpha](https://img.shields.io/badge/status-alpha-red)
 
 > [!WARNING]
-> Experimental software — expect rough edges. Don't test on files you can't afford to lose.
+> Vibecoded experimental software — expect rough edges. Don't test on files you can't afford to lose.
 
 ## Features
 
