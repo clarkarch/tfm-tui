@@ -5,7 +5,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 ![alpha](https://img.shields.io/badge/status-alpha-red)
 
 > [!WARNING]
-> Vibecoded experimental software — expect rough edges. Don't test on files you can't afford to lose.
+> Experimental vibecoded software — expect rough edges. Don't test on files you can't afford to lose.
 
 > [!IMPORTANT]
 > This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
@@ -69,6 +69,7 @@ Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 - tmux hides rasters unless `allow-passthrough` is on; icons render but won't display images
 - Cross-device moves are copy+delete (no atomic rename across filesystems)
 - Drag & drop to/from other apps is kitty-only (OSC 72): ghostty does image thumbnails and in-app drag (`ctrl+drag`), but cross-app drag **won't** work there
+- Kitty config/theme files must not set an explicit `background` — a theme-provided background makes icons/thumbnails render as black boxes over dialog scrims. Leave `background` out of `kitty.conf`/theme includes; tfm sets its own background via OSC 11 anyway
 - Single pane — no tabs or split view yet
 
 ## License
