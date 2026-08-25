@@ -11,6 +11,28 @@ import { THEME_PRESETS, type ThemePreset } from "./themes";
 
 const execFileP = promisify(execFile);
 
+// --- Debug mode (--debug / -d): writes a single event log + crash dump to
+// /tmp/tfm-debug.log so testers paste one file instead of a screenshot. ---
+const isDebug = process.argv.includes("--debug") || process.argv.includes("-d");
+const DEBUG_LOG = "/tmp/tfm-debug.log";
+const appendLog = (msg: string): void => {
+  try { appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+};
+const debugLog = (msg: string): void => {
+  if (!isDebug) return;
+  appendLog(msg);
+};
+
+process.on("uncaughtException", (err) => {
+  appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
+  try { process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`); } catch {}
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  appendLog(`UNHANDLED REJECTION: ${reason instanceof Error ? reason.stack : String(reason)}`);
+});
+if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
+
 // --- Config (TOML at ~/.config/tfm/config.toml, TFM_CONFIG overrides path) ---
 const config = loadConfig();
 
@@ -277,6 +299,7 @@ const goBack = () => { if (canBack()) { state.histIdx--; renderAll(); } };
 const goFwd = () => { if (canFwd()) { state.histIdx++; renderAll(); } };
 
 const navigate = (dir: string) => {
+  debugLog(`navigate -> ${dir}`);
   pathEditMode = false;
   if (fileMenuState) closeFileMenu();
   if (dir === RECENT_URI || dir === STARRED_URI) {
@@ -328,7 +351,7 @@ const beginTypeToSearch = (ch: string): void => {
 
 // --- System places sources (Nautilus-style: nothing hardcoded) ---
 
-type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string; scheme?: "recent" | "starred" };
+type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string; scheme?: "recent" | "starred"; bookmarked?: boolean };
 
 type UserDir = { key: string; label: string; p: string };
 
@@ -487,7 +510,7 @@ function buildSections(): Place[][] {
 
   const dirs: Place[] = sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }));
 
-  const bookmarks: Place[] = sysBookmarks.map((b) => ({ icon: "bookmark", label: b.label, path: b.p, ejectable: false }));
+  const bookmarks: Place[] = sysBookmarks.map((b) => ({ icon: "bookmark", label: b.label, path: b.p, ejectable: false, bookmarked: true }));
 
   const devices: Place[] = [
     { icon: "harddisk", label: "This Device", path: "/", ejectable: false },
@@ -562,7 +585,12 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
       columnGap: 1,
       paddingLeft: 1,
       backgroundColor: selected ? colors.accentBg : colors.sidebarBg,
-      onMouseDown: () => {
+      onMouseDown: (ev: any) => {
+        if (ev.button === 2) {
+          closeFileMenu();
+          openContextMenu(ev.x, ev.y, place.label, sidebarEntriesFor(place, ev.x, ev.y));
+          return;
+        }
         blurTerminal();
         closeFileMenu();
         const target = placeTarget();
@@ -2489,12 +2517,12 @@ const closeTerminalPane = (): void => {
   renderAll();
 };
 
-const openTerminalHere = (): void => {
+const openTerminalHere = (dir?: string): void => {
   if (!renderer.resolution) return;
   if (term) { try { term.focus(); } catch {}; termFocused = true; return; }
   const host: any = renderer.root.findDescendantById("tfm-term-host");
   if (!host) return;
-  const cwd = isVirtualCwd() ? home : state.cwd;
+  const cwd = dir ?? (isVirtualCwd() ? home : state.cwd);
   host.height = TERM_H + 1;
   const header = Box(
     { id: "tfm-term-header", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, backgroundColor: colors.sidebarBg },
@@ -2692,18 +2720,93 @@ const emptyTrash = (): void => {
   })();
 };
 
-const confirmEmptyTrash = (x: number, y: number): void => {
-  openContextMenu(x, y, "", [
-    { label: "cancel", action: () => closeFileMenu() },
-    { label: "EMPTY TRASH", action: () => { closeFileMenu(); emptyTrash(); } },
-  ]);
+let yesNoOpen = false;
+
+const closeYesNo = (): void => {
+  const scrim: any = renderer.root.findDescendantById("tfm-yesno");
+  scrim?.parent?.remove(scrim);
+  yesNoOpen = false;
 };
 
-const confirmDeleteForever = (x: number, y: number, paths: string[]): void => {
-  openContextMenu(x, y, "", [
-    { label: "cancel", action: () => closeFileMenu() },
-    { label: `DELETE ${paths.length} PERMANENTLY`, action: () => { closeFileMenu(); deleteForever(paths); } },
-  ]);
+// floating Yes/No confirmation dialog (replaces the old context-menu confirms)
+const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, danger = false): boolean => {
+  if (yesNoOpen || !renderer.resolution) return false;
+  yesNoOpen = true;
+  const W = MENU_W;
+  let bseq = 0;
+  const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> => {
+    const id = `tfm-yesno-b${bseq++}`;
+    const setBg = (bg: string) => {
+      const n: any = renderer.root.findDescendantById(id);
+      if (n) { try { n.backgroundColor = bg; } catch {} }
+    };
+    return Box(
+      {
+        id,
+        height: 1,
+        flexGrow: 1,
+        flexDirection: "row",
+        justifyContent: "center",
+        backgroundColor: colors.sidebarBg,
+        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
+        onMouseOver: () => setBg(colors.hoverBg),
+        onMouseOut: () => setBg(colors.sidebarBg),
+      },
+      Text({ content: label, fg }),
+    );
+  };
+  const yesFg = danger ? colors.ansi1 : colors.accent;
+  const scrim = Box(
+    {
+      id: "tfm-yesno",
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
+      zIndex: 3450,
+      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      onMouseDown: () => closeYesNo(),
+    },
+    Box(
+      {
+        id: "tfm-yesno-panel",
+        width: W,
+        backgroundColor: colors.sidebarBg,
+        paddingTop: 1,
+        paddingBottom: 1,
+        flexDirection: "column",
+        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
+      },
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: ` ${message}`.slice(0, W - 2), fg: yesFg }),
+      ),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: " " + "~".repeat(W - 2), fg: colors.divider }),
+      ),
+      Box({ height: 1 }),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
+        mkBtn("[ No ]", colors.sidebarFg, () => closeYesNo()),
+        mkBtn(`[ ${yesLabel} ]`, yesFg, () => { closeYesNo(); onYes(); }),
+      ),
+    ),
+  );
+  renderer.root.add(scrim);
+  stripSelectable();
+  return true;
+};
+
+const confirmEmptyTrash = (): void => {
+  confirmYesNo("Empty Trash?", "Empty", () => emptyTrash(), true);
+};
+
+const confirmDeleteForever = (paths: string[]): void => {
+  confirmYesNo(`Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}?`, "Delete", () => deleteForever(paths), true);
 };
 
 // --- Preview pane ---
@@ -3872,6 +3975,32 @@ const openContextMenu = (x: number, y: number, title: string, entries: ListEntry
   stripSelectable();
 };
 
+const sidebarEntriesFor = (place: Place, x: number, y: number): ListEntry[] => {
+  const target = place.scheme === "recent" ? RECENT_URI
+    : place.scheme === "starred" ? STARRED_URI
+    : place.path;
+  const entries: ListEntry[] = [];
+  if (target) {
+    entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(target); } });
+    entries.push({ icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(target); } });
+    if (target === path.join(TRASH_DIR, "files")) {
+      entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(); } });
+    } else if (place.bookmarked) {
+      entries.push({ icon: "bookmark", label: "Remove bookmark", action: () => {
+        closeFileMenu();
+        void setBookmarked(target, false).then(() => loadSystemPlaces()).then(() => renderAll());
+      } });
+    }
+  }
+  if (place.ejectable && place.device) {
+    entries.push({ icon: "eject", label: "Eject", action: () => { closeFileMenu(); ejectDevice(place.device!); } });
+  }
+  if (!target && place.mountDevice) {
+    entries.push({ icon: "usb", label: "Mount", action: () => { closeFileMenu(); mountDevice(place.mountDevice!); } });
+  }
+  return entries;
+};
+
 const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number): ListEntry[] => {
   const entries: ListEntry[] = [];
   // Nautilus trash semantics: Restore / Open / delete-for-real; no rename,
@@ -3882,7 +4011,7 @@ const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number
     entries.push(
       { icon: "folder", label: `Restore${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); restoreFromTrash(targets.map((t) => t.path)); } },
       { icon: "eye", label: "Open", action: () => { closeFileMenu(); openFileDefault(targetPath); } },
-      { icon: "trash-can", label: `Delete permanently`, action: () => { closeFileMenu(); confirmDeleteForever(x, y, targets.map((t) => t.path)); } },
+      { icon: "trash-can", label: `Delete permanently`, action: () => { closeFileMenu(); confirmDeleteForever(targets.map((t) => t.path)); } },
     );
     return entries;
   }
@@ -3931,7 +4060,7 @@ const sortEntries = (): ListEntry[] => {
 const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
   const entries: ListEntry[] = [];
   if (inTrashView()) {
-    entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(x, y); } });
+    entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(); } });
   }
   if (isVirtualCwd()) {
     // read-only virtual views: nothing to paste or create here
@@ -4449,6 +4578,11 @@ const boot = async () => {
   await loadSystemPlaces();
   renderAll();
 
+  if (isDebug) {
+    debugLog(`terminal ${renderer.terminalWidth}x${renderer.terminalHeight} cwd=${process.cwd()} config=${configPath()}`);
+    setStatusMsg(`debug: ${DEBUG_LOG}`);
+  }
+
   const inputEl: any = renderer.root.findDescendantById("tfm-search");
   if (inputEl?.on) {
     let searchTimer: any = null;
@@ -4597,6 +4731,7 @@ try {
 const DND_LOG = "/tmp/tfm-dnd.log";
 const dlog = (msg: string): void => {
   try { appendFileSync(DND_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+  if (isDebug) appendLog(`[dnd] ${msg}`);
 };
 
 const osc72Write = (s: string, label: string): void => {
@@ -5081,8 +5216,8 @@ renderer.keyInput.on("keypress", (e: any) => {
   const selected = selPaths();
   if (e.name === "delete" && selected.length) {
     if (inTrashView()) {
-      // no cursor coords in a keybind — anchor the confirm near the toolbar
-      confirmDeleteForever(8, 4, selected.map((s) => s.path));
+      // no cursor coords in a keybind — the confirm dialog is a centered modal
+      confirmDeleteForever(selected.map((s) => s.path));
     }
     else trashPaths(selected.map((s) => s.path));
     return;

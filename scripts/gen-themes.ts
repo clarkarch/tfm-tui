@@ -3,7 +3,12 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const SRC_DIR = process.argv[2] ?? "/home/clark/Downloads/git/opencode/packages/tui/src/theme/assets";
+const SRC_ARG = process.argv[2];
+if (!SRC_ARG) {
+  console.error("usage: bun scripts/gen-themes.ts <opencode-assets-dir>");
+  process.exit(1);
+}
+const SRC_DIR = SRC_ARG;
 const OUT = new URL("../src/themes.ts", import.meta.url).pathname;
 
 // the tfm default palette already IS tokyonight; skip the near-duplicate
