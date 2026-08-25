@@ -632,32 +632,48 @@ const navSpecs: Record<"tfm-nav-back" | "tfm-nav-fwd", IconSpec | undefined> = {
   "tfm-nav-fwd": undefined,
 };
 
+// nav icons carry 4 rasters: enabled/disabled × normal/hover (bg baked into
+// the png, so the wrapper box bg must swap in lockstep)
+let navHover: Record<string, boolean> = {};
+const navBtnBg = (id: string) => {
+  try {
+    const n: any = renderer.root.findDescendantById(id);
+    if (n) n.backgroundColor = navHover[id] ? colors.hoverBg : colors.bg;
+  } catch {}
+};
+
 const makeNavButton = (id: "tfm-nav-back" | "tfm-nav-fwd", iconName: string, onActivate: () => void) => {
-  const slot = makeIconSlot(
-    iconName,
-    [
-      { fg: colors.sidebarFg, bg: colors.bg },
-      { fg: colors.sidebarFgMuted, bg: colors.bg },
-    ],
-    1,
-    0,
-    undefined,
-    () => [
-      { fg: colors.sidebarFg, bg: colors.bg },
-      { fg: colors.sidebarFgMuted, bg: colors.bg },
-    ],
-  );
+  const states = (): IconState[] => [
+    { fg: colors.sidebarFg, bg: colors.bg },
+    { fg: colors.sidebarFgMuted, bg: colors.bg },
+    { fg: colors.sidebarFg, bg: colors.hoverBg },
+    { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
+  ];
+  const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
   navSpecs[id] = slot.spec;
   return Box(
-    { id, height: 1, width: 3, justifyContent: "center", onMouseDown: () => { closeFileMenu(); onActivate(); } },
+    {
+      id,
+      height: 1,
+      width: 3,
+      justifyContent: "center",
+      backgroundColor: colors.bg,
+      onMouseDown: () => { closeFileMenu(); onActivate(); },
+      onMouseOver: () => { navHover[id] = true; refreshNav(); },
+      onMouseOut: () => { navHover[id] = false; refreshNav(); },
+    },
     slot.el,
   );
 };
 
 const refreshNav = () => {
-  const setBtn = (spec: IconSpec | undefined, on: boolean) => setIconState(spec, on ? 0 : 1);
-  setBtn(navSpecs["tfm-nav-back"], canBack());
-  setBtn(navSpecs["tfm-nav-fwd"], canFwd());
+  const setBtn = (id: string, spec: IconSpec | undefined, on: boolean) => {
+    if (!spec) return;
+    setIconState(spec, (on ? 0 : 1) + (navHover[id] ? 2 : 0));
+    navBtnBg(id);
+  };
+  setBtn("tfm-nav-back", navSpecs["tfm-nav-back"], canBack());
+  setBtn("tfm-nav-fwd", navSpecs["tfm-nav-fwd"], canFwd());
 };
 
 const crumbSep = () => Text({ content: " › ", fg: colors.sidebarFgMuted });
@@ -746,20 +762,78 @@ const renderCrumbs = () => {
   crumbs.forEach((c, i) => {
     const current = i === crumbs.length - 1;
     const fg = current ? colors.white : colors.sidebarFgMuted;
+    // clickable crumbs get hover feedback: baked raster swap + box bg swap
+    const iconStates = current
+      ? [{ fg, bg: colors.bg }]
+      : [
+          { fg, bg: colors.bg },
+          { fg: colors.white, bg: colors.hoverBg },
+        ];
+    const iconSlot = c.icon ? makeIconSlot(c.icon, iconStates, 1) : null;
+    const paintHover = (on: boolean) => {
+      if (iconSlot && !current) setIconState(iconSlot.spec, on ? 1 : 0);
+      try {
+        const n: any = renderer.root.findDescendantById(`tfm-crumb-${i}`);
+        if (n) n.backgroundColor = on && !current ? colors.hoverBg : colors.bg;
+      } catch {}
+    };
     const crumb = Box(
       {
+        id: `tfm-crumb-${i}`,
         height: 1,
         flexDirection: "row",
         alignItems: "center",
         columnGap: 1,
-        ...(current ? {} : { onMouseDown: () => navigate(c.target) }),
+        backgroundColor: colors.bg,
+        ...(current
+          ? {}
+          : {
+              onMouseDown: () => navigate(c.target),
+              onMouseOver: () => paintHover(true),
+              onMouseOut: () => paintHover(false),
+            }),
       },
-      ...(c.icon ? [makeIconSlot(c.icon, [{ fg, bg: colors.bg }], 1).el] : []),
+      ...(iconSlot ? [iconSlot.el] : []),
       Text({ content: c.label, fg }),
     );
     box.add(crumb);
     if (i < crumbs.length - 1) box.add(crumbSep());
   });
+};
+
+// toolbar buttons swap between two baked rasters (normal/hover bg) and match
+// the wrapper box bg so the padding cells track the raster
+const hoverBtnStates = (): IconState[] => [
+  { fg: colors.sidebarFg, bg: colors.bg },
+  { fg: colors.sidebarFg, bg: colors.hoverBg },
+];
+const hoverBtn = (
+  id: string,
+  iconName: string,
+  onMouseDown: (ev: any) => void,
+): ReturnType<typeof Box> => {
+  const states = hoverBtnStates;
+  const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
+  const paint = (on: boolean) => {
+    setIconState(slot.spec, on ? 1 : 0);
+    try {
+      const n: any = renderer.root.findDescendantById(id);
+      if (n) n.backgroundColor = on ? colors.hoverBg : colors.bg;
+    } catch {}
+  };
+  return Box(
+    {
+      id,
+      height: 1,
+      width: 3,
+      justifyContent: "center",
+      backgroundColor: colors.bg,
+      onMouseDown,
+      onMouseOver: () => paint(true),
+      onMouseOut: () => paint(false),
+    },
+    slot.el,
+  );
 };
 
 const makeSearch = () => {
@@ -775,56 +849,24 @@ const makeSearch = () => {
     textColor: colors.white,
   });
 
-  const button = Box(
-    {
-      id: "tfm-search-btn",
-      height: 1,
-      width: 3,
-      justifyContent: "center",
-      onMouseDown: () => {
-        closeFileMenu();
-        const el: any = renderer.root.findDescendantById("tfm-search");
-        if (!el) return;
-        el.visible = !el.visible;
-        if (el.visible) el.focus();
-      },
-    },
-    makeIconSlot(
-      "search",
-      [{ fg: colors.sidebarFg, bg: colors.bg }],
-      1,
-      0,
-      undefined,
-      () => [{ fg: colors.sidebarFg, bg: colors.bg }],
-    ).el,
+  wrap.add(
+    hoverBtn("tfm-search-btn", "search", () => {
+      closeFileMenu();
+      const el: any = renderer.root.findDescendantById("tfm-search");
+      if (!el) return;
+      el.visible = !el.visible;
+      if (el.visible) el.focus();
+    }),
   );
-
-  wrap.add(button);
   wrap.add(input);
   return wrap;
 };
 
 const makeSortButton = (): ReturnType<typeof Box> =>
-  Box(
-    {
-      id: "tfm-sort-btn",
-      height: 1,
-      width: 3,
-      justifyContent: "center",
-      onMouseDown: (ev: any) => {
-        closeFileMenu();
-        openContextMenu(ev.x, ev.y, "", sortEntries());
-      },
-    },
-    makeIconSlot(
-      "sort",
-      [{ fg: colors.sidebarFg, bg: colors.bg }],
-      1,
-      0,
-      undefined,
-      () => [{ fg: colors.sidebarFg, bg: colors.bg }],
-    ).el,
-  );
+  hoverBtn("tfm-sort-btn", "sort", (ev: any) => {
+    closeFileMenu();
+    openContextMenu(ev.x, ev.y, "", sortEntries());
+  });
 
 const makeToolbarShell = (): ReturnType<typeof Box> =>
   Box(
@@ -4131,6 +4173,14 @@ const rethemeChrome = (): void => {
   setOnId(`${DRAG_GHOST_ID}-label`, (n) => { n.fg = colors.bg; });
   setOnId("tfm-status-label", (n) => { n.fg = colors.sidebarFgMuted; });
   setOnId("tfm-prompt-panel", (n) => { n.backgroundColor = colors.sidebarBg; });
+  // toolbar hover buttons: box bg must track the new palette between raster swaps
+  for (const id of ["tfm-nav-back", "tfm-nav-fwd", "tfm-search-btn", "tfm-sort-btn"]) {
+    setOnId(id, (n) => {
+      (n as any).backgroundColor = navHover[id] ? colors.hoverBg : colors.bg;
+    });
+  }
+  renderCrumbs();
+  refreshNav();
   for (const id of ["tfm-search", "tfm-path-input", "tfm-prompt-input"]) {
     setOnId(id, (n) => {
       n.backgroundColor = colors.accentBg;
