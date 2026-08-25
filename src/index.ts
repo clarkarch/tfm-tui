@@ -4580,6 +4580,7 @@ const boot = async () => {
       clearSearch();
       blurTerminal();
       if (pathEditMode) { exitPathEdit(); return; }
+      if (renameEdit) finishInlineRename(false);
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
       if (ev.button === 0) bandStart = { x: ev.x, y: ev.y };
