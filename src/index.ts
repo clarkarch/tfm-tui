@@ -1,7 +1,7 @@
 import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync, closeSync, createReadStream, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
-import { readdir, readFile, stat, rename as fsRename, mkdir, writeFile, chmod, cp, rm } from "node:fs/promises";
+import { readdir, readFile, stat, lstat, readlink, symlink, rename as fsRename, mkdir, writeFile, chmod, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -1032,9 +1032,16 @@ async function listDir(dir: string, showHidden: boolean): Promise<Entry[]> {
   if (dir === STARRED_URI) out = await starredEntries();
   else {
   const dirents = await readdir(dir, { withFileTypes: true });
-  out = dirents
-    .filter((d) => showHidden || !d.name.startsWith("."))
-    .map((d) => ({ name: d.name, isDir: d.isDirectory() }));
+  out = [];
+  for (const d of dirents) {
+    if (!showHidden && d.name.startsWith(".")) continue;
+    let isDir = d.isDirectory();
+    // a symlink is a folder only if its target is one — never follow it further
+    if (d.isSymbolicLink()) {
+      try { isDir = (await stat(path.join(dir, d.name))).isDirectory(); } catch { isDir = false; }
+    }
+    out.push({ name: d.name, isDir });
+  }
   }
   if (state.sortBy === "size" || state.sortBy === "mtime") {
     for (const e of out) {
@@ -1617,12 +1624,16 @@ const undoLast = (): void => {
   if (!entry) { setStatusMsg("Nothing to undo"); return; }
   void (async () => {
     let failed = 0;
+    const failWhy = new Set<string>();
     for (let i = entry.units.length - 1; i >= 0; i--) {
       const u = entry.units[i];
-      try { await u?.(); } catch { failed++; }
+      try { await u?.(); } catch (err) { failed++; failWhy.add(fsErrText(err)); }
     }
     renderAll();
-    setStatusMsg(failed ? `Undid ${entry.label} (${failed} failed)` : `Undid: ${entry.label}`);
+    const why = [...failWhy][0];
+    const summary = failed ? `Undo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}` : `Undid: ${entry.label}`;
+    setStatusMsg(summary);
+    notify(summary, failed ? "undo failed" : "undo");
   })();
 };
 
@@ -1890,8 +1901,10 @@ const scanTree = async (root: string): Promise<{ files: number; bytes: number }>
   const stack = [root];
   while (stack.length) {
     const d = stack.pop()!;
+    // lstat: a symlink counts once by its own size and is never followed
+    // (following it would loop forever on cycles and duplicate target trees)
     let st;
-    try { st = await stat(d); } catch { continue; }
+    try { st = await lstat(d); } catch { continue; }
     if (!st.isDirectory()) { files++; bytes += st.size ?? 0; continue; }
     let kids;
     try { kids = await readdir(d); } catch { continue; }
@@ -1922,7 +1935,18 @@ const copyFileProgress = (src: string, dest: string): Promise<void> =>
   });
 
 const copyTreeProgress = async (src: string, dest: string): Promise<void> => {
-  const st = await stat(src);
+  const st = await lstat(src);
+  if (st.isSymbolicLink()) {
+    // recreate the link itself — never stream through to the target's contents
+    await pauseGate();
+    if (prog.cancelled) throw new Error("cancelled");
+    await mkdir(path.dirname(dest), { recursive: true });
+    const target = await readlink(src);
+    try { await symlink(target, dest); } catch (err: any) { if (err?.code !== "EEXIST") throw err; }
+    prog.doneFiles++;
+    paintProgress(true);
+    return;
+  }
   if (st.isDirectory()) {
     await mkdir(dest, { recursive: true });
     for (const k of await readdir(src)) {
@@ -1940,14 +1964,35 @@ const copyTreeProgress = async (src: string, dest: string): Promise<void> => {
   }
 };
 
+// terse human text for the fs error codes users actually hit — "FAILED" alone
+// gives them nothing to act on (retry vs chmod vs free disk space)
+const FS_ERR_TEXT: Record<string, string> = {
+  ENOENT: "source gone",
+  EACCES: "permission denied",
+  EPERM: "permission denied",
+  ENOSPC: "disk full",
+  EBUSY: "file busy",
+  ETXTBSY: "file busy",
+  EISDIR: "is a directory",
+  ENOTDIR: "not a directory",
+  ENAMETOOLONG: "name too long",
+  EROFS: "read-only fs",
+  EMFILE: "too many open files",
+};
+const fsErrText = (err: unknown): string => {
+  const code = (err as any)?.code;
+  if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
+  return err instanceof Error ? err.message.split(":")[0]?.toLowerCase() ?? "unknown error" : "unknown error";
+};
+
 // every destructive-but-reversible file op funnels through here so overrides
 // are asked once and undo covers the whole batch
 async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void> {
   conflictPolicy = null;
   const units: UndoUnit[] = [];
-  let ok = 0, skipped = 0, replaced = 0;
+  let ok = 0, skipped = 0, replaced = 0, failed = 0, gone = 0;
+  const failWhy = new Set<string>();
   const total = srcs.length;
-  const startedAt = Date.now();
   if (op === "copy") {
     // pre-scan so the progress toast has real totals from byte one
     prog.paused = false;
@@ -1972,6 +2017,9 @@ async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[],
   for (const src of srcs) {
     if (cancelled || prog.cancelled) { cancelled = true; break; }
     await pauseGate();
+    // source vanished since it was copied/cut — report clearly instead of a
+    // cryptic mid-transfer ENOENT
+    if (!existsSync(src)) { gone++; skipped++; continue; }
     const base = path.basename(src);
     let target = path.join(destDir, base);
     // nautilus semantics: paste-in-place never asks, it just makes "name (copy)"
@@ -1983,29 +2031,34 @@ async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[],
       if (choice === "skip") { skipped++; continue; }
       if (choice === "keepBoth") target = uniqueTarget(destDir, base);
       else {
-        // stash the victim in the trash so ctrl+z can bring it back
+        // stash the victim in the trash so ctrl+z can bring it back;
+        // re-check first — the target may have vanished while the prompt was up
         try {
-          const victimDest = target;
-          const trashLoc = await xdgTrashMove(victimDest);
-          units.push(async () => {
-            await fsMove(trashLoc, victimDest);
-            try { await rm(path.join(TRASH_DIR, "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
-          });
-          replaced++;
-        } catch {}
+          if (existsSync(target)) {
+            const victimDest = target;
+            const trashLoc = await xdgTrashMove(victimDest);
+            units.push(async () => {
+              await safeRestoreMove(trashLoc, victimDest);
+              try { await rm(path.join(TRASH_DIR, "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
+            });
+            replaced++;
+          }
+        } catch (err) { failWhy.add(fsErrText(err)); }
       }
     }
     try {
       if (op === "copy") await copyTreeProgress(src, target);
       else await fsMove(src, target);
       const t = target, s = src;
-      if (op === "copy") units.push(() => rm(t, { recursive: true }));
-      else units.push(() => mkdir(path.dirname(s), { recursive: true }).then(() => fsMove(t, s)));
+      if (op === "copy") units.push(() => xdgTrashMove(t).then(() => undefined));
+      else units.push(() => safeRestoreMove(t, s));
       ok++;
-    } catch {
+    } catch (err) {
       // don't leave half-copied files behind
       if (op === "copy") { try { await rm(target, { recursive: true }); } catch {} }
       if (prog.cancelled) { cancelled = true; break; }
+      failed++;
+      failWhy.add(fsErrText(err));
     }
   }
   } finally {
@@ -2013,17 +2066,25 @@ async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[],
   }
   pushUndoBatch(label, units);
   renderAll();
-  const bits = [`${op === "copy" ? "Copied" : "Moved"} ${ok} item${ok === 1 ? "" : "s"}`];
+  const verb = op === "copy" ? "Copied" : "Moved";
+  const bits = [`${verb} ${ok} item${ok === 1 ? "" : "s"}`];
   if (replaced) bits.push(`${replaced} replaced`);
   if (skipped) bits.push(`${skipped} skipped`);
+  if (gone) bits.push(`${gone} source gone`);
+  const why = [...failWhy][0];
+  if (failed) bits.push(`${failed} FAILED${why ? ` (${why})` : ""}`);
   if (ok || replaced) bits.push("ctrl+z to undo");
-  setStatusMsg(bits.join(" · "));
+  const summary = bits.join(" · ");
+  setStatusMsg(summary);
+  // always surface the outcome — success, failure, or cancel
   if (prog.toastUp) {
-    finishProgressToast(cancelled ? "✗ Copy cancelled" : `✓ Copied ${ok} item${ok === 1 ? "" : "s"}`);
-  } else if (ok > 0 && Date.now() - startedAt > 4000 && op === "copy") {
-    // no progress toast was shown — use the regular notification
-    notify(`${bits[0]} to ~/${path.relative(home, destDir) || "/"}`, "tfm copy done");
+    finishProgressToast(cancelled ? `✗ ${verb} cancelled` : failed ? `✗ ${op} failed` : `✓ ${verb} ${ok}`);
   }
+  const destLabel = `to ~/${path.relative(home, destDir) || "/"}`;
+  const msg = `${summary}${!cancelled && !failed && ok + replaced > 0 ? ` ${destLabel}` : ""}`;
+  if (cancelled) notify(msg, `${op} cancelled`);
+  else if (failed > 0 && ok === 0) notify(msg, `${op} failed`);
+  else notify(msg, op);
 }
 
 // rename with nautilus-style collision handling: rename() would otherwise
@@ -2044,7 +2105,7 @@ const performRename = async (p: string, v: string): Promise<void> => {
         const victim = finalDest;
         const trashLoc = await xdgTrashMove(victim);
         units.push(async () => {
-          await fsMove(trashLoc, victim);
+          await safeRestoreMove(trashLoc, victim);
           try { await rm(path.join(TRASH_DIR, "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
         });
       } catch {}
@@ -2056,8 +2117,11 @@ const performRename = async (p: string, v: string): Promise<void> => {
     pushUndoBatch("rename", units);
     renderAll();
     setStatusMsg(`Renamed to ${path.basename(finalDest)} · ctrl+z to undo`);
-  } catch {
-    setStatusMsg("Rename failed");
+    notify(`Renamed to ${path.basename(finalDest)}`, "rename");
+  } catch (err) {
+    const summary = `Rename failed (${fsErrText(err)})`;
+    setStatusMsg(summary);
+    notify(`${path.basename(p)}: ${summary}`, "rename failed");
   }
 };
 
@@ -2154,6 +2218,16 @@ const fsMove = async (src: string, dest: string): Promise<void> => {
   }
 };
 
+// undo/restore moves must never clobber whatever now occupies the target —
+// rename() silently overwrites on Linux, so a file created between the original
+// op and ctrl+z would be destroyed. Bump to "name (copy)" instead.
+const safeRestoreMove = async (src: string, dest: string): Promise<void> => {
+  let d = dest;
+  if (existsSync(d)) d = uniqueTarget(path.dirname(d), path.basename(d));
+  await mkdir(path.dirname(d), { recursive: true });
+  await fsMove(src, d);
+};
+
 const doPaste = async (dest: string): Promise<void> => {
   if (!clipboard || clipboard.items.length === 0) return;
   const mode = clipboard.mode === "copy" ? "copy" : "move";
@@ -2230,55 +2304,36 @@ const xdgTrashMove = async (p: string): Promise<string> => {
   return finalPath;
 };
 
-const gioTrash = (p: string): Promise<void> =>
-  new Promise<void>((resolve, reject) => {
-    const proc = spawn("gio", ["trash", p], { stdio: "ignore" });
-    proc.on("close", (c) => (c === 0 ? resolve() : reject(new Error(`gio ${c}`))));
-    proc.on("error", reject);
-  });
-
 const trashPaths = (paths: string[]): void => {
   void (async () => {
-    const filesDir = path.join(home, ".local/share/Trash/files");
-    let before = new Set<string>();
-    try { before = new Set(await readdir(filesDir)); } catch {}
     const units: UndoUnit[] = [];
     let ok = 0;
+    const failWhy = new Set<string>();
     for (const p of paths) {
+      // always trash via our own xdg path: we control the final name, so the
+      // undo unit pairs deterministically (a before/after listing diff could
+      // mis-pair when something else trashes a similar name concurrently)
       try {
-        await gioTrash(p);
+        const loc = await xdgTrashMove(p);
+        const hit = path.basename(loc);
+        const from = path.join(TRASH_DIR, "files", hit);
+        units.push(async () => {
+          await safeRestoreMove(from, p);
+          try { await rm(path.join(TRASH_DIR, "info", `${hit}.trashinfo`)); } catch {}
+        });
         ok++;
-      } catch {
-        try {
-          await xdgTrashMove(p);
-          ok++;
-        } catch {}
-      }
-    }
-    // figure out where the trashed items landed so ctrl+z can move them back
-    if (ok > 0 && paths.length) {
-      try {
-        const after = new Set(await readdir(filesDir));
-        const fresh = [...after].filter((n) => !before.has(n));
-        const claimed = new Set<string>();
-        for (const p of paths) {
-          const base = path.basename(p);
-          const hit = fresh.find((n) => !claimed.has(n) && (n === base || n.startsWith(`${base}.`)));
-          if (!hit) continue;
-          claimed.add(hit);
-          const from = path.join(filesDir, hit);
-          const to = p;
-          units.push(async () => {
-            await mkdir(path.dirname(to), { recursive: true });
-            await fsMove(from, to);
-            try { await rm(path.join(TRASH_DIR, "info", `${hit}.trashinfo`)); } catch {}
-          });
-        }
-      } catch {}
+      } catch (err) { failWhy.add(fsErrText(err)); }
     }
     pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units);
     renderAll();
-    if (paths.length) setStatusMsg(ok === paths.length ? `Trashed ${ok} item${ok === 1 ? "" : "s"} · ctrl+z to undo` : `Trashed ${ok}/${paths.length}`);
+    const failed = paths.length - ok;
+    const why = [...failWhy][0];
+    const summary = failed
+      ? `Trashed ${ok}/${paths.length} · ${failed} FAILED${why ? ` (${why})` : ""}`
+      : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
+    setStatusMsg(ok === paths.length ? `${summary} · ctrl+z to undo` : summary);
+    if (failed > 0) notify(summary, "trash failed");
+    else notify(`${summary} · ctrl+z to undo`, "trash");
   })();
 };
 
@@ -2303,9 +2358,10 @@ const trashOrigPath = async (name: string): Promise<string | null> => {
 const restoreFromTrash = (paths: string[]): void => {
   void (async () => {
     let ok = 0;
+    const failWhy = new Set<string>();
     for (const src of paths) {
       const orig = await trashOrigPath(path.basename(src));
-      if (!orig) continue;
+      if (!orig) { failWhy.add("no trashinfo"); continue; }
       try {
         await mkdir(path.dirname(orig), { recursive: true });
         let dest = orig;
@@ -2313,43 +2369,65 @@ const restoreFromTrash = (paths: string[]): void => {
         await fsMove(src, dest);
         try { await rm(path.join(TRASH_DIR, "info", `${path.basename(src)}.trashinfo`)); } catch {}
         ok++;
-      } catch {}
+      } catch (err) { failWhy.add(fsErrText(err)); }
     }
     renderAll();
-    if (paths.length) setStatusMsg(`Restored ${ok} of ${paths.length}`);
+    const failed = paths.length - ok;
+    const why = [...failWhy][0];
+    const summary = `Restored ${ok} of ${paths.length}${failed ? ` · ${failed} FAILED${why ? ` (${why})` : ""}` : ""}`;
+    setStatusMsg(summary);
+    notify(summary, failed ? "restore failed" : "restore");
   })();
 };
 
 const deleteForever = (paths: string[]): void => {
   void (async () => {
     let ok = 0;
+    const failWhy = new Set<string>();
     for (const p of paths) {
       try {
         await rm(p, { recursive: true });
         try { await rm(path.join(TRASH_DIR, "info", `${path.basename(p)}.trashinfo`)); } catch {}
         ok++;
-      } catch {}
+      } catch (err) { failWhy.add(fsErrText(err)); }
     }
     renderAll();
-    if (paths.length) setStatusMsg(`Deleted ${ok} of ${paths.length}`);
+    const failed = paths.length - ok;
+    const why = [...failWhy][0];
+    const summary = `Deleted ${ok} of ${paths.length}${failed ? ` · ${failed} FAILED${why ? ` (${why})` : ""}` : ""}`;
+    setStatusMsg(summary);
+    notify(summary, failed ? "delete failed" : "delete");
   })();
 };
 
 const emptyTrash = (): void => {
   void (async () => {
     const filesDir = path.join(TRASH_DIR, "files");
+    let names: string[];
+    try { names = await readdir(filesDir); } catch (err) {
+      renderAll();
+      notify(`Could not read trash (${fsErrText(err)})`, "empty failed");
+      setStatusMsg("Trash unreadable");
+      return;
+    }
     let n = 0;
-    try {
-      for (const k of await readdir(filesDir)) {
-        try {
-          await rm(path.join(filesDir, k), { recursive: true });
-          try { await rm(path.join(TRASH_DIR, "info", `${k}.trashinfo`)); } catch {}
-          n++;
-        } catch {}
-      }
-    } catch {}
+    const failWhy = new Set<string>();
+    for (const k of names) {
+      try {
+        await rm(path.join(filesDir, k), { recursive: true });
+        try { await rm(path.join(TRASH_DIR, "info", `${k}.trashinfo`)); } catch {}
+        n++;
+      } catch (err) { failWhy.add(fsErrText(err)); }
+    }
     renderAll();
-    notify(`Emptied ${n} item${n === 1 ? "" : "s"} from trash`, "trash");
+    const failed = names.length - n;
+    const why = [...failWhy][0];
+    if (failed > 0) {
+      notify(`Emptied ${n}/${names.length} · ${failed} FAILED${why ? ` (${why})` : ""}`, "empty failed");
+      setStatusMsg(`Trash partially emptied (${n}/${names.length})`);
+      return;
+    }
+    notify(`Emptied ${n} item${n === 1 ? "" : "s"}`, "trash");
     setStatusMsg(`Trash emptied (${n})`);
   })();
 };
@@ -2358,6 +2436,13 @@ const confirmEmptyTrash = (x: number, y: number): void => {
   openContextMenu(x, y, "", [
     { label: "cancel", action: () => closeFileMenu() },
     { label: "EMPTY TRASH", action: () => { closeFileMenu(); emptyTrash(); } },
+  ]);
+};
+
+const confirmDeleteForever = (x: number, y: number, paths: string[]): void => {
+  openContextMenu(x, y, "", [
+    { label: "cancel", action: () => closeFileMenu() },
+    { label: `DELETE ${paths.length} PERMANENTLY`, action: () => { closeFileMenu(); deleteForever(paths); } },
   ]);
 };
 
@@ -2447,6 +2532,8 @@ const dirWalkStats = async (root: string): Promise<{ bytes: number; files: numbe
     for (const d of dirents) {
       if (++count > 200000) return null;
       const p = path.join(dir, d.name);
+      // symlinks: report the link's own size, never follow (cycles / dupes)
+      if (d.isSymbolicLink()) { files++; try { bytes += (await lstat(p)).size; } catch {} continue; }
       if (d.isDirectory()) { folders++; stack.push(p); continue; }
       files++;
       try { bytes += (await stat(p)).size; } catch {}
@@ -2831,7 +2918,7 @@ const renderGrid = async () => {
             updateSelectionStatusReal();
             void renderPreview();
           }
-          openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir));
+          openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir, ev.x, ev.y));
           return;
         }
         // the ctrl modifier decides internal vs external for drags
@@ -3427,7 +3514,7 @@ const openContextMenu = (x: number, y: number, title: string, entries: ListEntry
   stripSelectable();
 };
 
-const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
+const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number): ListEntry[] => {
   const entries: ListEntry[] = [];
   // Nautilus trash semantics: Restore / Open / delete-for-real; no rename,
   // clipboard ops or trashing inside the trash
@@ -3437,7 +3524,7 @@ const fileEntriesFor = (targetPath: string, isDir: boolean): ListEntry[] => {
     entries.push(
       { icon: "folder", label: `Restore${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); restoreFromTrash(targets.map((t) => t.path)); } },
       { icon: "eye", label: "Open", action: () => { closeFileMenu(); openFileDefault(targetPath); } },
-      { icon: "trash-can", label: `Delete permanently`, action: () => { closeFileMenu(); deleteForever(targets.map((t) => t.path)); } },
+      { icon: "trash-can", label: `Delete permanently`, action: () => { closeFileMenu(); confirmDeleteForever(x, y, targets.map((t) => t.path)); } },
     );
     return entries;
   }
@@ -4571,7 +4658,10 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   const selected = selPaths();
   if (e.name === "delete" && selected.length) {
-    if (inTrashView()) deleteForever(selected.map((s) => s.path));
+    if (inTrashView()) {
+      // no cursor coords in a keybind — anchor the confirm near the toolbar
+      confirmDeleteForever(8, 4, selected.map((s) => s.path));
+    }
     else trashPaths(selected.map((s) => s.path));
     return;
   }

@@ -26,6 +26,7 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 - Mouse DnD primitives exist: first drag motion sets a captured renderable (source gets all drag events), release fires `onMouseDrop` on whatever is hovered with `.source` set. Build drags on this, not manual hit-testing.
 - `renderer.subscribeOsc(cb)` is the sanctioned way to receive OSC sequences (kitty DnD etc.) — never add a second `process.stdin` data listener.
 - Ctrl+I == Tab in all terminals; check `opentui/packages/core/src/lib/parse.keypress.ts` when binding keys.
+- **Put ids on the TEXT node, not its wrapper Box** when the text must change at runtime. Boxes have no `.content`, so `progSetText(boxId, …)`-style updates no-op silently (bit us twice: progress-toast title/bar stayed blank).
 
 ## Kitty DnD (OSC 72) — what works
 
@@ -50,15 +51,29 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 
 ## Environment / tooling gotchas
 
-- `gio trash` fails on tmpfs ("system internal mounts") — need an XDG manual fallback.
+- `gio trash` fails on tmpfs ("system internal mounts") — need an XDG manual fallback (`xdgTrashMove`).
 - `magick` SVG thumbnails require `-density` before the input path.
+
+## Virtual places & file ops
+
+- Sidebar "Recent"/"Starred" are virtual cwds (`recent://` / `starred://`) — guard anything touching `state.cwd` with `isVirtualCwd()` or it tries to readdir the URI.
+- ALL copies/moves funnel through `runTransfer()` (conflict prompt, undo units, progress toast); renames through `performRename()` — raw `fsRename` silently overwrites on Linux.
+- Undo = Ctrl+Z (`pushUndoBatch`). Replace stashes victims in trash so undo restores them.
+- Bookmarks = standard `~/.config/gtk-3.0/bookmarks` (folders only); toggle lives in properties dialog beside star.
 
 ## Icons
 
 - SVG sources live in `assets/icons/*.svg` (single color, path-only, no `<text>`).
-- Never commit pre-rasterized PNGs as icons. Icons flow through slots: `makeIconSlot(name, ...)` queues a fallback-glyph slot, `applyRasterIcons()` swaps in an async `iconPng(name, fg, bg, pxW, pxH)` raster — tints hex colors to the theme, rasterizes via `rsvg-convert` at exact cell pixels (square output), flattens onto bg (kitty alpha is unreliable → causes tint), caches by `name:fg:bg:WxH`.
+- Icons flow through slots: `makeIconSlot(name, ...)` queues a fallback-glyph slot, `drainIconQueue()` swaps in an async `iconPng(name, fg, bg, pxW, pxH)` raster — tints hex colors to the theme, rasterizes via `rsvg-convert` at exact cell pixels (square output), flattens onto bg (kitty alpha is unreliable → causes tint), caches by `name:fg:bg:WxH`.
 - **Slot names must match SVG filenames exactly** (`makeIconSlot("chevron-left")` → `assets/icons/chevron-left.svg`). The swap's `catch {}` swallows ENOENT silently — a wrong name just leaves the small fallback glyph in place forever (bit us: nav buttons queued `back`/`fwd`, files were `chevron-left.svg`/`chevron-right.svg`).
-- Nerd font glyphs are the fallback. **Verify codepoints against the font cmap before using** — icon-set comments in old code were wrong. Check with python fontTools (`getBestCmap`) against `/usr/share/fonts/TTF/MesloLGLDZ Nerd Font Mono (see fc-list)`.
+- Nerd font glyphs are the fallback. **Verify codepoints against the font cmap before using** — icon-set comments in old code were wrong (a guessed paste glyph turned out to be cellphone_nfc). Check with python fontTools (`getBestCmap`) against `/usr/share/fonts/TTF/MesloLGLDZ Nerd Font Mono (see fc-list)`.
+
+## Preview pane
+
+- Text previews use OpenTUI's `CodeRenderable` + tree-sitter. Bundled grammars: js/ts/jsx/tsx, markdown, zig; more languages registered opencode-style via `addDefaultParsers` with wasm+query URLs (downloaded once, disk-cached). Highlighted node is memoized per file (key+mtime+size) so re-previews don't re-parse.
+- Syntax palette = new `syntax*` keys on Theme (stolen per-theme from opencode assets by `scripts/gen-themes.ts`; tokyo-night fallbacks for old configs). Keyword=accent, comment/punctuation=muted, variable=fg are derived, not stored.
+- `isTextLike`: known-text extensions (toml, ini, lock, …) short-circuit BEFORE mime checks — globs2 reports mimes like `application/toml` that fail a text/* whitelist (bit us: toml had no preview).
+- Inline rename: F2 / context-menu edits the tile label in place (`startInlineRename`); commits go through `performRename`, Esc/click-away cancels.
 
 ## Conventions
 
