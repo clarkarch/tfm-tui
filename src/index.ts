@@ -255,6 +255,9 @@ const scheduleSaveSession = (): void => {
 };
 
 const restoreSession = (): void => {
+  // off by default: launching tfm from a shell should open where you are;
+  // opt in via [ui] restore-session = true
+  if (!config.ui.restoreSession) return;
   try {
     const doc = JSON.parse(readFileSync(sessionFile(), "utf8"));
     const cwd = typeof doc?.cwd === "string" ? doc.cwd : "";

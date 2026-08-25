@@ -34,6 +34,7 @@ export type UiConfig = {
   showHidden: boolean;
   previewEnabled: boolean;
   previewWidth: number;
+  restoreSession: boolean;
 };
 
 export type Config = { ui: UiConfig; theme: Theme };
@@ -48,6 +49,7 @@ export const defaultConfig: Config = {
     showHidden: false,
     previewEnabled: false,
     previewWidth: 40,
+    restoreSession: false,
   },
   theme: {
     bg: "#1a1b26",
@@ -118,6 +120,7 @@ export function loadConfig(): Config {
       showHidden: typeof uiRaw["show-hidden"] === "boolean" ? uiRaw["show-hidden"] : defaultConfig.ui.showHidden,
       previewEnabled: typeof uiRaw["preview-enabled"] === "boolean" ? uiRaw["preview-enabled"] : defaultConfig.ui.previewEnabled,
       previewWidth: clampInt(uiRaw["preview-width"], 20, 80, defaultConfig.ui.previewWidth),
+      restoreSession: typeof uiRaw["restore-session"] === "boolean" ? uiRaw["restore-session"] : defaultConfig.ui.restoreSession,
     },
     theme: THEME_KEYS.reduce((acc, key) => {
       acc[key] = pickColor(themeRaw[key], defaultConfig.theme[key]);
@@ -140,6 +143,7 @@ export function serializeConfig(cfg: Config): string {
       "show-hidden": cfg.ui.showHidden,
       "preview-enabled": cfg.ui.previewEnabled,
       "preview-width": cfg.ui.previewWidth,
+      "restore-session": cfg.ui.restoreSession,
     },
     theme: { ...cfg.theme },
   };

@@ -12,6 +12,7 @@ double-click-ms = 400   # 100..2000
 show-hidden = false     # start with dotfiles visible (ctrl+h toggles at runtime)
 preview-enabled = false # right-side preview pane (text files, folder stats)
 preview-width = 40      # 20..80 cells
+restore-session = false # true = reopen the folder from the last quit instead of the launch cwd
 
 [theme]
 bg = "#1a1b26"
