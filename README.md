@@ -7,6 +7,9 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 > [!WARNING]
 > Vibecoded experimental software — expect rough edges. Don't test on files you can't afford to lose.
 
+> [!IMPORTANT]
+> This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
+
 ![tfm](screenshot.png)
 
 ## Features
