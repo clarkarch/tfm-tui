@@ -1122,11 +1122,32 @@ const cellMetrics = () => {
 // --- Runtime SVG pipeline: tint + rasterize at exact cell pixels, cached, async ---
 const iconCache = new Map<string, Uint8Array>();
 
-const rasterizeSvg = (name: string, fg: string, bg: string, pxW: number, pxH: number) =>
-  new Promise<Uint8Array>((resolve, reject) => {
+// In a `bun --compile` binary, assets/icons/*.svg are embedded as File blobs
+// named "<basename>-<hash>.svg" — plain readFileSync can't see them. Index by
+// basename once; dev runs (embeddedFiles empty) fall through to disk.
+// Memoize the PROMISE, not the Map: assigning the Map first let concurrent
+// callers resolve against a half-filled index during the await loop.
+let embeddedIconsP: Promise<Map<string, string>> | null = null;
+const embeddedIconTexts = (): Promise<Map<string, string>> =>
+  (embeddedIconsP ??= (async () => {
+    const map = new Map<string, string>();
+    try {
+      for (const f of (Bun as any).embeddedFiles ?? []) {
+        const iconName = String(f?.name ?? "").match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1];
+        if (iconName) map.set(iconName, await f.text());
+      }
+    } catch {}
+    return map;
+  })());
+void embeddedIconTexts(); // warm while the renderer boots
+
+const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, pxH: number) =>
+  new Promise<Uint8Array>(async (resolve, reject) => {
     let svg: string;
     try {
-      svg = readFileSync(`${import.meta.dir}/../assets/icons/${name}.svg`, "utf8");
+      svg =
+        (await embeddedIconTexts()).get(name) ??
+        readFileSync(`${import.meta.dir}/../assets/icons/${name}.svg`, "utf8");
     } catch (err) {
       return reject(err);
     }
