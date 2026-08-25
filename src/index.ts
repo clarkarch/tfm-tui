@@ -1265,7 +1265,7 @@ const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, p
 // Disk cache for rendered rasters: keyed by everything that changes the output
 // (name, tint, bg, pixel size) plus a pipeline-version salt. Theme switches
 // naturally miss because fg/bg are part of the key.
-const ICON_DISK_VER = "v1";
+const ICON_DISK_VER = "v2";
 const iconDiskDir = (): string =>
   path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
