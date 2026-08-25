@@ -9,11 +9,11 @@ Mouse-first file manager for the terminal. Nautilus-style places sidebar, grid v
 
 ## Features
 
-- **Mouse-first**: click, rubber-band select, drag-and-drop (in-app and out to other apps via kitty OSC 72), context menus, inline rename
+- **Mouse-first**: click, rubber-band select, context menus, inline rename
+- **Drag & drop**: move between folders (`ctrl+drag`), drag out to other apps, drop in from outside (kitty OSC 72)
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
-- **Safety**: everything destructive is trash-first and undoable (`ctrl+z`); replace conflicts stash victims in trash
 - **Previews**: kitty image thumbnails, tree-sitter syntax highlighting, folder stats
-- **Fast icons**: rsvg-tinted SVG rasters cached on disk per theme
+- **Themes**: bundled color presets with live switching, fully configurable via `config.toml`
 
 ## Requirements
 
