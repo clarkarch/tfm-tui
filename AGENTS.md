@@ -64,7 +64,7 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 
 - Sidebar "Recent"/"Starred" are virtual cwds (`recent://` / `starred://`) — guard anything touching `state.cwd` with `isVirtualCwd()` or it tries to readdir the URI.
 - ALL copies/moves funnel through `runTransfer()` (conflict prompt, undo units, progress toast); renames through `performRename()` — raw `fsRename` silently overwrites on Linux.
-- Undo = Ctrl+Z (`pushUndoBatch`). Replace stashes victims in trash so undo restores them.
+- Undo = Ctrl+Z, redo = Ctrl+Y / Ctrl+Shift+Z (`pushUndoBatch` with paired `redos` — every batch carries forward AND inverse closures; a fresh op clears the redo stack; batches without `redos` (replace-stash) break the redo chain). Replace stashes victims in trash so undo restores them.
 - Bookmarks = standard `~/.config/gtk-3.0/bookmarks` (folders only); toggle lives in properties dialog beside star.
 
 ## Icons

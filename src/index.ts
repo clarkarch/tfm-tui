@@ -1720,12 +1720,22 @@ const finishInlineRename = (commit: boolean): void => {
   if (value !== path.basename(edit.key)) {
     // create-unit is pushed BEFORE performRename so undo pops rename-back
     // first, then removes the entry entirely
-    if (edit.createKind) pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(edit.key, { recursive: true })]);
+    if (edit.createKind) {
+      const k = edit.key;
+      const redoCreate: UndoUnit = edit.createKind === "folder"
+        ? async () => { try { if (!existsSync(k)) await mkdir(k, { recursive: true }); } catch {} }
+        : async () => { try { if (!existsSync(k)) await writeFile(k, ""); } catch {} };
+      pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(k, { recursive: true })], [redoCreate]);
+    }
     void performRename(edit.key, value);
     return;
   }
   if (edit.createKind) {
-    pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(edit.key, { recursive: true })]);
+    const k = edit.key;
+    const redoCreate: UndoUnit = edit.createKind === "folder"
+      ? async () => { try { if (!existsSync(k)) await mkdir(k, { recursive: true }); } catch {} }
+      : async () => { try { if (!existsSync(k)) await writeFile(k, ""); } catch {} };
+    pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(k, { recursive: true })], [redoCreate]);
     setStatusMsg(`Created ${value} · ctrl+z to undo`);
   }
 };
@@ -1864,12 +1874,16 @@ type ConflictChoice = "replace" | "keepBoth" | "skip";
 let conflictPolicy: ConflictChoice | null = null;
 
 type UndoUnit = () => Promise<void> | void;
-const undoStack: { label: string; units: UndoUnit[] }[] = [];
+// every batch carries paired inverses: `units` reverse the op, `redos` re-apply it
+type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
+const undoStack: OpBatch[] = [];
+const redoStack: OpBatch[] = [];
 
-const pushUndoBatch = (label: string, units: UndoUnit[]): void => {
+const pushUndoBatch = (label: string, units: UndoUnit[], redos: UndoUnit[] = []): void => {
   if (!units.length) return;
-  undoStack.push({ label, units });
+  undoStack.push({ label, units, redos });
   if (undoStack.length > 30) undoStack.shift();
+  redoStack.length = 0; // a fresh action forks history — stale redos are gone
 };
 
 const undoLast = (): void => {
@@ -1882,11 +1896,31 @@ const undoLast = (): void => {
       const u = entry.units[i];
       try { await u?.(); } catch (err) { failed++; failWhy.add(fsErrText(err)); }
     }
+    // only batches that know how to re-apply themselves stay redoable
+    if (entry.redos.length) redoStack.push(entry);
     renderAll();
     const why = [...failWhy][0];
     const summary = failed ? `Undo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}` : `Undid: ${entry.label}`;
-    setStatusMsg(summary);
+    setStatusMsg(failed || !entry.redos.length ? summary : `${summary} · ctrl+y to redo`);
     notify(summary, failed ? "undo failed" : "undo");
+  })();
+};
+
+const redoLast = (): void => {
+  const entry = redoStack.pop();
+  if (!entry) { setStatusMsg("Nothing to redo"); return; }
+  void (async () => {
+    let failed = 0;
+    const failWhy = new Set<string>();
+    for (const r of entry.redos) {
+      try { await r?.(); } catch (err) { failed++; failWhy.add(fsErrText(err)); }
+    }
+    undoStack.push(entry);
+    renderAll();
+    const why = [...failWhy][0];
+    const summary = failed ? `Redo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}` : `Redid: ${entry.label}`;
+    setStatusMsg(summary);
+    notify(summary, failed ? "redo failed" : "redo");
   })();
 };
 
@@ -2263,6 +2297,7 @@ const fsErrText = (err: unknown): string => {
 async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void> {
   conflictPolicy = null;
   const units: UndoUnit[] = [];
+  const redos: UndoUnit[] = [];
   let ok = 0, skipped = 0, replaced = 0, failed = 0, gone = 0;
   const failWhy = new Set<string>();
   const total = srcs.length;
@@ -2323,8 +2358,13 @@ async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[],
       if (op === "copy") await copyTreeProgress(src, target);
       else await fsMove(src, target);
       const t = target, s = src;
-      if (op === "copy") units.push(() => xdgTrashMove(t).then(() => undefined));
-      else units.push(() => safeRestoreMove(t, s));
+      if (op === "copy") {
+        units.push(() => xdgTrashMove(t).then(() => undefined));
+        redos.push(async () => { try { if (!existsSync(t)) await copyTreeProgress(src, t); } catch {} });
+      } else {
+        units.push(() => safeRestoreMove(t, s));
+        redos.push(async () => { try { if (existsSync(s) && !existsSync(t)) await fsMove(s, t); } catch {} });
+      }
       ok++;
     } catch (err) {
       // don't leave half-copied files behind
@@ -2337,7 +2377,7 @@ async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[],
   } finally {
     prog.active = false;
   }
-  pushUndoBatch(label, units);
+  pushUndoBatch(label, units, redos);
   renderAll();
   const verb = op === "copy" ? "Copied" : "Moved";
   const bits = [`${verb} ${ok} item${ok === 1 ? "" : "s"}`];
@@ -2367,6 +2407,7 @@ const performRename = async (p: string, v: string): Promise<void> => {
   if (path.resolve(dest) === path.resolve(p)) { renderAll(); return; }
   let finalDest = dest;
   const units: UndoUnit[] = [];
+  const redos: UndoUnit[] = [];
   if (existsSync(finalDest)) {
     conflictPolicy = null;
     const choice = await promptConflict(finalDest, 0);
@@ -2387,7 +2428,8 @@ const performRename = async (p: string, v: string): Promise<void> => {
   try {
     await fsRename(p, finalDest);
     units.push(() => fsRename(finalDest, p));
-    pushUndoBatch("rename", units);
+    redos.push(async () => { try { if (existsSync(p) && !existsSync(finalDest)) await fsRename(p, finalDest); } catch {} });
+    pushUndoBatch("rename", units, redos);
     renderAll();
     setStatusMsg(`Renamed to ${path.basename(finalDest)} · ctrl+z to undo`);
     notify(`Renamed to ${path.basename(finalDest)}`, "rename");
@@ -2740,6 +2782,7 @@ const xdgTrashMove = async (p: string): Promise<string> => {
 const trashPaths = (paths: string[]): void => {
   void (async () => {
     const units: UndoUnit[] = [];
+    const redos: UndoUnit[] = [];
     let ok = 0;
     const failWhy = new Set<string>();
     for (const p of paths) {
@@ -2754,10 +2797,11 @@ const trashPaths = (paths: string[]): void => {
           await safeRestoreMove(from, p);
           try { await rm(path.join(TRASH_DIR, "info", `${hit}.trashinfo`)); } catch {}
         });
+        redos.push(async () => { try { if (existsSync(p)) await xdgTrashMove(p); } catch {} });
         ok++;
       } catch (err) { failWhy.add(fsErrText(err)); }
     }
-    pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units);
+    pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units, redos);
     renderAll();
     const failed = paths.length - ok;
     const why = [...failWhy][0];
@@ -5420,6 +5464,10 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   if (ctrl && (e.name === "v" || e.unicode === "v") && !isVirtualCwd()) {
     pasteSmart(state.cwd);
+    return;
+  }
+  if ((ctrl && e.shift && (e.name === "z" || e.unicode === "z")) || (ctrl && (e.name === "y" || e.unicode === "y"))) {
+    redoLast();
     return;
   }
   if (ctrl && (e.name === "z" || e.unicode === "z")) {
