@@ -37,7 +37,20 @@ if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.sli
 const config = loadConfig();
 
 // --- Color palette (theme from config; Tokyo Night defaults) ---
+
+// Terminals with background_opacity (kitty etc.) composite only their DEFAULT
+// background; OpenTUI leaves unpainted cells on SGR 49, so those go
+// see-through. transparentBg=false forces an opaque UI: renderer clear color =
+// bg, and bg itself nudged one step so it can never byte-equal the terminal's
+// default color. true keeps the theme faithful and gaps on terminal default.
+const bumpHex = (hex: string): string => {
+  const n = Number.parseInt(hex.slice(1), 16);
+  if (!Number.isFinite(n)) return hex;
+  return `#${Math.min(0xffffff, n + 1).toString(16).padStart(6, "0")}`;
+};
+
 const colors: Theme & Record<string, string> = { ...config.theme };
+if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
 
 // --- Nerd Font glyphs: FALLBACK ONLY ---
 const glyph = {
@@ -1232,7 +1245,7 @@ const container = Box(
 );
 
 // --- Renderer boot ---
-const renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 60, maxFps: 120 });
+const renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 60, maxFps: 120, ...(config.ui.transparentBg ? {} : { backgroundColor: colors.bg }) });
 renderer.root.add(container);
 renderer.setBackgroundColor(colors.bg); // opencode-style: global bg lives on the renderer, not per-box
 
@@ -4365,6 +4378,11 @@ const settingGroups = (): { header?: string; rows: SettingRow[] }[] => [
         set: (v) => { config.ui.showHidden = v; state.showHidden = v; commitSetting(); } },
       { kind: "toggle", label: "preview pane", get: () => config.ui.previewEnabled,
         set: (v) => { config.ui.previewEnabled = v; commitSetting(); } },
+      // fresh-object setter on purpose: applyConfig diffs config vs fresh, so
+      // mutating config first (like the rows above) would self-compare equal
+      // and skip the cache-invalidation/clear-color swap
+      { kind: "toggle", label: "transparent bg", get: () => config.ui.transparentBg,
+        set: (v) => { applyConfig({ ui: { ...config.ui, transparentBg: v }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
     ],
   },
   {
@@ -4867,10 +4885,12 @@ const rethemeChrome = (): void => {
 };
 
 const applyConfig = (fresh: Config): void => {
-  const themeChanged = JSON.stringify(config.theme) !== JSON.stringify(fresh.theme);
+  const themeChanged = JSON.stringify(config.theme) !== JSON.stringify(fresh.theme) ||
+    config.ui.transparentBg !== fresh.ui.transparentBg;
   Object.assign(config.ui, fresh.ui);
   Object.assign(config.theme, fresh.theme);
   Object.assign(colors, fresh.theme);
+  if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
 
   sw = config.ui.sidebarWidth;
   TILE_W = config.ui.tileWidth;
@@ -4891,7 +4911,7 @@ const applyConfig = (fresh: Config): void => {
     iconCache.clear();
     thumbCache.clear();
     for (const s of iconQueue) s.done = false;
-    try { renderer.setBackgroundColor(colors.bg); } catch {}
+    try { renderer.setBackgroundColor(config.ui.transparentBg ? "transparent" : colors.bg); } catch {}
     // grid/sidebar rebuild picks up the new palette; everything else needs this
     rethemeChrome();
     syncTerminalTheme();

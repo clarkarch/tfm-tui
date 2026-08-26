@@ -51,6 +51,7 @@ export type UiConfig = {
   previewEnabled: boolean;
   previewWidth: number;
   restoreSession: boolean;
+  transparentBg: boolean;
 };
 
 export type Config = { ui: UiConfig; theme: Theme };
@@ -66,6 +67,7 @@ export const defaultConfig: Config = {
     previewEnabled: false,
     previewWidth: 40,
     restoreSession: false,
+    transparentBg: false,
   },
   theme: {
     bg: "#1a1b26",
@@ -155,6 +157,7 @@ export function loadConfig(): Config {
       previewEnabled: typeof uiRaw["preview-enabled"] === "boolean" ? uiRaw["preview-enabled"] : defaultConfig.ui.previewEnabled,
       previewWidth: clampInt(uiRaw["preview-width"], 20, 80, defaultConfig.ui.previewWidth),
       restoreSession: typeof uiRaw["restore-session"] === "boolean" ? uiRaw["restore-session"] : defaultConfig.ui.restoreSession,
+      transparentBg: typeof uiRaw["transparent-bg"] === "boolean" ? uiRaw["transparent-bg"] : defaultConfig.ui.transparentBg,
     },
     theme: THEME_KEYS.reduce((acc, key) => {
       acc[key] = pickColor(themeRaw[key], defaultConfig.theme[key]);
@@ -178,6 +181,7 @@ export function serializeConfig(cfg: Config): string {
       "preview-enabled": cfg.ui.previewEnabled,
       "preview-width": cfg.ui.previewWidth,
       "restore-session": cfg.ui.restoreSession,
+      "transparent-bg": cfg.ui.transparentBg,
     },
     theme: { ...cfg.theme },
   };
