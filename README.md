@@ -25,7 +25,13 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 
 - Linux
 - A terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) — **recommended: kitty** (full experience incl. cross-app drag & drop); ghostty gets thumbnails but not cross-app drag; others fall back to Nerd Font glyphs
-- `rsvg-convert` (icon rasterization), `wl-paste`/`xclip` (clipboard bridge)
+- Runtime helpers (the installer checks these and tells you what's missing):
+  - `rsvg-convert` — theme-tinted icons (else Nerd Font glyphs)
+  - `magick` — SVG image thumbnails
+  - `gio` — Nautilus-compatible trash & starred files
+  - `xdg-open` — opening files in their default app
+  - `udisksctl` — removable-drive mount/eject
+  - `wl-paste`/`wl-copy` or `xclip` — clipboard bridge with GUI apps
 
 ## Install
 
@@ -51,7 +57,9 @@ Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 | type anywhere | live search · `enter` opens first match · `esc` cancels |
 | `enter` / `f2` | open / rename |
 | `backspace` | parent directory |
-| `ctrl+z` / `ctrl+a` | undo / select all |
+| `ctrl+z` / `ctrl+y` | undo / redo |
+| `ctrl+x` / `ctrl+c` / `ctrl+v` | cut / copy / paste |
+| `ctrl+a` | select all |
 | `ctrl+h` | toggle hidden files |
 | `delete` | trash (`delete` again in trash: permanent) |
 | `ctrl+click` / `shift+click` | toggle / range select |
