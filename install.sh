@@ -25,3 +25,18 @@ ln -sf "$DEST/tfm" "$DEST/terminal-file-manager"
 
 echo "tfm: installed -> $DEST/tfm (run it via \"tfm\" or \"terminal-file-manager\")"
 command -v tfm >/dev/null 2>&1 || echo "tfm: note: $DEST is not in your PATH — add it to use 'tfm'"
+
+# tfm degrades gracefully without these, but each one disables something
+have() { command -v "$1" >/dev/null 2>&1; }
+MISSING=""
+add_missing() { MISSING="$MISSING $1"; }
+have rsvg-convert || add_missing "rsvg-convert (icons — falls back to font glyphs)"
+have magick       || add_missing "magick (SVG thumbnails)"
+have gio          || add_missing "gio (trash/stars — XDG fallback used)"
+have xdg-open     || add_missing "xdg-open (opening files)"
+have udisksctl    || add_missing "udisksctl (drive mount/eject)"
+if ! have wl-paste && ! have wl-copy && ! have xclip; then
+  add_missing "wl-paste/wl-copy or xclip (system clipboard bridge)"
+fi
+
+[ -n "$MISSING" ] && echo "tfm: missing optional helpers, install if you want those features:$MISSING"
