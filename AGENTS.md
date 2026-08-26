@@ -10,6 +10,10 @@ bun src/index.ts     # run
 bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bundler --skipLibCheck src/index.ts   # typecheck (always run after edits)
 ```
 
+## Doc hygiene
+
+- The moment a fix reveals a non-obvious lesson, record it here; if any claim in this file proves wrong or hallucinated, correct it in the same change. Stale docs cause regressions — but only record what actually matters.
+
 ## Critical OpenTUI rules (learned the hard way)
 
 - Composition helpers (`Box()`, `Text()`, `Input()`) return **lazy proxied VNodes**. Mutating them before/after mount silently does nothing. For runtime changes: give an `id`, then use `renderer.root.findDescendantById(id)` and mutate the real renderable.
@@ -27,6 +31,7 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 - `renderer.subscribeOsc(cb)` is the sanctioned way to receive OSC sequences (kitty DnD etc.) — never add a second `process.stdin` data listener.
 - Ctrl+I == Tab in all terminals; check `opentui/packages/core/src/lib/parse.keypress.ts` when binding keys.
 - **Put ids on the TEXT node, not its wrapper Box** when the text must change at runtime. Boxes have no `.content`, so `progSetText(boxId, …)`-style updates no-op silently (bit us twice: progress-toast title/bar stayed blank).
+- **Never mutate selection at mousedown when that press can also start a drag.** A modifier that means both "click toggle" and "drag" (ctrl) must DEFER its click action to mouseup-without-movement (`commitPendingCtrlToggle`). Toggling at mousedown unselected the pressed tile → ctrl+drag moved 0 items ("Moved 0 items") and rubber-band + ctrl-drag silently dropped the pressed file from `dragKeys`. Drag payload = selection ∪ {pressed tile}, committed only once the drag threshold trips.
 
 ## Kitty DnD (OSC 72) — what works
 
@@ -52,6 +57,7 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 ## Environment / tooling gotchas
 
 - `gio trash` fails on tmpfs ("system internal mounts") — need an XDG manual fallback (`xdgTrashMove`).
+- The embedded terminal's VT answers nothing by itself — shells that probe at boot (fish: Primary DA) stall ~10s with a "could not read response" warning. `answerTerminalProbes` replies inline to DA1/DA2/DSR in the PTY stream; extend it there if another probe stalls a shell.
 - `magick` SVG thumbnails require `-density` before the input path.
 
 ## Virtual places & file ops
@@ -81,5 +87,6 @@ bunx tsc --noEmit --strict --target esnext --module esnext --moduleResolution bu
 - UI is one file (`src/index.ts`), built imperatively at module level; runtime mutation goes through ids + `findDescendantById`.
 - All config changes flow through ONE path: mutate → `applyConfig(fresh)` → `scheduleSaveConfig()` (debounced TOML write, atomic tmp+rename). `applyConfig` rewrites the mutable geometry lets (`sw`, `TILE_W/TILE_H/ICON_CELLS_H` — never bake these into consts), repaints boot-baked widgets via `rethemeChrome()` (extend it whenever you add a widget with baked colors), and invalidates icon/thumbnail caches on theme change. Boot-baked icon slots need a `statesFactory` or they keep stale palette rasters.
 - `src/themes.ts` is generated — edit via `bun scripts/gen-themes.ts <opencode-assets-dir>` (steals dark palettes from opencode's TUI assets, flattens alpha hex onto bg, skips transparent-background themes).
-- Selection model: plain click = anchor + select, ctrl+click = toggle (anchor untouched), shift/alt+click & shift+arrows = extend from anchor. Ctrl+drag stays internal-move DnD.
+- Selection model: plain click = anchor + select, ctrl+click = toggle (anchor untouched, committed on mouseup — see deferred-toggle rule above), shift/alt+click & shift+arrows = extend from anchor. Ctrl+drag stays internal-move DnD.
+- Drag diagnosis: `/tmp/tfm-dnd.log` logs the whole path (`drag offer` accept/decline + why, `tile mousedown/drop` payload counts, `moveInto` in/out filtering). `Moved 0 items` from a drag means `runTransfer` got an empty srcs list — trace `dragKeys` backwards.
 - `.gitignore`d: `node_modules/`, `nautilus/`, `opentui/` (reference clones, not project code).

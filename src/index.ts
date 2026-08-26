@@ -601,6 +601,7 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
         const keys = dragKeys;
         finishDragState();
         const target = placeTarget();
+        dlog(`place drop ${place.label} keys=${keys?.length ?? -1} scheme=${place.scheme ?? "-"} target=${target}`);
         if (!keys || !target || place.scheme) return;
         const rest = keys.filter((k) => k.path !== target);
         if (!rest.length) return;
@@ -1066,6 +1067,47 @@ const upsertRecentXbel = async (paths: string[]): Promise<void> => {
 const openFileDefault = (p: string): void => {
   recordOpen(p);
   spawn("xdg-open", [p], { stdio: "ignore", detached: true }).unref?.();
+  void notifyOpenedWith(p);
+};
+
+// resolve the app xdg-open will pick so the toast can say what launched
+const runOutShort = async (cmd: string[]): Promise<string> => {
+  try {
+    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const timer = setTimeout(() => { try { proc.kill(); } catch {} }, 1500);
+    const out = (await new Response(proc.stdout).text()).trim();
+    clearTimeout(timer);
+    return out;
+  } catch { return ""; }
+};
+
+const desktopAppName = async (desktopId: string): Promise<string> => {
+  if (!desktopId) return "";
+  const dirs = [
+    path.join(xdgDataHome(), "applications"),
+    "/usr/local/share/applications",
+    "/usr/share/applications",
+    "/var/lib/flatpak/exports/share/applications",
+    path.join(home, ".local/share/flatpak/exports/share/applications"),
+  ];
+  for (const d of dirs) {
+    try {
+      // first non-localized Name= inside [Desktop Entry]
+      const m = readFileSync(path.join(d, desktopId), "utf8").match(/^\[Desktop Entry\][\s\S]*?^Name=(.+)$/m);
+      if (m?.[1]) return m[1].trim();
+    } catch {}
+  }
+  return desktopId.replace(/\.desktop$/, "");
+};
+
+const notifyOpenedWith = async (p: string): Promise<void> => {
+  const base = path.basename(p);
+  let app = "";
+  try {
+    const mime = await runOutShort(["xdg-mime", "query", "filetype", p]);
+    if (mime) app = await desktopAppName(await runOutShort(["xdg-mime", "query", "default", mime]));
+  } catch {}
+  notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open");
 };
 
 // Starred registry: tfm's own list, kept in sync with gvfs metadata so
@@ -1613,7 +1655,7 @@ const moveFocus = (dx: number, dy: number): boolean => {
   return selectTileAt(next);
 };
 
-type TileRefs = { iconSpec?: IconSpec; selected: boolean; baseFg: string; tileId: string; labelId: string; isDir: boolean };
+type TileRefs = { iconSpec?: IconSpec; iconSlotId?: string; selected: boolean; baseFg: string; tileId: string; labelId: string; isDir: boolean };
 const tileRefsByKey = new Map<string, TileRefs>();
 
 const tileStates = (dim: boolean): IconState[] => {
@@ -1622,16 +1664,25 @@ const tileStates = (dim: boolean): IconState[] => {
     { fg: norm, bg: colors.bg },
     { fg: norm, bg: colors.hoverBg },
     { fg: colors.accent, bg: colors.accentBg },
+    { fg: colors.sidebarFgMuted, bg: colors.bg }, // 3 = cut (pending move)
   ];
 };
 
 const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   const refs = tileRefsByKey.get(key);
   if (!refs) return;
-  setIconState(refs.iconSpec, mode);
+  const cut = mode === 0 && !refs.selected && isCutKey(key);
+  setIconState(refs.iconSpec, cut ? 3 : mode);
+  if (!refs.iconSpec) {
+    // thumbnail slots have no state rasters — fade the whole slot instead
+    try {
+      const slot: any = renderer.root.findDescendantById(refs.iconSlotId ?? "");
+      if (slot) slot.opacity = cut ? 0.45 : 1;
+    } catch {}
+  }
   const labelReal: any = renderer.root.findDescendantById(refs.labelId);
   if (labelReal) {
-    try { labelReal.fg = mode === 2 ? colors.accent : refs.baseFg; } catch {}
+    try { labelReal.fg = mode === 2 ? colors.accent : cut ? colors.sidebarFgMuted : refs.baseFg; } catch {}
   }
   const tileReal: any = renderer.root.findDescendantById(refs.tileId);
   if (tileReal) {
@@ -1784,6 +1835,15 @@ const updateSelectionStatus: () => void = () => updateSelectionStatusReal();
 // --- File operations ---
 type ClipItem = { path: string; isDir: boolean };
 let clipboard: { mode: "copy" | "cut"; items: ClipItem[] } | null = null;
+
+// cut (pending-move) tiles render dimmed, nautilus-style
+const isCutKey = (key: string): boolean =>
+  clipboard?.mode === "cut" && clipboard.items.some((i) => i.path === key);
+
+// re-apply resting visuals after a cut/copy/paste so dimming tracks the clipboard
+const refreshCutVisuals = (): void => {
+  tileRefsByKey.forEach((refs, key) => { if (!refs.selected) setTileVisual(key, 0); });
+};
 
 let statusMsgTimer: any = null;
 const setStatusMsg = (text: string) => {
@@ -2342,6 +2402,7 @@ const setClipboard = (mode: "copy" | "cut", items: ClipItem[]) => {
   clipboard = items.length ? { mode, items } : null;
   if (clipboard) toSystemClipboard(mode, items);
   setStatusMsg(clipboard ? `${mode === "cut" ? "Cut" : "Copied"} ${items.length} item${items.length === 1 ? "" : "s"}` : "");
+  refreshCutVisuals();
 };
 
 // --- system clipboard bridge (Nautilus-style copied-files) ---
@@ -2446,6 +2507,7 @@ const doPaste = async (dest: string): Promise<void> => {
   const mode = clipboard.mode === "copy" ? "copy" : "move";
   const srcs = clipboard.items.map((i) => i.path);
   clipboard = null;
+  refreshCutVisuals();
   await runTransfer(mode, dest, srcs, mode === "copy" ? "paste" : "paste (move)");
 };
 
@@ -2456,6 +2518,22 @@ let dragActive = false;
 let dropTargetKey: string | null = null;
 let dragStartX = 0;
 let dragStartY = 0;
+
+// ctrl+press defers its toggle until we know it was a click, not a drag —
+// toggling at mousedown unselected the pressed tile and emptied the payload
+let ctrlPendingKey: string | null = null;
+let ctrlPendingState = false;
+const commitPendingCtrlToggle = (): void => {
+  const k = ctrlPendingKey;
+  ctrlPendingKey = null;
+  if (!k || dragActive) return;
+  const refs = tileRefsByKey.get(k);
+  if (!refs) return;
+  refs.selected = ctrlPendingState;
+  setTileVisual(k, ctrlPendingState ? 2 : 0);
+  updateSelectionStatusReal();
+  void renderPreview();
+};
 
 const DRAG_GHOST_ID = "tfm-drag-ghost";
 
@@ -2480,6 +2558,8 @@ const hideDragGhost = (): void => {
 };
 
 const finishDragState = (): void => {
+  dlog(`finishDragState active=${dragActive} target=${dropTargetKey}`);
+  ctrlPendingKey = null;
   hideDragGhost();
   dragCtrl = false;
   if (dropTargetKey) {
@@ -2498,6 +2578,7 @@ const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
   const srcs = items
     .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
     .map((it) => it.path);
+  dlog(`moveInto dest=${destDir} in=${items.length} out=${srcs.length} dropped=[${items.filter((it) => it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))).map((it) => it.path.split("/").pop()).join(",")}]`);
   await runTransfer("move", destDir, srcs, `move to ${path.basename(destDir) || "/"}`);
 };
 
@@ -2561,6 +2642,25 @@ const closeTerminalPane = (): void => {
   renderAll();
 };
 
+// fish waits up to 10s for a Primary Device Attribute reply the embedded VT
+// never sends (boot stalls with a "could not read response" warning). Answer
+// the common probes inline; sequences may split across chunks, hence the tail.
+const termProbeEnc = new TextEncoder();
+let termProbeTail = "";
+const answerTerminalProbes = (data: Uint8Array): void => {
+  try {
+    const pty = (termChild as any)?.terminal;
+    if (!pty) return;
+    const buf = termProbeTail + new TextDecoder().decode(data);
+    let resp = "";
+    if (/\x1b\[[0-9]*c/.test(buf)) resp += "\x1b[?62;1;2;6;9;15;22c"; // DA1 (tmux-style vt320)
+    if (/\x1b\[>[0-9]*c/.test(buf)) resp += "\x1b[>0;0;0c";           // secondary DA
+    if (/\x1b\[5n/.test(buf)) resp += "\x1b[0n";                      // device status OK
+    if (resp) pty.write(termProbeEnc.encode(resp));
+    termProbeTail = /(?:\x1b|\x1b\[|\x1b\[>)[0-9=>]*$/.test(buf) ? buf.slice(-8) : "";
+  } catch {}
+};
+
 const openTerminalHere = (dir?: string): void => {
   if (!renderer.resolution) return;
   if (term) { try { term.focus(); } catch {}; termFocused = true; return; }
@@ -2600,6 +2700,7 @@ const openTerminalHere = (dir?: string): void => {
         cols: Math.max(20, renderer.terminalWidth - sw),
         rows: TERM_H,
         data(_pty: any, data: Uint8Array) {
+          answerTerminalProbes(data);
           try { term?.write(data); } catch {}
         },
       },
@@ -3371,16 +3472,19 @@ const renderGrid = async () => {
         const mods = ev.modifiers ?? {};
 
         // ctrl+click (no movement): toggle membership — coexists with ctrl+drag
-        // which still means internal move once the drag threshold trips
+        // which still means internal move once the drag threshold trips.
+        // The toggle itself is DEFERRED to mouseup: applying it here unselected
+        // the pressed tile, so ctrl+dragging a selected file moved 0 items and
+        // rubber-band + ctrl+drag dropped the pressed file from the payload.
         if (mods.ctrl) {
           const refs = tileRefsByKey.get(key);
-          if (refs) {
-            refs.selected = !refs.selected;
-            setTileVisual(key, refs.selected ? 2 : 0);
-          }
+          const wasSel = !!refs?.selected;
+          ctrlPendingKey = key;
+          ctrlPendingState = !wasSel;
           updateSelectionStatusReal();
           void renderPreview();
-          dragKeys = selPaths();
+          dragKeys = wasSel ? selPaths() : [...selPaths(), { path: key, isDir: e.isDir }];
+          dlog(`ctrl mousedown ${key} wasSel=${wasSel} provisional=${dragKeys.length}`);
           dragActive = false;
           dragStartX = ev.x;
           dragStartY = ev.y;
@@ -3427,13 +3531,21 @@ const renderGrid = async () => {
         dragStartX = ev.x;
         dragStartY = ev.y;
         dragCtrl = !!ev.modifiers?.ctrl;
+        dlog(`tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${dragKeys.length} ctrl=${dragCtrl}`);
       },
-      onMouseUp: () => { if (dragKeys) scheduleDragCleanup(); },
-      onMouseDragEnd: () => { if (dragKeys) scheduleDragCleanup(); },
+      onMouseUp: () => { if (dragKeys) { dlog("tile mouseup -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
+      onMouseDragEnd: () => { if (dragKeys) { dlog("tile dragend -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
       onMouseDrag: (ev: any) => {
         if (!dragKeys) return;
         if (!dragActive && (Math.abs(ev.x - dragStartX) > 1 || Math.abs(ev.y - dragStartY) > 1)) {
           dragActive = true;
+          ctrlPendingKey = null; // it became a drag — the click-toggle never happened
+          // payload tiles must actually be selected or the visual state lies
+          for (const k of dragKeys) {
+            const r = tileRefsByKey.get(k.path);
+            if (r && !r.selected) { r.selected = true; setTileVisual(k.path, 2); }
+          }
+          dlog(`internal drag start n=${dragKeys.length}`);
           setStatusMsg(`Dragging ${dragKeys.length} item${dragKeys.length === 1 ? "" : "s"}…`);
         }
         if (dragActive) updateDragGhost(ev.x, ev.y);
@@ -3441,13 +3553,14 @@ const renderGrid = async () => {
       onMouseDrop: () => {
         const keys = dragKeys;
         const dest = dropTargetKey;
+        dlog(`tile drop keys=${keys?.length ?? -1}[${keys?.map((k) => k.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${e.isDir}`);
         finishDragState();
         if (keys && dest && e.isDir) void moveInto(dest, keys.filter((k) => k.path !== dest));
       },
       onMouseOver: () => {
         if (dragActive) {
           const draggingSelf = !!dragKeys?.some((k) => k.path === key);
-          if (e.isDir && !draggingSelf) { dropTargetKey = key; setTileVisual(key, 2); }
+          if (e.isDir && !draggingSelf) { dlog(`hover target set ${key}`); dropTargetKey = key; setTileVisual(key, 2); }
           return;
         }
         const refs = tileRefsByKey.get(key);
@@ -3494,7 +3607,7 @@ const renderGrid = async () => {
     const labelText: any = Text({ id: labelId, content: label, fg: baseFg });
     tile.add(labelText);
 
-    tileRefsByKey.set(key, { iconSpec, selected: false, baseFg, tileId, labelId, isDir: e.isDir });
+    tileRefsByKey.set(key, { iconSpec, iconSlotId: slotId, selected: false, baseFg, tileId, labelId, isDir: e.isDir });
 
     if (useThumb && st) {
         thumbJobs.push({
@@ -3517,6 +3630,9 @@ const renderGrid = async () => {
     for (const e of entries.slice(i, i + cols)) row.add(buildTile(e, tileIdx++));
     scroller.content.add(row);
   }
+
+  // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
+  tileRefsByKey.forEach((_, key) => { if (isCutKey(key)) setTileVisual(key, 0); });
 
   // fresh Text nodes default selectable=true; strip AFTER the async rebuild or
   // the renderer's text-selection drag hijacks file-drag events
@@ -4896,16 +5012,21 @@ const finishSelfDrop = async (x: number, y: number): Promise<void> => {
     return;
   }
   const destDir = target.path;
-  let ok = 0;
-  for (const src of paths) {
-    if (src === destDir || destDir.startsWith(src + path.sep)) continue;
-    const dest = path.join(destDir, path.basename(src));
-    if (existsSync(dest)) continue;
-    try { await fsMove(src, dest); ok++; } catch {}
+  // same routing as tile/place drops: conflict prompt, undo units, honest counts —
+  // never silently skip collisions; the trash place must gio-trash, not raw-move
+  if (destDir === path.join(home, ".local/share/Trash/files")) {
+    void trashPaths(paths);
+    return;
   }
-  renderAll();
-  setStatusMsg(`Moved ${ok} item${ok === 1 ? "" : "s"}`);
-  notify(`Moved ${ok} item${ok === 1 ? "" : "s"} into ${path.basename(destDir) || destDir}`, "drag & drop");
+  const items: ClipItem[] = paths.map((p) => ({
+    path: p,
+    isDir:
+      tileRefsByKey.get(p)?.isDir ??
+      (() => {
+        try { return statSync(p).isDirectory(); } catch { return false; }
+      })(),
+  }));
+  await moveInto(destDir, items);
 };
 
 const percentEncodePath = (p: string): string => encodeURIComponent(p).replace(/%2F/g, "/");
@@ -4964,7 +5085,7 @@ const handleOsc72 = (meta: string, payload: string): void => {
   // declined so the internal move flow keeps the pointer and its UI feedback
   if (t === "o" && x >= 0) {
     const want = !dragCtrl && !!dragKeys?.length && !promptOpen && !menuOpen && !fileMenuState;
-    dlog(`drag offer x=${x} y=${y} ctrl=${dragCtrl} accept=${want}`);
+    dlog(`drag offer x=${x} y=${y} ctrl=${dragCtrl} accept=${want} keys=${dragKeys?.length ?? -1} prompt=${promptOpen} menu=${menuOpen} fmenu=${!!fileMenuState}`);
     if (!want || !dragKeys) return; // left-drag: kitty falls back to normal mouse events
     beginOsc72Drag(dragKeys.map((k) => k.path));
     return;
