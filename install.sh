@@ -24,7 +24,25 @@ mv "$TMP/tfm" "$DEST/tfm"
 ln -sf "$DEST/tfm" "$DEST/terminal-file-manager"
 
 echo "tfm: installed -> $DEST/tfm (run it via \"tfm\" or \"terminal-file-manager\")"
-command -v tfm >/dev/null 2>&1 || echo "tfm: note: $DEST is not in your PATH — run: export PATH=\"$DEST:\$PATH\""
+# make sure 'tfm' resolves: prefer an already-on-PATH dir we can write, else
+# add a PATH entry to the user's shell rc (idempotent)
+if ! command -v tfm >/dev/null 2>&1; then
+  if [ -w /usr/local/bin ] && ln -sf "$DEST/tfm" /usr/local/bin/tfm 2>/dev/null; then
+    ln -sf "$DEST/tfm" /usr/local/bin/terminal-file-manager 2>/dev/null || true
+    echo "tfm: linked into /usr/local/bin — available now"
+  else
+    case "$(basename "${SHELL:-bash}")" in
+      fish) RCFILE="$HOME/.config/fish/config.fish"; LINE="fish_add_path $DEST" ;;
+      zsh)  RCFILE="$HOME/.zshrc";                   LINE="export PATH=\"$DEST:\$PATH\"" ;;
+      *)    RCFILE="${BASHRC:-$HOME/.bashrc}";       LINE="export PATH=\"$DEST:\$PATH\"" ;;
+    esac
+    mkdir -p "$(dirname "$RCFILE")"; touch "$RCFILE"
+    if ! grep -qF '# tfm PATH' "$RCFILE"; then
+      { echo; echo '# tfm PATH'; echo "$LINE"; } >> "$RCFILE"
+      echo "tfm: PATH entry added to $RCFILE — open a new shell or run: source $RCFILE"
+    fi
+  fi
+fi
 
 # tfm degrades gracefully without these, but each one disables something
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -40,6 +58,8 @@ if ! have wl-paste && ! have wl-copy && ! have xclip; then
 fi
 
 if [ -n "$MISSING" ]; then
-  echo "tfm: missing optional helpers (install if you want those features):"
-  printf '%b' "$MISSING"
+  RED=""; RST=""
+  [ -t 1 ] && { RED=$'\033[31m'; RST=$'\033[0m'; }
+  printf '%s\n' "${RED}tfm: missing optional helpers (install if you want those features):${RST}"
+  printf '%s%b%s' "$RED" "$MISSING" "$RST"
 fi
