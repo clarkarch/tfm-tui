@@ -29,14 +29,17 @@ command -v tfm >/dev/null 2>&1 || echo "tfm: note: $DEST is not in your PATH —
 # tfm degrades gracefully without these, but each one disables something
 have() { command -v "$1" >/dev/null 2>&1; }
 MISSING=""
-add_missing() { MISSING="$MISSING $1"; }
-have rsvg-convert || add_missing "rsvg-convert (icons — falls back to font glyphs)"
-have magick       || add_missing "magick (SVG thumbnails)"
-have gio          || add_missing "gio (trash/stars — XDG fallback used)"
-have xdg-open     || add_missing "xdg-open (opening files)"
-have udisksctl    || add_missing "udisksctl (drive mount/eject)"
+add_missing() { MISSING="${MISSING}  - $1\\n"; }
+have rsvg-convert || add_missing "rsvg-convert — icons fall back to font glyphs"
+have magick       || add_missing "magick — SVG thumbnails"
+have gio          || add_missing "gio — trash/stars use XDG fallback"
+have xdg-open     || add_missing "xdg-open — opening files"
+have udisksctl    || add_missing "udisksctl — drive mount/eject"
 if ! have wl-paste && ! have wl-copy && ! have xclip; then
-  add_missing "wl-paste/wl-copy or xclip (system clipboard bridge)"
+  add_missing "wl-paste/wl-copy or xclip — system clipboard bridge"
 fi
 
-[ -n "$MISSING" ] && echo "tfm: missing optional helpers, install if you want those features:$MISSING"
+if [ -n "$MISSING" ]; then
+  echo "tfm: missing optional helpers (install if you want those features):"
+  printf '%b' "$MISSING"
+fi
