@@ -4148,6 +4148,14 @@ const sidebarEntriesFor = (place: Place, x: number, y: number): ListEntry[] => {
   if (target) {
     entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(target); } });
     entries.push({ icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(target); } });
+    // paste into real places (not virtual views, not the trash)
+    if (!place.scheme && target !== path.join(TRASH_DIR, "files")) {
+      entries.push({
+        icon: "content-paste",
+        label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste",
+        action: () => { closeFileMenu(); pasteSmart(target); },
+      });
+    }
     if (target === path.join(TRASH_DIR, "files")) {
       entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(); } });
     } else if (place.bookmarked) {
@@ -4189,6 +4197,13 @@ const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number
   entries.push(
     { icon: "content-copy", label: `Copy${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); setClipboard("copy", targets); } },
     { icon: "content-cut", label: `Cut${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); setClipboard("cut", targets); } },
+    ...(isDir
+      ? [{
+          icon: "content-paste",
+          label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"} into folder` : "Paste into folder",
+          action: () => { closeFileMenu(); pasteSmart(targetPath); },
+        } satisfies ListEntry]
+      : []),
     { icon: "pencil", label: "Rename…", action: () => {
         closeFileMenu();
         startInlineRename(targetPath);
