@@ -24,7 +24,7 @@ mv "$TMP/tfm" "$DEST/tfm"
 ln -sf "$DEST/tfm" "$DEST/terminal-file-manager"
 
 echo "tfm: installed -> $DEST/tfm (run it via \"tfm\" or \"terminal-file-manager\")"
-command -v tfm >/dev/null 2>&1 || echo "tfm: note: $DEST is not in your PATH — add it to use 'tfm'"
+command -v tfm >/dev/null 2>&1 || echo "tfm: note: $DEST is not in your PATH — run: export PATH=\"$DEST:\$PATH\""
 
 # tfm degrades gracefully without these, but each one disables something
 have() { command -v "$1" >/dev/null 2>&1; }
