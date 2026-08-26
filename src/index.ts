@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { loadConfig, configPath, saveConfig, defaultConfig, type Config, type Theme } from "./config";
 import { THEME_PRESETS, type ThemePreset } from "./themes";
+import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
 
 const execFileP = promisify(execFile);
 
@@ -51,6 +52,10 @@ const bumpHex = (hex: string): string => {
 
 const colors: Theme & Record<string, string> = { ...config.theme };
 if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
+
+// inner width available to children of the sidebar panel: outline mode's
+// border ring reserves one cell per side (yoga setBorder)
+const sideInnerW = (): number => (config.ui.uiStyle === "outline" ? sw - 2 : sw);
 
 // --- Nerd Font glyphs: FALLBACK ONLY ---
 const glyph = {
@@ -566,14 +571,16 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
   const selected = !!place.path
     ? path.resolve(place.path) === path.resolve(state.cwd)
     : !!place.scheme && state.cwd === placeTarget();
+  const st = config.ui.uiStyle;
   const normFg = colors.sidebarFg;
   const selFg = colors.accent;
+  const rowBg = slotBg(st, colors, colors.sidebarBg);
   const iconStates: IconState[] = [
-    { fg: normFg, bg: colors.sidebarBg },
+    { fg: normFg, bg: rowBg },
     { fg: normFg, bg: colors.hoverBg },
     { fg: selFg, bg: colors.accentBg },
   ];
-  const maxLabel = sw - 4 - (place.ejectable ? 3 : 0);
+  const maxLabel = sideInnerW() - 4 - (place.ejectable ? 3 : 0);
   const paddedLabel = place.label.padEnd(Math.max(0, maxLabel)).slice(0, maxLabel);
 
   const iconSlot = makeIconSlot(place.icon, iconStates, 1, selected ? 2 : 0);
@@ -592,12 +599,12 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
   const rowNode = Box(
     {
       id: `tfm-place-${idx}`,
-      width: sw,
+      width: sideInnerW(),
       height: 1,
       flexDirection: "row",
       columnGap: 1,
       paddingLeft: 1,
-      backgroundColor: selected ? colors.accentBg : colors.sidebarBg,
+      ...(selected ? { backgroundColor: colors.accentBg } : rowSurface(st, colors, "rest")),
       onMouseDown: (ev: any) => {
         if (ev.button === 2) {
           closeFileMenu();
@@ -672,14 +679,14 @@ const renderSidebar = () => {
 
 const makeTitle = () =>
   Box(
-    { id: "tfm-title-box", width: sw, height: 5, flexDirection: "column", justifyContent: "center", paddingLeft: 1 },
+    { id: "tfm-title-box", width: sideInnerW(), height: 5, flexDirection: "column", justifyContent: "center", paddingLeft: 1 },
     ASCIIFont({ id: "tfm-title-font", text: "tfm", font: "tiny", color: colors.accent }),
     Text({ id: "tfm-title-sub", content: " terminal file manager", fg: colors.sidebarFgMuted }),
   );
 
 const makeDivider = () =>
   Box(
-    { width: sw, height: 1 },
+    { width: sideInnerW(), height: 1 },
     Text({ content: " " + "~".repeat(sw - 2), fg: colors.divider }),
   );
 
@@ -696,7 +703,7 @@ let navHover: Record<string, boolean> = {};
 const navBtnBg = (id: string) => {
   try {
     const n: any = renderer.root.findDescendantById(id);
-    if (n) n.backgroundColor = navHover[id] ? colors.hoverBg : colors.bg;
+    if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, !!navHover[id]));
   } catch {}
 };
 
@@ -715,7 +722,7 @@ const makeNavButton = (id: "tfm-nav-back" | "tfm-nav-fwd", iconName: string, onA
       height: 1,
       width: 3,
       justifyContent: "center",
-      backgroundColor: colors.bg,
+      ...btnSurface(config.ui.uiStyle, colors, false),
       onMouseDown: () => { closeFileMenu(); onActivate(); },
       onMouseOver: () => { navHover[id] = true; refreshNav(); },
       onMouseOut: () => { navHover[id] = false; refreshNav(); },
@@ -833,7 +840,7 @@ const renderCrumbs = () => {
       if (iconSlot && !current) setIconState(iconSlot.spec, on ? 1 : 0);
       try {
         const n: any = renderer.root.findDescendantById(`tfm-crumb-${i}`);
-        if (n) n.backgroundColor = on && !current ? colors.hoverBg : colors.bg;
+        if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on && !current));
       } catch {}
     };
     const crumb = Box(
@@ -843,7 +850,7 @@ const renderCrumbs = () => {
         flexDirection: "row",
         alignItems: "center",
         columnGap: 1,
-        backgroundColor: colors.bg,
+        ...btnSurface(config.ui.uiStyle, colors, false),
         ...(current
           ? {}
           : {
@@ -877,7 +884,7 @@ const hoverBtn = (
     setIconState(slot.spec, on ? 1 : 0);
     try {
       const n: any = renderer.root.findDescendantById(id);
-      if (n) n.backgroundColor = on ? colors.hoverBg : colors.bg;
+      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on));
     } catch {}
   };
   return Box(
@@ -886,7 +893,7 @@ const hoverBtn = (
       height: 1,
       width: 3,
       justifyContent: "center",
-      backgroundColor: colors.bg,
+      ...btnSurface(config.ui.uiStyle, colors, false),
       onMouseDown,
       onMouseOver: () => paint(true),
       onMouseOut: () => paint(false),
@@ -1214,12 +1221,12 @@ async function listDir(dir: string, showHidden: boolean): Promise<Entry[]> {
 const container = Box(
   { width: "100%", height: "100%", flexDirection: "row" },
   Box(
-    { id: "tfm-sidebar-root", width: sw, height: "100%", backgroundColor: colors.sidebarBg, flexDirection: "column" },
+    { id: "tfm-sidebar-root", width: sw, height: "100%", ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg), flexDirection: "column" },
     makeTitle(),
-    Box({ id: "tfm-places", width: sw, flexDirection: "column" }),
+    Box({ id: "tfm-places", width: sideInnerW(), flexDirection: "column" }),
   ),
   Box(
-    { id: "tfm-main", flexGrow: 1, height: "100%", backgroundColor: colors.bg, flexDirection: "column" },
+    { id: "tfm-main", flexGrow: 1, height: "100%", ...chromeSurface(config.ui.uiStyle, colors, colors.bg), flexDirection: "column" },
     makeToolbarShell(),
     Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
     // status bar sits above the embedded terminal pane (zero-height until opened),
@@ -1236,7 +1243,7 @@ const container = Box(
       width: config.ui.previewWidth,
       height: "100%",
       visible: config.ui.previewEnabled, // display:none in yoga: takes no layout space when hidden
-      backgroundColor: colors.sidebarBg,
+      ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,
@@ -1633,7 +1640,10 @@ const normalizePlaces = () => {
     const isHover = !isSel && (sidebarActive ? i === placeIdx : i === mousePlaceIdx);
     const row: any = renderer.root.findDescendantById(rec.rowId);
     const label: any = renderer.root.findDescendantById(rec.labelId);
-    try { if (row) row.backgroundColor = isSel ? colors.accentBg : isHover ? colors.hoverBg : colors.sidebarBg; } catch {}
+    if (row) applySurface(row, isSel
+      ? { backgroundColor: colors.accentBg }
+      : isHover ? { backgroundColor: colors.hoverBg }
+      : rowSurface(config.ui.uiStyle, colors, "rest"));
     rec.specs.forEach((s) => setIconState(s, isSel ? 2 : isHover ? 1 : 0));
     try { if (label) label.fg = isSel ? colors.accent : colors.sidebarFg; } catch {}
   });
@@ -1699,9 +1709,8 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   }
   const tileReal: any = renderer.root.findDescendantById(refs.tileId);
   if (tileReal) {
-    try {
-      tileReal.backgroundColor = mode === 0 ? colors.bg : mode === 1 ? colors.hoverBg : colors.accentBg;
-    } catch {}
+    const state = mode === 2 ? "selected" : mode === 1 ? "hover" : cut ? "cut" : "rest";
+    applySurface(tileReal, tileSurface(config.ui.uiStyle, colors, state));
   }
 };
 
@@ -1962,9 +1971,9 @@ const promptConflict = (destPath: string, remaining: number): Promise<ConflictCh
     let bseq = 0;
     const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> => {
       const id = `tfm-conflict-b${bseq++}`;
-      const setBg = (bg: string) => {
+      const setBg = (on: boolean) => {
         const n: any = renderer.root.findDescendantById(id);
-        if (n) { try { n.backgroundColor = bg; } catch {} }
+        if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
       };
       return Box(
         {
@@ -1973,10 +1982,10 @@ const promptConflict = (destPath: string, remaining: number): Promise<ConflictCh
           flexGrow: 1,
           flexDirection: "row",
           justifyContent: "center",
-          backgroundColor: colors.sidebarBg,
+          ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
           onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
-          onMouseOver: () => setBg(colors.hoverBg),
-          onMouseOut: () => setBg(colors.sidebarBg),
+          onMouseOver: () => setBg(true),
+          onMouseOut: () => setBg(false),
         },
         Text({ content: label, fg: colors.sidebarFg }),
       );
@@ -2035,7 +2044,7 @@ const promptConflict = (destPath: string, remaining: number): Promise<ConflictCh
         {
           id: "tfm-conflict-panel",
           width: CONFLICT_W,
-          backgroundColor: colors.sidebarBg,
+          ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
           paddingTop: 1,
           paddingBottom: 1,
           flexDirection: "column",
@@ -2724,7 +2733,7 @@ const openTerminalHere = (dir?: string): void => {
   const cwd = dir ?? (isVirtualCwd() ? home : state.cwd);
   host.height = TERM_H + 1;
   const header = Box(
-    { id: "tfm-term-header", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, backgroundColor: colors.sidebarBg },
+    { id: "tfm-term-header", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, ...(config.ui.uiStyle === "outline" ? {} : { backgroundColor: colors.sidebarBg }) },
     Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
     Box({ flexGrow: 1 }),
     escHintBtn("tfm-esc-term", closeTerminalPane),
@@ -2938,9 +2947,9 @@ const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, dang
   let bseq = 0;
   const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> => {
     const id = `tfm-yesno-b${bseq++}`;
-    const setBg = (bg: string) => {
+    const setBg = (on: boolean) => {
       const n: any = renderer.root.findDescendantById(id);
-      if (n) { try { n.backgroundColor = bg; } catch {} }
+      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
     };
     return Box(
       {
@@ -2949,10 +2958,10 @@ const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, dang
         flexGrow: 1,
         flexDirection: "row",
         justifyContent: "center",
-        backgroundColor: colors.sidebarBg,
+        ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
         onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
-        onMouseOver: () => setBg(colors.hoverBg),
-        onMouseOut: () => setBg(colors.sidebarBg),
+        onMouseOver: () => setBg(true),
+        onMouseOut: () => setBg(false),
       },
       Text({ content: label, fg }),
     );
@@ -2976,7 +2985,7 @@ const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, dang
       {
         id: "tfm-yesno-panel",
         width: W,
-        backgroundColor: colors.sidebarBg,
+        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
         paddingTop: 1,
         paddingBottom: 1,
         flexDirection: "column",
@@ -3262,7 +3271,7 @@ const renderPreview = async () => {
       size: st.size,
       wCells: w,
       hCells: h,
-      bg: colors.sidebarBg,
+      bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg),
       vector: key.toLowerCase().endsWith(".svg"),
       fallbackGlyph: glyph[fileIconFor(key) as keyof typeof glyph] ?? glyph.file!,
     });
@@ -3707,7 +3716,7 @@ const renderGrid = async () => {
 const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => {
   // X (close) raster with hover swap — replaced the old text "esc" hint
   const states = (): IconState[] => [
-    { fg: colors.sidebarFgMuted, bg: colors.sidebarBg },
+    { fg: colors.sidebarFgMuted, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) },
     { fg: colors.white, bg: colors.hoverBg },
   ];
   const slot = makeIconSlot("close", states(), 1, 0, undefined, states);
@@ -3715,7 +3724,7 @@ const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => 
     setIconState(slot.spec, on ? 1 : 0);
     try {
       const n: any = renderer.root.findDescendantById(id);
-      if (n) n.backgroundColor = on ? colors.hoverBg : colors.sidebarBg;
+      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
     } catch {}
   };
   return Box(
@@ -3725,7 +3734,7 @@ const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => 
       width: 3,
       height: 1,
       justifyContent: "center",
-      backgroundColor: colors.sidebarBg,
+      ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
       onMouseDown: () => onClose(),
       onMouseOver: () => paint(true),
       onMouseOut: () => paint(false),
@@ -3764,7 +3773,7 @@ const openPrompt = (title: string, initial: string, onSubmit: (value: string) =>
       {
         id: "tfm-prompt-panel",
         width: MENU_W,
-        backgroundColor: colors.sidebarBg,
+        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
         paddingTop: 1,
         paddingBottom: 1,
         flexDirection: "column",
@@ -3845,7 +3854,7 @@ const openProperties = (targetPath: string): void => {
       {
         id: "tfm-props-panel",
         width: PROPS_W,
-        backgroundColor: colors.sidebarBg,
+        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
         paddingTop: 1,
         paddingBottom: 1,
         flexDirection: "column",
@@ -3861,8 +3870,8 @@ const openProperties = (targetPath: string): void => {
   // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
   // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps
   const propsToggleStates = (): IconState[] => [
-    { fg: colors.sidebarFgMuted, bg: colors.sidebarBg },
-    { fg: colors.accent, bg: colors.sidebarBg },
+    { fg: colors.sidebarFgMuted, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) },
+    { fg: colors.accent, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) },
     { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
     { fg: colors.accent, bg: colors.hoverBg },
   ];
@@ -3870,7 +3879,7 @@ const openProperties = (targetPath: string): void => {
     setIconState(spec, (on ? 1 : 0) + (hover ? 2 : 0));
     try {
       const n: any = renderer.root.findDescendantById(btnId);
-      if (n) n.backgroundColor = hover ? colors.hoverBg : colors.sidebarBg;
+      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, hover, colors.sidebarBg));
     } catch {}
   };
 
@@ -3913,7 +3922,7 @@ const openProperties = (targetPath: string): void => {
         {
           id: "tfm-props-star",
           paddingLeft: 1,
-          backgroundColor: colors.sidebarBg,
+          ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
           onMouseOver: () => { starHover = true; propsTogglePaint("tfm-props-star", starSlot.spec, starred, true); },
           onMouseOut: () => { starHover = false; propsTogglePaint("tfm-props-star", starSlot.spec, starred, false); },
         },
@@ -3927,7 +3936,7 @@ const openProperties = (targetPath: string): void => {
             {
               id: "tfm-props-bm",
               paddingLeft: 1,
-              backgroundColor: colors.sidebarBg,
+              ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
               onMouseOver: () => { bmHover = true; propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, true); },
               onMouseOut: () => { bmHover = false; propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, false); },
             },
@@ -3956,12 +3965,12 @@ const openProperties = (targetPath: string): void => {
       size: st.size,
       wCells: heroW,
       hCells: ICON_H,
-      bg: colors.sidebarBg,
+      bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg),
       vector: targetPath.toLowerCase().endsWith(".svg"),
       fallbackGlyph: glyph[iconName as keyof typeof glyph] ?? glyph.file!,
     });
   } else {
-    heroEl = makeIconSlot(iconName, [{ fg: colors.sidebarFg, bg: colors.sidebarBg }], ICON_H).el;
+    heroEl = makeIconSlot(iconName, [{ fg: colors.sidebarFg, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) }], ICON_H).el;
   }
   panel.add(Box(
     { width: "100%", height: ICON_H + 1, flexDirection: "row", justifyContent: "center", alignItems: "center" },
@@ -4040,10 +4049,10 @@ const openProperties = (targetPath: string): void => {
       {
         id: rowId,
         width: "100%", height: 1, flexDirection: "row", paddingLeft: 1,
-        backgroundColor: colors.sidebarBg,
+        ...rowSurface(config.ui.uiStyle, colors, "rest"),
         onMouseDown: (ev: any) => openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
-        onMouseOver: () => setOnId(rowId, (n) => { n.backgroundColor = colors.hoverBg; }),
-        onMouseOut: () => setOnId(rowId, (n) => { n.backgroundColor = colors.sidebarBg; }),
+        onMouseOver: () => setOnId(rowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
+        onMouseOut: () => setOnId(rowId, (n) => applySurface(n, rowSurface(config.ui.uiStyle, colors, "rest"))),
       },
       Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
       Text({ id: permRowId(cls), content: permWords(st.mode, shift, isDirTarget), fg: colors.sidebarFg }),
@@ -4072,8 +4081,8 @@ const openProperties = (targetPath: string): void => {
   if (execCapable) {
     // raster checkbox: two slots (marked/blank) stacked in one hit area,
     // visibility flips with the exec bit
-    const cbOnSpec = makeIconSlot("checkbox-marked", [{ fg: colors.accent, bg: colors.sidebarBg }], 1, 0);
-    const cbOffSpec = makeIconSlot("checkbox-blank", [{ fg: colors.sidebarFgMuted, bg: colors.sidebarBg }], 1, 0);
+    const cbOnSpec = makeIconSlot("checkbox-marked", [{ fg: colors.accent, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) }], 1, 0);
+    const cbOffSpec = makeIconSlot("checkbox-blank", [{ fg: colors.sidebarFgMuted, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) }], 1, 0);
     syncExecCheckbox = (): void => {
       const on = !!(st.mode & 0o100);
       const a: any = renderer.root.findDescendantById(cbOnSpec.slotId);
@@ -4087,7 +4096,7 @@ const openProperties = (targetPath: string): void => {
       {
         id: execRowId,
         width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1,
-        backgroundColor: colors.sidebarBg,
+        ...rowSurface(config.ui.uiStyle, colors, "rest"),
         onMouseDown: () => {
           let nm: number;
           if (st.mode & 0o100) nm = st.mode & ~0o111;
@@ -4097,8 +4106,8 @@ const openProperties = (targetPath: string): void => {
           }
           void applyMode(nm);
         },
-        onMouseOver: () => setOnId(execRowId, (n) => { n.backgroundColor = colors.hoverBg; }),
-        onMouseOut: () => setOnId(execRowId, (n) => { n.backgroundColor = colors.sidebarBg; }),
+        onMouseOver: () => setOnId(execRowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
+        onMouseOut: () => setOnId(execRowId, (n) => applySurface(n, rowSurface(config.ui.uiStyle, colors, "rest"))),
       },
       Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),
       Text({ content: "execute as program", fg: colors.sidebarFg }),
@@ -4185,7 +4194,7 @@ const openContextMenu = (x: number, y: number, title: string, entries: ListEntry
       // above every modal (props/prompt/conflict/toast) — context menus can be
       // spawned from inside any of them
       zIndex: 3600,
-      backgroundColor: colors.sidebarBg,
+      ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
       flexDirection: "column",
     },
     Box(
@@ -4383,6 +4392,8 @@ const settingGroups = (): { header?: string; rows: SettingRow[] }[] => [
       // and skip the cache-invalidation/clear-color swap
       { kind: "toggle", label: "transparent bg", get: () => config.ui.transparentBg,
         set: (v) => { applyConfig({ ui: { ...config.ui, transparentBg: v }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
+      { kind: "cycle", label: "ui style", names: ["solid", "outline"], getIdx: () => (config.ui.uiStyle === "outline" ? 1 : 0),
+        setIdx: (i) => { applyConfig({ ui: { ...config.ui, uiStyle: i === 1 ? "outline" : "solid" }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
     ],
   },
   {
@@ -4688,7 +4699,7 @@ const openMenu = () => {
       {
         id: "tfm-menu-panel",
         width: MENU_W,
-        backgroundColor: colors.sidebarBg,
+        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
         paddingTop: 1,
         paddingBottom: 1,
         onMouseDown: (ev: any) => {
@@ -4848,21 +4859,26 @@ const setOnId = (id: string, fn: (n: any) => void): void => {
 // rebuilds never touch. Without this a runtime theme swap leaves the sidebar,
 // title, inputs, band, ghost and status bar in the old palette.
 const rethemeChrome = (): void => {
-  setOnId("tfm-sidebar-root", (n) => { n.backgroundColor = colors.sidebarBg; });
-  setOnId("tfm-main", (n) => { n.backgroundColor = colors.bg; });
+  const st = config.ui.uiStyle;
+  setOnId("tfm-sidebar-root", (n) => { n.width = sw; applySurface(n, chromeSurface(st, colors, colors.sidebarBg)); });
+  setOnId("tfm-main", (n) => applySurface(n, chromeSurface(st, colors, colors.bg)));
+  setOnId("tfm-title-box", (n) => { n.width = sideInnerW(); });
+  setOnId("tfm-places", (n) => { n.width = sideInnerW(); });
   setOnId("tfm-title-font", (n) => { n.color = colors.accent; });
   setOnId("tfm-title-sub", (n) => { n.fg = colors.sidebarFgMuted; });
-  setOnId("tfm-preview", (n) => { n.backgroundColor = colors.sidebarBg; });
+  setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
   setOnId(BAND_ID, (n) => { n.borderColor = colors.accent; });
   setOnId(DRAG_GHOST_ID, (n) => { n.backgroundColor = colors.accent; });
   setOnId(`${DRAG_GHOST_ID}-label`, (n) => { n.fg = colors.bg; });
   setOnId("tfm-status-label", (n) => { n.fg = colors.sidebarFgMuted; });
-  setOnId("tfm-prompt-panel", (n) => { n.backgroundColor = colors.sidebarBg; });
-  setOnId("tfm-term-header", (n) => { n.backgroundColor = colors.sidebarBg; });
+  setOnId("tfm-prompt-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
+  // 1-row header can't carry a border ring — just drop the fill in outline
+  setOnId("tfm-term-header", (n) => applySurface(n, st === "outline" ? {} : { backgroundColor: colors.sidebarBg }));
+
   // toolbar hover buttons: box bg must track the new palette between raster swaps
   for (const id of ["tfm-nav-back", "tfm-nav-fwd", "tfm-search-btn", "tfm-sort-btn"]) {
     setOnId(id, (n) => {
-      (n as any).backgroundColor = navHover[id] ? colors.hoverBg : colors.bg;
+      applySurface(n, btnSurface(st, colors, !!navHover[id]));
     });
   }
   renderCrumbs();
@@ -4875,18 +4891,19 @@ const rethemeChrome = (): void => {
     });
   }
   if (menuOpen) {
-    setOnId("tfm-menu-panel", (n) => { n.backgroundColor = colors.sidebarBg; });
+    setOnId("tfm-menu-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
     renderMenuContent();
   }
   if (fileMenuState) {
-    setOnId("tfm-filemenu", (n) => { n.backgroundColor = colors.sidebarBg; });
+    setOnId("tfm-filemenu", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
     renderFileMenu();
   }
 };
 
 const applyConfig = (fresh: Config): void => {
   const themeChanged = JSON.stringify(config.theme) !== JSON.stringify(fresh.theme) ||
-    config.ui.transparentBg !== fresh.ui.transparentBg;
+    config.ui.transparentBg !== fresh.ui.transparentBg ||
+    config.ui.uiStyle !== fresh.ui.uiStyle;
   Object.assign(config.ui, fresh.ui);
   Object.assign(config.theme, fresh.theme);
   Object.assign(colors, fresh.theme);
@@ -4897,7 +4914,7 @@ const applyConfig = (fresh: Config): void => {
   TILE_H = config.ui.tileHeight;
   ICON_CELLS_H = config.ui.iconCells;
   for (const id of ["tfm-sidebar-root", "tfm-title-box", "tfm-places"]) {
-    setOnId(id, (n) => { n.width = sw; });
+    setOnId(id, (n) => { n.width = id === "tfm-sidebar-root" ? sw : sideInnerW(); });
   }
   const pane: any = renderer.root.findDescendantById("tfm-preview");
   if (pane) {

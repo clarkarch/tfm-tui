@@ -3,6 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse, stringify } from "smol-toml";
+import type { UiStyle } from "./style";
 
 export type Theme = {
   bg: string;
@@ -52,6 +53,7 @@ export type UiConfig = {
   previewWidth: number;
   restoreSession: boolean;
   transparentBg: boolean;
+  uiStyle: UiStyle;
 };
 
 export type Config = { ui: UiConfig; theme: Theme };
@@ -68,6 +70,7 @@ export const defaultConfig: Config = {
     previewWidth: 40,
     restoreSession: false,
     transparentBg: false,
+    uiStyle: "solid",
   },
   theme: {
     bg: "#1a1b26",
@@ -158,6 +161,7 @@ export function loadConfig(): Config {
       previewWidth: clampInt(uiRaw["preview-width"], 20, 80, defaultConfig.ui.previewWidth),
       restoreSession: typeof uiRaw["restore-session"] === "boolean" ? uiRaw["restore-session"] : defaultConfig.ui.restoreSession,
       transparentBg: typeof uiRaw["transparent-bg"] === "boolean" ? uiRaw["transparent-bg"] : defaultConfig.ui.transparentBg,
+      uiStyle: uiRaw["ui-style"] === "outline" || uiRaw["ui-style"] === "solid" ? uiRaw["ui-style"] : defaultConfig.ui.uiStyle,
     },
     theme: THEME_KEYS.reduce((acc, key) => {
       acc[key] = pickColor(themeRaw[key], defaultConfig.theme[key]);
@@ -182,6 +186,7 @@ export function serializeConfig(cfg: Config): string {
       "preview-width": cfg.ui.previewWidth,
       "restore-session": cfg.ui.restoreSession,
       "transparent-bg": cfg.ui.transparentBg,
+      "ui-style": cfg.ui.uiStyle,
     },
     theme: { ...cfg.theme },
   };
