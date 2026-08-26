@@ -60,13 +60,13 @@ fi
 have() { command -v "$1" >/dev/null 2>&1; }
 MISSING=""
 add_missing() { MISSING="${MISSING}  - $1\\n"; }
-have rsvg-convert || add_missing "rsvg-convert — icons fall back to font glyphs"
-have magick       || add_missing "magick — SVG thumbnails"
-have gio          || add_missing "gio — trash/stars use XDG fallback"
-have xdg-open     || add_missing "xdg-open — required: opening files"
-have udisksctl    || add_missing "udisksctl — drive mount/eject"
+have rsvg-convert || add_missing "rsvg-convert — theme-tinted icons"
+have magick       || add_missing "magick — SVG image thumbnails"
+have gio          || add_missing "gio — Nautilus-compatible trash & starred files"
+have xdg-open     || add_missing "xdg-open — opens files in their default app (required)"
+have udisksctl    || add_missing "udisksctl — mount/eject removable drives"
 if ! have wl-paste && ! have wl-copy && ! have xclip; then
-  add_missing "wl-paste/wl-copy or xclip — system clipboard bridge"
+  add_missing "wl-paste/wl-copy or xclip — copy/paste between tfm and GUI apps"
 fi
 
 if [ -n "$MISSING" ]; then
