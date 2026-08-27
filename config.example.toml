@@ -15,6 +15,8 @@ preview-width = 40      # 20..80 cells
 restore-session = false # true = reopen the folder from the last quit instead of the launch cwd
 transparent-bg = false  # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 ui-style = "solid"      # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest
+tab-bar = false         # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
+view-mode = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
 
 [theme]
 bg = "#1a1b26"

@@ -98,6 +98,7 @@ const glyph = {
   play: "\u{F040A}",
   close: "\u{F0156}",
   terminal: "\u{F120}",
+  plus: "\u{F0415}",
 };
 
 // --- File type categories: icon NAMES live in ./filetype; this fills the
@@ -128,7 +129,7 @@ const makeIconSlot = (
   states: IconState[],
   heightCells = 1,
   initialState = 0,
-  onMouseDown?: () => void,
+  onMouseDown?: (ev: any) => void,
   statesFactory?: () => IconState[],
 ): { el: ReturnType<typeof Box>; slotId: string; spec: IconSpec } => {
   const slotId = `tfm-icon-${iconSeq++}`;
@@ -191,18 +192,69 @@ const state: AppState = {
 
 let renderAll: () => void = () => {};
 
-// --- session persistence: last folder survives restarts ---
+// --- session persistence: tabs (each with its own history) survive restarts ---
 const sessionFile = (): string =>
   path.join(process.env.XDG_STATE_HOME ?? path.join(home, ".local/state"), "tfm", "session.json");
+
+// --- Tabs: `state` is always the ACTIVE tab's view; switching copies the
+// live history refs into the outgoing tab slot and adopts the incoming one ---
+type Tab = { history: string[]; histIdx: number };
+const tabs: Tab[] = [{ history: [process.cwd()], histIdx: 0 }];
+let activeTab = 0;
+
+const syncTabFromState = (): void => {
+  const t = tabs[activeTab];
+  if (!t) return;
+  t.history = state.history;
+  t.histIdx = state.histIdx;
+};
+
+const adoptTab = (): void => {
+  const t = tabs[activeTab]!;
+  state.history = t.history;
+  state.histIdx = t.histIdx;
+};
+
+const switchTab = (i: number): void => {
+  if (i < 0 || i >= tabs.length || i === activeTab) return;
+  syncTabFromState();
+  activeTab = i;
+  adoptTab();
+  renderAll();
+};
+
+// opens right of the active tab at the same folder, with a fresh history
+const newTab = (dir?: string): void => {
+  const start = dir ?? state.cwd;
+  tabs.splice(activeTab + 1, 0, { history: [start], histIdx: 0 });
+  syncTabFromState();
+  activeTab++;
+  adoptTab();
+  renderAll();
+  setStatusMsg(`Tab ${activeTab + 1}/${tabs.length}`);
+};
+
+// closing the last tab quits, like a browser's last window
+const closeTab = (i: number = activeTab): void => {
+  if (i < 0 || i >= tabs.length) return;
+  if (tabs.length === 1) { quitApp(); return; }
+  if (i === activeTab) syncTabFromState();
+  tabs.splice(i, 1);
+  activeTab = i < activeTab ? activeTab - 1 : Math.min(activeTab, tabs.length - 1);
+  adoptTab();
+  renderAll();
+  setStatusMsg(`Tab ${activeTab + 1}/${tabs.length}`);
+};
 
 let sessionTimer: any = null;
 const scheduleSaveSession = (): void => {
   if (sessionTimer) clearTimeout(sessionTimer);
   sessionTimer = setTimeout(() => {
     sessionTimer = null;
+    syncTabFromState();
     if (isVirtualCwd()) return;
     void mkdir(path.dirname(sessionFile()), { recursive: true })
-      .then(() => writeFile(sessionFile(), JSON.stringify({ cwd: state.cwd })))
+      .then(() => writeFile(sessionFile(), JSON.stringify({ cwd: state.cwd, tabs, activeTab })))
       .catch(() => {});
   }, 400);
 };
@@ -211,14 +263,37 @@ const restoreSession = (): void => {
   // off by default: launching tfm from a shell should open where you are;
   // opt in via [ui] restore-session = true
   if (!config.ui.restoreSession) return;
+  const usable = (p: string): boolean => {
+    if (isVirtualUri(p)) return p === RECENT_URI || p === STARRED_URI;
+    try { return statSync(p).isDirectory(); } catch { return false; }
+  };
   try {
     const doc = JSON.parse(readFileSync(sessionFile(), "utf8"));
-    const cwd = typeof doc?.cwd === "string" ? doc.cwd : "";
-    if (!cwd || cwd === RECENT_URI || cwd === STARRED_URI) return;
-    try {
-      if (statSync(cwd).isDirectory()) { state.cwd = cwd; state.history = [cwd]; state.histIdx = 0; }
-    } catch {}
+    if (Array.isArray(doc?.tabs)) {
+      const restored: Tab[] = [];
+      for (const t of doc.tabs) {
+        const hist: string[] = Array.isArray(t?.history)
+          ? t.history.filter((p: unknown) => typeof p === "string" && usable(p as string))
+          : [];
+        if (!hist.length) continue;
+        restored.push({ history: hist, histIdx: Math.min(Math.max(0, t.histIdx | 0), hist.length - 1) });
+      }
+      if (restored.length) {
+        tabs.length = 0;
+        tabs.push(...restored);
+        activeTab = Math.min(Math.max(0, doc.activeTab | 0), tabs.length - 1);
+      }
+    } else {
+      // legacy single-cwd session file
+      const cwd = typeof doc?.cwd === "string" ? doc.cwd : "";
+      if (cwd && cwd !== RECENT_URI && cwd !== STARRED_URI) {
+        try {
+          if (statSync(cwd).isDirectory()) { tabs.length = 0; tabs.push({ history: [cwd], histIdx: 0 }); activeTab = 0; }
+        } catch {}
+      }
+    }
   } catch {}
+  adoptTab();
 };
 
 const canBack = () => state.histIdx > 0;
@@ -586,6 +661,76 @@ const renderSidebar = () => {
   if (sidebarActive && placeIdx >= 0) {
     normalizePlaces();
   }
+};
+
+// --- Tab strip: one clickable chip per open tab + a new-tab button ---
+const tabTitle = (t: Tab): string => {
+  const cwd = t.history[t.histIdx] ?? t.history[0] ?? "";
+  if (cwd === RECENT_URI) return "Recent";
+  if (cwd === STARRED_URI) return "Starred";
+  const base = path.basename(cwd) || cwd || "/";
+  return base.length > 16 ? base.slice(0, 15) + "…" : base;
+};
+
+const renderTabbar = (): void => {
+  const bar: any = renderer.root.findDescendantById("tfm-tabbar");
+  if (!bar) return;
+  // visibility rule: setting ON = strip always visible (even with one tab, so
+  // the ＋ button stays reachable); setting OFF = adaptive — the strip only
+  // earns a row once there's something to switch to (visible=false is
+  // display:none in yoga — no empty row left)
+  try { bar.visible = config.ui.tabBar || tabs.length > 1; } catch {}
+  [...bar.getChildren()].forEach((c: any) => bar.remove(c));
+  tabs.forEach((t, i) => {
+    const tabId = `tfm-tab-${i}`;
+    const paint = () => {
+      const n: any = renderer.root.findDescendantById(tabId);
+      if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, i === activeTab ? "selected" : "rest"));
+    };
+    // ✕ flatten target must match the chip's own fill, or the raster shows as
+    // a square patch on the active tab (accentBg) vs the canvas (rest states)
+    const closeStates = (): IconState[] => [
+      { fg: colors.sidebarFgMuted, bg: i === activeTab ? colors.accentBg : slotBg(config.ui.uiStyle, colors, colors.bg) },
+      { fg: colors.white, bg: colors.hoverBg },
+    ];
+    const closeSlot = makeIconSlot("close", closeStates(), 1, 0, (ev: any) => {
+      try { ev.stopPropagation?.(); } catch {} // ✕ must not also activate the chip
+      closeTab(i);
+    }, closeStates);
+    // makeIconSlot only takes onMouseDown — hover swap goes on a wrapper
+    const closeWrap = Box(
+      {
+        onMouseOver: () => { setIconState(closeSlot.spec, 1); },
+        onMouseOut: () => { setIconState(closeSlot.spec, 0); },
+      },
+      closeSlot.el,
+    );
+    bar.add(Box(
+      {
+        id: tabId,
+        height: 1,
+        maxWidth: 24,
+        flexDirection: "row",
+        columnGap: 1,
+        paddingLeft: 1,
+        paddingRight: 1,
+        ...tileSurface(config.ui.uiStyle, colors, i === activeTab ? "selected" : "rest"),
+        onMouseDown: (ev: any) => {
+          try { ev.stopPropagation?.(); } catch {}
+          closeFileMenu();
+          if (ev.button === 1) closeTab(i); // middle-click also closes
+          else switchTab(i);
+        },
+        onMouseOver: () => { if (i !== activeTab) { const n: any = renderer.root.findDescendantById(tabId); if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, "hover")); } },
+        onMouseOut: paint,
+      },
+      Text({ content: tabTitle(t), fg: i === activeTab ? colors.white : colors.sidebarFg }),
+      closeWrap,
+    ));
+  });
+  bar.add(hoverBtn("tfm-tab-new", "plus", () => newTab()));
+  stripSelectable();
+  void drainIconQueue();
 };
 
 const makeTitle = () =>
@@ -1022,6 +1167,7 @@ const container = Box(
   Box(
     { id: "tfm-main", flexGrow: 1, height: "100%", ...chromeSurface(config.ui.uiStyle, colors, colors.bg), flexDirection: "column" },
     makeToolbarShell(),
+    Box({ id: "tfm-tabbar", width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, visible: config.ui.tabBar }),
     Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
     // status bar sits above the embedded terminal pane (zero-height until opened),
     // so with a terminal open the bar hugs its top edge instead of sinking below it
@@ -1395,6 +1541,9 @@ let tileSeq = 0;
 let focusKeys: string[] = [];
 let focusIdx = -1;
 let colsAtBuild = 1;
+// per-row height of the last build (TILE_H for grid, 1 for list) — keyboard
+// scrolling uses it to page by the right amount in either view mode
+let rowHAtBuild = config.ui.tileHeight;
 // anchor tile for shift+click range selection (index into focusKeys)
 let selAnchor: number | null = null;
 
@@ -1458,8 +1607,8 @@ const selectTileAt = (idx: number): boolean => {
       const row = Math.floor(idx / colsAtBuild);
       const vh = renderer.terminalHeight - 3;
       const top = scroller.scrollTop;
-      if (row * TILE_H < top) scroller.scrollTo({ x: 0, y: row * TILE_H });
-      else if ((row + 1) * TILE_H > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * TILE_H - vh });
+      if (row * rowHAtBuild < top) scroller.scrollTo({ x: 0, y: row * rowHAtBuild });
+      else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * rowHAtBuild - vh });
     } catch {}
   }
   return true;
@@ -3094,6 +3243,149 @@ const clearGrid = () => {
   tileRefsByKey.clear();
 };
 
+// Mouse behavior shared by grid tiles AND list rows: selection (plain/ctrl/
+// shift), double-click open, drag payload prep, drop-into-folder, hover. Both
+// view modes register the exact same logic on differently-shaped containers;
+// all state lives in tileRefsByKey + the drag module vars, keyed by path.
+const entryMouseHandlers = (e: Entry, key: string, idx: number) => {
+  let lastClick = 0;
+  return {
+    onMouseDown: (ev: any) => {
+      try { ev.stopPropagation?.(); } catch {}
+      closeFileMenu();
+      if (renameEdit && renameEdit.key !== key) finishInlineRename(false);
+      if (ev.button === 2) {
+        // Nautilus behavior: right-click selects the tile unless it's already
+        // part of the live multi-selection
+        if (!tileRefsByKey.get(key)?.selected) {
+          clearTileSelection();
+          const r = tileRefsByKey.get(key);
+          if (r) { r.selected = true; setTileVisual(key, 2); }
+          updateSelectionStatusReal();
+          void renderPreview();
+        }
+        openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir, ev.x, ev.y));
+        return;
+      }
+      // the ctrl modifier decides internal vs external for drags
+      // (see the OSC 72 offer handler)
+      const now = Date.now();
+      if (now - lastClick < config.ui.doubleClickMs) {
+        if (e.isDir) navigate(key);
+        else openFileDefault(key);
+        lastClick = 0;
+        return;
+      }
+      lastClick = now;
+      const mods = ev.modifiers ?? {};
+
+      // ctrl+click (no movement): toggle membership — coexists with ctrl+drag
+      // which still means internal move once the drag threshold trips.
+      // The toggle itself is DEFERRED to mouseup: applying it here unselected
+      // the pressed tile, so ctrl+dragging a selected file moved 0 items and
+      // rubber-band + ctrl+drag dropped the pressed file from the payload.
+      if (mods.ctrl) {
+        const refs = tileRefsByKey.get(key);
+        const wasSel = !!refs?.selected;
+        ctrlPendingKey = key;
+        ctrlPendingState = !wasSel;
+        updateSelectionStatusReal();
+        void renderPreview();
+        dragKeys = wasSel ? selPaths() : [...selPaths(), { path: key, isDir: e.isDir }];
+        dlog(`ctrl mousedown ${key} wasSel=${wasSel} provisional=${dragKeys.length}`);
+        dragActive = false;
+        dragStartX = ev.x;
+        dragStartY = ev.y;
+        dragCtrl = true;
+        return;
+      }
+
+      // shift+click / alt+click: range select. The anchor persists across
+      // clicks so each alt+click re-extends from the SAME origin; plain and
+      // ctrl clicks are what move/reset it.
+      if ((mods.shift || mods.alt)) {
+        if (selAnchor === null) selAnchor = focusIdx >= 0 ? focusIdx : 0;
+        selectRange(selAnchor, idx);
+        updateSelectionStatusReal();
+        void renderPreview();
+        dragKeys = selPaths();
+        dragActive = false;
+        dragStartX = ev.x;
+        dragStartY = ev.y;
+        dragCtrl = false;
+        return;
+      }
+
+      const prevSel = selPaths();
+      const wasSelected = !!tileRefsByKey.get(key)?.selected;
+      clearTileSelection();
+      selAnchor = idx;
+      const refs = tileRefsByKey.get(key);
+      if (refs) {
+        if (wasSelected && prevSel.length > 1) {
+          for (const s of prevSel) {
+            const r2 = tileRefsByKey.get(s.path);
+            if (r2) { r2.selected = true; setTileVisual(s.path, 2); }
+          }
+        } else {
+          refs.selected = true;
+          setTileVisual(key, 2);
+        }
+      }
+      updateSelectionStatusReal();
+      void renderPreview();
+      dragKeys = wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: e.isDir }];
+      dragActive = false;
+      dragStartX = ev.x;
+      dragStartY = ev.y;
+      dragCtrl = !!ev.modifiers?.ctrl;
+      dlog(`tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${dragKeys.length} ctrl=${dragCtrl}`);
+    },
+    onMouseUp: () => { if (dragKeys) { dlog("tile mouseup -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
+    onMouseDragEnd: () => { if (dragKeys) { dlog("tile dragend -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
+    onMouseDrag: (ev: any) => {
+      if (!dragKeys) return;
+      if (!dragActive && (Math.abs(ev.x - dragStartX) > 1 || Math.abs(ev.y - dragStartY) > 1)) {
+        dragActive = true;
+        ctrlPendingKey = null; // it became a drag — the click-toggle never happened
+        // payload tiles must actually be selected or the visual state lies
+        for (const k of dragKeys) {
+          const r = tileRefsByKey.get(k.path);
+          if (r && !r.selected) { r.selected = true; setTileVisual(k.path, 2); }
+        }
+        dlog(`internal drag start n=${dragKeys.length}`);
+        setStatusMsg(`Dragging ${dragKeys.length} item${dragKeys.length === 1 ? "" : "s"}…`);
+      }
+      if (dragActive) updateDragGhost(ev.x, ev.y);
+    },
+    onMouseDrop: () => {
+      const keys = dragKeys;
+      const dest = dropTargetKey;
+      dlog(`tile drop keys=${keys?.length ?? -1}[${keys?.map((k) => k.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${e.isDir}`);
+      finishDragState();
+      if (keys && dest && e.isDir) void moveInto(dest, keys.filter((k) => k.path !== dest));
+    },
+    onMouseOver: () => {
+      if (dragActive) {
+        const draggingSelf = !!dragKeys?.some((k) => k.path === key);
+        if (e.isDir && !draggingSelf) { dlog(`hover target set ${key}`); dropTargetKey = key; setTileVisual(key, 2); }
+        return;
+      }
+      const refs = tileRefsByKey.get(key);
+      if (!refs?.selected) setTileVisual(key, 1);
+    },
+    onMouseOut: () => {
+      if (dragActive && dropTargetKey === key) {
+        dropTargetKey = null;
+        setTileVisual(key, 0);
+        return;
+      }
+      const refs = tileRefsByKey.get(key);
+      if (!refs?.selected) setTileVisual(key, 0);
+    },
+  };
+};
+
 const renderGrid = async () => {
   if (!scroller) return;
   const gen = ++gridGen;
@@ -3169,12 +3461,25 @@ const renderGrid = async () => {
   await waitForResolution();
   if (gen !== gridGen) return;
   const { aspect } = cellMetrics();
+  const isList = config.ui.viewMode === "list";
   const reservedRight = config.ui.previewEnabled ? config.ui.previewWidth : 0;
-  const cols = Math.max(1, Math.floor((renderer.terminalWidth - sw - reservedRight - 3) / TILE_W));
+  const cols = isList ? 1 : Math.max(1, Math.floor((renderer.terminalWidth - sw - reservedRight - 3) / TILE_W));
+
+  // list view always shows size + modified columns, so fetch whatever stats
+  // the active sort mode didn't already populate
+  if (isList) {
+    for (const en of entries) {
+      if (en.size !== undefined && en.mtimeMs !== undefined) continue;
+      try {
+        const st = statSync(en.abs ?? path.join(state.cwd, en.name));
+        en.size = st.size;
+        en.mtimeMs = st.mtimeMs ?? 0;
+      } catch {}
+    }
+  }
 
   const buildTile = (e: Entry, idx: number) => {
     const key = e.abs ?? path.join(state.cwd, e.name);
-    let lastClick = 0;
     const tileId = `tfm-tile-${tileSeq++}`;
     const labelId = `${tileId}-label`;
     const tile = Box({
@@ -3184,139 +3489,7 @@ const renderGrid = async () => {
       flexDirection: "column",
       alignItems: "center",
       justifyContent: "flex-start",
-      onMouseDown: (ev: any) => {
-        try { ev.stopPropagation?.(); } catch {}
-        closeFileMenu();
-        if (renameEdit && renameEdit.key !== key) finishInlineRename(false);
-        if (ev.button === 2) {
-          // Nautilus behavior: right-click selects the tile unless it's already
-          // part of the live multi-selection
-          if (!tileRefsByKey.get(key)?.selected) {
-            clearTileSelection();
-            const r = tileRefsByKey.get(key);
-            if (r) { r.selected = true; setTileVisual(key, 2); }
-            updateSelectionStatusReal();
-            void renderPreview();
-          }
-          openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir, ev.x, ev.y));
-          return;
-        }
-        // the ctrl modifier decides internal vs external for drags
-        // (see the OSC 72 offer handler)
-        const now = Date.now();
-        if (now - lastClick < config.ui.doubleClickMs) {
-          if (e.isDir) navigate(key);
-          else openFileDefault(key);
-          lastClick = 0;
-          return;
-        }
-        lastClick = now;
-        const mods = ev.modifiers ?? {};
-
-        // ctrl+click (no movement): toggle membership — coexists with ctrl+drag
-        // which still means internal move once the drag threshold trips.
-        // The toggle itself is DEFERRED to mouseup: applying it here unselected
-        // the pressed tile, so ctrl+dragging a selected file moved 0 items and
-        // rubber-band + ctrl+drag dropped the pressed file from the payload.
-        if (mods.ctrl) {
-          const refs = tileRefsByKey.get(key);
-          const wasSel = !!refs?.selected;
-          ctrlPendingKey = key;
-          ctrlPendingState = !wasSel;
-          updateSelectionStatusReal();
-          void renderPreview();
-          dragKeys = wasSel ? selPaths() : [...selPaths(), { path: key, isDir: e.isDir }];
-          dlog(`ctrl mousedown ${key} wasSel=${wasSel} provisional=${dragKeys.length}`);
-          dragActive = false;
-          dragStartX = ev.x;
-          dragStartY = ev.y;
-          dragCtrl = true;
-          return;
-        }
-
-        // shift+click / alt+click: range select. The anchor persists across
-        // clicks so each alt+click re-extends from the SAME origin; plain and
-        // ctrl clicks are what move/reset it.
-        if ((mods.shift || mods.alt)) {
-          if (selAnchor === null) selAnchor = focusIdx >= 0 ? focusIdx : 0;
-          selectRange(selAnchor, idx);
-          updateSelectionStatusReal();
-          void renderPreview();
-          dragKeys = selPaths();
-          dragActive = false;
-          dragStartX = ev.x;
-          dragStartY = ev.y;
-          dragCtrl = false;
-          return;
-        }
-
-        const prevSel = selPaths();
-        const wasSelected = !!tileRefsByKey.get(key)?.selected;
-        clearTileSelection();
-        selAnchor = idx;
-        const refs = tileRefsByKey.get(key);
-        if (refs) {
-          if (wasSelected && prevSel.length > 1) {
-            for (const s of prevSel) {
-              const r2 = tileRefsByKey.get(s.path);
-              if (r2) { r2.selected = true; setTileVisual(s.path, 2); }
-            }
-          } else {
-            refs.selected = true;
-            setTileVisual(key, 2);
-          }
-        }
-        updateSelectionStatusReal();
-        void renderPreview();
-        dragKeys = wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: e.isDir }];
-        dragActive = false;
-        dragStartX = ev.x;
-        dragStartY = ev.y;
-        dragCtrl = !!ev.modifiers?.ctrl;
-        dlog(`tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${dragKeys.length} ctrl=${dragCtrl}`);
-      },
-      onMouseUp: () => { if (dragKeys) { dlog("tile mouseup -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
-      onMouseDragEnd: () => { if (dragKeys) { dlog("tile dragend -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
-      onMouseDrag: (ev: any) => {
-        if (!dragKeys) return;
-        if (!dragActive && (Math.abs(ev.x - dragStartX) > 1 || Math.abs(ev.y - dragStartY) > 1)) {
-          dragActive = true;
-          ctrlPendingKey = null; // it became a drag — the click-toggle never happened
-          // payload tiles must actually be selected or the visual state lies
-          for (const k of dragKeys) {
-            const r = tileRefsByKey.get(k.path);
-            if (r && !r.selected) { r.selected = true; setTileVisual(k.path, 2); }
-          }
-          dlog(`internal drag start n=${dragKeys.length}`);
-          setStatusMsg(`Dragging ${dragKeys.length} item${dragKeys.length === 1 ? "" : "s"}…`);
-        }
-        if (dragActive) updateDragGhost(ev.x, ev.y);
-      },
-      onMouseDrop: () => {
-        const keys = dragKeys;
-        const dest = dropTargetKey;
-        dlog(`tile drop keys=${keys?.length ?? -1}[${keys?.map((k) => k.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${e.isDir}`);
-        finishDragState();
-        if (keys && dest && e.isDir) void moveInto(dest, keys.filter((k) => k.path !== dest));
-      },
-      onMouseOver: () => {
-        if (dragActive) {
-          const draggingSelf = !!dragKeys?.some((k) => k.path === key);
-          if (e.isDir && !draggingSelf) { dlog(`hover target set ${key}`); dropTargetKey = key; setTileVisual(key, 2); }
-          return;
-        }
-        const refs = tileRefsByKey.get(key);
-        if (!refs?.selected) setTileVisual(key, 1);
-      },
-      onMouseOut: () => {
-        if (dragActive && dropTargetKey === key) {
-          dropTargetKey = null;
-          setTileVisual(key, 0);
-          return;
-        }
-        const refs = tileRefsByKey.get(key);
-        if (!refs?.selected) setTileVisual(key, 0);
-      },
+      ...entryMouseHandlers(e, key, idx),
     });
 
     const dim = e.name.startsWith(".");
@@ -3366,11 +3539,59 @@ const renderGrid = async () => {
     return tile;
   };
 
+  // --- list view rows: icon | name | size | modified, all sharing tile mouse
+  // behavior via entryMouseHandlers; ids reuse the tfm-tile- prefix so
+  // setTileVisual / band select / rename-in-place work unchanged ---
+  const fmtDateShort = (ms?: number): string => {
+    if (!ms) return "-";
+    const d = new Date(ms);
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    return d.getFullYear() === new Date().getFullYear()
+      ? `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
+      : `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  };
+  // rough inner width of the file pane; only used to truncate names, rows
+  // themselves are 100%-width and flex
+  const listW = Math.max(40, renderer.terminalWidth - sw - reservedRight - (config.ui.uiStyle === "outline" ? 6 : 3));
+  const buildListRow = (e: Entry, idx: number) => {
+    const key = e.abs ?? path.join(state.cwd, e.name);
+    const rowId = `tfm-tile-${tileSeq++}`;
+    const labelId = `${rowId}-label`;
+    const dim = e.name.startsWith(".");
+    const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
+    const row = Box({
+      id: rowId,
+      width: "100%",
+      height: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      columnGap: 1,
+      paddingLeft: 1,
+      paddingRight: 1,
+      ...entryMouseHandlers(e, key, idx),
+    });
+    const iconSlot = makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), tileStates(dim), 1, 0);
+    row.add(iconSlot.el);
+    // 28 cells of fixed chrome: 2 padding + 1 icon + 4 gaps + 9 size + 11 date + 1 slack
+    const nameMax = Math.max(12, listW - 28);
+    const label = e.name.length > nameMax ? e.name.slice(0, nameMax - 1) + "…" : e.name;
+    row.add(Text({ id: labelId, content: label, fg: baseFg }));
+    row.add(Box({ flexGrow: 1 }));
+    row.add(Text({ content: e.isDir ? "" : fmtBytes(e.size ?? 0).padStart(9), fg: colors.sidebarFgMuted }));
+    row.add(Text({ content: fmtDateShort(e.mtimeMs), fg: colors.sidebarFgMuted }));
+    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, iconSlotId: iconSlot.slotId, selected: false, baseFg, tileId: rowId, labelId, isDir: e.isDir });
+    return row;
+  };
+
   let tileIdx = 0;
-  for (let i = 0; i < entries.length; i += cols) {
-    const row = Box({ height: TILE_H, flexDirection: "row" });
-    for (const e of entries.slice(i, i + cols)) row.add(buildTile(e, tileIdx++));
-    scroller.content.add(row);
+  if (isList) {
+    for (const e of entries) scroller.content.add(buildListRow(e, tileIdx++));
+  } else {
+    for (let i = 0; i < entries.length; i += cols) {
+      const row = Box({ height: TILE_H, flexDirection: "row" });
+      for (const e of entries.slice(i, i + cols)) row.add(buildTile(e, tileIdx++));
+      scroller.content.add(row);
+    }
   }
 
   // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
@@ -3385,6 +3606,7 @@ const renderGrid = async () => {
   focusIdx = -1;
   selAnchor = null;
   colsAtBuild = cols;
+  rowHAtBuild = isList ? 1 : TILE_H;
   updateSelectionStatusReal();
 };
 
@@ -4063,6 +4285,13 @@ const settingGroups = (): { header?: string; rows: SettingRow[] }[] => [
         set: (v) => { config.ui.showHidden = v; state.showHidden = v; commitSetting(); } },
       { kind: "toggle", label: "preview pane", get: () => config.ui.previewEnabled,
         set: (v) => { config.ui.previewEnabled = v; commitSetting(); } },
+      // fresh-object setters (see transparent-bg below): toggles that flip
+      // renderer/layout state must not mutate `config` before applyConfig
+      // cycle, not toggle: false = adaptive (strip only with 2+ tabs), true = always
+      { kind: "cycle", label: "tab bar", names: ["adaptive", "on"], getIdx: () => (config.ui.tabBar ? 1 : 0),
+        setIdx: (i) => { applyConfig({ ui: { ...config.ui, tabBar: i === 1 }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
+      { kind: "toggle", label: "list view", get: () => config.ui.viewMode === "list",
+        set: (v) => { applyConfig({ ui: { ...config.ui, viewMode: v ? "list" : "grid" }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
       // fresh-object setter on purpose: applyConfig diffs config vs fresh, so
       // mutating config first (like the rows above) would self-compare equal
       // and skip the cache-invalidation/clear-color swap
@@ -4433,8 +4662,12 @@ const syncCwdWatcher = (): void => {
 
 // --- Orchestration ---
 renderAll = () => {
+  // navigate/back/forward mutate state.history directly — fold it into the
+  // active tab slot BEFORE anything renders, or chip titles lag one switch
+  syncTabFromState();
   state.cwd = state.history[state.histIdx] ?? state.cwd;
   syncCwdWatcher();
+  renderTabbar();
   refreshNav();
   renderCrumbs();
   renderSidebar();
@@ -5140,6 +5373,17 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
   if (ctrl && (e.name === "r" || e.unicode === "r")) {
     void loadSystemPlaces().then(() => renderAll());
+  }
+
+  // --- tabs: ctrl+t new, ctrl+w close, ctrl+tab / ctrl+shift+tab cycle
+  // (kitty needs map no_op for the latter two — its default next_tab /
+  // previous_tab eat the keys before they reach us) ---
+  if (ctrl && (e.name === "t" || e.unicode === "t")) { newTab(); return; }
+  if (ctrl && (e.name === "w" || e.unicode === "w")) { closeTab(); return; }
+  if (ctrl && e.name === "tab") {
+    if (e.shift) switchTab(activeTab === 0 ? tabs.length - 1 : activeTab - 1);
+    else switchTab(activeTab === tabs.length - 1 ? 0 : activeTab + 1);
+    return;
   }
 
   // --- file operations ---

@@ -42,6 +42,8 @@ export type Theme = {
   ansi15: string;
 };
 
+export type ViewMode = "grid" | "list";
+
 export type UiConfig = {
   sidebarWidth: number;
   tileWidth: number;
@@ -54,6 +56,8 @@ export type UiConfig = {
   restoreSession: boolean;
   transparentBg: boolean;
   uiStyle: UiStyle;
+  tabBar: boolean;
+  viewMode: ViewMode;
 };
 
 export type Config = { ui: UiConfig; theme: Theme };
@@ -71,6 +75,8 @@ export const defaultConfig: Config = {
     restoreSession: false,
     transparentBg: false,
     uiStyle: "solid",
+    tabBar: false,
+    viewMode: "grid",
   },
   theme: {
     bg: "#1a1b26",
@@ -162,6 +168,8 @@ export function loadConfig(): Config {
       restoreSession: typeof uiRaw["restore-session"] === "boolean" ? uiRaw["restore-session"] : defaultConfig.ui.restoreSession,
       transparentBg: typeof uiRaw["transparent-bg"] === "boolean" ? uiRaw["transparent-bg"] : defaultConfig.ui.transparentBg,
       uiStyle: uiRaw["ui-style"] === "outline" || uiRaw["ui-style"] === "solid" ? uiRaw["ui-style"] : defaultConfig.ui.uiStyle,
+      tabBar: typeof uiRaw["tab-bar"] === "boolean" ? uiRaw["tab-bar"] : defaultConfig.ui.tabBar,
+      viewMode: uiRaw["view-mode"] === "list" ? "list" : "grid",
     },
     theme: THEME_KEYS.reduce((acc, key) => {
       acc[key] = pickColor(themeRaw[key], defaultConfig.theme[key]);
@@ -187,6 +195,8 @@ export function serializeConfig(cfg: Config): string {
       "restore-session": cfg.ui.restoreSession,
       "transparent-bg": cfg.ui.transparentBg,
       "ui-style": cfg.ui.uiStyle,
+      "tab-bar": cfg.ui.tabBar,
+      "view-mode": cfg.ui.viewMode,
     },
     theme: { ...cfg.theme },
   };
