@@ -20,6 +20,7 @@ import {
   upsertRecentXbel,
   writeStarredList,
 } from "./recent";
+import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove } from "./fsutil";
 
 const execFileP = promisify(execFile);
 
@@ -2085,27 +2086,6 @@ const copyTreeProgress = async (src: string, dest: string): Promise<void> => {
   }
 };
 
-// terse human text for the fs error codes users actually hit — "FAILED" alone
-// gives them nothing to act on (retry vs chmod vs free disk space)
-const FS_ERR_TEXT: Record<string, string> = {
-  ENOENT: "source gone",
-  EACCES: "permission denied",
-  EPERM: "permission denied",
-  ENOSPC: "disk full",
-  EBUSY: "file busy",
-  ETXTBSY: "file busy",
-  EISDIR: "is a directory",
-  ENOTDIR: "not a directory",
-  ENAMETOOLONG: "name too long",
-  EROFS: "read-only fs",
-  EMFILE: "too many open files",
-};
-const fsErrText = (err: unknown): string => {
-  const code = (err as any)?.code;
-  if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
-  return err instanceof Error ? err.message.split(":")[0]?.toLowerCase() ?? "unknown error" : "unknown error";
-};
-
 // every destructive-but-reversible file op funnels through here so overrides
 // are asked once and undo covers the whole batch
 async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void> {
@@ -2161,7 +2141,7 @@ async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[],
             const trashLoc = await xdgTrashMove(victimDest);
             units.push(async () => {
               await safeRestoreMove(trashLoc, victimDest);
-              try { await rm(path.join(TRASH_DIR, "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
+              try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
             });
             replaced++;
           }
@@ -2234,7 +2214,7 @@ const performRename = async (p: string, v: string): Promise<void> => {
         const trashLoc = await xdgTrashMove(victim);
         units.push(async () => {
           await safeRestoreMove(trashLoc, victim);
-          try { await rm(path.join(TRASH_DIR, "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
+          try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
         });
       } catch {}
     }
@@ -2326,36 +2306,6 @@ const pasteSmart = (dest: string): void => {
       void runTransfer(op === "move" ? "move" : "copy", dest, paths, "system-clipboard paste");
     })
     .catch((err) => { dlog(`paste: system clipboard read failed: ${err}`); });
-};
-
-const uniqueTarget = (dir: string, base: string): string => {
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
-  for (let i = 2; ; i++) {
-    const cand = i === 2 ? path.join(dir, `${stem} (copy)${ext}`) : path.join(dir, `${stem} (copy ${i - 1})${ext}`);
-    if (!existsSync(cand)) return cand;
-  }
-};
-
-const fsMove = async (src: string, dest: string): Promise<void> => {
-  try {
-    await fsRename(src, dest);
-  } catch (err: any) {
-    if (err?.code !== "EXDEV") throw err;
-    await cp(src, dest, { recursive: true });
-    await rm(src, { recursive: true });
-  }
-};
-
-// undo/restore moves must never clobber whatever now occupies the target —
-// rename() silently overwrites on Linux, so a file created between the original
-// op and ctrl+z would be destroyed. Bump to "name (copy)" instead.
-const safeRestoreMove = async (src: string, dest: string): Promise<void> => {
-  let d = dest;
-  if (existsSync(d)) d = uniqueTarget(path.dirname(d), path.basename(d));
-  await mkdir(path.dirname(d), { recursive: true });
-  await fsMove(src, d);
 };
 
 const doPaste = async (dest: string): Promise<void> => {
@@ -2577,22 +2527,6 @@ const openTerminalHere = (dir?: string): void => {
   }, 30);
 };
 
-const xdgTrashMove = async (p: string): Promise<string> => {
-  const trashDir = path.join(home, ".local/share/Trash");
-  const filesDir = path.join(trashDir, "files");
-  const infoDir = path.join(trashDir, "info");
-  await mkdir(filesDir, { recursive: true });
-  await mkdir(infoDir, { recursive: true });
-  const base = path.basename(p);
-  let name = base;
-  for (let i = 2; existsSync(path.join(filesDir, name)); i++) name = `${base}.${i}`;
-  const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-  await writeFile(path.join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${p}\nDeletionDate=${stamp}\n`);
-  const finalPath = path.join(filesDir, name);
-  await fsMove(p, finalPath);
-  return finalPath;
-};
-
 const trashPaths = (paths: string[]): void => {
   void (async () => {
     const units: UndoUnit[] = [];
@@ -2606,10 +2540,10 @@ const trashPaths = (paths: string[]): void => {
       try {
         const loc = await xdgTrashMove(p);
         const hit = path.basename(loc);
-        const from = path.join(TRASH_DIR, "files", hit);
+        const from = path.join(trashDir(), "files", hit);
         units.push(async () => {
           await safeRestoreMove(from, p);
-          try { await rm(path.join(TRASH_DIR, "info", `${hit}.trashinfo`)); } catch {}
+          try { await rm(path.join(trashDir(), "info", `${hit}.trashinfo`)); } catch {}
         });
         redos.push(async () => { try { if (existsSync(p)) await xdgTrashMove(p); } catch {} });
         ok++;
@@ -2629,13 +2563,11 @@ const trashPaths = (paths: string[]): void => {
 };
 
 // --- Trash management: restore / delete-permanently / empty ---
-const TRASH_DIR = path.join(home, ".local/share/Trash");
-
-const inTrashView = (): boolean => path.resolve(state.cwd) === path.join(TRASH_DIR, "files");
+const inTrashView = (): boolean => path.resolve(state.cwd) === path.join(trashDir(), "files");
 
 const trashOrigPath = async (name: string): Promise<string | null> => {
   try {
-    const raw = await readFile(path.join(TRASH_DIR, "info", `${name}.trashinfo`), "utf8");
+    const raw = await readFile(path.join(trashDir(), "info", `${name}.trashinfo`), "utf8");
     const m = raw.match(/^Path=(.+)$/m);
     if (!m?.[1]) return null;
     let p = m[1].trim();
@@ -2658,7 +2590,7 @@ const restoreFromTrash = (paths: string[]): void => {
         let dest = orig;
         if (existsSync(dest)) dest = uniqueTarget(path.dirname(dest), path.basename(dest));
         await fsMove(src, dest);
-        try { await rm(path.join(TRASH_DIR, "info", `${path.basename(src)}.trashinfo`)); } catch {}
+        try { await rm(path.join(trashDir(), "info", `${path.basename(src)}.trashinfo`)); } catch {}
         ok++;
       } catch (err) { failWhy.add(fsErrText(err)); }
     }
@@ -2678,7 +2610,7 @@ const deleteForever = (paths: string[]): void => {
     for (const p of paths) {
       try {
         await rm(p, { recursive: true });
-        try { await rm(path.join(TRASH_DIR, "info", `${path.basename(p)}.trashinfo`)); } catch {}
+        try { await rm(path.join(trashDir(), "info", `${path.basename(p)}.trashinfo`)); } catch {}
         ok++;
       } catch (err) { failWhy.add(fsErrText(err)); }
     }
@@ -2693,7 +2625,7 @@ const deleteForever = (paths: string[]): void => {
 
 const emptyTrash = (): void => {
   void (async () => {
-    const filesDir = path.join(TRASH_DIR, "files");
+    const filesDir = path.join(trashDir(), "files");
     let names: string[];
     try { names = await readdir(filesDir); } catch (err) {
       renderAll();
@@ -2706,7 +2638,7 @@ const emptyTrash = (): void => {
     for (const k of names) {
       try {
         await rm(path.join(filesDir, k), { recursive: true });
-        try { await rm(path.join(TRASH_DIR, "info", `${k}.trashinfo`)); } catch {}
+        try { await rm(path.join(trashDir(), "info", `${k}.trashinfo`)); } catch {}
         n++;
       } catch (err) { failWhy.add(fsErrText(err)); }
     }
@@ -4007,14 +3939,14 @@ const sidebarEntriesFor = (place: Place, x: number, y: number): ListEntry[] => {
     entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(target); } });
     entries.push({ icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(target); } });
     // paste into real places (not virtual views, not the trash)
-    if (!place.scheme && target !== path.join(TRASH_DIR, "files")) {
+    if (!place.scheme && target !== path.join(trashDir(), "files")) {
       entries.push({
         icon: "content-paste",
         label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste",
         action: () => { closeFileMenu(); pasteSmart(target); },
       });
     }
-    if (target === path.join(TRASH_DIR, "files")) {
+    if (target === path.join(trashDir(), "files")) {
       entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(); } });
     } else if (place.bookmarked) {
       entries.push({ icon: "bookmark", label: "Remove bookmark", action: () => {
