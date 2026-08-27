@@ -8,7 +8,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 > Experimental vibecoded software — expect rough edges. Don't test on files you can't afford to lose.
 
 > [!IMPORTANT]
-> This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
+> This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies. If you want to test safely, use Podman: `podman run --rm -it archlinux bash`
 
 ![tfm](screenshot.png)
 
