@@ -21,6 +21,7 @@ import {
   writeStarredList,
 } from "./recent";
 import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove } from "./fsutil";
+import { copyFileProgress as transferCopyFileProgress, copyTreeProgress as transferCopyTreeProgress, scanTree as transferScanTree, type TransferSink } from "./transfer";
 
 const execFileP = promisify(execFile);
 
@@ -2018,73 +2019,24 @@ const pauseGate = async (): Promise<void> => {
   while (prog.paused && !prog.cancelled) await sleepMs(80);
 };
 
-const scanTree = async (root: string): Promise<{ files: number; bytes: number }> => {
-  let files = 0, bytes = 0;
-  const stack = [root];
-  while (stack.length) {
-    const d = stack.pop()!;
-    // lstat: a symlink counts once by its own size and is never followed
-    // (following it would loop forever on cycles and duplicate target trees)
-    let st;
-    try { st = await lstat(d); } catch { continue; }
-    if (!st.isDirectory()) { files++; bytes += st.size ?? 0; continue; }
-    let kids;
-    try { kids = await readdir(d); } catch { continue; }
-    for (const k of kids) stack.push(path.join(d, k));
-  }
-  return { files, bytes };
-};
-
-const copyFileProgress = (src: string, dest: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const rs = createReadStream(src);
-    const ws = createWriteStream(dest);
-    prog.currentRs = rs;
-    rs.on("data", (c: any) => {
-      prog.bytes += c?.length ?? 0;
-      if (prog.paused) { try { rs.pause(); } catch {} }
-      if (prog.cancelled) { try { rs.destroy(new Error("cancelled")); } catch {} }
-      paintProgress();
-    });
-    const done = () => { if (prog.currentRs === rs) prog.currentRs = null; };
-    let settled = false;
-    ws.on("finish", () => { if (!settled) { settled = true; done(); resolve(); } });
-    const fail = (e: any) => { if (!settled) { settled = true; done(); reject(e); } };
-    ws.on("error", fail);
-    rs.on("error", fail);
-    rs.on("close", done);
-    rs.pipe(ws);
-  });
-
-const copyTreeProgress = async (src: string, dest: string): Promise<void> => {
-  const st = await lstat(src);
-  if (st.isSymbolicLink()) {
-    // recreate the link itself — never stream through to the target's contents
+// wire the copy engine (./transfer) to the live progress state
+const transferSink: TransferSink = {
+  checkpoint: async () => {
     await pauseGate();
     if (prog.cancelled) throw new Error("cancelled");
-    await mkdir(path.dirname(dest), { recursive: true });
-    const target = await readlink(src);
-    try { await symlink(target, dest); } catch (err: any) { if (err?.code !== "EEXIST") throw err; }
-    prog.doneFiles++;
-    paintProgress(true);
-    return;
-  }
-  if (st.isDirectory()) {
-    await mkdir(dest, { recursive: true });
-    for (const k of await readdir(src)) {
-      await pauseGate();
-      if (prog.cancelled) throw new Error("cancelled");
-      await copyTreeProgress(path.join(src, k), path.join(dest, k));
-    }
-  } else {
-    await pauseGate();
-    if (prog.cancelled) throw new Error("cancelled");
-    await mkdir(path.dirname(dest), { recursive: true });
-    await copyFileProgress(src, dest);
-    prog.doneFiles++;
-    paintProgress(true);
-  }
+  },
+  paused: () => prog.paused,
+  cancelled: () => prog.cancelled,
+  addBytes: (n) => { prog.bytes += n; },
+  fileDone: () => { prog.doneFiles++; },
+  setStream: (rs) => { prog.currentRs = rs; },
+  clearStream: (rs) => { if (prog.currentRs === rs) prog.currentRs = null; },
+  repaint: (full) => paintProgress(full),
 };
+
+const scanTree = (root: string): Promise<{ files: number; bytes: number }> => transferScanTree(root);
+const copyFileProgress = (src: string, dest: string): Promise<void> => transferCopyFileProgress(src, dest, transferSink);
+const copyTreeProgress = (src: string, dest: string): Promise<void> => transferCopyTreeProgress(src, dest, transferSink);
 
 // every destructive-but-reversible file op funnels through here so overrides
 // are asked once and undo covers the whole batch
