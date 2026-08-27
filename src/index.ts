@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { loadConfig, configPath, saveConfig, defaultConfig, type Config, type Theme } from "./config";
 import { THEME_PRESETS, type ThemePreset } from "./themes";
 import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
+import { bumpHex } from "./color";
 
 const execFileP = promisify(execFile);
 
@@ -44,12 +45,6 @@ const config = loadConfig();
 // see-through. transparentBg=false forces an opaque UI: renderer clear color =
 // bg, and bg itself nudged one step so it can never byte-equal the terminal's
 // default color. true keeps the theme faithful and gaps on terminal default.
-const bumpHex = (hex: string): string => {
-  const n = Number.parseInt(hex.slice(1), 16);
-  if (!Number.isFinite(n)) return hex;
-  return `#${Math.min(0xffffff, n + 1).toString(16).padStart(6, "0")}`;
-};
-
 const colors: Theme & Record<string, string> = { ...config.theme };
 if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
 
