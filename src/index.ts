@@ -11,6 +11,15 @@ import { THEME_PRESETS, type ThemePreset } from "./themes";
 import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
 import { bumpHex } from "./color";
 import { FILE_ICON_BY_EXT, fileIconFor, fileIsImage, loadGlobs2, mimeCategory, mimeForExt } from "./filetype";
+import { RECENT_URI, STARRED_URI, isVirtualUri, xdgDataHome, xdgStateHome } from "./uri";
+import {
+  readRecentXbel,
+  readStarredList,
+  starredRegistryAdd,
+  starredRegistryRemove,
+  upsertRecentXbel,
+  writeStarredList,
+} from "./recent";
 
 const execFileP = promisify(execFile);
 
@@ -872,52 +881,9 @@ type SortMode = "name" | "size" | "mtime" | "type";
 type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
 
 // --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred ---
-const RECENT_URI = "recent://";
-const STARRED_URI = "starred://";
-const isVirtualCwd = (p: string = state.cwd): boolean => p === RECENT_URI || p === STARRED_URI;
-
-const xdgDataHome = () => process.env.XDG_DATA_HOME ?? path.join(home, ".local/share");
-const xdgStateHome = () => process.env.XDG_STATE_HOME ?? path.join(home, ".local/state");
-
-type XbelItem = { path: string; modified: number };
-
-const xbelPath = (): string => path.join(xdgDataHome(), "recently-used.xbel");
-
-// XBEL timestamps are ISO-8601; Date.parse handles them
-const parseIso = (s: string): number => {
-  const t = Date.parse(s);
-  return Number.isFinite(t) ? t : 0;
-};
-
-const uriToPath = (uri: string): string | null => {
-  if (!uri.startsWith("file://")) return null;
-  try { return decodeURIComponent(uri.slice(7)); } catch { return null; }
-};
-
-const readRecentXbel = (): XbelItem[] => {
-  let xml = "";
-  try { xml = readFileSync(xbelPath(), "utf8"); } catch { return []; }
-  const out: XbelItem[] = [];
-  const bmRe = /<bookmark\b[^>]*href="([^"]+)"[^>]*>/g;
-  let m: RegExpExecArray | null;
-  while ((m = bmRe.exec(xml))) {
-    const p = uriToPath(m[1]!);
-    if (!p) continue;
-    // modified attr lives on the same tag; fall back to the application entry
-    const tag = m[0];
-    const mod = tag.match(/modified="([^"]+)"/)?.[1];
-    out.push({ path: p, modified: mod ? parseIso(mod) : 0 });
-  }
-  // newest first, one row per file
-  const seen = new Set<string>();
-  const uniq: XbelItem[] = [];
-  for (const it of out.sort((a, b) => b.modified - a.modified)) {
-    if (seen.has(it.path)) continue;
-    seen.add(it.path);
-    uniq.push(it);
-  }
-  return uniq;
-};
+// URI/XDG primitives live in ./uri, the registries in ./recent; this wrapper
+// keeps the historic call-signature (defaults to the current cwd)
+const isVirtualCwd = (p: string = state.cwd): boolean => isVirtualUri(p);
 
 let recordOpenTimer: any = null;
 let recordOpenPaths: string[] = [];
@@ -933,55 +899,6 @@ const recordOpen = (p: string): void => {
     recordOpenTimer = null;
     void upsertRecentXbel(paths);
   }, 150);
-};
-
-const xmlEscapeUri = (p: string): string =>
-  "file://" + p.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/");
-
-const upsertRecentXbel = async (paths: string[]): Promise<void> => {
-  try {
-    let xml = "";
-    try { xml = await readFile(xbelPath(), "utf8"); } catch {}
-    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-    type Kept = { uri: string; block: string };
-    const kept: Kept[] = [];
-    const counts = new Map<string, number>();
-    const bmRe = /[ \t]*<bookmark\b[\s\S]*?<\/bookmark>[ \t]*\n?/g;
-    for (const blk of xml.match(bmRe) ?? []) {
-      const uri = blk.match(/href="([^"]+)"/)?.[1];
-      if (!uri) continue;
-      if (paths.some((p) => xmlEscapeUri(p) === uri)) {
-        counts.set(uri, parseInt(blk.match(/count="(\d+)"/)?.[1] ?? "0", 10) + 1);
-        continue;
-      }
-      kept.push({ uri, block: blk.trim() });
-    }
-    for (const p of paths) {
-      const uri = xmlEscapeUri(p);
-      const mime = mimeForExt(path.extname(p).slice(1)) ?? "application/octet-stream";
-      const count = counts.get(uri) ?? 1;
-      kept.push({
-        uri,
-        block: `  <bookmark href="${uri}" added="${now}" modified="${now}" visited="${now}">
-    <info>
-      <metadata owner="http://freedesktop.org">
-        <mime:mime-type type="${mime}"/>
-        <bookmark:applications>
-          <bookmark:application name="tfm" exec="&apos;tfm&apos;" modified="${now}" count="${count}"/>
-        </bookmark:applications>
-      </metadata>
-    </info>
-  </bookmark>`,
-      });
-    }
-    const head = `<?xml version="1.0" encoding="UTF-8"?>
-<xbel version="1.0"
-      xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"
-      xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info">
-`;
-    const body = kept.slice(-500).map((k) => k.block).join("\n");
-    await writeFile(xbelPath(), `${head}${body}\n</xbel>\n`, "utf8");
-  } catch {}
 };
 
 const openFileDefault = (p: string): void => {
@@ -1028,31 +945,6 @@ const notifyOpenedWith = async (p: string): Promise<void> => {
     if (mime) app = await desktopAppName(await runOutShort(["xdg-mime", "query", "default", mime]));
   } catch {}
   notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open");
-};
-
-// Starred registry: tfm's own list, kept in sync with gvfs metadata so
-// nautilus sees the same stars (gio set metadata::starred).
-const starredListPath = (): string => path.join(xdgStateHome(), "tfm", "starred.list");
-
-const readStarredList = (): string[] => {
-  try {
-    return readFileSync(starredListPath(), "utf8")
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-  } catch { return []; }
-};
-
-const writeStarredList = async (paths: string[]): Promise<void> => {
-  try {
-    await mkdir(path.dirname(starredListPath()), { recursive: true });
-    await writeFile(starredListPath(), [...new Set(paths)].join("\n") + "\n", "utf8");
-  } catch {}
-};
-
-const starredRegistryAdd = (p: string): void => { void writeStarredList([...readStarredList(), p]); };
-const starredRegistryRemove = (p: string): void => {
-  void writeStarredList(readStarredList().filter((x) => x !== p));
 };
 
 const recentEntries = async (): Promise<Entry[]> => {
