@@ -5,10 +5,10 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 ![alpha](https://img.shields.io/badge/status-alpha-red)
 
 > [!WARNING]
-> Experimental vibecoded software — expect rough edges. Don't test on files you can't afford to lose.
+> Experimental vibecoded software — expect rough edges. Don't test on files you can't afford to lose. If you want to test safely, use Podman: `podman run --rm -it archlinux bash`
 
 > [!IMPORTANT]
-> This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies. If you want to test safely, use Podman: `podman run --rm -it archlinux bash`
+> This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
 
 ![tfm](screenshot.png)
 
