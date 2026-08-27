@@ -37,6 +37,34 @@ const debugLog = (msg: string): void => {
   appendLog(msg);
 };
 
+// Render-path guard: a throw inside one repaint step must not blank the pane
+// or kill the rest — log it unconditionally and keep the other steps running.
+const safeRenderStep = (name: string, fn: () => void | Promise<void>): void => {
+  try {
+    const r = fn();
+    if (r instanceof Promise) r.catch((err) => appendLog(`render ${name} (async): ${err?.stack ?? err}`));
+  } catch (err: any) {
+    appendLog(`render ${name}: ${err?.stack ?? err}`);
+  }
+};
+
+// clear-and-rebuild idiom used by every dynamic host (crumbs, sidebar, tab
+// strip, menus, grid): drop all children of a renderable
+const clearChildren = (node: any): void => {
+  if (!node) return;
+  try { [...node.getChildren()].forEach((c: any) => node.remove(c)); } catch {}
+};
+
+// trailing debounce: every call pushes the run `ms` back; the body sees the
+// latest closure state when it finally fires
+const debounced = (ms: number, fn: () => void): (() => void) => {
+  let t: any = null;
+  return () => {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => { t = null; fn(); }, ms);
+  };
+};
+
 process.on("uncaughtException", (err) => {
   appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
   try { process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`); } catch {}
@@ -154,7 +182,7 @@ const makeIconSlot = (
 const setIconState = (spec: IconSpec | undefined, stateIdx: number): boolean => {
   if (!spec) return false;
   spec.initialState = stateIdx;
-  const slot: any = renderer.root.findDescendantById(spec.slotId);
+  const slot: any = byId(spec.slotId);
   if (!slot) return false;
   const kids = slot.getChildren?.() ?? [];
   const stateImgs = kids.filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`);
@@ -246,18 +274,13 @@ const closeTab = (i: number = activeTab): void => {
   setStatusMsg(`Tab ${activeTab + 1}/${tabs.length}`);
 };
 
-let sessionTimer: any = null;
-const scheduleSaveSession = (): void => {
-  if (sessionTimer) clearTimeout(sessionTimer);
-  sessionTimer = setTimeout(() => {
-    sessionTimer = null;
-    syncTabFromState();
-    if (isVirtualCwd()) return;
-    void mkdir(path.dirname(sessionFile()), { recursive: true })
-      .then(() => writeFile(sessionFile(), JSON.stringify({ cwd: state.cwd, tabs, activeTab })))
-      .catch(() => {});
-  }, 400);
-};
+const scheduleSaveSession = debounced(400, () => {
+  syncTabFromState();
+  if (isVirtualCwd()) return;
+  void mkdir(path.dirname(sessionFile()), { recursive: true })
+    .then(() => writeFile(sessionFile(), JSON.stringify({ cwd: state.cwd, tabs, activeTab })))
+    .catch(() => {});
+});
 
 const restoreSession = (): void => {
   // off by default: launching tfm from a shell should open where you are;
@@ -335,7 +358,7 @@ let searchQuery = "";
 const clearSearch = () => {
   searchQuery = "";
   try {
-    const el: any = renderer.root.findDescendantById("tfm-search");
+    const el: any = byId("tfm-search");
     if (el) { el.value = ""; el.visible = false; }
   } catch {}
 };
@@ -344,7 +367,7 @@ const clearSearch = () => {
 // the search box seeded with that char instead of doing legacy jump-ahead
 const beginTypeToSearch = (ch: string): void => {
   if (termHasFocus()) return; // shell owns the keyboard — never hijack into search
-  const el: any = renderer.root.findDescendantById("tfm-search");
+  const el: any = byId("tfm-search");
   if (!el) return;
   el.visible = true;
   el.value = ch;
@@ -648,9 +671,9 @@ const ejectDevice = (device: string) => {
 };
 
 const renderSidebar = () => {
-  const hostBox: any = renderer.root.findDescendantById("tfm-places");
+  const hostBox: any = byId("tfm-places");
   if (!hostBox) return;
-  [...hostBox.getChildren()].forEach((c: any) => hostBox.remove(c));
+  clearChildren(hostBox);
   placesHost.length = 0;
 
   const groups = buildSections();
@@ -673,18 +696,18 @@ const tabTitle = (t: Tab): string => {
 };
 
 const renderTabbar = (): void => {
-  const bar: any = renderer.root.findDescendantById("tfm-tabbar");
+  const bar: any = byId("tfm-tabbar");
   if (!bar) return;
   // visibility rule: setting ON = strip always visible (even with one tab, so
   // the ＋ button stays reachable); setting OFF = adaptive — the strip only
   // earns a row once there's something to switch to (visible=false is
   // display:none in yoga — no empty row left)
   try { bar.visible = config.ui.tabBar || tabs.length > 1; } catch {}
-  [...bar.getChildren()].forEach((c: any) => bar.remove(c));
+  clearChildren(bar);
   tabs.forEach((t, i) => {
     const tabId = `tfm-tab-${i}`;
     const paint = () => {
-      const n: any = renderer.root.findDescendantById(tabId);
+      const n: any = byId(tabId);
       if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, i === activeTab ? "selected" : "rest"));
     };
     // ✕ flatten target must match the chip's own fill, or the raster shows as
@@ -721,7 +744,7 @@ const renderTabbar = (): void => {
           if (ev.button === 1) closeTab(i); // middle-click also closes
           else switchTab(i);
         },
-        onMouseOver: () => { if (i !== activeTab) { const n: any = renderer.root.findDescendantById(tabId); if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, "hover")); } },
+        onMouseOver: () => { if (i !== activeTab) { const n: any = byId(tabId); if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, "hover")); } },
         onMouseOut: paint,
       },
       Text({ content: tabTitle(t), fg: i === activeTab ? colors.white : colors.sidebarFg }),
@@ -758,7 +781,7 @@ const navSpecs: Record<"tfm-nav-back" | "tfm-nav-fwd", IconSpec | undefined> = {
 let navHover: Record<string, boolean> = {};
 const navBtnBg = (id: string) => {
   try {
-    const n: any = renderer.root.findDescendantById(id);
+    const n: any = byId(id);
     if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, !!navHover[id]));
   } catch {}
 };
@@ -816,14 +839,14 @@ const enterPathEdit = () => {
 };
 
 const renderCrumbs = () => {
-  const box: any = renderer.root.findDescendantById("tfm-crumbs");
+  const box: any = byId("tfm-crumbs");
   if (!box) return;
 
-  const toolbarRow: any = renderer.root.findDescendantById("tfm-toolbar");
+  const toolbarRow: any = byId("tfm-toolbar");
 
   if (pathEditMode) {
-    [...box.getChildren()].forEach((c: any) => box.remove(c));
-    let input: any = renderer.root.findDescendantById("tfm-path-input");
+    clearChildren(box);
+    let input: any = byId("tfm-path-input");
     if (!input) {
       // real class instance: proxied composition nodes don't mount under an
       // already-mounted parent
@@ -862,7 +885,7 @@ const renderCrumbs = () => {
   }
 
   // rebuild crumbs from scratch — appending would duplicate them every nav
-  [...box.getChildren()].forEach((c: any) => box.remove(c));
+  clearChildren(box);
 
   const cwdAbs = path.resolve(state.cwd);
   const virtCrumb = state.cwd === RECENT_URI
@@ -895,7 +918,7 @@ const renderCrumbs = () => {
     const paintHover = (on: boolean) => {
       if (iconSlot && !current) setIconState(iconSlot.spec, on ? 1 : 0);
       try {
-        const n: any = renderer.root.findDescendantById(`tfm-crumb-${i}`);
+        const n: any = byId(`tfm-crumb-${i}`);
         if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on && !current));
       } catch {}
     };
@@ -939,7 +962,7 @@ const hoverBtn = (
   const paint = (on: boolean) => {
     setIconState(slot.spec, on ? 1 : 0);
     try {
-      const n: any = renderer.root.findDescendantById(id);
+      const n: any = byId(id);
       if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on));
     } catch {}
   };
@@ -975,7 +998,7 @@ const makeSearch = () => {
     hoverBtn("tfm-search-btn", "search", () => {
       closeFileMenu();
       blurTerminal();
-      const el: any = renderer.root.findDescendantById("tfm-search");
+      const el: any = byId("tfm-search");
       if (!el) return;
       el.visible = !el.visible;
       if (el.visible) el.focus();
@@ -1032,20 +1055,18 @@ type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; ab
 // keeps the historic call-signature (defaults to the current cwd)
 const isVirtualCwd = (p: string = state.cwd): boolean => isVirtualUri(p);
 
-let recordOpenTimer: any = null;
 let recordOpenPaths: string[] = [];
 
 // batch opens into one xbel rewrite (opening a selection of N files fires N times)
+const flushRecordOpen = debounced(150, () => {
+  const paths = [...new Set(recordOpenPaths)];
+  recordOpenPaths = [];
+  void upsertRecentXbel(paths);
+});
 const recordOpen = (p: string): void => {
   if (inTrashView()) return;
   recordOpenPaths.push(p);
-  if (recordOpenTimer) clearTimeout(recordOpenTimer);
-  recordOpenTimer = setTimeout(() => {
-    const paths = [...new Set(recordOpenPaths)];
-    recordOpenPaths = [];
-    recordOpenTimer = null;
-    void upsertRecentXbel(paths);
-  }, 150);
+  flushRecordOpen();
 };
 
 const openFileDefault = (p: string): void => {
@@ -1197,6 +1218,13 @@ renderer.root.add(container);
 renderer.setBackgroundColor(colors.bg); // opencode-style: global bg lives on the renderer, not per-box
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// single seam for the "post-mount only" node lookup: everything here must
+// never call this before the renderer mounts, and must tolerate a miss
+// (nodes die on every rebuild)
+const byId = (id: string): any => {
+  try { return renderer.root.findDescendantById(id); } catch { return null; }
+};
 
 const stripSelectable = (node: any = renderer.root): void => {
   if (!node || node.isDestroyed) return;
@@ -1373,7 +1401,7 @@ const drainThumbs = async () => {
   const worker = async () => {
     while (idx < jobs.length) {
       const j = jobs[idx++]!;
-      const slot: any = renderer.root.findDescendantById(j.slotId);
+      const slot: any = byId(j.slotId);
       if (!slot) continue;
       const hCells = j.hCells ?? ICON_CELLS_H;
       const jobBg = j.bg ?? colors.bg;
@@ -1391,7 +1419,7 @@ const drainThumbs = async () => {
           protocol: "auto",
         });
         await img.loadPromise!;
-        [...slot.getChildren()].forEach((c: any) => { try { slot.remove(c); } catch {} });
+        clearChildren(slot);
         slot.add(img);
       } catch {
         if (slot.getChildren().length === 0) {
@@ -1461,7 +1489,7 @@ const drainIconQueue = async () => {
   const pending = iconQueue.filter((s) => !s.done);
   await Promise.all(pending.map(async (spec) => {
     spec.done = true;
-    const slot: any = renderer.root.findDescendantById(spec.slotId);
+    const slot: any = byId(spec.slotId);
     if (!slot) return;
     if (spec.statesFactory) {
       try { spec.states = spec.statesFactory(); } catch {}
@@ -1479,6 +1507,9 @@ const drainIconQueue = async () => {
     if (glyphNode) { try { glyphNode.visible = false; } catch {} }
     imgs.forEach((im) => slot.add(im));
   }));
+  // done specs are dead weight: their slots are destroyed on the next rebuild
+  // and live tile refs keep the spec objects alive independently of the queue
+  iconQueue.splice(0, iconQueue.length, ...iconQueue.filter((s) => !s.done));
   // re-rasters made fresh images visible; while a modal scrim is up the icons
   // must fall back to dimmed glyphs or they float over the menu
   if (menuOpen) setScrim(true);
@@ -1502,7 +1533,7 @@ const isModalChild = (slot: any): boolean => {
 
 const setScrim = (on: boolean) => {
   for (const spec of iconQueue) {
-    const slot: any = renderer.root.findDescendantById(spec.slotId);
+    const slot: any = byId(spec.slotId);
     if (!slot) continue;
     if (on && isModalChild(slot)) continue;
     const kids = (slot.getChildren?.() ?? []) as any[];
@@ -1581,8 +1612,8 @@ const normalizePlaces = () => {
   placesHost.forEach((rec, i) => {
     const isSel = rec.selected;
     const isHover = !isSel && (sidebarActive ? i === placeIdx : i === mousePlaceIdx);
-    const row: any = renderer.root.findDescendantById(rec.rowId);
-    const label: any = renderer.root.findDescendantById(rec.labelId);
+    const row: any = byId(rec.rowId);
+    const label: any = byId(rec.labelId);
     if (row) applySurface(row, isSel
       ? { backgroundColor: colors.accentBg }
       : isHover ? { backgroundColor: colors.hoverBg }
@@ -1642,15 +1673,15 @@ const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
   if (!refs.iconSpec) {
     // thumbnail slots have no state rasters — fade the whole slot instead
     try {
-      const slot: any = renderer.root.findDescendantById(refs.iconSlotId ?? "");
+      const slot: any = byId(refs.iconSlotId ?? "");
       if (slot) slot.opacity = cut ? 0.45 : 1;
     } catch {}
   }
-  const labelReal: any = renderer.root.findDescendantById(refs.labelId);
+  const labelReal: any = byId(refs.labelId);
   if (labelReal) {
     try { labelReal.fg = mode === 2 ? colors.accent : cut ? colors.sidebarFgMuted : refs.baseFg; } catch {}
   }
-  const tileReal: any = renderer.root.findDescendantById(refs.tileId);
+  const tileReal: any = byId(refs.tileId);
   if (tileReal) {
     const state = mode === 2 ? "selected" : mode === 1 ? "hover" : cut ? "cut" : "rest";
     applySurface(tileReal, tileSurface(config.ui.uiStyle, colors, state));
@@ -1668,12 +1699,12 @@ const finishInlineRename = (commit: boolean): void => {
   const edit = renameEdit;
   if (!edit) return;
   renameEdit = null;
-  const input: any = renderer.root.findDescendantById(edit.inputId);
+  const input: any = byId(edit.inputId);
   const value = String(input?.value ?? "").trim();
   if (input) { try { input.parent?.remove(input); } catch {} }
   const refs = tileRefsByKey.get(edit.key);
-  const tile: any = refs ? renderer.root.findDescendantById(refs.tileId) : null;
-  if (refs && tile && !renderer.root.findDescendantById(refs.labelId)) {
+  const tile: any = refs ? byId(refs.tileId) : null;
+  if (refs && tile && !byId(refs.labelId)) {
     const labelText: any = Text({ id: refs.labelId, content: tileLabelFor(path.basename(edit.key)), fg: refs.baseFg });
     tile.add(labelText);
   }
@@ -1709,12 +1740,12 @@ const startInlineRename = (key: string): void => {
   if (renameEdit) finishInlineRename(false);
   const refs = tileRefsByKey.get(key);
   if (!refs) return;
-  const tile: any = renderer.root.findDescendantById(refs.tileId);
-  const label: any = renderer.root.findDescendantById(refs.labelId);
+  const tile: any = byId(refs.tileId);
+  const label: any = byId(refs.labelId);
   if (!tile || !label || !existsSync(key)) return;
   // real class instance — mounts into the already-mounted tile
   const inputId = `tfm-rename-input`;
-  const stale = renderer.root.findDescendantById(inputId);
+  const stale = byId(inputId);
   if (stale) { try { (stale as any).parent?.remove(stale); } catch {} }
   const input: any = new InputRenderable(renderer, {
     id: inputId,
@@ -1773,7 +1804,7 @@ const updateSelectionStatusReal = () => {  const gen = ++selStatusGen;
   tileRefsByKey.forEach((r, k) => { if (r.selected) sel.push({ key: k, isDir: r.isDir }); });
   const setStatus = (s: string) => {
     if (gen !== selStatusGen) return;
-    const status: any = renderer.root.findDescendantById("tfm-status-label");
+    const status: any = byId("tfm-status-label");
     if (status) { try { status.content = s; } catch {} }
   };
   if (sel.length === 0) return setStatus("");
@@ -1820,12 +1851,12 @@ const refreshCutVisuals = (): void => {
   tileRefsByKey.forEach((refs, key) => { if (!refs.selected) setTileVisual(key, 0); });
 };
 
-let statusMsgTimer: any = null;
+// the reset fires 2500ms after the LAST status message, like a debounce
+const clearStatusMsg = debounced(2500, () => updateSelectionStatusReal());
 const setStatusMsg = (text: string) => {
-  const status: any = renderer.root.findDescendantById("tfm-status-label");
+  const status: any = byId("tfm-status-label");
   if (status) { try { status.content = text; } catch {} }
-  if (statusMsgTimer) clearTimeout(statusMsgTimer);
-  statusMsgTimer = setTimeout(() => updateSelectionStatusReal(), 2500);
+  clearStatusMsg();
 };
 
 const selPaths = (): ClipItem[] => {
@@ -1893,7 +1924,7 @@ let conflictOpen = false;
 let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
 
 const closeConflict = (c: ConflictChoice): void => {
-  const scrim: any = renderer.root.findDescendantById("tfm-conflict");
+  const scrim: any = byId("tfm-conflict");
   scrim?.parent?.remove(scrim);
   conflictOpen = false;
   const r = conflictResolveFn;
@@ -1915,7 +1946,7 @@ const promptConflict = (destPath: string, remaining: number): Promise<ConflictCh
     const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> => {
       const id = `tfm-conflict-b${bseq++}`;
       const setBg = (on: boolean) => {
-        const n: any = renderer.root.findDescendantById(id);
+        const n: any = byId(id);
         if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
       };
       return Box(
@@ -2030,7 +2061,7 @@ let progSpinTimer: any = null;
 const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 const progSetText = (nodeId: string, s: string): void => {
-  const n: any = renderer.root.findDescendantById(nodeId);
+  const n: any = byId(nodeId);
   if (n) { try { n.content = s; } catch {} }
 };
 
@@ -2052,8 +2083,8 @@ const showProgressToast = (): void => {
   prog.toastUp = true;
   const y = 1 + toasts.length * 4;
   const setPauseVisual = (): void => {
-    const p: any = renderer.root.findDescendantById(progPauseSpec.slotId);
-    const l: any = renderer.root.findDescendantById(progPlaySpec.slotId);
+    const p: any = byId(progPauseSpec.slotId);
+    const l: any = byId(progPlaySpec.slotId);
     try { if (p) p.visible = !prog.paused; } catch {}
     try { if (l) l.visible = !!prog.paused; } catch {}
   };
@@ -2066,7 +2097,7 @@ const showProgressToast = (): void => {
   const progPaint = (spec: IconSpec, btnId: string, on: boolean) => {
     setIconState(spec, on ? 1 : 0);
     try {
-      const n: any = renderer.root.findDescendantById(btnId);
+      const n: any = byId(btnId);
       if (n) n.backgroundColor = on ? colors.hoverBg : colors.accentBg;
     } catch {}
   };
@@ -2135,7 +2166,7 @@ const showProgressToast = (): void => {
   stripSelectable();
   setPauseVisual(); // play slot ships visible — hide until actually paused
   void drainIconQueue();
-  const real: any = renderer.root.findDescendantById(PROG_TOAST_ID);
+  const real: any = byId(PROG_TOAST_ID);
   if (real) animateLeft(real, renderer.terminalWidth + 2, Math.max(0, renderer.terminalWidth - PROG_W - 2), 180);
   progSpinTimer = setInterval(() => {
     progSpinIdx = (progSpinIdx + 1) % SPIN_FRAMES.length;
@@ -2151,10 +2182,10 @@ const finishProgressToast = (title: string): void => {
   progSetText(PROG_T_TITLE, title.slice(0, PROG_W - 2));
   progSetText(PROG_T_BAR, "");
   // done means the controls go away — nothing left to pause or cancel
-  const btns: any = renderer.root.findDescendantById(PROG_T_BTNS);
+  const btns: any = byId(PROG_T_BTNS);
   if (btns) { try { btns.visible = false; } catch {} }
   setTimeout(() => {
-    const real: any = renderer.root.findDescendantById(PROG_TOAST_ID);
+    const real: any = byId(PROG_TOAST_ID);
     if (!real) return;
     animateLeft(real, typeof real.left === "number" ? real.left : 0, renderer.terminalWidth + 2, 180);
     setTimeout(() => {
@@ -2445,12 +2476,12 @@ const commitPendingCtrlToggle = (): void => {
 const DRAG_GHOST_ID = "tfm-drag-ghost";
 
 const updateDragGhost = (x: number, y: number): void => {
-  const g: any = renderer.root.findDescendantById(DRAG_GHOST_ID);
+  const g: any = byId(DRAG_GHOST_ID);
   if (!g) return;
   try {
     const n = dragKeys?.length ?? 0;
     const label = `moving ${n} item${n === 1 ? "" : "s"}`;
-    const t: any = renderer.root.findDescendantById(`${DRAG_GHOST_ID}-label`);
+    const t: any = byId(`${DRAG_GHOST_ID}-label`);
     if (t && t.content !== label) t.content = label;
     g.width = label.length + 2;
     g.left = Math.max(0, Math.min(x + 1, renderer.terminalWidth - label.length - 2));
@@ -2460,7 +2491,7 @@ const updateDragGhost = (x: number, y: number): void => {
 };
 
 const hideDragGhost = (): void => {
-  const g: any = renderer.root.findDescendantById(DRAG_GHOST_ID);
+  const g: any = byId(DRAG_GHOST_ID);
   if (g) { try { g.visible = false; } catch {} }
 };
 
@@ -2544,8 +2575,8 @@ const closeTerminalPane = (): void => {
   try { term?.destroy(); } catch {};
   term = null;
   termFocused = false;
-  const host: any = renderer.root.findDescendantById("tfm-term-host");
-  if (host) { [...host.getChildren()].forEach((c: any) => host.remove(c)); host.height = 0; }
+  const host: any = byId("tfm-term-host");
+  if (host) { clearChildren(host); host.height = 0; }
   renderAll();
 };
 
@@ -2571,7 +2602,7 @@ const answerTerminalProbes = (data: Uint8Array): void => {
 const openTerminalHere = (dir?: string): void => {
   if (!renderer.resolution) return;
   if (term) { try { term.focus(); } catch {}; termFocused = true; return; }
-  const host: any = renderer.root.findDescendantById("tfm-term-host");
+  const host: any = byId("tfm-term-host");
   if (!host) return;
   const cwd = dir ?? (isVirtualCwd() ? home : state.cwd);
   host.height = TERM_H + 1;
@@ -2759,7 +2790,7 @@ const emptyTrash = (): void => {
 let yesNoOpen = false;
 
 const closeYesNo = (): void => {
-  const scrim: any = renderer.root.findDescendantById("tfm-yesno");
+  const scrim: any = byId("tfm-yesno");
   scrim?.parent?.remove(scrim);
   yesNoOpen = false;
 };
@@ -2773,7 +2804,7 @@ const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, dang
   const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> => {
     const id = `tfm-yesno-b${bseq++}`;
     const setBg = (on: boolean) => {
-      const n: any = renderer.root.findDescendantById(id);
+      const n: any = byId(id);
       if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
     };
     return Box(
@@ -3041,9 +3072,9 @@ let previewCodeCache: { key: string; mtimeMs: number; size: number; node: any } 
 const renderPreview = async () => {
   if (!config.ui.previewEnabled) return;
   const gen = ++previewGen;
-  const pane: any = renderer.root.findDescendantById("tfm-preview");
+  const pane: any = byId("tfm-preview");
   if (!pane) return;
-  [...pane.getChildren()].forEach((c: any) => pane.remove(c));
+  clearChildren(pane);
 
   // target = focused tile, else single selected, else folder summary
   let key: string | null = null;
@@ -3170,7 +3201,7 @@ const notify = (message: string, title = "tfm"): void => {
   );
   renderer.root.add(node);
   // the proxy is dead weight post-mount — animate/dismiss via the real renderable
-  const real: any = renderer.root.findDescendantById(`tfm-toast-${id}`);
+  const real: any = byId(`tfm-toast-${id}`);
   if (!real) return;
   const targetX = Math.max(0, renderer.terminalWidth - w - 2);
   animateLeft(real, renderer.terminalWidth + 2, targetX, 180);
@@ -3186,7 +3217,7 @@ const notify = (message: string, title = "tfm"): void => {
         try { (real.parent ?? renderer.root).remove(real); } catch {}
         toasts = toasts.filter((t) => t.id !== id);
         toasts.forEach((t, i) => {
-          const n: any = renderer.root.findDescendantById(t.nodeId);
+          const n: any = byId(t.nodeId);
           try { n.top = 1 + i * 4; } catch {}
         });
       }
@@ -3198,7 +3229,7 @@ const notify = (message: string, title = "tfm"): void => {
 let bandStart: { x: number; y: number } | null = null;
 const BAND_ID = "tfm-band";
 
-const bandNode = (): any => renderer.root.findDescendantById(BAND_ID);
+const bandNode = (): any => byId(BAND_ID);
 
 const updateBandRect = (ev: any) => {
   if (!bandStart) return;
@@ -3224,7 +3255,7 @@ const finalizeBand = (ev: any) => {
   const x1 = Math.max(start.x, ev.x), y1 = Math.max(start.y, ev.y);
   clearTileSelection();
   tileRefsByKey.forEach((refs, key) => {
-    const t: any = renderer.root.findDescendantById(refs.tileId);
+    const t: any = byId(refs.tileId);
     if (!t) return;
     const tx = t.screenX, ty = t.screenY, tw = t.width, th = t.height;
     if (tx < x1 + 1 && tx + tw > x0 && ty < y1 + 1 && ty + th > y0) {
@@ -3239,7 +3270,7 @@ const finalizeBand = (ev: any) => {
 const clearGrid = () => {
   if (!scroller) return;
   const content: any = scroller.content;
-  [...content.getChildren()].forEach((c: any) => content.remove(c));
+  clearChildren(content);
   tileRefsByKey.clear();
 };
 
@@ -3621,7 +3652,7 @@ const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => 
   const paint = (on: boolean) => {
     setIconState(slot.spec, on ? 1 : 0);
     try {
-      const n: any = renderer.root.findDescendantById(id);
+      const n: any = byId(id);
       if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
     } catch {}
   };
@@ -3645,7 +3676,7 @@ const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => 
 let promptOpen = false;
 
 const closePrompt = () => {
-  const scrim: any = renderer.root.findDescendantById("tfm-prompt");
+  const scrim: any = byId("tfm-prompt");
   scrim?.parent?.remove(scrim);
   promptOpen = false;
 };
@@ -3691,7 +3722,7 @@ const openPrompt = (title: string, initial: string, onSubmit: (value: string) =>
   );
   renderer.root.add(scrim);
 
-  const panel: any = renderer.root.findDescendantById("tfm-prompt-panel");
+  const panel: any = byId("tfm-prompt-panel");
   const input = new InputRenderable(renderer, {
     id: "tfm-prompt-input",
     flexGrow: 1,
@@ -3721,7 +3752,7 @@ const PROPS_W = 46;
 let propsOpen = false;
 
 const closeProps = (): void => {
-  const scrim: any = renderer.root.findDescendantById("tfm-props");
+  const scrim: any = byId("tfm-props");
   scrim?.parent?.remove(scrim);
   propsOpen = false;
 };
@@ -3762,7 +3793,7 @@ const openProperties = (targetPath: string): void => {
   );
   renderer.root.add(scrim);
 
-  const panel: any = renderer.root.findDescendantById("tfm-props-panel");
+  const panel: any = byId("tfm-props-panel");
   if (!panel) return;
 
   // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
@@ -3776,7 +3807,7 @@ const openProperties = (targetPath: string): void => {
   const propsTogglePaint = (btnId: string, spec: IconSpec, on: boolean, hover: boolean) => {
     setIconState(spec, (on ? 1 : 0) + (hover ? 2 : 0));
     try {
-      const n: any = renderer.root.findDescendantById(btnId);
+      const n: any = byId(btnId);
       if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, hover, colors.sidebarBg));
     } catch {}
   };
@@ -3900,12 +3931,12 @@ const openProperties = (targetPath: string): void => {
     void dirWalkStats(targetPath).then((s) => {
       if (!propsOpen || !s) {
         if (propsOpen) {
-          const n: any = renderer.root.findDescendantById("tfm-props-size");
+          const n: any = byId("tfm-props-size");
           if (n) { try { n.content = "huge"; } catch {} }
         }
         return;
       }
-      const n: any = renderer.root.findDescendantById("tfm-props-size");
+      const n: any = byId("tfm-props-size");
       if (n) { try { n.content = `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`; } catch {} }
     });
   }
@@ -3983,8 +4014,8 @@ const openProperties = (targetPath: string): void => {
     const cbOffSpec = makeIconSlot("checkbox-blank", [{ fg: colors.sidebarFgMuted, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) }], 1, 0);
     syncExecCheckbox = (): void => {
       const on = !!(st.mode & 0o100);
-      const a: any = renderer.root.findDescendantById(cbOnSpec.slotId);
-      const b: any = renderer.root.findDescendantById(cbOffSpec.slotId);
+      const a: any = byId(cbOnSpec.slotId);
+      const b: any = byId(cbOffSpec.slotId);
       try { if (a) a.visible = on; } catch {}
       try { if (b) b.visible = !on; } catch {}
     };
@@ -4023,15 +4054,15 @@ type ListEntry = { icon?: string; label: string; hint?: string; hintIcon?: strin
 let fileMenuState: { idx: number; entries: ListEntry[] } | null = null;
 
 const closeFileMenu = () => {
-  const scrim: any = renderer.root.findDescendantById("tfm-filemenu");
+  const scrim: any = byId("tfm-filemenu");
   scrim?.parent?.remove(scrim);
   fileMenuState = null;
 };
 
 const renderFileMenu = () => {
-  const panel: any = renderer.root.findDescendantById("tfm-filemenu-panel");
+  const panel: any = byId("tfm-filemenu-panel");
   if (!panel || !fileMenuState) return;
-  [...panel.getChildren()].forEach((c: any) => panel.remove(c));
+  clearChildren(panel);
   const row = (entry: ListEntry, i: number) => {
     if (entry.sep) {
       // plain spacer row — no divider glyph
@@ -4398,9 +4429,9 @@ const SETTINGS_W = 44;
 const SET_LABEL_W = 17;
 
 const renderMenuContent = () => {
-  const panel: any = renderer.root.findDescendantById("tfm-menu-panel");
+  const panel: any = byId("tfm-menu-panel");
   if (!panel) return;
-  [...panel.getChildren()].forEach((c: any) => panel.remove(c));
+  clearChildren(panel);
 
   const isSettings = menuView === "settings";
   const panelW = isSettings ? SETTINGS_W : MENU_W;
@@ -4567,7 +4598,7 @@ const renderMenuContent = () => {
 
   // center the panel vertically based on its actual content height so tall
   // views never overflow small terminals
-  const scrim: any = renderer.root.findDescendantById("tfm-menu");
+  const scrim: any = byId("tfm-menu");
   if (scrim) {
     const rows = [...panel.getChildren()].length;
     try { scrim.paddingTop = Math.max(1, Math.floor((renderer.terminalHeight - rows - 2) / 2)); } catch {}
@@ -4620,7 +4651,7 @@ const openMenu = () => {
 const closeMenu = () => {
   if (!menuOpen) return;
   menuOpen = false;
-  const scrim: any = renderer.root.findDescendantById("tfm-menu");
+  const scrim: any = byId("tfm-menu");
   scrim?.parent?.remove(scrim);
   setScrim(false);
 };
@@ -4634,7 +4665,12 @@ const moveMenu = (delta: number) => {
 // --- Live directory watching: external changes refresh the grid ---
 let cwdWatcher: ReturnType<typeof watch> | null = null;
 let watchedDir: string | null = null;
-let cwdWatchTimer: any = null;
+// fs events burst in clusters; coalesce them into one grid rebuild
+const onCwdChanged = debounced(200, () => {
+  // our own create+inline-edit would wipe the editor mid-keystroke
+  if (renameEdit) return;
+  if (path.resolve(state.cwd) === watchedDir) void renderGrid();
+});
 
 const syncCwdWatcher = (): void => {
   if (isVirtualCwd()) {
@@ -4647,15 +4683,7 @@ const syncCwdWatcher = (): void => {
   watchedDir = dir;
   if (cwdWatcher) { try { cwdWatcher.close(); } catch {} cwdWatcher = null; }
   try {
-    cwdWatcher = watch(dir, () => {
-      if (cwdWatchTimer) clearTimeout(cwdWatchTimer);
-      cwdWatchTimer = setTimeout(() => {
-        cwdWatchTimer = null;
-        // our own create+inline-edit would wipe the editor mid-keystroke
-        if (renameEdit) return;
-        if (path.resolve(state.cwd) === watchedDir) void renderGrid();
-      }, 200);
-    });
+    cwdWatcher = watch(dir, onCwdChanged);
     cwdWatcher.on("error", () => {});
   } catch {}
 };
@@ -4666,15 +4694,15 @@ renderAll = () => {
   // active tab slot BEFORE anything renders, or chip titles lag one switch
   syncTabFromState();
   state.cwd = state.history[state.histIdx] ?? state.cwd;
-  syncCwdWatcher();
-  renderTabbar();
-  refreshNav();
-  renderCrumbs();
-  renderSidebar();
-  void drainIconQueue();
-  void renderGrid();
-  void renderPreview();
-  stripSelectable();
+  safeRenderStep("cwdWatcher", () => syncCwdWatcher());
+  safeRenderStep("tabbar", () => renderTabbar());
+  safeRenderStep("nav", () => refreshNav());
+  safeRenderStep("crumbs", () => renderCrumbs());
+  safeRenderStep("sidebar", () => renderSidebar());
+  safeRenderStep("iconQueue", () => void drainIconQueue());
+  safeRenderStep("grid", () => void renderGrid());
+  safeRenderStep("preview", () => void renderPreview());
+  safeRenderStep("stripSelectable", () => stripSelectable());
   scheduleSaveSession();
 };
 
@@ -4703,7 +4731,7 @@ const boot = async () => {
     onMouseDragEnd: (ev: any) => finalizeBand(ev),
     onMouseUp: (ev: any) => { if (bandStart) finalizeBand(ev); },
   });
-  const host: any = renderer.root.findDescendantById("tfm-grid-host");
+  const host: any = byId("tfm-grid-host");
   host.add(scroller);
   renderer.root.add(Box({
     id: BAND_ID,
@@ -4738,13 +4766,12 @@ const boot = async () => {
     setStatusMsg(`debug: ${DEBUG_LOG}`);
   }
 
-  const inputEl: any = renderer.root.findDescendantById("tfm-search");
+  const inputEl: any = byId("tfm-search");
   if (inputEl?.on) {
-    let searchTimer: any = null;
+    const renderSearchResults = debounced(150, () => void renderGrid());
     inputEl.on("input", () => {
       try { searchQuery = String(inputEl.value ?? ""); } catch {}
-      if (searchTimer) clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => { searchTimer = null; void renderGrid(); }, 150);
+      renderSearchResults();
     });
     // enter/escape semantics live in the global key handler (enter commits
     // into the first match; escape cancels) — no listener here by design
@@ -4759,7 +4786,7 @@ boot();
 // when colors actually changed.
 
 const setOnId = (id: string, fn: (n: any) => void): void => {
-  const n: any = renderer.root.findDescendantById(id);
+  const n: any = byId(id);
   if (!n) return;
   try { fn(n); } catch {}
 };
@@ -4825,7 +4852,7 @@ const applyConfig = (fresh: Config): void => {
   for (const id of ["tfm-sidebar-root", "tfm-title-box", "tfm-places"]) {
     setOnId(id, (n) => { n.width = id === "tfm-sidebar-root" ? sw : sideInnerW(); });
   }
-  const pane: any = renderer.root.findDescendantById("tfm-preview");
+  const pane: any = byId("tfm-preview");
   if (pane) {
     try {
       pane.visible = config.ui.previewEnabled;
@@ -4845,42 +4872,36 @@ const applyConfig = (fresh: Config): void => {
   renderAll();
 };
 
-let cfgSaveTimer: any = null;
 // signature of the last file WE wrote; the watcher skips it so saving doesn't
 // re-enter applyConfig and churn the rasters
 let lastSavedSig = "";
 let saveWarned = false;
 
-const scheduleSaveConfig = (): void => {
-  if (cfgSaveTimer) clearTimeout(cfgSaveTimer);
-  cfgSaveTimer = setTimeout(() => {
-    cfgSaveTimer = null;
-    saveConfig(config)
-      .then(async () => { try { lastSavedSig = JSON.stringify(loadConfig()); } catch {} })
-      .catch(() => {
-        if (!saveWarned) {
-          saveWarned = true;
-          console.error(`[tfm] could not write config to ${configPath()}`);
-        }
-      });
-  }, 500);
-};
+const scheduleSaveConfig = debounced(500, () => {
+  saveConfig(config)
+    .then(async () => { try { lastSavedSig = JSON.stringify(loadConfig()); } catch {} })
+    .catch(() => {
+      if (!saveWarned) {
+        saveWarned = true;
+        console.error(`[tfm] could not write config to ${configPath()}`);
+      }
+    });
+});
 
 // --- live config reload ---
-let cfgTimer: any = null;
 try {
   const cfgPath = configPath();
+  const applyFreshConfig = debounced(250, () => {
+    try {
+      const fresh = loadConfig();
+      if (JSON.stringify(fresh) === lastSavedSig) return;
+      applyConfig(fresh);
+      setStatusMsg("config reloaded");
+    } catch {}
+  });
   const watcher = watch(path.dirname(cfgPath), (_event, filename) => {
     if (!filename || filename !== path.basename(cfgPath)) return;
-    if (cfgTimer) clearTimeout(cfgTimer);
-    cfgTimer = setTimeout(() => {
-      try {
-        const fresh = loadConfig();
-        if (JSON.stringify(fresh) === lastSavedSig) return;
-        applyConfig(fresh);
-        setStatusMsg("config reloaded");
-      } catch {}
-    }, 250);
+    applyFreshConfig();
   });
   watcher.on("error", () => {});
 } catch {}
@@ -5230,8 +5251,8 @@ renderer.keyInput.on("keypress", (e: any) => {
   // host UI. Click the grid/sidebar (or ✕) to leave the shell.
   if (termFocused || termHasFocus()) return;
 
-  const el: any = renderer.root.findDescendantById("tfm-search");
-  const pathInput: any = renderer.root.findDescendantById("tfm-path-input");
+  const el: any = byId("tfm-search");
+  const pathInput: any = byId("tfm-path-input");
 
   if (pathInput?.visible || pathEditMode) {
     if (e.name === "escape") {
