@@ -20,7 +20,7 @@ import {
 } from "./recent";
 import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove } from "./fsutil";
 import { copyFileProgress as transferCopyFileProgress, copyTreeProgress as transferCopyTreeProgress, scanTree as transferScanTree, type TransferSink } from "./transfer";
-import { buildSections, loadSystemPlaces, setBookmarked, type Place } from "./places";
+import { loadSystemPlaces, setBookmarked, type Place } from "./places";
 import { fmtBytes } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, registerSyntaxParsers, syntaxStyleSig } from "./syntax";
@@ -43,11 +43,12 @@ import {
 } from "./osc72";
 import { makeTrashOps } from "./trashops";
 import { makeUndo, type UndoUnit } from "./undo";
-import { makeTabs, tabTitle, type Tab } from "./tabs";
+import { makeTabs } from "./tabs";
 import { appForFile } from "./apps";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
 import { animateLeft, makeNotify } from "./notify";
+import { makeChrome } from "./ui-chrome";
 import { makeDialogs } from "./ui-dialogs";
 import { makeMenu } from "./ui-menu";
 import type { ListEntry } from "./ui-menu";
@@ -315,207 +316,48 @@ const beginTypeToSearch = (ch: string): void => {
 };
 
 
-// --- Places sidebar (rebuilt from scratch on every render, selection = cwd) ---
-
-const placesHost: { row: ReturnType<typeof Box>; rowId: string; labelId: string; specs: IconSpec[]; selected: boolean; place: Place }[] = [];
-let mousePlaceIdx = -1;
-
+// --- Places sidebar + tab strip — widget lives in ./ui-chrome ---
 // mutable: applyConfig() rewrites these when settings change
 let sw = config.ui.sidebarWidth;
 
-const mountDevice = (device: string) => {
-  spawn("udisksctl", ["mount", "-b", device], { stdio: "ignore" });
-  setTimeout(() => { void loadSystemPlaces().then(() => renderAll()); }, 1200);
-};
-
-const makeRow = (place: Place): ReturnType<typeof Box> => {
-  const idx = placesHost.length;
-  const placeTarget = (): string | null =>
-    place.scheme === "recent" ? RECENT_URI
-    : place.scheme === "starred" ? STARRED_URI
-    : place.path;
-  const selected = !!place.path
-    ? path.resolve(place.path) === path.resolve(state.cwd)
-    : !!place.scheme && state.cwd === placeTarget();
-  const st = config.ui.uiStyle;
-  const normFg = colors.sidebarFg;
-  const selFg = colors.accent;
-  const rowBg = slotBg(st, colors, colors.sidebarBg);
-  const iconStates: IconState[] = [
-    { fg: normFg, bg: rowBg },
-    { fg: normFg, bg: colors.hoverBg },
-    { fg: selFg, bg: colors.accentBg },
-  ];
-  const maxLabel = sideInnerW() - 4 - (place.ejectable ? 3 : 0);
-  const paddedLabel = place.label.padEnd(Math.max(0, maxLabel)).slice(0, maxLabel);
-
-  const iconSlot = makeIconSlot(place.icon, iconStates, 1, selected ? 2 : 0);
-  let ejectSlot: ReturnType<typeof makeIconSlot> | undefined;
-  if (place.ejectable && place.device) {
-    ejectSlot = makeIconSlot(
-      "eject",
-      iconStates,
-      1,
-      selected ? 2 : 0,
-      () => ejectDevice(place.device!),
-    );
-  }
-  const specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
-
-  const rowNode = Box(
-    {
-      id: `tfm-place-${idx}`,
-      width: sideInnerW(),
-      height: 1,
-      flexDirection: "row",
-      columnGap: 1,
-      paddingLeft: 1,
-      ...(selected ? { backgroundColor: colors.accentBg } : rowSurface(st, colors, "rest")),
-      onMouseDown: (ev: any) => {
-        if (ev.button === 2) {
-          closeFileMenu();
-          openContextMenu(ev.x, ev.y, place.label, sidebarEntriesFor(place, ev.x, ev.y));
-          return;
-        }
-        blurTerminal();
-        closeFileMenu();
-        const target = placeTarget();
-        if (target) navigate(target);
-        else if (place.mountDevice) mountDevice(place.mountDevice);
-      },
-      onMouseDrop: () => {
-        const keys = gridDrag.keys;
-        finishDragCtx();
-        const target = placeTarget();
-        dlog(`place drop ${place.label} keys=${keys?.length ?? -1} scheme=${place.scheme ?? "-"} target=${target}`);
-        if (!keys || !target || place.scheme) return;
-        const rest = keys.filter((k) => k.path !== target);
-        if (!rest.length) return;
-        if (target === path.join(home, ".local/share/Trash/files")) {
-          // dropping onto the trash place must gio-trash, not plain-move —
-          // otherwise no .trashinfo is written and items can't be restored
-          void trashPaths(rest.map((k) => k.path));
-        } else {
-          void moveInto(target, rest);
-        }
-      },
-      onMouseOver: () => { mousePlaceIdx = idx; normalizePlaces(); },
-      onMouseOut: () => { if (mousePlaceIdx === idx) { mousePlaceIdx = -1; normalizePlaces(); } },
-    },
-    iconSlot.el,
-  );
-  const labelText: any = Text({
-    id: `tfm-place-${idx}-label`,
-    content: paddedLabel,
-    fg: selected ? selFg : normFg,
-  });
-  rowNode.add(labelText);
-  if (ejectSlot) rowNode.add(ejectSlot.el);
-  placesHost.push({
-    row: rowNode,
-    rowId: `tfm-place-${idx}`,
-    labelId: `tfm-place-${idx}-label`,
-    specs: ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec],
-    selected,
-    place,
-  });
-  return rowNode;
-};
-
-const ejectDevice = (device: string) => {
-  spawn("udisksctl", ["unmount", "-b", device], { stdio: "ignore" });
-  setTimeout(() => { void loadSystemPlaces().then(() => renderAll()); }, 1500);
-};
-
-const renderSidebar = () => {
-  const hostBox: any = byId("tfm-places");
-  if (!hostBox) return;
-  clearChildren(hostBox);
-  placesHost.length = 0;
-
-  const groups = buildSections();
-  groups.forEach((group, gi) => {
-    for (const place of group) hostBox.add(makeRow(place));
-    if (gi < groups.length - 1) hostBox.add(makeDivider());
-  });
-  if (sidebarActive && placeIdx >= 0) {
-    normalizePlaces();
-  }
-};
-
-// --- Tab strip: one clickable chip per open tab + a new-tab button ---
-const renderTabbar = (): void => {
-  const bar: any = byId("tfm-tabbar");
-  if (!bar) return;
-  // visibility rule: setting ON = strip always visible (even with one tab, so
-  // the ＋ button stays reachable); setting OFF = adaptive — the strip only
-  // earns a row once there's something to switch to (visible=false is
-  // display:none in yoga — no empty row left)
-  try { bar.visible = config.ui.tabBar || tabModel.list.length > 1; } catch {}
-  clearChildren(bar);
-  tabModel.list.forEach((t, i) => {
-    const tabId = `tfm-tab-${i}`;
-    const paint = () => {
-      const n: any = byId(tabId);
-      if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, i === tabModel.active ? "selected" : "rest"));
-    };
-    // ✕ flatten target must match the chip's own fill, or the raster shows as
-    // a square patch on the active tab (accentBg) vs the canvas (rest states)
-    const closeStates = (): IconState[] => [
-      { fg: colors.sidebarFgMuted, bg: i === tabModel.active ? colors.accentBg : slotBg(config.ui.uiStyle, colors, colors.bg) },
-      { fg: colors.white, bg: colors.hoverBg },
-    ];
-    const closeSlot = makeIconSlot("close", closeStates(), 1, 0, (ev: any) => {
-      try { ev.stopPropagation?.(); } catch {} // ✕ must not also activate the chip
-      closeTab(i);
-    }, closeStates);
-    // makeIconSlot only takes onMouseDown — hover swap goes on a wrapper
-    const closeWrap = Box(
-      {
-        onMouseOver: () => { setIconState(closeSlot.spec, 1); },
-        onMouseOut: () => { setIconState(closeSlot.spec, 0); },
-      },
-      closeSlot.el,
-    );
-    bar.add(Box(
-      {
-        id: tabId,
-        height: 1,
-        maxWidth: 24,
-        flexDirection: "row",
-        columnGap: 1,
-        paddingLeft: 1,
-        paddingRight: 1,
-        ...tileSurface(config.ui.uiStyle, colors, i === tabModel.active ? "selected" : "rest"),
-        onMouseDown: (ev: any) => {
-          try { ev.stopPropagation?.(); } catch {}
-          closeFileMenu();
-          if (ev.button === 1) closeTab(i); // middle-click also closes
-          else switchTab(i);
-        },
-        onMouseOver: () => { if (i !== tabModel.active) { const n: any = byId(tabId); if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, "hover")); } },
-        onMouseOut: paint,
-      },
-      Text({ content: tabTitle(t), fg: i === tabModel.active ? colors.white : colors.sidebarFg }),
-      closeWrap,
-    ));
-  });
-  bar.add(hoverBtn("tfm-tab-new", "plus", () => newTab()));
-  stripSelectable();
-  void drainIconQueue();
-};
+const { renderSidebar, renderTabbar, normalizePlaces, makeDivider, placesHost, mountDevice, ejectDevice, setMousePlace, clearMousePlace } = makeChrome({
+  byId: (id) => byId(id),
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors as Theme & Record<string, any>,
+  sw: () => sw,
+  sideInnerW,
+  tabBar: () => config.ui.tabBar,
+  renderAll: () => renderAll(),
+  navigate: (target) => navigate(target),
+  blurTerminal: () => blurTerminal(),
+  closeFileMenu: () => closeFileMenu(),
+  openContextMenu: (x, y, t, e) => openContextMenu(x, y, t, e),
+  sidebarEntriesFor: (place, x, y) => sidebarEntriesFor(place, x, y),
+  finishDrag: () => finishDragCtx(),
+  dlog: (msg) => dlog(msg),
+  trashPaths: (paths) => trashPaths(paths),
+  moveInto: (dest, items) => moveInto(dest, items),
+  kbActive: () => sidebarActive,
+  kbIdx: () => placeIdx,
+  tabs: () => tabModel,
+  closeTab: (i) => closeTab(i),
+  switchTab: (i) => switchTab(i),
+  newTab: () => newTab(),
+  hoverBtn: (id, icon, onMouseDown) => hoverBtn(id, icon, onMouseDown),
+  stripSelectable: () => stripSelectable(),
+  drainIconQueue: () => drainIconQueue(),
+  makeIconSlot: (name, states, heightCells, initialState, onMouseDown, statesFactory) =>
+    makeIconSlot(name, states, heightCells, initialState, onMouseDown, statesFactory),
+  setIconState: (spec, stateIdx) => setIconState(spec, stateIdx),
+  home,
+  stateCwd: () => state.cwd,
+});
 
 const makeTitle = () =>
   Box(
     { id: "tfm-title-box", width: sideInnerW(), height: 5, flexDirection: "column", justifyContent: "center", paddingLeft: 1 },
     ASCIIFont({ id: "tfm-title-font", text: "tfm", font: "tiny", color: colors.accent }),
     Text({ id: "tfm-title-sub", content: " terminal file manager", fg: colors.sidebarFgMuted }),
-  );
-
-const makeDivider = () =>
-  Box(
-    { width: sideInnerW(), height: 1 },
-    Text({ content: " " + "~".repeat(sw - 2), fg: colors.divider }),
   );
 
 // --- Toolbar ---
@@ -1193,23 +1035,6 @@ const setSidebarFocus = (idx: number): boolean => {
 const leaveSidebarToGrid = () => {
   sidebarActive = false;
   normalizePlaces();
-};
-
-// single source of truth: exactly one accent (cwd-selected) and optionally
-// one keyboard-hover highlight; wipes any stray styles deterministically
-const normalizePlaces = () => {
-  placesHost.forEach((rec, i) => {
-    const isSel = rec.selected;
-    const isHover = !isSel && (sidebarActive ? i === placeIdx : i === mousePlaceIdx);
-    const row: any = byId(rec.rowId);
-    const label: any = byId(rec.labelId);
-    if (row) applySurface(row, isSel
-      ? { backgroundColor: colors.accentBg }
-      : isHover ? { backgroundColor: colors.hoverBg }
-      : rowSurface(config.ui.uiStyle, colors, "rest"));
-    rec.specs.forEach((s) => setIconState(s, isSel ? 2 : isHover ? 1 : 0));
-    try { if (label) label.fg = isSel ? colors.accent : colors.sidebarFg; } catch {}
-  });
 };
 
 // arrows and clicks drive the SAME single selection; there is no separate
@@ -3195,8 +3020,7 @@ const handleSelfDropHover = (x: number, y: number): void => {
   const target = x >= 0 ? resolveDropTargetAt(x, y) : null;
   dlog(`self hover ${x},${y} -> ${target ? target.kind + ":" + target.path : "none"}`);
   if (!target) {
-    mousePlaceIdx = -1;
-    normalizePlaces();
+    clearMousePlace();
     return;
   }
   if (target.kind === "folder") {
@@ -3204,7 +3028,7 @@ const handleSelfDropHover = (x: number, y: number): void => {
     setTileVisual(target.path, 2);
   } else {
     const idx = placesHost.findIndex((p) => p.place.path === target.path);
-    if (idx >= 0) { mousePlaceIdx = idx; normalizePlaces(); }
+    if (idx >= 0) setMousePlace(idx);
   }
 };
 
@@ -3310,7 +3134,7 @@ const handleOsc72 = (meta: string, payload: string): void => {
 
   // --- self-drop: hover/drop events landing back on tfm during OUR session ---
   if ((t === "m" || t === "M") && osc72DragPaths) {
-    if (x === -1 && y === -1) { clearSelfDropHighlight(); mousePlaceIdx = -1; normalizePlaces(); return; }
+    if (x === -1 && y === -1) { clearSelfDropHighlight(); clearMousePlace(); return; }
     if (t === "m") { handleSelfDropHover(x, y); return; }
     void finishSelfDrop(x, y); // M — dropped on ourselves
     return;
