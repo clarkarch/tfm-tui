@@ -2,10 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { clearIconCaches, iconPng, thumbPng } from "./icons";
 
 // exercises the real rsvg-convert/magick pipeline (both are dev-machine deps);
-// failures here mean the raster pipeline or its cache keys broke
+// failures here mean the raster pipeline or its cache keys broke.
+// The raster tests skip when the binaries are absent (CI runners, containers) —
+// "missing icon rejects" stays live everywhere: it rejects at the asset read,
+// before any binary is spawned.
+const hasRsvg = Bun.which("rsvg-convert") !== null;
+const hasMagick = Bun.which("magick") !== null;
 
 describe("icons", () => {
-  test("iconPng renders a PNG and serves the second request from cache", async () => {
+  test.skipIf(!hasRsvg)("iconPng renders a PNG and serves the second request from cache", async () => {
     clearIconCaches();
     const a = await iconPng("folder", "#c0caf5", "#1a1b26", 16, 16);
     expect(a.length).toBeGreaterThan(0);
@@ -16,7 +21,7 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test("different tints/size produce distinct renders", async () => {
+  test.skipIf(!hasRsvg)("different tints/size produce distinct renders", async () => {
     clearIconCaches();
     const a = await iconPng("folder", "#c0caf5", "#1a1b26", 16, 16);
     const b = await iconPng("folder", "#f7768e", "#1a1b26", 16, 16);
@@ -30,7 +35,7 @@ describe("icons", () => {
     expect(iconPng("no-such-icon-xyz", "#ffffff", "#000000", 8, 8)).rejects.toThrow();
   });
 
-  test("thumbPng rasterizes a file onto a bg", async () => {
+  test.skipIf(!hasMagick)("thumbPng rasterizes a file onto a bg", async () => {
     clearIconCaches();
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
     const tmp = `/tmp/opencode/tfm-thumb-test-${process.pid}.svg`;
