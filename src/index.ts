@@ -623,6 +623,7 @@ const { notify, toastCount } = makeNotify({
   accentBg: () => colors.accentBg,
   white: () => colors.white,
   sidebarFgMuted: () => colors.sidebarFgMuted,
+  durationMs: () => config.ui.toastDurationMs,
 });
 
 // Rubber-band gesture state + commit logic live in ./grid-input; this is the
@@ -657,6 +658,7 @@ const gridCtx = {
   getFocusIdx: () => selection.focusIdx(),
   selPaths,
   dblClickMs: () => config.ui.doubleClickMs,
+  dragThresholdCells: () => config.ui.dragThresholdCells,
   navigate,
   openFileDefault,
   openContextMenu: (x: number, y: number, title: string, entries: GridMenuEntry[]) => openContextMenu(x, y, title, entries as ListEntry[]),
@@ -685,6 +687,7 @@ const { renderGrid } = makeGridRenderer({
   tileW: () => TILE_W,
   tileH: () => TILE_H,
   iconCells: () => ICON_CELLS_H,
+  listRowH: () => config.ui.listRowHeight,
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors as Theme & Record<string, any>,
   previewEnabled: () => config.ui.previewEnabled,
@@ -793,6 +796,7 @@ const { settingGroups } = makeSettingModel({
   applyConfig: (fresh) => applyConfig(fresh),
   scheduleSaveConfig: () => scheduleSaveConfig(),
   showRoot: () => escMenu.showRoot(),
+  warn: (message, title) => notify(message, title ?? "tfm"),
 });
 
 
@@ -810,6 +814,8 @@ const escMenu = makeEscMenu({
   uiStyle: () => config.ui.uiStyle,
   menuW: () => MENU_W,
   settingGroups: () => settingGroups(),
+  warn: (message, title) => notify(message, title ?? "tfm"),
+  log: (message) => dlog(message),
   quit: () => quitApp(),
 });
 
@@ -916,6 +922,29 @@ const boot = async () => {
     debugLog(`terminal ${renderer.terminalWidth}x${renderer.terminalHeight} cwd=${process.cwd()} config=${configPath()}`);
     setStatusMsg(`debug: ${DEBUG_LOG}`);
   }
+
+  // --- Native memory hygiene ---
+  // OpenTUI's native objects (TextBuffers, images) are freed from bun GC
+  // finalizers, but bun only runs GC when the JS HEAP demands it — native
+  // memory pressure never triggers it. Sustained UI churn (theme flips,
+  // panel rebuilds) therefore grows the native allocator unbounded until
+  // small allocations start failing ("Failed to create TextBuffer" = the
+  // floating-UI-vanishes crash). Poke the GC on a schedule so finalizers
+  // drain regularly, and trace allocator stats under --debug.
+  const nativeMemLine = (): string => {
+    let stats = "n/a";
+    try {
+      const s = (renderer as any).lib?.getAllocatorStats?.();
+      if (s) stats = `native active=${s.activeAllocations} mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB`;
+    } catch {}
+    let rss = "";
+    try { rss = ` rss=${(process.memoryUsage().rss / 1048576).toFixed(0)}MB`; } catch {}
+    return `${stats}${rss}`;
+  };
+  setInterval(() => {
+    try { Bun.gc(false); } catch {}
+    if (isDebug) debugLog(`mem ${nativeMemLine()}`);
+  }, 10000).unref?.();
 
   const inputEl: any = byId("tfm-search");
   if (inputEl?.on) {
@@ -1047,6 +1076,7 @@ renderer.on(CliRenderEvents.RESIZE, () => {
 const keyRouter = makeKeyRouter({
   byId,
   state,
+  keybinds: (action) => config.keys[action] ?? [],
   quit: () => quitApp(),
   conflict,
   yesNo,

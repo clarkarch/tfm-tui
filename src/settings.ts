@@ -6,9 +6,14 @@ import { THEME_PRESETS, type ThemePreset } from "./themes";
 // config/state and the settings renderer stay in index.ts. ---
 
 export type SettingRow =
-  | { kind: "toggle"; label: string; get: () => boolean; set: (v: boolean) => void }
-  | { kind: "stepper"; label: string; min: number; max: number; step: number; fmt: (v: number) => string; get: () => number; set: (v: number) => void }
-  | { kind: "cycle"; label: string; names: string[]; getIdx: () => number; setIdx: (i: number) => void }
+  // `repaint` rows (theme / ui-style / transparent-bg) change the panel's own
+  // colors — their adjust re-renders the panel; other value rows update their
+  // value text by id (targeted, no rebuild — see the OOM note in AGENTS.md)
+  | { kind: "toggle"; label: string; repaint?: boolean; get: () => boolean; set: (v: boolean) => void }
+  | { kind: "stepper"; label: string; repaint?: boolean; min: number; max: number; step: number; fmt: (v: number) => string; get: () => number; set: (v: number) => void }
+  | { kind: "cycle"; label: string; repaint?: boolean; names: string[]; getIdx: () => number; setIdx: (i: number) => void }
+  // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
+  | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
   | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
 
 export type SettingGroup = { header?: string; rows: SettingRow[] };

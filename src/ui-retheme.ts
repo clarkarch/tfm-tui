@@ -97,6 +97,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     const themeChanged = lastThemeSig !== themeSig(fresh);
     Object.assign(ctx.config.ui, fresh.ui);
     Object.assign(ctx.config.theme, fresh.theme);
+    Object.assign(ctx.config.keys, fresh.keys);
     Object.assign(ctx.colors, fresh.theme);
     if (!ctx.config.ui.transparentBg) ctx.colors.bg = bumpHex(ctx.colors.bg);
     lastThemeSig = themeSig(ctx.config);
@@ -123,6 +124,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();
       ctx.syncTerminalTheme();
+      // a theme flip churns the whole icon raster set + every chrome surface;
+      // without a GC poke the destroyed renderables' native buffers sit in
+      // finalizer limbo until the next heap-driven GC (see index.ts mem note)
+      try { Bun.gc(false); } catch {}
     }
     ctx.renderAll();
   };

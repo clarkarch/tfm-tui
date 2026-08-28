@@ -41,6 +41,8 @@ export type GridInputCtx = {
   getFocusIdx(): number;
   selPaths(): ClipItem[];
   dblClickMs(): number;
+  // config knob [ui] drag-threshold-cells (default 1); read live at drag time
+  dragThresholdCells?(): number;
   navigate(dir: string): void;
   openFileDefault(p: string): void;
   openContextMenu(x: number, y: number, title: string, entries: GridMenuEntry[]): void;
@@ -273,7 +275,8 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       onMouseDragEnd: () => { if (gridDrag.keys) { ctx.log("tile dragend -> cleanup scheduled"); commitPendingCtrlToggle(ctx); scheduleDragCleanup(ctx); } },
       onMouseDrag: (ev: any) => {
         if (!gridDrag.keys) return;
-        if (!gridDrag.active && (Math.abs(ev.x - gridDrag.startX) > 1 || Math.abs(ev.y - gridDrag.startY) > 1)) {
+        const thr = ctx.dragThresholdCells?.() ?? 1;
+        if (!gridDrag.active && (Math.abs(ev.x - gridDrag.startX) > thr || Math.abs(ev.y - gridDrag.startY) > thr)) {
           gridDrag.active = true;
           gridDrag.pendingKey = null; // it became a drag — the click-toggle never happened
           // payload tiles must actually be selected or the visual state lies

@@ -1,11 +1,20 @@
 // --- Settings model: the row data wiring settings rows to config/state.
-// Pure row semantics live in ./settings (applyAdjust/flattenRows), the panel
-// widget in ./ui-settings; this module only builds the row list with live
-// get/set closures. No renderer imports — ctx carries the sinks. ---
+// Row TYPES + pure semantics live in ./settings, the panel widget in
+// ./ui-settings. Rows for schema-defined keys (config-schema.ts) are built
+// generically here; hand-written rows are only the ones with special
+// presentations: theme presets, tab-bar adaptive/on, show-hidden state sync.
+// No renderer imports — ctx carries the sinks. ---
 import { spawn } from "node:child_process";
 import { THEME_PRESETS } from "./themes";
-import { themePresetIdx as settingsThemePresetIdx, type SettingGroup } from "./settings";
-import { configPath, defaultConfig, type Config } from "./config";
+import { themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
+import { configPath, defaultConfig, type Config, type UiConfig } from "./config";
+import {
+  KEY_SCHEMA,
+  UI_SCHEMA,
+  keybindConflict,
+  type KeyAction,
+  type UiSchemaRow,
+} from "./config-schema";
 
 export type SettingsModelCtx = {
   // live object refs — getters/setters read through them on every call
@@ -14,68 +23,113 @@ export type SettingsModelCtx = {
   applyConfig(fresh: Config): void;
   scheduleSaveConfig(): void;
   showRoot(): void;
+  // conflict toasts for remapping (wired to notify in index)
+  warn(message: string, title?: string): void;
 };
 
 export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const themePresetIdx = (): number =>
     settingsThemePresetIdx(THEME_PRESETS, ctx.config.theme);
 
-  const commitSetting = (): void => {
-    ctx.applyConfig(ctx.config);
+  // fresh-object commit: applyConfig diffs vs its LAST-APPLIED state, but
+  // building a fresh Config keeps renderer-flipping rows correct regardless
+  const commit = (fresh: Config): void => {
+    ctx.applyConfig(fresh);
     ctx.scheduleSaveConfig();
+  };
+
+  const commitUi = (patch: Partial<UiConfig>): void => {
+    commit({ ui: { ...ctx.config.ui, ...patch }, theme: { ...ctx.config.theme }, keys: { ...ctx.config.keys } });
+  };
+
+  const commitKeys = (action: KeyAction, binds: string[]): void => {
+    commit({ ui: { ...ctx.config.ui }, theme: { ...ctx.config.theme }, keys: { ...ctx.config.keys, [action]: binds } });
   };
 
   const resetToDefaults = (): void => {
     const fresh = structuredClone(defaultConfig);
     ctx.state.showHidden = fresh.ui.showHidden;
-    ctx.applyConfig(fresh);
-    ctx.scheduleSaveConfig();
+    commit(fresh);
+  };
+
+  // generic row builders — one per schema kind
+  const schemaRow = (row: UiSchemaRow): SettingRow => {
+    const ui = ctx.config.ui as unknown as Record<string, unknown>;
+    switch (row.kind) {
+      case "int":
+        return {
+          kind: "stepper", label: row.label, min: row.min, max: row.max, step: row.step,
+          fmt: (v) => `${v}`,
+          get: () => (ui[row.prop] as number) ?? row.def,
+          set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
+        };
+      case "bool":
+        return {
+          kind: "toggle", label: row.label,
+          get: () => !!ui[row.prop],
+          set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
+        };
+      case "enum":
+        return {
+          kind: "cycle", label: row.label, names: [...row.values],
+          getIdx: () => row.values.indexOf(String(ui[row.prop] ?? row.def)),
+          setIdx: (i) => commitUi({ [row.prop]: row.values[i] } as Partial<UiConfig>),
+        };
+    }
+  };
+
+  const keybindRow = (action: KeyAction, label: string): SettingRow => ({
+    kind: "keybind", label,
+    get: () => ctx.config.keys[action] ?? [],
+    set: (v) => {
+      // conflict check: reject a bind another action already owns
+      for (const spec of v) {
+        const clash = keybindConflict(ctx.config, action, spec);
+        if (clash) {
+          const labelOf = KEY_SCHEMA.find((r) => r.action === clash)?.label ?? clash;
+          ctx.warn(`"${spec}" is already used by: ${labelOf}`, "keybind conflict");
+          return;
+        }
+      }
+      commitKeys(action, v);
+    },
+  });
+
+  const uiRowsIn = (group: UiSchemaRow["group"]): UiSchemaRow[] =>
+    UI_SCHEMA.filter((r): r is UiSchemaRow => r.section === "ui" && r.group === group);
+
+  // general: hand-rolled rows first (theme / hidden-files state sync), then
+  // schema rows minus the two with special presentations (show-hidden, tab-bar)
+  const generalRows = (): SettingRow[] => {
+    const rows: SettingRow[] = [
+      { kind: "cycle", label: "theme", repaint: true, names: THEME_PRESETS.map((p) => p.name), getIdx: themePresetIdx,
+        setIdx: (i) => { commit({ ui: { ...ctx.config.ui }, theme: { ...THEME_PRESETS[i]!.theme }, keys: { ...ctx.config.keys } }); } },
+      { kind: "toggle", label: "hidden files",
+        // state.showHidden is the effective runtime flag (the remap bind writes
+        // it without persisting); config is only updated when the GUI commits
+        get: () => ctx.state.showHidden,
+        set: (v) => { ctx.state.showHidden = v; commitUi({ showHidden: v }); } },
+      // cycle, not toggle: false = adaptive (strip only with 2+ tabs), true = always
+      { kind: "cycle", label: "tab bar", names: ["adaptive", "on"], getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
+        setIdx: (i) => commitUi({ tabBar: i === 1 }) },
+    ];
+    for (const row of uiRowsIn("general")) {
+      if (row.prop === "showHidden" || row.prop === "tabBar") continue;
+      const built = schemaRow(row);
+      // these change the PANEL's own colors — their adjust must re-render it
+      if (row.prop === "uiStyle" || row.prop === "transparentBg") {
+        if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
+      }
+      rows.push(built);
+    }
+    return rows;
   };
 
   const settingGroups = (): SettingGroup[] => [
-    {
-      rows: [
-        { kind: "cycle", label: "theme", names: THEME_PRESETS.map((p) => p.name), getIdx: themePresetIdx,
-          setIdx: (i) => { ctx.applyConfig({ ui: { ...ctx.config.ui }, theme: { ...THEME_PRESETS[i]!.theme } }); ctx.scheduleSaveConfig(); } },
-        { kind: "toggle", label: "hidden files",
-          // state.showHidden is the effective runtime flag (ctrl+h writes it
-          // without persisting); config is only updated when the GUI commits
-          get: () => ctx.state.showHidden,
-          set: (v) => { ctx.config.ui.showHidden = v; ctx.state.showHidden = v; commitSetting(); } },
-        { kind: "toggle", label: "preview pane", get: () => ctx.config.ui.previewEnabled,
-          set: (v) => { ctx.config.ui.previewEnabled = v; commitSetting(); } },
-        // fresh-object setters (see transparent-bg below): toggles that flip
-        // renderer/layout state must not mutate `config` before applyConfig
-        // cycle, not toggle: false = adaptive (strip only with 2+ tabs), true = always
-        { kind: "cycle", label: "tab bar", names: ["adaptive", "on"], getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
-          setIdx: (i) => { ctx.applyConfig({ ui: { ...ctx.config.ui, tabBar: i === 1 }, theme: { ...ctx.config.theme } }); ctx.scheduleSaveConfig(); } },
-        { kind: "toggle", label: "list view", get: () => ctx.config.ui.viewMode === "list",
-          set: (v) => { ctx.applyConfig({ ui: { ...ctx.config.ui, viewMode: v ? "list" : "grid" }, theme: { ...ctx.config.theme } }); ctx.scheduleSaveConfig(); } },
-        // fresh-object setter on purpose: applyConfig diffs config vs fresh, so
-        // mutating config first (like the rows above) would self-compare equal
-        // and skip the cache-invalidation/clear-color swap
-        { kind: "toggle", label: "transparent bg", get: () => ctx.config.ui.transparentBg,
-          set: (v) => { ctx.applyConfig({ ui: { ...ctx.config.ui, transparentBg: v }, theme: { ...ctx.config.theme } }); ctx.scheduleSaveConfig(); } },
-        { kind: "cycle", label: "ui style", names: ["solid", "outline"], getIdx: () => (ctx.config.ui.uiStyle === "outline" ? 1 : 0),
-          setIdx: (i) => { ctx.applyConfig({ ui: { ...ctx.config.ui, uiStyle: i === 1 ? "outline" : "solid" }, theme: { ...ctx.config.theme } }); ctx.scheduleSaveConfig(); } },
-      ],
-    },
-    {
-      header: "layout",
-      rows: [
-        { kind: "stepper", label: "sidebar width", min: 16, max: 60, step: 1, fmt: (v) => `${v}`, get: () => ctx.config.ui.sidebarWidth, set: (v) => { ctx.config.ui.sidebarWidth = v; commitSetting(); } },
-        { kind: "stepper", label: "tile width", min: 10, max: 40, step: 1, fmt: (v) => `${v}`, get: () => ctx.config.ui.tileWidth, set: (v) => { ctx.config.ui.tileWidth = v; commitSetting(); } },
-        { kind: "stepper", label: "tile height", min: 3, max: 10, step: 1, fmt: (v) => `${v}`, get: () => ctx.config.ui.tileHeight, set: (v) => { ctx.config.ui.tileHeight = v; commitSetting(); } },
-        { kind: "stepper", label: "icon size", min: 1, max: 5, step: 1, fmt: (v) => `${v}`, get: () => ctx.config.ui.iconCells, set: (v) => { ctx.config.ui.iconCells = v; commitSetting(); } },
-        { kind: "stepper", label: "preview width", min: 20, max: 80, step: 2, fmt: (v) => `${v}`, get: () => ctx.config.ui.previewWidth, set: (v) => { ctx.config.ui.previewWidth = v; commitSetting(); } },
-      ],
-    },
-    {
-      header: "behavior",
-      rows: [
-        { kind: "stepper", label: "double-click ms", min: 100, max: 2000, step: 50, fmt: (v) => `${v}`, get: () => ctx.config.ui.doubleClickMs, set: (v) => { ctx.config.ui.doubleClickMs = v; commitSetting(); } },
-      ],
-    },
+    { header: "general", rows: generalRows() },
+    { header: "layout", rows: uiRowsIn("layout").map(schemaRow) },
+    { header: "behavior", rows: uiRowsIn("behavior").map(schemaRow) },
+    { header: "keybindings", rows: KEY_SCHEMA.map((r) => keybindRow(r.action, r.label)) },
     {
       header: "config",
       rows: [

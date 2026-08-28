@@ -11,6 +11,8 @@ export type NotifyCtx = {
   accentBg(): string;
   white(): string;
   sidebarFgMuted(): string;
+  // config knob [ui] toast-duration-ms (default 3000)
+  durationMs?(): number;
 };
 
 type Toast = { id: number; nodeId: string; timer: any };
@@ -34,6 +36,10 @@ export const makeNotify = (ctx: NotifyCtx): { notify: (message: string, title?: 
   return {
     toastCount: () => toasts.length,
     notify(message, title = "tfm") {
+    // toasts fire from all over (incl. error paths during native memory
+    // pressure — see the OOM note in AGENTS.md); a missing toast must never
+    // take the app down, so the whole build is guarded
+    try {
     const id = ++toastSeq;
     const w = Math.max(24, Math.min(44, message.length + title.length + 6));
     const y = 1 + toasts.length * 4;
@@ -61,6 +67,7 @@ export const makeNotify = (ctx: NotifyCtx): { notify: (message: string, title?: 
     animateLeft(real, ctx.termW() + 2, targetX, 180);
     const entry: Toast = { id, nodeId: `tfm-toast-${id}`, timer: null };
     toasts.push(entry);
+    const duration = ctx.durationMs?.() ?? 3000;
     entry.timer = setTimeout(() => {
       let op = 1;
       const fade = () => {
@@ -77,7 +84,10 @@ export const makeNotify = (ctx: NotifyCtx): { notify: (message: string, title?: 
         }
       };
       fade();
-    }, 3000);
+    }, duration);
+    } catch {
+      // toast allocation failed (memory pressure) — drop it silently
+    }
     },
   };
 };

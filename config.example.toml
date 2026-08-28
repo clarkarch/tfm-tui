@@ -2,30 +2,76 @@
 # Location: ~/.config/tfm/config.toml (or $XDG_CONFIG_HOME/tfm/config.toml)
 # Override path with $TFM_CONFIG. Missing file = all defaults.
 # Invalid values are ignored per-key (falls back to default), never fatal.
+# [keys]: every action can carry several binds. Bare letters/numbers are
+# reserved for type-to-search.
 
 [ui]
-sidebar-width = 26      # 16..60 cells
-tile-width = 20         # 10..40
-tile-height = 5         # 3..10
-icon-cells = 3          # grid icon height in rows, 1..5
-double-click-ms = 400   # 100..2000
-show-hidden = false     # start with dotfiles visible (ctrl+h toggles at runtime)
-preview-enabled = false # right-side preview pane (text files, folder stats)
-preview-width = 40      # 20..80 cells
-restore-session = false # true = reopen the folder from the last quit instead of the launch cwd
-transparent-bg = false  # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
-ui-style = "solid"      # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest
-tab-bar = false         # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
-view-mode = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
+sidebar-width        = 26       # 16..60 cells (grid + list)
+tile-width           = 20       # 10..40 cells (grid view)
+tile-height          = 5        # 3..10 cells (grid view)
+icon-cells           = 3        # grid icon height in rows, 1..5
+list-row-height      = 1        # list view row height in cells, 1..3 (icon scales with it)
+preview-width        = 40       # 20..80 cells
+double-click-ms      = 400      # 100..2000
+toast-duration-ms    = 3000     # how long notifications stay up, 1000..10000
+drag-threshold-cells = 1        # cells of movement before a press becomes a drag, 1..5
+show-hidden          = false    # start with dotfiles visible (ctrl+h toggles at runtime)
+preview-enabled      = false    # right-side preview pane (text files, folder stats)
+restore-session      = false    # true = reopen the folder from the last quit instead of the launch cwd
+transparent-bg       = false    # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
+tab-bar              = false    # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
+view-mode            = "grid"   # "grid" = icon tiles; "list" = compact rows with size + modified columns
+ui-style             = "solid"  # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest
 
 [theme]
-bg = "#1a1b26"
-sidebar-bg = "#16161e"
-sidebar-fg = "#c0caf5"
-sidebar-fg-muted = "#565f89"
-accent = "#7aa2f7"
-accent-bg = "#292e42"
-hover-bg = "#24283b"
-border = "#292e42"
-divider = "#292e42"
-white = "#c0caf5"
+bg             = "#1a1b26"  # background
+sidebarBg      = "#16161e"  # sidebar background
+sidebarFg      = "#c0caf5"  # sidebar text
+sidebarFgMuted = "#565f89"  # sidebar muted text
+accent         = "#7aa2f7"  # accent
+accentBg       = "#292e42"  # accent background (selection, buttons)
+hoverBg        = "#24283b"  # hover background
+border         = "#292e42"  # borders
+divider        = "#292e42"  # dividers
+white          = "#c0caf5"  # primary text
+syntaxString   = "#9ece6a"  # syntax: strings
+syntaxNumber   = "#ff9e64"  # syntax: numbers
+syntaxType     = "#2ac3de"  # syntax: types
+syntaxFunction = "#7aa2f7"  # syntax: functions
+syntaxOperator = "#89ddff"  # syntax: operators
+syntaxProperty = "#73daca"  # syntax: properties
+ansi0          = "#16161e"  # terminal color 0 (black)
+ansi1          = "#f7768e"  # terminal color 1 (red)
+ansi2          = "#9ece6a"  # terminal color 2 (green)
+ansi3          = "#e0af68"  # terminal color 3 (yellow)
+ansi4          = "#7aa2f7"  # terminal color 4 (blue)
+ansi5          = "#bb9af7"  # terminal color 5 (magenta)
+ansi6          = "#7dcfff"  # terminal color 6 (cyan)
+ansi7          = "#c0caf5"  # terminal color 7 (white)
+ansi8          = "#565f89"  # terminal color 8 (bright black)
+ansi9          = "#f7768e"  # terminal color 9 (bright red)
+ansi10         = "#9ece6a"  # terminal color 10 (bright green)
+ansi11         = "#e0af68"  # terminal color 11 (bright yellow)
+ansi12         = "#7aa2f7"  # terminal color 12 (bright blue)
+ansi13         = "#bb9af7"  # terminal color 13 (bright magenta)
+ansi14         = "#7dcfff"  # terminal color 14 (bright cyan)
+ansi15         = "#c0caf5"  # terminal color 15 (bright white)
+
+[keys]
+quit              = ["ctrl+q"]                  # default: ctrl+q
+open-menu         = ["escape"]                  # default: escape
+toggle-hidden     = ["ctrl+h"]                  # default: ctrl+h
+reload-places     = ["ctrl+r"]                  # default: ctrl+r
+new-tab           = ["ctrl+t"]                  # default: ctrl+t
+close-tab         = ["ctrl+w"]                  # default: ctrl+w
+next-tab          = ["ctrl+tab"]                # default: ctrl+tab
+prev-tab          = ["ctrl+shift+tab"]          # default: ctrl+shift+tab
+select-all        = ["ctrl+a"]                  # default: ctrl+a
+trash             = ["delete"]                  # default: delete
+rename-or-restore = ["f2"]                      # default: f2
+copy              = ["ctrl+c"]                  # default: ctrl+c
+cut               = ["ctrl+x"]                  # default: ctrl+x
+paste             = ["ctrl+v"]                  # default: ctrl+v
+undo              = ["ctrl+z"]                  # default: ctrl+z
+redo              = ["ctrl+y", "ctrl+shift+z"]  # default: ctrl+y or ctrl+shift+z
+parent-dir        = ["backspace"]               # default: backspace

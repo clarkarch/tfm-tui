@@ -1,11 +1,14 @@
 // --- Keyboard router: ONE keypress entry point with a strict precedence
-// chain — quit > conflict > yes/no > rename > props > esc-menu > terminal >
-// path-edit > file menu > search > sidebar > grid > chords. State the sidebar
-// mouse code also reads (kb focus highlight) lives here behind getters. The
+// chain — quit > capture > conflict > yes/no > rename > props > esc-menu >
+// terminal > path-edit > file menu > search > sidebar > grid. Action keys are
+// remappable via config [keys] (see config-schema.ts); modal-internal nav
+// (arrows/enter/esc inside menus) and type-to-search stay structural. The
 // modal chain order IS load-bearing — do not reorder. ---
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "./uri";
 import { loadSystemPlaces } from "./places";
+import type { KeyAction } from "./config-schema";
+import { keyMatch, parseKeySpec } from "./config-schema";
 import type { Selection } from "./selection";
 
 // structural subset of index's AppState — the router only touches these
@@ -17,6 +20,8 @@ export type KeyState = {
 export type KeyRouterCtx = {
   byId(id: string): any;
   state: KeyState;
+  // live keybind lookup — reads config.keys so remaps apply without rebuilds
+  keybinds(action: KeyAction): string[];
   quit(): void;
   conflict: { isOpen(): boolean; closeConflict(policy: "skip"): void };
   yesNo: { isOpen(): boolean; close(): void };
@@ -29,7 +34,10 @@ export type KeyRouterCtx = {
     moveMenu(d: number): void;
     adjustSelectedSetting(d: number): void;
     menuActivate(): void;
+    menuTab(): void;
     openMenu(): void;
+    // keybind capture (settings panel): consume the event while recording
+    captureKey(e: any): boolean;
   };
   termOwnsKeyboard(): boolean;
   pathEditMode(): boolean;
@@ -78,6 +86,17 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   let sidebarActive = false;
   let placeIdx = -1;
 
+  // does this event match any configured bind for the action?
+  const hit = (e: any, action: KeyAction): boolean => {
+    const specs = ctx.keybinds(action);
+    if (!specs?.length) return false;
+    for (const s of specs) {
+      const spec = parseKeySpec(s);
+      if (spec && keyMatch(e, spec)) return true;
+    }
+    return false;
+  };
+
   const setSidebarFocus = (idx: number): boolean => {
     if (idx < 0 || idx >= ctx.placesHost.length) return false;
     placeIdx = idx;
@@ -103,7 +122,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
 
   const handleKey = (e: any): void => {
     const ctrl = !!e.ctrl || !!e.control;
-    if (ctrl && (e.name === "q" || e.unicode === "q")) {
+    // keybind capture in the settings panel is the ONE state above quit:
+    // recording ctrl+q must not quit the app mid-capture
+    if (ctx.escMenu.captureKey(e)) return;
+    if (hit(e, "quit")) {
       ctx.quit();
       return;
     }
@@ -136,6 +158,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       else if (e.name === "down") ctx.escMenu.moveMenu(1);
       else if (e.name === "left") ctx.escMenu.adjustSelectedSetting(-1);
       else if (e.name === "right") ctx.escMenu.adjustSelectedSetting(1);
+      else if (e.name === "tab") ctx.escMenu.menuTab();
       else if (e.name === "return") ctx.escMenu.menuActivate();
       return;
     }
@@ -255,7 +278,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       }
       return;
     }
-    if (e.name === "backspace") {
+    if (hit(e, "parentDir")) {
       const cwd = path.resolve(ctx.state.cwd);
       const parent = path.dirname(cwd);
       if (parent !== cwd) ctx.navigate(parent);
@@ -266,38 +289,40 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
 
-    if (e.name === "escape") {
+    if (hit(e, "openMenu")) {
       ctx.escMenu.openMenu();
       return;
     }
-    if (ctrl && (e.name === "h" || e.unicode === "h")) {
+    if (hit(e, "toggleHidden")) {
       ctx.state.showHidden = !ctx.state.showHidden;
       void ctx.renderGrid();
       return;
     }
-    if (ctrl && (e.name === "r" || e.unicode === "r")) {
+    if (hit(e, "reloadPlaces")) {
       void loadSystemPlaces().then(() => ctx.renderAll());
       return;
     }
 
-    // --- tabs: ctrl+t new, ctrl+w close, ctrl+tab / ctrl+shift+tab cycle
-    // (kitty needs map no_op for the latter two — its default next_tab /
-    // previous_tab eat the keys before they reach us) ---
-    if (ctrl && (e.name === "t" || e.unicode === "t")) { ctx.newTab(); return; }
-    if (ctrl && (e.name === "w" || e.unicode === "w")) { ctx.closeTab(); return; }
-    if (ctrl && e.name === "tab") {
-      if (e.shift) ctx.switchTab(ctx.tabModel.active === 0 ? ctx.tabModel.list.length - 1 : ctx.tabModel.active - 1);
-      else ctx.switchTab(ctx.tabModel.active === ctx.tabModel.list.length - 1 ? 0 : ctx.tabModel.active + 1);
+    // --- tabs (kitty needs map no_op for ctrl+tab / ctrl+shift+tab — its
+    // default next_tab/previous_tab eat the keys before they reach us) ---
+    if (hit(e, "newTab")) { ctx.newTab(); return; }
+    if (hit(e, "closeTab")) { ctx.closeTab(); return; }
+    if (hit(e, "prevTab")) {
+      ctx.switchTab(ctx.tabModel.active === 0 ? ctx.tabModel.list.length - 1 : ctx.tabModel.active - 1);
+      return;
+    }
+    if (hit(e, "nextTab")) {
+      ctx.switchTab(ctx.tabModel.active === ctx.tabModel.list.length - 1 ? 0 : ctx.tabModel.active + 1);
       return;
     }
 
     // --- file operations ---
-    if (ctrl && (e.name === "a" || e.unicode === "a")) {
+    if (hit(e, "selectAll")) {
       selection.selectAll();
       return;
     }
     const selected = selection.selPaths();
-    if (e.name === "delete" && selected.length) {
+    if (hit(e, "trash") && selected.length) {
       if (ctx.inTrashView()) {
         // no cursor coords in a keybind — the confirm dialog is a centered modal
         ctx.confirmDeleteForever(selected.map((s) => s.path));
@@ -305,8 +330,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       else ctx.trashPaths(selected.map((s) => s.path));
       return;
     }
-    if (e.name === "f2" && selected.length === 1 && selected[0]) {
-      // in the trash F2 restores instead of renaming
+    if (hit(e, "renameOrRestore") && selected.length === 1 && selected[0]) {
+      // in the trash rename restores instead
       if (ctx.inTrashView()) {
         ctx.restoreFromTrash(selected.map((s) => s.path));
         return;
@@ -314,23 +339,23 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       ctx.startInlineRename(selected[0].path);
       return;
     }
-    if (ctrl && (e.name === "c" || e.unicode === "c") && selected.length) {
+    if (hit(e, "copy") && selected.length) {
       ctx.setClipboard("copy", selected);
       return;
     }
-    if (ctrl && (e.name === "x" || e.unicode === "x") && selected.length) {
+    if (hit(e, "cut") && selected.length) {
       ctx.setClipboard("cut", selected);
       return;
     }
-    if (ctrl && (e.name === "v" || e.unicode === "v") && !ctx.isVirtualCwd()) {
+    if (hit(e, "paste") && !ctx.isVirtualCwd()) {
       ctx.pasteSmart(ctx.state.cwd);
       return;
     }
-    if ((ctrl && e.shift && (e.name === "z" || e.unicode === "z")) || (ctrl && (e.name === "y" || e.unicode === "y"))) {
+    if (hit(e, "redo")) {
       ctx.redoLast();
       return;
     }
-    if (ctrl && (e.name === "z" || e.unicode === "z")) {
+    if (hit(e, "undo")) {
       ctx.undoLast();
       return;
     }

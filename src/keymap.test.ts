@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeKeyRouter, type KeyRouterCtx } from "./keymap";
 import { makeSelection, type SelectionCtx } from "./selection";
+import { defaultConfig } from "./config-schema";
 
 const COLORS: any = {
   bg: "#111111", hoverBg: "#222222", accent: "#7aa2f7", accentBg: "#333333",
@@ -44,16 +45,18 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
   seedTiles(["a.txt", "b.txt", "c.txt", "d.txt"]);
 
   const state = { cwd: "/tmp/tfm-kb/sub", showHidden: false };
-  const escMenuState = { open: false };
+  const escMenuState = { open: false, capturing: false };
   const places = [
     { selected: false, place: { path: "/home" } as any },
     { selected: false, place: { path: "/media/usb", mountDevice: "sdb1" } as any },
   ];
   const tabModel = { active: 1, list: [0, 1, 2] };
+  const binds: Record<string, string[]> = structuredClone(defaultConfig.keys);
 
   const ctx: KeyRouterCtx = {
     byId: () => undefined,
     state,
+    keybinds: (action) => binds[action] ?? [],
     quit: rec("quit"),
     conflict: { isOpen: () => false, closeConflict: (p) => calls.push(`conflict:close:${p}`) },
     yesNo: { isOpen: () => false, close: rec("yesno:close") },
@@ -66,7 +69,14 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
       moveMenu: (d) => calls.push(`escmenu:move:${d}`),
       adjustSelectedSetting: (d) => calls.push(`escmenu:adjust:${d}`),
       menuActivate: rec("escmenu:activate"),
+      menuTab: () => calls.push("escmenu:tab"),
       openMenu: () => { escMenuState.open = true; calls.push("escmenu:open"); },
+      captureKey: (e) => {
+        if (!escMenuState.capturing) return false;
+        if (e.name === "escape") escMenuState.capturing = false;
+        calls.push(`capture:${e.name}`);
+        return true;
+      },
     },
     termOwnsKeyboard: () => false,
     pathEditMode: () => false,
@@ -105,9 +115,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     ...over,
   };
   const router = makeKeyRouter(ctx);
-  const key = (name: string, opts: { ctrl?: boolean; shift?: boolean; unicode?: string } = {}): void =>
-    router.handleKey({ name, ctrl: !!opts.ctrl, shift: !!opts.shift, unicode: opts.unicode ?? name });
-  return { router, ctx, calls, selection, places, tabModel, state, escMenuState, seedTiles, key };
+  const key = (name: string, opts: { ctrl?: boolean; shift?: boolean; meta?: boolean } = {}): void =>
+    router.handleKey({ name, ctrl: !!opts.ctrl, shift: !!opts.shift, meta: !!opts.meta });
+  return { router, ctx, calls, selection, places, tabModel, state, escMenuState, seedTiles, key, binds };
 };
 
 // --- the modal precedence chain is load-bearing: quit > conflict > yes/no >
@@ -460,5 +470,76 @@ describe("file operation keys", () => {
     h.key("y", { ctrl: true });
     h.key("z", { ctrl: true, shift: true });
     expect(h.calls).toEqual(["undo", "redo", "redo"]);
+  });
+});
+
+describe("remappable keybinds", () => {
+  test("remapped action fires on the new key and not the old one", () => {
+    const h = makeHarness();
+    h.binds.toggleHidden = ["ctrl+j"];
+    h.key("h", { ctrl: true }); // old bind is gone
+    expect(h.calls).toEqual([]);
+    h.key("j", { ctrl: true });
+    expect(h.calls).toEqual(["renderGrid"]);
+    expect(h.state.showHidden).toBe(true);
+  });
+
+  test("multi-bind actions fire on every configured bind", () => {
+    const h = makeHarness();
+    h.binds.quit = ["ctrl+q", "alt+f4"];
+    h.key("q", { ctrl: true });
+    h.key("f4", { meta: true });
+    expect(h.calls).toEqual(["quit", "quit"]);
+  });
+
+  test("rebinding quit keeps it first in the chain (pre-empts an open conflict)", () => {
+    const h = makeHarness({ conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) } });
+    h.binds.quit = ["ctrl+x"];
+    h.key("x", { ctrl: true });
+    expect(h.calls).toEqual(["quit"]);
+  });
+
+  test("empty binds list disables the action", () => {
+    const h = makeHarness();
+    h.binds.newTab = [];
+    h.key("t", { ctrl: true });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("remapped trash/delete still respects the trash-view split", () => {
+    const h = makeHarness({ inTrashView: () => true });
+    h.binds.trash = ["ctrl+d"];
+    h.key("a", { ctrl: true });
+    h.key("d", { ctrl: true });
+    expect(h.calls).toEqual(["deleteForever:a.txt,b.txt,c.txt,d.txt"]);
+  });
+});
+
+describe("keybind capture precedence", () => {
+  test("capture consumes every key, even modals' keys, until it ends", () => {
+    const h = makeHarness({ conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) } });
+    h.escMenuState.capturing = true;
+    h.key("q", { ctrl: true }); // would quit without capture — swallowed
+    h.key("x");
+    expect(h.calls).toEqual(["capture:q", "capture:x"]);
+    h.key("escape"); // ends capture (fake logs the swallowed key before ending)
+    expect(h.escMenuState.capturing).toBe(false);
+    expect(h.calls).toEqual(["capture:q", "capture:x", "capture:escape"]);
+    // next key reaches the (open) conflict modal
+    h.key("escape");
+    expect(h.calls).toEqual(["capture:q", "capture:x", "capture:escape", "conflict:close:skip"]);
+  });
+
+  test("no capture -> router behaves normally (fake returns false)", () => {
+    const h = makeHarness();
+    h.key("escape");
+    expect(h.calls).toEqual(["escmenu:open"]);
+  });
+
+  test("esc menu swallows tab via menuTab (pane switching)", () => {
+    const h = makeHarness();
+    h.escMenuState.open = true;
+    h.key("tab");
+    expect(h.calls).toEqual(["escmenu:tab"]);
   });
 });

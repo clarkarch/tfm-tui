@@ -31,6 +31,7 @@ export type GridRendererCtx = {
   tileW(): number;
   tileH(): number;
   iconCells(): number;
+  listRowH(): number;
   uiStyle(): string;
   colors(): Record<string, any>;
   previewEnabled(): boolean;
@@ -173,6 +174,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const cwd = ctx.state.cwd;
     const sw = ctx.sw();
     const colors = ctx.colors();
+    // density knob [ui] list-row-height: 1 = compact, icon scales with height
+    const h = Math.min(3, Math.max(1, ctx.listRowH()));
+    const { aspect } = ctx.cellMetrics();
     const key = e.abs ?? path.join(cwd, e.name);
     const rowId = `tfm-tile-${tileSeq++}`;
     const labelId = `${rowId}-label`;
@@ -181,7 +185,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const row = Box({
       id: rowId,
       width: "100%",
-      height: 1,
+      height: h,
       flexDirection: "row",
       alignItems: "center",
       columnGap: 1,
@@ -189,13 +193,15 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       paddingRight: 1,
       ...ctx.entryMouseHandlers(e, key, idx),
     });
-    const iconSlot = ctx.makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), selection.tileStates(dim), 1, 0);
+    const iconSlot = ctx.makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), selection.tileStates(dim), h, 0);
     row.add(iconSlot.el);
     // rough inner width of the file pane; only used to truncate names, rows
     // themselves are 100%-width and flex
-    // 28 cells of fixed chrome: 2 padding + 1 icon + 4 gaps + 9 size + 11 date + 1 slack
+    // fixed chrome: 2 padding + gaps + size + date + slack; the icon is
+    // `aspect * h` cells wide and eats into the flexible name column
+    const iconW = Math.max(1, Math.round(aspect * h));
     const listW = Math.max(40, ctx.termW() - sw - ctx.reservedRight() - (ctx.uiStyle() === "outline" ? 6 : 3));
-    const nameMax = Math.max(12, listW - 28);
+    const nameMax = Math.max(12, listW - 27 - iconW);
     const label = e.name.length > nameMax ? e.name.slice(0, nameMax - 1) + "…" : e.name;
     row.add(Text({ id: labelId, content: label, fg: baseFg }));
     row.add(Box({ flexGrow: 1 }));
@@ -290,7 +296,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     selection.setFocusIdx(-1);
     selection.setSelAnchor(null);
     selection.setCols(cols);
-    selection.setRowH(isList ? 1 : TILE_H);
+    selection.setRowH(isList ? Math.min(3, Math.max(1, ctx.listRowH())) : TILE_H);
     selection.updateSelectionStatusReal();
   };
 
