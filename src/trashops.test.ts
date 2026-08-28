@@ -1,0 +1,165 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { trashDir } from "./fsutil";
+import { makeTrashOps, trashOrigPath, type TrashOpsSink } from "./trashops";
+
+const oldDataHome = process.env.XDG_DATA_HOME;
+const oldHome = process.env.HOME;
+afterEach(() => {
+  if (oldDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = oldDataHome;
+  if (oldHome === undefined) delete process.env.HOME;
+  else process.env.HOME = oldHome;
+});
+
+const sandbox = (): string => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "tfm-trash-"));
+  process.env.XDG_DATA_HOME = path.join(root, "data");
+  process.env.HOME = root; // restoreFromTrash may mkdir under orig path
+  return root;
+};
+
+const recordingSink = (): TrashOpsSink & { notes: string[]; batches: { label: string; units: number; redos: number }[] } => {
+  const notes: string[] = [];
+  const batches: { label: string; units: number; redos: number }[] = [];
+  return {
+    notes,
+    batches,
+    pushUndoBatch: (label, units, redos) => batches.push({ label, units: units.length, redos: redos.length }),
+    status: (msg) => notes.push(`status:${msg}`),
+    notify: (msg, title) => notes.push(`notify:${title ?? ""}:${msg}`),
+    refresh: () => notes.push("refresh"),
+  };
+};
+
+describe("trashPaths", () => {
+  test("moves into XDG trash, writes trashinfo, pushes paired undo batch", async () => {
+    const root = sandbox();
+    try {
+      const file = path.join(root, "doomed.txt");
+      writeFileSync(file, "bye");
+      const sink = recordingSink();
+      const ops = makeTrashOps(sink);
+      ops.trashPaths([file]);
+      await Bun.sleep(30);
+
+      const hit = path.join(trashDir(), "files", "doomed.txt");
+      expect(existsSync(hit)).toBe(true);
+      expect(existsSync(file)).toBe(false);
+      expect(existsSync(path.join(trashDir(), "info", "doomed.txt.trashinfo"))).toBe(true);
+      expect(sink.batches.length).toBe(1);
+      expect(sink.batches[0]!.label).toBe("trash 1 item");
+      expect(sink.batches[0]!.units).toBe(1);
+      expect(sink.batches[0]!.redos).toBe(1);
+      expect(sink.notes.some((n) => n === "status:Trashed 1 item · ctrl+z to undo")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("failure is counted with reason, not thrown", async () => {
+    const root = sandbox();
+    try {
+      const sink = recordingSink();
+      const ops = makeTrashOps(sink);
+      ops.trashPaths([path.join(root, "missing.bin")]);
+      await Bun.sleep(30);
+      expect(sink.notes.some((n) => n.includes("Trashed 0/1") && n.includes("FAILED"))).toBe(true);
+      expect(sink.notes.some((n) => n.startsWith("notify:trash failed"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("trashOrigPath", () => {
+  test("parses Path= with url-decoding, file:// prefix tolerated", async () => {
+    const root = sandbox();
+    try {
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "info", "a.txt.trashinfo"), "[Trash Info]\nPath=/tmp/a%20b.txt\n");
+      writeFileSync(path.join(trashDir(), "info", "b.txt.trashinfo"), "[Trash Info]\nPath=file:///tmp/b.txt\n");
+      expect(await trashOrigPath("a.txt")).toBe("/tmp/a b.txt");
+      expect(await trashOrigPath("b.txt")).toBe("/tmp/b.txt");
+      expect(await trashOrigPath("nope.txt")).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("restoreFromTrash", () => {
+  test("moves back to original location and removes trashinfo", async () => {
+    const root = sandbox();
+    try {
+      const origDir = path.join(root, "orig");
+      mkdirSync(origDir, { recursive: true });
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "files", "gone.txt"), "data");
+      writeFileSync(path.join(trashDir(), "info", "gone.txt.trashinfo"), `[Trash Info]\nPath=${origDir}/gone.txt\n`);
+      const sink = recordingSink();
+      makeTrashOps(sink).restoreFromTrash([path.join(trashDir(), "files", "gone.txt")]);
+      await Bun.sleep(30);
+      expect(existsSync(path.join(origDir, "gone.txt"))).toBe(true);
+      expect(existsSync(path.join(trashDir(), "info", "gone.txt.trashinfo"))).toBe(false);
+      expect(sink.notes.some((n) => n === "status:Restored 1 of 1")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("deleteForever / emptyTrash", () => {
+  test("delete removes files+info without undo batch", async () => {
+    const root = sandbox();
+    try {
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "files", "x.txt"), "1");
+      writeFileSync(path.join(trashDir(), "info", "x.txt.trashinfo"), "[Trash Info]\nPath=/tmp/x\n");
+      const sink = recordingSink();
+      makeTrashOps(sink).deleteForever([path.join(trashDir(), "files", "x.txt")]);
+      await Bun.sleep(30);
+      expect(existsSync(path.join(trashDir(), "files", "x.txt"))).toBe(false);
+      expect(existsSync(path.join(trashDir(), "info", "x.txt.trashinfo"))).toBe(false);
+      expect(sink.batches.length).toBe(0);
+      expect(sink.notes.some((n) => n === "status:Deleted 1 of 1")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("emptyTrash wipes everything and reports count", async () => {
+    const root = sandbox();
+    try {
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "files", "a"), "1");
+      writeFileSync(path.join(trashDir(), "files", "b"), "2");
+      const sink = recordingSink();
+      makeTrashOps(sink).emptyTrash();
+      await Bun.sleep(30);
+      expect(existsSync(path.join(trashDir(), "files", "a"))).toBe(false);
+      expect(sink.notes.some((n) => n === "notify:trash:Emptied 2 items")).toBe(true);
+      expect(sink.notes.some((n) => n === "status:Trash emptied (2)")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("emptyTrash with unreadable dir notifies failure", async () => {
+    const root = sandbox();
+    try {
+      const sink = recordingSink();
+      makeTrashOps(sink).emptyTrash();
+      await Bun.sleep(30);
+      expect(sink.notes.some((n) => n.startsWith("notify:empty failed:Could not read trash"))).toBe(true);
+      expect(sink.notes.some((n) => n === "status:Trash unreadable")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

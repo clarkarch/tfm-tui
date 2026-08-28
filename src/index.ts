@@ -23,6 +23,29 @@ import {
 } from "./recent";
 import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove } from "./fsutil";
 import { copyFileProgress as transferCopyFileProgress, copyTreeProgress as transferCopyTreeProgress, scanTree as transferScanTree, type TransferSink } from "./transfer";
+import { buildSections, isBookmarked, loadSystemPlaces, setBookmarked, type Place } from "./places";
+import { dirWalkStats, fmtBytes, fmtDate, idName, mimeLabelFor, permWords } from "./propsinfo";
+import { readRestoredSession, saveSession } from "./session";
+import {
+  agreeDragFrame,
+  agreeDropFrame,
+  dragIconFrame,
+  dragOutEnableFrame,
+  dropDisableFrame,
+  dropInEnableFrame,
+  dropPayloadToPaths,
+  finishDropFrame,
+  parseOsc72Meta,
+  presentDragFrames,
+  selfDropRejectFrame,
+  startDragFrame,
+  startDropFrame,
+  uriListPayload,
+} from "./osc72";
+import { makeTrashOps } from "./trashops";
+import { animateLeft, makeNotify } from "./notify";
+import { makeDialogs } from "./ui-dialogs";
+import { DRAG_GHOST_ID, finishDragState, gridDrag, makeEntryMouseHandlers, type ClipItem, type GridMenuEntry } from "./grid-input";
 
 const execFileP = promisify(execFile);
 
@@ -222,8 +245,6 @@ const state: AppState = {
 let renderAll: () => void = () => {};
 
 // --- session persistence: tabs (each with its own history) survive restarts ---
-const sessionFile = (): string =>
-  path.join(process.env.XDG_STATE_HOME ?? path.join(home, ".local/state"), "tfm", "session.json");
 
 // --- Tabs: `state` is always the ACTIVE tab's view; switching copies the
 // live history refs into the outgoing tab slot and adopts the incoming one ---
@@ -278,45 +299,19 @@ const closeTab = (i: number = activeTab): void => {
 const scheduleSaveSession = debounced(400, () => {
   syncTabFromState();
   if (isVirtualCwd()) return;
-  void mkdir(path.dirname(sessionFile()), { recursive: true })
-    .then(() => writeFile(sessionFile(), JSON.stringify({ cwd: state.cwd, tabs, activeTab })))
-    .catch(() => {});
+  void saveSession(state.cwd, tabs, activeTab).catch(() => {});
 });
 
 const restoreSession = (): void => {
   // off by default: launching tfm from a shell should open where you are;
   // opt in via [ui] restore-session = true
   if (!config.ui.restoreSession) return;
-  const usable = (p: string): boolean => {
-    if (isVirtualUri(p)) return p === RECENT_URI || p === STARRED_URI;
-    try { return statSync(p).isDirectory(); } catch { return false; }
-  };
-  try {
-    const doc = JSON.parse(readFileSync(sessionFile(), "utf8"));
-    if (Array.isArray(doc?.tabs)) {
-      const restored: Tab[] = [];
-      for (const t of doc.tabs) {
-        const hist: string[] = Array.isArray(t?.history)
-          ? t.history.filter((p: unknown) => typeof p === "string" && usable(p as string))
-          : [];
-        if (!hist.length) continue;
-        restored.push({ history: hist, histIdx: Math.min(Math.max(0, t.histIdx | 0), hist.length - 1) });
-      }
-      if (restored.length) {
-        tabs.length = 0;
-        tabs.push(...restored);
-        activeTab = Math.min(Math.max(0, doc.activeTab | 0), tabs.length - 1);
-      }
-    } else {
-      // legacy single-cwd session file
-      const cwd = typeof doc?.cwd === "string" ? doc.cwd : "";
-      if (cwd && cwd !== RECENT_URI && cwd !== STARRED_URI) {
-        try {
-          if (statSync(cwd).isDirectory()) { tabs.length = 0; tabs.push({ history: [cwd], histIdx: 0 }); activeTab = 0; }
-        } catch {}
-      }
-    }
-  } catch {}
+  const restored = readRestoredSession();
+  if (restored) {
+    tabs.length = 0;
+    tabs.push(...restored.tabs);
+    activeTab = restored.activeTab;
+  }
   adoptTab();
 };
 
@@ -377,187 +372,6 @@ const beginTypeToSearch = (ch: string): void => {
   setTimeout(() => { try { el.focus(); } catch {} }, 10);
 };
 
-// --- System places sources (Nautilus-style: nothing hardcoded) ---
-
-type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string; scheme?: "recent" | "starred"; bookmarked?: boolean };
-
-type UserDir = { key: string; label: string; p: string };
-
-async function loadSystemPlaces(): Promise<void> {
-  sysUserDirs = await readUserDirs();
-  sysBookmarks = await readBookmarks();
-  sysMounts = await listMounts();
-}
-
-let sysUserDirs: UserDir[] = [];
-let sysBookmarks: { p: string; label: string }[] = [];
-let sysMounts: { label: string; target: string; removable: boolean; device: string }[] = [];
-
-const xdgUserDirsFile = () =>
-  path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "user-dirs.dirs");
-
-const XDG_LABELS: Record<string, string> = {
-  XDG_DESKTOP_DIR: "Desktop",
-  XDG_DOWNLOAD_DIR: "Downloads",
-  XDG_DOCUMENTS_DIR: "Documents",
-  XDG_MUSIC_DIR: "Music",
-  XDG_PICTURES_DIR: "Pictures",
-  XDG_VIDEOS_DIR: "Videos",
-};
-
-const expandXdgValue = (raw: string): string => {
-  const v = raw.trim().replace(/^"(.*)"$/, "$1");
-  return v.replace(/^\$HOME/, home).replace(/^~/, home);
-};
-
-async function readUserDirs(): Promise<UserDir[]> {
-  try {
-    const text = await readFile(xdgUserDirsFile(), "utf8");
-    const out: UserDir[] = [];
-    for (const line of text.split("\n")) {
-      const m = line.match(/^(XDG_[A-Z_]+_DIR)\s*=\s*(.+)$/);
-      if (!m || !m[1] || !m[2]) continue;
-      const label = XDG_LABELS[m[1]];
-      if (!label) continue;
-      const p = expandXdgValue(m[2]!);
-      // XDG rule (and nautilus): pointing at $HOME disables the entry
-      if (!p || p === home) continue;
-      try {
-        if (!statSync(p).isDirectory()) continue;
-      } catch { continue; }
-      out.push({ key: m[1], label, p });
-    }
-    return out.sort((a, b) => (a.key < b.key ? -1 : 1));
-  } catch {
-    return [];
-  }
-}
-
-async function readBookmarks(): Promise<{ p: string; label: string }[]> {
-  try {
-    const file = path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "gtk-3.0", "bookmarks");
-    const text = await readFile(file, "utf8");
-    const out: { p: string; label: string }[] = [];
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      const sp = line.indexOf(" ");
-      const uri = sp === -1 ? line : line.slice(0, sp);
-      const label = sp === -1 ? "" : line.slice(sp + 1).trim();
-      if (!uri.startsWith("file://")) continue;
-      let p: string;
-      try { p = decodeURIComponent(uri.slice("file://".length)); } catch { continue; }
-      try { if (!statSync(p).isDirectory()) continue; } catch { continue; }
-      out.push({ p, label: label || path.basename(p) });
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-// --- GTK bookmark toggle (properties dialog; folders only, nautilus-compatible) ---
-const gtkBookmarksFile = (): string =>
-  path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "gtk-3.0", "bookmarks");
-
-const bookmarkUri = (p: string): string =>
-  "file://" + p.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/");
-
-const isBookmarked = (dir: string): boolean =>
-  sysBookmarks.some((b) => path.resolve(b.p) === path.resolve(dir));
-
-// rewrite preserving order + custom labels; additions go last (nautilus does too)
-const setBookmarked = async (dir: string, on: boolean): Promise<void> => {
-  const file = gtkBookmarksFile();
-  let lines: string[] = [];
-  try { lines = (await readFile(file, "utf8")).split("\n"); } catch {}
-  const uri = bookmarkUri(dir);
-  const kept = lines.filter((l) => l.trim() && l.split(" ")[0] !== uri);
-  if (on) kept.push(uri);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, kept.join("\n") + (kept.length ? "\n" : ""), "utf8");
-};
-
-const PSEUDO_FSTYPES = new Set(["squashfs", "tmpfs", "devtmpfs", "proc", "sysfs", "efivarfs", "overlay", "ramfs", "devfs", "cgroup"]);const SYSTEM_MOUNTS = new Set(["/", "/boot", "/boot/efi", "/efi", "/swap"]);
-
-function parseLsblk(json: any): { label: string; target: string; removable: boolean; device: string }[] {
-  const out: { label: string; target: string; removable: boolean; device: string }[] = [];
-  const visit = (nodes: any[], parentRm: boolean) => {
-    if (!Array.isArray(nodes)) return;
-    for (const n of nodes) {
-      const name: string = n?.name ?? "";
-      const rm = !!n?.rm || parentRm;
-      if (/^(loop|zram|ram\d+)/.test(name)) {
-        if (Array.isArray(n?.children)) visit(n.children, rm);
-        continue;
-      }
-      const fstype: string | null | undefined = n?.fstype;
-      let mps: string[] = [];
-      if (Array.isArray(n?.mountpoints)) {
-        mps = n.mountpoints.map((m: any) => (typeof m === "string" ? m : m?.mountpoint)).filter(Boolean);
-      } else if (typeof n?.mountpoint === "string") {
-        mps = [n.mountpoint];
-      }
-      const device = n?.path ?? `/dev/${name}`;
-      if (mps.length === 0) {
-        // mounted-nowhere but has a filesystem -> clickable to mount (nautilus behavior)
-        if (fstype && !PSEUDO_FSTYPES.has(fstype)) {
-          out.push({ label: n?.label || name, target: "", removable: rm, device });
-        }
-      }
-      for (const target of mps) {
-        if (!target || target.startsWith("[")) continue;
-        if (SYSTEM_MOUNTS.has(target)) continue;
-        if (target.startsWith("/snap") || target.startsWith("/var/lib/docker")) continue;
-        const label = n?.label || path.basename(target) || name;
-        if (!out.some((o) => o.target === target)) out.push({ label, target, removable: rm, device });
-      }
-      if (Array.isArray(n?.children)) visit(n.children, rm);
-    }
-  };
-  visit(json?.blockdevices ?? [], false);
-  return out;
-}
-
-async function listMounts(): Promise<{ label: string; target: string; removable: boolean; device: string }[]> {
-  try {
-    const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"]);
-    return parseLsblk(JSON.parse(stdout));
-  } catch {
-    return [];
-  }
-}
-
-function buildSections(): Place[][] {
-  const trashDir = path.join(home, ".local/share/Trash/files");
-  const hasTrash = (() => { try { return statSync(trashDir).isDirectory(); } catch { return false; } })();
-
-  const defaults: Place[] = [{ icon: "home", label: "Home", path: home, ejectable: false }];
-  defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false, scheme: "recent" });
-  defaults.push({ icon: "star", label: "Starred", path: null, ejectable: false, scheme: "starred" });
-  if (hasTrash) defaults.push({ icon: "trash-can", label: "Trash", path: trashDir, ejectable: false });
-
-  const dirs: Place[] = sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }));
-
-  const bookmarks: Place[] = sysBookmarks.map((b) => ({ icon: "bookmark", label: b.label, path: b.p, ejectable: false, bookmarked: true }));
-
-  const devices: Place[] = [
-    { icon: "harddisk", label: "This Device", path: "/", ejectable: false },
-    ...sysMounts.map((m): Place => ({
-      icon: m.removable ? "usb" : "harddisk",
-      label: m.label,
-      path: m.target || null,
-      ejectable: m.removable && !!m.target,
-      device: m.device,
-      mountDevice: m.target ? undefined : m.device,
-    })),
-  ];
-
-  const groups = [defaults];
-  if (dirs.length) groups.push(dirs);
-  if (bookmarks.length) groups.push(bookmarks);
-  groups.push(devices);
-  return groups;
-}
 
 // --- Places sidebar (rebuilt from scratch on every render, selection = cwd) ---
 
@@ -628,8 +442,8 @@ const makeRow = (place: Place): ReturnType<typeof Box> => {
         else if (place.mountDevice) mountDevice(place.mountDevice);
       },
       onMouseDrop: () => {
-        const keys = dragKeys;
-        finishDragState();
+        const keys = gridDrag.keys;
+        finishDragCtx();
         const target = placeTarget();
         dlog(`place drop ${place.label} keys=${keys?.length ?? -1} scheme=${place.scheme ?? "-"} target=${target}`);
         if (!keys || !target || place.scheme) return;
@@ -1414,75 +1228,15 @@ const setScrim = (on: boolean) => {
   }
 };
 
-// --- Shared skeleton for the centered floating dialogs (conflict / props /
-// prompt / yesno): full-screen dimmed scrim + a chrome panel that swallows
-// clicks, teardown is one scrim removal. Callers supply id/zIndex/width and
-// build their panel rows fresh (they close over live state). ---
-const openDialog = (opts: {
-  id: string;
-  zIndex: number;
-  width: number;
-  paddingDiv?: number; // vertical centering divisor: terminalHeight / this (3, props uses 4)
-  rows: () => any[];
-  onClose: () => void;
-}): void => {
-  const scrim = Box(
-    {
-      id: opts.id,
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: "100%",
-      height: "100%",
-      alignItems: "center",
-      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / (opts.paddingDiv ?? 3))),
-      zIndex: opts.zIndex,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-      onMouseDown: () => opts.onClose(),
-    },
-    Box(
-      {
-        id: `${opts.id}-panel`,
-        width: opts.width,
-        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-        paddingTop: 1,
-        paddingBottom: 1,
-        flexDirection: "column",
-        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
-      },
-      ...opts.rows(),
-    ),
-  );
-  renderer.root.add(scrim);
-  stripSelectable();
-};
+const { openDialog, closeDialog, dialogBtn } = makeDialogs({
+  byId,
+  rootAdd: (node) => renderer.root.add(node),
+  stripSelectable: () => stripSelectable(),
+  termH: () => renderer.terminalHeight,
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors,
+});
 
-const closeDialog = (id: string): void => {
-  const scrim: any = byId(id);
-  scrim?.parent?.remove(scrim);
-};
-
-// hover button used by the conflict + yes/no dialogs (identical builders)
-const dialogBtn = (id: string, label: string, fg: string, onPick: () => void): ReturnType<typeof Box> => {
-  const setBg = (on: boolean) => {
-    const n: any = byId(id);
-    if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
-  };
-  return Box(
-    {
-      id,
-      height: 1,
-      flexGrow: 1,
-      flexDirection: "row",
-      justifyContent: "center",
-      ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
-      onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
-      onMouseOver: () => setBg(true),
-      onMouseOut: () => setBg(false),
-    },
-    Text({ content: label, fg }),
-  );
-};
 
 // --- Grid (scrollable, culled, interactive) ---
 // mutable: applyConfig() rewrites these when settings change
@@ -1765,7 +1519,6 @@ const clearTileSelection = () => {
 const updateSelectionStatus: () => void = () => updateSelectionStatusReal();
 
 // --- File operations ---
-type ClipItem = { path: string; isDir: boolean };
 let clipboard: { mode: "copy" | "cut"; items: ClipItem[] } | null = null;
 
 // cut (pending-move) tiles render dimmed, nautilus-style
@@ -1965,7 +1718,7 @@ const paintProgress = (force = false): void => {
 const showProgressToast = (): void => {
   if (prog.toastUp) return;
   prog.toastUp = true;
-  const y = 1 + toasts.length * 4;
+  const y = 1 + toastCount() * 4;
   const setPauseVisual = (): void => {
     const p: any = byId(progPauseSpec.slotId);
     const l: any = byId(progPlaySpec.slotId);
@@ -2333,69 +2086,6 @@ const doPaste = async (dest: string): Promise<void> => {
   await runTransfer(mode, dest, srcs, mode === "copy" ? "paste" : "paste (move)");
 };
 
-// --- drag-to-move (press tile → drag → drop on folder tile or sidebar place) ---
-let dragKeys: ClipItem[] | null = null;
-let dragCtrl = false; // ctrl+drag = internal move, plain drag = external OSC 72
-let dragActive = false;
-let dropTargetKey: string | null = null;
-let dragStartX = 0;
-let dragStartY = 0;
-
-// ctrl+press defers its toggle until we know it was a click, not a drag —
-// toggling at mousedown unselected the pressed tile and emptied the payload
-let ctrlPendingKey: string | null = null;
-let ctrlPendingState = false;
-const commitPendingCtrlToggle = (): void => {
-  const k = ctrlPendingKey;
-  ctrlPendingKey = null;
-  if (!k || dragActive) return;
-  const refs = tileRefsByKey.get(k);
-  if (!refs) return;
-  refs.selected = ctrlPendingState;
-  setTileVisual(k, ctrlPendingState ? 2 : 0);
-  updateSelectionStatusReal();
-  void renderPreview();
-};
-
-const DRAG_GHOST_ID = "tfm-drag-ghost";
-
-const updateDragGhost = (x: number, y: number): void => {
-  const g: any = byId(DRAG_GHOST_ID);
-  if (!g) return;
-  try {
-    const n = dragKeys?.length ?? 0;
-    const label = `moving ${n} item${n === 1 ? "" : "s"}`;
-    const t: any = byId(`${DRAG_GHOST_ID}-label`);
-    if (t && t.content !== label) t.content = label;
-    g.width = label.length + 2;
-    g.left = Math.max(0, Math.min(x + 1, renderer.terminalWidth - label.length - 2));
-    g.top = Math.max(0, Math.min(y + 1, renderer.terminalHeight - 1));
-    g.visible = true;
-  } catch {}
-};
-
-const hideDragGhost = (): void => {
-  const g: any = byId(DRAG_GHOST_ID);
-  if (g) { try { g.visible = false; } catch {} }
-};
-
-const finishDragState = (): void => {
-  dlog(`finishDragState active=${dragActive} target=${dropTargetKey}`);
-  ctrlPendingKey = null;
-  hideDragGhost();
-  dragCtrl = false;
-  if (dropTargetKey) {
-    const r = tileRefsByKey.get(dropTargetKey);
-    if (r && !r.selected) setTileVisual(dropTargetKey, 0);
-  }
-  dropTargetKey = null;
-  dragActive = false;
-  dragKeys = null;
-};
-
-// release fires on the source before `drop` reaches the target — defer cleanup
-const scheduleDragCleanup = (): void => { setTimeout(finishDragState, 0); };
-
 const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
   const srcs = items
     .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
@@ -2543,133 +2233,16 @@ const openTerminalHere = (dir?: string): void => {
   }, 30);
 };
 
-const trashPaths = (paths: string[]): void => {
-  void (async () => {
-    const units: UndoUnit[] = [];
-    const redos: UndoUnit[] = [];
-    let ok = 0;
-    const failWhy = new Set<string>();
-    for (const p of paths) {
-      // always trash via our own xdg path: we control the final name, so the
-      // undo unit pairs deterministically (a before/after listing diff could
-      // mis-pair when something else trashes a similar name concurrently)
-      try {
-        const loc = await xdgTrashMove(p);
-        const hit = path.basename(loc);
-        const from = path.join(trashDir(), "files", hit);
-        units.push(async () => {
-          await safeRestoreMove(from, p);
-          try { await rm(path.join(trashDir(), "info", `${hit}.trashinfo`)); } catch {}
-        });
-        redos.push(async () => { try { if (existsSync(p)) await xdgTrashMove(p); } catch {} });
-        ok++;
-      } catch (err) { failWhy.add(fsErrText(err)); }
-    }
-    pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units, redos);
-    renderAll();
-    const failed = paths.length - ok;
-    const why = [...failWhy][0];
-    const summary = failed
-      ? `Trashed ${ok}/${paths.length} · ${failed} FAILED${why ? ` (${why})` : ""}`
-      : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
-    setStatusMsg(ok === paths.length ? `${summary} · ctrl+z to undo` : summary);
-    if (failed > 0) notify(summary, "trash failed");
-    else notify(`${summary} · ctrl+z to undo`, "trash");
-  })();
-};
+const trashOps = makeTrashOps({
+  pushUndoBatch,
+  status: (msg) => setStatusMsg(msg),
+  notify: (msg, title) => notify(msg, title),
+  refresh: () => renderAll(),
+});
+const { trashPaths, restoreFromTrash, deleteForever, emptyTrash } = trashOps;
 
 // --- Trash management: restore / delete-permanently / empty ---
 const inTrashView = (): boolean => path.resolve(state.cwd) === path.join(trashDir(), "files");
-
-const trashOrigPath = async (name: string): Promise<string | null> => {
-  try {
-    const raw = await readFile(path.join(trashDir(), "info", `${name}.trashinfo`), "utf8");
-    const m = raw.match(/^Path=(.+)$/m);
-    if (!m?.[1]) return null;
-    let p = m[1].trim();
-    // spec says URL-encoded; nautilus writes bare encoded abs paths
-    if (p.startsWith("file://")) p = p.slice(7);
-    try { p = decodeURIComponent(p); } catch {}
-    return path.resolve(p);
-  } catch { return null; }
-};
-
-const restoreFromTrash = (paths: string[]): void => {
-  void (async () => {
-    let ok = 0;
-    const failWhy = new Set<string>();
-    for (const src of paths) {
-      const orig = await trashOrigPath(path.basename(src));
-      if (!orig) { failWhy.add("no trashinfo"); continue; }
-      try {
-        await mkdir(path.dirname(orig), { recursive: true });
-        let dest = orig;
-        if (existsSync(dest)) dest = uniqueTarget(path.dirname(dest), path.basename(dest));
-        await fsMove(src, dest);
-        try { await rm(path.join(trashDir(), "info", `${path.basename(src)}.trashinfo`)); } catch {}
-        ok++;
-      } catch (err) { failWhy.add(fsErrText(err)); }
-    }
-    renderAll();
-    const failed = paths.length - ok;
-    const why = [...failWhy][0];
-    const summary = `Restored ${ok} of ${paths.length}${failed ? ` · ${failed} FAILED${why ? ` (${why})` : ""}` : ""}`;
-    setStatusMsg(summary);
-    notify(summary, failed ? "restore failed" : "restore");
-  })();
-};
-
-const deleteForever = (paths: string[]): void => {
-  void (async () => {
-    let ok = 0;
-    const failWhy = new Set<string>();
-    for (const p of paths) {
-      try {
-        await rm(p, { recursive: true });
-        try { await rm(path.join(trashDir(), "info", `${path.basename(p)}.trashinfo`)); } catch {}
-        ok++;
-      } catch (err) { failWhy.add(fsErrText(err)); }
-    }
-    renderAll();
-    const failed = paths.length - ok;
-    const why = [...failWhy][0];
-    const summary = `Deleted ${ok} of ${paths.length}${failed ? ` · ${failed} FAILED${why ? ` (${why})` : ""}` : ""}`;
-    setStatusMsg(summary);
-    notify(summary, failed ? "delete failed" : "delete");
-  })();
-};
-
-const emptyTrash = (): void => {
-  void (async () => {
-    const filesDir = path.join(trashDir(), "files");
-    let names: string[];
-    try { names = await readdir(filesDir); } catch (err) {
-      renderAll();
-      notify(`Could not read trash (${fsErrText(err)})`, "empty failed");
-      setStatusMsg("Trash unreadable");
-      return;
-    }
-    let n = 0;
-    const failWhy = new Set<string>();
-    for (const k of names) {
-      try {
-        await rm(path.join(filesDir, k), { recursive: true });
-        try { await rm(path.join(trashDir(), "info", `${k}.trashinfo`)); } catch {}
-        n++;
-      } catch (err) { failWhy.add(fsErrText(err)); }
-    }
-    renderAll();
-    const failed = names.length - n;
-    const why = [...failWhy][0];
-    if (failed > 0) {
-      notify(`Emptied ${n}/${names.length} · ${failed} FAILED${why ? ` (${why})` : ""}`, "empty failed");
-      setStatusMsg(`Trash partially emptied (${n}/${names.length})`);
-      return;
-    }
-    notify(`Emptied ${n} item${n === 1 ? "" : "s"}`, "trash");
-    setStatusMsg(`Trash emptied (${n})`);
-  })();
-};
 
 let yesNoOpen = false;
 
@@ -2733,87 +2306,6 @@ const isTextLike = (name: string): boolean => {
   const mime = mimeForExt(ext);
   if (!mime) return false;
   return mime.startsWith("text/") || /^(application\/(json|xml|javascript|x-yaml|x-sh|toml))/.test(mime) || mime.endsWith("+xml");
-};
-
-// --- properties helpers ---
-const fmtBytes = (n: number): string => {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = n, i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${i === 0 ? v : v.toFixed(1)} ${units[i]}`;
-};
-
-// rwx triad -> plain words; execute means "run" for files, "enter" for folders
-const permWords = (mode: number, shift: number, isDir: boolean): string => {
-  const r = !!(mode & (4 << shift));
-  const w = !!(mode & (2 << shift));
-  const x = !!(mode & (1 << shift));
-  if (!r && !w && !x) return "no access";
-  const out: string[] = [];
-  if (r) out.push("read");
-  if (w) out.push("write");
-  if (x) out.push(isDir ? "enter" : "run");
-  return out.join(", ");
-};
-
-let idNameCache: Map<number, string> | null = null;
-const idName = (uid: number): string => {
-  idNameCache ??= (() => {
-    const m = new Map<number, string>();
-    try {
-      for (const line of readFileSync("/etc/passwd", "utf8").split("\n")) {
-        const p = line.split(":");
-        const uidN = Number(p[2]);
-        if (p[0] && Number.isFinite(uidN)) m.set(uidN, p[0]);
-      }
-    } catch {}
-    return m;
-  })();
-  return idNameCache.get(uid) ?? String(uid);
-};
-
-const fmtDate = (ms?: number): string => {
-  if (!ms) return "-";
-  const d = new Date(ms);
-  const p2 = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
-};
-
-const mimeLabelFor = (name: string): string => {
-  const dot = name.lastIndexOf(".");
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
-  const mime = mimeForExt(ext);
-  if (mime) return mime;
-  const cat = FILE_ICON_BY_EXT[ext];
-  return cat === "file-image" ? "image/*"
-    : cat === "file-video" ? "video/*"
-    : cat === "file-music" ? "audio/*"
-    : cat === "zip-box" ? "archive"
-    : cat === "file-pdf-box" ? "application/pdf"
-    : cat === "file-code" ? "code"
-    : cat === "file-document" ? "document"
-    : "data";
-};
-
-// recursive dir totals; null when the tree is absurdly large
-const dirWalkStats = async (root: string): Promise<{ bytes: number; files: number; folders: number } | null> => {
-  let bytes = 0, files = 0, folders = 0, count = 0;
-  const stack: string[] = [root];
-  while (stack.length) {
-    const dir = stack.pop()!;
-    let dirents;
-    try { dirents = await readdir(dir, { withFileTypes: true }); } catch { continue; }
-    for (const d of dirents) {
-      if (++count > 200000) return null;
-      const p = path.join(dir, d.name);
-      // symlinks: report the link's own size, never follow (cycles / dupes)
-      if (d.isSymbolicLink()) { files++; try { bytes += (await lstat(p)).size; } catch {} continue; }
-      if (d.isDirectory()) { folders++; stack.push(p); continue; }
-      files++;
-      try { bytes += (await stat(p)).size; } catch {}
-    }
-  }
-  return { bytes, files, folders };
 };
 
 let previewGen = 0;
@@ -3007,68 +2499,15 @@ const renderPreview = async () => {
   } catch {}
 };
 
-// --- Notifications (top-right, animated) ---
-type Toast = { id: number; nodeId: string; timer: any };
-let toasts: Toast[] = [];
-let toastSeq = 0;
-
-const animateLeft = (node: any, from: number, to: number, ms: number): void => {
-  const steps = 8;
-  let i = 0;
-  const tick = () => {
-    i++;
-    try { node.left = Math.round(from + ((to - from) * i) / steps); } catch {}
-    if (i < steps) setTimeout(tick, Math.max(16, ms / steps));
-  };
-  tick();
-};
-
-const notify = (message: string, title = "tfm"): void => {
-  const id = ++toastSeq;
-  const w = Math.max(24, Math.min(44, message.length + title.length + 6));
-  const y = 1 + toasts.length * 4;
-  const node: any = Box(
-    {
-      id: `tfm-toast-${id}`,
-      position: "absolute",
-      left: renderer.terminalWidth + 2,
-      top: y,
-      width: w,
-      height: 3,
-      zIndex: 3500,
-      backgroundColor: colors.accentBg,
-      flexDirection: "column",
-      paddingLeft: 1,
-    },
-    Text({ content: title.slice(0, w - 3), fg: colors.white }),
-    Text({ content: message.slice(0, w - 3), fg: colors.sidebarFgMuted }),
-  );
-  renderer.root.add(node);
-  // the proxy is dead weight post-mount — animate/dismiss via the real renderable
-  const real: any = byId(`tfm-toast-${id}`);
-  if (!real) return;
-  const targetX = Math.max(0, renderer.terminalWidth - w - 2);
-  animateLeft(real, renderer.terminalWidth + 2, targetX, 180);
-  const entry: Toast = { id, nodeId: `tfm-toast-${id}`, timer: null };
-  toasts.push(entry);
-  entry.timer = setTimeout(() => {
-    let op = 1;
-    const fade = () => {
-      op -= 0.18;
-      try { real.opacity = Math.max(0, op); } catch {}
-      if (op > 0) setTimeout(fade, 24);
-      else {
-        try { (real.parent ?? renderer.root).remove(real); } catch {}
-        toasts = toasts.filter((t) => t.id !== id);
-        toasts.forEach((t, i) => {
-          const n: any = byId(t.nodeId);
-          try { n.top = 1 + i * 4; } catch {}
-        });
-      }
-    };
-    fade();
-  }, 3000);
-};
+const { notify, toastCount } = makeNotify({
+  rootAdd: (node) => renderer.root.add(node),
+  remove: (node) => { const p: any = node.parent ?? renderer.root; p.remove(node); },
+  byId,
+  termW: () => renderer.terminalWidth,
+  accentBg: () => colors.accentBg,
+  white: () => colors.white,
+  sidebarFgMuted: () => colors.sidebarFgMuted,
+});
 
 let bandStart: { x: number; y: number } | null = null;
 const BAND_ID = "tfm-band";
@@ -3122,144 +2561,35 @@ const clearGrid = () => {
 // shift), double-click open, drag payload prep, drop-into-folder, hover. Both
 // view modes register the exact same logic on differently-shaped containers;
 // all state lives in tileRefsByKey + the drag module vars, keyed by path.
-const entryMouseHandlers = (e: Entry, key: string, idx: number) => {
-  let lastClick = 0;
-  return {
-    onMouseDown: (ev: any) => {
-      try { ev.stopPropagation?.(); } catch {}
-      closeFileMenu();
-      if (renameEdit && renameEdit.key !== key) finishInlineRename(false);
-      if (ev.button === 2) {
-        // Nautilus behavior: right-click selects the tile unless it's already
-        // part of the live multi-selection
-        if (!tileRefsByKey.get(key)?.selected) {
-          clearTileSelection();
-          const r = tileRefsByKey.get(key);
-          if (r) { r.selected = true; setTileVisual(key, 2); }
-          updateSelectionStatusReal();
-          void renderPreview();
-        }
-        openContextMenu(ev.x, ev.y, "", fileEntriesFor(key, e.isDir, ev.x, ev.y));
-        return;
-      }
-      // the ctrl modifier decides internal vs external for drags
-      // (see the OSC 72 offer handler)
-      const now = Date.now();
-      if (now - lastClick < config.ui.doubleClickMs) {
-        if (e.isDir) navigate(key);
-        else openFileDefault(key);
-        lastClick = 0;
-        return;
-      }
-      lastClick = now;
-      const mods = ev.modifiers ?? {};
-
-      // ctrl+click (no movement): toggle membership — coexists with ctrl+drag
-      // which still means internal move once the drag threshold trips.
-      // The toggle itself is DEFERRED to mouseup: applying it here unselected
-      // the pressed tile, so ctrl+dragging a selected file moved 0 items and
-      // rubber-band + ctrl+drag dropped the pressed file from the payload.
-      if (mods.ctrl) {
-        const refs = tileRefsByKey.get(key);
-        const wasSel = !!refs?.selected;
-        ctrlPendingKey = key;
-        ctrlPendingState = !wasSel;
-        updateSelectionStatusReal();
-        void renderPreview();
-        dragKeys = wasSel ? selPaths() : [...selPaths(), { path: key, isDir: e.isDir }];
-        dlog(`ctrl mousedown ${key} wasSel=${wasSel} provisional=${dragKeys.length}`);
-        dragActive = false;
-        dragStartX = ev.x;
-        dragStartY = ev.y;
-        dragCtrl = true;
-        return;
-      }
-
-      // shift+click / alt+click: range select. The anchor persists across
-      // clicks so each alt+click re-extends from the SAME origin; plain and
-      // ctrl clicks are what move/reset it.
-      if ((mods.shift || mods.alt)) {
-        if (selAnchor === null) selAnchor = focusIdx >= 0 ? focusIdx : 0;
-        selectRange(selAnchor, idx);
-        updateSelectionStatusReal();
-        void renderPreview();
-        dragKeys = selPaths();
-        dragActive = false;
-        dragStartX = ev.x;
-        dragStartY = ev.y;
-        dragCtrl = false;
-        return;
-      }
-
-      const prevSel = selPaths();
-      const wasSelected = !!tileRefsByKey.get(key)?.selected;
-      clearTileSelection();
-      selAnchor = idx;
-      const refs = tileRefsByKey.get(key);
-      if (refs) {
-        if (wasSelected && prevSel.length > 1) {
-          for (const s of prevSel) {
-            const r2 = tileRefsByKey.get(s.path);
-            if (r2) { r2.selected = true; setTileVisual(s.path, 2); }
-          }
-        } else {
-          refs.selected = true;
-          setTileVisual(key, 2);
-        }
-      }
-      updateSelectionStatusReal();
-      void renderPreview();
-      dragKeys = wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: e.isDir }];
-      dragActive = false;
-      dragStartX = ev.x;
-      dragStartY = ev.y;
-      dragCtrl = !!ev.modifiers?.ctrl;
-      dlog(`tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${dragKeys.length} ctrl=${dragCtrl}`);
-    },
-    onMouseUp: () => { if (dragKeys) { dlog("tile mouseup -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
-    onMouseDragEnd: () => { if (dragKeys) { dlog("tile dragend -> cleanup scheduled"); commitPendingCtrlToggle(); scheduleDragCleanup(); } },
-    onMouseDrag: (ev: any) => {
-      if (!dragKeys) return;
-      if (!dragActive && (Math.abs(ev.x - dragStartX) > 1 || Math.abs(ev.y - dragStartY) > 1)) {
-        dragActive = true;
-        ctrlPendingKey = null; // it became a drag — the click-toggle never happened
-        // payload tiles must actually be selected or the visual state lies
-        for (const k of dragKeys) {
-          const r = tileRefsByKey.get(k.path);
-          if (r && !r.selected) { r.selected = true; setTileVisual(k.path, 2); }
-        }
-        dlog(`internal drag start n=${dragKeys.length}`);
-        setStatusMsg(`Dragging ${dragKeys.length} item${dragKeys.length === 1 ? "" : "s"}…`);
-      }
-      if (dragActive) updateDragGhost(ev.x, ev.y);
-    },
-    onMouseDrop: () => {
-      const keys = dragKeys;
-      const dest = dropTargetKey;
-      dlog(`tile drop keys=${keys?.length ?? -1}[${keys?.map((k) => k.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${e.isDir}`);
-      finishDragState();
-      if (keys && dest && e.isDir) void moveInto(dest, keys.filter((k) => k.path !== dest));
-    },
-    onMouseOver: () => {
-      if (dragActive) {
-        const draggingSelf = !!dragKeys?.some((k) => k.path === key);
-        if (e.isDir && !draggingSelf) { dlog(`hover target set ${key}`); dropTargetKey = key; setTileVisual(key, 2); }
-        return;
-      }
-      const refs = tileRefsByKey.get(key);
-      if (!refs?.selected) setTileVisual(key, 1);
-    },
-    onMouseOut: () => {
-      if (dragActive && dropTargetKey === key) {
-        dropTargetKey = null;
-        setTileVisual(key, 0);
-        return;
-      }
-      const refs = tileRefsByKey.get(key);
-      if (!refs?.selected) setTileVisual(key, 0);
-    },
-  };
+const gridCtx = {
+  byId,
+  termW: () => renderer.terminalWidth,
+  termH: () => renderer.terminalHeight,
+  tileRefs: tileRefsByKey,
+  setTileVisual,
+  updateSelectionStatusReal,
+  renderPreview,
+  clearTileSelection,
+  selectRange,
+  getSelAnchor: () => selAnchor,
+  setSelAnchor: (v: number | null) => { selAnchor = v; },
+  getFocusIdx: () => focusIdx,
+  selPaths,
+  dblClickMs: () => config.ui.doubleClickMs,
+  navigate,
+  openFileDefault,
+  openContextMenu: (x: number, y: number, title: string, entries: GridMenuEntry[]) => openContextMenu(x, y, title, entries as ListEntry[]),
+  fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): GridMenuEntry[] => fileEntriesFor(key, isDir, x, y) as GridMenuEntry[],
+  closeFileMenu: () => closeFileMenu(),
+  renameEditKey: () => renameEdit?.key ?? null,
+  finishInlineRename,
+  setStatusMsg,
+  log: (msg: string) => dlog(msg),
+  moveInto,
 };
+const finishDragCtx = () => finishDragState(gridCtx);
+
+const entryMouseHandlers = makeEntryMouseHandlers(gridCtx);
 
 const renderGrid = async () => {
   if (!scroller) return;
@@ -4672,10 +4002,10 @@ const osc72Write = (s: string, label: string): void => {
 };
 
 const enableDrops = (): void => {
-  osc72Write("\x1b]72;t=o:x=1;\x1b\\", "enable drag-out"); // trailing ; = empty machine-id, byte-exact w/ yazi
-  osc72Write("\x1b]72;t=a;text/uri-list\x1b\\", "enable drop-in");
+  osc72Write(dragOutEnableFrame(), "enable drag-out");
+  osc72Write(dropInEnableFrame(), "enable drop-in");
 };
-const disableDrops = (): void => osc72Write("\x1b]72;t=A\x1b\\", "disable drop");
+const disableDrops = (): void => osc72Write(dropDisableFrame(), "disable drop");
 
 let osc72DropIdx = -1;
 const osc72Arrive: Record<number, string> = {};
@@ -4733,21 +4063,18 @@ const clearSelfDropHighlight = (): void => {
 // kitty renders this text badge next to the cursor for the whole drag session —
 // the visual feedback we lose by handing the pointer to the OS
 const sendDragIcon = (n: number): void => {
-  const label = `${n} item${n === 1 ? "" : "s"}`;
-  const b64 = Buffer.from(label, "utf8").toString("base64").replace(/=+$/, "");
-  // byte-exact w/ yazi: fmt:y / size cells:X,Y / opacity / m flag — NO terminator
-  osc72Write(`\x1b]72;t=p:x=-1:y=0:X=${label.length + 2}:Y=1:o=0:m=0;${b64}\x1b\\`, "drag icon");
+  osc72Write(dragIconFrame(n), "drag icon");
 };
 
 const beginOsc72Drag = (paths: string[]): void => {
   osc72DragPaths = paths;
   osc72DragOp = 1;
   osc72SelfHandled = false;
-  finishDragState(); // pointer is about to be grabbed by the terminal
-  osc72Write("\x1b]72;t=o:o=3;text/uri-list\x1b\\", "agree drag either");
+  finishDragCtx(); // pointer is about to be grabbed by the terminal
+  osc72Write(agreeDragFrame(), "agree drag either");
   presentDragUriList(paths);
   sendDragIcon(paths.length);
-  osc72Write("\x1b]72;t=P:x=-1\x1b\\", "start drag");
+  osc72Write(startDragFrame(), "start drag");
   setStatusMsg(`Dragging ${paths.length} item${paths.length === 1 ? "" : "s"} — drop into another app or a folder`);
 };
 
@@ -4781,7 +4108,7 @@ const finishSelfDrop = async (x: number, y: number): Promise<void> => {
   osc72DragPaths = null;
   osc72SelfHandled = false;
   if (!paths?.length || !target) {
-    osc72Write("\x1b]72;t=r:o=0\x1b\\", "self drop rejected");
+    osc72Write(selfDropRejectFrame(), "self drop rejected");
     setStatusMsg("drag cancelled");
     return;
   }
@@ -4803,32 +4130,21 @@ const finishSelfDrop = async (x: number, y: number): Promise<void> => {
   await moveInto(destDir, items);
 };
 
-const percentEncodePath = (p: string): string => encodeURIComponent(p).replace(/%2F/g, "/");
-
 const presentDragUriList = (paths: string[]): void => {
-  const b64 = Buffer.from(paths.map((p) => `file://${percentEncodePath(p)}`).join("\r\n"), "utf8")
-    .toString("base64")
-    .replace(/=+$/, ""); // unpadded, like yazi
-  osc72Write(`\x1b]72;t=p:x=0:m=0;${b64}\x1b\\`, `present drag ${b64.length} b64 chars`);
-  osc72Write("\x1b]72;t=p:x=0\x1b\\", "present drag end");
+  const [dataFrame, endFrame] = presentDragFrames(paths);
+  const b64Len = dropPayloadLength(paths);
+  osc72Write(dataFrame, `present drag ${b64Len} b64 chars`);
+  osc72Write(endFrame, "present drag end");
 };
 
-const uriListToPaths = (data: string): string[] =>
-  data
-    .split(/\r?\n/)
-    .filter((l) => l.startsWith("file://"))
-    .map((l) => {
-      let u = l.slice(7);
-      if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
-      try { u = decodeURIComponent(u); } catch {}
-      return u;
-    });
+// length of the unpadded base64 payload, for the debug label only
+const dropPayloadLength = (paths: string[]): number => uriListPayload(paths).length;
 
 const finishOsc72Drop = async (idx: number): Promise<void> => {
   const b64 = osc72Arrive[idx];
   delete osc72Arrive[idx];
   osc72DropIdx = -1;
-  osc72Write(`\x1b]72;t=r:o=1\x1b\\`, `finish drop idx=${idx}`);
+  osc72Write(finishDropFrame(), `finish drop idx=${idx}`);
   dlog(`drop complete, uri-list bytes=${b64 ? Buffer.from(b64, "base64").length : 0}`);
   if (!b64) return;
   if (isVirtualCwd()) {
@@ -4836,7 +4152,7 @@ const finishOsc72Drop = async (idx: number): Promise<void> => {
     return;
   }
   const text = Buffer.from(b64, "base64").toString("utf8");
-  let paths = uriListToPaths(text);
+  let paths = dropPayloadToPaths(text);
   // some sources deliver bare paths (text/plain) instead of file:// URIs
   if (!paths.length) paths = text.split(/\r?\n/).filter((l) => l.startsWith("/"));
   dlog(`paths: ${paths.join(" | ") || "(none)"}`);
@@ -4844,24 +4160,16 @@ const finishOsc72Drop = async (idx: number): Promise<void> => {
 };
 
 const handleOsc72 = (meta: string, payload: string): void => {
-  let t = "";
-  let x = NaN, y = NaN, m = false;
-  for (const part of meta.split(":")) {
-    const [k, v] = part.split("=");
-    if (k === "t") t = v ?? "";
-    else if (k === "x") x = parseInt(v ?? "", 10);
-    else if (k === "y") y = parseInt(v ?? "", 10);
-    else if (k === "m") m = v === "1";
-  }
+  const { t, x, y, m } = parseOsc72Meta(meta);
 
   // --- outgoing drag session ---
   // middle-button drags go external (OS session + icon badge); left drags are
   // declined so the internal move flow keeps the pointer and its UI feedback
   if (t === "o" && x >= 0) {
-    const want = !dragCtrl && !!dragKeys?.length && !menuOpen && !fileMenuState;
-    dlog(`drag offer x=${x} y=${y} ctrl=${dragCtrl} accept=${want} keys=${dragKeys?.length ?? -1} menu=${menuOpen} fmenu=${!!fileMenuState}`);
-    if (!want || !dragKeys) return; // left-drag: kitty falls back to normal mouse events
-    beginOsc72Drag(dragKeys.map((k) => k.path));
+    const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !menuOpen && !fileMenuState;
+    dlog(`drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${menuOpen} fmenu=${!!fileMenuState}`);
+    if (!want || !gridDrag.keys) return; // left-drag: kitty falls back to normal mouse events
+    beginOsc72Drag(gridDrag.keys.map((k) => k.path));
     return;
   }
   if (t === "e") {
@@ -4911,12 +4219,12 @@ const handleOsc72 = (meta: string, payload: string): void => {
     const idx = mimes.indexOf("text/uri-list");
     dlog(`${t === "M" ? "ready" : "enter"} mimes=[${mimes}] uriIdx=${idx} busy=${osc72DropIdx >= 0}`);
     if (idx < 0 || osc72DropIdx >= 0) return;
-    osc72Write(`\x1b]72;t=m:o=1;text/uri-list\x1b\\`, "agree copy");
+    osc72Write(agreeDropFrame(), "agree copy");
     if (t === "M") {
       // kitty's mime indices are 1-based (yazi requests ipairs index)
       osc72DropIdx = idx + 1;
       osc72Arrive[osc72DropIdx] = "";
-      osc72Write(`\x1b]72;t=r:x=${osc72DropIdx}\x1b\\`, `start drop uriIdx=${idx} wire=${osc72DropIdx}`);
+      osc72Write(startDropFrame(osc72DropIdx), `start drop uriIdx=${idx} wire=${osc72DropIdx}`);
     }
     return;
   }
