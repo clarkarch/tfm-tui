@@ -104,6 +104,75 @@ export const finishDragState = (ctx: GridInputCtx): void => {
 // release fires on the source before `drop` reaches the target — defer cleanup
 export const scheduleDragCleanup = (ctx: GridInputCtx): void => { setTimeout(() => finishDragState(ctx), 0); };
 
+// --- Rubber-band selection (marquee over empty grid space) ---
+// Owns the band gesture state: the band NODE is created by the boot layout
+// (id: BAND_ID), this module only moves/hides it and commit-picks tiles.
+// Module-level state mirrors the gridDrag singleton above.
+
+export type BandCtx = {
+  byId(id: string): any;
+  tileRefs: Map<string, { selected: boolean; tileId: string }>;
+  clearTileSelection(): void;
+  setTileVisual(key: string, mode: 0 | 1 | 2): void;
+  updateSelectionStatusReal(): void;
+  renderPreview(): void | Promise<void>;
+  setSelAnchor(v: number | null): void;
+};
+
+export const BAND_ID = "tfm-band";
+
+let bandStart: { x: number; y: number } | null = null;
+
+export const bandActive = (): boolean => bandStart !== null;
+
+export const beginBand = (ev: { x: number; y: number; button: number }): void => {
+  if (ev.button !== 0) return;
+  bandStart = { x: ev.x, y: ev.y };
+};
+
+export const updateBandRect = (ctx: BandCtx, ev: { x: number; y: number }): void => {
+  if (!bandStart) return;
+  const b: any = ctx.byId(BAND_ID);
+  if (!b) return;
+  try {
+    b.x = Math.min(bandStart.x, ev.x);
+    b.y = Math.min(bandStart.y, ev.y);
+    b.width = Math.abs(ev.x - bandStart.x) + 1;
+    b.height = Math.abs(ev.y - bandStart.y) + 1;
+    b.visible = true;
+  } catch {}
+};
+
+export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void => {
+  const start = bandStart;
+  bandStart = null;
+  ctx.setSelAnchor(null);
+  const b: any = ctx.byId(BAND_ID);
+  if (b) { try { b.visible = false; } catch {} }
+  if (!start) return;
+  const x0 = Math.min(start.x, ev.x), y0 = Math.min(start.y, ev.y);
+  const x1 = Math.max(start.x, ev.x), y1 = Math.max(start.y, ev.y);
+  ctx.clearTileSelection();
+  ctx.tileRefs.forEach((refs, key) => {
+    const t: any = ctx.byId(refs.tileId);
+    if (!t) return;
+    const tx = t.screenX, ty = t.screenY, tw = t.width, th = t.height;
+    if (tx < x1 + 1 && tx + tw > x0 && ty < y1 + 1 && ty + th > y0) {
+      refs.selected = true;
+      ctx.setTileVisual(key, 2);
+    }
+  });
+  ctx.updateSelectionStatusReal();
+  void ctx.renderPreview();
+};
+
+// modal menus kill any in-flight band so a stale rect can't commit later
+export const cancelBand = (ctx: BandCtx): void => {
+  bandStart = null;
+  const b: any = ctx.byId(BAND_ID);
+  if (b) { try { b.visible = false; } catch {} }
+};
+
 export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
   return (e: { isDir: boolean }, key: string, idx: number) => {
     let lastClick = 0;

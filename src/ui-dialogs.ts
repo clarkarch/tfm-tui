@@ -1,4 +1,5 @@
 import { Box, RGBA, Text } from "@opentui/core";
+import path from "node:path";
 import { applySurface, btnSurface, chromeSurface } from "./style";
 import type { Theme } from "./config";
 
@@ -85,5 +86,103 @@ export const makeDialogs = (ctx: DialogsCtx) => {
   };
 
   return { openDialog, closeDialog, dialogBtn };
+};
+
+// --- Override/conflict prompt ("Replace …?") for transfer/rename collisions ---
+// State + promise plumbing live here; when the choice should apply to the
+// whole remaining batch ("…all") the policy is remembered until resetPolicy.
+
+export type ConflictChoice = "replace" | "keepBoth" | "skip";
+
+export type ConflictCtx = {
+  colors(): Theme & Record<string, any>;
+  drainIconQueue(): void | Promise<void>;
+  // transient popups that must not sit above the prompt (file menu, props)
+  closeTransients(): void;
+};
+
+export const makeConflict = (
+  dialogs: ReturnType<typeof makeDialogs>,
+  ctx: ConflictCtx,
+) => {
+  const { openDialog, closeDialog, dialogBtn } = dialogs;
+
+  const CONFLICT_W = 48;
+  let conflictPolicy: ConflictChoice | null = null;
+  let conflictOpen = false;
+  let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
+
+  const closeConflict = (c: ConflictChoice): void => {
+    closeDialog("tfm-conflict");
+    conflictOpen = false;
+    const r = conflictResolveFn;
+    conflictResolveFn = null;
+    r?.(c);
+  };
+
+  const promptConflict = (destPath: string, remaining: number): Promise<ConflictChoice> =>
+    new Promise<ConflictChoice>((resolve) => {
+      ctx.closeTransients();
+      conflictOpen = true;
+      conflictResolveFn = resolve;
+      const c = ctx.colors();
+      const name = path.basename(destPath);
+      const parentName = path.basename(path.dirname(destPath)) || "/";
+      let bseq = 0;
+      const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> =>
+        dialogBtn(`tfm-conflict-b${bseq++}`, label, c.sidebarFg, onPick);
+      const pick = (choice: ConflictChoice, all?: ConflictChoice) => {
+        if (all) conflictPolicy = all;
+        closeConflict(choice);
+      };
+      const rows: ReturnType<typeof Box>[] = [
+        Box(
+          { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+          Text({ content: ` Replace "${name.slice(0, CONFLICT_W - 14)}"?`, fg: c.accent }),
+        ),
+        Box(
+          { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+          Text({ content: " " + "~".repeat(CONFLICT_W - 2), fg: c.divider }),
+        ),
+        Box(
+          { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+          Text({ content: ` an item called "${name}" already exists in ${parentName}`.slice(0, CONFLICT_W - 1), fg: c.sidebarFgMuted }),
+        ),
+        Box({ height: 1 }),
+        Box(
+          { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
+          mkBtn("[ Replace ]", () => pick("replace")),
+          mkBtn("[ Keep both ]", () => pick("keepBoth")),
+          mkBtn("[ Skip ]", () => pick("skip")),
+        ),
+      ];
+      if (remaining > 0) {
+        rows.push(
+          Box({ height: 1 }),
+          Box(
+            { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
+            mkBtn("[ Replace all ]", () => pick("replace", "replace")),
+            mkBtn("[ Keep both all ]", () => pick("keepBoth", "keepBoth")),
+            mkBtn("[ Skip rest ]", () => pick("skip", "skip")),
+          ),
+        );
+      }
+      openDialog({
+        id: "tfm-conflict",
+        zIndex: 3400,
+        width: CONFLICT_W,
+        rows: () => rows,
+        onClose: () => closeConflict("skip"),
+      });
+      void ctx.drainIconQueue();
+    });
+
+  return {
+    promptConflict,
+    closeConflict,
+    isOpen: (): boolean => conflictOpen,
+    policy: (): ConflictChoice | null => conflictPolicy,
+    resetPolicy: (): void => { conflictPolicy = null; },
+  };
 };
 

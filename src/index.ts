@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, statSync, watch } from "node:fs";
@@ -9,7 +9,7 @@ import { loadConfig, configPath, saveConfig, defaultConfig, type Config, type Th
 import { THEME_PRESETS, type ThemePreset } from "./themes";
 import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
 import { bumpHex } from "./color";
-import { clearIconCaches, iconPng, thumbPng, warmEmbeddedIcons } from "./icons";
+import { clearIconCaches, warmEmbeddedIcons } from "./icons";
 import { FILE_ICON_BY_EXT, fileIconFor, fileIsImage, loadGlobs2, mimeCategory } from "./filetype";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
 import {
@@ -49,26 +49,32 @@ import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } fro
 import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
 import { animateLeft, makeNotify } from "./notify";
 import { makeChrome } from "./ui-chrome";
-import { makeDialogs } from "./ui-dialogs";
+import { makeDialogs, makeConflict } from "./ui-dialogs";
 import { makeMenu } from "./ui-menu";
 import type { ListEntry } from "./ui-menu";
 import { makePreview } from "./ui-preview";
 import { makeProps } from "./ui-props";
 import { makeProgress } from "./ui-progress";
 import { makeTerminal } from "./ui-term";
-import { DRAG_GHOST_ID, finishDragState, gridDrag, makeEntryMouseHandlers, type ClipItem, type GridMenuEntry } from "./grid-input";
-
-// --- Debug mode (--debug / -d): writes a single event log + crash dump to
-// /tmp/tfm-debug.log so testers paste one file instead of a screenshot. ---
-const isDebug = process.argv.includes("--debug") || process.argv.includes("-d");
-const DEBUG_LOG = "/tmp/tfm-debug.log";
-const appendLog = (msg: string): void => {
-  try { appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
-};
-const debugLog = (msg: string): void => {
-  if (!isDebug) return;
-  appendLog(msg);
-};
+import { makeSlots, type IconState, type IconSpec } from "./ui-slots";
+import { makeEscMenu } from "./ui-settings";
+import {
+  BAND_ID,
+  DRAG_GHOST_ID,
+  bandActive,
+  beginBand,
+  cancelBand,
+  finalizeBand,
+  finishDragState,
+  gridDrag,
+  makeEntryMouseHandlers,
+  updateBandRect,
+  type BandCtx,
+  type ClipItem,
+  type GridMenuEntry,
+} from "./grid-input";
+import { appendLog, debugLog, isDebug, DEBUG_LOG } from "./log";
+import { glyph, glyphFor } from "./glyphs";
 
 // clear-and-rebuild / debounce / render-step guards live in ./uiutil
 const clearChildren = uiutilClearChildren;
@@ -76,14 +82,6 @@ const debounced = uiutilDebounced;
 const safeRenderStep = (name: string, fn: () => void | Promise<void>): void =>
   uiutilSafeRenderStep(name, fn, appendLog);
 
-process.on("uncaughtException", (err) => {
-  appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
-  try { process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`); } catch {}
-  process.exit(1);
-});
-process.on("unhandledRejection", (reason) => {
-  appendLog(`UNHANDLED REJECTION: ${reason instanceof Error ? reason.stack : String(reason)}`);
-});
 if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
 
 // --- Config (TOML at ~/.config/tfm/config.toml, TFM_CONFIG overrides path) ---
@@ -103,110 +101,37 @@ if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
 // border ring reserves one cell per side (yoga setBorder)
 const sideInnerW = (): number => (config.ui.uiStyle === "outline" ? sw - 2 : sw);
 
-// --- Nerd Font glyphs: FALLBACK ONLY ---
-const glyph = {
-  home: "\u{F02DC}",
-  star: "\u{F04CE}",
-  clock: "\u{F0954}",
-  bookmark: "\u{F00C6}",
-  "trash-can": "\u{F0A79}",
-  folder: "\u{F024B}",
-  harddisk: "\u{F02CA}",
-  usb: "\u{F0553}",
-  eject: "\u{F01EA}",
-  search: "\u{F002}",
-  file: "\u{F0214}",
-  "chevron-left": "\u{F0141}",
-  "chevron-right": "\u{F0142}",
-  "desktop-tower": "\u{F01C5}",
-  cog: "\u{F0493}",
-  power: "\u{F0425}",
-  eye: "\u{F0208}",
-  "eye-off": "\u{F0209}",
-  "content-copy": "\u{F018F}",
-  "content-paste": "\u{F0192}",
-  "content-cut": "\u{F0190}",
-  information: "\u{F02FD}",
-  pencil: "\u{F03EB}",
-  "folder-plus": "\u{F0770}",
-  "select-all": "\u{F0478}",
-  sort: "\u{F04BA}",
-  "checkbox-marked": "\u{F0132}",
-  "checkbox-blank": "\u{F0131}",
-  pause: "\u{F03E4}",
-  play: "\u{F040A}",
-  close: "\u{F0156}",
-  terminal: "\u{F120}",
-  plus: "\u{F0415}",
-};
-
-// --- File type categories: icon NAMES live in ./filetype; this fills the
-// glyph fallbacks for every category the classifier can emit ---
+// --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY) ---
+// File type categories: icon NAMES live in ./filetype; this fills the
+// glyph fallbacks for every category the classifier can emit
 for (const cat of new Set(Object.values(FILE_ICON_BY_EXT))) {
-  if (!(cat in glyph)) glyph[cat as keyof typeof glyph] = glyph.file;
+  if (!(cat in glyph)) glyph[cat] = glyph.file!;
 }
 
-// --- Icon slots ---
-type IconState = { fg: string; bg: string };
-type IconSpec = {
-  slotId: string;
-  name: string;
-  heightCells: number;
-  states: IconState[];
-  // slots that survive renderAll rebuilds (nav/search/sort) must derive fresh
-  // state colors on every re-raster, or a runtime theme swap leaves them stale
-  statesFactory?: () => IconState[];
-  initialState: number;
-  done?: boolean;
-};
-
-const iconQueue: IconSpec[] = [];
-let iconSeq = 0;
-
-const makeIconSlot = (
-  name: string,
-  states: IconState[],
-  heightCells = 1,
-  initialState = 0,
-  onMouseDown?: (ev: any) => void,
-  statesFactory?: () => IconState[],
-): { el: ReturnType<typeof Box>; slotId: string; spec: IconSpec } => {
-  const slotId = `tfm-icon-${iconSeq++}`;
-  const g = glyph[name as keyof typeof glyph] ?? "\u{FFFD}";
-  const spec: IconSpec = { slotId, name, heightCells, states, initialState, ...(statesFactory ? { statesFactory } : {}) };
-  iconQueue.push(spec);
-  return {
-    el: Box(
-      {
-        id: slotId,
-        width: Math.round(heightCells * 2),
-        height: heightCells,
-        ...(onMouseDown ? { onMouseDown } : {}),
-      },
-      Text({ id: `${slotId}-g`, content: g, fg: states[initialState]?.fg ?? states[0]?.fg }),
-    ),
-    slotId,
-    spec,
-  };
-};
-
-const setIconState = (spec: IconSpec | undefined, stateIdx: number): boolean => {
-  if (!spec) return false;
-  spec.initialState = stateIdx;
-  const slot: any = byId(spec.slotId);
-  if (!slot) return false;
-  const kids = slot.getChildren?.() ?? [];
-  const stateImgs = kids.filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`);
-  if (stateImgs.length === 0) {
-    const glyphNode: any = kids.find((k: any) => k.id === `${spec.slotId}-g`);
-    if (glyphNode) {
-      try { glyphNode.fg = spec.states[stateIdx]?.fg; } catch {}
-    }
-    return false;
-  }
-  stateImgs.forEach((k: any, i: number) => { try { k.visible = i === stateIdx; } catch {} });
-  return true;
-};
+// --- Icon slots / thumbs / modal scrim — widget lives in ./ui-slots ---
+// Called before the renderer boots: every ctx field the drain path needs is
+// an arrow wrapper (post-boot evaluation), per the widget-seam rules.
+const {
+  cellMetrics,
+  makeIconSlot,
+  setIconState,
+  escHintBtn,
+  drainThumbs,
+  drainIconQueue,
+  setScrim,
+  nextIconId,
+  resetIconQueue,
+  pushThumbJob,
+} = makeSlots({
+  renderer: () => renderer,
+  byId: (id: string) => byId(id),
+  clearChildren: (node: any) => clearChildren(node),
+  colors: () => colors as Theme & Record<string, any>,
+  uiStyle: () => config.ui.uiStyle,
+  iconCells: () => ICON_CELLS_H,
+  modalOpen: () => escMenu.isOpen(),
+  glyphFor,
+});
 
 // --- App state & history ---
 const home = os.homedir();
@@ -804,183 +729,7 @@ const waitForResolution = async () => {
   for (let i = 0; i < 40 && !renderer.resolution; i++) await sleep(50);
 };
 
-const cellMetrics = () => {
-  const res = renderer.resolution;
-  const cellW = res ? res.width / renderer.terminalWidth : 10;
-  const cellH = res ? res.height / renderer.terminalHeight : 20;
-  return { cellW, cellH, aspect: cellH > 0 ? cellH / cellW : 2 };
-};
-
-type ThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string };
-let thumbJobs: ThumbJob[] = [];
-
-const drainThumbs = async () => {
-  const jobs = thumbJobs;
-  thumbJobs = [];
-  if (!renderer.resolution || jobs.length === 0) return;
-  const { cellW, cellH } = cellMetrics();
-  let idx = 0;
-  const worker = async () => {
-    while (idx < jobs.length) {
-      const j = jobs[idx++]!;
-      const slot: any = byId(j.slotId);
-      if (!slot) continue;
-      const hCells = j.hCells ?? ICON_CELLS_H;
-      const jobBg = j.bg ?? colors.bg;
-      // 2px inset so kitty's cell->pixel rounding never bleeds onto neighbors
-      const pxW = Math.max(1, Math.round(j.wCells * cellW) - 2);
-      const pxH = Math.max(1, Math.round(hCells * cellH) - 2);
-      try {
-        const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector);
-        const img = new ImageRenderable(renderer, {
-          id: `${j.slotId}-t`,
-          source: bytes,
-          width: j.wCells,
-          height: hCells,
-          fit: "fit",
-          protocol: "auto",
-        });
-        await img.loadPromise!;
-        clearChildren(slot);
-        slot.add(img);
-      } catch {
-        if (slot.getChildren().length === 0) {
-          try {
-            slot.add(Text({ content: j.fallbackGlyph, fg: colors.sidebarFgMuted }));
-          } catch {}
-        }
-      }
-      await new Promise((r) => setTimeout(r, 0));
-    }
-  };
-  await Promise.all([worker(), worker(), worker()]);
-};
-
-const dimHex = (hex: string, f: number): string => {
-  if (f === 1) return hex;
-  const m = hex.match(/^#([0-9a-fA-F]{6})$/);
-  if (!m || !m[1]) return hex;
-  const n = parseInt(m[1], 16);
-  const r = Math.round(((n >> 16) & 255) * f);
-  const g = Math.round(((n >> 8) & 255) * f);
-  const b = Math.round((n & 255) * f);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
-};
-
-const rasterStatesInto = async (
-  slotId: string,
-  name: string,
-  states: IconState[],
-  heightCells: number,
-  wCells: number,
-  initial: number,
-  dimFactor = 1,
-  idPrefix = "s",
-) => {
-  const { cellW, cellH } = cellMetrics();
-  const imgs: any[] = [];
-  for (let si = 0; si < states.length; si++) {
-    try {
-      const st = states[si]!;
-      const bytes = await iconPng(
-        name,
-        dimHex(st.fg, dimFactor),
-        dimHex(st.bg, dimFactor),
-        Math.max(1, Math.round(wCells * cellW)),
-        Math.max(1, Math.round(heightCells * cellH)),
-      );
-      const img = new ImageRenderable(renderer, {
-        id: `${slotId}-${idPrefix}${si}`,
-        source: bytes,
-        width: wCells,
-        height: heightCells,
-        fit: "fit",
-        protocol: "auto",
-      });
-      await img.loadPromise!;
-      img.visible = si === initial;
-      imgs.push(img);
-    } catch {}
-  }
-  return imgs;
-};
-
-const drainIconQueue = async () => {
-  if (!renderer.resolution) return;
-  const aspect = cellMetrics().aspect;
-  const pending = iconQueue.filter((s) => !s.done);
-  await Promise.all(pending.map(async (spec) => {
-    spec.done = true;
-    const slot: any = byId(spec.slotId);
-    if (!slot) return;
-    if (spec.statesFactory) {
-      try { spec.states = spec.statesFactory(); } catch {}
-    }
-    const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
-    const imgs = await rasterStatesInto(spec.slotId, spec.name, spec.states, spec.heightCells, wCells, spec.initialState);
-    if (imgs.length === 0) return;
-    slot.width = wCells;
-    const kids = slot.getChildren?.() ?? [];
-    // drop previous rasters (e.g. after a resize re-raster at new cell pixels)
-    kids.filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
-      .forEach((k: any) => { try { slot.remove(k); } catch {} });
-    const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
-    // glyph stays in the slot (hidden) so the scrim can fall back to it
-    if (glyphNode) { try { glyphNode.visible = false; } catch {} }
-    imgs.forEach((im) => slot.add(im));
-  }));
-  // done specs are dead weight: their slots are destroyed on the next rebuild
-  // and live tile refs keep the spec objects alive independently of the queue
-  iconQueue.splice(0, iconQueue.length, ...iconQueue.filter((s) => !s.done));
-  // re-rasters made fresh images visible; while a modal scrim is up the icons
-  // must fall back to dimmed glyphs or they float over the menu
-  if (menuOpen) setScrim(true);
-};
-
-// Kitty placements float above all cells, so the scrim can't dim them.
-// While the menu is open every background slot falls back to its glyph,
-// pre-darkened to blend into the backdrop; rasters come back on close.
-// Slots INSIDE a modal (menu rows, context menus, prompts) sit above the
-// scrim and keep their crisp rasters.
-const MODAL_ROOT_IDS = new Set(["tfm-menu", "tfm-filemenu", "tfm-prompt"]);
-
-const isModalChild = (slot: any): boolean => {
-  let cur: any = slot?.parent;
-  while (cur) {
-    if (typeof cur?.id === "string" && MODAL_ROOT_IDS.has(cur.id)) return true;
-    cur = cur.parent;
-  }
-  return false;
-};
-
-const setScrim = (on: boolean) => {
-  for (const spec of iconQueue) {
-    const slot: any = byId(spec.slotId);
-    if (!slot) continue;
-    if (on && isModalChild(slot)) continue;
-    const kids = (slot.getChildren?.() ?? []) as any[];
-    const glyphNode: any = kids.find((k) => k.id === `${spec.slotId}-g`);
-    if (!glyphNode) continue;
-    const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`));
-    if (stateImgs.length === 0 && !spec.done) continue;
-    if (on) {
-      stateImgs.forEach((k) => { try { k.visible = false; } catch {} });
-      try {
-        glyphNode.fg = dimHex(spec.states[spec.initialState]?.fg ?? colors.sidebarFg, 0.41);
-        glyphNode.visible = true;
-      } catch {}
-    } else {
-      if (stateImgs.length === 0) {
-        try { glyphNode.visible = true; } catch {}
-      } else {
-        try { glyphNode.visible = false; } catch {}
-        stateImgs.forEach((k, i) => { try { k.visible = i === spec.initialState; } catch {} });
-      }
-    }
-  }
-};
-
-const { openDialog, closeDialog, dialogBtn } = makeDialogs({
+const dialogs = makeDialogs({
   byId,
   rootAdd: (node) => renderer.root.add(node),
   stripSelectable: () => stripSelectable(),
@@ -988,6 +737,7 @@ const { openDialog, closeDialog, dialogBtn } = makeDialogs({
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors,
 });
+const { openDialog, closeDialog, dialogBtn } = dialogs;
 
 
 // --- Grid (scrollable, culled, interactive) ---
@@ -1279,10 +1029,7 @@ const selPaths = (): ClipItem[] => {
   return out;
 };
 
-// --- Undo stack + override (conflict) prompt ---
-type ConflictChoice = "replace" | "keepBoth" | "skip";
-let conflictPolicy: ConflictChoice | null = null;
-
+// --- Undo stack + override (conflict) prompt — dialog lives in ./ui-dialogs ---
 // undo/redo state machine lives in ./undo (pure, tested) — results surface via sink
 const { pushUndoBatch, undoLast, redoLast } = makeUndo({
   status: (msg) => setStatusMsg(msg),
@@ -1290,75 +1037,15 @@ const { pushUndoBatch, undoLast, redoLast } = makeUndo({
   refresh: () => renderAll(),
 });
 
-let conflictOpen = false;
-let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
 
-const closeConflict = (c: ConflictChoice): void => {
-  closeDialog("tfm-conflict");
-  conflictOpen = false;
-  const r = conflictResolveFn;
-  conflictResolveFn = null;
-  r?.(c);
-};
-
-const CONFLICT_W = 48;
-
-const promptConflict = (destPath: string, remaining: number): Promise<ConflictChoice> =>
-  new Promise<ConflictChoice>((resolve) => {
+const conflict = makeConflict(dialogs, {
+  colors: () => colors as Theme & Record<string, any>,
+  drainIconQueue: () => drainIconQueue(),
+  closeTransients: () => {
     closeFileMenu();
     if (propsIsOpen()) closeProps();
-    conflictOpen = true;
-    conflictResolveFn = resolve;
-    const name = path.basename(destPath);
-    const parentName = path.basename(path.dirname(destPath)) || "/";
-    let bseq = 0;
-    const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> =>
-      dialogBtn(`tfm-conflict-b${bseq++}`, label, colors.sidebarFg, onPick);
-    const pick = (c: ConflictChoice, all?: ConflictChoice) => {
-      if (all) conflictPolicy = all;
-      closeConflict(c);
-    };
-    const rows: ReturnType<typeof Box>[] = [
-      Box(
-        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: ` Replace "${name.slice(0, CONFLICT_W - 14)}"?`, fg: colors.accent }),
-      ),
-      Box(
-        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: " " + "~".repeat(CONFLICT_W - 2), fg: colors.divider }),
-      ),
-      Box(
-        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: ` an item called "${name}" already exists in ${parentName}`.slice(0, CONFLICT_W - 1), fg: colors.sidebarFgMuted }),
-      ),
-      Box({ height: 1 }),
-      Box(
-        { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
-        mkBtn("[ Replace ]", () => pick("replace")),
-        mkBtn("[ Keep both ]", () => pick("keepBoth")),
-        mkBtn("[ Skip ]", () => pick("skip")),
-      ),
-    ];
-    if (remaining > 0) {
-      rows.push(
-        Box({ height: 1 }),
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
-          mkBtn("[ Replace all ]", () => pick("replace", "replace")),
-          mkBtn("[ Keep both all ]", () => pick("keepBoth", "keepBoth")),
-          mkBtn("[ Skip rest ]", () => pick("skip", "skip")),
-        ),
-      );
-    }
-    openDialog({
-      id: "tfm-conflict",
-      zIndex: 3400,
-      width: CONFLICT_W,
-      rows: () => rows,
-      onClose: () => closeConflict("skip"),
-    });
-    void drainIconQueue();
-  });
+  },
+});
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
 // state + paint/toast machinery live in ./ui-progress; renderer, theme and the
@@ -1398,7 +1085,7 @@ const copyTreeProgress = (src: string, dest: string): Promise<void> => transferC
 // every destructive-but-reversible file op funnels through here so overrides
 // are asked once and undo covers the whole batch
 async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void> {
-  conflictPolicy = null;
+  conflict.resetPolicy();
   const units: UndoUnit[] = [];
   const redos: UndoUnit[] = [];
   let ok = 0, skipped = 0, replaced = 0, failed = 0, gone = 0;
@@ -1438,7 +1125,7 @@ async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[],
     else if (target === src) { skipped++; continue; }
     else if (existsSync(target)) {
       const done = ok + skipped;
-      const choice = conflictPolicy ?? await promptConflict(target, Math.max(0, total - done - 1));
+      const choice = conflict.policy() ?? await conflict.promptConflict(target, Math.max(0, total - done - 1));
       if (choice === "skip") { skipped++; continue; }
       if (choice === "keepBoth") target = uniqueTarget(destDir, base);
       else {
@@ -1512,8 +1199,8 @@ const performRename = async (p: string, v: string): Promise<void> => {
   const units: UndoUnit[] = [];
   const redos: UndoUnit[] = [];
   if (existsSync(finalDest)) {
-    conflictPolicy = null;
-    const choice = await promptConflict(finalDest, 0);
+    conflict.resetPolicy();
+    const choice = await conflict.promptConflict(finalDest, 0);
     if (choice === "skip") return;
     if (choice === "keepBoth") {
       finalDest = uniqueTarget(path.dirname(finalDest), path.basename(finalDest));
@@ -1675,11 +1362,11 @@ const { renderPreview } = makePreview({
   cellMetrics,
   focusKey: () => (focusIdx >= 0 && focusKeys[focusIdx] ? focusKeys[focusIdx]! : null),
   tileRefs: tileRefsByKey,
-  pushThumbJob: (job) => thumbJobs.push(job),
+  pushThumbJob,
   drainThumbs: () => drainThumbs(),
   drainIconQueue: () => drainIconQueue(),
-  nextIconId: () => `tfm-icon-${iconSeq++}`,
-  fallbackGlyphFor: (name) => (glyph as Record<string, string>)[name] ?? glyph.file!,
+  nextIconId,
+  fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
 });
 
 const { notify, toastCount } = makeNotify({
@@ -1692,45 +1379,17 @@ const { notify, toastCount } = makeNotify({
   sidebarFgMuted: () => colors.sidebarFgMuted,
 });
 
-let bandStart: { x: number; y: number } | null = null;
-const BAND_ID = "tfm-band";
-
-const bandNode = (): any => byId(BAND_ID);
-
-const updateBandRect = (ev: any) => {
-  if (!bandStart) return;
-  const b = bandNode();
-  if (!b) return;
-  try {
-    b.x = Math.min(bandStart.x, ev.x);
-    b.y = Math.min(bandStart.y, ev.y);
-    b.width = Math.abs(ev.x - bandStart.x) + 1;
-    b.height = Math.abs(ev.y - bandStart.y) + 1;
-    b.visible = true;
-  } catch {}
-};
-
-const finalizeBand = (ev: any) => {
-  const start = bandStart;
-  bandStart = null;
-  selAnchor = null;
-  const b = bandNode();
-  if (b) { try { b.visible = false; } catch {} }
-  if (!start) return;
-  const x0 = Math.min(start.x, ev.x), y0 = Math.min(start.y, ev.y);
-  const x1 = Math.max(start.x, ev.x), y1 = Math.max(start.y, ev.y);
-  clearTileSelection();
-  tileRefsByKey.forEach((refs, key) => {
-    const t: any = byId(refs.tileId);
-    if (!t) return;
-    const tx = t.screenX, ty = t.screenY, tw = t.width, th = t.height;
-    if (tx < x1 + 1 && tx + tw > x0 && ty < y1 + 1 && ty + th > y0) {
-      refs.selected = true;
-      setTileVisual(key, 2);
-    }
-  });
-  updateSelectionStatusReal();
-  void renderPreview();
+// Rubber-band gesture state + commit logic live in ./grid-input; this is the
+// ctx object it renders through (built here because it closes over the live
+// selection/preview state below).
+const bandCtx: BandCtx = {
+  byId: (id: string) => byId(id),
+  tileRefs: tileRefsByKey,
+  clearTileSelection,
+  setTileVisual,
+  updateSelectionStatusReal,
+  renderPreview,
+  setSelAnchor: (v: number | null) => { selAnchor = v; },
 };
 
 const clearGrid = () => {
@@ -1895,7 +1554,7 @@ const renderGrid = async () => {
     let iconSpec: IconSpec | undefined;
     let iconSlotEl: ReturnType<typeof Box>;
     if (useThumb) {
-      slotId = `tfm-icon-${iconSeq++}`;
+      slotId = nextIconId();
       iconSlotEl = Box({ id: slotId, width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" });
     } else {
       const s = makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), tileStates(dim), ICON_CELLS_H, 0);
@@ -1913,14 +1572,14 @@ const renderGrid = async () => {
     tileRefsByKey.set(key, { iconSpec, iconSlotId: slotId, selected: false, baseFg, tileId, labelId, isDir: e.isDir });
 
     if (useThumb && st) {
-        thumbJobs.push({
+        pushThumbJob({
           slotId,
           path: key,
           mtimeMs: st.mtimeMs ?? 0,
           size: st.size,
           wCells: slotW,
           vector: e.name.toLowerCase().endsWith(".svg"),
-          fallbackGlyph: glyph[fileIconFor(e.name) as keyof typeof glyph] ?? glyph.file!,
+          fallbackGlyph: glyph[fileIconFor(e.name)] ?? glyph.file!,
         });
     }
 
@@ -1998,37 +1657,6 @@ const renderGrid = async () => {
   updateSelectionStatusReal();
 };
 
-// clickable "esc" hint shared by floating UIs (prompt/props/menu)
-const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => {
-  // X (close) raster with hover swap — replaced the old text "esc" hint
-  const states = (): IconState[] => [
-    { fg: colors.sidebarFgMuted, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) },
-    { fg: colors.white, bg: colors.hoverBg },
-  ];
-  const slot = makeIconSlot("close", states(), 1, 0, undefined, states);
-  const paint = (on: boolean) => {
-    setIconState(slot.spec, on ? 1 : 0);
-    try {
-      const n: any = byId(id);
-      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
-    } catch {}
-  };
-  return Box(
-    {
-      id,
-      // extra cell keeps the X off the panel edge
-      width: 3,
-      height: 1,
-      justifyContent: "center",
-      ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
-      onMouseDown: () => onClose(),
-      onMouseOver: () => paint(true),
-      onMouseOut: () => paint(false),
-    },
-    slot.el,
-  );
-};
-
 const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
   byId,
   openDialog,
@@ -2039,8 +1667,8 @@ const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
   stripSelectable: () => stripSelectable(),
   drainIconQueue: () => drainIconQueue(),
   drainThumbs: () => drainThumbs(),
-  pushThumbJob: (job) => thumbJobs.push(job),
-  nextIconId: () => `tfm-icon-${iconSeq++}`,
+  pushThumbJob,
+  nextIconId,
   escHintBtn,
   closeFileMenu: () => closeFileMenu(),
   openContextMenu: (x, y, title, entries) => openContextMenu(x, y, title, entries),
@@ -2051,7 +1679,7 @@ const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
   home,
   makeIconSlot,
   setIconState,
-  fallbackGlyphFor: (name) => (glyph as Record<string, string>)[name] ?? glyph.file!,
+  fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
   cellMetrics,
 });
 const MENU_W = 36;
@@ -2199,13 +1827,7 @@ const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
   return entries;
 };
 
-// --- ESC menu (scrim pattern stolen from opencode's Dialog) ---
-type MenuEntry = { label: string; hint?: string; action: () => void };
-
-let menuOpen = false;
-let menuView: "root" | "settings" = "root";
-let menuIdx = 0;
-
+// --- ESC menu + settings panel — widget lives in ./ui-settings ---
 const quitApp = () => {
   disableDrops();
   // release the shift-capture request made at boot
@@ -2280,295 +1902,28 @@ const settingGroups = (): SettingGroup[] => [
     rows: [
       { kind: "action", label: "reset to defaults", keepOpen: true, run: resetToDefaults },
       { kind: "action", label: "edit config.toml…", run: () => { spawn("xdg-open", [configPath()], { stdio: "ignore", detached: true }).unref?.(); } },
-      { kind: "action", label: "back", keepOpen: true, run: () => { menuView = "root"; menuIdx = 0; } },
+      { kind: "action", label: "back", keepOpen: true, run: () => escMenu.showRoot() },
     ],
   },
 ];
 
-const settingsFlatRows = (): SettingRow[] => flattenRows(settingGroups());
 
-const adjustSelectedSetting = (dir: number): void => {
-  if (menuView !== "settings") return;
-  const row = settingsFlatRows()[menuIdx];
-  if (!row || !applyAdjust(row, dir)) return;
-  renderMenuContent();
-};
-
-const menuActivate = () => {
-  if (menuView === "settings") {
-    const row = settingsFlatRows()[menuIdx];
-    if (!row) return;
-    if (row.kind === "toggle") { applyAdjust(row, 1); renderMenuContent(); return; }
-    if (row.kind === "action") {
-      if (row.keepOpen) { row.run(); renderMenuContent(); }
-      else { closeMenu(); row.run(); }
-      return;
-    }
-    applyAdjust(row, 1);
-    renderMenuContent();
-    return;
-  }
-  const items = rootMenuItems();
-  const it = items[menuIdx] ?? items[0];
-  if (!it) return;
-  if (it.keepOpen) { it.action(); return; }
-  closeMenu();
-  it.action();
-};
-
-const rootMenuItems = (): { icon: string; label: string; hint?: string; keepOpen?: boolean; action: () => void }[] => [
-  {
-    icon: "cog",
-    label: "Settings",
-    // stays open: the action switches the menu to the settings view; closing
-    // first would destroy the scrim/panel the view renders into
-    keepOpen: true,
-    action: () => { menuView = "settings"; menuIdx = 0; renderMenuContent(); },
-  },
-  {
-    icon: "power",
-    label: "Quit",
-    hint: "ctrl+q",
-    action: quitApp,
-  },
-];
-
-const SETTINGS_W = 44;
-const SET_LABEL_W = 17;
-
-const renderMenuContent = () => {
-  const panel: any = byId("tfm-menu-panel");
-  if (!panel) return;
-  clearChildren(panel);
-
-  const isSettings = menuView === "settings";
-  const panelW = isSettings ? SETTINGS_W : MENU_W;
-  try { panel.width = panelW; } catch {}
-
-  panel.add(Box(
-    { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-    Text({ content: isSettings ? "Menu — settings" : "Menu", fg: colors.accent }),
-    Box({ flexGrow: 1 }),
-    escHintBtn("tfm-esc-menu", closeMenu),
-  ));
-  panel.add(Box(
-    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-    Text({ content: " " + "~".repeat(panelW - 2), fg: colors.divider }),
-  ));
-
-  const hoverSelect = (index: number) => () => {
-    if (menuIdx !== index) { menuIdx = index; renderMenuContent(); }
-  };
-
-  const rootRow = (
-    icon: string | undefined,
-    label: string,
-    hint: string | undefined,
-    active: boolean,
-    index: number,
-    onClick: (ev?: any) => void,
-  ) =>
-    Box(
-      {
-        width: "100%",
-        height: 1,
-        flexDirection: "row",
-        columnGap: 1,
-        paddingLeft: 1,
-        paddingRight: 1,
-        backgroundColor: active ? colors.accentBg : undefined,
-        onMouseDown: onClick,
-        onMouseOver: hoverSelect(index),
-      },
-      ...(icon
-        ? [makeIconSlot(
-            icon,
-            [
-              { fg: colors.sidebarFg, bg: active ? colors.accentBg : colors.sidebarBg },
-              { fg: colors.white, bg: colors.accentBg },
-            ],
-            1,
-            active ? 1 : 0,
-          ).el]
-        : []),
-      Text({ content: icon ? label : ` ${label}`, fg: active ? colors.white : colors.sidebarFg }),
-      Box({ flexGrow: 1 }),
-      ...(hint ? [Text({ content: hint + " ", fg: colors.sidebarFgMuted })] : []),
-    );
-
-  const activateRow = (index: number) => (ev: any) => {
-    try { ev.stopPropagation?.(); } catch {}
-    menuIdx = index;
-    menuActivate();
-  };
-
-  // value column shared by stepper/cycle rows: ‹ value ›
-  const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) => {
-    const tId = `tfm-chev-${index}-${dir}`;
-    return Box(
-      {
-        width: 2,
-        justifyContent: "center",
-        onMouseDown: (ev: any) => {
-          try { ev.stopPropagation?.(); } catch {}
-          const changed = applyAdjust(rowSpec, dir);
-          if (menuIdx !== index || changed) {
-            menuIdx = index;
-            renderMenuContent();
-          }
-        },
-        onMouseOver: () => setOnId(tId, (n) => { n.fg = colors.white; }),
-        onMouseOut: () => setOnId(tId, (n) => { n.fg = active ? colors.white : colors.sidebarFgMuted; }),
-      },
-      Text({ id: tId, content: dirText, fg: active ? colors.white : colors.sidebarFgMuted }),
-    );
-  };
-
-  const settingsRow = (rowSpec: SettingRow, index: number) => {
-    const active = menuIdx === index;
-    const labelFg = active ? colors.white : colors.sidebarFg;
-    let control: any;
-    let rowActivate: (ev?: any) => void = activateRow(index);
-
-    if (rowSpec.kind === "toggle") {
-      const on = rowSpec.get();
-      control = Box(
-        { width: 6, justifyContent: "flex-end" },
-        Text({ content: on ? "on" : "off", fg: on ? colors.accent : colors.sidebarFgMuted }),
-      );
-    } else if (rowSpec.kind === "stepper" || rowSpec.kind === "cycle") {
-      const value = rowSpec.kind === "stepper"
-        ? rowSpec.fmt(rowSpec.get())
-        : (() => { const i = rowSpec.getIdx(); return i >= 0 ? rowSpec.names[i] ?? "?" : "custom"; })();
-      control = Box(
-        { flexDirection: "row", alignItems: "center", onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} } },
-        chevron("‹", active, index, rowSpec, -1),
-        Box(
-          { width: 13, justifyContent: "flex-end", paddingRight: 1 },
-          Text({
-            content: value.length > 12 ? value.slice(0, 12) : value,
-            fg: active ? colors.white : colors.sidebarFgMuted,
-          }),
-        ),
-        chevron("›", active, index, rowSpec, 1),
-      );
-      rowActivate = (ev?: any) => {
-        try { ev?.stopPropagation?.(); } catch {}
-        menuIdx = index;
-        applyAdjust(rowSpec, 1);
-        renderMenuContent();
-      };
-    } else {
-      control = Box({ width: 6 });
-    }
-
-    return Box(
-      {
-        width: "100%",
-        height: 1,
-        flexDirection: "row",
-        paddingLeft: 1,
-        paddingRight: 1,
-        backgroundColor: active ? colors.accentBg : undefined,
-        onMouseDown: rowActivate,
-        onMouseOver: hoverSelect(index),
-      },
-      Text({ content: ` ${rowSpec.label.slice(0, SET_LABEL_W).padEnd(SET_LABEL_W)}`, fg: labelFg }),
-      Box({ flexGrow: 1 }),
-      control,
-    );
-  };
-
-  if (!isSettings) {
-    const items = rootMenuItems();
-    items.forEach((it, i) => panel.add(rootRow(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))));
-  } else {
-    let flatIdx = 0;
-    settingGroups().forEach((group, gi) => {
-      if (gi > 0) panel.add(Box({ width: "100%", height: 1 }));
-      if (group.header) {
-        panel.add(Box(
-          { width: "100%", height: 1, paddingLeft: 1 },
-          Text({ content: group.header.toUpperCase(), fg: colors.sidebarFgMuted }),
-        ));
-      }
-      for (const rowSpec of group.rows) {
-        panel.add(settingsRow(rowSpec, flatIdx));
-        flatIdx++;
-      }
-    });
-    panel.add(Box({ width: "100%", height: 1 }));
-    panel.add(Box(
-      { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: "←→ adjust · enter select", fg: colors.sidebarFgMuted }),
-    ));
-  }
-
-  // center the panel vertically based on its actual content height so tall
-  // views never overflow small terminals
-  const scrim: any = byId("tfm-menu");
-  if (scrim) {
-    const rows = [...panel.getChildren()].length;
-    try { scrim.paddingTop = Math.max(1, Math.floor((renderer.terminalHeight - rows - 2) / 2)); } catch {}
-  }
-
-  stripSelectable();
-  void drainIconQueue();
-};
-
-const openMenu = () => {
-  if (menuOpen) return;
-  menuOpen = true;
-  menuView = "root";
-  menuIdx = 0;
-  bandStart = null;
-  const pendingBand = bandNode();
-  if (pendingBand) { try { pendingBand.visible = false; } catch {} }
-  setScrim(true);
-  const scrim = Box(
-    {
-      id: "tfm-menu",
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: "100%",
-      height: "100%",
-      alignItems: "center",
-      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
-      zIndex: 3000,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-      onMouseDown: () => closeMenu(),
-    },
-    Box(
-      {
-        id: "tfm-menu-panel",
-        width: MENU_W,
-        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-        paddingTop: 1,
-        paddingBottom: 1,
-        onMouseDown: (ev: any) => {
-          try { ev.stopPropagation?.(); } catch {}
-        },
-      },
-    ),
-  );
-  renderer.root.add(scrim);
-  renderMenuContent();
-};
-
-const closeMenu = () => {
-  if (!menuOpen) return;
-  menuOpen = false;
-  const scrim: any = byId("tfm-menu");
-  scrim?.parent?.remove(scrim);
-  setScrim(false);
-};
-
-const moveMenu = (delta: number) => {
-  const count = menuView === "settings" ? settingsFlatRows().length : rootMenuItems().length;
-  menuIdx = (menuIdx + delta + count) % count;
-  renderMenuContent();
-};
+const escMenu = makeEscMenu({
+  renderer: () => renderer,
+  byId,
+  clearChildren: (node: any) => clearChildren(node),
+  stripSelectable: () => stripSelectable(),
+  escHintBtn,
+  makeIconSlot,
+  drainIconQueue: () => drainIconQueue(),
+  setScrim,
+  cancelBand: () => cancelBand(bandCtx),
+  colors: () => colors as Theme & Record<string, any>,
+  uiStyle: () => config.ui.uiStyle,
+  menuW: () => MENU_W,
+  settingGroups: () => settingGroups(),
+  quit: () => quitApp(),
+});
 
 // --- Live directory watching: external changes refresh the grid ---
 let cwdWatcher: ReturnType<typeof watch> | null = null;
@@ -2632,12 +1987,12 @@ const boot = async () => {
       if (renameEdit) finishInlineRename(false);
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
-      if (ev.button === 0) bandStart = { x: ev.x, y: ev.y };
+      beginBand(ev);
       if (ev.button === 2) openContextMenu(ev.x, ev.y, "", emptyAreaEntries(ev.x, ev.y));
     },
-    onMouseDrag: (ev: any) => updateBandRect(ev),
-    onMouseDragEnd: (ev: any) => finalizeBand(ev),
-    onMouseUp: (ev: any) => { if (bandStart) finalizeBand(ev); },
+    onMouseDrag: (ev: any) => updateBandRect(bandCtx, ev),
+    onMouseDragEnd: (ev: any) => finalizeBand(bandCtx, ev),
+    onMouseUp: (ev: any) => { if (bandActive()) finalizeBand(bandCtx, ev); },
   });
   const host: any = byId("tfm-grid-host");
   host.add(scroller);
@@ -2734,9 +2089,9 @@ const rethemeChrome = (): void => {
       n.textColor = colors.white;
     });
   }
-  if (menuOpen) {
+  if (escMenu.isOpen()) {
     setOnId("tfm-menu-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-    renderMenuContent();
+    escMenu.renderMenuContent();
   }
   if (fileMenuIsOpen()) {
     setOnId("tfm-filemenu", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
@@ -2777,7 +2132,7 @@ const applyConfig = (fresh: Config): void => {
 
   if (themeChanged) {
     clearIconCaches();
-    for (const s of iconQueue) s.done = false;
+    resetIconQueue();
     try { renderer.setBackgroundColor(config.ui.transparentBg ? "transparent" : colors.bg); } catch {}
     // grid/sidebar rebuild picks up the new palette; everything else needs this
     rethemeChrome();
@@ -3001,8 +2356,8 @@ const handleOsc72 = (meta: string, payload: string): void => {
   // middle-button drags go external (OS session + icon badge); left drags are
   // declined so the internal move flow keeps the pointer and its UI feedback
   if (t === "o" && x >= 0) {
-    const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !menuOpen && !fileMenuIsOpen();
-    dlog(`drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${menuOpen} fmenu=${fileMenuIsOpen()}`);
+    const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !escMenu.isOpen() && !fileMenuIsOpen();
+    dlog(`drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${escMenu.isOpen()} fmenu=${fileMenuIsOpen()}`);
     if (!want || !gridDrag.keys) return; // left-drag: kitty falls back to normal mouse events
     beginOsc72Drag(gridDrag.keys.map((k) => k.path));
     return;
@@ -3091,7 +2446,7 @@ let resizeTimer: any = null;
 renderer.on(CliRenderEvents.RESIZE, () => {
   if (resizeTimer) clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    for (const s of iconQueue) s.done = false;
+    resetIconQueue();
     renderAll();
   }, 150);
 });
@@ -3104,8 +2459,8 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
   // override/conflict modal: esc = skip, everything else swallowed (mouse-driven)
-  if (conflictOpen) {
-    if (e.name === "escape") closeConflict("skip");
+  if (conflict.isOpen()) {
+    if (e.name === "escape") conflict.closeConflict("skip");
     return;
   }
 
@@ -3132,13 +2487,13 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
 
-  if (menuOpen) {
-    if (e.name === "escape") closeMenu();
-    else if (e.name === "up") moveMenu(-1);
-    else if (e.name === "down") moveMenu(1);
-    else if (e.name === "left") adjustSelectedSetting(-1);
-    else if (e.name === "right") adjustSelectedSetting(1);
-    else if (e.name === "return") menuActivate();
+  if (escMenu.isOpen()) {
+    if (e.name === "escape") escMenu.closeMenu();
+    else if (e.name === "up") escMenu.moveMenu(-1);
+    else if (e.name === "down") escMenu.moveMenu(1);
+    else if (e.name === "left") escMenu.adjustSelectedSetting(-1);
+    else if (e.name === "right") escMenu.adjustSelectedSetting(1);
+    else if (e.name === "return") escMenu.menuActivate();
     return;
   }
 
@@ -3283,7 +2638,7 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
 
   if (e.name === "escape") {
-    openMenu();
+    escMenu.openMenu();
     return;
   }
   if (ctrl && (e.name === "h" || e.unicode === "h")) {
