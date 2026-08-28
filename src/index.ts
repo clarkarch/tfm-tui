@@ -1,7 +1,7 @@
 import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, createReadStream, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
+import { appendFileSync, closeSync, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
 import { readdir, readFile, stat, lstat, readlink, symlink, rename as fsRename, mkdir, writeFile, chmod, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +45,7 @@ import {
 import { makeTrashOps } from "./trashops";
 import { animateLeft, makeNotify } from "./notify";
 import { makeDialogs } from "./ui-dialogs";
+import { makeProgress } from "./ui-progress";
 import { DRAG_GHOST_ID, finishDragState, gridDrag, makeEntryMouseHandlers, type ClipItem, type GridMenuEntry } from "./grid-input";
 
 const execFileP = promisify(execFile);
@@ -1042,6 +1043,13 @@ const byId = (id: string): any => {
   try { return renderer.root.findDescendantById(id); } catch { return null; }
 };
 
+// set a TEXT node's content by id — ids must live on the Text, not its
+// wrapper Box (boxes have no .content, mutating them no-ops)
+const setTextOnId = (nodeId: string, s: string): void => {
+  const n: any = byId(nodeId);
+  if (n) { try { n.content = s; } catch {} }
+};
+
 const stripSelectable = (node: any = renderer.root): void => {
   if (!node || node.isDestroyed) return;
   try { if (node.selectable) node.selectable = false; } catch {}
@@ -1670,171 +1678,20 @@ const promptConflict = (destPath: string, remaining: number): Promise<ConflictCh
   });
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
-const prog = {
-  active: false,
-  verb: "copying",
-  doneFiles: 0,
-  totalFiles: 0,
-  bytes: 0,
-  totalBytes: 0,
-  paused: false,
-  cancelled: false,
-  currentRs: null as ReturnType<typeof createReadStream> | null,
-  toastUp: false,
-};
-let progLastPaint = 0;
-
-const PROG_TOAST_ID = "tfm-prog-toast";
-const PROG_T_TITLE = "tfm-prog-title";
-const PROG_T_BAR = "tfm-prog-bar";
-const PROG_T_BTNS = "tfm-prog-btns";
-const PROG_W = 42;
-const PROG_BAR_CELLS = 14;
-// braille spinner frames (same as ~/loading_animation.py)
-const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-let progSpinIdx = 0;
-let progSpinTimer: any = null;
-
-const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-const progSetText = (nodeId: string, s: string): void => {
-  const n: any = byId(nodeId);
-  if (n) { try { n.content = s; } catch {} }
-};
-
-const paintProgress = (force = false): void => {
-  if (!prog.active || !prog.toastUp) return;
-  const now = Date.now();
-  if (!force && now - progLastPaint < 120) return;
-  progLastPaint = now;
-  const pct = prog.totalBytes > 0 ? Math.min(100, Math.floor((prog.bytes / prog.totalBytes) * 100)) : 0;
-  const filled = Math.round((pct / 100) * PROG_BAR_CELLS);
-  const spin = prog.paused ? "⏸" : SPIN_FRAMES[progSpinIdx];
-  progSetText(PROG_T_TITLE, `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pct}%)`);
-  const line = "█".repeat(filled) + "░".repeat(Math.max(0, PROG_BAR_CELLS - filled)) + ` ${fmtBytes(prog.bytes)}/${fmtBytes(prog.totalBytes)}`;
-  progSetText(PROG_T_BAR, line.slice(0, PROG_W - 2));
-};
-
-const showProgressToast = (): void => {
-  if (prog.toastUp) return;
-  prog.toastUp = true;
-  const y = 1 + toastCount() * 4;
-  const setPauseVisual = (): void => {
-    const p: any = byId(progPauseSpec.slotId);
-    const l: any = byId(progPlaySpec.slotId);
-    try { if (p) p.visible = !prog.paused; } catch {}
-    try { if (l) l.visible = !!prog.paused; } catch {}
-  };
-  // pause/play are different shapes → two slots stacked in one hit area
-  // toast icons carry a hover state baked for the toast bg
-  const progBtnStates = (): IconState[] => [
-    { fg: colors.white, bg: colors.accentBg },
-    { fg: colors.white, bg: colors.hoverBg },
-  ];
-  const progPaint = (spec: IconSpec, btnId: string, on: boolean) => {
-    setIconState(spec, on ? 1 : 0);
-    try {
-      const n: any = byId(btnId);
-      if (n) n.backgroundColor = on ? colors.hoverBg : colors.accentBg;
-    } catch {}
-  };
-  const progPauseSpec = makeIconSlot("pause", progBtnStates(), 1, 0, undefined, progBtnStates);
-  const progPlaySpec = makeIconSlot("play", progBtnStates(), 1, 0, undefined, progBtnStates);
-  const progCloseSpec = makeIconSlot("close", progBtnStates(), 1, 0, undefined, progBtnStates);
-  const scrimless = Box(
-    {
-      id: PROG_TOAST_ID,
-      position: "absolute",
-      left: renderer.terminalWidth + 2,
-      top: y,
-      width: PROG_W,
-      height: 4,
-      zIndex: 3500,
-      backgroundColor: colors.accentBg,
-      flexDirection: "column",
-    },
-    // ids live on the TEXT nodes — boxes have no .content, mutating them no-ops
-    Box({ height: 1 }, Text({ id: PROG_T_TITLE, content: `${SPIN_FRAMES[0]} ${prog.verb}`, fg: colors.white })),
-    Box({ height: 1 }, Text({ id: PROG_T_BAR, content: "", fg: colors.white })),
-    Box(
-      { id: PROG_T_BTNS, height: 1, flexDirection: "row", paddingLeft: 1, columnGap: 1 },
-      (() => {
-        const btn = Box(
-          {
-            id: "tfm-prog-pause",
-            width: 2,
-            height: 1,
-            flexDirection: "row",
-            backgroundColor: colors.accentBg,
-            onMouseDown: () => {
-              prog.paused = !prog.paused;
-              if (!prog.paused) { try { prog.currentRs?.resume(); } catch {} }
-              else { try { prog.currentRs?.pause(); } catch {} }
-              setPauseVisual();
-            },
-            onMouseOver: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", true),
-            onMouseOut: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", false),
-          },
-          progPauseSpec.el,
-          progPlaySpec.el,
-        );
-        return btn;
-      })(),
-      Box(
-        {
-          id: "tfm-prog-close",
-          width: 2,
-          height: 1,
-          flexDirection: "row",
-          backgroundColor: colors.accentBg,
-          onMouseDown: () => {
-            prog.cancelled = true;
-            try { prog.currentRs?.destroy(new Error("cancelled")); } catch {}
-          },
-          onMouseOver: () => progPaint(progCloseSpec.spec, "tfm-prog-close", true),
-          onMouseOut: () => progPaint(progCloseSpec.spec, "tfm-prog-close", false),
-        },
-        progCloseSpec.el,
-      ),
-    ),
-  );
-  renderer.root.add(scrimless);
-  // button Texts must not enter text-selection mode or they hijack the clicks
-  stripSelectable();
-  setPauseVisual(); // play slot ships visible — hide until actually paused
-  void drainIconQueue();
-  const real: any = byId(PROG_TOAST_ID);
-  if (real) animateLeft(real, renderer.terminalWidth + 2, Math.max(0, renderer.terminalWidth - PROG_W - 2), 180);
-  progSpinTimer = setInterval(() => {
-    progSpinIdx = (progSpinIdx + 1) % SPIN_FRAMES.length;
-    paintProgress(true);
-  }, 100);
-};
-
-// swap to a terminal state (✓/✗ passed in title), linger briefly, slide away
-const finishProgressToast = (title: string): void => {
-  if (!prog.toastUp) return;
-  prog.toastUp = false;
-  if (progSpinTimer) { clearInterval(progSpinTimer); progSpinTimer = null; }
-  progSetText(PROG_T_TITLE, title.slice(0, PROG_W - 2));
-  progSetText(PROG_T_BAR, "");
-  // done means the controls go away — nothing left to pause or cancel
-  const btns: any = byId(PROG_T_BTNS);
-  if (btns) { try { btns.visible = false; } catch {} }
-  setTimeout(() => {
-    const real: any = byId(PROG_TOAST_ID);
-    if (!real) return;
-    animateLeft(real, typeof real.left === "number" ? real.left : 0, renderer.terminalWidth + 2, 180);
-    setTimeout(() => {
-      try { (real.parent ?? renderer.root).remove(real); } catch {}
-    }, 200);
-  }, 1800);
-};
-
-// pause/cancel gates used between files AND mid-stream
-const pauseGate = async (): Promise<void> => {
-  while (prog.paused && !prog.cancelled) await sleepMs(80);
-};
+// state + paint/toast machinery live in ./ui-progress; renderer, theme and the
+// icon-slot machinery arrive via ctx (same seam as ui-dialogs/notify)
+const { prog, paintProgress, showProgressToast, finishProgressToast, pauseGate } = makeProgress({
+  byId,
+  rootAdd: (node) => renderer.root.add(node),
+  remove: (node) => { try { (node.parent ?? renderer.root).remove(node); } catch {} },
+  stripSelectable: () => stripSelectable(),
+  termW: () => renderer.terminalWidth,
+  toastCount: () => toastCount(),
+  colors: () => colors,
+  makeIconSlot,
+  setIconState,
+  drainIconQueue,
+});
 
 // wire the copy engine (./transfer) to the live progress state
 const transferSink: TransferSink = {
@@ -3030,9 +2887,9 @@ const openProperties = (targetPath: string): void => {
   // assigned only when the exec checkbox exists (exec-capable files)
   let syncExecCheckbox: () => void = () => {};
   const refreshPermRows = (): void => {
-    progSetText(permRowId("owner"), permWords(st.mode, 6, isDirTarget));
-    progSetText(permRowId("group"), permWords(st.mode, 3, isDirTarget));
-    progSetText(permRowId("others"), permWords(st.mode, 0, isDirTarget));
+    setTextOnId(permRowId("owner"), permWords(st.mode, 6, isDirTarget));
+    setTextOnId(permRowId("group"), permWords(st.mode, 3, isDirTarget));
+    setTextOnId(permRowId("others"), permWords(st.mode, 0, isDirTarget));
     syncExecCheckbox();
   };
   const applyMode = async (nm: number): Promise<void> => {
@@ -3915,14 +3772,21 @@ const rethemeChrome = (): void => {
   }
 };
 
+// theme-relevant signature of a config snapshot. Diffing against the LAST
+// APPLIED state (not the caller's pre-call `config`) means a settings row can
+// mutate config first and call applyConfig(config) and the flip is still seen
+// — the old self-compare skipped raster invalidation silently.
+const themeSig = (c: Config): string =>
+  JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle]);
+let lastThemeSig = themeSig(config);
+
 const applyConfig = (fresh: Config): void => {
-  const themeChanged = JSON.stringify(config.theme) !== JSON.stringify(fresh.theme) ||
-    config.ui.transparentBg !== fresh.ui.transparentBg ||
-    config.ui.uiStyle !== fresh.ui.uiStyle;
+  const themeChanged = lastThemeSig !== themeSig(fresh);
   Object.assign(config.ui, fresh.ui);
   Object.assign(config.theme, fresh.theme);
   Object.assign(colors, fresh.theme);
   if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
+  lastThemeSig = themeSig(config);
 
   sw = config.ui.sidebarWidth;
   TILE_W = config.ui.tileWidth;
