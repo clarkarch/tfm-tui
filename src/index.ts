@@ -1,11 +1,10 @@
 import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, createCliRenderer } from "@opentui/core";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, createWriteStream, existsSync, openSync, readSync, statSync, watch } from "node:fs";
-import { readdir, readFile, stat, lstat, readlink, symlink, rename as fsRename, mkdir, writeFile, chmod, cp, rm } from "node:fs/promises";
+import { appendFileSync, createWriteStream, existsSync, statSync, watch } from "node:fs";
+import { readdir, readFile, stat, lstat, readlink, symlink, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { loadConfig, configPath, saveConfig, defaultConfig, type Config, type Theme } from "./config";
 import { THEME_PRESETS, type ThemePreset } from "./themes";
 import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
@@ -16,15 +15,13 @@ import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
 import {
   readRecentXbel,
   readStarredList,
-  starredRegistryAdd,
-  starredRegistryRemove,
   upsertRecentXbel,
   writeStarredList,
 } from "./recent";
 import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove } from "./fsutil";
 import { copyFileProgress as transferCopyFileProgress, copyTreeProgress as transferCopyTreeProgress, scanTree as transferScanTree, type TransferSink } from "./transfer";
-import { buildSections, isBookmarked, loadSystemPlaces, setBookmarked, type Place } from "./places";
-import { dirWalkStats, fmtBytes, fmtDate, idName, mimeLabelFor, permWords } from "./propsinfo";
+import { buildSections, loadSystemPlaces, setBookmarked, type Place } from "./places";
+import { fmtBytes } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, registerSyntaxParsers, syntaxStyleSig } from "./syntax";
 import { applyAdjust, flattenRows, themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
@@ -52,10 +49,9 @@ import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } fro
 import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
 import { animateLeft, makeNotify } from "./notify";
 import { makeDialogs } from "./ui-dialogs";
+import { makeProps } from "./ui-props";
 import { makeProgress } from "./ui-progress";
 import { DRAG_GHOST_ID, finishDragState, gridDrag, makeEntryMouseHandlers, type ClipItem, type GridMenuEntry } from "./grid-input";
-
-const execFileP = promisify(execFile);
 
 // --- Debug mode (--debug / -d): writes a single event log + crash dump to
 // /tmp/tfm-debug.log so testers paste one file instead of a screenshot. ---
@@ -1481,7 +1477,7 @@ const CONFLICT_W = 48;
 const promptConflict = (destPath: string, remaining: number): Promise<ConflictChoice> =>
   new Promise<ConflictChoice>((resolve) => {
     closeFileMenu();
-    if (propsOpen) closeProps();
+    if (propsIsOpen()) closeProps();
     conflictOpen = true;
     conflictResolveFn = resolve;
     const name = path.basename(destPath);
@@ -2426,288 +2422,31 @@ const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => 
   );
 };
 
-// --- Properties dialog (floating, right-click -> Properties…) ---
-const PROPS_W = 46;
-let propsOpen = false;
-
-const closeProps = (): void => {
-  closeDialog("tfm-props");
-  propsOpen = false;
-};
-
-const openProperties = (targetPath: string): void => {
-  closeFileMenu();
-  let st: any = null;
-  try { st = statSync(targetPath); } catch { return; }
-  if (propsOpen) closeProps();
-  const isDirTarget = st.isDirectory();
-  propsOpen = true;
-
-  openDialog({
-    id: "tfm-props",
-    zIndex: 3300,
-    width: PROPS_W,
-    paddingDiv: 4,
-    rows: () => [],
-    onClose: () => closeProps(),
-  });
-
-  const panel: any = byId("tfm-props-panel");
-  if (!panel) return;
-
-  // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
-  // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps
-  const propsToggleStates = (): IconState[] => [
-    { fg: colors.sidebarFgMuted, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) },
-    { fg: colors.accent, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) },
-    { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
-    { fg: colors.accent, bg: colors.hoverBg },
-  ];
-  const propsTogglePaint = (btnId: string, spec: IconSpec, on: boolean, hover: boolean) => {
-    setIconState(spec, (on ? 1 : 0) + (hover ? 2 : 0));
-    try {
-      const n: any = byId(btnId);
-      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, hover, colors.sidebarBg));
-    } catch {}
-  };
-
-  const starSlot = makeIconSlot("star", propsToggleStates(), 1, 0, () => {
-    starred = !starred;
-    propsTogglePaint("tfm-props-star", starSlot.spec, starred, starHover);
-    if (starred) starredRegistryAdd(targetPath);
-    else starredRegistryRemove(targetPath);
-    void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""]).catch(() => {});
-  });
-  let starHover = false;
-  let starred = readStarredList().includes(targetPath);
-  if (starred) setIconState(starSlot.spec, 1);
-  void execFileP("gio", ["info", "-a", "metadata::starred", targetPath]).then(
-    ({ stdout }) => {
-      const m = stdout.match(/metadata::starred:\s*(\S+)/);
-      const gioStarred = !!m && m[1] !== "";
-      if (gioStarred && !starred) {
-        starred = true;
-        starredRegistryAdd(targetPath); // adopt stars made outside tfm
-      }
-      setIconState(starSlot.spec, (starred ? 1 : 0) + (starHover ? 2 : 0));
-    },
-  ).catch(() => {});
-  // folders can be bookmarked (gtk bookmarks → sidebar); files can't.
-  // created unconditionally like starSlot — just not rendered for files
-  let bmHover = false;
-  let bookmarked = isBookmarked(targetPath);
-  const bmSlot = makeIconSlot("bookmark", propsToggleStates(), 1, bookmarked ? 1 : 0, () => {
-    bookmarked = !bookmarked;
-    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, bmHover);
-    void setBookmarked(targetPath, bookmarked)
-      .then(() => loadSystemPlaces())
-      .then(() => renderAll());
-  });
-  panel.add(Box(
-    { width: "100%", height: 1, flexDirection: "row", alignItems: "center" },
-    (() => {
-      const b = Box(
-        {
-          id: "tfm-props-star",
-          paddingLeft: 1,
-          ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
-          onMouseOver: () => { starHover = true; propsTogglePaint("tfm-props-star", starSlot.spec, starred, true); },
-          onMouseOut: () => { starHover = false; propsTogglePaint("tfm-props-star", starSlot.spec, starred, false); },
-        },
-        starSlot.el,
-      );
-      return b;
-    })(),
-    ...(isDirTarget
-      ? [
-          Box(
-            {
-              id: "tfm-props-bm",
-              paddingLeft: 1,
-              ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
-              onMouseOver: () => { bmHover = true; propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, true); },
-              onMouseOut: () => { bmHover = false; propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, false); },
-            },
-            bmSlot.el,
-          ),
-        ]
-      : []),
-    Box({ flexGrow: 1 }),
-    escHintBtn("tfm-esc-props", closeProps),
-  ));
-
-  // hero: big category icon below the title, or the actual picture for images
-  const iconName = isDirTarget ? "folder" : fileIconFor(targetPath);
-  const ICON_H = 6;
-  const { aspect } = cellMetrics();
-  const heroW = Math.max(1, Math.round(aspect * ICON_H));
-  const wantsThumb = !isDirTarget && fileIsImage(targetPath) && st.size > 0 && st.size <= 26214400;
-  let heroEl: ReturnType<typeof Box>;
-  if (wantsThumb) {
-    const slotId = `tfm-icon-${iconSeq++}`;
-    heroEl = Box({ id: slotId, width: heroW, height: ICON_H });
-    thumbJobs.push({
-      slotId,
-      path: targetPath,
-      mtimeMs: st.mtimeMs ?? 0,
-      size: st.size,
-      wCells: heroW,
-      hCells: ICON_H,
-      bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg),
-      vector: targetPath.toLowerCase().endsWith(".svg"),
-      fallbackGlyph: glyph[iconName as keyof typeof glyph] ?? glyph.file!,
-    });
-  } else {
-    heroEl = makeIconSlot(iconName, [{ fg: colors.sidebarFg, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) }], ICON_H).el;
-  }
-  panel.add(Box(
-    { width: "100%", height: ICON_H + 1, flexDirection: "row", justifyContent: "center", alignItems: "center" },
-    heroEl,
-  ));
-  panel.add(Box(
-    { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
-    Text({ content: path.basename(targetPath).slice(0, PROPS_W - 4), fg: colors.white }),
-  ));
-  panel.add(Box(
-    { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
-    Text({
-      id: "tfm-props-size",
-      content: isDirTarget ? "calculating…" : `${fmtBytes(st.size ?? 0)} (${st.size ?? 0} bytes)`,
-      fg: colors.accent,
-    }),
-  ));
-  panel.add(Box(
-    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-    Text({ content: " " + "~".repeat(PROPS_W - 2), fg: colors.divider }),
-  ));
-
-  const row = (label: string, value: string, id?: string) =>
-    Box({ width: "100%", height: 1, flexDirection: "row", paddingLeft: 1 },
-      Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
-      Text({ ...(id ? { id } : {}), content: String(value).slice(0, PROPS_W - 14), fg: colors.sidebarFg }));
-
-  if (isDirTarget) {
-    void dirWalkStats(targetPath).then((s) => {
-      if (!propsOpen || !s) {
-        if (propsOpen) {
-          const n: any = byId("tfm-props-size");
-          if (n) { try { n.content = "huge"; } catch {} }
-        }
-        return;
-      }
-      const n: any = byId("tfm-props-size");
-      if (n) { try { n.content = `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`; } catch {} }
-    });
-  }
-  panel.add(row("type", isDirTarget ? "inode/directory" : mimeLabelFor(targetPath)));
-  panel.add(row("location", path.dirname(targetPath).replace(home, "~").slice(0, PROPS_W - 14)));
-  panel.add(row("modified", fmtDate(st.mtimeMs)));
-  panel.add(row("accessed", fmtDate(st.atimeMs)));
-
-  // --- nautilus-style permissions editor: click a class to pick access,
-  // checkbox toggles the execute bit ---
-  const permRowId = (cls: string): string => `tfm-props-perm-${cls}`;
-  // assigned only when the exec checkbox exists (exec-capable files)
-  let syncExecCheckbox: () => void = () => {};
-  const refreshPermRows = (): void => {
-    setTextOnId(permRowId("owner"), permWords(st.mode, 6, isDirTarget));
-    setTextOnId(permRowId("group"), permWords(st.mode, 3, isDirTarget));
-    setTextOnId(permRowId("others"), permWords(st.mode, 0, isDirTarget));
-    syncExecCheckbox();
-  };
-  const applyMode = async (nm: number): Promise<void> => {
-    try { await chmod(targetPath, nm); } catch { setStatusMsg("chmod failed"); return; }
-    try { st.mode = statSync(targetPath).mode; } catch { return; }
-    refreshPermRows();
-  };
-  const permClassMenu = (shift: number): ListEntry[] => {
-    const cur = (st.mode >> shift) & 7;
-    const mk = (bits: number, label: string): ListEntry => ({
-      label: `${cur === bits ? "●" : "○"} ${label}`,
-      action: () => {
-        closeFileMenu();
-        void applyMode((st.mode & ~(7 << shift)) | (bits << shift));
-      },
-    });
-    return [mk(6, "read & write"), mk(4, "read-only"), mk(0, "none")];
-  };
-  const permRow = (label: string, cls: string, shift: number) => {
-    const rowId = `tfm-props-perm-${cls}`;
-    return Box(
-      {
-        id: rowId,
-        width: "100%", height: 1, flexDirection: "row", paddingLeft: 1,
-        ...rowSurface(config.ui.uiStyle, colors, "rest"),
-        onMouseDown: (ev: any) => openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
-        onMouseOver: () => setOnId(rowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
-        onMouseOut: () => setOnId(rowId, (n) => applySurface(n, rowSurface(config.ui.uiStyle, colors, "rest"))),
-      },
-      Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
-      Text({ id: permRowId(cls), content: permWords(st.mode, shift, isDirTarget), fg: colors.sidebarFg }),
-    );
-  };
-  panel.add(permRow("you", "owner", 6));
-  panel.add(permRow("group", "group", 3));
-  panel.add(permRow("others", "others", 0));
-  panel.add(row("owner", `${idName(st.uid)}:${idName(st.gid)}`));
-
-  // "execute as program" only makes sense for things that can actually run:
-  // already-executable files, ELF binaries, shebang scripts, known script exts
-  const execCapable = ((): boolean => {
-    if (isDirTarget) return false;
-    if (st.mode & 0o111) return true;
-    const ext = path.extname(targetPath).slice(1).toLowerCase();
-    if (["sh", "bash", "zsh", "py", "pl", "rb", "run"].includes(ext)) return true;
-    try {
-      const head = Buffer.alloc(4);
-      const fd = openSync(targetPath, "r");
-      try { readSync(fd, head, 0, 4, 0); } finally { closeSync(fd); }
-      return (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46)
-        || (head[0] === 0x23 && head[1] === 0x21);
-    } catch { return false; }
-  })();
-  if (execCapable) {
-    // raster checkbox: two slots (marked/blank) stacked in one hit area,
-    // visibility flips with the exec bit
-    const cbOnSpec = makeIconSlot("checkbox-marked", [{ fg: colors.accent, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) }], 1, 0);
-    const cbOffSpec = makeIconSlot("checkbox-blank", [{ fg: colors.sidebarFgMuted, bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg) }], 1, 0);
-    syncExecCheckbox = (): void => {
-      const on = !!(st.mode & 0o100);
-      const a: any = byId(cbOnSpec.slotId);
-      const b: any = byId(cbOffSpec.slotId);
-      try { if (a) a.visible = on; } catch {}
-      try { if (b) b.visible = !on; } catch {}
-    };
-    panel.add(Box({ height: 1 }));
-    const execRowId = "tfm-props-exec";
-    const execRow = Box(
-      {
-        id: execRowId,
-        width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1,
-        ...rowSurface(config.ui.uiStyle, colors, "rest"),
-        onMouseDown: () => {
-          let nm: number;
-          if (st.mode & 0o100) nm = st.mode & ~0o111;
-          else {
-            nm = st.mode;
-            for (const sh of [6, 3, 0]) { if ((st.mode >> sh) & 4) nm |= 1 << sh; }
-          }
-          void applyMode(nm);
-        },
-        onMouseOver: () => setOnId(execRowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
-        onMouseOut: () => setOnId(execRowId, (n) => applySurface(n, rowSurface(config.ui.uiStyle, colors, "rest"))),
-      },
-      Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),
-      Text({ content: "execute as program", fg: colors.sidebarFg }),
-    );
-    panel.add(execRow);
-    syncExecCheckbox();
-  }
-  stripSelectable();
-  void drainIconQueue();
-  void drainThumbs();
-};
-
+const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
+  byId,
+  openDialog,
+  closeDialog,
+  setTextOnId,
+  // setOnId is defined further down — defer through a wrapper (TDZ)
+  setOnId: (id, fn) => setOnId(id, fn),
+  stripSelectable: () => stripSelectable(),
+  drainIconQueue: () => drainIconQueue(),
+  drainThumbs: () => drainThumbs(),
+  pushThumbJob: (job) => thumbJobs.push(job),
+  nextIconId: () => `tfm-icon-${iconSeq++}`,
+  escHintBtn,
+  closeFileMenu: () => closeFileMenu(),
+  openContextMenu: (x, y, title, entries) => openContextMenu(x, y, title, entries),
+  renderAll: () => renderAll(),
+  setStatusMsg: (msg) => setStatusMsg(msg),
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors as Theme & Record<string, any>,
+  home,
+  makeIconSlot,
+  setIconState,
+  fallbackGlyphFor: (name) => (glyph as Record<string, string>)[name] ?? glyph.file!,
+  cellMetrics,
+});
 // --- File context menu (right-click a tile) ---
 type ListEntry = { icon?: string; label: string; hint?: string; hintIcon?: string; action: () => void; sep?: boolean };
 let fileMenuState: { idx: number; entries: ListEntry[] } | null = null;
@@ -3849,7 +3588,7 @@ renderer.keyInput.on("keypress", (e: any) => {
   if (renameEdit) return;
 
   // floating properties dialog: esc/enter closes, everything else swallowed
-  if (propsOpen) {
+  if (propsIsOpen()) {
     if (e.name === "escape" || e.name === "return") closeProps();
     return;
   }
