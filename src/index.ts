@@ -2,29 +2,28 @@ import { ASCIIFont, Box, CliRenderEvents, InputRenderable, RGBA, Renderable, Scr
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, statSync, watch } from "node:fs";
-import { readdir, readFile, stat, lstat, readlink, symlink, mkdir, writeFile, cp, rm } from "node:fs/promises";
+import { readdir, readFile, lstat, readlink, symlink, mkdir, writeFile, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, configPath, saveConfig, defaultConfig, type Config, type Theme } from "./config";
-import { THEME_PRESETS, type ThemePreset } from "./themes";
+import { loadConfig, configPath, type Config, type Theme } from "./config";
 import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
 import { bumpHex } from "./color";
 import { clearIconCaches, warmEmbeddedIcons } from "./icons";
 import { FILE_ICON_BY_EXT, fileIconFor, fileIsImage, loadGlobs2, mimeCategory } from "./filetype";
+// --- Directory listing/sort/virtual-place entries live in ./listing ---
+import { listDir, type Entry } from "./listing";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
 import {
-  readRecentXbel,
-  readStarredList,
   upsertRecentXbel,
-  writeStarredList,
 } from "./recent";
 import { trashDir, fsErrText } from "./fsutil";
 import { loadSystemPlaces } from "./places";
 import { fmtBytes } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
 import { registerSyntaxParsers } from "./syntax";
-import { applyAdjust, flattenRows, themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
 import { makeDnd72, type DropTarget } from "./dnd72";
+import { makeSettingModel } from "./settings-model";
+import { makeRetheme } from "./ui-retheme";
 import { makeTrashOps } from "./trashops";
 import { makeFileOps } from "./fileops";
 import { makeUndo, type UndoUnit } from "./undo";
@@ -306,11 +305,10 @@ const {
 });
 
 // --- Directory listing ---
-type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
-
 // --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred ---
-// URI/XDG primitives live in ./uri, the registries in ./recent; this wrapper
-// keeps the historic call-signature (defaults to the current cwd)
+// URI/XDG primitives live in ./uri, the registries in ./recent, the listings
+// themselves in ./listing; this wrapper keeps the historic call-signature
+// (defaults to the current cwd)
 const isVirtualCwd = (p: string = state.cwd): boolean => isVirtualUri(p);
 
 let recordOpenPaths: string[] = [];
@@ -340,68 +338,6 @@ const notifyOpenedWith = async (p: string): Promise<void> => {
   const app = await appForFile(p);
   notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open");
 };
-
-const recentEntries = async (): Promise<Entry[]> => {
-  const out: Entry[] = [];
-  for (const it of readRecentXbel()) {
-    let st: any = null;
-    try { st = statSync(it.path); } catch { continue; } // drop vanished files
-    out.push({ name: path.basename(it.path), isDir: st.isDirectory(), abs: it.path, size: st.size, mtimeMs: it.modified });
-  }
-  return out;
-};
-
-const starredEntries = async (): Promise<Entry[]> => {
-  const out: Entry[] = [];
-  for (const p of readStarredList()) {
-    let st: any = null;
-    try { st = statSync(p); } catch { continue; }
-    out.push({ name: path.basename(p), isDir: st.isDirectory(), abs: p, size: st.size, mtimeMs: st.mtimeMs ?? 0 });
-  }
-  return out;
-};
-
-async function listDir(dir: string, showHidden: boolean): Promise<Entry[]> {
-  let out: Entry[];
-  if (dir === RECENT_URI) {
-    out = await recentEntries();
-    // recency order wins over the global sort mode, like nautilus
-    return out.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
-  }
-  if (dir === STARRED_URI) out = await starredEntries();
-  else {
-  const dirents = await readdir(dir, { withFileTypes: true });
-  out = [];
-  for (const d of dirents) {
-    if (!showHidden && d.name.startsWith(".")) continue;
-    let isDir = d.isDirectory();
-    // a symlink is a folder only if its target is one — never follow it further
-    if (d.isSymbolicLink()) {
-      try { isDir = (await stat(path.join(dir, d.name))).isDirectory(); } catch { isDir = false; }
-    }
-    out.push({ name: d.name, isDir });
-  }
-  }
-  if (state.sortBy === "size" || state.sortBy === "mtime") {
-    for (const e of out) {
-      try { const st = statSync(e.abs ?? path.join(dir, e.name)); e.size = st.size; e.mtimeMs = st.mtimeMs ?? 0; } catch {}
-    }
-  }
-  const extOf = (n: string): string => {
-    const b = n.startsWith(".") ? n.slice(1) : n;
-    const i = b.lastIndexOf(".");
-    return i > 0 ? b.slice(i + 1).toLowerCase() : "";
-  };
-  const cmp = (a: Entry, b: Entry): number => {
-    switch (state.sortBy) {
-      case "size": return (a.size ?? 0) - (b.size ?? 0);
-      case "mtime": return (a.mtimeMs ?? 0) - (b.mtimeMs ?? 0);
-      case "type": return extOf(a.name).localeCompare(extOf(b.name)) || a.name.localeCompare(b.name);
-      default: return a.name.localeCompare(b.name);
-    }
-  };
-  return out.sort((a, b) => Number(b.isDir) - Number(a.isDir) || (state.sortAsc ? cmp(a, b) : -cmp(a, b)));
-}
 
 // --- Layout ---
 const container = Box(
@@ -958,7 +894,7 @@ const renderGrid = async () => {
   const q = searchQuery.trim().toLowerCase();
   let allEntries: Entry[];
   try {
-    allEntries = await listDir(state.cwd, state.showHidden || q.length > 0);
+    allEntries = await listDir(state.cwd, state.showHidden || q.length > 0, state.sortBy, state.sortAsc);
   } catch (err) {
     // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
     if (gen !== gridGen) return;
@@ -1254,76 +1190,16 @@ const quitApp = () => {
   process.exit(0);
 };
 
-// --- Settings model: row type + pure semantics live in ./settings.ts; the
-// get/set closures wiring rows to config/state and the renderer stay here ---
-const themePresetIdx = (): number =>
-  settingsThemePresetIdx(THEME_PRESETS, config.theme);
-
-const commitSetting = (): void => {
-  applyConfig(config);
-  scheduleSaveConfig();
-};
-
-const resetToDefaults = (): void => {
-  const fresh = structuredClone(defaultConfig);
-  state.showHidden = fresh.ui.showHidden;
-  applyConfig(fresh);
-  scheduleSaveConfig();
-};
-
-const settingGroups = (): SettingGroup[] => [
-  {
-    rows: [
-      { kind: "cycle", label: "theme", names: THEME_PRESETS.map((p) => p.name), getIdx: themePresetIdx,
-        setIdx: (i) => { applyConfig({ ui: { ...config.ui }, theme: { ...THEME_PRESETS[i]!.theme } }); scheduleSaveConfig(); } },
-      { kind: "toggle", label: "hidden files",
-        // state.showHidden is the effective runtime flag (ctrl+h writes it
-        // without persisting); config is only updated when the GUI commits
-        get: () => state.showHidden,
-        set: (v) => { config.ui.showHidden = v; state.showHidden = v; commitSetting(); } },
-      { kind: "toggle", label: "preview pane", get: () => config.ui.previewEnabled,
-        set: (v) => { config.ui.previewEnabled = v; commitSetting(); } },
-      // fresh-object setters (see transparent-bg below): toggles that flip
-      // renderer/layout state must not mutate `config` before applyConfig
-      // cycle, not toggle: false = adaptive (strip only with 2+ tabs), true = always
-      { kind: "cycle", label: "tab bar", names: ["adaptive", "on"], getIdx: () => (config.ui.tabBar ? 1 : 0),
-        setIdx: (i) => { applyConfig({ ui: { ...config.ui, tabBar: i === 1 }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
-      { kind: "toggle", label: "list view", get: () => config.ui.viewMode === "list",
-        set: (v) => { applyConfig({ ui: { ...config.ui, viewMode: v ? "list" : "grid" }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
-      // fresh-object setter on purpose: applyConfig diffs config vs fresh, so
-      // mutating config first (like the rows above) would self-compare equal
-      // and skip the cache-invalidation/clear-color swap
-      { kind: "toggle", label: "transparent bg", get: () => config.ui.transparentBg,
-        set: (v) => { applyConfig({ ui: { ...config.ui, transparentBg: v }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
-      { kind: "cycle", label: "ui style", names: ["solid", "outline"], getIdx: () => (config.ui.uiStyle === "outline" ? 1 : 0),
-        setIdx: (i) => { applyConfig({ ui: { ...config.ui, uiStyle: i === 1 ? "outline" : "solid" }, theme: { ...config.theme } }); scheduleSaveConfig(); } },
-    ],
-  },
-  {
-    header: "layout",
-    rows: [
-      { kind: "stepper", label: "sidebar width", min: 16, max: 60, step: 1, fmt: (v) => `${v}`, get: () => config.ui.sidebarWidth, set: (v) => { config.ui.sidebarWidth = v; commitSetting(); } },
-      { kind: "stepper", label: "tile width", min: 10, max: 40, step: 1, fmt: (v) => `${v}`, get: () => config.ui.tileWidth, set: (v) => { config.ui.tileWidth = v; commitSetting(); } },
-      { kind: "stepper", label: "tile height", min: 3, max: 10, step: 1, fmt: (v) => `${v}`, get: () => config.ui.tileHeight, set: (v) => { config.ui.tileHeight = v; commitSetting(); } },
-      { kind: "stepper", label: "icon size", min: 1, max: 5, step: 1, fmt: (v) => `${v}`, get: () => config.ui.iconCells, set: (v) => { config.ui.iconCells = v; commitSetting(); } },
-      { kind: "stepper", label: "preview width", min: 20, max: 80, step: 2, fmt: (v) => `${v}`, get: () => config.ui.previewWidth, set: (v) => { config.ui.previewWidth = v; commitSetting(); } },
-    ],
-  },
-  {
-    header: "behavior",
-    rows: [
-      { kind: "stepper", label: "double-click ms", min: 100, max: 2000, step: 50, fmt: (v) => `${v}`, get: () => config.ui.doubleClickMs, set: (v) => { config.ui.doubleClickMs = v; commitSetting(); } },
-    ],
-  },
-  {
-    header: "config",
-    rows: [
-      { kind: "action", label: "reset to defaults", keepOpen: true, run: resetToDefaults },
-      { kind: "action", label: "edit config.toml…", run: () => { spawn("xdg-open", [configPath()], { stdio: "ignore", detached: true }).unref?.(); } },
-      { kind: "action", label: "back", keepOpen: true, run: () => escMenu.showRoot() },
-    ],
-  },
-];
+// --- Settings model: row type + pure semantics live in ./settings.ts, the
+// row->config wiring in ./settings-model, the panel in ./ui-settings ---
+const { settingGroups } = makeSettingModel({
+  config,
+  state,
+  // arrow wrappers: applyConfig/scheduleSaveConfig/escMenu are defined below (TDZ)
+  applyConfig: (fresh) => applyConfig(fresh),
+  scheduleSaveConfig: () => scheduleSaveConfig(),
+  showRoot: () => escMenu.showRoot(),
+});
 
 
 const escMenu = makeEscMenu({
@@ -1460,134 +1336,39 @@ const boot = async () => {
 };
 boot();
 
-// --- Config application & persistence ---
-// Single path for every config change (file watcher, settings UI, reset):
-// mutate -> applyConfig -> scheduleSaveConfig. Geometry values that used to be
-// baked into consts are rewritten here, and raster caches are invalidated only
-// when colors actually changed.
-
+// --- Config application & persistence: lives in ./ui-retheme (rethemeChrome,
+// applyConfig, scheduleSaveConfig, live reload). Geometry lets stay here and
+// are rewritten through the ctx setters — never bake them into consts. ---
 const setOnId = (id: string, fn: (n: any) => void): void => {
   const n: any = byId(id);
   if (!n) return;
   try { fn(n); } catch {}
 };
 
-// Repaints widgets whose colors were baked at boot and which renderAll's
-// rebuilds never touch. Without this a runtime theme swap leaves the sidebar,
-// title, inputs, band, ghost and status bar in the old palette.
-const rethemeChrome = (): void => {
-  const st = config.ui.uiStyle;
-  setOnId("tfm-sidebar-root", (n) => { n.width = sw; applySurface(n, chromeSurface(st, colors, colors.sidebarBg)); });
-  setOnId("tfm-main", (n) => applySurface(n, chromeSurface(st, colors, colors.bg)));
-  setOnId("tfm-title-box", (n) => { n.width = sideInnerW(); });
-  setOnId("tfm-places", (n) => { n.width = sideInnerW(); });
-  setOnId("tfm-title-font", (n) => { n.color = colors.accent; });
-  setOnId("tfm-title-sub", (n) => { n.fg = colors.sidebarFgMuted; });
-  setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-  setOnId(BAND_ID, (n) => { n.borderColor = colors.accent; });
-  setOnId(DRAG_GHOST_ID, (n) => { n.backgroundColor = colors.accent; });
-  setOnId(`${DRAG_GHOST_ID}-label`, (n) => { n.fg = colors.bg; });
-  setOnId("tfm-status-label", (n) => { n.fg = colors.sidebarFgMuted; });
-  setOnId("tfm-prompt-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-  // 1-row header can't carry a border ring — just drop the fill in outline
-  setOnId("tfm-term-header", (n) => applySurface(n, st === "outline" ? {} : { backgroundColor: colors.sidebarBg }));
-
-  // toolbar hover buttons: box bg must track the new palette between raster swaps
-  repaintButtons();
-  renderCrumbs();
-  refreshNav();
-  for (const id of ["tfm-search", "tfm-path-input", "tfm-prompt-input"]) {
-    setOnId(id, (n) => {
-      n.backgroundColor = colors.accentBg;
-      n.focusedBackgroundColor = colors.accentBg;
-      n.textColor = colors.white;
-    });
-  }
-  if (escMenu.isOpen()) {
-    setOnId("tfm-menu-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-    escMenu.renderMenuContent();
-  }
-  if (fileMenuIsOpen()) {
-    setOnId("tfm-filemenu", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-    renderFileMenu();
-  }
-};
-
-// theme-relevant signature of a config snapshot. Diffing against the LAST
-// APPLIED state (not the caller's pre-call `config`) means a settings row can
-// mutate config first and call applyConfig(config) and the flip is still seen
-// — the old self-compare skipped raster invalidation silently.
-const themeSig = (c: Config): string =>
-  JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle]);
-let lastThemeSig = themeSig(config);
-
-const applyConfig = (fresh: Config): void => {
-  const themeChanged = lastThemeSig !== themeSig(fresh);
-  Object.assign(config.ui, fresh.ui);
-  Object.assign(config.theme, fresh.theme);
-  Object.assign(colors, fresh.theme);
-  if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
-  lastThemeSig = themeSig(config);
-
-  sw = config.ui.sidebarWidth;
-  TILE_W = config.ui.tileWidth;
-  TILE_H = config.ui.tileHeight;
-  ICON_CELLS_H = config.ui.iconCells;
-  for (const id of ["tfm-sidebar-root", "tfm-title-box", "tfm-places"]) {
-    setOnId(id, (n) => { n.width = id === "tfm-sidebar-root" ? sw : sideInnerW(); });
-  }
-  const pane: any = byId("tfm-preview");
-  if (pane) {
-    try {
-      pane.visible = config.ui.previewEnabled;
-      pane.width = config.ui.previewWidth;
-    } catch {}
-  }
-
-  if (themeChanged) {
-    clearIconCaches();
-    resetIconQueue();
-    try { renderer.setBackgroundColor(config.ui.transparentBg ? "transparent" : colors.bg); } catch {}
-    // grid/sidebar rebuild picks up the new palette; everything else needs this
-    rethemeChrome();
-    syncTerminalTheme();
-  }
-  renderAll();
-};
-
-// signature of the last file WE wrote; the watcher skips it so saving doesn't
-// re-enter applyConfig and churn the rasters
-let lastSavedSig = "";
-let saveWarned = false;
-
-const scheduleSaveConfig = debounced(500, () => {
-  saveConfig(config)
-    .then(async () => { try { lastSavedSig = JSON.stringify(loadConfig()); } catch {} })
-    .catch(() => {
-      if (!saveWarned) {
-        saveWarned = true;
-        console.error(`[tfm] could not write config to ${configPath()}`);
-      }
-    });
+const { rethemeChrome, applyConfig, scheduleSaveConfig } = makeRetheme({
+  config,
+  colors: colors as Theme & Record<string, any>,
+  setOnId,
+  byId,
+  renderer: () => renderer,
+  getSw: () => sw,
+  setSw: (v) => { sw = v; },
+  setTileW: (v) => { TILE_W = v; },
+  setTileH: (v) => { TILE_H = v; },
+  setIconCells: (v) => { ICON_CELLS_H = v; },
+  sideInnerW,
+  renderAll: () => renderAll(),
+  clearIconCaches,
+  resetIconQueue: () => resetIconQueue(),
+  syncTerminalTheme,
+  repaintButtons,
+  renderCrumbs,
+  refreshNav,
+  escMenu,
+  fileMenuIsOpen: () => fileMenuIsOpen(),
+  renderFileMenu,
+  setStatusMsg,
 });
-
-// --- live config reload ---
-try {
-  const cfgPath = configPath();
-  const applyFreshConfig = debounced(250, () => {
-    try {
-      const fresh = loadConfig();
-      if (JSON.stringify(fresh) === lastSavedSig) return;
-      applyConfig(fresh);
-      setStatusMsg("config reloaded");
-    } catch {}
-  });
-  const watcher = watch(path.dirname(cfgPath), (_event, filename) => {
-    if (!filename || filename !== path.basename(cfgPath)) return;
-    applyFreshConfig();
-  });
-  watcher.on("error", () => {});
-} catch {}
 
 const DND_LOG = "/tmp/tfm-dnd.log";
 const dlog = (msg: string): void => {
