@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, statSync, watch } from "node:fs";
@@ -53,6 +53,7 @@ import { makeMenu } from "./ui-menu";
 import type { ListEntry } from "./ui-menu";
 import { makeProps } from "./ui-props";
 import { makeProgress } from "./ui-progress";
+import { makeTerminal } from "./ui-term";
 import { DRAG_GHOST_ID, finishDragState, gridDrag, makeEntryMouseHandlers, type ClipItem, type GridMenuEntry } from "./grid-input";
 
 // --- Debug mode (--debug / -d): writes a single event log + crash dump to
@@ -1758,144 +1759,22 @@ const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
   await runTransfer("move", destDir, srcs, `move to ${path.basename(destDir) || "/"}`);
 };
 
-// --- Embedded terminal pane ("Open Terminal Here") ---
-// OpenTUI's EmbeddedTerminalRenderable draws the VT stream; the PTY belongs to
-// Bun.spawn({ terminal }). Keys route to the shell while focused; clicking the
-// grid or sidebar hands focus back to tfm.
-const TERM_H = 12;
-let term: EmbeddedTerminalRenderable | null = null;
-let termChild: ReturnType<typeof Bun.spawn> | null = null;
-let termFocused = false;
-
-// the flag can lag reality (click-refocus inside the pane bypasses our focus()
-// call) — ask the renderer who owns the keyboard before acting on keys
-const termHasFocus = (): boolean =>
-  !!term && renderer.currentFocusedRenderable === (term as any);
-
-const blurTerminal = (): void => {
-  if (!termFocused) return;
-  try { term?.blur(); } catch {}
-  termFocused = false;
-};
-
-// "#rrggbb" -> xterm "rgb:RRRR/GGGG/BBBB" (8-bit channel doubled to 16-bit)
-const hexToRgb16 = (hex: string): string => {
-  const b = (/^#?([0-9a-f]{6})$/i.exec(hex.trim()) ?? [, "ffffff"])[1];
-  const ch = (i: number) => `${b.slice(i, i + 2)}${b.slice(i, i + 2)}`;
-  return `${ch(0)}/${ch(2)}/${ch(4)}`;
-};
-
-// make the embedded terminal match the tfm theme: OSC 4 sets the 16-color
-// palette (so ls/vim/prompts stop floating on stock xterm hues) and
-// OSC 10/11/12 set the default fg/bg/cursor
-const syncTerminalTheme = (): void => {
-  if (!term) return;
-  try {
-    const enc = new TextEncoder();
-    const spec = (hex: string) => `rgb:${hexToRgb16(hex)}`;
-    const osc4 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-      .map((i) => `${i};${spec((colors as any)[`ansi${i}`] ?? colors.white)}`)
-      .join(";");
-    term.write(new Uint8Array([
-      ...enc.encode(`\x1b]4;${osc4}\x1b\\`),
-      ...enc.encode(`\x1b]10;${spec(colors.white)}\x1b\\`),
-      ...enc.encode(`\x1b]11;${spec(colors.bg)}\x1b\\`),
-      ...enc.encode(`\x1b]12;${spec(colors.accent)}\x1b\\`),
-    ]));
-  } catch {}
-};
-
-const closeTerminalPane = (): void => {
-  try { term?.blur(); } catch {};
-  try { termChild?.kill(); } catch {};
-  try { (termChild as any)?.terminal?.close(); } catch {};
-  termChild = null;
-  try { term?.destroy(); } catch {};
-  term = null;
-  termFocused = false;
-  const host: any = byId("tfm-term-host");
-  if (host) { clearChildren(host); host.height = 0; }
-  renderAll();
-};
-
-// fish waits up to 10s for a Primary Device Attribute reply the embedded VT
-// never sends (boot stalls with a "could not read response" warning). Answer
-// the common probes inline; sequences may split across chunks, hence the tail.
-const termProbeEnc = new TextEncoder();
-let termProbeTail = "";
-const answerTerminalProbes = (data: Uint8Array): void => {
-  try {
-    const pty = (termChild as any)?.terminal;
-    if (!pty) return;
-    const buf = termProbeTail + new TextDecoder().decode(data);
-    let resp = "";
-    if (/\x1b\[[0-9]*c/.test(buf)) resp += "\x1b[?62;1;2;6;9;15;22c"; // DA1 (tmux-style vt320)
-    if (/\x1b\[>[0-9]*c/.test(buf)) resp += "\x1b[>0;0;0c";           // secondary DA
-    if (/\x1b\[5n/.test(buf)) resp += "\x1b[0n";                      // device status OK
-    if (resp) pty.write(termProbeEnc.encode(resp));
-    termProbeTail = /(?:\x1b|\x1b\[|\x1b\[>)[0-9=>]*$/.test(buf) ? buf.slice(-8) : "";
-  } catch {}
-};
-
-const openTerminalHere = (dir?: string): void => {
-  if (!renderer.resolution) return;
-  if (term) { try { term.focus(); } catch {}; termFocused = true; return; }
-  const host: any = byId("tfm-term-host");
-  if (!host) return;
-  const cwd = dir ?? (isVirtualCwd() ? home : state.cwd);
-  host.height = TERM_H + 1;
-  const header = Box(
-    { id: "tfm-term-header", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, ...(config.ui.uiStyle === "outline" ? {} : { backgroundColor: colors.sidebarBg }) },
-    Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
-    Box({ flexGrow: 1 }),
-    escHintBtn("tfm-esc-term", closeTerminalPane),
-  );
-  term = new EmbeddedTerminalRenderable(renderer, {
-    id: "tfm-term",
-    width: "100%",
-    height: TERM_H,
-    cols: Math.max(20, renderer.terminalWidth - sw),
-    rows: TERM_H,
-    maxScrollback: 20_000,
-    onData: (data: Uint8Array) => {
-      (termChild as any)?.terminal?.write(data);
-    },
-    onTerminalResize: (cols: number, rows: number) => {
-      try { (termChild as any)?.terminal?.resize(cols, rows); } catch {}
-    },
-  });
-  host.add(header);
-  host.add(term);
-  stripSelectable();
-  const shell = process.env.SHELL || "/bin/bash";
-  try {
-    termChild = Bun.spawn([shell], {
-      cwd,
-      env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
-      terminal: {
-        cols: Math.max(20, renderer.terminalWidth - sw),
-        rows: TERM_H,
-        data(_pty: any, data: Uint8Array) {
-          answerTerminalProbes(data);
-          try { term?.write(data); } catch {}
-        },
-      },
-    } as any);
-  } catch (err) {
-    notify(`terminal failed (${fsErrText(err)})`, "terminal");
-    closeTerminalPane();
-    return;
-  }
-  termChild.exited.then(() => { if (termChild) closeTerminalPane(); }).catch(() => {});
-  syncTerminalTheme();
-  void drainIconQueue();
-  renderAll();
-  setTimeout(() => {
-    try { term?.focus(); termFocused = true; } catch {}
-    // early prompt bytes can compose before first layout — force a full redraw
-    try { term?.invalidate(); } catch {}
-  }, 30);
-};
+// --- Embedded terminal pane — widget lives in ./ui-term ---
+const { openTerminalHere, closeTerminalPane, syncTerminalTheme, termHasFocus, blurTerminal, ownsKeyboard: termOwnsKeyboard } = makeTerminal({
+  renderer,
+  byId,
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors as Theme & Record<string, any>,
+  sw: () => sw,
+  escHintBtn: (id, onClose) => escHintBtn(id, onClose),
+  stripSelectable: () => stripSelectable(),
+  drainIconQueue: () => drainIconQueue(),
+  notify: (message, title) => notify(message, title),
+  renderAll: () => renderAll(),
+  cwd: () => state.cwd,
+  virtualCwd: () => isVirtualCwd(),
+  home,
+});
 
 const trashOps = makeTrashOps({
   pushUndoBatch,
@@ -3540,7 +3419,7 @@ renderer.keyInput.on("keypress", (e: any) => {
 
   // embedded terminal owns the keyboard while focused — everything below is
   // host UI. Click the grid/sidebar (or ✕) to leave the shell.
-  if (termFocused || termHasFocus()) return;
+  if (termOwnsKeyboard()) return;
 
   const el: any = byId("tfm-search");
   const pathInput: any = byId("tfm-path-input");
