@@ -10,6 +10,7 @@ import { fileIconFor, fileIsImage } from "./filetype";
 import { dirWalkStats, fmtBytes, fmtDate, idName, mimeLabelFor, permWords } from "./propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "./recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "./places";
+import type { ListEntry } from "./ui-menu";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -19,8 +20,6 @@ import { isBookmarked, setBookmarked, loadSystemPlaces } from "./places";
 export type PropsIconState = { fg: string; bg: string };
 
 export type PropsThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string };
-
-export type PropsMenuEntry = { icon?: string; label: string; hint?: string; hintIcon?: string; action: () => void; sep?: boolean };
 
 export type PropsCtx = {
   byId(id: string): any;
@@ -35,7 +34,7 @@ export type PropsCtx = {
   nextIconId(): string;
   escHintBtn(id: string, onClose: () => void): any;
   closeFileMenu(): void;
-  openContextMenu(x: number, y: number, title: string, entries: PropsMenuEntry[]): void;
+  openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   renderAll(): void;
   setStatusMsg(msg: string): void;
   uiStyle(): "solid" | "outline";
@@ -245,9 +244,9 @@ export const makeProps = (ctx: PropsCtx) => {
       try { st.mode = statSync(targetPath).mode; } catch { return; }
       refreshPermRows();
     };
-    const permClassMenu = (shift: number): PropsMenuEntry[] => {
+    const permClassMenu = (shift: number): ListEntry[] => {
       const cur = (st.mode >> shift) & 7;
-      const mk = (bits: number, label: string): PropsMenuEntry => ({
+      const mk = (bits: number, label: string): ListEntry => ({
         label: `${cur === bits ? "●" : "○"} ${label}`,
         action: () => {
           ctx.closeFileMenu();

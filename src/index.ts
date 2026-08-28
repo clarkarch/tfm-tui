@@ -49,6 +49,8 @@ import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } fro
 import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
 import { animateLeft, makeNotify } from "./notify";
 import { makeDialogs } from "./ui-dialogs";
+import { makeMenu } from "./ui-menu";
+import type { ListEntry } from "./ui-menu";
 import { makeProps } from "./ui-props";
 import { makeProgress } from "./ui-progress";
 import { DRAG_GHOST_ID, finishDragState, gridDrag, makeEntryMouseHandlers, type ClipItem, type GridMenuEntry } from "./grid-input";
@@ -263,7 +265,7 @@ const goFwd = () => { if (canFwd()) { state.histIdx++; renderAll(); } };
 const navigate = (dir: string) => {
   debugLog(`navigate -> ${dir}`);
   pathEditMode = false;
-  if (fileMenuState) closeFileMenu();
+  if (fileMenuIsOpen()) closeFileMenu();
   if (dir === RECENT_URI || dir === STARRED_URI) {
     if (dir === state.cwd) { renderAll(); return; }
     state.history = state.history.slice(0, state.histIdx + 1);
@@ -2447,91 +2449,20 @@ const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
   fallbackGlyphFor: (name) => (glyph as Record<string, string>)[name] ?? glyph.file!,
   cellMetrics,
 });
-// --- File context menu (right-click a tile) ---
-type ListEntry = { icon?: string; label: string; hint?: string; hintIcon?: string; action: () => void; sep?: boolean };
-let fileMenuState: { idx: number; entries: ListEntry[] } | null = null;
-
-const closeFileMenu = () => {
-  const scrim: any = byId("tfm-filemenu");
-  scrim?.parent?.remove(scrim);
-  fileMenuState = null;
-};
-
-const renderFileMenu = () => {
-  const panel: any = byId("tfm-filemenu-panel");
-  if (!panel || !fileMenuState) return;
-  clearChildren(panel);
-  const row = (entry: ListEntry, i: number) => {
-    if (entry.sep) {
-      // plain spacer row — no divider glyph
-      return Box({ width: "100%", height: 1 });
-    }
-    return Box(
-      {
-        width: "100%",
-        height: 1,
-        flexDirection: "row",
-        columnGap: 1,
-        paddingLeft: 1,
-        paddingRight: 1,
-        backgroundColor: i === fileMenuState!.idx ? colors.accentBg : undefined,
-        onMouseDown: (ev: any) => {
-          try { ev.stopPropagation?.(); } catch {}
-          entry.action();
-        },
-        onMouseOver: () => {
-          if (fileMenuState && fileMenuState.idx !== i) { fileMenuState.idx = i; renderFileMenu(); }
-        },
-      },
-      ...(entry.icon ? [makeIconSlot(entry.icon, [{ fg: colors.sidebarFg, bg: i === fileMenuState!.idx ? colors.accentBg : colors.sidebarBg }, { fg: colors.white, bg: colors.accentBg }], 1, i === fileMenuState!.idx ? 1 : 0).el] : []),
-      Text({ content: entry.label, fg: i === fileMenuState!.idx ? colors.white : colors.sidebarFg }),
-      Box({ flexGrow: 1 }),
-      ...(entry.hintIcon
-        ? [makeIconSlot(entry.hintIcon, [
-            { fg: colors.sidebarFgMuted, bg: i === fileMenuState!.idx ? colors.accentBg : colors.sidebarBg },
-            { fg: colors.white, bg: colors.accentBg },
-          ], 1, i === fileMenuState!.idx ? 1 : 0).el]
-        : entry.hint ? [Text({ content: entry.hint + " ", fg: colors.sidebarFgMuted })] : []),
-    );
-  };
-  panel.add(Box(
-    { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-    Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
-  ));
-  fileMenuState.entries.forEach((e2, i) => panel.add(row(e2, i)));
-  void drainIconQueue();
-};
-
-// small unscoped box spawned at the cursor — no scrim
-const openContextMenu = (x: number, y: number, title: string, entries: ListEntry[]): void => {
-  closeFileMenu();
-  fileMenuState = { idx: 0, entries };
-  const w = MENU_W;
-  const h = entries.length + 2;
-  let px = x, py = y;
-  if (px + w > renderer.terminalWidth - 1) px = Math.max(0, renderer.terminalWidth - w - 1);
-  if (py + h > renderer.terminalHeight - 1) py = Math.max(0, renderer.terminalHeight - h - 1);
-  const menu = Box(
-    {
-      id: "tfm-filemenu",
-      position: "absolute",
-      left: px,
-      top: py,
-      width: w,
-      // above every modal (props/prompt/conflict/toast) — context menus can be
-      // spawned from inside any of them
-      zIndex: 3600,
-      ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-      flexDirection: "column",
-    },
-    Box(
-      { id: "tfm-filemenu-panel", width: "100%", flexDirection: "column" },
-    ),
-  );
-  renderer.root.add(menu);
-  renderFileMenu();
-  stripSelectable();
-};
+const MENU_W = 36;
+// --- File context menu (right-click a tile) — widget lives in ./ui-menu ---
+const { closeFileMenu, renderFileMenu, openContextMenu, isFileMenuOpen: fileMenuIsOpen, fileMenuState: getFileMenuState } = makeMenu({
+  byId,
+  rootAdd: (node) => renderer.root.add(node),
+  termW: () => renderer.terminalWidth,
+  termH: () => renderer.terminalHeight,
+  stripSelectable: () => stripSelectable(),
+  drainIconQueue: () => drainIconQueue(),
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors as Theme & Record<string, any>,
+  menuW: MENU_W,
+  makeIconSlot,
+});
 
 const sidebarEntriesFor = (place: Place, x: number, y: number): ListEntry[] => {
   const target = place.scheme === "recent" ? RECENT_URI
@@ -2669,8 +2600,6 @@ type MenuEntry = { label: string; hint?: string; action: () => void };
 let menuOpen = false;
 let menuView: "root" | "settings" = "root";
 let menuIdx = 0;
-
-const MENU_W = 36;
 
 const quitApp = () => {
   disableDrops();
@@ -3204,7 +3133,7 @@ const rethemeChrome = (): void => {
     setOnId("tfm-menu-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
     renderMenuContent();
   }
-  if (fileMenuState) {
+  if (fileMenuIsOpen()) {
     setOnId("tfm-filemenu", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
     renderFileMenu();
   }
@@ -3468,8 +3397,8 @@ const handleOsc72 = (meta: string, payload: string): void => {
   // middle-button drags go external (OS session + icon badge); left drags are
   // declined so the internal move flow keeps the pointer and its UI feedback
   if (t === "o" && x >= 0) {
-    const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !menuOpen && !fileMenuState;
-    dlog(`drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${menuOpen} fmenu=${!!fileMenuState}`);
+    const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !menuOpen && !fileMenuIsOpen();
+    dlog(`drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${menuOpen} fmenu=${fileMenuIsOpen()}`);
     if (!want || !gridDrag.keys) return; // left-drag: kitty falls back to normal mouse events
     beginOsc72Drag(gridDrag.keys.map((k) => k.path));
     return;
@@ -3624,20 +3553,23 @@ renderer.keyInput.on("keypress", (e: any) => {
     return;
   }
 
-  // file context menu open: arrows/enter navigate it, esc closes
-  if (fileMenuState) {
-    const entries = fileMenuState.entries;
+  // file context menu open: arrows/enter navigate it, esc closes.
+  // getFileMenuState() returns the LIVE state object — mutating fmenu.idx
+  // below updates the menu module's state in place.
+  const fmenu = getFileMenuState();
+  if (fmenu) {
+    const entries = fmenu.entries;
     const count = entries.length;
     const step = (d: number) => {
-      let i = (fileMenuState!.idx + d + count) % count;
+      let i = (fmenu.idx + d + count) % count;
       while (entries[i]?.sep) i = (i + d + count) % count;
-      fileMenuState!.idx = i;
+      fmenu.idx = i;
       renderFileMenu();
     };
     if (e.name === "escape") closeFileMenu();
     else if (e.name === "up") step(-1);
     else if (e.name === "down") step(1);
-    else if (e.name === "return") entries[fileMenuState.idx]?.action();
+    else if (e.name === "return") entries[fmenu.idx]?.action();
     return;
   }
 
