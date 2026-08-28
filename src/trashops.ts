@@ -19,6 +19,8 @@ export type TrashOpsSink = {
   notify(msg: string, title?: string): void;
   /** schedule a grid refresh */
   refresh(): void;
+  /** debug event log — undo/redo closures fail silently otherwise */
+  log?(msg: string): void;
 };
 
 // XDG trashinfo -> original absolute path. Spec says URL-encoded; nautilus
@@ -52,9 +54,9 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           const from = path.join(trashDir(), "files", hit);
           units.push(async () => {
             await safeRestoreMove(from, p);
-            try { await rm(path.join(trashDir(), "info", `${hit}.trashinfo`)); } catch {}
+            try { await rm(path.join(trashDir(), "info", `${hit}.trashinfo`)); } catch (err) { sink.log?.(`undo trash ${p}: ${fsErrText(err)}`); }
           });
-          redos.push(async () => { try { if (existsSync(p)) await xdgTrashMove(p); } catch {} });
+          redos.push(async () => { try { if (existsSync(p)) await xdgTrashMove(p); } catch (err) { sink.log?.(`redo trash ${p}: ${fsErrText(err)}`); } });
           ok++;
         } catch (err) { failWhy.add(fsErrText(err)); }
       }
@@ -83,7 +85,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           let dest = orig;
           if (existsSync(dest)) dest = uniqueTarget(path.dirname(dest), path.basename(dest));
           await fsMove(src, dest);
-          try { await rm(path.join(trashDir(), "info", `${path.basename(src)}.trashinfo`)); } catch {}
+          try { await rm(path.join(trashDir(), "info", `${path.basename(src)}.trashinfo`)); } catch (err) { sink.log?.(`restore cleanup ${src}: ${fsErrText(err)}`); }
           ok++;
         } catch (err) { failWhy.add(fsErrText(err)); }
       }
@@ -103,7 +105,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       for (const p of paths) {
         try {
           await rm(p, { recursive: true });
-          try { await rm(path.join(trashDir(), "info", `${path.basename(p)}.trashinfo`)); } catch {}
+          try { await rm(path.join(trashDir(), "info", `${path.basename(p)}.trashinfo`)); } catch (err) { sink.log?.(`delete cleanup ${p}: ${fsErrText(err)}`); }
           ok++;
         } catch (err) { failWhy.add(fsErrText(err)); }
       }
@@ -131,7 +133,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       for (const k of names) {
         try {
           await rm(path.join(filesDir, k), { recursive: true });
-          try { await rm(path.join(trashDir(), "info", `${k}.trashinfo`)); } catch {}
+          try { await rm(path.join(trashDir(), "info", `${k}.trashinfo`)); } catch (err) { sink.log?.(`empty cleanup ${k}: ${fsErrText(err)}`); }
           n++;
         } catch (err) { failWhy.add(fsErrText(err)); }
       }

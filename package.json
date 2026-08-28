@@ -6,7 +6,9 @@
   "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.ts",
-    "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm"
+    "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm",
+    "test": "bun test src/*.test.ts",
+    "typecheck": "tsc --noEmit --strict --target esnext --module esnext --moduleResolution bundler --skipLibCheck src/index.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

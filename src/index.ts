@@ -573,6 +573,7 @@ const trashOps = makeTrashOps({
   status: (msg) => setStatusMsg(msg),
   notify: (msg, title) => notify(msg, title),
   refresh: () => renderAll(),
+  log: (msg) => appendLog(`trashops: ${msg}`),
 });
 const { trashPaths, restoreFromTrash, deleteForever, emptyTrash } = trashOps;
 

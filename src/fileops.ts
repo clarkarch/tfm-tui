@@ -115,11 +115,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               const trashLoc = await xdgTrashMove(victimDest);
               units.push(async () => {
                 await safeRestoreMove(trashLoc, victimDest);
-                try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
+                try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch (err) { ctx.log(`undo replace ${victimDest}: ${fsErrText(err)}`); }
               });
               replaced++;
             }
-          } catch (err) { failWhy.add(fsErrText(err)); }
+          } catch (err) { failWhy.add(fsErrText(err)); ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — proceeding without undo`); }
         }
       }
       try {
@@ -128,15 +128,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         const t = target, s = src;
         if (op === "copy") {
           units.push(() => xdgTrashMove(t).then(() => undefined));
-          redos.push(async () => { try { if (!existsSync(t)) await copyTreeProgressWired(src, t); } catch {} });
+          redos.push(async () => { try { if (!existsSync(t)) await copyTreeProgressWired(src, t); } catch (err) { ctx.log(`redo copy ${t}: ${fsErrText(err)}`); } });
         } else {
           units.push(() => safeRestoreMove(t, s));
-          redos.push(async () => { try { if (existsSync(s) && !existsSync(t)) await fsMove(s, t); } catch {} });
+          redos.push(async () => { try { if (existsSync(s) && !existsSync(t)) await fsMove(s, t); } catch (err) { ctx.log(`redo move ${t}: ${fsErrText(err)}`); } });
         }
         ok++;
       } catch (err) {
         // don't leave half-copied files behind
-        if (op === "copy") { try { await rm(target, { recursive: true }); } catch {} }
+        if (op === "copy") { try { await rm(target, { recursive: true }); } catch (cleanup) { ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`); } }
         if (prog.cancelled) { cancelled = true; break; }
         failed++;
         failWhy.add(fsErrText(err));
@@ -188,15 +188,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           const trashLoc = await xdgTrashMove(victim);
           units.push(async () => {
             await safeRestoreMove(trashLoc, victim);
-            try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
+            try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch (err) { ctx.log(`undo replace ${victim}: ${fsErrText(err)}`); }
           });
-        } catch {}
+        } catch (err) { ctx.log(`replace stash failed ${finalDest}: ${fsErrText(err)} — proceeding without undo`); }
       }
     }
     try {
       await fsRename(p, finalDest);
       units.push(() => fsRename(finalDest, p));
-      redos.push(async () => { try { if (existsSync(p) && !existsSync(finalDest)) await fsRename(p, finalDest); } catch {} });
+      redos.push(async () => { try { if (existsSync(p) && !existsSync(finalDest)) await fsRename(p, finalDest); } catch (err) { ctx.log(`redo rename ${finalDest}: ${fsErrText(err)}`); } });
       ctx.pushUndoBatch("rename", units, redos);
       ctx.renderAll();
       ctx.setStatusMsg(`Renamed to ${path.basename(finalDest)} · ctrl+z to undo`);
