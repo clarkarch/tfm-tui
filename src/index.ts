@@ -27,6 +27,7 @@ import { buildSections, isBookmarked, loadSystemPlaces, setBookmarked, type Plac
 import { dirWalkStats, fmtBytes, fmtDate, idName, mimeLabelFor, permWords } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, registerSyntaxParsers, syntaxStyleSig } from "./syntax";
+import { applyAdjust, flattenRows, themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
 import {
   agreeDragFrame,
   agreeDropFrame,
@@ -2940,15 +2941,10 @@ const quitApp = () => {
   process.exit(0);
 };
 
-// --- Settings model: declarative rows drive both rendering and key/mouse input ---
-type SettingRow =
-  | { kind: "toggle"; label: string; get: () => boolean; set: (v: boolean) => void }
-  | { kind: "stepper"; label: string; min: number; max: number; step: number; fmt: (v: number) => string; get: () => number; set: (v: number) => void }
-  | { kind: "cycle"; label: string; names: string[]; getIdx: () => number; setIdx: (i: number) => void }
-  | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
-
+// --- Settings model: row type + pure semantics live in ./settings.ts; the
+// get/set closures wiring rows to config/state and the renderer stay here ---
 const themePresetIdx = (): number =>
-  THEME_PRESETS.findIndex((p) => JSON.stringify(p.theme) === JSON.stringify(config.theme));
+  settingsThemePresetIdx(THEME_PRESETS, config.theme);
 
 const commitSetting = (): void => {
   applyConfig(config);
@@ -2962,7 +2958,7 @@ const resetToDefaults = (): void => {
   scheduleSaveConfig();
 };
 
-const settingGroups = (): { header?: string; rows: SettingRow[] }[] => [
+const settingGroups = (): SettingGroup[] => [
   {
     rows: [
       { kind: "cycle", label: "theme", names: THEME_PRESETS.map((p) => p.name), getIdx: themePresetIdx,
@@ -3016,26 +3012,7 @@ const settingGroups = (): { header?: string; rows: SettingRow[] }[] => [
   },
 ];
 
-const settingsFlatRows = (): SettingRow[] => settingGroups().flatMap((g) => g.rows);
-
-const applyAdjust = (row: SettingRow, dir: number): boolean => {
-  switch (row.kind) {
-    case "toggle": row.set(!row.get()); return true;
-    case "stepper": {
-      const next = Math.max(row.min, Math.min(row.max, row.get() + dir * row.step));
-      if (next !== row.get()) { row.set(next); return true; }
-      return false;
-    }
-    case "cycle": {
-      const n = row.names.length;
-      const cur = row.getIdx();
-      const next = cur < 0 ? (dir > 0 ? 0 : n - 1) : (cur + dir + n) % n;
-      row.setIdx(next);
-      return true;
-    }
-    default: return false;
-  }
-};
+const settingsFlatRows = (): SettingRow[] => flattenRows(settingGroups());
 
 const adjustSelectedSetting = (dir: number): void => {
   if (menuView !== "settings") return;
