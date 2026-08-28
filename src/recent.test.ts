@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   readRecentXbel,
@@ -10,8 +11,8 @@ import {
 
 // xbelPath()/starredListPath() are computed per call from XDG env, so each
 // test redirects both homes into a throwaway fixture dir.
-const DATA = `/tmp/opencode/tfm-recent-test-${process.pid}/data`;
-const STATE = `/tmp/opencode/tfm-recent-test-${process.pid}/state`;
+const DATA = path.join(os.tmpdir(), `tfm-recent-test-${process.pid}/data`);
+const STATE = path.join(os.tmpdir(), `tfm-recent-test-${process.pid}/state`);
 let oldData: string | undefined;
 let oldState: string | undefined;
 

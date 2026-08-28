@@ -1,12 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { compareEntries, extOf, listDir, type Entry } from "./listing";
 import { RECENT_URI, STARRED_URI } from "./uri";
 
+// mkdtemp only creates the last segment — the parent must be a dir that
+// exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
+const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), prefix));
+
 // listing reads the two registries via xdgDataHome()/xdgStateHome(), which
 // re-read the env on every call — redirect both to keep the test sandboxed.
-const SANDBOX = mkdtempSync("/tmp/opencode/tfm-listing-");
+const SANDBOX = mktmp("tfm-listing-");
 let oldData: string | undefined;
 let oldState: string | undefined;
 
@@ -68,7 +73,7 @@ describe("compareEntries", () => {
 
 describe("listDir", () => {
   test("hidden filtering, symlink-as-dir, dirs-first name sort", async () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-ld-");
+    const dir = mktmp("tfm-ld-");
     try {
       W(path.join(dir, "zed.txt"));
       W(path.join(dir, ".hidden"));
@@ -89,7 +94,7 @@ describe("listDir", () => {
   });
 
   test("size sort stat-fills entries; desc flips within isDir groups", async () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-ld2-");
+    const dir = mktmp("tfm-ld2-");
     try {
       W(path.join(dir, "big.txt"), "x".repeat(1000));
       W(path.join(dir, "small.txt"), "x");
@@ -102,7 +107,7 @@ describe("listDir", () => {
   });
 
   test("mtime sort uses real mtimes", async () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-ld3-");
+    const dir = mktmp("tfm-ld3-");
     try {
       W(path.join(dir, "old.txt"));
       W(path.join(dir, "new.txt"));

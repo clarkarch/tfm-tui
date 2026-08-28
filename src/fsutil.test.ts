@@ -1,11 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove, deviceOf, crossDevice } from "./fsutil";
 
+// mkdtemp only creates the last segment — the parent must be a dir that
+// exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
+const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), prefix));
+
 // trashDir() re-reads XDG_DATA_HOME on every call, so redirecting the env in
 // beforeAll sandboxes all trash writes away from the real ~/.local/share.
-const SANDBOX = mkdtempSync("/tmp/opencode/tfm-fsutil-");
+const SANDBOX = mktmp("tfm-fsutil-");
 let oldData: string | undefined;
 
 beforeAll(() => {
@@ -24,7 +29,7 @@ const W = (p: string, s = "x") => { mkdirSync(path.dirname(p), { recursive: true
 
 describe("uniqueTarget", () => {
   test("contract: callers pass an OCCUPIED name — first suggestion is ' (copy)', never the base", () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-ut-");
+    const dir = mktmp("tfm-ut-");
     try {
       W(path.join(dir, "report.pdf"));
       expect(uniqueTarget(dir, "report.pdf")).toBe(path.join(dir, "report (copy).pdf"));
@@ -32,7 +37,7 @@ describe("uniqueTarget", () => {
   });
 
   test("first collision -> ' (copy)', then ' (copy 2)'…", () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-ut-");
+    const dir = mktmp("tfm-ut-");
     try {
       W(path.join(dir, "f.txt"));
       expect(uniqueTarget(dir, "f.txt")).toBe(path.join(dir, "f (copy).txt"));
@@ -44,7 +49,7 @@ describe("uniqueTarget", () => {
   });
 
   test("extensionless and dotfiles collide on the whole name", () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-ut-");
+    const dir = mktmp("tfm-ut-");
     try {
       W(path.join(dir, "Makefile"));
       expect(uniqueTarget(dir, "Makefile")).toBe(path.join(dir, "Makefile (copy)"));
@@ -56,7 +61,7 @@ describe("uniqueTarget", () => {
 
 describe("fsMove / safeRestoreMove", () => {
   test("move renames within a fs", async () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-mv-");
+    const dir = mktmp("tfm-mv-");
     try {
       W(path.join(dir, "a.txt"), "data");
       await fsMove(path.join(dir, "a.txt"), path.join(dir, "b.txt"));
@@ -66,7 +71,7 @@ describe("fsMove / safeRestoreMove", () => {
   });
 
   test("safeRestoreMove never clobbers an occupied target", async () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-mv-");
+    const dir = mktmp("tfm-mv-");
     try {
       W(path.join(dir, "src.txt"), "restored");
       W(path.join(dir, "dst.txt"), "current");
@@ -77,7 +82,7 @@ describe("fsMove / safeRestoreMove", () => {
   });
 
   test("safeRestoreMove creates missing parent dirs", async () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-mv-");
+    const dir = mktmp("tfm-mv-");
     try {
       W(path.join(dir, "src.txt"), "deep");
       await safeRestoreMove(path.join(dir, "src.txt"), path.join(dir, "x/y/z/dst.txt"));
@@ -88,7 +93,7 @@ describe("fsMove / safeRestoreMove", () => {
 
 describe("xdgTrashMove", () => {
   test("writes .trashinfo and moves into Trash/files with deterministic name", async () => {
-    const files = mkdtempSync("/tmp/opencode/tfm-trash-src-");
+    const files = mktmp("tfm-trash-src-");
     try {
       W(path.join(files, "gone.txt"), "bye");
       const loc = await xdgTrashMove(path.join(files, "gone.txt"));
@@ -102,8 +107,8 @@ describe("xdgTrashMove", () => {
   });
 
   test("colliding NAME suffixes .2 (trash/files holds a.txt, so same-named source bumps)", async () => {
-    const d1 = mkdtempSync("/tmp/opencode/tfm-trash-d1-");
-    const d2 = mkdtempSync("/tmp/opencode/tfm-trash-d2-");
+    const d1 = mktmp("tfm-trash-d1-");
+    const d2 = mktmp("tfm-trash-d2-");
     try {
       W(path.join(d1, "same.txt"));
       W(path.join(d2, "same.txt"));
@@ -124,7 +129,7 @@ describe("xdgTrashMove", () => {
 
   test("creates the trash tree on demand when absent", async () => {
     rmSync(path.join(SANDBOX, "Trash"), { recursive: true, force: true });
-    const files = mkdtempSync("/tmp/opencode/tfm-trash-src3-");
+    const files = mktmp("tfm-trash-src3-");
     try {
       W(path.join(files, "c.txt"));
       const loc = await xdgTrashMove(path.join(files, "c.txt"));
@@ -141,7 +146,7 @@ describe("xdgTrashMove", () => {
 
   test("info-write failure rolls the move back — source intact, no half-trashed state", async () => {
     rmSync(path.join(SANDBOX, "Trash"), { recursive: true, force: true });
-    const files = mkdtempSync("/tmp/opencode/tfm-trash-rb-");
+    const files = mktmp("tfm-trash-rb-");
     const infoDir = path.join(trashDir(), "info");
     try {
       W(path.join(files, "rb.txt"), "still mine");
@@ -160,7 +165,7 @@ describe("xdgTrashMove", () => {
 
 describe("deviceOf / crossDevice", () => {
   test("same tree is same-device, statable paths yield a dev number", () => {
-    const dir = mkdtempSync("/tmp/opencode/tfm-dev-");
+    const dir = mktmp("tfm-dev-");
     try {
       W(path.join(dir, "f.txt"));
       expect(typeof deviceOf(path.join(dir, "f.txt"))).toBe("number");

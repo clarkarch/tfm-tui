@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { makeFileOps, type FileOpsCtx } from "./fileops";
 
@@ -8,7 +9,10 @@ import { makeFileOps, type FileOpsCtx } from "./fileops";
 // toast + source removal, and cancel mid-copy never leaves partials behind.
 // crossDevice is injectable precisely so tests can fake the device split.
 
-const ROOT = mkdtempSync("/tmp/opencode/tfm-fileops-");
+// mkdtemp only creates the last segment — the parent must be a dir that
+// exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
+const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), prefix));
+const ROOT = mktmp("tfm-fileops-");
 const HOME = ROOT;
 
 afterAll(() => { rmSync(ROOT, { recursive: true, force: true }); });

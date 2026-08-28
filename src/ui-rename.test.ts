@@ -1,9 +1,13 @@
 import { describe, expect, test, afterAll } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { tileLabelFor, uniqueUntitledName } from "./ui-rename";
 
-const dir = mkdtempSync("/tmp/opencode/tfm-rename-");
+// mkdtemp only creates the last segment — the parent must be a dir that
+// exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
+const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), prefix));
+const dir = mktmp("tfm-rename-");
 afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("uniqueUntitledName", () => {

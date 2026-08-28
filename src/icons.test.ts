@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import os from "node:os";
+import path from "node:path";
 import { clearIconCaches, iconPng, thumbPng } from "./icons";
 
 // exercises the real rsvg-convert/magick pipeline (both are dev-machine deps);
@@ -38,7 +40,7 @@ describe("icons", () => {
   test.skipIf(!hasMagick)("thumbPng rasterizes a file onto a bg", async () => {
     clearIconCaches();
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
-    const tmp = `/tmp/opencode/tfm-thumb-test-${process.pid}.svg`;
+    const tmp = path.join(os.tmpdir(), `tfm-thumb-test-${process.pid}.svg`);
     await Bun.write(tmp, svg);
     const bytes = await thumbPng(tmp, 1, 1, 32, 32, "#1a1b26", true);
     expect(bytes.length).toBeGreaterThan(0);

@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { copyFileProgress, copyTreeProgress, scanTree, type TransferSink } from "./transfer";
+
+// mkdtemp only creates the last segment — the parent must be a dir that
+// exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
+const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), prefix));
 
 const mkSink = (opts: { pauseAfterBytes?: number; cancelAfterFiles?: number } = {}) => {
   const log: string[] = [];
@@ -36,7 +41,7 @@ const mkSink = (opts: { pauseAfterBytes?: number; cancelAfterFiles?: number } = 
 };
 
 let dir: string;
-beforeEach(() => { dir = mkdtempSync("/tmp/opencode/tfm-transfer-"); });
+beforeEach(() => { dir = mktmp("tfm-transfer-"); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 const W = (p: string, s: string) => {
