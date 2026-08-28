@@ -1,7 +1,7 @@
 import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, createWriteStream, existsSync, openSync, readFileSync, readSync, statSync, watch } from "node:fs";
+import { appendFileSync, closeSync, createWriteStream, existsSync, openSync, readSync, statSync, watch } from "node:fs";
 import { readdir, readFile, stat, lstat, readlink, symlink, rename as fsRename, mkdir, writeFile, chmod, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +12,7 @@ import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurfac
 import { bumpHex } from "./color";
 import { clearIconCaches, iconPng, thumbPng, warmEmbeddedIcons } from "./icons";
 import { FILE_ICON_BY_EXT, fileIconFor, fileIsImage, loadGlobs2, mimeCategory, mimeForExt } from "./filetype";
-import { RECENT_URI, STARRED_URI, isVirtualUri, xdgDataHome, xdgStateHome } from "./uri";
+import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
 import {
   readRecentXbel,
   readStarredList,
@@ -43,6 +43,10 @@ import {
   uriListPayload,
 } from "./osc72";
 import { makeTrashOps } from "./trashops";
+import { makeUndo, type UndoUnit } from "./undo";
+import { makeTabs, type Tab } from "./tabs";
+import { appForFile } from "./apps";
+import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { animateLeft, makeNotify } from "./notify";
 import { makeDialogs } from "./ui-dialogs";
 import { makeProgress } from "./ui-progress";
@@ -245,62 +249,20 @@ const state: AppState = {
 
 let renderAll: () => void = () => {};
 
-// --- session persistence: tabs (each with its own history) survive restarts ---
-
 // --- Tabs: `state` is always the ACTIVE tab's view; switching copies the
-// live history refs into the outgoing tab slot and adopts the incoming one ---
-type Tab = { history: string[]; histIdx: number };
-const tabs: Tab[] = [{ history: [process.cwd()], histIdx: 0 }];
-let activeTab = 0;
-
-const syncTabFromState = (): void => {
-  const t = tabs[activeTab];
-  if (!t) return;
-  t.history = state.history;
-  t.histIdx = state.histIdx;
-};
-
-const adoptTab = (): void => {
-  const t = tabs[activeTab]!;
-  state.history = t.history;
-  state.histIdx = t.histIdx;
-};
-
-const switchTab = (i: number): void => {
-  if (i < 0 || i >= tabs.length || i === activeTab) return;
-  syncTabFromState();
-  activeTab = i;
-  adoptTab();
-  renderAll();
-};
-
-// opens right of the active tab at the same folder, with a fresh history
-const newTab = (dir?: string): void => {
-  const start = dir ?? state.cwd;
-  tabs.splice(activeTab + 1, 0, { history: [start], histIdx: 0 });
-  syncTabFromState();
-  activeTab++;
-  adoptTab();
-  renderAll();
-  setStatusMsg(`Tab ${activeTab + 1}/${tabs.length}`);
-};
-
-// closing the last tab quits, like a browser's last window
-const closeTab = (i: number = activeTab): void => {
-  if (i < 0 || i >= tabs.length) return;
-  if (tabs.length === 1) { quitApp(); return; }
-  if (i === activeTab) syncTabFromState();
-  tabs.splice(i, 1);
-  activeTab = i < activeTab ? activeTab - 1 : Math.min(activeTab, tabs.length - 1);
-  adoptTab();
-  renderAll();
-  setStatusMsg(`Tab ${activeTab + 1}/${tabs.length}`);
-};
+// live history refs into the outgoing tab slot and adopts the incoming one.
+// Model lives in ./tabs (pure, tested) — rendering/session I/O stay here. ---
+const tabModel = makeTabs(state, {
+  onChanged: () => renderAll(),
+  status: (msg) => setStatusMsg(msg),
+  quit: () => quitApp(),
+});
+const { switchTab, newTab, closeTab, syncTabFromState, adoptTab } = tabModel;
 
 const scheduleSaveSession = debounced(400, () => {
   syncTabFromState();
   if (isVirtualCwd()) return;
-  void saveSession(state.cwd, tabs, activeTab).catch(() => {});
+  void saveSession(state.cwd, tabModel.list, tabModel.active).catch(() => {});
 });
 
 const restoreSession = (): void => {
@@ -309,11 +271,10 @@ const restoreSession = (): void => {
   if (!config.ui.restoreSession) return;
   const restored = readRestoredSession();
   if (restored) {
-    tabs.length = 0;
-    tabs.push(...restored.tabs);
-    activeTab = restored.activeTab;
+    tabModel.adoptTabs(restored.tabs, restored.activeTab);
+  } else {
+    adoptTab();
   }
-  adoptTab();
 };
 
 const canBack = () => state.histIdx > 0;
@@ -518,18 +479,18 @@ const renderTabbar = (): void => {
   // the ＋ button stays reachable); setting OFF = adaptive — the strip only
   // earns a row once there's something to switch to (visible=false is
   // display:none in yoga — no empty row left)
-  try { bar.visible = config.ui.tabBar || tabs.length > 1; } catch {}
+  try { bar.visible = config.ui.tabBar || tabModel.list.length > 1; } catch {}
   clearChildren(bar);
-  tabs.forEach((t, i) => {
+  tabModel.list.forEach((t, i) => {
     const tabId = `tfm-tab-${i}`;
     const paint = () => {
       const n: any = byId(tabId);
-      if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, i === activeTab ? "selected" : "rest"));
+      if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, i === tabModel.active ? "selected" : "rest"));
     };
     // ✕ flatten target must match the chip's own fill, or the raster shows as
     // a square patch on the active tab (accentBg) vs the canvas (rest states)
     const closeStates = (): IconState[] => [
-      { fg: colors.sidebarFgMuted, bg: i === activeTab ? colors.accentBg : slotBg(config.ui.uiStyle, colors, colors.bg) },
+      { fg: colors.sidebarFgMuted, bg: i === tabModel.active ? colors.accentBg : slotBg(config.ui.uiStyle, colors, colors.bg) },
       { fg: colors.white, bg: colors.hoverBg },
     ];
     const closeSlot = makeIconSlot("close", closeStates(), 1, 0, (ev: any) => {
@@ -553,17 +514,17 @@ const renderTabbar = (): void => {
         columnGap: 1,
         paddingLeft: 1,
         paddingRight: 1,
-        ...tileSurface(config.ui.uiStyle, colors, i === activeTab ? "selected" : "rest"),
+        ...tileSurface(config.ui.uiStyle, colors, i === tabModel.active ? "selected" : "rest"),
         onMouseDown: (ev: any) => {
           try { ev.stopPropagation?.(); } catch {}
           closeFileMenu();
           if (ev.button === 1) closeTab(i); // middle-click also closes
           else switchTab(i);
         },
-        onMouseOver: () => { if (i !== activeTab) { const n: any = byId(tabId); if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, "hover")); } },
+        onMouseOver: () => { if (i !== tabModel.active) { const n: any = byId(tabId); if (n) applySurface(n, tileSurface(config.ui.uiStyle, colors, "hover")); } },
         onMouseOut: paint,
       },
-      Text({ content: tabTitle(t), fg: i === activeTab ? colors.white : colors.sidebarFg }),
+      Text({ content: tabTitle(t), fg: i === tabModel.active ? colors.white : colors.sidebarFg }),
       closeWrap,
     ));
   });
@@ -891,43 +852,11 @@ const openFileDefault = (p: string): void => {
   void notifyOpenedWith(p);
 };
 
-// resolve the app xdg-open will pick so the toast can say what launched
-const runOutShort = async (cmd: string[]): Promise<string> => {
-  try {
-    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const timer = setTimeout(() => { try { proc.kill(); } catch {} }, 1500);
-    const out = (await new Response(proc.stdout).text()).trim();
-    clearTimeout(timer);
-    return out;
-  } catch { return ""; }
-};
-
-const desktopAppName = async (desktopId: string): Promise<string> => {
-  if (!desktopId) return "";
-  const dirs = [
-    path.join(xdgDataHome(), "applications"),
-    "/usr/local/share/applications",
-    "/usr/share/applications",
-    "/var/lib/flatpak/exports/share/applications",
-    path.join(home, ".local/share/flatpak/exports/share/applications"),
-  ];
-  for (const d of dirs) {
-    try {
-      // first non-localized Name= inside [Desktop Entry]
-      const m = readFileSync(path.join(d, desktopId), "utf8").match(/^\[Desktop Entry\][\s\S]*?^Name=(.+)$/m);
-      if (m?.[1]) return m[1].trim();
-    } catch {}
-  }
-  return desktopId.replace(/\.desktop$/, "");
-};
-
+// resolve what xdg-open will pick so the toast can say what launched —
+// probing lives in ./apps (pure, tested)
 const notifyOpenedWith = async (p: string): Promise<void> => {
   const base = path.basename(p);
-  let app = "";
-  try {
-    const mime = await runOutShort(["xdg-mime", "query", "filetype", p]);
-    if (mime) app = await desktopAppName(await runOutShort(["xdg-mime", "query", "default", mime]));
-  } catch {}
+  const app = await appForFile(p);
   notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open");
 };
 
@@ -1556,56 +1485,12 @@ const selPaths = (): ClipItem[] => {
 type ConflictChoice = "replace" | "keepBoth" | "skip";
 let conflictPolicy: ConflictChoice | null = null;
 
-type UndoUnit = () => Promise<void> | void;
-// every batch carries paired inverses: `units` reverse the op, `redos` re-apply it
-type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
-const undoStack: OpBatch[] = [];
-const redoStack: OpBatch[] = [];
-
-const pushUndoBatch = (label: string, units: UndoUnit[], redos: UndoUnit[] = []): void => {
-  if (!units.length) return;
-  undoStack.push({ label, units, redos });
-  if (undoStack.length > 30) undoStack.shift();
-  redoStack.length = 0; // a fresh action forks history — stale redos are gone
-};
-
-const undoLast = (): void => {
-  const entry = undoStack.pop();
-  if (!entry) { setStatusMsg("Nothing to undo"); return; }
-  void (async () => {
-    let failed = 0;
-    const failWhy = new Set<string>();
-    for (let i = entry.units.length - 1; i >= 0; i--) {
-      const u = entry.units[i];
-      try { await u?.(); } catch (err) { failed++; failWhy.add(fsErrText(err)); }
-    }
-    // only batches that know how to re-apply themselves stay redoable
-    if (entry.redos.length) redoStack.push(entry);
-    renderAll();
-    const why = [...failWhy][0];
-    const summary = failed ? `Undo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}` : `Undid: ${entry.label}`;
-    setStatusMsg(failed || !entry.redos.length ? summary : `${summary} · ctrl+y to redo`);
-    notify(summary, failed ? "undo failed" : "undo");
-  })();
-};
-
-const redoLast = (): void => {
-  const entry = redoStack.pop();
-  if (!entry) { setStatusMsg("Nothing to redo"); return; }
-  void (async () => {
-    let failed = 0;
-    const failWhy = new Set<string>();
-    for (const r of entry.redos) {
-      try { await r?.(); } catch (err) { failed++; failWhy.add(fsErrText(err)); }
-    }
-    undoStack.push(entry);
-    renderAll();
-    const why = [...failWhy][0];
-    const summary = failed ? `Redo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}` : `Redid: ${entry.label}`;
-    setStatusMsg(summary);
-    notify(summary, failed ? "redo failed" : "redo");
-  })();
-};
+// undo/redo state machine lives in ./undo (pure, tested) — results surface via sink
+const { pushUndoBatch, undoLast, redoLast } = makeUndo({
+  status: (msg) => setStatusMsg(msg),
+  notify: (message, title) => notify(message, title),
+  refresh: () => renderAll(),
+});
 
 let conflictOpen = false;
 let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
@@ -1867,40 +1752,11 @@ const setClipboard = (mode: "copy" | "cut", items: ClipItem[]) => {
   refreshCutVisuals();
 };
 
-// --- system clipboard bridge (Nautilus-style copied-files) ---
-// Nautilus publishes files on the CLIPBOARD selection as MIME
-// `x-special/gnome-copied-files`: first line = "copy"|"cut", then one
-// file:// URI per line. wl-copy/xclip let us publish the same thing.
-const CLIP_TYPE = "x-special/gnome-copied-files";
-
-const sysClipTool = (): { get: string; put: string; putBase: string[]; getArgs: string[] } | null => {
-  if (process.env.WAYLAND_DISPLAY) {
-    return { get: "wl-paste", put: "wl-copy", putBase: [], getArgs: ["-t", CLIP_TYPE] };
-  }
-  if (process.env.DISPLAY) {
-    // -l 4: serve a few requests (target probe + fetch) then exit so we don't own it forever
-    return { get: "xclip", put: "xclip", putBase: ["-selection", "clipboard", "-l", "4"], getArgs: ["-selection", "clipboard", "-o", "-t", CLIP_TYPE] };
-  }
-  return null;
-};
-
-// We publish PLAIN TEXT full paths (one per line): pasting after tfm-copy
-// yields e.g. /home/clark/test.md in any app. Wayland/X11 CLI tools can only
-// offer ONE mime type per selection owner, and Nautilus file-paste needs
-// x-special/gnome-copied-files — so text wins here; reading stays multi-type
-// (we still accept gnome-copied-files from other apps on paste).
+// --- system clipboard bridge — lives in ./clipboard (pure, tested). tfm
+// publishes plain-text paths so paste-anywhere works; reading accepts
+// gnome-copied-files from other apps. ---
 const toSystemClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
-  const t = sysClipTool();
-  if (!t || !items.length) return;
-  const payload = items.map((i) => i.path).join("\n");
-  try {
-    const p = spawn(t.put, [...t.putBase], { stdio: ["pipe", "ignore", "ignore"] });
-    p.stdin?.end(payload);
-    p.unref?.();
-    dlog(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (text paths)`);
-  } catch (err) {
-    dlog(`system clipboard FAILED: ${err}`);
-  }
+  publishPathsToSystemClipboard(mode, items, dlog);
 };
 
 const pasteSmart = (dest: string): void => {
@@ -1909,29 +1765,9 @@ const pasteSmart = (dest: string): void => {
     void doPaste(dest);
     return;
   }
-  const t = sysClipTool();
-  if (!t) { dlog("paste: no system clipboard tool"); return; }
-  dlog(`paste: reading system clipboard via ${t.get}`);
-  void execFileP(t.get, t.getArgs)
-    .then(({ stdout }) => {
-      const text = String(stdout ?? "");
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      dlog(`paste: system clip lines=${lines.length} head=${JSON.stringify(lines.slice(0, 2))}`);
-      if (!lines.length) return;
-      const op: "copy" | "move" = lines[0] === "cut" ? "move" : "copy";
-      const body = lines[0] === "copy" || lines[0] === "cut" ? lines.slice(1) : lines;
-      const paths = body
-        .filter((l) => l.startsWith("file://"))
-        .map((l) => {
-          let u = l.slice(7);
-          if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
-          try { u = decodeURIComponent(u); } catch {}
-          return u;
-        });
-      if (!paths.length) { dlog("paste: no file:// uris in system clip"); return; }
-      void runTransfer(op === "move" ? "move" : "copy", dest, paths, "system-clipboard paste");
-    })
-    .catch((err) => { dlog(`paste: system clipboard read failed: ${err}`); });
+  void readCopiedFilesFromSystemClipboard(dlog).then((res) => {
+    if (res) void runTransfer(res.op === "move" ? "move" : "copy", dest, res.paths, "system-clipboard paste");
+  });
 };
 
 const doPaste = async (dest: string): Promise<void> => {
@@ -4326,8 +4162,8 @@ renderer.keyInput.on("keypress", (e: any) => {
   if (ctrl && (e.name === "t" || e.unicode === "t")) { newTab(); return; }
   if (ctrl && (e.name === "w" || e.unicode === "w")) { closeTab(); return; }
   if (ctrl && e.name === "tab") {
-    if (e.shift) switchTab(activeTab === 0 ? tabs.length - 1 : activeTab - 1);
-    else switchTab(activeTab === tabs.length - 1 ? 0 : activeTab + 1);
+    if (e.shift) switchTab(tabModel.active === 0 ? tabModel.list.length - 1 : tabModel.active - 1);
+    else switchTab(tabModel.active === tabModel.list.length - 1 ? 0 : tabModel.active + 1);
     return;
   }
 

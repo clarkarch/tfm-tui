@@ -21,6 +21,15 @@ const sandbox = (): string => {
   return root;
 };
 
+// the ops run fire-and-forget async — a fixed sleep races real fs work under
+// suite load, so poll for a condition (or just settle when no fs change is
+// expected) with a generous deadline
+const settleUntil = async (cond: () => boolean): Promise<void> => {
+  const deadline = Date.now() + 2000;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+  await Bun.sleep(10);
+};
+
 const recordingSink = (): TrashOpsSink & { notes: string[]; batches: { label: string; units: number; redos: number }[] } => {
   const notes: string[] = [];
   const batches: { label: string; units: number; redos: number }[] = [];
@@ -43,9 +52,9 @@ describe("trashPaths", () => {
       const sink = recordingSink();
       const ops = makeTrashOps(sink);
       ops.trashPaths([file]);
-      await Bun.sleep(30);
 
       const hit = path.join(trashDir(), "files", "doomed.txt");
+      await settleUntil(() => existsSync(hit));
       expect(existsSync(hit)).toBe(true);
       expect(existsSync(file)).toBe(false);
       expect(existsSync(path.join(trashDir(), "info", "doomed.txt.trashinfo"))).toBe(true);
@@ -65,7 +74,7 @@ describe("trashPaths", () => {
       const sink = recordingSink();
       const ops = makeTrashOps(sink);
       ops.trashPaths([path.join(root, "missing.bin")]);
-      await Bun.sleep(30);
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:trash failed")));
       expect(sink.notes.some((n) => n.includes("Trashed 0/1") && n.includes("FAILED"))).toBe(true);
       expect(sink.notes.some((n) => n.startsWith("notify:trash failed"))).toBe(true);
     } finally {
@@ -102,7 +111,7 @@ describe("restoreFromTrash", () => {
       writeFileSync(path.join(trashDir(), "info", "gone.txt.trashinfo"), `[Trash Info]\nPath=${origDir}/gone.txt\n`);
       const sink = recordingSink();
       makeTrashOps(sink).restoreFromTrash([path.join(trashDir(), "files", "gone.txt")]);
-      await Bun.sleep(30);
+      await settleUntil(() => existsSync(path.join(origDir, "gone.txt")));
       expect(existsSync(path.join(origDir, "gone.txt"))).toBe(true);
       expect(existsSync(path.join(trashDir(), "info", "gone.txt.trashinfo"))).toBe(false);
       expect(sink.notes.some((n) => n === "status:Restored 1 of 1")).toBe(true);
@@ -122,7 +131,7 @@ describe("deleteForever / emptyTrash", () => {
       writeFileSync(path.join(trashDir(), "info", "x.txt.trashinfo"), "[Trash Info]\nPath=/tmp/x\n");
       const sink = recordingSink();
       makeTrashOps(sink).deleteForever([path.join(trashDir(), "files", "x.txt")]);
-      await Bun.sleep(30);
+      await settleUntil(() => !existsSync(path.join(trashDir(), "info", "x.txt.trashinfo")));
       expect(existsSync(path.join(trashDir(), "files", "x.txt"))).toBe(false);
       expect(existsSync(path.join(trashDir(), "info", "x.txt.trashinfo"))).toBe(false);
       expect(sink.batches.length).toBe(0);
@@ -141,7 +150,7 @@ describe("deleteForever / emptyTrash", () => {
       writeFileSync(path.join(trashDir(), "files", "b"), "2");
       const sink = recordingSink();
       makeTrashOps(sink).emptyTrash();
-      await Bun.sleep(30);
+      await settleUntil(() => !existsSync(path.join(trashDir(), "files", "a")));
       expect(existsSync(path.join(trashDir(), "files", "a"))).toBe(false);
       expect(sink.notes.some((n) => n === "notify:trash:Emptied 2 items")).toBe(true);
       expect(sink.notes.some((n) => n === "status:Trash emptied (2)")).toBe(true);
