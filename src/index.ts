@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, addDefaultParsers, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, EmbeddedTerminalRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, createCliRenderer } from "@opentui/core";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, createWriteStream, existsSync, openSync, readSync, statSync, watch } from "node:fs";
@@ -11,7 +11,7 @@ import { THEME_PRESETS, type ThemePreset } from "./themes";
 import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
 import { bumpHex } from "./color";
 import { clearIconCaches, iconPng, thumbPng, warmEmbeddedIcons } from "./icons";
-import { FILE_ICON_BY_EXT, fileIconFor, fileIsImage, loadGlobs2, mimeCategory, mimeForExt } from "./filetype";
+import { FILE_ICON_BY_EXT, fileIconFor, fileIsImage, loadGlobs2, mimeCategory } from "./filetype";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
 import {
   readRecentXbel,
@@ -26,6 +26,7 @@ import { copyFileProgress as transferCopyFileProgress, copyTreeProgress as trans
 import { buildSections, isBookmarked, loadSystemPlaces, setBookmarked, type Place } from "./places";
 import { dirWalkStats, fmtBytes, fmtDate, idName, mimeLabelFor, permWords } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
+import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, registerSyntaxParsers, syntaxStyleSig } from "./syntax";
 import {
   agreeDragFrame,
   agreeDropFrame,
@@ -1959,108 +1960,22 @@ const confirmDeleteForever = (paths: string[]): void => {
 
 // --- Preview pane ---
 const TEXT_PREVIEW_MAX = 262144;
-const isTextLike = (name: string): boolean => {
-  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
-  if (FILE_ICON_BY_EXT[ext] === "file-image" || FILE_ICON_BY_EXT[ext] === "file-video") return false;
-  // known-text extensions win even when globs2 reports an odd mime
-  // (e.g. toml → application/toml used to fall through the cracks)
-  if (["md", "markdown", "txt", "log", "json", "yaml", "yml", "toml", "ini", "conf", "cfg", "html", "css", "csv", "lock", "env"].includes(ext)
-    || FILE_ICON_BY_EXT[ext] === "file-code"
-    || FILE_ICON_BY_EXT[ext] === "file-document") return true;
-  const mime = mimeForExt(ext);
-  if (!mime) return false;
-  return mime.startsWith("text/") || /^(application\/(json|xml|javascript|x-yaml|x-sh|toml))/.test(mime) || mime.endsWith("+xml");
-};
 
 let previewGen = 0;
 
-// --- syntax highlighting for the preview pane (tree-sitter via @opentui/core) ---
-// bundled grammars: javascript, typescript, markdown, zig. Extra languages are
-// registered opencode-style: wasm + query URLs, downloaded once and cached by
-// the client's download utils.
-const EXTRA_PARSERS = [
-  {
-    filetype: "json",
-    wasm: "https://github.com/tree-sitter/tree-sitter-json/releases/download/v0.24.8/tree-sitter-json.wasm",
-    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/json/highlights.scm"] },
-  },
-  {
-    filetype: "bash",
-    wasm: "https://github.com/tree-sitter/tree-sitter-bash/releases/download/v0.25.0/tree-sitter-bash.wasm",
-    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/bash/highlights.scm"] },
-  },
-  {
-    filetype: "python",
-    wasm: "https://github.com/tree-sitter/tree-sitter-python/releases/download/v0.23.6/tree-sitter-python.wasm",
-    queries: { highlights: ["https://github.com/tree-sitter/tree-sitter-python/raw/refs/heads/master/queries/highlights.scm"] },
-  },
-  {
-    filetype: "rust",
-    wasm: "https://github.com/tree-sitter/tree-sitter-rust/releases/download/v0.24.0/tree-sitter-rust.wasm",
-    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/rust/highlights.scm"] },
-  },
-  {
-    filetype: "go",
-    wasm: "https://github.com/tree-sitter/tree-sitter-go/releases/download/v0.25.0/tree-sitter-go.wasm",
-    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/go/highlights.scm"] },
-  },
-  {
-    filetype: "css",
-    wasm: "https://github.com/tree-sitter/tree-sitter-css/releases/download/v0.25.0/tree-sitter-css.wasm",
-    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/css/highlights.scm"] },
-  },
-  {
-    filetype: "yaml",
-    wasm: "https://github.com/tree-sitter-grammars/tree-sitter-yaml/releases/download/v0.7.2/tree-sitter-yaml.wasm",
-    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/refs/heads/master/queries/yaml/highlights.scm"] },
-  },
-  {
-    filetype: "toml",
-    wasm: "https://github.com/tree-sitter-grammars/tree-sitter-toml/releases/download/v0.7.0/tree-sitter-toml.wasm",
-    queries: { highlights: ["https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/master/queries/toml/highlights.scm"] },
-  },
-];
-addDefaultParsers(EXTRA_PARSERS);
-
-const PREVIEW_FT_BY_EXT: Record<string, string> = {
-  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascriptreact",
-  ts: "typescript", mts: "typescript", cts: "typescript", tsx: "typescriptreact",
-  md: "markdown", markdown: "markdown", mdx: "markdown",
-  zig: "zig",
-  json: "json", jsonc: "json",
-  sh: "bash", bash: "bash", zsh: "bash",
-  py: "python", rs: "rust", go: "go",
-  css: "css", scss: "css",
-  yml: "yaml", yaml: "yaml",
-  toml: "toml",
-};
+// --- syntax highlighting for the preview pane: tree-sitter machinery (extra
+// parser registration, filetype map, style builder) lives in ./syntax.ts ---
+registerSyntaxParsers();
 
 let previewSyntaxStyle: InstanceType<typeof SyntaxStyle> | null = null;
 let previewSyntaxSig = "";
 const getPreviewSyntaxStyle = () => {
-  const t = colors as Theme;
-  const sig = [t.accent, t.white, t.sidebarFg, t.sidebarFgMuted,
-    t.syntaxString, t.syntaxNumber, t.syntaxType, t.syntaxFunction, t.syntaxOperator, t.syntaxProperty].join("|");
+  const sig = syntaxStyleSig(colors as Theme);
   if (!previewSyntaxStyle || previewSyntaxSig !== sig) {
     try { previewSyntaxStyle?.destroy(); } catch {}
     // cached nodes hold a reference to the old style
     previewCodeCache = null;
-    previewSyntaxStyle = SyntaxStyle.fromStyles({
-      keyword: { fg: t.accent, bold: true },
-      string: { fg: t.syntaxString ?? "#9ece6a" },
-      comment: { fg: t.sidebarFgMuted, italic: true },
-      function: { fg: t.syntaxFunction ?? "#7aa2f7" },
-      method: { fg: t.syntaxFunction ?? "#7aa2f7" },
-      type: { fg: t.syntaxType ?? "#2ac3de" },
-      "type.builtin": { fg: t.syntaxType ?? "#2ac3de" },
-      number: { fg: t.syntaxNumber ?? "#ff9e64" },
-      constant: { fg: t.syntaxNumber ?? "#ff9e64" },
-      "constant.builtin": { fg: t.syntaxNumber ?? "#bb9af7" },
-      operator: { fg: t.syntaxOperator ?? t.white },
-      punctuation: { fg: t.sidebarFgMuted },
-      property: { fg: t.syntaxProperty ?? "#73daca" },
-      variable: { fg: t.sidebarFg },
-    });
+    previewSyntaxStyle = buildSyntaxStyle(colors as Theme);
     previewSyntaxSig = sig;
   }
   return previewSyntaxStyle;
