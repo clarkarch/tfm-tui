@@ -1,4 +1,4 @@
-import { ASCIIFont, Box, CliRenderEvents, CodeRenderable, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, SyntaxStyle, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, ImageRenderable, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, statSync, watch } from "node:fs";
@@ -23,7 +23,7 @@ import { copyFileProgress as transferCopyFileProgress, copyTreeProgress as trans
 import { loadSystemPlaces, setBookmarked, type Place } from "./places";
 import { fmtBytes } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
-import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, registerSyntaxParsers, syntaxStyleSig } from "./syntax";
+import { registerSyntaxParsers } from "./syntax";
 import { applyAdjust, flattenRows, themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
 import {
   agreeDragFrame,
@@ -52,6 +52,7 @@ import { makeChrome } from "./ui-chrome";
 import { makeDialogs } from "./ui-dialogs";
 import { makeMenu } from "./ui-menu";
 import type { ListEntry } from "./ui-menu";
+import { makePreview } from "./ui-preview";
 import { makeProps } from "./ui-props";
 import { makeProgress } from "./ui-progress";
 import { makeTerminal } from "./ui-term";
@@ -1661,125 +1662,25 @@ const confirmDeleteForever = (paths: string[]): void => {
   confirmYesNo(`Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}?`, "Delete", () => deleteForever(paths), true);
 };
 
-// --- Preview pane ---
-const TEXT_PREVIEW_MAX = 262144;
-
-let previewGen = 0;
-
-// --- syntax highlighting for the preview pane: tree-sitter machinery (extra
-// parser registration, filetype map, style builder) lives in ./syntax.ts ---
+// --- Preview pane — widget lives in ./ui-preview ---
 registerSyntaxParsers();
-
-let previewSyntaxStyle: InstanceType<typeof SyntaxStyle> | null = null;
-let previewSyntaxSig = "";
-const getPreviewSyntaxStyle = () => {
-  const sig = syntaxStyleSig(colors as Theme);
-  if (!previewSyntaxStyle || previewSyntaxSig !== sig) {
-    try { previewSyntaxStyle?.destroy(); } catch {}
-    // cached nodes hold a reference to the old style
-    previewCodeCache = null;
-    previewSyntaxStyle = buildSyntaxStyle(colors as Theme);
-    previewSyntaxSig = sig;
-  }
-  return previewSyntaxStyle;
-};
-let previewCodeSeq = 0;
-// reuse the (already-parsed/highlighted) node when the same file is previewed again
-let previewCodeCache: { key: string; mtimeMs: number; size: number; node: any } | null = null;
-
-const renderPreview = async () => {
-  if (!config.ui.previewEnabled) return;
-  const gen = ++previewGen;
-  const pane: any = byId("tfm-preview");
-  if (!pane) return;
-  clearChildren(pane);
-
-  // target = focused tile, else single selected, else folder summary
-  let key: string | null = null;
-  if (focusIdx >= 0 && focusKeys[focusIdx]) key = focusKeys[focusIdx]!;
-  else {
-    let selCount = 0;
-    let selKey: string | null = null;
-    tileRefsByKey.forEach((r, k) => { if (r.selected) { selCount++; selKey = k; } });
-    if (selCount === 1 && selKey) key = selKey;
-    else if (selCount > 1) {
-      pane.add(Text({ content: `${selCount} items selected`, fg: colors.sidebarFg }));
-      return;
-    }
-  }
-
-  if (!key || !existsSync(key)) {
-    pane.add(Box({ height: 1 }));
-    pane.add(Text({ content: "no selection", fg: colors.sidebarFgMuted }));
-    return;
-  }
-
-  let st: any = null;
-  try { st = statSync(key); } catch { return; }
-  if (gen !== previewGen) return;
-  const isDirTarget = st.isDirectory();
-
-  pane.add(Text({ content: ` ${path.basename(key)}${isDirTarget ? "/" : ""}`, fg: colors.white }));
-  pane.add(Text({ content: "~".repeat(Math.max(0, config.ui.previewWidth - 2)), fg: colors.divider }));
-
-  // metadata lives in right-click -> Properties…; the pane shows content only
-  if (isDirTarget) {
-    void drainIconQueue();
-    return;
-  }
-
-  // pictures: render the actual image (svg included) instead of nothing
-  if (fileIsImage(key) && st.size > 0 && st.size <= 26214400) {
-    const w = Math.max(4, config.ui.previewWidth - 4);
-    const maxH = Math.max(4, renderer.terminalHeight - 8);
-    const h = Math.min(maxH, Math.max(3, Math.round(w / cellMetrics().aspect)));
-    const slotId = `tfm-icon-${iconSeq++}`;
-    pane.add(Box(
-      { width: "100%", flexDirection: "row", justifyContent: "center" },
-      Box({ id: slotId, width: w, height: h }),
-    ));
-    thumbJobs.push({
-      slotId,
-      path: key,
-      mtimeMs: st.mtimeMs ?? 0,
-      size: st.size,
-      wCells: w,
-      hCells: h,
-      bg: slotBg(config.ui.uiStyle, colors, colors.sidebarBg),
-      vector: key.toLowerCase().endsWith(".svg"),
-      fallbackGlyph: glyph[fileIconFor(key) as keyof typeof glyph] ?? glyph.file!,
-    });
-    void drainThumbs();
-    return;
-  }
-
-  if (!isTextLike(key) || st.size > TEXT_PREVIEW_MAX) return;
-
-  try {
-    const text = (await readFile(key, "utf8")).slice(0, 65536);
-    if (gen !== previewGen) return;
-    const mtimeMs = st.mtimeMs ?? 0;
-    const size = st.size ?? 0;
-    if (previewCodeCache && previewCodeCache.key === key
-      && previewCodeCache.mtimeMs === mtimeMs && previewCodeCache.size === size) {
-      pane.add(previewCodeCache.node);
-      return;
-    }
-    // real class instance (not a proxied helper) so it mounts into the live pane
-    const codeNode: any = new CodeRenderable(renderer, {
-      id: `tfm-preview-code-${previewCodeSeq++}`,
-      content: text,
-      filetype: PREVIEW_FT_BY_EXT[path.extname(key).slice(1).toLowerCase()],
-      syntaxStyle: getPreviewSyntaxStyle()!,
-      width: Math.max(8, config.ui.previewWidth - 2),
-      height: Math.max(1, renderer.terminalHeight - 6),
-      selectable: false,
-    });
-    previewCodeCache = { key, mtimeMs, size, node: codeNode };
-    pane.add(codeNode);
-    void drainIconQueue();
-  } catch {}
-};
+const { renderPreview } = makePreview({
+  renderer,
+  byId,
+  colors: () => colors as Theme & Record<string, any>,
+  uiStyle: () => config.ui.uiStyle,
+  previewEnabled: () => config.ui.previewEnabled,
+  previewWidth: () => config.ui.previewWidth,
+  termH: () => renderer.terminalHeight,
+  cellMetrics,
+  focusKey: () => (focusIdx >= 0 && focusKeys[focusIdx] ? focusKeys[focusIdx]! : null),
+  tileRefs: tileRefsByKey,
+  pushThumbJob: (job) => thumbJobs.push(job),
+  drainThumbs: () => drainThumbs(),
+  drainIconQueue: () => drainIconQueue(),
+  nextIconId: () => `tfm-icon-${iconSeq++}`,
+  fallbackGlyphFor: (name) => (glyph as Record<string, string>)[name] ?? glyph.file!,
+});
 
 const { notify, toastCount } = makeNotify({
   rootAdd: (node) => renderer.root.add(node),
