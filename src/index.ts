@@ -1,32 +1,35 @@
-import { ASCIIFont, Box, CliRenderEvents, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, createWriteStream, existsSync, statSync, watch } from "node:fs";
-import { readdir, readFile, lstat, readlink, symlink, mkdir, writeFile, cp, rm } from "node:fs/promises";
+import { appendFileSync, createWriteStream, statSync, watch } from "node:fs";
+import { readFile, lstat, readlink, symlink, cp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig, configPath, type Config, type Theme } from "./config";
 import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
 import { bumpHex } from "./color";
 import { clearIconCaches, warmEmbeddedIcons } from "./icons";
-import { FILE_ICON_BY_EXT, fileIconFor, fileIsImage, loadGlobs2, mimeCategory } from "./filetype";
+import { FILE_ICON_BY_EXT, loadGlobs2 } from "./filetype";
 // --- Directory listing/sort/virtual-place entries live in ./listing ---
 import { listDir, type Entry } from "./listing";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
 import {
   upsertRecentXbel,
 } from "./recent";
-import { trashDir, fsErrText } from "./fsutil";
+import { trashDir } from "./fsutil";
 import { loadSystemPlaces } from "./places";
-import { fmtBytes } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
 import { registerSyntaxParsers } from "./syntax";
 import { makeDnd72, type DropTarget } from "./dnd72";
 import { makeSettingModel } from "./settings-model";
+import { makeRename } from "./ui-rename";
+import { makeSelection } from "./selection";
+import { makeGridRenderer } from "./ui-grid";
+import { makeKeyRouter } from "./keymap";
 import { makeRetheme } from "./ui-retheme";
 import { makeTrashOps } from "./trashops";
 import { makeFileOps } from "./fileops";
-import { makeUndo, type UndoUnit } from "./undo";
+import { makeUndo } from "./undo";
 import { makeTabs } from "./tabs";
 import { appForFile } from "./apps";
 import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
@@ -247,8 +250,8 @@ const { renderSidebar, renderTabbar, normalizePlaces, makeDivider, placesHost, m
   dlog: (msg) => dlog(msg),
   trashPaths: (paths) => trashPaths(paths),
   moveInto: (dest, items) => moveInto(dest, items),
-  kbActive: () => sidebarActive,
-  kbIdx: () => placeIdx,
+  kbActive: () => keyRouter.sidebarActive(),
+  kbIdx: () => keyRouter.placeIdx(),
   tabs: () => tabModel,
   closeTab: (i) => closeTab(i),
   switchTab: (i) => switchTab(i),
@@ -424,274 +427,70 @@ let TILE_H = config.ui.tileHeight;
 let ICON_CELLS_H = config.ui.iconCells;
 
 let scroller: ScrollBoxRenderable | null = null;
-let gridGen = 0;
-let tileSeq = 0;
 
-// keyboard focus over tiles
-let focusKeys: string[] = [];
-let focusIdx = -1;
-let colsAtBuild = 1;
-// per-row height of the last build (TILE_H for grid, 1 for list) — keyboard
-// scrolling uses it to page by the right amount in either view mode
-let rowHAtBuild = config.ui.tileHeight;
-// anchor tile for shift+click range selection (index into focusKeys)
-let selAnchor: number | null = null;
+// --- Selection + focus state lives in ./selection (single source of truth
+// shared by the grid build, mouse pipeline, OSC 72 and the keyboard router) ---
+const selection = makeSelection({
+  colors: () => colors as Theme & Record<string, any>,
+  uiStyle: () => config.ui.uiStyle,
+  byId,
+  setIconState,
+  // arrow wrappers: isCutKey/renderPreview are defined below (TDZ)
+  isCutKey: (key) => isCutKey(key),
+  scroller: () => scroller,
+  viewH: () => renderer.terminalHeight - 3,
+  rowHInit: () => TILE_H,
+  renderPreview: () => renderPreview(),
+});
+const {
+  setTileVisual,
+  tileStates,
+  selPaths,
+  updateSelectionStatusReal,
+  clearTileSelection,
+  selectRange,
+  selectTileAt,
+  moveFocus,
+  selectAll,
+  refreshCutVisuals,
+} = selection;
+const tileRefsByKey = selection.tileRefs;
 
-const selectRange = (from: number, to: number): void => {
-  clearTileSelection();
-  if (focusKeys.length === 0) return;
-  const lo = Math.max(0, Math.min(from, to));
-  const hi = Math.min(focusKeys.length - 1, Math.max(from, to));
-  for (let i = lo; i <= hi; i++) {
-    const k = focusKeys[i]!;
-    const r = tileRefsByKey.get(k);
-    if (r) { r.selected = true; setTileVisual(k, 2); }
-  }
-};
-
-// sidebar keyboard focus
-let sidebarActive = false;
-let placeIdx = -1;
-
-const setSidebarFocus = (idx: number): boolean => {
-  if (idx < 0 || idx >= placesHost.length) return false;
-  placeIdx = idx;
-  normalizePlaces();
-  return true;
-};
-
-const leaveSidebarToGrid = () => {
-  sidebarActive = false;
-  normalizePlaces();
-};
-
-// arrows and clicks drive the SAME single selection; there is no separate
-// focus highlight
-const selectTileAt = (idx: number): boolean => {
-  if (idx < 0 || idx >= focusKeys.length) return false;
-  clearTileSelection();
-  const key = focusKeys[idx]!;
-  const refs = tileRefsByKey.get(key);
-  if (refs) { refs.selected = true; setTileVisual(key, 2); }
-  focusIdx = idx;
-  void renderPreview();
-  if (scroller) {
-    try {
-      const row = Math.floor(idx / colsAtBuild);
-      const vh = renderer.terminalHeight - 3;
-      const top = scroller.scrollTop;
-      if (row * rowHAtBuild < top) scroller.scrollTo({ x: 0, y: row * rowHAtBuild });
-      else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * rowHAtBuild - vh });
-    } catch {}
-  }
-  return true;
-};
-const moveFocus = (dx: number, dy: number): boolean => {
-  if (focusKeys.length === 0) return false;
-  let next = focusIdx === -1 ? 0 : focusIdx + dx + dy * colsAtBuild;
-  next = Math.max(0, Math.min(focusKeys.length - 1, next));
-  if (next === focusIdx) return false;
-  return selectTileAt(next);
-};
-
-type TileRefs = { iconSpec?: IconSpec; iconSlotId?: string; selected: boolean; baseFg: string; tileId: string; labelId: string; isDir: boolean };
-const tileRefsByKey = new Map<string, TileRefs>();
-
-const tileStates = (dim: boolean): IconState[] => {
-  const norm = dim ? colors.sidebarFgMuted : colors.sidebarFg;
-  return [
-    { fg: norm, bg: colors.bg },
-    { fg: norm, bg: colors.hoverBg },
-    { fg: colors.accent, bg: colors.accentBg },
-    { fg: colors.sidebarFgMuted, bg: colors.bg }, // 3 = cut (pending move)
-  ];
-};
-
-const setTileVisual = (key: string, mode: 0 | 1 | 2) => {
-  const refs = tileRefsByKey.get(key);
-  if (!refs) return;
-  const cut = mode === 0 && !refs.selected && isCutKey(key);
-  setIconState(refs.iconSpec, cut ? 3 : mode);
-  if (!refs.iconSpec) {
-    // thumbnail slots have no state rasters — fade the whole slot instead
-    try {
-      const slot: any = byId(refs.iconSlotId ?? "");
-      if (slot) slot.opacity = cut ? 0.45 : 1;
-    } catch {}
-  }
-  const labelReal: any = byId(refs.labelId);
-  if (labelReal) {
-    try { labelReal.fg = mode === 2 ? colors.accent : cut ? colors.sidebarFgMuted : refs.baseFg; } catch {}
-  }
-  const tileReal: any = byId(refs.tileId);
-  if (tileReal) {
-    const state = mode === 2 ? "selected" : mode === 1 ? "hover" : cut ? "cut" : "rest";
-    applySurface(tileReal, tileSurface(config.ui.uiStyle, colors, state));
-  }
-};
-
-// --- inline rename: edit the tile label in place instead of a modal ---
-let renameEdit: { key: string; inputId: string; createKind?: "file" | "folder" } | null = null;
-
-const tileLabelFor = (name: string): string =>
-  name.length > TILE_W - 2 ? name.slice(0, TILE_W - 5) + "…" : name;
-
-// restores the plain label node; commit=true runs performRename afterwards
-const finishInlineRename = (commit: boolean): void => {
-  const edit = renameEdit;
-  if (!edit) return;
-  renameEdit = null;
-  const input: any = byId(edit.inputId);
-  const value = String(input?.value ?? "").trim();
-  if (input) { try { input.parent?.remove(input); } catch {} }
-  const refs = tileRefsByKey.get(edit.key);
-  const tile: any = refs ? byId(refs.tileId) : null;
-  if (refs && tile && !byId(refs.labelId)) {
-    const labelText: any = Text({ id: refs.labelId, content: tileLabelFor(path.basename(edit.key)), fg: refs.baseFg });
-    tile.add(labelText);
-  }
-  stripSelectable();
-  if (!commit || !value) {
-    if (edit.createKind) void rm(edit.key, { recursive: true }).then(() => renderAll());
-    return;
-  }
-  if (value !== path.basename(edit.key)) {
-    // create-unit is pushed BEFORE performRename so undo pops rename-back
-    // first, then removes the entry entirely
-    if (edit.createKind) {
-      const k = edit.key;
-      const redoCreate: UndoUnit = edit.createKind === "folder"
-        ? async () => { try { if (!existsSync(k)) await mkdir(k, { recursive: true }); } catch {} }
-        : async () => { try { if (!existsSync(k)) await writeFile(k, ""); } catch {} };
-      pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(k, { recursive: true })], [redoCreate]);
-    }
-    void performRename(edit.key, value);
-    return;
-  }
-  if (edit.createKind) {
-    const k = edit.key;
-    const redoCreate: UndoUnit = edit.createKind === "folder"
-      ? async () => { try { if (!existsSync(k)) await mkdir(k, { recursive: true }); } catch {} }
-      : async () => { try { if (!existsSync(k)) await writeFile(k, ""); } catch {} };
-    pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(k, { recursive: true })], [redoCreate]);
-    setStatusMsg(`Created ${value} · ctrl+z to undo`);
-  }
-};
-
-const startInlineRename = (key: string): void => {
-  if (renameEdit) finishInlineRename(false);
-  const refs = tileRefsByKey.get(key);
-  if (!refs) return;
-  const tile: any = byId(refs.tileId);
-  const label: any = byId(refs.labelId);
-  if (!tile || !label || !existsSync(key)) return;
-  // real class instance — mounts into the already-mounted tile
-  const inputId = `tfm-rename-input`;
-  const stale = byId(inputId);
-  if (stale) { try { (stale as any).parent?.remove(stale); } catch {} }
-  const input: any = new InputRenderable(renderer, {
-    id: inputId,
-    width: TILE_W - 2,
-    value: path.basename(key),
-    backgroundColor: colors.hoverBg,
-    focusedBackgroundColor: colors.accentBg,
-    textColor: colors.white,
-  });
-  try { tile.insertBefore(input, label); } catch { tile.add(input); }
-  try { tile.remove(label); } catch {}
-  renameEdit = { key, inputId };
-  input.on?.("enter", () => finishInlineRename(true));
-  const prevHandler = input.handleKeyPress?.bind(input);
-  input.handleKeyPress = (k: any) => {
-    if (k?.name === "escape") { finishInlineRename(false); return true; }
-    return prevHandler ? prevHandler(k) : false;
-  };
-  setTimeout(() => { try { input.focus(); } catch {} }, 20);
-  stripSelectable();
-};
-
-const uniqueUntitledName = (dir: string, base: string): string => {
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
-  let n = base;
-  let i = 2;
-  while (existsSync(path.join(dir, n))) n = `${stem} ${i++}${ext}`;
-  return n;
-};
-
-// nautilus-style: the entry is created immediately with a default name, then
-// its label edits in place; esc/empty name deletes it again
-const startInlineCreate = (kind: "file" | "folder"): void => {
-  if (renameEdit) finishInlineRename(false);
-  if (isVirtualCwd() || inTrashView()) return;
-  const name = uniqueUntitledName(state.cwd, kind === "folder" ? "Untitled folder" : "Untitled.txt");
-  const target = path.join(state.cwd, name);
-  const made = kind === "folder"
-    ? mkdir(target, { recursive: true })
-    : writeFile(target, "");
-  void made
-    .then(() => renderGrid())
-    .then(() => {
-      const idx = focusKeys.indexOf(target);
-      if (idx >= 0) selectTileAt(idx);
-      startInlineRename(target);
-    })
-    .catch(() => setStatusMsg("Create failed"));
-};
-
-let selStatusGen = 0;
-const updateSelectionStatusReal = () => {  const gen = ++selStatusGen;
-  const sel: { key: string; isDir: boolean }[] = [];
-  tileRefsByKey.forEach((r, k) => { if (r.selected) sel.push({ key: k, isDir: r.isDir }); });
-  const setStatus = (s: string) => {
-    if (gen !== selStatusGen) return;
-    const status: any = byId("tfm-status-label");
-    if (status) { try { status.content = s; } catch {} }
-  };
-  if (sel.length === 0) return setStatus("");
-  // total size of the selected files (dirs contribute their item count instead)
-  let bytes = 0;
-  for (const s of sel) {
-    if (!s.isDir) { try { bytes += statSync(s.key).size; } catch {} }
-  }
-  const dirs = sel.filter((s) => s.isDir);
-  if (dirs.length === 0) {
-    return setStatus(`${sel.length} selected${bytes > 0 ? ` · ${fmtBytes(bytes)}` : ""}`);
-  }
-  void (async () => {
-    let contained = 0;
-    await Promise.all(dirs.map(async (d) => {
-      try { contained += (await readdir(d.key)).length; } catch {}
-    }));
-    const bits = [`${sel.length} selected`];
-    if (bytes > 0) bits.push(fmtBytes(bytes));
-    if (dirs.length === 1 && sel.length === 1) bits.push(`${contained} items`);
-    setStatus(bits.join(" · "));
-  })();
-};
-
-const clearTileSelection = () => {
-  tileRefsByKey.forEach((refs, k) => {
-    if (refs.selected) { refs.selected = false; setTileVisual(k, 0); }
-  });
-  updateSelectionStatus();
-};
-
-const updateSelectionStatus: () => void = () => updateSelectionStatusReal();
+// --- inline rename/create: widget + state live in ./ui-rename ---
+const {
+  isRenaming,
+  renameEditKey,
+  clearRenameEdit,
+  finishInlineRename,
+  startInlineRename,
+  startInlineCreate,
+} = makeRename({
+  renderer: () => renderer,
+  byId,
+  colors: () => colors as Record<string, any>,
+  tileW: () => TILE_W,
+  tileRefs: tileRefsByKey,
+  stripSelectable: () => stripSelectable(),
+  renderAll: () => renderAll(),
+  renderGrid: () => renderGrid(),
+  // arrow wrappers: pushUndoBatch/performRename/setStatusMsg/inTrashView are defined below (TDZ)
+  performRename: (p, name) => performRename(p, name),
+  pushUndoBatch: (label, undos, redos) => pushUndoBatch(label, undos, redos),
+  setStatusMsg: (msg) => setStatusMsg(msg),
+  isVirtualCwd: () => isVirtualCwd(),
+  inTrashView: () => inTrashView(),
+  cwd: () => state.cwd,
+  focusKeys: () => selection.focusKeys(),
+  selectTileAt,
+});
 
 // --- File operations ---
 // runTransfer/performRename/paste/clipboard orchestration lives in ./fileops;
 // the copy engine is ./transfer (pure, sink-injected), the progress toast
-// is ./ui-progress, and cut-tile dimming stays here with the grid visuals.
+// is ./ui-progress, and cut-tile dimming lives in ./selection (setTileVisual).
 const isCutKey = (key: string): boolean => {
   const c = clipboardRef();
   return c?.mode === "cut" && c.items.some((i) => i.path === key);
-};
-
-// re-apply resting visuals after a cut/copy/paste so dimming tracks the clipboard
-const refreshCutVisuals = (): void => {
-  tileRefsByKey.forEach((refs, key) => { if (!refs.selected) setTileVisual(key, 0); });
 };
 
 // the reset fires 2500ms after the LAST status message, like a debounce
@@ -700,12 +499,6 @@ const setStatusMsg = (text: string) => {
   const status: any = byId("tfm-status-label");
   if (status) { try { status.content = text; } catch {} }
   clearStatusMsg();
-};
-
-const selPaths = (): ClipItem[] => {
-  const out: ClipItem[] = [];
-  tileRefsByKey.forEach((r, k) => { if (r.selected) out.push({ path: k, isDir: r.isDir }); });
-  return out;
 };
 
 // --- Undo stack + override (conflict) prompt — dialog lives in ./ui-dialogs ---
@@ -812,7 +605,7 @@ const { renderPreview } = makePreview({
   previewWidth: () => config.ui.previewWidth,
   termH: () => renderer.terminalHeight,
   cellMetrics,
-  focusKey: () => (focusIdx >= 0 && focusKeys[focusIdx] ? focusKeys[focusIdx]! : null),
+  focusKey: () => (selection.focusIdx() >= 0 && selection.focusKeys()[selection.focusIdx()] ? selection.focusKeys()[selection.focusIdx()]! : null),
   tileRefs: tileRefsByKey,
   pushThumbJob,
   drainThumbs: () => drainThumbs(),
@@ -841,14 +634,7 @@ const bandCtx: BandCtx = {
   setTileVisual,
   updateSelectionStatusReal,
   renderPreview,
-  setSelAnchor: (v: number | null) => { selAnchor = v; },
-};
-
-const clearGrid = () => {
-  if (!scroller) return;
-  const content: any = scroller.content;
-  clearChildren(content);
-  tileRefsByKey.clear();
+  setSelAnchor: (v: number | null) => { selection.setSelAnchor(v); },
 };
 
 // Mouse behavior shared by grid tiles AND list rows: selection (plain/ctrl/
@@ -865,9 +651,9 @@ const gridCtx = {
   renderPreview,
   clearTileSelection,
   selectRange,
-  getSelAnchor: () => selAnchor,
-  setSelAnchor: (v: number | null) => { selAnchor = v; },
-  getFocusIdx: () => focusIdx,
+  getSelAnchor: () => selection.selAnchor(),
+  setSelAnchor: (v: number | null) => { selection.setSelAnchor(v); },
+  getFocusIdx: () => selection.focusIdx(),
   selPaths,
   dblClickMs: () => config.ui.doubleClickMs,
   navigate,
@@ -875,7 +661,7 @@ const gridCtx = {
   openContextMenu: (x: number, y: number, title: string, entries: GridMenuEntry[]) => openContextMenu(x, y, title, entries as ListEntry[]),
   fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): GridMenuEntry[] => fileEntriesFor(key, isDir, x, y) as GridMenuEntry[],
   closeFileMenu: () => closeFileMenu(),
-  renameEditKey: () => renameEdit?.key ?? null,
+  renameEditKey,
   finishInlineRename,
   setStatusMsg,
   log: (msg: string) => dlog(msg),
@@ -885,229 +671,39 @@ const finishDragCtx = () => finishDragState(gridCtx);
 
 const entryMouseHandlers = makeEntryMouseHandlers(gridCtx);
 
-const renderGrid = async () => {
-  if (!scroller) return;
-  const gen = ++gridGen;
-  // a rebuild destroys the edit input; drop the state with it
-  if (renameEdit) renameEdit = null;
-  clearGrid();
-  const q = searchQuery.trim().toLowerCase();
-  let allEntries: Entry[];
-  try {
-    allEntries = await listDir(state.cwd, state.showHidden || q.length > 0, state.sortBy, state.sortAsc);
-  } catch (err) {
-    // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
-    if (gen !== gridGen) return;
-    await waitForResolution();
-    if (gen !== gridGen) return;
-    const { aspect } = cellMetrics();
-    const iconCells = 8;
-    const slotW = Math.max(1, Math.round(aspect * iconCells));
-    const paneH = Math.max(8, renderer.terminalHeight - 3);
-    scroller.add(Box(
-      {
-        width: "100%",
-        height: paneH,
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: colors.bg,
-      },
-      makeIconSlot("close", [{ fg: colors.sidebarFgMuted, bg: colors.bg }], iconCells).el,
-      Box({ height: 1 }),
-      Text({ content: `can't open this folder (${fsErrText(err)})`, fg: colors.sidebarFgMuted }),
-      Text({ content: pathEditMode() ? "" : "edit the path above to go elsewhere", fg: colors.divider }),
-      Box({ width: slotW, height: 0 }),
-    ));
-    stripSelectable();
-    void drainIconQueue();
-    return;
-  }
-  const entries = q ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
-  if (gen !== gridGen) return;
+// --- Grid renderer lives in ./ui-grid (tile/list-row builders, empty and
+// restricted states, thumbnail handoff, gen-counter stale guards) ---
+const { renderGrid } = makeGridRenderer({
+  termW: () => renderer.terminalWidth,
+  termH: () => renderer.terminalHeight,
+  scroller: () => scroller,
+  state,
+  searchQuery: () => searchQuery,
+  pathEditMode: () => pathEditMode(),
+  sw: () => sw,
+  tileW: () => TILE_W,
+  tileH: () => TILE_H,
+  iconCells: () => ICON_CELLS_H,
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors as Theme & Record<string, any>,
+  previewEnabled: () => config.ui.previewEnabled,
+  previewWidth: () => config.ui.previewWidth,
+  viewMode: () => config.ui.viewMode,
+  reservedRight: () => (config.ui.previewEnabled ? config.ui.previewWidth : 0),
+  cellMetrics,
+  makeIconSlot,
+  pushThumbJob,
+  nextIconId: () => nextIconId(),
+  drainIconQueue: () => drainIconQueue(),
+  drainThumbs: () => drainThumbs(),
+  stripSelectable: () => stripSelectable(),
+  selection,
+  entryMouseHandlers,
+  isCutKey: (key) => isCutKey(key),
+  waitForResolution: () => waitForResolution(),
+  clearRenameEdit,
+});
 
-  if (entries.length === 0) {
-    await waitForResolution();
-    if (gen !== gridGen) return;
-    const { aspect } = cellMetrics();
-    const iconCells = 8;
-    const slotW = Math.max(1, Math.round(aspect * iconCells));
-    const paneH = Math.max(8, renderer.terminalHeight - 3);
-    const emptyState = Box(
-      {
-        width: "100%",
-        height: paneH,
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: colors.bg,
-      },
-      makeIconSlot("folder", [{ fg: colors.sidebarFgMuted, bg: colors.bg }], iconCells).el,
-      Box({ height: 1 }),
-      Text({
-        content: q ? "no matches"
-          : state.cwd === RECENT_URI ? "no recent files"
-          : state.cwd === STARRED_URI ? "nothing starred yet"
-          : "this folder is empty",
-        fg: colors.sidebarFgMuted,
-      }),
-    );
-    scroller.content.add(emptyState);
-    void drainIconQueue();
-    return;
-  }
-
-  await waitForResolution();
-  if (gen !== gridGen) return;
-  const { aspect } = cellMetrics();
-  const isList = config.ui.viewMode === "list";
-  const reservedRight = config.ui.previewEnabled ? config.ui.previewWidth : 0;
-  const cols = isList ? 1 : Math.max(1, Math.floor((renderer.terminalWidth - sw - reservedRight - 3) / TILE_W));
-
-  // list view always shows size + modified columns, so fetch whatever stats
-  // the active sort mode didn't already populate
-  if (isList) {
-    for (const en of entries) {
-      if (en.size !== undefined && en.mtimeMs !== undefined) continue;
-      try {
-        const st = statSync(en.abs ?? path.join(state.cwd, en.name));
-        en.size = st.size;
-        en.mtimeMs = st.mtimeMs ?? 0;
-      } catch {}
-    }
-  }
-
-  const buildTile = (e: Entry, idx: number) => {
-    const key = e.abs ?? path.join(state.cwd, e.name);
-    const tileId = `tfm-tile-${tileSeq++}`;
-    const labelId = `${tileId}-label`;
-    const tile = Box({
-      id: tileId,
-      width: TILE_W,
-      height: TILE_H,
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "flex-start",
-      ...entryMouseHandlers(e, key, idx),
-    });
-
-    const dim = e.name.startsWith(".");
-    const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
-    const slotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
-
-    // image tiles: empty slot until the thumbnail lands (no icon->photo swap);
-    // everything else queues its category raster as usual
-    const wantsThumb = !e.isDir && fileIsImage(e.name);
-    let st: any = null;
-    if (wantsThumb) { try { st = statSync(key); } catch {} }
-    const useThumb = wantsThumb && st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400;
-
-    let slotId: string;
-    let iconSpec: IconSpec | undefined;
-    let iconSlotEl: ReturnType<typeof Box>;
-    if (useThumb) {
-      slotId = nextIconId();
-      iconSlotEl = Box({ id: slotId, width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" });
-    } else {
-      const s = makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), tileStates(dim), ICON_CELLS_H, 0);
-      slotId = s.slotId;
-      iconSpec = s.spec;
-      iconSlotEl = s.el;
-    }
-    const tileBox = Box({ width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" }, iconSlotEl);
-    tile.add(tileBox);
-
-    const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
-    const labelText: any = Text({ id: labelId, content: label, fg: baseFg });
-    tile.add(labelText);
-
-    tileRefsByKey.set(key, { iconSpec, iconSlotId: slotId, selected: false, baseFg, tileId, labelId, isDir: e.isDir });
-
-    if (useThumb && st) {
-        pushThumbJob({
-          slotId,
-          path: key,
-          mtimeMs: st.mtimeMs ?? 0,
-          size: st.size,
-          wCells: slotW,
-          vector: e.name.toLowerCase().endsWith(".svg"),
-          fallbackGlyph: glyph[fileIconFor(e.name)] ?? glyph.file!,
-        });
-    }
-
-    return tile;
-  };
-
-  // --- list view rows: icon | name | size | modified, all sharing tile mouse
-  // behavior via entryMouseHandlers; ids reuse the tfm-tile- prefix so
-  // setTileVisual / band select / rename-in-place work unchanged ---
-  const fmtDateShort = (ms?: number): string => {
-    if (!ms) return "-";
-    const d = new Date(ms);
-    const p2 = (n: number) => String(n).padStart(2, "0");
-    return d.getFullYear() === new Date().getFullYear()
-      ? `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
-      : `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-  };
-  // rough inner width of the file pane; only used to truncate names, rows
-  // themselves are 100%-width and flex
-  const listW = Math.max(40, renderer.terminalWidth - sw - reservedRight - (config.ui.uiStyle === "outline" ? 6 : 3));
-  const buildListRow = (e: Entry, idx: number) => {
-    const key = e.abs ?? path.join(state.cwd, e.name);
-    const rowId = `tfm-tile-${tileSeq++}`;
-    const labelId = `${rowId}-label`;
-    const dim = e.name.startsWith(".");
-    const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
-    const row = Box({
-      id: rowId,
-      width: "100%",
-      height: 1,
-      flexDirection: "row",
-      alignItems: "center",
-      columnGap: 1,
-      paddingLeft: 1,
-      paddingRight: 1,
-      ...entryMouseHandlers(e, key, idx),
-    });
-    const iconSlot = makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), tileStates(dim), 1, 0);
-    row.add(iconSlot.el);
-    // 28 cells of fixed chrome: 2 padding + 1 icon + 4 gaps + 9 size + 11 date + 1 slack
-    const nameMax = Math.max(12, listW - 28);
-    const label = e.name.length > nameMax ? e.name.slice(0, nameMax - 1) + "…" : e.name;
-    row.add(Text({ id: labelId, content: label, fg: baseFg }));
-    row.add(Box({ flexGrow: 1 }));
-    row.add(Text({ content: e.isDir ? "" : fmtBytes(e.size ?? 0).padStart(9), fg: colors.sidebarFgMuted }));
-    row.add(Text({ content: fmtDateShort(e.mtimeMs), fg: colors.sidebarFgMuted }));
-    tileRefsByKey.set(key, { iconSpec: iconSlot.spec, iconSlotId: iconSlot.slotId, selected: false, baseFg, tileId: rowId, labelId, isDir: e.isDir });
-    return row;
-  };
-
-  let tileIdx = 0;
-  if (isList) {
-    for (const e of entries) scroller.content.add(buildListRow(e, tileIdx++));
-  } else {
-    for (let i = 0; i < entries.length; i += cols) {
-      const row = Box({ height: TILE_H, flexDirection: "row" });
-      for (const e of entries.slice(i, i + cols)) row.add(buildTile(e, tileIdx++));
-      scroller.content.add(row);
-    }
-  }
-
-  // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
-  tileRefsByKey.forEach((_, key) => { if (isCutKey(key)) setTileVisual(key, 0); });
-
-  // fresh Text nodes default selectable=true; strip AFTER the async rebuild or
-  // the renderer's text-selection drag hijacks file-drag events
-  stripSelectable();
-  void drainIconQueue();
-  void drainThumbs();
-  focusKeys = [...tileRefsByKey.keys()];
-  focusIdx = -1;
-  selAnchor = null;
-  colsAtBuild = cols;
-  rowHAtBuild = isList ? 1 : TILE_H;
-  updateSelectionStatusReal();
-};
 
 const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
   byId,
@@ -1173,10 +769,7 @@ const { sidebarEntriesFor, fileEntriesFor, sortEntries, emptyAreaEntries } = mak
   trashPaths,
   restoreFromTrash,
   openProperties,
-  selectAll: () => {
-    tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
-    updateSelectionStatusReal();
-  },
+  selectAll,
   cwd: () => state.cwd,
   sortState: state,
 });
@@ -1225,7 +818,7 @@ let watchedDir: string | null = null;
 // fs events burst in clusters; coalesce them into one grid rebuild
 const onCwdChanged = debounced(200, () => {
   // our own create+inline-edit would wipe the editor mid-keystroke
-  if (renameEdit) return;
+  if (isRenaming()) return;
   if (path.resolve(state.cwd) === watchedDir) void renderGrid();
 });
 
@@ -1278,7 +871,7 @@ const boot = async () => {
       clearSearch();
       blurTerminal();
       if (pathEditMode()) { exitPathEdit(); return; }
-      if (renameEdit) finishInlineRename(false);
+      if (isRenaming()) finishInlineRename(false);
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
       beginBand(ev);
@@ -1446,252 +1039,54 @@ renderer.on(CliRenderEvents.RESIZE, () => {
   }, 150);
 });
 
-// --- Keyboard ---
-renderer.keyInput.on("keypress", (e: any) => {
-  const ctrl = !!e.ctrl || !!e.control;
-  if (ctrl && (e.name === "q" || e.unicode === "q")) {
-    quitApp();
-    return;
-  }
-  // override/conflict modal: esc = skip, everything else swallowed (mouse-driven)
-  if (conflict.isOpen()) {
-    if (e.name === "escape") conflict.closeConflict("skip");
-    return;
-  }
 
-  // yes/no confirm: esc = No, everything else swallowed (mouse-driven)
-  if (yesNo.isOpen()) {
-    if (e.name === "escape") yesNo.close();
-    return;
-  }
-
-  // inline rename: the focused Input consumes typing; swallow everything else
-  // so arrows/shortcuts don't move grid focus mid-edit (esc/enter handled at
-  // the source via handleKeyPress / "enter")
-  if (renameEdit) return;
-
-  // floating properties dialog: esc/enter closes, everything else swallowed
-  if (propsIsOpen()) {
-    if (e.name === "escape" || e.name === "return") closeProps();
-    return;
-  }
-
-  if (escMenu.isOpen()) {
-    if (e.name === "escape") escMenu.closeMenu();
-    else if (e.name === "up") escMenu.moveMenu(-1);
-    else if (e.name === "down") escMenu.moveMenu(1);
-    else if (e.name === "left") escMenu.adjustSelectedSetting(-1);
-    else if (e.name === "right") escMenu.adjustSelectedSetting(1);
-    else if (e.name === "return") escMenu.menuActivate();
-    return;
-  }
-
-  // embedded terminal owns the keyboard while focused — everything below is
-  // host UI. Click the grid/sidebar (or ✕) to leave the shell.
-  if (termOwnsKeyboard()) return;
-
-  const el: any = byId("tfm-search");
-  const pathInput: any = byId("tfm-path-input");
-
-  if (pathInput?.visible || pathEditMode()) {
-    if (e.name === "escape") {
-      exitPathEdit();
-      return;
-    }
-    return;
-  }
-
-  // file context menu open: arrows/enter navigate it, esc closes.
-  // getFileMenuState() returns the LIVE state object — mutating fmenu.idx
-  // below updates the menu module's state in place.
-  const fmenu = getFileMenuState();
-  if (fmenu) {
-    const entries = fmenu.entries;
-    const count = entries.length;
-    const step = (d: number) => {
-      let i = (fmenu.idx + d + count) % count;
-      while (entries[i]?.sep) i = (i + d + count) % count;
-      fmenu.idx = i;
-      renderFileMenu();
-    };
-    if (e.name === "escape") closeFileMenu();
-    else if (e.name === "up") step(-1);
-    else if (e.name === "down") step(1);
-    else if (e.name === "return") entries[fmenu.idx]?.action();
-    return;
-  }
-
-  if (el?.visible) {
-    if (e.name === "escape") {
-      const had = !!searchQuery;
-      clearSearch();
-      if (had) void renderGrid();
-      return;
-    }
-    // enter commits: open the first folder match (dirs sort first in the
-    // filtered grid); fall back to opening the first file match
-    if (e.name === "return") {
-      const firstDir = focusKeys.find((k) => tileRefsByKey.get(k)?.isDir);
-      const targetKey = firstDir ?? focusKeys[0];
-      const refs = targetKey !== undefined ? tileRefsByKey.get(targetKey) : undefined;
-      if (targetKey && refs) {
-        if (refs.isDir) navigate(targetKey);
-        else { openFileDefault(targetKey); clearSearch(); void renderGrid(); }
-      } else {
-        clearSearch();
-        void renderGrid();
-      }
-      return;
-    }
-    return;
-  }
-
-  // --- keyboard navigation: sidebar <-> grid ---
-  // shift+arrows extend the selection from the anchor instead of moving it
-  const extendFromAnchor = (next: number): void => {
-    if (selAnchor === null) {
-      selAnchor = focusIdx >= 0 ? focusIdx : 0;
-    }
-    if (next === focusIdx || next < 0 || next >= focusKeys.length) return;
-    selectTileAt(next);
-    selectRange(selAnchor, next);
-    updateSelectionStatusReal();
-    void renderPreview();
-  };
-  if (e.shift && !ctrl && e.name === "up") { if (focusKeys.length) { selAnchor = selAnchor ?? (focusIdx >= 0 ? focusIdx : 0); extendFromAnchor(focusIdx < 0 ? 0 : focusIdx - colsAtBuild); } return; }
-  if (e.shift && !ctrl && e.name === "down") { if (focusKeys.length) { selAnchor = selAnchor ?? (focusIdx >= 0 ? focusIdx : 0); extendFromAnchor(focusIdx < 0 ? 0 : focusIdx + colsAtBuild); } return; }
-  if (e.shift && !ctrl && e.name === "left") { if (focusKeys.length && focusIdx > 0) extendFromAnchor(focusIdx - 1); return; }
-  if (e.shift && !ctrl && e.name === "right") { if (focusKeys.length && focusIdx < focusKeys.length - 1) extendFromAnchor(focusIdx + 1); return; }
-
-  if (sidebarActive) {
-    if (e.name === "up") { setSidebarFocus(placeIdx - 1); return; }
-    if (e.name === "down") { setSidebarFocus(placeIdx + 1); return; }
-    if (e.name === "left" || e.name === "right") {
-      leaveSidebarToGrid();
-      selectTileAt(focusIdx >= 0 ? focusIdx : 0);
-      return;
-    }
-    if (e.name === "return") {
-      const rec = placesHost[placeIdx];
-      if (rec) {
-        closeFileMenu();
-        sidebarActive = false;
-        placeIdx = -1;
-        const target = rec.place.scheme === "recent" ? RECENT_URI
-          : rec.place.scheme === "starred" ? STARRED_URI
-          : rec.place.path;
-        if (target) navigate(target);
-        else if (rec.place.mountDevice) mountDevice(rec.place.mountDevice);
-      }
-      return;
-    }
-    return;
-  }
-
-  if (e.name === "up") { moveFocus(0, -1); return; }
-  if (e.name === "down") { moveFocus(0, 1); return; }
-  if (e.name === "left") {
-    const atLeftEdge = focusIdx === -1 || focusIdx % colsAtBuild === 0;
-    if (atLeftEdge || focusKeys.length === 0) {
-      const selRec = placesHost.findIndex((p) => p.selected);
-      const pk = focusIdx >= 0 ? focusKeys[focusIdx] : undefined;
-      if (pk !== undefined) {
-        const pr = tileRefsByKey.get(pk);
-        if (pr && !pr.selected) setTileVisual(pk, 0);
-      }
-      sidebarActive = true;
-      setSidebarFocus(selRec >= 0 ? selRec : 0);
-      return;
-    }
-    moveFocus(-1, 0);
-    return;
-  }
-  if (e.name === "right") { moveFocus(1, 0); return; }
-  if (e.name === "return" && focusIdx >= 0) {
-    const key = focusKeys[focusIdx];
-    const refs = key !== undefined ? tileRefsByKey.get(key) : undefined;
-    if (key && refs) {
-      if (refs.isDir) navigate(key);
-      else openFileDefault(key);
-    }
-    return;
-  }
-  if (e.name === "backspace") {
-    const parent = path.dirname(path.resolve(state.cwd));
-    if (parent !== path.resolve(state.cwd)) navigate(parent);
-    return;
-  }
-  if (!ctrl && !e.shift && typeof e.name === "string" && e.name.length === 1 && /[a-z0-9._-]/i.test(e.name)) {
-    beginTypeToSearch(e.name);
-    return;
-  }
-
-  if (e.name === "escape") {
-    escMenu.openMenu();
-    return;
-  }
-  if (ctrl && (e.name === "h" || e.unicode === "h")) {
-    state.showHidden = !state.showHidden;
-    renderGrid();
-  }
-  if (ctrl && (e.name === "r" || e.unicode === "r")) {
-    void loadSystemPlaces().then(() => renderAll());
-  }
-
-  // --- tabs: ctrl+t new, ctrl+w close, ctrl+tab / ctrl+shift+tab cycle
-  // (kitty needs map no_op for the latter two — its default next_tab /
-  // previous_tab eat the keys before they reach us) ---
-  if (ctrl && (e.name === "t" || e.unicode === "t")) { newTab(); return; }
-  if (ctrl && (e.name === "w" || e.unicode === "w")) { closeTab(); return; }
-  if (ctrl && e.name === "tab") {
-    if (e.shift) switchTab(tabModel.active === 0 ? tabModel.list.length - 1 : tabModel.active - 1);
-    else switchTab(tabModel.active === tabModel.list.length - 1 ? 0 : tabModel.active + 1);
-    return;
-  }
-
-  // --- file operations ---
-  if (ctrl && (e.name === "a" || e.unicode === "a")) {
-    tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
-    updateSelectionStatusReal();
-    return;
-  }
-  const selected = selPaths();
-  if (e.name === "delete" && selected.length) {
-    if (inTrashView()) {
-      // no cursor coords in a keybind — the confirm dialog is a centered modal
-      confirmDeleteForever(selected.map((s) => s.path));
-    }
-    else trashPaths(selected.map((s) => s.path));
-    return;
-  }
-  if (e.name === "f2" && selected.length === 1 && selected[0]) {
-    // in the trash F2 restores instead of renaming
-    if (inTrashView()) {
-      restoreFromTrash(selected.map((s) => s.path));
-      return;
-    }
-    const p = selected[0].path;
-    startInlineRename(p);
-    return;
-  }
-  if (ctrl && (e.name === "c" || e.unicode === "c") && selected.length) {
-    setClipboard("copy", selected);
-    return;
-  }
-  if (ctrl && (e.name === "x" || e.unicode === "x") && selected.length) {
-    setClipboard("cut", selected);
-    return;
-  }
-  if (ctrl && (e.name === "v" || e.unicode === "v") && !isVirtualCwd()) {
-    pasteSmart(state.cwd);
-    return;
-  }
-  if ((ctrl && e.shift && (e.name === "z" || e.unicode === "z")) || (ctrl && (e.name === "y" || e.unicode === "y"))) {
-    redoLast();
-    return;
-  }
-  if (ctrl && (e.name === "z" || e.unicode === "z")) {
-    undoLast();
-    return;
-  }
+// --- Keyboard router lives in ./keymap: modal precedence chain (quit >
+// conflict > yes/no > rename > props > esc-menu > terminal > path-edit >
+// file menu > search > sidebar > grid > chords) + sidebar kb-focus state ---
+const keyRouter = makeKeyRouter({
+  byId,
+  state,
+  quit: () => quitApp(),
+  conflict,
+  yesNo,
+  isRenaming,
+  propsIsOpen,
+  closeProps,
+  escMenu,
+  termOwnsKeyboard,
+  pathEditMode,
+  pathInputVisible: () => !!(byId("tfm-path-input") as any)?.visible,
+  searchVisible: () => !!(byId("tfm-search") as any)?.visible,
+  searchQuery: () => searchQuery,
+  clearSearch,
+  exitPathEdit,
+  beginTypeToSearch,
+  renderGrid,
+  renderPreview,
+  renderAll,
+  selection,
+  placesHost,
+  normalizePlaces,
+  mountDevice,
+  navigate,
+  openFileDefault,
+  getFileMenuState,
+  closeFileMenu,
+  renderFileMenu,
+  tabModel,
+  newTab,
+  closeTab,
+  switchTab,
+  inTrashView,
+  confirmDeleteForever,
+  trashPaths,
+  restoreFromTrash,
+  startInlineRename,
+  setClipboard,
+  isVirtualCwd,
+  pasteSmart,
+  undoLast,
+  redoLast,
 });
+
+renderer.keyInput.on("keypress", (e: any) => keyRouter.handleKey(e));
