@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeTabs, type TabStateRef, type TabsHooks } from "./tabs";
+import { makeTabs, tabTitle, type TabStateRef, type TabsHooks } from "./tabs";
 
 const mkState = (cwd = "/tmp/a"): TabStateRef => ({
   cwd,
@@ -153,5 +153,29 @@ describe("makeTabs", () => {
     tabs.switchTab(1);
     expect(state.history).toEqual(["/tmp/b", "/tmp/sub"]);
     expect(tabs.list[0]!.history).toEqual(["/tmp/a", "/tmp/other"]);
+  });
+});
+
+describe("tabTitle", () => {
+  test("uses the tab's current cwd basename", () => {
+    expect(tabTitle({ history: ["/home/clark/Projects"], histIdx: 0 })).toBe("Projects");
+  });
+
+  test("follows histIdx through the history", () => {
+    expect(tabTitle({ history: ["/a", "/b/c"], histIdx: 1 })).toBe("c");
+  });
+
+  test("virtual places get their friendly names", () => {
+    expect(tabTitle({ history: ["recent://"], histIdx: 0 })).toBe("Recent");
+    expect(tabTitle({ history: ["starred://"], histIdx: 0 })).toBe("Starred");
+  });
+
+  test("long names truncate at 16 with an ellipsis", () => {
+    const long = "a-very-long-folder-name";
+    expect(tabTitle({ history: [`/x/${long}`], histIdx: 0 })).toBe(long.slice(0, 15) + "…");
+  });
+
+  test("empty history falls back to /", () => {
+    expect(tabTitle({ history: [], histIdx: 0 })).toBe("/");
   });
 });

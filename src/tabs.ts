@@ -1,3 +1,6 @@
+import path from "node:path";
+import { RECENT_URI, STARRED_URI } from "./uri";
+
 // --- Tabs model: each tab owns its own history; `state` is always the ACTIVE
 // tab's view. Switching copies the live history refs into the outgoing tab
 // slot and adopts the incoming one (ref identity is load-bearing — navigate()
@@ -6,6 +9,15 @@
 
 export type Tab = { history: string[]; histIdx: number };
 export type TabStateRef = { history: string[]; histIdx: number; cwd: string };
+
+// chip label: basename of the tab's current cwd, virtual places by name
+export const tabTitle = (t: Tab): string => {
+  const cwd = t.history[t.histIdx] ?? t.history[0] ?? "";
+  if (cwd === RECENT_URI) return "Recent";
+  if (cwd === STARRED_URI) return "Starred";
+  const base = path.basename(cwd) || cwd || "/";
+  return base.length > 16 ? base.slice(0, 15) + "…" : base;
+};
 
 export type TabsHooks = {
   onChanged: () => void; // repaint chrome (renderAll)

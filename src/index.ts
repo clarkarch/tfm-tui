@@ -44,7 +44,7 @@ import {
 } from "./osc72";
 import { makeTrashOps } from "./trashops";
 import { makeUndo, type UndoUnit } from "./undo";
-import { makeTabs, type Tab } from "./tabs";
+import { makeTabs, tabTitle, type Tab } from "./tabs";
 import { appForFile } from "./apps";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
@@ -443,14 +443,6 @@ const renderSidebar = () => {
 };
 
 // --- Tab strip: one clickable chip per open tab + a new-tab button ---
-const tabTitle = (t: Tab): string => {
-  const cwd = t.history[t.histIdx] ?? t.history[0] ?? "";
-  if (cwd === RECENT_URI) return "Recent";
-  if (cwd === STARRED_URI) return "Starred";
-  const base = path.basename(cwd) || cwd || "/";
-  return base.length > 16 ? base.slice(0, 15) + "…" : base;
-};
-
 const renderTabbar = (): void => {
   const bar: any = byId("tfm-tabbar");
   if (!bar) return;

@@ -3,12 +3,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
+import type { Tab } from "./tabs";
 
 // --- Session persistence: tabs (each with its own history) survive restarts.
 // Pure read/write of the session document; the caller owns when to save and
 // how to adopt the restored slots. ---
 
-export type SessionTab = { history: string[]; histIdx: number };
+export type SessionTab = Tab;
 
 export const sessionFile = (): string =>
   path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state"), "tfm", "session.json");
