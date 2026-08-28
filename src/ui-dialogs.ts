@@ -186,3 +186,64 @@ export const makeConflict = (
   };
 };
 
+// --- Floating Yes/No confirmation ("Empty Trash?", "Permanently delete …?").
+// State lives here; the trash-bound wrappers (confirmEmptyTrash /
+// confirmDeleteForever) stay with trashOps in index.ts. ---
+
+export type YesNoCtx = {
+  colors(): Theme & Record<string, any>;
+  // false while the renderer hasn't laid out yet (same gate as makeConflict callers)
+  canOpen(): boolean;
+};
+
+const YESNO_W = 36;
+
+export const makeYesNo = (
+  dialogs: ReturnType<typeof makeDialogs>,
+  ctx: YesNoCtx,
+) => {
+  const { openDialog, closeDialog, dialogBtn } = dialogs;
+
+  let open = false;
+
+  const close = (): void => {
+    closeDialog("tfm-yesno");
+    open = false;
+  };
+
+  const confirm = (message: string, yesLabel: string, onYes: () => void, danger = false): boolean => {
+    if (open || !ctx.canOpen()) return false;
+    open = true;
+    const c = ctx.colors();
+    const yesFg = danger ? c.ansi1 : c.accent;
+    let bseq = 0;
+    const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> =>
+      dialogBtn(`tfm-yesno-b${bseq++}`, label, fg, onPick);
+    openDialog({
+      id: "tfm-yesno",
+      zIndex: 3450,
+      width: YESNO_W,
+      rows: () => [
+        Box(
+          { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+          Text({ content: ` ${message}`.slice(0, YESNO_W - 2), fg: yesFg }),
+        ),
+        Box(
+          { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+          Text({ content: " " + "~".repeat(YESNO_W - 2), fg: c.divider }),
+        ),
+        Box({ height: 1 }),
+        Box(
+          { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
+          mkBtn("[ No ]", c.sidebarFg, () => close()),
+          mkBtn(`[ ${yesLabel} ]`, yesFg, () => { close(); onYes(); }),
+        ),
+      ],
+      onClose: () => close(),
+    });
+    return true;
+  };
+
+  return { confirm, close, isOpen: (): boolean => open };
+};
+

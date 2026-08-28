@@ -1,8 +1,8 @@
-import { ASCIIFont, Box, CliRenderEvents, Input, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { ASCIIFont, Box, CliRenderEvents, InputRenderable, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, createWriteStream, existsSync, statSync, watch } from "node:fs";
-import { readdir, readFile, stat, lstat, readlink, symlink, rename as fsRename, mkdir, writeFile, cp, rm } from "node:fs/promises";
+import { readdir, readFile, stat, lstat, readlink, symlink, mkdir, writeFile, cp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadConfig, configPath, saveConfig, defaultConfig, type Config, type Theme } from "./config";
@@ -18,38 +18,22 @@ import {
   upsertRecentXbel,
   writeStarredList,
 } from "./recent";
-import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove } from "./fsutil";
-import { copyFileProgress as transferCopyFileProgress, copyTreeProgress as transferCopyTreeProgress, scanTree as transferScanTree, type TransferSink } from "./transfer";
-import { loadSystemPlaces, setBookmarked, type Place } from "./places";
+import { trashDir, fsErrText } from "./fsutil";
+import { loadSystemPlaces } from "./places";
 import { fmtBytes } from "./propsinfo";
 import { readRestoredSession, saveSession } from "./session";
 import { registerSyntaxParsers } from "./syntax";
 import { applyAdjust, flattenRows, themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
-import {
-  agreeDragFrame,
-  agreeDropFrame,
-  dragIconFrame,
-  dragOutEnableFrame,
-  dropDisableFrame,
-  dropInEnableFrame,
-  dropPayloadToPaths,
-  finishDropFrame,
-  parseOsc72Meta,
-  presentDragFrames,
-  selfDropRejectFrame,
-  startDragFrame,
-  startDropFrame,
-  uriListPayload,
-} from "./osc72";
+import { makeDnd72, type DropTarget } from "./dnd72";
 import { makeTrashOps } from "./trashops";
+import { makeFileOps } from "./fileops";
 import { makeUndo, type UndoUnit } from "./undo";
 import { makeTabs } from "./tabs";
 import { appForFile } from "./apps";
-import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
 import { animateLeft, makeNotify } from "./notify";
 import { makeChrome } from "./ui-chrome";
-import { makeDialogs, makeConflict } from "./ui-dialogs";
+import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
 import { makeMenu } from "./ui-menu";
 import type { ListEntry } from "./ui-menu";
 import { makePreview } from "./ui-preview";
@@ -66,7 +50,6 @@ import {
   cancelBand,
   finalizeBand,
   finishDragState,
-  gridDrag,
   makeEntryMouseHandlers,
   updateBandRect,
   type BandCtx,
@@ -74,6 +57,8 @@ import {
   type GridMenuEntry,
 } from "./grid-input";
 import { appendLog, debugLog, isDebug, DEBUG_LOG } from "./log";
+import { makeMenuEntries, type SortMode } from "./menu-entries";
+import { makeToolbar } from "./ui-toolbar";
 import { glyph, glyphFor } from "./glyphs";
 
 // clear-and-rebuild / debounce / render-step guards live in ./uiutil
@@ -192,7 +177,7 @@ const goFwd = () => { if (canFwd()) { state.histIdx++; renderAll(); } };
 
 const navigate = (dir: string) => {
   debugLog(`navigate -> ${dir}`);
-  pathEditMode = false;
+  exitPathEdit();
   if (fileMenuIsOpen()) closeFileMenu();
   if (dir === RECENT_URI || dir === STARRED_URI) {
     if (dir === state.cwd) { renderAll(); return; }
@@ -286,285 +271,41 @@ const makeTitle = () =>
     Text({ id: "tfm-title-sub", content: " terminal file manager", fg: colors.sidebarFgMuted }),
   );
 
-// --- Toolbar ---
-
-const navSpecs: Record<"tfm-nav-back" | "tfm-nav-fwd", IconSpec | undefined> = {
-  "tfm-nav-back": undefined,
-  "tfm-nav-fwd": undefined,
-};
-
-// nav icons carry 4 rasters: enabled/disabled × normal/hover (bg baked into
-// the png, so the wrapper box bg must swap in lockstep)
-let navHover: Record<string, boolean> = {};
-const navBtnBg = (id: string) => {
-  try {
-    const n: any = byId(id);
-    if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, !!navHover[id]));
-  } catch {}
-};
-
-const makeNavButton = (id: "tfm-nav-back" | "tfm-nav-fwd", iconName: string, onActivate: () => void) => {
-  const states = (): IconState[] => [
-    { fg: colors.sidebarFg, bg: colors.bg },
-    { fg: colors.sidebarFgMuted, bg: colors.bg },
-    { fg: colors.sidebarFg, bg: colors.hoverBg },
-    { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
-  ];
-  const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
-  navSpecs[id] = slot.spec;
-  return Box(
-    {
-      id,
-      height: 1,
-      width: 3,
-      justifyContent: "center",
-      ...btnSurface(config.ui.uiStyle, colors, false),
-      onMouseDown: () => { closeFileMenu(); onActivate(); },
-      onMouseOver: () => { navHover[id] = true; refreshNav(); },
-      onMouseOut: () => { navHover[id] = false; refreshNav(); },
-    },
-    slot.el,
-  );
-};
-
-const refreshNav = () => {
-  const setBtn = (id: string, spec: IconSpec | undefined, on: boolean) => {
-    if (!spec) return;
-    setIconState(spec, (on ? 0 : 1) + (navHover[id] ? 2 : 0));
-    navBtnBg(id);
-  };
-  setBtn("tfm-nav-back", navSpecs["tfm-nav-back"], canBack());
-  setBtn("tfm-nav-fwd", navSpecs["tfm-nav-fwd"], canFwd());
-};
-
-const crumbSep = () => Text({ content: " › ", fg: colors.sidebarFgMuted });
-
-let pathEditMode = false;
-let crumbClickAt = 0;
-
-const exitPathEdit = () => {
-  if (!pathEditMode) return;
-  pathEditMode = false;
-  renderCrumbs();
-};
-
-const enterPathEdit = () => {
-  if (pathEditMode) return;
-  blurTerminal();
-  pathEditMode = true;
-  renderCrumbs();
-};
-
-const renderCrumbs = () => {
-  const box: any = byId("tfm-crumbs");
-  if (!box) return;
-
-  const toolbarRow: any = byId("tfm-toolbar");
-
-  if (pathEditMode) {
-    clearChildren(box);
-    let input: any = byId("tfm-path-input");
-    if (!input) {
-      // real class instance: proxied composition nodes don't mount under an
-      // already-mounted parent
-      input = new InputRenderable(renderer, {
-        id: "tfm-path-input",
-        flexGrow: 1,
-        value: isVirtualCwd() ? state.cwd : path.resolve(state.cwd),
-        backgroundColor: colors.accentBg,
-        focusedBackgroundColor: colors.accentBg,
-        textColor: colors.white,
-      });
-      box.add(input);
-      input.on?.("enter", () => {
-        const target = String((input as any).value ?? "").replace(/^~(?=\/|$)/, home);
-        pathEditMode = false;
-        renderCrumbs();
-        navigate(target);
-      });
-      // focused editors can consume keys before the global handler; intercept
-      // escape at the source so it always cancels
-      const prevHandler = input.handleKeyPress?.bind(input);
-      input.handleKeyPress = (key: any) => {
-        if (key?.name === "escape") {
-          exitPathEdit();
-          return true;
-        }
-        return prevHandler ? prevHandler(key) : false;
-      };
-    } else {
-      try { input.value = isVirtualCwd() ? state.cwd : path.resolve(state.cwd); } catch {}
-    }
-    try { input.visible = true; } catch {}
-    setTimeout(() => { try { input.focus(); } catch {} }, 20);
-    stripSelectable();
-    return;
-  }
-
-  // rebuild crumbs from scratch — appending would duplicate them every nav
-  clearChildren(box);
-
-  const cwdAbs = path.resolve(state.cwd);
-  const virtCrumb = state.cwd === RECENT_URI
-    ? { label: "Recent", icon: "clock" }
-    : state.cwd === STARRED_URI
-    ? { label: "Starred", icon: "star" }
-    : null;
-  const inHome = !virtCrumb && (cwdAbs === home || cwdAbs.startsWith(home + path.sep));
-  const baseLabel = virtCrumb ? virtCrumb.label : inHome ? "Home" : os.hostname();
-  const baseIcon = virtCrumb ? virtCrumb.icon! : inHome ? "home" : "desktop-tower";
-  const basePath = virtCrumb ? state.cwd : inHome ? home : "/";
-  const rest = virtCrumb ? [] : path.relative(inHome ? home : "/", cwdAbs).split(path.sep).filter(Boolean);
-
-  const crumbs: { label: string; icon?: string; target: string }[] = [
-    { label: baseLabel, icon: baseIcon, target: basePath },
-    ...rest.map((seg, i) => ({ label: seg, target: path.join(basePath, ...rest.slice(0, i + 1)) })),
-  ];
-
-  crumbs.forEach((c, i) => {
-    const current = i === crumbs.length - 1;
-    const fg = current ? colors.white : colors.sidebarFgMuted;
-    // clickable crumbs get hover feedback: baked raster swap + box bg swap
-    const iconStates = current
-      ? [{ fg, bg: colors.bg }]
-      : [
-          { fg, bg: colors.bg },
-          { fg: colors.white, bg: colors.hoverBg },
-        ];
-    const iconSlot = c.icon ? makeIconSlot(c.icon, iconStates, 1) : null;
-    const paintHover = (on: boolean) => {
-      if (iconSlot && !current) setIconState(iconSlot.spec, on ? 1 : 0);
-      try {
-        const n: any = byId(`tfm-crumb-${i}`);
-        if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on && !current));
-      } catch {}
-    };
-    const crumb = Box(
-      {
-        id: `tfm-crumb-${i}`,
-        height: 1,
-        flexDirection: "row",
-        alignItems: "center",
-        columnGap: 1,
-        ...btnSurface(config.ui.uiStyle, colors, false),
-        ...(current
-          ? {}
-          : {
-              onMouseDown: () => navigate(c.target),
-              onMouseOver: () => paintHover(true),
-              onMouseOut: () => paintHover(false),
-            }),
-      },
-      ...(iconSlot ? [iconSlot.el] : []),
-      Text({ content: c.label, fg }),
-    );
-    box.add(crumb);
-    if (i < crumbs.length - 1) box.add(crumbSep());
-  });
-};
-
-// toolbar buttons swap between two baked rasters (normal/hover bg) and match
-// the wrapper box bg so the padding cells track the raster
-const hoverBtnStates = (): IconState[] => [
-  { fg: colors.sidebarFg, bg: colors.bg },
-  { fg: colors.sidebarFg, bg: colors.hoverBg },
-];
-const hoverBtn = (
-  id: string,
-  iconName: string,
-  onMouseDown: (ev: any) => void,
-): ReturnType<typeof Box> => {
-  const states = hoverBtnStates;
-  const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
-  const paint = (on: boolean) => {
-    setIconState(slot.spec, on ? 1 : 0);
-    try {
-      const n: any = byId(id);
-      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on));
-    } catch {}
-  };
-  return Box(
-    {
-      id,
-      height: 1,
-      width: 3,
-      justifyContent: "center",
-      ...btnSurface(config.ui.uiStyle, colors, false),
-      onMouseDown,
-      onMouseOver: () => paint(true),
-      onMouseOut: () => paint(false),
-    },
-    slot.el,
-  );
-};
-
-const makeSearch = () => {
-  const wrap = Box({ id: "tfm-search-wrap", height: 1, flexDirection: "row" });
-
-  const input = Input({
-    id: "tfm-search",
-    width: 16,
-    visible: false,
-    placeholder: "Search",
-    backgroundColor: colors.accentBg,
-    focusedBackgroundColor: colors.accentBg,
-    textColor: colors.white,
-  });
-
-  wrap.add(
-    hoverBtn("tfm-search-btn", "search", () => {
-      closeFileMenu();
-      blurTerminal();
-      const el: any = byId("tfm-search");
-      if (!el) return;
-      el.visible = !el.visible;
-      if (el.visible) el.focus();
-    }),
-  );
-  wrap.add(input);
-  return wrap;
-};
-
-const makeSortButton = (): ReturnType<typeof Box> =>
-  hoverBtn("tfm-sort-btn", "sort", (ev: any) => {
-    closeFileMenu();
-    openContextMenu(ev.x, ev.y, "", sortEntries());
-  });
-
-const makeToolbarShell = (): ReturnType<typeof Box> =>
-  Box(
-    { id: "tfm-toolbar", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, paddingRight: 1, columnGap: 1 },
-    Box(
-      { height: 1, flexGrow: 1, flexBasis: 0, overflow: "hidden", flexDirection: "row", columnGap: 1 },
-      makeNavButton("tfm-nav-back", "chevron-left", goBack),
-      makeNavButton("tfm-nav-fwd", "chevron-right", goFwd),
-      Box({
-        id: "tfm-crumbs",
-        flexGrow: 1,
-        flexBasis: 0,
-        height: 1,
-        flexDirection: "row",
-        columnGap: 1,
-        overflow: "hidden",
-        onMouseDown: () => {
-          const now = Date.now();
-          if (pathEditMode) return;
-          closeFileMenu();
-          if (now - crumbClickAt < 350) {
-            crumbClickAt = 0;
-            enterPathEdit();
-          } else {
-            crumbClickAt = now;
-          }
-        },
-      }),
-    ),
-    makeSortButton(),
-    makeSearch(),
-  );
+// --- Toolbar — widget lives in ./ui-toolbar (nav buttons, crumbs, inline path
+// edit, sort/search buttons). The search QUERY state + type-to-search stay
+// here with the keyboard router; ctx fields for later-defined symbols are
+// arrow wrappers (TDZ seam rule). ---
+const {
+  makeToolbarShell,
+  renderCrumbs,
+  refreshNav,
+  repaintButtons,
+  hoverBtn,
+  exitPathEdit,
+  pathEditMode,
+} = makeToolbar({
+  renderer: () => renderer,
+  byId: (id: string) => byId(id),
+  clearChildren: (node: any) => clearChildren(node),
+  stripSelectable: () => stripSelectable(),
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors as Theme & Record<string, any>,
+  makeIconSlot,
+  setIconState,
+  closeFileMenu: () => closeFileMenu(),
+  blurTerminal: () => blurTerminal(),
+  navigate,
+  canBack,
+  canFwd,
+  goBack,
+  goFwd,
+  openContextMenu: (x, y, t, entries) => openContextMenu(x, y, t, entries),
+  sortEntries: () => sortEntries(),
+  cwd: () => state.cwd,
+  home,
+});
 
 // --- Directory listing ---
-type SortMode = "name" | "size" | "mtime" | "type";
 type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
 
 // --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred ---
@@ -1004,11 +745,13 @@ const clearTileSelection = () => {
 const updateSelectionStatus: () => void = () => updateSelectionStatusReal();
 
 // --- File operations ---
-let clipboard: { mode: "copy" | "cut"; items: ClipItem[] } | null = null;
-
-// cut (pending-move) tiles render dimmed, nautilus-style
-const isCutKey = (key: string): boolean =>
-  clipboard?.mode === "cut" && clipboard.items.some((i) => i.path === key);
+// runTransfer/performRename/paste/clipboard orchestration lives in ./fileops;
+// the copy engine is ./transfer (pure, sink-injected), the progress toast
+// is ./ui-progress, and cut-tile dimming stays here with the grid visuals.
+const isCutKey = (key: string): boolean => {
+  const c = clipboardRef();
+  return c?.mode === "cut" && c.items.some((i) => i.path === key);
+};
 
 // re-apply resting visuals after a cut/copy/paste so dimming tracks the clipboard
 const refreshCutVisuals = (): void => {
@@ -1063,214 +806,21 @@ const { prog, paintProgress, showProgressToast, finishProgressToast, pauseGate }
   drainIconQueue,
 });
 
-// wire the copy engine (./transfer) to the live progress state
-const transferSink: TransferSink = {
-  checkpoint: async () => {
-    await pauseGate();
-    if (prog.cancelled) throw new Error("cancelled");
-  },
-  paused: () => prog.paused,
-  cancelled: () => prog.cancelled,
-  addBytes: (n) => { prog.bytes += n; },
-  fileDone: () => { prog.doneFiles++; },
-  setStream: (rs) => { prog.currentRs = rs; },
-  clearStream: (rs) => { if (prog.currentRs === rs) prog.currentRs = null; },
-  repaint: (full) => paintProgress(full),
-};
-
-const scanTree = (root: string): Promise<{ files: number; bytes: number }> => transferScanTree(root);
-const copyFileProgress = (src: string, dest: string): Promise<void> => transferCopyFileProgress(src, dest, transferSink);
-const copyTreeProgress = (src: string, dest: string): Promise<void> => transferCopyTreeProgress(src, dest, transferSink);
-
-// every destructive-but-reversible file op funnels through here so overrides
-// are asked once and undo covers the whole batch
-async function runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void> {
-  conflict.resetPolicy();
-  const units: UndoUnit[] = [];
-  const redos: UndoUnit[] = [];
-  let ok = 0, skipped = 0, replaced = 0, failed = 0, gone = 0;
-  const failWhy = new Set<string>();
-  const total = srcs.length;
-  if (op === "copy") {
-    // pre-scan so the progress toast has real totals from byte one
-    prog.paused = false;
-    prog.cancelled = false;
-    prog.doneFiles = 0;
-    prog.bytes = 0;
-    let files = 0, bytes = 0;
-    for (const s of srcs) {
-      try { const r = await scanTree(s); files += r.files; bytes += r.bytes; } catch {}
-    }
-    prog.totalFiles = files || Math.max(1, total);
-    prog.totalBytes = bytes;
-    // tiny transfers don't need a toast
-    if (prog.totalBytes > 4 * 1024 * 1024 || prog.totalFiles > 4) {
-      prog.active = true;
-      showProgressToast();
-      paintProgress(true);
-    }
-  }
-  let cancelled = false;
-  try {
-  for (const src of srcs) {
-    if (cancelled || prog.cancelled) { cancelled = true; break; }
-    await pauseGate();
-    // source vanished since it was copied/cut — report clearly instead of a
-    // cryptic mid-transfer ENOENT
-    if (!existsSync(src)) { gone++; skipped++; continue; }
-    const base = path.basename(src);
-    let target = path.join(destDir, base);
-    // nautilus semantics: paste-in-place never asks, it just makes "name (copy)"
-    if (target === src && op === "copy") { target = uniqueTarget(destDir, base); }
-    else if (target === src) { skipped++; continue; }
-    else if (existsSync(target)) {
-      const done = ok + skipped;
-      const choice = conflict.policy() ?? await conflict.promptConflict(target, Math.max(0, total - done - 1));
-      if (choice === "skip") { skipped++; continue; }
-      if (choice === "keepBoth") target = uniqueTarget(destDir, base);
-      else {
-        // stash the victim in the trash so ctrl+z can bring it back;
-        // re-check first — the target may have vanished while the prompt was up
-        try {
-          if (existsSync(target)) {
-            const victimDest = target;
-            const trashLoc = await xdgTrashMove(victimDest);
-            units.push(async () => {
-              await safeRestoreMove(trashLoc, victimDest);
-              try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
-            });
-            replaced++;
-          }
-        } catch (err) { failWhy.add(fsErrText(err)); }
-      }
-    }
-    try {
-      if (op === "copy") await copyTreeProgress(src, target);
-      else await fsMove(src, target);
-      const t = target, s = src;
-      if (op === "copy") {
-        units.push(() => xdgTrashMove(t).then(() => undefined));
-        redos.push(async () => { try { if (!existsSync(t)) await copyTreeProgress(src, t); } catch {} });
-      } else {
-        units.push(() => safeRestoreMove(t, s));
-        redos.push(async () => { try { if (existsSync(s) && !existsSync(t)) await fsMove(s, t); } catch {} });
-      }
-      ok++;
-    } catch (err) {
-      // don't leave half-copied files behind
-      if (op === "copy") { try { await rm(target, { recursive: true }); } catch {} }
-      if (prog.cancelled) { cancelled = true; break; }
-      failed++;
-      failWhy.add(fsErrText(err));
-    }
-  }
-  } finally {
-    prog.active = false;
-  }
-  pushUndoBatch(label, units, redos);
-  renderAll();
-  const verb = op === "copy" ? "Copied" : "Moved";
-  const bits = [`${verb} ${ok} item${ok === 1 ? "" : "s"}`];
-  if (replaced) bits.push(`${replaced} replaced`);
-  if (skipped) bits.push(`${skipped} skipped`);
-  if (gone) bits.push(`${gone} source gone`);
-  const why = [...failWhy][0];
-  if (failed) bits.push(`${failed} FAILED${why ? ` (${why})` : ""}`);
-  if (ok || replaced) bits.push("ctrl+z to undo");
-  const summary = bits.join(" · ");
-  setStatusMsg(summary);
-  // always surface the outcome — success, failure, or cancel
-  if (prog.toastUp) {
-    finishProgressToast(cancelled ? `✗ ${verb} cancelled` : failed ? `✗ ${op} failed` : `✓ ${verb} ${ok}`);
-  }
-  const destLabel = `to ~/${path.relative(home, destDir) || "/"}`;
-  const msg = `${summary}${!cancelled && !failed && ok + replaced > 0 ? ` ${destLabel}` : ""}`;
-  if (cancelled) notify(msg, `${op} cancelled`);
-  else if (failed > 0 && ok === 0) notify(msg, `${op} failed`);
-  else notify(msg, op);
-}
-
-// rename with nautilus-style collision handling: rename() would otherwise
-// silently overwrite the existing file
-const performRename = async (p: string, v: string): Promise<void> => {
-  const dest = path.join(path.dirname(p), v);
-  if (path.resolve(dest) === path.resolve(p)) { renderAll(); return; }
-  let finalDest = dest;
-  const units: UndoUnit[] = [];
-  const redos: UndoUnit[] = [];
-  if (existsSync(finalDest)) {
-    conflict.resetPolicy();
-    const choice = await conflict.promptConflict(finalDest, 0);
-    if (choice === "skip") return;
-    if (choice === "keepBoth") {
-      finalDest = uniqueTarget(path.dirname(finalDest), path.basename(finalDest));
-    } else {
-      try {
-        const victim = finalDest;
-        const trashLoc = await xdgTrashMove(victim);
-        units.push(async () => {
-          await safeRestoreMove(trashLoc, victim);
-          try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch {}
-        });
-      } catch {}
-    }
-  }
-  try {
-    await fsRename(p, finalDest);
-    units.push(() => fsRename(finalDest, p));
-    redos.push(async () => { try { if (existsSync(p) && !existsSync(finalDest)) await fsRename(p, finalDest); } catch {} });
-    pushUndoBatch("rename", units, redos);
-    renderAll();
-    setStatusMsg(`Renamed to ${path.basename(finalDest)} · ctrl+z to undo`);
-    notify(`Renamed to ${path.basename(finalDest)}`, "rename");
-  } catch (err) {
-    const summary = `Rename failed (${fsErrText(err)})`;
-    setStatusMsg(summary);
-    notify(`${path.basename(p)}: ${summary}`, "rename failed");
-  }
-};
-
-const setClipboard = (mode: "copy" | "cut", items: ClipItem[]) => {
-  clipboard = items.length ? { mode, items } : null;
-  if (clipboard) toSystemClipboard(mode, items);
-  setStatusMsg(clipboard ? `${mode === "cut" ? "Cut" : "Copied"} ${items.length} item${items.length === 1 ? "" : "s"}` : "");
-  refreshCutVisuals();
-};
-
-// --- system clipboard bridge — lives in ./clipboard (pure, tested). tfm
-// publishes plain-text paths so paste-anywhere works; reading accepts
-// gnome-copied-files from other apps. ---
-const toSystemClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
-  publishPathsToSystemClipboard(mode, items, dlog);
-};
-
-const pasteSmart = (dest: string): void => {
-  if (clipboard?.items.length) {
-    dlog(`paste: internal clipboard (${clipboard.items.length} items)`);
-    void doPaste(dest);
-    return;
-  }
-  void readCopiedFilesFromSystemClipboard(dlog).then((res) => {
-    if (res) void runTransfer(res.op === "move" ? "move" : "copy", dest, res.paths, "system-clipboard paste");
-  });
-};
-
-const doPaste = async (dest: string): Promise<void> => {
-  if (!clipboard || clipboard.items.length === 0) return;
-  const mode = clipboard.mode === "copy" ? "copy" : "move";
-  const srcs = clipboard.items.map((i) => i.path);
-  clipboard = null;
-  refreshCutVisuals();
-  await runTransfer(mode, dest, srcs, mode === "copy" ? "paste" : "paste (move)");
-};
-
-const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
-  const srcs = items
-    .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
-    .map((it) => it.path);
-  dlog(`moveInto dest=${destDir} in=${items.length} out=${srcs.length} dropped=[${items.filter((it) => it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))).map((it) => it.path.split("/").pop()).join(",")}]`);
-  await runTransfer("move", destDir, srcs, `move to ${path.basename(destDir) || "/"}`);
-};
+const { runTransfer, performRename, setClipboard, pasteSmart, moveInto, clipboard: clipboardRef } = makeFileOps({
+  conflict,
+  prog,
+  paintProgress,
+  showProgressToast,
+  finishProgressToast,
+  pauseGate,
+  pushUndoBatch,
+  renderAll: () => renderAll(),
+  setStatusMsg,
+  notify: (msg, title) => notify(msg, title),
+  home,
+  refreshCutVisuals,
+  log: (msg) => dlog(msg),
+});
 
 // --- Embedded terminal pane — widget lives in ./ui-term ---
 const { openTerminalHere, closeTerminalPane, syncTerminalTheme, termHasFocus, blurTerminal, ownsKeyboard: termOwnsKeyboard } = makeTerminal({
@@ -1300,46 +850,12 @@ const { trashPaths, restoreFromTrash, deleteForever, emptyTrash } = trashOps;
 // --- Trash management: restore / delete-permanently / empty ---
 const inTrashView = (): boolean => path.resolve(state.cwd) === path.join(trashDir(), "files");
 
-let yesNoOpen = false;
-
-const closeYesNo = (): void => {
-  closeDialog("tfm-yesno");
-  yesNoOpen = false;
-};
-
-// floating Yes/No confirmation dialog (replaces the old context-menu confirms)
-const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, danger = false): boolean => {
-  if (yesNoOpen || !renderer.resolution) return false;
-  yesNoOpen = true;
-  const W = MENU_W;
-  let bseq = 0;
-  const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> =>
-    dialogBtn(`tfm-yesno-b${bseq++}`, label, fg, onPick);
-  const yesFg = danger ? colors.ansi1 : colors.accent;
-  openDialog({
-    id: "tfm-yesno",
-    zIndex: 3450,
-    width: W,
-    rows: () => [
-      Box(
-        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: ` ${message}`.slice(0, W - 2), fg: yesFg }),
-      ),
-      Box(
-        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: " " + "~".repeat(W - 2), fg: colors.divider }),
-      ),
-      Box({ height: 1 }),
-      Box(
-        { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
-        mkBtn("[ No ]", colors.sidebarFg, () => closeYesNo()),
-        mkBtn(`[ ${yesLabel} ]`, yesFg, () => { closeYesNo(); onYes(); }),
-      ),
-    ],
-    onClose: () => closeYesNo(),
-  });
-  return true;
-};
+// floating Yes/No confirmation — widget lives in ./ui-dialogs
+const yesNo = makeYesNo(dialogs, {
+  colors: () => colors as Theme & Record<string, any>,
+  canOpen: () => !!renderer.resolution,
+});
+const confirmYesNo = yesNo.confirm;
 
 const confirmEmptyTrash = (): void => {
   confirmYesNo("Empty Trash?", "Empty", () => emptyTrash(), true);
@@ -1464,7 +980,7 @@ const renderGrid = async () => {
       makeIconSlot("close", [{ fg: colors.sidebarFgMuted, bg: colors.bg }], iconCells).el,
       Box({ height: 1 }),
       Text({ content: `can't open this folder (${fsErrText(err)})`, fg: colors.sidebarFgMuted }),
-      Text({ content: pathEditMode ? "" : "edit the path above to go elsewhere", fg: colors.divider }),
+      Text({ content: pathEditMode() ? "" : "edit the path above to go elsewhere", fg: colors.divider }),
       Box({ width: slotW, height: 0 }),
     ));
     stripSelectable();
@@ -1697,135 +1213,37 @@ const { closeFileMenu, renderFileMenu, openContextMenu, isFileMenuOpen: fileMenu
   makeIconSlot,
 });
 
-const sidebarEntriesFor = (place: Place, x: number, y: number): ListEntry[] => {
-  const target = place.scheme === "recent" ? RECENT_URI
-    : place.scheme === "starred" ? STARRED_URI
-    : place.path;
-  const entries: ListEntry[] = [];
-  if (target) {
-    entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(target); } });
-    entries.push({ icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(target); } });
-    // paste into real places (not virtual views, not the trash)
-    if (!place.scheme && target !== path.join(trashDir(), "files")) {
-      entries.push({
-        icon: "content-paste",
-        label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste",
-        action: () => { closeFileMenu(); pasteSmart(target); },
-      });
-    }
-    if (target === path.join(trashDir(), "files")) {
-      entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(); } });
-    } else if (place.bookmarked) {
-      entries.push({ icon: "bookmark", label: "Remove bookmark", action: () => {
-        closeFileMenu();
-        void setBookmarked(target, false).then(() => loadSystemPlaces()).then(() => renderAll());
-      } });
-    }
-  }
-  if (place.ejectable && place.device) {
-    entries.push({ icon: "eject", label: "Eject", action: () => { closeFileMenu(); ejectDevice(place.device!); } });
-  }
-  if (!target && place.mountDevice) {
-    entries.push({ icon: "usb", label: "Mount", action: () => { closeFileMenu(); mountDevice(place.mountDevice!); } });
-  }
-  return entries;
-};
-
-const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number): ListEntry[] => {
-  const entries: ListEntry[] = [];
-  // Nautilus trash semantics: Restore / Open / delete-for-real; no rename,
-  // clipboard ops or trashing inside the trash
-  if (inTrashView()) {
-    const inSel = !!tileRefsByKey.get(targetPath)?.selected;
-    const targets: ClipItem[] = inSel && selPaths().length > 1 ? selPaths() : [{ path: targetPath, isDir }];
-    entries.push(
-      { icon: "folder", label: `Restore${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); restoreFromTrash(targets.map((t) => t.path)); } },
-      { icon: "eye", label: "Open", action: () => { closeFileMenu(); openFileDefault(targetPath); } },
-      { icon: "trash-can", label: `Delete permanently`, action: () => { closeFileMenu(); confirmDeleteForever(targets.map((t) => t.path)); } },
-    );
-    return entries;
-  }
-  if (isDir) entries.push({ icon: "folder", label: "Open", action: () => { closeFileMenu(); navigate(targetPath); } });
-  else entries.push({ icon: "eye", label: "Open", action: () => { closeFileMenu(); openFileDefault(targetPath); } });
-  // actions apply to the whole live selection when the right-clicked tile is
-  // part of it (Nautilus behavior), otherwise just this tile
-  const inSel = !!tileRefsByKey.get(targetPath)?.selected;
-  const targets: ClipItem[] = inSel && selPaths().length > 1 ? selPaths() : [{ path: targetPath, isDir }];
-  entries.push(
-    { icon: "content-copy", label: `Copy${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); setClipboard("copy", targets); } },
-    { icon: "content-cut", label: `Cut${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); setClipboard("cut", targets); } },
-    ...(isDir
-      ? [{
-          icon: "content-paste",
-          label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"} into folder` : "Paste into folder",
-          action: () => { closeFileMenu(); pasteSmart(targetPath); },
-        } satisfies ListEntry]
-      : []),
-    { icon: "pencil", label: "Rename…", action: () => {
-        closeFileMenu();
-        startInlineRename(targetPath);
-      } },
-    { icon: "trash-can", label: `Trash${inSel && targets.length > 1 ? ` ${targets.length} items` : ""}`, action: () => { closeFileMenu(); trashPaths(targets.map((t) => t.path)); } },
-  );
-  entries.push({ icon: "information", label: "Properties…", action: () => openProperties(targetPath) });
-  return entries;
-};
-
-const sortEntries = (): ListEntry[] => {
-  // nautilus convention: picking a different key sorts it in its natural
-  // direction; clicking the active key flips ascending/descending.
-  // Direction arrow sits at the row's right edge via hint.
-  const pick = (key: SortMode, naturalAsc: boolean): void => {
-    closeFileMenu();
-    if (state.sortBy === key) state.sortAsc = !state.sortAsc;
-    else { state.sortBy = key; state.sortAsc = naturalAsc; }
-    void renderGrid();
-  };
-  const entry = (key: SortMode, label: string, naturalAsc: boolean): ListEntry => ({
-    label,
-    ...(state.sortBy === key ? { hintIcon: state.sortAsc ? "arrow-up" : "arrow-down" } : {}),
-    action: () => pick(key, naturalAsc),
-  });
-  return [
-    entry("name", "Name", true),
-    entry("size", "Size", false),
-    entry("mtime", "Modified", true),
-    entry("type", "Type", true),
-  ];
-};
-
-const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
-  const entries: ListEntry[] = [];
-  if (inTrashView()) {
-    entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { closeFileMenu(); confirmEmptyTrash(); } });
-  }
-  if (isVirtualCwd()) {
-    // read-only virtual views: nothing to paste or create here
-    entries.push(
-      { icon: "select-all", label: "Select all", action: () => {
-        closeFileMenu();
-        tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
-        updateSelectionStatusReal();
-      } },
-    );
-    return entries;
-  }
-  entries.push(
-    { icon: "file", label: "New File", action: () => { closeFileMenu(); startInlineCreate("file"); } },
-    { icon: "folder-plus", label: "New Folder", action: () => { closeFileMenu(); startInlineCreate("folder"); } },
-    { icon: "select-all", label: "Select all", action: () => {
-      closeFileMenu();
-      tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
-      updateSelectionStatusReal();
-    } },
-    { icon: "content-paste", label: clipboard && clipboard.items.length ? `Paste ${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}` : "Paste", action: () => { closeFileMenu(); pasteSmart(state.cwd); } },
-    { icon: "information", label: "Properties…", action: () => { closeFileMenu(); openProperties(state.cwd); } },
-    // nautilus puts shell access in its own group at the bottom
-    { sep: true, label: "", action: () => {} },
-    { icon: "terminal", label: "Open Terminal Here", action: () => { closeFileMenu(); openTerminalHere(); } },
-  );
-  return entries;
-};
+// --- Menu entry builders (what the menus contain) live in ./menu-entries;
+// the floating menu widget itself lives in ./ui-menu ---
+const { sidebarEntriesFor, fileEntriesFor, sortEntries, emptyAreaEntries } = makeMenuEntries({
+  closeFileMenu,
+  navigate,
+  renderAll: () => renderAll(),
+  renderGrid,
+  openTerminalHere,
+  clipboard: () => clipboardRef(),
+  pasteSmart,
+  confirmEmptyTrash,
+  confirmDeleteForever,
+  ejectDevice,
+  mountDevice,
+  inTrashView,
+  tileRefs: tileRefsByKey,
+  selPaths,
+  openFileDefault,
+  setClipboard,
+  startInlineRename,
+  startInlineCreate,
+  trashPaths,
+  restoreFromTrash,
+  openProperties,
+  selectAll: () => {
+    tileRefsByKey.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
+    updateSelectionStatusReal();
+  },
+  cwd: () => state.cwd,
+  sortState: state,
+});
 
 // --- ESC menu + settings panel — widget lives in ./ui-settings ---
 const quitApp = () => {
@@ -1983,7 +1401,7 @@ const boot = async () => {
       closeFileMenu();
       clearSearch();
       blurTerminal();
-      if (pathEditMode) { exitPathEdit(); return; }
+      if (pathEditMode()) { exitPathEdit(); return; }
       if (renameEdit) finishInlineRename(false);
       clearTileSelection();
       // band shows only once a drag actually moves the pointer
@@ -2075,11 +1493,7 @@ const rethemeChrome = (): void => {
   setOnId("tfm-term-header", (n) => applySurface(n, st === "outline" ? {} : { backgroundColor: colors.sidebarBg }));
 
   // toolbar hover buttons: box bg must track the new palette between raster swaps
-  for (const id of ["tfm-nav-back", "tfm-nav-fwd", "tfm-search-btn", "tfm-sort-btn"]) {
-    setOnId(id, (n) => {
-      applySurface(n, btnSurface(st, colors, !!navHover[id]));
-    });
-  }
+  repaintButtons();
   renderCrumbs();
   refreshNav();
   for (const id of ["tfm-search", "tfm-path-input", "tfm-prompt-input"]) {
@@ -2175,271 +1589,71 @@ try {
   watcher.on("error", () => {});
 } catch {}
 
-// --- OSC 72 drop-in (kitty drag-and-drop): accept OS file drags onto the terminal ---
-// wire format per yazi's reference impl: enter(t=m)/ready(t=M) carry a plaintext
-// space-separated MIME list; data arrives as unpadded base64 chunks (t=r) that we
-// request with StartDrop and acknowledge with FinishDrop(copy).
-// Sequences are received via renderer.subscribeOsc — OpenTUI's stdin parser hands
-// every OSC it frames to subscribers, so no second reader races the renderer.
 const DND_LOG = "/tmp/tfm-dnd.log";
 const dlog = (msg: string): void => {
   try { appendFileSync(DND_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
   if (isDebug) appendLog(`[dnd] ${msg}`);
 };
 
-const osc72Write = (s: string, label: string): void => {
-  dlog(`tx ${label}`);
-  try { process.stdout.write(s); } catch {}
-};
-
-const enableDrops = (): void => {
-  osc72Write(dragOutEnableFrame(), "enable drag-out");
-  osc72Write(dropInEnableFrame(), "enable drop-in");
-};
-const disableDrops = (): void => osc72Write(dropDisableFrame(), "disable drop");
-
-let osc72DropIdx = -1;
-const osc72Arrive: Record<number, string> = {};
-// outgoing drag session state
-let osc72DragPaths: string[] | null = null;
-let osc72DragOp = 1; // 1 copy / 2 move
-let osc72SelfHandled = false; // self-drop already moved/copied the files
-let osc72SelfTargetKey: string | null = null; // folder tile currently highlighted
-let osc72EndTimer: any = null;
-// NOTE: an experiment to detect cursor-exit mid-drag by flipping SGR pixel
-// mode (?1016) failed: OpenTUI's mouse parser drops negatives outright
-// (parse.mouse.ts returns null) and interprets pixel coords as cells, corrupting
-// dispatch/highlights app-wide. Kitty reports OOB motion only in that mode,
-// so internal->external handoff within one gesture is not implementable here.
-let osc72OfferSeen = false; // internal-first: we decline offers, remember the gesture happened
-let osc72Engaged = false; // handed off to the OS mid-gesture
-
-// resolve a terminal cell position to an internal drop target (folder tile or place)
-const resolveDropTargetAt = (x: number, y: number): { kind: "folder" | "place"; path: string } | null => {
-  try {
-    const num = renderer.hitTest(x, y);
-    if (!num) return null;
-    let cur: any = (Renderable as any).renderablesByNumber?.get(num);
-    while (cur) {
-      const id: unknown = cur.id;
-      if (typeof id === "string") {
-        if (id.startsWith("tfm-place-")) {
-          const rec = placesHost[parseInt(id.slice(10), 10)];
-          return rec?.place.path ? { kind: "place", path: rec.place.path } : null;
-        }
-        if (id.startsWith("tfm-tile-")) {
-          for (const [k, r] of tileRefsByKey) {
-            if (r.tileId === id) {
-              if (!r.isDir) return null;
-              if (osc72DragPaths?.includes(k)) return null; // dropping onto itself
-              return { kind: "folder", path: k };
+// --- OSC 72 (kitty drag-and-drop): wire format per yazi's reference impl;
+// the state machine (outgoing drags, incoming drops, self-drop routing) lives
+// in ./dnd72, the byte-exact frames in ./osc72. Only the renderer-coupled
+// hooks stay here: cell hit-testing, tile highlight and place hover. ---
+const { enableDrops, disableDrops } = makeDnd72({
+  log: (msg) => dlog(msg),
+  writeFrame: (s) => { try { process.stdout.write(s); } catch {} },
+  hitTargetAt: (x, y, dragPaths): DropTarget | null => {
+    try {
+      const num = renderer.hitTest(x, y);
+      if (!num) return null;
+      let cur: any = (Renderable as any).renderablesByNumber?.get(num);
+      while (cur) {
+        const id: unknown = cur.id;
+        if (typeof id === "string") {
+          if (id.startsWith("tfm-place-")) {
+            const rec = placesHost[parseInt(id.slice(10), 10)];
+            return rec?.place.path ? { kind: "place", path: rec.place.path } : null;
+          }
+          if (id.startsWith("tfm-tile-")) {
+            for (const [k, r] of tileRefsByKey) {
+              if (r.tileId === id) {
+                if (!r.isDir) return null;
+                if (dragPaths?.includes(k)) return null; // dropping onto itself
+                return { kind: "folder", path: k };
+              }
             }
           }
         }
+        cur = cur.parent;
       }
-      cur = cur.parent;
-    }
-  } catch {}
-  return null;
-};
-
-const clearSelfDropHighlight = (): void => {
-  if (osc72SelfTargetKey) {
-    const r = tileRefsByKey.get(osc72SelfTargetKey);
-    if (r && !r.selected) setTileVisual(osc72SelfTargetKey, 0);
-    osc72SelfTargetKey = null;
-  }
-};
-
-// kitty renders this text badge next to the cursor for the whole drag session —
-// the visual feedback we lose by handing the pointer to the OS
-const sendDragIcon = (n: number): void => {
-  osc72Write(dragIconFrame(n), "drag icon");
-};
-
-const beginOsc72Drag = (paths: string[]): void => {
-  osc72DragPaths = paths;
-  osc72DragOp = 1;
-  osc72SelfHandled = false;
-  finishDragCtx(); // pointer is about to be grabbed by the terminal
-  osc72Write(agreeDragFrame(), "agree drag either");
-  presentDragUriList(paths);
-  sendDragIcon(paths.length);
-  osc72Write(startDragFrame(), "start drag");
-  setStatusMsg(`Dragging ${paths.length} item${paths.length === 1 ? "" : "s"} — drop into another app or a folder`);
-};
-
-// self-dropped back onto tfm: route to the folder/place under the cursor,
-// otherwise cancel — this is what makes one plain drag serve both worlds
-const handleSelfDropHover = (x: number, y: number): void => {
-  clearSelfDropHighlight();
-  const target = x >= 0 ? resolveDropTargetAt(x, y) : null;
-  dlog(`self hover ${x},${y} -> ${target ? target.kind + ":" + target.path : "none"}`);
-  if (!target) {
-    clearMousePlace();
-    return;
-  }
-  if (target.kind === "folder") {
-    osc72SelfTargetKey = target.path;
-    setTileVisual(target.path, 2);
-  } else {
-    const idx = placesHost.findIndex((p) => p.place.path === target.path);
+    } catch {}
+    return null;
+  },
+  tileRefs: tileRefsByKey,
+  setTileVisual,
+  hoverPlace: (p) => {
+    const idx = placesHost.findIndex((pl) => pl.place.path === p);
     if (idx >= 0) setMousePlace(idx);
-  }
-};
-
-const finishSelfDrop = async (x: number, y: number): Promise<void> => {
-  dlog(`self drop at ${x},${y}`);
-  if (osc72EndTimer) { clearTimeout(osc72EndTimer); osc72EndTimer = null; }
-  const paths = osc72DragPaths;
-  osc72SelfHandled = true;
-  const target = resolveDropTargetAt(x, y);
-  clearSelfDropHighlight();
-  osc72DragPaths = null;
-  osc72SelfHandled = false;
-  if (!paths?.length || !target) {
-    osc72Write(selfDropRejectFrame(), "self drop rejected");
-    setStatusMsg("drag cancelled");
-    return;
-  }
-  const destDir = target.path;
-  // same routing as tile/place drops: conflict prompt, undo units, honest counts —
-  // never silently skip collisions; the trash place must gio-trash, not raw-move
-  if (destDir === path.join(home, ".local/share/Trash/files")) {
-    void trashPaths(paths);
-    return;
-  }
-  const items: ClipItem[] = paths.map((p) => ({
-    path: p,
-    isDir:
-      tileRefsByKey.get(p)?.isDir ??
-      (() => {
-        try { return statSync(p).isDirectory(); } catch { return false; }
-      })(),
-  }));
-  await moveInto(destDir, items);
-};
-
-const presentDragUriList = (paths: string[]): void => {
-  const [dataFrame, endFrame] = presentDragFrames(paths);
-  const b64Len = dropPayloadLength(paths);
-  osc72Write(dataFrame, `present drag ${b64Len} b64 chars`);
-  osc72Write(endFrame, "present drag end");
-};
-
-// length of the unpadded base64 payload, for the debug label only
-const dropPayloadLength = (paths: string[]): number => uriListPayload(paths).length;
-
-const finishOsc72Drop = async (idx: number): Promise<void> => {
-  const b64 = osc72Arrive[idx];
-  delete osc72Arrive[idx];
-  osc72DropIdx = -1;
-  osc72Write(finishDropFrame(), `finish drop idx=${idx}`);
-  dlog(`drop complete, uri-list bytes=${b64 ? Buffer.from(b64, "base64").length : 0}`);
-  if (!b64) return;
-  if (isVirtualCwd()) {
-    setStatusMsg("Drops land in a real folder");
-    return;
-  }
-  const text = Buffer.from(b64, "base64").toString("utf8");
-  let paths = dropPayloadToPaths(text);
-  // some sources deliver bare paths (text/plain) instead of file:// URIs
-  if (!paths.length) paths = text.split(/\r?\n/).filter((l) => l.startsWith("/"));
-  dlog(`paths: ${paths.join(" | ") || "(none)"}`);
-  if (paths.length) await runTransfer("copy", state.cwd, paths, "drop");
-};
-
-const handleOsc72 = (meta: string, payload: string): void => {
-  const { t, x, y, m } = parseOsc72Meta(meta);
-
-  // --- outgoing drag session ---
-  // middle-button drags go external (OS session + icon badge); left drags are
-  // declined so the internal move flow keeps the pointer and its UI feedback
-  if (t === "o" && x >= 0) {
-    const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !escMenu.isOpen() && !fileMenuIsOpen();
-    dlog(`drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${escMenu.isOpen()} fmenu=${fileMenuIsOpen()}`);
-    if (!want || !gridDrag.keys) return; // left-drag: kitty falls back to normal mouse events
-    beginOsc72Drag(gridDrag.keys.map((k) => k.path));
-    return;
-  }
-  if (t === "e") {
-    if (x === 2) { osc72DragOp = y === 2 ? 2 : 1; dlog(`drag op=${osc72DragOp === 2 ? "move" : "copy"}`); }
-    else if (x === 3) { dlog(`drag landed op=${osc72DragOp}`); }
-    else if (x === 4) {
-      const canceled = y !== 0;
-      dlog(`drag end canceled=${canceled} op=${osc72DragOp} selfHandled=${osc72SelfHandled}`);
-      const pathsAtEnd = osc72DragPaths;
-      const finishExternal = (): void => {
-        if (!canceled && pathsAtEnd && !osc72SelfHandled) {
-          // released over another app: honor move semantics by trashing our copies
-          if (osc72DragOp === 2) trashPaths(pathsAtEnd);
-          else notify(`Sent ${pathsAtEnd.length} item${pathsAtEnd.length === 1 ? "" : "s"}`, "drag & drop");
-        } else if (canceled) setStatusMsg("drag cancelled");
-        osc72DragPaths = null;
-        osc72SelfHandled = false;
-        clearSelfDropHighlight();
-      };
-      if (osc72EndTimer) { clearTimeout(osc72EndTimer); osc72EndTimer = null; }
-      // a self-drop M may still be in flight behind the end event — defer
-      if (!canceled && pathsAtEnd && !osc72SelfHandled) osc72EndTimer = setTimeout(finishExternal, 700);
-      else finishExternal();
-    }
-    else if (x === 5 && osc72DragPaths && !osc72SelfHandled) { dlog("drag send request"); presentDragUriList(osc72DragPaths); }
-    return;
-  }
-
-  // --- self-drop: hover/drop events landing back on tfm during OUR session ---
-  if ((t === "m" || t === "M") && osc72DragPaths) {
-    if (x === -1 && y === -1) { clearSelfDropHighlight(); clearMousePlace(); return; }
-    if (t === "m") { handleSelfDropHover(x, y); return; }
-    void finishSelfDrop(x, y); // M — dropped on ourselves
-    return;
-  }
-
-  // DropLeave
-  if (t === "m" && x === -1 && y === -1) {
-    dlog("leave");
-    osc72DropIdx = -1;
-    for (const k of Object.keys(osc72Arrive)) delete osc72Arrive[Number(k)];
-    return;
-  }
-
-  if (t === "m" || t === "M") {
-    const mimes = payload.split(/\s+/).filter(Boolean);
-    const idx = mimes.indexOf("text/uri-list");
-    dlog(`${t === "M" ? "ready" : "enter"} mimes=[${mimes}] uriIdx=${idx} busy=${osc72DropIdx >= 0}`);
-    if (idx < 0 || osc72DropIdx >= 0) return;
-    osc72Write(agreeDropFrame(), "agree copy");
-    if (t === "M") {
-      // kitty's mime indices are 1-based (yazi requests ipairs index)
-      osc72DropIdx = idx + 1;
-      osc72Arrive[osc72DropIdx] = "";
-      osc72Write(startDropFrame(osc72DropIdx), `start drop uriIdx=${idx} wire=${osc72DropIdx}`);
-    }
-    return;
-  }
-  if (t === "r" && x === osc72DropIdx) {
-    osc72Arrive[x] += payload;
-    // presence of payload or m=1 means more chunks are coming
-    if (!payload && !m) void finishOsc72Drop(x);
-    return;
-  }
-  if (t === "R") { dlog(`drop error: ${payload}`); setStatusMsg("drop failed"); return; }
-  if (t === "E") { dlog(`drag offer error: ${payload}`); setStatusMsg("drag failed"); return; }
-  dlog(`unhandled osc72 type t=${JSON.stringify(t)} x=${x} y=${y} payloadLen=${payload.length}`);
-};
-
-renderer.subscribeOsc((seq: string) => {
-  const start = seq.indexOf("]72;");
-  if (start < 0) return;
-  const body = seq.slice(start + 4).replace(/(\x1b\\|\x07|\x9c)$/, "");
-  handleOsc72(body.slice(0, body.indexOf(";") < 0 ? body.length : body.indexOf(";")), body.indexOf(";") < 0 ? "" : body.slice(body.indexOf(";") + 1));
+  },
+  clearHoverPlace: () => clearMousePlace(),
+  finishDrag: () => finishDragCtx(),
+  escMenuOpen: () => escMenu.isOpen(),
+  fileMenuOpen: () => fileMenuIsOpen(),
+  trashPaths,
+  moveInto,
+  runTransfer,
+  cwd: () => state.cwd,
+  virtualCwd: () => isVirtualCwd(),
+  home,
+  setStatusMsg,
+  notify: (msg, title) => notify(msg, title),
+  subscribeOsc: (cb) => renderer.subscribeOsc(cb),
 });
 enableDrops();
 // XTSHIFTESCAPE=1 (CSI > Ps s): ask the terminal (kitty, ghostty, xterm) to
 // forward shift+click instead of using it for native text selection.
 // Terminals that don't know the sequence ignore it; alt+click is the fallback.
-osc72Write("\x1b[>1s", "xtshiftescape on");
+try { dlog("tx xtshiftescape on"); process.stdout.write("\x1b[>1s"); } catch {}
 
 // --- resize: repave rasters and rebuild layout ---
 let resizeTimer: any = null;
@@ -2465,8 +1679,8 @@ renderer.keyInput.on("keypress", (e: any) => {
   }
 
   // yes/no confirm: esc = No, everything else swallowed (mouse-driven)
-  if (yesNoOpen) {
-    if (e.name === "escape") closeYesNo();
+  if (yesNo.isOpen()) {
+    if (e.name === "escape") yesNo.close();
     return;
   }
 
@@ -2478,12 +1692,6 @@ renderer.keyInput.on("keypress", (e: any) => {
   // floating properties dialog: esc/enter closes, everything else swallowed
   if (propsIsOpen()) {
     if (e.name === "escape" || e.name === "return") closeProps();
-    return;
-  }
-
-  // notification test: ctrl+g (ctrl+i is indistinguishable from tab)
-  if (ctrl && e.name === "g") {
-    notify(`hello at ${new Date().toLocaleTimeString()}`, "debug");
     return;
   }
 
@@ -2504,7 +1712,7 @@ renderer.keyInput.on("keypress", (e: any) => {
   const el: any = byId("tfm-search");
   const pathInput: any = byId("tfm-path-input");
 
-  if (pathInput?.visible || pathEditMode) {
+  if (pathInput?.visible || pathEditMode()) {
     if (e.name === "escape") {
       exitPathEdit();
       return;
