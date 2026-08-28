@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import path from "node:path";
-import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove } from "./fsutil";
+import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove, deviceOf, crossDevice } from "./fsutil";
 
 // trashDir() re-reads XDG_DATA_HOME on every call, so redirecting the env in
 // beforeAll sandboxes all trash writes away from the real ~/.local/share.
@@ -130,6 +130,47 @@ describe("xdgTrashMove", () => {
       const loc = await xdgTrashMove(path.join(files, "c.txt"));
       expect(loc).toBe(path.join(trashDir(), "files", "c.txt"));
     } finally { rmSync(files, { recursive: true, force: true }); }
+  });
+
+  test("failed move leaves NO orphan .trashinfo (info is written after the move)", async () => {
+    rmSync(path.join(SANDBOX, "Trash"), { recursive: true, force: true });
+    await expect(xdgTrashMove("/nonexistent/tfm-orphan.txt")).rejects.toThrow();
+    expect(existsSync(path.join(trashDir(), "info", "tfm-orphan.txt.trashinfo"))).toBe(false);
+    expect(existsSync(path.join(trashDir(), "files", "tfm-orphan.txt"))).toBe(false);
+  });
+
+  test("info-write failure rolls the move back — source intact, no half-trashed state", async () => {
+    rmSync(path.join(SANDBOX, "Trash"), { recursive: true, force: true });
+    const files = mkdtempSync("/tmp/opencode/tfm-trash-rb-");
+    const infoDir = path.join(trashDir(), "info");
+    try {
+      W(path.join(files, "rb.txt"), "still mine");
+      mkdirSync(infoDir, { recursive: true });
+      chmodSync(infoDir, 0o555); // writeFile into info/ fails with EACCES
+      await expect(xdgTrashMove(path.join(files, "rb.txt"))).rejects.toThrow();
+      // rolled back: file back where it was, nothing left in Trash
+      expect(readFileSync(path.join(files, "rb.txt"), "utf8")).toBe("still mine");
+      expect(existsSync(path.join(trashDir(), "files", "rb.txt"))).toBe(false);
+    } finally {
+      chmodSync(infoDir, 0o755);
+      rmSync(files, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("deviceOf / crossDevice", () => {
+  test("same tree is same-device, statable paths yield a dev number", () => {
+    const dir = mkdtempSync("/tmp/opencode/tfm-dev-");
+    try {
+      W(path.join(dir, "f.txt"));
+      expect(typeof deviceOf(path.join(dir, "f.txt"))).toBe("number");
+      expect(crossDevice(dir, path.join(dir, "f.txt"))).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("unstatable path -> null dev, crossDevice false (safe fallback, not 'equal')", () => {
+    expect(deviceOf("/nonexistent/tfm-dev-miss")).toBeNull();
+    expect(crossDevice("/nonexistent/a", "/nonexistent/b")).toBe(false);
   });
 });
 

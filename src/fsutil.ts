@@ -1,5 +1,5 @@
 import { cp, mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -72,6 +72,15 @@ export const safeRestoreMove = async (src: string, dest: string): Promise<void> 
 // XDG trash fallback: `gio trash` fails on tmpfs ("system internal mounts"),
 // so we write the .trashinfo ourselves and move into Trash/files. Returns the
 // final path (name may be suffixed .2, .3 … on collisions).
+//
+// Ordering matters: the move happens FIRST, the .trashinfo only after it —
+// writing the info first left an orphan entry pointing at a file that never
+// arrived whenever the move failed (dead row in every trash browser). If the
+// info write fails after a successful move, roll the move back so trash state
+// stays consistent (either fully trashed or untouched). Residual race: the
+// collision-name check is existsSync-then-rename, so a concurrent trasher
+// could still claim the name between check and move (portable APIs expose no
+// atomic no-clobber rename for dirs).
 export const xdgTrashMove = async (p: string): Promise<string> => {
   const filesDir = path.join(trashDir(), "files");
   const infoDir = path.join(trashDir(), "info");
@@ -80,9 +89,29 @@ export const xdgTrashMove = async (p: string): Promise<string> => {
   const base = path.basename(p);
   let name = base;
   for (let i = 2; existsSync(path.join(filesDir, name)); i++) name = `${base}.${i}`;
-  const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-  await writeFile(path.join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${p}\nDeletionDate=${stamp}\n`);
   const finalPath = path.join(filesDir, name);
   await fsMove(p, finalPath);
+  const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  try {
+    await writeFile(path.join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${p}\nDeletionDate=${stamp}\n`);
+  } catch (err) {
+    // put the file back — a source-less trash entry is worse than no entry
+    try { await fsMove(finalPath, p); } catch (undoErr) {
+      (err as any).rollbackFailed = undoErr;
+    }
+    throw err;
+  }
   return finalPath;
+};
+
+// st.dev of a path (lstat: moving a symlink moves the link, not its target).
+// null when the path is gone/unstatable — callers must treat null as
+// "unknown, use the safe fallback" (fsMove's EXDEV path), never as equal.
+export const deviceOf = (p: string): number | null => {
+  try { return lstatSync(p).dev; } catch { return null; }
+};
+
+export const crossDevice = (a: string, b: string): boolean => {
+  const da = deviceOf(a), db = deviceOf(b);
+  return da !== null && db !== null && da !== db;
 };

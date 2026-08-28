@@ -8,7 +8,7 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { rm, rename as fsRename } from "node:fs/promises";
-import { fsErrText, fsMove, safeRestoreMove, trashDir, uniqueTarget, xdgTrashMove } from "./fsutil";
+import { fsErrText, fsMove, safeRestoreMove, trashDir, uniqueTarget, xdgTrashMove, crossDevice as fsCrossDevice } from "./fsutil";
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import type { ConflictChoice } from "./ui-dialogs";
@@ -35,6 +35,8 @@ export type FileOpsCtx = {
   home: string;
   // cut-tile dimming repaint (tile visuals stay with the grid in index.ts)
   refreshCutVisuals(): void;
+  // injectable for tests — real impl lstats st.dev (fsutil)
+  crossDevice?(a: string, b: string): boolean;
   // /tmp/tfm-dnd.log debug sink
   log(msg: string): void;
 };
@@ -59,6 +61,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     repaint: (full) => ctx.paintProgress(full),
   };
   const copyTreeProgressWired = (src: string, dest: string): Promise<void> => copyTreeProgress(src, dest, transferSink);
+  const isCrossDevice = (a: string, b: string): boolean => (ctx.crossDevice ?? fsCrossDevice)(a, b);
 
   // every destructive-but-reversible file op funnels through here so overrides
   // are asked once and undo covers the whole batch
@@ -69,12 +72,17 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let ok = 0, skipped = 0, replaced = 0, failed = 0, gone = 0;
     const failWhy = new Set<string>();
     const total = srcs.length;
-    if (op === "copy") {
+    // moves across a filesystem boundary go through the copy engine too
+    // (rename can't cross devices) — those need the same pre-scan + toast
+    // copies get, or a big cross-device move sits there silently for minutes
+    const withProgress = op === "copy" || srcs.some((s) => isCrossDevice(s, destDir));
+    if (withProgress) {
       // pre-scan so the progress toast has real totals from byte one
       prog.paused = false;
       prog.cancelled = false;
       prog.doneFiles = 0;
       prog.bytes = 0;
+      prog.verb = op === "copy" ? "copying" : "moving";
       let files = 0, bytes = 0;
       for (const s of srcs) {
         try { const r = await scanTreeWired(s); files += r.files; bytes += r.bytes; } catch {}
@@ -122,8 +130,19 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           } catch (err) { failWhy.add(fsErrText(err)); ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — proceeding without undo`); }
         }
       }
+      // per-iteration: did THIS src go through the streaming copy engine?
+      // (cross-device moves need the same half-copy cleanup real copies get)
+      let copiedHere = false;
       try {
-        if (op === "copy") await copyTreeProgressWired(src, target);
+        if (op === "copy") { copiedHere = true; await copyTreeProgressWired(src, target); }
+        else if (isCrossDevice(src, destDir)) {
+          copiedHere = true;
+          await copyTreeProgressWired(src, target);
+          // cancel raced the final byte: copy completed but the source must
+          // survive a cancelled move — surface as cancelled, drop the copy
+          if (prog.cancelled) throw new Error("cancelled");
+          await rm(src, { recursive: true });
+        }
         else await fsMove(src, target);
         const t = target, s = src;
         if (op === "copy") {
@@ -135,8 +154,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         }
         ok++;
       } catch (err) {
-        // don't leave half-copied files behind
-        if (op === "copy") { try { await rm(target, { recursive: true }); } catch (cleanup) { ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`); } }
+        // don't leave half-copied files behind (copies AND cross-device moves)
+        if (op === "copy" || copiedHere) { try { await rm(target, { recursive: true }); } catch (cleanup) { ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`); } }
         if (prog.cancelled) { cancelled = true; break; }
         failed++;
         failWhy.add(fsErrText(err));

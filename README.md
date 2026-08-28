@@ -75,7 +75,7 @@ Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 - Linux only; no macOS/Windows support
 - Image thumbnails need a kitty-graphics-protocol terminal (kitty, ghostty); others fall back to Nerd Font glyphs
 - tmux hides rasters unless `allow-passthrough` is on; icons render but won't display images
-- Cross-device moves are copy+delete (no atomic rename across filesystems)
+- Cross-device moves are copy+delete (no atomic rename across filesystems) — they run through the copy engine with the progress toast
 - Drag & drop to/from other apps is kitty-only (OSC 72): ghostty does image thumbnails and in-app drag (`ctrl+drag`), but cross-app drag **won't** work there
 - Custom kitty themes might misbehave
 
