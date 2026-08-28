@@ -1414,6 +1414,76 @@ const setScrim = (on: boolean) => {
   }
 };
 
+// --- Shared skeleton for the centered floating dialogs (conflict / props /
+// prompt / yesno): full-screen dimmed scrim + a chrome panel that swallows
+// clicks, teardown is one scrim removal. Callers supply id/zIndex/width and
+// build their panel rows fresh (they close over live state). ---
+const openDialog = (opts: {
+  id: string;
+  zIndex: number;
+  width: number;
+  paddingDiv?: number; // vertical centering divisor: terminalHeight / this (3, props uses 4)
+  rows: () => any[];
+  onClose: () => void;
+}): void => {
+  const scrim = Box(
+    {
+      id: opts.id,
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / (opts.paddingDiv ?? 3))),
+      zIndex: opts.zIndex,
+      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      onMouseDown: () => opts.onClose(),
+    },
+    Box(
+      {
+        id: `${opts.id}-panel`,
+        width: opts.width,
+        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
+        paddingTop: 1,
+        paddingBottom: 1,
+        flexDirection: "column",
+        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
+      },
+      ...opts.rows(),
+    ),
+  );
+  renderer.root.add(scrim);
+  stripSelectable();
+};
+
+const closeDialog = (id: string): void => {
+  const scrim: any = byId(id);
+  scrim?.parent?.remove(scrim);
+};
+
+// hover button used by the conflict + yes/no dialogs (identical builders)
+const dialogBtn = (id: string, label: string, fg: string, onPick: () => void): ReturnType<typeof Box> => {
+  const setBg = (on: boolean) => {
+    const n: any = byId(id);
+    if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
+  };
+  return Box(
+    {
+      id,
+      height: 1,
+      flexGrow: 1,
+      flexDirection: "row",
+      justifyContent: "center",
+      ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
+      onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
+      onMouseOver: () => setBg(true),
+      onMouseOut: () => setBg(false),
+    },
+    Text({ content: label, fg }),
+  );
+};
+
 // --- Grid (scrollable, culled, interactive) ---
 // mutable: applyConfig() rewrites these when settings change
 let TILE_W = config.ui.tileWidth;
@@ -1780,8 +1850,7 @@ let conflictOpen = false;
 let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
 
 const closeConflict = (c: ConflictChoice): void => {
-  const scrim: any = byId("tfm-conflict");
-  scrim?.parent?.remove(scrim);
+  closeDialog("tfm-conflict");
   conflictOpen = false;
   const r = conflictResolveFn;
   conflictResolveFn = null;
@@ -1799,27 +1868,8 @@ const promptConflict = (destPath: string, remaining: number): Promise<ConflictCh
     const name = path.basename(destPath);
     const parentName = path.basename(path.dirname(destPath)) || "/";
     let bseq = 0;
-    const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> => {
-      const id = `tfm-conflict-b${bseq++}`;
-      const setBg = (on: boolean) => {
-        const n: any = byId(id);
-        if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
-      };
-      return Box(
-        {
-          id,
-          height: 1,
-          flexGrow: 1,
-          flexDirection: "row",
-          justifyContent: "center",
-          ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
-          onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
-          onMouseOver: () => setBg(true),
-          onMouseOut: () => setBg(false),
-        },
-        Text({ content: label, fg: colors.sidebarFg }),
-      );
-    };
+    const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> =>
+      dialogBtn(`tfm-conflict-b${bseq++}`, label, colors.sidebarFg, onPick);
     const pick = (c: ConflictChoice, all?: ConflictChoice) => {
       if (all) conflictPolicy = all;
       closeConflict(c);
@@ -1856,35 +1906,13 @@ const promptConflict = (destPath: string, remaining: number): Promise<ConflictCh
         ),
       );
     }
-    const scrim = Box(
-      {
-        id: "tfm-conflict",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: "100%",
-        height: "100%",
-        alignItems: "center",
-        paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
-        zIndex: 3400,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-        onMouseDown: () => closeConflict("skip"),
-      },
-      Box(
-        {
-          id: "tfm-conflict-panel",
-          width: CONFLICT_W,
-          ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-          paddingTop: 1,
-          paddingBottom: 1,
-          flexDirection: "column",
-          onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
-        },
-        ...rows,
-      ),
-    );
-    renderer.root.add(scrim);
-    stripSelectable();
+    openDialog({
+      id: "tfm-conflict",
+      zIndex: 3400,
+      width: CONFLICT_W,
+      rows: () => rows,
+      onClose: () => closeConflict("skip"),
+    });
     void drainIconQueue();
   });
 
@@ -2646,8 +2674,7 @@ const emptyTrash = (): void => {
 let yesNoOpen = false;
 
 const closeYesNo = (): void => {
-  const scrim: any = byId("tfm-yesno");
-  scrim?.parent?.remove(scrim);
+  closeDialog("tfm-yesno");
   yesNoOpen = false;
 };
 
@@ -2657,52 +2684,14 @@ const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, dang
   yesNoOpen = true;
   const W = MENU_W;
   let bseq = 0;
-  const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> => {
-    const id = `tfm-yesno-b${bseq++}`;
-    const setBg = (on: boolean) => {
-      const n: any = byId(id);
-      if (n) applySurface(n, btnSurface(config.ui.uiStyle, colors, on, colors.sidebarBg));
-    };
-    return Box(
-      {
-        id,
-        height: 1,
-        flexGrow: 1,
-        flexDirection: "row",
-        justifyContent: "center",
-        ...btnSurface(config.ui.uiStyle, colors, false, colors.sidebarBg),
-        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
-        onMouseOver: () => setBg(true),
-        onMouseOut: () => setBg(false),
-      },
-      Text({ content: label, fg }),
-    );
-  };
+  const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> =>
+    dialogBtn(`tfm-yesno-b${bseq++}`, label, fg, onPick);
   const yesFg = danger ? colors.ansi1 : colors.accent;
-  const scrim = Box(
-    {
-      id: "tfm-yesno",
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: "100%",
-      height: "100%",
-      alignItems: "center",
-      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
-      zIndex: 3450,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-      onMouseDown: () => closeYesNo(),
-    },
-    Box(
-      {
-        id: "tfm-yesno-panel",
-        width: W,
-        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-        paddingTop: 1,
-        paddingBottom: 1,
-        flexDirection: "column",
-        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
-      },
+  openDialog({
+    id: "tfm-yesno",
+    zIndex: 3450,
+    width: W,
+    rows: () => [
       Box(
         { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
         Text({ content: ` ${message}`.slice(0, W - 2), fg: yesFg }),
@@ -2717,10 +2706,9 @@ const confirmYesNo = (message: string, yesLabel: string, onYes: () => void, dang
         mkBtn("[ No ]", colors.sidebarFg, () => closeYesNo()),
         mkBtn(`[ ${yesLabel} ]`, yesFg, () => { closeYesNo(); onYes(); }),
       ),
-    ),
-  );
-  renderer.root.add(scrim);
-  stripSelectable();
+    ],
+    onClose: () => closeYesNo(),
+  });
   return true;
 };
 
@@ -3528,88 +3516,12 @@ const escHintBtn = (id: string, onClose: () => void): ReturnType<typeof Box> => 
   );
 };
 
-// --- Prompt modal (rename / new folder) ---
-let promptOpen = false;
-
-const closePrompt = () => {
-  const scrim: any = byId("tfm-prompt");
-  scrim?.parent?.remove(scrim);
-  promptOpen = false;
-};
-
-const openPrompt = (title: string, initial: string, onSubmit: (value: string) => void) => {
-  if (promptOpen || !renderer.resolution) return;
-  promptOpen = true;
-  const scrim = Box(
-    {
-      id: "tfm-prompt",
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: "100%",
-      height: "100%",
-      alignItems: "center",
-      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 3)),
-      zIndex: 3200,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-      onMouseDown: () => { closePrompt(); },
-    },
-    Box(
-      {
-        id: "tfm-prompt-panel",
-        width: MENU_W,
-        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-        paddingTop: 1,
-        paddingBottom: 1,
-        flexDirection: "column",
-        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
-      },
-      Box(
-        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 1, paddingRight: 1 },
-        Text({ content: ` ${title}`.slice(0, MENU_W - 7), fg: colors.accent }),
-        Box({ flexGrow: 1 }),
-        escHintBtn("tfm-esc-prompt", closePrompt),
-      ),
-      Box(
-        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: " " + "~".repeat(MENU_W - 2), fg: colors.divider }),
-      ),
-    ),
-  );
-  renderer.root.add(scrim);
-
-  const panel: any = byId("tfm-prompt-panel");
-  const input = new InputRenderable(renderer, {
-    id: "tfm-prompt-input",
-    flexGrow: 1,
-    value: initial,
-    backgroundColor: colors.accentBg,
-    focusedBackgroundColor: colors.accentBg,
-    textColor: colors.white,
-  });
-  panel.add(input);
-  const prevHandler = input.handleKeyPress?.bind(input);
-  input.handleKeyPress = (key: any) => {
-    if (key?.name === "escape") { closePrompt(); return true; }
-    if (key?.name === "return") {
-      const v = String((input as any).value ?? "").trim();
-      closePrompt();
-      if (v) onSubmit(v);
-      return true;
-    }
-    return prevHandler ? prevHandler(key) : false;
-  };
-  setTimeout(() => { try { input.focus(); } catch {} }, 20);
-  stripSelectable();
-};
-
 // --- Properties dialog (floating, right-click -> Properties…) ---
 const PROPS_W = 46;
 let propsOpen = false;
 
 const closeProps = (): void => {
-  const scrim: any = byId("tfm-props");
-  scrim?.parent?.remove(scrim);
+  closeDialog("tfm-props");
   propsOpen = false;
 };
 
@@ -3621,33 +3533,14 @@ const openProperties = (targetPath: string): void => {
   const isDirTarget = st.isDirectory();
   propsOpen = true;
 
-  const scrim = Box(
-    {
-      id: "tfm-props",
-      position: "absolute",
-      left: 0,
-      top: 0,
-      width: "100%",
-      height: "100%",
-      alignItems: "center",
-      paddingTop: Math.max(2, Math.round(renderer.terminalHeight / 4)),
-      zIndex: 3300,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-      onMouseDown: () => closeProps(),
-    },
-    Box(
-      {
-        id: "tfm-props-panel",
-        width: PROPS_W,
-        ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-        paddingTop: 1,
-        paddingBottom: 1,
-        flexDirection: "column",
-        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
-      },
-    ),
-  );
-  renderer.root.add(scrim);
+  openDialog({
+    id: "tfm-props",
+    zIndex: 3300,
+    width: PROPS_W,
+    paddingDiv: 4,
+    rows: () => [],
+    onClose: () => closeProps(),
+  });
 
   const panel: any = byId("tfm-props-panel");
   if (!panel) return;
@@ -4965,8 +4858,8 @@ const handleOsc72 = (meta: string, payload: string): void => {
   // middle-button drags go external (OS session + icon badge); left drags are
   // declined so the internal move flow keeps the pointer and its UI feedback
   if (t === "o" && x >= 0) {
-    const want = !dragCtrl && !!dragKeys?.length && !promptOpen && !menuOpen && !fileMenuState;
-    dlog(`drag offer x=${x} y=${y} ctrl=${dragCtrl} accept=${want} keys=${dragKeys?.length ?? -1} prompt=${promptOpen} menu=${menuOpen} fmenu=${!!fileMenuState}`);
+    const want = !dragCtrl && !!dragKeys?.length && !menuOpen && !fileMenuState;
+    dlog(`drag offer x=${x} y=${y} ctrl=${dragCtrl} accept=${want} keys=${dragKeys?.length ?? -1} menu=${menuOpen} fmenu=${!!fileMenuState}`);
     if (!want || !dragKeys) return; // left-drag: kitty falls back to normal mouse events
     beginOsc72Drag(dragKeys.map((k) => k.path));
     return;
@@ -5067,11 +4960,15 @@ renderer.keyInput.on("keypress", (e: any) => {
     quitApp();
     return;
   }
-  if (promptOpen) return;
-
   // override/conflict modal: esc = skip, everything else swallowed (mouse-driven)
   if (conflictOpen) {
     if (e.name === "escape") closeConflict("skip");
+    return;
+  }
+
+  // yes/no confirm: esc = No, everything else swallowed (mouse-driven)
+  if (yesNoOpen) {
+    if (e.name === "escape") closeYesNo();
     return;
   }
 
