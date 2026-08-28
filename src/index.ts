@@ -47,6 +47,7 @@ import { makeUndo, type UndoUnit } from "./undo";
 import { makeTabs, type Tab } from "./tabs";
 import { appForFile } from "./apps";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
+import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
 import { animateLeft, makeNotify } from "./notify";
 import { makeDialogs } from "./ui-dialogs";
 import { makeProgress } from "./ui-progress";
@@ -66,33 +67,11 @@ const debugLog = (msg: string): void => {
   appendLog(msg);
 };
 
-// Render-path guard: a throw inside one repaint step must not blank the pane
-// or kill the rest — log it unconditionally and keep the other steps running.
-const safeRenderStep = (name: string, fn: () => void | Promise<void>): void => {
-  try {
-    const r = fn();
-    if (r instanceof Promise) r.catch((err) => appendLog(`render ${name} (async): ${err?.stack ?? err}`));
-  } catch (err: any) {
-    appendLog(`render ${name}: ${err?.stack ?? err}`);
-  }
-};
-
-// clear-and-rebuild idiom used by every dynamic host (crumbs, sidebar, tab
-// strip, menus, grid): drop all children of a renderable
-const clearChildren = (node: any): void => {
-  if (!node) return;
-  try { [...node.getChildren()].forEach((c: any) => node.remove(c)); } catch {}
-};
-
-// trailing debounce: every call pushes the run `ms` back; the body sees the
-// latest closure state when it finally fires
-const debounced = (ms: number, fn: () => void): (() => void) => {
-  let t: any = null;
-  return () => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => { t = null; fn(); }, ms);
-  };
-};
+// clear-and-rebuild / debounce / render-step guards live in ./uiutil
+const clearChildren = uiutilClearChildren;
+const debounced = uiutilDebounced;
+const safeRenderStep = (name: string, fn: () => void | Promise<void>): void =>
+  uiutilSafeRenderStep(name, fn, appendLog);
 
 process.on("uncaughtException", (err) => {
   appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
