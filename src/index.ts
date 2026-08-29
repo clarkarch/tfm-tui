@@ -118,7 +118,7 @@ const {
   pushThumbJob,
 } = makeSlots({
   renderer: () => renderer,
-  byId: (id: string) => byId(id),
+  byId,
   clearChildren: (node: any) => clearChildren(node),
   colors: () => colors as Theme & Record<string, any>,
   uiStyle: () => config.ui.uiStyle,
@@ -139,12 +139,14 @@ const state: AppState = {
   sortAsc: true,
 };
 
-let renderAll: () => void = () => {};
+// renderAll is a hoisted function declaration (defined further down) so
+// factories constructed before it can hold the stable binding directly —
+// no per-ctx TDZ arrow wrappers needed.
 
 // --- History navigation — pure state machine lives in ./nav (tested);
 // hooks close over later-defined bindings (TDZ seam rule) ---
 const { canBack, canFwd, goBack, goFwd, navigate } = makeNav(state, {
-  renderAll: () => renderAll(),
+  renderAll,
   clearSearch: () => clearSearch(),
   exitPathEdit: () => exitPathEdit(),
   closeFileMenuIfOpen: () => { if (fileMenuIsOpen()) closeFileMenu(); },
@@ -154,9 +156,9 @@ const { canBack, canFwd, goBack, goFwd, navigate } = makeNav(state, {
 // live history refs into the outgoing tab slot and adopts the incoming one.
 // Model lives in ./tabs (pure, tested) — rendering/session I/O stay here. ---
 const tabModel = makeTabs(state, {
-  onChanged: () => renderAll(),
-  status: (msg) => setStatusMsg(msg),
-  quit: () => quitApp(),
+  onChanged: renderAll,
+  status: setStatusMsg,
+  quit: quitApp,
 });
 const { switchTab, newTab, closeTab, syncTabFromState, adoptTab } = tabModel;
 
@@ -165,13 +167,13 @@ const { scheduleSaveSession, restoreSession } = makeSessionSync({
   state,
   tabModel,
   config,
-  isVirtualCwd: () => isVirtualCwd(),
+  isVirtualCwd,
 });
 
 // --- Type-to-search: query state + begin/clear/input-wiring live in ./search;
 // the keymap drives begin/clear, the grid reads the query via getQuery(). ---
 const search = makeSearch({
-  byId: (id) => byId(id),
+  byId,
   // arrow wrappers: termHasFocus/renderGrid are defined below (TDZ seam rule)
   termHasFocus: () => termHasFocus(),
   renderGrid: () => renderGrid(),
@@ -179,24 +181,42 @@ const search = makeSearch({
 const { clearSearch, beginTypeToSearch, wireSearchInput } = search;
 
 
+// --- File context menu (right-click a tile) — widget lives in ./ui-menu.
+// Hoisted above nav/chrome/toolbar/conflict/grid-ctx, which all consume
+// closeFileMenu/openContextMenu/fileMenuIsOpen. Safe pre-boot: every ctx
+// field defers renderer access (same seam rule as makeSlots) ---
+const MENU_W = 36;
+const { closeFileMenu, renderFileMenu, openContextMenu, isFileMenuOpen: fileMenuIsOpen, fileMenuState: getFileMenuState } = makeMenu({
+  byId,
+  rootAdd: (node) => renderer.root.add(node),
+  termW: () => renderer.terminalWidth,
+  termH: () => renderer.terminalHeight,
+  stripSelectable,
+  drainIconQueue: () => drainIconQueue(),
+  uiStyle: () => config.ui.uiStyle,
+  colors: () => colors as Theme & Record<string, any>,
+  menuW: MENU_W,
+  makeIconSlot,
+});
+
 // --- Places sidebar + tab strip — widget lives in ./ui-chrome ---
 // mutable: applyConfig() rewrites these when settings change
 let sw = config.ui.sidebarWidth;
 
 const { renderSidebar, renderTabbar, normalizePlaces, makeDivider, placesHost, mountDevice, ejectDevice, setMousePlace, clearMousePlace } = makeChrome({
-  byId: (id) => byId(id),
+  byId,
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors as Theme & Record<string, any>,
   sw: () => sw,
   sideInnerW,
   tabBar: () => config.ui.tabBar,
-  renderAll: () => renderAll(),
+  renderAll,
   navigate: (target) => navigate(target),
   blurTerminal: () => blurTerminal(),
-  closeFileMenu: () => closeFileMenu(),
-  openContextMenu: (x, y, t, e) => openContextMenu(x, y, t, e),
+  closeFileMenu,
+  openContextMenu,
   sidebarEntriesFor: (place, x, y) => sidebarEntriesFor(place, x, y),
-  finishDrag: () => finishDragCtx(),
+  finishDrag: finishDragCtx,
   dlog: (msg) => dlog(msg),
   trashPaths: (paths) => trashPaths(paths),
   moveInto: (dest, items) => moveInto(dest, items),
@@ -207,7 +227,7 @@ const { renderSidebar, renderTabbar, normalizePlaces, makeDivider, placesHost, m
   switchTab: (i) => switchTab(i),
   newTab: () => newTab(),
   hoverBtn: (id, icon, onMouseDown) => hoverBtn(id, icon, onMouseDown),
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   drainIconQueue: () => drainIconQueue(),
   makeIconSlot: (name, states, heightCells, initialState, onMouseDown, statesFactory) =>
     makeIconSlot(name, states, heightCells, initialState, onMouseDown, statesFactory),
@@ -237,21 +257,21 @@ const {
   pathEditMode,
 } = makeToolbar({
   renderer: () => renderer,
-  byId: (id: string) => byId(id),
+  byId,
   clearChildren: (node: any) => clearChildren(node),
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors as Theme & Record<string, any>,
   makeIconSlot,
   setIconState,
-  closeFileMenu: () => closeFileMenu(),
+  closeFileMenu,
   blurTerminal: () => blurTerminal(),
   navigate,
   canBack,
   canFwd,
   goBack,
   goFwd,
-  openContextMenu: (x, y, t, entries) => openContextMenu(x, y, t, entries),
+  openContextMenu,
   sortEntries: () => sortEntries(),
   cwd: () => state.cwd,
   home,
@@ -262,18 +282,10 @@ const {
 // URI/XDG primitives live in ./uri, the registries in ./recent, the listings
 // themselves in ./listing; this wrapper keeps the historic call-signature
 // (defaults to the current cwd)
-const isVirtualCwd = (p: string = state.cwd): boolean => isVirtualUri(p);
+function isVirtualCwd(p: string = state.cwd): boolean {
+  return isVirtualUri(p);
+}
 
-// --- Recent-files recording + default open: batching/toast logic lives in
-// ./recent-open (tested); xbel write, xdg-open spawn and the app probe are
-// injected here (notify is defined below — TDZ seam rule) ---
-const { openFileDefault } = makeRecentOpen({
-  inTrashView: () => inTrashView(),
-  notify: (msg, title) => notify(msg, title),
-  upsertRecent: (paths) => upsertRecentXbel(paths),
-  spawnOpen: (p) => { spawn("xdg-open", [p], { stdio: "ignore", detached: true }).unref?.(); },
-  appForFile,
-});
 // --- Layout ---
 const container = Box(
   { width: "100%", height: "100%", flexDirection: "row" },
@@ -315,10 +327,35 @@ renderer.root.add(container);
 warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
 renderer.setBackgroundColor(colors.bg); // opencode-style: global bg lives on the renderer, not per-box
 
+// --- Notifications — hoisted above its consumers (recent-open, undo, fileops,
+// terminal, trashops, settings, dnd72) so they take `notify` directly instead
+// of TDZ arrow wrappers; its ctx deps are all early (renderer/byId/colors) ---
+const { notify, toastCount } = makeNotify({
+  rootAdd: (node) => renderer.root.add(node),
+  remove: (node) => { const p: any = node.parent ?? renderer.root; p.remove(node); },
+  byId,
+  termW: () => renderer.terminalWidth,
+  accentBg: () => colors.accentBg,
+  white: () => colors.white,
+  sidebarFgMuted: () => colors.sidebarFgMuted,
+  durationMs: () => config.ui.toastDurationMs,
+});
+
+// --- Recent-files recording + default open: batching/toast logic lives in
+// ./recent-open (tested); xbel write, xdg-open spawn and the app probe are
+// injected here (hoisted below the renderer boot so `notify` exists) ---
+const { openFileDefault } = makeRecentOpen({
+  inTrashView,
+  notify,
+  upsertRecent: (paths) => upsertRecentXbel(paths),
+  spawnOpen: (p) => { spawn("xdg-open", [p], { stdio: "ignore", detached: true }).unref?.(); },
+  appForFile,
+});
+
 const dialogs = makeDialogs({
   byId,
   rootAdd: (node) => renderer.root.add(node),
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   termH: () => renderer.terminalHeight,
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors,
@@ -342,7 +379,7 @@ const selection = makeSelection({
   byId,
   setIconState,
   // arrow wrappers: isCutKey/renderPreview are defined below (TDZ)
-  isCutKey: (key) => isCutKey(key),
+  isCutKey,
   scroller: () => scroller,
   viewH: () => renderer.terminalHeight - 3,
   rowHInit: () => TILE_H,
@@ -376,15 +413,15 @@ const {
   colors: () => colors as Record<string, any>,
   tileW: () => TILE_W,
   tileRefs: tileRefsByKey,
-  stripSelectable: () => stripSelectable(),
-  renderAll: () => renderAll(),
+  stripSelectable,
+  renderAll,
   renderGrid: () => renderGrid(),
   // arrow wrappers: pushUndoBatch/performRename/setStatusMsg/inTrashView are defined below (TDZ)
   performRename: (p, name) => performRename(p, name),
   pushUndoBatch: (label, undos, redos) => pushUndoBatch(label, undos, redos),
-  setStatusMsg: (msg) => setStatusMsg(msg),
-  isVirtualCwd: () => isVirtualCwd(),
-  inTrashView: () => inTrashView(),
+  setStatusMsg,
+  isVirtualCwd,
+  inTrashView,
   cwd: () => state.cwd,
   focusKeys: () => selection.focusKeys(),
   selectTileAt,
@@ -394,14 +431,15 @@ const {
 // runTransfer/performRename/paste/clipboard orchestration lives in ./fileops;
 // the copy engine is ./transfer (pure, sink-injected), the progress toast
 // is ./ui-progress, and cut-tile dimming lives in ./selection (setTileVisual).
-const isCutKey = (key: string): boolean => {
+function isCutKey(key: string): boolean {
   const c = clipboardRef();
   return c?.mode === "cut" && c.items.some((i) => i.path === key);
 };
 
 // the reset fires 2500ms after the LAST status message, like a debounce
 const clearStatusMsg = debounced(2500, () => updateSelectionStatusReal());
-const setStatusMsg = (text: string) => {
+// hoisted declaration: consumed by factories constructed above this point
+function setStatusMsg(text: string) {
   const status: any = byId("tfm-status-label");
   if (status) { try { status.content = text; } catch {} }
   clearStatusMsg();
@@ -410,9 +448,9 @@ const setStatusMsg = (text: string) => {
 // --- Undo stack + override (conflict) prompt — dialog lives in ./ui-dialogs ---
 // undo/redo state machine lives in ./undo (pure, tested) — results surface via sink
 const { pushUndoBatch, undoLast, redoLast } = makeUndo({
-  status: (msg) => setStatusMsg(msg),
-  notify: (message, title) => notify(message, title),
-  refresh: () => renderAll(),
+  status: setStatusMsg,
+  notify,
+  refresh: renderAll,
 });
 
 
@@ -432,9 +470,9 @@ const { prog, paintProgress, showProgressToast, finishProgressToast, pauseGate }
   byId,
   rootAdd: (node) => renderer.root.add(node),
   remove: (node) => { try { (node.parent ?? renderer.root).remove(node); } catch {} },
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   termW: () => renderer.terminalWidth,
-  toastCount: () => toastCount(),
+  toastCount,
   colors: () => colors,
   makeIconSlot,
   setIconState,
@@ -449,9 +487,9 @@ const { runTransfer, performRename, setClipboard, pasteSmart, moveInto, clipboar
   finishProgressToast,
   pauseGate,
   pushUndoBatch,
-  renderAll: () => renderAll(),
+  renderAll,
   setStatusMsg,
-  notify: (msg, title) => notify(msg, title),
+  notify,
   home,
   refreshCutVisuals,
   log: (msg) => dlog(msg),
@@ -465,26 +503,28 @@ const { openTerminalHere, closeTerminalPane, syncTerminalTheme, termHasFocus, bl
   colors: () => colors as Theme & Record<string, any>,
   sw: () => sw,
   escHintBtn: (id, onClose) => escHintBtn(id, onClose),
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   drainIconQueue: () => drainIconQueue(),
-  notify: (message, title) => notify(message, title),
-  renderAll: () => renderAll(),
+  notify,
+  renderAll,
   cwd: () => state.cwd,
-  virtualCwd: () => isVirtualCwd(),
+  virtualCwd: isVirtualCwd,
   home,
 });
 
 const trashOps = makeTrashOps({
   pushUndoBatch,
-  status: (msg) => setStatusMsg(msg),
-  notify: (msg, title) => notify(msg, title),
-  refresh: () => renderAll(),
+  status: setStatusMsg,
+  notify,
+  refresh: renderAll,
   log: (msg) => appendLog(`trashops: ${msg}`),
 });
 const { trashPaths, restoreFromTrash, deleteForever, emptyTrash } = trashOps;
 
 // --- Trash management: restore / delete-permanently / empty ---
-const inTrashView = (): boolean => path.resolve(state.cwd) === path.join(trashDir(), "files");
+function inTrashView(): boolean {
+  return path.resolve(state.cwd) === path.join(trashDir(), "files");
+}
 
 // floating Yes/No confirmation — widget lives in ./ui-dialogs
 const yesNo = makeYesNo(dialogs, {
@@ -521,22 +561,11 @@ const { renderPreview } = makePreview({
   fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
 });
 
-const { notify, toastCount } = makeNotify({
-  rootAdd: (node) => renderer.root.add(node),
-  remove: (node) => { const p: any = node.parent ?? renderer.root; p.remove(node); },
-  byId,
-  termW: () => renderer.terminalWidth,
-  accentBg: () => colors.accentBg,
-  white: () => colors.white,
-  sidebarFgMuted: () => colors.sidebarFgMuted,
-  durationMs: () => config.ui.toastDurationMs,
-});
-
 // Rubber-band gesture state + commit logic live in ./grid-input; this is the
 // ctx object it renders through (built here because it closes over the live
 // selection/preview state below).
 const bandCtx: BandCtx = {
-  byId: (id: string) => byId(id),
+  byId,
   tileRefs: tileRefsByKey,
   clearTileSelection,
   setTileVisual,
@@ -569,14 +598,16 @@ const gridCtx = {
   openFileDefault,
   openContextMenu: (x: number, y: number, title: string, entries: GridMenuEntry[]) => openContextMenu(x, y, title, entries as ListEntry[]),
   fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): GridMenuEntry[] => fileEntriesFor(key, isDir, x, y) as GridMenuEntry[],
-  closeFileMenu: () => closeFileMenu(),
+  closeFileMenu,
   renameEditKey,
   finishInlineRename,
   setStatusMsg,
   log: (msg: string) => dlog(msg),
   moveInto,
 };
-const finishDragCtx = () => finishDragState(gridCtx);
+function finishDragCtx() {
+  return finishDragState(gridCtx);
+}
 
 const entryMouseHandlers = makeEntryMouseHandlers(gridCtx);
 
@@ -606,10 +637,10 @@ const { renderGrid } = makeGridRenderer({
   nextIconId: () => nextIconId(),
   drainIconQueue: () => drainIconQueue(),
   drainThumbs: () => drainThumbs(),
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   selection,
   entryMouseHandlers,
-  isCutKey: (key) => isCutKey(key),
+  isCutKey,
   waitForResolution: () => waitForResolution(renderer),
   clearRenameEdit,
 });
@@ -622,16 +653,16 @@ const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
   setTextOnId,
   // setOnId is defined further down — defer through a wrapper (TDZ)
   setOnId: (id, fn) => setOnId(id, fn),
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   drainIconQueue: () => drainIconQueue(),
   drainThumbs: () => drainThumbs(),
   pushThumbJob,
   nextIconId,
   escHintBtn,
-  closeFileMenu: () => closeFileMenu(),
+  closeFileMenu,
   openContextMenu: (x, y, title, entries) => openContextMenu(x, y, title, entries),
-  renderAll: () => renderAll(),
-  setStatusMsg: (msg) => setStatusMsg(msg),
+  renderAll,
+  setStatusMsg,
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors as Theme & Record<string, any>,
   home,
@@ -640,27 +671,13 @@ const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
   fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
   cellMetrics,
 });
-const MENU_W = 36;
-// --- File context menu (right-click a tile) — widget lives in ./ui-menu ---
-const { closeFileMenu, renderFileMenu, openContextMenu, isFileMenuOpen: fileMenuIsOpen, fileMenuState: getFileMenuState } = makeMenu({
-  byId,
-  rootAdd: (node) => renderer.root.add(node),
-  termW: () => renderer.terminalWidth,
-  termH: () => renderer.terminalHeight,
-  stripSelectable: () => stripSelectable(),
-  drainIconQueue: () => drainIconQueue(),
-  uiStyle: () => config.ui.uiStyle,
-  colors: () => colors as Theme & Record<string, any>,
-  menuW: MENU_W,
-  makeIconSlot,
-});
 
 // --- Menu entry builders (what the menus contain) live in ./menu-entries;
 // the floating menu widget itself lives in ./ui-menu ---
 const { sidebarEntriesFor, fileEntriesFor, sortEntries, emptyAreaEntries } = makeMenuEntries({
   closeFileMenu,
   navigate,
-  renderAll: () => renderAll(),
+  renderAll,
   renderGrid,
   openTerminalHere,
   clipboard: () => clipboardRef(),
@@ -685,7 +702,9 @@ const { sidebarEntriesFor, fileEntriesFor, sortEntries, emptyAreaEntries } = mak
 });
 
 // --- ESC menu + settings panel — widget lives in ./ui-settings ---
-const quitApp = () => {
+// hoisted declaration: tabs/settings/esc-menu are constructed before this
+// point but only ever CALL it (post-boot), so the stable binding suffices
+function quitApp() {
   disableDrops();
   // release the shift-capture request made at boot (frame in ./ui-term)
   try { process.stdout.write(xtShiftEscapeFrame(false)); } catch {}
@@ -710,7 +729,7 @@ const escMenu = makeEscMenu({
   renderer: () => renderer,
   byId,
   clearChildren: (node: any) => clearChildren(node),
-  stripSelectable: () => stripSelectable(),
+  stripSelectable,
   escHintBtn,
   makeIconSlot,
   drainIconQueue: () => drainIconQueue(),
@@ -722,7 +741,7 @@ const escMenu = makeEscMenu({
   settingGroups: () => settingGroups(),
   warn: (message, title) => notify(message, title ?? "tfm"),
   log: (message) => dlog(message),
-  quit: () => quitApp(),
+  quit: quitApp,
 });
 
 // --- Live directory watching: external changes refresh the grid.
@@ -730,13 +749,13 @@ const escMenu = makeEscMenu({
 // cwd/renaming/renderGrid getters (TDZ seam rule). ---
 const { syncCwdWatcher } = makeCwdWatcher({
   cwd: () => state.cwd,
-  isVirtualCwd: () => isVirtualCwd(),
+  isVirtualCwd,
   isRenaming: () => isRenaming(),
   renderGrid: () => renderGrid(),
 });
 
 // --- Orchestration ---
-renderAll = () => {
+function renderAll() {
   // navigate/back/forward mutate state.history directly — fold it into the
   // active tab slot BEFORE anything renders, or chip titles lag one switch
   syncTabFromState();
@@ -760,7 +779,7 @@ const boot = async () => {
   // byte-identical; band gesture fns wired there straight from grid-input)
   scroller = buildBootLayout({
     renderer,
-    byId: (id: string) => byId(id),
+    byId,
     colors,
     bandCtx,
     closeFileMenu,
@@ -816,7 +835,7 @@ const { rethemeChrome, applyConfig, scheduleSaveConfig } = makeRetheme({
   setTileH: (v) => { TILE_H = v; },
   setIconCells: (v) => { ICON_CELLS_H = v; },
   sideInnerW,
-  renderAll: () => renderAll(),
+  renderAll,
   clearIconCaches,
   resetIconQueue: () => resetIconQueue(),
   syncTerminalTheme,
@@ -824,7 +843,7 @@ const { rethemeChrome, applyConfig, scheduleSaveConfig } = makeRetheme({
   renderCrumbs,
   refreshNav,
   escMenu,
-  fileMenuIsOpen: () => fileMenuIsOpen(),
+  fileMenuIsOpen,
   renderFileMenu,
   setStatusMsg,
 });
@@ -851,17 +870,17 @@ const { enableDrops, disableDrops } = makeDnd72({
     if (idx >= 0) setMousePlace(idx);
   },
   clearHoverPlace: () => clearMousePlace(),
-  finishDrag: () => finishDragCtx(),
+  finishDrag: finishDragCtx,
   escMenuOpen: () => escMenu.isOpen(),
   fileMenuOpen: () => fileMenuIsOpen(),
   trashPaths,
   moveInto,
   runTransfer,
   cwd: () => state.cwd,
-  virtualCwd: () => isVirtualCwd(),
+  virtualCwd: isVirtualCwd,
   home,
   setStatusMsg,
-  notify: (msg, title) => notify(msg, title),
+  notify,
   subscribeOsc: (cb) => renderer.subscribeOsc(cb),
 });
 enableDrops();
@@ -890,7 +909,7 @@ const keyRouter = makeKeyRouter({
   byId,
   state,
   keybinds: (action) => config.keys[action] ?? [],
-  quit: () => quitApp(),
+  quit: quitApp,
   conflict,
   yesNo,
   isRenaming,
