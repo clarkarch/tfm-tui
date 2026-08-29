@@ -163,6 +163,24 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
     "magick",
   );
 
+// video thumbs: one representative frame via ffmpeg, cover-cropped like the
+// raster path so tiles keep a uniform look. Input-seek ~1s in to skip the
+// black lead-in (fast keyframe seek); clips shorter than that retry at 0.
+export const canThumbVideo = (): boolean => Bun.which("ffmpeg") !== null;
+const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const vf = `scale=${pxW}:${pxH}:force_original_aspect_ratio=increase,crop=${pxW}:${pxH}`;
+  const attempt = (ss: string) =>
+    pngFromProc(
+      spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-ss", ss, "-i", p, "-frames:v", "1", "-vf", vf, "-f", "image2pipe", "-vcodec", "png", "-"]),
+      "ffmpeg",
+    );
+  try {
+    return await attempt("1");
+  } catch {
+    return attempt("0");
+  }
+};
+
 const thumbCache = new Map<string, Promise<Uint8Array>>();
 
 // Disk cache keyed by everything that changes the output (path, mtime, size,
@@ -187,9 +205,11 @@ export const thumbPng = (
   pxH: number,
   bg: string,
   vector = false,
+  video = false,
 ): Promise<Uint8Array> => {
   // bg in the key: thumbnails are flattened onto it, so a theme swap must miss
-  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${vector ? "vec" : "raster"}`;
+  const mode = video ? "video" : vector ? "vec" : "raster";
+  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`;
   let p = thumbCache.get(key);
   if (!p) {
     p = (async () => {
@@ -197,7 +217,11 @@ export const thumbPng = (
         const cached = readFileSync(thumbDiskPath(key));
         return new Uint8Array(cached);
       } catch {}
-      const bytes = await (vector ? renderVectorPng(path, pxW, pxH, bg) : renderRasterPng(path, pxW, pxH, bg));
+      const bytes = await (video
+        ? renderVideoPng(path, pxW, pxH)
+        : vector
+          ? renderVectorPng(path, pxW, pxH, bg)
+          : renderRasterPng(path, pxW, pxH, bg));
       // write-behind: never block the render on the cache write
       void ensureThumbDir().then(() => writeFile(thumbDiskPath(key), bytes).catch(() => {}));
       return bytes;

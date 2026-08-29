@@ -35,6 +35,7 @@ export type ThumbJob = {
   hCells?: number;
   bg?: string;
   vector: boolean;
+  video?: boolean;
   fallbackGlyph: string;
   // foreground jobs (preview pane, properties hero) jump ahead of the folder's
   // grid-thumbnail backlog instead of waiting FIFO behind it
@@ -149,7 +150,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
         const pxW = Math.max(1, Math.round(j.wCells * cellW) - 2);
         const pxH = Math.max(1, Math.round(hCells * cellH) - 2);
         try {
-          const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector);
+          const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector, j.video);
           const img = new ImageRenderable(ctx.renderer(), {
             id: `${j.slotId}-t`,
             source: bytes,

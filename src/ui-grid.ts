@@ -8,7 +8,8 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { listDir, type Entry } from "./listing";
 import { fsErrText } from "./fsutil";
-import { fileIsImage, fileIconFor } from "./filetype";
+import { fileIsImage, fileIsVideo, fileIconFor } from "./filetype";
+import { canThumbVideo } from "./icons";
 import { fmtBytes } from "./propsinfo";
 import { RECENT_URI, STARRED_URI } from "./uri";
 import { clearChildren } from "./uiutil";
@@ -115,9 +116,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
     const slotW = Math.max(1, Math.round(aspect * ICON_CELLS_H));
 
-    // image tiles: empty slot until the thumbnail lands (no icon->photo swap);
-    // everything else queues its category raster as usual
-    const wantsThumb = !e.isDir && fileIsImage(e.name);
+    // image/video tiles: empty slot until the thumbnail lands (no icon->photo
+    // swap); everything else queues its category raster as usual. Videos need
+    // ffmpeg for the frame extract — without it they keep their icon.
+    const isVideo = !e.isDir && fileIsVideo(e.name);
+    const wantsThumb = !e.isDir && (fileIsImage(e.name) || (isVideo && canThumbVideo()));
     let st: any = null;
     if (wantsThumb) { try { st = statSync(key); } catch {} }
     const useThumb = wantsThumb && st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400;
@@ -151,6 +154,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         size: st.size,
         wCells: slotW,
         vector: e.name.toLowerCase().endsWith(".svg"),
+        video: isVideo,
         fallbackGlyph: glyph[fileIconFor(e.name)] ?? glyph.file!,
       });
     }

@@ -105,3 +105,12 @@ export const fileIsImage = (name: string): boolean => {
   const mime = globs2ByExt?.get(ext);
   return !!mime && mime.startsWith("image/");
 };
+
+export const fileIsVideo = (name: string): boolean => {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  // ext table first: `.ts` is TypeScript for us even though globs2 says video/mp2t
+  if (FILE_ICON_BY_EXT[ext] === "file-video") return true;
+  const mime = globs2ByExt?.get(ext);
+  return !!mime && mime.startsWith("video/");
+};

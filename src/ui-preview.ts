@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { clearChildren } from "./uiutil";
 import { slotBg } from "./style";
-import { fileIconFor, fileIsImage } from "./filetype";
+import { fileIconFor, fileIsImage, fileIsVideo } from "./filetype";
+import { canThumbVideo } from "./icons";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, syntaxStyleSig } from "./syntax";
 import type { Theme } from "./config";
 
@@ -14,7 +15,7 @@ import type { Theme } from "./config";
 // ui-props/ui-term; the gen-counter guards stale async file reads so a slow
 // preview can't paint over a newer one. tfm-preview-* ids stay byte-identical. ---
 
-export type ThumbJobLike = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string; priority?: boolean };
+export type ThumbJobLike = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; video?: boolean; fallbackGlyph: string; priority?: boolean };
 
 export type PreviewCtx = {
   renderer: any;
@@ -102,8 +103,10 @@ export const makePreview = (ctx: PreviewCtx) => {
       return;
     }
 
-    // pictures: render the actual image (svg included) instead of nothing
-    if (fileIsImage(key) && st.size > 0 && st.size <= 26214400) {
+    // pictures and videos (ffmpeg present): render the actual content instead
+    // of nothing
+    const isVideo = fileIsVideo(key);
+    if ((fileIsImage(key) || (isVideo && canThumbVideo())) && st.size > 0 && st.size <= 26214400) {
       const w = Math.max(4, ctx.previewWidth() - 4);
       const maxH = Math.max(4, ctx.termH() - 8);
       const h = Math.min(maxH, Math.max(3, Math.round(w / ctx.cellMetrics().aspect)));
@@ -121,6 +124,7 @@ export const makePreview = (ctx: PreviewCtx) => {
         hCells: h,
         bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg),
         vector: key.toLowerCase().endsWith(".svg"),
+        video: isVideo,
         fallbackGlyph: ctx.fallbackGlyphFor(fileIconFor(key)),
         priority: true, // must not wait behind the grid's thumbnail backlog
       });

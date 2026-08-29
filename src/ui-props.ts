@@ -6,7 +6,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { applySurface, btnSurface, rowSurface, slotBg } from "./style";
 import type { Theme } from "./config";
-import { fileIconFor, fileIsImage } from "./filetype";
+import { fileIconFor, fileIsImage, fileIsVideo } from "./filetype";
+import { canThumbVideo } from "./icons";
 import { dirWalkStats, fmtBytes, fmtDate, idName, mimeLabelFor, permWords } from "./propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "./recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "./places";
@@ -19,7 +20,7 @@ import type { ListEntry } from "./ui-menu";
 
 export type PropsIconState = { fg: string; bg: string };
 
-export type PropsThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string; priority?: boolean };
+export type PropsThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; video?: boolean; fallbackGlyph: string; priority?: boolean };
 
 export type PropsCtx = {
   byId(id: string): any;
@@ -165,7 +166,8 @@ export const makeProps = (ctx: PropsCtx) => {
     const ICON_H = 6;
     const { aspect } = ctx.cellMetrics();
     const heroW = Math.max(1, Math.round(aspect * ICON_H));
-    const wantsThumb = !isDirTarget && fileIsImage(targetPath) && st.size > 0 && st.size <= 26214400;
+    const isVideo = !isDirTarget && fileIsVideo(targetPath);
+    const wantsThumb = !isDirTarget && (fileIsImage(targetPath) || (isVideo && canThumbVideo())) && st.size > 0 && st.size <= 26214400;
     let heroEl: ReturnType<typeof Box>;
     if (wantsThumb) {
       const slotId = ctx.nextIconId();
@@ -179,6 +181,7 @@ export const makeProps = (ctx: PropsCtx) => {
         hCells: ICON_H,
         bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg),
         vector: targetPath.toLowerCase().endsWith(".svg"),
+        video: isVideo,
         fallbackGlyph: ctx.fallbackGlyphFor(iconName),
         priority: true,
       });

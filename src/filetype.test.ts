@@ -3,6 +3,7 @@ import {
   FILE_ICON_BY_EXT,
   fileIconFor,
   fileIsImage,
+  fileIsVideo,
   loadGlobs2,
   mimeCategory,
   mimeForExt,
@@ -76,6 +77,21 @@ describe("fileIsImage", () => {
     expect(fileIsImage("x.ts")).toBe(false);
     expect(fileIsImage("x.mp4")).toBe(false);
     expect(fileIsImage(".profile")).toBe(false);
+  });
+});
+
+describe("fileIsVideo", () => {
+  test("video extensions are videos", () => {
+    expect(fileIsVideo("x.mp4")).toBe(true);
+    expect(fileIsVideo("x.MKV")).toBe(true);
+    expect(fileIsVideo("x.webm")).toBe(true);
+  });
+
+  // .ts is TypeScript for tfm even though globs2 classifies it video/mp2t —
+  // the ext table must win over the mime db
+  test(".ts stays TypeScript, dotfiles are not videos", () => {
+    expect(fileIsVideo("x.ts")).toBe(false);
+    expect(fileIsVideo(".profile")).toBe(false);
   });
 });
 
