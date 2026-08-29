@@ -58,14 +58,21 @@ Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 | type anywhere | live search · `enter` opens first match · `esc` cancels |
 | `enter` / `f2` | open / rename |
 | `backspace` | parent directory |
-| `ctrl+z` / `ctrl+y` | undo / redo |
+| `esc` | menu (settings, view mode, sort, …) |
+| `ctrl+q` | quit |
+| `ctrl+z` / `ctrl+y` | undo / redo (`ctrl+shift+z` works too) |
 | `ctrl+x` / `ctrl+c` / `ctrl+v` | cut / copy / paste |
 | `ctrl+a` | select all |
 | `ctrl+h` | toggle hidden files |
+| `ctrl+r` | reload sidebar places |
+| `ctrl+t` / `ctrl+w` | new tab / close tab (middle-click a chip also closes) |
+| `ctrl+tab` / `ctrl+shift+tab` | next / previous tab |
 | `delete` | trash (`delete` again in trash: permanent) |
 | `ctrl+click` / `shift+click` | toggle / range select |
 | plain drag / `ctrl+drag` | drag out of terminal / move inside tfm |
 | right-click | context menu |
+
+All keys are remappable under `[keys]` in `config.toml` (or `esc` → Settings → Keys).
 
 ## Config
 
