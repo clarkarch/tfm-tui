@@ -45,24 +45,21 @@ import type { ListEntry } from "./ui-menu";
 import { makePreview } from "./ui-preview";
 import { makeProps } from "./ui-props";
 import { makeProgress } from "./ui-progress";
-import { makeTerminal } from "./ui-term";
+import { makeTerminal, xtShiftEscapeFrame } from "./ui-term";
 import { makeSlots, type IconState, type IconSpec } from "./ui-slots";
 import { makeEscMenu } from "./ui-settings";
 import {
-  BAND_ID,
-  DRAG_GHOST_ID,
-  bandActive,
-  beginBand,
   cancelBand,
-  finalizeBand,
   finishDragState,
   makeEntryMouseHandlers,
-  updateBandRect,
   type BandCtx,
   type ClipItem,
   type GridMenuEntry,
 } from "./grid-input";
-import { appendLog, debugLog, isDebug, DEBUG_LOG } from "./log";
+import { appendLog, debugLog, dlog, isDebug, DEBUG_LOG } from "./log";
+import { startMemHygiene } from "./mem-hygiene";
+import { makeSearch } from "./search";
+import { buildBootLayout } from "./ui-boot-layout";
 import { makeMenuEntries } from "./menu-entries";
 import { makeToolbar } from "./ui-toolbar";
 import { glyph, glyphFor } from "./glyphs";
@@ -171,28 +168,15 @@ const { scheduleSaveSession, restoreSession } = makeSessionSync({
   isVirtualCwd: () => isVirtualCwd(),
 });
 
-let searchQuery = "";
-
-const clearSearch = () => {
-  searchQuery = "";
-  try {
-    const el: any = byId("tfm-search");
-    if (el) { el.value = ""; el.visible = false; }
-  } catch {}
-};
-
-// nautilus-style type-to-search: a printable char with the grid focused opens
-// the search box seeded with that char instead of doing legacy jump-ahead
-const beginTypeToSearch = (ch: string): void => {
-  if (termHasFocus()) return; // shell owns the keyboard — never hijack into search
-  const el: any = byId("tfm-search");
-  if (!el) return;
-  el.visible = true;
-  el.value = ch;
-  searchQuery = ch;
-  void renderGrid();
-  setTimeout(() => { try { el.focus(); } catch {} }, 10);
-};
+// --- Type-to-search: query state + begin/clear/input-wiring live in ./search;
+// the keymap drives begin/clear, the grid reads the query via getQuery(). ---
+const search = makeSearch({
+  byId: (id) => byId(id),
+  // arrow wrappers: termHasFocus/renderGrid are defined below (TDZ seam rule)
+  termHasFocus: () => termHasFocus(),
+  renderGrid: () => renderGrid(),
+});
+const { clearSearch, beginTypeToSearch, wireSearchInput } = search;
 
 
 // --- Places sidebar + tab strip — widget lives in ./ui-chrome ---
@@ -603,7 +587,7 @@ const { renderGrid } = makeGridRenderer({
   termH: () => renderer.terminalHeight,
   scroller: () => scroller,
   state,
-  searchQuery: () => searchQuery,
+  searchQuery: () => search.getQuery(),
   pathEditMode: () => pathEditMode(),
   sw: () => sw,
   tileW: () => TILE_W,
@@ -703,8 +687,8 @@ const { sidebarEntriesFor, fileEntriesFor, sortEntries, emptyAreaEntries } = mak
 // --- ESC menu + settings panel — widget lives in ./ui-settings ---
 const quitApp = () => {
   disableDrops();
-  // release the shift-capture request made at boot
-  try { process.stdout.write("\x1b[>0s"); } catch {}
+  // release the shift-capture request made at boot (frame in ./ui-term)
+  try { process.stdout.write(xtShiftEscapeFrame(false)); } catch {}
   try { renderer.destroy(); } catch {}
   process.exit(0);
 };
@@ -772,54 +756,24 @@ renderAll = () => {
 
 const boot = async () => {
   await waitForResolution(renderer);
-  scroller = new ScrollBoxRenderable(renderer, {
-    id: "tfm-scroll",
-    flexGrow: 1,
-    width: "100%",
-    scrollY: true,
-    viewportCulling: true,
-    contentOptions: { flexDirection: "column" },
-    onMouseDown: (ev: any) => {
-      closeFileMenu();
-      clearSearch();
-      blurTerminal();
-      if (pathEditMode()) { exitPathEdit(); return; }
-      if (isRenaming()) finishInlineRename(false);
-      // left-click clears (and may start a rubber band); right-click opens the
-      // background menu WITHOUT cancelling the selection (Nautilus behavior)
-      if (ev.button === 0) clearTileSelection();
-      // band shows only once a drag actually moves the pointer
-      beginBand(ev);
-      if (ev.button === 2) openContextMenu(ev.x, ev.y, "", emptyAreaEntries(ev.x, ev.y));
-    },
-    onMouseDrag: (ev: any) => updateBandRect(bandCtx, ev),
-    onMouseDragEnd: (ev: any) => finalizeBand(bandCtx, ev),
-    onMouseUp: (ev: any) => { if (bandActive()) finalizeBand(bandCtx, ev); },
+  // scroller/band rect/drag ghost — module: ./ui-boot-layout (ids stay
+  // byte-identical; band gesture fns wired there straight from grid-input)
+  scroller = buildBootLayout({
+    renderer,
+    byId: (id: string) => byId(id),
+    colors,
+    bandCtx,
+    closeFileMenu,
+    clearSearch,
+    blurTerminal,
+    pathEditMode,
+    exitPathEdit,
+    isRenaming,
+    finishInlineRename,
+    clearTileSelection,
+    openContextMenu: (x: number, y: number, t: string, e: any[]) => openContextMenu(x, y, t, e),
+    emptyAreaEntries,
   });
-  const host: any = byId("tfm-grid-host");
-  host.add(scroller);
-  renderer.root.add(Box({
-    id: BAND_ID,
-    visible: false,
-    position: "absolute",
-    zIndex: 2500,
-    border: true,
-    borderStyle: "rounded",
-    borderColor: colors.accent,
-  }));
-  renderer.root.add(Box({
-    id: DRAG_GHOST_ID,
-    visible: false,
-    position: "absolute",
-    left: 0,
-    top: 0,
-    width: 12,
-    height: 1,
-    zIndex: 4000,
-    backgroundColor: colors.accent,
-    flexDirection: "row",
-    paddingLeft: 1,
-  }, Text({ id: `${DRAG_GHOST_ID}-label`, content: "moving 0 items", fg: colors.bg })));
 
   await loadGlobs2();
   restoreSession();
@@ -831,39 +785,18 @@ const boot = async () => {
     setStatusMsg(`debug: ${DEBUG_LOG}`);
   }
 
-  // --- Native memory hygiene ---
-  // OpenTUI's native objects (TextBuffers, images) are freed from bun GC
-  // finalizers, but bun only runs GC when the JS HEAP demands it — native
-  // memory pressure never triggers it. Sustained UI churn (theme flips,
-  // panel rebuilds) therefore grows the native allocator unbounded until
-  // small allocations start failing ("Failed to create TextBuffer" = the
-  // floating-UI-vanishes crash). Poke the GC on a schedule so finalizers
-  // drain regularly, and trace allocator stats under --debug.
-  const nativeMemLine = (): string => {
-    let stats = "n/a";
-    try {
-      const s = (renderer as any).lib?.getAllocatorStats?.();
-      if (s) stats = `native active=${s.activeAllocations} mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB`;
-    } catch {}
-    let rss = "";
-    try { rss = ` rss=${(process.memoryUsage().rss / 1048576).toFixed(0)}MB`; } catch {}
-    return `${stats}${rss}`;
-  };
-  setInterval(() => {
-    try { Bun.gc(false); } catch {}
-    if (isDebug) debugLog(`mem ${nativeMemLine()}`);
-  }, 10000).unref?.();
+  // --- Native memory hygiene (module: ./mem-hygiene) — the private allocator
+  // stats reach is the only renderer-coupled part, so it's injected here ---
+  startMemHygiene({
+    allocatorStats: () => {
+      try {
+        return (renderer as any).lib?.getAllocatorStats?.() ?? null;
+      } catch { return null; }
+    },
+    debugLog: isDebug ? (msg) => debugLog(msg) : undefined,
+  });
 
-  const inputEl: any = byId("tfm-search");
-  if (inputEl?.on) {
-    const renderSearchResults = debounced(150, () => void renderGrid());
-    inputEl.on("input", () => {
-      try { searchQuery = String(inputEl.value ?? ""); } catch {}
-      renderSearchResults();
-    });
-    // enter/escape semantics live in the global key handler (enter commits
-    // into the first match; escape cancels) — no listener here by design
-  }
+  wireSearchInput();
 };
 boot();
 
@@ -895,12 +828,6 @@ const { rethemeChrome, applyConfig, scheduleSaveConfig } = makeRetheme({
   renderFileMenu,
   setStatusMsg,
 });
-
-const DND_LOG = "/tmp/tfm-dnd.log";
-const dlog = (msg: string): void => {
-  try { appendFileSync(DND_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
-  if (isDebug) appendLog(`[dnd] ${msg}`);
-};
 
 // --- OSC 72 (kitty drag-and-drop): wire format per yazi's reference impl;
 // the state machine (outgoing drags, incoming drops, self-drop routing) lives
@@ -941,7 +868,9 @@ enableDrops();
 // XTSHIFTESCAPE=1 (CSI > Ps s): ask the terminal (kitty, ghostty, xterm) to
 // forward shift+click instead of using it for native text selection.
 // Terminals that don't know the sequence ignore it; alt+click is the fallback.
-try { dlog("tx xtshiftescape on"); process.stdout.write("\x1b[>1s"); } catch {}
+// XTSHIFTESCAPE (frame builder in ./ui-term): ask the terminal to forward
+// shift+click instead of using it for native text selection; released on quit.
+try { dlog("tx xtshiftescape on"); process.stdout.write(xtShiftEscapeFrame(true)); } catch {}
 
 // --- resize: repave rasters and rebuild layout ---
 let resizeTimer: any = null;
@@ -972,7 +901,7 @@ const keyRouter = makeKeyRouter({
   pathEditMode,
   pathInputVisible: () => !!(byId("tfm-path-input") as any)?.visible,
   searchVisible: () => !!(byId("tfm-search") as any)?.visible,
-  searchQuery: () => searchQuery,
+  searchQuery: () => search.getQuery(),
   clearSearch,
   exitPathEdit,
   beginTypeToSearch,

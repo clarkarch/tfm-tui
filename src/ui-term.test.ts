@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hexToRgb16, terminalProbeReply } from "./ui-term";
+import { hexToRgb16, terminalProbeReply, xtShiftEscapeFrame } from "./ui-term";
 
 describe("hexToRgb16", () => {
   test("doubles each 8-bit channel to 16-bit", () => {
@@ -58,5 +58,15 @@ describe("terminalProbeReply", () => {
     const { resp, tail } = terminalProbeReply("plain output\r\n");
     expect(resp).toBe("");
     expect(tail).toBe("");
+  });
+});
+
+describe("xtShiftEscapeFrame", () => {
+  test("enable uses CSI > 1 s", () => {
+    expect(xtShiftEscapeFrame(true)).toBe("\x1b[>1s");
+  });
+
+  test("release uses CSI > 0 s", () => {
+    expect(xtShiftEscapeFrame(false)).toBe("\x1b[>0s");
   });
 });

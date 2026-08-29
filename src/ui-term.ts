@@ -47,6 +47,12 @@ export const terminalProbeReply = (buf: string): { resp: string; tail: string } 
   return { resp, tail };
 };
 
+// XTSHIFTESCAPE (CSI > Ps s): ask the terminal (kitty, ghostty, xterm) to
+// forward shift+click while tfm owns the mouse, release on quit. The final
+// byte MUST be `s` — `n` is silently ignored. Terminals that don't know the
+// sequence ignore it; alt+click is the universal fallback.
+export const xtShiftEscapeFrame = (enable: boolean): string => (enable ? "\x1b[>1s" : "\x1b[>0s");
+
 export const makeTerminal = (ctx: TermCtx) => {
   let term: EmbeddedTerminalRenderable | null = null;
   let termChild: ReturnType<typeof Bun.spawn> | null = null;

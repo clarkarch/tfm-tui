@@ -15,6 +15,18 @@ export const debugLog = (msg: string): void => {
   appendLog(msg);
 };
 
+// --- Drag diagnosis: the whole DnD path (drag offer accept/decline + why,
+// tile mousedown/drop payload counts, moveInto in/out filtering) goes here so
+// a "Moved 0 items" toast can be traced backwards. Always-on (cheap appends),
+// mirrored into the debug event log under --debug. ---
+
+export const DND_LOG = "/tmp/tfm-dnd.log";
+
+export const dlog = (msg: string): void => {
+  try { appendFileSync(DND_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+  if (isDebug) appendLog(`[dnd] ${msg}`);
+};
+
 process.on("uncaughtException", (err) => {
   appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
   try { process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`); } catch {}
