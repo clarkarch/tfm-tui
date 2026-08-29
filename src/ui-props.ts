@@ -19,7 +19,7 @@ import type { ListEntry } from "./ui-menu";
 
 export type PropsIconState = { fg: string; bg: string };
 
-export type PropsThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string };
+export type PropsThumbJob = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string; priority?: boolean };
 
 export type PropsCtx = {
   byId(id: string): any;
@@ -180,6 +180,7 @@ export const makeProps = (ctx: PropsCtx) => {
         bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg),
         vector: targetPath.toLowerCase().endsWith(".svg"),
         fallbackGlyph: ctx.fallbackGlyphFor(iconName),
+        priority: true,
       });
     } else {
       heroEl = ctx.makeIconSlot(iconName, [{ fg: colors.sidebarFg, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }], ICON_H).el;

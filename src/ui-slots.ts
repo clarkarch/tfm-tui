@@ -36,6 +36,9 @@ export type ThumbJob = {
   bg?: string;
   vector: boolean;
   fallbackGlyph: string;
+  // foreground jobs (preview pane, properties hero) jump ahead of the folder's
+  // grid-thumbnail backlog instead of waiting FIFO behind it
+  priority?: boolean;
 };
 
 export type SlotsCtx = {
@@ -121,10 +124,18 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return true;
   };
 
+  // magick/rsvg spawns are the bottleneck (~100ms each, SVGs worse); 3 workers
+  // made big folders drip in one-by-one — match the icon raster cap's spirit
+  // and keep the UI thread yielding between jobs
+  const THUMB_WORKERS = 8;
+
   const drainThumbs = async () => {
     const jobs = thumbJobs;
     thumbJobs = [];
     if (!ctx.renderer().resolution || jobs.length === 0) return;
+    // priority jobs (preview/props) first — Array#sort is stable, so each
+    // class keeps its push order
+    jobs.sort((a, b) => (a.priority ? 0 : 1) - (b.priority ? 0 : 1));
     const { cellW, cellH } = cellMetrics();
     let idx = 0;
     const worker = async () => {
@@ -160,7 +171,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
         await new Promise((r) => setTimeout(r, 0));
       }
     };
-    await Promise.all([worker(), worker(), worker()]);
+    await Promise.all(Array.from({ length: Math.min(THUMB_WORKERS, jobs.length) }, () => worker()));
   };
 
   const rasterStatesInto = async (

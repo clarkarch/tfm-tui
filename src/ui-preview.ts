@@ -14,7 +14,7 @@ import type { Theme } from "./config";
 // ui-props/ui-term; the gen-counter guards stale async file reads so a slow
 // preview can't paint over a newer one. tfm-preview-* ids stay byte-identical. ---
 
-export type ThumbJobLike = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string };
+export type ThumbJobLike = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; fallbackGlyph: string; priority?: boolean };
 
 export type PreviewCtx = {
   renderer: any;
@@ -122,6 +122,7 @@ export const makePreview = (ctx: PreviewCtx) => {
         bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg),
         vector: key.toLowerCase().endsWith(".svg"),
         fallbackGlyph: ctx.fallbackGlyphFor(fileIconFor(key)),
+        priority: true, // must not wait behind the grid's thumbnail backlog
       });
       void ctx.drainThumbs();
       return;

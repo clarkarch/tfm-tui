@@ -3,7 +3,7 @@
 // this module only turns (name, colors, pixel size) into PNG bytes. All caches
 // are keyed by everything that changes the output, so theme switches miss
 // naturally and never need explicit invalidation beyond clearIconCaches.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -116,8 +116,68 @@ export const iconPng = async (name: string, fg: string, bg: string, pxW: number,
   return job;
 };
 
-// --- Image thumbnails (magick resize flattened onto bg, cached per file version) ---
+// --- Image thumbnails (vector-crisp via rsvg-convert, magick fallback;
+// cached per file version in memory AND on disk so folder revisits are
+// instant instead of re-spawning a renderer per file) ---
+
+const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promise<Uint8Array> =>
+  new Promise<Uint8Array>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    proc.stdout.on("data", (c: Buffer) => chunks.push(c));
+    proc.on("error", reject);
+    proc.on("close", (code) =>
+      code === 0 && chunks.length > 0
+        ? resolve(new Uint8Array(Buffer.concat(chunks)))
+        : reject(new Error(`${tool} exited ${code}`))
+    );
+  });
+
+// SVGs render vector-crisp at the exact target size (contain-fit, letterboxed
+// onto bg) — the old magick -density dance rasterized a small intrinsic bitmap
+// first and then upscaled it: slow AND mushy for icon-sized viewBoxes.
+// rsvg-convert missing (CI, IM6 distros) or ancient librsvg (< 2.54, no
+// --page-*): fall back to the magick -density path.
+const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): string[] => [
+  "-density", "192", p, "-auto-orient", "-background", bg,
+  "-thumbnail", `${pxW}x${pxH}^`, "-gravity", "center", "-extent", `${pxW}x${pxH}`, "png:-",
+];
+const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
+  if (Bun.which("rsvg-convert")) {
+    return pngFromProc(
+      spawn("rsvg-convert", [
+        "-w", String(pxW), "-h", String(pxH),
+        "--page-width", String(pxW), "--page-height", String(pxH),
+        "--keep-aspect-ratio", "--background-color", bg, p,
+      ]),
+      "rsvg-convert",
+    ).catch(() =>
+      pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick"),
+    );
+  }
+  return pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
+};
+
+const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> =>
+  pngFromProc(
+    spawn("magick", [p, "-auto-orient", "-background", bg, "-thumbnail", `${pxW}x${pxH}^`, "-gravity", "center", "-extent", `${pxW}x${pxH}`, "png:-"]),
+    "magick",
+  );
+
 const thumbCache = new Map<string, Promise<Uint8Array>>();
+
+// Disk cache keyed by everything that changes the output (path, mtime, size,
+// pixel size, bg, vector flag) plus a pipeline-version salt — renderer swaps
+// and file edits miss naturally. No eviction (icon disk cache has none either).
+const THUMB_DISK_VER = "v1";
+const thumbDiskDir = (): string =>
+  path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
+const thumbDiskPath = (key: string): string =>
+  path.join(thumbDiskDir(), `${createHash("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
+// NOT memoized: tests re-point XDG_CACHE_HOME per run, a memoized mkdir would
+// cache the first dir and strand later writes in a missing directory
+const ensureThumbDir = async (): Promise<void> => {
+  try { await mkdir(thumbDiskDir(), { recursive: true }); } catch {}
+};
 
 export const thumbPng = (
   path: string,
@@ -129,29 +189,19 @@ export const thumbPng = (
   vector = false,
 ): Promise<Uint8Array> => {
   // bg in the key: thumbnails are flattened onto it, so a theme swap must miss
-  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}`;
+  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${vector ? "vec" : "raster"}`;
   let p = thumbCache.get(key);
   if (!p) {
-    p = new Promise<Uint8Array>((resolve, reject) => {
-      // vectors must render at high density FIRST or we upscale a tiny
-      // intrinsic bitmap (a 24-unit icon svg would look like mush)
-      const args = [
-        ...(vector ? ["-density", "192"] : []),
-        path, "-auto-orient", "-background", bg,
-        "-thumbnail", `${pxW}x${pxH}^`, "-gravity", "center", "-extent", `${pxW}x${pxH}`,
-        "png:-",
-      ];
-      const proc = spawn("magick", args);
-      const chunks: Buffer[] = [];
-      proc.stdout.on("data", (c: Buffer) => chunks.push(c));
-      proc.on("error", reject);
-      proc.on("close", (code) =>
-        code === 0 && chunks.length > 0
-          ? resolve(new Uint8Array(Buffer.concat(chunks)))
-          : reject(new Error(`magick exited ${code}`))
-      );
-      proc.stdin.end();
-    });
+    p = (async () => {
+      try {
+        const cached = readFileSync(thumbDiskPath(key));
+        return new Uint8Array(cached);
+      } catch {}
+      const bytes = await (vector ? renderVectorPng(path, pxW, pxH, bg) : renderRasterPng(path, pxW, pxH, bg));
+      // write-behind: never block the render on the cache write
+      void ensureThumbDir().then(() => writeFile(thumbDiskPath(key), bytes).catch(() => {}));
+      return bytes;
+    })();
     p.catch(() => thumbCache.delete(key));
     thumbCache.set(key, p);
   }

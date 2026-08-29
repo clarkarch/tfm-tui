@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { clearIconCaches, iconPng, thumbPng } from "./icons";
@@ -48,5 +49,47 @@ describe("icons", () => {
     const again = thumbPng(tmp, 1, 1, 32, 32, "#1a1b26", true);
     await expect(again).resolves.toBe(bytes); // memoized promise
     clearIconCaches();
+  });
+
+  test.skipIf(!hasRsvg)("vector thumbs render at the exact requested pixel size (rsvg path)", async () => {
+    clearIconCaches();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
+    const tmp = path.join(os.tmpdir(), `tfm-thumb-vec-${process.pid}.svg`);
+    await Bun.write(tmp, svg);
+    const bytes = await thumbPng(tmp, 2, 1, 64, 48, "#1a1b26", true);
+    expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    expect(dv.getUint32(16)).toBe(64); // IHDR width
+    expect(dv.getUint32(20)).toBe(48); // IHDR height
+  });
+
+  test.skipIf(!hasMagick && !hasRsvg)("thumb disk cache serves revisits after the memory layer drops", async () => {
+    const prevCache = process.env.XDG_CACHE_HOME;
+    const sandbox = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-cache-"));
+    process.env.XDG_CACHE_HOME = sandbox;
+    try {
+      clearIconCaches();
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
+      const tmp = path.join(os.tmpdir(), `tfm-thumb-disk-${process.pid}.svg`);
+      await Bun.write(tmp, svg);
+      const a = await thumbPng(tmp, 3, 1, 32, 32, "#1a1b26", true);
+      // write-behind — poll the sandbox for the cache file
+      const thumbDir = path.join(sandbox, "tfm", "thumbs");
+      let files: string[] = [];
+      for (let i = 0; i < 100; i++) {
+        files = existsSync(thumbDir) ? readdirSync(thumbDir) : [];
+        if (files.length > 0) break;
+        await Bun.sleep(5);
+      }
+      expect(files.length).toBe(1);
+      clearIconCaches(); // drop the memory layer only
+      const b = await thumbPng(tmp, 3, 1, 32, 32, "#1a1b26", true);
+      expect(b).toEqual(a); // served from disk, byte-identical
+    } finally {
+      if (prevCache === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = prevCache;
+      rmSync(sandbox, { recursive: true, force: true });
+      clearIconCaches();
+    }
   });
 });
