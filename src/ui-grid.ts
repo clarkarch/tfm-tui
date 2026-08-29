@@ -38,6 +38,7 @@ export type GridRendererCtx = {
   previewEnabled(): boolean;
   previewWidth(): number;
   viewMode(): "grid" | "list";
+  wordWrap(): boolean;
   reservedRight(): number;
   // ui-slots
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
@@ -141,7 +142,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     tile.add(tileBox);
 
     const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
-    const labelText: any = Text({ id: labelId, content: label, fg: baseFg });
+    // word wrap [ui] word-wrap: long names flow onto extra rows (capped at the
+    // space under the icon) via the native word-wrap buffer; overflow lines
+    // clip, unbreakable runs ellipsize. Off = today's single cut line.
+    const maxLabelLines = Math.max(1, TILE_H - ICON_CELLS_H);
+    const wrapOn = ctx.wordWrap() && e.name.length > TILE_W - 2 && maxLabelLines > 1;
+    const labelText: any = Text({
+      id: labelId,
+      content: wrapOn ? e.name : label,
+      fg: baseFg,
+      ...(wrapOn ? { width: TILE_W - 2, height: maxLabelLines, truncate: true } : {}),
+    });
     tile.add(labelText);
 
     selection.tileRefs.set(key, { iconSpec, iconSlotId: slotId, selected: false, baseFg, tileId, labelId, isDir: e.isDir });

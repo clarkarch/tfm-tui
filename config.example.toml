@@ -22,6 +22,7 @@ transparent-bg       = false    # true = follow a transparent terminal bg (kitty
 tab-bar              = false    # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 view-mode            = "grid"   # "grid" = icon tiles; "list" = compact rows with size + modified columns
 ui-style             = "solid"  # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest
+word-wrap            = false    # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
 
 [theme]
 bg             = "#1a1b26"  # background

@@ -630,6 +630,7 @@ const { renderGrid } = makeGridRenderer({
   previewEnabled: () => config.ui.previewEnabled,
   previewWidth: () => config.ui.previewWidth,
   viewMode: () => config.ui.viewMode,
+  wordWrap: () => config.ui.wordWrap,
   reservedRight: () => (config.ui.previewEnabled ? config.ui.previewWidth : 0),
   cellMetrics,
   makeIconSlot,

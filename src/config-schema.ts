@@ -61,6 +61,7 @@ export type UiConfig = {
   toastDurationMs: number;
   dragThresholdCells: number;
   listRowHeight: number;
+  wordWrap: boolean;
 };
 
 // --- keybind actions (section [keys], kebab-case in TOML, camel props here) ---
@@ -121,6 +122,7 @@ const UI_ROWS: SchemaRow[] = [
   { kind: "bool", section: "ui", tomlKey: "tab-bar", prop: "tabBar", def: false, doc: "true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)", label: "tab bar", group: "general" },
   { kind: "enum", section: "ui", tomlKey: "view-mode", prop: "viewMode", values: ["grid", "list"], def: "grid", doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns', label: "view mode", group: "general" },
   { kind: "enum", section: "ui", tomlKey: "ui-style", prop: "uiStyle", values: ["solid", "outline"], def: "solid", doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest', label: "ui style", group: "general" },
+  { kind: "bool", section: "ui", tomlKey: "word-wrap", prop: "wordWrap", def: false, doc: "true = wrap long file names onto extra tile rows (grid view); false = single line cut with …", label: "word wrap (grid)", group: "layout" },
 ];
 
 // [theme] keys are camelCase in TOML (matches the Theme type) and are NOT
