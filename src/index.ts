@@ -1,7 +1,7 @@
 import { ASCIIFont, Box, CliRenderEvents, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, createWriteStream, statSync, watch } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { readFile, lstat, readlink, symlink, cp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,17 +12,21 @@ import { clearIconCaches, warmEmbeddedIcons } from "./icons";
 import { FILE_ICON_BY_EXT, loadGlobs2 } from "./filetype";
 // --- Directory listing/sort/virtual-place entries live in ./listing ---
 import { listDir, type Entry } from "./listing";
-import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
+import { isVirtualUri } from "./uri";
 import {
   upsertRecentXbel,
 } from "./recent";
 import { trashDir } from "./fsutil";
 import { loadSystemPlaces } from "./places";
-import { readRestoredSession, saveSession } from "./session";
 import { registerSyntaxParsers } from "./syntax";
-import { makeDnd72, type DropTarget } from "./dnd72";
+import { makeDnd72 } from "./dnd72";
 import { makeSettingModel } from "./settings-model";
 import { makeRename } from "./ui-rename";
+import { makeNav, makeSessionSync, type AppState } from "./nav";
+import { makeCwdWatcher } from "./watcher";
+import { makeHitTargetAt } from "./hit-target";
+import { makeRecentOpen } from "./recent-open";
+import { makeLookup, waitForResolution } from "./ui-lookup";
 import { makeSelection } from "./selection";
 import { makeGridRenderer } from "./ui-grid";
 import { makeKeyRouter } from "./keymap";
@@ -59,7 +63,7 @@ import {
   type GridMenuEntry,
 } from "./grid-input";
 import { appendLog, debugLog, isDebug, DEBUG_LOG } from "./log";
-import { makeMenuEntries, type SortMode } from "./menu-entries";
+import { makeMenuEntries } from "./menu-entries";
 import { makeToolbar } from "./ui-toolbar";
 import { glyph, glyphFor } from "./glyphs";
 
@@ -95,6 +99,12 @@ for (const cat of new Set(Object.values(FILE_ICON_BY_EXT))) {
   if (!(cat in glyph)) glyph[cat] = glyph.file!;
 }
 
+// --- Post-mount node lookup seam — lives in ./ui-lookup (tested). Created
+// before the widget factories that capture byId/stripSelectable in ctx; the
+// renderer boots further down, so root arrives as an arrow (TDZ seam rule).
+// Every lookup must tolerate a miss (nodes die on every rebuild). ---
+const { byId, setTextOnId, setOnId, stripSelectable } = makeLookup({ root: () => renderer.root });
+
 // --- Icon slots / thumbs / modal scrim — widget lives in ./ui-slots ---
 // Called before the renderer boots: every ctx field the drain path needs is
 // an arrow wrapper (post-boot evaluation), per the widget-seam rules.
@@ -120,17 +130,8 @@ const {
   glyphFor,
 });
 
-// --- App state & history ---
+// --- App state & history (type lives in ./nav with the navigation logic) ---
 const home = os.homedir();
-
-type AppState = {
-  cwd: string;
-  history: string[];
-  histIdx: number;
-  showHidden: boolean;
-  sortBy: SortMode;
-  sortAsc: boolean;
-};
 
 const state: AppState = {
   cwd: process.cwd(),
@@ -143,6 +144,15 @@ const state: AppState = {
 
 let renderAll: () => void = () => {};
 
+// --- History navigation — pure state machine lives in ./nav (tested);
+// hooks close over later-defined bindings (TDZ seam rule) ---
+const { canBack, canFwd, goBack, goFwd, navigate } = makeNav(state, {
+  renderAll: () => renderAll(),
+  clearSearch: () => clearSearch(),
+  exitPathEdit: () => exitPathEdit(),
+  closeFileMenuIfOpen: () => { if (fileMenuIsOpen()) closeFileMenu(); },
+});
+
 // --- Tabs: `state` is always the ACTIVE tab's view; switching copies the
 // live history refs into the outgoing tab slot and adopts the incoming one.
 // Model lives in ./tabs (pure, tested) — rendering/session I/O stay here. ---
@@ -153,57 +163,13 @@ const tabModel = makeTabs(state, {
 });
 const { switchTab, newTab, closeTab, syncTabFromState, adoptTab } = tabModel;
 
-const scheduleSaveSession = debounced(400, () => {
-  syncTabFromState();
-  if (isVirtualCwd()) return;
-  void saveSession(state.cwd, tabModel.list, tabModel.active).catch(() => {});
+// --- Session save/restore scheduling — logic lives in ./nav (tested) ---
+const { scheduleSaveSession, restoreSession } = makeSessionSync({
+  state,
+  tabModel,
+  config,
+  isVirtualCwd: () => isVirtualCwd(),
 });
-
-const restoreSession = (): void => {
-  // off by default: launching tfm from a shell should open where you are;
-  // opt in via [ui] restore-session = true
-  if (!config.ui.restoreSession) return;
-  const restored = readRestoredSession();
-  if (restored) {
-    tabModel.adoptTabs(restored.tabs, restored.activeTab);
-  } else {
-    adoptTab();
-  }
-};
-
-const canBack = () => state.histIdx > 0;
-const canFwd = () => state.histIdx < state.history.length - 1;
-
-const goBack = () => { if (canBack()) { state.histIdx--; renderAll(); } };
-const goFwd = () => { if (canFwd()) { state.histIdx++; renderAll(); } };
-
-const navigate = (dir: string) => {
-  debugLog(`navigate -> ${dir}`);
-  exitPathEdit();
-  if (fileMenuIsOpen()) closeFileMenu();
-  if (dir === RECENT_URI || dir === STARRED_URI) {
-    if (dir === state.cwd) { renderAll(); return; }
-    state.history = state.history.slice(0, state.histIdx + 1);
-    state.history.push(dir);
-    state.histIdx++;
-    clearSearch();
-    renderAll();
-    return;
-  }
-  let target: string;
-  try {
-    target = path.resolve(dir);
-    if (!statSync(target).isDirectory()) return;
-  } catch {
-    return;
-  }
-  if (target === path.resolve(state.cwd)) { renderAll(); return; }
-  state.history = state.history.slice(0, state.histIdx + 1);
-  state.history.push(target);
-  state.histIdx++;
-  clearSearch();
-  renderAll();
-};
 
 let searchQuery = "";
 
@@ -314,34 +280,16 @@ const {
 // (defaults to the current cwd)
 const isVirtualCwd = (p: string = state.cwd): boolean => isVirtualUri(p);
 
-let recordOpenPaths: string[] = [];
-
-// batch opens into one xbel rewrite (opening a selection of N files fires N times)
-const flushRecordOpen = debounced(150, () => {
-  const paths = [...new Set(recordOpenPaths)];
-  recordOpenPaths = [];
-  void upsertRecentXbel(paths);
+// --- Recent-files recording + default open: batching/toast logic lives in
+// ./recent-open (tested); xbel write, xdg-open spawn and the app probe are
+// injected here (notify is defined below — TDZ seam rule) ---
+const { openFileDefault } = makeRecentOpen({
+  inTrashView: () => inTrashView(),
+  notify: (msg, title) => notify(msg, title),
+  upsertRecent: (paths) => upsertRecentXbel(paths),
+  spawnOpen: (p) => { spawn("xdg-open", [p], { stdio: "ignore", detached: true }).unref?.(); },
+  appForFile,
 });
-const recordOpen = (p: string): void => {
-  if (inTrashView()) return;
-  recordOpenPaths.push(p);
-  flushRecordOpen();
-};
-
-const openFileDefault = (p: string): void => {
-  recordOpen(p);
-  spawn("xdg-open", [p], { stdio: "ignore", detached: true }).unref?.();
-  void notifyOpenedWith(p);
-};
-
-// resolve what xdg-open will pick so the toast can say what launched —
-// probing lives in ./apps (pure, tested)
-const notifyOpenedWith = async (p: string): Promise<void> => {
-  const base = path.basename(p);
-  const app = await appForFile(p);
-  notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open");
-};
-
 // --- Layout ---
 const container = Box(
   { width: "100%", height: "100%", flexDirection: "row" },
@@ -382,32 +330,6 @@ const renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 60, ma
 renderer.root.add(container);
 warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
 renderer.setBackgroundColor(colors.bg); // opencode-style: global bg lives on the renderer, not per-box
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// single seam for the "post-mount only" node lookup: everything here must
-// never call this before the renderer mounts, and must tolerate a miss
-// (nodes die on every rebuild)
-const byId = (id: string): any => {
-  try { return renderer.root.findDescendantById(id); } catch { return null; }
-};
-
-// set a TEXT node's content by id — ids must live on the Text, not its
-// wrapper Box (boxes have no .content, mutating them no-ops)
-const setTextOnId = (nodeId: string, s: string): void => {
-  const n: any = byId(nodeId);
-  if (n) { try { n.content = s; } catch {} }
-};
-
-const stripSelectable = (node: any = renderer.root): void => {
-  if (!node || node.isDestroyed) return;
-  try { if (node.selectable) node.selectable = false; } catch {}
-  node.getChildren?.().forEach((c: any) => stripSelectable(c));
-};
-
-const waitForResolution = async () => {
-  for (let i = 0; i < 40 && !renderer.resolution; i++) await sleep(50);
-};
 
 const dialogs = makeDialogs({
   byId,
@@ -704,7 +626,7 @@ const { renderGrid } = makeGridRenderer({
   selection,
   entryMouseHandlers,
   isCutKey: (key) => isCutKey(key),
-  waitForResolution: () => waitForResolution(),
+  waitForResolution: () => waitForResolution(renderer),
   clearRenameEdit,
 });
 
@@ -819,31 +741,15 @@ const escMenu = makeEscMenu({
   quit: () => quitApp(),
 });
 
-// --- Live directory watching: external changes refresh the grid ---
-let cwdWatcher: ReturnType<typeof watch> | null = null;
-let watchedDir: string | null = null;
-// fs events burst in clusters; coalesce them into one grid rebuild
-const onCwdChanged = debounced(200, () => {
-  // our own create+inline-edit would wipe the editor mid-keystroke
-  if (isRenaming()) return;
-  if (path.resolve(state.cwd) === watchedDir) void renderGrid();
+// --- Live directory watching: external changes refresh the grid.
+// Watch lifecycle lives in ./watcher (tested); index supplies the live
+// cwd/renaming/renderGrid getters (TDZ seam rule). ---
+const { syncCwdWatcher } = makeCwdWatcher({
+  cwd: () => state.cwd,
+  isVirtualCwd: () => isVirtualCwd(),
+  isRenaming: () => isRenaming(),
+  renderGrid: () => renderGrid(),
 });
-
-const syncCwdWatcher = (): void => {
-  if (isVirtualCwd()) {
-    if (cwdWatcher) { try { cwdWatcher.close(); } catch {} cwdWatcher = null; }
-    watchedDir = null;
-    return;
-  }
-  const dir = path.resolve(state.cwd);
-  if (watchedDir === dir) return;
-  watchedDir = dir;
-  if (cwdWatcher) { try { cwdWatcher.close(); } catch {} cwdWatcher = null; }
-  try {
-    cwdWatcher = watch(dir, onCwdChanged);
-    cwdWatcher.on("error", () => {});
-  } catch {}
-};
 
 // --- Orchestration ---
 renderAll = () => {
@@ -865,7 +771,7 @@ renderAll = () => {
 
 
 const boot = async () => {
-  await waitForResolution();
+  await waitForResolution(renderer);
   scroller = new ScrollBoxRenderable(renderer, {
     id: "tfm-scroll",
     flexGrow: 1,
@@ -964,11 +870,6 @@ boot();
 // --- Config application & persistence: lives in ./ui-retheme (rethemeChrome,
 // applyConfig, scheduleSaveConfig, live reload). Geometry lets stay here and
 // are rewritten through the ctx setters — never bake them into consts. ---
-const setOnId = (id: string, fn: (n: any) => void): void => {
-  const n: any = byId(id);
-  if (!n) return;
-  try { fn(n); } catch {}
-};
 
 const { rethemeChrome, applyConfig, scheduleSaveConfig } = makeRetheme({
   config,
@@ -1008,33 +909,14 @@ const dlog = (msg: string): void => {
 const { enableDrops, disableDrops } = makeDnd72({
   log: (msg) => dlog(msg),
   writeFrame: (s) => { try { process.stdout.write(s); } catch {} },
-  hitTargetAt: (x, y, dragPaths): DropTarget | null => {
-    try {
-      const num = renderer.hitTest(x, y);
-      if (!num) return null;
-      let cur: any = (Renderable as any).renderablesByNumber?.get(num);
-      while (cur) {
-        const id: unknown = cur.id;
-        if (typeof id === "string") {
-          if (id.startsWith("tfm-place-")) {
-            const rec = placesHost[parseInt(id.slice(10), 10)];
-            return rec?.place.path ? { kind: "place", path: rec.place.path } : null;
-          }
-          if (id.startsWith("tfm-tile-")) {
-            for (const [k, r] of tileRefsByKey) {
-              if (r.tileId === id) {
-                if (!r.isDir) return null;
-                if (dragPaths?.includes(k)) return null; // dropping onto itself
-                return { kind: "folder", path: k };
-              }
-            }
-          }
-        }
-        cur = cur.parent;
-      }
-    } catch {}
-    return null;
-  },
+  // cell -> drop target walk lives in ./hit-target (tested); index supplies
+  // the renderer-coupled hitTest + registry and the live place/tile refs
+  hitTargetAt: makeHitTargetAt({
+    hitTest: (x, y) => renderer.hitTest(x, y),
+    byNumber: (num) => (Renderable as any).renderablesByNumber?.get(num),
+    placesHost: () => placesHost,
+    tileRefs: tileRefsByKey,
+  }),
   tileRefs: tileRefsByKey,
   setTileVisual,
   hoverPlace: (p) => {
