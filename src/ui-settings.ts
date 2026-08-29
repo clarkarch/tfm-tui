@@ -14,6 +14,7 @@ import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { IconState, IconSpec } from "./ui-slots";
 import type { Theme } from "./config";
 import { keySpecFromEvent, validateKeybindSpec } from "./config-schema";
+import { FLOAT_Z, type Floats } from "./floats";
 
 export type EscMenuCtx = {
   renderer(): any;
@@ -40,6 +41,8 @@ export type EscMenuCtx = {
   settingGroups(): SettingGroup[];
   // conflict/rejection toasts for the keybind capture flow (wired to notify)
   warn(message: string, title?: string): void;
+  // open/close orchestration + the dismiss-others policy live in ./floats
+  floats: Floats;
   // debug sink (dlog) — rebuild failures MUST surface somewhere
   log?(message: string): void;
   quit(): void;
@@ -592,8 +595,21 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     } catch {}
   };
 
+  // raw teardown — registered with floats at open time; public closeMenu is
+  // floats.close("escmenu")
+  const rawCloseMenu = () => {
+    menuOpen = false;
+    capturing = null;
+    ctx.log?.("esc-menu close");
+    nativeMemTrace("esc-menu close");
+    const scrim: any = ctx.byId("tfm-menu");
+    scrim?.parent?.remove(scrim);
+    ctx.setScrim(false);
+  };
+
   const openMenu = () => {
     if (menuOpen) return;
+    ctx.floats.open("escmenu", rawCloseMenu);
     menuOpen = true;
     menuView = "root";
     menuIdx = 0;
@@ -615,7 +631,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         height: "100%",
         alignItems: "center",
         paddingTop: Math.max(2, Math.round(ctx.renderer().terminalHeight / 3)),
-        zIndex: 3000,
+        zIndex: FLOAT_Z.escmenu,
         backgroundColor: RGBA.fromInts(0, 0, 0, 150),
         // mouse-first: first outside click cancels an in-flight capture,
         // the next one dismisses the menu
@@ -640,14 +656,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const closeMenu = () => {
-    if (!menuOpen) return;
-    menuOpen = false;
-    capturing = null;
-    ctx.log?.("esc-menu close");
-    nativeMemTrace("esc-menu close");
-    const scrim: any = ctx.byId("tfm-menu");
-    scrim?.parent?.remove(scrim);
-    ctx.setScrim(false);
+    ctx.floats.close("escmenu");
   };
 
   const moveMenu = (delta: number) => {

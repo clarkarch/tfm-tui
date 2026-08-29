@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
+import { makeFloats, type Floats } from "./floats";
 
-// The floating context menu sits at zIndex 3600 — ABOVE every dialog — so any
-// dialog open path that forgets to dismiss it leaves it stuck on screen
-// (regression: select-all → Properties… kept the menu over the multi dialog).
-// The close must happen in openDialog itself, not per call site.
+// Floating-layer state lives in ./floats (single source of truth): the
+// conflict/yesno prompts register through it, so opening one dismisses the
+// context menu + any other layer by POLICY. openDialog additionally keeps a
+// closeFileMenu baseline for future dialogs. The regression this pins:
+// select-all → Properties… used to leave the menu floating over the dialog.
 const makeCtx = () => {
   const calls: string[] = [];
   let lastAdded: any = null;
+  const floats: Floats = makeFloats();
   const ctx = {
     byId: () => null,
     rootAdd: (node: any) => { lastAdded = node; calls.push("add-scrim"); },
@@ -27,8 +30,9 @@ const makeCtx = () => {
         hoverBg: "#222222",
       }) as any,
     closeFileMenu: () => calls.push("close-menu"),
+    floats,
   };
-  return { ctx, calls, lastAdded: () => lastAdded };
+  return { ctx, calls, lastAdded: () => lastAdded, floats };
 };
 
 describe("openDialog chokepoint", () => {
@@ -43,17 +47,45 @@ describe("openDialog chokepoint", () => {
     expect(closeIdx).toBeLessThan(addIdx);
   });
 
-  test("conflict + yesno prompts inherit the guarantee (both route through openDialog)", () => {
-    const { ctx, calls } = makeCtx();
+  test("conflict prompt opens through floats: menu dismissed, conflict tracked", () => {
+    const { ctx, calls, floats } = makeCtx();
+    // simulate a menu popup being open
+    floats.open("filemenu", () => {});
     const dialogs = makeDialogs(ctx);
-    const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, closeTransients: () => {} });
+    const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, floats });
     void conflict.promptConflict("/a/b.txt", 0);
+    expect(floats.isOpen("filemenu")).toBe(false);
+    expect(floats.top()).toBe("conflict");
     expect(calls.indexOf("close-menu")).toBe(calls.indexOf("add-scrim") - 1);
 
-    calls.length = 0;
-    const yesNo = makeYesNo(dialogs, { colors: ctx.colors, canOpen: () => true });
-    yesNo.confirm("Empty Trash?", "Empty", () => {});
-    expect(calls.indexOf("close-menu")).toBe(calls.indexOf("add-scrim") - 1);
+    // picking a choice closes through floats
+    conflict.closeConflict("replace");
+    expect(floats.isOpen("conflict")).toBe(false);
+    expect(floats.depth()).toBe(0);
+  });
+
+  test("pending conflict resolves 'skip' when floats dismisses it (policy close)", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, floats });
+    const p = conflict.promptConflict("/a/b.txt", 0);
+    // a props dialog opens afterwards — floats clears the desktop, the
+    // pending prompt must not hang forever
+    floats.open("props", () => {});
+    expect(conflict.isOpen()).toBe(false);
+    expect(floats.top()).toBe("props");
+  });
+
+  test("yesno opens through floats; No routes back through floats", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, { colors: ctx.colors, canOpen: () => true, floats });
+    let confirmed = false;
+    yesNo.confirm("Empty Trash?", "Empty", () => { confirmed = true; });
+    expect(floats.top()).toBe("yesno");
+    yesNo.close();
+    expect(floats.isOpen("yesno")).toBe(false);
+    expect(confirmed).toBe(false);
   });
 
   test("scrim click routes to onClose (dismiss-by-click-away still works)", () => {

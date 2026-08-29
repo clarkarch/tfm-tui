@@ -41,6 +41,7 @@ import { animateLeft, makeNotify } from "./notify";
 import { makeChrome } from "./ui-chrome";
 import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
 import { makeMenu } from "./ui-menu";
+import { makeFloats } from "./floats";
 import type { ListEntry } from "./ui-menu";
 import { makePreview } from "./ui-preview";
 import { makeProps } from "./ui-props";
@@ -123,7 +124,7 @@ const {
   colors: () => colors as Theme & Record<string, any>,
   uiStyle: () => config.ui.uiStyle,
   iconCells: () => ICON_CELLS_H,
-  modalOpen: () => escMenu.isOpen(),
+  modalOpen: () => floats.isOpen("escmenu"),
   glyphFor,
 });
 
@@ -181,6 +182,11 @@ const search = makeSearch({
 const { clearSearch, beginTypeToSearch, wireSearchInput } = search;
 
 
+// --- Floating layers: THE single source of truth for which modal/cursor
+// layer is open + the dismiss-others policy. Every widget factory below
+// routes its open/close through it. Pure module, created before any widget. ---
+const floats = makeFloats();
+
 // --- File context menu (right-click a tile) — widget lives in ./ui-menu.
 // Hoisted above nav/chrome/toolbar/conflict/grid-ctx, which all consume
 // closeFileMenu/openContextMenu/fileMenuIsOpen. Safe pre-boot: every ctx
@@ -196,6 +202,7 @@ const { closeFileMenu, renderFileMenu, openContextMenu, isFileMenuOpen: fileMenu
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors as Theme & Record<string, any>,
   menuW: MENU_W,
+  floats,
   makeIconSlot,
 });
 
@@ -458,10 +465,7 @@ const { pushUndoBatch, undoLast, redoLast } = makeUndo({
 const conflict = makeConflict(dialogs, {
   colors: () => colors as Theme & Record<string, any>,
   drainIconQueue: () => drainIconQueue(),
-  closeTransients: () => {
-    closeFileMenu();
-    if (propsIsOpen()) closeProps();
-  },
+  floats,
 });
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
@@ -533,6 +537,7 @@ function inTrashView(): boolean {
 const yesNo = makeYesNo(dialogs, {
   colors: () => colors as Theme & Record<string, any>,
   canOpen: () => !!renderer.resolution,
+  floats,
 });
 const confirmYesNo = yesNo.confirm;
 
@@ -650,10 +655,11 @@ const { renderGrid } = makeGridRenderer({
 });
 
 
-const { openProperties, closeProps, isOpen: propsIsOpen } = makeProps({
+const { openProperties, closeProps } = makeProps({
   byId,
   openDialog,
   closeDialog,
+  floats,
   setTextOnId,
   // setOnId is defined further down — defer through a wrapper (TDZ)
   setOnId: (id, fn) => setOnId(id, fn),
@@ -732,6 +738,7 @@ const { settingGroups } = makeSettingModel({
 const escMenu = makeEscMenu({
   renderer: () => renderer,
   byId,
+  floats,
   clearChildren: (node: any) => clearChildren(node),
   stripSelectable,
   escHintBtn,
@@ -875,8 +882,8 @@ const { enableDrops, disableDrops } = makeDnd72({
   },
   clearHoverPlace: () => clearMousePlace(),
   finishDrag: finishDragCtx,
-  escMenuOpen: () => escMenu.isOpen(),
-  fileMenuOpen: () => fileMenuIsOpen(),
+  escMenuOpen: () => floats.isOpen("escmenu"),
+  fileMenuOpen: () => floats.isOpen("filemenu"),
   trashPaths,
   moveInto,
   runTransfer,
@@ -914,12 +921,14 @@ const keyRouter = makeKeyRouter({
   state,
   keybinds: (action) => config.keys[action] ?? [],
   quit: quitApp,
-  conflict,
-  yesNo,
+  // layer-open reads go through floats — the single source of truth; the
+  // close fns are the widgets' (they route back through floats themselves)
+  conflict: { isOpen: () => floats.isOpen("conflict"), closeConflict: (p: "skip") => conflict.closeConflict(p) },
+  yesNo: { isOpen: () => floats.isOpen("yesno"), close: () => yesNo.close() },
   isRenaming,
-  propsIsOpen,
+  propsIsOpen: () => floats.isOpen("props"),
   closeProps,
-  escMenu,
+  escMenu: { ...escMenu, isOpen: () => floats.isOpen("escmenu") },
   termOwnsKeyboard,
   pathEditMode,
   pathInputVisible: () => !!(byId("tfm-path-input") as any)?.visible,

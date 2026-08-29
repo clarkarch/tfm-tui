@@ -12,6 +12,7 @@ import { dirWalkStats, fmtBytes, fmtDate, idName, mimeLabelFor, permWords } from
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "./recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "./places";
 import type { ListEntry } from "./ui-menu";
+import { FLOAT_Z, type Floats } from "./floats";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -36,6 +37,7 @@ export type PropsCtx = {
   escHintBtn(id: string, onClose: () => void): any;
   closeFileMenu(): void;
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
+  floats: Floats;
   renderAll(): void;
   setStatusMsg(msg: string): void;
   uiStyle(): "solid" | "outline";
@@ -54,22 +56,28 @@ export const makeProps = (ctx: PropsCtx) => {
   const PROPS_W = 46;
   let propsOpen = false;
 
-  const closeProps = (): void => {
+  // raw teardown — registered with floats at open time; the public closeProps
+  // is floats.close("props"), which also takes any popup spawned on top of
+  // the dialog (the permission menu) with it
+  const rawCloseProps = (): void => {
     ctx.closeDialog("tfm-props");
     propsOpen = false;
+  };
+  const closeProps = (): void => {
+    ctx.floats.close("props");
   };
 
   const openSingle = (targetPath: string): void => {
     const colors = ctx.colors();
     let st: any = null;
     try { st = statSync(targetPath); } catch { return; }
-    if (propsOpen) closeProps();
-    const isDirTarget = st.isDirectory();
+    ctx.floats.open("props", rawCloseProps);
     propsOpen = true;
+    const isDirTarget = st.isDirectory();
 
     ctx.openDialog({
       id: "tfm-props",
-      zIndex: 3300,
+      zIndex: FLOAT_Z.props,
       width: PROPS_W,
       paddingDiv: 4,
       rows: () => [],
@@ -341,12 +349,12 @@ export const makeProps = (ctx: PropsCtx) => {
 
   const openMulti = (items: { path: string; st: any }[]): void => {
     const colors = ctx.colors();
-    if (propsOpen) closeProps();
+    ctx.floats.open("props", rawCloseProps);
     propsOpen = true;
 
     ctx.openDialog({
       id: "tfm-props",
-      zIndex: 3300,
+      zIndex: FLOAT_Z.props,
       width: PROPS_W,
       paddingDiv: 4,
       rows: () => [],

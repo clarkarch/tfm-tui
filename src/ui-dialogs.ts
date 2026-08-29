@@ -2,6 +2,7 @@ import { Box, RGBA, Text } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, chromeSurface } from "./style";
 import type { Theme } from "./config";
+import { FLOAT_Z, type Floats } from "./floats";
 
 // --- Shared skeleton for the centered floating dialogs (conflict / props /
 // yesno): full-screen dimmed scrim + a chrome panel that swallows clicks,
@@ -16,9 +17,11 @@ export type DialogsCtx = {
   termH(): number;
   uiStyle(): "solid" | "outline";
   colors(): Theme & Record<string, any>;
-  // EVERY dialog closes the context menu at open time — the menu floats above
-  // every modal (zIndex 3600), so any path that forgets leaves it stuck on
-  // screen. Centralized here, not per menu entry / per dialog.
+  // skeleton baseline for ANY future dialog: the context menu floats above
+  // every modal, so a scrim must never come up under an open menu. The real
+  // dismiss-others policy lives in ./floats (modal open clears the desktop);
+  // conflict/yesno/props route their opens through floats — this call is the
+  // safety net for dialogs that don't.
   closeFileMenu(): void;
 };
 
@@ -102,8 +105,8 @@ export type ConflictChoice = "replace" | "keepBoth" | "skip";
 export type ConflictCtx = {
   colors(): Theme & Record<string, any>;
   drainIconQueue(): void | Promise<void>;
-  // transient popups that must not sit above the prompt (file menu, props)
-  closeTransients(): void;
+  // open/close orchestration + the dismiss-others policy live in ./floats
+  floats: Floats;
 };
 
 export const makeConflict = (
@@ -117,17 +120,28 @@ export const makeConflict = (
   let conflictOpen = false;
   let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
 
-  const closeConflict = (c: ConflictChoice): void => {
+  // raw teardown — registered with floats at open time; a floats-initiated
+  // close (policy dismissal / replace) resolves a pending prompt as "skip"
+  const rawTeardown = (): void => {
+    const r = conflictResolveFn;
+    conflictResolveFn = null;
     closeDialog("tfm-conflict");
     conflictOpen = false;
+    r?.("skip");
+  };
+
+  const closeConflict = (c: ConflictChoice): void => {
     const r = conflictResolveFn;
     conflictResolveFn = null;
     r?.(c);
+    ctx.floats.close("conflict");
   };
 
   const promptConflict = (destPath: string, remaining: number): Promise<ConflictChoice> =>
     new Promise<ConflictChoice>((resolve) => {
-      ctx.closeTransients();
+      // floats.open dismisses every other floating layer (menu, props, …) —
+      // the prompt must be the only thing on screen
+      ctx.floats.open("conflict", rawTeardown);
       conflictOpen = true;
       conflictResolveFn = resolve;
       const c = ctx.colors();
@@ -174,7 +188,7 @@ export const makeConflict = (
       }
       openDialog({
         id: "tfm-conflict",
-        zIndex: 3400,
+        zIndex: FLOAT_Z.conflict,
         width: CONFLICT_W,
         rows: () => rows,
         onClose: () => closeConflict("skip"),
@@ -199,6 +213,8 @@ export type YesNoCtx = {
   colors(): Theme & Record<string, any>;
   // false while the renderer hasn't laid out yet (same gate as makeConflict callers)
   canOpen(): boolean;
+  // open/close orchestration + the dismiss-others policy live in ./floats
+  floats: Floats;
 };
 
 const YESNO_W = 36;
@@ -211,13 +227,19 @@ export const makeYesNo = (
 
   let open = false;
 
-  const close = (): void => {
+  // raw teardown — registered with floats at open time
+  const rawClose = (): void => {
     closeDialog("tfm-yesno");
     open = false;
   };
 
+  const close = (): void => {
+    ctx.floats.close("yesno");
+  };
+
   const confirm = (message: string, yesLabel: string, onYes: () => void, danger = false): boolean => {
     if (open || !ctx.canOpen()) return false;
+    ctx.floats.open("yesno", rawClose);
     open = true;
     const c = ctx.colors();
     const yesFg = danger ? c.ansi1 : c.accent;
@@ -226,7 +248,7 @@ export const makeYesNo = (
       dialogBtn(`tfm-yesno-b${bseq++}`, label, fg, onPick);
     openDialog({
       id: "tfm-yesno",
-      zIndex: 3450,
+      zIndex: FLOAT_Z.yesno,
       width: YESNO_W,
       rows: () => [
         Box(

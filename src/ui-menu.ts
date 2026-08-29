@@ -2,11 +2,13 @@ import { Box, Text } from "@opentui/core";
 import { chromeSurface } from "./style";
 import type { Theme } from "./config";
 import { clearChildren } from "./uiutil";
+import { FLOAT_Z, type Floats } from "./floats";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
 // renderer. Ids tfm-filemenu / tfm-filemenu-panel stay byte-identical for
 // rethemeChrome; theme/renderer access arrives via ctx (same seam as
-// ui-dialogs). ---
+// ui-dialogs). Open/close state routes through ./floats (the single source of
+// truth): this module keeps only rendering + the raw teardown. ---
 
 export type ListEntry = { icon?: string; label: string; hint?: string; hintIcon?: string; action: () => void; sep?: boolean };
 
@@ -20,13 +22,16 @@ export type MenuCtx = {
   uiStyle(): "solid" | "outline";
   colors(): Theme & Record<string, any>;
   menuW: number;
+  floats: Floats;
   makeIconSlot(name: string, states: { fg: string; bg: string }[], heightCells?: number, initialState?: number, onMouseDown?: (ev: any) => void): { el: any; slotId: string; spec: any };
 };
 
 export const makeMenu = (ctx: MenuCtx) => {
   let state: { idx: number; entries: ListEntry[] } | null = null;
 
-  const closeFileMenu = () => {
+  // raw teardown — registered with floats at open time, invoked by floats
+  // (public closeFileMenu is floats.close("filemenu"))
+  const rawCloseMenu = () => {
     const scrim: any = ctx.byId("tfm-filemenu");
     scrim?.parent?.remove(scrim);
     state = null;
@@ -78,10 +83,11 @@ export const makeMenu = (ctx: MenuCtx) => {
     void ctx.drainIconQueue();
   };
 
-  // small unscoped box spawned at the cursor — no scrim
+  // small unscoped box spawned at the cursor — no scrim. floats.open replaces
+  // any open popup (the raw teardown removes the old node first)
   const openContextMenu = (x: number, y: number, title: string, entries: ListEntry[]): void => {
     const colors = ctx.colors();
-    closeFileMenu();
+    ctx.floats.open("filemenu", rawCloseMenu);
     state = { idx: 0, entries };
     const w = ctx.menuW;
     const h = entries.length + 2;
@@ -97,7 +103,7 @@ export const makeMenu = (ctx: MenuCtx) => {
         width: w,
         // above every modal (props/prompt/conflict/toast) — context menus can be
         // spawned from inside any of them
-        zIndex: 3600,
+        zIndex: FLOAT_Z.filemenu,
         ...chromeSurface(ctx.uiStyle(), colors, colors.sidebarBg),
         flexDirection: "column",
       },
@@ -113,5 +119,5 @@ export const makeMenu = (ctx: MenuCtx) => {
   // fileMenuState() returns the LIVE mutable state object — index.ts's
   // keyboard nav mutates fmenu.idx in place (no setter) and calls
   // renderFileMenu() afterwards; do not snapshot it.
-  return { closeFileMenu, renderFileMenu, openContextMenu, isFileMenuOpen: () => !!state, fileMenuState: () => state };
+  return { closeFileMenu: () => ctx.floats.close("filemenu"), renderFileMenu, openContextMenu, isFileMenuOpen: () => !!state, fileMenuState: () => state };
 };
