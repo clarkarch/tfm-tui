@@ -510,6 +510,8 @@ const { openTerminalHere, closeTerminalPane, syncTerminalTheme, termHasFocus, bl
   cwd: () => state.cwd,
   virtualCwd: isVirtualCwd,
   home,
+  finishDrag: finishDragCtx,
+  dlog: (msg) => dlog(msg),
 });
 
 const trashOps = makeTrashOps({

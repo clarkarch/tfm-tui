@@ -17,7 +17,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@opentui/core": "0.5.8",
+    "@opentui/core": "0.5.9",
     "smol-toml": "^1.8.0"
   }
 }
