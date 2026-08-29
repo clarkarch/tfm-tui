@@ -28,6 +28,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 - Runtime helpers (the installer checks these and tells you what's missing):
   - `rsvg-convert` — theme-tinted icons (else Nerd Font glyphs)
   - `magick` — SVG image thumbnails
+  - `ffmpeg` — video thumbnails & previews (else videos show plain icons)
   - `gio` — Nautilus-compatible trash & starred files
   - `xdg-open` — opening files in their default app
   - `udisksctl` — removable-drive mount/eject
