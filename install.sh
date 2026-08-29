@@ -62,6 +62,7 @@ MISSING=""
 add_missing() { MISSING="${MISSING}  - $1\\n"; }
 have rsvg-convert || add_missing "rsvg-convert — theme-tinted icons"
 have magick       || add_missing "magick — SVG image thumbnails"
+have ffmpeg       || add_missing "ffmpeg — video thumbnails & previews"
 have gio          || add_missing "gio — Nautilus-compatible trash & starred files"
 have xdg-open     || add_missing "xdg-open — opens files in their default app (required)"
 have udisksctl    || add_missing "udisksctl — mount/eject removable drives"
