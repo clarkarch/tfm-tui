@@ -209,13 +209,33 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       paddingRight: 1,
       ...ctx.entryMouseHandlers(e, key, idx),
     });
-    const iconSlot = ctx.makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), selection.tileStates(dim), h, 0);
-    row.add(iconSlot.el);
-    // rough inner width of the file pane; only used to truncate names, rows
-    // themselves are 100%-width and flex
     // fixed chrome: 2 padding + gaps + size + date + slack; the icon is
     // `aspect * h` cells wide and eats into the flexible name column
     const iconW = Math.max(1, Math.round(aspect * h));
+
+    // image/video rows get thumbnails like grid tiles: empty slot until the
+    // async raster lands, then drainThumbs swaps the image in. hCells must be
+    // passed explicitly — the drain default is the grid's ICON_CELLS_H, not
+    // the list-row-height knob.
+    const isVideo = !e.isDir && fileIsVideo(e.name);
+    const wantsThumb = !e.isDir && (fileIsImage(e.name) || (isVideo && canThumbVideo()));
+    let st: any = null;
+    if (wantsThumb) { try { st = statSync(key); } catch {} }
+    const useThumb = wantsThumb && st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400;
+
+    let slotId: string;
+    let iconSpec: IconSpec | undefined;
+    let slotEl: ReturnType<typeof Box>;
+    if (useThumb) {
+      slotId = ctx.nextIconId();
+      slotEl = Box({ id: slotId, width: iconW, height: h, flexDirection: "row", justifyContent: "center" });
+    } else {
+      const s = ctx.makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), selection.tileStates(dim), h, 0);
+      slotId = s.slotId;
+      iconSpec = s.spec;
+      slotEl = s.el;
+    }
+    row.add(slotEl);
     const listW = Math.max(40, ctx.termW() - sw - ctx.reservedRight() - (ctx.uiStyle() === "outline" ? 6 : 3));
     const nameMax = Math.max(12, listW - 27 - iconW);
     const label = e.name.length > nameMax ? e.name.slice(0, nameMax - 1) + "…" : e.name;
@@ -223,7 +243,20 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     row.add(Box({ flexGrow: 1 }));
     row.add(Text({ content: e.isDir ? "" : fmtBytes(e.size ?? 0).padStart(9), fg: colors.sidebarFgMuted }));
     row.add(Text({ content: fmtDateShort(e.mtimeMs), fg: colors.sidebarFgMuted }));
-    selection.tileRefs.set(key, { iconSpec: iconSlot.spec, iconSlotId: iconSlot.slotId, selected: false, baseFg, tileId: rowId, labelId, isDir: e.isDir });
+    selection.tileRefs.set(key, { iconSpec, iconSlotId: slotId, selected: false, baseFg, tileId: rowId, labelId, isDir: e.isDir });
+    if (useThumb && st) {
+      ctx.pushThumbJob({
+        slotId,
+        path: key,
+        mtimeMs: st.mtimeMs ?? 0,
+        size: st.size,
+        wCells: iconW,
+        hCells: h,
+        vector: e.name.toLowerCase().endsWith(".svg"),
+        video: isVideo,
+        fallbackGlyph: glyph[fileIconFor(e.name)] ?? glyph.file!,
+      });
+    }
     return row;
   };
 
