@@ -36,7 +36,7 @@ A modern, mouse-first file manager with Nautilus-inspired places sidebar, grid v
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 ```
 
 Installs to `~/.local/bin` as `tfm` (and `terminal-file-manager`). Prebuilt binaries for linux x86_64/aarch64 are on [Releases](https://github.com/clarkarch/tfm-tui/releases).

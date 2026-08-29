@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tfm installer: downloads the latest prebuilt binary for your arch.
-# usage: curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/master/install.sh | bash
+# usage: curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 set -euo pipefail
 
 REPO="clarkarch/tfm-tui"
