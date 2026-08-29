@@ -90,6 +90,7 @@ const hideDragGhost = (ctx: GridInputCtx): void => {
 };
 
 export const finishDragState = (ctx: GridInputCtx): void => {
+  const wasActive = gridDrag.active;
   ctx.log(`finishDragState active=${gridDrag.active} target=${gridDrag.dropTarget}`);
   gridDrag.pendingKey = null;
   hideDragGhost(ctx);
@@ -101,6 +102,9 @@ export const finishDragState = (ctx: GridInputCtx): void => {
   gridDrag.dropTarget = null;
   gridDrag.active = false;
   gridDrag.keys = null;
+  // release without a drop: "Dragging N items…" must not linger — restore the
+  // selection status (a real drop overwrites it with the move/copy progress)
+  if (wasActive) ctx.updateSelectionStatusReal();
 };
 
 // release fires on the source before `drop` reaches the target — defer cleanup

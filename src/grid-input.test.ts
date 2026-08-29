@@ -12,7 +12,7 @@ beforeEach(() => {
   gridDrag.pendingState = false;
 });
 
-const makeCtx = (): GridInputCtx & { visuals: Map<string, number>; statuses: string[]; moved: { dest: string; n: number }[]; menus: string[]; logs: string[] } => {
+const makeCtx = (): GridInputCtx & { visuals: Map<string, number>; statuses: string[]; moved: { dest: string; n: number }[]; menus: string[]; logs: string[]; selStatusRefreshes: { n: number } } => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
   for (const [p, isDir] of [["/w/a.txt", false], ["/w/b.txt", false], ["/w/c.txt", false], ["/w/sub", true]] as const) {
@@ -23,6 +23,7 @@ const makeCtx = (): GridInputCtx & { visuals: Map<string, number>; statuses: str
   const moved: { dest: string; n: number }[] = [];
   const menus: string[] = [];
   const logs: string[] = [];
+  const selStatus = { n: 0 };
   let anchor: number | null = null;
   let focused = 0;
   return {
@@ -31,12 +32,13 @@ const makeCtx = (): GridInputCtx & { visuals: Map<string, number>; statuses: str
     moved,
     menus,
     logs,
+    selStatusRefreshes: selStatus,
     byId: () => null,
     termW: () => 80,
     termH: () => 24,
     tileRefs: refs as GridInputCtx["tileRefs"],
     setTileVisual: (key, mode) => void visuals.set(key, mode),
-    updateSelectionStatusReal: () => {},
+    updateSelectionStatusReal: () => { selStatus.n++; },
     renderPreview: () => {},
     clearTileSelection: () => { for (const [k, r] of refs) if (r.selected) { r.selected = false; visuals.set(k, 0); } },
     selectRange: (from, to) => {
@@ -103,7 +105,7 @@ describe("deferred ctrl toggle (the moved-0-items regression)", () => {
     expect(gridDrag.keys).toBeNull();
   });
 
-  test("ctrl+press then drag: toggle is cancelled, payload keeps the pressed tile", () => {
+  test("ctrl+press then drag: toggle is cancelled, payload keeps the pressed tile", async () => {
     const ctx = makeCtx();
     // pre-select b and c
     ctx.tileRefs.get("/w/b.txt")!.selected = true;
@@ -120,6 +122,10 @@ describe("deferred ctrl toggle (the moved-0-items regression)", () => {
     h.onMouseUp();
     // toggle must NOT have fired
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
+    // settle the deferred cleanup — a leaked timer would fire mid-next-test
+    // and clear the shared gridDrag singleton out from under it
+    for (let i = 0; i < 50 && gridDrag.keys; i++) await Bun.sleep(1);
+    expect(gridDrag.keys).toBeNull();
   });
 });
 
@@ -187,5 +193,28 @@ describe("commitPendingCtrlToggle / finishDragState", () => {
     expect(gridDrag.dropTarget).toBeNull();
     expect(gridDrag.ctrl).toBe(false);
     expect(ctx.visuals.get("/w/sub")).toBe(0);
+  });
+
+  test("releasing an active drag restores the selection status (no stale 'Dragging…')", async () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, { x: 5, y: 5 });
+    h.onMouseDrag({ x: 8, y: 5 } as any); // drag starts -> "Dragging 1 item…"
+    expect(ctx.statuses.at(-1)).toBe("Dragging 1 item…");
+    ctx.selStatusRefreshes.n = 0;
+    h.onMouseUp(); // cleanup is deferred a tick (scheduleDragCleanup) — poll, don't sleep
+    for (let i = 0; i < 50 && gridDrag.active; i++) await Bun.sleep(1);
+    expect(gridDrag.active).toBe(false);
+    expect(ctx.selStatusRefreshes.n).toBe(1);
+  });
+
+  test("plain mouseup without an active drag does not touch the status", async () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, { x: 5, y: 5 });
+    ctx.selStatusRefreshes.n = 0;
+    h.onMouseUp();
+    for (let i = 0; i < 50 && gridDrag.keys; i++) await Bun.sleep(1); // settle deferred cleanup
+    expect(ctx.selStatusRefreshes.n).toBe(0);
   });
 });
