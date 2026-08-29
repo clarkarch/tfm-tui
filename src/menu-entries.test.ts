@@ -102,6 +102,20 @@ describe("fileEntriesFor", () => {
     expect(ctx.calls).toContain("trash:/a,/b");
   });
 
+  test("properties target the whole selection, single when outside it", () => {
+    const ctx = baseCtx();
+    ctx.tileRefs = new Map<string, GridTileRef>([["/a", { selected: true, isDir: false }]]);
+    ctx.selPaths = () => [{ path: "/a", isDir: false }, { path: "/b", isDir: false }];
+    const m = makeMenuEntries(ctx);
+    const props = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label === "Properties…")!;
+    props.action();
+    expect(ctx.calls).toContain("props:/a,/b");
+
+    const solo = m.fileEntriesFor("/z", false, 0, 0).find((e) => e.label === "Properties…")!;
+    solo.action();
+    expect(ctx.calls).toContain("props:/z");
+  });
+
   test("trash view offers restore / delete-permanently only", () => {
     const ctx = baseCtx();
     ctx.inTrashView = () => true;

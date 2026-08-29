@@ -191,6 +191,14 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const colors = ctx.colors();
     const bar: any = ctx.byId("tfm-tabbar");
     if (!bar) return;
+    // a chip is a valid drop target only for a single dragged folder — dropping
+    // navigates THAT tab to it (browser-style)
+    const dragTabDir = (): string | null => {
+      if (!gridDrag.active) return null;
+      const keys = gridDrag.keys;
+      const first = keys?.length === 1 ? keys[0] : undefined;
+      return first && first.isDir ? first.path : null;
+    };
     // visibility rule: setting ON = strip always visible (even with one tab, so
     // the ＋ button stays reachable); setting OFF = adaptive — the strip only
     // earns a row once there's something to switch to (visible=false is
@@ -237,7 +245,21 @@ export const makeChrome = (ctx: ChromeCtx) => {
             if (ev.button === 1) ctx.closeTab(i); // middle-click also closes
             else ctx.switchTab(i);
           },
-          onMouseOver: () => { if (i !== ctx.tabs().active) { const n: any = ctx.byId(tabId); if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "hover")); } },
+          onMouseDrop: () => {
+            const keys = gridDrag.keys;
+            ctx.finishDrag();
+            const first = keys?.length === 1 ? keys[0] : undefined;
+            ctx.dlog(`tab drop chip=${i} keys=${keys?.length ?? -1} dir=${first?.isDir ?? "-"}`);
+            if (!first || !first.isDir) return;
+            ctx.switchTab(i);
+            ctx.navigate(first.path);
+          },
+          onMouseOver: () => {
+            // drop-target cue: light the chip like the selected tab while a
+            // single-folder drag hovers it
+            if (dragTabDir() !== null) { const n: any = ctx.byId(tabId); if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected")); return; }
+            if (i !== ctx.tabs().active) { const n: any = ctx.byId(tabId); if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "hover")); }
+          },
           onMouseOut: paint,
         },
         Text({ content: tabTitle(t), fg: i === ctx.tabs().active ? colors.white : colors.sidebarFg }),

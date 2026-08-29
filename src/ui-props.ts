@@ -58,7 +58,7 @@ export const makeProps = (ctx: PropsCtx) => {
     propsOpen = false;
   };
 
-  const openProperties = (targetPath: string): void => {
+  const openSingle = (targetPath: string): void => {
     const colors = ctx.colors();
     ctx.closeFileMenu();
     let st: any = null;
@@ -330,6 +330,108 @@ export const makeProps = (ctx: PropsCtx) => {
     ctx.stripSelectable();
     void ctx.drainIconQueue();
     void ctx.drainThumbs();
+  };
+
+  // --- multi-selection properties: count + aggregate size + capped name
+  // list; no star/bookmark/perms (those are per-file semantics) ---
+  const PROPS_LIST_MAX = 6;
+
+  const openMulti = (items: { path: string; st: any }[]): void => {
+    const colors = ctx.colors();
+    if (propsOpen) closeProps();
+    propsOpen = true;
+
+    ctx.openDialog({
+      id: "tfm-props",
+      zIndex: 3300,
+      width: PROPS_W,
+      paddingDiv: 4,
+      rows: () => [],
+      onClose: () => closeProps(),
+    });
+
+    const panel: any = ctx.byId("tfm-props-panel");
+    if (!panel) return;
+
+    panel.add(Box(
+      { width: "100%", height: 1, flexDirection: "row" },
+      Box({ flexGrow: 1 }),
+      ctx.escHintBtn("tfm-esc-props", closeProps),
+    ));
+
+    const ICON_H = 6;
+    const heroEl = ctx.makeIconSlot("select-all", [{ fg: colors.sidebarFg, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }], ICON_H).el;
+    panel.add(Box(
+      { width: "100%", height: ICON_H + 1, flexDirection: "row", justifyContent: "center", alignItems: "center" },
+      heroEl,
+    ));
+    panel.add(Box(
+      { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
+      Text({ content: `${items.length} items selected`, fg: colors.white }),
+    ));
+    panel.add(Box(
+      { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
+      Text({ id: "tfm-props-size", content: "calculating…", fg: colors.accent }),
+    ));
+    panel.add(Box(
+      { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+      Text({ content: " " + "~".repeat(PROPS_W - 2), fg: colors.divider }),
+    ));
+
+    // aggregate size: files are already stat'd, folders walk async (same
+    // settle-guarded byId update as the single-dir flow)
+    let totalBytes = 0;
+    let nFiles = 0;
+    let nFolders = 0;
+    const dirPaths: string[] = [];
+    for (const it of items) {
+      if (it.st.isDirectory()) dirPaths.push(it.path);
+      else { totalBytes += it.st.size ?? 0; nFiles++; }
+    }
+    const settle = (): void => {
+      if (!propsOpen) return;
+      const n: any = ctx.byId("tfm-props-size");
+      if (n) {
+        const counts = dirPaths.length ? ` · ${nFiles} files · ${nFolders} folders` : ` · ${nFiles} files`;
+        try { n.content = `${fmtBytes(totalBytes)}${counts}`; } catch {}
+      }
+    };
+    if (dirPaths.length) {
+      void Promise.all(dirPaths.map((d) => dirWalkStats(d))).then((walks) => {
+        for (const s of walks) {
+          if (s) { totalBytes += s.bytes; nFiles += s.files; nFolders += s.folders; }
+        }
+        settle();
+      });
+    } else {
+      settle();
+    }
+
+    const shown = items.slice(0, PROPS_LIST_MAX);
+    for (const it of shown) {
+      panel.add(Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: ` ${path.basename(it.path)}`.slice(0, PROPS_W - 1), fg: colors.sidebarFg }),
+      ));
+    }
+    if (items.length > PROPS_LIST_MAX) {
+      panel.add(Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: ` …and ${items.length - PROPS_LIST_MAX} more`, fg: colors.sidebarFgMuted }),
+      ));
+    }
+    ctx.stripSelectable();
+    void ctx.drainIconQueue();
+  };
+
+  const openProperties = (target: string | string[]): void => {
+    if (!Array.isArray(target)) { openSingle(target); return; }
+    const stats: { path: string; st: any }[] = [];
+    for (const p of target) {
+      try { stats.push({ path: p, st: statSync(p) }); } catch {}
+    }
+    if (stats.length === 1) { openSingle(stats[0]!.path); return; }
+    if (stats.length > 1) openMulti(stats);
   };
 
   return { openProperties, closeProps, isOpen: () => propsOpen };

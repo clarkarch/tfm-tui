@@ -879,7 +879,9 @@ const boot = async () => {
       blurTerminal();
       if (pathEditMode()) { exitPathEdit(); return; }
       if (isRenaming()) finishInlineRename(false);
-      clearTileSelection();
+      // left-click clears (and may start a rubber band); right-click opens the
+      // background menu WITHOUT cancelling the selection (Nautilus behavior)
+      if (ev.button === 0) clearTileSelection();
       // band shows only once a drag actually moves the pointer
       beginBand(ev);
       if (ev.button === 2) openContextMenu(ev.x, ev.y, "", emptyAreaEntries(ev.x, ev.y));
