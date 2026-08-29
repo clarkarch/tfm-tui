@@ -110,6 +110,10 @@ describe("fileEntriesFor", () => {
     const props = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label === "Properties…")!;
     props.action();
     expect(ctx.calls).toContain("props:/a,/b");
+    // the menu must close before the dialog opens — it floats above every
+    // modal, so leaving it open leaves it stuck on the properties UI
+    expect(ctx.calls.indexOf("close")).toBeGreaterThanOrEqual(0);
+    expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("props:/a,/b"));
 
     const solo = m.fileEntriesFor("/z", false, 0, 0).find((e) => e.label === "Properties…")!;
     solo.action();

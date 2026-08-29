@@ -359,6 +359,7 @@ const dialogs = makeDialogs({
   termH: () => renderer.terminalHeight,
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors,
+  closeFileMenu,
 });
 const { openDialog, closeDialog, dialogBtn } = dialogs;
 

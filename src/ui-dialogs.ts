@@ -16,6 +16,10 @@ export type DialogsCtx = {
   termH(): number;
   uiStyle(): "solid" | "outline";
   colors(): Theme & Record<string, any>;
+  // EVERY dialog closes the context menu at open time — the menu floats above
+  // every modal (zIndex 3600), so any path that forgets leaves it stuck on
+  // screen. Centralized here, not per menu entry / per dialog.
+  closeFileMenu(): void;
 };
 
 export const makeDialogs = (ctx: DialogsCtx) => {
@@ -27,6 +31,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
     rows: () => any[];
     onClose: () => void;
   }): void => {
+    ctx.closeFileMenu();
     const scrim = Box(
       {
         id: opts.id,

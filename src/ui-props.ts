@@ -61,7 +61,6 @@ export const makeProps = (ctx: PropsCtx) => {
 
   const openSingle = (targetPath: string): void => {
     const colors = ctx.colors();
-    ctx.closeFileMenu();
     let st: any = null;
     try { st = statSync(targetPath); } catch { return; }
     if (propsOpen) closeProps();

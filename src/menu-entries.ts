@@ -117,7 +117,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         } },
       { icon: "trash-can", label: `Trash${nSuffix}`, action: () => { ctx.closeFileMenu(); ctx.trashPaths(targets.map((t) => t.path)); } },
     );
-    entries.push({ icon: "information", label: "Properties…", action: () => ctx.openProperties(inSel && targets.length > 1 ? targets.map((t) => t.path) : targetPath) });
+    entries.push({ icon: "information", label: "Properties…", action: () => { ctx.closeFileMenu(); ctx.openProperties(inSel && targets.length > 1 ? targets.map((t) => t.path) : targetPath); } });
     return entries;
   };
 
