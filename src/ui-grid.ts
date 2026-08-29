@@ -143,15 +143,16 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
 
     const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
     // word wrap [ui] word-wrap: long names flow onto extra rows (capped at the
-    // space under the icon) via the native word-wrap buffer; overflow lines
-    // clip, unbreakable runs ellipsize. Off = today's single cut line.
+    // space under the icon) via the native char-wrap buffer — filenames are
+    // single runs, per-character wrap fills every line edge-to-edge; overflow
+    // lines clip, too-long runs ellipsize. Off = today's single cut line.
     const maxLabelLines = Math.max(1, TILE_H - ICON_CELLS_H);
     const wrapOn = ctx.wordWrap() && e.name.length > TILE_W - 2 && maxLabelLines > 1;
     const labelText: any = Text({
       id: labelId,
       content: wrapOn ? e.name : label,
       fg: baseFg,
-      ...(wrapOn ? { width: TILE_W - 2, height: maxLabelLines, truncate: true } : {}),
+      ...(wrapOn ? { width: TILE_W - 2, height: maxLabelLines, truncate: true, wrapMode: "char" as const } : {}),
     });
     tile.add(labelText);
 
