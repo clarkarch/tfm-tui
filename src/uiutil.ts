@@ -14,11 +14,18 @@ export const clearChildren = (node: any): void => {
 
 // trailing debounce: every call pushes the run `ms` back; the body sees the
 // latest closure state when it finally fires
-export const debounced = (ms: number, fn: () => void): (() => void) => {
+// injectable timer pair: tests pass a virtual clock (Bun has no fake
+// timers), production defaults to the real one
+export type Scheduler = {
+  setTimeout(cb: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+};
+
+export const debounced = (ms: number, fn: () => void, sched: Scheduler = globalThis): (() => void) => {
   let t: any = null;
   return () => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => {
+    if (t) sched.clearTimeout(t);
+    t = sched.setTimeout(() => {
       t = null;
       fn();
     }, ms);
