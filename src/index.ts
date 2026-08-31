@@ -1,4 +1,4 @@
-import { CliRenderEvents, Renderable, ScrollBoxRenderable, createCliRenderer } from "@opentui/core";
+import { CliRenderEvents, Renderable, type ScrollBoxRenderable, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import { loadConfig, configPath, type Theme } from "./config";
@@ -176,7 +176,7 @@ const tabModel = makeTabs(state, {
   status: setStatusMsg,
   quit: quitApp,
 });
-const { switchTab, newTab, closeTab, syncTabFromState, adoptTab } = tabModel;
+const { switchTab, newTab, closeTab, syncTabFromState } = tabModel;
 
 // --- Session save/restore scheduling — logic lives in ./nav (tested) ---
 const { scheduleSaveSession, restoreSession } = makeSessionSync({
@@ -225,7 +225,7 @@ const { closeFileMenu, renderFileMenu, openContextMenu, isFileMenuOpen: fileMenu
 // mutable: applyConfig() rewrites these when settings change
 let sw = config.ui.sidebarWidth;
 
-const { renderSidebar, renderTabbar, normalizePlaces, makeDivider, placesHost, mountDevice, ejectDevice, setMousePlace, clearMousePlace } = makeChrome({
+const { renderSidebar, renderTabbar, normalizePlaces, placesHost, mountDevice, ejectDevice, setMousePlace, clearMousePlace } = makeChrome({
   byId,
   uiStyle: () => config.ui.uiStyle,
   colors: () => colors as Theme & Record<string, any>,
@@ -356,7 +356,7 @@ const dialogs = makeDialogs({
   colors: () => colors,
   closeFileMenu,
 });
-const { openDialog, closeDialog, dialogBtn } = dialogs;
+const { openDialog, closeDialog } = dialogs;
 
 
 // --- Grid (scrollable, culled, interactive) ---
@@ -383,13 +383,11 @@ const selection = makeSelection({
 });
 const {
   setTileVisual,
-  tileStates,
   selPaths,
   updateSelectionStatusReal,
   clearTileSelection,
   selectRange,
   selectTileAt,
-  moveFocus,
   selectAll,
   refreshCutVisuals,
 } = selection;
@@ -481,7 +479,7 @@ const { runTransfer, performRename, setClipboard, pasteSmart, moveInto, clipboar
 });
 
 // --- Embedded terminal pane — widget lives in ./ui-term ---
-const { openTerminalHere, closeTerminalPane, syncTerminalTheme, termHasFocus, blurTerminal, ownsKeyboard: termOwnsKeyboard } = makeTerminal({
+const { openTerminalHere, syncTerminalTheme, termHasFocus, blurTerminal, ownsKeyboard: termOwnsKeyboard } = makeTerminal({
   renderer,
   byId,
   uiStyle: () => config.ui.uiStyle,
@@ -788,7 +786,7 @@ void runBoot({
 // applyConfig, scheduleSaveConfig, live reload). Geometry lets stay here and
 // are rewritten through the ctx setters — never bake them into consts. ---
 
-const { rethemeChrome, applyConfig, scheduleSaveConfig } = makeRetheme({
+const { applyConfig, scheduleSaveConfig } = makeRetheme({
   config,
   colors: colors as Theme & Record<string, any>,
   setOnId,

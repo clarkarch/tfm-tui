@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "bun:test";
+import { describe, expect, test, } from "bun:test";
 import { clearChildren, debounced, safeRenderStep } from "./uiutil";
 
 describe("clearChildren", () => {

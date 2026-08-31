@@ -221,7 +221,7 @@ describe("file menu keys", () => {
 });
 
 describe("search keys", () => {
-  const searchOn = (h: Harness, query: string): Partial<KeyRouterCtx> => ({
+  const searchOn = (_h: Harness, query: string): Partial<KeyRouterCtx> => ({
     searchVisible: () => true,
     searchQuery: () => query,
   });

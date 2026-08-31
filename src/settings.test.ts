@@ -51,7 +51,7 @@ describe("applyAdjust", () => {
   });
 
   test("cycle with getIdx() < 0 (custom value) picks an end based on direction", () => {
-    let idx = -1;
+    const idx = -1;
     let set = -9;
     const row: SettingRow = { kind: "cycle", label: "c", names: ["a", "b"], getIdx: () => idx, setIdx: (i) => { set = i; } };
     applyAdjust(row, 1);

@@ -29,4 +29,4 @@ export const uriToPath = (uri: string): string | null => {
 // path -> file:// URI, percent-encoding every segment except the root slash.
 // (Named xmlEscapeUri in the monolith days — it escapes for URIs, not XML.)
 export const pathToUri = (p: string): string =>
-  "file://" + p.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/");
+  `file://${p.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/")}`;

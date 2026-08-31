@@ -30,6 +30,7 @@ import { gridDrag, type ClipItem, type GridTileRef } from "./grid-input";
 export const splitOsc72Seq = (seq: string): { meta: string; payload: string } | null => {
   const start = seq.indexOf("]72;");
   if (start < 0) return null;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: OSC terminators (ST/BEL) are control bytes
   const body = seq.slice(start + 4).replace(/(\x1b\\|\x07|\x9c)$/, "");
   const sep = body.indexOf(";");
   return { meta: sep < 0 ? body : body.slice(0, sep), payload: sep < 0 ? "" : body.slice(sep + 1) };
@@ -126,7 +127,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   const handleSelfDropHover = (x: number, y: number): void => {
     clearSelfDropHighlight();
     const target = x >= 0 ? ctx.hitTargetAt(x, y, dragPaths) : null;
-    ctx.log(`self hover ${x},${y} -> ${target ? target.kind + ":" + target.path : "none"}`);
+    ctx.log(`self hover ${x},${y} -> ${target ? `${target.kind}:${target.path}` : "none"}`);
     if (!target) {
       ctx.clearHoverPlace();
       return;

@@ -18,6 +18,7 @@ export const readRecentXbel = (): XbelItem[] => {
   const out: XbelItem[] = [];
   const bmRe = /<bookmark\b[^>]*href="([^"]+)"[^>]*>/g;
   let m: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: classic exec-loop idiom
   while ((m = bmRe.exec(xml))) {
     const p = uriToPath(m[1]!);
     if (!p) continue;
@@ -99,7 +100,7 @@ export const readStarredList = (): string[] => {
 export const writeStarredList = async (paths: string[]): Promise<void> => {
   try {
     await mkdir(path.dirname(starredListPath()), { recursive: true });
-    await writeFile(starredListPath(), [...new Set(paths)].join("\n") + "\n", "utf8");
+    await writeFile(starredListPath(), `${[...new Set(paths)].join("\n")}\n`, "utf8");
   } catch {}
 };
 

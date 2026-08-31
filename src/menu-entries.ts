@@ -54,7 +54,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     action: () => { ctx.closeFileMenu(); ctx.selectAll(); },
   });
 
-  const sidebarEntriesFor = (place: Place, x: number, y: number): ListEntry[] => {
+  const sidebarEntriesFor = (place: Place, _x: number, _y: number): ListEntry[] => {
     const target = place.scheme === "recent" ? RECENT_URI
       : place.scheme === "starred" ? STARRED_URI
       : place.path;
@@ -84,7 +84,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     return entries;
   };
 
-  const fileEntriesFor = (targetPath: string, isDir: boolean, x: number, y: number): ListEntry[] => {
+  const fileEntriesFor = (targetPath: string, isDir: boolean, _x: number, _y: number): ListEntry[] => {
     const entries: ListEntry[] = [];
     // Nautilus trash semantics: Restore / Open / delete-for-real; no rename,
     // clipboard ops or trashing inside the trash
@@ -144,7 +144,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     ];
   };
 
-  const emptyAreaEntries = (x: number, y: number): ListEntry[] => {
+  const emptyAreaEntries = (_x: number, _y: number): ListEntry[] => {
     const entries: ListEntry[] = [];
     if (ctx.inTrashView()) {
       entries.push({ icon: "trash-can", label: "Empty Trash", action: () => { ctx.closeFileMenu(); ctx.confirmEmptyTrash(); } });

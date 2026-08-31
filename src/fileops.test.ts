@@ -19,8 +19,6 @@ afterAll(() => { rmSync(ROOT, { recursive: true, force: true }); });
 
 const W = (p: string, s = "x") => { mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, s); };
 
-type Harness = ReturnType<typeof makeHarness>;
-
 const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
   const calls: string[] = [];
   const prog = {
@@ -49,7 +47,7 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
     pushUndoBatch: (label, units, redos) => calls.push(`undo:${label}:${units.length}:${redos.length}`),
     renderAll: () => calls.push("renderAll"),
     setStatusMsg: (msg) => calls.push(`status:${msg}`),
-    notify: (msg, title) => calls.push(`notify:${title ?? ""}`),
+    notify: (_msg, title) => calls.push(`notify:${title ?? ""}`),
     home: HOME,
     refreshCutVisuals: () => calls.push("cut"),
     log: () => {},

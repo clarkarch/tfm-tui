@@ -6,7 +6,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse } from "smol-toml";
-import { exampleToml, parseConfigDoc, serializeConfig, type Config } from "./config-schema";
+import { parseConfigDoc, serializeConfig, type Config } from "./config-schema";
 
 export type {
   Config,

@@ -16,7 +16,7 @@ export const tabTitle = (t: Tab): string => {
   if (cwd === RECENT_URI) return "Recent";
   if (cwd === STARRED_URI) return "Starred";
   const base = path.basename(cwd) || cwd || "/";
-  return base.length > 16 ? base.slice(0, 15) + "…" : base;
+  return base.length > 16 ? `${base.slice(0, 15)}…` : base;
 };
 
 export type TabsHooks = {

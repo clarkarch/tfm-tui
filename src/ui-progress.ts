@@ -48,7 +48,7 @@ export const pctOf = (bytes: number, totalBytes: number): number =>
 
 export const barLine = (bytes: number, totalBytes: number, cells: number): string => {
   const filled = Math.round((pctOf(bytes, totalBytes) / 100) * cells);
-  return "█".repeat(filled) + "░".repeat(Math.max(0, cells - filled)) + ` ${fmtBytes(bytes)}/${fmtBytes(totalBytes)}`;
+  return `${"█".repeat(filled) + "░".repeat(Math.max(0, cells - filled))} ${fmtBytes(bytes)}/${fmtBytes(totalBytes)}`;
 };
 
 // tiny transfers don't need a toast

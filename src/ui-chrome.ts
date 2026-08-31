@@ -76,7 +76,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       place.scheme === "recent" ? RECENT_URI
       : place.scheme === "starred" ? STARRED_URI
       : place.path;
-    const selected = !!place.path
+    const selected = place.path
       ? path.resolve(place.path) === path.resolve(ctx.stateCwd())
       : !!place.scheme && ctx.stateCwd() === placeTarget();
     const colors = ctx.colors();
@@ -103,7 +103,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         () => ejectDevice(place.device!),
       );
     }
-    const specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
+    const _specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
 
     const rowNode = Box(
       {
@@ -197,7 +197,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       if (!gridDrag.active) return null;
       const keys = gridDrag.keys;
       const first = keys?.length === 1 ? keys[0] : undefined;
-      return first && first.isDir ? first.path : null;
+      return first?.isDir ? first.path : null;
     };
     // visibility rule: setting ON = strip always visible (even with one tab, so
     // the ＋ button stays reachable); setting OFF = adaptive — the strip only
@@ -250,7 +250,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
             ctx.finishDrag();
             const first = keys?.length === 1 ? keys[0] : undefined;
             ctx.dlog(`tab drop chip=${i} keys=${keys?.length ?? -1} dir=${first?.isDir ?? "-"}`);
-            if (!first || !first.isDir) return;
+            if (!first?.isDir) return;
             ctx.switchTab(i);
             ctx.navigate(first.path);
           },
@@ -275,7 +275,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const colors = ctx.colors();
     return Box(
       { width: ctx.sideInnerW(), height: 1 },
-      Text({ content: " " + "~".repeat(ctx.sw() - 2), fg: colors.divider }),
+      Text({ content: ` ${"~".repeat(ctx.sw() - 2)}`, fg: colors.divider }),
     );
   };
 
@@ -292,7 +292,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         ? { backgroundColor: colors.accentBg }
         : isHover ? { backgroundColor: colors.hoverBg }
         : rowSurface(ctx.uiStyle(), colors, "rest"));
-      rec.specs.forEach((s) => ctx.setIconState(s, isSel ? 2 : isHover ? 1 : 0));
+      rec.specs.forEach((s) => { ctx.setIconState(s, isSel ? 2 : isHover ? 1 : 0); });
       try { if (label) label.fg = isSel ? colors.accent : colors.sidebarFg; } catch {}
     });
   };

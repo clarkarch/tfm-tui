@@ -161,7 +161,7 @@ export const makeConflict = (
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: " " + "~".repeat(CONFLICT_W - 2), fg: c.divider }),
+          Text({ content: ` ${"~".repeat(CONFLICT_W - 2)}`, fg: c.divider }),
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
@@ -257,7 +257,7 @@ export const makeYesNo = (
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: " " + "~".repeat(YESNO_W - 2), fg: c.divider }),
+          Text({ content: ` ${"~".repeat(YESNO_W - 2)}`, fg: c.divider }),
         ),
         Box({ height: 1 }),
         Box(

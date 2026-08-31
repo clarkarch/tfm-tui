@@ -25,7 +25,7 @@ const makeCtx = (): GridInputCtx & { visuals: Map<string, number>; statuses: str
   const logs: string[] = [];
   const selStatus = { n: 0 };
   let anchor: number | null = null;
-  let focused = 0;
+  const focused = 0;
   return {
     visuals,
     statuses,
@@ -156,7 +156,7 @@ describe("selection model", () => {
 
   test("double-click opens (dir navigates) and resets lastClick", () => {
     const ctx = makeCtx();
-    let navigated: string[] = [];
+    const navigated: string[] = [];
     ctx.navigate = (d) => { navigated.push(d); };
     const factory = makeEntryMouseHandlers(ctx);
     const h = factory({ isDir: true }, "/w/sub", 3);

@@ -1,4 +1,4 @@
-import { THEME_PRESETS, type ThemePreset } from "./themes";
+import type { ThemePreset } from "./themes";
 
 // --- Settings model: declarative rows drive both rendering and key/mouse
 // input. This module owns the row TYPE and the pure row semantics (adjust /

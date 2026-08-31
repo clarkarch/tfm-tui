@@ -59,7 +59,7 @@ export type SlotsCtx = {
 export const dimHex = (hex: string, f: number): string => {
   if (f === 1) return hex;
   const m = hex.match(/^#([0-9a-fA-F]{6})$/);
-  if (!m || !m[1]) return hex;
+  if (!m?.[1]) return hex;
   const n = parseInt(m[1], 16);
   const r = Math.round(((n >> 16) & 255) * f);
   const g = Math.round(((n >> 8) & 255) * f);
@@ -235,7 +235,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
       // glyph stays in the slot (hidden) so the scrim can fall back to it
       if (glyphNode) { try { glyphNode.visible = false; } catch {} }
-      imgs.forEach((im) => slot.add(im));
+      imgs.forEach((im) => { slot.add(im); });
     }));
     // done specs are dead weight: their slots are destroyed on the next rebuild
     // and live tile refs keep the spec objects alive independently of the queue

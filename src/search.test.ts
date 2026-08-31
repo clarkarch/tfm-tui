@@ -8,6 +8,7 @@ const stubInput = () => {
     value: "",
     focused: false,
     focus() { this.focused = true; },
+    // biome-ignore lint/suspicious/noAssignInExpressions: init-on-first-use idiom
     on(ev: string, fn: () => void) { (listeners[ev] ??= []).push(fn); },
     fire(ev: string) { for (const fn of listeners[ev] ?? []) fn(); },
     hasOn: true,

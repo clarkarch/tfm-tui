@@ -60,7 +60,7 @@ export async function readUserDirs(): Promise<UserDir[]> {
     const out: UserDir[] = [];
     for (const line of text.split("\n")) {
       const m = line.match(/^(XDG_[A-Z_]+_DIR)\s*=\s*(.+)$/);
-      if (!m || !m[1] || !m[2]) continue;
+      if (!m?.[1] || !m[2]) continue;
       const label = XDG_LABELS[m[1]];
       if (!label) continue;
       const p = expandXdgValue(m[2]!);

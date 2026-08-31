@@ -32,31 +32,28 @@ const embeddedIconTexts = (): Promise<Map<string, string>> =>
 
 export const warmEmbeddedIcons = (): void => { void embeddedIconTexts(); };
 
-const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, pxH: number) =>
-  new Promise<Uint8Array>(async (resolve, reject) => {
-    let svg: string;
-    try {
-      svg =
-        (await embeddedIconTexts()).get(name) ??
-        readFileSync(`${import.meta.dir}/../assets/icons/${name}.svg`, "utf8");
-    } catch (err) {
-      return reject(err);
-    }
-    const tinted = /#[0-9a-fA-F]{6}/.test(svg)
-      ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
-      : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
+const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const svg =
+    (await embeddedIconTexts()).get(name) ??
+    readFileSync(`${import.meta.dir}/../assets/icons/${name}.svg`, "utf8");
+  const tinted = /#[0-9a-fA-F]{6}/.test(svg)
+    ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
+    : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
 
-    const proc = spawn("rsvg-convert", ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)]);
-    const chunks: Buffer[] = [];
-    proc.stdout.on("data", (c: Buffer) => chunks.push(c));
+  const proc = spawn("rsvg-convert", ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)]);
+  const chunks: Buffer[] = [];
+  proc.stdout.on("data", (c: Buffer) => { chunks.push(c); });
+  const done = new Promise<Uint8Array>((resolve, reject) => {
     proc.on("error", reject);
     proc.on("close", (code) =>
       code === 0 && chunks.length > 0
         ? resolve(new Uint8Array(Buffer.concat(chunks)))
         : reject(new Error(`rsvg-convert exited ${code}`))
     );
-    proc.stdin.end(tinted);
   });
+  proc.stdin.end(tinted);
+  return done;
+};
 
 const iconCache = new Map<string, Uint8Array>();
 const inflightIcons = new Map<string, Promise<Uint8Array>>();

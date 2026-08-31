@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildSections, loadSystemPlaces, parseLsblk, systemBookmarks, systemMounts, systemUserDirs } from "./places";
+import { buildSections, loadSystemPlaces, parseLsblk, systemBookmarks, systemUserDirs } from "./places";
 import { isVirtualUri } from "./uri";
 
 const oldConfigHome = process.env.XDG_CONFIG_HOME;
@@ -70,7 +70,7 @@ describe("loadSystemPlaces + buildSections", () => {
   });
 
   test("missing config dir yields empty groups without throwing", async () => {
-    process.env.XDG_CONFIG_HOME = path.join(os.tmpdir(), "tfm-places-nonexistent-" + process.pid);
+    process.env.XDG_CONFIG_HOME = path.join(os.tmpdir(), `tfm-places-nonexistent-${process.pid}`);
     await loadSystemPlaces();
     expect(systemUserDirs()).toEqual([]);
     expect(systemBookmarks()).toEqual([]);
@@ -89,7 +89,7 @@ describe("virtual place uris used by places", () => {
 });
 
 function mkdtempAndDirs() {
-  const root = path.join(os.tmpdir(), "tfm-places-" + process.pid + "-" + Math.random().toString(36).slice(2));
+  const root = path.join(os.tmpdir(), `tfm-places-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const configHome = path.join(root, "config");
   const docs = path.join(root, "Documents");
   const bookmarkDir = path.join(root, "bm");

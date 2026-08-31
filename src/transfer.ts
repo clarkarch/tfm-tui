@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
+import { createReadStream, createWriteStream, type ReadStream, type Stats } from "node:fs";
 import { lstat, mkdir, readdir, readlink, symlink } from "node:fs/promises";
 import path from "node:path";
 
@@ -31,10 +31,10 @@ export const scanTree = async (root: string): Promise<{ files: number; bytes: nu
     const d = stack.pop()!;
     // lstat: a symlink counts once by its own size and is never followed
     // (following it would loop forever on cycles and duplicate target trees)
-    let st;
+    let st: Stats;
     try { st = await lstat(d); } catch { continue; }
     if (!st.isDirectory()) { files++; bytes += st.size ?? 0; continue; }
-    let kids;
+    let kids: string[];
     try { kids = await readdir(d); } catch { continue; }
     for (const k of kids) stack.push(path.join(d, k));
   }

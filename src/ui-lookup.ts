@@ -30,7 +30,7 @@ export const makeLookup = (ctx: LookupCtx) => {
   const stripSelectable = (node: any = ctx.root()): void => {
     if (!node || node.isDestroyed) return;
     try { if (node.selectable) node.selectable = false; } catch {}
-    node.getChildren?.().forEach((c: any) => stripSelectable(c));
+    node.getChildren?.().forEach((c: any) => { stripSelectable(c); });
   };
 
   return { byId, setTextOnId, setOnId, stripSelectable };

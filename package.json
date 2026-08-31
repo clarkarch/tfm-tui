@@ -8,9 +8,13 @@
     "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm",
     "test": "bun test src/*.test.ts",
     "test:watch": "bun test --watch src/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint .",
+    "fmt": "biome format --write .",
+    "check": "biome check . && tsc --noEmit"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.11",
     "@types/bun": "latest"
   },
   "peerDependencies": {

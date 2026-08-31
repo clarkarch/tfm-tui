@@ -213,7 +213,7 @@ export const makeProps = (ctx: PropsCtx) => {
     ));
     panel.add(Box(
       { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: " " + "~".repeat(PROPS_W - 2), fg: colors.divider }),
+      Text({ content: ` ${"~".repeat(PROPS_W - 2)}`, fg: colors.divider }),
     ));
 
     const row = (label: string, value: string, id?: string) =>
@@ -386,7 +386,7 @@ export const makeProps = (ctx: PropsCtx) => {
     ));
     panel.add(Box(
       { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: " " + "~".repeat(PROPS_W - 2), fg: colors.divider }),
+      Text({ content: ` ${"~".repeat(PROPS_W - 2)}`, fg: colors.divider }),
     ));
 
     // aggregate size: files are already stat'd, folders walk async (same

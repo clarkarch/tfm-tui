@@ -192,7 +192,7 @@ const KEY_ROWS: KeyRow[] = (
 ).map(([action, label, def]) => ({
   kind: "key",
   section: "keys",
-  tomlKey: action.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase()),
+  tomlKey: action.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`),
   prop: action,
   action: action as KeyAction,
   doc: `default: ${def.join(" or ")}`,
@@ -350,7 +350,7 @@ export function parseConfigDoc(doc: unknown): Config {
 }
 
 const tomlString = (s: string): string =>
-  '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+  `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 
 const tomlValue = (v: string | number | boolean | string[]): string => {
   if (Array.isArray(v)) return `[${v.map(tomlString).join(", ")}]`;

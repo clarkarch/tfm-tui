@@ -292,7 +292,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ));
     panel.add(Box(
       { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: " " + "~".repeat(panelW - 2), fg: c.divider }),
+      Text({ content: ` ${"~".repeat(panelW - 2)}`, fg: c.divider }),
     ));
 
     if (!isSettings) {
@@ -337,10 +337,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             : []),
           Text({ content: icon ? label : ` ${label}`, fg: active ? c.white : c.sidebarFg }),
           Box({ flexGrow: 1 }),
-          ...(hint ? [Text({ content: hint + " ", fg: c.sidebarFgMuted })] : []),
+          ...(hint ? [Text({ content: `${hint} `, fg: c.sidebarFgMuted })] : []),
         );
       const items = rootMenuItems();
-      items.forEach((it, i) => panel.add(rootRow(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))));
+      items.forEach((it, i) => { panel.add(rootRow(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))); });
     } else {
       renderSettings(c, panel);
     }
@@ -484,7 +484,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       const active = pane === "rows" && menuIdx === index;
       const capturingThis = capturing === index;
       const labelFg = active ? c.white : c.sidebarFg;
-      const paintRow = (on: boolean) => paintRowAt(index, on);
+      const _paintRow = (on: boolean) => paintRowAt(index, on);
       let control: any;
       let onClick: (ev?: any) => void = (ev?: any) => {
         try { ev?.stopPropagation?.(); } catch {}

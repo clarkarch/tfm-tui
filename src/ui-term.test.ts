@@ -62,7 +62,7 @@ describe("terminalProbeReply", () => {
     const { resp, tail } = terminalProbeReply("ls\x1b[");
     expect(resp).toBe("");
     expect(tail).toBe("ls\x1b[".slice(-8));
-    const reassembled = terminalProbeReply(tail + "0c");
+    const reassembled = terminalProbeReply(`${tail}0c`);
     expect(reassembled.resp).toContain("\x1b[?62;1;2;6;9;15;22c");
   });
 
@@ -150,7 +150,7 @@ describe("ptyScreenState", () => {
     let s = { mouse: false, alt: false };
     let r = ptyScreenState("some output \x1b[?10", s);
     s = r.state;
-    r = ptyScreenState(r.tail + "00h more", s);
+    r = ptyScreenState(`${r.tail}00h more`, s);
     expect(r.state.mouse).toBe(true);
   });
 });

@@ -172,7 +172,7 @@ describe("tabTitle", () => {
 
   test("long names truncate at 16 with an ellipsis", () => {
     const long = "a-very-long-folder-name";
-    expect(tabTitle({ history: [`/x/${long}`], histIdx: 0 })).toBe(long.slice(0, 15) + "…");
+    expect(tabTitle({ history: [`/x/${long}`], histIdx: 0 })).toBe(`${long.slice(0, 15)}…`);
   });
 
   test("empty history falls back to /", () => {

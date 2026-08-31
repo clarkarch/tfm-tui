@@ -72,20 +72,20 @@ export const makeMenu = (ctx: MenuCtx) => {
               { fg: colors.sidebarFgMuted, bg: i === state!.idx ? colors.accentBg : colors.sidebarBg },
               { fg: colors.white, bg: colors.accentBg },
             ], 1, i === state!.idx ? 1 : 0).el]
-          : entry.hint ? [Text({ content: entry.hint + " ", fg: colors.sidebarFgMuted })] : []),
+          : entry.hint ? [Text({ content: `${entry.hint} `, fg: colors.sidebarFgMuted })] : []),
       );
     };
     panel.add(Box(
       { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: " " + "~".repeat(ctx.menuW - 2), fg: colors.divider }),
+      Text({ content: ` ${"~".repeat(ctx.menuW - 2)}`, fg: colors.divider }),
     ));
-    state.entries.forEach((e2, i) => panel.add(row(e2, i)));
+    state.entries.forEach((e2, i) => { panel.add(row(e2, i)); });
     void ctx.drainIconQueue();
   };
 
   // small unscoped box spawned at the cursor — no scrim. floats.open replaces
   // any open popup (the raw teardown removes the old node first)
-  const openContextMenu = (x: number, y: number, title: string, entries: ListEntry[]): void => {
+  const openContextMenu = (x: number, y: number, _title: string, entries: ListEntry[]): void => {
     const colors = ctx.colors();
     ctx.floats.open("filemenu", rawCloseMenu);
     state = { idx: 0, entries };

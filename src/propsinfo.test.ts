@@ -74,7 +74,7 @@ describe("dirWalkStats", () => {
   });
 
   test("missing root yields zeros, not a throw", async () => {
-    const s = await dirWalkStats(path.join(os.tmpdir(), "tfm-props-nonexistent-" + process.pid));
+    const s = await dirWalkStats(path.join(os.tmpdir(), `tfm-props-nonexistent-${process.pid}`));
     expect(s).toEqual({ bytes: 0, files: 0, folders: 0 });
   });
 });

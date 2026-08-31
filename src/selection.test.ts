@@ -19,8 +19,6 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
   await Bun.sleep(10);
 };
 
-type Harness = ReturnType<typeof makeHarness>;
-
 const makeHarness = () => {
   const nodes = new Map<string, any>();
   const byId = (id: string): any => nodes.get(id);
@@ -67,7 +65,7 @@ describe("selectTileAt", () => {
   test("selects the tile, moves focus, requests a preview", () => {
     const h = makeHarness();
     h.sel.setFocusKeys(["a", "b", "c"]);
-    ["a", "b", "c"].forEach((k) => h.addTile(k));
+    ["a", "b", "c"].forEach((k) => { h.addTile(k); });
     expect(h.sel.selectTileAt(1)).toBe(true);
     expect(h.sel.focusIdx()).toBe(1);
     expect(h.sel.tileRefs.get("b")!.selected).toBe(true);
@@ -91,7 +89,7 @@ describe("moveFocus", () => {
   test("starts at tile 0 from an unfocused grid", () => {
     const h = makeHarness();
     h.sel.setFocusKeys(["a", "b", "c"]);
-    ["a", "b", "c"].forEach((k) => h.addTile(k));
+    ["a", "b", "c"].forEach((k) => { h.addTile(k); });
     expect(h.sel.moveFocus(0, 1)).toBe(true);
     expect(h.sel.focusIdx()).toBe(0);
   });
@@ -100,7 +98,7 @@ describe("moveFocus", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e", "f"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => h.addTile(k));
+    keys.forEach((k) => { h.addTile(k); });
     h.sel.setCols(3);
     h.sel.selectTileAt(1);
     h.sel.moveFocus(0, 1); // 1 -> 4
@@ -135,7 +133,7 @@ describe("selectRange / selectAll / clearTileSelection", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => h.addTile(k));
+    keys.forEach((k) => { h.addTile(k); });
     h.sel.selectTileAt(0);
     h.sel.selectRange(4, 1); // reversed args select 1..4
     expect(h.sel.tileRefs.get("a")!.selected).toBe(false);
@@ -283,7 +281,7 @@ describe("keyboard scrolling", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e", "f"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => h.addTile(k));
+    keys.forEach((k) => { h.addTile(k); });
     h.sel.setCols(3);
     h.sel.setRowH(3);
     const scroller: any = { scrollTop: 0, scrollTo: (o: any) => h.scrolls.push(o) };
@@ -296,7 +294,7 @@ describe("keyboard scrolling", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e", "f"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => h.addTile(k));
+    keys.forEach((k) => { h.addTile(k); });
     h.sel.setCols(3);
     h.sel.setRowH(3);
     const scroller: any = { scrollTop: 6, scrollTo: (o: any) => h.scrolls.push(o) };

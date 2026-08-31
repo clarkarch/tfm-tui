@@ -37,7 +37,7 @@ export const TERM_H = 12;
 
 // "#rrggbb" -> xterm "rgb:RRRR/GGGG/BBBB" (8-bit channel doubled to 16-bit)
 export const hexToRgb16 = (hex: string): string => {
-  const b = (/^#?([0-9a-f]{6})$/i.exec(hex.trim()) ?? [, "ffffff"])[1];
+  const b = (/^#?([0-9a-f]{6})$/i.exec(hex.trim()) ?? ["", "ffffff"])[1];
   const ch = (i: number) => `${b.slice(i, i + 2)}${b.slice(i, i + 2)}`;
   return `${ch(0)}/${ch(2)}/${ch(4)}`;
 };
@@ -47,9 +47,14 @@ export const hexToRgb16 = (hex: string): string => {
 // the common probes inline; sequences may split across chunks, hence the tail.
 export const terminalProbeReply = (buf: string): { resp: string; tail: string } => {
   let resp = "";
+  // VT probe sequences are literal control bytes by nature (biome-ignore below)
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the byte terminals send
   if (/\x1b\[[0-9]*c/.test(buf)) resp += "\x1b[?62;1;2;6;9;15;22c"; // DA1 (tmux-style vt320)
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the byte terminals send
   if (/\x1b\[>[0-9]*c/.test(buf)) resp += "\x1b[>0;0;0c";           // secondary DA
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the byte terminals send
   if (/\x1b\[5n/.test(buf)) resp += "\x1b[0n";                      // device status OK
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: partial-ESC tail detection
   const tail = /(?:\x1b|\x1b\[|\x1b\[>)[0-9=>]*$/.test(buf) ? buf.slice(-8) : "";
   return { resp, tail };
 };
@@ -105,8 +110,10 @@ export const ptyScreenState = (
   prev: PtyScreenState,
 ): { state: PtyScreenState; tail: string } => {
   const state = { ...prev };
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: DECSET sequences are literal control bytes
   const re = /\x1b\[\?(1000|1002|1003|1049)(h|l)/g;
   let m: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: classic exec-loop idiom
   while ((m = re.exec(chunk))) {
     const on = m[2] === "h";
     if (m[1] === "1049") state.alt = on;

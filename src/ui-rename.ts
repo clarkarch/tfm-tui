@@ -41,7 +41,7 @@ export const uniqueUntitledName = (dir: string, base: string): string => {
 };
 
 export const tileLabelFor = (name: string, maxW: number): string =>
-  name.length > maxW - 2 ? name.slice(0, maxW - 5) + "…" : name;
+  name.length > maxW - 2 ? `${name.slice(0, maxW - 5)}…` : name;
 
 const redoCreateUnit = (k: string, kind: "file" | "folder"): UndoUnit =>
   kind === "folder"

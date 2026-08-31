@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, type Dirent } from "node:fs";
 import { lstat, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { FILE_ICON_BY_EXT, mimeForExt } from "./filetype";
@@ -71,7 +71,7 @@ export const dirWalkStats = async (root: string): Promise<{ bytes: number; files
   const stack: string[] = [root];
   while (stack.length) {
     const dir = stack.pop()!;
-    let dirents;
+    let dirents: Dirent[];
     try { dirents = await readdir(dir, { withFileTypes: true }); } catch { continue; }
     for (const d of dirents) {
       if (++count > 200000) return null;

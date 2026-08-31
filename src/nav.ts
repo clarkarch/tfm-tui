@@ -10,7 +10,7 @@ import { RECENT_URI, STARRED_URI } from "./uri";
 import type { SortMode } from "./menu-entries";
 import type { Config } from "./config";
 import type { TabStateRef } from "./tabs";
-import { makeTabs } from "./tabs";
+import type { makeTabs } from "./tabs";
 import { debounced } from "./uiutil";
 import { readRestoredSession, saveSession } from "./session";
 import { debugLog } from "./log";

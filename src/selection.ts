@@ -97,7 +97,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
       const status: any = ctx.byId("tfm-status-label");
       if (status) { try { status.content = s; } catch {} }
     };
-    if (sel.length === 0) return setStatus("");
+    if (sel.length === 0) { setStatus(""); return; }
     // total size of the selected files (dirs contribute their item count instead)
     let bytes = 0;
     for (const s of sel) {
@@ -105,7 +105,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
     }
     const dirs = sel.filter((s) => s.isDir);
     if (dirs.length === 0) {
-      return setStatus(`${sel.length} selected${bytes > 0 ? ` · ${fmtBytes(bytes)}` : ""}`);
+      setStatus(`${sel.length} selected${bytes > 0 ? ` · ${fmtBytes(bytes)}` : ""}`);
+      return;
     }
     void (async () => {
       let contained = 0;

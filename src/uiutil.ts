@@ -5,7 +5,7 @@
 // strip, menus, grid): drop all children of a renderable
 export const clearChildren = (node: any): void => {
   if (!node) return;
-  try { [...node.getChildren()].forEach((c: any) => node.remove(c)); } catch {}
+  try { [...node.getChildren()].forEach((c: any) => { node.remove(c); }); } catch {}
 };
 
 // trailing debounce: every call pushes the run `ms` back; the body sees the

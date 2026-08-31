@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { copyFileProgress, copyTreeProgress, scanTree, type TransferSink } from "./transfer";
@@ -27,8 +27,8 @@ const mkSink = (opts: { pauseAfterBytes?: number; cancelAfterFiles?: number } = 
       log.push(`file#${files}`);
       if (opts.cancelAfterFiles !== undefined && files >= opts.cancelAfterFiles) cancelled = true;
     },
-    setStream: (rs) => log.push(`open`),
-    clearStream: (rs) => log.push(`close`),
+    setStream: (_rs) => log.push(`open`),
+    clearStream: (_rs) => log.push(`close`),
     repaint: () => {},
   };
   return {

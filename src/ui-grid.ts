@@ -141,7 +141,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const tileBox = Box({ width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" }, iconSlotEl);
     tile.add(tileBox);
 
-    const label = e.name.length > TILE_W - 2 ? e.name.slice(0, TILE_W - 5) + "…" : e.name;
+    const label = e.name.length > TILE_W - 2 ? `${e.name.slice(0, TILE_W - 5)}…` : e.name;
     // word wrap [ui] word-wrap: long names flow onto extra rows (capped at the
     // space under the icon) via the native char-wrap buffer — filenames are
     // single runs, per-character wrap fills every line edge-to-edge; overflow
@@ -238,7 +238,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     row.add(slotEl);
     const listW = Math.max(40, ctx.termW() - sw - ctx.reservedRight() - (ctx.uiStyle() === "outline" ? 6 : 3));
     const nameMax = Math.max(12, listW - 27 - iconW);
-    const label = e.name.length > nameMax ? e.name.slice(0, nameMax - 1) + "…" : e.name;
+    const label = e.name.length > nameMax ? `${e.name.slice(0, nameMax - 1)}…` : e.name;
     row.add(Text({ id: labelId, content: label, fg: baseFg }));
     row.add(Box({ flexGrow: 1 }));
     row.add(Text({ content: e.isDir ? "" : fmtBytes(e.size ?? 0).padStart(9), fg: colors.sidebarFgMuted }));
@@ -264,7 +264,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const scroller = ctx.scroller();
     if (!scroller) return;
     const gen = ++gridGen;
-    const colors = ctx.colors();
+    const _colors = ctx.colors();
     const state = ctx.state;
     // a rebuild destroys the edit input; drop the state with it
     ctx.clearRenameEdit();
