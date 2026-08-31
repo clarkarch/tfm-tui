@@ -44,6 +44,7 @@
   nav .links { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
   nav .links a { color: var(--muted); }
   nav .links a:hover { color: var(--fg); text-decoration: none; }
+  @media (max-width: 640px) { nav .links a:not(:last-child) { display: none; } }
   .badge {
     font-size: 11px; padding: 2px 8px; border-radius: 4px;
     background: color-mix(in srgb, #f7768e 18%, transparent);
@@ -51,12 +52,16 @@
   }
 
   /* hero */
-  header { padding: 72px 0 40px; text-align: center; }
+  .hero {
+    display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    gap: 44px; align-items: center; padding: 64px 20px 48px; text-align: left;
+  }
+  @media (max-width: 900px) { .hero { grid-template-columns: minmax(0, 1fr); } }
   h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 2px; color: var(--fg); }
   .subtitle { color: var(--accent); font-size: clamp(15px, 2.4vw, 21px); margin: 0 0 14px; }
-  .tagline { color: var(--muted); max-width: 640px; margin: 0 auto 28px; }
+  .tagline { color: var(--muted); margin: 0 0 24px; }
   .tagline b { color: var(--accent); font-weight: 600; }
-  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .cta { display: flex; gap: 12px; justify-content: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
   .btn {
     display: inline-block; padding: 10px 20px; border-radius: 6px; font-size: 14px;
     border: 1px solid var(--border); color: var(--fg); background: var(--hover);
@@ -64,11 +69,11 @@
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
   .btn:hover { text-decoration: none; filter: brightness(1.12); }
   .install {
-    display: inline-flex; align-items: center; gap: 10px; max-width: 100%;
+    display: flex; align-items: center; gap: 10px; max-width: 100%;
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 14px; font-size: 13px; color: var(--fg);
   }
-  .install code { white-space: nowrap; overflow-x: auto; }
+  .install code { white-space: nowrap; overflow-x: auto; min-width: 0; }
   .install .p { color: var(--accent); }
   .copy {
     border: 1px solid var(--border); background: transparent; color: var(--muted);
@@ -79,7 +84,7 @@
 
   /* terminal frame */
   .term {
-    margin: 40px auto 0; max-width: 960px; text-align: left;
+    margin: 0; min-width: 0; text-align: left;
     border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
     background: var(--panel);
     box-shadow: 0 24px 80px -24px rgba(0,0,0,.7);
@@ -186,19 +191,21 @@
   </div>
 </nav>
 
-<header class="wrap">
-  <h1>tfm</h1>
-  <p class="subtitle">(terminal file manager)</p>
-  <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails <b>right inside your terminal</b>.<br>Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
-  <div class="cta">
-    <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
-    <a class="btn" href="https://github.com/clarkarch/tfm-tui">GitHub</a>
+<header class="wrap hero">
+  <div class="pitch">
+    <h1>tfm</h1>
+    <p class="subtitle">(terminal file manager)</p>
+    <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails <b>right inside your terminal</b>.<br>Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
+      <a class="btn" href="https://github.com/clarkarch/tfm-tui">GitHub</a>
+    </div>
+    <div class="install">
+      <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash</code>
+      <button class="copy" id="copyBtn" type="button">copy</button>
+    </div>
+    <p class="warn">Linux only · experimental software — don't test on files you can't afford to lose</p>
   </div>
-  <div class="install">
-    <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash</code>
-    <button class="copy" id="copyBtn" type="button">copy</button>
-  </div>
-  <p class="warn">Linux only · experimental software — don't test on files you can't afford to lose</p>
 
   <div class="term">
     <div class="bar">
@@ -207,7 +214,7 @@
       <span class="dot" style="background:#9ece6a"></span>
       <span class="title">tfm — ~</span>
     </div>
-    <img src="screenshot.png" alt="tfm browsing a project folder: places sidebar, grid of thumbnails, preview pane" width="1920" height="1080" loading="eager">
+    <img src="screenshot.png" alt="tfm browsing the home folder: places sidebar, grid of files, preview pane" width="1920" height="1080" loading="eager">
   </div>
 </header>
 
