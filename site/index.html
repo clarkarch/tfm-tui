@@ -53,8 +53,8 @@
 
   /* hero */
   header { padding: 72px 0 40px; text-align: center; }
-  h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 6px; color: var(--fg); }
-  h1 .accent { color: var(--accent); }
+  h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 2px; color: var(--fg); }
+  .subtitle { color: var(--accent); font-size: clamp(15px, 2.4vw, 21px); margin: 0 0 14px; }
   .tagline { color: var(--muted); max-width: 640px; margin: 0 auto 28px; }
   .tagline b { color: var(--green); font-weight: 600; }
   .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
@@ -91,7 +91,7 @@
   .term img { display: block; width: 100%; height: auto; }
 
   /* sections */
-  section { padding: 64px 0 8px; }
+  section { padding: 64px 0 8px; scroll-margin-top: 64px; }
   h2 { font-size: 24px; margin: 0 0 4px; }
   h2::before { content: "## "; color: var(--muted); }
   .sub { color: var(--muted); margin: 0 0 28px; }
@@ -147,6 +147,21 @@
   pre .c { color: var(--muted); }
   pre .s { color: #e0af68; }
 
+  /* scroll-reveal animations */
+  .reveal { opacity: 0; translate: 0 22px; }
+  .reveal.in { opacity: 1; translate: 0 0; transition: opacity .55s ease, translate .55s ease; }
+  .cards .card { opacity: 0; translate: 0 16px; }
+  .cards.in .card { opacity: 1; translate: 0 0; transition: opacity .5s ease var(--d, 0ms), translate .5s ease var(--d, 0ms); }
+  .cards .card:nth-child(2) { --d: 70ms; }
+  .cards .card:nth-child(3) { --d: 140ms; }
+  .cards .card:nth-child(4) { --d: 210ms; }
+  .cards .card:nth-child(5) { --d: 280ms; }
+  .cards .card:nth-child(6) { --d: 350ms; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal, .cards .card { opacity: 1; translate: none; transition: none; }
+  }
+
   footer { margin-top: 72px; border-top: 1px solid var(--border); background: var(--panel); padding: 36px 0 48px; font-size: 13px; }
   footer .cols { grid-template-columns: 1fr 1fr 1fr; }
   @media (max-width: 820px) { footer .cols { grid-template-columns: 1fr; } }
@@ -173,7 +188,8 @@
 </nav>
 
 <header class="wrap">
-  <h1>tfm<span class="accent">_tui</span></h1>
+  <h1>tfm</h1>
+  <p class="subtitle">( terminal file manager )</p>
   <p class="tagline">A modern, <b>mouse-first</b> file manager for your terminal — Nautilus-inspired places sidebar, grid view, drag &amp; drop, image thumbnails. Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
   <div class="cta">
     <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
@@ -356,6 +372,19 @@ THEMES.forEach(t => {
 
 document.getElementById("resetTheme").addEventListener("click", () => apply(THEMES[0]));
 apply(THEMES[0]);
+
+const io = new IntersectionObserver(entries => {
+  for (const en of entries) {
+    if (en.isIntersecting) {
+      en.target.classList.add("in");
+      io.unobserve(en.target);
+    }
+  }
+}, { threshold: 0.12 });
+document.querySelectorAll("section > *").forEach(el => {
+  if (!el.classList.contains("cards")) el.classList.add("reveal");
+  io.observe(el);
+});
 
 document.getElementById("copyBtn").addEventListener("click", async e => {
   await navigator.clipboard.writeText("curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash");
