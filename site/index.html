@@ -10,7 +10,6 @@
     --bg: #1a1b26;
     --panel: #16161e;
     --accent: #7aa2f7;
-    --green: #9ece6a;
     --fg: #c0caf5;
     --muted: #565f89;
     --hover: #24283b;
@@ -40,7 +39,7 @@
     border-bottom: 1px solid var(--border);
   }
   nav .wrap { display: flex; align-items: center; gap: 18px; height: 52px; }
-  nav .logo { color: var(--green); font-weight: 700; letter-spacing: .5px; }
+  nav .logo { color: var(--accent); font-weight: 700; letter-spacing: .5px; }
   nav .logo::before { content: "$ "; color: var(--muted); }
   nav .links { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
   nav .links a { color: var(--muted); }
@@ -56,7 +55,7 @@
   h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 2px; color: var(--fg); }
   .subtitle { color: var(--accent); font-size: clamp(15px, 2.4vw, 21px); margin: 0 0 14px; }
   .tagline { color: var(--muted); max-width: 640px; margin: 0 auto 28px; }
-  .tagline b { color: var(--green); font-weight: 600; }
+  .tagline b { color: var(--accent); font-weight: 600; }
   .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
   .btn {
     display: inline-block; padding: 10px 20px; border-radius: 6px; font-size: 14px;
@@ -70,7 +69,7 @@
     padding: 10px 14px; font-size: 13px; color: var(--fg);
   }
   .install code { white-space: nowrap; overflow-x: auto; }
-  .install .p { color: var(--green); }
+  .install .p { color: var(--accent); }
   .copy {
     border: 1px solid var(--border); background: transparent; color: var(--muted);
     font-family: inherit; font-size: 12px; border-radius: 5px; padding: 3px 9px; cursor: pointer;
@@ -103,7 +102,7 @@
     padding: 20px; transition: border-color .15s, transform .15s;
   }
   .card:hover { border-color: var(--accent); transform: translateY(-2px); }
-  .card .ico { font-size: 20px; color: var(--green); }
+  .card .ico { font-size: 20px; color: var(--accent); }
   .card h3 { margin: 8px 0 6px; font-size: 16px; color: var(--accent); }
   .card p { margin: 0; font-size: 13px; color: var(--muted); }
 
@@ -115,7 +114,7 @@
 
   /* theme gallery */
   .themes-note { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
-  .themes-note b { color: var(--green); font-weight: 600; }
+  .themes-note b { color: var(--accent); font-weight: 600; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
   .tcard {
     cursor: pointer; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
@@ -136,14 +135,14 @@
   @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  td:first-child { white-space: nowrap; color: var(--green); width: 40%; }
+  td:first-child { white-space: nowrap; color: var(--accent); width: 40%; }
   td:last-child { color: var(--muted); }
   pre {
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     padding: 16px; font-size: 12.5px; overflow-x: auto; margin: 0; line-height: 1.7;
   }
   pre .k { color: var(--accent); }
-  pre .v { color: var(--green); }
+  pre .v { color: var(--accent); }
   pre .c { color: var(--muted); }
   pre .s { color: #e0af68; }
 
@@ -190,7 +189,7 @@
 <header class="wrap">
   <h1>tfm</h1>
   <p class="subtitle">( terminal file manager )</p>
-  <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails right inside your terminal. Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
+  <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails right inside your terminal.<br>Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
   <div class="cta">
     <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
     <a class="btn" href="https://github.com/clarkarch/tfm-tui">GitHub</a>
@@ -206,7 +205,7 @@
       <span class="dot" style="background:#f7768e"></span>
       <span class="dot" style="background:#e0af68"></span>
       <span class="dot" style="background:#9ece6a"></span>
-      <span class="title">tfm — ~/Projects</span>
+      <span class="title">tfm — ~</span>
     </div>
     <img src="screenshot.png" alt="tfm browsing a project folder: places sidebar, grid of thumbnails, preview pane" width="1920" height="1080" loading="eager">
   </div>
@@ -219,7 +218,7 @@
   <p class="sub">a GUI file manager that lives in your terminal</p>
   <div class="cards">
     <div class="card">
-      <div class="ico">▚</div>
+      <div class="ico">➤</div>
       <h3>Mouse-first</h3>
       <p>Click, rubber-band select, right-click context menus, inline rename — no memorizing a modal keymap to get things done. <kbd>ctrl</kbd>+click toggles, <kbd>shift</kbd>+click ranges.</p>
     </div>
@@ -351,7 +350,6 @@ function apply(t) {
   root.setProperty("--bg", t.bg);
   root.setProperty("--panel", t.sidebar);
   root.setProperty("--accent", t.accent);
-  root.setProperty("--green", t.green);
   root.setProperty("--fg", t.fg);
   root.setProperty("--muted", t.muted);
   root.setProperty("--hover", t.hover);
