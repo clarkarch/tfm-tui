@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tfm — terminal file manager</title>
+<meta name="description" content="A modern, mouse-first terminal file manager with a Nautilus-inspired places sidebar, grid view, drag & drop, and image thumbnails. Built on OpenTUI + Bun.">
+<style>
+  :root {
+    --bg: #1a1b26;
+    --panel: #16161e;
+    --accent: #7aa2f7;
+    --green: #9ece6a;
+    --fg: #c0caf5;
+    --muted: #565f89;
+    --hover: #24283b;
+    --border: #292e42;
+    --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", MesloLGS NF, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: 1.6;
+    transition: background .25s, color .25s;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+  /* nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 18px; height: 52px; }
+  nav .logo { color: var(--green); font-weight: 700; letter-spacing: .5px; }
+  nav .logo::before { content: "$ "; color: var(--muted); }
+  nav .links { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
+  nav .links a { color: var(--muted); }
+  nav .links a:hover { color: var(--fg); text-decoration: none; }
+  .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    background: color-mix(in srgb, #f7768e 18%, transparent);
+    color: #f7768e; border: 1px solid color-mix(in srgb, #f7768e 40%, transparent);
+  }
+
+  /* hero */
+  header { padding: 72px 0 40px; text-align: center; }
+  h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 6px; color: var(--fg); }
+  h1 .accent { color: var(--accent); }
+  .tagline { color: var(--muted); max-width: 640px; margin: 0 auto 28px; }
+  .tagline b { color: var(--green); font-weight: 600; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 6px; font-size: 14px;
+    border: 1px solid var(--border); color: var(--fg); background: var(--hover);
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+  .btn:hover { text-decoration: none; filter: brightness(1.12); }
+  .install {
+    display: inline-flex; align-items: center; gap: 10px; max-width: 100%;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; color: var(--fg);
+  }
+  .install code { white-space: nowrap; overflow-x: auto; }
+  .install .p { color: var(--green); }
+  .copy {
+    border: 1px solid var(--border); background: transparent; color: var(--muted);
+    font-family: inherit; font-size: 12px; border-radius: 5px; padding: 3px 9px; cursor: pointer;
+  }
+  .copy:hover { color: var(--fg); }
+  .warn { font-size: 12px; color: var(--muted); margin-top: 16px; }
+
+  /* terminal frame */
+  .term {
+    margin: 40px auto 0; max-width: 960px; text-align: left;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    background: var(--panel);
+    box-shadow: 0 24px 80px -24px rgba(0,0,0,.7);
+  }
+  .term .bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .term .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .term .title { margin-left: 8px; font-size: 12px; color: var(--muted); }
+  .term img { display: block; width: 100%; }
+
+  /* sections */
+  section { padding: 64px 0 8px; }
+  h2 { font-size: 24px; margin: 0 0 4px; }
+  h2::before { content: "## "; color: var(--muted); }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+
+  /* features */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; transition: border-color .15s, transform .15s;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card .ico { font-size: 20px; color: var(--green); }
+  .card h3 { margin: 8px 0 6px; font-size: 16px; color: var(--accent); }
+  .card p { margin: 0; font-size: 13px; color: var(--muted); }
+
+  kbd {
+    background: var(--hover); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 5px; padding: 1px 7px; font-family: inherit; font-size: 12px; white-space: nowrap;
+  }
+  .card kbd { color: var(--fg); }
+
+  /* theme gallery */
+  .themes-note { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+  .themes-note b { color: var(--green); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .tcard {
+    cursor: pointer; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    background: var(--panel); padding: 0; font-family: inherit; text-align: left; color: inherit;
+    transition: border-color .15s, transform .15s;
+  }
+  .tcard:hover { transform: translateY(-2px); border-color: var(--muted); }
+  .tcard.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .tcard .prev { height: 64px; display: flex; }
+  .tcard .sb { width: 34%; }
+  .tcard .body { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .tcard .ln { height: 6px; border-radius: 3px; }
+  .tcard .nm { padding: 7px 10px; font-size: 12px; border-top: 1px solid var(--border); }
+  .reset { margin-top: 14px; font-size: 12px; }
+
+  /* keys + config */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+  @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td:first-child { white-space: nowrap; color: var(--green); width: 40%; }
+  td:last-child { color: var(--muted); }
+  pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; font-size: 12.5px; overflow-x: auto; margin: 0; line-height: 1.7;
+  }
+  pre .k { color: var(--accent); }
+  pre .v { color: var(--green); }
+  pre .c { color: var(--muted); }
+  pre .s { color: #e0af68; }
+
+  footer { margin-top: 72px; border-top: 1px solid var(--border); background: var(--panel); padding: 36px 0 48px; font-size: 13px; }
+  footer .cols { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 820px) { footer .cols { grid-template-columns: 1fr; } }
+  footer h4 { margin: 0 0 10px; color: var(--fg); font-size: 13px; }
+  footer ul { margin: 0; padding-left: 18px; color: var(--muted); }
+  footer li { margin-bottom: 4px; }
+  .license { text-align: center; margin-top: 36px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <span class="logo">tfm</span>
+    <span class="badge">alpha</span>
+    <div class="links">
+      <a href="#features">features</a>
+      <a href="#themes">themes</a>
+      <a href="#keys">keys</a>
+      <a href="#config">config</a>
+      <a href="https://github.com/clarkarch/tfm-tui">github</a>
+    </div>
+  </div>
+</nav>
+
+<header class="wrap">
+  <h1>tfm<span class="accent">_tui</span></h1>
+  <p class="tagline">A modern, <b>mouse-first</b> file manager for your terminal — Nautilus-inspired places sidebar, grid view, drag &amp; drop, image thumbnails. Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
+    <a class="btn" href="https://github.com/clarkarch/tfm-tui">GitHub</a>
+  </div>
+  <div class="install">
+    <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash</code>
+    <button class="copy" id="copyBtn" type="button">copy</button>
+  </div>
+  <p class="warn">Linux only · experimental software — don't test on files you can't afford to lose</p>
+
+  <div class="term">
+    <div class="bar">
+      <span class="dot" style="background:#f7768e"></span>
+      <span class="dot" style="background:#e0af68"></span>
+      <span class="dot" style="background:#9ece6a"></span>
+      <span class="title">tfm — ~/Projects</span>
+    </div>
+    <img src="screenshot.png" alt="tfm browsing a project folder: places sidebar, grid of thumbnails, preview pane" width="1920" height="1080" loading="eager">
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="features">
+  <h2>Features</h2>
+  <p class="sub">a GUI file manager that lives in your terminal</p>
+  <div class="cards">
+    <div class="card">
+      <div class="ico">▚</div>
+      <h3>Mouse-first</h3>
+      <p>Click, rubber-band select, right-click context menus, inline rename — no memorizing a modal keymap to get things done. <kbd>ctrl</kbd>+click toggles, <kbd>shift</kbd>+click ranges.</p>
+    </div>
+    <div class="card">
+      <div class="ico">⇄</div>
+      <h3>Drag &amp; drop</h3>
+      <p>Move files between folders with <kbd>ctrl</kbd>+drag. Drag <i>out</i> of the terminal to other apps and drop files <i>in</i> — cross-app DnD via the kitty graphics protocol (OSC 72).</p>
+    </div>
+    <div class="card">
+      <div class="ico">⌘</div>
+      <h3>Desktop integration</h3>
+      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every operation.</p>
+    </div>
+    <div class="card">
+      <div class="ico">&gt;_</div>
+      <h3>Embedded terminal</h3>
+      <p>Right-click empty space → <i>Open Terminal Here</i> runs your <kbd>$SHELL</kbd> in a pane at the current folder. Drop files onto the prompt to paste their paths.</p>
+    </div>
+    <div class="card">
+      <div class="ico">❐</div>
+      <h3>Previews &amp; thumbnails</h3>
+      <p>Image and video thumbnails (kitty graphics), tree-sitter syntax-highlighted text previews, folder stats — with a disk-cached thumbnail pipeline so folder revisits are instant.</p>
+    </div>
+    <div class="card">
+      <div class="ico">◑</div>
+      <h3>30+ themes</h3>
+      <p>Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized… live-switchable in the settings menu, fully configurable via <i>config.toml</i>. Try them below.</p>
+    </div>
+  </div>
+</section>
+
+<section id="themes">
+  <h2>Themes</h2>
+  <p class="sub">32 bundled presets, switchable at runtime</p>
+  <p class="themes-note"><b>click any theme to restyle this page</b> — the same live palette swap ships inside tfm (<kbd>esc</kbd> → Settings → Theme).</p>
+  <div class="grid" id="themeGrid"></div>
+  <button class="btn reset" id="resetTheme" type="button">reset to Tokyo Night</button>
+</section>
+
+<section id="keys">
+  <h2>Keys</h2>
+  <p class="sub">muscle-memory bindings — every one remappable under <i>[keys]</i> in config.toml</p>
+  <div class="cols">
+    <table>
+      <tr><td><kbd>type anywhere</kbd></td><td>live search · enter opens first match</td></tr>
+      <tr><td><kbd>enter</kbd> / <kbd>f2</kbd></td><td>open / rename</td></tr>
+      <tr><td><kbd>backspace</kbd></td><td>parent directory</td></tr>
+      <tr><td><kbd>esc</kbd></td><td>menu (settings, view mode, sort, …)</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>q</kbd></td><td>quit</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>z</kbd> / <kbd>ctrl</kbd>+<kbd>y</kbd></td><td>undo / redo</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>x</kbd> / <kbd>c</kbd> / <kbd>v</kbd></td><td>cut / copy / paste</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>a</kbd></td><td>select all</td></tr>
+    </table>
+    <table>
+      <tr><td><kbd>ctrl</kbd>+<kbd>t</kbd> / <kbd>w</kbd></td><td>new tab / close tab</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>tab</kbd></td><td>next / previous tab</td></tr>
+      <tr><td><kbd>delete</kbd></td><td>trash (again in trash: permanent)</td></tr>
+      <tr><td><kbd>ctrl</kbd>+click / <kbd>shift</kbd>+click</td><td>toggle / range select</td></tr>
+      <tr><td>plain drag</td><td>drag out of terminal (kitty)</td></tr>
+      <tr><td><kbd>ctrl</kbd>+drag</td><td>move inside tfm</td></tr>
+      <tr><td>right-click</td><td>context menu</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>h</kbd></td><td>toggle hidden files</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="config">
+  <h2>Config</h2>
+  <p class="sub"><i>~/.config/tfm/config.toml</i> — invalid values fall back per-key, never fatal</p>
+  <pre><span class="c"># ~/.config/tfm/config.toml — see config.example.toml in the repo</span>
+<span class="k">[ui]</span>
+sidebar-width   <span class="c">=</span> <span class="v">26</span>      <span class="c"># 16..60 cells</span>
+tile-width      <span class="c">=</span> <span class="v">20</span>      <span class="c"># 10..40 cells (grid view)</span>
+tile-height     <span class="c">=</span> <span class="v">5</span>       <span class="c"># 3..10 cells</span>
+preview-enabled <span class="c">=</span> <span class="v">false</span>   <span class="c"># right-side preview pane</span>
+view-mode       <span class="c">=</span> <span class="s">"grid"</span>  <span class="c"># "grid" tiles or "list" rows</span>
+ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># or "outline" — rounded borders</span>
+restore-session <span class="c">=</span> <span class="v">false</span>   <span class="c"># reopen last folder on launch</span>
+transparent-bg  <span class="c">=</span> <span class="v">false</span>   <span class="c"># follow kitty background_opacity</span>
+
+<span class="k">[theme]</span>
+bg     <span class="c">=</span> <span class="s">"#1a1b26"</span>   <span class="c"># or pick a preset: esc → Settings → Theme</span>
+accent <span class="c">=</span> <span class="s">"#7aa2f7"</span>
+
+<span class="k">[keys]</span>
+quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="c"># every action remappable, several binds allowed</span></pre>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap cols">
+    <div>
+      <h4>Requirements</h4>
+      <ul>
+        <li>Linux</li>
+        <li>kitty-graphics terminal — <b>kitty</b> recommended (full experience incl. cross-app DnD); ghostty gets thumbnails; others fall back to Nerd Font glyphs</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Optional helpers</h4>
+      <ul>
+        <li><code>rsvg-convert</code> — tinted icons</li>
+        <li><code>magick</code> / <code>ffmpeg</code> — SVG / video thumbnails</li>
+        <li><code>gio</code>, <code>xdg-open</code>, <code>udisksctl</code> — trash, default apps, mounts</li>
+        <li><code>wl-clipboard</code> / <code>xclip</code> — clipboard bridge</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Know the limits</h4>
+      <ul>
+        <li>experimental — expect rough edges</li>
+        <li>cross-app DnD is kitty-only (OSC 72)</li>
+        <li>tmux needs <code>allow-passthrough</code> for images</li>
+        <li>cross-device moves are copy+delete</li>
+      </ul>
+    </div>
+  </div>
+  <p class="license">MIT licensed · <a href="https://github.com/clarkarch/tfm-tui">github.com/clarkarch/tfm-tui</a> · <a href="https://github.com/clarkarch/tfm-tui/releases">releases</a></p>
+</footer>
+
+<script>
+const THEMES = [{"name":"Tokyo Night","bg":"#1a1b26","sidebar":"#16161e","accent":"#7aa2f7","green":"#9ece6a","fg":"#c0caf5","muted":"#565f89","hover":"#24283b"},{"name":"OpenCode","bg":"#0a0a0a","sidebar":"#141414","accent":"#fab283","green":"#7fd88f","fg":"#eeeeee","muted":"#808080","hover":"#212121"},{"name":"Aura","bg":"#0f0f0f","sidebar":"#15141b","accent":"#a277ff","green":"#61ffca","fg":"#edecee","muted":"#6d6d6d","hover":"#252525"},{"name":"Ayu","bg":"#0b0e14","sidebar":"#0f131a","accent":"#59c2ff","green":"#aad94c","fg":"#bfbdb6","muted":"#565b66","hover":"#1d2024"},{"name":"Carbon Fox","bg":"#161616","sidebar":"#1a1a1a","accent":"#33b1ff","green":"#25be6a","fg":"#f2f4f8","muted":"#7d848f","hover":"#2c2c2d"},{"name":"Catppuccin","bg":"#1e1e2e","sidebar":"#181825","accent":"#89b4fa","green":"#a6e3a1","fg":"#cdd6f4","muted":"#9399b2","hover":"#303042"},{"name":"Cobalt 2","bg":"#193549","sidebar":"#122738","accent":"#0088ff","green":"#9eff80","fg":"#ffffff","muted":"#adb7c9","hover":"#30495b"},{"name":"Cursor","bg":"#181818","sidebar":"#141414","accent":"#88c0d0","green":"#e394dc","fg":"#e4e4e4","muted":"#636363","hover":"#2c2c2c"},{"name":"Dracula","bg":"#282a36","sidebar":"#21222c","accent":"#bd93f9","green":"#f1fa8c","fg":"#f8f8f2","muted":"#6272a4","hover":"#3d3f49"},{"name":"Everforest","bg":"#2d353b","sidebar":"#333c43","accent":"#a7c080","green":"#a7c080","fg":"#d3c6aa","muted":"#7a8478","hover":"#3e4446"},{"name":"Flexoki","bg":"#100f0f","sidebar":"#1c1b1a","accent":"#da702c","green":"#3aa99f","fg":"#cecdc3","muted":"#6f6e69","hover":"#232221"},{"name":"Frappe","bg":"#303446","sidebar":"#292c3c","accent":"#8da4e2","green":"#a6d189","fg":"#c6d0f5","muted":"#949cb8","hover":"#3f4458"},{"name":"GitHub","bg":"#0d1117","sidebar":"#010409","accent":"#58a6ff","green":"#39c5cf","fg":"#c9d1d9","muted":"#8b949e","hover":"#20242a"},{"name":"Gruvbox","bg":"#282828","sidebar":"#3c3836","accent":"#83a598","green":"#fabd2f","fg":"#ebdbb2","muted":"#928374","hover":"#3c3a36"},{"name":"Kanagawa","bg":"#1f1f28","sidebar":"#2a2a37","accent":"#7e9cd8","green":"#98bb6c","fg":"#dcd7ba","muted":"#727169","hover":"#323137"},{"name":"Macchiato","bg":"#24273a","sidebar":"#1e2030","accent":"#8aadf4","green":"#a6da95","fg":"#cad3f5","muted":"#939ab7","hover":"#35384d"},{"name":"Material","bg":"#263238","sidebar":"#1e272c","accent":"#82aaff","green":"#c3e88d","fg":"#eeffff","muted":"#546e7a","hover":"#3a474c"},{"name":"Matrix","bg":"#0a0e0a","sidebar":"#0e130d","accent":"#2eff6a","green":"#1cc24b","fg":"#62ff94","muted":"#8ca391","hover":"#132618"},{"name":"Mercury","bg":"#171721","sidebar":"#10101a","accent":"#8da4f5","green":"#77c599","fg":"#dddde5","muted":"#9d9da8","hover":"#2b2b35"},{"name":"Monokai","bg":"#272822","sidebar":"#1e1f1c","accent":"#66d9ef","green":"#e6db74","fg":"#f8f8f2","muted":"#75715e","hover":"#3c3d37"},{"name":"Night Owl","bg":"#011627","sidebar":"#0b253a","accent":"#82aaff","green":"#ecc48d","fg":"#d6deeb","muted":"#5f7e97","hover":"#162a3b"},{"name":"Nord","bg":"#2e3440","sidebar":"#3b4252","accent":"#88c0d0","green":"#a3be8c","fg":"#eceff4","muted":"#8b95a7","hover":"#414752"},{"name":"One Dark","bg":"#282c34","sidebar":"#21252b","accent":"#61afef","green":"#98c379","fg":"#abb2bf","muted":"#5c6370","hover":"#353942"},{"name":"Orng","bg":"#0a0a0a","sidebar":"#141414","accent":"#ec5b2b","green":"#6ba1e6","fg":"#eeeeee","muted":"#808080","hover":"#212121"},{"name":"Osaka Jade","bg":"#111c18","sidebar":"#1a2520","accent":"#2dd5b7","green":"#63b07a","fg":"#c1c497","muted":"#53685b","hover":"#232d25"},{"name":"Palenight","bg":"#292d3e","sidebar":"#1e2132","accent":"#82aaff","green":"#c3e88d","fg":"#a6accd","muted":"#676e95","hover":"#363a4c"},{"name":"Rose Pine","bg":"#191724","sidebar":"#1f1d2e","accent":"#9ccfd8","green":"#f6c177","fg":"#e0def4","muted":"#6e6a86","hover":"#2d2b39"},{"name":"Solarized","bg":"#002b36","sidebar":"#073642","accent":"#268bd2","green":"#2aa198","fg":"#839496","muted":"#586e75","hover":"#0d3640"},{"name":"Synth '84","bg":"#262335","sidebar":"#1e1a29","accent":"#36f9f6","green":"#fede5d","fg":"#ffffff","muted":"#848bbd","hover":"#3c3949"},{"name":"Vercel","bg":"#000000","sidebar":"#1a1a1a","accent":"#0070f3","green":"#63c46d","fg":"#ededed","muted":"#878787","hover":"#181818"},{"name":"Vesper","bg":"#101010","sidebar":"#101010","accent":"#ffc799","green":"#99ffe4","fg":"#ffffff","muted":"#a0a0a0","hover":"#282828"},{"name":"Zenburn","bg":"#3f3f3f","sidebar":"#4f4f4f","accent":"#8cd0d3","green":"#cc9393","fg":"#dcdccc","muted":"#9f9f9f","hover":"#4f4f4d"}];
+
+const root = document.documentElement.style;
+const grid = document.getElementById("themeGrid");
+
+function apply(t) {
+  root.setProperty("--bg", t.bg);
+  root.setProperty("--panel", t.sidebar);
+  root.setProperty("--accent", t.accent);
+  root.setProperty("--green", t.green);
+  root.setProperty("--fg", t.fg);
+  root.setProperty("--muted", t.muted);
+  root.setProperty("--hover", t.hover);
+  root.setProperty("--border", t.hover);
+  document.querySelectorAll(".tcard").forEach(c => { c.classList.toggle("active", c.dataset.name === t.name); });
+}
+
+THEMES.forEach(t => {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "tcard";
+  b.dataset.name = t.name;
+  b.title = `Apply ${t.name}`;
+  b.innerHTML = `<span class="prev"><span class="sb" style="background:${t.sidebar};border-right:1px solid ${t.hover}"></span><span class="body" style="background:${t.bg}"><span class="ln" style="background:${t.accent};width:70%"></span><span class="ln" style="background:${t.hover};width:90%"></span><span class="ln" style="background:${t.green};width:45%"></span><span class="ln" style="background:${t.hover};width:60%"></span></span></span><span class="nm" style="background:${t.bg};color:${t.fg}">${t.name}</span>`;
+  b.addEventListener("click", () => apply(t));
+  grid.appendChild(b);
+});
+
+document.getElementById("resetTheme").addEventListener("click", () => apply(THEMES[0]));
+apply(THEMES[0]);
+
+document.getElementById("copyBtn").addEventListener("click", async e => {
+  await navigator.clipboard.writeText("curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash");
+  e.target.textContent = "copied!";
+  setTimeout(() => e.target.textContent = "copy", 1500);
+});
+</script>
+</body>
+</html>
