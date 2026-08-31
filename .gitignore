@@ -4,3 +4,4 @@ opentui/
 .agents/
 dist/
 AGENTS.md
+skills-lock.json
