@@ -3,10 +3,10 @@
 Single-file static landing page for [tfm](../README.md) — no build step, no dependencies.
 
 ```bash
-cd site && python3 -m http.server 8080   # preview at http://localhost:8080
+cd docs && python3 -m http.server 8080   # preview at http://localhost:8080
 ```
 
-Deploy: upload the folder to any static host, or enable GitHub Pages for `/site`.
+Deploy: GitHub Pages serves this `/docs` folder from the `dev` branch
 The theme gallery data is extracted from `src/themes.ts` — regenerate with:
 
 ```bash
