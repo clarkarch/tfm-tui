@@ -37,6 +37,13 @@ const decodeFileUri = (l: string): string => {
 
 export type CopiedFiles = { op: "copy" | "move"; paths: string[] };
 
+// internal-clipboard cut check (tile dimming): the pressed path is "cut" when
+// the pending clipboard is a cut containing it. null clipboard = nothing cut.
+export const isCutKeyFor = (
+  clip: { mode: string; items: { path: string }[] } | null | undefined,
+  key: string,
+): boolean => clip?.mode === "cut" && clip.items.some((i) => i.path === key);
+
 // parse a gnome-copied-files payload: op from the first line ("cut" → move),
 // body = file:// URIs only (plain text paths are intentionally ignored — tfm
 // publishes text so paste-anywhere works, and internal pastes never come back

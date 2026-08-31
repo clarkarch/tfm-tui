@@ -152,3 +152,24 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
 
   return { trashPaths, restoreFromTrash, deleteForever, emptyTrash };
 };
+
+// --- Trash-bound Yes/No wrappers: label + verb bindings onto the floating
+// confirm dialog (both are destructive → danger styling). Extracted so the
+// exact prompts are testable without a renderer. ---
+export type TrashConfirmsCtx = {
+  confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): void;
+  emptyTrash(): void;
+  deleteForever(paths: string[]): void;
+};
+
+export const makeTrashConfirms = (ctx: TrashConfirmsCtx) => {
+  const confirmEmptyTrash = (): void => {
+    ctx.confirm("Empty Trash?", "Empty", () => ctx.emptyTrash(), true);
+  };
+
+  const confirmDeleteForever = (paths: string[]): void => {
+    ctx.confirm(`Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}?`, "Delete", () => ctx.deleteForever(paths), true);
+  };
+
+  return { confirmEmptyTrash, confirmDeleteForever };
+};

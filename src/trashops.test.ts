@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import { trashDir } from "./fsutil";
-import { makeTrashOps, trashOrigPath, type TrashOpsSink } from "./trashops";
+import { makeTrashConfirms, makeTrashOps, trashOrigPath, type TrashOpsSink } from "./trashops";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 const oldHome = process.env.HOME;
@@ -170,5 +170,53 @@ describe("deleteForever / emptyTrash", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("makeTrashConfirms", () => {
+  type Confirmed = { message: string; yesLabel: string; danger?: boolean };
+  const mkEnv = () => {
+    const asked: Confirmed[] = [];
+    const fired: string[] = [];
+    let onYes: (() => void) | null = null;
+    const confirms = makeTrashConfirms({
+      confirm: (message, yesLabel, cb, danger) => {
+        asked.push({ message, yesLabel, danger });
+        onYes = cb;
+      },
+      emptyTrash: () => { fired.push("empty"); },
+      deleteForever: (paths) => { fired.push(`delete:${paths.join(",")}`); },
+    });
+    return { asked, fired, confirms, runYes: () => onYes?.() };
+  };
+
+  test("empty-trash prompt: exact label, verb and danger flag", () => {
+    const { asked, confirms, runYes, fired } = mkEnv();
+    confirms.confirmEmptyTrash();
+    expect(asked[0]).toEqual({ message: "Empty Trash?", yesLabel: "Empty", danger: true });
+    runYes();
+    expect(fired).toEqual(["empty"]);
+  });
+
+  test("delete-forever prompt pluralizes and carries the paths into the action", () => {
+    const { asked, confirms, runYes, fired } = mkEnv();
+    confirms.confirmDeleteForever(["/t/a"]);
+    expect(asked[0].message).toBe("Permanently delete 1 item?");
+    expect(asked[0].yesLabel).toBe("Delete");
+    expect(asked[0].danger).toBe(true);
+    runYes();
+    expect(fired).toEqual(["delete:/t/a"]);
+
+    confirms.confirmDeleteForever(["/t/a", "/t/b"]);
+    expect(asked[1].message).toBe("Permanently delete 2 items?");
+    runYes();
+    expect(fired).toEqual(["delete:/t/a", "delete:/t/a,/t/b"]);
+  });
+
+  test("nothing happens until the user confirms (onYes not auto-invoked)", () => {
+    const { confirms, fired } = mkEnv();
+    confirms.confirmEmptyTrash();
+    confirms.confirmDeleteForever(["/x"]);
+    expect(fired).toEqual([]);
   });
 });

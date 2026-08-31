@@ -15,6 +15,11 @@ import type { Theme } from "./config";
 
 export type UiStyle = "solid" | "outline";
 
+// inner width available to children of the sidebar panel: outline mode's
+// border ring reserves one cell per side (yoga setBorder)
+export const sideInnerWidth = (style: UiStyle, sw: number): number =>
+  style === "outline" ? sw - 2 : sw;
+
 export type SurfaceState = "rest" | "hover" | "selected" | "cut";
 
 export type SurfaceOpts = {

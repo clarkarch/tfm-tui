@@ -24,6 +24,17 @@ export type AppState = {
   sortAsc: boolean;
 };
 
+// boot state: the start dir is its own one-entry history; sort defaults to
+// name-ascending (the settings/menu own changes afterwards)
+export const initialAppState = (config: Config, cwd: string = process.cwd()): AppState => ({
+  cwd,
+  history: [cwd],
+  histIdx: 0,
+  showHidden: config.ui.showHidden,
+  sortBy: "name",
+  sortAsc: true,
+});
+
 export type NavHooks = {
   renderAll: () => void;
   clearSearch: () => void;

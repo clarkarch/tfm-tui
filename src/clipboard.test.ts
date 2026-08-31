@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { parseCopiedFiles, sysClipTool } from "./clipboard";
+import { isCutKeyFor, parseCopiedFiles, sysClipTool } from "./clipboard";
 
 const oldWayland = process.env.WAYLAND_DISPLAY;
 const oldDisplay = process.env.DISPLAY;
@@ -70,5 +70,29 @@ describe("sysClipTool", () => {
     delete process.env.WAYLAND_DISPLAY;
     delete process.env.DISPLAY;
     expect(sysClipTool()).toBeNull();
+  });
+});
+
+describe("isCutKeyFor", () => {
+  const clip = (mode: "copy" | "cut", paths: string[]) => ({ mode, items: paths.map((p) => ({ path: p })) });
+
+  test("null/undefined clipboard cuts nothing", () => {
+    expect(isCutKeyFor(null, "/a")).toBe(false);
+    expect(isCutKeyFor(undefined, "/a")).toBe(false);
+  });
+
+  test("copy mode never dims", () => {
+    expect(isCutKeyFor(clip("copy", ["/a"]), "/a")).toBe(false);
+  });
+
+  test("cut mode dims exactly the queued paths", () => {
+    const c = clip("cut", ["/a", "/b"]);
+    expect(isCutKeyFor(c, "/a")).toBe(true);
+    expect(isCutKeyFor(c, "/b")).toBe(true);
+    expect(isCutKeyFor(c, "/c")).toBe(false);
+  });
+
+  test("empty cut items match nothing", () => {
+    expect(isCutKeyFor(clip("cut", []), "/a")).toBe(false);
   });
 });

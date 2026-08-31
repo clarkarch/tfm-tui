@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { trashDir, fsErrText, fsMove, safeRestoreMove, uniqueTarget, xdgTrashMove, deviceOf, crossDevice } from "./fsutil";
+import { trashDir, fsErrText, fsMove, isTrashFilesDir, safeRestoreMove, uniqueTarget, xdgTrashMove, deviceOf, crossDevice } from "./fsutil";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
 // exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
@@ -190,5 +190,28 @@ describe("fsErrText", () => {
     expect(fsErrText({ code: "EWOULDNEVER" })).toBe("ewouldnever");
     expect(fsErrText(new Error("EACCES: permission denied, open '/x'"))).toBe("eacces");
     expect(fsErrText("plain string")).toBe("unknown error");
+  });
+});
+
+describe("isTrashFilesDir", () => {
+  test("the sandboxed trash files dir matches (XDG_DATA_HOME honored)", () => {
+    expect(isTrashFilesDir(path.join(SANDBOX, "Trash", "files"))).toBe(true);
+  });
+
+  test("relative spellings of the same dir match", () => {
+    const abs = path.join(SANDBOX, "Trash", "files");
+    const rel = path.relative(process.cwd(), abs);
+    expect(isTrashFilesDir(rel)).toBe(path.resolve(rel) === abs);
+  });
+
+  test("the trash info dir and unrelated paths do NOT match", () => {
+    expect(isTrashFilesDir(path.join(SANDBOX, "Trash", "info"))).toBe(false);
+    expect(isTrashFilesDir(SANDBOX)).toBe(false);
+    expect(isTrashFilesDir("/")).toBe(false);
+  });
+
+  test("virtual place URIs never match", () => {
+    expect(isTrashFilesDir("recent://")).toBe(false);
+    expect(isTrashFilesDir("starred://")).toBe(false);
   });
 });

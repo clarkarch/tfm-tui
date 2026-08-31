@@ -13,6 +13,11 @@ import path from "node:path";
 export const trashDir = (): string =>
   path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), "Trash");
 
+// is a cwd the trash FILES dir? (virtual URIs like recent:// resolve to junk
+// paths, never the trash root, so no guard needed at the call site)
+export const isTrashFilesDir = (p: string): boolean =>
+  path.resolve(p) === path.join(trashDir(), "files");
+
 // terse human text for the fs error codes users actually hit — "FAILED" alone
 // gives them nothing to act on (retry vs chmod vs free disk space)
 const FS_ERR_TEXT: Record<string, string> = {

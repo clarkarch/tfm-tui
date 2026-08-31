@@ -1,28 +1,20 @@
-import { ASCIIFont, Box, CliRenderEvents, RGBA, Renderable, ScrollBoxRenderable, Text, createCliRenderer } from "@opentui/core";
+import { CliRenderEvents, Renderable, ScrollBoxRenderable, createCliRenderer } from "@opentui/core";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { appendFileSync } from "node:fs";
-import { readFile, lstat, readlink, symlink, cp } from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
-import { loadConfig, configPath, type Config, type Theme } from "./config";
-import { applySurface, btnSurface, chromeSurface, rowSurface, slotBg, tileSurface } from "./style";
-import { bumpHex } from "./color";
+import { loadConfig, configPath, type Theme } from "./config";
+import { sideInnerWidth } from "./style";
+import { deriveColors } from "./color";
 import { clearIconCaches, warmEmbeddedIcons } from "./icons";
 import { FILE_ICON_BY_EXT, loadGlobs2 } from "./filetype";
-// --- Directory listing/sort/virtual-place entries live in ./listing ---
-import { listDir, type Entry } from "./listing";
 import { isVirtualUri } from "./uri";
-import {
-  upsertRecentXbel,
-} from "./recent";
-import { trashDir } from "./fsutil";
+import { upsertRecentXbel } from "./recent";
+import { isTrashFilesDir } from "./fsutil";
 import { loadSystemPlaces } from "./places";
 import { registerSyntaxParsers } from "./syntax";
 import { makeDnd72 } from "./dnd72";
 import { makeSettingModel } from "./settings-model";
 import { makeRename } from "./ui-rename";
-import { makeNav, makeSessionSync, type AppState } from "./nav";
+import { initialAppState, makeNav, makeSessionSync, type AppState } from "./nav";
 import { makeCwdWatcher } from "./watcher";
 import { makeHitTargetAt } from "./hit-target";
 import { makeRecentOpen } from "./recent-open";
@@ -31,13 +23,14 @@ import { makeSelection } from "./selection";
 import { makeGridRenderer } from "./ui-grid";
 import { makeKeyRouter } from "./keymap";
 import { makeRetheme } from "./ui-retheme";
-import { makeTrashOps } from "./trashops";
+import { makeTrashOps, makeTrashConfirms } from "./trashops";
 import { makeFileOps } from "./fileops";
 import { makeUndo } from "./undo";
 import { makeTabs } from "./tabs";
 import { appForFile } from "./apps";
-import { clearChildren as uiutilClearChildren, debounced as uiutilDebounced, safeRenderStep as uiutilSafeRenderStep } from "./uiutil";
-import { animateLeft, makeNotify } from "./notify";
+import { isCutKeyFor } from "./clipboard";
+import { clearChildren as uiutilClearChildren } from "./uiutil";
+import { makeNotify } from "./notify";
 import { makeChrome } from "./ui-chrome";
 import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
 import { makeMenu } from "./ui-menu";
@@ -47,55 +40,47 @@ import { makePreview } from "./ui-preview";
 import { makeProps } from "./ui-props";
 import { makeProgress } from "./ui-progress";
 import { makeTerminal, xtShiftEscapeFrame } from "./ui-term";
-import { makeSlots, type IconState, type IconSpec } from "./ui-slots";
+import { makeSlots } from "./ui-slots";
 import { makeEscMenu } from "./ui-settings";
 import {
   cancelBand,
   finishDragState,
   makeEntryMouseHandlers,
   type BandCtx,
-  type ClipItem,
   type GridMenuEntry,
 } from "./grid-input";
 import { appendLog, debugLog, dlog, isDebug, DEBUG_LOG } from "./log";
 import { startMemHygiene } from "./mem-hygiene";
 import { makeSearch } from "./search";
-import { buildBootLayout } from "./ui-boot-layout";
+import { buildAppContainer, buildBootLayout, buildTitle } from "./ui-boot-layout";
 import { makeMenuEntries } from "./menu-entries";
 import { makeToolbar } from "./ui-toolbar";
-import { glyph, glyphFor } from "./glyphs";
+import { glyph, glyphFor, ensureGlyphFallbacks } from "./glyphs";
+import { makeRenderAll } from "./render-all";
+import { makeQuit } from "./quit";
+import { makeStatus } from "./ui-status";
+import { makeResizeWatcher } from "./resize";
+import { runBoot } from "./boot";
 
-// clear-and-rebuild / debounce / render-step guards live in ./uiutil
+// clear-and-rebuild idiom (the widgets' ctx fields take it as a callback)
 const clearChildren = uiutilClearChildren;
-const debounced = uiutilDebounced;
-const safeRenderStep = (name: string, fn: () => void | Promise<void>): void =>
-  uiutilSafeRenderStep(name, fn, appendLog);
 
 if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
+const bootStart = performance.now();
 
 // --- Config (TOML at ~/.config/tfm/config.toml, TFM_CONFIG overrides path) ---
 const config = loadConfig();
 
-// --- Color palette (theme from config; Tokyo Night defaults) ---
+// --- Color palette (theme from config; transparent-bg nudge lives in ./color) ---
+const colors: Theme & Record<string, string> = deriveColors(config.theme, config.ui.transparentBg) as Theme & Record<string, string>;
 
-// Terminals with background_opacity (kitty etc.) composite only their DEFAULT
-// background; OpenTUI leaves unpainted cells on SGR 49, so those go
-// see-through. transparentBg=false forces an opaque UI: renderer clear color =
-// bg, and bg itself nudged one step so it can never byte-equal the terminal's
-// default color. true keeps the theme faithful and gaps on terminal default.
-const colors: Theme & Record<string, string> = { ...config.theme };
-if (!config.ui.transparentBg) colors.bg = bumpHex(colors.bg);
+// inner width available to children of the sidebar panel (outline border math
+// lives in ./style)
+const sideInnerW = (): number => sideInnerWidth(config.ui.uiStyle, sw);
 
-// inner width available to children of the sidebar panel: outline mode's
-// border ring reserves one cell per side (yoga setBorder)
-const sideInnerW = (): number => (config.ui.uiStyle === "outline" ? sw - 2 : sw);
-
-// --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY) ---
-// File type categories: icon NAMES live in ./filetype; this fills the
-// glyph fallbacks for every category the classifier can emit
-for (const cat of new Set(Object.values(FILE_ICON_BY_EXT))) {
-  if (!(cat in glyph)) glyph[cat] = glyph.file!;
-}
+// --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY); every category the
+// ./filetype classifier can emit gets a file-glyph fallback ---
+ensureGlyphFallbacks(new Set(Object.values(FILE_ICON_BY_EXT)));
 
 // --- Post-mount node lookup seam — lives in ./ui-lookup (tested). Created
 // before the widget factories that capture byId/stripSelectable in ctx; the
@@ -128,21 +113,51 @@ const {
   glyphFor,
 });
 
-// --- App state & history (type lives in ./nav with the navigation logic) ---
+// --- App state & history (type + boot-state factory live in ./nav with the
+// navigation logic) ---
 const home = os.homedir();
 
-const state: AppState = {
-  cwd: process.cwd(),
-  history: [process.cwd()],
-  histIdx: 0,
-  showHidden: config.ui.showHidden,
-  sortBy: "name",
-  sortAsc: true,
-};
+const state: AppState = initialAppState(config);
 
-// renderAll is a hoisted function declaration (defined further down) so
-// factories constructed before it can hold the stable binding directly —
-// no per-ctx TDZ arrow wrappers needed.
+// --- renderAll orchestration lives in ./render-all (tested): tab-sync +
+// cwd-sync, then the named steps in insertion order, each guarded. Every
+// step closes over a later-defined widget through an arrow (TDZ seam rule),
+// so the const can sit at the TOP of the wiring and all consumers below
+// reference it directly. ---
+const renderAll = makeRenderAll({
+  state,
+  syncTabFromState: () => syncTabFromState(),
+  scheduleSaveSession: () => scheduleSaveSession(),
+  log: (msg) => appendLog(msg),
+  steps: {
+    cwdWatcher: () => syncCwdWatcher(),
+    tabbar: () => renderTabbar(),
+    nav: () => refreshNav(),
+    crumbs: () => renderCrumbs(),
+    sidebar: () => renderSidebar(),
+    iconQueue: () => { void drainIconQueue(); },
+    grid: () => { void renderGrid(); },
+    preview: () => { void renderPreview(); },
+    stripSelectable: () => stripSelectable(),
+  },
+});
+
+// --- Quit: the single teardown path lives in ./quit (tested). disableDrops
+// and the renderer arrive as arrows (defined near the bottom of the wiring). ---
+const quitApp = makeQuit({
+  disableDrops: () => disableDrops(),
+  releaseShiftCapture: () => process.stdout.write(xtShiftEscapeFrame(false)),
+  destroy: () => renderer.destroy(),
+  exit: (code) => process.exit(code),
+});
+
+// --- Status bar writes live in ./ui-status (tested): transient messages +
+// the debounced reclaim by the selection summary. The refresh target is
+// selection's, created further down — arrow defers it. ---
+const { setStatusMsg } = makeStatus({
+  byId,
+  refresh: () => updateSelectionStatusReal(),
+});
 
 // --- History navigation — pure state machine lives in ./nav (tested);
 // hooks close over later-defined bindings (TDZ seam rule) ---
@@ -243,16 +258,9 @@ const { renderSidebar, renderTabbar, normalizePlaces, makeDivider, placesHost, m
   stateCwd: () => state.cwd,
 });
 
-const makeTitle = () =>
-  Box(
-    { id: "tfm-title-box", width: sideInnerW(), height: 5, flexDirection: "column", justifyContent: "center", paddingLeft: 1 },
-    ASCIIFont({ id: "tfm-title-font", text: "tfm", font: "tiny", color: colors.accent }),
-    Text({ id: "tfm-title-sub", content: " terminal file manager", fg: colors.sidebarFgMuted }),
-  );
-
 // --- Toolbar — widget lives in ./ui-toolbar (nav buttons, crumbs, inline path
 // edit, sort/search buttons). The search QUERY state + type-to-search stay
-// here with the keyboard router; ctx fields for later-defined symbols are
+// with the keyboard router; ctx fields for later-defined symbols are
 // arrow wrappers (TDZ seam rule). ---
 const {
   makeToolbarShell,
@@ -284,49 +292,29 @@ const {
   home,
 });
 
-// --- Directory listing ---
 // --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred ---
 // URI/XDG primitives live in ./uri, the registries in ./recent, the listings
 // themselves in ./listing; this wrapper keeps the historic call-signature
-// (defaults to the current cwd)
+// (defaults to the current cwd). Hoisted: consumed by factories constructed
+// above this point (sessionSync, terminal, watcher, rename, dnd72).
 function isVirtualCwd(p: string = state.cwd): boolean {
   return isVirtualUri(p);
 }
 
-// --- Layout ---
-const container = Box(
-  { width: "100%", height: "100%", flexDirection: "row" },
-  Box(
-    { id: "tfm-sidebar-root", width: sw, height: "100%", ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg), flexDirection: "column" },
-    makeTitle(),
-    Box({ id: "tfm-places", width: sideInnerW(), flexDirection: "column" }),
-  ),
-  Box(
-    { id: "tfm-main", flexGrow: 1, height: "100%", ...chromeSurface(config.ui.uiStyle, colors, colors.bg), flexDirection: "column" },
-    makeToolbarShell(),
-    Box({ id: "tfm-tabbar", width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, visible: config.ui.tabBar }),
-    Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
-    // status bar sits above the embedded terminal pane (zero-height until opened),
-    // so with a terminal open the bar hugs its top edge instead of sinking below it
-    Box(
-      { id: "tfm-status", width: "100%", height: 1, flexDirection: "row", justifyContent: "flex-end", paddingRight: 1 },
-      Text({ id: "tfm-status-label", content: "", fg: colors.sidebarFgMuted }),
-    ),
-    Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }),
-  ),
-  Box(
-    {
-      id: "tfm-preview",
-      width: config.ui.previewWidth,
-      height: "100%",
-      visible: config.ui.previewEnabled, // display:none in yoga: takes no layout space when hidden
-      ...chromeSurface(config.ui.uiStyle, colors, colors.sidebarBg),
-      flexDirection: "column",
-      paddingLeft: 1,
-      paddingRight: 1,
-    },
-  ),
-);
+// --- Layout: the pre-mount skeleton (title + three panels) lives in
+// ./ui-boot-layout; ids are repainted by rethemeChrome, so they must stay
+// byte-identical there. ---
+const container = buildAppContainer({
+  sw,
+  sideInnerW: sideInnerW(),
+  colors: colors as Record<string, any>,
+  uiStyle: config.ui.uiStyle,
+  tabBarVisible: config.ui.tabBar,
+  previewWidth: config.ui.previewWidth,
+  previewEnabled: config.ui.previewEnabled,
+  title: buildTitle({ width: sideInnerW(), colors: colors as Record<string, any> }),
+  toolbarShell: makeToolbarShell(),
+});
 
 // --- Renderer boot ---
 const renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 60, maxFps: 120, ...(config.ui.transparentBg ? {} : { backgroundColor: colors.bg }) });
@@ -386,7 +374,7 @@ const selection = makeSelection({
   uiStyle: () => config.ui.uiStyle,
   byId,
   setIconState,
-  // arrow wrappers: isCutKey/renderPreview are defined below (TDZ)
+  // hoisted wrapper: clipboardRef is defined below (TDZ)
   isCutKey,
   scroller: () => scroller,
   viewH: () => renderer.terminalHeight - 3,
@@ -424,7 +412,7 @@ const {
   stripSelectable,
   renderAll,
   renderGrid: () => renderGrid(),
-  // arrow wrappers: pushUndoBatch/performRename/setStatusMsg/inTrashView are defined below (TDZ)
+  // arrow wrappers: pushUndoBatch/performRename are defined below (TDZ)
   performRename: (p, name) => performRename(p, name),
   pushUndoBatch: (label, undos, redos) => pushUndoBatch(label, undos, redos),
   setStatusMsg,
@@ -439,22 +427,14 @@ const {
 // runTransfer/performRename/paste/clipboard orchestration lives in ./fileops;
 // the copy engine is ./transfer (pure, sink-injected), the progress toast
 // is ./ui-progress, and cut-tile dimming lives in ./selection (setTileVisual).
+// The cut check itself is pure (./clipboard); this wrapper reads the live
+// internal clipboard. Hoisted: selection's ctx above takes the stable binding.
 function isCutKey(key: string): boolean {
-  const c = clipboardRef();
-  return c?.mode === "cut" && c.items.some((i) => i.path === key);
-};
+  return isCutKeyFor(clipboardRef(), key);
+}
 
-// the reset fires 2500ms after the LAST status message, like a debounce
-const clearStatusMsg = debounced(2500, () => updateSelectionStatusReal());
-// hoisted declaration: consumed by factories constructed above this point
-function setStatusMsg(text: string) {
-  const status: any = byId("tfm-status-label");
-  if (status) { try { status.content = text; } catch {} }
-  clearStatusMsg();
-};
-
-// --- Undo stack + override (conflict) prompt — dialog lives in ./ui-dialogs ---
-// undo/redo state machine lives in ./undo (pure, tested) — results surface via sink
+// --- Undo stack — state machine lives in ./undo (pure, tested) — results
+// surface via sink; the override (conflict) prompt dialog lives in ./ui-dialogs ---
 const { pushUndoBatch, undoLast, redoLast } = makeUndo({
   status: setStatusMsg,
   notify,
@@ -528,9 +508,11 @@ const trashOps = makeTrashOps({
 });
 const { trashPaths, restoreFromTrash, deleteForever, emptyTrash } = trashOps;
 
-// --- Trash management: restore / delete-permanently / empty ---
+// --- Trash view detection: the path comparison is pure (./fsutil, honors
+// $XDG_DATA_HOME); this wrapper reads the live cwd. Hoisted: recent-open's
+// ctx above takes the stable binding. ---
 function inTrashView(): boolean {
-  return path.resolve(state.cwd) === path.join(trashDir(), "files");
+  return isTrashFilesDir(state.cwd);
 }
 
 // floating Yes/No confirmation — widget lives in ./ui-dialogs
@@ -541,13 +523,12 @@ const yesNo = makeYesNo(dialogs, {
 });
 const confirmYesNo = yesNo.confirm;
 
-const confirmEmptyTrash = (): void => {
-  confirmYesNo("Empty Trash?", "Empty", () => emptyTrash(), true);
-};
-
-const confirmDeleteForever = (paths: string[]): void => {
-  confirmYesNo(`Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}?`, "Delete", () => deleteForever(paths), true);
-};
+// --- Trash-bound confirm dialogs: label+verb bindings live in ./trashops ---
+const { confirmEmptyTrash, confirmDeleteForever } = makeTrashConfirms({
+  confirm: confirmYesNo,
+  emptyTrash,
+  deleteForever,
+});
 
 // --- Preview pane — widget lives in ./ui-preview ---
 registerSyntaxParsers();
@@ -711,17 +692,6 @@ const { sidebarEntriesFor, fileEntriesFor, sortEntries, emptyAreaEntries } = mak
   sortState: state,
 });
 
-// --- ESC menu + settings panel — widget lives in ./ui-settings ---
-// hoisted declaration: tabs/settings/esc-menu are constructed before this
-// point but only ever CALL it (post-boot), so the stable binding suffices
-function quitApp() {
-  disableDrops();
-  // release the shift-capture request made at boot (frame in ./ui-term)
-  try { process.stdout.write(xtShiftEscapeFrame(false)); } catch {}
-  try { renderer.destroy(); } catch {}
-  process.exit(0);
-};
-
 // --- Settings model: row type + pure semantics live in ./settings.ts, the
 // row->config wiring in ./settings-model, the panel in ./ui-settings ---
 const { settingGroups } = makeSettingModel({
@@ -765,70 +735,54 @@ const { syncCwdWatcher } = makeCwdWatcher({
   renderGrid: () => renderGrid(),
 });
 
-// --- Orchestration ---
-function renderAll() {
-  // navigate/back/forward mutate state.history directly — fold it into the
-  // active tab slot BEFORE anything renders, or chip titles lag one switch
-  syncTabFromState();
-  state.cwd = state.history[state.histIdx] ?? state.cwd;
-  safeRenderStep("cwdWatcher", () => syncCwdWatcher());
-  safeRenderStep("tabbar", () => renderTabbar());
-  safeRenderStep("nav", () => refreshNav());
-  safeRenderStep("crumbs", () => renderCrumbs());
-  safeRenderStep("sidebar", () => renderSidebar());
-  safeRenderStep("iconQueue", () => void drainIconQueue());
-  safeRenderStep("grid", () => void renderGrid());
-  safeRenderStep("preview", () => void renderPreview());
-  safeRenderStep("stripSelectable", () => stripSelectable());
-  scheduleSaveSession();
-};
-
-
-const boot = async () => {
-  await waitForResolution(renderer);
-  // scroller/band rect/drag ghost — module: ./ui-boot-layout (ids stay
-  // byte-identical; band gesture fns wired there straight from grid-input)
-  scroller = buildBootLayout({
-    renderer,
-    byId,
-    colors,
-    bandCtx,
-    closeFileMenu,
-    clearSearch,
-    blurTerminal,
-    pathEditMode,
-    exitPathEdit,
-    isRenaming,
-    finishInlineRename,
-    clearTileSelection,
-    openContextMenu: (x: number, y: number, t: string, e: any[]) => openContextMenu(x, y, t, e),
-    emptyAreaEntries,
-  });
-
-  await loadGlobs2();
-  restoreSession();
-  await loadSystemPlaces();
-  renderAll();
-
-  if (isDebug) {
+// --- Boot sequence (order + toast gating live in ./boot, tested): resolution
+// wait, fixed nodes, globs2, session restore, places, first render, hygiene,
+// search wiring. Everything renderer-coupled arrives as an injected step. ---
+void runBoot({
+  waitForResolution: () => waitForResolution(renderer),
+  buildLayout: () => {
+    // scroller/band rect/drag ghost — module: ./ui-boot-layout (ids stay
+    // byte-identical; band gesture fns wired there straight from grid-input)
+    scroller = buildBootLayout({
+      renderer,
+      byId,
+      colors,
+      bandCtx,
+      closeFileMenu,
+      clearSearch,
+      blurTerminal,
+      pathEditMode,
+      exitPathEdit,
+      isRenaming,
+      finishInlineRename,
+      clearTileSelection,
+      openContextMenu: (x: number, y: number, t: string, e: any[]) => openContextMenu(x, y, t, e),
+      emptyAreaEntries,
+    });
+  },
+  loadGlobs2: () => loadGlobs2(),
+  restoreSession: () => restoreSession(),
+  loadSystemPlaces: () => loadSystemPlaces(),
+  renderAll,
+  debugTrace: () => {
     debugLog(`terminal ${renderer.terminalWidth}x${renderer.terminalHeight} cwd=${process.cwd()} config=${configPath()}`);
     setStatusMsg(`debug: ${DEBUG_LOG}`);
-  }
-
-  // --- Native memory hygiene (module: ./mem-hygiene) — the private allocator
-  // stats reach is the only renderer-coupled part, so it's injected here ---
-  startMemHygiene({
+  },
+  launchToast: () => notify(`launched in ${Math.round(performance.now() - bootStart)} ms`),
+  startHygiene: () => startMemHygiene({
+    // the private allocator stats reach is the only renderer-coupled part,
+    // so it's injected here (module: ./mem-hygiene)
     allocatorStats: () => {
       try {
         return (renderer as any).lib?.getAllocatorStats?.() ?? null;
       } catch { return null; }
     },
     debugLog: isDebug ? (msg) => debugLog(msg) : undefined,
-  });
-
-  wireSearchInput();
-};
-boot();
+  }),
+  wireSearchInput: () => wireSearchInput(),
+  isDebug,
+  showLaunchTime: () => config.ui.showLaunchTime,
+});
 
 // --- Config application & persistence: lives in ./ui-retheme (rethemeChrome,
 // applyConfig, scheduleSaveConfig, live reload). Geometry lets stay here and
@@ -898,19 +852,15 @@ enableDrops();
 // XTSHIFTESCAPE=1 (CSI > Ps s): ask the terminal (kitty, ghostty, xterm) to
 // forward shift+click instead of using it for native text selection.
 // Terminals that don't know the sequence ignore it; alt+click is the fallback.
-// XTSHIFTESCAPE (frame builder in ./ui-term): ask the terminal to forward
-// shift+click instead of using it for native text selection; released on quit.
+// (frame builder in ./ui-term; released on quit via makeQuit above)
 try { dlog("tx xtshiftescape on"); process.stdout.write(xtShiftEscapeFrame(true)); } catch {}
 
-// --- resize: repave rasters and rebuild layout ---
-let resizeTimer: any = null;
-renderer.on(CliRenderEvents.RESIZE, () => {
-  if (resizeTimer) clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => {
-    resetIconQueue();
-    renderAll();
-  }, 150);
+// --- resize: repave rasters and rebuild layout (debounce lives in ./resize) ---
+const { onResize } = makeResizeWatcher({
+  resetIconQueue: () => resetIconQueue(),
+  renderAll,
 });
+renderer.on(CliRenderEvents.RESIZE, onResize);
 
 
 // --- Keyboard router lives in ./keymap: modal precedence chain (quit >

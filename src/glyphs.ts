@@ -40,3 +40,9 @@ export const glyph: Record<string, string> = {
 };
 
 export const glyphFor = (name: string): string => glyph[name] ?? "\u{FFFD}";
+
+// every file-type category the classifier can emit must have a glyph: fill
+// unknown ones with the generic file glyph so a new filetype never renders □
+export const ensureGlyphFallbacks = (names: Iterable<string>): void => {
+  for (const n of names) if (!(n in glyph)) glyph[n] = glyph.file!;
+};

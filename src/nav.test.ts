@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeNav, makeSessionSync, type AppState } from "./nav";
+import { initialAppState, makeNav, makeSessionSync, type AppState } from "./nav";
 import { makeTabs } from "./tabs";
 import { RECENT_URI } from "./uri";
 
@@ -216,5 +216,29 @@ describe("makeSessionSync", () => {
     } finally {
       delete process.env.XDG_STATE_HOME;
     }
+  });
+});
+
+describe("initialAppState", () => {
+  test("the start dir is its own one-entry history", () => {
+    const st = initialAppState({ ui: { showHidden: false } } as any, "/start/dir");
+    expect(st.cwd).toBe("/start/dir");
+    expect(st.history).toEqual(["/start/dir"]);
+    expect(st.histIdx).toBe(0);
+  });
+
+  test("sort defaults to name-ascending", () => {
+    const st = initialAppState({ ui: { showHidden: false } } as any, "/x");
+    expect(st.sortBy).toBe("name");
+    expect(st.sortAsc).toBe(true);
+  });
+
+  test("showHidden seeds from config", () => {
+    expect(initialAppState({ ui: { showHidden: true } } as any, "/x").showHidden).toBe(true);
+    expect(initialAppState({ ui: { showHidden: false } } as any, "/x").showHidden).toBe(false);
+  });
+
+  test("cwd defaults to the process dir", () => {
+    expect(initialAppState({ ui: { showHidden: false } } as any).cwd).toBe(process.cwd());
   });
 });
