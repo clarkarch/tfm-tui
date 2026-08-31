@@ -2,7 +2,7 @@
 
 A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails right inside your terminal
 
-![alpha](https://img.shields.io/badge/status-alpha-red) [🌐 Website](https://clarkarch.github.io/tfm-tui/)
+![alpha](https://img.shields.io/badge/status-alpha-red) [![website](https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white)](https://clarkarch.github.io/tfm-tui/)
 
 > [!WARNING]
 > Experimental vibecoded software — expect rough edges. Don't test on files you can't afford to lose. If you want to test safely, use Podman: `podman run --rm -it archlinux bash`
