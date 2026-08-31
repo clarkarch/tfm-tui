@@ -4,7 +4,9 @@
 import { appendFileSync } from "node:fs";
 
 export const isDebug = process.argv.includes("--debug") || process.argv.includes("-d");
-export const DEBUG_LOG = "/tmp/tfm-debug.log";
+// env overrides exist so tests (and sandboxes) can redirect the logs off the
+// real /tmp files; defaults are the documented tester-paste paths
+export const DEBUG_LOG = process.env.TFM_DEBUG_LOG ?? "/tmp/tfm-debug.log";
 
 export const appendLog = (msg: string): void => {
   try {
@@ -22,7 +24,7 @@ export const debugLog = (msg: string): void => {
 // a "Moved 0 items" toast can be traced backwards. Always-on (cheap appends),
 // mirrored into the debug event log under --debug. ---
 
-export const DND_LOG = "/tmp/tfm-dnd.log";
+export const DND_LOG = process.env.TFM_DND_LOG ?? "/tmp/tfm-dnd.log";
 
 export const dlog = (msg: string): void => {
   try {
