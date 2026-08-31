@@ -25,5 +25,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
+  "include": ["src", "scripts"],
   "exclude": ["node_modules", "dist", "opentui", "nautilus", ".agents"]
 }

@@ -1,14 +1,14 @@
 {
   "name": "tfm-tui",
   "version": "0.1.0-alpha.11",
-  "module": "src/index.tsx",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm",
     "test": "bun test src/*.test.ts",
-    "typecheck": "tsc --noEmit --strict --target esnext --module esnext --moduleResolution bundler --skipLibCheck src/index.ts src/*.test.ts"
+    "test:watch": "bun test --watch src/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest"

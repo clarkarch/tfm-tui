@@ -201,14 +201,14 @@ describe("makeTrashConfirms", () => {
   test("delete-forever prompt pluralizes and carries the paths into the action", () => {
     const { asked, confirms, runYes, fired } = mkEnv();
     confirms.confirmDeleteForever(["/t/a"]);
-    expect(asked[0].message).toBe("Permanently delete 1 item?");
-    expect(asked[0].yesLabel).toBe("Delete");
-    expect(asked[0].danger).toBe(true);
+    expect(asked[0]!.message).toBe("Permanently delete 1 item?");
+    expect(asked[0]!.yesLabel).toBe("Delete");
+    expect(asked[0]!.danger).toBe(true);
     runYes();
     expect(fired).toEqual(["delete:/t/a"]);
 
     confirms.confirmDeleteForever(["/t/a", "/t/b"]);
-    expect(asked[1].message).toBe("Permanently delete 2 items?");
+    expect(asked[1]!.message).toBe("Permanently delete 2 items?");
     runYes();
     expect(fired).toEqual(["delete:/t/a", "delete:/t/a,/t/b"]);
   });
