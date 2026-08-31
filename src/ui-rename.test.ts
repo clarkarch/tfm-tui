@@ -8,7 +8,9 @@ import { tileLabelFor, uniqueUntitledName } from "./ui-rename";
 // exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
 const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), prefix));
 const dir = mktmp("tfm-rename-");
-afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
+afterAll(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe("uniqueUntitledName", () => {
   test("base name is free -> returned as-is", () => {

@@ -29,7 +29,7 @@ export type TermCtx = {
   cwd(): string;
   virtualCwd(): boolean;
   home: string;
-  finishDrag(): void;                 // ends an internal drag (finishDragState)
+  finishDrag(): void; // ends an internal drag (finishDragState)
   dlog(msg: string): void;
 };
 
@@ -51,9 +51,9 @@ export const terminalProbeReply = (buf: string): { resp: string; tail: string } 
   // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the byte terminals send
   if (/\x1b\[[0-9]*c/.test(buf)) resp += "\x1b[?62;1;2;6;9;15;22c"; // DA1 (tmux-style vt320)
   // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the byte terminals send
-  if (/\x1b\[>[0-9]*c/.test(buf)) resp += "\x1b[>0;0;0c";           // secondary DA
+  if (/\x1b\[>[0-9]*c/.test(buf)) resp += "\x1b[>0;0;0c"; // secondary DA
   // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the byte terminals send
-  if (/\x1b\[5n/.test(buf)) resp += "\x1b[0n";                      // device status OK
+  if (/\x1b\[5n/.test(buf)) resp += "\x1b[0n"; // device status OK
   // biome-ignore lint/suspicious/noControlCharactersInRegex: partial-ESC tail detection
   const tail = /(?:\x1b|\x1b\[|\x1b\[>)[0-9=>]*$/.test(buf) ? buf.slice(-8) : "";
   return { resp, tail };
@@ -105,10 +105,7 @@ export type PtyScreenState = { mouse: boolean; alt: boolean };
 
 // scan PTY output for DECSET/DECRST 1000/1002/1003 (mouse reporting) and 1049
 // (alt screen). Sequences may split across chunks — the caller carries `tail`.
-export const ptyScreenState = (
-  chunk: string,
-  prev: PtyScreenState,
-): { state: PtyScreenState; tail: string } => {
+export const ptyScreenState = (chunk: string, prev: PtyScreenState): { state: PtyScreenState; tail: string } => {
   const state = { ...prev };
   // biome-ignore lint/suspicious/noControlCharactersInRegex: DECSET sequences are literal control bytes
   const re = /\x1b\[\?(1000|1002|1003|1049)(h|l)/g;
@@ -151,8 +148,7 @@ export const makeTerminal = (ctx: TermCtx) => {
 
   // the flag can lag reality (click-refocus inside the pane bypasses our focus()
   // call) — ask the renderer who owns the keyboard before acting on keys
-  const termHasFocus = (): boolean =>
-    !!term && ctx.renderer.currentFocusedRenderable === (term as any);
+  const termHasFocus = (): boolean => !!term && ctx.renderer.currentFocusedRenderable === (term as any);
 
   // drop-target cue: light the header while an internal drag hovers the pane
   // (rest fill follows the ui-style seam — none in outline mode)
@@ -163,9 +159,14 @@ export const makeTerminal = (ctx: TermCtx) => {
     if (!header) return;
     try {
       const colors = ctx.colors();
-      applySurface(header, hot
-        ? { backgroundColor: colors.hoverBg }
-        : ctx.uiStyle() === "solid" ? { backgroundColor: colors.sidebarBg } : {});
+      applySurface(
+        header,
+        hot
+          ? { backgroundColor: colors.hoverBg }
+          : ctx.uiStyle() === "solid"
+            ? { backgroundColor: colors.sidebarBg }
+            : {},
+      );
     } catch {}
   };
 
@@ -174,10 +175,19 @@ export const makeTerminal = (ctx: TermCtx) => {
   // (finishDragState nulls it), same order as the place/tab drop handlers.
   const handleTermDrop = (): void => {
     const keys = gridDrag.keys;
-    const pty: any = termChild ? (termChild as any)?.terminal ?? null : null;
-    pasteDroppedPaths(pty ? keys?.map((k) => k.path) ?? null : null, {
-      ptyWrite: (s) => { try { pty.write(new TextEncoder().encode(s)); } catch {} },
-      focusTerm: () => { try { term?.focus(); termFocused = true; } catch {} },
+    const pty: any = termChild ? ((termChild as any)?.terminal ?? null) : null;
+    pasteDroppedPaths(pty ? (keys?.map((k) => k.path) ?? null) : null, {
+      ptyWrite: (s) => {
+        try {
+          pty.write(new TextEncoder().encode(s));
+        } catch {}
+      },
+      focusTerm: () => {
+        try {
+          term?.focus();
+          termFocused = true;
+        } catch {}
+      },
       finishDrag: ctx.finishDrag,
       paintCue: paintHeaderCue,
       log: (m) => ctx.dlog(m),
@@ -203,12 +213,16 @@ export const makeTerminal = (ctx: TermCtx) => {
       screen.lines[screen.cursor.y] ?? "",
     );
     if (!bytes) return;
-    try { (termChild as any)?.terminal?.write(new TextEncoder().encode(bytes)); } catch {}
+    try {
+      (termChild as any)?.terminal?.write(new TextEncoder().encode(bytes));
+    } catch {}
   };
 
   const blurTerminal = (): void => {
     if (!termFocused) return;
-    try { term?.blur(); } catch {}
+    try {
+      term?.blur();
+    } catch {}
     termFocused = false;
   };
 
@@ -224,21 +238,31 @@ export const makeTerminal = (ctx: TermCtx) => {
       const osc4 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
         .map((i) => `${i};${spec((colors as any)[`ansi${i}`] ?? colors.white)}`)
         .join(";");
-      term.write(new Uint8Array([
-        ...enc.encode(`\x1b]4;${osc4}\x1b\\`),
-        ...enc.encode(`\x1b]10;${spec(colors.white)}\x1b\\`),
-        ...enc.encode(`\x1b]11;${spec(colors.bg)}\x1b\\`),
-        ...enc.encode(`\x1b]12;${spec(colors.accent)}\x1b\\`),
-      ]));
+      term.write(
+        new Uint8Array([
+          ...enc.encode(`\x1b]4;${osc4}\x1b\\`),
+          ...enc.encode(`\x1b]10;${spec(colors.white)}\x1b\\`),
+          ...enc.encode(`\x1b]11;${spec(colors.bg)}\x1b\\`),
+          ...enc.encode(`\x1b]12;${spec(colors.accent)}\x1b\\`),
+        ]),
+      );
     } catch {}
   };
 
   const closeTerminalPane = (): void => {
-    try { term?.blur(); } catch {};
-    try { termChild?.kill(); } catch {};
-    try { (termChild as any)?.terminal?.close(); } catch {};
+    try {
+      term?.blur();
+    } catch {}
+    try {
+      termChild?.kill();
+    } catch {}
+    try {
+      (termChild as any)?.terminal?.close();
+    } catch {}
     termChild = null;
-    try { term?.destroy(); } catch {};
+    try {
+      term?.destroy();
+    } catch {}
     term = null;
     termFocused = false;
     headerHot = false;
@@ -250,9 +274,15 @@ export const makeTerminal = (ctx: TermCtx) => {
       clearChildren(host);
       host.height = 0;
       // the pane is gone — the host must stop acting as a drop target
-      try { host.onMouseOver = undefined; } catch {}
-      try { host.onMouseOut = undefined; } catch {}
-      try { host.onMouseDrop = undefined; } catch {}
+      try {
+        host.onMouseOver = undefined;
+      } catch {}
+      try {
+        host.onMouseOut = undefined;
+      } catch {}
+      try {
+        host.onMouseDrop = undefined;
+      } catch {}
     }
     ctx.renderAll();
   };
@@ -272,19 +302,36 @@ export const makeTerminal = (ctx: TermCtx) => {
 
   const openTerminalHere = (dir?: string): void => {
     if (!ctx.renderer.resolution) return;
-    if (term) { try { term.focus(); } catch {}; termFocused = true; return; }
+    if (term) {
+      try {
+        term.focus();
+      } catch {}
+      termFocused = true;
+      return;
+    }
     const host: any = ctx.byId("tfm-term-host");
     if (!host) return;
     // the host box is the pane's drop target: over/out give the drag-hover cue,
     // drop pastes the payload into the PTY (see handleTermDrop)
-    host.onMouseOver = () => { if (gridDrag.active) paintHeaderCue(true); };
-    host.onMouseOut = () => { paintHeaderCue(false); };
+    host.onMouseOver = () => {
+      if (gridDrag.active) paintHeaderCue(true);
+    };
+    host.onMouseOut = () => {
+      paintHeaderCue(false);
+    };
     host.onMouseDrop = handleTermDrop;
     const colors = ctx.colors();
     const cwd = dir ?? (ctx.virtualCwd() ? ctx.home : ctx.cwd());
     host.height = TERM_H + 1;
     const header = Box(
-      { id: "tfm-term-header", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, ...(ctx.uiStyle() === "outline" ? {} : { backgroundColor: colors.sidebarBg }) },
+      {
+        id: "tfm-term-header",
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        paddingLeft: 1,
+        ...(ctx.uiStyle() === "outline" ? {} : { backgroundColor: colors.sidebarBg }),
+      },
       Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
       Box({ flexGrow: 1 }),
       ctx.escHintBtn("tfm-esc-term", closeTerminalPane),
@@ -300,11 +347,15 @@ export const makeTerminal = (ctx: TermCtx) => {
         (termChild as any)?.terminal?.write(data);
       },
       onTerminalResize: (cols: number, rows: number) => {
-        try { (termChild as any)?.terminal?.resize(cols, rows); } catch {}
+        try {
+          (termChild as any)?.terminal?.resize(cols, rows);
+        } catch {}
       },
       // the bridge tracks press→release movement itself (a plain click still
       // reports isDragging on up — Selection defaults it to true)
-      onMouseDown: (ev: any) => { downCell = { x: ev.x, y: ev.y }; },
+      onMouseDown: (ev: any) => {
+        downCell = { x: ev.x, y: ev.y };
+      },
       onMouseUp: (ev: any) => {
         const wasClick = !!downCell && downCell.x === ev.x && downCell.y === ev.y;
         downCell = null;
@@ -328,7 +379,9 @@ export const makeTerminal = (ctx: TermCtx) => {
             const scan = ptyScreenState(ptyScanTail + new TextDecoder().decode(data), ptyScreen);
             ptyScreen = scan.state;
             ptyScanTail = scan.tail;
-            try { term?.write(data); } catch {}
+            try {
+              term?.write(data);
+            } catch {}
           },
         },
       } as any);
@@ -337,16 +390,32 @@ export const makeTerminal = (ctx: TermCtx) => {
       closeTerminalPane();
       return;
     }
-    termChild.exited.then(() => { if (termChild) closeTerminalPane(); }).catch(() => {});
+    termChild.exited
+      .then(() => {
+        if (termChild) closeTerminalPane();
+      })
+      .catch(() => {});
     syncTerminalTheme();
     void ctx.drainIconQueue();
     ctx.renderAll();
     setTimeout(() => {
-      try { term?.focus(); termFocused = true; } catch {}
+      try {
+        term?.focus();
+        termFocused = true;
+      } catch {}
       // early prompt bytes can compose before first layout — force a full redraw
-      try { term?.invalidate(); } catch {}
+      try {
+        term?.invalidate();
+      } catch {}
     }, 30);
   };
 
-  return { openTerminalHere, closeTerminalPane, syncTerminalTheme, termHasFocus, blurTerminal, ownsKeyboard: () => termFocused || termHasFocus() };
+  return {
+    openTerminalHere,
+    closeTerminalPane,
+    syncTerminalTheme,
+    termHasFocus,
+    blurTerminal,
+    ownsKeyboard: () => termFocused || termHasFocus(),
+  };
 };

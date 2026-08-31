@@ -79,9 +79,18 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         width: 3,
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
-        onMouseDown: () => { ctx.closeFileMenu(); onActivate(); },
-        onMouseOver: () => { navHover[id] = true; refreshNav(); },
-        onMouseOut: () => { navHover[id] = false; refreshNav(); },
+        onMouseDown: () => {
+          ctx.closeFileMenu();
+          onActivate();
+        },
+        onMouseOver: () => {
+          navHover[id] = true;
+          refreshNav();
+        },
+        onMouseOut: () => {
+          navHover[id] = false;
+          refreshNav();
+        },
       },
       slot.el,
     );
@@ -162,10 +171,18 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           return prevHandler ? prevHandler(key) : false;
         };
       } else {
-        try { input.value = isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()); } catch {}
+        try {
+          input.value = isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd());
+        } catch {}
       }
-      try { input.visible = true; } catch {}
-      setTimeout(() => { try { input.focus(); } catch {} }, 20);
+      try {
+        input.visible = true;
+      } catch {}
+      setTimeout(() => {
+        try {
+          input.focus();
+        } catch {}
+      }, 20);
       ctx.stripSelectable();
       return;
     }
@@ -174,16 +191,22 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     ctx.clearChildren(box);
 
     const cwdAbs = path.resolve(ctx.cwd());
-    const virtCrumb = ctx.cwd() === RECENT_URI
-      ? { label: "Recent", icon: "clock" }
-      : ctx.cwd() === STARRED_URI
-      ? { label: "Starred", icon: "star" }
-      : null;
+    const virtCrumb =
+      ctx.cwd() === RECENT_URI
+        ? { label: "Recent", icon: "clock" }
+        : ctx.cwd() === STARRED_URI
+          ? { label: "Starred", icon: "star" }
+          : null;
     const inHome = !virtCrumb && (cwdAbs === ctx.home || cwdAbs.startsWith(ctx.home + path.sep));
     const baseLabel = virtCrumb ? virtCrumb.label : inHome ? "Home" : os.hostname();
     const baseIcon = virtCrumb ? virtCrumb.icon! : inHome ? "home" : "desktop-tower";
     const basePath = virtCrumb ? ctx.cwd() : inHome ? ctx.home : "/";
-    const rest = virtCrumb ? [] : path.relative(inHome ? ctx.home : "/", cwdAbs).split(path.sep).filter(Boolean);
+    const rest = virtCrumb
+      ? []
+      : path
+          .relative(inHome ? ctx.home : "/", cwdAbs)
+          .split(path.sep)
+          .filter(Boolean);
 
     const crumbs: { label: string; icon?: string; target: string }[] = [
       { label: baseLabel, icon: baseIcon, target: basePath },
@@ -234,11 +257,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
 
   // --- generic hover button: two baked rasters (normal/hover bg), wrapper box
   // bg matches so the padding cells track the raster ---
-  const hoverBtn = (
-    id: string,
-    iconName: string,
-    onMouseDown: (ev: any) => void,
-  ): ReturnType<typeof Box> => {
+  const hoverBtn = (id: string, iconName: string, onMouseDown: (ev: any) => void): ReturnType<typeof Box> => {
     const states = (): IconState[] => [
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().bg },
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().hoverBg },
@@ -301,7 +320,15 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
 
   const makeToolbarShell = (): ReturnType<typeof Box> =>
     Box(
-      { id: "tfm-toolbar", width: "100%", height: 1, flexDirection: "row", paddingLeft: 1, paddingRight: 1, columnGap: 1 },
+      {
+        id: "tfm-toolbar",
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        paddingLeft: 1,
+        paddingRight: 1,
+        columnGap: 1,
+      },
       Box(
         { height: 1, flexGrow: 1, flexBasis: 0, overflow: "hidden", flexDirection: "row", columnGap: 1 },
         makeNavButton("tfm-nav-back", "chevron-left", ctx.goBack),

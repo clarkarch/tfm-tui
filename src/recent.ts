@@ -14,7 +14,11 @@ const xbelPath = (): string => path.join(xdgDataHome(), "recently-used.xbel");
 
 export const readRecentXbel = (): XbelItem[] => {
   let xml = "";
-  try { xml = readFileSync(xbelPath(), "utf8"); } catch { return []; }
+  try {
+    xml = readFileSync(xbelPath(), "utf8");
+  } catch {
+    return [];
+  }
   const out: XbelItem[] = [];
   const bmRe = /<bookmark\b[^>]*href="([^"]+)"[^>]*>/g;
   let m: RegExpExecArray | null;
@@ -41,7 +45,9 @@ export const readRecentXbel = (): XbelItem[] => {
 export const upsertRecentXbel = async (paths: string[]): Promise<void> => {
   try {
     let xml = "";
-    try { xml = await readFile(xbelPath(), "utf8"); } catch {}
+    try {
+      xml = await readFile(xbelPath(), "utf8");
+    } catch {}
     const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     type Kept = { uri: string; block: string };
     const kept: Kept[] = [];
@@ -79,7 +85,10 @@ export const upsertRecentXbel = async (paths: string[]): Promise<void> => {
       xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"
       xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info">
 `;
-    const body = kept.slice(-500).map((k) => k.block).join("\n");
+    const body = kept
+      .slice(-500)
+      .map((k) => k.block)
+      .join("\n");
     await writeFile(xbelPath(), `${head}${body}\n</xbel>\n`, "utf8");
   } catch {}
 };
@@ -94,7 +103,9 @@ export const readStarredList = (): string[] => {
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean);
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 };
 
 export const writeStarredList = async (paths: string[]): Promise<void> => {
@@ -104,7 +115,9 @@ export const writeStarredList = async (paths: string[]): Promise<void> => {
   } catch {}
 };
 
-export const starredRegistryAdd = (p: string): void => { void writeStarredList([...readStarredList(), p]); };
+export const starredRegistryAdd = (p: string): void => {
+  void writeStarredList([...readStarredList(), p]);
+};
 export const starredRegistryRemove = (p: string): void => {
   void writeStarredList(readStarredList().filter((x) => x !== p));
 };

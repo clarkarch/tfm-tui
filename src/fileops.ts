@@ -8,7 +8,15 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { rm, rename as fsRename } from "node:fs/promises";
-import { fsErrText, fsMove, safeRestoreMove, trashDir, uniqueTarget, xdgTrashMove, crossDevice as fsCrossDevice } from "./fsutil";
+import {
+  fsErrText,
+  fsMove,
+  safeRestoreMove,
+  trashDir,
+  uniqueTarget,
+  xdgTrashMove,
+  crossDevice as fsCrossDevice,
+} from "./fsutil";
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import type { ConflictChoice } from "./ui-dialogs";
@@ -54,10 +62,18 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     },
     paused: () => prog.paused,
     cancelled: () => prog.cancelled,
-    addBytes: (n) => { prog.bytes += n; },
-    fileDone: () => { prog.doneFiles++; },
-    setStream: (rs) => { prog.currentRs = rs; },
-    clearStream: (rs) => { if (prog.currentRs === rs) prog.currentRs = null; },
+    addBytes: (n) => {
+      prog.bytes += n;
+    },
+    fileDone: () => {
+      prog.doneFiles++;
+    },
+    setStream: (rs) => {
+      prog.currentRs = rs;
+    },
+    clearStream: (rs) => {
+      if (prog.currentRs === rs) prog.currentRs = null;
+    },
     repaint: (full) => ctx.paintProgress(full),
   };
   const copyTreeProgressWired = (src: string, dest: string): Promise<void> => copyTreeProgress(src, dest, transferSink);
@@ -69,7 +85,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     conflict.resetPolicy();
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
-    let ok = 0, skipped = 0, replaced = 0, failed = 0, gone = 0;
+    let ok = 0,
+      skipped = 0,
+      replaced = 0,
+      failed = 0,
+      gone = 0;
     const failWhy = new Set<string>();
     const total = srcs.length;
     // moves across a filesystem boundary go through the copy engine too
@@ -83,9 +103,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       prog.doneFiles = 0;
       prog.bytes = 0;
       prog.verb = op === "copy" ? "copying" : "moving";
-      let files = 0, bytes = 0;
+      let files = 0,
+        bytes = 0;
       for (const s of srcs) {
-        try { const r = await scanTreeWired(s); files += r.files; bytes += r.bytes; } catch {}
+        try {
+          const r = await scanTreeWired(s);
+          files += r.files;
+          bytes += r.bytes;
+        } catch {}
       }
       prog.totalFiles = files || Math.max(1, total);
       prog.totalBytes = bytes;
@@ -98,69 +123,112 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     }
     let cancelled = false;
     try {
-    for (const src of srcs) {
-      if (cancelled || prog.cancelled) { cancelled = true; break; }
-      await ctx.pauseGate();
-      // source vanished since it was copied/cut — report clearly instead of a
-      // cryptic mid-transfer ENOENT
-      if (!existsSync(src)) { gone++; skipped++; continue; }
-      const base = path.basename(src);
-      let target = path.join(destDir, base);
-      // nautilus semantics: paste-in-place never asks, it just makes "name (copy)"
-      if (target === src && op === "copy") { target = uniqueTarget(destDir, base); }
-      else if (target === src) { skipped++; continue; }
-      else if (existsSync(target)) {
-        const done = ok + skipped;
-        const choice = conflict.policy() ?? await conflict.promptConflict(target, Math.max(0, total - done - 1));
-        if (choice === "skip") { skipped++; continue; }
-        if (choice === "keepBoth") target = uniqueTarget(destDir, base);
-        else {
-          // stash the victim in the trash so ctrl+z can bring it back;
-          // re-check first — the target may have vanished while the prompt was up
-          try {
-            if (existsSync(target)) {
-              const victimDest = target;
-              const trashLoc = await xdgTrashMove(victimDest);
-              units.push(async () => {
-                await safeRestoreMove(trashLoc, victimDest);
-                try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch (err) { ctx.log(`undo replace ${victimDest}: ${fsErrText(err)}`); }
-              });
-              replaced++;
+      for (const src of srcs) {
+        if (cancelled || prog.cancelled) {
+          cancelled = true;
+          break;
+        }
+        await ctx.pauseGate();
+        // source vanished since it was copied/cut — report clearly instead of a
+        // cryptic mid-transfer ENOENT
+        if (!existsSync(src)) {
+          gone++;
+          skipped++;
+          continue;
+        }
+        const base = path.basename(src);
+        let target = path.join(destDir, base);
+        // nautilus semantics: paste-in-place never asks, it just makes "name (copy)"
+        if (target === src && op === "copy") {
+          target = uniqueTarget(destDir, base);
+        } else if (target === src) {
+          skipped++;
+          continue;
+        } else if (existsSync(target)) {
+          const done = ok + skipped;
+          const choice = conflict.policy() ?? (await conflict.promptConflict(target, Math.max(0, total - done - 1)));
+          if (choice === "skip") {
+            skipped++;
+            continue;
+          }
+          if (choice === "keepBoth") target = uniqueTarget(destDir, base);
+          else {
+            // stash the victim in the trash so ctrl+z can bring it back;
+            // re-check first — the target may have vanished while the prompt was up
+            try {
+              if (existsSync(target)) {
+                const victimDest = target;
+                const trashLoc = await xdgTrashMove(victimDest);
+                units.push(async () => {
+                  await safeRestoreMove(trashLoc, victimDest);
+                  try {
+                    await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`));
+                  } catch (err) {
+                    ctx.log(`undo replace ${victimDest}: ${fsErrText(err)}`);
+                  }
+                });
+                replaced++;
+              }
+            } catch (err) {
+              failWhy.add(fsErrText(err));
+              ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — proceeding without undo`);
             }
-          } catch (err) { failWhy.add(fsErrText(err)); ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — proceeding without undo`); }
+          }
+        }
+        // per-iteration: did THIS src go through the streaming copy engine?
+        // (cross-device moves need the same half-copy cleanup real copies get)
+        let copiedHere = false;
+        try {
+          if (op === "copy") {
+            copiedHere = true;
+            await copyTreeProgressWired(src, target);
+          } else if (isCrossDevice(src, destDir)) {
+            copiedHere = true;
+            await copyTreeProgressWired(src, target);
+            // cancel raced the final byte: copy completed but the source must
+            // survive a cancelled move — surface as cancelled, drop the copy
+            if (prog.cancelled) throw new Error("cancelled");
+            await rm(src, { recursive: true });
+          } else await fsMove(src, target);
+          const t = target,
+            s = src;
+          if (op === "copy") {
+            units.push(() => xdgTrashMove(t).then(() => undefined));
+            redos.push(async () => {
+              try {
+                if (!existsSync(t)) await copyTreeProgressWired(src, t);
+              } catch (err) {
+                ctx.log(`redo copy ${t}: ${fsErrText(err)}`);
+              }
+            });
+          } else {
+            units.push(() => safeRestoreMove(t, s));
+            redos.push(async () => {
+              try {
+                if (existsSync(s) && !existsSync(t)) await fsMove(s, t);
+              } catch (err) {
+                ctx.log(`redo move ${t}: ${fsErrText(err)}`);
+              }
+            });
+          }
+          ok++;
+        } catch (err) {
+          // don't leave half-copied files behind (copies AND cross-device moves)
+          if (op === "copy" || copiedHere) {
+            try {
+              await rm(target, { recursive: true });
+            } catch (cleanup) {
+              ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`);
+            }
+          }
+          if (prog.cancelled) {
+            cancelled = true;
+            break;
+          }
+          failed++;
+          failWhy.add(fsErrText(err));
         }
       }
-      // per-iteration: did THIS src go through the streaming copy engine?
-      // (cross-device moves need the same half-copy cleanup real copies get)
-      let copiedHere = false;
-      try {
-        if (op === "copy") { copiedHere = true; await copyTreeProgressWired(src, target); }
-        else if (isCrossDevice(src, destDir)) {
-          copiedHere = true;
-          await copyTreeProgressWired(src, target);
-          // cancel raced the final byte: copy completed but the source must
-          // survive a cancelled move — surface as cancelled, drop the copy
-          if (prog.cancelled) throw new Error("cancelled");
-          await rm(src, { recursive: true });
-        }
-        else await fsMove(src, target);
-        const t = target, s = src;
-        if (op === "copy") {
-          units.push(() => xdgTrashMove(t).then(() => undefined));
-          redos.push(async () => { try { if (!existsSync(t)) await copyTreeProgressWired(src, t); } catch (err) { ctx.log(`redo copy ${t}: ${fsErrText(err)}`); } });
-        } else {
-          units.push(() => safeRestoreMove(t, s));
-          redos.push(async () => { try { if (existsSync(s) && !existsSync(t)) await fsMove(s, t); } catch (err) { ctx.log(`redo move ${t}: ${fsErrText(err)}`); } });
-        }
-        ok++;
-      } catch (err) {
-        // don't leave half-copied files behind (copies AND cross-device moves)
-        if (op === "copy" || copiedHere) { try { await rm(target, { recursive: true }); } catch (cleanup) { ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`); } }
-        if (prog.cancelled) { cancelled = true; break; }
-        failed++;
-        failWhy.add(fsErrText(err));
-      }
-    }
     } finally {
       prog.active = false;
     }
@@ -191,7 +259,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // silently overwrite the existing file
   const performRename = async (p: string, v: string): Promise<void> => {
     const dest = path.join(path.dirname(p), v);
-    if (path.resolve(dest) === path.resolve(p)) { ctx.renderAll(); return; }
+    if (path.resolve(dest) === path.resolve(p)) {
+      ctx.renderAll();
+      return;
+    }
     let finalDest = dest;
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
@@ -207,15 +278,27 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           const trashLoc = await xdgTrashMove(victim);
           units.push(async () => {
             await safeRestoreMove(trashLoc, victim);
-            try { await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`)); } catch (err) { ctx.log(`undo replace ${victim}: ${fsErrText(err)}`); }
+            try {
+              await rm(path.join(trashDir(), "info", `${path.basename(trashLoc)}.trashinfo`));
+            } catch (err) {
+              ctx.log(`undo replace ${victim}: ${fsErrText(err)}`);
+            }
           });
-        } catch (err) { ctx.log(`replace stash failed ${finalDest}: ${fsErrText(err)} — proceeding without undo`); }
+        } catch (err) {
+          ctx.log(`replace stash failed ${finalDest}: ${fsErrText(err)} — proceeding without undo`);
+        }
       }
     }
     try {
       await fsRename(p, finalDest);
       units.push(() => fsRename(finalDest, p));
-      redos.push(async () => { try { if (existsSync(p) && !existsSync(finalDest)) await fsRename(p, finalDest); } catch (err) { ctx.log(`redo rename ${finalDest}: ${fsErrText(err)}`); } });
+      redos.push(async () => {
+        try {
+          if (existsSync(p) && !existsSync(finalDest)) await fsRename(p, finalDest);
+        } catch (err) {
+          ctx.log(`redo rename ${finalDest}: ${fsErrText(err)}`);
+        }
+      });
       ctx.pushUndoBatch("rename", units, redos);
       ctx.renderAll();
       ctx.setStatusMsg(`Renamed to ${path.basename(finalDest)} · ctrl+z to undo`);
@@ -239,7 +322,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const setClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
     clipboard = items.length ? { mode, items } : null;
     if (clipboard) toSystemClipboard(mode, items);
-    ctx.setStatusMsg(clipboard ? `${mode === "cut" ? "Cut" : "Copied"} ${items.length} item${items.length === 1 ? "" : "s"}` : "");
+    ctx.setStatusMsg(
+      clipboard ? `${mode === "cut" ? "Cut" : "Copied"} ${items.length} item${items.length === 1 ? "" : "s"}` : "",
+    );
     ctx.refreshCutVisuals();
   };
 
@@ -267,7 +352,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const srcs = items
       .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
       .map((it) => it.path);
-    ctx.log(`moveInto dest=${destDir} in=${items.length} out=${srcs.length} dropped=[${items.filter((it) => it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))).map((it) => it.path.split("/").pop()).join(",")}]`);
+    ctx.log(
+      `moveInto dest=${destDir} in=${items.length} out=${srcs.length} dropped=[${items
+        .filter((it) => it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep)))
+        .map((it) => it.path.split("/").pop())
+        .join(",")}]`,
+    );
     await runTransfer("move", destDir, srcs, `move to ${path.basename(destDir) || "/"}`);
   };
 

@@ -25,7 +25,19 @@ describe("makeUndo", () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     const ran: string[] = [];
-    undo.pushUndoBatch("op", [() => { ran.push("u1"); }], [() => { ran.push("r1"); }]);
+    undo.pushUndoBatch(
+      "op",
+      [
+        () => {
+          ran.push("u1");
+        },
+      ],
+      [
+        () => {
+          ran.push("r1");
+        },
+      ],
+    );
     undo.undoLast();
     await settle();
     expect(undo.redoDepth()).toBe(1);
@@ -38,7 +50,11 @@ describe("makeUndo", () => {
     const undo = makeUndo(sink);
     const ran: string[] = [];
     for (let i = 0; i < MAX_UNDO_BATCHES + 5; i++) {
-      undo.pushUndoBatch(`op ${i}`, [() => { ran.push(String(i)); }]);
+      undo.pushUndoBatch(`op ${i}`, [
+        () => {
+          ran.push(String(i));
+        },
+      ]);
     }
     expect(undo.undoDepth()).toBe(MAX_UNDO_BATCHES);
     // oldest five (op 0..4) were shifted — next undo reverses the newest
@@ -53,7 +69,17 @@ describe("makeUndo", () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     const ran: string[] = [];
-    undo.pushUndoBatch("batch", [() => { ran.push("a"); }, () => { ran.push("b"); }, () => { ran.push("c"); }]);
+    undo.pushUndoBatch("batch", [
+      () => {
+        ran.push("a");
+      },
+      () => {
+        ran.push("b");
+      },
+      () => {
+        ran.push("c");
+      },
+    ]);
     undo.undoLast();
     await settle();
     expect(ran).toEqual(["c", "b", "a"]);
@@ -82,10 +108,16 @@ describe("makeUndo", () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     const boom = Object.assign(new Error("nope"), { code: "EACCES" });
-    undo.pushUndoBatch("messy", [
-      () => { throw boom; },
-      () => {},
-    ], [() => {}]);
+    undo.pushUndoBatch(
+      "messy",
+      [
+        () => {
+          throw boom;
+        },
+        () => {},
+      ],
+      [() => {}],
+    );
     undo.undoLast();
     await settle();
     // failed runs get no ctrl+y hint (original behavior) but stay redoable
@@ -98,7 +130,19 @@ describe("makeUndo", () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     const ran: string[] = [];
-    undo.pushUndoBatch("op", [() => { ran.push("u"); }], [() => { ran.push("r"); }]);
+    undo.pushUndoBatch(
+      "op",
+      [
+        () => {
+          ran.push("u");
+        },
+      ],
+      [
+        () => {
+          ran.push("r");
+        },
+      ],
+    );
     undo.undoLast();
     await settle();
     undo.redoLast();
@@ -122,7 +166,15 @@ describe("makeUndo", () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     const boom = Object.assign(new Error("gone"), { code: "ENOENT" });
-    undo.pushUndoBatch("op", [() => {}], [() => { throw boom; }]);
+    undo.pushUndoBatch(
+      "op",
+      [() => {}],
+      [
+        () => {
+          throw boom;
+        },
+      ],
+    );
     undo.undoLast();
     await settle();
     undo.redoLast();

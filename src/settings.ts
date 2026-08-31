@@ -10,8 +10,25 @@ export type SettingRow =
   // colors — their adjust re-renders the panel; other value rows update their
   // value text by id (targeted, no rebuild — see the OOM note in AGENTS.md)
   | { kind: "toggle"; label: string; repaint?: boolean; get: () => boolean; set: (v: boolean) => void }
-  | { kind: "stepper"; label: string; repaint?: boolean; min: number; max: number; step: number; fmt: (v: number) => string; get: () => number; set: (v: number) => void }
-  | { kind: "cycle"; label: string; repaint?: boolean; names: string[]; getIdx: () => number; setIdx: (i: number) => void }
+  | {
+      kind: "stepper";
+      label: string;
+      repaint?: boolean;
+      min: number;
+      max: number;
+      step: number;
+      fmt: (v: number) => string;
+      get: () => number;
+      set: (v: number) => void;
+    }
+  | {
+      kind: "cycle";
+      label: string;
+      repaint?: boolean;
+      names: string[];
+      getIdx: () => number;
+      setIdx: (i: number) => void;
+    }
   // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
   | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
   | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
@@ -24,10 +41,15 @@ export const flattenRows = (groups: SettingGroup[]): SettingRow[] => groups.flat
 // rows, steppers pinned at min/max)
 export const applyAdjust = (row: SettingRow, dir: number): boolean => {
   switch (row.kind) {
-    case "toggle": row.set(!row.get()); return true;
+    case "toggle":
+      row.set(!row.get());
+      return true;
     case "stepper": {
       const next = Math.max(row.min, Math.min(row.max, row.get() + dir * row.step));
-      if (next !== row.get()) { row.set(next); return true; }
+      if (next !== row.get()) {
+        row.set(next);
+        return true;
+      }
       return false;
     }
     case "cycle": {
@@ -37,7 +59,8 @@ export const applyAdjust = (row: SettingRow, dir: number): boolean => {
       row.setIdx(next);
       return true;
     }
-    default: return false;
+    default:
+      return false;
   }
 };
 

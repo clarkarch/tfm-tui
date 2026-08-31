@@ -98,8 +98,13 @@ describe("fileIsVideo", () => {
 describe("FILE_ICON_BY_EXT integrity", () => {
   test("every value is one of the known icon-name categories", () => {
     const known = new Set([
-      "file-code", "file-document", "file-image", "file-video",
-      "file-music", "zip-box", "file-pdf-box",
+      "file-code",
+      "file-document",
+      "file-image",
+      "file-video",
+      "file-music",
+      "zip-box",
+      "file-pdf-box",
     ]);
     for (const cat of Object.values(FILE_ICON_BY_EXT)) expect(known.has(cat)).toBe(true);
   });

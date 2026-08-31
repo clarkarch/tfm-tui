@@ -17,7 +17,11 @@ export const makeStatus = (ctx: StatusCtx) => {
 
   const setStatusMsg = (text: string): void => {
     const status: any = ctx.byId("tfm-status-label");
-    if (status) { try { status.content = text; } catch {} }
+    if (status) {
+      try {
+        status.content = text;
+      } catch {}
+    }
     clearStatusMsg();
   };
 

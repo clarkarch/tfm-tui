@@ -15,7 +15,10 @@ const SANDBOX = mktmp("tfm-listing-");
 let oldData: string | undefined;
 let oldState: string | undefined;
 
-const W = (p: string, s = "x") => { mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, s); };
+const W = (p: string, s = "x") => {
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, s);
+};
 
 beforeAll(() => {
   oldData = process.env.XDG_DATA_HOME;
@@ -25,8 +28,10 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (oldData === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = oldData;
-  if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
+  if (oldData === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = oldData;
+  if (oldState === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = oldState;
   rmSync(SANDBOX, { recursive: true, force: true });
 });
 
@@ -90,7 +95,9 @@ describe("listDir", () => {
 
       const withHidden = await listDir(dir, true, "name", true);
       expect(withHidden.map((x) => x.name)).toContain(".hidden");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("size sort stat-fills entries; desc flips within isDir groups", async () => {
@@ -103,7 +110,9 @@ describe("listDir", () => {
       const desc = await listDir(dir, false, "size", false);
       expect(desc.map((x) => x.name)).toEqual(["big.txt", "small.txt"]);
       expect(desc[0]!.size).toBe(1000);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("mtime sort uses real mtimes", async () => {
@@ -116,7 +125,9 @@ describe("listDir", () => {
       utimesSync(path.join(dir, "new.txt"), t, t);
       const out = await listDir(dir, false, "mtime", true);
       expect(out.map((x) => x.name)).toEqual(["old.txt", "new.txt"]);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("RECENT_URI: recency order wins over sort mode; vanished files dropped", async () => {
@@ -124,29 +135,37 @@ describe("listDir", () => {
     const keep = path.join(SANDBOX, "keep.txt");
     W(keep, "x");
     const gone = path.join(SANDBOX, "vanished.txt"); // never created
-    W(path.join(dataHome, "recently-used.xbel"), `<?xml version="1.0" encoding="UTF-8"?>
+    W(
+      path.join(dataHome, "recently-used.xbel"),
+      `<?xml version="1.0" encoding="UTF-8"?>
 <xbel version="1.0" xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks">
   <bookmark href="file://${encodeURI(gone)}" added="2026-01-01T00:00:00Z" modified="2026-01-01T00:00:00Z" visited="2026-01-01T00:00:00Z"><info><metadata owner="http://freedesktop.org"><mime:mime-type type="text/plain"/><bookmark:applications><bookmark:application name="tfm" exec="&apos;tfm&apos;" modified="2026-01-01T00:00:00Z" count="1"/></bookmark:applications></metadata></info></bookmark>
   <bookmark href="file://${encodeURI(keep)}" added="2026-02-02T00:00:00Z" modified="2026-02-02T00:00:00Z" visited="2026-02-02T00:00:00Z"><info><metadata owner="http://freedesktop.org"><mime:mime-type type="text/plain"/><bookmark:applications><bookmark:application name="tfm" exec="&apos;tfm&apos;" modified="2026-02-02T00:00:00Z" count="1"/></bookmark:applications></metadata></info></bookmark>
 </xbel>
-`);
+`,
+    );
     try {
       // sortBy=name asc would put "keep.txt" first by alphabet anyway — use
       // size asc to prove recency (newest first) overrides the sort mode
       const out = await listDir(RECENT_URI, false, "size", true);
       expect(out.map((x) => x.abs)).toEqual([keep]); // vanished dropped, newest first
-    } finally { rmSync(path.join(dataHome, "recently-used.xbel"), { force: true }); }
+    } finally {
+      rmSync(path.join(dataHome, "recently-used.xbel"), { force: true });
+    }
   });
 
   test("STARRED_URI: reads the tfm registry", async () => {
     const stateHome = process.env.XDG_STATE_HOME!;
     const a = path.join(SANDBOX, "a-star.txt");
     const b = path.join(SANDBOX, "b-star.txt");
-    W(a); W(b);
+    W(a);
+    W(b);
     W(path.join(stateHome, "tfm", "starred.list"), `${a}\n${b}\n`);
     try {
       const out = await listDir(STARRED_URI, false, "name", true);
       expect(out.map((x) => x.name)).toEqual(["a-star.txt", "b-star.txt"]);
-    } finally { rmSync(path.join(stateHome, "tfm", "starred.list"), { force: true }); }
+    } finally {
+      rmSync(path.join(stateHome, "tfm", "starred.list"), { force: true });
+    }
   });
 });

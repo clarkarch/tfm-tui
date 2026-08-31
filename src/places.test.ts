@@ -15,12 +15,18 @@ describe("parseLsblk", () => {
   test("walks children, inherits rm, skips loop/zram/ram and system mounts", () => {
     const out = parseLsblk({
       blockdevices: [
-        { name: "nvme0n1", rm: false, path: "/dev/nvme0n1", children: [
-          { name: "nvme0n1p2", fstype: "ext4", mountpoints: ["/", "/boot"] },
-        ]},
-        { name: "sda", rm: true, path: "/dev/sda", children: [
-          { name: "sda1", fstype: "vfat", mountpoints: ["/run/media/clark/USB"] },
-        ]},
+        {
+          name: "nvme0n1",
+          rm: false,
+          path: "/dev/nvme0n1",
+          children: [{ name: "nvme0n1p2", fstype: "ext4", mountpoints: ["/", "/boot"] }],
+        },
+        {
+          name: "sda",
+          rm: true,
+          path: "/dev/sda",
+          children: [{ name: "sda1", fstype: "vfat", mountpoints: ["/run/media/clark/USB"] }],
+        },
         { name: "loop0", fstype: "squashfs", mountpoints: ["/snap/foo"] },
         { name: "zram0", fstype: "swap", mountpoints: ["[SWAP]"] },
       ],
@@ -96,7 +102,10 @@ function mkdtempAndDirs() {
   mkdirSync(configHome, { recursive: true });
   mkdirSync(docs, { recursive: true });
   mkdirSync(bookmarkDir, { recursive: true });
-  writeFileSync(path.join(configHome, "user-dirs.dirs"), `XDG_DOCUMENTS_DIR="${docs}"\nXDG_MUSIC_DIR="${os.homedir()}"\n`);
+  writeFileSync(
+    path.join(configHome, "user-dirs.dirs"),
+    `XDG_DOCUMENTS_DIR="${docs}"\nXDG_MUSIC_DIR="${os.homedir()}"\n`,
+  );
   mkdirSync(path.join(configHome, "gtk-3.0"), { recursive: true });
   writeFileSync(path.join(configHome, "gtk-3.0", "bookmarks"), `file://${bookmarkDir} mydocs\nnot-a-file-uri\n`);
   return { root, configHome, docs, bookmarkDir };

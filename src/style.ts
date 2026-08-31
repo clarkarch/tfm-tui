@@ -17,8 +17,7 @@ export type UiStyle = "solid" | "outline";
 
 // inner width available to children of the sidebar panel: outline mode's
 // border ring reserves one cell per side (yoga setBorder)
-export const sideInnerWidth = (style: UiStyle, sw: number): number =>
-  style === "outline" ? sw - 2 : sw;
+export const sideInnerWidth = (style: UiStyle, sw: number): number => (style === "outline" ? sw - 2 : sw);
 
 export type SurfaceState = "rest" | "hover" | "selected" | "cut";
 
@@ -31,9 +30,7 @@ export type SurfaceOpts = {
 
 // chrome panels: sidebar / main region / preview / menus / dialogs
 export const chromeSurface = (style: UiStyle, c: Theme, bg: string): SurfaceOpts =>
-  style === "outline"
-    ? { border: true, borderStyle: "rounded", borderColor: c.border }
-    : { backgroundColor: bg };
+  style === "outline" ? { border: true, borderStyle: "rounded", borderColor: c.border } : { backgroundColor: bg };
 
 // grid tiles: rest goes bare in outline, interaction states keep fills
 export const tileSurface = (style: UiStyle, c: Theme, state: SurfaceState): SurfaceOpts => {
@@ -62,21 +59,32 @@ export const rowSurface = (style: UiStyle, c: Theme, state: SurfaceState): Surfa
 // panel (canvas bg for toolbar, sidebarBg inside dialogs); outline clears it
 export const btnSurface = (style: UiStyle, c: Theme, hovered: boolean, restBg?: string): SurfaceOpts => {
   if (style === "outline" && !hovered) return {};
-  return { backgroundColor: hovered ? c.hoverBg : restBg ?? c.bg };
+  return { backgroundColor: hovered ? c.hoverBg : (restBg ?? c.bg) };
 };
 
 // raster slots flatten icons onto a bg hex; outline rest states sit on the
 // canvas, so the flatten target must be canvas bg instead of panel bg
-export const slotBg = (style: UiStyle, c: Theme, panelBg: string): string =>
-  style === "outline" ? c.bg : panelBg;
+export const slotBg = (style: UiStyle, c: Theme, panelBg: string): string => (style === "outline" ? c.bg : panelBg);
 
 // post-mutation of real renderables (findDescendantById results). "transparent"
 // clears a fill — parseColor maps it to alpha-0, which emits terminal-default
 // bg for that cell.
 export const applySurface = (node: any, opts: SurfaceOpts): void => {
   if (!node) return;
-  try { node.backgroundColor = opts.backgroundColor ?? "transparent"; } catch {}
-  try { node.border = !!opts.border; } catch {}
-  if (opts.borderStyle) { try { node.borderStyle = opts.borderStyle; } catch {} }
-  if (opts.borderColor) { try { node.borderColor = opts.borderColor; } catch {} }
+  try {
+    node.backgroundColor = opts.backgroundColor ?? "transparent";
+  } catch {}
+  try {
+    node.border = !!opts.border;
+  } catch {}
+  if (opts.borderStyle) {
+    try {
+      node.borderStyle = opts.borderStyle;
+    } catch {}
+  }
+  if (opts.borderColor) {
+    try {
+      node.borderColor = opts.borderColor;
+    } catch {}
+  }
 };

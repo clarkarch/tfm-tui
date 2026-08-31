@@ -1,13 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  applySurface,
-  btnSurface,
-  chromeSurface,
-  rowSurface,
-  sideInnerWidth,
-  slotBg,
-  tileSurface,
-} from "./style";
+import { applySurface, btnSurface, chromeSurface, rowSurface, sideInnerWidth, slotBg, tileSurface } from "./style";
 import type { Theme } from "./config";
 import { glyph, ensureGlyphFallbacks, glyphFor } from "./glyphs";
 
@@ -32,7 +24,11 @@ describe("sideInnerWidth", () => {
 describe("surface builders", () => {
   test("chromeSurface: solid fills, outline draws a rounded border", () => {
     expect(chromeSurface("solid", theme, theme.sidebarBg)).toEqual({ backgroundColor: "#16161e" });
-    expect(chromeSurface("outline", theme, theme.sidebarBg)).toEqual({ border: true, borderStyle: "rounded", borderColor: "#3b4261" });
+    expect(chromeSurface("outline", theme, theme.sidebarBg)).toEqual({
+      border: true,
+      borderStyle: "rounded",
+      borderColor: "#3b4261",
+    });
   });
 
   test("tileSurface: outline rest is bare, interaction states keep fills", () => {
@@ -83,7 +79,11 @@ describe("applySurface", () => {
 
   test("throwing setters are swallowed (proxied VNodes no-op)", () => {
     const hostile: any = {};
-    Object.defineProperty(hostile, "backgroundColor", { set() { throw new Error("nope"); } });
+    Object.defineProperty(hostile, "backgroundColor", {
+      set() {
+        throw new Error("nope");
+      },
+    });
     expect(() => applySurface(hostile, { backgroundColor: "#000", border: true })).not.toThrow();
   });
 });

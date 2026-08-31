@@ -14,9 +14,15 @@ const mkCtx = (over: Partial<Parameters<typeof makeRecentOpen>[0]> = {}) => {
   const calls: string[] = [];
   const ctx = {
     inTrashView: () => false,
-    notify: (msg: string, title?: string) => { calls.push(`notify:${title}:${msg}`); },
-    upsertRecent: (paths: string[]) => { calls.push(`upsert:${paths.join("|")}`); },
-    spawnOpen: (p: string) => { calls.push(`spawn:${p}`); },
+    notify: (msg: string, title?: string) => {
+      calls.push(`notify:${title}:${msg}`);
+    },
+    upsertRecent: (paths: string[]) => {
+      calls.push(`upsert:${paths.join("|")}`);
+    },
+    spawnOpen: (p: string) => {
+      calls.push(`spawn:${p}`);
+    },
     appForFile: async (_p: string) => "Video Player",
     ...over,
   };

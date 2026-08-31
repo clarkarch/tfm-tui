@@ -49,17 +49,36 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   const rethemeChrome = (): void => {
     const st = ctx.config.ui.uiStyle;
     const colors = ctx.colors;
-    setOnId("tfm-sidebar-root", (n) => { n.width = ctx.getSw(); applySurface(n, chromeSurface(st, colors, colors.sidebarBg)); });
+    setOnId("tfm-sidebar-root", (n) => {
+      n.width = ctx.getSw();
+      applySurface(n, chromeSurface(st, colors, colors.sidebarBg));
+    });
     setOnId("tfm-main", (n) => applySurface(n, chromeSurface(st, colors, colors.bg)));
-    setOnId("tfm-title-box", (n) => { n.width = ctx.sideInnerW(); });
-    setOnId("tfm-places", (n) => { n.width = ctx.sideInnerW(); });
-    setOnId("tfm-title-font", (n) => { n.color = colors.accent; });
-    setOnId("tfm-title-sub", (n) => { n.fg = colors.sidebarFgMuted; });
+    setOnId("tfm-title-box", (n) => {
+      n.width = ctx.sideInnerW();
+    });
+    setOnId("tfm-places", (n) => {
+      n.width = ctx.sideInnerW();
+    });
+    setOnId("tfm-title-font", (n) => {
+      n.color = colors.accent;
+    });
+    setOnId("tfm-title-sub", (n) => {
+      n.fg = colors.sidebarFgMuted;
+    });
     setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-    setOnId(BAND_ID, (n) => { n.borderColor = colors.accent; });
-    setOnId(DRAG_GHOST_ID, (n) => { n.backgroundColor = colors.accent; });
-    setOnId(`${DRAG_GHOST_ID}-label`, (n) => { n.fg = colors.bg; });
-    setOnId("tfm-status-label", (n) => { n.fg = colors.sidebarFgMuted; });
+    setOnId(BAND_ID, (n) => {
+      n.borderColor = colors.accent;
+    });
+    setOnId(DRAG_GHOST_ID, (n) => {
+      n.backgroundColor = colors.accent;
+    });
+    setOnId(`${DRAG_GHOST_ID}-label`, (n) => {
+      n.fg = colors.bg;
+    });
+    setOnId("tfm-status-label", (n) => {
+      n.fg = colors.sidebarFgMuted;
+    });
     setOnId("tfm-prompt-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
     // 1-row header can't carry a border ring — just drop the fill in outline
     setOnId("tfm-term-header", (n) => applySurface(n, st === "outline" ? {} : { backgroundColor: colors.sidebarBg }));
@@ -89,8 +108,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // APPLIED state (not the caller's pre-call `config`) means a settings row
   // can mutate config first and call applyConfig(config) and the flip is
   // still seen — the old self-compare skipped raster invalidation silently.
-  const themeSig = (c: Config): string =>
-    JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle]);
+  const themeSig = (c: Config): string => JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle]);
   let lastThemeSig = themeSig(ctx.config);
 
   const applyConfig = (fresh: Config): void => {
@@ -107,7 +125,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     ctx.setTileH(ctx.config.ui.tileHeight);
     ctx.setIconCells(ctx.config.ui.iconCells);
     for (const id of ["tfm-sidebar-root", "tfm-title-box", "tfm-places"]) {
-      setOnId(id, (n) => { n.width = id === "tfm-sidebar-root" ? ctx.getSw() : ctx.sideInnerW(); });
+      setOnId(id, (n) => {
+        n.width = id === "tfm-sidebar-root" ? ctx.getSw() : ctx.sideInnerW();
+      });
     }
     const pane: any = ctx.byId("tfm-preview");
     if (pane) {
@@ -120,14 +140,18 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     if (themeChanged) {
       ctx.clearIconCaches();
       ctx.resetIconQueue();
-      try { ctx.renderer().setBackgroundColor(ctx.config.ui.transparentBg ? "transparent" : ctx.colors.bg); } catch {}
+      try {
+        ctx.renderer().setBackgroundColor(ctx.config.ui.transparentBg ? "transparent" : ctx.colors.bg);
+      } catch {}
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();
       ctx.syncTerminalTheme();
       // a theme flip churns the whole icon raster set + every chrome surface;
       // without a GC poke the destroyed renderables' native buffers sit in
       // finalizer limbo until the next heap-driven GC (see index.ts mem note)
-      try { Bun.gc(false); } catch {}
+      try {
+        Bun.gc(false);
+      } catch {}
     }
     ctx.renderAll();
   };
@@ -139,7 +163,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
 
   const scheduleSaveConfig = debounced(500, () => {
     saveConfig(ctx.config)
-      .then(async () => { try { lastSavedSig = JSON.stringify(loadConfig()); } catch {} })
+      .then(async () => {
+        try {
+          lastSavedSig = JSON.stringify(loadConfig());
+        } catch {}
+      })
       .catch(() => {
         if (!saveWarned) {
           saveWarned = true;

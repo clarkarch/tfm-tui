@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { commitPendingCtrlToggle, finishDragState, gridDrag, makeEntryMouseHandlers, type GridInputCtx } from "./grid-input";
+import {
+  commitPendingCtrlToggle,
+  finishDragState,
+  gridDrag,
+  makeEntryMouseHandlers,
+  type GridInputCtx,
+} from "./grid-input";
 
 beforeEach(() => {
   gridDrag.keys = null;
@@ -12,10 +18,22 @@ beforeEach(() => {
   gridDrag.pendingState = false;
 });
 
-const makeCtx = (): GridInputCtx & { visuals: Map<string, number>; statuses: string[]; moved: { dest: string; n: number }[]; menus: string[]; logs: string[]; selStatusRefreshes: { n: number } } => {
+const makeCtx = (): GridInputCtx & {
+  visuals: Map<string, number>;
+  statuses: string[];
+  moved: { dest: string; n: number }[];
+  menus: string[];
+  logs: string[];
+  selStatusRefreshes: { n: number };
+} => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
-  for (const [p, isDir] of [["/w/a.txt", false], ["/w/b.txt", false], ["/w/c.txt", false], ["/w/sub", true]] as const) {
+  for (const [p, isDir] of [
+    ["/w/a.txt", false],
+    ["/w/b.txt", false],
+    ["/w/c.txt", false],
+    ["/w/sub", true],
+  ] as const) {
     refs.set(p, { selected: false, isDir });
     visuals.set(p, 0);
   }
@@ -38,34 +56,60 @@ const makeCtx = (): GridInputCtx & { visuals: Map<string, number>; statuses: str
     termH: () => 24,
     tileRefs: refs as GridInputCtx["tileRefs"],
     setTileVisual: (key, mode) => void visuals.set(key, mode),
-    updateSelectionStatusReal: () => { selStatus.n++; },
+    updateSelectionStatusReal: () => {
+      selStatus.n++;
+    },
     renderPreview: () => {},
-    clearTileSelection: () => { for (const [k, r] of refs) if (r.selected) { r.selected = false; visuals.set(k, 0); } },
+    clearTileSelection: () => {
+      for (const [k, r] of refs)
+        if (r.selected) {
+          r.selected = false;
+          visuals.set(k, 0);
+        }
+    },
     selectRange: (from, to) => {
       const keys = [...refs.keys()];
       const [lo, hi] = [Math.min(from, to), Math.max(from, to)];
-      for (let i = lo; i <= hi; i++) { const r = refs.get(keys[i]!); if (r) { r.selected = true; visuals.set(keys[i]!, 2); } }
+      for (let i = lo; i <= hi; i++) {
+        const r = refs.get(keys[i]!);
+        if (r) {
+          r.selected = true;
+          visuals.set(keys[i]!, 2);
+        }
+      }
     },
     getSelAnchor: () => anchor,
-    setSelAnchor: (v) => { anchor = v; },
+    setSelAnchor: (v) => {
+      anchor = v;
+    },
     getFocusIdx: () => focused,
     selPaths: () => [...refs.entries()].filter(([, r]) => r.selected).map(([p, r]) => ({ path: p, isDir: r.isDir })),
     dblClickMs: () => 500,
     navigate: () => {},
     openFileDefault: () => {},
-    openContextMenu: (_x, _y, _t, entries) => { menus.push(entries[0]?.label ?? ""); },
+    openContextMenu: (_x, _y, _t, entries) => {
+      menus.push(entries[0]?.label ?? "");
+    },
     fileEntriesFor: (key) => [{ label: `menu-${key}`, action: () => {} }],
     closeFileMenu: () => {},
     renameEditKey: () => null,
     finishInlineRename: () => {},
-    setStatusMsg: (m) => { statuses.push(m); },
-    log: (m) => { logs.push(m); },
-    moveInto: async (dest, items) => { moved.push({ dest, n: items.length }); },
+    setStatusMsg: (m) => {
+      statuses.push(m);
+    },
+    log: (m) => {
+      logs.push(m);
+    },
+    moveInto: async (dest, items) => {
+      moved.push({ dest, n: items.length });
+    },
   };
 };
 
-const press = (h: ReturnType<ReturnType<typeof makeEntryMouseHandlers>>, ev: Partial<{ button: number; x: number; y: number; modifiers: Record<string, boolean> }>) =>
-  h.onMouseDown({ x: 0, y: 0, button: 0, modifiers: {}, ...ev } as any);
+const press = (
+  h: ReturnType<ReturnType<typeof makeEntryMouseHandlers>>,
+  ev: Partial<{ button: number; x: number; y: number; modifiers: Record<string, boolean> }>,
+) => h.onMouseDown({ x: 0, y: 0, button: 0, modifiers: {}, ...ev } as any);
 
 describe("plain click + drag", () => {
   test("click selects single tile and arms drag payload; drop moves it", () => {
@@ -81,10 +125,10 @@ describe("plain click + drag", () => {
     expect(gridDrag.active).toBe(true);
     expect(ctx.statuses.at(-1)).toBe("Dragging 1 item…");
     // hover over a folder arms the drop target
-    (makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3)).onMouseOver();
+    makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3).onMouseOver();
     expect(gridDrag.dropTarget).toBe("/w/sub");
     // drop fires on the TARGET tile's handler (isDir=true there), filtering the dest itself
-    (makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3)).onMouseDrop();
+    makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3).onMouseDrop();
     expect(ctx.moved).toEqual([{ dest: "/w/sub", n: 1 }]);
     expect(gridDrag.keys).toBeNull();
     expect(gridDrag.active).toBe(false);
@@ -136,7 +180,12 @@ describe("selection model", () => {
     ctx.tileRefs.get("/w/b.txt")!.selected = true;
     const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
     press(h, { x: 3, y: 3 });
-    expect(ctx.selPaths().map((p) => p.path).sort()).toEqual(["/w/a.txt", "/w/b.txt"]);
+    expect(
+      ctx
+        .selPaths()
+        .map((p) => p.path)
+        .sort(),
+    ).toEqual(["/w/a.txt", "/w/b.txt"]);
   });
 
   test("shift+click range-extends from anchor", () => {
@@ -157,7 +206,9 @@ describe("selection model", () => {
   test("double-click opens (dir navigates) and resets lastClick", () => {
     const ctx = makeCtx();
     const navigated: string[] = [];
-    ctx.navigate = (d) => { navigated.push(d); };
+    ctx.navigate = (d) => {
+      navigated.push(d);
+    };
     const factory = makeEntryMouseHandlers(ctx);
     const h = factory({ isDir: true }, "/w/sub", 3);
     press(h, { x: 1, y: 1 });

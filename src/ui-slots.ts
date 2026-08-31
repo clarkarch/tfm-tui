@@ -90,7 +90,14 @@ export const makeSlots = (ctx: SlotsCtx) => {
   ): { el: ReturnType<typeof Box>; slotId: string; spec: IconSpec } => {
     const slotId = `tfm-icon-${iconSeq++}`;
     const g = ctx.glyphFor(name);
-    const spec: IconSpec = { slotId, name, heightCells, states, initialState, ...(statesFactory ? { statesFactory } : {}) };
+    const spec: IconSpec = {
+      slotId,
+      name,
+      heightCells,
+      states,
+      initialState,
+      ...(statesFactory ? { statesFactory } : {}),
+    };
     iconQueue.push(spec);
     return {
       el: Box(
@@ -113,15 +120,23 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const slot: any = ctx.byId(spec.slotId);
     if (!slot) return false;
     const kids = slot.getChildren?.() ?? [];
-    const stateImgs = kids.filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`);
+    const stateImgs = kids.filter(
+      (k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`,
+    );
     if (stateImgs.length === 0) {
       const glyphNode: any = kids.find((k: any) => k.id === `${spec.slotId}-g`);
       if (glyphNode) {
-        try { glyphNode.fg = spec.states[stateIdx]?.fg; } catch {}
+        try {
+          glyphNode.fg = spec.states[stateIdx]?.fg;
+        } catch {}
       }
       return false;
     }
-    stateImgs.forEach((k: any, i: number) => { try { k.visible = i === stateIdx; } catch {} });
+    stateImgs.forEach((k: any, i: number) => {
+      try {
+        k.visible = i === stateIdx;
+      } catch {}
+    });
     return true;
   };
 
@@ -217,26 +232,48 @@ export const makeSlots = (ctx: SlotsCtx) => {
     if (!ctx.renderer().resolution) return;
     const aspect = cellMetrics().aspect;
     const pending = iconQueue.filter((s) => !s.done);
-    await Promise.all(pending.map(async (spec) => {
-      spec.done = true;
-      const slot: any = ctx.byId(spec.slotId);
-      if (!slot) return;
-      if (spec.statesFactory) {
-        try { spec.states = spec.statesFactory(); } catch {}
-      }
-      const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
-      const imgs = await rasterStatesInto(spec.slotId, spec.name, spec.states, spec.heightCells, wCells, spec.initialState);
-      if (imgs.length === 0) return;
-      slot.width = wCells;
-      const kids = slot.getChildren?.() ?? [];
-      // drop previous rasters (e.g. after a resize re-raster at new cell pixels)
-      kids.filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
-        .forEach((k: any) => { try { slot.remove(k); } catch {} });
-      const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
-      // glyph stays in the slot (hidden) so the scrim can fall back to it
-      if (glyphNode) { try { glyphNode.visible = false; } catch {} }
-      imgs.forEach((im) => { slot.add(im); });
-    }));
+    await Promise.all(
+      pending.map(async (spec) => {
+        spec.done = true;
+        const slot: any = ctx.byId(spec.slotId);
+        if (!slot) return;
+        if (spec.statesFactory) {
+          try {
+            spec.states = spec.statesFactory();
+          } catch {}
+        }
+        const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
+        const imgs = await rasterStatesInto(
+          spec.slotId,
+          spec.name,
+          spec.states,
+          spec.heightCells,
+          wCells,
+          spec.initialState,
+        );
+        if (imgs.length === 0) return;
+        slot.width = wCells;
+        const kids = slot.getChildren?.() ?? [];
+        // drop previous rasters (e.g. after a resize re-raster at new cell pixels)
+        kids
+          .filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
+          .forEach((k: any) => {
+            try {
+              slot.remove(k);
+            } catch {}
+          });
+        const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
+        // glyph stays in the slot (hidden) so the scrim can fall back to it
+        if (glyphNode) {
+          try {
+            glyphNode.visible = false;
+          } catch {}
+        }
+        imgs.forEach((im) => {
+          slot.add(im);
+        });
+      }),
+    );
     // done specs are dead weight: their slots are destroyed on the next rebuild
     // and live tile refs keep the spec objects alive independently of the queue
     iconQueue.splice(0, iconQueue.length, ...iconQueue.filter((s) => !s.done));
@@ -269,17 +306,29 @@ export const makeSlots = (ctx: SlotsCtx) => {
       const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`));
       if (stateImgs.length === 0 && !spec.done) continue;
       if (on) {
-        stateImgs.forEach((k) => { try { k.visible = false; } catch {} });
+        stateImgs.forEach((k) => {
+          try {
+            k.visible = false;
+          } catch {}
+        });
         try {
           glyphNode.fg = dimHex(spec.states[spec.initialState]?.fg ?? ctx.colors().sidebarFg, 0.41);
           glyphNode.visible = true;
         } catch {}
       } else {
         if (stateImgs.length === 0) {
-          try { glyphNode.visible = true; } catch {}
+          try {
+            glyphNode.visible = true;
+          } catch {}
         } else {
-          try { glyphNode.visible = false; } catch {}
-          stateImgs.forEach((k, i) => { try { k.visible = i === spec.initialState; } catch {} });
+          try {
+            glyphNode.visible = false;
+          } catch {}
+          stateImgs.forEach((k, i) => {
+            try {
+              k.visible = i === spec.initialState;
+            } catch {}
+          });
         }
       }
     }
@@ -289,7 +338,10 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // an icon-slot widget, so it lives with the slot machinery
   const escHintBtn = (id: string, onClose: () => void): any => {
     const states = (): IconState[] => [
-      { fg: ctx.colors().sidebarFgMuted, bg: slotBg(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg) },
+      {
+        fg: ctx.colors().sidebarFgMuted,
+        bg: slotBg(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
+      },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
     const slot = makeIconSlot("close", states(), 1, 0, undefined, states);
@@ -325,7 +377,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
     drainIconQueue,
     setScrim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
-    resetIconQueue: (): void => { for (const s of iconQueue) s.done = false; },
-    pushThumbJob: (job: ThumbJob): void => { thumbJobs.push(job); },
+    resetIconQueue: (): void => {
+      for (const s of iconQueue) s.done = false;
+    },
+    pushThumbJob: (job: ThumbJob): void => {
+      thumbJobs.push(job);
+    },
   };
 };

@@ -15,7 +15,16 @@ import { trashDir } from "./fsutil";
 const execFileP = promisify(execFile);
 const home = os.homedir();
 
-export type Place = { icon: string; label: string; path: string | null; ejectable: boolean; device?: string; mountDevice?: string; scheme?: "recent" | "starred"; bookmarked?: boolean };
+export type Place = {
+  icon: string;
+  label: string;
+  path: string | null;
+  ejectable: boolean;
+  device?: string;
+  mountDevice?: string;
+  scheme?: "recent" | "starred";
+  bookmarked?: boolean;
+};
 
 export type UserDir = { key: string; label: string; p: string };
 
@@ -37,8 +46,7 @@ export const loadSystemPlaces = async (): Promise<void> => {
   sysMounts = await listMounts();
 };
 
-const xdgUserDirsFile = () =>
-  path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "user-dirs.dirs");
+const xdgUserDirsFile = () => path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "user-dirs.dirs");
 
 const XDG_LABELS: Record<string, string> = {
   XDG_DESKTOP_DIR: "Desktop",
@@ -68,7 +76,9 @@ export async function readUserDirs(): Promise<UserDir[]> {
       if (!p || p === home) continue;
       try {
         if (!statSync(p).isDirectory()) continue;
-      } catch { continue; }
+      } catch {
+        continue;
+      }
       out.push({ key: m[1], label, p });
     }
     return out.sort((a, b) => (a.key < b.key ? -1 : 1));
@@ -89,8 +99,16 @@ export async function readBookmarks(): Promise<BookmarkEntry[]> {
       const label = sp === -1 ? "" : line.slice(sp + 1).trim();
       if (!uri.startsWith("file://")) continue;
       let p: string;
-      try { p = decodeURIComponent(uri.slice("file://".length)); } catch { continue; }
-      try { if (!statSync(p).isDirectory()) continue; } catch { continue; }
+      try {
+        p = decodeURIComponent(uri.slice("file://".length));
+      } catch {
+        continue;
+      }
+      try {
+        if (!statSync(p).isDirectory()) continue;
+      } catch {
+        continue;
+      }
       out.push({ p, label: label || path.basename(p) });
     }
     return out;
@@ -105,14 +123,15 @@ export const gtkBookmarksFile = (): string =>
 
 export const bookmarkUri = pathToUri;
 
-export const isBookmarked = (dir: string): boolean =>
-  sysBookmarks.some((b) => path.resolve(b.p) === path.resolve(dir));
+export const isBookmarked = (dir: string): boolean => sysBookmarks.some((b) => path.resolve(b.p) === path.resolve(dir));
 
 // rewrite preserving order + custom labels; additions go last (nautilus does too)
 export const setBookmarked = async (dir: string, on: boolean): Promise<void> => {
   const file = gtkBookmarksFile();
   let lines: string[] = [];
-  try { lines = (await readFile(file, "utf8")).split("\n"); } catch {}
+  try {
+    lines = (await readFile(file, "utf8")).split("\n");
+  } catch {}
   const uri = bookmarkUri(dir);
   const kept = lines.filter((l) => l.trim() && l.split(" ")[0] !== uri);
   if (on) kept.push(uri);
@@ -120,7 +139,18 @@ export const setBookmarked = async (dir: string, on: boolean): Promise<void> => 
   await writeFile(file, kept.join("\n") + (kept.length ? "\n" : ""), "utf8");
 };
 
-const PSEUDO_FSTYPES = new Set(["squashfs", "tmpfs", "devtmpfs", "proc", "sysfs", "efivarfs", "overlay", "ramfs", "devfs", "cgroup"]);
+const PSEUDO_FSTYPES = new Set([
+  "squashfs",
+  "tmpfs",
+  "devtmpfs",
+  "proc",
+  "sysfs",
+  "efivarfs",
+  "overlay",
+  "ramfs",
+  "devfs",
+  "cgroup",
+]);
 const SYSTEM_MOUNTS = new Set(["/", "/boot", "/boot/efi", "/efi", "/swap"]);
 
 export function parseLsblk(json: any): MountEntry[] {
@@ -173,7 +203,13 @@ export async function listMounts(): Promise<MountEntry[]> {
 
 export function buildSections(): Place[][] {
   const trashFilesDir = path.join(trashDir(), "files");
-  const hasTrash = (() => { try { return statSync(trashFilesDir).isDirectory(); } catch { return false; } })();
+  const hasTrash = (() => {
+    try {
+      return statSync(trashFilesDir).isDirectory();
+    } catch {
+      return false;
+    }
+  })();
 
   const defaults: Place[] = [{ icon: "home", label: "Home", path: home, ejectable: false }];
   defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false, scheme: "recent" });
@@ -182,18 +218,26 @@ export function buildSections(): Place[][] {
 
   const dirs: Place[] = sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }));
 
-  const bookmarks: Place[] = sysBookmarks.map((b) => ({ icon: "bookmark", label: b.label, path: b.p, ejectable: false, bookmarked: true }));
+  const bookmarks: Place[] = sysBookmarks.map((b) => ({
+    icon: "bookmark",
+    label: b.label,
+    path: b.p,
+    ejectable: false,
+    bookmarked: true,
+  }));
 
   const devices: Place[] = [
     { icon: "harddisk", label: "This Device", path: "/", ejectable: false },
-    ...sysMounts.map((m): Place => ({
-      icon: m.removable ? "usb" : "harddisk",
-      label: m.label,
-      path: m.target || null,
-      ejectable: m.removable && !!m.target,
-      device: m.device,
-      mountDevice: m.target ? undefined : m.device,
-    })),
+    ...sysMounts.map(
+      (m): Place => ({
+        icon: m.removable ? "usb" : "harddisk",
+        label: m.label,
+        path: m.target || null,
+        ejectable: m.removable && !!m.target,
+        device: m.device,
+        mountDevice: m.target ? undefined : m.device,
+      }),
+    ),
   ];
 
   const groups = [defaults];

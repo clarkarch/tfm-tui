@@ -14,7 +14,11 @@ export const makeResizeWatcher = (ctx: ResizeCtx) => {
   let timer: any = null;
   const onResize = (): void => {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = null; ctx.resetIconQueue(); ctx.renderAll(); }, ms);
+    timer = setTimeout(() => {
+      timer = null;
+      ctx.resetIconQueue();
+      ctx.renderAll();
+    }, ms);
   };
   return { onResize };
 };

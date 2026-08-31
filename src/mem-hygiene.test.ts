@@ -21,7 +21,10 @@ describe("startMemHygiene", () => {
     const lines: string[] = [];
     let statsReads = 0;
     const stop = startMemHygiene({
-      allocatorStats: () => { statsReads++; return { activeAllocations: 7, totalRequestedBytes: 0 }; },
+      allocatorStats: () => {
+        statsReads++;
+        return { activeAllocations: 7, totalRequestedBytes: 0 };
+      },
       debugLog: (msg) => lines.push(msg),
       intervalMs: 15,
     });
@@ -36,7 +39,13 @@ describe("startMemHygiene", () => {
 
   test("no debugLog -> no per-tick work beyond the gc poke", async () => {
     let reads = 0;
-    const stop = startMemHygiene({ allocatorStats: () => { reads++; return null; }, intervalMs: 10 });
+    const stop = startMemHygiene({
+      allocatorStats: () => {
+        reads++;
+        return null;
+      },
+      intervalMs: 10,
+    });
     await new Promise((r) => setTimeout(r, 35));
     stop();
     expect(reads).toBe(0);

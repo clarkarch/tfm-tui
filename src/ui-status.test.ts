@@ -8,7 +8,9 @@ const mkEnv = (resetDelayMs = 30) => {
   let refreshes = 0;
   const { setStatusMsg } = makeStatus({
     byId: (id) => nodes[id],
-    refresh: () => { refreshes++; },
+    refresh: () => {
+      refreshes++;
+    },
     resetDelayMs,
   });
   return { nodes, setStatusMsg, refreshCount: () => refreshes };
@@ -50,7 +52,12 @@ describe("makeStatus", () => {
   test("default reset delay is used when none is given", async () => {
     const nodes: Record<string, { content: string }> = { "tfm-status-label": { content: "" } };
     let refreshes = 0;
-    const { setStatusMsg } = makeStatus({ byId: (id) => nodes[id], refresh: () => { refreshes++; } });
+    const { setStatusMsg } = makeStatus({
+      byId: (id) => nodes[id],
+      refresh: () => {
+        refreshes++;
+      },
+    });
     setStatusMsg("x");
     await sleep(50);
     expect(refreshes).toBe(0); // 2500ms default — must not have fired yet

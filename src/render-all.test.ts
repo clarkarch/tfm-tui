@@ -30,10 +30,18 @@ describe("makeRenderAll", () => {
       scheduleSaveSession: () => order.push("save"),
       log: () => {},
       steps: {
-        cwdWatcher: () => { order.push("cwdWatcher"); },
-        tabbar: () => { order.push("tabbar"); },
-        grid: () => { order.push("grid"); },
-        preview: () => { order.push("preview"); },
+        cwdWatcher: () => {
+          order.push("cwdWatcher");
+        },
+        tabbar: () => {
+          order.push("tabbar");
+        },
+        grid: () => {
+          order.push("grid");
+        },
+        preview: () => {
+          order.push("preview");
+        },
       },
     };
     makeRenderAll(ctx)();
@@ -49,7 +57,11 @@ describe("makeRenderAll", () => {
       syncTabFromState: () => {},
       scheduleSaveSession: () => {},
       log: () => {},
-      steps: { probe: () => { cwdSeen = state.cwd; } },
+      steps: {
+        probe: () => {
+          cwdSeen = state.cwd;
+        },
+      },
     });
     renderAll();
     expect(cwdSeen).toBe("/third");
@@ -78,9 +90,15 @@ describe("makeRenderAll", () => {
       scheduleSaveSession: () => order.push("save"),
       log: (m) => logs.push(m),
       steps: {
-        first: () => { order.push("first"); },
-        boom: () => { throw new Error("kaboom"); },
-        after: () => { order.push("after"); },
+        first: () => {
+          order.push("first");
+        },
+        boom: () => {
+          throw new Error("kaboom");
+        },
+        after: () => {
+          order.push("after");
+        },
       },
     })();
     expect(order).toEqual(["first", "after", "save"]);

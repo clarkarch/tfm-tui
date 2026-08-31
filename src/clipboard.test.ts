@@ -12,9 +12,7 @@ afterEach(() => {
 
 describe("parseCopiedFiles", () => {
   test("parses the gnome-copied-files format with percent-decoding", () => {
-    const res = parseCopiedFiles(
-      "copy\nfile:///home/me/a%20b.txt\nfile:///home/me/c.txt",
-    );
+    const res = parseCopiedFiles("copy\nfile:///home/me/a%20b.txt\nfile:///home/me/c.txt");
     expect(res).toEqual({ op: "copy", paths: ["/home/me/a b.txt", "/home/me/c.txt"] });
   });
 

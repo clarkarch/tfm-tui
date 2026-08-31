@@ -9,11 +9,9 @@ export const STARRED_URI = "starred://";
 
 export const isVirtualUri = (p: string): boolean => p === RECENT_URI || p === STARRED_URI;
 
-export const xdgDataHome = (): string =>
-  process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share");
+export const xdgDataHome = (): string => process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share");
 
-export const xdgStateHome = (): string =>
-  process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state");
+export const xdgStateHome = (): string => process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state");
 
 // XBEL timestamps are ISO-8601; Date.parse handles them
 export const parseIso = (s: string): number => {
@@ -23,10 +21,17 @@ export const parseIso = (s: string): number => {
 
 export const uriToPath = (uri: string): string | null => {
   if (!uri.startsWith("file://")) return null;
-  try { return decodeURIComponent(uri.slice(7)); } catch { return null; }
+  try {
+    return decodeURIComponent(uri.slice(7));
+  } catch {
+    return null;
+  }
 };
 
 // path -> file:// URI, percent-encoding every segment except the root slash.
 // (Named xmlEscapeUri in the monolith days — it escapes for URIs, not XML.)
 export const pathToUri = (p: string): string =>
-  `file://${p.split("/").map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg))).join("/")}`;
+  `file://${p
+    .split("/")
+    .map((seg, i) => (i === 0 ? seg : encodeURIComponent(seg)))
+    .join("/")}`;

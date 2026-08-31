@@ -26,7 +26,12 @@ export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
   });
 
   const closeWatcher = (): void => {
-    if (watcher) { try { watcher.close(); } catch {} watcher = null; }
+    if (watcher) {
+      try {
+        watcher.close();
+      } catch {}
+      watcher = null;
+    }
   };
 
   const syncCwdWatcher = (): void => {

@@ -15,7 +15,9 @@ export const nativeMemLine = (stats: AllocatorStats | null): string => {
   if (stats) {
     out = `native active=${stats.activeAllocations} mem=${(stats.totalRequestedBytes / 1048576).toFixed(1)}MB`;
   }
-  try { out += ` rss=${(process.memoryUsage().rss / 1048576).toFixed(0)}MB`; } catch {}
+  try {
+    out += ` rss=${(process.memoryUsage().rss / 1048576).toFixed(0)}MB`;
+  } catch {}
   return out;
 };
 
@@ -30,7 +32,9 @@ export type MemHygieneCtx = {
 // returns a stop() so tests (or a future settings knob) can tear it down
 export const startMemHygiene = (ctx: MemHygieneCtx): (() => void) => {
   const timer = setInterval(() => {
-    try { Bun.gc(false); } catch {}
+    try {
+      Bun.gc(false);
+    } catch {}
     if (ctx.debugLog) ctx.debugLog(`mem ${nativeMemLine(ctx.allocatorStats())}`);
   }, ctx.intervalMs ?? 10000);
   timer.unref?.();

@@ -11,9 +11,17 @@ export type QuitCtx = {
   exit(code: number): void;
 };
 
-export const makeQuit = (ctx: QuitCtx): (() => void) => () => {
-  try { ctx.disableDrops(); } catch {}
-  try { ctx.releaseShiftCapture(); } catch {}
-  try { ctx.destroy(); } catch {}
-  ctx.exit(0);
-};
+export const makeQuit =
+  (ctx: QuitCtx): (() => void) =>
+  () => {
+    try {
+      ctx.disableDrops();
+    } catch {}
+    try {
+      ctx.releaseShiftCapture();
+    } catch {}
+    try {
+      ctx.destroy();
+    } catch {}
+    ctx.exit(0);
+  };

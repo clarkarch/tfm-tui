@@ -23,7 +23,11 @@ export const saveSession = async (cwd: string, tabs: SessionTab[], activeTab: nu
 // "usable", other virtual URIs are not, real paths must be existing dirs
 const usable = (p: string): boolean => {
   if (isVirtualUri(p)) return p === RECENT_URI || p === STARRED_URI;
-  try { return statSync(p).isDirectory(); } catch { return false; }
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
 };
 
 // Parse + sanitize the session file. Returns null when there is nothing to

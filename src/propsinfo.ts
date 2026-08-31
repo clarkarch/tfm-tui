@@ -8,8 +8,12 @@ import { FILE_ICON_BY_EXT, mimeForExt } from "./filetype";
 
 export const fmtBytes = (n: number): string => {
   const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = n, i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  let v = n,
+    i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
   return `${i === 0 ? v : v.toFixed(1)} ${units[i]}`;
 };
 
@@ -55,32 +59,58 @@ export const mimeLabelFor = (name: string): string => {
   const mime = mimeForExt(ext);
   if (mime) return mime;
   const cat = FILE_ICON_BY_EXT[ext];
-  return cat === "file-image" ? "image/*"
-    : cat === "file-video" ? "video/*"
-    : cat === "file-music" ? "audio/*"
-    : cat === "zip-box" ? "archive"
-    : cat === "file-pdf-box" ? "application/pdf"
-    : cat === "file-code" ? "code"
-    : cat === "file-document" ? "document"
-    : "data";
+  return cat === "file-image"
+    ? "image/*"
+    : cat === "file-video"
+      ? "video/*"
+      : cat === "file-music"
+        ? "audio/*"
+        : cat === "zip-box"
+          ? "archive"
+          : cat === "file-pdf-box"
+            ? "application/pdf"
+            : cat === "file-code"
+              ? "code"
+              : cat === "file-document"
+                ? "document"
+                : "data";
 };
 
 // recursive dir totals; null when the tree is absurdly large
 export const dirWalkStats = async (root: string): Promise<{ bytes: number; files: number; folders: number } | null> => {
-  let bytes = 0, files = 0, folders = 0, count = 0;
+  let bytes = 0,
+    files = 0,
+    folders = 0,
+    count = 0;
   const stack: string[] = [root];
   while (stack.length) {
     const dir = stack.pop()!;
     let dirents: Dirent[];
-    try { dirents = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    try {
+      dirents = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
     for (const d of dirents) {
       if (++count > 200000) return null;
       const p = path.join(dir, d.name);
       // symlinks: report the link's own size, never follow (cycles / dupes)
-      if (d.isSymbolicLink()) { files++; try { bytes += (await lstat(p)).size; } catch {} continue; }
-      if (d.isDirectory()) { folders++; stack.push(p); continue; }
+      if (d.isSymbolicLink()) {
+        files++;
+        try {
+          bytes += (await lstat(p)).size;
+        } catch {}
+        continue;
+      }
+      if (d.isDirectory()) {
+        folders++;
+        stack.push(p);
+        continue;
+      }
       files++;
-      try { bytes += (await stat(p)).size; } catch {}
+      try {
+        bytes += (await stat(p)).size;
+      } catch {}
     }
   }
   return { bytes, files, folders };

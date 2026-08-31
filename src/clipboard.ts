@@ -22,7 +22,12 @@ export const sysClipTool = (): ClipTool | null => {
   }
   if (process.env.DISPLAY) {
     // -l 4: serve a few requests (target probe + fetch) then exit so we don't own it forever
-    return { get: "xclip", put: "xclip", putBase: ["-selection", "clipboard", "-l", "4"], getArgs: ["-selection", "clipboard", "-o", "-t", CLIP_TYPE] };
+    return {
+      get: "xclip",
+      put: "xclip",
+      putBase: ["-selection", "clipboard", "-l", "4"],
+      getArgs: ["-selection", "clipboard", "-o", "-t", CLIP_TYPE],
+    };
   }
   return null;
 };
@@ -31,7 +36,9 @@ export const sysClipTool = (): ClipTool | null => {
 const decodeFileUri = (l: string): string => {
   let u = l.slice(7);
   if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
-  try { u = decodeURIComponent(u); } catch {}
+  try {
+    u = decodeURIComponent(u);
+  } catch {}
   return u;
 };
 
@@ -53,9 +60,7 @@ export const parseCopiedFiles = (text: string): CopiedFiles | null => {
   if (!lines.length) return null;
   const op: "copy" | "move" = lines[0] === "cut" ? "move" : "copy";
   const body = lines[0] === "copy" || lines[0] === "cut" ? lines.slice(1) : lines;
-  const paths = body
-    .filter((l) => l.startsWith("file://"))
-    .map(decodeFileUri);
+  const paths = body.filter((l) => l.startsWith("file://")).map(decodeFileUri);
   if (!paths.length) return null;
   return { op, paths };
 };
@@ -66,7 +71,11 @@ type ClipLog = (msg: string) => void;
 
 // publish plain-text full paths (one per line) so paste-after-copy works in
 // any app; fails silently with a log line when no tool is available
-export const publishPathsToSystemClipboard = (mode: string, items: { path: string }[], log: ClipLog = () => {}): void => {
+export const publishPathsToSystemClipboard = (
+  mode: string,
+  items: { path: string }[],
+  log: ClipLog = () => {},
+): void => {
   const t = sysClipTool();
   if (!t || !items.length) return;
   const payload = items.map((i) => i.path).join("\n");
@@ -83,7 +92,10 @@ export const publishPathsToSystemClipboard = (mode: string, items: { path: strin
 // read a file payload from the system clipboard (gnome-copied-files only)
 export const readCopiedFilesFromSystemClipboard = async (log: ClipLog = () => {}): Promise<CopiedFiles | null> => {
   const t = sysClipTool();
-  if (!t) { log("paste: no system clipboard tool"); return null; }
+  if (!t) {
+    log("paste: no system clipboard tool");
+    return null;
+  }
   log(`paste: reading system clipboard via ${t.get}`);
   try {
     const { stdout } = await execFileP(t.get, t.getArgs);

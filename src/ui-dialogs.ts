@@ -57,7 +57,11 @@ export const makeDialogs = (ctx: DialogsCtx) => {
           paddingTop: 1,
           paddingBottom: 1,
           flexDirection: "column",
-          onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {} },
+          onMouseDown: (ev: any) => {
+            try {
+              ev.stopPropagation?.();
+            } catch {}
+          },
         },
         ...opts.rows(),
       ),
@@ -85,7 +89,12 @@ export const makeDialogs = (ctx: DialogsCtx) => {
         flexDirection: "row",
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle(), ctx.colors(), false, ctx.colors().sidebarBg),
-        onMouseDown: (ev: any) => { try { ev.stopPropagation?.(); } catch {}; onPick(); },
+        onMouseDown: (ev: any) => {
+          try {
+            ev.stopPropagation?.();
+          } catch {}
+          onPick();
+        },
         onMouseOver: () => setBg(true),
         onMouseOut: () => setBg(false),
       },
@@ -109,10 +118,7 @@ export type ConflictCtx = {
   floats: Floats;
 };
 
-export const makeConflict = (
-  dialogs: ReturnType<typeof makeDialogs>,
-  ctx: ConflictCtx,
-) => {
+export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: ConflictCtx) => {
   const { openDialog, closeDialog, dialogBtn } = dialogs;
 
   const CONFLICT_W = 48;
@@ -165,7 +171,10 @@ export const makeConflict = (
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` an item called "${name}" already exists in ${parentName}`.slice(0, CONFLICT_W - 1), fg: c.sidebarFgMuted }),
+          Text({
+            content: ` an item called "${name}" already exists in ${parentName}`.slice(0, CONFLICT_W - 1),
+            fg: c.sidebarFgMuted,
+          }),
         ),
         Box({ height: 1 }),
         Box(
@@ -201,7 +210,9 @@ export const makeConflict = (
     closeConflict,
     isOpen: (): boolean => conflictOpen,
     policy: (): ConflictChoice | null => conflictPolicy,
-    resetPolicy: (): void => { conflictPolicy = null; },
+    resetPolicy: (): void => {
+      conflictPolicy = null;
+    },
   };
 };
 
@@ -219,10 +230,7 @@ export type YesNoCtx = {
 
 const YESNO_W = 36;
 
-export const makeYesNo = (
-  dialogs: ReturnType<typeof makeDialogs>,
-  ctx: YesNoCtx,
-) => {
+export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx) => {
   const { openDialog, closeDialog, dialogBtn } = dialogs;
 
   let open = false;
@@ -263,7 +271,10 @@ export const makeYesNo = (
         Box(
           { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
           mkBtn("[ No ]", c.sidebarFg, () => close()),
-          mkBtn(`[ ${yesLabel} ]`, yesFg, () => { close(); onYes(); }),
+          mkBtn(`[ ${yesLabel} ]`, yesFg, () => {
+            close();
+            onYes();
+          }),
         ),
       ],
       onClose: () => close(),
@@ -273,4 +284,3 @@ export const makeYesNo = (
 
   return { confirm, close, isOpen: (): boolean => open };
 };
-

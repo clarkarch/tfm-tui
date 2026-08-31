@@ -30,19 +30,29 @@ export const makeUndo = (sink: UndoSink) => {
 
   const undoLast = (): void => {
     const entry = undoStack.pop();
-    if (!entry) { sink.status("Nothing to undo"); return; }
+    if (!entry) {
+      sink.status("Nothing to undo");
+      return;
+    }
     void (async () => {
       let failed = 0;
       const failWhy = new Set<string>();
       for (let i = entry.units.length - 1; i >= 0; i--) {
         const u = entry.units[i];
-        try { await u?.(); } catch (err) { failed++; failWhy.add(fsErrText(err)); }
+        try {
+          await u?.();
+        } catch (err) {
+          failed++;
+          failWhy.add(fsErrText(err));
+        }
       }
       // only batches that know how to re-apply themselves stay redoable
       if (entry.redos.length) redoStack.push(entry);
       sink.refresh();
       const why = [...failWhy][0];
-      const summary = failed ? `Undo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}` : `Undid: ${entry.label}`;
+      const summary = failed
+        ? `Undo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}`
+        : `Undid: ${entry.label}`;
       sink.status(failed || !entry.redos.length ? summary : `${summary} · ctrl+y to redo`);
       sink.notify(summary, failed ? "undo failed" : "undo");
     })();
@@ -50,17 +60,27 @@ export const makeUndo = (sink: UndoSink) => {
 
   const redoLast = (): void => {
     const entry = redoStack.pop();
-    if (!entry) { sink.status("Nothing to redo"); return; }
+    if (!entry) {
+      sink.status("Nothing to redo");
+      return;
+    }
     void (async () => {
       let failed = 0;
       const failWhy = new Set<string>();
       for (const r of entry.redos) {
-        try { await r?.(); } catch (err) { failed++; failWhy.add(fsErrText(err)); }
+        try {
+          await r?.();
+        } catch (err) {
+          failed++;
+          failWhy.add(fsErrText(err));
+        }
       }
       undoStack.push(entry);
       sink.refresh();
       const why = [...failWhy][0];
-      const summary = failed ? `Redo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}` : `Redid: ${entry.label}`;
+      const summary = failed
+        ? `Redo ${entry.label} · ${failed} FAILED${why ? ` (${why})` : ""}`
+        : `Redid: ${entry.label}`;
       sink.status(summary);
       sink.notify(summary, failed ? "redo failed" : "redo");
     })();

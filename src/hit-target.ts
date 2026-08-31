@@ -17,7 +17,8 @@ export type HitTargetCtx = {
   tileRefs: Map<string, SelTileRef>;
 };
 
-export const makeHitTargetAt = (ctx: HitTargetCtx) =>
+export const makeHitTargetAt =
+  (ctx: HitTargetCtx) =>
   (x: number, y: number, dragPaths: string[] | null): DropTarget | null => {
     try {
       const num = ctx.hitTest(x, y);

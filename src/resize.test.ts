@@ -8,11 +8,18 @@ describe("makeResizeWatcher", () => {
     let rebuilds = 0;
     let resets = 0;
     const { onResize } = makeResizeWatcher({
-      resetIconQueue: () => { resets++; },
-      renderAll: () => { rebuilds++; },
+      resetIconQueue: () => {
+        resets++;
+      },
+      renderAll: () => {
+        rebuilds++;
+      },
       delayMs: 30,
     });
-    for (let i = 0; i < 8; i++) { onResize(); await sleep(5); }
+    for (let i = 0; i < 8; i++) {
+      onResize();
+      await sleep(5);
+    }
     expect(rebuilds).toBe(0); // still inside the debounce window
     await sleep(60);
     expect(rebuilds).toBe(1);
@@ -22,8 +29,12 @@ describe("makeResizeWatcher", () => {
   test("the icon queue resets BEFORE renderAll so rasters re-bake at new pixels", async () => {
     const order: string[] = [];
     const { onResize } = makeResizeWatcher({
-      resetIconQueue: () => { order.push("reset"); },
-      renderAll: () => { order.push("render"); },
+      resetIconQueue: () => {
+        order.push("reset");
+      },
+      renderAll: () => {
+        order.push("render");
+      },
       delayMs: 5,
     });
     onResize();
@@ -35,7 +46,9 @@ describe("makeResizeWatcher", () => {
     let rebuilds = 0;
     const { onResize } = makeResizeWatcher({
       resetIconQueue: () => {},
-      renderAll: () => { rebuilds++; },
+      renderAll: () => {
+        rebuilds++;
+      },
       delayMs: 10,
     });
     onResize();

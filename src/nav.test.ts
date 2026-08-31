@@ -189,7 +189,11 @@ describe("makeSessionSync", () => {
       scheduleSaveSession();
       const file = path.join(stateDir, "tfm", "session.json");
       await settleUntil(() => {
-        try { return JSON.parse(require("node:fs").readFileSync(file, "utf8")).cwd === "/a"; } catch { return false; }
+        try {
+          return JSON.parse(require("node:fs").readFileSync(file, "utf8")).cwd === "/a";
+        } catch {
+          return false;
+        }
       });
     } finally {
       delete process.env.XDG_STATE_HOME;
@@ -211,7 +215,11 @@ describe("makeSessionSync", () => {
       scheduleSaveSession();
       await new Promise((r) => setTimeout(r, 550));
       let threw = false;
-      try { require("node:fs").statSync(path.join(stateDir, "tfm", "session.json")); } catch { threw = true; }
+      try {
+        require("node:fs").statSync(path.join(stateDir, "tfm", "session.json"));
+      } catch {
+        threw = true;
+      }
       expect(threw).toBe(true);
     } finally {
       delete process.env.XDG_STATE_HOME;

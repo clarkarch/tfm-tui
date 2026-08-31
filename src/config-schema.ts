@@ -107,24 +107,215 @@ export type ThemeRow = Extract<SchemaRow, { kind: "hex" }>;
 export type UiSchemaRow = Extract<SchemaRow, { section: "ui" }>;
 
 const UI_ROWS: SchemaRow[] = [
-  { kind: "int", section: "ui", tomlKey: "sidebar-width", prop: "sidebarWidth", min: 16, max: 60, step: 1, def: 26, doc: "16..60 cells (grid + list)", label: "sidebar width", group: "layout" },
-  { kind: "int", section: "ui", tomlKey: "tile-width", prop: "tileWidth", min: 10, max: 40, step: 1, def: 20, doc: "10..40 cells (grid view)", label: "grid tile width", group: "layout" },
-  { kind: "int", section: "ui", tomlKey: "tile-height", prop: "tileHeight", min: 3, max: 10, step: 1, def: 5, doc: "3..10 cells (grid view)", label: "grid tile height", group: "layout" },
-  { kind: "int", section: "ui", tomlKey: "icon-cells", prop: "iconCells", min: 1, max: 5, step: 1, def: 3, doc: "grid icon height in rows, 1..5", label: "grid icon size", group: "layout" },
-  { kind: "int", section: "ui", tomlKey: "list-row-height", prop: "listRowHeight", min: 1, max: 3, step: 1, def: 1, doc: "list view row height in cells, 1..3 (icon scales with it)", label: "list row height", group: "layout" },
-  { kind: "int", section: "ui", tomlKey: "preview-width", prop: "previewWidth", min: 20, max: 80, step: 2, def: 40, doc: "20..80 cells", label: "preview width", group: "layout" },
-  { kind: "int", section: "ui", tomlKey: "double-click-ms", prop: "doubleClickMs", min: 100, max: 2000, step: 50, def: 400, doc: "100..2000", label: "double-click ms", group: "behavior" },
-  { kind: "int", section: "ui", tomlKey: "toast-duration-ms", prop: "toastDurationMs", min: 1000, max: 10000, step: 500, def: 3000, doc: "how long notifications stay up, 1000..10000", label: "toast duration", group: "behavior" },
-  { kind: "int", section: "ui", tomlKey: "drag-threshold-cells", prop: "dragThresholdCells", min: 1, max: 5, step: 1, def: 1, doc: "cells of movement before a press becomes a drag, 1..5", label: "drag threshold", group: "behavior" },
-  { kind: "bool", section: "ui", tomlKey: "show-hidden", prop: "showHidden", def: false, doc: "start with dotfiles visible (ctrl+h toggles at runtime)", label: "hidden files", group: "general" },
-  { kind: "bool", section: "ui", tomlKey: "preview-enabled", prop: "previewEnabled", def: false, doc: "right-side preview pane (text files, folder stats)", label: "preview pane", group: "general" },
-  { kind: "bool", section: "ui", tomlKey: "restore-session", prop: "restoreSession", def: false, doc: "true = reopen the folder from the last quit instead of the launch cwd", label: "restore session", group: "general" },
-  { kind: "bool", section: "ui", tomlKey: "transparent-bg", prop: "transparentBg", def: false, doc: "true = follow a transparent terminal bg (kitty background_opacity); false = force opaque", label: "transparent bg", group: "general" },
-  { kind: "bool", section: "ui", tomlKey: "tab-bar", prop: "tabBar", def: false, doc: "true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)", label: "tab bar", group: "general" },
-  { kind: "enum", section: "ui", tomlKey: "view-mode", prop: "viewMode", values: ["grid", "list"], def: "grid", doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns', label: "view mode", group: "general" },
-  { kind: "enum", section: "ui", tomlKey: "ui-style", prop: "uiStyle", values: ["solid", "outline"], def: "solid", doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest', label: "ui style", group: "general" },
-  { kind: "bool", section: "ui", tomlKey: "word-wrap", prop: "wordWrap", def: false, doc: "true = wrap long file names onto extra tile rows (grid view); false = single line cut with …", label: "word wrap (grid)", group: "layout" },
-  { kind: "bool", section: "ui", tomlKey: "show-launch-time", prop: "showLaunchTime", def: false, doc: "true = show a notification with the app launch time in ms (debug aid); also enabled by --debug", label: "show launch time", group: "general" },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "sidebar-width",
+    prop: "sidebarWidth",
+    min: 16,
+    max: 60,
+    step: 1,
+    def: 26,
+    doc: "16..60 cells (grid + list)",
+    label: "sidebar width",
+    group: "layout",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "tile-width",
+    prop: "tileWidth",
+    min: 10,
+    max: 40,
+    step: 1,
+    def: 20,
+    doc: "10..40 cells (grid view)",
+    label: "grid tile width",
+    group: "layout",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "tile-height",
+    prop: "tileHeight",
+    min: 3,
+    max: 10,
+    step: 1,
+    def: 5,
+    doc: "3..10 cells (grid view)",
+    label: "grid tile height",
+    group: "layout",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "icon-cells",
+    prop: "iconCells",
+    min: 1,
+    max: 5,
+    step: 1,
+    def: 3,
+    doc: "grid icon height in rows, 1..5",
+    label: "grid icon size",
+    group: "layout",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "list-row-height",
+    prop: "listRowHeight",
+    min: 1,
+    max: 3,
+    step: 1,
+    def: 1,
+    doc: "list view row height in cells, 1..3 (icon scales with it)",
+    label: "list row height",
+    group: "layout",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "preview-width",
+    prop: "previewWidth",
+    min: 20,
+    max: 80,
+    step: 2,
+    def: 40,
+    doc: "20..80 cells",
+    label: "preview width",
+    group: "layout",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "double-click-ms",
+    prop: "doubleClickMs",
+    min: 100,
+    max: 2000,
+    step: 50,
+    def: 400,
+    doc: "100..2000",
+    label: "double-click ms",
+    group: "behavior",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "toast-duration-ms",
+    prop: "toastDurationMs",
+    min: 1000,
+    max: 10000,
+    step: 500,
+    def: 3000,
+    doc: "how long notifications stay up, 1000..10000",
+    label: "toast duration",
+    group: "behavior",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "drag-threshold-cells",
+    prop: "dragThresholdCells",
+    min: 1,
+    max: 5,
+    step: 1,
+    def: 1,
+    doc: "cells of movement before a press becomes a drag, 1..5",
+    label: "drag threshold",
+    group: "behavior",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "show-hidden",
+    prop: "showHidden",
+    def: false,
+    doc: "start with dotfiles visible (ctrl+h toggles at runtime)",
+    label: "hidden files",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "preview-enabled",
+    prop: "previewEnabled",
+    def: false,
+    doc: "right-side preview pane (text files, folder stats)",
+    label: "preview pane",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "restore-session",
+    prop: "restoreSession",
+    def: false,
+    doc: "true = reopen the folder from the last quit instead of the launch cwd",
+    label: "restore session",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "transparent-bg",
+    prop: "transparentBg",
+    def: false,
+    doc: "true = follow a transparent terminal bg (kitty background_opacity); false = force opaque",
+    label: "transparent bg",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "tab-bar",
+    prop: "tabBar",
+    def: false,
+    doc: "true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)",
+    label: "tab bar",
+    group: "general",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "view-mode",
+    prop: "viewMode",
+    values: ["grid", "list"],
+    def: "grid",
+    doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns',
+    label: "view mode",
+    group: "general",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "ui-style",
+    prop: "uiStyle",
+    values: ["solid", "outline"],
+    def: "solid",
+    doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest',
+    label: "ui style",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "word-wrap",
+    prop: "wordWrap",
+    def: false,
+    doc: "true = wrap long file names onto extra tile rows (grid view); false = single line cut with …",
+    label: "word wrap (grid)",
+    group: "layout",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "show-launch-time",
+    prop: "showLaunchTime",
+    def: false,
+    doc: "true = show a notification with the app launch time in ms (debug aid); also enabled by --debug",
+    label: "show launch time",
+    group: "general",
+  },
 ];
 
 // [theme] keys are camelCase in TOML (matches the Theme type) and are NOT
@@ -223,14 +414,18 @@ export type KeySpec = { name: string; ctrl: boolean; shift: boolean; meta: boole
 
 export const parseKeySpec = (s: string): KeySpec | null => {
   if (typeof s !== "string") return null;
-  const parts = s.split("+").map((p) => p.trim().toLowerCase()).filter(Boolean);
+  const parts = s
+    .split("+")
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
   if (!parts.length) return null;
   const spec: KeySpec = { name: "", ctrl: false, shift: false, meta: false };
   for (const p of parts) {
     if (p === "ctrl" || p === "control") spec.ctrl = true;
     else if (p === "shift") spec.shift = true;
     else if (p === "alt" || p === "meta" || p === "option") spec.meta = true;
-    else if (spec.name) return null; // two key names
+    else if (spec.name)
+      return null; // two key names
     else spec.name = p;
   }
   if (!spec.name) return null;
@@ -250,10 +445,30 @@ const BARE_KEY_RE = /^[a-z0-9._-]$/;
 // are matched by length); anything else is garbage and rejected at parse time
 const KNOWN_KEY_NAMES = new Set([
   ...Array.from({ length: 24 }, (_, i) => `f${i + 1}`),
-  "escape", "return", "enter", "tab", "backspace", "delete", "insert",
-  "home", "end", "pageup", "pagedown", "up", "down", "left", "right",
-  "space", "menu", "clear", "capslock", "numlock", "scrolllock",
-  "printscreen", "pause", "contextmenu",
+  "escape",
+  "return",
+  "enter",
+  "tab",
+  "backspace",
+  "delete",
+  "insert",
+  "home",
+  "end",
+  "pageup",
+  "pagedown",
+  "up",
+  "down",
+  "left",
+  "right",
+  "space",
+  "menu",
+  "clear",
+  "capslock",
+  "numlock",
+  "scrolllock",
+  "printscreen",
+  "pause",
+  "contextmenu",
 ]);
 
 export const validateKeybindSpec = (s: string): string | null => {
@@ -269,7 +484,14 @@ export const validateKeybindSpec = (s: string): string | null => {
 
 // mirror OpenTUI's matcher (keybinding.internal.ts): name + modifiers, with
 // the kitty base-layout codepoint as a fallback for non-Latin layouts
-export type KeyEventLike = { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; option?: boolean; baseCode?: number };
+export type KeyEventLike = {
+  name?: string;
+  ctrl?: boolean;
+  shift?: boolean;
+  meta?: boolean;
+  option?: boolean;
+  baseCode?: number;
+};
 
 export const keyMatch = (e: KeyEventLike, spec: KeySpec): boolean => {
   if (!!e.ctrl !== spec.ctrl || !!e.shift !== spec.shift || (!!e.meta || !!e.option) !== spec.meta) return false;
@@ -298,7 +520,13 @@ export const keybindConflict = (cfg: Config, action: KeyAction, specStr: string)
     if (row.action === action) continue;
     for (const s of cfg.keys[row.action] ?? []) {
       const other = parseKeySpec(s);
-      if (other && other.name === spec.name && other.ctrl === spec.ctrl && other.shift === spec.shift && other.meta === spec.meta)
+      if (
+        other &&
+        other.name === spec.name &&
+        other.ctrl === spec.ctrl &&
+        other.shift === spec.shift &&
+        other.meta === spec.meta
+      )
         return row.action;
     }
   }
@@ -318,10 +546,16 @@ const clampInt = (v: unknown, min: number, max: number, fallback: number): numbe
 // per-row coercion of one raw TOML value; undefined = keep default
 const coerceRow = (row: SchemaRow, raw: unknown): { ok: boolean; value: unknown } => {
   switch (row.kind) {
-    case "int": return { ok: true, value: clampInt(raw, row.min, row.max, row.def) };
-    case "bool": return typeof raw === "boolean" ? { ok: true, value: raw } : { ok: false, value: row.def };
-    case "enum": return typeof raw === "string" && (row.values as readonly string[]).includes(raw) ? { ok: true, value: raw } : { ok: false, value: row.def };
-    case "hex": return typeof raw === "string" && HEX_RE.test(raw) ? { ok: true, value: raw } : { ok: false, value: row.def };
+    case "int":
+      return { ok: true, value: clampInt(raw, row.min, row.max, row.def) };
+    case "bool":
+      return typeof raw === "boolean" ? { ok: true, value: raw } : { ok: false, value: row.def };
+    case "enum":
+      return typeof raw === "string" && (row.values as readonly string[]).includes(raw)
+        ? { ok: true, value: raw }
+        : { ok: false, value: row.def };
+    case "hex":
+      return typeof raw === "string" && HEX_RE.test(raw) ? { ok: true, value: raw } : { ok: false, value: row.def };
     case "key": {
       if (!Array.isArray(raw)) return { ok: false, value: row.def };
       const specs = raw
@@ -349,8 +583,7 @@ export function parseConfigDoc(doc: unknown): Config {
   return cfg;
 }
 
-const tomlString = (s: string): string =>
-  `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
+const tomlString = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 
 const tomlValue = (v: string | number | boolean | string[]): string => {
   if (Array.isArray(v)) return `[${v.map(tomlString).join(", ")}]`;

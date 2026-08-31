@@ -9,28 +9,42 @@ export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeou
 
 export const makeLookup = (ctx: LookupCtx) => {
   const byId = (id: string): any => {
-    try { return ctx.root().findDescendantById(id); } catch { return null; }
+    try {
+      return ctx.root().findDescendantById(id);
+    } catch {
+      return null;
+    }
   };
 
   // set a TEXT node's content by id — ids must live on the Text, not its
   // wrapper Box (boxes have no .content, mutating them no-ops)
   const setTextOnId = (nodeId: string, s: string): void => {
     const n: any = byId(nodeId);
-    if (n) { try { n.content = s; } catch {} }
+    if (n) {
+      try {
+        n.content = s;
+      } catch {}
+    }
   };
 
   const setOnId = (id: string, fn: (n: any) => void): void => {
     const n: any = byId(id);
     if (!n) return;
-    try { fn(n); } catch {}
+    try {
+      fn(n);
+    } catch {}
   };
 
   // text renderables default selectable = true — the renderer's text-selection
   // drag hijacks custom drag flows, so strip it recursively after every rebuild
   const stripSelectable = (node: any = ctx.root()): void => {
     if (!node || node.isDestroyed) return;
-    try { if (node.selectable) node.selectable = false; } catch {}
-    node.getChildren?.().forEach((c: any) => { stripSelectable(c); });
+    try {
+      if (node.selectable) node.selectable = false;
+    } catch {}
+    node.getChildren?.().forEach((c: any) => {
+      stripSelectable(c);
+    });
   };
 
   return { byId, setTextOnId, setOnId, stripSelectable };

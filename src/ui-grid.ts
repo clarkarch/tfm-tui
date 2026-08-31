@@ -42,7 +42,12 @@ export type GridRendererCtx = {
   reservedRight(): number;
   // ui-slots
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
-  makeIconSlot(name: string, states: any[], heightCells?: number, initialState?: number): { el: any; slotId: string; spec: any };
+  makeIconSlot(
+    name: string,
+    states: any[],
+    heightCells?: number,
+    initialState?: number,
+  ): { el: any; slotId: string; spec: any };
   pushThumbJob(job: any): void;
   nextIconId(): string;
   drainIconQueue(): void | Promise<void>;
@@ -86,9 +91,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       },
       ctx.makeIconSlot(icon, [{ fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().bg }], iconCells).el,
       Box({ height: 1 }),
-      ...lines.map((content, i) =>
-        Text({ content, fg: i === 0 ? ctx.colors().sidebarFgMuted : ctx.colors().divider }),
-      ),
+      ...lines.map((content, i) => Text({ content, fg: i === 0 ? ctx.colors().sidebarFgMuted : ctx.colors().divider })),
       Box({ width: slotW, height: 0 }),
     );
     scroller.content.add(pane);
@@ -123,7 +126,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const isVideo = !e.isDir && fileIsVideo(e.name);
     const wantsThumb = !e.isDir && (fileIsImage(e.name) || (isVideo && canThumbVideo()));
     let st: any = null;
-    if (wantsThumb) { try { st = statSync(key); } catch {} }
+    if (wantsThumb) {
+      try {
+        st = statSync(key);
+      } catch {}
+    }
     const useThumb = wantsThumb && st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400;
 
     let slotId: string;
@@ -131,14 +138,23 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     let iconSlotEl: ReturnType<typeof Box>;
     if (useThumb) {
       slotId = ctx.nextIconId();
-      iconSlotEl = Box({ id: slotId, width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" });
+      iconSlotEl = Box({
+        id: slotId,
+        width: slotW,
+        height: ICON_CELLS_H,
+        flexDirection: "row",
+        justifyContent: "center",
+      });
     } else {
       const s = ctx.makeIconSlot(e.isDir ? "folder" : fileIconFor(e.name), selection.tileStates(dim), ICON_CELLS_H, 0);
       slotId = s.slotId;
       iconSpec = s.spec;
       iconSlotEl = s.el;
     }
-    const tileBox = Box({ width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" }, iconSlotEl);
+    const tileBox = Box(
+      { width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" },
+      iconSlotEl,
+    );
     tile.add(tileBox);
 
     const label = e.name.length > TILE_W - 2 ? `${e.name.slice(0, TILE_W - 5)}…` : e.name;
@@ -156,7 +172,15 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     });
     tile.add(labelText);
 
-    selection.tileRefs.set(key, { iconSpec, iconSlotId: slotId, selected: false, baseFg, tileId, labelId, isDir: e.isDir });
+    selection.tileRefs.set(key, {
+      iconSpec,
+      iconSlotId: slotId,
+      selected: false,
+      baseFg,
+      tileId,
+      labelId,
+      isDir: e.isDir,
+    });
 
     if (useThumb && st) {
       ctx.pushThumbJob({
@@ -220,7 +244,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const isVideo = !e.isDir && fileIsVideo(e.name);
     const wantsThumb = !e.isDir && (fileIsImage(e.name) || (isVideo && canThumbVideo()));
     let st: any = null;
-    if (wantsThumb) { try { st = statSync(key); } catch {} }
+    if (wantsThumb) {
+      try {
+        st = statSync(key);
+      } catch {}
+    }
     const useThumb = wantsThumb && st && typeof st.size === "number" && st.size > 0 && st.size <= 26214400;
 
     let slotId: string;
@@ -243,7 +271,15 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     row.add(Box({ flexGrow: 1 }));
     row.add(Text({ content: e.isDir ? "" : fmtBytes(e.size ?? 0).padStart(9), fg: colors.sidebarFgMuted }));
     row.add(Text({ content: fmtDateShort(e.mtimeMs), fg: colors.sidebarFgMuted }));
-    selection.tileRefs.set(key, { iconSpec, iconSlotId: slotId, selected: false, baseFg, tileId: rowId, labelId, isDir: e.isDir });
+    selection.tileRefs.set(key, {
+      iconSpec,
+      iconSlotId: slotId,
+      selected: false,
+      baseFg,
+      tileId: rowId,
+      labelId,
+      isDir: e.isDir,
+    });
     if (useThumb && st) {
       ctx.pushThumbJob({
         slotId,
@@ -293,10 +329,13 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       await ctx.waitForResolution();
       if (gen !== gridGen) return;
       buildEmptyPane("folder", [
-        q ? "no matches"
-          : state.cwd === RECENT_URI ? "no recent files"
-          : state.cwd === STARRED_URI ? "nothing starred yet"
-          : "this folder is empty",
+        q
+          ? "no matches"
+          : state.cwd === RECENT_URI
+            ? "no recent files"
+            : state.cwd === STARRED_URI
+              ? "nothing starred yet"
+              : "this folder is empty",
       ]);
       void ctx.drainIconQueue();
       return;
@@ -334,7 +373,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     }
 
     // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
-    selection.tileRefs.forEach((_: any, key: string) => { if (ctx.isCutKey(key)) selection.setTileVisual(key, 0); });
+    selection.tileRefs.forEach((_: any, key: string) => {
+      if (ctx.isCutKey(key)) selection.setTileVisual(key, 0);
+    });
 
     // fresh Text nodes default selectable=true; strip AFTER the async rebuild or
     // the renderer's text-selection drag hijacks file-drag events

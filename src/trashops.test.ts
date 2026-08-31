@@ -30,7 +30,10 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
   await Bun.sleep(10);
 };
 
-const recordingSink = (): TrashOpsSink & { notes: string[]; batches: { label: string; units: number; redos: number }[] } => {
+const recordingSink = (): TrashOpsSink & {
+  notes: string[];
+  batches: { label: string; units: number; redos: number }[];
+} => {
   const notes: string[] = [];
   const batches: { label: string; units: number; redos: number }[] = [];
   return {
@@ -184,8 +187,12 @@ describe("makeTrashConfirms", () => {
         asked.push({ message, yesLabel, danger });
         onYes = cb;
       },
-      emptyTrash: () => { fired.push("empty"); },
-      deleteForever: (paths) => { fired.push(`delete:${paths.join(",")}`); },
+      emptyTrash: () => {
+        fired.push("empty");
+      },
+      deleteForever: (paths) => {
+        fired.push(`delete:${paths.join(",")}`);
+      },
     });
     return { asked, fired, confirms, runYes: () => onYes?.() };
   };

@@ -13,7 +13,10 @@ const makeCtx = () => {
   const floats: Floats = makeFloats();
   const ctx = {
     byId: () => null,
-    rootAdd: (node: any) => { lastAdded = node; calls.push("add-scrim"); },
+    rootAdd: (node: any) => {
+      lastAdded = node;
+      calls.push("add-scrim");
+    },
     stripSelectable: () => {},
     termH: () => 24,
     uiStyle: () => "solid" as const,
@@ -81,7 +84,9 @@ describe("openDialog chokepoint", () => {
     const dialogs = makeDialogs(ctx);
     const yesNo = makeYesNo(dialogs, { colors: ctx.colors, canOpen: () => true, floats });
     let confirmed = false;
-    yesNo.confirm("Empty Trash?", "Empty", () => { confirmed = true; });
+    yesNo.confirm("Empty Trash?", "Empty", () => {
+      confirmed = true;
+    });
     expect(floats.top()).toBe("yesno");
     yesNo.close();
     expect(floats.isOpen("yesno")).toBe(false);
@@ -92,7 +97,15 @@ describe("openDialog chokepoint", () => {
     const { ctx, lastAdded } = makeCtx();
     const { openDialog } = makeDialogs(ctx);
     let closed = false;
-    openDialog({ id: "tfm-test", zIndex: 3300, width: 20, rows: () => [], onClose: () => { closed = true; } });
+    openDialog({
+      id: "tfm-test",
+      zIndex: 3300,
+      width: 20,
+      rows: () => [],
+      onClose: () => {
+        closed = true;
+      },
+    });
     const scrim = lastAdded();
     expect(typeof scrim.props.onMouseDown).toBe("function");
     scrim.props.onMouseDown({});

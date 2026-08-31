@@ -17,7 +17,10 @@ const mkCtx = (calls: string[], fail?: "drops" | "release" | "destroy"): QuitCtx
       calls.push("destroy");
       if (fail === "destroy") throw new Error("renderer gone");
     },
-    exit: (code) => { calls.push(`exit:${code}`); codes.push(code); },
+    exit: (code) => {
+      calls.push(`exit:${code}`);
+      codes.push(code);
+    },
   };
 };
 

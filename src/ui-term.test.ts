@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { hexToRgb16, pasteDroppedPaths, promptClickArrows, ptyScreenState, shellQuotePaths, terminalProbeReply, xtShiftEscapeFrame, type TermDropSink } from "./ui-term";
+import {
+  hexToRgb16,
+  pasteDroppedPaths,
+  promptClickArrows,
+  ptyScreenState,
+  shellQuotePaths,
+  terminalProbeReply,
+  xtShiftEscapeFrame,
+  type TermDropSink,
+} from "./ui-term";
 
 const makeSink = () => {
   const calls: string[] = [];
@@ -109,13 +118,7 @@ describe("pasteDroppedPaths", () => {
   test("pastes quoted paths + trailing space, focuses, logs; returns true", () => {
     const { calls, sink } = makeSink();
     expect(pasteDroppedPaths(["/tmp/a.txt", "/tmp/b c"], sink)).toBe(true);
-    expect(calls).toEqual([
-      "finishDrag",
-      "cue:false",
-      "write:'/tmp/a.txt' '/tmp/b c' ",
-      "focus",
-      "log:term drop n=2",
-    ]);
+    expect(calls).toEqual(["finishDrag", "cue:false", "write:'/tmp/a.txt' '/tmp/b c' ", "focus", "log:term drop n=2"]);
   });
 
   test("null payload still cleans up drag state and cue but writes nothing", () => {

@@ -62,7 +62,9 @@ export const makeSelection = (ctx: SelectionCtx) => {
     }
     const labelReal: any = ctx.byId(refs.labelId);
     if (labelReal) {
-      try { labelReal.fg = mode === 2 ? ctx.colors().accent : cut ? ctx.colors().sidebarFgMuted : refs.baseFg; } catch {}
+      try {
+        labelReal.fg = mode === 2 ? ctx.colors().accent : cut ? ctx.colors().sidebarFgMuted : refs.baseFg;
+      } catch {}
     }
     const tileReal: any = ctx.byId(refs.tileId);
     if (tileReal) {
@@ -83,7 +85,9 @@ export const makeSelection = (ctx: SelectionCtx) => {
 
   const selPaths = (): ClipItem[] => {
     const out: ClipItem[] = [];
-    tileRefs.forEach((r, k) => { if (r.selected) out.push({ path: k, isDir: r.isDir }); });
+    tileRefs.forEach((r, k) => {
+      if (r.selected) out.push({ path: k, isDir: r.isDir });
+    });
     return out;
   };
 
@@ -91,17 +95,30 @@ export const makeSelection = (ctx: SelectionCtx) => {
   const updateSelectionStatusReal = (): void => {
     const gen = ++selStatusGen;
     const sel: { key: string; isDir: boolean }[] = [];
-    tileRefs.forEach((r, k) => { if (r.selected) sel.push({ key: k, isDir: r.isDir }); });
+    tileRefs.forEach((r, k) => {
+      if (r.selected) sel.push({ key: k, isDir: r.isDir });
+    });
     const setStatus = (s: string) => {
       if (gen !== selStatusGen) return;
       const status: any = ctx.byId("tfm-status-label");
-      if (status) { try { status.content = s; } catch {} }
+      if (status) {
+        try {
+          status.content = s;
+        } catch {}
+      }
     };
-    if (sel.length === 0) { setStatus(""); return; }
+    if (sel.length === 0) {
+      setStatus("");
+      return;
+    }
     // total size of the selected files (dirs contribute their item count instead)
     let bytes = 0;
     for (const s of sel) {
-      if (!s.isDir) { try { bytes += statSync(s.key).size; } catch {} }
+      if (!s.isDir) {
+        try {
+          bytes += statSync(s.key).size;
+        } catch {}
+      }
     }
     const dirs = sel.filter((s) => s.isDir);
     if (dirs.length === 0) {
@@ -110,9 +127,13 @@ export const makeSelection = (ctx: SelectionCtx) => {
     }
     void (async () => {
       let contained = 0;
-      await Promise.all(dirs.map(async (d) => {
-        try { contained += (await readdir(d.key)).length; } catch {}
-      }));
+      await Promise.all(
+        dirs.map(async (d) => {
+          try {
+            contained += (await readdir(d.key)).length;
+          } catch {}
+        }),
+      );
       const bits = [`${sel.length} selected`];
       if (bytes > 0) bits.push(fmtBytes(bytes));
       if (dirs.length === 1 && sel.length === 1) bits.push(`${contained} items`);
@@ -122,7 +143,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
 
   const clearTileSelection = (): void => {
     tileRefs.forEach((refs, k) => {
-      if (refs.selected) { refs.selected = false; setTileVisual(k, 0); }
+      if (refs.selected) {
+        refs.selected = false;
+        setTileVisual(k, 0);
+      }
     });
     updateSelectionStatusReal();
   };
@@ -135,7 +159,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
     for (let i = lo; i <= hi; i++) {
       const k = focusKeys[i]!;
       const r = tileRefs.get(k);
-      if (r) { r.selected = true; setTileVisual(k, 2); }
+      if (r) {
+        r.selected = true;
+        setTileVisual(k, 2);
+      }
     }
   };
 
@@ -146,7 +173,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
     clearTileSelection();
     const key = focusKeys[idx]!;
     const refs = tileRefs.get(key);
-    if (refs) { refs.selected = true; setTileVisual(key, 2); }
+    if (refs) {
+      refs.selected = true;
+      setTileVisual(key, 2);
+    }
     focusIdx = idx;
     void ctx.renderPreview();
     const scroller = ctx.scroller();
@@ -171,13 +201,18 @@ export const makeSelection = (ctx: SelectionCtx) => {
   };
 
   const selectAll = (): void => {
-    tileRefs.forEach((r, k) => { r.selected = true; setTileVisual(k, 2); });
+    tileRefs.forEach((r, k) => {
+      r.selected = true;
+      setTileVisual(k, 2);
+    });
     updateSelectionStatusReal();
   };
 
   // re-apply resting visuals after a cut/copy/paste so dimming tracks the clipboard
   const refreshCutVisuals = (): void => {
-    tileRefs.forEach((refs, key) => { if (!refs.selected) setTileVisual(key, 0); });
+    tileRefs.forEach((refs, key) => {
+      if (!refs.selected) setTileVisual(key, 0);
+    });
   };
 
   return {
@@ -185,15 +220,25 @@ export const makeSelection = (ctx: SelectionCtx) => {
     // let accessors — renderGrid (ui-grid) writes at every rebuild tail, the
     // keyboard router reads for paging/extend; never snapshot these
     focusKeys: (): string[] => focusKeys,
-    setFocusKeys: (keys: string[]): void => { focusKeys = keys; },
+    setFocusKeys: (keys: string[]): void => {
+      focusKeys = keys;
+    },
     focusIdx: (): number => focusIdx,
-    setFocusIdx: (v: number): void => { focusIdx = v; },
+    setFocusIdx: (v: number): void => {
+      focusIdx = v;
+    },
     colsAtBuild: (): number => colsAtBuild,
-    setCols: (v: number): void => { colsAtBuild = v; },
+    setCols: (v: number): void => {
+      colsAtBuild = v;
+    },
     rowHAtBuild: (): number => rowHAtBuild,
-    setRowH: (v: number): void => { rowHAtBuild = v; },
+    setRowH: (v: number): void => {
+      rowHAtBuild = v;
+    },
     selAnchor: (): number | null => selAnchor,
-    setSelAnchor: (v: number | null): void => { selAnchor = v; },
+    setSelAnchor: (v: number | null): void => {
+      selAnchor = v;
+    },
     // methods
     setTileVisual,
     tileStates,

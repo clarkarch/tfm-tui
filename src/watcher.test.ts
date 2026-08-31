@@ -24,7 +24,9 @@ describe("makeCwdWatcher", () => {
       cwd: () => dir,
       isVirtualCwd: () => false,
       isRenaming: () => false,
-      renderGrid: () => { gridRenders++; },
+      renderGrid: () => {
+        gridRenders++;
+      },
     });
     syncCwdWatcher();
     writeFileSync(path.join(dir, "new-file"), "x");
@@ -38,7 +40,9 @@ describe("makeCwdWatcher", () => {
       cwd: () => dir,
       isVirtualCwd: () => false,
       isRenaming: () => false,
-      renderGrid: () => { gridRenders++; },
+      renderGrid: () => {
+        gridRenders++;
+      },
     });
     syncCwdWatcher();
     for (let i = 0; i < 10; i++) writeFileSync(path.join(dir, `f${i}`), "x");
@@ -56,7 +60,9 @@ describe("makeCwdWatcher", () => {
       cwd: () => dir,
       isVirtualCwd: () => false,
       isRenaming: () => renaming,
-      renderGrid: () => { gridRenders++; },
+      renderGrid: () => {
+        gridRenders++;
+      },
     });
     syncCwdWatcher();
     writeFileSync(path.join(dir, "while-renaming"), "x");
@@ -76,7 +82,9 @@ describe("makeCwdWatcher", () => {
       cwd: () => (virtual ? "recent://" : dir),
       isVirtualCwd: () => virtual,
       isRenaming: () => false,
-      renderGrid: () => { gridRenders++; },
+      renderGrid: () => {
+        gridRenders++;
+      },
     });
     syncCwdWatcher();
     virtual = true;

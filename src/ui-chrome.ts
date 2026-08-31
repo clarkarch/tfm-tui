@@ -32,50 +32,64 @@ export type ChromeCtx = {
   byId(id: string): any;
   uiStyle(): "solid" | "outline";
   colors(): Theme & Record<string, any>;
-  sw(): number;                       // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
-  sideInnerW(): number;               // index keeps this helper (outline insets by 2)
-  tabBar(): boolean;                  // config.ui.tabBar
+  sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
+  sideInnerW(): number; // index keeps this helper (outline insets by 2)
+  tabBar(): boolean; // config.ui.tabBar
   renderAll(): void;
   navigate(target: string): void;
   blurTerminal(): void;
   closeFileMenu(): void;
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   sidebarEntriesFor(place: Place, x: number, y: number): ListEntry[];
-  finishDrag(): void;                 // was finishDragCtx()
+  finishDrag(): void; // was finishDragCtx()
   dlog(msg: string): void;
   trashPaths(paths: string[]): void;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
-  kbActive(): boolean;                // sidebarActive
-  kbIdx(): number;                    // placeIdx
-  tabs(): { list: Tab[]; active: number };   // live tabModel read
+  kbActive(): boolean; // sidebarActive
+  kbIdx(): number; // placeIdx
+  tabs(): { list: Tab[]; active: number }; // live tabModel read
   closeTab(i: number): void;
   switchTab(i: number): void;
   newTab(): void;
   hoverBtn(id: string, iconName: string, onMouseDown: (ev: any) => void): any;
   stripSelectable(): void;
   drainIconQueue(): void;
-  makeIconSlot(name: string, states: IconState[], heightCells?: number, initialState?: number, onMouseDown?: (ev: any) => void, statesFactory?: () => IconState[]): { el: any; slotId: string; spec: IconSpec };
+  makeIconSlot(
+    name: string,
+    states: IconState[],
+    heightCells?: number,
+    initialState?: number,
+    onMouseDown?: (ev: any) => void,
+    statesFactory?: () => IconState[],
+  ): { el: any; slotId: string; spec: IconSpec };
   setIconState(spec: any, stateIdx: number): boolean;
   home: string;
-  stateCwd(): string;                 // live state.cwd
+  stateCwd(): string; // live state.cwd
 };
 
 export const makeChrome = (ctx: ChromeCtx) => {
   // --- Places sidebar (rebuilt from scratch on every render, selection = cwd) ---
-  const placesHost: { row: ReturnType<typeof Box>; rowId: string; labelId: string; specs: IconSpec[]; selected: boolean; place: Place }[] = [];
+  const placesHost: {
+    row: ReturnType<typeof Box>;
+    rowId: string;
+    labelId: string;
+    specs: IconSpec[];
+    selected: boolean;
+    place: Place;
+  }[] = [];
   let mousePlaceIdx = -1;
 
   const mountDevice = (device: string) => {
     spawn("udisksctl", ["mount", "-b", device], { stdio: "ignore" });
-    setTimeout(() => { void loadSystemPlaces().then(() => ctx.renderAll()); }, 1200);
+    setTimeout(() => {
+      void loadSystemPlaces().then(() => ctx.renderAll());
+    }, 1200);
   };
 
   const makeRow = (place: Place): ReturnType<typeof Box> => {
     const idx = placesHost.length;
     const placeTarget = (): string | null =>
-      place.scheme === "recent" ? RECENT_URI
-      : place.scheme === "starred" ? STARRED_URI
-      : place.path;
+      place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : place.path;
     const selected = place.path
       ? path.resolve(place.path) === path.resolve(ctx.stateCwd())
       : !!place.scheme && ctx.stateCwd() === placeTarget();
@@ -95,13 +109,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const iconSlot = ctx.makeIconSlot(place.icon, iconStates, 1, selected ? 2 : 0);
     let ejectSlot: ReturnType<typeof ctx.makeIconSlot> | undefined;
     if (place.ejectable && place.device) {
-      ejectSlot = ctx.makeIconSlot(
-        "eject",
-        iconStates,
-        1,
-        selected ? 2 : 0,
-        () => ejectDevice(place.device!),
-      );
+      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selected ? 2 : 0, () => ejectDevice(place.device!));
     }
     const _specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
 
@@ -130,7 +138,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
           const keys = gridDrag.keys;
           ctx.finishDrag();
           const target = placeTarget();
-          ctx.dlog(`place drop ${place.label} keys=${keys?.length ?? -1} scheme=${place.scheme ?? "-"} target=${target}`);
+          ctx.dlog(
+            `place drop ${place.label} keys=${keys?.length ?? -1} scheme=${place.scheme ?? "-"} target=${target}`,
+          );
           if (!keys || !target || place.scheme) return;
           const rest = keys.filter((k) => k.path !== target);
           if (!rest.length) return;
@@ -142,8 +152,16 @@ export const makeChrome = (ctx: ChromeCtx) => {
             void ctx.moveInto(target, rest);
           }
         },
-        onMouseOver: () => { mousePlaceIdx = idx; normalizePlaces(); },
-        onMouseOut: () => { if (mousePlaceIdx === idx) { mousePlaceIdx = -1; normalizePlaces(); } },
+        onMouseOver: () => {
+          mousePlaceIdx = idx;
+          normalizePlaces();
+        },
+        onMouseOut: () => {
+          if (mousePlaceIdx === idx) {
+            mousePlaceIdx = -1;
+            normalizePlaces();
+          }
+        },
       },
       iconSlot.el,
     );
@@ -167,7 +185,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
 
   const ejectDevice = (device: string) => {
     spawn("udisksctl", ["unmount", "-b", device], { stdio: "ignore" });
-    setTimeout(() => { void loadSystemPlaces().then(() => ctx.renderAll()); }, 1500);
+    setTimeout(() => {
+      void loadSystemPlaces().then(() => ctx.renderAll());
+    }, 1500);
   };
 
   const renderSidebar = () => {
@@ -203,7 +223,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
     // the ＋ button stays reachable); setting OFF = adaptive — the strip only
     // earns a row once there's something to switch to (visible=false is
     // display:none in yoga — no empty row left)
-    try { bar.visible = ctx.tabBar() || ctx.tabs().list.length > 1; } catch {}
+    try {
+      bar.visible = ctx.tabBar() || ctx.tabs().list.length > 1;
+    } catch {}
     clearChildren(bar);
     ctx.tabs().list.forEach((t, i) => {
       const tabId = `tfm-tab-${i}`;
@@ -214,57 +236,85 @@ export const makeChrome = (ctx: ChromeCtx) => {
       // ✕ flatten target must match the chip's own fill, or the raster shows as
       // a square patch on the active tab (accentBg) vs the canvas (rest states)
       const closeStates = (): IconState[] => [
-        { fg: colors.sidebarFgMuted, bg: i === ctx.tabs().active ? colors.accentBg : slotBg(ctx.uiStyle(), colors, colors.bg) },
+        {
+          fg: colors.sidebarFgMuted,
+          bg: i === ctx.tabs().active ? colors.accentBg : slotBg(ctx.uiStyle(), colors, colors.bg),
+        },
         { fg: colors.white, bg: colors.hoverBg },
       ];
-      const closeSlot = ctx.makeIconSlot("close", closeStates(), 1, 0, (ev: any) => {
-        try { ev.stopPropagation?.(); } catch {} // ✕ must not also activate the chip
-        ctx.closeTab(i);
-      }, closeStates);
+      const closeSlot = ctx.makeIconSlot(
+        "close",
+        closeStates(),
+        1,
+        0,
+        (ev: any) => {
+          try {
+            ev.stopPropagation?.();
+          } catch {} // ✕ must not also activate the chip
+          ctx.closeTab(i);
+        },
+        closeStates,
+      );
       // makeIconSlot only takes onMouseDown — hover swap goes on a wrapper
       const closeWrap = Box(
         {
-          onMouseOver: () => { ctx.setIconState(closeSlot.spec, 1); },
-          onMouseOut: () => { ctx.setIconState(closeSlot.spec, 0); },
+          onMouseOver: () => {
+            ctx.setIconState(closeSlot.spec, 1);
+          },
+          onMouseOut: () => {
+            ctx.setIconState(closeSlot.spec, 0);
+          },
         },
         closeSlot.el,
       );
-      bar.add(Box(
-        {
-          id: tabId,
-          height: 1,
-          maxWidth: 24,
-          flexDirection: "row",
-          columnGap: 1,
-          paddingLeft: 1,
-          paddingRight: 1,
-          ...tileSurface(ctx.uiStyle(), colors, i === ctx.tabs().active ? "selected" : "rest"),
-          onMouseDown: (ev: any) => {
-            try { ev.stopPropagation?.(); } catch {}
-            ctx.closeFileMenu();
-            if (ev.button === 1) ctx.closeTab(i); // middle-click also closes
-            else ctx.switchTab(i);
+      bar.add(
+        Box(
+          {
+            id: tabId,
+            height: 1,
+            maxWidth: 24,
+            flexDirection: "row",
+            columnGap: 1,
+            paddingLeft: 1,
+            paddingRight: 1,
+            ...tileSurface(ctx.uiStyle(), colors, i === ctx.tabs().active ? "selected" : "rest"),
+            onMouseDown: (ev: any) => {
+              try {
+                ev.stopPropagation?.();
+              } catch {}
+              ctx.closeFileMenu();
+              if (ev.button === 1)
+                ctx.closeTab(i); // middle-click also closes
+              else ctx.switchTab(i);
+            },
+            onMouseDrop: () => {
+              const keys = gridDrag.keys;
+              ctx.finishDrag();
+              const first = keys?.length === 1 ? keys[0] : undefined;
+              ctx.dlog(`tab drop chip=${i} keys=${keys?.length ?? -1} dir=${first?.isDir ?? "-"}`);
+              if (!first?.isDir) return;
+              ctx.switchTab(i);
+              ctx.navigate(first.path);
+            },
+            onMouseOver: () => {
+              // drop-target cue: light the chip like the selected tab while a
+              // single-folder drag hovers it
+              if (dragTabDir() !== null) {
+                const n: any = ctx.byId(tabId);
+                if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected"));
+                return;
+              }
+              if (i !== ctx.tabs().active) {
+                const n: any = ctx.byId(tabId);
+                if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "hover"));
+              }
+            },
+            onMouseOut: paint,
           },
-          onMouseDrop: () => {
-            const keys = gridDrag.keys;
-            ctx.finishDrag();
-            const first = keys?.length === 1 ? keys[0] : undefined;
-            ctx.dlog(`tab drop chip=${i} keys=${keys?.length ?? -1} dir=${first?.isDir ?? "-"}`);
-            if (!first?.isDir) return;
-            ctx.switchTab(i);
-            ctx.navigate(first.path);
-          },
-          onMouseOver: () => {
-            // drop-target cue: light the chip like the selected tab while a
-            // single-folder drag hovers it
-            if (dragTabDir() !== null) { const n: any = ctx.byId(tabId); if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected")); return; }
-            if (i !== ctx.tabs().active) { const n: any = ctx.byId(tabId); if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "hover")); }
-          },
-          onMouseOut: paint,
-        },
-        Text({ content: tabTitle(t), fg: i === ctx.tabs().active ? colors.white : colors.sidebarFg }),
-        closeWrap,
-      ));
+          Text({ content: tabTitle(t), fg: i === ctx.tabs().active ? colors.white : colors.sidebarFg }),
+          closeWrap,
+        ),
+      );
     });
     bar.add(ctx.hoverBtn("tfm-tab-new", "plus", () => ctx.newTab()));
     ctx.stripSelectable();
@@ -288,12 +338,21 @@ export const makeChrome = (ctx: ChromeCtx) => {
       const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
       const row: any = ctx.byId(rec.rowId);
       const label: any = ctx.byId(rec.labelId);
-      if (row) applySurface(row, isSel
-        ? { backgroundColor: colors.accentBg }
-        : isHover ? { backgroundColor: colors.hoverBg }
-        : rowSurface(ctx.uiStyle(), colors, "rest"));
-      rec.specs.forEach((s) => { ctx.setIconState(s, isSel ? 2 : isHover ? 1 : 0); });
-      try { if (label) label.fg = isSel ? colors.accent : colors.sidebarFg; } catch {}
+      if (row)
+        applySurface(
+          row,
+          isSel
+            ? { backgroundColor: colors.accentBg }
+            : isHover
+              ? { backgroundColor: colors.hoverBg }
+              : rowSurface(ctx.uiStyle(), colors, "rest"),
+        );
+      rec.specs.forEach((s) => {
+        ctx.setIconState(s, isSel ? 2 : isHover ? 1 : 0);
+      });
+      try {
+        if (label) label.fg = isSel ? colors.accent : colors.sidebarFg;
+      } catch {}
     });
   };
 
@@ -305,7 +364,13 @@ export const makeChrome = (ctx: ChromeCtx) => {
     placesHost,
     mountDevice,
     ejectDevice,
-    setMousePlace: (idx: number) => { mousePlaceIdx = idx; normalizePlaces(); },
-    clearMousePlace: () => { mousePlaceIdx = -1; normalizePlaces(); },
+    setMousePlace: (idx: number) => {
+      mousePlaceIdx = idx;
+      normalizePlaces();
+    },
+    clearMousePlace: () => {
+      mousePlaceIdx = -1;
+      normalizePlaces();
+    },
   };
 };

@@ -51,7 +51,7 @@ describe("parseConfigDoc", () => {
   });
 
   test("[keys]: filters invalid specs, dedupes, falls back when none left", () => {
-    const cfg = parseConfigDoc({ keys: { "new-tab": ["ctrl+n", "ctrl+n", "bare", "bogus+keys+x"], "quit": [] } });
+    const cfg = parseConfigDoc({ keys: { "new-tab": ["ctrl+n", "ctrl+n", "bare", "bogus+keys+x"], quit: [] } });
     expect(cfg.keys.newTab).toEqual(["ctrl+n"]);
     expect(cfg.keys.quit).toEqual(["ctrl+q"]);
   });

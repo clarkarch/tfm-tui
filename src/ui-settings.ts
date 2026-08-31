@@ -86,14 +86,27 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const groups = (): SettingGroup[] => ctx.settingGroups();
   const rowsOf = (gi: number): SettingRow[] => groups()[gi]?.rows ?? [];
 
-  const rootMenuItems = (): { icon: string; label: string; hint?: string; keepOpen?: boolean; action: () => void }[] => [
+  const rootMenuItems = (): {
+    icon: string;
+    label: string;
+    hint?: string;
+    keepOpen?: boolean;
+    action: () => void;
+  }[] => [
     {
       icon: "cog",
       label: "Settings",
       // stays open: the action switches the menu to the settings view; closing
       // first would destroy the scrim/panel the view renders into
       keepOpen: true,
-      action: () => { menuView = "settings"; catIdx = 0; menuIdx = 0; pane = "rows"; scrollOff = 0; renderMenuContent(); },
+      action: () => {
+        menuView = "settings";
+        catIdx = 0;
+        menuIdx = 0;
+        pane = "rows";
+        scrollOff = 0;
+        renderMenuContent();
+      },
     },
     {
       icon: "power",
@@ -124,11 +137,17 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const adjustSelectedSetting = (dir: number): void => {
     if (menuView !== "settings") return;
-    if (pane === "cats") { switchCategory(catIdx + dir); return; }
+    if (pane === "cats") {
+      switchCategory(catIdx + dir);
+      return;
+    }
     const row = rowsOf(catIdx)[menuIdx];
     if (!row) return;
     // keybind/action rows have no left/right value — the arrows switch category
-    if (row.kind === "keybind" || row.kind === "action") { switchCategory(catIdx + dir); return; }
+    if (row.kind === "keybind" || row.kind === "action") {
+      switchCategory(catIdx + dir);
+      return;
+    }
     if (!applyAdjust(row, dir)) return;
     afterAdjust(menuIdx, row);
   };
@@ -155,9 +174,15 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // memory pressure trips native allocation failures; see AGENTS.md OOM note)
   const paintRowAt = (idx: number, on: boolean): void => {
     const c = menuC;
-    setOnId(`tfm-set-row-${idx}`, (n) => { n.backgroundColor = on ? c.accentBg : undefined; });
-    setOnId(`tfm-set-rowl-${idx}`, (n) => { n.fg = on ? c.white : c.sidebarFg; });
-    setOnId(`tfm-set-rowv-${idx}`, (n) => { n.fg = on ? c.white : c.sidebarFgMuted; });
+    setOnId(`tfm-set-row-${idx}`, (n) => {
+      n.backgroundColor = on ? c.accentBg : undefined;
+    });
+    setOnId(`tfm-set-rowl-${idx}`, (n) => {
+      n.fg = on ? c.white : c.sidebarFg;
+    });
+    setOnId(`tfm-set-rowv-${idx}`, (n) => {
+      n.fg = on ? c.white : c.sidebarFgMuted;
+    });
   };
 
   // after applyAdjust on a value row: refresh JUST the value text by id.
@@ -165,12 +190,21 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // panel's own colors and need the full rebuild.
   const afterAdjust = (index: number, row: SettingRow): void => {
     if (row.kind === "action" || row.kind === "keybind") return;
-    if (row.repaint) { renderMenuContent(); return; }
-    const value = row.kind === "toggle"
-      ? (row.get() ? "on" : "off")
-      : row.kind === "stepper"
-        ? row.fmt(row.get())
-        : (() => { const i = row.getIdx(); return i >= 0 ? row.names[i] ?? "?" : "custom"; })();
+    if (row.repaint) {
+      renderMenuContent();
+      return;
+    }
+    const value =
+      row.kind === "toggle"
+        ? row.get()
+          ? "on"
+          : "off"
+        : row.kind === "stepper"
+          ? row.fmt(row.get())
+          : (() => {
+              const i = row.getIdx();
+              return i >= 0 ? (row.names[i] ?? "?") : "custom";
+            })();
     setOnId(`tfm-set-rowv-${index}`, (n) => {
       n.content = value.length > 12 ? value.slice(0, 12) : value;
       if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
@@ -201,14 +235,29 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const rowActivate = (rowIdx: number): void => {
-    if (capturing !== null) { if (capturing !== rowIdx) cancelCapture(); return; }
+    if (capturing !== null) {
+      if (capturing !== rowIdx) cancelCapture();
+      return;
+    }
     const row = rowsOf(catIdx)[rowIdx];
     if (!row) return;
-    if (row.kind === "toggle") { applyAdjust(row, 1); afterAdjust(rowIdx, row); return; }
-    if (row.kind === "keybind") { startCapture(rowIdx); return; }
+    if (row.kind === "toggle") {
+      applyAdjust(row, 1);
+      afterAdjust(rowIdx, row);
+      return;
+    }
+    if (row.kind === "keybind") {
+      startCapture(rowIdx);
+      return;
+    }
     if (row.kind === "action") {
-      if (row.keepOpen) { row.run(); renderMenuContent(); }
-      else { closeMenu(); row.run(); }
+      if (row.keepOpen) {
+        row.run();
+        renderMenuContent();
+      } else {
+        closeMenu();
+        row.run();
+      }
       return;
     }
     applyAdjust(row, 1);
@@ -217,14 +266,20 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const menuActivate = () => {
     if (menuView === "settings") {
-      if (pane === "cats") { switchCategory(catIdx); return; }
+      if (pane === "cats") {
+        switchCategory(catIdx);
+        return;
+      }
       rowActivate(menuIdx);
       return;
     }
     const items = rootMenuItems();
     const it = items[menuIdx] ?? items[0];
     if (!it) return;
-    if (it.keepOpen) { it.action(); return; }
+    if (it.keepOpen) {
+      it.action();
+      return;
+    }
     closeMenu();
     it.action();
   };
@@ -237,7 +292,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const setOnId = (id: string, fn: (n: any) => void): void => {
     const n: any = ctx.byId(id);
-    if (n) { try { fn(n); } catch {} }
+    if (n) {
+      try {
+        fn(n);
+      } catch {}
+    }
   };
 
   // A mid-rebuild throw after clearChildren leaves the panel EMPTY — to the
@@ -270,7 +329,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       const lib = (ctx.renderer() as any).lib;
       const s = lib?.getAllocatorStats?.();
       if (s) {
-        ctx.log?.(`esc-menu render failed: ${err} | native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`);
+        ctx.log?.(
+          `esc-menu render failed: ${err} | native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`,
+        );
         return;
       }
     } catch {}
@@ -282,25 +343,36 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const buildMenuContent = (c: Record<string, any>, panel: any, isSettings: boolean) => {
     menuC = c;
     const panelW = isSettings ? SETTINGS_W : ctx.menuW();
-    try { panel.width = panelW; } catch {}
+    try {
+      panel.width = panelW;
+    } catch {}
 
-    panel.add(Box(
-      { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-      Text({ content: isSettings ? "Menu — settings" : "Menu", fg: c.accent }),
-      Box({ flexGrow: 1 }),
-      ctx.escHintBtn("tfm-esc-menu", closeMenu),
-    ));
-    panel.add(Box(
-      { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: ` ${"~".repeat(panelW - 2)}`, fg: c.divider }),
-    ));
+    panel.add(
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+        Text({ content: isSettings ? "Menu — settings" : "Menu", fg: c.accent }),
+        Box({ flexGrow: 1 }),
+        ctx.escHintBtn("tfm-esc-menu", closeMenu),
+      ),
+    );
+    panel.add(
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: ` ${"~".repeat(panelW - 2)}`, fg: c.divider }),
+      ),
+    );
 
     if (!isSettings) {
       const hoverSelect = (index: number) => () => {
-        if (menuIdx !== index) { menuIdx = index; renderMenuContent(); }
+        if (menuIdx !== index) {
+          menuIdx = index;
+          renderMenuContent();
+        }
       };
       const activateRow = (index: number) => (ev: any) => {
-        try { ev.stopPropagation?.(); } catch {}
+        try {
+          ev.stopPropagation?.();
+        } catch {}
         menuIdx = index;
         menuActivate();
       };
@@ -325,22 +397,26 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             onMouseOver: hoverSelect(index),
           },
           ...(icon
-            ? [ctx.makeIconSlot(
-                icon,
-                [
-                  { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
-                  { fg: c.white, bg: c.accentBg },
-                ],
-                1,
-                active ? 1 : 0,
-              ).el]
+            ? [
+                ctx.makeIconSlot(
+                  icon,
+                  [
+                    { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
+                    { fg: c.white, bg: c.accentBg },
+                  ],
+                  1,
+                  active ? 1 : 0,
+                ).el,
+              ]
             : []),
           Text({ content: icon ? label : ` ${label}`, fg: active ? c.white : c.sidebarFg }),
           Box({ flexGrow: 1 }),
           ...(hint ? [Text({ content: `${hint} `, fg: c.sidebarFgMuted })] : []),
         );
       const items = rootMenuItems();
-      items.forEach((it, i) => { panel.add(rootRow(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i))); });
+      items.forEach((it, i) => {
+        panel.add(rootRow(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i)));
+      });
     } else {
       renderSettings(c, panel);
     }
@@ -352,12 +428,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const scrim: any = ctx.byId("tfm-menu");
     if (scrim) {
       const childH = (n: any): number => {
-        try { if (typeof n.height === "number") return n.height; } catch {}
+        try {
+          if (typeof n.height === "number") return n.height;
+        } catch {}
         return 1;
       };
       let contentH = 0;
       for (const ch of panel.getChildren()) contentH += childH(ch);
-      try { scrim.paddingTop = panelPadTop(ctx.renderer().terminalHeight, contentH); } catch {}
+      try {
+        scrim.paddingTop = panelPadTop(ctx.renderer().terminalHeight, contentH);
+      } catch {}
     }
 
     ctx.stripSelectable();
@@ -372,11 +452,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const canScroll = rows.length > vis;
     const wheelScroll = (ev: any) => {
       if (!canScroll) return;
-      try { ev.stopPropagation?.(); } catch {}
+      try {
+        ev.stopPropagation?.();
+      } catch {}
       const d = ev.scroll?.direction === "up" ? -3 : 3;
       const max = Math.max(0, rows.length - vis);
       const next = Math.min(max, Math.max(0, scrollOff + d));
-      if (next !== scrollOff) { scrollOff = next; renderMenuContent(); }
+      if (next !== scrollOff) {
+        scrollOff = next;
+        renderMenuContent();
+      }
     };
 
     // --- left pane: categories ---
@@ -388,64 +473,94 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       const active = gi === catIdx;
       const icon = CAT_ICONS[g.header ?? ""] ?? "cog";
       const paintCat = (hover: boolean) => {
-        setOnId(`tfm-set-cat-${gi}`, (n) => { n.backgroundColor = active ? c.accentBg : hover ? c.hoverBg : undefined; });
-        setOnId(`tfm-set-catl-${gi}`, (n) => { n.fg = active || hover ? c.white : c.sidebarFg; });
+        setOnId(`tfm-set-cat-${gi}`, (n) => {
+          n.backgroundColor = active ? c.accentBg : hover ? c.hoverBg : undefined;
+        });
+        setOnId(`tfm-set-catl-${gi}`, (n) => {
+          n.fg = active || hover ? c.white : c.sidebarFg;
+        });
       };
-      catPane.add(Box(
-        {
-          id: `tfm-set-cat-${gi}`,
-          width: "100%",
-          height: 1,
-          flexDirection: "row",
-          columnGap: 1,
-          paddingLeft: 1,
-          backgroundColor: active ? c.accentBg : undefined,
-          onMouseDown: (ev: any) => {
-            try { ev.stopPropagation?.(); } catch {}
-            if (capturing !== null) { cancelCapture(); return; }
-            if (catIdx !== gi) switchCategory(gi);
-            else renderMenuContent();
+      catPane.add(
+        Box(
+          {
+            id: `tfm-set-cat-${gi}`,
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            columnGap: 1,
+            paddingLeft: 1,
+            backgroundColor: active ? c.accentBg : undefined,
+            onMouseDown: (ev: any) => {
+              try {
+                ev.stopPropagation?.();
+              } catch {}
+              if (capturing !== null) {
+                cancelCapture();
+                return;
+              }
+              if (catIdx !== gi) switchCategory(gi);
+              else renderMenuContent();
+            },
+            onMouseOver: () => {
+              if (hoverCat !== gi) {
+                hoverCat = gi;
+                paintCat(true);
+              }
+            },
+            onMouseOut: () => {
+              if (hoverCat === gi) {
+                hoverCat = -1;
+                paintCat(false);
+              }
+            },
           },
-          onMouseOver: () => { if (hoverCat !== gi) { hoverCat = gi; paintCat(true); } },
-          onMouseOut: () => { if (hoverCat === gi) { hoverCat = -1; paintCat(false); } },
-        },
-        ctx.makeIconSlot(
-          icon,
-          [
-            { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
-            { fg: c.white, bg: c.accentBg },
-          ],
-          1,
-          active ? 1 : 0,
-        ).el,
-        Text({ id: `tfm-set-catl-${gi}`, content: (g.header ?? "general").slice(0, CAT_W - 3), fg: active ? c.white : c.sidebarFg }),
-      ));
+          ctx.makeIconSlot(
+            icon,
+            [
+              { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
+              { fg: c.white, bg: c.accentBg },
+            ],
+            1,
+            active ? 1 : 0,
+          ).el,
+          Text({
+            id: `tfm-set-catl-${gi}`,
+            content: (g.header ?? "general").slice(0, CAT_W - 3),
+            fg: active ? c.white : c.sidebarFg,
+          }),
+        ),
+      );
     });
-    panel.add(Box(
-      {
-        width: "100%",
-        flexDirection: "row",
-        height: Math.max(vis + 1, cats.length + 1),
-        // wheel anywhere over the panel scrolls the rows pane (mouse-first)
-        onMouseScroll: wheelScroll,
-      },
-      catPane,
-      // --- right pane: rows (windowed) ---
-      Box({ width: 1, flexDirection: "column" }),
-      renderRowPane(c, rows, vis),
-    ));
+    panel.add(
+      Box(
+        {
+          width: "100%",
+          flexDirection: "row",
+          height: Math.max(vis + 1, cats.length + 1),
+          // wheel anywhere over the panel scrolls the rows pane (mouse-first)
+          onMouseScroll: wheelScroll,
+        },
+        catPane,
+        // --- right pane: rows (windowed) ---
+        Box({ width: 1, flexDirection: "column" }),
+        renderRowPane(c, rows, vis),
+      ),
+    );
 
     // footer hints — pane- and state-aware
-    const hint = capturing !== null
-      ? "press a key…  esc/enter/click = cancel"
-      : pane === "cats"
-        ? "click or enter selects · ←→ · tab = rows"
-        : `↑↓ move · ←→ adjust${canScroll ? " · wheel scrolls" : ""} · tab = categories`;
+    const hint =
+      capturing !== null
+        ? "press a key…  esc/enter/click = cancel"
+        : pane === "cats"
+          ? "click or enter selects · ←→ · tab = rows"
+          : `↑↓ move · ←→ adjust${canScroll ? " · wheel scrolls" : ""} · tab = categories`;
     panel.add(Box({ width: "100%", height: 1 }));
-    panel.add(Box(
-      { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: hint.slice(0, SETTINGS_W - 2), fg: c.sidebarFgMuted }),
-    ));
+    panel.add(
+      Box(
+        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: hint.slice(0, SETTINGS_W - 2), fg: c.sidebarFgMuted }),
+      ),
+    );
   };
 
   const renderRowPane = (c: Record<string, any>, rows: SettingRow[], vis: number) => {
@@ -461,8 +576,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           width: 2,
           justifyContent: "center",
           onMouseDown: (ev: any) => {
-            try { ev.stopPropagation?.(); } catch {}
-            if (capturing !== null) { cancelCapture(); return; }
+            try {
+              ev.stopPropagation?.();
+            } catch {}
+            if (capturing !== null) {
+              cancelCapture();
+              return;
+            }
             const changed = applyAdjust(rowSpec, dir);
             if (!changed && menuIdx === index) return;
             if (menuIdx !== index) {
@@ -473,8 +593,14 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             }
             afterAdjust(index, rowSpec);
           },
-          onMouseOver: () => setOnId(tId, (n) => { n.fg = menuC.white; }),
-          onMouseOut: () => setOnId(tId, (n) => { n.fg = active ? menuC.white : menuC.sidebarFgMuted; }),
+          onMouseOver: () =>
+            setOnId(tId, (n) => {
+              n.fg = menuC.white;
+            }),
+          onMouseOut: () =>
+            setOnId(tId, (n) => {
+              n.fg = active ? menuC.white : menuC.sidebarFgMuted;
+            }),
         },
         Text({ id: tId, content: dirText, fg: active ? menuC.white : menuC.sidebarFgMuted }),
       );
@@ -487,16 +613,15 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       const _paintRow = (on: boolean) => paintRowAt(index, on);
       let control: any;
       let onClick: (ev?: any) => void = (ev?: any) => {
-        try { ev?.stopPropagation?.(); } catch {}
+        try {
+          ev?.stopPropagation?.();
+        } catch {}
         menuIdx = index;
         rowActivate(index);
       };
 
       if (capturingThis) {
-        control = Box(
-          { flexGrow: 1 },
-          Text({ content: "press a key…", fg: c.accent }),
-        );
+        control = Box({ flexGrow: 1 }, Text({ content: "press a key…", fg: c.accent }));
       } else if (rowSpec.kind === "toggle") {
         const on = rowSpec.get();
         control = Box(
@@ -504,9 +629,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           Text({ id: `tfm-set-rowv-${index}`, content: on ? "on" : "off", fg: on ? c.accent : c.sidebarFgMuted }),
         );
       } else if (rowSpec.kind === "stepper" || rowSpec.kind === "cycle") {
-        const value = rowSpec.kind === "stepper"
-          ? rowSpec.fmt(rowSpec.get())
-          : (() => { const i = rowSpec.getIdx(); return i >= 0 ? rowSpec.names[i] ?? "?" : "custom"; })();
+        const value =
+          rowSpec.kind === "stepper"
+            ? rowSpec.fmt(rowSpec.get())
+            : (() => {
+                const i = rowSpec.getIdx();
+                return i >= 0 ? (rowSpec.names[i] ?? "?") : "custom";
+              })();
         control = Box(
           { flexDirection: "row", alignItems: "center" },
           chevron("‹", active, index, rowSpec, -1),
@@ -521,8 +650,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           chevron("›", active, index, rowSpec, 1),
         );
         onClick = (ev?: any) => {
-          try { ev?.stopPropagation?.(); } catch {}
-          if (capturing !== null) { cancelCapture(); return; }
+          try {
+            ev?.stopPropagation?.();
+          } catch {}
+          if (capturing !== null) {
+            cancelCapture();
+            return;
+          }
           menuIdx = index;
           pane = "rows";
           applyAdjust(rowSpec, 1);
@@ -562,7 +696,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             paintRowAt(index, true);
           },
         },
-        Text({ id: `tfm-set-rowl-${index}`, content: ` ${rowSpec.label.slice(0, SET_LABEL_W).padEnd(SET_LABEL_W)}`, fg: labelFg }),
+        Text({
+          id: `tfm-set-rowl-${index}`,
+          content: ` ${rowSpec.label.slice(0, SET_LABEL_W).padEnd(SET_LABEL_W)}`,
+          fg: labelFg,
+        }),
         Box({ flexGrow: 1 }),
         control,
       );
@@ -573,13 +711,15 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       if (rowSpec) pane2.add(rowNode(rowSpec, i));
     }
     if (canScroll) {
-      pane2.add(Box(
-        { width: "100%", height: 1, paddingLeft: 1 },
-        Text({
-          content: `${scrollOff + 1}-${end} of ${rows.length}`,
-          fg: c.sidebarFgMuted,
-        }),
-      ));
+      pane2.add(
+        Box(
+          { width: "100%", height: 1, paddingLeft: 1 },
+          Text({
+            content: `${scrollOff + 1}-${end} of ${rows.length}`,
+            fg: c.sidebarFgMuted,
+          }),
+        ),
+      );
     }
     return pane2;
   };
@@ -591,7 +731,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (!ctx.log) return;
     try {
       const s = (ctx.renderer() as any).lib?.getAllocatorStats?.();
-      if (s) ctx.log?.(`${tag} native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`);
+      if (s)
+        ctx.log?.(`${tag} native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`);
     } catch {}
   };
 
@@ -635,21 +776,23 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         backgroundColor: RGBA.fromInts(0, 0, 0, 150),
         // mouse-first: first outside click cancels an in-flight capture,
         // the next one dismisses the menu
-        onMouseDown: () => { if (!cancelCapture()) closeMenu(); },
-      },
-      Box(
-        {
-          id: "tfm-menu-panel",
-          width: ctx.menuW(),
-          ...chromeSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
-          paddingTop: 1,
-          paddingBottom: 1,
-          onMouseDown: (ev: any) => {
-            try { ev.stopPropagation?.(); } catch {}
-            if (capturing !== null) cancelCapture();
-          },
+        onMouseDown: () => {
+          if (!cancelCapture()) closeMenu();
         },
-      ),
+      },
+      Box({
+        id: "tfm-menu-panel",
+        width: ctx.menuW(),
+        ...chromeSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
+        paddingTop: 1,
+        paddingBottom: 1,
+        onMouseDown: (ev: any) => {
+          try {
+            ev.stopPropagation?.();
+          } catch {}
+          if (capturing !== null) cancelCapture();
+        },
+      }),
     );
     ctx.renderer().root.add(scrim);
     renderMenuContent();
@@ -678,7 +821,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   // the "back" action row returns to the root view
-  const showRoot = (): void => { menuView = "root"; menuIdx = 0; pane = "rows"; capturing = null; };
+  const showRoot = (): void => {
+    menuView = "root";
+    menuIdx = 0;
+    pane = "rows";
+    capturing = null;
+  };
 
   return {
     openMenu,

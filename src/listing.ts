@@ -21,10 +21,14 @@ export const compareEntries =
   (a: Entry, b: Entry): number => {
     const cmp = (x: Entry, y: Entry): number => {
       switch (sortBy) {
-        case "size": return (x.size ?? 0) - (y.size ?? 0);
-        case "mtime": return (x.mtimeMs ?? 0) - (y.mtimeMs ?? 0);
-        case "type": return extOf(x.name).localeCompare(extOf(y.name)) || x.name.localeCompare(y.name);
-        default: return x.name.localeCompare(y.name);
+        case "size":
+          return (x.size ?? 0) - (y.size ?? 0);
+        case "mtime":
+          return (x.mtimeMs ?? 0) - (y.mtimeMs ?? 0);
+        case "type":
+          return extOf(x.name).localeCompare(extOf(y.name)) || x.name.localeCompare(y.name);
+        default:
+          return x.name.localeCompare(y.name);
       }
     };
     // dirs sort first, always — like nautilus
@@ -32,15 +36,30 @@ export const compareEntries =
   };
 
 const statEntry = (abs: string): { size?: number; mtimeMs?: number } => {
-  try { const st = statSync(abs); return { size: st.size, mtimeMs: st.mtimeMs ?? 0 }; } catch { return {}; }
+  try {
+    const st = statSync(abs);
+    return { size: st.size, mtimeMs: st.mtimeMs ?? 0 };
+  } catch {
+    return {};
+  }
 };
 
 export const recentEntries = async (): Promise<Entry[]> => {
   const out: Entry[] = [];
   for (const it of readRecentXbel()) {
     let st: any = null;
-    try { st = statSync(it.path); } catch { continue; } // drop vanished files
-    out.push({ name: path.basename(it.path), isDir: st.isDirectory(), abs: it.path, size: st.size, mtimeMs: it.modified });
+    try {
+      st = statSync(it.path);
+    } catch {
+      continue;
+    } // drop vanished files
+    out.push({
+      name: path.basename(it.path),
+      isDir: st.isDirectory(),
+      abs: it.path,
+      size: st.size,
+      mtimeMs: it.modified,
+    });
   }
   return out;
 };
@@ -49,13 +68,22 @@ export const starredEntries = async (): Promise<Entry[]> => {
   const out: Entry[] = [];
   for (const p of readStarredList()) {
     let st: any = null;
-    try { st = statSync(p); } catch { continue; }
+    try {
+      st = statSync(p);
+    } catch {
+      continue;
+    }
     out.push({ name: path.basename(p), isDir: st.isDirectory(), abs: p, size: st.size, mtimeMs: st.mtimeMs ?? 0 });
   }
   return out;
 };
 
-export const listDir = async (dir: string, showHidden: boolean, sortBy: SortMode, sortAsc: boolean): Promise<Entry[]> => {
+export const listDir = async (
+  dir: string,
+  showHidden: boolean,
+  sortBy: SortMode,
+  sortAsc: boolean,
+): Promise<Entry[]> => {
   let out: Entry[];
   if (dir === RECENT_URI) {
     out = await recentEntries();
@@ -71,7 +99,11 @@ export const listDir = async (dir: string, showHidden: boolean, sortBy: SortMode
       let isDir = d.isDirectory();
       // a symlink is a folder only if its target is one — never follow it further
       if (d.isSymbolicLink()) {
-        try { isDir = (await stat(path.join(dir, d.name))).isDirectory(); } catch { isDir = false; }
+        try {
+          isDir = (await stat(path.join(dir, d.name))).isDirectory();
+        } catch {
+          isDir = false;
+        }
       }
       out.push({ name: d.name, isDir });
     }

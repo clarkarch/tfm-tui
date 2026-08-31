@@ -4,8 +4,12 @@ import { makeSelection, type SelectionCtx } from "./selection";
 import { defaultConfig } from "./config-schema";
 
 const COLORS: any = {
-  bg: "#111111", hoverBg: "#222222", accent: "#7aa2f7", accentBg: "#333333",
-  sidebarFg: "#aaaaaa", sidebarFgMuted: "#666666",
+  bg: "#111111",
+  hoverBg: "#222222",
+  accent: "#7aa2f7",
+  accentBg: "#333333",
+  sidebarFg: "#aaaaaa",
+  sidebarFgMuted: "#666666",
 };
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {
@@ -32,13 +36,21 @@ type Harness = ReturnType<typeof makeHarness>;
 
 const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
   const calls: string[] = [];
-  const rec = (name: string) => () => { calls.push(name); };
+  const rec = (name: string) => () => {
+    calls.push(name);
+  };
   const selection = makeSelectionForTest();
   const seedTiles = (keys: string[]) => {
     selection.setFocusKeys(keys);
     keys.forEach((k, i) => {
       if (!selection.tileRefs.has(k)) {
-        selection.tileRefs.set(k, { selected: false, baseFg: COLORS.sidebarFg, tileId: `t${i}`, labelId: `l${i}`, isDir: k.endsWith("/") });
+        selection.tileRefs.set(k, {
+          selected: false,
+          baseFg: COLORS.sidebarFg,
+          tileId: `t${i}`,
+          labelId: `l${i}`,
+          isDir: k.endsWith("/"),
+        });
       }
     });
   };
@@ -65,12 +77,18 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     closeProps: rec("props:close"),
     escMenu: {
       isOpen: () => escMenuState.open,
-      closeMenu: () => { escMenuState.open = false; calls.push("escmenu:close"); },
+      closeMenu: () => {
+        escMenuState.open = false;
+        calls.push("escmenu:close");
+      },
       moveMenu: (d) => calls.push(`escmenu:move:${d}`),
       adjustSelectedSetting: (d) => calls.push(`escmenu:adjust:${d}`),
       menuActivate: rec("escmenu:activate"),
       menuTab: () => calls.push("escmenu:tab"),
-      openMenu: () => { escMenuState.open = true; calls.push("escmenu:open"); },
+      openMenu: () => {
+        escMenuState.open = true;
+        calls.push("escmenu:open");
+      },
       captureKey: (e) => {
         if (!escMenuState.capturing) return false;
         if (e.name === "escape") escMenuState.capturing = false;
@@ -101,7 +119,10 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     tabModel,
     newTab: rec("tab:new"),
     closeTab: rec("tab:close"),
-    switchTab: (i) => { tabModel.active = i; calls.push(`tab:switch:${i}`); },
+    switchTab: (i) => {
+      tabModel.active = i;
+      calls.push(`tab:switch:${i}`);
+    },
     inTrashView: () => false,
     confirmDeleteForever: (ps) => calls.push(`deleteForever:${ps.join(",")}`),
     trashPaths: (ps) => calls.push(`trash:${ps.join(",")}`),
@@ -125,13 +146,17 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
 
 describe("precedence chain", () => {
   test("ctrl+q quits above everything, even an open conflict", () => {
-    const h = makeHarness({ conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) } });
+    const h = makeHarness({
+      conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) },
+    });
     h.key("q", { ctrl: true });
     expect(h.calls).toEqual(["quit"]);
   });
 
   test("conflict modal: esc = skip, everything else swallowed", () => {
-    const h = makeHarness({ conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) } });
+    const h = makeHarness({
+      conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) },
+    });
     h.key("down");
     expect(h.calls).toEqual([]);
     h.key("escape");
@@ -166,9 +191,19 @@ describe("precedence chain", () => {
   test("esc menu: arrows adjust, return activates, escape closes", () => {
     const h = makeHarness();
     h.escMenuState.open = true;
-    h.key("up"); h.key("down"); h.key("left"); h.key("right"); h.key("return"); h.key("escape");
+    h.key("up");
+    h.key("down");
+    h.key("left");
+    h.key("right");
+    h.key("return");
+    h.key("escape");
     expect(h.calls).toEqual([
-      "escmenu:move:-1", "escmenu:move:1", "escmenu:adjust:-1", "escmenu:adjust:1", "escmenu:activate", "escmenu:close",
+      "escmenu:move:-1",
+      "escmenu:move:1",
+      "escmenu:adjust:-1",
+      "escmenu:adjust:1",
+      "escmenu:activate",
+      "escmenu:close",
     ]);
     expect(h.escMenuState.open).toBe(false);
   });
@@ -200,7 +235,14 @@ describe("precedence chain", () => {
 describe("file menu keys", () => {
   test("down skips separators and wraps; return activates the live entry", () => {
     const calls: string[] = [];
-    const fmenu = { idx: 0, entries: [{ action: () => calls.push("act:A") }, { sep: true, action: () => {} }, { action: () => calls.push("act:B") }] };
+    const fmenu = {
+      idx: 0,
+      entries: [
+        { action: () => calls.push("act:A") },
+        { sep: true, action: () => {} },
+        { action: () => calls.push("act:B") },
+      ],
+    };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.key("down"); // 0 -> skips sep -> 2
     expect(fmenu.idx).toBe(2);
@@ -265,7 +307,12 @@ describe("shift+arrows extend from anchor", () => {
     h.key("down", { shift: true }); // focus -1 -> anchor 0, extend to 0
     expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
     h.key("down", { shift: true }); // extend to 1
-    expect(h.selection.selPaths().map((p) => p.path).sort()).toEqual(["a.txt", "b.txt"]);
+    expect(
+      h.selection
+        .selPaths()
+        .map((p) => p.path)
+        .sort(),
+    ).toEqual(["a.txt", "b.txt"]);
   });
 
   test("shift+left with no focus is a no-op", () => {
@@ -493,7 +540,9 @@ describe("remappable keybinds", () => {
   });
 
   test("rebinding quit keeps it first in the chain (pre-empts an open conflict)", () => {
-    const h = makeHarness({ conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) } });
+    const h = makeHarness({
+      conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) },
+    });
     h.binds.quit = ["ctrl+x"];
     h.key("x", { ctrl: true });
     expect(h.calls).toEqual(["quit"]);
@@ -517,7 +566,9 @@ describe("remappable keybinds", () => {
 
 describe("keybind capture precedence", () => {
   test("capture consumes every key, even modals' keys, until it ends", () => {
-    const h = makeHarness({ conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) } });
+    const h = makeHarness({
+      conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) },
+    });
     h.escMenuState.capturing = true;
     h.key("q", { ctrl: true }); // would quit without capture — swallowed
     h.key("x");

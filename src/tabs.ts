@@ -63,7 +63,10 @@ export const makeTabs = (state: TabStateRef, hooks: TabsHooks) => {
 
   const closeTab = (i: number = active): void => {
     if (i < 0 || i >= list.length) return;
-    if (list.length === 1) { hooks.quit(); return; }
+    if (list.length === 1) {
+      hooks.quit();
+      return;
+    }
     if (i === active) syncTabFromState();
     list.splice(i, 1);
     active = i < active ? active - 1 : Math.min(active, list.length - 1);
@@ -82,7 +85,9 @@ export const makeTabs = (state: TabStateRef, hooks: TabsHooks) => {
 
   return {
     list,
-    get active() { return active; },
+    get active() {
+      return active;
+    },
     syncTabFromState,
     adoptTab,
     switchTab,

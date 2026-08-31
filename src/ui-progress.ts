@@ -85,7 +85,11 @@ export const makeProgress = (ctx: ProgressCtx) => {
 
   const progSetText = (nodeId: string, s: string): void => {
     const n: any = ctx.byId(nodeId);
-    if (n) { try { n.content = s; } catch {} }
+    if (n) {
+      try {
+        n.content = s;
+      } catch {}
+    }
   };
 
   const paintProgress = (force = false): void => {
@@ -94,7 +98,10 @@ export const makeProgress = (ctx: ProgressCtx) => {
     if (!force && now - progLastPaint < 120) return;
     progLastPaint = now;
     const spin = prog.paused ? "⏸" : SPIN_FRAMES[progSpinIdx];
-    progSetText(PROG_T_TITLE, `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pctOf(prog.bytes, prog.totalBytes)}%)`);
+    progSetText(
+      PROG_T_TITLE,
+      `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pctOf(prog.bytes, prog.totalBytes)}%)`,
+    );
     progSetText(PROG_T_BAR, barLine(prog.bytes, prog.totalBytes, PROG_BAR_CELLS).slice(0, PROG_W - 2));
   };
 
@@ -105,8 +112,12 @@ export const makeProgress = (ctx: ProgressCtx) => {
     const setPauseVisual = (): void => {
       const p: any = ctx.byId(progPauseSpec.slotId);
       const l: any = ctx.byId(progPlaySpec.slotId);
-      try { if (p) p.visible = !prog.paused; } catch {}
-      try { if (l) l.visible = !!prog.paused; } catch {}
+      try {
+        if (p) p.visible = !prog.paused;
+      } catch {}
+      try {
+        if (l) l.visible = !!prog.paused;
+      } catch {}
     };
     // pause/play are different shapes → two slots stacked in one hit area
     // toast icons carry a hover state baked for the toast bg
@@ -150,8 +161,15 @@ export const makeProgress = (ctx: ProgressCtx) => {
             backgroundColor: ctx.colors().accentBg,
             onMouseDown: () => {
               prog.paused = !prog.paused;
-              if (!prog.paused) { try { prog.currentRs?.resume(); } catch {} }
-              else { try { prog.currentRs?.pause(); } catch {} }
+              if (!prog.paused) {
+                try {
+                  prog.currentRs?.resume();
+                } catch {}
+              } else {
+                try {
+                  prog.currentRs?.pause();
+                } catch {}
+              }
               setPauseVisual();
             },
             onMouseOver: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", true),
@@ -169,7 +187,9 @@ export const makeProgress = (ctx: ProgressCtx) => {
             backgroundColor: ctx.colors().accentBg,
             onMouseDown: () => {
               prog.cancelled = true;
-              try { prog.currentRs?.destroy(new Error("cancelled")); } catch {}
+              try {
+                prog.currentRs?.destroy(new Error("cancelled"));
+              } catch {}
             },
             onMouseOver: () => progPaint(progCloseSpec.spec, "tfm-prog-close", true),
             onMouseOut: () => progPaint(progCloseSpec.spec, "tfm-prog-close", false),
@@ -195,18 +215,27 @@ export const makeProgress = (ctx: ProgressCtx) => {
   const finishProgressToast = (title: string): void => {
     if (!prog.toastUp) return;
     prog.toastUp = false;
-    if (progSpinTimer) { clearInterval(progSpinTimer); progSpinTimer = null; }
+    if (progSpinTimer) {
+      clearInterval(progSpinTimer);
+      progSpinTimer = null;
+    }
     progSetText(PROG_T_TITLE, title.slice(0, PROG_W - 2));
     progSetText(PROG_T_BAR, "");
     // done means the controls go away — nothing left to pause or cancel
     const btns: any = ctx.byId(PROG_T_BTNS);
-    if (btns) { try { btns.visible = false; } catch {} }
+    if (btns) {
+      try {
+        btns.visible = false;
+      } catch {}
+    }
     setTimeout(() => {
       const real: any = ctx.byId(PROG_TOAST_ID);
       if (!real) return;
       animateLeft(real, typeof real.left === "number" ? real.left : 0, ctx.termW() + 2, 180);
       setTimeout(() => {
-        try { ctx.remove(real); } catch {}
+        try {
+          ctx.remove(real);
+        } catch {}
       }, 200);
     }, 1800);
   };

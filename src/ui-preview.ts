@@ -15,24 +15,36 @@ import type { Theme } from "./config";
 // ui-props/ui-term; the gen-counter guards stale async file reads so a slow
 // preview can't paint over a newer one. tfm-preview-* ids stay byte-identical. ---
 
-export type ThumbJobLike = { slotId: string; path: string; mtimeMs: number; size: number; wCells: number; hCells?: number; bg?: string; vector: boolean; video?: boolean; fallbackGlyph: string; priority?: boolean };
+export type ThumbJobLike = {
+  slotId: string;
+  path: string;
+  mtimeMs: number;
+  size: number;
+  wCells: number;
+  hCells?: number;
+  bg?: string;
+  vector: boolean;
+  video?: boolean;
+  fallbackGlyph: string;
+  priority?: boolean;
+};
 
 export type PreviewCtx = {
   renderer: any;
   byId(id: string): any;
   colors(): Theme & Record<string, any>;
   uiStyle(): "solid" | "outline";
-  previewEnabled(): boolean;          // config.ui.previewEnabled
-  previewWidth(): number;             // config.ui.previewWidth
-  termH(): number;                    // renderer.terminalHeight — LIVE read
+  previewEnabled(): boolean; // config.ui.previewEnabled
+  previewWidth(): number; // config.ui.previewWidth
+  termH(): number; // renderer.terminalHeight — LIVE read
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
-  focusKey(): string | null;          // focused tile's key, else null
-  tileRefs: Map<string, { selected: boolean; [k: string]: any }>;   // tileRefsByKey — shared by ref; only .forEach read here
-  pushThumbJob(job: ThumbJobLike): void;   // thumbJobs is SWAPPED (reassigned) by drainThumbs — never capture the array
+  focusKey(): string | null; // focused tile's key, else null
+  tileRefs: Map<string, { selected: boolean; [k: string]: any }>; // tileRefsByKey — shared by ref; only .forEach read here
+  pushThumbJob(job: ThumbJobLike): void; // thumbJobs is SWAPPED (reassigned) by drainThumbs — never capture the array
   drainThumbs(): void;
   drainIconQueue(): void;
-  nextIconId(): string;               // `tfm-icon-${iconSeq++}`
-  fallbackGlyphFor(name: string): string;  // glyph[name] ?? glyph.file!
+  nextIconId(): string; // `tfm-icon-${iconSeq++}`
+  fallbackGlyphFor(name: string): string; // glyph[name] ?? glyph.file!
 };
 
 export const makePreview = (ctx: PreviewCtx) => {
@@ -48,7 +60,9 @@ export const makePreview = (ctx: PreviewCtx) => {
     const colors = ctx.colors();
     const sig = syntaxStyleSig(colors as Theme);
     if (!previewSyntaxStyle || previewSyntaxSig !== sig) {
-      try { previewSyntaxStyle?.destroy(); } catch {}
+      try {
+        previewSyntaxStyle?.destroy();
+      } catch {}
       // cached nodes hold a reference to the old style
       previewCodeCache = null;
       previewSyntaxStyle = buildSyntaxStyle(colors as Theme);
@@ -75,7 +89,12 @@ export const makePreview = (ctx: PreviewCtx) => {
     else {
       let selCount = 0;
       let selKey: string | null = null;
-      ctx.tileRefs.forEach((r, k) => { if (r.selected) { selCount++; selKey = k; } });
+      ctx.tileRefs.forEach((r, k) => {
+        if (r.selected) {
+          selCount++;
+          selKey = k;
+        }
+      });
       if (selCount === 1 && selKey) key = selKey;
       else if (selCount > 1) {
         pane.add(Text({ content: `${selCount} items selected`, fg: colors.sidebarFg }));
@@ -90,7 +109,11 @@ export const makePreview = (ctx: PreviewCtx) => {
     }
 
     let st: any = null;
-    try { st = statSync(key); } catch { return; }
+    try {
+      st = statSync(key);
+    } catch {
+      return;
+    }
     if (gen !== previewGen) return;
     const isDirTarget = st.isDirectory();
 
@@ -111,10 +134,12 @@ export const makePreview = (ctx: PreviewCtx) => {
       const maxH = Math.max(4, ctx.termH() - 8);
       const h = Math.min(maxH, Math.max(3, Math.round(w / ctx.cellMetrics().aspect)));
       const slotId = ctx.nextIconId();
-      pane.add(Box(
-        { width: "100%", flexDirection: "row", justifyContent: "center" },
-        Box({ id: slotId, width: w, height: h }),
-      ));
+      pane.add(
+        Box(
+          { width: "100%", flexDirection: "row", justifyContent: "center" },
+          Box({ id: slotId, width: w, height: h }),
+        ),
+      );
       ctx.pushThumbJob({
         slotId,
         path: key,
@@ -139,8 +164,12 @@ export const makePreview = (ctx: PreviewCtx) => {
       if (gen !== previewGen) return;
       const mtimeMs = st.mtimeMs ?? 0;
       const size = st.size ?? 0;
-      if (previewCodeCache && previewCodeCache.key === key
-        && previewCodeCache.mtimeMs === mtimeMs && previewCodeCache.size === size) {
+      if (
+        previewCodeCache &&
+        previewCodeCache.key === key &&
+        previewCodeCache.mtimeMs === mtimeMs &&
+        previewCodeCache.size === size
+      ) {
         pane.add(previewCodeCache.node);
         return;
       }

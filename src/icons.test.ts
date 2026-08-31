@@ -41,7 +41,8 @@ describe("icons", () => {
 
   test.skipIf(!hasMagick)("thumbPng rasterizes a file onto a bg", async () => {
     clearIconCaches();
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
     const tmp = path.join(os.tmpdir(), `tfm-thumb-test-${process.pid}.svg`);
     await Bun.write(tmp, svg);
     const bytes = await thumbPng(tmp, 1, 1, 32, 32, "#1a1b26", true);
@@ -54,7 +55,8 @@ describe("icons", () => {
 
   test.skipIf(!hasRsvg)("vector thumbs render at the exact requested pixel size (rsvg path)", async () => {
     clearIconCaches();
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
     const tmp = path.join(os.tmpdir(), `tfm-thumb-vec-${process.pid}.svg`);
     await Bun.write(tmp, svg);
     const bytes = await thumbPng(tmp, 2, 1, 64, 48, "#1a1b26", true);
@@ -70,7 +72,8 @@ describe("icons", () => {
     process.env.XDG_CACHE_HOME = sandbox;
     try {
       clearIconCaches();
-      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
+      const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
       const tmp = path.join(os.tmpdir(), `tfm-thumb-disk-${process.pid}.svg`);
       await Bun.write(tmp, svg);
       const a = await thumbPng(tmp, 3, 1, 32, 32, "#1a1b26", true);
@@ -98,9 +101,18 @@ describe("icons", () => {
     clearIconCaches();
     const tmp = path.join(os.tmpdir(), `tfm-thumb-video-${process.pid}.mp4`);
     const gen = Bun.spawnSync([
-      "ffmpeg", "-hide_banner", "-loglevel", "error",
-      "-f", "lavfi", "-i", "testsrc=duration=3:size=256x256:rate=10",
-      "-pix_fmt", "yuv420p", "-y", tmp,
+      "ffmpeg",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=duration=3:size=256x256:rate=10",
+      "-pix_fmt",
+      "yuv420p",
+      "-y",
+      tmp,
     ]);
     expect(gen.exitCode).toBe(0);
     const bytes = await thumbPng(tmp, 4, 1, 48, 64, "#1a1b26", false, true);

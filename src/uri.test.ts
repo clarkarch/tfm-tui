@@ -35,8 +35,10 @@ describe("xdg homes", () => {
       expect(xdgDataHome()).toBe("/tmp/opencode/xdg-data");
       expect(xdgStateHome()).toBe("/tmp/opencode/xdg-state");
     } finally {
-      if (oldData === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = oldData;
-      if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
+      if (oldData === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = oldData;
+      if (oldState === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = oldState;
     }
   });
 

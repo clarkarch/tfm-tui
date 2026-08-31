@@ -7,10 +7,16 @@ const stubInput = () => {
     visible: false,
     value: "",
     focused: false,
-    focus() { this.focused = true; },
-    // biome-ignore lint/suspicious/noAssignInExpressions: init-on-first-use idiom
-    on(ev: string, fn: () => void) { (listeners[ev] ??= []).push(fn); },
-    fire(ev: string) { for (const fn of listeners[ev] ?? []) fn(); },
+    focus() {
+      this.focused = true;
+    },
+    on(ev: string, fn: () => void) {
+      // biome-ignore lint/suspicious/noAssignInExpressions: init-on-first-use idiom
+      (listeners[ev] ??= []).push(fn);
+    },
+    fire(ev: string) {
+      for (const fn of listeners[ev] ?? []) fn();
+    },
     hasOn: true,
   };
 };
@@ -23,7 +29,9 @@ describe("makeSearch", () => {
     let renders = 0;
     const search = makeSearch({
       byId: (id) => (id === "tfm-search" ? el : null),
-      renderGrid: () => { renders++; },
+      renderGrid: () => {
+        renders++;
+      },
       termHasFocus: () => false,
     });
     search.beginTypeToSearch("a");
@@ -40,7 +48,9 @@ describe("makeSearch", () => {
     let renders = 0;
     const search = makeSearch({
       byId: (id) => (id === "tfm-search" ? el : null),
-      renderGrid: () => { renders++; },
+      renderGrid: () => {
+        renders++;
+      },
       termHasFocus: () => true,
     });
     search.beginTypeToSearch("a");
@@ -69,7 +79,10 @@ describe("makeSearch", () => {
       renderGrid: () => {},
       termHasFocus: () => false,
     });
-    expect(() => { search.beginTypeToSearch("a"); search.clearSearch(); }).not.toThrow();
+    expect(() => {
+      search.beginTypeToSearch("a");
+      search.clearSearch();
+    }).not.toThrow();
   });
 
   test("wireSearchInput mirrors typed text into the query (debounced render)", async () => {
@@ -77,7 +90,9 @@ describe("makeSearch", () => {
     let renders = 0;
     const search = makeSearch({
       byId: (id) => (id === "tfm-search" ? el : null),
-      renderGrid: () => { renders++; },
+      renderGrid: () => {
+        renders++;
+      },
       termHasFocus: () => false,
     });
     search.wireSearchInput();

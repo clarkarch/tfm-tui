@@ -2,11 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { makeLookup, waitForResolution } from "./ui-lookup";
 
 // fake renderable tree: nodes expose getChildren() like the real renderer
-const leaf = (id: string, extra: any = {}): any => ({ id, children: [], getChildren() { return this.children; }, ...extra });
+const leaf = (id: string, extra: any = {}): any => ({
+  id,
+  children: [],
+  getChildren() {
+    return this.children;
+  },
+  ...extra,
+});
 const branch = (id: string | undefined, ...children: any[]): any => ({
   id,
   children,
-  getChildren() { return this.children; },
+  getChildren() {
+    return this.children;
+  },
 });
 
 const find = (node: any, id: string): any => {
@@ -40,7 +49,9 @@ describe("makeLookup", () => {
 
   test("byId survives a throwing root (pre-mount)", () => {
     const { byId } = makeLookup({
-      root: () => { throw new Error("not mounted"); },
+      root: () => {
+        throw new Error("not mounted");
+      },
     });
     expect(byId("x")).toBeNull();
   });
@@ -64,8 +75,13 @@ describe("makeLookup", () => {
     const tree = branch(undefined, box);
     const { setOnId } = makeLookup({ root: () => mkRoot(tree) });
     const seen: any[] = [];
-    setOnId("tfm-x", (n: any) => { seen.push(n); n.visible = true; });
-    setOnId("ghost", (n: any) => { seen.push(n); });
+    setOnId("tfm-x", (n: any) => {
+      seen.push(n);
+      n.visible = true;
+    });
+    setOnId("ghost", (n: any) => {
+      seen.push(n);
+    });
     expect(seen.length).toBe(1);
     expect(box.visible).toBe(true);
   });
@@ -105,7 +121,12 @@ describe("waitForResolution", () => {
     // 40 polls x 50ms real sleep is 2s — shrink by observing the loop bounds
     // indirectly: resolution never set -> resolves (not hangs) after ~2s
     const start = Date.now();
-    await waitForResolution({ get resolution() { polls++; return null; } });
+    await waitForResolution({
+      get resolution() {
+        polls++;
+        return null;
+      },
+    });
     expect(polls).toBe(40);
     expect(Date.now() - start).toBeGreaterThanOrEqual(1900);
   });

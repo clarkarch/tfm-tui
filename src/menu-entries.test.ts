@@ -25,7 +25,9 @@ const baseCtx = (): MenuEntriesCtx & {
     closeFileMenu: () => calls.push("close"),
     navigate: (d) => calls.push(`navigate:${d}`),
     renderAll: () => calls.push("renderAll"),
-    renderGrid: () => { calls.push("renderGrid"); },
+    renderGrid: () => {
+      calls.push("renderGrid");
+    },
     openTerminalHere: (d) => calls.push(`term:${d ?? ""}`),
     clipboard: () => clip,
     pasteSmart: (d) => calls.push(`paste:${d}`),
@@ -89,7 +91,10 @@ describe("fileEntriesFor", () => {
   test("copy/cut/trash target the whole selection", () => {
     const ctx = baseCtx();
     ctx.tileRefs = new Map<string, GridTileRef>([["/a", { selected: true, isDir: false }]]);
-    ctx.selPaths = () => [{ path: "/a", isDir: false }, { path: "/b", isDir: false }];
+    ctx.selPaths = () => [
+      { path: "/a", isDir: false },
+      { path: "/b", isDir: false },
+    ];
     const m = makeMenuEntries(ctx);
     const entries = m.fileEntriesFor("/a", false, 0, 0);
     const copy = entries.find((e) => e.label.startsWith("Copy"));
@@ -105,7 +110,10 @@ describe("fileEntriesFor", () => {
   test("properties target the whole selection, single when outside it", () => {
     const ctx = baseCtx();
     ctx.tileRefs = new Map<string, GridTileRef>([["/a", { selected: true, isDir: false }]]);
-    ctx.selPaths = () => [{ path: "/a", isDir: false }, { path: "/b", isDir: false }];
+    ctx.selPaths = () => [
+      { path: "/a", isDir: false },
+      { path: "/b", isDir: false },
+    ];
     const m = makeMenuEntries(ctx);
     const props = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label === "Properties…")!;
     props.action();
@@ -151,11 +159,13 @@ describe("sidebarEntriesFor", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);
     m.sidebarEntriesFor(place({ path: "/media/usb", ejectable: true, device: "sdb1" }), 0, 0)
-      .find((e) => e.label === "Eject")!.action();
+      .find((e) => e.label === "Eject")!
+      .action();
     expect(ctx.calls).toContain("eject:sdb1");
 
     m.sidebarEntriesFor(place({ mountDevice: "sdc" }), 0, 0)
-      .find((e) => e.label === "Mount")!.action();
+      .find((e) => e.label === "Mount")!
+      .action();
     expect(ctx.calls).toContain("mount:sdc");
 
     const bm = m.sidebarEntriesFor(place({ path: "/home/u/Docs", bookmarked: true }), 0, 0);

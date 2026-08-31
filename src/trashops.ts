@@ -32,9 +32,13 @@ export const trashOrigPath = async (name: string): Promise<string | null> => {
     if (!m?.[1]) return null;
     let p = m[1].trim();
     if (p.startsWith("file://")) p = p.slice(7);
-    try { p = decodeURIComponent(p); } catch {}
+    try {
+      p = decodeURIComponent(p);
+    } catch {}
     return path.resolve(p);
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 };
 
 export const makeTrashOps = (sink: TrashOpsSink) => {
@@ -54,11 +58,23 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           const from = path.join(trashDir(), "files", hit);
           units.push(async () => {
             await safeRestoreMove(from, p);
-            try { await rm(path.join(trashDir(), "info", `${hit}.trashinfo`)); } catch (err) { sink.log?.(`undo trash ${p}: ${fsErrText(err)}`); }
+            try {
+              await rm(path.join(trashDir(), "info", `${hit}.trashinfo`));
+            } catch (err) {
+              sink.log?.(`undo trash ${p}: ${fsErrText(err)}`);
+            }
           });
-          redos.push(async () => { try { if (existsSync(p)) await xdgTrashMove(p); } catch (err) { sink.log?.(`redo trash ${p}: ${fsErrText(err)}`); } });
+          redos.push(async () => {
+            try {
+              if (existsSync(p)) await xdgTrashMove(p);
+            } catch (err) {
+              sink.log?.(`redo trash ${p}: ${fsErrText(err)}`);
+            }
+          });
           ok++;
-        } catch (err) { failWhy.add(fsErrText(err)); }
+        } catch (err) {
+          failWhy.add(fsErrText(err));
+        }
       }
       sink.pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units, redos);
       sink.refresh();
@@ -79,15 +95,24 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const failWhy = new Set<string>();
       for (const src of paths) {
         const orig = await trashOrigPath(path.basename(src));
-        if (!orig) { failWhy.add("no trashinfo"); continue; }
+        if (!orig) {
+          failWhy.add("no trashinfo");
+          continue;
+        }
         try {
           await mkdir(path.dirname(orig), { recursive: true });
           let dest = orig;
           if (existsSync(dest)) dest = uniqueTarget(path.dirname(dest), path.basename(dest));
           await fsMove(src, dest);
-          try { await rm(path.join(trashDir(), "info", `${path.basename(src)}.trashinfo`)); } catch (err) { sink.log?.(`restore cleanup ${src}: ${fsErrText(err)}`); }
+          try {
+            await rm(path.join(trashDir(), "info", `${path.basename(src)}.trashinfo`));
+          } catch (err) {
+            sink.log?.(`restore cleanup ${src}: ${fsErrText(err)}`);
+          }
           ok++;
-        } catch (err) { failWhy.add(fsErrText(err)); }
+        } catch (err) {
+          failWhy.add(fsErrText(err));
+        }
       }
       sink.refresh();
       const failed = paths.length - ok;
@@ -105,9 +130,15 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       for (const p of paths) {
         try {
           await rm(p, { recursive: true });
-          try { await rm(path.join(trashDir(), "info", `${path.basename(p)}.trashinfo`)); } catch (err) { sink.log?.(`delete cleanup ${p}: ${fsErrText(err)}`); }
+          try {
+            await rm(path.join(trashDir(), "info", `${path.basename(p)}.trashinfo`));
+          } catch (err) {
+            sink.log?.(`delete cleanup ${p}: ${fsErrText(err)}`);
+          }
           ok++;
-        } catch (err) { failWhy.add(fsErrText(err)); }
+        } catch (err) {
+          failWhy.add(fsErrText(err));
+        }
       }
       sink.refresh();
       const failed = paths.length - ok;
@@ -122,7 +153,9 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
     void (async () => {
       const filesDir = path.join(trashDir(), "files");
       let names: string[];
-      try { names = await readdir(filesDir); } catch (err) {
+      try {
+        names = await readdir(filesDir);
+      } catch (err) {
         sink.refresh();
         sink.notify(`Could not read trash (${fsErrText(err)})`, "empty failed");
         sink.status("Trash unreadable");
@@ -133,9 +166,15 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       for (const k of names) {
         try {
           await rm(path.join(filesDir, k), { recursive: true });
-          try { await rm(path.join(trashDir(), "info", `${k}.trashinfo`)); } catch (err) { sink.log?.(`empty cleanup ${k}: ${fsErrText(err)}`); }
+          try {
+            await rm(path.join(trashDir(), "info", `${k}.trashinfo`));
+          } catch (err) {
+            sink.log?.(`empty cleanup ${k}: ${fsErrText(err)}`);
+          }
           n++;
-        } catch (err) { failWhy.add(fsErrText(err)); }
+        } catch (err) {
+          failWhy.add(fsErrText(err));
+        }
       }
       sink.refresh();
       const failed = names.length - n;
@@ -168,7 +207,12 @@ export const makeTrashConfirms = (ctx: TrashConfirmsCtx) => {
   };
 
   const confirmDeleteForever = (paths: string[]): void => {
-    ctx.confirm(`Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}?`, "Delete", () => ctx.deleteForever(paths), true);
+    ctx.confirm(
+      `Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}?`,
+      "Delete",
+      () => ctx.deleteForever(paths),
+      true,
+    );
   };
 
   return { confirmEmptyTrash, confirmDeleteForever };

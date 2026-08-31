@@ -2,12 +2,7 @@ import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  readRecentXbel,
-  readStarredList,
-  upsertRecentXbel,
-  writeStarredList,
-} from "./recent";
+import { readRecentXbel, readStarredList, upsertRecentXbel, writeStarredList } from "./recent";
 
 // xbelPath()/starredListPath() are computed per call from XDG env, so each
 // test redirects both homes into a throwaway fixture dir.
@@ -26,8 +21,10 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (oldData === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = oldData;
-  if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
+  if (oldData === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = oldData;
+  if (oldState === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = oldState;
 });
 
 const XBEL = path.join(DATA, "recently-used.xbel");

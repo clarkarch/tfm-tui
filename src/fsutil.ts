@@ -15,8 +15,7 @@ export const trashDir = (): string =>
 
 // is a cwd the trash FILES dir? (virtual URIs like recent:// resolve to junk
 // paths, never the trash root, so no guard needed at the call site)
-export const isTrashFilesDir = (p: string): boolean =>
-  path.resolve(p) === path.join(trashDir(), "files");
+export const isTrashFilesDir = (p: string): boolean => path.resolve(p) === path.join(trashDir(), "files");
 
 // terse human text for the fs error codes users actually hit — "FAILED" alone
 // gives them nothing to act on (retry vs chmod vs free disk space)
@@ -37,7 +36,7 @@ const FS_ERR_TEXT: Record<string, string> = {
 export const fsErrText = (err: unknown): string => {
   const code = (err as any)?.code;
   if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
-  return err instanceof Error ? err.message.split(":")[0]?.toLowerCase() ?? "unknown error" : "unknown error";
+  return err instanceof Error ? (err.message.split(":")[0]?.toLowerCase() ?? "unknown error") : "unknown error";
 };
 
 // nautilus naming for an OCCUPIED name: first suggestion is " (copy)", then
@@ -101,7 +100,9 @@ export const xdgTrashMove = async (p: string): Promise<string> => {
     await writeFile(path.join(infoDir, `${name}.trashinfo`), `[Trash Info]\nPath=${p}\nDeletionDate=${stamp}\n`);
   } catch (err) {
     // put the file back — a source-less trash entry is worse than no entry
-    try { await fsMove(finalPath, p); } catch (undoErr) {
+    try {
+      await fsMove(finalPath, p);
+    } catch (undoErr) {
       (err as any).rollbackFailed = undoErr;
     }
     throw err;
@@ -113,10 +114,15 @@ export const xdgTrashMove = async (p: string): Promise<string> => {
 // null when the path is gone/unstatable — callers must treat null as
 // "unknown, use the safe fallback" (fsMove's EXDEV path), never as equal.
 export const deviceOf = (p: string): number | null => {
-  try { return lstatSync(p).dev; } catch { return null; }
+  try {
+    return lstatSync(p).dev;
+  } catch {
+    return null;
+  }
 };
 
 export const crossDevice = (a: string, b: string): boolean => {
-  const da = deviceOf(a), db = deviceOf(b);
+  const da = deviceOf(a),
+    db = deviceOf(b);
   return da !== null && db !== null && da !== db;
 };

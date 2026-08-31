@@ -45,8 +45,16 @@ export const tileLabelFor = (name: string, maxW: number): string =>
 
 const redoCreateUnit = (k: string, kind: "file" | "folder"): UndoUnit =>
   kind === "folder"
-    ? async () => { try { if (!existsSync(k)) await mkdir(k, { recursive: true }); } catch {} }
-    : async () => { try { if (!existsSync(k)) await writeFile(k, ""); } catch {} };
+    ? async () => {
+        try {
+          if (!existsSync(k)) await mkdir(k, { recursive: true });
+        } catch {}
+      }
+    : async () => {
+        try {
+          if (!existsSync(k)) await writeFile(k, "");
+        } catch {}
+      };
 
 export const makeRename = (ctx: RenameCtx) => {
   let renameEdit: RenameEdit | null = null;
@@ -58,11 +66,19 @@ export const makeRename = (ctx: RenameCtx) => {
     renameEdit = null;
     const input: any = ctx.byId(edit.inputId);
     const value = String(input?.value ?? "").trim();
-    if (input) { try { input.parent?.remove(input); } catch {} }
+    if (input) {
+      try {
+        input.parent?.remove(input);
+      } catch {}
+    }
     const refs = ctx.tileRefs.get(edit.key);
     const tile: any = refs ? ctx.byId(refs.tileId) : null;
     if (refs && tile && !ctx.byId(refs.labelId)) {
-      const labelText: any = Text({ id: refs.labelId, content: tileLabelFor(path.basename(edit.key), ctx.tileW()), fg: refs.baseFg });
+      const labelText: any = Text({
+        id: refs.labelId,
+        content: tileLabelFor(path.basename(edit.key), ctx.tileW()),
+        fg: refs.baseFg,
+      });
       tile.add(labelText);
     }
     ctx.stripSelectable();
@@ -75,14 +91,22 @@ export const makeRename = (ctx: RenameCtx) => {
       // first, then removes the entry entirely
       if (edit.createKind) {
         const k = edit.key;
-        ctx.pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(k, { recursive: true })], [redoCreateUnit(k, edit.createKind)]);
+        ctx.pushUndoBatch(
+          edit.createKind === "folder" ? "new folder" : "new file",
+          [() => rm(k, { recursive: true })],
+          [redoCreateUnit(k, edit.createKind)],
+        );
       }
       void ctx.performRename(edit.key, value);
       return;
     }
     if (edit.createKind) {
       const k = edit.key;
-      ctx.pushUndoBatch(edit.createKind === "folder" ? "new folder" : "new file", [() => rm(k, { recursive: true })], [redoCreateUnit(k, edit.createKind)]);
+      ctx.pushUndoBatch(
+        edit.createKind === "folder" ? "new folder" : "new file",
+        [() => rm(k, { recursive: true })],
+        [redoCreateUnit(k, edit.createKind)],
+      );
       ctx.setStatusMsg(`Created ${value} · ctrl+z to undo`);
     }
   };
@@ -97,7 +121,11 @@ export const makeRename = (ctx: RenameCtx) => {
     // real class instance — mounts into the already-mounted tile
     const inputId = `tfm-rename-input`;
     const stale = ctx.byId(inputId);
-    if (stale) { try { (stale as any).parent?.remove(stale); } catch {} }
+    if (stale) {
+      try {
+        (stale as any).parent?.remove(stale);
+      } catch {}
+    }
     const input: any = new InputRenderable(ctx.renderer(), {
       id: inputId,
       width: ctx.tileW() - 2,
@@ -106,16 +134,29 @@ export const makeRename = (ctx: RenameCtx) => {
       focusedBackgroundColor: ctx.colors().accentBg,
       textColor: ctx.colors().white,
     });
-    try { tile.insertBefore(input, label); } catch { tile.add(input); }
-    try { tile.remove(label); } catch {}
+    try {
+      tile.insertBefore(input, label);
+    } catch {
+      tile.add(input);
+    }
+    try {
+      tile.remove(label);
+    } catch {}
     renameEdit = { key, inputId };
     input.on?.("enter", () => finishInlineRename(true));
     const prevHandler = input.handleKeyPress?.bind(input);
     input.handleKeyPress = (k: any) => {
-      if (k?.name === "escape") { finishInlineRename(false); return true; }
+      if (k?.name === "escape") {
+        finishInlineRename(false);
+        return true;
+      }
       return prevHandler ? prevHandler(k) : false;
     };
-    setTimeout(() => { try { input.focus(); } catch {} }, 20);
+    setTimeout(() => {
+      try {
+        input.focus();
+      } catch {}
+    }, 20);
     ctx.stripSelectable();
   };
 
@@ -126,9 +167,7 @@ export const makeRename = (ctx: RenameCtx) => {
     if (ctx.isVirtualCwd() || ctx.inTrashView()) return;
     const name = uniqueUntitledName(ctx.cwd(), kind === "folder" ? "Untitled folder" : "Untitled.txt");
     const target = path.join(ctx.cwd(), name);
-    const made = kind === "folder"
-      ? mkdir(target, { recursive: true })
-      : writeFile(target, "");
+    const made = kind === "folder" ? mkdir(target, { recursive: true }) : writeFile(target, "");
     void made
       .then(() => ctx.renderGrid())
       .then(() => {
@@ -142,7 +181,9 @@ export const makeRename = (ctx: RenameCtx) => {
   return {
     isRenaming: (): boolean => renameEdit !== null,
     renameEditKey: (): string | null => renameEdit?.key ?? null,
-    clearRenameEdit: (): void => { renameEdit = null; },
+    clearRenameEdit: (): void => {
+      renameEdit = null;
+    },
     finishInlineRename,
     startInlineRename,
     startInlineCreate,

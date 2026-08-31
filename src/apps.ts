@@ -10,11 +10,17 @@ import { xdgDataHome } from "./uri";
 export const runOutShort = async (cmd: string[], timeoutMs = 1500): Promise<string> => {
   try {
     const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const timer = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
+    const timer = setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {}
+    }, timeoutMs);
     const out = (await new Response(proc.stdout).text()).trim();
     clearTimeout(timer);
     return out;
-  } catch { return ""; }
+  } catch {
+    return "";
+  }
 };
 
 // human name for a desktop id: first non-localized Name= inside [Desktop Entry]

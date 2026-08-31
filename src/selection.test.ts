@@ -32,12 +32,16 @@ const makeHarness = () => {
     colors: () => COLORS,
     uiStyle: () => "solid",
     byId,
-    setIconState: (spec: any, mode: number) => { if (spec) iconEvents.push({ key: spec.__key, mode }); },
+    setIconState: (spec: any, mode: number) => {
+      if (spec) iconEvents.push({ key: spec.__key, mode });
+    },
     isCutKey: (k: string) => cutKeys.has(k),
     scroller: () => scroller,
     viewH: () => 4,
     rowHInit: () => 3,
-    renderPreview: () => { previews.push(1); },
+    renderPreview: () => {
+      previews.push(1);
+    },
   };
   const sel = makeSelection(ctx);
 
@@ -58,14 +62,28 @@ const makeHarness = () => {
     sel.tileRefs.set(key, ref);
   };
 
-  return { sel, ctx, nodes, iconEvents, previews, scrolls, cutKeys, addTile, setScroller: (s: any) => { scroller = s; } };
+  return {
+    sel,
+    ctx,
+    nodes,
+    iconEvents,
+    previews,
+    scrolls,
+    cutKeys,
+    addTile,
+    setScroller: (s: any) => {
+      scroller = s;
+    },
+  };
 };
 
 describe("selectTileAt", () => {
   test("selects the tile, moves focus, requests a preview", () => {
     const h = makeHarness();
     h.sel.setFocusKeys(["a", "b", "c"]);
-    ["a", "b", "c"].forEach((k) => { h.addTile(k); });
+    ["a", "b", "c"].forEach((k) => {
+      h.addTile(k);
+    });
     expect(h.sel.selectTileAt(1)).toBe(true);
     expect(h.sel.focusIdx()).toBe(1);
     expect(h.sel.tileRefs.get("b")!.selected).toBe(true);
@@ -77,7 +95,8 @@ describe("selectTileAt", () => {
   test("out-of-bounds is a no-op that keeps the current selection", () => {
     const h = makeHarness();
     h.sel.setFocusKeys(["a", "b"]);
-    h.addTile("a"); h.addTile("b");
+    h.addTile("a");
+    h.addTile("b");
     h.sel.selectTileAt(0);
     expect(h.sel.selectTileAt(5)).toBe(false);
     expect(h.sel.tileRefs.get("a")!.selected).toBe(true);
@@ -89,7 +108,9 @@ describe("moveFocus", () => {
   test("starts at tile 0 from an unfocused grid", () => {
     const h = makeHarness();
     h.sel.setFocusKeys(["a", "b", "c"]);
-    ["a", "b", "c"].forEach((k) => { h.addTile(k); });
+    ["a", "b", "c"].forEach((k) => {
+      h.addTile(k);
+    });
     expect(h.sel.moveFocus(0, 1)).toBe(true);
     expect(h.sel.focusIdx()).toBe(0);
   });
@@ -98,7 +119,9 @@ describe("moveFocus", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e", "f"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => { h.addTile(k); });
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
     h.sel.setCols(3);
     h.sel.selectTileAt(1);
     h.sel.moveFocus(0, 1); // 1 -> 4
@@ -133,7 +156,9 @@ describe("selectRange / selectAll / clearTileSelection", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => { h.addTile(k); });
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
     h.sel.selectTileAt(0);
     h.sel.selectRange(4, 1); // reversed args select 1..4
     expect(h.sel.tileRefs.get("a")!.selected).toBe(false);
@@ -148,7 +173,8 @@ describe("selectRange / selectAll / clearTileSelection", () => {
     const h = makeHarness();
     const keys = ["d1/", "f.txt"];
     h.sel.setFocusKeys(keys);
-    h.addTile("d1/", true); h.addTile("f.txt");
+    h.addTile("d1/", true);
+    h.addTile("f.txt");
     h.sel.selectAll();
     const paths = h.sel.selPaths();
     expect(paths.map((p) => p.path).sort()).toEqual(["d1/", "f.txt"]);
@@ -188,7 +214,8 @@ describe("refreshCutVisuals", () => {
   test("repaints only unselected tiles, tracking the clipboard", () => {
     const h = makeHarness();
     h.sel.setFocusKeys(["a", "b"]);
-    h.addTile("a"); h.addTile("b");
+    h.addTile("a");
+    h.addTile("b");
     h.cutKeys.add("a");
     h.sel.selectTileAt(0); // select "a"
     h.iconEvents.length = 0;
@@ -220,7 +247,9 @@ describe("updateSelectionStatusReal", () => {
       const status = h.nodes.get("tfm-status-label");
       await settleUntil(() => status.content === "1 selected · 3 B");
       expect(status.content).toBe("1 selected · 3 B");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("single dir reports its contained item count", async () => {
@@ -238,7 +267,9 @@ describe("updateSelectionStatusReal", () => {
       const status = h.nodes.get("tfm-status-label");
       await settleUntil(() => status.content === "1 selected · 2 items");
       expect(status.content).toBe("1 selected · 2 items");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a newer status request wins over a still-in-flight older one", async () => {
@@ -260,7 +291,9 @@ describe("updateSelectionStatusReal", () => {
       const status = h.nodes.get("tfm-status-label");
       await settleUntil(() => status.content === "1 selected · 2 B");
       expect(status.content).toBe("1 selected · 2 B");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -281,7 +314,9 @@ describe("keyboard scrolling", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e", "f"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => { h.addTile(k); });
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
     h.sel.setCols(3);
     h.sel.setRowH(3);
     const scroller: any = { scrollTop: 0, scrollTo: (o: any) => h.scrolls.push(o) };
@@ -294,7 +329,9 @@ describe("keyboard scrolling", () => {
     const h = makeHarness();
     const keys = ["a", "b", "c", "d", "e", "f"];
     h.sel.setFocusKeys(keys);
-    keys.forEach((k) => { h.addTile(k); });
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
     h.sel.setCols(3);
     h.sel.setRowH(3);
     const scroller: any = { scrollTop: 6, scrollTo: (o: any) => h.scrolls.push(o) };

@@ -4,7 +4,9 @@
 export const bumpHex = (hex: string): string => {
   const n = Number.parseInt(hex.slice(1), 16);
   if (!Number.isFinite(n)) return hex;
-  return `#${Math.min(0xffffff, n + 1).toString(16).padStart(6, "0")}`;
+  return `#${Math.min(0xffffff, n + 1)
+    .toString(16)
+    .padStart(6, "0")}`;
 };
 
 // Terminals with background_opacity (kitty etc.) composite only their DEFAULT

@@ -25,17 +25,30 @@ export type TransferSink = {
 };
 
 export const scanTree = async (root: string): Promise<{ files: number; bytes: number }> => {
-  let files = 0, bytes = 0;
+  let files = 0,
+    bytes = 0;
   const stack = [root];
   while (stack.length) {
     const d = stack.pop()!;
     // lstat: a symlink counts once by its own size and is never followed
     // (following it would loop forever on cycles and duplicate target trees)
     let st: Stats;
-    try { st = await lstat(d); } catch { continue; }
-    if (!st.isDirectory()) { files++; bytes += st.size ?? 0; continue; }
+    try {
+      st = await lstat(d);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory()) {
+      files++;
+      bytes += st.size ?? 0;
+      continue;
+    }
     let kids: string[];
-    try { kids = await readdir(d); } catch { continue; }
+    try {
+      kids = await readdir(d);
+    } catch {
+      continue;
+    }
     for (const k of kids) stack.push(path.join(d, k));
   }
   return { files, bytes };
@@ -48,14 +61,34 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
     sink.setStream(rs);
     rs.on("data", (c: any) => {
       sink.addBytes(c?.length ?? 0);
-      if (sink.paused()) { try { rs.pause(); } catch {} }
-      if (sink.cancelled()) { try { rs.destroy(new Error("cancelled")); } catch {} }
+      if (sink.paused()) {
+        try {
+          rs.pause();
+        } catch {}
+      }
+      if (sink.cancelled()) {
+        try {
+          rs.destroy(new Error("cancelled"));
+        } catch {}
+      }
       if (sink.repaint) sink.repaint();
     });
     const done = () => sink.clearStream(rs);
     let settled = false;
-    ws.on("finish", () => { if (!settled) { settled = true; done(); resolve(); } });
-    const fail = (e: any) => { if (!settled) { settled = true; done(); reject(e); } };
+    ws.on("finish", () => {
+      if (!settled) {
+        settled = true;
+        done();
+        resolve();
+      }
+    });
+    const fail = (e: any) => {
+      if (!settled) {
+        settled = true;
+        done();
+        reject(e);
+      }
+    };
     ws.on("error", fail);
     rs.on("error", fail);
     rs.on("close", done);
@@ -69,7 +102,11 @@ export const copyTreeProgress = async (src: string, dest: string, sink: Transfer
     await sink.checkpoint();
     await mkdir(path.dirname(dest), { recursive: true });
     const target = await readlink(src);
-    try { await symlink(target, dest); } catch (err: any) { if (err?.code !== "EEXIST") throw err; }
+    try {
+      await symlink(target, dest);
+    } catch (err: any) {
+      if (err?.code !== "EEXIST") throw err;
+    }
     sink.fileDone();
     sink.repaint(true);
     return;

@@ -2,16 +2,36 @@ import { describe, expect, test } from "bun:test";
 import { runBoot, type BootCtx } from "./boot";
 
 const mkCtx = (calls: string[], over: Partial<BootCtx> = {}): BootCtx => ({
-  waitForResolution: async () => { calls.push("resolution"); },
-  buildLayout: () => { calls.push("layout"); },
-  loadGlobs2: async () => { calls.push("globs2"); },
-  restoreSession: () => { calls.push("session"); },
-  loadSystemPlaces: async () => { calls.push("places"); },
-  renderAll: () => { calls.push("render"); },
-  debugTrace: () => { calls.push("debug"); },
-  launchToast: () => { calls.push("toast"); },
-  startHygiene: () => { calls.push("hygiene"); },
-  wireSearchInput: () => { calls.push("search"); },
+  waitForResolution: async () => {
+    calls.push("resolution");
+  },
+  buildLayout: () => {
+    calls.push("layout");
+  },
+  loadGlobs2: async () => {
+    calls.push("globs2");
+  },
+  restoreSession: () => {
+    calls.push("session");
+  },
+  loadSystemPlaces: async () => {
+    calls.push("places");
+  },
+  renderAll: () => {
+    calls.push("render");
+  },
+  debugTrace: () => {
+    calls.push("debug");
+  },
+  launchToast: () => {
+    calls.push("toast");
+  },
+  startHygiene: () => {
+    calls.push("hygiene");
+  },
+  wireSearchInput: () => {
+    calls.push("search");
+  },
   isDebug: false,
   showLaunchTime: () => false,
   ...over,

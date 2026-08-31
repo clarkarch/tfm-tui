@@ -24,7 +24,14 @@ import {
 
 export const buildTitle = (opts: { width: number; colors: Record<string, any> }): any =>
   Box(
-    { id: "tfm-title-box", width: opts.width, height: 5, flexDirection: "column", justifyContent: "center", paddingLeft: 1 },
+    {
+      id: "tfm-title-box",
+      width: opts.width,
+      height: 5,
+      flexDirection: "column",
+      justifyContent: "center",
+      paddingLeft: 1,
+    },
     ASCIIFont({ id: "tfm-title-font", text: "tfm", font: "tiny", color: opts.colors.accent }),
     Text({ id: "tfm-title-sub", content: " terminal file manager", fg: opts.colors.sidebarFgMuted }),
   );
@@ -41,28 +48,55 @@ export type AppContainerOpts = {
   toolbarShell: any;
 };
 
-export const buildAppContainer = (o: AppContainerOpts): any => Box(
-  { width: "100%", height: "100%", flexDirection: "row" },
+export const buildAppContainer = (o: AppContainerOpts): any =>
   Box(
-    { id: "tfm-sidebar-root", width: o.sw, height: "100%", ...chromeSurface(o.uiStyle, o.colors as any, o.colors.sidebarBg), flexDirection: "column" },
-    o.title,
-    Box({ id: "tfm-places", width: o.sideInnerW, flexDirection: "column" }),
-  ),
-  Box(
-    { id: "tfm-main", flexGrow: 1, height: "100%", ...chromeSurface(o.uiStyle, o.colors as any, o.colors.bg), flexDirection: "column" },
-    o.toolbarShell,
-    Box({ id: "tfm-tabbar", width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, visible: o.tabBarVisible }),
-    Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
-    // status bar sits above the embedded terminal pane (zero-height until opened),
-    // so with a terminal open the bar hugs its top edge instead of sinking below it
+    { width: "100%", height: "100%", flexDirection: "row" },
     Box(
-      { id: "tfm-status", width: "100%", height: 1, flexDirection: "row", justifyContent: "flex-end", paddingRight: 1 },
-      Text({ id: "tfm-status-label", content: "", fg: o.colors.sidebarFgMuted }),
+      {
+        id: "tfm-sidebar-root",
+        width: o.sw,
+        height: "100%",
+        ...chromeSurface(o.uiStyle, o.colors as any, o.colors.sidebarBg),
+        flexDirection: "column",
+      },
+      o.title,
+      Box({ id: "tfm-places", width: o.sideInnerW, flexDirection: "column" }),
     ),
-    Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }),
-  ),
-  Box(
-    {
+    Box(
+      {
+        id: "tfm-main",
+        flexGrow: 1,
+        height: "100%",
+        ...chromeSurface(o.uiStyle, o.colors as any, o.colors.bg),
+        flexDirection: "column",
+      },
+      o.toolbarShell,
+      Box({
+        id: "tfm-tabbar",
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        columnGap: 1,
+        paddingLeft: 1,
+        visible: o.tabBarVisible,
+      }),
+      Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
+      // status bar sits above the embedded terminal pane (zero-height until opened),
+      // so with a terminal open the bar hugs its top edge instead of sinking below it
+      Box(
+        {
+          id: "tfm-status",
+          width: "100%",
+          height: 1,
+          flexDirection: "row",
+          justifyContent: "flex-end",
+          paddingRight: 1,
+        },
+        Text({ id: "tfm-status-label", content: "", fg: o.colors.sidebarFgMuted }),
+      ),
+      Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }),
+    ),
+    Box({
       id: "tfm-preview",
       width: o.previewWidth,
       height: "100%",
@@ -71,9 +105,8 @@ export const buildAppContainer = (o: AppContainerOpts): any => Box(
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,
-    },
-  ),
-);
+    }),
+  );
 
 export type BootLayoutCtx = {
   renderer: any;
@@ -106,7 +139,10 @@ export const buildBootLayout = (ctx: BootLayoutCtx): ScrollBoxRenderable => {
       ctx.closeFileMenu();
       ctx.clearSearch();
       ctx.blurTerminal();
-      if (ctx.pathEditMode()) { ctx.exitPathEdit(); return; }
+      if (ctx.pathEditMode()) {
+        ctx.exitPathEdit();
+        return;
+      }
       if (ctx.isRenaming()) ctx.finishInlineRename(false);
       // left-click clears (and may start a rubber band); right-click opens the
       // background menu WITHOUT cancelling the selection (Nautilus behavior)
@@ -117,34 +153,43 @@ export const buildBootLayout = (ctx: BootLayoutCtx): ScrollBoxRenderable => {
     },
     onMouseDrag: (ev: any) => updateBandRect(ctx.bandCtx, ev),
     onMouseDragEnd: (ev: any) => finalizeBand(ctx.bandCtx, ev),
-    onMouseUp: (ev: any) => { if (bandActive()) finalizeBand(ctx.bandCtx, ev); },
+    onMouseUp: (ev: any) => {
+      if (bandActive()) finalizeBand(ctx.bandCtx, ev);
+    },
   });
   const host: any = ctx.byId("tfm-grid-host");
   host.add(scroller);
 
-  ctx.renderer.root.add(Box({
-    id: BAND_ID,
-    visible: false,
-    position: "absolute",
-    zIndex: 2500,
-    border: true,
-    borderStyle: "rounded",
-    borderColor: ctx.colors.accent,
-  }));
+  ctx.renderer.root.add(
+    Box({
+      id: BAND_ID,
+      visible: false,
+      position: "absolute",
+      zIndex: 2500,
+      border: true,
+      borderStyle: "rounded",
+      borderColor: ctx.colors.accent,
+    }),
+  );
 
-  ctx.renderer.root.add(Box({
-    id: DRAG_GHOST_ID,
-    visible: false,
-    position: "absolute",
-    left: 0,
-    top: 0,
-    width: 12,
-    height: 1,
-    zIndex: 4000,
-    backgroundColor: ctx.colors.accent,
-    flexDirection: "row",
-    paddingLeft: 1,
-  }, Text({ id: `${DRAG_GHOST_ID}-label`, content: "moving 0 items", fg: ctx.colors.bg })));
+  ctx.renderer.root.add(
+    Box(
+      {
+        id: DRAG_GHOST_ID,
+        visible: false,
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: 12,
+        height: 1,
+        zIndex: 4000,
+        backgroundColor: ctx.colors.accent,
+        flexDirection: "row",
+        paddingLeft: 1,
+      },
+      Text({ id: `${DRAG_GHOST_ID}-label`, content: "moving 0 items", fg: ctx.colors.bg }),
+    ),
+  );
 
   return scroller;
 };

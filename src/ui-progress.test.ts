@@ -64,7 +64,9 @@ describe("makeProgress gates", () => {
     const { prog, pauseGate } = makeProgress(stubCtx());
     prog.paused = true;
     let released = false;
-    const gate = pauseGate().then(() => { released = true; });
+    const gate = pauseGate().then(() => {
+      released = true;
+    });
     await new Promise((r) => setTimeout(r, 120));
     expect(released).toBe(false);
     prog.paused = false;

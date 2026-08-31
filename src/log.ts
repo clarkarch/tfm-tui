@@ -7,7 +7,9 @@ export const isDebug = process.argv.includes("--debug") || process.argv.includes
 export const DEBUG_LOG = "/tmp/tfm-debug.log";
 
 export const appendLog = (msg: string): void => {
-  try { appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+  try {
+    appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`);
+  } catch {}
 };
 
 export const debugLog = (msg: string): void => {
@@ -23,13 +25,17 @@ export const debugLog = (msg: string): void => {
 export const DND_LOG = "/tmp/tfm-dnd.log";
 
 export const dlog = (msg: string): void => {
-  try { appendFileSync(DND_LOG, `${new Date().toISOString()} ${msg}\n`); } catch {}
+  try {
+    appendFileSync(DND_LOG, `${new Date().toISOString()} ${msg}\n`);
+  } catch {}
   if (isDebug) appendLog(`[dnd] ${msg}`);
 };
 
 process.on("uncaughtException", (err) => {
   appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
-  try { process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`); } catch {}
+  try {
+    process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`);
+  } catch {}
   process.exit(1);
 });
 process.on("unhandledRejection", (reason) => {

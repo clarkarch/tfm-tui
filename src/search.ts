@@ -20,7 +20,10 @@ export const makeSearch = (ctx: SearchCtx) => {
     searchQuery = "";
     try {
       const el: any = ctx.byId("tfm-search");
-      if (el) { el.value = ""; el.visible = false; }
+      if (el) {
+        el.value = "";
+        el.visible = false;
+      }
     } catch {}
   };
 
@@ -34,7 +37,11 @@ export const makeSearch = (ctx: SearchCtx) => {
     el.value = ch;
     searchQuery = ch;
     void ctx.renderGrid();
-    setTimeout(() => { try { el.focus(); } catch {} }, 10);
+    setTimeout(() => {
+      try {
+        el.focus();
+      } catch {}
+    }, 10);
   };
 
   // wire the Input's typed characters into the query; enter/escape semantics
@@ -45,7 +52,9 @@ export const makeSearch = (ctx: SearchCtx) => {
     if (!inputEl?.on) return;
     const renderSearchResults = debounced(150, () => void ctx.renderGrid());
     inputEl.on("input", () => {
-      try { searchQuery = String(inputEl.value ?? ""); } catch {}
+      try {
+        searchQuery = String(inputEl.value ?? "");
+      } catch {}
       renderSearchResults();
     });
   };

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { copyFileProgress, copyTreeProgress, scanTree, type TransferSink } from "./transfer";
@@ -21,7 +30,9 @@ const mkSink = (opts: { pauseAfterBytes?: number; cancelAfterFiles?: number } = 
     },
     paused: () => paused,
     cancelled: () => cancelled,
-    addBytes: (n) => { bytes += n; },
+    addBytes: (n) => {
+      bytes += n;
+    },
     fileDone: () => {
       files++;
       log.push(`file#${files}`);
@@ -34,15 +45,25 @@ const mkSink = (opts: { pauseAfterBytes?: number; cancelAfterFiles?: number } = 
   return {
     sink,
     log,
-    get bytes() { return bytes; },
-    get files() { return files; },
-    setPaused: (v: boolean) => { paused = v; },
+    get bytes() {
+      return bytes;
+    },
+    get files() {
+      return files;
+    },
+    setPaused: (v: boolean) => {
+      paused = v;
+    },
   };
 };
 
 let dir: string;
-beforeEach(() => { dir = mktmp("tfm-transfer-"); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+beforeEach(() => {
+  dir = mktmp("tfm-transfer-");
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
 
 const W = (p: string, s: string) => {
   mkdirSync(path.dirname(p), { recursive: true });
@@ -108,7 +129,9 @@ describe("copyTreeProgress", () => {
     let caught: unknown = null;
     try {
       await copyTreeProgress(path.join(dir, "src"), path.join(dir, "dst"), h.sink);
-    } catch (err) { caught = err; }
+    } catch (err) {
+      caught = err;
+    }
     expect((caught as Error)?.message).toBe("cancelled"); // same contract runTransfer catches per-source
     expect(h.files).toBe(1);
     // readdir order is fs-dependent, so exactly one file landed — never both
@@ -121,7 +144,9 @@ describe("copyTreeProgress", () => {
     h.setPaused(true);
     const p = copyTreeProgress(path.join(dir, "src"), path.join(dir, "dst"), h.sink);
     let done = false;
-    void p.then(() => { done = true; });
+    void p.then(() => {
+      done = true;
+    });
     await new Promise((r) => setTimeout(r, 50));
     expect(done).toBe(false); // still gated
     h.setPaused(false);

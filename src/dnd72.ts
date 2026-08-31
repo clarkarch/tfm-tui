@@ -69,7 +69,9 @@ export type Dnd72Ctx = {
 export const makeDnd72 = (ctx: Dnd72Ctx) => {
   const write = (s: string, label: string): void => {
     ctx.log(`tx ${label}`);
-    try { ctx.writeFrame(s); } catch {}
+    try {
+      ctx.writeFrame(s);
+    } catch {}
   };
 
   const enableDrops = (): void => {
@@ -119,7 +121,9 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     presentDragUriList(paths);
     sendDragIcon(paths.length);
     write(startDragFrame(), "start drag");
-    ctx.setStatusMsg(`Dragging ${paths.length} item${paths.length === 1 ? "" : "s"} — drop into another app or a folder`);
+    ctx.setStatusMsg(
+      `Dragging ${paths.length} item${paths.length === 1 ? "" : "s"} — drop into another app or a folder`,
+    );
   };
 
   // self-dropped back onto tfm: route to the folder/place under the cursor,
@@ -142,7 +146,10 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
 
   const finishSelfDrop = async (x: number, y: number): Promise<void> => {
     ctx.log(`self drop at ${x},${y}`);
-    if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+    if (endTimer) {
+      clearTimeout(endTimer);
+      endTimer = null;
+    }
     const paths = dragPaths;
     selfHandled = true;
     const target = ctx.hitTargetAt(x, y, dragPaths);
@@ -166,7 +173,11 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       isDir:
         ctx.tileRefs.get(p)?.isDir ??
         (() => {
-          try { return statSync(p).isDirectory(); } catch { return false; }
+          try {
+            return statSync(p).isDirectory();
+          } catch {
+            return false;
+          }
         })(),
     }));
     await ctx.moveInto(destDir, items);
@@ -199,15 +210,20 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     // declined so the internal move flow keeps the pointer and its UI feedback
     if (t === "o" && x >= 0) {
       const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !ctx.escMenuOpen() && !ctx.fileMenuOpen();
-      ctx.log(`drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${ctx.escMenuOpen()} fmenu=${ctx.fileMenuOpen()}`);
+      ctx.log(
+        `drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${ctx.escMenuOpen()} fmenu=${ctx.fileMenuOpen()}`,
+      );
       if (!want || !gridDrag.keys) return; // left-drag: kitty falls back to normal mouse events
       beginDrag(gridDrag.keys.map((k) => k.path));
       return;
     }
     if (t === "e") {
-      if (x === 2) { dragOp = y === 2 ? 2 : 1; ctx.log(`drag op=${dragOp === 2 ? "move" : "copy"}`); }
-      else if (x === 3) { ctx.log(`drag landed op=${dragOp}`); }
-      else if (x === 4) {
+      if (x === 2) {
+        dragOp = y === 2 ? 2 : 1;
+        ctx.log(`drag op=${dragOp === 2 ? "move" : "copy"}`);
+      } else if (x === 3) {
+        ctx.log(`drag landed op=${dragOp}`);
+      } else if (x === 4) {
         const canceled = y !== 0;
         ctx.log(`drag end canceled=${canceled} op=${dragOp} selfHandled=${selfHandled}`);
         const pathsAtEnd = dragPaths;
@@ -221,19 +237,31 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
           selfHandled = false;
           clearSelfDropHighlight();
         };
-        if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+        if (endTimer) {
+          clearTimeout(endTimer);
+          endTimer = null;
+        }
         // a self-drop M may still be in flight behind the end event — defer
         if (!canceled && pathsAtEnd && !selfHandled) endTimer = setTimeout(finishExternal, 700);
         else finishExternal();
+      } else if (x === 5 && dragPaths && !selfHandled) {
+        ctx.log("drag send request");
+        presentDragUriList(dragPaths);
       }
-      else if (x === 5 && dragPaths && !selfHandled) { ctx.log("drag send request"); presentDragUriList(dragPaths); }
       return;
     }
 
     // --- self-drop: hover/drop events landing back on tfm during OUR session ---
     if ((t === "m" || t === "M") && dragPaths) {
-      if (x === -1 && y === -1) { clearSelfDropHighlight(); ctx.clearHoverPlace(); return; }
-      if (t === "m") { handleSelfDropHover(x, y); return; }
+      if (x === -1 && y === -1) {
+        clearSelfDropHighlight();
+        ctx.clearHoverPlace();
+        return;
+      }
+      if (t === "m") {
+        handleSelfDropHover(x, y);
+        return;
+      }
       void finishSelfDrop(x, y); // M — dropped on ourselves
       return;
     }
@@ -266,8 +294,16 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       if (!payload && !m) void finishDrop(x);
       return;
     }
-    if (t === "R") { ctx.log(`drop error: ${payload}`); ctx.setStatusMsg("drop failed"); return; }
-    if (t === "E") { ctx.log(`drag offer error: ${payload}`); ctx.setStatusMsg("drag failed"); return; }
+    if (t === "R") {
+      ctx.log(`drop error: ${payload}`);
+      ctx.setStatusMsg("drop failed");
+      return;
+    }
+    if (t === "E") {
+      ctx.log(`drag offer error: ${payload}`);
+      ctx.setStatusMsg("drag failed");
+      return;
+    }
     ctx.log(`unhandled osc72 type t=${JSON.stringify(t)} x=${x} y=${y} payloadLen=${payload.length}`);
   };
 

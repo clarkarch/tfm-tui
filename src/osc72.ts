@@ -12,7 +12,9 @@ export type Osc72Meta = { t: string; x: number; y: number; m: boolean };
 
 export const parseOsc72Meta = (meta: string): Osc72Meta => {
   let t = "";
-  let x = NaN, y = NaN, m = false;
+  let x = NaN,
+    y = NaN,
+    m = false;
   for (const part of meta.split(":")) {
     const [k, v] = part.split("=");
     if (k === "t") t = v ?? "";
@@ -71,7 +73,9 @@ export const uriListToPaths = (data: string): string[] =>
     .map((l) => {
       let u = l.slice(7);
       if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
-      try { u = decodeURIComponent(u); } catch {}
+      try {
+        u = decodeURIComponent(u);
+      } catch {}
       return u;
     });
 

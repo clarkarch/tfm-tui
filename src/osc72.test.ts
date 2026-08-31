@@ -41,7 +41,9 @@ describe("frames are byte-exact", () => {
 
   test("drag icon frame sizes label cells and carries unpadded b64", () => {
     const f = dragIconFrame(1);
-    expect(f).toBe(`\x1b]72;t=p:x=-1:y=0:X=8:Y=1:o=0:m=0;${Buffer.from("1 item").toString("base64").replace(/=+$/, "")}\x1b\\`);
+    expect(f).toBe(
+      `\x1b]72;t=p:x=-1:y=0:X=8:Y=1:o=0:m=0;${Buffer.from("1 item").toString("base64").replace(/=+$/, "")}\x1b\\`,
+    );
     expect(dragBadgeLabel(1)).toBe("1 item");
     expect(dragBadgeLabel(3)).toBe("3 items");
   });

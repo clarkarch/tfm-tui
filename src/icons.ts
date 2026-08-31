@@ -30,25 +30,28 @@ const embeddedIconTexts = (): Promise<Map<string, string>> =>
     return map;
   })());
 
-export const warmEmbeddedIcons = (): void => { void embeddedIconTexts(); };
+export const warmEmbeddedIcons = (): void => {
+  void embeddedIconTexts();
+};
 
 const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, pxH: number): Promise<Uint8Array> => {
   const svg =
-    (await embeddedIconTexts()).get(name) ??
-    readFileSync(`${import.meta.dir}/../assets/icons/${name}.svg`, "utf8");
+    (await embeddedIconTexts()).get(name) ?? readFileSync(`${import.meta.dir}/../assets/icons/${name}.svg`, "utf8");
   const tinted = /#[0-9a-fA-F]{6}/.test(svg)
     ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
     : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
 
   const proc = spawn("rsvg-convert", ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)]);
   const chunks: Buffer[] = [];
-  proc.stdout.on("data", (c: Buffer) => { chunks.push(c); });
+  proc.stdout.on("data", (c: Buffer) => {
+    chunks.push(c);
+  });
   const done = new Promise<Uint8Array>((resolve, reject) => {
     proc.on("error", reject);
     proc.on("close", (code) =>
       code === 0 && chunks.length > 0
         ? resolve(new Uint8Array(Buffer.concat(chunks)))
-        : reject(new Error(`rsvg-convert exited ${code}`))
+        : reject(new Error(`rsvg-convert exited ${code}`)),
     );
   });
   proc.stdin.end(tinted);
@@ -62,13 +65,14 @@ const inflightIcons = new Map<string, Promise<Uint8Array>>();
 // (name, tint, bg, pixel size) plus a pipeline-version salt. Theme switches
 // naturally miss because fg/bg are part of the key.
 const ICON_DISK_VER = "v2";
-const iconDiskDir = (): string =>
-  path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
+const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
   path.join(iconDiskDir(), `${createHash("sha1").update(`${ICON_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
 let iconDirReady: Promise<void> | null = null;
 const ensureIconDir = (): Promise<void> =>
-  (iconDirReady ??= mkdir(iconDiskDir(), { recursive: true }).then(() => undefined).catch(() => {}));
+  (iconDirReady ??= mkdir(iconDiskDir(), { recursive: true })
+    .then(() => undefined)
+    .catch(() => {}));
 
 // Cap concurrent rsvg forks — boot fans out dozens of slots at once and a
 // thundering herd of librsvg processes is slower than a capped pipeline.
@@ -125,7 +129,7 @@ const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promis
     proc.on("close", (code) =>
       code === 0 && chunks.length > 0
         ? resolve(new Uint8Array(Buffer.concat(chunks)))
-        : reject(new Error(`${tool} exited ${code}`))
+        : reject(new Error(`${tool} exited ${code}`)),
     );
   });
 
@@ -135,28 +139,58 @@ const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promis
 // rsvg-convert missing (CI, IM6 distros) or ancient librsvg (< 2.54, no
 // --page-*): fall back to the magick -density path.
 const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): string[] => [
-  "-density", "192", p, "-auto-orient", "-background", bg,
-  "-thumbnail", `${pxW}x${pxH}^`, "-gravity", "center", "-extent", `${pxW}x${pxH}`, "png:-",
+  "-density",
+  "192",
+  p,
+  "-auto-orient",
+  "-background",
+  bg,
+  "-thumbnail",
+  `${pxW}x${pxH}^`,
+  "-gravity",
+  "center",
+  "-extent",
+  `${pxW}x${pxH}`,
+  "png:-",
 ];
 const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
   if (Bun.which("rsvg-convert")) {
     return pngFromProc(
       spawn("rsvg-convert", [
-        "-w", String(pxW), "-h", String(pxH),
-        "--page-width", String(pxW), "--page-height", String(pxH),
-        "--keep-aspect-ratio", "--background-color", bg, p,
+        "-w",
+        String(pxW),
+        "-h",
+        String(pxH),
+        "--page-width",
+        String(pxW),
+        "--page-height",
+        String(pxH),
+        "--keep-aspect-ratio",
+        "--background-color",
+        bg,
+        p,
       ]),
       "rsvg-convert",
-    ).catch(() =>
-      pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick"),
-    );
+    ).catch(() => pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick"));
   }
   return pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
 };
 
 const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> =>
   pngFromProc(
-    spawn("magick", [p, "-auto-orient", "-background", bg, "-thumbnail", `${pxW}x${pxH}^`, "-gravity", "center", "-extent", `${pxW}x${pxH}`, "png:-"]),
+    spawn("magick", [
+      p,
+      "-auto-orient",
+      "-background",
+      bg,
+      "-thumbnail",
+      `${pxW}x${pxH}^`,
+      "-gravity",
+      "center",
+      "-extent",
+      `${pxW}x${pxH}`,
+      "png:-",
+    ]),
     "magick",
   );
 
@@ -168,7 +202,24 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
   const vf = `scale=${pxW}:${pxH}:force_original_aspect_ratio=increase,crop=${pxW}:${pxH}`;
   const attempt = (ss: string) =>
     pngFromProc(
-      spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-ss", ss, "-i", p, "-frames:v", "1", "-vf", vf, "-f", "image2pipe", "-vcodec", "png", "-"]),
+      spawn("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        ss,
+        "-i",
+        p,
+        "-frames:v",
+        "1",
+        "-vf",
+        vf,
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "png",
+        "-",
+      ]),
       "ffmpeg",
     );
   try {
@@ -184,14 +235,15 @@ const thumbCache = new Map<string, Promise<Uint8Array>>();
 // pixel size, bg, vector flag) plus a pipeline-version salt — renderer swaps
 // and file edits miss naturally. No eviction (icon disk cache has none either).
 const THUMB_DISK_VER = "v1";
-const thumbDiskDir = (): string =>
-  path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
+const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
   path.join(thumbDiskDir(), `${createHash("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
 // NOT memoized: tests re-point XDG_CACHE_HOME per run, a memoized mkdir would
 // cache the first dir and strand later writes in a missing directory
 const ensureThumbDir = async (): Promise<void> => {
-  try { await mkdir(thumbDiskDir(), { recursive: true }); } catch {}
+  try {
+    await mkdir(thumbDiskDir(), { recursive: true });
+  } catch {}
 };
 
 export const thumbPng = (

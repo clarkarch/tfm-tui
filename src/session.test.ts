@@ -29,10 +29,14 @@ describe("readRestoredSession", () => {
   test("round-trips tabs through saveSession", async () => {
     const root = sandbox();
     try {
-      await saveSession(root, [
-        { history: [root, os.homedir()], histIdx: 1 },
-        { history: ["/tmp"], histIdx: 0 },
-      ], 1);
+      await saveSession(
+        root,
+        [
+          { history: [root, os.homedir()], histIdx: 1 },
+          { history: ["/tmp"], histIdx: 0 },
+        ],
+        1,
+      );
       const doc = readRestoredSession();
       expect(doc).not.toBeNull();
       expect(doc!.tabs.length).toBe(2);
@@ -47,13 +51,16 @@ describe("readRestoredSession", () => {
     const root = sandbox();
     try {
       mkdirSync(path.dirname(sessionFile()), { recursive: true });
-      writeFileSync(sessionFile(), JSON.stringify({
-        tabs: [
-          { history: ["/nonexistent-dir-xyz", os.tmpdir()], histIdx: 99 },
-          { history: ["/nonexistent-dir-xyz"], histIdx: 0 },
-        ],
-        activeTab: 7,
-      }));
+      writeFileSync(
+        sessionFile(),
+        JSON.stringify({
+          tabs: [
+            { history: ["/nonexistent-dir-xyz", os.tmpdir()], histIdx: 99 },
+            { history: ["/nonexistent-dir-xyz"], histIdx: 0 },
+          ],
+          activeTab: 7,
+        }),
+      );
       const doc = readRestoredSession();
       expect(doc).not.toBeNull();
       expect(doc!.tabs.length).toBe(1);
@@ -92,7 +99,10 @@ describe("readRestoredSession", () => {
     const root = sandbox();
     try {
       mkdirSync(path.dirname(sessionFile()), { recursive: true });
-      writeFileSync(sessionFile(), JSON.stringify({ tabs: [{ history: ["recent://", "starred://"], histIdx: 1 }], activeTab: 0 }));
+      writeFileSync(
+        sessionFile(),
+        JSON.stringify({ tabs: [{ history: ["recent://", "starred://"], histIdx: 1 }], activeTab: 0 }),
+      );
       const doc = readRestoredSession();
       expect(doc!.tabs[0]!.history).toEqual(["recent://", "starred://"]);
       expect(doc!.tabs[0]!.histIdx).toBe(1);

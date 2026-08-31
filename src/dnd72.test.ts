@@ -9,7 +9,15 @@ const baseCtx = () => {
   const status: string[] = [];
   const notes: string[] = [];
   let oscCb: ((seq: string) => void) | null = null;
-  const ctx: Dnd72Ctx & { tx: string[]; logs: string[]; status: string[]; notes: string[]; runTransfers: any[]; moveIns: any[]; trashed: string[][] } = {
+  const ctx: Dnd72Ctx & {
+    tx: string[];
+    logs: string[];
+    status: string[];
+    notes: string[];
+    runTransfers: any[];
+    moveIns: any[];
+    trashed: string[][];
+  } = {
     tx,
     logs,
     status,
@@ -34,14 +42,20 @@ const baseCtx = () => {
     escMenuOpen: () => false,
     fileMenuOpen: () => false,
     trashPaths: (ps) => ctx.trashed.push(ps),
-    moveInto: async (destDir, items) => { ctx.moveIns.push([destDir, items]); },
-    runTransfer: async (op, destDir, srcs, label) => { ctx.runTransfers.push([op, destDir, srcs, label]); },
+    moveInto: async (destDir, items) => {
+      ctx.moveIns.push([destDir, items]);
+    },
+    runTransfer: async (op, destDir, srcs, label) => {
+      ctx.runTransfers.push([op, destDir, srcs, label]);
+    },
     cwd: () => "/home/u",
     virtualCwd: () => false,
     home: "/home/u",
     setStatusMsg: (m) => status.push(m),
     notify: (m, t) => notes.push(`${t}: ${m}`),
-    subscribeOsc: (cb) => { oscCb = cb; },
+    subscribeOsc: (cb) => {
+      oscCb = cb;
+    },
   };
   const feed = (meta: string, payload = ""): void => {
     oscCb!(`\x1b]72;${meta};${payload}\x1b\\`);
@@ -49,8 +63,7 @@ const baseCtx = () => {
   return { ctx, feed, tx, logs, status, notes };
 };
 
-const b64 = (s: string): string =>
-  Buffer.from(s, "utf8").toString("base64").replace(/=+$/, "");
+const b64 = (s: string): string => Buffer.from(s, "utf8").toString("base64").replace(/=+$/, "");
 
 describe("splitOsc72Seq", () => {
   test("splits meta/payload and strips terminators", () => {

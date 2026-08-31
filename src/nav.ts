@@ -47,8 +47,18 @@ export type NavHooks = {
 export const makeNav = (state: AppState, hooks: NavHooks) => {
   const canBack = () => state.histIdx > 0;
   const canFwd = () => state.histIdx < state.history.length - 1;
-  const goBack = () => { if (canBack()) { state.histIdx--; hooks.renderAll(); } };
-  const goFwd = () => { if (canFwd()) { state.histIdx++; hooks.renderAll(); } };
+  const goBack = () => {
+    if (canBack()) {
+      state.histIdx--;
+      hooks.renderAll();
+    }
+  };
+  const goFwd = () => {
+    if (canFwd()) {
+      state.histIdx++;
+      hooks.renderAll();
+    }
+  };
 
   const pushHistory = (dir: string): void => {
     state.history = state.history.slice(0, state.histIdx + 1);
@@ -61,7 +71,10 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
     hooks.exitPathEdit();
     hooks.closeFileMenuIfOpen();
     if (dir === RECENT_URI || dir === STARRED_URI) {
-      if (dir === state.cwd) { hooks.renderAll(); return; }
+      if (dir === state.cwd) {
+        hooks.renderAll();
+        return;
+      }
       pushHistory(dir);
       hooks.clearSearch();
       hooks.renderAll();
@@ -74,7 +87,10 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
     } catch {
       return;
     }
-    if (target === path.resolve(state.cwd)) { hooks.renderAll(); return; }
+    if (target === path.resolve(state.cwd)) {
+      hooks.renderAll();
+      return;
+    }
     pushHistory(target);
     hooks.clearSearch();
     hooks.renderAll();

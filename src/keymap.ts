@@ -209,7 +209,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
         const refs = targetKey !== undefined ? selection.tileRefs.get(targetKey) : undefined;
         if (targetKey && refs) {
           if (refs.isDir) ctx.navigate(targetKey);
-          else { ctx.openFileDefault(targetKey); ctx.clearSearch(); void ctx.renderGrid(); }
+          else {
+            ctx.openFileDefault(targetKey);
+            ctx.clearSearch();
+            void ctx.renderGrid();
+          }
         } else {
           ctx.clearSearch();
           void ctx.renderGrid();
@@ -220,14 +224,41 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
 
     // --- keyboard navigation: sidebar <-> grid ---
     // shift+arrows extend the selection from the anchor instead of moving it
-    if (e.shift && !ctrl && e.name === "up") { if (selection.focusKeys().length) { if (selection.selAnchor() === null) selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0); extendFromAnchor(selection.focusIdx() < 0 ? 0 : selection.focusIdx() - selection.colsAtBuild()); } return; }
-    if (e.shift && !ctrl && e.name === "down") { if (selection.focusKeys().length) { if (selection.selAnchor() === null) selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0); extendFromAnchor(selection.focusIdx() < 0 ? 0 : selection.focusIdx() + selection.colsAtBuild()); } return; }
-    if (e.shift && !ctrl && e.name === "left") { if (selection.focusKeys().length && selection.focusIdx() > 0) extendFromAnchor(selection.focusIdx() - 1); return; }
-    if (e.shift && !ctrl && e.name === "right") { if (selection.focusKeys().length && selection.focusIdx() < selection.focusKeys().length - 1) extendFromAnchor(selection.focusIdx() + 1); return; }
+    if (e.shift && !ctrl && e.name === "up") {
+      if (selection.focusKeys().length) {
+        if (selection.selAnchor() === null)
+          selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+        extendFromAnchor(selection.focusIdx() < 0 ? 0 : selection.focusIdx() - selection.colsAtBuild());
+      }
+      return;
+    }
+    if (e.shift && !ctrl && e.name === "down") {
+      if (selection.focusKeys().length) {
+        if (selection.selAnchor() === null)
+          selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+        extendFromAnchor(selection.focusIdx() < 0 ? 0 : selection.focusIdx() + selection.colsAtBuild());
+      }
+      return;
+    }
+    if (e.shift && !ctrl && e.name === "left") {
+      if (selection.focusKeys().length && selection.focusIdx() > 0) extendFromAnchor(selection.focusIdx() - 1);
+      return;
+    }
+    if (e.shift && !ctrl && e.name === "right") {
+      if (selection.focusKeys().length && selection.focusIdx() < selection.focusKeys().length - 1)
+        extendFromAnchor(selection.focusIdx() + 1);
+      return;
+    }
 
     if (sidebarActive) {
-      if (e.name === "up") { setSidebarFocus(placeIdx - 1); return; }
-      if (e.name === "down") { setSidebarFocus(placeIdx + 1); return; }
+      if (e.name === "up") {
+        setSidebarFocus(placeIdx - 1);
+        return;
+      }
+      if (e.name === "down") {
+        setSidebarFocus(placeIdx + 1);
+        return;
+      }
       if (e.name === "left" || e.name === "right") {
         leaveSidebarToGrid();
         selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
@@ -239,9 +270,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
           ctx.closeFileMenu();
           sidebarActive = false;
           placeIdx = -1;
-          const target = rec.place.scheme === "recent" ? RECENT_URI
-            : rec.place.scheme === "starred" ? STARRED_URI
-            : rec.place.path;
+          const target =
+            rec.place.scheme === "recent" ? RECENT_URI : rec.place.scheme === "starred" ? STARRED_URI : rec.place.path;
           if (target) ctx.navigate(target);
           else if (rec.place.mountDevice) ctx.mountDevice(rec.place.mountDevice);
         }
@@ -250,8 +280,14 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
 
-    if (e.name === "up") { selection.moveFocus(0, -1); return; }
-    if (e.name === "down") { selection.moveFocus(0, 1); return; }
+    if (e.name === "up") {
+      selection.moveFocus(0, -1);
+      return;
+    }
+    if (e.name === "down") {
+      selection.moveFocus(0, 1);
+      return;
+    }
     if (e.name === "left") {
       const atLeftEdge = selection.focusIdx() === -1 || selection.focusIdx() % selection.colsAtBuild() === 0;
       if (atLeftEdge || selection.focusKeys().length === 0) {
@@ -268,7 +304,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       selection.moveFocus(-1, 0);
       return;
     }
-    if (e.name === "right") { selection.moveFocus(1, 0); return; }
+    if (e.name === "right") {
+      selection.moveFocus(1, 0);
+      return;
+    }
     if (e.name === "return" && selection.focusIdx() >= 0) {
       const key = selection.focusKeys()[selection.focusIdx()];
       const refs = key !== undefined ? selection.tileRefs.get(key) : undefined;
@@ -305,8 +344,14 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
 
     // --- tabs (kitty needs map no_op for ctrl+tab / ctrl+shift+tab — its
     // default next_tab/previous_tab eat the keys before they reach us) ---
-    if (hit(e, "newTab")) { ctx.newTab(); return; }
-    if (hit(e, "closeTab")) { ctx.closeTab(); return; }
+    if (hit(e, "newTab")) {
+      ctx.newTab();
+      return;
+    }
+    if (hit(e, "closeTab")) {
+      ctx.closeTab();
+      return;
+    }
     if (hit(e, "prevTab")) {
       ctx.switchTab(ctx.tabModel.active === 0 ? ctx.tabModel.list.length - 1 : ctx.tabModel.active - 1);
       return;
@@ -326,8 +371,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       if (ctx.inTrashView()) {
         // no cursor coords in a keybind — the confirm dialog is a centered modal
         ctx.confirmDeleteForever(selected.map((s) => s.path));
-      }
-      else ctx.trashPaths(selected.map((s) => s.path));
+      } else ctx.trashPaths(selected.map((s) => s.path));
       return;
     }
     if (hit(e, "renameOrRestore") && selected.length === 1 && selected[0]) {

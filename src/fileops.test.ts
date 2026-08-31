@@ -15,9 +15,14 @@ const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), pre
 const ROOT = mktmp("tfm-fileops-");
 const HOME = ROOT;
 
-afterAll(() => { rmSync(ROOT, { recursive: true, force: true }); });
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
-const W = (p: string, s = "x") => { mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, s); };
+const W = (p: string, s = "x") => {
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, s);
+};
 
 const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
   const calls: string[] = [];
@@ -37,12 +42,21 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
     conflict: {
       resetPolicy: () => calls.push("policy:reset"),
       policy: () => null,
-      promptConflict: async () => { calls.push("conflict:prompt"); return "skip" as const; },
+      promptConflict: async () => {
+        calls.push("conflict:prompt");
+        return "skip" as const;
+      },
     },
     prog,
     paintProgress: () => calls.push("paint"),
-    showProgressToast: () => { prog.toastUp = true; calls.push("toast:show"); },
-    finishProgressToast: (msg) => { prog.toastUp = false; calls.push(`toast:finish:${msg}`); },
+    showProgressToast: () => {
+      prog.toastUp = true;
+      calls.push("toast:show");
+    },
+    finishProgressToast: (msg) => {
+      prog.toastUp = false;
+      calls.push(`toast:finish:${msg}`);
+    },
     pauseGate: async () => {},
     pushUndoBatch: (label, units, redos) => calls.push(`undo:${label}:${units.length}:${redos.length}`),
     renderAll: () => calls.push("renderAll"),
@@ -81,8 +95,7 @@ describe("runTransfer: same-fs move", () => {
 });
 
 describe("runTransfer: cross-device move", () => {
-  const fakeSplit = (a: string, b: string): boolean =>
-    a.includes("dev-a") !== b.includes("dev-a");
+  const fakeSplit = (a: string, b: string): boolean => a.includes("dev-a") !== b.includes("dev-a");
 
   test("goes through the copy engine with a toast, then removes the source", async () => {
     const h = makeHarness({ crossDevice: fakeSplit });
@@ -106,7 +119,9 @@ describe("runTransfer: cross-device move", () => {
       crossDevice: fakeSplit,
       // first progress repaint (during file 1's copy) flips the cancel flag —
       // the next checkpoint/epilogue sees it, no timing games needed
-      paintProgress: () => { h.prog.cancelled = true; },
+      paintProgress: () => {
+        h.prog.cancelled = true;
+      },
     });
     const src = path.join(ROOT, "dev-a", "cancel-tree");
     const destDir = path.join(ROOT, "dev-b-cancel");
