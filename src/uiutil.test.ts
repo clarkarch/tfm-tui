@@ -61,10 +61,14 @@ describe("debounced", () => {
     const { sched, advance, pending } = mkClock();
     let state = "a";
     let runs = 0;
-    const run = debounced(30, () => {
-      runs++;
-      state += "!";
-    }, sched);
+    const run = debounced(
+      30,
+      () => {
+        runs++;
+        state += "!";
+      },
+      sched,
+    );
     run();
     advance(10);
     state = "b";
