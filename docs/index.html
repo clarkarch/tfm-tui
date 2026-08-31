@@ -5,248 +5,169 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tfm — terminal file manager</title>
 <meta name="description" content="A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails right inside your terminal. Built on OpenTUI + Bun.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --ink: #12131a;
-    --panel: #1a1c26;
-    --line: #2a2d3a;
-    --bone: #e6e4df;
-    --dim: #7a7f8f;
+    --bg: #1a1b26;
+    --panel: #16161e;
     --accent: #7aa2f7;
-    --sel: #292e42;
-    --red: #f7768e;
-    --mono: "IBM Plex Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
-    --disp: "Space Grotesk", var(--mono);
-    /* mock window palette — driven by the theme picker */
-    --w-bg: #1a1b26;
-    --w-side: #16161e;
-    --w-fg: #c0caf5;
-    --w-dim: #565f89;
-    --w-hover: #24283b;
-    --w-accent: #7aa2f7;
-    --w-sel: #292e42;
-    --w-green: #9ece6a;
+    --fg: #c0caf5;
+    --muted: #565f89;
+    --hover: #24283b;
+    --border: #292e42;
+    --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", MesloLGS NF, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
-    margin: 0; background: var(--ink); color: var(--bone);
-    font-family: var(--mono); font-size: 15px; line-height: 1.6;
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: 1.6;
+    transition: background .25s, color .25s;
   }
-  ::selection { background: var(--accent); color: var(--ink); }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
-  /* ---------- nav ---------- */
+  /* nav */
   nav {
-    position: sticky; top: 0; z-index: 20;
-    background: color-mix(in srgb, var(--ink) 88%, transparent);
-    backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border);
   }
-  nav .wrap { display: flex; align-items: center; gap: 18px; height: 54px; }
-  nav .logo { font-family: var(--disp); font-weight: 700; color: var(--bone); font-size: 17px; letter-spacing: .3px; }
-  nav .logo::before { content: "$ "; color: var(--accent); }
-  nav .links { margin-left: auto; display: flex; gap: 18px; font-size: 13px; }
-  nav .links a { color: var(--dim); }
-  nav .links a:hover { color: var(--bone); text-decoration: none; }
-  @media (max-width: 640px) { nav .links a:not(:last-child) { display: none; } }
-  .pill {
-    font-size: 11px; padding: 2px 9px; border-radius: 99px; color: var(--red);
-    border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  nav .wrap { display: flex; align-items: center; gap: 18px; height: 52px; }
+  nav .logo { color: var(--accent); font-weight: 700; letter-spacing: .5px; }
+  nav .logo::before { content: "$ "; color: var(--muted); }
+  nav .links { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
+  nav .links a { color: var(--muted); }
+  nav .links a:hover { color: var(--fg); text-decoration: none; }
+  .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    background: color-mix(in srgb, #f7768e 18%, transparent);
+    color: #f7768e; border: 1px solid color-mix(in srgb, #f7768e 40%, transparent);
   }
 
-  /* ---------- hero ---------- */
-  .hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 48px; align-items: center; padding: 84px 24px 64px; }
-  @media (max-width: 960px) { .hero { grid-template-columns: minmax(0, 1fr); padding-top: 56px; } }
-  .eyebrow { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); margin: 0 0 18px; }
-  .eyebrow b { color: var(--accent); font-weight: 500; }
-  h1 {
-    font-family: var(--disp); font-weight: 700; font-size: clamp(38px, 5.2vw, 62px);
-    line-height: 1.06; letter-spacing: -.02em; margin: 0 0 20px; color: var(--bone);
+  /* hero */
+  header { padding: 72px 0 40px; text-align: center; }
+  h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 2px; color: var(--fg); }
+  .subtitle { color: var(--accent); font-size: clamp(15px, 2.4vw, 21px); margin: 0 0 14px; }
+  .tagline { color: var(--muted); max-width: 640px; margin: 0 auto 28px; }
+  .tagline b { color: var(--accent); font-weight: 600; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 6px; font-size: 14px;
+    border: 1px solid var(--border); color: var(--fg); background: var(--hover);
   }
-  h1 .hl { color: var(--accent); }
-  .cursor { display: inline-block; width: .52em; height: .95em; background: var(--accent); vertical-align: -.08em; margin-left: 4px; animation: blink 1.1s steps(1) infinite; }
-  @keyframes blink { 50% { opacity: 0; } }
-  .lede { color: var(--dim); max-width: 480px; margin: 0 0 28px; }
-  .lede b { color: var(--bone); font-weight: 500; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+  .btn:hover { text-decoration: none; filter: brightness(1.12); }
   .install {
-    display: flex; align-items: center; gap: 10px; max-width: 100%;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-    padding: 11px 14px; font-size: 12.5px;
+    display: inline-flex; align-items: center; gap: 10px; max-width: 100%;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 13px; color: var(--fg);
   }
-  .install code { white-space: nowrap; overflow-x: auto; min-width: 0; }
+  .install code { white-space: nowrap; overflow-x: auto; }
   .install .p { color: var(--accent); }
   .copy {
-    margin-left: auto; border: 1px solid var(--line); background: transparent; color: var(--dim);
-    font-family: inherit; font-size: 11px; border-radius: 5px; padding: 4px 10px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--muted);
+    font-family: inherit; font-size: 12px; border-radius: 5px; padding: 3px 9px; cursor: pointer;
   }
-  .copy:hover { color: var(--bone); border-color: var(--dim); }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; font-size: 11.5px; color: var(--dim); }
-  .chips span { border: 1px solid var(--line); border-radius: 99px; padding: 3px 11px; }
-  .warn { font-size: 12px; color: var(--dim); margin-top: 22px; }
-  .warn b { color: var(--red); font-weight: 500; }
+  .copy:hover { color: var(--fg); }
+  .warn { font-size: 12px; color: var(--muted); margin-top: 16px; }
 
-  /* ---------- live mock window (signature) ---------- */
-  .demo { min-width: 0; }
-  .demo-hint { text-align: center; font-size: 11.5px; color: var(--dim); margin: 10px 0 0; }
-  .demo-hint b { color: var(--accent); font-weight: 500; }
-  .win {
-    background: var(--w-bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
-    box-shadow: 0 30px 90px -30px rgba(0,0,0,.8), 0 0 0 1px rgba(255,255,255,.02);
-    font-size: 12.5px; color: var(--w-fg); user-select: none;
-    transition: background-color .3s, color .3s;
+  /* terminal frame */
+  .term {
+    margin: 40px auto 0; max-width: 960px; text-align: left;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    background: var(--panel);
+    box-shadow: 0 24px 80px -24px rgba(0,0,0,.7);
   }
-  .win-bar { display: flex; align-items: center; gap: 7px; padding: 9px 12px; background: var(--w-side); border-bottom: 1px solid var(--line); transition: background-color .3s; }
-  .win-bar .dot { width: 10px; height: 10px; border-radius: 50%; }
-  .win-path { margin-left: 10px; display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--w-dim); overflow: hidden; white-space: nowrap; }
-  .win-path .cur { color: var(--w-fg); }
-  .win-back {
-    margin-left: auto; border: 1px solid var(--line); background: transparent; color: var(--w-dim);
-    font-family: inherit; font-size: 11px; border-radius: 5px; padding: 2px 9px; cursor: pointer;
-  }
-  .win-back:hover { color: var(--w-fg); }
-  .win-back[hidden] { display: none; }
-  .win-tabs { display: flex; gap: 4px; padding: 6px 10px 0; background: var(--w-side); transition: background-color .3s; }
-  .win-tab {
-    border: 1px solid transparent; border-bottom: none; background: transparent; color: var(--w-dim);
-    font-family: inherit; font-size: 11px; padding: 4px 14px; border-radius: 6px 6px 0 0; cursor: pointer;
-  }
-  .win-tab.on { background: var(--w-bg); color: var(--w-fg); border-color: var(--line); }
-  .win-body { display: flex; border-top: 1px solid var(--line); }
-  .win-side { width: 128px; flex-shrink: 0; background: var(--w-side); border-right: 1px solid var(--line); padding: 8px 0 12px; transition: background-color .3s; }
-  .win-side .head { font-size: 9.5px; letter-spacing: .14em; color: var(--w-dim); padding: 6px 12px 3px; }
-  .side-row {
-    display: flex; gap: 7px; align-items: center; width: 100%; text-align: left;
-    background: transparent; border: 0; color: var(--w-fg); font-family: inherit; font-size: 11.5px;
-    padding: 4.5px 12px; cursor: pointer;
-  }
-  .side-row .g { color: var(--w-dim); width: 12px; text-align: center; }
-  .side-row:hover { background: var(--w-hover); }
-  .side-row.on { background: var(--w-sel); box-shadow: inset 2px 0 0 var(--w-accent); }
-  .side-row.on .g { color: var(--w-accent); }
-  .win-grid {
-    position: relative; flex: 1; min-height: 268px; padding: 10px;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
-    grid-auto-rows: 74px; gap: 4px; align-content: start; cursor: default;
-  }
-  .tile {
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-    border-radius: 6px; padding: 4px 2px; border: 1px solid transparent;
-  }
-  .tile .g { font-size: 21px; line-height: 1; color: var(--w-dim); }
-  .tile.dir .g { color: var(--w-accent); }
-  .tile.img .g { color: var(--w-green); }
-  .tile .n { font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--w-fg); }
-  .tile:hover { background: var(--w-hover); }
-  .tile.sel { background: var(--w-sel); border-color: color-mix(in srgb, var(--w-accent) 55%, transparent); }
-  .band {
-    position: absolute; display: none; pointer-events: none;
-    border: 1px dashed var(--w-accent); background: color-mix(in srgb, var(--w-accent) 12%, transparent);
-    border-radius: 2px; z-index: 5;
-  }
-  .win-status {
-    display: flex; gap: 14px; padding: 6px 12px; border-top: 1px solid var(--line);
-    background: var(--w-side); font-size: 10.5px; color: var(--w-dim); transition: background-color .3s;
-  }
-  .win-status .sel-n { color: var(--w-accent); }
-  @media (max-width: 560px) {
-    .win-side { width: 96px; }
-    .win-grid { grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); grid-auto-rows: 66px; }
-  }
+  .term .bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .term .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .term .title { margin-left: 8px; font-size: 12px; color: var(--muted); }
+  .term img { display: block; width: 100%; height: auto; }
 
-  /* ---------- sections ---------- */
-  section { padding: 72px 0 0; scroll-margin-top: 64px; }
-  h2 { font-family: var(--disp); font-weight: 700; font-size: 26px; letter-spacing: -.01em; margin: 0 0 6px; }
-  h2::before { content: "## "; color: var(--dim); font-family: var(--mono); font-weight: 400; }
-  .sub { color: var(--dim); margin: 0 0 30px; font-size: 14px; }
+  /* sections */
+  section { padding: 64px 0 8px; scroll-margin-top: 64px; }
+  h2 { font-size: 24px; margin: 0 0 4px; }
+  h2::before { content: "## "; color: var(--muted); }
+  .sub { color: var(--muted); margin: 0 0 28px; }
 
-  /* spec sheet */
-  .spec { border-top: 1px solid var(--line); }
-  .spec .row {
-    display: grid; grid-template-columns: 210px 1fr; gap: 20px; padding: 15px 10px;
-    border-bottom: 1px solid var(--line); transition: background-color .12s;
+  /* features */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; transition: border-color .15s, transform .15s;
   }
-  .spec .row:hover { background: var(--panel); }
-  .spec .term { color: var(--accent); font-size: 12.5px; font-weight: 600; letter-spacing: .1em; }
-  .spec .desc { color: var(--dim); font-size: 13.5px; }
-  .spec .desc b { color: var(--bone); font-weight: 500; }
-  @media (max-width: 700px) { .spec .row { grid-template-columns: 1fr; gap: 4px; } }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card .ico { font-size: 20px; color: var(--accent); }
+  .card h3 { margin: 8px 0 6px; font-size: 16px; color: var(--accent); }
+  .card p { margin: 0; font-size: 13px; color: var(--muted); }
 
   kbd {
-    background: var(--panel); border: 1px solid var(--line); border-bottom-width: 2px;
-    border-radius: 5px; padding: 1px 7px; font-family: var(--mono); font-size: 11.5px; white-space: nowrap; color: var(--bone);
+    background: var(--hover); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 5px; padding: 1px 7px; font-family: inherit; font-size: 12px; white-space: nowrap;
   }
+  .card kbd { color: var(--fg); }
 
-  /* themes */
-  .themes-note { font-size: 13px; color: var(--dim); margin: 0 0 20px; }
-  .themes-note b { color: var(--accent); font-weight: 500; }
-  .strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 14px; scrollbar-width: thin; }
-  .tchip {
-    flex-shrink: 0; display: flex; align-items: center; gap: 8px; cursor: pointer;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-    color: var(--dim); font-family: inherit; font-size: 11.5px; padding: 7px 12px;
-    transition: border-color .15s, color .15s;
+  /* theme gallery */
+  .themes-note { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+  .themes-note b { color: var(--accent); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .tcard {
+    cursor: pointer; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    background: var(--panel); padding: 0; font-family: inherit; text-align: left; color: inherit;
+    transition: border-color .15s, transform .15s;
   }
-  .tchip:hover { color: var(--bone); border-color: var(--dim); }
-  .tchip.on { border-color: var(--accent); color: var(--bone); box-shadow: 0 0 0 1px var(--accent); }
-  .tchip .dots { display: flex; gap: 3px; }
-  .tchip .d { width: 8px; height: 8px; border-radius: 50%; border: 1px solid rgba(255,255,255,.12); }
+  .tcard:hover { transform: translateY(-2px); border-color: var(--muted); }
+  .tcard.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .tcard .prev { height: 64px; display: flex; }
+  .tcard .sb { width: 34%; }
+  .tcard .body { flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .tcard .ln { height: 6px; border-radius: 3px; }
+  .tcard .nm { padding: 7px 10px; font-size: 12px; border-top: 1px solid var(--border); }
+  .reset { margin-top: 14px; font-size: 12px; }
 
-  /* keys */
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
+  /* keys + config */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
   @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  td:first-child { white-space: nowrap; width: 44%; }
-  td:last-child { color: var(--dim); }
-
-  /* config */
+  td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td:first-child { white-space: nowrap; color: var(--accent); width: 40%; }
+  td:last-child { color: var(--muted); }
   pre {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-    padding: 18px 20px; font-size: 12.5px; overflow-x: auto; margin: 0; line-height: 1.75; font-family: var(--mono);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; font-size: 12.5px; overflow-x: auto; margin: 0; line-height: 1.7;
   }
   pre .k { color: var(--accent); }
-  pre .v { color: var(--bone); }
-  pre .c { color: var(--dim); }
+  pre .v { color: var(--accent); }
+  pre .c { color: var(--muted); }
   pre .s { color: #e0af68; }
 
-  /* real screenshot */
-  .shot { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-  .shot img { display: block; width: 100%; height: auto; }
-  .shot figcaption { padding: 9px 14px; font-size: 11.5px; color: var(--dim); background: var(--panel); border-top: 1px solid var(--line); }
-
-  /* scroll-reveal */
+  /* scroll-reveal animations */
   .reveal { opacity: 0; translate: 0 22px; }
   .reveal.in { opacity: 1; translate: 0 0; transition: opacity .55s ease, translate .55s ease; }
-  .spec.in .row { opacity: 1; translate: 0 0; transition: opacity .45s ease var(--d, 0ms), translate .45s ease var(--d, 0ms); }
-  .spec .row { opacity: 0; translate: 0 14px; }
-  .spec .row:nth-child(2) { --d: 60ms; }
-  .spec .row:nth-child(3) { --d: 120ms; }
-  .spec .row:nth-child(4) { --d: 180ms; }
-  .spec .row:nth-child(5) { --d: 240ms; }
-  .spec .row:nth-child(6) { --d: 300ms; }
-  .spec .row:nth-child(7) { --d: 360ms; }
-  .spec .row:nth-child(8) { --d: 420ms; }
+  .cards .card { opacity: 0; translate: 0 16px; }
+  .cards.in .card { opacity: 1; translate: 0 0; transition: opacity .5s ease var(--d, 0ms), translate .5s ease var(--d, 0ms); }
+  .cards .card:nth-child(2) { --d: 70ms; }
+  .cards .card:nth-child(3) { --d: 140ms; }
+  .cards .card:nth-child(4) { --d: 210ms; }
+  .cards .card:nth-child(5) { --d: 280ms; }
+  .cards .card:nth-child(6) { --d: 350ms; }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .cursor { animation: none; }
-    .reveal, .spec .row { opacity: 1; translate: none; transition: none; }
+    .reveal, .cards .card { opacity: 1; translate: none; transition: none; }
   }
 
-  /* footer */
-  footer { margin-top: 88px; border-top: 1px solid var(--line); background: var(--panel); padding: 40px 0 52px; font-size: 12.5px; }
-  footer .cols { gap: 32px; }
+  footer { margin-top: 72px; border-top: 1px solid var(--border); background: var(--panel); padding: 36px 0 48px; font-size: 13px; }
+  footer .cols { grid-template-columns: 1fr 1fr 1fr; }
   @media (max-width: 820px) { footer .cols { grid-template-columns: 1fr; } }
-  footer h4 { margin: 0 0 10px; color: var(--bone); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
-  footer ul { margin: 0; padding-left: 18px; color: var(--dim); }
-  footer li { margin-bottom: 5px; }
-  .license { text-align: center; margin-top: 40px; color: var(--dim); font-size: 12px; }
+  footer h4 { margin: 0 0 10px; color: var(--fg); font-size: 13px; }
+  footer ul { margin: 0; padding-left: 18px; color: var(--muted); }
+  footer li { margin-bottom: 4px; }
+  .license { text-align: center; margin-top: 36px; color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -254,7 +175,7 @@
 <nav>
   <div class="wrap">
     <span class="logo">tfm</span>
-    <span class="pill">alpha</span>
+    <span class="badge">alpha</span>
     <div class="links">
       <a href="#features">features</a>
       <a href="#themes">themes</a>
@@ -265,38 +186,28 @@
   </div>
 </nav>
 
-<header class="hero wrap">
-  <div>
-    <p class="eyebrow">Linux · <b>kitty graphics</b> · MIT</p>
-    <h1>Files, with a mouse, inside your <span class="hl">terminal</span><span class="cursor" aria-hidden="true"></span></h1>
-    <p class="lede">tfm is a <b>mouse-first</b> file manager — places sidebar, grid view, thumbnails, drag &amp; drop, undo. No modal keymap to memorize, and every key is still remappable.</p>
-    <div class="install">
-      <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash</code>
-      <button class="copy" id="copyBtn" type="button">copy</button>
-    </div>
-    <div class="chips">
-      <span>700 KB binary</span><span>no config required</span><span>32 themes</span><span>tabs</span><span>embedded terminal</span>
-    </div>
-    <p class="warn"><b>alpha</b> — experimental software. Don't test on files you can't afford to lose.</p>
+<header class="wrap">
+  <h1>tfm</h1>
+  <p class="subtitle">(terminal file manager)</p>
+  <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails <b>right inside your terminal</b>.<br>Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
+    <a class="btn" href="https://github.com/clarkarch/tfm-tui">GitHub</a>
   </div>
+  <div class="install">
+    <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash</code>
+    <button class="copy" id="copyBtn" type="button">copy</button>
+  </div>
+  <p class="warn">Linux only · experimental software — don't test on files you can't afford to lose</p>
 
-  <div class="demo">
-    <section class="win" id="win" aria-label="Interactive tfm demo — click folders, drag to select">
-      <div class="win-bar">
-        <span class="dot" style="background:#f7768e"></span>
-        <span class="dot" style="background:#e0af68"></span>
-        <span class="dot" style="background:#9ece6a"></span>
-        <span class="win-path" id="winPath"></span>
-        <button class="win-back" id="winBack" type="button" hidden>← back</button>
-      </div>
-      <div class="win-tabs" id="winTabs"></div>
-      <div class="win-body">
-        <aside class="win-side" id="winSide"></aside>
-        <div class="win-grid" id="winGrid"><div class="band" id="band"></div></div>
-      </div>
-      <div class="win-status"><span id="statCount"></span><span class="sel-n" id="statSel"></span></div>
-    </section>
-    <p class="demo-hint"><b>this is a live demo</b> — click a folder, double-click to open, drag across tiles to rubber-band select</p>
+  <div class="term">
+    <div class="bar">
+      <span class="dot" style="background:#f7768e"></span>
+      <span class="dot" style="background:#e0af68"></span>
+      <span class="dot" style="background:#9ece6a"></span>
+      <span class="title">tfm — ~</span>
+    </div>
+    <img src="screenshot.png" alt="tfm browsing a project folder: places sidebar, grid of thumbnails, preview pane" width="1920" height="1080" loading="eager">
   </div>
 </header>
 
@@ -304,29 +215,52 @@
 
 <section id="features">
   <h2>Features</h2>
-  <p class="sub">what you get when a GUI file manager moves into your terminal</p>
-  <div class="spec">
-    <div class="row"><span class="term">MOUSE-FIRST</span><span class="desc"><b>Click, rubber-band select, right-click context menus, inline rename.</b> The whole desktop vocabulary — no modal keymap between you and your files.</span></div>
-    <div class="row"><span class="term">DRAG &amp; DROP</span><span class="desc">Move files between folders with <kbd>ctrl</kbd>+drag. Drag <b>out of the terminal</b> into other apps, drop files in — cross-app DnD over the kitty graphics protocol (OSC 72).</span></div>
-    <div class="row"><span class="term">DESKTOP INTEGRATION</span><span class="desc">GTK bookmarks, recently-used files, <b>XDG trash with restore</b>, system clipboard bridge with GUI apps, removable drives via udisksctl.</span></div>
-    <div class="row"><span class="term">UNDO / REDO</span><span class="desc"><kbd>ctrl</kbd>+z / <kbd>ctrl</kbd>+y on every copy, move, rename, trash. Replace stashes victims in the trash so undo restores them.</span></div>
-    <div class="row"><span class="term">PREVIEWS</span><span class="desc">Image and video thumbnails, <b>tree-sitter syntax-highlighted</b> text previews, folder stats — disk-cached so revisits are instant.</span></div>
-    <div class="row"><span class="term">EMBEDDED TERMINAL</span><span class="desc">Right-click empty space → <b>Open Terminal Here</b> runs your <kbd>$SHELL</kbd> in a pane at the current folder. Drop files onto the prompt to paste their paths.</span></div>
-    <div class="row"><span class="term">TABS &amp; SESSION</span><span class="desc"><kbd>ctrl</kbd>+t / <kbd>ctrl</kbd>+w, browser semantics, each tab with its own history. Optionally reopens where you left off.</span></div>
-    <div class="row"><span class="term">32 THEMES</span><span class="desc">Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine… <b>live-switchable</b> — try them on the demo window above.</span></div>
+  <p class="sub">a GUI file manager that lives in your terminal</p>
+  <div class="cards">
+    <div class="card">
+      <div class="ico">➤</div>
+      <h3>Mouse-first</h3>
+      <p>Click, rubber-band select, right-click context menus, inline rename — no memorizing a modal keymap to get things done. <kbd>ctrl</kbd>+click toggles, <kbd>shift</kbd>+click ranges.</p>
+    </div>
+    <div class="card">
+      <div class="ico">⇄</div>
+      <h3>Drag &amp; drop</h3>
+      <p>Move files between folders with <kbd>ctrl</kbd>+drag. Drag <i>out</i> of the terminal to other apps and drop files <i>in</i> — cross-app DnD via the kitty graphics protocol (OSC 72).</p>
+    </div>
+    <div class="card">
+      <div class="ico">⌘</div>
+      <h3>Desktop integration</h3>
+      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every operation.</p>
+    </div>
+    <div class="card">
+      <div class="ico">&gt;_</div>
+      <h3>Embedded terminal</h3>
+      <p>Right-click empty space → <i>Open Terminal Here</i> runs your <kbd>$SHELL</kbd> in a pane at the current folder. Drop files onto the prompt to paste their paths.</p>
+    </div>
+    <div class="card">
+      <div class="ico">❐</div>
+      <h3>Previews &amp; thumbnails</h3>
+      <p>Image and video thumbnails (kitty graphics), tree-sitter syntax-highlighted text previews, folder stats — with a disk-cached thumbnail pipeline so folder revisits are instant.</p>
+    </div>
+    <div class="card">
+      <div class="ico">◑</div>
+      <h3>30+ themes</h3>
+      <p>Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized… live-switchable in the settings menu, fully configurable via <i>config.toml</i>. Try them below.</p>
+    </div>
   </div>
 </section>
 
 <section id="themes">
   <h2>Themes</h2>
-  <p class="sub">32 bundled presets — click one, watch the demo window repaint</p>
-  <p class="themes-note">The same live palette swap ships inside tfm: <kbd>esc</kbd> → Settings → Theme, or edit <i>config.toml</i>.</p>
-  <div class="strip" id="themeStrip"></div>
+  <p class="sub">32 bundled presets, switchable at runtime</p>
+  <p class="themes-note"><b>click any theme to restyle this page</b> — the same live palette swap ships inside tfm (<kbd>esc</kbd> → Settings → Theme).</p>
+  <div class="grid" id="themeGrid"></div>
+  <button class="btn reset" id="resetTheme" type="button">reset to Tokyo Night</button>
 </section>
 
 <section id="keys">
   <h2>Keys</h2>
-  <p class="sub">muscle-memory bindings — every one remappable under <i>[keys]</i></p>
+  <p class="sub">muscle-memory bindings — every one remappable under <i>[keys]</i> in config.toml</p>
   <div class="cols">
     <table>
       <tr><td><kbd>type anywhere</kbd></td><td>live search · enter opens first match</td></tr>
@@ -373,15 +307,6 @@ accent <span class="c">=</span> <span class="s">"#7aa2f7"</span>
 quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="c"># every action remappable, several binds allowed</span></pre>
 </section>
 
-<section id="real">
-  <h2>The real thing</h2>
-  <p class="sub">above was HTML — this is tfm itself</p>
-  <figure class="shot" style="margin:0">
-    <img src="screenshot.png" alt="tfm browsing the home folder: places sidebar, grid of files with icons, preview pane, status bar" width="1920" height="1080" loading="lazy">
-    <figcaption>kitty · Tokyo Night · 1920×1080</figcaption>
-  </figure>
-</section>
-
 </main>
 
 <footer>
@@ -416,191 +341,36 @@ quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="
 </footer>
 
 <script>
-/* ============ theme data — extracted from src/themes.ts ============ */
 const THEMES = [{"name":"Tokyo Night","bg":"#1a1b26","sidebar":"#16161e","accent":"#7aa2f7","green":"#9ece6a","fg":"#c0caf5","muted":"#565f89","hover":"#24283b"},{"name":"OpenCode","bg":"#0a0a0a","sidebar":"#141414","accent":"#fab283","green":"#7fd88f","fg":"#eeeeee","muted":"#808080","hover":"#212121"},{"name":"Aura","bg":"#0f0f0f","sidebar":"#15141b","accent":"#a277ff","green":"#61ffca","fg":"#edecee","muted":"#6d6d6d","hover":"#252525"},{"name":"Ayu","bg":"#0b0e14","sidebar":"#0f131a","accent":"#59c2ff","green":"#aad94c","fg":"#bfbdb6","muted":"#565b66","hover":"#1d2024"},{"name":"Carbon Fox","bg":"#161616","sidebar":"#1a1a1a","accent":"#33b1ff","green":"#25be6a","fg":"#f2f4f8","muted":"#7d848f","hover":"#2c2c2d"},{"name":"Catppuccin","bg":"#1e1e2e","sidebar":"#181825","accent":"#89b4fa","green":"#a6e3a1","fg":"#cdd6f4","muted":"#9399b2","hover":"#303042"},{"name":"Cobalt 2","bg":"#193549","sidebar":"#122738","accent":"#0088ff","green":"#9eff80","fg":"#ffffff","muted":"#adb7c9","hover":"#30495b"},{"name":"Cursor","bg":"#181818","sidebar":"#141414","accent":"#88c0d0","green":"#e394dc","fg":"#e4e4e4","muted":"#636363","hover":"#2c2c2c"},{"name":"Dracula","bg":"#282a36","sidebar":"#21222c","accent":"#bd93f9","green":"#f1fa8c","fg":"#f8f8f2","muted":"#6272a4","hover":"#3d3f49"},{"name":"Everforest","bg":"#2d353b","sidebar":"#333c43","accent":"#a7c080","green":"#a7c080","fg":"#d3c6aa","muted":"#7a8478","hover":"#3e4446"},{"name":"Flexoki","bg":"#100f0f","sidebar":"#1c1b1a","accent":"#da702c","green":"#3aa99f","fg":"#cecdc3","muted":"#6f6e69","hover":"#232221"},{"name":"Frappe","bg":"#303446","sidebar":"#292c3c","accent":"#8da4e2","green":"#a6d189","fg":"#c6d0f5","muted":"#949cb8","hover":"#3f4458"},{"name":"GitHub","bg":"#0d1117","sidebar":"#010409","accent":"#58a6ff","green":"#39c5cf","fg":"#c9d1d9","muted":"#8b949e","hover":"#20242a"},{"name":"Gruvbox","bg":"#282828","sidebar":"#3c3836","accent":"#83a598","green":"#fabd2f","fg":"#ebdbb2","muted":"#928374","hover":"#3c3a36"},{"name":"Kanagawa","bg":"#1f1f28","sidebar":"#2a2a37","accent":"#7e9cd8","green":"#98bb6c","fg":"#dcd7ba","muted":"#727169","hover":"#323137"},{"name":"Macchiato","bg":"#24273a","sidebar":"#1e2030","accent":"#8aadf4","green":"#a6da95","fg":"#cad3f5","muted":"#939ab7","hover":"#35384d"},{"name":"Material","bg":"#263238","sidebar":"#1e272c","accent":"#82aaff","green":"#c3e88d","fg":"#eeffff","muted":"#546e7a","hover":"#3a474c"},{"name":"Matrix","bg":"#0a0e0a","sidebar":"#0e130d","accent":"#2eff6a","green":"#1cc24b","fg":"#62ff94","muted":"#8ca391","hover":"#132618"},{"name":"Mercury","bg":"#171721","sidebar":"#10101a","accent":"#8da4f5","green":"#77c599","fg":"#dddde5","muted":"#9d9da8","hover":"#2b2b35"},{"name":"Monokai","bg":"#272822","sidebar":"#1e1f1c","accent":"#66d9ef","green":"#e6db74","fg":"#f8f8f2","muted":"#75715e","hover":"#3c3d37"},{"name":"Night Owl","bg":"#011627","sidebar":"#0b253a","accent":"#82aaff","green":"#ecc48d","fg":"#d6deeb","muted":"#5f7e97","hover":"#162a3b"},{"name":"Nord","bg":"#2e3440","sidebar":"#3b4252","accent":"#88c0d0","green":"#a3be8c","fg":"#eceff4","muted":"#8b95a7","hover":"#414752"},{"name":"One Dark","bg":"#282c34","sidebar":"#21252b","accent":"#61afef","green":"#98c379","fg":"#abb2bf","muted":"#5c6370","hover":"#353942"},{"name":"Orng","bg":"#0a0a0a","sidebar":"#141414","accent":"#ec5b2b","green":"#6ba1e6","fg":"#eeeeee","muted":"#808080","hover":"#212121"},{"name":"Osaka Jade","bg":"#111c18","sidebar":"#1a2520","accent":"#2dd5b7","green":"#63b07a","fg":"#c1c497","muted":"#53685b","hover":"#232d25"},{"name":"Palenight","bg":"#292d3e","sidebar":"#1e2132","accent":"#82aaff","green":"#c3e88d","fg":"#a6accd","muted":"#676e95","hover":"#363a4c"},{"name":"Rose Pine","bg":"#191724","sidebar":"#1f1d2e","accent":"#9ccfd8","green":"#f6c177","fg":"#e0def4","muted":"#6e6a86","hover":"#2d2b39"},{"name":"Solarized","bg":"#002b36","sidebar":"#073642","accent":"#268bd2","green":"#2aa198","fg":"#839496","muted":"#586e75","hover":"#0d3640"},{"name":"Synth '84","bg":"#262335","sidebar":"#1e1a29","accent":"#36f9f6","green":"#fede5d","fg":"#ffffff","muted":"#848bbd","hover":"#3c3949"},{"name":"Vercel","bg":"#000000","sidebar":"#1a1a1a","accent":"#0070f3","green":"#63c46d","fg":"#ededed","muted":"#878787","hover":"#181818"},{"name":"Vesper","bg":"#101010","sidebar":"#101010","accent":"#ffc799","green":"#99ffe4","fg":"#ffffff","muted":"#a0a0a0","hover":"#282828"},{"name":"Zenburn","bg":"#3f3f3f","sidebar":"#4f4f4f","accent":"#8cd0d3","green":"#cc9393","fg":"#dcdccc","muted":"#9f9f9f","hover":"#4f4f4d"}];
 
-/* ============ mock filesystem for the demo window ============ */
-const d = (n, extra = {}) => ({ n, t: "dir", ...extra });
-const f = (n, s, mod) => ({ n, t: mod || ext(n), s });
-function ext(n) {
-  const e = n.split(".").pop().toLowerCase();
-  if (["png", "jpg", "svg"].includes(e)) return "img";
-  if (["zip", "gz", "iso", "tar"].includes(e) || e === "xz") return "arc";
-  if (["mp4", "webm"].includes(e)) return "vid";
-  if (["mp3", "flac"].includes(e)) return "aud";
-  if (["ts", "js", "json", "toml"].includes(e)) return "code";
-  return "txt";
-}
-const GLYPH = { dir: "▤", txt: "≡", md: "≡", img: "◨", arc: "▧", vid: "▷", aud: "♪", code: "▦" };
-const FS = {
-  "~": [d("Projects"), d("Downloads"), d("Pictures"), d("Documents"), d("Music"), f("notes.md", "2K"), f("todo.txt", "1K"), f(".config", "—", "dir")],
-  "~/Projects": [d("tfm-tui"), d("dotfiles"), d("side-project"), f("work.code-workspace", "1K", "code")],
-  "~/Projects/tfm-tui": [d("src"), d("assets"), d("docs"), f("README.md", "4K"), f("package.json", "1K", "code"), f("config.example.toml", "3K", "code"), f("screenshot.png", "132K", "img")],
-  "~/Projects/tfm-tui/src": [d("themes"), f("index.ts", "48K", "code"), f("keymap.ts", "22K", "code"), f("grid-input.ts", "19K", "code"), f("ui-term.ts", "17K", "code"), f("osc72.ts", "9K", "code")],
-  "~/Downloads": [d("tfm-0.1.0"), f("archlinux.iso", "2.1G", "arc"), f("invoice-08.pdf", "88K"), f("wallpaper.png", "4.2M", "img"), f("podcast-42.mp3", "61M", "aud"), f("backup.tar.gz", "812M", "arc")],
-  "~/Pictures": [f("sunset.png", "3.8M", "img"), f("screenshot-1.png", "420K", "img"), f("screenshot-2.png", "380K", "img"), f("logo.svg", "6K", "img"), f("clip.mp4", "24M", "vid")],
-  "~/Documents": [f("lease.pdf", "1.2M"), f("taxes-2025", "—", "dir"), f("recipes.md", "12K"), f("journal.txt", "44K")],
-  "~/Music": [f("setlist.txt", "1K"), f("track01.flac", "32M", "aud"), f("track02.flac", "28M", "aud")],
-  "trash:///": [f("old-config.bak", "8K"), f("screenshot-old.png", "220K", "img")],
-};
-const PARENT = { "~": null, "~/Projects": "~", "~/Projects/tfm-tui": "~/Projects", "~/Projects/tfm-tui/src": "~/Projects/tfm-tui", "~/Downloads": "~", "~/Pictures": "~", "~/Documents": "~", "~/Music": "~", "trash:///": null };
-const PLACES = [
-  { g: "⌂", n: "Home", k: "~" },
-  { g: "▸", n: "Projects", k: "~/Projects" },
-  { g: "⇓", n: "Downloads", k: "~/Downloads" },
-  { g: "◨", n: "Pictures", k: "~/Pictures" },
-  { g: "≡", n: "Documents", k: "~/Documents" },
-  { g: "♪", n: "Music", k: "~/Music" },
-  { g: "⌫", n: "Trash", k: "trash:///" },
-];
-const TABS = [{ n: "Home", k: "~" }, { n: "tfm-tui", k: "~/Projects/tfm-tui" }];
-
-/* ============ demo window state + rendering ============ */
-const grid = document.getElementById("winGrid");
-const band = document.getElementById("band");
-let cwd = "~";
-let sel = new Set();
-
-function renderSide() {
-  const side = document.getElementById("winSide");
-  side.innerHTML = `<div class="head">PLACES</div>${PLACES.map(p => `<button type="button" class="side-row${p.k === cwd ? " on" : ""}" data-k="${p.k}"><span class="g">${p.g}</span>${p.n}</button>`).join("")}`;
-  side.querySelectorAll(".side-row").forEach(b => {
-    b.addEventListener("click", () => nav(b.dataset.k));
-  });
-}
-function renderTabs() {
-  const tabs = document.getElementById("winTabs");
-  tabs.innerHTML = TABS.map(t => `<button type="button" class="win-tab${t.k === cwd ? " on" : ""}" data-k="${t.k}">${t.n}</button>`).join("");
-  tabs.querySelectorAll(".win-tab").forEach(b => {
-    b.addEventListener("click", () => nav(b.dataset.k));
-  });
-}
-function renderPath() {
-  const parts = cwd === "trash:///" ? ["Trash"] : cwd.replace(/^~/, "~").split("/").filter(Boolean);
-  document.getElementById("winPath").innerHTML = parts.map((p, i) =>
-    `<span${i === parts.length - 1 ? ' class="cur"' : ""}>${p}</span>`).join('<span>/</span>');
-  document.getElementById("winBack").hidden = !PARENT[cwd];
-}
-function renderGrid() {
-  grid.querySelectorAll(".tile").forEach(t => { t.remove(); });
-  const entries = FS[cwd] || [];
-  for (const e of entries) {
-    const t = document.createElement("div");
-    const kind = e.t === "dir" ? "dir" : e.t;
-    t.className = `tile ${kind}${sel.has(e.n) ? " sel" : ""}`;
-    t.dataset.n = e.n;
-    t.innerHTML = `<span class="g">${GLYPH[kind] || "≡"}</span><span class="n">${e.n}</span>`;
-    grid.appendChild(t);
-  }
-  renderStatus(entries.length);
-}
-function renderStatus(n) {
-  document.getElementById("statCount").textContent = `${n ?? (FS[cwd] || []).length} items`;
-  document.getElementById("statSel").textContent = sel.size ? `${sel.size} selected` : "";
-}
-function paintSel() {
-  grid.querySelectorAll(".tile").forEach(t => {
-    t.classList.toggle("sel", sel.has(t.dataset.n));
-  });
-  renderStatus();
-}
-function nav(k) {
-  cwd = k;
-  sel = new Set();
-  renderSide(); renderTabs(); renderPath(); renderGrid();
-}
-document.getElementById("winBack").addEventListener("click", () => {
-  if (PARENT[cwd]) nav(PARENT[cwd]);
-});
-
-/* click / ctrl+click / double-click */
-grid.addEventListener("mousedown", e => {
-  const tile = e.target.closest(".tile");
-  if (!tile || e.button !== 0) return;
-  if (e.ctrlKey || e.metaKey) {
-    sel.has(tile.dataset.n) ? sel.delete(tile.dataset.n) : sel.add(tile.dataset.n);
-  } else {
-    sel = new Set([tile.dataset.n]);
-  }
-  paintSel();
-});
-grid.addEventListener("dblclick", e => {
-  const tile = e.target.closest(".tile");
-  if (!tile?.classList.contains("dir")) return;
-  const target = cwd === "~" ? `~/${tile.dataset.n}` : `${cwd}/${tile.dataset.n}`;
-  nav(FS[target] ? target : cwd);
-});
-
-/* rubber-band selection — no pointer capture until the band is active,
-   or click/dblclick targets get retargeted to the grid */
-let bandStart = null;
-grid.addEventListener("pointerdown", e => {
-  if (e.button !== 0) return;
-  const r = grid.getBoundingClientRect();
-  bandStart = { x: e.clientX - r.left, y: e.clientY - r.top, ctrl: e.ctrlKey, base: new Set(sel), active: false };
-});
-window.addEventListener("pointermove", e => {
-  if (!bandStart) return;
-  const r = grid.getBoundingClientRect();
-  const x = Math.max(0, Math.min(e.clientX - r.left, r.width));
-  const y = Math.max(0, Math.min(e.clientY - r.top, r.height));
-  if (!bandStart.active && Math.abs(x - bandStart.x) < 5 && Math.abs(y - bandStart.y) < 5) return;
-  bandStart.active = true;
-  const [x0, x1] = [Math.min(bandStart.x, x), Math.max(bandStart.x, x)];
-  const [y0, y1] = [Math.min(bandStart.y, y), Math.max(bandStart.y, y)];
-  band.style.display = "block";
-  band.style.left = `${x0}px`; band.style.top = `${y0}px`;
-  band.style.width = `${x1 - x0}px`; band.style.height = `${y1 - y0}px`;
-  sel = bandStart.ctrl ? new Set(bandStart.base) : new Set();
-  grid.querySelectorAll(".tile").forEach(t => {
-    const b = t.getBoundingClientRect();
-    if (b.right > r.left + x0 && b.left < r.left + x1 && b.bottom > r.top + y0 && b.top < r.top + y1) {
-      sel.add(t.dataset.n);
-    }
-  });
-  paintSel();
-});
-window.addEventListener("pointerup", () => {
-  bandStart = null;
-  band.style.display = "none";
-});
-
-/* ============ theme picker — repaints the demo window ============ */
 const root = document.documentElement.style;
-function applyTheme(t) {
-  root.setProperty("--w-bg", t.bg);
-  root.setProperty("--w-side", t.sidebar);
-  root.setProperty("--w-fg", t.fg);
-  root.setProperty("--w-dim", t.muted);
-  root.setProperty("--w-hover", t.hover);
-  root.setProperty("--w-accent", t.accent);
-  root.setProperty("--w-sel", t.hover);
-  root.setProperty("--w-green", t.green);
+const grid = document.getElementById("themeGrid");
+
+function apply(t) {
+  root.setProperty("--bg", t.bg);
+  root.setProperty("--panel", t.sidebar);
   root.setProperty("--accent", t.accent);
-  root.setProperty("--sel", t.hover);
-  document.querySelectorAll(".tchip").forEach(c => {
-    c.classList.toggle("on", c.dataset.name === t.name);
-  });
+  root.setProperty("--fg", t.fg);
+  root.setProperty("--muted", t.muted);
+  root.setProperty("--hover", t.hover);
+  root.setProperty("--border", t.hover);
+  document.querySelectorAll(".tcard").forEach(c => { c.classList.toggle("active", c.dataset.name === t.name); });
 }
-const strip = document.getElementById("themeStrip");
+
 THEMES.forEach(t => {
   const b = document.createElement("button");
   b.type = "button";
-  b.className = "tchip";
+  b.className = "tcard";
   b.dataset.name = t.name;
-  b.innerHTML = `<span class="dots"><span class="d" style="background:${t.bg}"></span><span class="d" style="background:${t.accent}"></span><span class="d" style="background:${t.green}"></span></span>${t.name}`;
-  b.addEventListener("click", () => applyTheme(t));
-  strip.appendChild(b);
+  b.title = `Apply ${t.name}`;
+  b.innerHTML = `<span class="prev"><span class="sb" style="background:${t.sidebar};border-right:1px solid ${t.hover}"></span><span class="body" style="background:${t.bg}"><span class="ln" style="background:${t.accent};width:70%"></span><span class="ln" style="background:${t.hover};width:90%"></span><span class="ln" style="background:${t.green};width:45%"></span><span class="ln" style="background:${t.hover};width:60%"></span></span></span><span class="nm" style="background:${t.bg};color:${t.fg}">${t.name}</span>`;
+  b.addEventListener("click", () => apply(t));
+  grid.appendChild(b);
 });
 
-/* ============ install copy ============ */
-document.getElementById("copyBtn").addEventListener("click", async e => {
-  await navigator.clipboard.writeText("curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash");
-  e.target.textContent = "copied!";
-  setTimeout(() => { e.target.textContent = "copy"; }, 1500);
-});
+document.getElementById("resetTheme").addEventListener("click", () => apply(THEMES[0]));
+apply(THEMES[0]);
 
-/* ============ scroll-reveal (plays after nav-initiated scrolls) ============ */
 let navLock = false;
 const io = new IntersectionObserver(entries => {
   if (navLock) return;
@@ -612,26 +382,33 @@ const io = new IntersectionObserver(entries => {
   }
 }, { threshold: 0.12 });
 document.querySelectorAll("section > *").forEach(el => {
-  if (!el.classList.contains("spec")) el.classList.add("reveal");
+  if (!el.classList.contains("cards")) el.classList.add("reveal");
   io.observe(el);
 });
+
 function revealSection(id) {
   const sec = document.getElementById(id);
   if (sec) sec.querySelectorAll(":scope > *").forEach(el => { el.classList.add("in"); });
 }
+
 document.querySelectorAll('nav a[href^="#"]').forEach(a => {
   a.addEventListener("click", () => {
     const id = a.getAttribute("href").slice(1);
     navLock = true;
-    const done = () => { navLock = false; revealSection(id); };
+    const done = () => {
+      navLock = false;
+      revealSection(id);
+    };
     window.addEventListener("scrollend", done, { once: true });
     setTimeout(done, 900);
   });
 });
 
-/* boot the demo */
-applyTheme(THEMES[0]);
-nav("~");
+document.getElementById("copyBtn").addEventListener("click", async e => {
+  await navigator.clipboard.writeText("curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash");
+  e.target.textContent = "copied!";
+  setTimeout(() => e.target.textContent = "copy", 1500);
+});
 </script>
 </body>
 </html>
