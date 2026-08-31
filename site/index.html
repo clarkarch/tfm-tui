@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tfm — terminal file manager</title>
-<meta name="description" content="A modern, mouse-first terminal file manager with a Nautilus-inspired places sidebar, grid view, drag & drop, and image thumbnails. Built on OpenTUI + Bun.">
+<meta name="description" content="A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails right inside your terminal. Built on OpenTUI + Bun.">
 <style>
   :root {
     --bg: #1a1b26;
@@ -190,7 +190,7 @@
 <header class="wrap">
   <h1>tfm</h1>
   <p class="subtitle">( terminal file manager )</p>
-  <p class="tagline">A modern, <b>mouse-first</b> file manager for your terminal — Nautilus-inspired places sidebar, grid view, drag &amp; drop, image thumbnails. Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
+  <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails right inside your terminal. Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
   <div class="cta">
     <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
     <a class="btn" href="https://github.com/clarkarch/tfm-tui">GitHub</a>
@@ -373,7 +373,9 @@ THEMES.forEach(t => {
 document.getElementById("resetTheme").addEventListener("click", () => apply(THEMES[0]));
 apply(THEMES[0]);
 
+let navLock = false;
 const io = new IntersectionObserver(entries => {
+  if (navLock) return;
   for (const en of entries) {
     if (en.isIntersecting) {
       en.target.classList.add("in");
@@ -384,6 +386,24 @@ const io = new IntersectionObserver(entries => {
 document.querySelectorAll("section > *").forEach(el => {
   if (!el.classList.contains("cards")) el.classList.add("reveal");
   io.observe(el);
+});
+
+function revealSection(id) {
+  const sec = document.getElementById(id);
+  if (sec) sec.querySelectorAll(":scope > *").forEach(el => { el.classList.add("in"); });
+}
+
+document.querySelectorAll('nav a[href^="#"]').forEach(a => {
+  a.addEventListener("click", () => {
+    const id = a.getAttribute("href").slice(1);
+    navLock = true;
+    const done = () => {
+      navLock = false;
+      revealSection(id);
+    };
+    window.addEventListener("scrollend", done, { once: true });
+    setTimeout(done, 900);
+  });
 });
 
 document.getElementById("copyBtn").addEventListener("click", async e => {
