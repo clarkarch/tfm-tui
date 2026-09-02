@@ -1,12 +1,14 @@
-// --- ESC menu + settings panel (two-pane: categories left, rows right) ---
-// Widget-extraction seam (see ui-dialogs.ts for the template): this owns the
-// menu state (open/view/pane/cursor/scroll/capture) and every keystroke-nav
-// op the keyboard router calls. Config-wiring closures for the setting rows
-// (what get/set actually mutate) live in settings-model and arrive via
-// ctx.settingGroups() — the factory only renders and adjusts them.
+// --- ESC menu shell: the menu state machine (open/view/cursor/capture),
+// every keystroke-nav op the keyboard router calls, the root view, the
+// open/close + floats policy, and the guarded rebuild. The settings VIEW
+// rendering (two panes, windowing, chevrons, hover paints) lives in
+// ./ui-settings-panel and renders through this shell's state + hooks.
+// Widget-extraction seam (see ui-dialogs.ts for the template): config-wiring
+// closures for the setting rows live in settings-model and arrive via
+// ctx.settingGroups() — this factory only renders and adjusts them.
 // ctx fields for symbols defined after the call site must be arrow wrappers.
-// MOUSE-FIRST: every control is clickable (categories, rows, chevrons), rows
-// hover-select, the right pane wheel-scrolls, and click-away cancels capture.
+// MOUSE-FIRST: every control is clickable, rows hover-select, click-away
+// cancels capture.
 
 import { Box, RGBA, Text } from "@opentui/core";
 import { chromeSurface, type UiStyle } from "./style";
@@ -15,6 +17,14 @@ import type { IconState, IconSpec } from "./ui-slots";
 import type { Theme } from "./config";
 import { keySpecFromEvent, validateKeybindSpec } from "./config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
+import {
+  ensureVisible,
+  panelPadTop,
+  renderSettingsPanel,
+  settingsVisRows,
+  SETTINGS_W,
+  type SettingsPanelState,
+} from "./ui-settings-panel";
 
 export type EscMenuCtx = {
   renderer(): any;
@@ -48,40 +58,18 @@ export type EscMenuCtx = {
   quit(): void;
 };
 
-// settings panel is wider than the root menu (categories + value columns)
-export const SETTINGS_W = 62;
-const CAT_W = 18;
-const SET_LABEL_W = 17;
-
-// scrim paddingTop that vertically centers a panel of `contentH` rows
-// (the -2 covers the panel's own top/bottom padding); clamps to 1 when the
-// panel is taller than the terminal
-export const panelPadTop = (termH: number, contentH: number): number =>
-  Math.max(1, Math.floor((termH - contentH - 2) / 2));
-
-// right-pane window size: a COMPACT dialog, not a full-screen sheet — capped
-// at 14 rows (panel ≈ 21 rows total with chrome); shrinks on tiny terminals.
-// Categories with more rows wheel-scroll/arrow-scroll.
-export const settingsVisRows = (termH: number): number => Math.min(14, Math.max(5, termH - 12));
-
-const CAT_ICONS: Record<string, string> = {
-  general: "cog",
-  layout: "select-all",
-  behavior: "clock",
-  keybindings: "pencil",
-  config: "file-document",
-};
-
 export const makeEscMenu = (ctx: EscMenuCtx) => {
   let menuOpen = false;
   let menuView: "root" | "settings" = "root";
-  let menuIdx = 0; // row cursor within the ACTIVE category
-  let catIdx = 0;
-  let pane: "cats" | "rows" = "rows";
-  let scrollOff = 0;
-  let hoverCat = -1;
-  // keybind capture: flat row index within the active category being recorded
-  let capturing: number | null = null;
+  // panel cursor state — rendered by ./ui-settings-panel, mutated by the ops here
+  const st: SettingsPanelState = {
+    catIdx: 0,
+    menuIdx: 0,
+    pane: "rows",
+    scrollOff: 0,
+    hoverCat: -1,
+    capturing: null,
+  };
 
   const groups = (): SettingGroup[] => ctx.settingGroups();
   const rowsOf = (gi: number): SettingRow[] => groups()[gi]?.rows ?? [];
@@ -101,10 +89,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       keepOpen: true,
       action: () => {
         menuView = "settings";
-        catIdx = 0;
-        menuIdx = 0;
-        pane = "rows";
-        scrollOff = 0;
+        st.catIdx = 0;
+        st.menuIdx = 0;
+        st.pane = "rows";
+        st.scrollOff = 0;
         renderMenuContent();
       },
     },
@@ -118,51 +106,43 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const switchCategory = (gi: number): void => {
     const n = groups().length;
-    catIdx = ((gi % n) + n) % n;
-    menuIdx = 0;
-    pane = "rows";
-    scrollOff = 0;
+    st.catIdx = ((gi % n) + n) % n;
+    st.menuIdx = 0;
+    st.pane = "rows";
+    st.scrollOff = 0;
     renderMenuContent();
   };
 
-  // visible row count for the right pane (panel chrome takes ~6 rows)
   const visibleRows = (): number => settingsVisRows(ctx.renderer().terminalHeight);
-
-  const ensureVisible = (): void => {
-    const vis = visibleRows();
-    if (menuIdx < scrollOff) scrollOff = menuIdx;
-    if (menuIdx >= scrollOff + vis) scrollOff = menuIdx - vis + 1;
-    if (scrollOff < 0) scrollOff = 0;
-  };
 
   const adjustSelectedSetting = (dir: number): void => {
     if (menuView !== "settings") return;
-    if (pane === "cats") {
-      switchCategory(catIdx + dir);
+    if (st.pane === "cats") {
+      switchCategory(st.catIdx + dir);
       return;
     }
-    const row = rowsOf(catIdx)[menuIdx];
+    const row = rowsOf(st.catIdx)[st.menuIdx];
     if (!row) return;
     // keybind/action rows have no left/right value — the arrows switch category
     if (row.kind === "keybind" || row.kind === "action") {
-      switchCategory(catIdx + dir);
+      switchCategory(st.catIdx + dir);
       return;
     }
     if (!applyAdjust(row, dir)) return;
-    afterAdjust(menuIdx, row);
+    afterAdjust(st.menuIdx, row);
   };
 
   const cancelCapture = (): boolean => {
-    if (capturing === null) return false;
-    capturing = null;
+    if (st.capturing === null) return false;
+    st.capturing = null;
     renderMenuContent();
     return true;
   };
 
   const startCapture = (rowIdx: number): void => {
-    const row = rowsOf(catIdx)[rowIdx];
+    const row = rowsOf(st.catIdx)[rowIdx];
     if (row?.kind !== "keybind") return;
-    capturing = rowIdx;
+    st.capturing = rowIdx;
     renderMenuContent();
   };
 
@@ -214,9 +194,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // called from the keyboard router BEFORE the esc-menu nav branch: while
   // recording, every key is swallowed. enter/click-away also cancel.
   const captureKey = (e: any): boolean => {
-    if (capturing === null) return false;
+    if (st.capturing === null) return false;
     if (e.name === "escape" || e.name === "return" || e.name === "tab") {
-      capturing = null;
+      st.capturing = null;
       renderMenuContent();
       return true;
     }
@@ -227,19 +207,19 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       ctx.warn(problem, "keybind");
       return true; // stay in capture so the user can retry
     }
-    const row = rowsOf(catIdx)[capturing];
-    capturing = null;
+    const row = rowsOf(st.catIdx)[st.capturing];
+    st.capturing = null;
     if (row?.kind === "keybind") row.set([spec]);
     renderMenuContent();
     return true;
   };
 
   const rowActivate = (rowIdx: number): void => {
-    if (capturing !== null) {
-      if (capturing !== rowIdx) cancelCapture();
+    if (st.capturing !== null) {
+      if (st.capturing !== rowIdx) cancelCapture();
       return;
     }
-    const row = rowsOf(catIdx)[rowIdx];
+    const row = rowsOf(st.catIdx)[rowIdx];
     if (!row) return;
     if (row.kind === "toggle") {
       applyAdjust(row, 1);
@@ -266,15 +246,15 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const menuActivate = () => {
     if (menuView === "settings") {
-      if (pane === "cats") {
-        switchCategory(catIdx);
+      if (st.pane === "cats") {
+        switchCategory(st.catIdx);
         return;
       }
-      rowActivate(menuIdx);
+      rowActivate(st.menuIdx);
       return;
     }
     const items = rootMenuItems();
-    const it = items[menuIdx] ?? items[0];
+    const it = items[st.menuIdx] ?? items[0];
     if (!it) return;
     if (it.keepOpen) {
       it.action();
@@ -285,8 +265,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const menuTab = (): void => {
-    if (menuView !== "settings" || capturing !== null) return;
-    pane = pane === "cats" ? "rows" : "cats";
+    if (menuView !== "settings" || st.capturing !== null) return;
+    st.pane = st.pane === "cats" ? "rows" : "cats";
     renderMenuContent();
   };
 
@@ -364,8 +344,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
     if (!isSettings) {
       const hoverSelect = (index: number) => () => {
-        if (menuIdx !== index) {
-          menuIdx = index;
+        if (st.menuIdx !== index) {
+          st.menuIdx = index;
           renderMenuContent();
         }
       };
@@ -373,7 +353,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         try {
           ev.stopPropagation?.();
         } catch {}
-        menuIdx = index;
+        st.menuIdx = index;
         menuActivate();
       };
       const rootRow = (
@@ -415,10 +395,21 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         );
       const items = rootMenuItems();
       items.forEach((it, i) => {
-        panel.add(rootRow(it.icon, it.label, it.hint, i === menuIdx, i, activateRow(i)));
+        panel.add(rootRow(it.icon, it.label, it.hint, i === st.menuIdx, i, activateRow(i)));
       });
     } else {
-      renderSettings(c, panel);
+      renderSettingsPanel(c, panel, st, {
+        groups,
+        visRows: visibleRows,
+        setOnId,
+        makeIconSlot: ctx.makeIconSlot,
+        switchCategory,
+        cancelCapture,
+        rowActivate,
+        afterAdjust,
+        paintRowAt,
+        rebuild: renderMenuContent,
+      });
     }
 
     // center the panel vertically based on its actual CONTENT HEIGHT — child
@@ -444,286 +435,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     void ctx.drainIconQueue();
   };
 
-  const renderSettings = (c: Record<string, any>, panel: any) => {
-    const cats = groups();
-    ensureVisible();
-    const vis = visibleRows();
-    const rows = rowsOf(catIdx);
-    const canScroll = rows.length > vis;
-    const wheelScroll = (ev: any) => {
-      if (!canScroll) return;
-      try {
-        ev.stopPropagation?.();
-      } catch {}
-      const d = ev.scroll?.direction === "up" ? -3 : 3;
-      const max = Math.max(0, rows.length - vis);
-      const next = Math.min(max, Math.max(0, scrollOff + d));
-      if (next !== scrollOff) {
-        scrollOff = next;
-        renderMenuContent();
-      }
-    };
-
-    // --- left pane: categories ---
-    // hover does NOT rebuild the panel — it paints the category via byId
-    // (full rebuilds on every mouseover churned native Text/icon buffers
-    // hard enough that the panel could fail mid-rebuild and vanish)
-    const catPane = Box({ width: CAT_W, flexDirection: "column" });
-    cats.forEach((g, gi) => {
-      const active = gi === catIdx;
-      const icon = CAT_ICONS[g.header ?? ""] ?? "cog";
-      const paintCat = (hover: boolean) => {
-        setOnId(`tfm-set-cat-${gi}`, (n) => {
-          n.backgroundColor = active ? c.accentBg : hover ? c.hoverBg : undefined;
-        });
-        setOnId(`tfm-set-catl-${gi}`, (n) => {
-          n.fg = active || hover ? c.white : c.sidebarFg;
-        });
-      };
-      catPane.add(
-        Box(
-          {
-            id: `tfm-set-cat-${gi}`,
-            width: "100%",
-            height: 1,
-            flexDirection: "row",
-            columnGap: 1,
-            paddingLeft: 1,
-            backgroundColor: active ? c.accentBg : undefined,
-            onMouseDown: (ev: any) => {
-              try {
-                ev.stopPropagation?.();
-              } catch {}
-              if (capturing !== null) {
-                cancelCapture();
-                return;
-              }
-              if (catIdx !== gi) switchCategory(gi);
-              else renderMenuContent();
-            },
-            onMouseOver: () => {
-              if (hoverCat !== gi) {
-                hoverCat = gi;
-                paintCat(true);
-              }
-            },
-            onMouseOut: () => {
-              if (hoverCat === gi) {
-                hoverCat = -1;
-                paintCat(false);
-              }
-            },
-          },
-          ctx.makeIconSlot(
-            icon,
-            [
-              { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
-              { fg: c.white, bg: c.accentBg },
-            ],
-            1,
-            active ? 1 : 0,
-          ).el,
-          Text({
-            id: `tfm-set-catl-${gi}`,
-            content: (g.header ?? "general").slice(0, CAT_W - 3),
-            fg: active ? c.white : c.sidebarFg,
-          }),
-        ),
-      );
-    });
-    panel.add(
-      Box(
-        {
-          width: "100%",
-          flexDirection: "row",
-          height: Math.max(vis + 1, cats.length + 1),
-          // wheel anywhere over the panel scrolls the rows pane (mouse-first)
-          onMouseScroll: wheelScroll,
-        },
-        catPane,
-        // --- right pane: rows (windowed) ---
-        Box({ width: 1, flexDirection: "column" }),
-        renderRowPane(c, rows, vis),
-      ),
-    );
-
-    // footer hints — pane- and state-aware
-    const hint =
-      capturing !== null
-        ? "press a key…  esc/enter/click = cancel"
-        : pane === "cats"
-          ? "click or enter selects · ←→ · tab = rows"
-          : `↑↓ move · ←→ adjust${canScroll ? " · wheel scrolls" : ""} · tab = categories`;
-    panel.add(Box({ width: "100%", height: 1 }));
-    panel.add(
-      Box(
-        { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: hint.slice(0, SETTINGS_W - 2), fg: c.sidebarFgMuted }),
-      ),
-    );
-  };
-
-  const renderRowPane = (c: Record<string, any>, rows: SettingRow[], vis: number) => {
-    ensureVisible();
-    const canScroll = rows.length > vis;
-    const end = Math.min(rows.length, scrollOff + vis);
-    const pane2 = Box({ flexGrow: 1, flexDirection: "column" });
-
-    const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) => {
-      const tId = `tfm-chev-${index}-${dir}`;
-      return Box(
-        {
-          width: 2,
-          justifyContent: "center",
-          onMouseDown: (ev: any) => {
-            try {
-              ev.stopPropagation?.();
-            } catch {}
-            if (capturing !== null) {
-              cancelCapture();
-              return;
-            }
-            const changed = applyAdjust(rowSpec, dir);
-            if (!changed && menuIdx === index) return;
-            if (menuIdx !== index) {
-              if (pane === "rows") paintRowAt(menuIdx, false);
-              menuIdx = index;
-              pane = "rows";
-              paintRowAt(index, true);
-            }
-            afterAdjust(index, rowSpec);
-          },
-          onMouseOver: () =>
-            setOnId(tId, (n) => {
-              n.fg = menuC.white;
-            }),
-          onMouseOut: () =>
-            setOnId(tId, (n) => {
-              n.fg = active ? menuC.white : menuC.sidebarFgMuted;
-            }),
-        },
-        Text({ id: tId, content: dirText, fg: active ? menuC.white : menuC.sidebarFgMuted }),
-      );
-    };
-
-    const rowNode = (rowSpec: SettingRow, index: number) => {
-      const active = pane === "rows" && menuIdx === index;
-      const capturingThis = capturing === index;
-      const labelFg = active ? c.white : c.sidebarFg;
-      const _paintRow = (on: boolean) => paintRowAt(index, on);
-      let control: any;
-      let onClick: (ev?: any) => void = (ev?: any) => {
-        try {
-          ev?.stopPropagation?.();
-        } catch {}
-        menuIdx = index;
-        rowActivate(index);
-      };
-
-      if (capturingThis) {
-        control = Box({ flexGrow: 1 }, Text({ content: "press a key…", fg: c.accent }));
-      } else if (rowSpec.kind === "toggle") {
-        const on = rowSpec.get();
-        control = Box(
-          { width: 6, justifyContent: "flex-end" },
-          Text({ id: `tfm-set-rowv-${index}`, content: on ? "on" : "off", fg: on ? c.accent : c.sidebarFgMuted }),
-        );
-      } else if (rowSpec.kind === "stepper" || rowSpec.kind === "cycle") {
-        const value =
-          rowSpec.kind === "stepper"
-            ? rowSpec.fmt(rowSpec.get())
-            : (() => {
-                const i = rowSpec.getIdx();
-                return i >= 0 ? (rowSpec.names[i] ?? "?") : "custom";
-              })();
-        control = Box(
-          { flexDirection: "row", alignItems: "center" },
-          chevron("‹", active, index, rowSpec, -1),
-          Box(
-            { width: 13, justifyContent: "flex-end", paddingRight: 1 },
-            Text({
-              id: `tfm-set-rowv-${index}`,
-              content: value.length > 12 ? value.slice(0, 12) : value,
-              fg: active ? c.white : c.sidebarFgMuted,
-            }),
-          ),
-          chevron("›", active, index, rowSpec, 1),
-        );
-        onClick = (ev?: any) => {
-          try {
-            ev?.stopPropagation?.();
-          } catch {}
-          if (capturing !== null) {
-            cancelCapture();
-            return;
-          }
-          menuIdx = index;
-          pane = "rows";
-          applyAdjust(rowSpec, 1);
-          afterAdjust(index, rowSpec);
-        };
-      } else if (rowSpec.kind === "keybind") {
-        const binds = rowSpec.get();
-        const shown = binds.length ? binds.join(" / ") : "unset";
-        control = Box(
-          { width: 18, justifyContent: "flex-end", paddingRight: 1 },
-          Text({
-            id: `tfm-set-rowv-${index}`,
-            content: shown.length > 17 ? shown.slice(0, 17) : shown,
-            fg: active ? c.white : c.sidebarFgMuted,
-          }),
-        );
-      } else {
-        control = Box({ width: 6 });
-      }
-
-      return Box(
-        {
-          id: `tfm-set-row-${index}`,
-          width: "100%",
-          height: 1,
-          flexDirection: "row",
-          paddingLeft: 1,
-          paddingRight: 1,
-          backgroundColor: capturingThis ? c.hoverBg : active ? c.accentBg : undefined,
-          onMouseDown: onClick,
-          onMouseOver: () => {
-            if (capturing !== null || (pane === "rows" && menuIdx === index)) return;
-            const prev = pane === "rows" ? menuIdx : -1;
-            menuIdx = index;
-            pane = "rows";
-            if (prev >= 0 && prev !== index) paintRowAt(prev, false);
-            paintRowAt(index, true);
-          },
-        },
-        Text({
-          id: `tfm-set-rowl-${index}`,
-          content: ` ${rowSpec.label.slice(0, SET_LABEL_W).padEnd(SET_LABEL_W)}`,
-          fg: labelFg,
-        }),
-        Box({ flexGrow: 1 }),
-        control,
-      );
-    };
-
-    for (let i = scrollOff; i < end; i++) {
-      const rowSpec = rows[i];
-      if (rowSpec) pane2.add(rowNode(rowSpec, i));
-    }
-    if (canScroll) {
-      pane2.add(
-        Box(
-          { width: "100%", height: 1, paddingLeft: 1 },
-          Text({
-            content: `${scrollOff + 1}-${end} of ${rows.length}`,
-            fg: c.sidebarFgMuted,
-          }),
-        ),
-      );
-    }
-    return pane2;
-  };
-
   // best-effort native allocator stats (renderer.lib is private — this is
   // diagnostics only); lets a tfm-side leak be told apart from system OOM
   // by comparing the numbers across a session's open/close traces
@@ -740,7 +451,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // floats.close("escmenu")
   const rawCloseMenu = () => {
     menuOpen = false;
-    capturing = null;
+    st.capturing = null;
     ctx.log?.("esc-menu close");
     nativeMemTrace("esc-menu close");
     const scrim: any = ctx.byId("tfm-menu");
@@ -753,11 +464,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.floats.open("escmenu", rawCloseMenu);
     menuOpen = true;
     menuView = "root";
-    menuIdx = 0;
-    catIdx = 0;
-    pane = "rows";
-    scrollOff = 0;
-    capturing = null;
+    st.menuIdx = 0;
+    st.catIdx = 0;
+    st.pane = "rows";
+    st.scrollOff = 0;
+    st.capturing = null;
     ctx.log?.("esc-menu open");
     nativeMemTrace("esc-menu open");
     ctx.cancelBand();
@@ -790,7 +501,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           try {
             ev.stopPropagation?.();
           } catch {}
-          if (capturing !== null) cancelCapture();
+          if (st.capturing !== null) cancelCapture();
         },
       }),
     );
@@ -805,27 +516,27 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const moveMenu = (delta: number) => {
     if (menuView !== "settings") {
       const count = rootMenuItems().length;
-      menuIdx = (menuIdx + delta + count) % count;
+      st.menuIdx = (st.menuIdx + delta + count) % count;
       renderMenuContent();
       return;
     }
-    if (pane === "cats") {
-      switchCategory(catIdx + delta);
+    if (st.pane === "cats") {
+      switchCategory(st.catIdx + delta);
       return;
     }
-    const count = rowsOf(catIdx).length;
+    const count = rowsOf(st.catIdx).length;
     if (!count) return;
-    menuIdx = (menuIdx + delta + count) % count;
-    ensureVisible();
+    st.menuIdx = (st.menuIdx + delta + count) % count;
+    ensureVisible(st, visibleRows());
     renderMenuContent();
   };
 
   // the "back" action row returns to the root view
   const showRoot = (): void => {
     menuView = "root";
-    menuIdx = 0;
-    pane = "rows";
-    capturing = null;
+    st.menuIdx = 0;
+    st.pane = "rows";
+    st.capturing = null;
   };
 
   return {

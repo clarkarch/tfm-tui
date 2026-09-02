@@ -3,7 +3,7 @@ import type { ThemePreset } from "./themes";
 // --- Settings model: declarative rows drive both rendering and key/mouse
 // input. This module owns the row TYPE and the pure row semantics (adjust /
 // flatten / theme-preset lookup); the get/set closures that wire rows to
-// config/state live in ./settings-model, the panel in ./ui-settings. ---
+// config/state live in ./settings-model, the panel in ./ui-settings-panel. ---
 
 export type SettingRow =
   // `repaint` rows (theme / ui-style / transparent-bg) change the panel's own
