@@ -4,6 +4,7 @@ import path from "node:path";
 import { clearChildren } from "./uiutil";
 import { applySurface, rowSurface, slotBg, tileSurface } from "./style";
 import { buildSections, loadSystemPlaces, type Place } from "./places";
+import { trashDir } from "./fsutil";
 import { RECENT_URI, STARRED_URI } from "./uri";
 import { tabTitle, type Tab } from "./tabs";
 import { gridDrag, type ClipItem } from "./grid-input";
@@ -144,7 +145,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
           if (!keys || !target || place.scheme) return;
           const rest = keys.filter((k) => k.path !== target);
           if (!rest.length) return;
-          if (target === path.join(ctx.home, ".local/share/Trash/files")) {
+          // trashDir() honors $XDG_DATA_HOME (like places.ts's Trash row) — a
+          // hardcoded ~/.local/share path diverges under a relocated trash
+          // root and the drop would plain-move without a .trashinfo
+          if (target === path.join(trashDir(), "files")) {
             // dropping onto the trash place must gio-trash, not plain-move —
             // otherwise no .trashinfo is written and items can't be restored
             void ctx.trashPaths(rest.map((k) => k.path));
