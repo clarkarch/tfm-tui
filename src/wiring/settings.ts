@@ -3,14 +3,14 @@
 // them, matching the original wiring order — the retheme/config-apply path
 // (live theme switch, geometry rewrites, config persistence). ---
 
-import { makeSettingModel } from "../settings-model";
-import { MENU_W } from "../ui-menu";
-import { makeEscMenu } from "../ui-settings";
-import { makeRetheme } from "../ui-retheme";
-import { clearIconCaches } from "../icons";
-import { cancelBand } from "../grid-input";
-import { clearChildren } from "../uiutil";
-import { dlog } from "../log";
+import { makeSettingModel } from "../ui/settings-model";
+import { MENU_W } from "../ui/ui-menu";
+import { makeEscMenu } from "../ui/ui-settings";
+import { makeRetheme } from "../ui/ui-retheme";
+import { clearIconCaches } from "../ui/icons";
+import { cancelBand } from "../input/grid-input";
+import { clearChildren } from "../ui/uiutil";
+import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
 

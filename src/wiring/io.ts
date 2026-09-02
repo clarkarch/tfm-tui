@@ -3,19 +3,19 @@
 // resize repave. Everything renderer-coupled arrives as an injected step. ---
 
 import { CliRenderEvents, Renderable } from "@opentui/core";
-import { runBoot } from "../boot";
-import { buildBootLayout } from "../ui-boot-layout";
-import { makeCwdWatcher } from "../watcher";
-import { makeDnd72 } from "../dnd72";
-import { makeHitTargetAt } from "../hit-target";
-import { makeResizeWatcher } from "../resize";
-import { waitForResolution } from "../ui-lookup";
-import { loadGlobs2 } from "../filetype";
-import { loadSystemPlaces } from "../places";
-import { startMemHygiene } from "../mem-hygiene";
-import { xtShiftEscapeFrame } from "../ui-term";
-import { configPath } from "../config";
-import { debugLog, dlog, isDebug, DEBUG_LOG } from "../log";
+import { runBoot } from "../app/boot";
+import { buildBootLayout } from "../ui/ui-boot-layout";
+import { makeCwdWatcher } from "../fs/watcher";
+import { makeDnd72 } from "../dnd/dnd72";
+import { makeHitTargetAt } from "../dnd/hit-target";
+import { makeResizeWatcher } from "../app/resize";
+import { waitForResolution } from "../ui/ui-lookup";
+import { loadGlobs2 } from "../fs/filetype";
+import { loadSystemPlaces } from "../fs/places";
+import { startMemHygiene } from "../app/mem-hygiene";
+import { xtShiftEscapeFrame } from "../ui/ui-term";
+import { configPath } from "../config/config";
+import { debugLog, dlog, isDebug, DEBUG_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
 export type WatcherWiring = ReturnType<typeof makeCwdWatcher>;

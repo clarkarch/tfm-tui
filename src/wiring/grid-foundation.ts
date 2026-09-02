@@ -4,8 +4,8 @@
 // refreshCutVisuals directly) while rename's performRename/pushUndoBatch stay
 // deferred arrows into it (TDZ seam rule). ---
 
-import { makeSelection } from "../selection";
-import { makeRename } from "../ui-rename";
+import { makeSelection } from "../input/selection";
+import { makeRename } from "../ui/ui-rename";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring } from "./types";
 

@@ -7,18 +7,18 @@
 
 import { spawn } from "node:child_process";
 import { createCliRenderer } from "@opentui/core";
-import { makeMenu, MENU_W } from "../ui-menu";
-import { makeChrome } from "../ui-chrome";
-import { makeToolbar } from "../ui-toolbar";
-import { buildAppContainer, buildTitle } from "../ui-boot-layout";
-import { warmEmbeddedIcons } from "../icons";
-import { makeNotify } from "../notify";
-import { makeRecentOpen } from "../recent-open";
-import { upsertRecentXbel } from "../recent";
-import { appForFile } from "../apps";
-import { makeDialogs } from "../ui-dialogs";
-import { clearChildren } from "../uiutil";
-import { dlog } from "../log";
+import { makeMenu, MENU_W } from "../ui/ui-menu";
+import { makeChrome } from "../ui/ui-chrome";
+import { makeToolbar } from "../ui/ui-toolbar";
+import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
+import { warmEmbeddedIcons } from "../ui/icons";
+import { makeNotify } from "../ui/notify";
+import { makeRecentOpen } from "../fs/recent-open";
+import { upsertRecentXbel } from "../fs/recent";
+import { appForFile } from "../fs/apps";
+import { makeDialogs } from "../ui/ui-dialogs";
+import { clearChildren } from "../ui/uiutil";
+import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
 

@@ -4,13 +4,13 @@
 // grid foundation (takes refreshCutVisuals directly) and BEFORE the grid
 // wiring (gridCtx takes moveInto directly). ---
 
-import { makeUndo } from "../undo";
-import { makeConflict, makeYesNo } from "../ui-dialogs";
-import { makeProgress } from "../ui-progress";
-import { makeFileOps } from "../fileops";
-import { makeTerminal } from "../ui-term";
-import { makeTrashOps, makeTrashConfirms } from "../trashops";
-import { appendLog, dlog } from "../log";
+import { makeUndo } from "../app/undo";
+import { makeConflict, makeYesNo } from "../ui/ui-dialogs";
+import { makeProgress } from "../ui/ui-progress";
+import { makeFileOps } from "../fs/fileops";
+import { makeTerminal } from "../ui/ui-term";
+import { makeTrashOps, makeTrashConfirms } from "../fs/trashops";
+import { appendLog, dlog } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
 

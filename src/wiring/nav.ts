@@ -4,14 +4,14 @@
 // later-built widgets through the injected getters — the same TDZ seam rule
 // the old flat wiring used, just parameterized. ---
 
-import { makeRenderAll } from "../render-all";
-import { makeQuit } from "../quit";
-import { makeStatus } from "../ui-status";
-import { makeNav, makeSessionSync } from "../nav";
-import { makeTabs } from "../tabs";
-import { makeSearch } from "../search";
-import { appendLog } from "../log";
-import { xtShiftEscapeFrame } from "../ui-term";
+import { makeRenderAll } from "../app/render-all";
+import { makeQuit } from "../app/quit";
+import { makeStatus } from "../ui/ui-status";
+import { makeNav, makeSessionSync } from "../app/nav";
+import { makeTabs } from "../app/tabs";
+import { makeSearch } from "../input/search";
+import { appendLog } from "../app/log";
+import { xtShiftEscapeFrame } from "../ui/ui-term";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, GridWiring } from "./types";
 

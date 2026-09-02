@@ -8,19 +8,19 @@
 
 import os from "node:os";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { loadConfig, type Theme } from "../config";
-import { deriveColors } from "../color";
-import { sideInnerWidth } from "../style";
-import { ensureGlyphFallbacks, glyphFor } from "../glyphs";
-import { FILE_ICON_BY_EXT } from "../filetype";
-import { isVirtualUri } from "../uri";
-import { isTrashFilesDir } from "../fsutil";
-import { isCutKeyFor } from "../clipboard";
-import { makeLookup } from "../ui-lookup";
-import { makeSlots } from "../ui-slots";
-import { makeFloats } from "../floats";
-import { clearChildren } from "../uiutil";
-import { initialAppState } from "../nav";
+import { loadConfig, type Theme } from "../config/config";
+import { deriveColors } from "../config/color";
+import { sideInnerWidth } from "../ui/style";
+import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
+import { FILE_ICON_BY_EXT } from "../fs/filetype";
+import { isVirtualUri } from "../fs/uri";
+import { isTrashFilesDir } from "../fs/fsutil";
+import { isCutKeyFor } from "../fs/clipboard";
+import { makeLookup } from "../ui/ui-lookup";
+import { makeSlots } from "../ui/ui-slots";
+import { makeFloats } from "../ui/floats";
+import { clearChildren } from "../ui/uiutil";
+import { initialAppState } from "../app/nav";
 
 export type CoreWiring = ReturnType<typeof wireCore>;
 

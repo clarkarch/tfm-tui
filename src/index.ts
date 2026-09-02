@@ -6,7 +6,7 @@
 //   core → nav → chrome (renderer boots here) → grid foundation → fileops →
 //   grid → settings → watcher → boot → retheme → dnd → resize → keymap ---
 
-import { appendLog, isDebug } from "./log";
+import { appendLog, isDebug } from "./app/log";
 import { wireCore } from "./wiring/core";
 import { wireNav } from "./wiring/nav";
 import { wireChrome } from "./wiring/chrome";

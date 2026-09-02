@@ -9,7 +9,7 @@ if (!SRC_ARG) {
   process.exit(1);
 }
 const SRC_DIR = SRC_ARG;
-const OUT = new URL("../src/themes.ts", import.meta.url).pathname;
+const OUT = new URL("../src/config/themes.ts", import.meta.url).pathname;
 
 // the tfm default palette already IS tokyonight; skip the near-duplicate
 const SKIP = new Set(["tokyonight"]);

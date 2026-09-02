@@ -3,7 +3,7 @@
 // path-edit > file menu > search > sidebar > grid > chords) + sidebar
 // kb-focus state. Last wiring step — everything it reads exists by now. ---
 
-import { makeKeyRouter } from "../keymap";
+import { makeKeyRouter } from "../input/keymap";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
 

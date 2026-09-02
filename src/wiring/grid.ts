@@ -3,16 +3,16 @@
 // the grid renderer, properties dialog and the menu entry builders. Runs
 // AFTER the fileops wiring — gridCtx takes moveInto directly. ---
 
-import { registerSyntaxParsers } from "../syntax";
-import { makePreview } from "../ui-preview";
-import { finishDragState, makeEntryMouseHandlers, type BandCtx, type GridMenuEntry } from "../grid-input";
-import { makeGridRenderer } from "../ui-grid";
-import { makeProps } from "../ui-props";
-import { makeMenuEntries } from "../menu-entries";
-import { waitForResolution } from "../ui-lookup";
-import { glyph } from "../glyphs";
-import { dlog } from "../log";
-import type { ListEntry } from "../ui-menu";
+import { registerSyntaxParsers } from "../ui/syntax";
+import { makePreview } from "../ui/ui-preview";
+import { finishDragState, makeEntryMouseHandlers, type BandCtx, type GridMenuEntry } from "../input/grid-input";
+import { makeGridRenderer } from "../ui/ui-grid";
+import { makeProps } from "../ui/ui-props";
+import { makeMenuEntries } from "../ui/menu-entries";
+import { waitForResolution } from "../ui/ui-lookup";
+import { glyph } from "../ui/glyphs";
+import { dlog } from "../app/log";
+import type { ListEntry } from "../ui/ui-menu";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, NavWiring } from "./types";
 
