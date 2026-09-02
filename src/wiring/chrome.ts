@@ -137,12 +137,14 @@ export const wireChrome = async (deps: {
   const container = buildAppContainer({
     sw: core.geometry.sw,
     sideInnerW: core.sideInnerW(),
-    colors: themeGet,
+    // eager object, not a getter — buildAppContainer/buildTitle read fields
+    // directly (typed as Theme in ui-boot-layout so tsc enforces this)
+    colors: core.colors,
     uiStyle: core.config.ui.uiStyle,
     tabBarVisible: core.config.ui.tabBar,
     previewWidth: core.config.ui.previewWidth,
     previewEnabled: core.config.ui.previewEnabled,
-    title: buildTitle({ width: core.sideInnerW(), colors: themeGet }),
+    title: buildTitle({ width: core.sideInnerW(), colors: core.colors }),
     toolbarShell: toolbar.makeToolbarShell(),
   });
 

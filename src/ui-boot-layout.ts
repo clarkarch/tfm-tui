@@ -8,6 +8,7 @@
 
 import { ASCIIFont, Box, ScrollBoxRenderable, Text } from "@opentui/core";
 import { chromeSurface, type UiStyle } from "./style";
+import type { Theme } from "./config";
 import {
   BAND_ID,
   DRAG_GHOST_ID,
@@ -22,7 +23,10 @@ import {
 // container. Ids are painted once at boot and repainted by rethemeChrome via
 // findDescendantById — they must stay byte-identical. ---
 
-export const buildTitle = (opts: { width: number; colors: Record<string, any> }): any =>
+// eager object, NOT a getter — these three ctxs read fields directly, so the
+// type must reject the themeGet function (a bare Record<string, any> would
+// silently accept it and every field read would be undefined at boot)
+export const buildTitle = (opts: { width: number; colors: Theme }): any =>
   Box(
     {
       id: "tfm-title-box",
@@ -39,7 +43,7 @@ export const buildTitle = (opts: { width: number; colors: Record<string, any> })
 export type AppContainerOpts = {
   sw: number;
   sideInnerW: number;
-  colors: Record<string, any>;
+  colors: Theme; // eager object — see buildTitle
   uiStyle: UiStyle;
   tabBarVisible: boolean;
   previewWidth: number;
@@ -111,7 +115,7 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
 export type BootLayoutCtx = {
   renderer: any;
   byId: (id: string) => any;
-  colors: Record<string, any>;
+  colors: Theme; // eager object — see buildTitle
   bandCtx: BandCtx;
   closeFileMenu: () => void;
   clearSearch: () => void;
