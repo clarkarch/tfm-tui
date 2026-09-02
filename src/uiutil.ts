@@ -1,5 +1,5 @@
-// --- Renderer-agnostic UI utilities shared by index.ts and the extracted
-// widgets. No OpenTUI/renderer imports — nodes arrive as parameters. ---
+// --- Renderer-agnostic UI utilities shared by the wiring layer and the
+// widget modules. No OpenTUI/renderer imports — nodes arrive as parameters. ---
 
 // clear-and-rebuild idiom used by every dynamic host (crumbs, sidebar, tab
 // strip, menus, grid): drop all children of a renderable

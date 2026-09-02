@@ -12,10 +12,10 @@ import type { ListEntry } from "./ui-menu";
 
 // --- Places sidebar rows + tab strip + divider — rebuilt from scratch each
 // render; ctx-seamed like ui-term. tfm-* ids (tfm-place-N / tfm-place-N-label
-// / tfm-tab-N / tfm-tab-new) stay byte-identical — rethemeChrome (index.ts)
+// / tfm-tab-N / tfm-tab-new) stay byte-identical — rethemeChrome (./ui-retheme)
 // and the OSC-72 self-hover path share placesHost via the returned ref. ---
 
-// structural mirrors of index.ts's icon-slot types (they are module-private
+// structural mirrors of ./ui-slots's icon-slot types (they are module-private
 // there; the functions arrive via ctx, like ui-props does)
 type IconState = { fg: string; bg: string };
 type IconSpec = {

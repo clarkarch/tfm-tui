@@ -148,7 +148,8 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       ctx.syncTerminalTheme();
       // a theme flip churns the whole icon raster set + every chrome surface;
       // without a GC poke the destroyed renderables' native buffers sit in
-      // finalizer limbo until the next heap-driven GC (see index.ts mem note)
+      // finalizer limbo until the next heap-driven GC (see the native-OOM
+      // note in AGENTS.md / ./mem-hygiene)
       try {
         Bun.gc(false);
       } catch {}

@@ -1,6 +1,6 @@
 // --- UI style seam: solid vs outline surfaces ---
-// Single vocabulary for how every chrome surface is painted. index.ts must not
-// hand-roll bg/border ternaries; add new surface roles HERE so solid and
+// Single vocabulary for how every chrome surface is painted. Call sites must
+// not hand-roll bg/border ternaries; add new surface roles HERE so solid and
 // outline stay consistent.
 //
 // outline mode rules:
@@ -11,9 +11,9 @@
 //     (yoga reserves the ring via setBorder), which would clip content
 //   - input fields keep their fill in both modes (InputRenderable extends
 //     TextareaRenderable and has no border support)
-import type { Theme } from "./config";
+import type { Theme, UiStyle } from "./config-schema";
 
-export type UiStyle = "solid" | "outline";
+export type { UiStyle };
 
 // inner width available to children of the sidebar panel: outline mode's
 // border ring reserves one cell per side (yoga setBorder)

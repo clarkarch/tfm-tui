@@ -1,6 +1,6 @@
 // --- OSC 72 (kitty drag-and-drop) pure protocol helpers: frame builders,
 // meta-string parser and drop-payload decoding. All bytes here are
-// byte-exact with yazi's reference implementation; index.ts owns the
+// byte-exact with yazi's reference implementation; ./dnd72 owns the
 // write/log/state-machine side. ---
 
 // path -> file:// uri, escaping every segment except the root slashes

@@ -10,6 +10,10 @@ import { FLOAT_Z, type Floats } from "./floats";
 // ui-dialogs). Open/close state routes through ./floats (the single source of
 // truth): this module keeps only rendering + the raw teardown. ---
 
+// menu panel width in cells — shared with the esc-menu root view (wiring
+// passes it to both), so the two menus measure alike
+export const MENU_W = 36;
+
 export type ListEntry = {
   icon?: string;
   label: string;
@@ -158,7 +162,7 @@ export const makeMenu = (ctx: MenuCtx) => {
     ctx.stripSelectable();
   };
 
-  // fileMenuState() returns the LIVE mutable state object — index.ts's
+  // fileMenuState() returns the LIVE mutable state object — ./keymap's
   // keyboard nav mutates fmenu.idx in place (no setter) and calls
   // renderFileMenu() afterwards; do not snapshot it.
   return {

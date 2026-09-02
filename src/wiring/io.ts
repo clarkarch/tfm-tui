@@ -17,14 +17,7 @@ import { xtShiftEscapeFrame } from "../ui-term";
 import { configPath } from "../config";
 import { debugLog, dlog, isDebug, DEBUG_LOG } from "../log";
 import type { CoreWiring } from "./core";
-import type { NavWiring } from "./nav";
-import type { ChromeWiring } from "./chrome";
-import type { GridFoundationWiring } from "./grid-foundation";
-import type { GridWiring } from "./grid";
-import type { FileopsWiring } from "./fileops";
-
-// Hand-written from the factory returns — see nav.ts for why the wiring
-// types must stay acyclic.
+import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
 export type WatcherWiring = ReturnType<typeof makeCwdWatcher>;
 export type DndWiring = ReturnType<typeof makeDnd72>;
 

@@ -5,12 +5,7 @@
 
 import { makeKeyRouter } from "../keymap";
 import type { CoreWiring } from "./core";
-import type { NavWiring } from "./nav";
-import type { ChromeWiring } from "./chrome";
-import type { GridFoundationWiring } from "./grid-foundation";
-import type { GridWiring } from "./grid";
-import type { FileopsWiring } from "./fileops";
-import type { SettingsWiring } from "./settings";
+import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
 
 export type KeymapWiring = ReturnType<typeof wireKeymap>;
 

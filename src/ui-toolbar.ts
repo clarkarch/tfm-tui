@@ -1,8 +1,8 @@
 // --- Toolbar: back/fwd nav buttons, breadcrumb path row (with the double-click
 // inline path editor), sort + search buttons — as a factory with injected
-// callbacks (same seam as ui-chrome.ts). The search QUERY state and the
-// keyboard router stay in index.ts; this module owns the pathEditMode flag and
-// the hover-button raster/surface plumbing. ---
+// callbacks (same seam as ui-chrome.ts). The search QUERY state lives in
+// ./search and the keyboard router in ./keymap; this module owns the
+// pathEditMode flag and the hover-button raster/surface plumbing. ---
 
 import path from "node:path";
 import os from "node:os";

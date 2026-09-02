@@ -1,5 +1,5 @@
 // --- Raster pipeline core: SVG tinting, PNG disk/memory caches, thumbnails ---
-// Renderer-free on purpose: index.ts owns slots/queues (the renderable side),
+// Renderer-free on purpose: ./ui-slots owns slots/queues (the renderable side),
 // this module only turns (name, colors, pixel size) into PNG bytes. All caches
 // are keyed by everything that changes the output, so theme switches miss
 // naturally and never need explicit invalidation beyond clearIconCaches.

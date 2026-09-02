@@ -6,7 +6,7 @@
 
 export type ClipItem = { path: string; isDir: boolean };
 
-// structural view of a tile ref — the full TileRefs in index.ts satisfies this
+// structural view of a tile ref — the full TileRefs in ./selection satisfies this
 export type GridTileRef = { selected: boolean; isDir: boolean };
 
 export type GridMenuEntry = {
@@ -18,8 +18,8 @@ export type GridMenuEntry = {
   sep?: boolean;
 };
 
-// shared drag state: one plain mutable object so closures in index.ts and
-// here see the same fields without getter/setter plumbing
+// shared drag state: one plain mutable object so the wiring closures and the
+// handlers here see the same fields without getter/setter plumbing
 export const gridDrag = {
   keys: null as ClipItem[] | null,
   ctrl: false, // ctrl+drag = internal move, plain drag = external OSC 72

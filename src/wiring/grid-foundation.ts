@@ -7,17 +7,7 @@
 import { makeSelection } from "../selection";
 import { makeRename } from "../ui-rename";
 import type { CoreWiring } from "./core";
-import type { NavWiring } from "./nav";
-import type { ChromeWiring } from "./chrome";
-import type { FileopsWiring } from "./fileops";
-import type { GridWiring } from "./grid";
-
-// Hand-written from the factory returns — see nav.ts for why the wiring
-// types must stay acyclic.
-export type GridFoundationWiring = {
-  selection: ReturnType<typeof makeSelection>;
-  rename: ReturnType<typeof makeRename>;
-};
+import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring } from "./types";
 
 export const wireGridFoundation = (deps: {
   core: CoreWiring;

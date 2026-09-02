@@ -6,7 +6,7 @@ import { parseIso, pathToUri, uriToPath, xdgDataHome, xdgStateHome } from "./uri
 
 // --- Recent files (freedesktop recently-used.xbel) + tfm's starred registry.
 // Persistence only: read/write these two registries, nothing else. Batching
-// opens and building grid Entries stays in index.ts. ---
+// opens and building grid Entries live in ./recent-open and ./listing. ---
 
 export type XbelItem = { path: string; modified: number };
 

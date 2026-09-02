@@ -13,28 +13,7 @@ import { makeSearch } from "../search";
 import { appendLog } from "../log";
 import { xtShiftEscapeFrame } from "../ui-term";
 import type { CoreWiring } from "./core";
-import type { ChromeWiring } from "./chrome";
-import type { GridFoundationWiring } from "./grid-foundation";
-import type { GridWiring } from "./grid";
-
-// Hand-written from the factory returns (NOT ReturnType<typeof wireNav>) —
-// the wire functions reference each other's wiring types through their deps,
-// which would make the aliases circular.
-type NavOut = ReturnType<typeof makeNav>;
-type TabsOut = ReturnType<typeof makeTabs>;
-type SessionOut = ReturnType<typeof makeSessionSync>;
-type SearchOut = ReturnType<typeof makeSearch>;
-
-export type NavWiring = {
-  renderAll: ReturnType<typeof makeRenderAll>;
-  quitApp: ReturnType<typeof makeQuit>;
-  setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
-  tabModel: TabsOut;
-  search: SearchOut;
-} & Pick<NavOut, "canBack" | "canFwd" | "goBack" | "goFwd" | "navigate"> &
-  Pick<TabsOut, "switchTab" | "newTab" | "closeTab" | "syncTabFromState"> &
-  Pick<SessionOut, "scheduleSaveSession" | "restoreSession"> &
-  Pick<SearchOut, "clearSearch" | "beginTypeToSearch" | "wireSearchInput">;
+import type { ChromeWiring, GridFoundationWiring, GridWiring } from "./types";
 
 export const wireNav = (deps: {
   core: CoreWiring;

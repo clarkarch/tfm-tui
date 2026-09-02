@@ -36,7 +36,7 @@ export type EscMenuCtx = {
   cancelBand(): void;
   colors(): Record<string, any>;
   uiStyle(): string;
-  // root-view width — same value the context menu uses (MENU_W in index)
+  // root-view width — same value the context menu uses (MENU_W in ./ui-menu)
   menuW(): number;
   settingGroups(): SettingGroup[];
   // conflict/rejection toasts for the keybind capture flow (wired to notify)

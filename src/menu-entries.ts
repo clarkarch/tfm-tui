@@ -17,7 +17,7 @@ export type MenuEntriesCtx = {
   renderAll(): void;
   renderGrid(): void | Promise<void>;
   openTerminalHere(dir?: string): void;
-  // clipboard is a mutable let in index.ts — read live, never captured
+  // clipboard is a mutable let in ./fileops — read live, never captured
   clipboard(): { mode: "copy" | "cut"; items: ClipItem[] } | null;
   pasteSmart(dest: string): void;
   confirmEmptyTrash(): void;

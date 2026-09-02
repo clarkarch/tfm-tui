@@ -5,7 +5,7 @@ import { RECENT_URI, STARRED_URI } from "./uri";
 // tab's view. Switching copies the live history refs into the outgoing tab
 // slot and adopts the incoming one (ref identity is load-bearing — navigate()
 // reassigns `state.history`, so syncs must copy the CURRENT ref). Pure data
-// machine — rendering/session I/O stay in index.ts. ---
+// machine — rendering/session I/O stay in the wiring layer. ---
 
 export type Tab = { history: string[]; histIdx: number };
 export type TabStateRef = { history: string[]; histIdx: number; cwd: string };

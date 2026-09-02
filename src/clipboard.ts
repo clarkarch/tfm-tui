@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 // CLI tools can offer only ONE mime type per selection owner — can't have
 // both gnome-copied-files and text. We publish PLAIN TEXT full paths (one per
 // line) so paste-anywhere works; reading stays gnome-copied-files only (other
-// apps' file pastes), internal pastes go through index.ts's clipboard. ---
+// apps' file pastes), internal pastes go through ./fileops's clipboard. ---
 
 export const CLIP_TYPE = "x-special/gnome-copied-files";
 

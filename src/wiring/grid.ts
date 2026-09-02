@@ -14,21 +14,7 @@ import { glyph } from "../glyphs";
 import { dlog } from "../log";
 import type { ListEntry } from "../ui-menu";
 import type { CoreWiring } from "./core";
-import type { NavWiring } from "./nav";
-import type { ChromeWiring } from "./chrome";
-import type { GridFoundationWiring } from "./grid-foundation";
-import type { FileopsWiring } from "./fileops";
-
-// Hand-written from the factory returns — see nav.ts for why the wiring
-// types must stay acyclic.
-export type GridWiring = {
-  renderPreview: ReturnType<typeof makePreview>["renderPreview"];
-  renderGrid: ReturnType<typeof makeGridRenderer>["renderGrid"];
-  finishDrag: () => void;
-  bandCtx: BandCtx;
-  props: ReturnType<typeof makeProps>;
-  menuEntries: ReturnType<typeof makeMenuEntries>;
-};
+import type { ChromeWiring, FileopsWiring, GridFoundationWiring, NavWiring } from "./types";
 
 export const wireGrid = (deps: {
   core: CoreWiring;

@@ -5,8 +5,6 @@
 // derive from this table. Adding a knob = adding a row here, nothing else.
 // Pure module: no fs, no renderer. ---
 
-import type { UiStyle } from "./style";
-
 export type Theme = {
   bg: string;
   sidebarBg: string;
@@ -43,6 +41,10 @@ export type Theme = {
 };
 
 export type ViewMode = "grid" | "list";
+
+// surface-style vocabulary — the ui-style key's value type. The solid/outline
+// painting decisions live in ./style (the surface seam), which re-exports this.
+export type UiStyle = "solid" | "outline";
 
 export type UiConfig = {
   sidebarWidth: number;

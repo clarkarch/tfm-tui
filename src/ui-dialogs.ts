@@ -218,7 +218,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
 
 // --- Floating Yes/No confirmation ("Empty Trash?", "Permanently delete …?").
 // State lives here; the trash-bound wrappers (confirmEmptyTrash /
-// confirmDeleteForever) stay with trashOps in index.ts. ---
+// confirmDeleteForever) live in ./trashops. ---
 
 export type YesNoCtx = {
   colors(): Theme & Record<string, any>;

@@ -17,7 +17,7 @@ export type NotifyCtx = {
 
 type Toast = { id: number; nodeId: string; timer: any };
 
-// shared slide-in animation (also used by the progress toast in index.ts)
+// shared slide-in animation (also used by the progress toast in ./ui-progress)
 export const animateLeft = (node: any, from: number, to: number, ms: number): void => {
   const steps = 8;
   let i = 0;

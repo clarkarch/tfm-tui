@@ -12,22 +12,7 @@ import { makeTerminal } from "../ui-term";
 import { makeTrashOps, makeTrashConfirms } from "../trashops";
 import { appendLog, dlog } from "../log";
 import type { CoreWiring } from "./core";
-import type { NavWiring } from "./nav";
-import type { ChromeWiring } from "./chrome";
-import type { GridFoundationWiring } from "./grid-foundation";
-
-// Hand-written from the factory returns — see nav.ts for why the wiring
-// types must stay acyclic.
-export type FileopsWiring = {
-  undo: ReturnType<typeof makeUndo>;
-  conflict: ReturnType<typeof makeConflict>;
-  progress: ReturnType<typeof makeProgress>;
-  fileops: ReturnType<typeof makeFileOps>;
-  terminal: ReturnType<typeof makeTerminal>;
-  trash: ReturnType<typeof makeTrashOps>;
-  yesNo: ReturnType<typeof makeYesNo>;
-  confirmYesNo: ReturnType<typeof makeYesNo>["confirm"];
-} & ReturnType<typeof makeTrashConfirms>;
+import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
 
 export const wireFileops = (deps: {
   core: CoreWiring;

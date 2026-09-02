@@ -10,7 +10,7 @@ import type { Theme } from "./config";
 // Bun.spawn({ terminal }). Keys route to the shell while focused; clicking the
 // grid or sidebar hands focus back to tfm. Theme + renderer arrive via ctx;
 // ids (tfm-term-host / tfm-term-header / tfm-term) stay byte-identical for
-// index.ts's layout host box and rethemeChrome. The host box is also the
+// ./ui-boot-layout's host box and rethemeChrome. The host box is also the
 // internal-drop target: ctrl+dragging files here pastes shell-quoted paths
 // into the PTY (the VT never registers a "drop" mouse listener, so the event
 // bubbles up to the host).

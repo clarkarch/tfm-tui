@@ -7,7 +7,7 @@
 
 import { spawn } from "node:child_process";
 import { createCliRenderer } from "@opentui/core";
-import { makeMenu } from "../ui-menu";
+import { makeMenu, MENU_W } from "../ui-menu";
 import { makeChrome } from "../ui-chrome";
 import { makeToolbar } from "../ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui-boot-layout";
@@ -20,24 +20,7 @@ import { makeDialogs } from "../ui-dialogs";
 import { clearChildren } from "../uiutil";
 import { dlog } from "../log";
 import type { CoreWiring } from "./core";
-import type { NavWiring } from "./nav";
-import type { FileopsWiring } from "./fileops";
-import type { GridWiring } from "./grid";
-
-// Hand-written from the factory returns (NOT Awaited<ReturnType<typeof
-// wireChrome>>) — see nav.ts for why the wiring types must stay acyclic.
-export type ChromeWiring = {
-  renderer: Awaited<ReturnType<typeof createCliRenderer>>;
-  menu: ReturnType<typeof makeMenu>;
-  chrome: ReturnType<typeof makeChrome>;
-  toolbar: ReturnType<typeof makeToolbar>;
-  notify: ReturnType<typeof makeNotify>["notify"];
-  toastCount: ReturnType<typeof makeNotify>["toastCount"];
-  openFileDefault: ReturnType<typeof makeRecentOpen>["openFileDefault"];
-  dialogs: ReturnType<typeof makeDialogs>;
-};
-
-export const MENU_W = 36;
+import type { FileopsWiring, GridWiring, NavWiring } from "./types";
 
 export const wireChrome = async (deps: {
   core: CoreWiring;

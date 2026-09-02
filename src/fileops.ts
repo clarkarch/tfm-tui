@@ -41,7 +41,7 @@ export type FileOpsCtx = {
   setStatusMsg(msg: string): void;
   notify(msg: string, title?: string): void;
   home: string;
-  // cut-tile dimming repaint (tile visuals stay with the grid in index.ts)
+  // cut-tile dimming repaint (tile visuals live in ./selection)
   refreshCutVisuals(): void;
   // injectable for tests — real impl lstats st.dev (fsutil)
   crossDevice?(a: string, b: string): boolean;

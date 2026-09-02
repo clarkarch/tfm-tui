@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 
 // --- File type classification (extension -> icon-name category), shared by
 // grid tiles, preview gating and the properties dialog. Returns icon NAMES
-// only ("file-code", "zip-box", …); resolving names to glyphs stays in
-// index.ts so this module never touches UI state. ---
+// only ("file-code", "zip-box", …); resolving names to glyphs lives in
+// ./glyphs so this module never touches UI state. ---
 
 // generic `file` is the fallback, mirroring nautilus's themed-icon fallback
 // chain in spirit

@@ -17,7 +17,7 @@ export type SettingsModelCtx = {
   applyConfig(fresh: Config): void;
   scheduleSaveConfig(): void;
   showRoot(): void;
-  // conflict toasts for remapping (wired to notify in index)
+  // conflict toasts for remapping (wired to notify in the settings wiring)
   warn(message: string, title?: string): void;
 };
 

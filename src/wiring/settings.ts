@@ -4,26 +4,17 @@
 // (live theme switch, geometry rewrites, config persistence). ---
 
 import { makeSettingModel } from "../settings-model";
+import { MENU_W } from "../ui-menu";
 import { makeEscMenu } from "../ui-settings";
 import { makeRetheme } from "../ui-retheme";
 import { clearIconCaches } from "../icons";
 import { cancelBand } from "../grid-input";
 import { clearChildren } from "../uiutil";
 import { dlog } from "../log";
-import { MENU_W } from "./chrome";
 import type { CoreWiring } from "./core";
-import type { NavWiring } from "./nav";
-import type { ChromeWiring } from "./chrome";
-import type { GridWiring } from "./grid";
-import type { FileopsWiring } from "./fileops";
+import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
 
-// Hand-written from the factory returns — see nav.ts for why the wiring
-// types must stay acyclic.
-export type SettingsWiring = {
-  settingGroups: ReturnType<typeof makeSettingModel>["settingGroups"];
-  escMenu: ReturnType<typeof makeEscMenu>;
-};
-export type RethemeWiring = ReturnType<typeof makeRetheme>;
+export type RethemeWiring = ReturnType<typeof wireRetheme>;
 
 export const wireSettings = (deps: {
   core: CoreWiring;
