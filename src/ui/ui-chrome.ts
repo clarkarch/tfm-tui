@@ -8,6 +8,7 @@ import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { tabTitle, type Tab } from "../app/tabs";
 import { gridDrag, type ClipItem } from "../input/grid-input";
+import { IconStateIdx, selectIconState } from "./ui-slots";
 import type { Theme } from "../config/config";
 import type { ListEntry } from "./ui-menu";
 
@@ -107,10 +108,12 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const maxLabel = ctx.sideInnerW() - 4 - (place.ejectable ? 3 : 0);
     const paddedLabel = place.label.padEnd(Math.max(0, maxLabel)).slice(0, maxLabel);
 
-    const iconSlot = ctx.makeIconSlot(place.icon, iconStates, 1, selected ? 2 : 0);
+    const iconSlot = ctx.makeIconSlot(place.icon, iconStates, 1, selectIconState(selected, false));
     let ejectSlot: ReturnType<typeof ctx.makeIconSlot> | undefined;
     if (place.ejectable && place.device) {
-      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selected ? 2 : 0, () => ejectDevice(place.device!));
+      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), () =>
+        ejectDevice(place.device!),
+      );
     }
     const _specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
 
@@ -263,10 +266,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
       const closeWrap = Box(
         {
           onMouseOver: () => {
-            ctx.setIconState(closeSlot.spec, 1);
+            ctx.setIconState(closeSlot.spec, IconStateIdx.Active);
           },
           onMouseOut: () => {
-            ctx.setIconState(closeSlot.spec, 0);
+            ctx.setIconState(closeSlot.spec, IconStateIdx.Rest);
           },
         },
         closeSlot.el,
@@ -352,7 +355,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
               : rowSurface(ctx.uiStyle(), colors, "rest"),
         );
       rec.specs.forEach((s) => {
-        ctx.setIconState(s, isSel ? 2 : isHover ? 1 : 0);
+        ctx.setIconState(s, selectIconState(isSel, isHover));
       });
       try {
         if (label) label.fg = isSel ? colors.accent : colors.sidebarFg;

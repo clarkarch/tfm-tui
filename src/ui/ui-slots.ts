@@ -14,6 +14,27 @@ import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 
 export type IconState = { fg: string; bg: string };
 
+// Icon raster indices shared by every slot. Three slot families share one
+// index space:
+// - select slots (tiles, sidebar rows): Rest/Hover/Selected (+ Cut for tiles)
+// - toggle slots (star, crumbs, hover buttons): Off/On + HoverOffset
+// - nav slots (back/fwd): Enabled/Disabled + HoverOffset (note: Enabled=0,
+//   Disabled=1 — the inverse sense of a toggle, hence the separate helper)
+export const IconStateIdx = { Rest: 0, Active: 1, Selected: 2, Cut: 3, HoverOffset: 2 } as const;
+export type IconStateIndex = (typeof IconStateIdx)[keyof typeof IconStateIdx];
+
+/** Toggle slot (off/on × normal/hover): star, crumbs, hover buttons, esc hint. */
+export const toggleIconState = (on: boolean, hover: boolean): number =>
+  (on ? IconStateIdx.Active : IconStateIdx.Rest) + (hover ? IconStateIdx.HoverOffset : 0);
+
+/** Nav slot (enabled/disabled × normal/hover): back/fwd buttons. */
+export const navIconState = (enabled: boolean, hover: boolean): number =>
+  (enabled ? IconStateIdx.Rest : IconStateIdx.Active) + (hover ? IconStateIdx.HoverOffset : 0);
+
+/** Select slot (rest/hover/selected): tiles, sidebar rows. */
+export const selectIconState = (selected: boolean, hover: boolean): number =>
+  selected ? IconStateIdx.Selected : hover ? IconStateIdx.Active : IconStateIdx.Rest;
+
 export type IconSpec = {
   slotId: string;
   name: string;
@@ -344,9 +365,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
       },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
-    const slot = makeIconSlot("close", states(), 1, 0, undefined, states);
+    const slot = makeIconSlot("close", states(), 1, IconStateIdx.Rest, undefined, states);
     const paint = (on: boolean) => {
-      setIconState(slot.spec, on ? 1 : 0);
+      setIconState(slot.spec, toggleIconState(on, false));
       try {
         const n: any = ctx.byId(id);
         if (n) applySurface(n, btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, on, ctx.colors().sidebarBg));

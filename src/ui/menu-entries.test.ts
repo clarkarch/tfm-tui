@@ -145,6 +145,7 @@ describe("sidebarEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const home = m.sidebarEntriesFor(place({ path: "/home/u" }), 0, 0);
     expect(home.some((e) => e.label.startsWith("Paste"))).toBe(true);
+    expect(home.some((e) => e.label === "Open Terminal Here")).toBe(true);
 
     const trash = m.sidebarEntriesFor(place({ path: TRASH_FILES }), 0, 0);
     expect(trash.some((e) => e.label.startsWith("Paste"))).toBe(false);
@@ -153,6 +154,16 @@ describe("sidebarEntriesFor", () => {
     const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
     recent.find((e) => e.label === "Open")!.action();
     expect(ctx.calls).toContain("navigate:recent://");
+  });
+
+  test("no terminal / paste on virtual places (URIs are not shell cwds)", () => {
+    // openTerminalHere falls back to home only on its no-arg path — an
+    // explicit recent:// target would spawn the PTY in a bogus cwd.
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
+    expect(recent.some((e) => e.label === "Open Terminal Here")).toBe(false);
+    expect(recent.some((e) => e.label.startsWith("Paste"))).toBe(false);
   });
 
   test("eject / mount / bookmark removal", () => {
@@ -209,12 +220,14 @@ describe("sortEntries / emptyAreaEntries", () => {
     expect(ctx.calls).toContain("paste:/home/u");
   });
 
-  test("trash view empty-area adds Empty Trash on top of the normal set", () => {
+  test("trash view empty-area is Empty Trash + select only (no create/paste/terminal)", () => {
+    // Trash is not a workspace: New File/Folder silently no-op there
+    // (startInlineCreate guards trash) and pasting lands files with no
+    // .trashinfo — so the menu must not offer them. Nautilus parity.
     const ctx = baseCtx();
     ctx.inTrashView = () => true;
     const m = makeMenuEntries(ctx);
     const entries = m.emptyAreaEntries(0, 0);
-    expect(entries.some((e) => e.label === "Empty Trash")).toBe(true);
-    expect(entries[0]!.label).toBe("Empty Trash");
+    expect(entries.map((e) => e.label)).toEqual(["Empty Trash", "Select all"]);
   });
 });

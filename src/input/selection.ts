@@ -10,6 +10,8 @@ import { applySurface, tileSurface, type UiStyle } from "../ui/style";
 import { fmtBytes } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ClipItem } from "./grid-input";
+import { TileVisual, type TileVisualMode } from "./grid-input";
+import { IconStateIdx } from "../ui/ui-slots";
 
 export type SelTileRef = {
   iconSpec?: any;
@@ -48,11 +50,11 @@ export const makeSelection = (ctx: SelectionCtx) => {
   // anchor tile for shift+click range selection (index into focusKeys)
   let selAnchor: number | null = null;
 
-  const setTileVisual = (key: string, mode: 0 | 1 | 2): void => {
+  const setTileVisual = (key: string, mode: TileVisualMode): void => {
     const refs = tileRefs.get(key);
     if (!refs) return;
-    const cut = mode === 0 && !refs.selected && ctx.isCutKey(key);
-    ctx.setIconState(refs.iconSpec, cut ? 3 : mode);
+    const cut = mode === TileVisual.Rest && !refs.selected && ctx.isCutKey(key);
+    ctx.setIconState(refs.iconSpec, cut ? IconStateIdx.Cut : mode);
     if (!refs.iconSpec) {
       // thumbnail slots have no state rasters — fade the whole slot instead
       try {
@@ -63,12 +65,14 @@ export const makeSelection = (ctx: SelectionCtx) => {
     const labelReal: any = ctx.byId(refs.labelId);
     if (labelReal) {
       try {
-        labelReal.fg = mode === 2 ? ctx.colors().accent : cut ? ctx.colors().sidebarFgMuted : refs.baseFg;
+        labelReal.fg =
+          mode === TileVisual.Selected ? ctx.colors().accent : cut ? ctx.colors().sidebarFgMuted : refs.baseFg;
       } catch {}
     }
     const tileReal: any = ctx.byId(refs.tileId);
     if (tileReal) {
-      const state = mode === 2 ? "selected" : mode === 1 ? "hover" : cut ? "cut" : "rest";
+      const state =
+        mode === TileVisual.Selected ? "selected" : mode === TileVisual.Hover ? "hover" : cut ? "cut" : "rest";
       applySurface(tileReal, tileSurface(ctx.uiStyle(), ctx.colors(), state));
     }
   };
@@ -76,10 +80,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
   const tileStates = (dim: boolean): Array<{ fg: string; bg: string }> => {
     const norm = dim ? ctx.colors().sidebarFgMuted : ctx.colors().sidebarFg;
     return [
-      { fg: norm, bg: ctx.colors().bg },
-      { fg: norm, bg: ctx.colors().hoverBg },
-      { fg: ctx.colors().accent, bg: ctx.colors().accentBg },
-      { fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().bg }, // 3 = cut (pending move)
+      { fg: norm, bg: ctx.colors().bg }, // Rest
+      { fg: norm, bg: ctx.colors().hoverBg }, // Hover
+      { fg: ctx.colors().accent, bg: ctx.colors().accentBg }, // Selected
+      { fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().bg }, // Cut (pending move)
     ];
   };
 
@@ -145,7 +149,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
     tileRefs.forEach((refs, k) => {
       if (refs.selected) {
         refs.selected = false;
-        setTileVisual(k, 0);
+        setTileVisual(k, TileVisual.Rest);
       }
     });
     updateSelectionStatusReal();
@@ -161,7 +165,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
       const r = tileRefs.get(k);
       if (r) {
         r.selected = true;
-        setTileVisual(k, 2);
+        setTileVisual(k, TileVisual.Selected);
       }
     }
   };
@@ -175,7 +179,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
     const refs = tileRefs.get(key);
     if (refs) {
       refs.selected = true;
-      setTileVisual(key, 2);
+      setTileVisual(key, TileVisual.Selected);
     }
     focusIdx = idx;
     void ctx.renderPreview();
@@ -203,7 +207,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
   const selectAll = (): void => {
     tileRefs.forEach((r, k) => {
       r.selected = true;
-      setTileVisual(k, 2);
+      setTileVisual(k, TileVisual.Selected);
     });
     updateSelectionStatusReal();
   };
@@ -211,7 +215,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
   // re-apply resting visuals after a cut/copy/paste so dimming tracks the clipboard
   const refreshCutVisuals = (): void => {
     tileRefs.forEach((refs, key) => {
-      if (!refs.selected) setTileVisual(key, 0);
+      if (!refs.selected) setTileVisual(key, TileVisual.Rest);
     });
   };
 

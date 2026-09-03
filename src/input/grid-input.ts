@@ -6,6 +6,22 @@
 
 export type ClipItem = { path: string; isDir: boolean };
 
+// Mouse-event shape the tile pipeline actually reads (cell coords, button,
+// modifiers). The renderer hands a richer object; handlers only touch these.
+export type TileMouseEvent = {
+  x: number;
+  y: number;
+  button?: number;
+  modifiers?: { ctrl?: boolean; shift?: boolean; alt?: boolean };
+  stopPropagation?(): void;
+};
+
+// Tile highlight states painted by selection.setTileVisual. Names replace the
+// bare 0/1/2 literals at call sites — Rest also covers the cut-dim case (the
+// dim itself is resolved inside setTileVisual via isCutKey).
+export const TileVisual = { Rest: 0, Hover: 1, Selected: 2 } as const;
+export type TileVisualMode = (typeof TileVisual)[keyof typeof TileVisual];
+
 // structural view of a tile ref — the full TileRefs in ./selection satisfies this
 export type GridTileRef = { selected: boolean; isDir: boolean };
 
@@ -33,12 +49,11 @@ export const gridDrag = {
   pendingState: false,
 };
 
-export type GridInputCtx = {
-  byId(id: string): any;
-  termW(): number;
-  termH(): number;
+// --- ctx sections (intersected below; runtime object stays flat) ---
+/** Selection state + visuals (owned by ./selection). */
+export type GridSelectionDeps = {
   tileRefs: Map<string, GridTileRef>;
-  setTileVisual(key: string, mode: 0 | 1 | 2): void;
+  setTileVisual(key: string, mode: TileVisualMode): void;
   updateSelectionStatusReal(): void;
   renderPreview(): void | Promise<void>;
   clearTileSelection(): void;
@@ -47,20 +62,34 @@ export type GridInputCtx = {
   setSelAnchor(v: number | null): void;
   getFocusIdx(): number;
   selPaths(): ClipItem[];
-  dblClickMs(): number;
-  // config knob [ui] drag-threshold-cells (default 1); read live at drag time
-  dragThresholdCells?(): number;
-  navigate(dir: string): void;
-  openFileDefault(p: string): void;
+};
+/** Context menu + inline rename (owned by the menu/rename widgets). */
+export type GridMenuDeps = {
   openContextMenu(x: number, y: number, title: string, entries: GridMenuEntry[]): void;
   fileEntriesFor(key: string, isDir: boolean, x: number, y: number): GridMenuEntry[];
   closeFileMenu(): void;
   renameEditKey(): string | null;
   finishInlineRename(commit: boolean): void;
-  setStatusMsg(msg: string): void;
-  log(msg: string): void;
+};
+/** Navigation + open + drop-into (owned by nav/fileops/chrome wirings). */
+export type GridNavDeps = {
+  navigate(dir: string): void;
+  openFileDefault(p: string): void;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
 };
+
+export type GridInputCtx = {
+  byId(id: string): any;
+  termW(): number;
+  termH(): number;
+  dblClickMs(): number;
+  // config knob [ui] drag-threshold-cells (default 1); read live at drag time
+  dragThresholdCells?(): number;
+  setStatusMsg(msg: string): void;
+  log(msg: string): void;
+} & GridSelectionDeps &
+  GridMenuDeps &
+  GridNavDeps;
 
 export const DRAG_GHOST_ID = "tfm-drag-ghost";
 
@@ -71,7 +100,7 @@ export const commitPendingCtrlToggle = (ctx: GridInputCtx): void => {
   const refs = ctx.tileRefs.get(k);
   if (!refs) return;
   refs.selected = gridDrag.pendingState;
-  ctx.setTileVisual(k, gridDrag.pendingState ? 2 : 0);
+  ctx.setTileVisual(k, gridDrag.pendingState ? TileVisual.Selected : TileVisual.Rest);
   ctx.updateSelectionStatusReal();
   void ctx.renderPreview();
 };
@@ -108,7 +137,7 @@ export const finishDragState = (ctx: GridInputCtx): void => {
   gridDrag.ctrl = false;
   if (gridDrag.dropTarget) {
     const r = ctx.tileRefs.get(gridDrag.dropTarget);
-    if (r && !r.selected) ctx.setTileVisual(gridDrag.dropTarget, 0);
+    if (r && !r.selected) ctx.setTileVisual(gridDrag.dropTarget, TileVisual.Rest);
   }
   gridDrag.dropTarget = null;
   gridDrag.active = false;
@@ -132,7 +161,7 @@ export type BandCtx = {
   byId(id: string): any;
   tileRefs: Map<string, { selected: boolean; tileId: string }>;
   clearTileSelection(): void;
-  setTileVisual(key: string, mode: 0 | 1 | 2): void;
+  setTileVisual(key: string, mode: TileVisualMode): void;
   updateSelectionStatusReal(): void;
   renderPreview(): void | Promise<void>;
   setSelAnchor(v: number | null): void;
@@ -187,7 +216,7 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
       th = t.height;
     if (tx < x1 + 1 && tx + tw > x0 && ty < y1 + 1 && ty + th > y0) {
       refs.selected = true;
-      ctx.setTileVisual(key, 2);
+      ctx.setTileVisual(key, TileVisual.Selected);
     }
   });
   ctx.updateSelectionStatusReal();
@@ -206,141 +235,157 @@ export const cancelBand = (ctx: BandCtx): void => {
 };
 
 export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
-  return (e: { isDir: boolean }, key: string, idx: number) => {
+  return (entry: { isDir: boolean }, key: string, idx: number) => {
     let lastClick = 0;
+
+    const armDragPayload = (ev: TileMouseEvent, keys: ClipItem[], internal: boolean): void => {
+      gridDrag.keys = keys;
+      gridDrag.active = false;
+      gridDrag.startX = ev.x;
+      gridDrag.startY = ev.y;
+      gridDrag.ctrl = internal;
+    };
+
+    // Nautilus behavior: right-click selects the tile unless it's already
+    // part of the live multi-selection, then opens the context menu.
+    const handleRightClick = (ev: TileMouseEvent): boolean => {
+      if (ev.button !== 2) return false;
+      if (!ctx.tileRefs.get(key)?.selected) {
+        ctx.clearTileSelection();
+        const ref = ctx.tileRefs.get(key);
+        if (ref) {
+          ref.selected = true;
+          ctx.setTileVisual(key, TileVisual.Selected);
+        }
+        ctx.updateSelectionStatusReal();
+        void ctx.renderPreview();
+      }
+      ctx.openContextMenu(ev.x, ev.y, "", ctx.fileEntriesFor(key, entry.isDir, ev.x, ev.y));
+      return true;
+    };
+
+    const handleDoubleClick = (): boolean => {
+      const now = Date.now();
+      if (now - lastClick >= ctx.dblClickMs()) {
+        lastClick = now;
+        return false;
+      }
+      if (entry.isDir) ctx.navigate(key);
+      else ctx.openFileDefault(key);
+      lastClick = 0;
+      return true;
+    };
+
+    // ctrl+click (no movement): toggle membership — coexists with ctrl+drag
+    // which still means internal move once the drag threshold trips.
+    // The toggle itself is DEFERRED to mouseup: applying it here unselected
+    // the pressed tile, so ctrl+dragging a selected file moved 0 items and
+    // rubber-band + ctrl+drag dropped the pressed file from the payload.
+    const handleCtrlPress = (ev: TileMouseEvent): boolean => {
+      if (!ev.modifiers?.ctrl) return false;
+      const refs = ctx.tileRefs.get(key);
+      const wasSelected = !!refs?.selected;
+      gridDrag.pendingKey = key;
+      gridDrag.pendingState = !wasSelected;
+      ctx.updateSelectionStatusReal();
+      void ctx.renderPreview();
+      armDragPayload(ev, wasSelected ? ctx.selPaths() : [...ctx.selPaths(), { path: key, isDir: entry.isDir }], true);
+      ctx.log(`ctrl mousedown ${key} wasSel=${wasSelected} provisional=${gridDrag.keys?.length ?? 0}`);
+      return true;
+    };
+
+    // shift+click / alt+click: range select. The anchor persists across
+    // clicks so each alt+click re-extends from the SAME origin; plain and
+    // ctrl clicks are what move/reset it.
+    const handleRangePress = (ev: TileMouseEvent): boolean => {
+      const mods = ev.modifiers ?? {};
+      if (!(mods.shift || mods.alt)) return false;
+      if (ctx.getSelAnchor() === null) ctx.setSelAnchor(ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
+      ctx.selectRange(ctx.getSelAnchor()!, idx);
+      ctx.updateSelectionStatusReal();
+      void ctx.renderPreview();
+      armDragPayload(ev, ctx.selPaths(), false);
+      return true;
+    };
+
+    const handlePlainPress = (ev: TileMouseEvent): void => {
+      const prevSel = ctx.selPaths();
+      const wasSelected = !!ctx.tileRefs.get(key)?.selected;
+      ctx.clearTileSelection();
+      ctx.setSelAnchor(idx);
+      const ref = ctx.tileRefs.get(key);
+      if (ref) {
+        if (wasSelected && prevSel.length > 1) {
+          for (const item of prevSel) {
+            const itemRef = ctx.tileRefs.get(item.path);
+            if (itemRef) {
+              itemRef.selected = true;
+              ctx.setTileVisual(item.path, TileVisual.Selected);
+            }
+          }
+        } else {
+          ref.selected = true;
+          ctx.setTileVisual(key, TileVisual.Selected);
+        }
+      }
+      ctx.updateSelectionStatusReal();
+      void ctx.renderPreview();
+      armDragPayload(ev, wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: entry.isDir }], false);
+      gridDrag.ctrl = !!ev.modifiers?.ctrl;
+      ctx.log(
+        `tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${gridDrag.keys?.length ?? 0} ctrl=${gridDrag.ctrl}`,
+      );
+    };
+
+    // mouseup / drag-end without a drop: commit a deferred ctrl-toggle, then
+    // schedule the shared cleanup (a real drop overwrites the status first).
+    const releasePress = (why: string): void => {
+      if (!gridDrag.keys) return;
+      ctx.log(`tile ${why} -> cleanup scheduled`);
+      commitPendingCtrlToggle(ctx);
+      scheduleDragCleanup(ctx);
+    };
+
+    // first motion past the threshold turns the press into an internal drag:
+    // the click-toggle never happened, so select the payload for real.
+    const tripDrag = (): void => {
+      gridDrag.active = true;
+      gridDrag.pendingKey = null; // it became a drag — the click-toggle never happened
+      // payload tiles must actually be selected or the visual state lies
+      for (const dragged of gridDrag.keys ?? []) {
+        const ref = ctx.tileRefs.get(dragged.path);
+        if (ref && !ref.selected) {
+          ref.selected = true;
+          ctx.setTileVisual(dragged.path, TileVisual.Selected);
+        }
+      }
+      ctx.log(`internal drag start n=${gridDrag.keys?.length ?? 0}`);
+      ctx.setStatusMsg(`Dragging ${gridDrag.keys?.length ?? 0} item${gridDrag.keys?.length === 1 ? "" : "s"}…`);
+    };
+
     return {
-      onMouseDown: (ev: any) => {
+      onMouseDown: (ev: TileMouseEvent) => {
         try {
           ev.stopPropagation?.();
         } catch {}
         ctx.closeFileMenu();
         const rk = ctx.renameEditKey();
         if (rk && rk !== key) ctx.finishInlineRename(false);
-        if (ev.button === 2) {
-          // Nautilus behavior: right-click selects the tile unless it's already
-          // part of the live multi-selection
-          if (!ctx.tileRefs.get(key)?.selected) {
-            ctx.clearTileSelection();
-            const r = ctx.tileRefs.get(key);
-            if (r) {
-              r.selected = true;
-              ctx.setTileVisual(key, 2);
-            }
-            ctx.updateSelectionStatusReal();
-            void ctx.renderPreview();
-          }
-          ctx.openContextMenu(ev.x, ev.y, "", ctx.fileEntriesFor(key, e.isDir, ev.x, ev.y));
-          return;
-        }
+        if (handleRightClick(ev)) return;
         // the ctrl modifier decides internal vs external for drags
         // (see the OSC 72 offer handler)
-        const now = Date.now();
-        if (now - lastClick < ctx.dblClickMs()) {
-          if (e.isDir) ctx.navigate(key);
-          else ctx.openFileDefault(key);
-          lastClick = 0;
-          return;
-        }
-        lastClick = now;
-        const mods = ev.modifiers ?? {};
-
-        // ctrl+click (no movement): toggle membership — coexists with ctrl+drag
-        // which still means internal move once the drag threshold trips.
-        // The toggle itself is DEFERRED to mouseup: applying it here unselected
-        // the pressed tile, so ctrl+dragging a selected file moved 0 items and
-        // rubber-band + ctrl+drag dropped the pressed file from the payload.
-        if (mods.ctrl) {
-          const refs = ctx.tileRefs.get(key);
-          const wasSel = !!refs?.selected;
-          gridDrag.pendingKey = key;
-          gridDrag.pendingState = !wasSel;
-          ctx.updateSelectionStatusReal();
-          void ctx.renderPreview();
-          gridDrag.keys = wasSel ? ctx.selPaths() : [...ctx.selPaths(), { path: key, isDir: e.isDir }];
-          ctx.log(`ctrl mousedown ${key} wasSel=${wasSel} provisional=${gridDrag.keys.length}`);
-          gridDrag.active = false;
-          gridDrag.startX = ev.x;
-          gridDrag.startY = ev.y;
-          gridDrag.ctrl = true;
-          return;
-        }
-
-        // shift+click / alt+click: range select. The anchor persists across
-        // clicks so each alt+click re-extends from the SAME origin; plain and
-        // ctrl clicks are what move/reset it.
-        if (mods.shift || mods.alt) {
-          if (ctx.getSelAnchor() === null) ctx.setSelAnchor(ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
-          ctx.selectRange(ctx.getSelAnchor()!, idx);
-          ctx.updateSelectionStatusReal();
-          void ctx.renderPreview();
-          gridDrag.keys = ctx.selPaths();
-          gridDrag.active = false;
-          gridDrag.startX = ev.x;
-          gridDrag.startY = ev.y;
-          gridDrag.ctrl = false;
-          return;
-        }
-
-        const prevSel = ctx.selPaths();
-        const wasSelected = !!ctx.tileRefs.get(key)?.selected;
-        ctx.clearTileSelection();
-        ctx.setSelAnchor(idx);
-        const refs = ctx.tileRefs.get(key);
-        if (refs) {
-          if (wasSelected && prevSel.length > 1) {
-            for (const s of prevSel) {
-              const r2 = ctx.tileRefs.get(s.path);
-              if (r2) {
-                r2.selected = true;
-                ctx.setTileVisual(s.path, 2);
-              }
-            }
-          } else {
-            refs.selected = true;
-            ctx.setTileVisual(key, 2);
-          }
-        }
-        ctx.updateSelectionStatusReal();
-        void ctx.renderPreview();
-        gridDrag.keys = wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: e.isDir }];
-        gridDrag.active = false;
-        gridDrag.startX = ev.x;
-        gridDrag.startY = ev.y;
-        gridDrag.ctrl = !!ev.modifiers?.ctrl;
-        ctx.log(
-          `tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${gridDrag.keys.length} ctrl=${gridDrag.ctrl}`,
-        );
+        if (handleDoubleClick()) return;
+        if (handleCtrlPress(ev)) return;
+        if (handleRangePress(ev)) return;
+        handlePlainPress(ev);
       },
-      onMouseUp: () => {
-        if (gridDrag.keys) {
-          ctx.log("tile mouseup -> cleanup scheduled");
-          commitPendingCtrlToggle(ctx);
-          scheduleDragCleanup(ctx);
-        }
-      },
-      onMouseDragEnd: () => {
-        if (gridDrag.keys) {
-          ctx.log("tile dragend -> cleanup scheduled");
-          commitPendingCtrlToggle(ctx);
-          scheduleDragCleanup(ctx);
-        }
-      },
-      onMouseDrag: (ev: any) => {
+      onMouseUp: () => releasePress("mouseup"),
+      onMouseDragEnd: () => releasePress("dragend"),
+      onMouseDrag: (ev: TileMouseEvent) => {
         if (!gridDrag.keys) return;
         const thr = ctx.dragThresholdCells?.() ?? 1;
         if (!gridDrag.active && (Math.abs(ev.x - gridDrag.startX) > thr || Math.abs(ev.y - gridDrag.startY) > thr)) {
-          gridDrag.active = true;
-          gridDrag.pendingKey = null; // it became a drag — the click-toggle never happened
-          // payload tiles must actually be selected or the visual state lies
-          for (const k of gridDrag.keys) {
-            const r = ctx.tileRefs.get(k.path);
-            if (r && !r.selected) {
-              r.selected = true;
-              ctx.setTileVisual(k.path, 2);
-            }
-          }
-          ctx.log(`internal drag start n=${gridDrag.keys.length}`);
-          ctx.setStatusMsg(`Dragging ${gridDrag.keys.length} item${gridDrag.keys.length === 1 ? "" : "s"}…`);
+          tripDrag();
         }
         if (gridDrag.active) updateDragGhost(ctx, ev.x, ev.y);
       },
@@ -348,36 +393,36 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         const keys = gridDrag.keys;
         const dest = gridDrag.dropTarget;
         ctx.log(
-          `tile drop keys=${keys?.length ?? -1}[${keys?.map((k) => k.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${e.isDir}`,
+          `tile drop keys=${keys?.length ?? -1}[${keys?.map((item) => item.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${entry.isDir}`,
         );
         finishDragState(ctx);
-        if (keys && dest && e.isDir)
+        if (keys && dest && entry.isDir)
           void ctx.moveInto(
             dest,
-            keys.filter((k) => k.path !== dest),
+            keys.filter((item) => item.path !== dest),
           );
       },
       onMouseOver: () => {
         if (gridDrag.active) {
-          const draggingSelf = !!gridDrag.keys?.some((k) => k.path === key);
-          if (e.isDir && !draggingSelf) {
+          const draggingSelf = !!gridDrag.keys?.some((item) => item.path === key);
+          if (entry.isDir && !draggingSelf) {
             ctx.log(`hover target set ${key}`);
             gridDrag.dropTarget = key;
-            ctx.setTileVisual(key, 2);
+            ctx.setTileVisual(key, TileVisual.Selected);
           }
           return;
         }
         const refs = ctx.tileRefs.get(key);
-        if (!refs?.selected) ctx.setTileVisual(key, 1);
+        if (!refs?.selected) ctx.setTileVisual(key, TileVisual.Hover);
       },
       onMouseOut: () => {
         if (gridDrag.active && gridDrag.dropTarget === key) {
           gridDrag.dropTarget = null;
-          ctx.setTileVisual(key, 0);
+          ctx.setTileVisual(key, TileVisual.Rest);
           return;
         }
         const refs = ctx.tileRefs.get(key);
-        if (!refs?.selected) ctx.setTileVisual(key, 0);
+        if (!refs?.selected) ctx.setTileVisual(key, TileVisual.Rest);
       },
     };
   };

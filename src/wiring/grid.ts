@@ -75,6 +75,7 @@ export const wireGrid = (deps: {
     byId,
     termW: () => chrome.renderer.terminalWidth,
     termH: () => chrome.renderer.terminalHeight,
+    // --- selection deps (GridSelectionDeps) ---
     tileRefs: selection.tileRefs,
     setTileVisual: selection.setTileVisual,
     updateSelectionStatusReal: selection.updateSelectionStatusReal,
@@ -89,8 +90,11 @@ export const wireGrid = (deps: {
     selPaths: selection.selPaths,
     dblClickMs: () => core.config.ui.doubleClickMs,
     dragThresholdCells: () => core.config.ui.dragThresholdCells,
+    // --- nav deps (GridNavDeps) ---
     navigate: nav.navigate,
     openFileDefault: chrome.openFileDefault,
+    moveInto: fileops.fileops.moveInto,
+    // --- menu deps (GridMenuDeps) ---
     openContextMenu: (x: number, y: number, title: string, entries: GridMenuEntry[]) =>
       chrome.menu.openContextMenu(x, y, title, entries as ListEntry[]),
     fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): GridMenuEntry[] =>
@@ -98,9 +102,9 @@ export const wireGrid = (deps: {
     closeFileMenu: chrome.menu.closeFileMenu,
     renameEditKey: rename.renameEditKey,
     finishInlineRename: rename.finishInlineRename,
+    // --- host ---
     setStatusMsg: nav.setStatusMsg,
     log: (msg: string) => dlog(msg),
-    moveInto: fileops.fileops.moveInto,
   };
   const finishDragCtx = () => finishDragState(gridCtx);
 

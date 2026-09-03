@@ -50,6 +50,7 @@ const baseCtx = () => {
     },
     cwd: () => "/home/u",
     virtualCwd: () => false,
+    inTrashView: () => false,
     home: "/home/u",
     setStatusMsg: (m) => status.push(m),
     notify: (m, t) => notes.push(`${t}: ${m}`),
@@ -151,6 +152,18 @@ describe("incoming drop", () => {
     await Bun.sleep(10);
     expect(ctx.runTransfers).toEqual([]);
     expect(status).toContain("Drops land in a real folder");
+  });
+
+  test("trash view trashes external drops (no raw copy without trashinfo)", async () => {
+    const { ctx, feed } = baseCtx();
+    ctx.inTrashView = () => true;
+    makeDnd72(ctx);
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1", b64("file:///home/u/a.txt"));
+    feed("t=r:x=1");
+    await Bun.sleep(10);
+    expect(ctx.runTransfers).toEqual([]);
+    expect(ctx.trashed).toEqual([[`/home/u/a.txt`]]);
   });
 });
 

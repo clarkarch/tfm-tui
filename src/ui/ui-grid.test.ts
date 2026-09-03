@@ -212,7 +212,7 @@ describe("renderGrid (grid tiles)", () => {
     iconStateCalls.length = 0;
     await renderGrid();
     await t.renderOnce();
-    // setTileVisual(mode 0) on a cut key routes icon state 3 (cut)
+    // setTileVisual(Rest) on a cut key routes icon state 3 (cut)
     expect(iconStateCalls.some((c) => c.idx === 3)).toBe(true);
     cutKeys.clear();
   });

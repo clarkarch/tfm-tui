@@ -143,9 +143,10 @@ export const wireChrome = async (deps: {
   renderer.setBackgroundColor(core.colors.bg); // opencode-style: global bg lives on the renderer, not per-box
 
   // --- Notifications — its consumers (recent-open, undo, fileops, terminal,
-  // trashops, settings, dnd72) take `notify` directly; its ctx deps are all
-  // early (renderer/byId/colors) ---
-  const { notify, toastCount } = makeNotify({
+  // trashops, settings, dnd72) take `notify` directly; the sticky transfer
+  // progress toast lives in the same stack via notifySticky, so every
+  // survivor reflows uniformly and two toasts never share a slot. ---
+  const { notify, notifySticky } = makeNotify({
     rootAdd: (node) => renderer.root.add(node),
     remove: (node) => {
       const p: any = node.parent ?? renderer.root;
@@ -188,7 +189,7 @@ export const wireChrome = async (deps: {
     chrome,
     toolbar,
     notify,
-    toastCount,
+    notifySticky,
     openFileDefault,
     dialogs,
   };

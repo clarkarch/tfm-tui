@@ -53,7 +53,7 @@ export type ChromeWiring = {
   chrome: ReturnType<typeof makeChrome>;
   toolbar: ReturnType<typeof makeToolbar>;
   notify: ReturnType<typeof makeNotify>["notify"];
-  toastCount: ReturnType<typeof makeNotify>["toastCount"];
+  notifySticky: ReturnType<typeof makeNotify>["notifySticky"];
   openFileDefault: ReturnType<typeof makeRecentOpen>["openFileDefault"];
   dialogs: ReturnType<typeof makeDialogs>;
 };

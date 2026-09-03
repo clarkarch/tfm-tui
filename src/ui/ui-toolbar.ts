@@ -11,6 +11,7 @@ import { applySurface, btnSurface } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import type { IconSpec, IconState } from "./ui-slots";
+import { navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 
 export type MakeIconSlotFn = (
@@ -99,7 +100,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   const refreshNav = () => {
     const setBtn = (id: string, spec: IconSpec | undefined, on: boolean) => {
       if (!spec) return;
-      setIconState(spec, (on ? 0 : 1) + (navHover[id] ? 2 : 0));
+      setIconState(spec, navIconState(on, !!navHover[id]));
       navBtnBg(id);
     };
     setBtn("tfm-nav-back", navSpecs["tfm-nav-back"], ctx.canBack());
@@ -225,7 +226,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           ];
       const iconSlot = c.icon ? makeIconSlot(c.icon, iconStates, 1) : null;
       const paintHover = (on: boolean) => {
-        if (iconSlot && !current) setIconState(iconSlot.spec, on ? 1 : 0);
+        if (iconSlot && !current) setIconState(iconSlot.spec, toggleIconState(on, false));
         try {
           const n: any = ctx.byId(`tfm-crumb-${i}`);
           if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on && !current));
@@ -264,7 +265,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     ];
     const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
     const paint = (on: boolean) => {
-      setIconState(slot.spec, on ? 1 : 0);
+      setIconState(slot.spec, toggleIconState(on, false));
       try {
         const n: any = ctx.byId(id);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on));

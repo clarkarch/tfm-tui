@@ -42,6 +42,7 @@ export type FileOpsCtx = {
   notify(msg: string, title?: string): void;
   home: string;
   // cut-tile dimming repaint (tile visuals live in ./selection)
+  // cut-tile dimming repaint (tile visuals live in ./selection)
   refreshCutVisuals(): void;
   // injectable for tests — real impl lstats st.dev (fsutil)
   crossDevice?(a: string, b: string): boolean;
@@ -51,6 +52,17 @@ export type FileOpsCtx = {
 
 export const makeFileOps = (ctx: FileOpsCtx) => {
   const { prog, conflict } = ctx;
+
+  // Trash/files (or anything under it) is not a paste/move target: files
+  // landing there without .trashinfo are unrestorable. Trashing goes through
+  // trashPaths; drag-restore onto real places stays allowed (dest-based, not
+  // view-based, so it never blocks legitimate outs).
+  const trashFilesRoot = (): string => path.join(trashDir(), "files");
+  const isInTrashFiles = (p: string): boolean => {
+    const root = path.resolve(trashFilesRoot());
+    const target = path.resolve(p);
+    return target === root || target.startsWith(root + path.sep);
+  };
 
   const scanTreeWired = (root: string): Promise<{ files: number; bytes: number }> => scanTree(root);
 
@@ -338,6 +350,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   };
 
   const pasteSmart = (dest: string): void => {
+    if (isInTrashFiles(dest)) {
+      ctx.setStatusMsg("Can't paste into Trash");
+      return;
+    }
     if (clipboard?.items.length) {
       ctx.log(`paste: internal clipboard (${clipboard.items.length} items)`);
       void doPaste(dest);
@@ -349,6 +365,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   };
 
   const moveInto = async (destDir: string, items: ClipItem[]): Promise<void> => {
+    // trashing goes through trashPaths (trashinfo metadata) — a raw move
+    // into Trash/files orphans the .trashinfo OriginalPath chain
+    if (isInTrashFiles(destDir)) {
+      ctx.setStatusMsg("Can't move items into Trash");
+      return;
+    }
     const srcs = items
       .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
       .map((it) => it.path);

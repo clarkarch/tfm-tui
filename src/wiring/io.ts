@@ -147,6 +147,7 @@ export const wireDnd = (deps: {
     runTransfer: fileops.fileops.runTransfer,
     cwd: () => core.state.cwd,
     virtualCwd: core.isVirtualCwd,
+    inTrashView: core.inTrashView,
     home: core.home,
     setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,

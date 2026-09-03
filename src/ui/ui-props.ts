@@ -12,6 +12,7 @@ import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../f
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
 import type { ListEntry } from "./ui-menu";
 import { FLOAT_Z, type Floats } from "./floats";
+import { IconStateIdx, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
@@ -126,7 +127,7 @@ export const makeProps = (ctx: PropsCtx) => {
       { fg: colors.accent, bg: colors.hoverBg },
     ];
     const propsTogglePaint = (btnId: string, spec: any, on: boolean, hover: boolean) => {
-      ctx.setIconState(spec, (on ? 1 : 0) + (hover ? 2 : 0));
+      ctx.setIconState(spec, toggleIconState(on, hover));
       try {
         const n: any = ctx.byId(btnId);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), colors, hover, colors.sidebarBg));
@@ -144,7 +145,7 @@ export const makeProps = (ctx: PropsCtx) => {
     });
     let starHover = false;
     let starred = readStarredList().includes(targetPath);
-    if (starred) ctx.setIconState(starSlot.spec, 1);
+    if (starred) ctx.setIconState(starSlot.spec, IconStateIdx.Active);
     void execFileP("gio", ["info", "-a", "metadata::starred", targetPath])
       .then(({ stdout }) => {
         const m = stdout.match(/metadata::starred:\s*(\S+)/);
@@ -153,14 +154,14 @@ export const makeProps = (ctx: PropsCtx) => {
           starred = true;
           starredRegistryAdd(targetPath); // adopt stars made outside tfm
         }
-        ctx.setIconState(starSlot.spec, (starred ? 1 : 0) + (starHover ? 2 : 0));
+        ctx.setIconState(starSlot.spec, toggleIconState(starred, starHover));
       })
       .catch(() => {});
     // folders can be bookmarked (gtk bookmarks → sidebar); files can't.
     // created unconditionally like starSlot — just not rendered for files
     let bmHover = false;
     let bookmarked = isBookmarked(targetPath);
-    const bmSlot = ctx.makeIconSlot("bookmark", propsToggleStates(), 1, bookmarked ? 1 : 0, () => {
+    const bmSlot = ctx.makeIconSlot("bookmark", propsToggleStates(), 1, toggleIconState(bookmarked, false), () => {
       bookmarked = !bookmarked;
       propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, bmHover);
       void setBookmarked(targetPath, bookmarked)

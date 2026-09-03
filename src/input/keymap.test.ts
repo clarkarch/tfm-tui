@@ -113,6 +113,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     mountDevice: (d) => calls.push(`mount:${d}`),
     navigate: (dir) => calls.push(`navigate:${dir}`),
     openFileDefault: (p) => calls.push(`open:${p}`),
+    home: "/home/u",
     getFileMenuState: () => null,
     closeFileMenu: rec("fmenu:close"),
     renderFileMenu: rec("fmenu:render"),
@@ -406,6 +407,12 @@ describe("grid keys", () => {
     expect(root.calls).toEqual([]);
   });
 
+  test("backspace in a virtual cwd goes home (URIs have no fs parent)", () => {
+    const h = makeHarness({ isVirtualCwd: () => true, state: { cwd: "recent://", showHidden: false } as any });
+    h.key("backspace");
+    expect(h.calls).toEqual(["navigate:/home/u"]);
+  });
+
   test("plain typing starts type-to-search; shifted/ctrl keys do not", () => {
     const h = makeHarness();
     h.key("x");
@@ -506,6 +513,13 @@ describe("file operation keys", () => {
 
   test("ctrl+v in a virtual cwd is swallowed", () => {
     const h = makeHarness({ isVirtualCwd: () => true });
+    h.key("a", { ctrl: true });
+    h.key("v", { ctrl: true });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("ctrl+v in trash view is swallowed (no trashinfo on paste)", () => {
+    const h = makeHarness({ inTrashView: () => true });
     h.key("a", { ctrl: true });
     h.key("v", { ctrl: true });
     expect(h.calls).toEqual([]);

@@ -23,7 +23,7 @@ import {
   startDropFrame,
   uriListPayload,
 } from "./osc72";
-import { gridDrag, type ClipItem, type GridTileRef } from "../input/grid-input";
+import { gridDrag, TileVisual, type ClipItem, type GridTileRef, type TileVisualMode } from "../input/grid-input";
 
 // "]72;<meta>;<payload>" → { meta, payload } — ST/BEL/8-bit terminators are
 // stripped; null when the sequence isn't OSC 72
@@ -46,7 +46,7 @@ export type Dnd72Ctx = {
   // dragPaths lets the hit filter exclude the tiles being dragged
   hitTargetAt(x: number, y: number, dragPaths: string[] | null): DropTarget | null;
   tileRefs: Map<string, GridTileRef>;
-  setTileVisual(key: string, mode: 0 | 1 | 2): void;
+  setTileVisual(key: string, mode: TileVisualMode): void;
   // sidebar place highlight while a self-drop hovers it
   hoverPlace(path: string): void;
   clearHoverPlace(): void;
@@ -59,6 +59,9 @@ export type Dnd72Ctx = {
   runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void>;
   cwd(): string;
   virtualCwd(): boolean;
+  // trash view — external drops land in Trash: route them through trashPaths
+  // (trashinfo metadata), never a raw copy into Trash/files
+  inTrashView(): boolean;
   home: string;
   setStatusMsg(msg: string): void;
   notify(msg: string, title?: string): void;
@@ -92,7 +95,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   const clearSelfDropHighlight = (): void => {
     if (selfTargetKey) {
       const r = ctx.tileRefs.get(selfTargetKey);
-      if (r && !r.selected) ctx.setTileVisual(selfTargetKey, 0);
+      if (r && !r.selected) ctx.setTileVisual(selfTargetKey, TileVisual.Rest);
       selfTargetKey = null;
     }
   };
@@ -138,7 +141,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     }
     if (target.kind === "folder") {
       selfTargetKey = target.path;
-      ctx.setTileVisual(target.path, 2);
+      ctx.setTileVisual(target.path, TileVisual.Selected);
     } else {
       ctx.hoverPlace(target.path);
     }
@@ -199,7 +202,13 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     // some sources deliver bare paths (text/plain) instead of file:// URIs
     if (!paths.length) paths = text.split(/\r?\n/).filter((l) => l.startsWith("/"));
     ctx.log(`paths: ${paths.join(" | ") || "(none)"}`);
-    if (paths.length) await ctx.runTransfer("copy", ctx.cwd(), paths, "drop");
+    if (!paths.length) return;
+    // dropping onto Trash trashes (same as the trash-place self-drop route)
+    if (ctx.inTrashView()) {
+      void ctx.trashPaths(paths);
+      return;
+    }
+    await ctx.runTransfer("copy", ctx.cwd(), paths, "drop");
   };
 
   const handleOsc72 = (meta: string, payload: string): void => {

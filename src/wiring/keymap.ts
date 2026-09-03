@@ -55,6 +55,7 @@ export const wireKeymap = (deps: {
     mountDevice: chrome.chrome.mountDevice,
     navigate: nav.navigate,
     openFileDefault: chrome.openFileDefault,
+    home: core.home,
     getFileMenuState: chrome.menu.fileMenuState,
     closeFileMenu: chrome.menu.closeFileMenu,
     renderFileMenu: chrome.menu.renderFileMenu,

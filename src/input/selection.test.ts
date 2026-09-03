@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeSelection, type SelTileRef, type SelectionCtx } from "./selection";
+import { TileVisual } from "./grid-input";
 
 const COLORS: any = {
   bg: "#111111",
@@ -187,14 +188,14 @@ describe("selectRange / selectAll / clearTileSelection", () => {
 describe("setTileVisual", () => {
   test("unknown tile key is a no-op", () => {
     const h = makeHarness();
-    expect(() => h.sel.setTileVisual("ghost", 2)).not.toThrow();
+    expect(() => h.sel.setTileVisual("ghost", TileVisual.Selected)).not.toThrow();
   });
 
-  test("mode 0 over a cut key paints the cut state (dimmed slot, muted label)", () => {
+  test("Rest over a cut key paints the cut state (dimmed slot, muted label)", () => {
     const h = makeHarness();
     h.addTile("thumb.png", false, false); // thumbnail slot: no iconSpec
     h.cutKeys.add("thumb.png");
-    h.sel.setTileVisual("thumb.png", 0);
+    h.sel.setTileVisual("thumb.png", TileVisual.Rest);
     // setIconState guards !spec (ui-slots.ts) — thumbnails signal cut via opacity
     expect(h.iconEvents).toEqual([]);
     expect(h.nodes.get("slot:thumb.png").opacity).toBe(0.45);
@@ -204,7 +205,7 @@ describe("setTileVisual", () => {
   test("selected mode tints the label accent and fills the tile", () => {
     const h = makeHarness();
     h.addTile("a");
-    h.sel.setTileVisual("a", 2);
+    h.sel.setTileVisual("a", TileVisual.Selected);
     expect(h.nodes.get("label:a").fg).toBe(COLORS.accent);
     expect(h.nodes.get("tile:a").backgroundColor).toBe(COLORS.accentBg);
   });

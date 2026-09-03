@@ -1,8 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeFileOps, type FileOpsCtx } from "./fileops";
+import { trashDir } from "./fsutil";
 
 // runTransfer is the only path copies/moves take — these tests pin the wiring:
 // same-fs move = plain rename (no toast), cross-device move = copy engine +
@@ -14,6 +15,18 @@ import { makeFileOps, type FileOpsCtx } from "./fileops";
 const mktmp = (prefix: string): string => mkdtempSync(path.join(os.tmpdir(), prefix));
 const ROOT = mktmp("tfm-fileops-");
 const HOME = ROOT;
+
+// trash-path assertions sandbox $XDG_DATA_HOME (same pattern as
+// trashops.test.ts) so no real Trash dir is ever touched
+const oldDataHome = process.env.XDG_DATA_HOME;
+const XDG_ROOT = mktmp("tfm-fileops-xdg-");
+beforeAll(() => {
+  process.env.XDG_DATA_HOME = path.join(XDG_ROOT, "data");
+});
+afterAll(() => {
+  if (oldDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = oldDataHome;
+});
 
 afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
@@ -150,5 +163,33 @@ describe("runTransfer: cross-device move", () => {
     expect(readFileSync(path.join(destDir, "copy-src", "f1.txt"), "utf8")).toBe("content-1");
     expect(existsSync(path.join(src, "f1.txt"))).toBe(true);
     expect(h.calls).toContain("toast:show");
+  });
+});
+
+describe("trash guards", () => {
+  test("pasteSmart into Trash/files refuses with a status, moves nothing", () => {
+    // dest-based (not view-based): pasting onto a real place while viewing
+    // trash stays allowed — only the trash dir itself is refused, since
+    // files landing there get no .trashinfo and become unrestorable
+    const h = makeHarness();
+    const src = path.join(ROOT, "paste-guard-src.txt");
+    W(src, "keep me");
+    h.ops.setClipboard("copy", [{ path: src, isDir: false }]);
+    h.ops.pasteSmart(path.join(trashDir(), "files"));
+    expect(h.calls).toContain("status:Can't paste into Trash");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    expect(existsSync(src)).toBe(true);
+  });
+
+  test("moveInto a trash dir refuses with a status, moves nothing", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "move-guard-src.txt");
+    W(src, "keep me");
+    const trashFiles = path.join(trashDir(), "files");
+    await h.ops.moveInto(trashFiles, [{ path: src, isDir: false }]);
+    expect(h.calls).toContain("status:Can't move items into Trash");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    expect(existsSync(src)).toBe(true);
+    expect(existsSync(path.join(trashFiles, "move-guard-src.txt"))).toBe(false);
   });
 });

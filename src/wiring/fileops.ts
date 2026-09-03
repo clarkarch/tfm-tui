@@ -42,22 +42,17 @@ export const wireFileops = (deps: {
     floats: core.floats,
   });
 
-  // --- live copy progress: floating toast (top-right) with pause/cancel ---
+  // --- live copy progress: floating toast (top-right) with pause/cancel.
+  // The shell lives in ./notify (single stack via notifySticky) — this only
+  // passes the icon-slot machinery the buttons need. ---
   const progress = makeProgress({
     byId,
-    rootAdd: (node) => chrome.renderer.root.add(node),
-    remove: (node) => {
-      try {
-        (node.parent ?? chrome.renderer.root).remove(node);
-      } catch {}
-    },
     stripSelectable,
-    termW: () => chrome.renderer.terminalWidth,
-    toastCount: chrome.toastCount,
     colors: () => core.colors,
     makeIconSlot,
     setIconState,
     drainIconQueue,
+    notifySticky: (children, opts) => chrome.notifySticky(children, opts),
   });
 
   // --- File operations: runTransfer/performRename/paste/clipboard

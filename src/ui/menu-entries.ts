@@ -69,14 +69,18 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           ctx.navigate(target);
         },
       });
-      entries.push({
-        icon: "terminal",
-        label: "Open Terminal Here",
-        action: () => {
-          ctx.closeFileMenu();
-          ctx.openTerminalHere(target);
-        },
-      });
+      // terminal + paste need a real fs dir: virtual URIs are not shell cwds
+      // (openTerminalHere only falls back to home on its no-arg path)
+      if (!place.scheme) {
+        entries.push({
+          icon: "terminal",
+          label: "Open Terminal Here",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.openTerminalHere(target);
+          },
+        });
+      }
       // paste into real places (not virtual views, not the trash)
       if (!place.scheme && target !== trashFiles()) {
         entries.push({
@@ -277,6 +281,10 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
   const emptyAreaEntries = (_x: number, _y: number): ListEntry[] => {
     const entries: ListEntry[] = [];
     if (ctx.inTrashView()) {
+      // Trash is not a workspace: New File/Folder silently no-op here
+      // (startInlineCreate guards trash) and pasting would land files with
+      // no .trashinfo — so unlike normal dirs it gets Empty Trash + select
+      // only, not the create/paste/terminal set.
       entries.push({
         icon: "trash-can",
         label: "Empty Trash",
@@ -285,6 +293,8 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           ctx.confirmEmptyTrash();
         },
       });
+      entries.push(selectAllEntry());
+      return entries;
     }
     if (isVirtualUri(ctx.cwd())) {
       // read-only virtual views: nothing to paste or create here
