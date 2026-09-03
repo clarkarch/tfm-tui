@@ -7,13 +7,14 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { UndoUnit } from "../app/undo";
+import type { Theme } from "../config/config";
 
 export type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder" };
 
 export type RenameCtx = {
   renderer(): any;
   byId(id: string): any;
-  colors(): Record<string, any>;
+  colors(): Theme;
   tileW(): number;
   tileRefs: Map<string, { tileId: string; labelId: string; baseFg: string }>;
   stripSelectable(): void;
@@ -123,7 +124,7 @@ export const makeRename = (ctx: RenameCtx) => {
     const stale = ctx.byId(inputId);
     if (stale) {
       try {
-        (stale as any).parent?.remove(stale);
+        stale.parent?.remove(stale);
       } catch {}
     }
     const input: any = new InputRenderable(ctx.renderer(), {

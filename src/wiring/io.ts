@@ -12,7 +12,7 @@ import { makeResizeWatcher } from "../app/resize";
 import { waitForResolution } from "../ui/ui-lookup";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces } from "../fs/places";
-import { startMemHygiene } from "../app/mem-hygiene";
+import { startMemHygiene, type AllocatorStats } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame } from "../ui/ui-term";
 import { configPath } from "../config/config";
 import { debugLog, dlog, isDebug, DEBUG_LOG } from "../app/log";
@@ -20,6 +20,9 @@ import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
 export type WatcherWiring = ReturnType<typeof makeCwdWatcher>;
 export type DndWiring = ReturnType<typeof makeDnd72>;
+
+// narrowed shape of CliRenderer's private native binding — diagnostics only
+type NativeStatsReach = { lib?: { getAllocatorStats?: () => AllocatorStats | null } };
 
 // --- Live directory watching: external changes refresh the grid.
 // Watch lifecycle lives in ./watcher (tested); the wiring supplies the live
@@ -87,11 +90,12 @@ export const wireBoot = (deps: {
     launchToast: () => chrome.notify(`launched in ${Math.round(performance.now() - bootStart)} ms`),
     startHygiene: () =>
       startMemHygiene({
-        // the private allocator stats reach is the only renderer-coupled part,
-        // so it's injected here (module: ./mem-hygiene)
+        // CliRenderer.lib is private with no public stats accessor — this
+        // diagnostics-only reach stays narrowed to the one method we call
+        // (see the seam note in ./mem-hygiene) instead of `any`
         allocatorStats: () => {
           try {
-            return (chrome.renderer as any).lib?.getAllocatorStats?.() ?? null;
+            return (chrome.renderer as unknown as NativeStatsReach).lib?.getAllocatorStats?.() ?? null;
           } catch {
             return null;
           }
@@ -128,7 +132,7 @@ export const wireDnd = (deps: {
     // supplies the renderer-coupled hitTest + registry and the live place refs
     hitTargetAt: makeHitTargetAt({
       hitTest: (x, y) => chrome.renderer.hitTest(x, y),
-      byNumber: (num) => (Renderable as any).renderablesByNumber?.get(num),
+      byNumber: (num) => Renderable.renderablesByNumber.get(num),
       placesHost: () => chrome.chrome.placesHost,
       tileRefs: gridFoundation.selection.tileRefs,
     }),

@@ -16,7 +16,7 @@ import { debounced } from "./uiutil";
 export type RethemeCtx = {
   // live object refs — applyConfig mutates them in place
   config: Config;
-  colors: Theme & Record<string, any>;
+  colors: Theme;
   setOnId(id: string, fn: (n: any) => void): void;
   byId(id: string): any;
   renderer(): any;

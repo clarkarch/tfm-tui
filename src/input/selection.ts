@@ -24,7 +24,7 @@ export type SelTileRef = {
 };
 
 export type SelectionCtx = {
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   uiStyle(): UiStyle;
   byId(id: string): any;
   setIconState(spec: any, mode: number): void;

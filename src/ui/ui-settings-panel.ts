@@ -10,6 +10,7 @@
 import { Box, Text } from "@opentui/core";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { IconState, IconSpec } from "./ui-slots";
+import type { Theme } from "../config/config";
 
 export type SettingsPanelState = {
   catIdx: number;
@@ -72,12 +73,7 @@ export const ensureVisible = (st: SettingsPanelState, vis: number): void => {
   if (st.scrollOff < 0) st.scrollOff = 0;
 };
 
-export const renderSettingsPanel = (
-  c: Record<string, any>,
-  panel: any,
-  st: SettingsPanelState,
-  h: SettingsPanelHooks,
-) => {
+export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState, h: SettingsPanelHooks) => {
   const cats = h.groups();
   ensureVisible(st, h.visRows());
   const vis = h.visRows();
@@ -196,13 +192,7 @@ export const renderSettingsPanel = (
   );
 };
 
-const renderRowPane = (
-  c: Record<string, any>,
-  rows: SettingRow[],
-  vis: number,
-  st: SettingsPanelState,
-  h: SettingsPanelHooks,
-) => {
+const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPanelState, h: SettingsPanelHooks) => {
   ensureVisible(st, vis);
   const canScroll = rows.length > vis;
   const end = Math.min(rows.length, st.scrollOff + vis);

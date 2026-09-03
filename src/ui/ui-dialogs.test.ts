@@ -71,7 +71,7 @@ describe("openDialog chokepoint", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);
     const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, floats });
-    const _p = conflict.promptConflict("/a/b.txt", 0);
+    void conflict.promptConflict("/a/b.txt", 0);
     // a props dialog opens afterwards — floats clears the desktop, the
     // pending prompt must not hang forever
     floats.open("props", () => {});

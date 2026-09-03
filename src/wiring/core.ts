@@ -34,8 +34,8 @@ export const wireCore = (deps: {
   const config = loadConfig();
 
   // --- Color palette (theme from config; transparent-bg nudge lives in ./color) ---
-  const colors = deriveColors(config.theme, config.ui.transparentBg) as Theme & Record<string, string>;
-  const themeGet = (): Theme & Record<string, any> => colors;
+  const colors = deriveColors(config.theme, config.ui.transparentBg);
+  const themeGet = (): Theme => colors;
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---
   const geometry = {

@@ -19,7 +19,7 @@ export type TermCtx = {
   renderer: any;
   byId(id: string): any;
   uiStyle(): "solid" | "outline";
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   sw(): number;
   escHintBtn(id: string, onClose: () => void): any;
   stripSelectable(): void;
@@ -34,6 +34,27 @@ export type TermCtx = {
 };
 
 export const TERM_H = 12;
+
+// Theme's 16 ANSI slots as const keys — the OSC 4 palette maps over them
+// with full type checking instead of a computed `any` index
+const ANSI_KEYS = [
+  "ansi0",
+  "ansi1",
+  "ansi2",
+  "ansi3",
+  "ansi4",
+  "ansi5",
+  "ansi6",
+  "ansi7",
+  "ansi8",
+  "ansi9",
+  "ansi10",
+  "ansi11",
+  "ansi12",
+  "ansi13",
+  "ansi14",
+  "ansi15",
+] as const;
 
 // "#rrggbb" -> xterm "rgb:RRRR/GGGG/BBBB" (8-bit channel doubled to 16-bit)
 export const hexToRgb16 = (hex: string): string => {
@@ -148,7 +169,7 @@ export const makeTerminal = (ctx: TermCtx) => {
 
   // the flag can lag reality (click-refocus inside the pane bypasses our focus()
   // call) — ask the renderer who owns the keyboard before acting on keys
-  const termHasFocus = (): boolean => !!term && ctx.renderer.currentFocusedRenderable === (term as any);
+  const termHasFocus = (): boolean => !!term && ctx.renderer.currentFocusedRenderable === term;
 
   // drop-target cue: light the header while an internal drag hovers the pane
   // (rest fill follows the ui-style seam — none in outline mode)
@@ -175,11 +196,11 @@ export const makeTerminal = (ctx: TermCtx) => {
   // (finishDragState nulls it), same order as the place/tab drop handlers.
   const handleTermDrop = (): void => {
     const keys = gridDrag.keys;
-    const pty: any = termChild ? ((termChild as any)?.terminal ?? null) : null;
+    const pty = termChild?.terminal ?? null;
     pasteDroppedPaths(pty ? (keys?.map((k) => k.path) ?? null) : null, {
       ptyWrite: (s) => {
         try {
-          pty.write(new TextEncoder().encode(s));
+          pty?.write(new TextEncoder().encode(s));
         } catch {}
       },
       focusTerm: () => {
@@ -203,8 +224,8 @@ export const makeTerminal = (ctx: TermCtx) => {
     if (ptyScreen.mouse || ptyScreen.alt) return;
     const screen = term.screen();
     if (!screen.cursor.visible) return;
-    const clickX = ev.x - (term as any).screenX;
-    const clickRow = ev.y - (term as any).screenY;
+    const clickX = ev.x - term.screenX;
+    const clickRow = ev.y - term.screenY;
     const bytes = promptClickArrows(
       screen.cursor.x,
       screen.cursor.y,
@@ -214,7 +235,7 @@ export const makeTerminal = (ctx: TermCtx) => {
     );
     if (!bytes) return;
     try {
-      (termChild as any)?.terminal?.write(new TextEncoder().encode(bytes));
+      termChild?.terminal?.write(new TextEncoder().encode(bytes));
     } catch {}
   };
 
@@ -235,9 +256,7 @@ export const makeTerminal = (ctx: TermCtx) => {
     try {
       const enc = new TextEncoder();
       const spec = (hex: string) => `rgb:${hexToRgb16(hex)}`;
-      const osc4 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-        .map((i) => `${i};${spec((colors as any)[`ansi${i}`] ?? colors.white)}`)
-        .join(";");
+      const osc4 = ANSI_KEYS.map((k, i) => `${i};${spec(colors[k])}`).join(";");
       term.write(
         new Uint8Array([
           ...enc.encode(`\x1b]4;${osc4}\x1b\\`),
@@ -257,7 +276,7 @@ export const makeTerminal = (ctx: TermCtx) => {
       termChild?.kill();
     } catch {}
     try {
-      (termChild as any)?.terminal?.close();
+      termChild?.terminal?.close();
     } catch {}
     termChild = null;
     try {
@@ -291,7 +310,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   let termProbeTail = "";
   const answerTerminalProbes = (data: Uint8Array): void => {
     try {
-      const pty = (termChild as any)?.terminal;
+      const pty = termChild?.terminal;
       if (!pty) return;
       const buf = termProbeTail + new TextDecoder().decode(data);
       const { resp, tail } = terminalProbeReply(buf);
@@ -344,11 +363,11 @@ export const makeTerminal = (ctx: TermCtx) => {
       rows: TERM_H,
       maxScrollback: 20_000,
       onData: (data: Uint8Array) => {
-        (termChild as any)?.terminal?.write(data);
+        termChild?.terminal?.write(data);
       },
       onTerminalResize: (cols: number, rows: number) => {
         try {
-          (termChild as any)?.terminal?.resize(cols, rows);
+          termChild?.terminal?.resize(cols, rows);
         } catch {}
       },
       // the bridge tracks press→release movement itself (a plain click still
@@ -373,7 +392,7 @@ export const makeTerminal = (ctx: TermCtx) => {
         terminal: {
           cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
           rows: TERM_H,
-          data(_pty: any, data: Uint8Array) {
+          data(_pty, data) {
             answerTerminalProbes(data);
             // sniff mouse-mode/alt-screen DECSETs (split-safe) for the bridge
             const scan = ptyScreenState(ptyScanTail + new TextDecoder().decode(data), ptyScreen);
@@ -384,7 +403,7 @@ export const makeTerminal = (ctx: TermCtx) => {
             } catch {}
           },
         },
-      } as any);
+      });
     } catch (err) {
       ctx.notify(`terminal failed (${fsErrText(err)})`, "terminal");
       closeTerminalPane();

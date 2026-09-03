@@ -16,7 +16,7 @@ export type ProgressCtx = {
   byId(id: string): any;
   stripSelectable(): void;
   // live theme — always read through the getter, never captured
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   makeIconSlot(
     name: string,
     states: { fg: string; bg: string }[],

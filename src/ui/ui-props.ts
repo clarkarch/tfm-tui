@@ -61,7 +61,7 @@ export type PropsCtx = {
   renderAll(): void;
   setStatusMsg(msg: string): void;
   uiStyle(): "solid" | "outline";
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   home: string;
   makeIconSlot(
     name: string,

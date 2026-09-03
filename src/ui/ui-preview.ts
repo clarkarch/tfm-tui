@@ -32,7 +32,7 @@ export type ThumbJobLike = {
 export type PreviewCtx = {
   renderer: any;
   byId(id: string): any;
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   uiStyle(): "solid" | "outline";
   previewEnabled(): boolean; // config.ui.previewEnabled
   previewWidth(): number; // config.ui.previewWidth

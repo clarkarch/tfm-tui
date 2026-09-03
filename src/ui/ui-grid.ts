@@ -7,6 +7,7 @@ import { Box, Text } from "@opentui/core";
 import { statSync } from "node:fs";
 import path from "node:path";
 import { listDir, type Entry } from "../fs/listing";
+import type { Theme } from "../config/config";
 import { fsErrText } from "../fs/fsutil";
 import { fileIsImage, fileIsVideo, fileIconFor } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
@@ -35,7 +36,7 @@ export type GridRendererCtx = {
   iconCells(): number;
   listRowH(): number;
   uiStyle(): string;
-  colors(): Record<string, any>;
+  colors(): Theme;
   previewEnabled(): boolean;
   previewWidth(): number;
   viewMode(): "grid" | "list";
@@ -71,7 +72,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   const clearGrid = (): void => {
     const scroller = ctx.scroller();
     if (!scroller) return;
-    clearChildren(scroller.content as any);
+    clearChildren(scroller.content);
     selection.tileRefs.clear();
   };
 
@@ -307,7 +308,6 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const scroller = ctx.scroller();
     if (!scroller) return;
     const gen = ++gridGen;
-    const _colors = ctx.colors();
     const state = ctx.state;
     // a rebuild destroys the edit input; drop the state with it
     ctx.clearRenameEdit();

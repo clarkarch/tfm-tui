@@ -34,9 +34,16 @@ const FS_ERR_TEXT: Record<string, string> = {
 };
 
 export const fsErrText = (err: unknown): string => {
-  const code = (err as any)?.code;
+  const code = errCode(err);
   if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
   return err instanceof Error ? (err.message.split(":")[0]?.toLowerCase() ?? "unknown error") : "unknown error";
+};
+
+// errno-style .code off an unknown caught value (fs renames, child-proc
+// failures) — structural narrowing instead of `any`
+const errCode = (err: unknown): unknown => {
+  if (typeof err === "object" && err !== null && "code" in err) return err.code;
+  return undefined;
 };
 
 // nautilus naming for an OCCUPIED name: first suggestion is " (copy)", then
@@ -56,8 +63,8 @@ export const uniqueTarget = (dir: string, base: string): string => {
 export const fsMove = async (src: string, dest: string): Promise<void> => {
   try {
     await fsRename(src, dest);
-  } catch (err: any) {
-    if (err?.code !== "EXDEV") throw err;
+  } catch (err: unknown) {
+    if (errCode(err) !== "EXDEV") throw err;
     await cp(src, dest, { recursive: true });
     await rm(src, { recursive: true });
   }
@@ -103,7 +110,10 @@ export const xdgTrashMove = async (p: string): Promise<string> => {
     try {
       await fsMove(finalPath, p);
     } catch (undoErr) {
-      (err as any).rollbackFailed = undoErr;
+      if (err instanceof Error) {
+        const e: Error & { rollbackFailed?: unknown } = err;
+        e.rollbackFailed = undoErr;
+      }
     }
     throw err;
   }

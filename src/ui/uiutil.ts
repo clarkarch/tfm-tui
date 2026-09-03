@@ -2,13 +2,28 @@
 // widget modules. No OpenTUI/renderer imports — nodes arrive as parameters. ---
 
 // clear-and-rebuild idiom used by every dynamic host (crumbs, sidebar, tab
-// strip, menus, grid): drop all children of a renderable
-export const clearChildren = (node: any): void => {
-  if (!node) return;
+// strip, menus, grid): drop all children of a renderable. Nodes arrive as
+// unknown — OpenTUI hosts are heterogeneous — and are narrowed structurally
+// instead of `any`.
+type ChildHost = { getChildren: () => Iterable<unknown>; remove: (child: unknown) => void };
+
+const isChildHost = (v: unknown): v is ChildHost =>
+  typeof v === "object" &&
+  v !== null &&
+  "getChildren" in v &&
+  "remove" in v &&
+  typeof v.getChildren === "function" &&
+  typeof v.remove === "function";
+
+export const clearChildren = (node: unknown): void => {
+  if (!isChildHost(node)) return;
   try {
-    [...node.getChildren()].forEach((c: any) => {
-      node.remove(c);
-    });
+    const kids = [...node.getChildren()];
+    for (const c of kids) {
+      try {
+        node.remove(c);
+      } catch {}
+    }
   } catch {}
 };
 
@@ -22,7 +37,7 @@ export type Scheduler = {
 };
 
 export const debounced = (ms: number, fn: () => void, sched: Scheduler = globalThis): (() => void) => {
-  let t: any = null;
+  let t: unknown = null;
   return () => {
     if (t) sched.clearTimeout(t);
     t = sched.setTimeout(() => {
@@ -34,6 +49,14 @@ export const debounced = (ms: number, fn: () => void, sched: Scheduler = globalT
 
 // render-path guard: a throw inside one repaint step must not blank the pane
 // or kill the rest — log it (injected) and keep the other steps running
+
+// log detail for a caught value: a present .stack wins, else the value
+// itself (template-stringified by the caller) — same output as before
+const errDetail = (err: unknown): unknown => {
+  if (typeof err === "object" && err !== null && "stack" in err) return err.stack ?? err;
+  return err;
+};
+
 export const safeRenderStep = (
   name: string,
   fn: () => void | Promise<void>,
@@ -41,8 +64,8 @@ export const safeRenderStep = (
 ): void => {
   try {
     const r = fn();
-    if (r instanceof Promise) r.catch((err) => log(`render ${name} (async): ${err?.stack ?? err}`));
-  } catch (err: any) {
-    log(`render ${name}: ${err?.stack ?? err}`);
+    if (r instanceof Promise) r.catch((err) => log(`render ${name} (async): ${errDetail(err)}`));
+  } catch (err: unknown) {
+    log(`render ${name}: ${errDetail(err)}`);
   }
 };

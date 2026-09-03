@@ -26,11 +26,11 @@ export type MakeIconSlotFn = (
 export type ToolbarCtx = {
   renderer(): any;
   byId(id: string): any;
-  clearChildren(node: any): void;
+  clearChildren(node: unknown): void;
   stripSelectable(): void;
   uiStyle(): "solid" | "outline";
   // live theme — always read through the getter, never captured
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   makeIconSlot: MakeIconSlotFn;
   setIconState(spec: IconSpec, index: number): void;
   closeFileMenu(): void;
@@ -156,7 +156,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         });
         box.add(input);
         input.on?.("enter", () => {
-          const target = String((input as any).value ?? "").replace(/^~(?=\/|$)/, ctx.home);
+          const target = String(input.value ?? "").replace(/^~(?=\/|$)/, ctx.home);
           pathEditMode = false;
           renderCrumbs();
           ctx.navigate(target);

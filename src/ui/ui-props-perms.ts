@@ -22,7 +22,7 @@ export type PermsCtx = {
   closeFileMenu(): void;
   setStatusMsg(msg: string): void;
   uiStyle(): "solid" | "outline";
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   makeIconSlot(
     name: string,
     states: { fg: string; bg: string }[],

@@ -44,7 +44,7 @@ export type EscMenuCtx = {
   setScrim(on: boolean): void;
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)
   cancelBand(): void;
-  colors(): Record<string, any>;
+  colors(): Theme;
   uiStyle(): string;
   // root-view width — same value the context menu uses (MENU_W in ./ui-menu)
   menuW(): number;
@@ -148,7 +148,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   // colors of the current build — targeted updates below paint with them
   // (menu colors can't change while the panel is up without a rebuild)
-  let menuC: Record<string, any> = {};
+  let menuC: Theme = ctx.colors();
 
   // repaint one row's highlight via byId — NO rebuild (rebuild churn under
   // memory pressure trips native allocation failures; see AGENTS.md OOM note)
@@ -306,7 +306,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // best-effort native allocator stats (renderer.lib is private — this is
     // diagnostics only); tells a tfm-side leak apart from system OOM
     try {
-      const lib = (ctx.renderer() as any).lib;
+      const lib = ctx.renderer().lib;
       const s = lib?.getAllocatorStats?.();
       if (s) {
         ctx.log?.(
@@ -320,7 +320,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const isSettingsView = (): boolean => menuView === "settings";
 
-  const buildMenuContent = (c: Record<string, any>, panel: any, isSettings: boolean) => {
+  const buildMenuContent = (c: Theme, panel: any, isSettings: boolean) => {
     menuC = c;
     const panelW = isSettings ? SETTINGS_W : ctx.menuW();
     try {
@@ -441,7 +441,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const nativeMemTrace = (tag: string): void => {
     if (!ctx.log) return;
     try {
-      const s = (ctx.renderer() as any).lib?.getAllocatorStats?.();
+      const s = ctx.renderer().lib?.getAllocatorStats?.();
       if (s)
         ctx.log?.(`${tag} native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`);
     } catch {}

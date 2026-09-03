@@ -66,9 +66,9 @@ export type ThumbJob = {
 export type SlotsCtx = {
   renderer(): any;
   byId(id: string): any;
-  clearChildren(node: any): void;
+  clearChildren(node: unknown): void;
   // live theme — always read through the getter, never captured
-  colors(): Record<string, any>;
+  colors(): Theme;
   uiStyle(): string;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
@@ -307,10 +307,20 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // scrim and keep their crisp rasters.
   const MODAL_ROOT_IDS = new Set(["tfm-menu", "tfm-filemenu", "tfm-prompt"]);
 
-  const isModalChild = (slot: any): boolean => {
-    let cur: any = slot?.parent;
+  // mounted icon-slot nodes: heterogeneous OpenTUI renderables (byId
+  // returns any by design — see ./ui-lookup), narrowed structurally here
+  type SlotNode = {
+    id?: unknown;
+    parent?: SlotNode | null;
+    visible?: boolean;
+    fg?: string;
+    getChildren?: () => Iterable<SlotNode>;
+  };
+
+  const isModalChild = (slot: SlotNode | null | undefined): boolean => {
+    let cur: SlotNode | null | undefined = slot?.parent;
     while (cur) {
-      if (typeof cur?.id === "string" && MODAL_ROOT_IDS.has(cur.id)) return true;
+      if (typeof cur.id === "string" && MODAL_ROOT_IDS.has(cur.id)) return true;
       cur = cur.parent;
     }
     return false;
@@ -318,11 +328,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
 
   const setScrim = (on: boolean) => {
     for (const spec of iconQueue) {
-      const slot: any = ctx.byId(spec.slotId);
+      const slot: SlotNode | null = ctx.byId(spec.slotId);
       if (!slot) continue;
       if (on && isModalChild(slot)) continue;
-      const kids = (slot.getChildren?.() ?? []) as any[];
-      const glyphNode: any = kids.find((k) => k.id === `${spec.slotId}-g`);
+      const kids = [...(slot.getChildren?.() ?? [])];
+      const glyphNode = kids.find((k) => k.id === `${spec.slotId}-g`);
       if (!glyphNode) continue;
       const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`));
       if (stateImgs.length === 0 && !spec.done) continue;

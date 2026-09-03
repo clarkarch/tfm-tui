@@ -31,7 +31,7 @@ export type MenuCtx = {
   stripSelectable(): void;
   drainIconQueue(): void;
   uiStyle(): "solid" | "outline";
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   menuW: number;
   floats: Floats;
   makeIconSlot(

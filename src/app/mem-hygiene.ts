@@ -22,7 +22,8 @@ export const nativeMemLine = (stats: AllocatorStats | null): string => {
 };
 
 export type MemHygieneCtx = {
-  // renderer.lib.getAllocatorStats() is private — any-cast it at the call site
+  // renderer.lib.getAllocatorStats() is private — narrow-cast it at the call
+  // site (see NativeStatsReach in wiring/io)
   allocatorStats: () => AllocatorStats | null;
   // heartbeat lines are only interesting under --debug
   debugLog?: (msg: string) => void;

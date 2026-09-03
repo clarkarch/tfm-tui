@@ -33,7 +33,7 @@ type IconSpec = {
 export type ChromeCtx = {
   byId(id: string): any;
   uiStyle(): "solid" | "outline";
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
   sideInnerW(): number; // index keeps this helper (outline insets by 2)
   tabBar(): boolean; // config.ui.tabBar
@@ -115,8 +115,6 @@ export const makeChrome = (ctx: ChromeCtx) => {
         ejectDevice(place.device!),
       );
     }
-    const _specs = ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec];
-
     const rowNode = Box(
       {
         id: `tfm-place-${idx}`,
@@ -172,7 +170,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       },
       iconSlot.el,
     );
-    const labelText: any = Text({
+    const labelText = Text({
       id: `tfm-place-${idx}-label`,
       content: paddedLabel,
       fg: selected ? selFg : normFg,

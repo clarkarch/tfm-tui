@@ -16,7 +16,7 @@ export type DialogsCtx = {
   stripSelectable(): void;
   termH(): number;
   uiStyle(): "solid" | "outline";
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   // skeleton baseline for ANY future dialog: the context menu floats above
   // every modal, so a scrim must never come up under an open menu. The real
   // dismiss-others policy lives in ./floats (modal open clears the desktop);
@@ -112,7 +112,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
 export type ConflictChoice = "replace" | "keepBoth" | "skip";
 
 export type ConflictCtx = {
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   drainIconQueue(): void | Promise<void>;
   // open/close orchestration + the dismiss-others policy live in ./floats
   floats: Floats;
@@ -221,7 +221,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
 // confirmDeleteForever) live in ./trashops. ---
 
 export type YesNoCtx = {
-  colors(): Theme & Record<string, any>;
+  colors(): Theme;
   // false while the renderer hasn't laid out yet (same gate as makeConflict callers)
   canOpen(): boolean;
   // open/close orchestration + the dismiss-others policy live in ./floats
