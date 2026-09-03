@@ -37,6 +37,17 @@ export const glyph: Record<string, string> = {
   close: "\u{F0156}",
   terminal: "\u{F120}",
   plus: "\u{F0415}",
+  disc: "\u{F05EE}",
+  "cog-box": "\u{F0494}",
+  package: "\u{F03D3}",
+  "file-font": "\u{F06D6}",
+  "book-open": "\u{F00BD}",
+  database: "\u{F01BC}",
+  certificate: "\u{F0124}",
+  cube: "\u{F01A6}",
+  email: "\u{F01EE}",
+  magnet: "\u{F0347}",
+  android: "\u{F0032}",
 };
 
 export const glyphFor = (name: string): string => glyph[name] ?? "\u{FFFD}";

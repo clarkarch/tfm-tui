@@ -5,7 +5,7 @@
 // naturally and never need explicit invalidation beyond clearIconCaches.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,8 +22,9 @@ const embeddedIconTexts = (): Promise<Map<string, string>> =>
   (embeddedIconsP ??= (async () => {
     const map = new Map<string, string>();
     try {
-      for (const f of (Bun as any).embeddedFiles ?? []) {
-        const iconName = String(f?.name ?? "").match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1];
+      for (const f of Bun.embeddedFiles ?? []) {
+        // typed as Blob, but the compiled binary embeds Files (hence .name)
+        const iconName = (f instanceof File ? f.name : "").match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1];
         if (iconName) map.set(iconName, await f.text());
       }
     } catch {}
@@ -34,9 +35,32 @@ export const warmEmbeddedIcons = (): void => {
   void embeddedIconTexts();
 };
 
+const svgAssetPath = (name: string): string => `${import.meta.dir}/../../assets/icons/${name}.svg`;
+
+// SVG source version for the icon cache key: editing an asset must
+// re-raster instead of serving the stale disk entry (the old key only had
+// name/tint/bg/size, so asset edits were invisible until the cache dir was
+// wiped by hand). 0 when the file is absent — the compiled binary embeds
+// assets, fixed at build time.
+export const svgSourceMtime = (name: string): number => {
+  try {
+    return statSync(svgAssetPath(name)).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+
+export const iconCacheKey = (
+  name: string,
+  fg: string,
+  bg: string,
+  pxW: number,
+  pxH: number,
+  srcMtimeMs: number,
+): string => `${name}:${fg}:${bg}:${pxW}x${pxH}|src${srcMtimeMs}`;
+
 const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, pxH: number): Promise<Uint8Array> => {
-  const svg =
-    (await embeddedIconTexts()).get(name) ?? readFileSync(`${import.meta.dir}/../../assets/icons/${name}.svg`, "utf8");
+  const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
   const tinted = /#[0-9a-fA-F]{6}/.test(svg)
     ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
     : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
@@ -62,8 +86,8 @@ const iconCache = new Map<string, Uint8Array>();
 const inflightIcons = new Map<string, Promise<Uint8Array>>();
 
 // Disk cache for rendered rasters: keyed by everything that changes the output
-// (name, tint, bg, pixel size) plus a pipeline-version salt. Theme switches
-// naturally miss because fg/bg are part of the key.
+// (name, tint, bg, pixel size, SVG source version) plus a pipeline-version
+// salt. Theme switches naturally miss because fg/bg are part of the key.
 const ICON_DISK_VER = "v2";
 const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
@@ -89,7 +113,7 @@ const releaseRasterSlot = () => {
 };
 
 export const iconPng = async (name: string, fg: string, bg: string, pxW: number, pxH: number): Promise<Uint8Array> => {
-  const key = `${name}:${fg}:${bg}:${pxW}x${pxH}`;
+  const key = iconCacheKey(name, fg, bg, pxW, pxH, svgSourceMtime(name));
   const hit = iconCache.get(key);
   if (hit) return hit;
   // identical requests racing (e.g. 15 folder rows) share one render
@@ -179,6 +203,11 @@ const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promi
 const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> =>
   pngFromProc(
     spawn("magick", [
+      // decode at ~2x target size: full-res JPEG decode dominates thumb time
+      // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
+      // 2x keeps downscale quality while skipping most of the decode (~5x).
+      "-define",
+      `jpeg:size=${pxW * 2}x${pxH * 2}`,
       p,
       "-auto-orient",
       "-background",
@@ -234,7 +263,9 @@ const thumbCache = new Map<string, Promise<Uint8Array>>();
 // Disk cache keyed by everything that changes the output (path, mtime, size,
 // pixel size, bg, vector flag) plus a pipeline-version salt — renderer swaps
 // and file edits miss naturally. No eviction (icon disk cache has none either).
-const THUMB_DISK_VER = "v1";
+// v2: raster path decodes JPEGs at ~2x target (jpeg:size hint) — pixels differ
+// slightly from v1 full-decode thumbs, so old entries must regenerate.
+const THUMB_DISK_VER = "v2";
 const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
   path.join(thumbDiskDir(), `${createHash("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);

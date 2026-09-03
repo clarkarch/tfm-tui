@@ -101,9 +101,70 @@ export const FILE_ICON_BY_EXT: Record<string, string> = {
   zst: "zip-box",
   "7z": "zip-box",
   rar: "zip-box",
-  apk: "zip-box",
+  cab: "zip-box",
+  apk: "android",
+  aab: "android",
+  apks: "android",
+  xapk: "android",
   jar: "zip-box",
   pdf: "file-pdf-box",
+  iso: "disc",
+  iso9660: "disc",
+  img: "disc",
+  bin: "disc",
+  cue: "disc",
+  mdf: "disc",
+  nrg: "disc",
+  cso: "disc",
+  exe: "cog-box",
+  msi: "cog-box",
+  bat: "cog-box",
+  cmd: "cog-box",
+  com: "cog-box",
+  dll: "cog-box",
+  sys: "cog-box",
+  so: "cog-box",
+  o: "cog-box",
+  a: "cog-box",
+  class: "cog-box",
+  appimage: "cog-box",
+  deb: "package",
+  rpm: "package",
+  ttf: "file-font",
+  otf: "file-font",
+  woff: "file-font",
+  woff2: "file-font",
+  ttc: "file-font",
+  eot: "file-font",
+  epub: "book-open",
+  mobi: "book-open",
+  azw: "book-open",
+  azw3: "book-open",
+  fb2: "book-open",
+  crt: "certificate",
+  cer: "certificate",
+  der: "certificate",
+  pem: "certificate",
+  key: "certificate",
+  p12: "certificate",
+  pfx: "certificate",
+  blend: "cube",
+  dwg: "cube",
+  obj: "cube",
+  stl: "cube",
+  fbx: "cube",
+  glb: "cube",
+  eml: "email",
+  torrent: "magnet",
+  db: "database",
+  sqlite: "database",
+  sqlite3: "database",
+  db3: "database",
+  dmg: "harddisk",
+  vhdx: "harddisk",
+  vdi: "harddisk",
+  qcow2: "harddisk",
+  kra: "file-image",
 };
 
 // shared-mime-info database (same data nautilus's GIO consults): ext -> mime,
@@ -150,6 +211,30 @@ const ARCHIVE_MIMES = new Set([
   "application/x-tar",
   "application/java-archive",
   "application/vnd.android.package-archive",
+  "application/vnd.ms-cab-compressed",
+]);
+
+const EXE_MIMES = new Set(["application/x-msdownload"]);
+
+const PACKAGE_MIMES = new Set(["application/vnd.debian.binary-package", "application/x-rpm"]);
+
+const EBOOK_MIMES = new Set(["application/epub+zip"]);
+
+const CERT_MIMES = new Set(["application/pkix-cert", "application/x-x509-ca-cert"]);
+
+const TORRENT_MIMES = new Set(["application/x-bittorrent"]);
+
+const DB_MIMES = new Set(["application/x-sqlite3", "application/vnd.sqlite3"]);
+
+// optical disc images (same data nautilus consults): ext-table entries above
+// cover the common extensions; this set catches the long tail that only
+// resolves via globs2 (e.g. .cdr-style variants)
+const OPTICAL_MIMES = new Set([
+  "application/x-cd-image",
+  "application/vnd.efi.iso",
+  "application/x-compressed-iso",
+  "application/x-cue",
+  "application/x-nrg",
 ]);
 
 export const mimeCategory = (mime: string): string => {
@@ -157,7 +242,16 @@ export const mimeCategory = (mime: string): string => {
   if (media === "image") return "file-image";
   if (media === "video") return "file-video";
   if (media === "audio") return "file-music";
+  if (media === "font") return "file-font";
+  if (media === "message") return "email";
   if (ARCHIVE_MIMES.has(mime)) return "zip-box";
+  if (OPTICAL_MIMES.has(mime)) return "disc";
+  if (EXE_MIMES.has(mime)) return "cog-box";
+  if (PACKAGE_MIMES.has(mime)) return "package";
+  if (EBOOK_MIMES.has(mime)) return "book-open";
+  if (CERT_MIMES.has(mime)) return "certificate";
+  if (TORRENT_MIMES.has(mime)) return "magnet";
+  if (DB_MIMES.has(mime)) return "database";
   if (mime === "application/pdf") return "file-pdf-box";
   if (
     /^text\/x-/.test(mime) ||

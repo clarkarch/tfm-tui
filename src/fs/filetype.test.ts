@@ -44,6 +44,32 @@ describe("mimeCategory", () => {
     expect(mimeCategory("application/vnd.oasis.opendocument.text")).toBe("file-document");
   });
 
+  test("optical disc images map to disc", () => {
+    expect(mimeCategory("application/x-cd-image")).toBe("disc");
+    expect(mimeCategory("application/vnd.efi.iso")).toBe("disc");
+    expect(mimeCategory("application/x-compressed-iso")).toBe("disc");
+    expect(mimeCategory("application/x-cue")).toBe("disc");
+    expect(mimeCategory("application/x-nrg")).toBe("disc");
+  });
+
+  test("executables and MS packages map to their categories", () => {
+    expect(mimeCategory("application/x-msdownload")).toBe("cog-box");
+    expect(mimeCategory("application/vnd.debian.binary-package")).toBe("package");
+    expect(mimeCategory("application/x-rpm")).toBe("package");
+    expect(mimeCategory("application/vnd.ms-cab-compressed")).toBe("zip-box");
+  });
+
+  test("font/*, message/* and ebook/cert/torrent/db mimes map to their categories", () => {
+    expect(mimeCategory("font/ttf")).toBe("file-font");
+    expect(mimeCategory("font/woff2")).toBe("file-font");
+    expect(mimeCategory("message/rfc822")).toBe("email");
+    expect(mimeCategory("application/epub+zip")).toBe("book-open");
+    expect(mimeCategory("application/pkix-cert")).toBe("certificate");
+    expect(mimeCategory("application/x-x509-ca-cert")).toBe("certificate");
+    expect(mimeCategory("application/x-bittorrent")).toBe("magnet");
+    expect(mimeCategory("application/x-sqlite3")).toBe("database");
+  });
+
   test("unknown mimes fall back to file", () => {
     expect(mimeCategory("application/octet-stream")).toBe("file");
     expect(mimeCategory("")).toBe("file");
@@ -55,6 +81,44 @@ describe("fileIconFor", () => {
     expect(fileIconFor("app.ts")).toBe("file-code");
     expect(fileIconFor("PHOTO.JPG")).toBe("file-image");
     expect(fileIconFor("archive.7z")).toBe("zip-box");
+  });
+
+  test("disc images get the disc icon regardless of case", () => {
+    expect(fileIconFor("ubuntu.iso")).toBe("disc");
+    expect(fileIconFor("raspbian.IMG")).toBe("disc");
+    expect(fileIconFor("game.bin")).toBe("disc");
+    expect(fileIconFor("game.cue")).toBe("disc");
+    expect(fileIconFor("disc.mdf")).toBe("disc");
+    expect(fileIconFor("disc.nrg")).toBe("disc");
+    expect(fileIconFor("game.cso")).toBe("disc");
+  });
+
+  test("executables, packages, fonts, books, certs, models, mail, torrents, db, VM disks", () => {
+    expect(fileIconFor("setup.exe")).toBe("cog-box");
+    expect(fileIconFor("setup.msi")).toBe("cog-box");
+    expect(fileIconFor("run.BAT")).toBe("cog-box");
+    expect(fileIconFor("lib.so")).toBe("cog-box");
+    expect(fileIconFor("app.AppImage")).toBe("cog-box");
+    expect(fileIconFor("pkg.deb")).toBe("package");
+    expect(fileIconFor("pkg.rpm")).toBe("package");
+    expect(fileIconFor("font.ttf")).toBe("file-font");
+    expect(fileIconFor("font.OTF")).toBe("file-font");
+    expect(fileIconFor("font.woff2")).toBe("file-font");
+    expect(fileIconFor("book.epub")).toBe("book-open");
+    expect(fileIconFor("book.mobi")).toBe("book-open");
+    expect(fileIconFor("site.crt")).toBe("certificate");
+    expect(fileIconFor("key.pem")).toBe("certificate");
+    expect(fileIconFor("model.blend")).toBe("cube");
+    expect(fileIconFor("part.dwg")).toBe("cube");
+    expect(fileIconFor("mail.eml")).toBe("email");
+    expect(fileIconFor("linux.torrent")).toBe("magnet");
+    expect(fileIconFor("data.sqlite")).toBe("database");
+    expect(fileIconFor("mac.dmg")).toBe("harddisk");
+    expect(fileIconFor("disk.vhdx")).toBe("harddisk");
+    expect(fileIconFor("app.apk")).toBe("android");
+    expect(fileIconFor("app.aab")).toBe("android");
+    expect(fileIconFor("cover.kra")).toBe("file-image");
+    expect(fileIconFor("data.cab")).toBe("zip-box");
   });
 
   test("dotfiles and extensionless names fall back to file", () => {
@@ -105,12 +169,32 @@ describe("FILE_ICON_BY_EXT integrity", () => {
       "file-music",
       "zip-box",
       "file-pdf-box",
+      "disc",
+      "cog-box",
+      "package",
+      "file-font",
+      "book-open",
+      "database",
+      "certificate",
+      "cube",
+      "email",
+      "magnet",
+      "harddisk",
+      "android",
     ]);
     for (const cat of Object.values(FILE_ICON_BY_EXT)) expect(known.has(cat)).toBe(true);
   });
 
   test("keys are lowercase so the case-insensitive lookup path stays honest", () => {
     for (const ext of Object.keys(FILE_ICON_BY_EXT)) expect(ext).toBe(ext.toLowerCase());
+  });
+
+  test("every emitted category has a matching assets/icons/<name>.svg (slot names must match filenames exactly)", async () => {
+    const { existsSync } = await import("node:fs");
+    const { default: path } = await import("node:path");
+    const dir = path.join(import.meta.dir, "../../assets/icons");
+    const cats = new Set([...Object.values(FILE_ICON_BY_EXT), "file"]);
+    for (const cat of cats) expect(existsSync(path.join(dir, `${cat}.svg`))).toBe(true);
   });
 });
 

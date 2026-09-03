@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { clearIconCaches, iconPng, thumbPng } from "./icons";
+import { clearIconCaches, iconCacheKey, iconPng, svgSourceMtime, thumbPng } from "./icons";
 
 // exercises the real rsvg-convert/magick pipeline (both are dev-machine deps);
 // failures here mean the raster pipeline or its cache keys broke.
@@ -37,6 +37,22 @@ describe("icons", () => {
 
   test("missing icon rejects", async () => {
     expect(iconPng("no-such-icon-xyz", "#ffffff", "#000000", 8, 8)).rejects.toThrow();
+  });
+
+  test("icon cache key includes the SVG source version (edited assets re-raster)", () => {
+    const a = iconCacheKey("disc", "#fff", "#000", 16, 16, 1000);
+    expect(iconCacheKey("disc", "#fff", "#000", 16, 16, 1000)).toBe(a); // deterministic
+    expect(iconCacheKey("disc", "#fff", "#000", 16, 16, 2000)).not.toBe(a); // source edit misses
+    expect(iconCacheKey("disc", "#fff", "#000", 16, 16, 1000)).not.toBe(
+      iconCacheKey("folder", "#fff", "#000", 16, 16, 1000),
+    );
+  });
+
+  test("svgSourceMtime tracks a real asset, degrades to 0 when absent (compiled binary)", () => {
+    const m = svgSourceMtime("folder");
+    expect(Number.isFinite(m)).toBe(true);
+    expect(m).toBeGreaterThan(0);
+    expect(svgSourceMtime("no-such-icon-xyz")).toBe(0);
   });
 
   test.skipIf(!hasMagick)("thumbPng rasterizes a file onto a bg", async () => {
