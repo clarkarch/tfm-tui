@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { clearIconCaches, iconCacheKey, iconPng, svgSourceMtime, thumbPng } from "./icons";
+import { clearIconCaches, iconCacheKey, iconPng, loadEmbeddedIcons, svgSourceMtime, thumbPng } from "./icons";
 
 // exercises the real rsvg-convert/magick pipeline (both are dev-machine deps);
 // failures here mean the raster pipeline or its cache keys broke.
@@ -53,6 +53,19 @@ describe("icons", () => {
     expect(Number.isFinite(m)).toBe(true);
     expect(m).toBeGreaterThan(0);
     expect(svgSourceMtime("no-such-icon-xyz")).toBe(0);
+  });
+
+  test("embedded index reads Blob entries by name (compiled binary: Blobs, not Files)", async () => {
+    // Bun.embeddedFiles in a --compile binary are plain Blobs carrying .name
+    // (no File instances) — the index must not require instanceof File
+    const fake = [
+      { name: "disc-abcdef12.svg", text: async () => "<svg>DISC</svg>" },
+      { name: "not-an-icon.txt", text: async () => "junk" },
+      { text: async () => "nameless" },
+    ];
+    const map = await loadEmbeddedIcons(fake);
+    expect(map.get("disc")).toBe("<svg>DISC</svg>");
+    expect(map.size).toBe(1);
   });
 
   test.skipIf(!hasMagick)("thumbPng rasterizes a file onto a bg", async () => {

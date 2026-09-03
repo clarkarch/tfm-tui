@@ -12,24 +12,33 @@ import path from "node:path";
 
 const home = os.homedir();
 
-// In a `bun --compile` binary, assets/icons/*.svg are embedded as File blobs
-// named "<basename>-<hash>.svg" — plain readFileSync can't see them. Index by
+// In a `bun --compile` binary, assets/icons/*.svg are embedded as Blob blobs
+// named "<basename>-<hash>.svg" — plain readFileSync can't see them (and
+// import.meta.dir is /$bunfs/..., so the disk path fails too). Index by
 // basename once; dev runs (embeddedFiles empty) fall through to disk.
+// The entries are plain Blobs, NOT Files — reach .name structurally ("name"
+// in f), never via instanceof File (that check silently emptied the whole
+// index and every icon fell back to glyphs in the shipped binary).
 // Memoize the PROMISE, not the Map: assigning the Map first let concurrent
 // callers resolve against a half-filled index during the await loop.
-let embeddedIconsP: Promise<Map<string, string>> | null = null;
-const embeddedIconTexts = (): Promise<Map<string, string>> =>
-  (embeddedIconsP ??= (async () => {
+export type EmbeddedFile = { name?: unknown; text: () => Promise<string> };
+
+export const loadEmbeddedIcons = (files: readonly EmbeddedFile[]): Promise<Map<string, string>> =>
+  (async () => {
     const map = new Map<string, string>();
     try {
-      for (const f of Bun.embeddedFiles ?? []) {
-        // typed as Blob, but the compiled binary embeds Files (hence .name)
-        const iconName = (f instanceof File ? f.name : "").match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1];
+      for (const f of files) {
+        const raw = typeof f === "object" && f !== null && "name" in f ? f.name : undefined;
+        const iconName = typeof raw === "string" ? raw.match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1] : undefined;
         if (iconName) map.set(iconName, await f.text());
       }
     } catch {}
     return map;
-  })());
+  })();
+
+let embeddedIconsP: Promise<Map<string, string>> | null = null;
+const embeddedIconTexts = (): Promise<Map<string, string>> =>
+  (embeddedIconsP ??= loadEmbeddedIcons(Bun.embeddedFiles ?? []));
 
 export const warmEmbeddedIcons = (): void => {
   void embeddedIconTexts();
