@@ -1,0 +1,5 @@
+[test]
+# Reference clones (gitignored, not project code) contain 300+ *.test.ts files.
+# Without this, bare `bun test` scans them and hangs. CLI flag equivalent:
+# --path-ignore-patterns. CLI flags override this value entirely.
+pathIgnorePatterns = ["opentui/**", "nautilus/**"]

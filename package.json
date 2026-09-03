@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm",
-    "test": "bun test src/*.test.ts src/**/*.test.ts",
-    "test:watch": "bun test --watch src/*.test.ts src/**/*.test.ts",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",
     "fmt": "biome format --write .",
