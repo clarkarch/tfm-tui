@@ -85,7 +85,18 @@ export type KeyAction =
   | "paste"
   | "undo"
   | "redo"
-  | "parentDir";
+  | "parentDir"
+  | "histBack"
+  | "histForward"
+  | "showProps"
+  | "newFolder"
+  | "newFile"
+  | "pathEdit"
+  | "togglePreview"
+  | "openTerminal"
+  | "toggleView"
+  | "zoomIn"
+  | "zoomOut";
 
 export type KeysConfig = Record<KeyAction, string[]>;
 
@@ -381,6 +392,17 @@ const KEY_ROWS: KeyRow[] = (
     ["undo", "undo last file op", ["ctrl+z"]],
     ["redo", "redo (ctrl+shift+z works too)", ["ctrl+y", "ctrl+shift+z"]],
     ["parentDir", "go to parent directory", ["backspace"]],
+    ["histBack", "back in history", ["alt+left"]],
+    ["histForward", "forward in history", ["alt+right"]],
+    ["showProps", "properties for selection", ["alt+enter"]],
+    ["newFolder", "new folder", ["ctrl+shift+n"]],
+    ["newFile", "new file", ["ctrl+alt+n"]],
+    ["pathEdit", "edit the path bar", ["ctrl+l"]],
+    ["togglePreview", "toggle preview pane", ["f9"]],
+    ["openTerminal", "open terminal here", ["f4"]],
+    ["toggleView", "toggle grid/list view", ["ctrl+g"]],
+    ["zoomIn", "bigger tiles", ["ctrl+="]],
+    ["zoomOut", "smaller tiles", ["ctrl+-"]],
   ] as const
 ).map(([action, label, def]) => ({
   kind: "key",

@@ -1,4 +1,5 @@
 import type { ThemePreset } from "../config/themes";
+import { UI_SCHEMA, type UiConfig } from "../config/config-schema";
 
 // --- Settings model: declarative rows drive both rendering and key/mouse
 // input. This module owns the row TYPE and the pure row semantics (adjust /
@@ -69,3 +70,25 @@ export const applyAdjust = (row: SettingRow, dir: number): boolean => {
 // runtime-only), or -1 when customized
 export const themePresetIdx = (presets: ThemePreset[], theme: unknown): number =>
   presets.findIndex((p) => JSON.stringify(p.theme) === JSON.stringify(theme));
+
+// zoom step for the zoomIn/zoomOut keybinds (ctrl+= / ctrl+-): grid view
+// scales tile W/H plus the icon cells so tiles and glyphs grow together;
+// list view scales the row height instead. Bounds/steps come from the schema
+// int rows (single source — same numbers the layout steppers use); saturated
+// axes hold their bound so zooming at min/max is a no-op patch.
+type ZoomProp = "tileWidth" | "tileHeight" | "iconCells" | "listRowHeight";
+
+const zoomStep = (ui: UiConfig, prop: ZoomProp, dir: number): number => {
+  const row = UI_SCHEMA.find((r) => r.prop === prop);
+  if (row?.kind !== "int") return ui[prop];
+  return Math.max(row.min, Math.min(row.max, ui[prop] + dir * row.step));
+};
+
+export const zoomUiPatch = (ui: UiConfig, dir: number): Partial<UiConfig> =>
+  ui.viewMode === "list"
+    ? { listRowHeight: zoomStep(ui, "listRowHeight", dir) }
+    : {
+        tileWidth: zoomStep(ui, "tileWidth", dir),
+        tileHeight: zoomStep(ui, "tileHeight", dir),
+        iconCells: zoomStep(ui, "iconCells", dir),
+      };

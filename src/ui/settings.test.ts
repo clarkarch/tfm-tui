@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { applyAdjust, flattenRows, themePresetIdx, type SettingGroup, type SettingRow } from "./settings";
+import { applyAdjust, flattenRows, themePresetIdx, zoomUiPatch, type SettingGroup, type SettingRow } from "./settings";
 import { THEME_PRESETS } from "../config/themes";
+import { defaultConfig, type UiConfig } from "../config/config-schema";
 
 const rec = () => {
   const calls: string[] = [];
@@ -137,5 +138,43 @@ describe("themePresetIdx", () => {
     expect(themePresetIdx(THEME_PRESETS, live)).toBe(1);
     live.bg = "#000001"; // any mutation → customized
     expect(themePresetIdx(THEME_PRESETS, live)).toBe(-1);
+  });
+});
+
+describe("zoomUiPatch", () => {
+  const ui = (): UiConfig => structuredClone(defaultConfig.ui);
+
+  test("grid view scales tile W/H plus icon cells together", () => {
+    const u = ui();
+    u.viewMode = "grid";
+    expect(zoomUiPatch(u, 1)).toEqual({
+      tileWidth: u.tileWidth + 1,
+      tileHeight: u.tileHeight + 1,
+      iconCells: u.iconCells + 1,
+    });
+    expect(zoomUiPatch(u, -1)).toEqual({
+      tileWidth: u.tileWidth - 1,
+      tileHeight: u.tileHeight - 1,
+      iconCells: u.iconCells - 1,
+    });
+  });
+
+  test("list view scales the row height only", () => {
+    const u = ui();
+    u.viewMode = "list";
+    expect(zoomUiPatch(u, 1)).toEqual({ listRowHeight: u.listRowHeight + 1 });
+  });
+
+  test("saturated axes hold their bound (zoom at min/max is a no-op patch)", () => {
+    const u = ui();
+    u.viewMode = "grid";
+    u.tileWidth = 40;
+    u.tileHeight = 10;
+    u.iconCells = 5;
+    expect(zoomUiPatch(u, 1)).toEqual({ tileWidth: 40, tileHeight: 10, iconCells: 5 });
+    u.tileWidth = 10;
+    u.tileHeight = 3;
+    u.iconCells = 1;
+    expect(zoomUiPatch(u, -1)).toEqual({ tileWidth: 10, tileHeight: 3, iconCells: 1 });
   });
 });

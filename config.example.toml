@@ -77,3 +77,14 @@ paste             = ["ctrl+v"]                  # default: ctrl+v
 undo              = ["ctrl+z"]                  # default: ctrl+z
 redo              = ["ctrl+y", "ctrl+shift+z"]  # default: ctrl+y or ctrl+shift+z
 parent-dir        = ["backspace"]               # default: backspace
+hist-back         = ["alt+left"]                # default: alt+left
+hist-forward      = ["alt+right"]               # default: alt+right
+show-props        = ["alt+enter"]               # default: alt+enter
+new-folder        = ["ctrl+shift+n"]            # default: ctrl+shift+n
+new-file          = ["ctrl+alt+n"]              # default: ctrl+alt+n
+path-edit         = ["ctrl+l"]                  # default: ctrl+l
+toggle-preview    = ["f9"]                      # default: f9
+open-terminal     = ["f4"]                      # default: f4
+toggle-view       = ["ctrl+g"]                  # default: ctrl+g
+zoom-in           = ["ctrl+="]                  # default: ctrl+=
+zoom-out          = ["ctrl+-"]                  # default: ctrl+-

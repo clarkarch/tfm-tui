@@ -178,9 +178,9 @@ describe("keybind rows", () => {
 
   test("free bind commits through commitKeys, other actions untouched", () => {
     const h = mk();
-    asKeybind(h.byLabel("undo last file op")).set(["ctrl+g"]);
+    asKeybind(h.byLabel("undo last file op")).set(["ctrl+b"]);
     expect(h.applied.length).toBe(1);
-    expect(h.config.keys.undo).toEqual(["ctrl+g"]);
+    expect(h.config.keys.undo).toEqual(["ctrl+b"]);
     expect(h.config.keys.quit).toEqual(defaultConfig.keys.quit);
   });
 

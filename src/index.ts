@@ -147,4 +147,5 @@ const keymap = wireKeymap({
   grid,
   fileops,
   settings,
+  getRetheme: () => retheme,
 });

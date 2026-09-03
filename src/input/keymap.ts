@@ -71,6 +71,8 @@ export type KeyRouterCtx = {
   mountDevice(dev: string): void;
   // --- navigation / open ---
   navigate(dir: string): void;
+  goBack(): void;
+  goFwd(): void;
   openFileDefault(p: string): void;
   // home dir — backspace target inside virtual views (URIs have no fs parent)
   home: string;
@@ -89,6 +91,13 @@ export type KeyRouterCtx = {
   trashPaths(paths: string[]): void;
   restoreFromTrash(paths: string[]): void;
   startInlineRename(p: string): void;
+  startInlineCreate(kind: "file" | "folder"): void;
+  openProperties(paths: string[]): void;
+  enterPathEdit(): void;
+  openTerminal(): void;
+  togglePreview(): void;
+  toggleViewMode(): void;
+  zoomTiles(dir: number): void;
   setClipboard(mode: "copy" | "cut", items: Array<{ path: string; isDir: boolean }>): void;
   isVirtualCwd(): boolean;
   pasteSmart(dir: string): void;
@@ -104,12 +113,19 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   let placeIdx = -1;
 
   // does this event match any configured bind for the action?
+  const enterAlias = (name: string): string | null =>
+    name === "enter" ? "return" : name === "return" ? "enter" : null;
+
   const hit = (ev: KeyPressEvent, action: KeyAction): boolean => {
     const specs = ctx.keybinds(action);
     if (!specs?.length) return false;
     for (const specText of specs) {
       const spec = parseKeySpec(specText);
       if (spec && keyMatch(ev, spec)) return true;
+      // OpenTUI reports Enter as "return" (kitty/legacy forms vary) — accept
+      // both spellings in binds so alt+enter works whatever the parser emits
+      const alias = spec && enterAlias(spec.name);
+      if (alias && keyMatch(ev, { ...spec, name: alias })) return true;
     }
     return false;
   };
@@ -348,6 +364,57 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // below updates the menu module's state in place.
     if (handleFileMenuKeys(ev)) return;
     if (handleSearchKeys(ev)) return;
+
+    // --- remappable action keys that grid nav would otherwise swallow:
+    // handleGridNavKeys consumes bare arrows/return regardless of modifiers,
+    // so alt+arrows and alt+enter must dispatch BEFORE it (plain arrows and
+    // return are unaffected — they match no bind unless remapped onto one) ---
+    if (hit(ev, "histBack")) {
+      ctx.goBack();
+      return;
+    }
+    if (hit(ev, "histForward")) {
+      ctx.goFwd();
+      return;
+    }
+    if (hit(ev, "showProps")) {
+      const sel = selection.selPaths();
+      if (sel.length) ctx.openProperties(sel.map((s) => s.path));
+      else if (!ctx.isVirtualCwd()) ctx.openProperties([ctx.state.cwd]);
+      return;
+    }
+    if (hit(ev, "newFolder")) {
+      ctx.startInlineCreate("folder");
+      return;
+    }
+    if (hit(ev, "newFile")) {
+      ctx.startInlineCreate("file");
+      return;
+    }
+    if (hit(ev, "pathEdit")) {
+      ctx.enterPathEdit();
+      return;
+    }
+    if (hit(ev, "togglePreview")) {
+      ctx.togglePreview();
+      return;
+    }
+    if (hit(ev, "openTerminal")) {
+      ctx.openTerminal();
+      return;
+    }
+    if (hit(ev, "toggleView")) {
+      ctx.toggleViewMode();
+      return;
+    }
+    if (hit(ev, "zoomIn")) {
+      ctx.zoomTiles(1);
+      return;
+    }
+    if (hit(ev, "zoomOut")) {
+      ctx.zoomTiles(-1);
+      return;
+    }
 
     // --- keyboard navigation: sidebar <-> grid ---
     if (handleShiftExtend(ev, ctrl)) return;

@@ -112,6 +112,8 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     normalizePlaces: rec("places:normalize"),
     mountDevice: (d) => calls.push(`mount:${d}`),
     navigate: (dir) => calls.push(`navigate:${dir}`),
+    goBack: rec("back"),
+    goFwd: rec("fwd"),
     openFileDefault: (p) => calls.push(`open:${p}`),
     home: "/home/u",
     getFileMenuState: () => null,
@@ -129,6 +131,13 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     trashPaths: (ps) => calls.push(`trash:${ps.join(",")}`),
     restoreFromTrash: (ps) => calls.push(`restore:${ps.join(",")}`),
     startInlineRename: (p) => calls.push(`rename:${p}`),
+    startInlineCreate: (k) => calls.push(`create:${k}`),
+    openProperties: (ps) => calls.push(`props:${ps.join(",")}`),
+    enterPathEdit: rec("pathedit:enter"),
+    openTerminal: rec("term:open"),
+    togglePreview: rec("preview:toggle"),
+    toggleViewMode: rec("view:toggle"),
+    zoomTiles: (d) => calls.push(`zoom:${d}`),
     setClipboard: (mode, items) => calls.push(`clip:${mode}:${items.length}`),
     isVirtualCwd: () => false,
     pasteSmart: (d) => calls.push(`paste:${d}`),
@@ -606,5 +615,71 @@ describe("keybind capture precedence", () => {
     h.escMenuState.open = true;
     h.key("tab");
     expect(h.calls).toEqual(["escmenu:tab"]);
+  });
+});
+
+describe("remappable action keys", () => {
+  test("alt+left/right walk history (dispatched before grid nav swallows arrows)", () => {
+    const h = makeHarness();
+    h.key("left", { meta: true });
+    h.key("right", { meta: true });
+    expect(h.calls).toEqual(["back", "fwd"]);
+  });
+
+  test("plain arrows still move grid focus (no modifier, no bind hit)", () => {
+    const h = makeHarness();
+    h.key("left");
+    expect(h.calls).not.toContain("back");
+  });
+
+  test("alt+enter opens props for the selection (return/enter spelling alias)", () => {
+    const h = makeHarness();
+    h.selection.selectTileAt(0);
+    h.calls.length = 0;
+    // OpenTUI reports Enter as "return" — the alt+enter bind must still hit
+    h.key("return", { meta: true });
+    expect(h.calls).toEqual(["props:a.txt"]);
+  });
+
+  test("alt+enter with empty selection opens props for cwd, skipped in virtual views", () => {
+    const h = makeHarness();
+    h.key("return", { meta: true });
+    expect(h.calls).toEqual(["props:/tmp/tfm-kb/sub"]);
+    const hv = makeHarness({ isVirtualCwd: () => true });
+    hv.key("return", { meta: true });
+    expect(hv.calls).toEqual([]);
+  });
+
+  test("ctrl+shift+n / ctrl+alt+n start folder/file creation", () => {
+    const h = makeHarness();
+    h.key("n", { ctrl: true, shift: true });
+    h.key("n", { ctrl: true, meta: true });
+    expect(h.calls).toEqual(["create:folder", "create:file"]);
+  });
+
+  test("ctrl+l enters path edit, f9 toggles preview, f4 opens the terminal", () => {
+    const h = makeHarness();
+    h.key("l", { ctrl: true });
+    h.key("f9");
+    h.key("f4");
+    expect(h.calls).toEqual(["pathedit:enter", "preview:toggle", "term:open"]);
+  });
+
+  test("ctrl+g toggles grid/list, ctrl+= / ctrl+- zoom tile size", () => {
+    const h = makeHarness();
+    h.key("g", { ctrl: true });
+    h.key("=", { ctrl: true });
+    h.key("-", { ctrl: true });
+    expect(h.calls).toEqual(["view:toggle", "zoom:1", "zoom:-1"]);
+  });
+
+  test("remapped binds apply live (binds read per keypress)", () => {
+    const h = makeHarness();
+    h.binds.histBack = ["ctrl+b"];
+    h.key("left", { meta: true });
+    expect(h.calls).not.toContain("back");
+    h.calls.length = 0;
+    h.key("b", { ctrl: true });
+    expect(h.calls).toEqual(["back"]);
   });
 });
