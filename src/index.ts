@@ -5,20 +5,33 @@
 // widget factories use internally. Order:
 //   core → nav → chrome (renderer boots here) → grid foundation → fileops →
 //   grid → settings → watcher → boot → retheme → dnd → resize → keymap ---
+//
+// The app graph loads LAZILY (dynamic imports below): --version must answer
+// in milliseconds, not after OpenTUI natives + the whole graph load (~250ms).
 
-import { appendLog, isDebug } from "./app/log";
-import { wireCore } from "./wiring/core";
-import { wireNav } from "./wiring/nav";
-import { wireChrome } from "./wiring/chrome";
-import { wireGridFoundation } from "./wiring/grid-foundation";
-import { wireFileops } from "./wiring/fileops";
-import { wireGrid } from "./wiring/grid";
-import { wireSettings, wireRetheme } from "./wiring/settings";
-import { wireWatcher, wireBoot, wireDnd, wireResize } from "./wiring/io";
-import { wireKeymap } from "./wiring/keymap";
+import pkg from "../package.json";
+
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  console.log(`tfm ${pkg.version}`);
+  process.exit(0);
+}
+
+// wall-clock start precedes the graph load so the launch toast tells the
+// truth about startup (imports were ~200ms of it, silently uncounted before)
+const bootStart = performance.now();
+
+const { appendLog, isDebug } = await import("./app/log");
+const { wireCore } = await import("./wiring/core");
+const { wireNav } = await import("./wiring/nav");
+const { wireChrome } = await import("./wiring/chrome");
+const { wireGridFoundation } = await import("./wiring/grid-foundation");
+const { wireFileops } = await import("./wiring/fileops");
+const { wireGrid } = await import("./wiring/grid");
+const { wireSettings, wireRetheme } = await import("./wiring/settings");
+const { wireWatcher, wireBoot, wireDnd, wireResize } = await import("./wiring/io");
+const { wireKeymap } = await import("./wiring/keymap");
 
 if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
-const bootStart = performance.now();
 
 // --- core: config, theme, lookup, icon slots, floats, app state, geometry ---
 const core = wireCore({

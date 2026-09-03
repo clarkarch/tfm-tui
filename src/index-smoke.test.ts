@@ -7,7 +7,7 @@
 // only way a plain `timeout N` ever exits). ---
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -55,4 +55,24 @@ describe("index.ts smoke boot", () => {
     },
     15000,
   );
+});
+
+describe("index.ts --version", () => {
+  test("--version prints the package version without booting the TUI", () => {
+    const pkg = JSON.parse(readFileSync(path.resolve(import.meta.dir, "..", "package.json"), "utf8"));
+    for (const flag of ["--version", "-v"]) {
+      const proc = Bun.spawnSync({
+        cmd: ["bun", "src/index.ts", flag],
+        cwd: path.resolve(import.meta.dir, ".."),
+        env: { ...process.env, TFM_CONFIG: path.join(TMP, "config.toml") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = new TextDecoder().decode(proc.stdout);
+      expect(out).toBe(`tfm ${pkg.version}\n`);
+      // exits cleanly on its own — no timeout kill, no alternate screen
+      expect(proc.exitCode).toBe(0);
+      expect(out).not.toContain("\x1b[?1049");
+    }
+  });
 });

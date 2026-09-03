@@ -7,6 +7,8 @@
 // Everything renderer-coupled arrives as an injected step so the sequence is
 // testable with fakes. ---
 
+import { debugLog } from "./log";
+
 export type BootCtx = {
   waitForResolution(): Promise<void>;
   buildLayout(): void;
@@ -23,12 +25,21 @@ export type BootCtx = {
 };
 
 export const runBoot = async (ctx: BootCtx): Promise<void> => {
+  // ISO timestamps on every line already give a full timeline in the debug
+  // log — free profiling for slow-boot reports, silent in production
+  debugLog("boot: waitResolution");
   await ctx.waitForResolution();
+  debugLog("boot: buildLayout");
   ctx.buildLayout();
+  debugLog("boot: loadGlobs2");
   await ctx.loadGlobs2();
+  debugLog("boot: restoreSession");
   ctx.restoreSession();
+  debugLog("boot: loadSystemPlaces");
   await ctx.loadSystemPlaces();
+  debugLog("boot: renderAll");
   ctx.renderAll();
+  debugLog("boot: done");
   if (ctx.isDebug) ctx.debugTrace();
   if (ctx.isDebug || ctx.showLaunchTime()) ctx.launchToast();
   ctx.startHygiene();
