@@ -84,7 +84,16 @@ export const makeRename = (ctx: RenameCtx) => {
     }
     ctx.stripSelectable();
     if (!commit || !value) {
-      if (edit.createKind) void rm(edit.key, { recursive: true }).then(() => ctx.renderAll());
+      if (edit.createKind) {
+        void rm(edit.key, { recursive: true })
+          .then(() => ctx.renderAll())
+          .catch(() => {
+            // surface it: a silent rejection left the half-created entry on
+            // disk AND on screen with no error and no repaint
+            ctx.setStatusMsg("Delete failed");
+            void ctx.renderAll();
+          });
+      }
       return;
     }
     if (value !== path.basename(edit.key)) {
