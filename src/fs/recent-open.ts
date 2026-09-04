@@ -5,7 +5,7 @@
 // via ctx. ---
 
 import path from "node:path";
-import { debounced } from "../ui/uiutil";
+import { debounced } from "../lib/uiutil";
 
 export type RecentOpenCtx = {
   inTrashView: () => boolean;

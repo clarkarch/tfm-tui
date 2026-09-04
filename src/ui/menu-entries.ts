@@ -8,8 +8,8 @@ import { setBookmarked, loadSystemPlaces, type Place } from "../fs/places";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import type { ListEntry } from "./ui-menu";
 import type { ClipItem, GridTileRef } from "../input/grid-input";
-
-export type SortMode = "name" | "size" | "mtime" | "type";
+import type { SortMode } from "../lib/sort";
+export type { SortMode } from "../lib/sort";
 
 export type MenuEntriesCtx = {
   closeFileMenu(): void;
@@ -32,8 +32,8 @@ export type MenuEntriesCtx = {
   setClipboard(mode: "copy" | "cut", items: ClipItem[]): void;
   startInlineRename(key: string): void;
   startInlineCreate(kind: "file" | "folder"): void;
-  trashPaths(paths: string[]): void;
-  restoreFromTrash(paths: string[]): void;
+  trashPaths(paths: string[]): Promise<void>;
+  restoreFromTrash(paths: string[]): Promise<void>;
   openProperties(p: string | string[]): void;
   selectAll(): void;
   cwd(): string;

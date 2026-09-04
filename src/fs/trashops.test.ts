@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { trashDir } from "./fsutil";
@@ -40,9 +40,9 @@ const recordingSink = (): TrashOpsSink & {
     notes,
     batches,
     pushUndoBatch: (label, units, redos) => batches.push({ label, units: units.length, redos: redos.length }),
-    status: (msg) => notes.push(`status:${msg}`),
+    setStatusMsg: (msg) => notes.push(`setStatusMsg:${msg}`),
     notify: (msg, title) => notes.push(`notify:${title ?? ""}:${msg}`),
-    refresh: () => notes.push("refresh"),
+    renderAll: () => notes.push("renderAll"),
   };
 };
 
@@ -65,7 +65,7 @@ describe("trashPaths", () => {
       expect(sink.batches[0]!.label).toBe("trash 1 item");
       expect(sink.batches[0]!.units).toBe(1);
       expect(sink.batches[0]!.redos).toBe(1);
-      expect(sink.notes.some((n) => n === "status:Trashed 1 item · ctrl+z to undo")).toBe(true);
+      expect(sink.notes.some((n) => n === "setStatusMsg:Trashed 1 item · ctrl+z to undo")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -78,7 +78,7 @@ describe("trashPaths", () => {
       const ops = makeTrashOps(sink);
       ops.trashPaths([path.join(root, "missing.bin")]);
       await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:trash failed")));
-      expect(sink.notes.some((n) => n.includes("Trashed 0/1") && n.includes("FAILED"))).toBe(true);
+      expect(sink.notes.some((n) => n.includes("Trashed 0 of 1") && n.includes("FAILED"))).toBe(true);
       expect(sink.notes.some((n) => n.startsWith("notify:trash failed"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -117,7 +117,30 @@ describe("restoreFromTrash", () => {
       await settleUntil(() => existsSync(path.join(origDir, "gone.txt")));
       expect(existsSync(path.join(origDir, "gone.txt"))).toBe(true);
       expect(existsSync(path.join(trashDir(), "info", "gone.txt.trashinfo"))).toBe(false);
-      expect(sink.notes.some((n) => n === "status:Restored 1 of 1")).toBe(true);
+      expect(sink.notes.some((n) => n === "setStatusMsg:Restored 1 item · ctrl+z to undo")).toBe(true);
+      // restore is reversible: undo batch re-trashes the restored item
+      expect(sink.batches.length).toBe(1);
+      expect(sink.batches[0]!.label).toBe("restore 1 item");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("recreated original is never clobbered: restore bumps to (copy)", async () => {
+    const root = sandbox();
+    try {
+      const origDir = path.join(root, "orig");
+      mkdirSync(origDir, { recursive: true });
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "files", "gone.txt"), "restored-data");
+      writeFileSync(path.join(trashDir(), "info", "gone.txt.trashinfo"), `[Trash Info]\nPath=${origDir}/gone.txt\n`);
+      writeFileSync(path.join(origDir, "gone.txt"), "current-data");
+      const sink = recordingSink();
+      makeTrashOps(sink).restoreFromTrash([path.join(trashDir(), "files", "gone.txt")]);
+      await settleUntil(() => existsSync(path.join(origDir, "gone (copy).txt")));
+      expect(readFileSync(path.join(origDir, "gone.txt"), "utf8")).toBe("current-data");
+      expect(readFileSync(path.join(origDir, "gone (copy).txt"), "utf8")).toBe("restored-data");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -138,7 +161,7 @@ describe("deleteForever / emptyTrash", () => {
       expect(existsSync(path.join(trashDir(), "files", "x.txt"))).toBe(false);
       expect(existsSync(path.join(trashDir(), "info", "x.txt.trashinfo"))).toBe(false);
       expect(sink.batches.length).toBe(0);
-      expect(sink.notes.some((n) => n === "status:Deleted 1 of 1")).toBe(true);
+      expect(sink.notes.some((n) => n === "setStatusMsg:Deleted 1 item · cannot be undone")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -155,8 +178,8 @@ describe("deleteForever / emptyTrash", () => {
       makeTrashOps(sink).emptyTrash();
       await settleUntil(() => !existsSync(path.join(trashDir(), "files", "a")));
       expect(existsSync(path.join(trashDir(), "files", "a"))).toBe(false);
-      expect(sink.notes.some((n) => n === "notify:trash:Emptied 2 items")).toBe(true);
-      expect(sink.notes.some((n) => n === "status:Trash emptied (2)")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:empty:Emptied 2 items · cannot be undone")).toBe(true);
+      expect(sink.notes.some((n) => n === "setStatusMsg:Emptied 2 items · cannot be undone")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -169,7 +192,7 @@ describe("deleteForever / emptyTrash", () => {
       makeTrashOps(sink).emptyTrash();
       await Bun.sleep(30);
       expect(sink.notes.some((n) => n.startsWith("notify:empty failed:Could not read trash"))).toBe(true);
-      expect(sink.notes.some((n) => n === "status:Trash unreadable")).toBe(true);
+      expect(sink.notes.some((n) => n === "setStatusMsg:Trash unreadable (source gone)")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -197,25 +220,48 @@ describe("makeTrashConfirms", () => {
     return { asked, fired, confirms, runYes: () => onYes?.() };
   };
 
-  test("empty-trash prompt: exact label, verb and danger flag", () => {
-    const { asked, confirms, runYes, fired } = mkEnv();
-    confirms.confirmEmptyTrash();
-    expect(asked[0]).toEqual({ message: "Empty Trash?", yesLabel: "Empty", danger: true });
-    runYes();
-    expect(fired).toEqual(["empty"]);
+  test("empty-trash prompt names the count, exact verb and danger flag", () => {
+    const root = sandbox();
+    try {
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "files", "a"), "1");
+      writeFileSync(path.join(trashDir(), "files", "b"), "2");
+      const { asked, confirms, runYes, fired } = mkEnv();
+      confirms.confirmEmptyTrash();
+      expect(asked[0]).toEqual({
+        message: "Empty Trash (2 items)? This cannot be undone.",
+        yesLabel: "Empty Trash",
+        danger: true,
+      });
+      runYes();
+      expect(fired).toEqual(["empty"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("empty-trash prompt omits the count when the trash is unreadable", () => {
+    const root = sandbox();
+    try {
+      const { asked, confirms } = mkEnv();
+      confirms.confirmEmptyTrash();
+      expect(asked[0]!.message).toBe("Empty Trash? This cannot be undone.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("delete-forever prompt pluralizes and carries the paths into the action", () => {
     const { asked, confirms, runYes, fired } = mkEnv();
     confirms.confirmDeleteForever(["/t/a"]);
-    expect(asked[0]!.message).toBe("Permanently delete 1 item?");
-    expect(asked[0]!.yesLabel).toBe("Delete");
+    expect(asked[0]!.message).toBe("Permanently delete 1 item? This cannot be undone.");
+    expect(asked[0]!.yesLabel).toBe("Delete permanently");
     expect(asked[0]!.danger).toBe(true);
     runYes();
     expect(fired).toEqual(["delete:/t/a"]);
 
     confirms.confirmDeleteForever(["/t/a", "/t/b"]);
-    expect(asked[1]!.message).toBe("Permanently delete 2 items?");
+    expect(asked[1]!.message).toBe("Permanently delete 2 items? This cannot be undone.");
     runYes();
     expect(fired).toEqual(["delete:/t/a", "delete:/t/a,/t/b"]);
   });

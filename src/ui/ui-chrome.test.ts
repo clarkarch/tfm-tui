@@ -121,6 +121,7 @@ beforeAll(async () => {
     dlog: () => {},
     trashPaths: (paths) => {
       calls.trashPaths.push(paths);
+      return Promise.resolve();
     },
     moveInto: (dest, items) => {
       calls.moveInto.push([dest, items]);

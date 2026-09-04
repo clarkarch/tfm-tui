@@ -34,25 +34,31 @@ describe("makeQuit", () => {
   test("a throwing disableDrops still releases, destroys and exits", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "drops"))();
-    expect(calls).toEqual(["drops", "release", "destroy", "exit:0"]);
+    expect(calls).toEqual(["drops", "release", "destroy", "exit:1"]);
   });
 
   test("a throwing shift-release still destroys and exits", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "release"))();
-    expect(calls).toEqual(["drops", "release", "destroy", "exit:0"]);
+    expect(calls).toEqual(["drops", "release", "destroy", "exit:1"]);
   });
 
   test("a throwing renderer destroy still exits", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "destroy"))();
-    expect(calls).toEqual(["drops", "release", "destroy", "exit:0"]);
+    expect(calls).toEqual(["drops", "release", "destroy", "exit:1"]);
   });
 
-  test("exit code is always 0", () => {
-    const calls: string[] = [];
-    const ctx = mkCtx(calls);
-    makeQuit(ctx)();
-    expect(ctx.codes).toEqual([0]);
+  test("exit code is 0 clean, 1 when any teardown step threw", () => {
+    const okCalls: string[] = [];
+    const okCtx = mkCtx(okCalls);
+    makeQuit(okCtx)();
+    expect(okCtx.codes).toEqual([0]);
+    for (const fail of ["drops", "release", "destroy"] as const) {
+      const calls: string[] = [];
+      const ctx = mkCtx(calls, fail);
+      makeQuit(ctx)();
+      expect(ctx.codes).toEqual([1]);
+    }
   });
 });

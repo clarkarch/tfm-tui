@@ -65,6 +65,7 @@ export type GridFoundationWiring = {
 
 export type FileopsWiring = {
   undo: ReturnType<typeof makeUndo>;
+  syncUndoJournal: () => void;
   conflict: ReturnType<typeof makeConflict>;
   progress: ReturnType<typeof makeProgress>;
   fileops: ReturnType<typeof makeFileOps>;

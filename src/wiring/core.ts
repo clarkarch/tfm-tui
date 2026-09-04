@@ -19,7 +19,7 @@ import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup } from "../ui/ui-lookup";
 import { makeSlots } from "../ui/ui-slots";
 import { makeFloats } from "../ui/floats";
-import { clearChildren } from "../ui/uiutil";
+import { clearChildren } from "../lib/uiutil";
 import { initialAppState } from "../app/nav";
 
 export type CoreWiring = ReturnType<typeof wireCore>;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { isCutKeyFor, parseCopiedFiles, sysClipTool } from "./clipboard";
+import { fileUriFor, isCutKeyFor, parseCopiedFiles, sysClipTool } from "./clipboard";
 
 const oldWayland = process.env.WAYLAND_DISPLAY;
 const oldDisplay = process.env.DISPLAY;
@@ -31,7 +31,7 @@ describe("parseCopiedFiles", () => {
     expect(res!.paths).toEqual(["/tmp/x", "/tmp/y"]);
   });
 
-  test("plain text paths are ignored (tfm publishes text; pastes come back as URIs)", () => {
+  test("plain text paths are ignored (tfm publishes gnome-copied-files; pastes come back as URIs)", () => {
     expect(parseCopiedFiles("/tmp/plain\n/tmp/paths")).toBeNull();
   });
 
@@ -45,6 +45,13 @@ describe("parseCopiedFiles", () => {
     const res = parseCopiedFiles("copy\nfile:///tmp/%zz.txt");
     expect(res!.paths).toEqual(["/tmp/%zz.txt"]);
   });
+
+  test("published gnome payloads round-trip through the parser (cross-instance paste)", () => {
+    const uri = fileUriFor("/home/me/a b.txt");
+    expect(uri).toBe("file:///home/me/a%20b.txt");
+    const res = parseCopiedFiles(`copy\n${uri}`);
+    expect(res).toEqual({ op: "copy", paths: ["/home/me/a b.txt"] });
+  });
 });
 
 describe("sysClipTool", () => {
@@ -56,12 +63,13 @@ describe("sysClipTool", () => {
     expect(t!.getArgs).toEqual(["-t", "x-special/gnome-copied-files"]);
   });
 
-  test("X11 xclip serves a few requests then exits", () => {
+  test("X11 xclip serves enough requests then exits (probes + fetch, no mid-paste expiry)", () => {
     delete process.env.WAYLAND_DISPLAY;
     process.env.DISPLAY = ":0";
     const t = sysClipTool();
     expect(t!.put).toBe("xclip");
-    expect(t!.putBase).toEqual(["-selection", "clipboard", "-l", "4"]);
+    expect(t!.putBase).toEqual(["-selection", "clipboard", "-l", "10"]);
+    expect(t!.putMimeArgs).toEqual(["-t", "x-special/gnome-copied-files"]);
   });
 
   test("no display at all → null", () => {

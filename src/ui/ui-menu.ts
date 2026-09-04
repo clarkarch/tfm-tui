@@ -1,7 +1,7 @@
 import { Box, Text } from "@opentui/core";
 import { chromeSurface } from "./style";
 import type { Theme } from "../config/config";
-import { clearChildren } from "./uiutil";
+import { clearChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
@@ -135,7 +135,15 @@ export const makeMenu = (ctx: MenuCtx) => {
   const openContextMenu = (x: number, y: number, _title: string, entries: ListEntry[]): void => {
     const colors = ctx.colors();
     ctx.floats.open("filemenu", rawCloseMenu);
-    state = { idx: 0, entries };
+    // start focus on the first actionable row — a leading separator would
+    // strand keyboard highlight on a spacer until the first arrow key
+    state = {
+      idx: Math.max(
+        0,
+        entries.findIndex((e) => !e.sep),
+      ),
+      entries,
+    };
     const w = ctx.menuW;
     const h = entries.length + 2;
     let px = x,

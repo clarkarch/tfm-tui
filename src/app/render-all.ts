@@ -5,7 +5,7 @@
 // save is scheduled last so the write sees the settled state. Steps arrive as
 // a record of closures — index wires them to the live widgets via arrows. ---
 
-import { safeRenderStep } from "../ui/uiutil";
+import { safeRenderStep } from "../lib/uiutil";
 import { debugLog, isDebug } from "./log";
 import type { AppState } from "./nav";
 

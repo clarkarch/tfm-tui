@@ -66,7 +66,7 @@ const mkGroups = (rowCount = 5): SettingGroup[] => {
       set: () => {},
     })),
   });
-  big.push({ header: "keybindings", rows: mkRows().filter((r) => r.kind === "keybind") });
+  big.push({ header: "keys", rows: mkRows().filter((r) => r.kind === "keybind") });
   return big;
 };
 
@@ -275,6 +275,7 @@ describe("keybind capture", () => {
     expect(menu.captureKey({ name: "a", ctrl: false, shift: false, meta: false })).toBe(true);
     expect(warns.length).toBe(1);
     expect(warns[0]![0]).toContain("type-to-search");
+    expect(warns[0]![1]).toBe("invalid keybind");
     expect(t.captureCharFrame()).toContain("press a key…"); // still capturing
 
     // ctrl+f is valid -> committed via row.set, capture ends
@@ -307,7 +308,7 @@ describe("keybind capture", () => {
 describe("action rows + close policy", () => {
   test("a non-keepOpen action closes the menu, then runs", async () => {
     await openSettings();
-    // switch to the keybindings category (row 0 there is the keybind row; use
+    // switch to the keys category (row 0 there is the keybind row; use
     // the general category's action row instead: row 4)
     for (let i = 0; i < 4; i++) menu.moveMenu(1);
     menu.menuActivate();

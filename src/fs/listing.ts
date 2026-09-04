@@ -6,7 +6,7 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "./uri";
 import { readRecentXbel, readStarredList } from "./recent";
-import type { SortMode } from "../ui/menu-entries";
+import type { SortMode } from "../lib/sort";
 
 export type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
 

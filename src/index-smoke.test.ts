@@ -35,7 +35,7 @@ describe("index.ts smoke boot", () => {
           "8",
           "bun",
           "src/index.ts",
-          TMP, // run INSIDE the sandbox dir so a stray write lands there
+          TMP, // launch dir: index.ts chdirs here, so tabs/history/session start inside the sandbox
         ],
         cwd: path.resolve(import.meta.dir, ".."),
         env: {

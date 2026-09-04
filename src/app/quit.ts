@@ -2,7 +2,9 @@
 // route here). Order is load-bearing: drops disabled BEFORE the renderer dies
 // so no OSC 72 frame is written to a dead terminal, and the XTSHIFTESCAPE
 // request made at boot is released before exiting. Every step is
-// best-effort — a throwing teardown must never strand the user in the TUI. ---
+// best-effort — a throwing teardown must never strand the user in the TUI —
+// but the exit code stays honest: 0 clean, 1 when any step threw (a masked
+// teardown failure used to exit 0, hiding broken shutdowns from scripts). ---
 
 export type QuitCtx = {
   disableDrops(): void;
@@ -14,14 +16,21 @@ export type QuitCtx = {
 export const makeQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
+    let failed = false;
     try {
       ctx.disableDrops();
-    } catch {}
+    } catch {
+      failed = true;
+    }
     try {
       ctx.releaseShiftCapture();
-    } catch {}
+    } catch {
+      failed = true;
+    }
     try {
       ctx.destroy();
-    } catch {}
-    ctx.exit(0);
+    } catch {
+      failed = true;
+    }
+    ctx.exit(failed ? 1 : 0);
   };

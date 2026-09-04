@@ -7,7 +7,13 @@ import { FILE_ICON_BY_EXT, mimeForExt } from "../fs/filetype";
 // registered opencode-style: wasm + query URLs, downloaded once and
 // disk-cached by the client's download utils. Also owns the preview syntax
 // style builder. Pure module — no renderer/state imports; the theme arrives
-// as a parameter. ---
+// as a parameter.
+//
+// Supply chain note: every URL below is version-pinned (v0.24.8, …), but the
+// opentui download API takes plain URLs with no integrity-hash field, so
+// there is nothing to pin a sha against here — treat first-use downloads as
+// untrusted-network traffic (https only) and set TFM_NO_SYNTAX_DL=1 on
+// offline/air-gapped machines. ---
 
 export const EXTRA_PARSERS = [
   {
@@ -83,7 +89,16 @@ export const EXTRA_PARSERS = [
 ];
 
 export const registerSyntaxParsers = (): void => {
-  addDefaultParsers(EXTRA_PARSERS);
+  // offline/proxy-safe: remote grammars download on first use and a failed
+  // fetch must degrade to plain-text previews, never crash boot. Set
+  // TFM_NO_SYNTAX_DL=1 to skip registration entirely (bundled js/ts/md/zig
+  // highlighting still works — those ship inside @opentui/core).
+  if (process.env.TFM_NO_SYNTAX_DL) return;
+  try {
+    addDefaultParsers(EXTRA_PARSERS);
+  } catch (err) {
+    console.error(`tfm: syntax grammars unavailable, previews fall back to plain text (${err})`);
+  }
 };
 
 export const PREVIEW_FT_BY_EXT: Record<string, string> = {

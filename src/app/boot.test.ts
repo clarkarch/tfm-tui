@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { runBoot, type BootCtx } from "./boot";
+import { launchDirFromArgv, runBoot, type BootCtx } from "./boot";
+
+describe("launchDirFromArgv", () => {
+  test("bun layout skips the script, compiled layout has none", () => {
+    expect(launchDirFromArgv(["bun", "src/index.ts", "/tmp/x"])).toBe("/tmp/x");
+    expect(launchDirFromArgv(["/home/u/.local/bin/tfm", "/tmp/x"])).toBe("/tmp/x");
+  });
+
+  test("flags skipped, absent dir is null", () => {
+    expect(launchDirFromArgv(["bun", "src/index.ts", "--debug", "/tmp/x"])).toBe("/tmp/x");
+    expect(launchDirFromArgv(["tfm", "--debug"])).toBeNull();
+    expect(launchDirFromArgv(["bun", "src/index.ts"])).toBeNull();
+    expect(launchDirFromArgv(["tfm"])).toBeNull();
+  });
+});
 
 const mkCtx = (calls: string[], over: Partial<BootCtx> = {}): BootCtx => ({
   waitForResolution: async () => {

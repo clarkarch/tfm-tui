@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   trashDir,
   fsErrText,
+  failSuffix,
   fsMove,
   isTrashFilesDir,
   safeRestoreMove,
@@ -12,6 +13,7 @@ import {
   xdgTrashMove,
   deviceOf,
   crossDevice,
+  encodeTrashPath,
 } from "./fsutil";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
@@ -175,6 +177,9 @@ describe("xdgTrashMove", () => {
   });
 
   test("info-write failure rolls the move back — source intact, no half-trashed state", async () => {
+    // NOTE: fails as root (chmod 555 doesn't block uid 0) — CI runs as
+    // non-root; verified green there. Skipped when euid is 0.
+    if (typeof process.geteuid === "function" && process.geteuid() === 0) return;
     rmSync(path.join(SANDBOX, "Trash"), { recursive: true, force: true });
     const files = mktmp("tfm-trash-rb-");
     const infoDir = path.join(trashDir(), "info");
@@ -188,6 +193,36 @@ describe("xdgTrashMove", () => {
       expect(existsSync(path.join(trashDir(), "files", "rb.txt"))).toBe(false);
     } finally {
       chmodSync(infoDir, 0o755);
+      rmSync(files, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("encodeTrashPath", () => {
+  test("plain paths pass through unchanged", () => {
+    expect(encodeTrashPath("/tmp/plain.txt")).toBe("/tmp/plain.txt");
+  });
+
+  test("spaces, %, # and unicode are percent-encoded per segment, slashes survive", () => {
+    expect(encodeTrashPath("/tmp/a b/c%d.txt")).toBe("/tmp/a%20b/c%25d.txt");
+    const enc = encodeTrashPath("/home/me/#hash éprouvé.txt");
+    expect(enc).not.toContain(" ");
+    expect(enc).not.toContain("#");
+    expect(decodeURIComponent(enc)).toBe("/home/me/#hash éprouvé.txt");
+  });
+});
+
+describe("xdgTrashMove encoding", () => {
+  test("Path= is percent-encoded and resolves back to the source", async () => {
+    const files = mktmp("tfm-trash-enc-");
+    try {
+      const src = path.join(files, "sp ace.txt");
+      W(src, "data");
+      const loc = await xdgTrashMove(src);
+      const info = readFileSync(path.join(trashDir(), "info", `${path.basename(loc)}.trashinfo`), "utf8");
+      expect(info).toContain(`Path=${encodeTrashPath(src)}`);
+      expect(info).toContain("%20");
+    } finally {
       rmSync(files, { recursive: true, force: true });
     }
   });
@@ -222,6 +257,13 @@ describe("fsErrText", () => {
     expect(fsErrText({ code: "EWOULDNEVER" })).toBe("ewouldnever");
     expect(fsErrText(new Error("EACCES: permission denied, open '/x'"))).toBe("eacces");
     expect(fsErrText("plain string")).toBe("unknown error");
+  });
+});
+
+describe("failSuffix", () => {
+  test("first reason wins, empty set omits the parens", () => {
+    expect(failSuffix(2, new Set(["disk full", "source gone"]))).toBe("2 FAILED (disk full)");
+    expect(failSuffix(1, new Set())).toBe("1 FAILED");
   });
 });
 

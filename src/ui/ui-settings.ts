@@ -183,7 +183,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           ? row.fmt(row.get())
           : (() => {
               const i = row.getIdx();
-              return i >= 0 ? (row.names[i] ?? "?") : "custom";
+              return i >= 0 ? (row.names[i] ?? "?") : (row.customLabel?.() ?? "custom");
             })();
     setOnId(`tfm-set-rowv-${index}`, (n) => {
       n.content = value.length > 12 ? value.slice(0, 12) : value;
@@ -204,7 +204,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (!spec) return true;
     const problem = validateKeybindSpec(spec);
     if (problem) {
-      ctx.warn(problem, "keybind");
+      ctx.warn(problem, "invalid keybind");
       return true; // stay in capture so the user can retry
     }
     const row = rowsOf(st.catIdx)[st.capturing];

@@ -17,7 +17,7 @@ import { makeRecentOpen } from "../fs/recent-open";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
-import { clearChildren } from "../ui/uiutil";
+import { clearChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
@@ -104,6 +104,7 @@ export const wireChrome = async (deps: {
     closeFileMenu: menu.closeFileMenu,
     blurTerminal: () => getFileops().terminal.blurTerminal(),
     navigate: nav.navigate,
+    setStatusMsg: nav.setStatusMsg,
     canBack: nav.canBack,
     canFwd: nav.canFwd,
     goBack: nav.goBack,

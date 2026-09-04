@@ -1,8 +1,8 @@
 import { Box, CodeRenderable, Text, type SyntaxStyle } from "@opentui/core";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { clearChildren } from "./uiutil";
+import { clearChildren } from "../lib/uiutil";
 import { slotBg } from "./style";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
@@ -11,9 +11,10 @@ import type { Theme } from "../config/config";
 
 // --- Preview pane (right sidebar): image thumbs go through the shared
 // thumb-job sink, text files render via CodeRenderable + tree-sitter
-// (machinery in ./syntax.ts), directories get a header only. ctx-seamed like
-// ui-props/ui-term; the gen-counter guards stale async file reads so a slow
-// preview can't paint over a newer one. tfm-preview-* ids stay byte-identical. ---
+// (machinery in ./syntax.ts), directories get a header + entry count (full
+// stats live in Properties…). ctx-seamed like ui-props/ui-term; the
+// gen-counter guards stale async file reads so a slow preview can't paint
+// over a newer one. tfm-preview-* ids stay byte-identical. ---
 
 export type ThumbJobLike = {
   slotId: string;
@@ -112,6 +113,7 @@ export const makePreview = (ctx: PreviewCtx) => {
     try {
       st = statSync(key);
     } catch {
+      pane.add(Text({ content: "source gone", fg: colors.sidebarFgMuted }));
       return;
     }
     if (gen !== previewGen) return;
@@ -120,8 +122,17 @@ export const makePreview = (ctx: PreviewCtx) => {
     pane.add(Text({ content: ` ${path.basename(key)}${isDirTarget ? "/" : ""}`, fg: colors.white }));
     pane.add(Text({ content: "~".repeat(Math.max(0, ctx.previewWidth() - 2)), fg: colors.divider }));
 
-    // metadata lives in right-click -> Properties…; the pane shows content only
+    // directories show a count + pointer instead of a blank pane under a
+    // header (full stats live in right-click → Properties…)
     if (isDirTarget) {
+      try {
+        const n = readdirSync(key).length;
+        pane.add(
+          Text({ content: ` ${n} item${n === 1 ? "" : "s"} — Properties… for details`, fg: colors.sidebarFgMuted }),
+        );
+      } catch {
+        pane.add(Text({ content: "can't list this folder", fg: colors.sidebarFgMuted }));
+      }
       void ctx.drainIconQueue();
       return;
     }

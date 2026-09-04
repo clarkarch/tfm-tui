@@ -4,7 +4,7 @@
 // injected (selection's updateSelectionStatusReal) so this module stays
 // renderer-free — nodes arrive through byId. ---
 
-import { debounced } from "./uiutil";
+import { debounced } from "../lib/uiutil";
 
 export type StatusCtx = {
   byId(id: string): any;

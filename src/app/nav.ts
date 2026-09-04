@@ -7,11 +7,11 @@
 import path from "node:path";
 import { statSync } from "node:fs";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
-import type { SortMode } from "../ui/menu-entries";
+import type { SortMode } from "../lib/sort";
 import type { Config } from "../config/config";
 import type { TabStateRef } from "./tabs";
 import type { makeTabs } from "./tabs";
-import { debounced } from "../ui/uiutil";
+import { debounced } from "../lib/uiutil";
 import { readRestoredSession, saveSession } from "../fs/session";
 import { debugLog } from "./log";
 

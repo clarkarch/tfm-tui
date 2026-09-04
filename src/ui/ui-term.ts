@@ -1,5 +1,5 @@
 import { Box, EmbeddedTerminalRenderable, Text } from "@opentui/core";
-import { clearChildren } from "./uiutil";
+import { clearChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
 import { applySurface } from "./style";
 import { gridDrag } from "../input/grid-input";

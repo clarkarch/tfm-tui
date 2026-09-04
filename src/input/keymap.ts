@@ -1,9 +1,10 @@
 // --- Keyboard router: ONE keypress entry point with a strict precedence
-// chain — quit > capture > conflict > yes/no > rename > props > esc-menu >
-// terminal > path-edit > file menu > search > sidebar > grid. Action keys are
-// remappable via config [keys] (see config-schema.ts); modal-internal nav
-// (arrows/enter/esc inside menus) and type-to-search stay structural. The
-// modal chain order IS load-bearing — do not reorder. ---
+// chain — capture > quit > conflict > yes/no > rename > props > esc-menu >
+// terminal > path-edit > file menu > search > sidebar > grid > actions.
+// Action keys are remappable via config [keys] (see config-schema.ts);
+// modal-internal nav (arrows/enter/esc inside menus) and type-to-search stay
+// structural. The order IS load-bearing — do not reorder; handleKey below is
+// the canonical sequence, this header mirrors it. ---
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { loadSystemPlaces } from "../fs/places";
@@ -88,8 +89,8 @@ export type KeyRouterCtx = {
   // --- file ops ---
   inTrashView(): boolean;
   confirmDeleteForever(paths: string[]): void;
-  trashPaths(paths: string[]): void;
-  restoreFromTrash(paths: string[]): void;
+  trashPaths(paths: string[]): Promise<void>;
+  restoreFromTrash(paths: string[]): Promise<void>;
   startInlineRename(p: string): void;
   startInlineCreate(kind: "file" | "folder"): void;
   openProperties(paths: string[]): void;
@@ -101,6 +102,7 @@ export type KeyRouterCtx = {
   setClipboard(mode: "copy" | "cut", items: Array<{ path: string; isDir: boolean }>): void;
   isVirtualCwd(): boolean;
   pasteSmart(dir: string): void;
+  setStatusMsg(msg: string): void;
   undoLast(): void;
   redoLast(): void;
 };
@@ -111,6 +113,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // sidebar keyboard focus
   let sidebarActive = false;
   let placeIdx = -1;
+  // terminal-hint throttle: the "click the grid to leave" status shows once
+  // per terminal focus visit, not on every swallowed keypress
+  let termHintShown = false;
 
   // does this event match any configured bind for the action?
   const enterAlias = (name: string): string | null =>
@@ -156,7 +161,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // --- Precedence stages below: each returns true when it consumes the event.
   // Order is load-bearing (capture > quit > conflict > yes/no > rename >
   // props > esc-menu > terminal > path-edit > file menu > search > sidebar >
-  // grid > actions) — do not reorder. ---
+  // grid > actions) — do not reorder; mirrors the module header. ---
 
   // Modal layers swallow everything while open (mostly mouse-driven dialogs).
   const handleModalKeys = (ev: KeyPressEvent): boolean => {
@@ -190,8 +195,16 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return true;
     }
     // embedded terminal owns the keyboard while focused — everything below is
-    // host UI. Click the grid/sidebar (or ✕) to leave the shell.
-    if (ctx.termOwnsKeyboard()) return true;
+    // host UI. Say so on the status bar (once per focus visit, not per key)
+    // instead of dead-ending silently: users otherwise think the app hung.
+    if (ctx.termOwnsKeyboard()) {
+      if (!termHintShown) {
+        termHintShown = true;
+        ctx.setStatusMsg("Terminal owns keyboard — click the grid to leave");
+      }
+      return true;
+    }
+    termHintShown = false;
     if (ctx.pathInputVisible() || ctx.pathEditMode()) {
       if (ev.name === "escape") ctx.exitPathEdit();
       return true;
@@ -207,8 +220,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const entries = fmenu.entries;
     const count = entries.length;
     const step = (delta: number) => {
+      // skip separators; bounded so an all-separator menu can't spin forever
       let i = (fmenu.idx + delta + count) % count;
-      while (entries[i]?.sep) i = (i + delta + count) % count;
+      for (let n = 0; entries[i]?.sep && n < count; n++) i = (i + delta + count) % count;
       fmenu.idx = i;
       ctx.renderFileMenu();
     };
@@ -499,7 +513,13 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       ctx.setClipboard("cut", selected);
       return;
     }
-    if (hit(ev, "paste") && !ctx.isVirtualCwd() && !ctx.inTrashView()) {
+    if (hit(ev, "paste")) {
+      // virtual views and the trash aren't paste targets — say so instead of
+      // swallowing the key (pasteSmart itself guards Trash/files too)
+      if (ctx.isVirtualCwd() || ctx.inTrashView()) {
+        ctx.setStatusMsg("Can't paste here");
+        return;
+      }
       ctx.pasteSmart(ctx.state.cwd);
       return;
     }

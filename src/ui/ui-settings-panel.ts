@@ -179,7 +179,7 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
   // footer hints — pane- and state-aware
   const hint =
     st.capturing !== null
-      ? "press a key…  esc/enter/click = cancel"
+      ? "press a key…  esc/enter/tab/click = cancel"
       : st.pane === "cats"
         ? "click or enter selects · ←→ · tab = rows"
         : `↑↓ move · ←→ adjust${canScroll ? " · wheel scrolls" : ""} · tab = categories`;
@@ -262,7 +262,7 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
           ? rowSpec.fmt(rowSpec.get())
           : (() => {
               const i = rowSpec.getIdx();
-              return i >= 0 ? (rowSpec.names[i] ?? "?") : "custom";
+              return i >= 0 ? (rowSpec.names[i] ?? "?") : (rowSpec.customLabel?.() ?? "custom");
             })();
       control = Box(
         { flexDirection: "row", alignItems: "center" },

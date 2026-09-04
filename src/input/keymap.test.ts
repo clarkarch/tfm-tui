@@ -128,8 +128,14 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     },
     inTrashView: () => false,
     confirmDeleteForever: (ps) => calls.push(`deleteForever:${ps.join(",")}`),
-    trashPaths: (ps) => calls.push(`trash:${ps.join(",")}`),
-    restoreFromTrash: (ps) => calls.push(`restore:${ps.join(",")}`),
+    trashPaths: (ps) => {
+      calls.push(`trash:${ps.join(",")}`);
+      return Promise.resolve();
+    },
+    restoreFromTrash: (ps) => {
+      calls.push(`restore:${ps.join(",")}`);
+      return Promise.resolve();
+    },
     startInlineRename: (p) => calls.push(`rename:${p}`),
     startInlineCreate: (k) => calls.push(`create:${k}`),
     openProperties: (ps) => calls.push(`props:${ps.join(",")}`),
@@ -141,6 +147,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     setClipboard: (mode, items) => calls.push(`clip:${mode}:${items.length}`),
     isVirtualCwd: () => false,
     pasteSmart: (d) => calls.push(`paste:${d}`),
+    setStatusMsg: (m) => calls.push(`setStatusMsg:${m}`),
     undoLast: rec("undo"),
     redoLast: rec("redo"),
     ...over,
@@ -218,12 +225,12 @@ describe("precedence chain", () => {
     expect(h.escMenuState.open).toBe(false);
   });
 
-  test("embedded terminal owns the keyboard — nothing below it fires", () => {
+  test("embedded terminal owns the keyboard — hint once, then nothing below it fires", () => {
     const h = makeHarness({ termOwnsKeyboard: () => true });
     h.key("escape");
     h.key("down");
     h.key("x");
-    expect(h.calls).toEqual([]);
+    expect(h.calls).toEqual(["setStatusMsg:Terminal owns keyboard — click the grid to leave"]);
   });
 
   test("path edit: esc exits, everything else swallowed", () => {
@@ -520,18 +527,18 @@ describe("file operation keys", () => {
     expect(h.calls).toEqual(["clip:copy:4", "clip:cut:4", "paste:/tmp/tfm-kb/sub"]);
   });
 
-  test("ctrl+v in a virtual cwd is swallowed", () => {
+  test("ctrl+v in a virtual cwd reports it can't paste there", () => {
     const h = makeHarness({ isVirtualCwd: () => true });
     h.key("a", { ctrl: true });
     h.key("v", { ctrl: true });
-    expect(h.calls).toEqual([]);
+    expect(h.calls).toEqual(["setStatusMsg:Can't paste here"]);
   });
 
-  test("ctrl+v in trash view is swallowed (no trashinfo on paste)", () => {
+  test("ctrl+v in trash view reports it can't paste there (no trashinfo on paste)", () => {
     const h = makeHarness({ inTrashView: () => true });
     h.key("a", { ctrl: true });
     h.key("v", { ctrl: true });
-    expect(h.calls).toEqual([]);
+    expect(h.calls).toEqual(["setStatusMsg:Can't paste here"]);
   });
 
   test("ctrl+z undoes; ctrl+y and ctrl+shift+z redo", () => {

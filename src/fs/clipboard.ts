@@ -1,35 +1,62 @@
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import path from "node:path";
 
 // --- System clipboard bridge (Nautilus-style copied-files). Nautilus
 // publishes files on the CLIPBOARD selection as MIME
 // `x-special/gnome-copied-files`: first line = "copy"|"cut", then one
-// file:// URI per line.
+// file:// URI per line (percent-encoded).
 //
-// CLI tools can offer only ONE mime type per selection owner — can't have
-// both gnome-copied-files and text. We publish PLAIN TEXT full paths (one per
-// line) so paste-anywhere works; reading stays gnome-copied-files only (other
-// apps' file pastes), internal pastes go through ./fileops's clipboard. ---
+// We publish the SAME gnome format (not bare text paths) so Tfm→Nautilus
+// paste-as-files works and cross-instance Tfm→Tfm pastes round-trip through
+// readCopiedFilesFromSystemClipboard. Pasting into a text editor yields
+// `copy\nfile://…` lines (same as Nautilus) instead of bare paths —
+// file-manager interop wins over clean text paste. ---
 
 export const CLIP_TYPE = "x-special/gnome-copied-files";
 
-export type ClipTool = { get: string; put: string; putBase: string[]; getArgs: string[] };
+export type ClipTool = {
+  get: string;
+  put: string;
+  putBase: string[];
+  /** extra args to offer the gnome mime type on publish */
+  putMimeArgs: string[];
+  getArgs: string[];
+};
 
 export const sysClipTool = (): ClipTool | null => {
   if (process.env.WAYLAND_DISPLAY) {
-    return { get: "wl-paste", put: "wl-copy", putBase: [], getArgs: ["-t", CLIP_TYPE] };
+    return {
+      get: "wl-paste",
+      put: "wl-copy",
+      putBase: [],
+      putMimeArgs: ["-t", CLIP_TYPE],
+      getArgs: ["-t", CLIP_TYPE],
+    };
   }
   if (process.env.DISPLAY) {
-    // -l 4: serve a few requests (target probe + fetch) then exit so we don't own it forever
+    // -l 10: serve target probes + fetches from the file manager AND a text
+    // preview without expiring mid-paste (-l 4 expired after a few requests)
     return {
       get: "xclip",
       put: "xclip",
-      putBase: ["-selection", "clipboard", "-l", "4"],
+      putBase: ["-selection", "clipboard", "-l", "10"],
+      putMimeArgs: ["-t", CLIP_TYPE],
       getArgs: ["-selection", "clipboard", "-o", "-t", CLIP_TYPE],
     };
   }
   return null;
+};
+
+// "/home/me/a b.txt" -> "file:///home/me/a%20b.txt"
+export const fileUriFor = (p: string): string => {
+  const abs = path.resolve(p);
+  const encoded = abs
+    .split(path.sep)
+    .map((seg, i) => (i === 0 && seg === "" ? "" : encodeURIComponent(seg)))
+    .join("/");
+  return `file://${encoded}`;
 };
 
 // "file:///home/me/a%20b.txt" -> "/home/me/a b.txt"
@@ -52,9 +79,7 @@ export const isCutKeyFor = (
 ): boolean => clip?.mode === "cut" && clip.items.some((i) => i.path === key);
 
 // parse a gnome-copied-files payload: op from the first line ("cut" → move),
-// body = file:// URIs only (plain text paths are intentionally ignored — tfm
-// publishes text so paste-anywhere works, and internal pastes never come back
-// through here). null when the payload holds no usable URIs.
+// body = file:// URIs only. null when the payload holds no usable URIs.
 export const parseCopiedFiles = (text: string): CopiedFiles | null => {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (!lines.length) return null;
@@ -69,8 +94,8 @@ const execFileP = promisify(execFile);
 
 type ClipLog = (msg: string) => void;
 
-// publish plain-text full paths (one per line) so paste-after-copy works in
-// any app; fails silently with a log line when no tool is available
+// publish gnome-copied-files so GUI file managers (and other tfm instances)
+// can paste as files; fails silently with a log line when no tool is available
 export const publishPathsToSystemClipboard = (
   mode: string,
   items: { path: string }[],
@@ -78,12 +103,13 @@ export const publishPathsToSystemClipboard = (
 ): void => {
   const t = sysClipTool();
   if (!t || !items.length) return;
-  const payload = items.map((i) => i.path).join("\n");
+  const header = mode === "cut" ? "cut" : "copy";
+  const payload = [header, ...items.map((i) => fileUriFor(i.path))].join("\n");
   try {
-    const p = spawn(t.put, [...t.putBase], { stdio: ["pipe", "ignore", "ignore"] });
+    const p = spawn(t.put, [...t.putMimeArgs, ...t.putBase], { stdio: ["pipe", "ignore", "ignore"] });
     p.stdin?.end(payload);
     p.unref?.();
-    log(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (text paths)`);
+    log(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (${CLIP_TYPE})`);
   } catch (err) {
     log(`system clipboard FAILED: ${err}`);
   }

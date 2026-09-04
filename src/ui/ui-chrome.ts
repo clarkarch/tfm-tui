@@ -1,7 +1,7 @@
 import { Box, Text } from "@opentui/core";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { clearChildren } from "./uiutil";
+import { clearChildren } from "../lib/uiutil";
 import { applySurface, rowSurface, slotBg, tileSurface } from "./style";
 import { buildSections, loadSystemPlaces, type Place } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
@@ -45,7 +45,7 @@ export type ChromeCtx = {
   sidebarEntriesFor(place: Place, x: number, y: number): ListEntry[];
   finishDrag(): void; // was finishDragCtx()
   dlog(msg: string): void;
-  trashPaths(paths: string[]): void;
+  trashPaths(paths: string[]): Promise<void>;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
   kbActive(): boolean; // sidebarActive
   kbIdx(): number; // placeIdx
@@ -150,8 +150,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
           // hardcoded ~/.local/share path diverges under a relocated trash
           // root and the drop would plain-move without a .trashinfo
           if (target === path.join(trashDir(), "files")) {
-            // dropping onto the trash place must gio-trash, not plain-move —
-            // otherwise no .trashinfo is written and items can't be restored
+            // dropping onto the trash place must go through trashPaths (own
+            // .trashinfo writer), not plain-move — otherwise no .trashinfo is
+            // written and items can't be restored
             void ctx.trashPaths(rest.map((k) => k.path));
           } else {
             void ctx.moveInto(target, rest);

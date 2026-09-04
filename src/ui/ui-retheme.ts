@@ -11,7 +11,7 @@ import { bumpHex } from "../config/color";
 import { applySurface, chromeSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
-import { debounced } from "./uiutil";
+import { debounced } from "../lib/uiutil";
 
 export type RethemeCtx = {
   // live object refs — applyConfig mutates them in place
@@ -38,6 +38,9 @@ export type RethemeCtx = {
   fileMenuIsOpen(): boolean;
   renderFileMenu(): void;
   setStatusMsg(msg: string): void;
+  // side-effect hook for non-visual config consumers (undo journal sync).
+  // Runs at the end of every applyConfig — optional so tests stay light.
+  onConfigApplied?(): void;
 };
 
 export const makeRetheme = (ctx: RethemeCtx) => {
@@ -154,6 +157,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         Bun.gc(false);
       } catch {}
     }
+    try {
+      ctx.onConfigApplied?.();
+    } catch {}
     ctx.renderAll();
   };
 

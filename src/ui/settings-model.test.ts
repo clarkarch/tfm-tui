@@ -66,12 +66,12 @@ const asKeybind = (r: SettingRow): Extract<SettingRow, { kind: "keybind" }> => {
 describe("settingGroups shape", () => {
   test("headers in the documented order", () => {
     const h = mk();
-    expect(h.groups().map((g) => g.header)).toEqual(["general", "layout", "behavior", "keybindings", "config"]);
+    expect(h.groups().map((g) => g.header)).toEqual(["general", "layout", "behavior", "keys", "config"]);
   });
 
   test("every keybind action gets a row", () => {
     const h = mk();
-    const kb = h.groups().find((g) => g.header === "keybindings")!.rows;
+    const kb = h.groups().find((g) => g.header === "keys")!.rows;
     expect(kb.length).toBe(KEY_SCHEMA.length);
     expect(kb.every(isKeybind)).toBe(true);
   });
@@ -160,6 +160,17 @@ describe("hand-written rows", () => {
     asCycle(row).setIdx(1);
     expect(h.config.theme).toEqual(THEME_PRESETS[1]!.theme);
     expect(h.config.theme).not.toBe(THEME_PRESETS[1]!.theme); // fresh copy, not the preset object
+  });
+
+  test("hand-edited theme reports ~nearest preset, exact match reports none needed", () => {
+    const h = mk();
+    const row = h.byLabel("theme");
+    if (row.kind !== "cycle" || !row.customLabel) throw new Error("theme row must be a cycle with customLabel");
+    // default config IS Tokyo Night (preset 0) — nearest is itself
+    expect(row.getIdx()).toBe(0);
+    h.config.theme = { ...THEME_PRESETS[2]!.theme, bg: "#000000" };
+    expect(row.getIdx()).toBe(-1);
+    expect(row.customLabel()).toBe(`~${THEME_PRESETS[2]!.name}`);
   });
 });
 

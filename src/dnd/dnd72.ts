@@ -24,6 +24,11 @@ import {
   uriListPayload,
 } from "./osc72";
 import { gridDrag, TileVisual, type ClipItem, type GridTileRef, type TileVisualMode } from "../input/grid-input";
+import { trashDir } from "../fs/fsutil";
+
+// terminal-provided error text can be long or binary — keep one short line
+// for the status bar; the full payload stays in the debug log
+const shortReason = (s: string): string => (s.length > 80 ? `${s.slice(0, 77)}…` : s) || "unknown error";
 
 // "]72;<meta>;<payload>" → { meta, payload } — ST/BEL/8-bit terminators are
 // stripped; null when the sequence isn't OSC 72
@@ -54,7 +59,7 @@ export type Dnd72Ctx = {
   finishDrag(): void;
   escMenuOpen(): boolean;
   fileMenuOpen(): boolean;
-  trashPaths(paths: string[]): void;
+  trashPaths(paths: string[]): Promise<void>;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
   runTransfer(op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void>;
   cwd(): string;
@@ -166,8 +171,9 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     }
     const destDir = target.path;
     // same routing as tile/place drops: conflict prompt, undo units, honest counts —
-    // never silently skip collisions; the trash place must gio-trash, not raw-move
-    if (destDir === path.join(ctx.home, ".local/share/Trash/files")) {
+    // never silently skip collisions; the trash place must go through
+    // trashPaths (own .trashinfo writer), not raw-move
+    if (destDir === path.join(trashDir(), "files")) {
       void ctx.trashPaths(paths);
       return;
     }
@@ -208,7 +214,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       void ctx.trashPaths(paths);
       return;
     }
-    await ctx.runTransfer("copy", ctx.cwd(), paths, "drop");
+    await ctx.runTransfer("copy", ctx.cwd(), paths, `drop ${paths.length} item${paths.length === 1 ? "" : "s"}`);
   };
 
   const handleOsc72 = (meta: string, payload: string): void => {
@@ -239,7 +245,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
         const finishExternal = (): void => {
           if (!canceled && pathsAtEnd && !selfHandled) {
             // released over another app: honor move semantics by trashing our copies
-            if (dragOp === 2) ctx.trashPaths(pathsAtEnd);
+            if (dragOp === 2) void ctx.trashPaths(pathsAtEnd);
             else ctx.notify(`Sent ${pathsAtEnd.length} item${pathsAtEnd.length === 1 ? "" : "s"}`, "drag & drop");
           } else if (canceled) ctx.setStatusMsg("drag cancelled");
           dragPaths = null;
@@ -305,12 +311,16 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     }
     if (t === "R") {
       ctx.log(`drop error: ${payload}`);
-      ctx.setStatusMsg("drop failed");
+      const summary = `Drop failed (${shortReason(payload)})`;
+      ctx.setStatusMsg(summary);
+      ctx.notify(summary, "drop failed");
       return;
     }
     if (t === "E") {
       ctx.log(`drag offer error: ${payload}`);
-      ctx.setStatusMsg("drag failed");
+      const summary = `Drag failed (${shortReason(payload)})`;
+      ctx.setStatusMsg(summary);
+      ctx.notify(summary, "drag failed");
       return;
     }
     ctx.log(`unhandled osc72 type t=${JSON.stringify(t)} x=${x} y=${y} payloadLen=${payload.length}`);

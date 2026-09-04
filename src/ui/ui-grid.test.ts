@@ -8,7 +8,7 @@ import { makeGridRenderer, type GridState } from "./ui-grid";
 import { makeSelection } from "../input/selection";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
-import type { SortMode } from "./menu-entries";
+import type { SortMode } from "../lib/sort";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // grid renderer's observable contract: painted frames per view mode, the

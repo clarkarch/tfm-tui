@@ -48,6 +48,12 @@ export const glyph: Record<string, string> = {
   email: "\u{F01EE}",
   magnet: "\u{F0347}",
   android: "\u{F0032}",
+  // sort-direction arrows (menu hintIcon): standard Unicode arrows, NOT Nerd
+  // PUA codepoints — U+2191/2193 ship in Meslo and virtually every monospace
+  // font, so they render even where the Nerd patch is incomplete. Without
+  // these the active sort column falls back to U+FFFD tofu in glyph mode.
+  "arrow-up": "↑",
+  "arrow-down": "↓",
 };
 
 export const glyphFor = (name: string): string => glyph[name] ?? "\u{FFFD}";

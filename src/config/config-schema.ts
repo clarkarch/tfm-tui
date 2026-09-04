@@ -56,6 +56,7 @@ export type UiConfig = {
   previewEnabled: boolean;
   previewWidth: number;
   restoreSession: boolean;
+  persistUndo: boolean;
   transparentBg: boolean;
   uiStyle: UiStyle;
   tabBar: boolean;
@@ -265,6 +266,16 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = reopen the folder from the last quit instead of the launch cwd",
     label: "restore session",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "persist-undo",
+    prop: "persistUndo",
+    def: false,
+    doc: "true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)",
+    label: "persistent undo",
     group: "general",
   },
   {
