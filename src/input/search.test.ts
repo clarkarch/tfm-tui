@@ -13,7 +13,7 @@ const makeClock = () => {
       return job;
     },
     clearTimeout(handle: unknown): void {
-      const i = jobs.findIndex((j) => j === handle);
+      const i = jobs.indexOf(handle as { at: number; fn: () => void });
       if (i >= 0) jobs.splice(i, 1);
     },
     advance(ms: number): void {
