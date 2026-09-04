@@ -4,25 +4,41 @@
 // Renderer-free — node access goes through byId; renderGrid/termHasFocus
 // arrive as getters so the factory can exist pre-boot (TDZ seam rule). ---
 
-import { debounced } from "../ui/uiutil";
+import { debounced, type Scheduler } from "../ui/uiutil";
 
 export type SearchCtx = {
   byId: (id: string) => any;
   renderGrid: () => void | Promise<void>;
   // the embedded terminal owns the keyboard — never hijack into search
   termHasFocus: () => boolean;
+  // injectable clock (tests use a virtual one); defaults to the real timers
+  sched?: Scheduler;
 };
 
 export const makeSearch = (ctx: SearchCtx) => {
+  const sched: Scheduler = ctx.sched ?? globalThis;
   let searchQuery = "";
+  let focusTimer: unknown = null;
 
   const clearSearch = (): void => {
     searchQuery = "";
+    if (focusTimer !== null) {
+      sched.clearTimeout(focusTimer);
+      focusTimer = null;
+    }
     try {
       const el: any = ctx.byId("tfm-search");
       if (el) {
         el.value = "";
         el.visible = false;
+        // the boot-baked input keeps renderer focus otherwise: its input
+        // handler keeps updating searchQuery (debounced renderGrid filters
+        // the folder) with the box invisible and no structural escape —
+        // the type-to-search catch-all needs searchVisible(), so the keymap
+        // never sees the keystrokes
+        try {
+          el.blur?.();
+        } catch {}
       }
     } catch {}
   };
@@ -37,7 +53,9 @@ export const makeSearch = (ctx: SearchCtx) => {
     el.value = ch;
     searchQuery = ch;
     void ctx.renderGrid();
-    setTimeout(() => {
+    if (focusTimer !== null) sched.clearTimeout(focusTimer);
+    focusTimer = sched.setTimeout(() => {
+      focusTimer = null;
       try {
         el.focus();
       } catch {}
@@ -50,7 +68,7 @@ export const makeSearch = (ctx: SearchCtx) => {
   const wireSearchInput = (): void => {
     const inputEl: any = ctx.byId("tfm-search");
     if (!inputEl?.on) return;
-    const renderSearchResults = debounced(150, () => void ctx.renderGrid());
+    const renderSearchResults = debounced(150, () => void ctx.renderGrid(), sched);
     inputEl.on("input", () => {
       try {
         searchQuery = String(inputEl.value ?? "");
