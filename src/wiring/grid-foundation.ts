@@ -44,6 +44,7 @@ export const wireGridFoundation = (deps: {
     performRename: (p, name) => getFileops().fileops.performRename(p, name),
     pushUndoBatch: (label, undos, redos) => getFileops().undo.pushUndoBatch(label, undos, redos),
     setStatusMsg: nav.setStatusMsg,
+    notify: chrome.notify,
     isVirtualCwd: core.isVirtualCwd,
     inTrashView: core.inTrashView,
     cwd: () => core.state.cwd,

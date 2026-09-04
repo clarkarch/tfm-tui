@@ -4,12 +4,13 @@
 // renderGrid read it without a module-level import from index. ---
 import { InputRenderable, Text } from "@opentui/core";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { UndoUnit } from "../app/undo";
 import type { Theme } from "../config/config";
+import { fsErrText, uniqueTarget } from "../fs/fsutil";
 
-export type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder" };
+export type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
 
 export type RenameCtx = {
   renderer(): any;
@@ -23,6 +24,7 @@ export type RenameCtx = {
   performRename(p: string, name: string): void | Promise<void>;
   pushUndoBatch(label: string, undos: Array<() => Promise<void> | void>, redos: Array<UndoUnit>): void;
   setStatusMsg(msg: string): void;
+  notify(msg: string, title?: string): void;
   isVirtualCwd(): boolean;
   inTrashView(): boolean;
   cwd(): string;
@@ -80,7 +82,21 @@ export const makeRename = (ctx: RenameCtx) => {
         content: tileLabelFor(path.basename(edit.key), ctx.tileW()),
         fg: refs.baseFg,
       });
-      tile.add(labelText);
+      // restore at the label's ORIGINAL index, not via add(): in list rows
+      // (icon | name | … | size | date) an append drops the name after the
+      // date — the same-name create path never rebuilds, so it stayed there
+      const kids: any[] = typeof tile.getChildren === "function" ? [...tile.getChildren()] : [];
+      const at = edit.labelIdx !== undefined && edit.labelIdx <= kids.length ? edit.labelIdx : kids.length;
+      const before = kids[at];
+      if (before) {
+        try {
+          tile.insertBefore(labelText, before);
+        } catch {
+          tile.add(labelText);
+        }
+      } else {
+        tile.add(labelText);
+      }
     }
     ctx.stripSelectable();
     if (!commit || !value) {
@@ -96,38 +112,70 @@ export const makeRename = (ctx: RenameCtx) => {
       }
       return;
     }
-    if (value !== path.basename(edit.key)) {
-      // create-unit is pushed BEFORE performRename so undo pops rename-back
-      // first, then removes the entry entirely
-      if (edit.createKind) {
-        const k = edit.key;
-        ctx.pushUndoBatch(
-          edit.createKind === "folder" ? "new folder" : "new file",
-          [() => rm(k, { recursive: true })],
-          [redoCreateUnit(k, edit.createKind)],
-        );
-      }
-      void ctx.performRename(edit.key, value);
-      return;
-    }
     if (edit.createKind) {
+      // the whole create is ONE user action: land the final name right here
+      // (no performRename detour — that would push a second "rename" undo
+      // batch and report "Renamed to …" for a file the user just made) and
+      // push a single undo batch for the final path: undo deletes it, redo
+      // recreates it
       const k = edit.key;
+      const dir = path.dirname(k);
+      let target = k;
+      if (value !== path.basename(k)) {
+        target = path.join(dir, value);
+        // create never replaces: a typed name that exists gets the same
+        // "name 2" dedupe the initial Untitled naming used. existsSync guard
+        // right before the rename — Linux rename would silently overwrite.
+        if (existsSync(target)) target = uniqueTarget(dir, value);
+        void fsRename(k, target)
+          .then(() => {
+            ctx.pushUndoBatch(
+              `new ${edit.createKind} ${path.basename(target)}`,
+              [() => rm(target, { recursive: true })],
+              [redoCreateUnit(target, edit.createKind!)],
+            );
+            const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
+            ctx.setStatusMsg(msg);
+            ctx.notify(msg, "create");
+            void ctx.renderAll();
+          })
+          .catch((err: unknown) => {
+            // the placeholder still exists under the old name — repaint it
+            ctx.setStatusMsg(`Create failed (${fsErrText(err)})`);
+            void ctx.renderAll();
+          });
+        return;
+      }
       ctx.pushUndoBatch(
-        edit.createKind === "folder" ? "new folder" : "new file",
+        `new ${edit.createKind} ${value}`,
         [() => rm(k, { recursive: true })],
         [redoCreateUnit(k, edit.createKind)],
       );
-      ctx.setStatusMsg(`Created ${value} · ctrl+z to undo`);
+      const msg = `Created ${value} · ctrl+z to undo`;
+      ctx.setStatusMsg(msg);
+      ctx.notify(msg, "create");
+      return;
     }
+    // plain F2 rename: goes through performRename, which owns conflict
+    // handling, undo units and the "Renamed a → b" reporting
+    void ctx.performRename(edit.key, value);
   };
 
-  const startInlineRename = (key: string): void => {
+  const startInlineRename = (key: string, createKind?: "file" | "folder"): void => {
     if (renameEdit) finishInlineRename(false);
     const refs = ctx.tileRefs.get(key);
     if (!refs) return;
     const tile: any = ctx.byId(refs.tileId);
     const label: any = ctx.byId(refs.labelId);
     if (!tile || !label || !existsSync(key)) return;
+    // remember where the label sits so finishInlineRename can restore it in
+    // place (grid tile: below the icon; list row: right after it — an append
+    // would drop the name after the size/date columns)
+    let labelIdx: number | undefined;
+    try {
+      labelIdx = [...tile.getChildren()].indexOf(label);
+    } catch {}
+    if (labelIdx === -1) labelIdx = undefined;
     // real class instance — mounts into the already-mounted tile
     const inputId = `tfm-rename-input`;
     const stale = ctx.byId(inputId);
@@ -152,7 +200,7 @@ export const makeRename = (ctx: RenameCtx) => {
     try {
       tile.remove(label);
     } catch {}
-    renameEdit = { key, inputId };
+    renameEdit = { key, inputId, labelIdx, ...(createKind ? { createKind } : {}) };
     input.on?.("enter", () => finishInlineRename(true));
     const prevHandler = input.handleKeyPress?.bind(input);
     input.handleKeyPress = (k: any) => {
@@ -171,7 +219,9 @@ export const makeRename = (ctx: RenameCtx) => {
   };
 
   // nautilus-style: the entry is created immediately with a default name, then
-  // its label edits in place; esc/empty name deletes it again
+  // its label edits in place; esc/empty name deletes it again. createKind MUST
+  // ride along — without it the commit looked like a plain rename (a
+  // "Renamed to …" toast and a second undo batch for a file just created).
   const startInlineCreate = (kind: "file" | "folder"): void => {
     if (renameEdit) finishInlineRename(false);
     if (ctx.isVirtualCwd() || ctx.inTrashView()) return;
@@ -183,7 +233,7 @@ export const makeRename = (ctx: RenameCtx) => {
       .then(() => {
         const idx = ctx.focusKeys().indexOf(target);
         if (idx >= 0) ctx.selectTileAt(idx);
-        startInlineRename(target);
+        startInlineRename(target, kind);
       })
       .catch(() => ctx.setStatusMsg("Create failed"));
   };
