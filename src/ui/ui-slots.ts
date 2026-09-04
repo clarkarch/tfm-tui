@@ -90,6 +90,13 @@ export const dimHex = (hex: string, f: number): string => {
 
 export const makeSlots = (ctx: SlotsCtx) => {
   const iconQueue: IconSpec[] = [];
+  // registry of every queued slot, drained or not: setScrim must reach
+  // rasters that finished BEFORE the modal opened (the old queue pruned
+  // done specs at the end of each drain — scrim then iterated an almost
+  // empty queue and kitty rasters floated over the menu), and
+  // resetIconQueue must re-queue drained slots for theme/resize re-rasters.
+  // Pruned lazily in drainIconQueue when the slot node is gone from the tree.
+  const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
   let thumbJobs: ThumbJob[] = [];
 
@@ -120,6 +127,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       ...(statesFactory ? { statesFactory } : {}),
     };
     iconQueue.push(spec);
+    allSpecs.set(slotId, spec);
     return {
       el: Box(
         {
@@ -295,9 +303,14 @@ export const makeSlots = (ctx: SlotsCtx) => {
         });
       }),
     );
-    // done specs are dead weight: their slots are destroyed on the next rebuild
-    // and live tile refs keep the spec objects alive independently of the queue
-    iconQueue.splice(0, iconQueue.length, ...iconQueue.filter((s) => !s.done));
+    // drop specs whose slot node is gone from the tree (tiles/sidebars
+    // rebuilt by renderAll): their spec objects are dead weight and the
+    // tile refs that kept them alive are gone too. Everything still
+    // mounted stays in the registry — the scrim and retheme re-rasters
+    // need it (see allSpecs above).
+    for (const [id, spec] of allSpecs) {
+      if (spec.done && !ctx.byId(id)) allSpecs.delete(id);
+    }
     // re-rasters made fresh images visible; while a modal scrim is up the icons
     // must fall back to dimmed glyphs or they float over the menu
     if (ctx.modalOpen()) setScrim(true);
@@ -327,7 +340,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
   };
 
   const setScrim = (on: boolean) => {
-    for (const spec of iconQueue) {
+    for (const spec of allSpecs.values()) {
       const slot: SlotNode | null = ctx.byId(spec.slotId);
       if (!slot) continue;
       if (on && isModalChild(slot)) continue;
@@ -409,6 +422,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
     setScrim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
     resetIconQueue: (): void => {
+      // boot-baked slots may have already drained and left the queue —
+      // the registry keeps them reachable for theme/resize re-rasters
+      for (const s of allSpecs.values()) s.done = false;
       for (const s of iconQueue) s.done = false;
     },
     pushThumbJob: (job: ThumbJob): void => {
