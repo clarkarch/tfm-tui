@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,13 @@ export const sessionFile = (): string =>
 export const saveSession = async (cwd: string, tabs: SessionTab[], activeTab: number): Promise<void> => {
   await mkdir(path.dirname(sessionFile()), { recursive: true });
   await writeFile(sessionFile(), JSON.stringify({ cwd, tabs, activeTab }));
+};
+
+// synchronous final write for quit: process.exit() kills pending async IO,
+// so the debounced 400ms save would lose the last navigation
+export const saveSessionSync = (cwd: string, tabs: SessionTab[], activeTab: number): void => {
+  mkdirSync(path.dirname(sessionFile()), { recursive: true });
+  writeFileSync(sessionFile(), JSON.stringify({ cwd, tabs, activeTab }));
 };
 
 // directory check shared with virtual places: recent/starred URIs are always

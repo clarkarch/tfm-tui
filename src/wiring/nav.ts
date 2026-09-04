@@ -8,6 +8,7 @@ import { makeRenderAll } from "../app/render-all";
 import { makeQuit } from "../app/quit";
 import { makeStatus } from "../ui/ui-status";
 import { makeNav, makeSessionSync } from "../app/nav";
+import { saveSessionSync } from "../fs/session";
 import { makeTabs } from "../app/tabs";
 import { makeSearch } from "../input/search";
 import { appendLog } from "../app/log";
@@ -23,9 +24,10 @@ export const wireNav = (deps: {
   getGridFoundation: () => GridFoundationWiring;
   getGrid: () => GridWiring;
   getTermHasFocus: () => boolean;
+  getTerm: () => { closeTerminalPane(): void };
   getWatcher: () => { syncCwdWatcher(): void };
 }) => {
-  const { core, getChrome, getDnd, getGridFoundation, getGrid, getTermHasFocus, getWatcher } = deps;
+  const { core, getChrome, getDnd, getGridFoundation, getGrid, getTermHasFocus, getTerm, getWatcher } = deps;
 
   // --- renderAll orchestration lives in ./render-all (tested): tab-sync +
   // cwd-sync, then the named steps in insertion order, each guarded. ---
@@ -53,10 +55,22 @@ export const wireNav = (deps: {
     },
   });
 
-  // --- Quit: the single teardown path lives in ./quit (tested). ---
+  // --- Quit: the single teardown path lives in ./quit (tested). closeTerminal
+  // kills the PTY child (it would otherwise rely on EIO from the dead master —
+  // a shell with a foreground child can linger) and flushSession writes the
+  // final session.json synchronously (process.exit kills pending async IO, so
+  // the debounced save loses the last navigation). Both arrive as arrows —
+  // they close over later-defined bindings. ---
   const quitApp = makeQuit({
     disableDrops: () => getDnd().disableDrops(),
     releaseShiftCapture: () => process.stdout.write(xtShiftEscapeFrame(false)),
+    closeTerminal: () => getTerm().closeTerminalPane(),
+    flushSession: () => {
+      if (!core.isVirtualCwd()) {
+        syncTabFromState();
+        saveSessionSync(core.state.cwd, tabModel.list, tabModel.active);
+      }
+    },
     destroy: () => getChrome().renderer.destroy(),
     exit: (code) => process.exit(code),
   });

@@ -47,6 +47,7 @@ const nav = wireNav({
   getGridFoundation: () => gridFoundation,
   getGrid: () => grid,
   getTermHasFocus: () => fileops.terminal.termHasFocus(),
+  getTerm: () => fileops.terminal,
   getWatcher: () => watcher,
 });
 

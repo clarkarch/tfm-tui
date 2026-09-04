@@ -7,6 +7,12 @@
 export type QuitCtx = {
   disableDrops(): void;
   releaseShiftCapture(): void;
+  // kill the embedded PTY pane — it would otherwise rely on EIO from the
+  // dead master and a shell with a foreground child can linger
+  closeTerminal?(): void;
+  // synchronous final session write — process.exit kills pending async IO,
+  // so the debounced 400ms save loses the last navigation
+  flushSession?(): void;
   destroy(): void;
   exit(code: number): void;
 };
@@ -19,6 +25,12 @@ export const makeQuit =
     } catch {}
     try {
       ctx.releaseShiftCapture();
+    } catch {}
+    try {
+      ctx.flushSession?.();
+    } catch {}
+    try {
+      ctx.closeTerminal?.();
     } catch {}
     try {
       ctx.destroy();
