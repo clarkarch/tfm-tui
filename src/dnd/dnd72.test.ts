@@ -234,6 +234,48 @@ describe("external drag end", () => {
     expect(ctx.trashed).toEqual([["/d/a"]]);
     gridDrag.keys = null;
   });
+
+  test("a new drag starting inside the end window completes its own epilogue", async () => {
+    const { ctx, feed, notes } = baseCtx();
+    makeDnd72(ctx);
+    // session A ends over another app (copy) — its epilogue is deferred 700ms
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=e:x=4:y=0");
+    // session B starts inside that window and ends over another app too
+    gridDrag.keys = [{ path: "/d/b", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=e:x=4:y=0");
+    // both sessions must report "Sent" — the stale fire resetting the shared
+    // state (dragPaths=null) used to swallow session B's epilogue entirely
+    const deadline = Date.now() + 3000;
+    while (notes.filter((n) => n.includes("Sent 1 item")).length < 2 && Date.now() < deadline) await Bun.sleep(10);
+    expect(notes.filter((n) => n.includes("Sent 1 item")).length).toBe(2);
+    gridDrag.keys = null;
+  });
+
+  test("stale copy-session epilogue never trashes sources because a new drag was a move", async () => {
+    const { ctx, feed, notes } = baseCtx();
+    makeDnd72(ctx);
+    // A: copy drag, end over another app → deferred epilogue
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=e:x=4:y=0");
+    // B: move drag begins inside A's window and announces op=move
+    gridDrag.keys = [{ path: "/d/b", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=e:x=2:y=2");
+    // the stale timer reads the snapshot (A was a copy), not the live op
+    await Bun.sleep(750);
+    expect(ctx.trashed).toEqual([]); // A's sources survive
+    expect(notes.some((n) => n.includes("Sent 1 item"))).toBe(true); // A's copy epilogue ran as a copy
+    // B still completes with move semantics
+    feed("t=e:x=4:y=0");
+    const deadline = Date.now() + 3000;
+    while (ctx.trashed.length === 0 && Date.now() < deadline) await Bun.sleep(10);
+    expect(ctx.trashed).toEqual([["/d/b"]]);
+    gridDrag.keys = null;
+  });
 });
 
 describe("payload length", () => {

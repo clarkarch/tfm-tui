@@ -91,6 +91,12 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   let selfHandled = false; // self-drop already moved/copied the files
   let selfTargetKey: string | null = null; // folder tile currently highlighted
   let endTimer: ReturnType<typeof setTimeout> | null = null;
+  let endTimerSession = 0; // which drag session the pending epilogue belongs to
+  // monotonically rising session token: the deferred end epilogue closes over
+  // the token it belongs to, so a stale timer firing inside a NEWER session
+  // can neither read the new session's live op (a copy drag's sources were
+  // trashed when the new drag was a move) nor clear the new session's state
+  let dragSession = 0;
 
   const clearSelfDropHighlight = (): void => {
     if (selfTargetKey) {
@@ -116,6 +122,10 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   };
 
   const beginDrag = (paths: string[]): void => {
+    // a drag starting inside a previous session's 700ms end window must not
+    // inherit the stale epilogue: it would wipe THIS payload and read THIS
+    // session's op against the OLD session's paths
+    dragSession++;
     dragPaths = paths;
     dragOp = 1;
     selfHandled = false;
@@ -149,7 +159,10 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
 
   const finishSelfDrop = async (x: number, y: number): Promise<void> => {
     ctx.log(`self drop at ${x},${y}`);
-    if (endTimer) {
+    if (endTimer && endTimerSession === dragSession) {
+      // this session's own pending epilogue is superseded by a self drop;
+      // an OLDER session's deferred epilogue still runs — cancelling it here
+      // would skip its move-semantics source cleanup (the trash)
       clearTimeout(endTimer);
       endTimer = null;
     }
@@ -235,24 +248,35 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       } else if (x === 4) {
         const canceled = y !== 0;
         ctx.log(`drag end canceled=${canceled} op=${dragOp} selfHandled=${selfHandled}`);
+        // snapshot EVERYTHING the epilogue needs at end time — the timer may
+        // fire after a newer session began, and the live values then belong
+        // to that newer session
+        const seqAtEnd = dragSession;
         const pathsAtEnd = dragPaths;
+        const opAtEnd = dragOp;
+        const selfAtEnd = selfHandled;
         const finishExternal = (): void => {
-          if (!canceled && pathsAtEnd && !selfHandled) {
+          if (!canceled && pathsAtEnd && !selfAtEnd) {
             // released over another app: honor move semantics by trashing our copies
-            if (dragOp === 2) ctx.trashPaths(pathsAtEnd);
+            if (opAtEnd === 2) ctx.trashPaths(pathsAtEnd);
             else ctx.notify(`Sent ${pathsAtEnd.length} item${pathsAtEnd.length === 1 ? "" : "s"}`, "drag & drop");
           } else if (canceled) ctx.setStatusMsg("drag cancelled");
-          dragPaths = null;
-          selfHandled = false;
-          clearSelfDropHighlight();
+          if (dragSession === seqAtEnd) {
+            dragPaths = null;
+            selfHandled = false;
+            clearSelfDropHighlight();
+          }
         };
-        if (endTimer) {
+        if (endTimer && endTimerSession === dragSession) {
+          // duplicate end events for the same session — reschedule, don't stack
           clearTimeout(endTimer);
           endTimer = null;
         }
         // a self-drop M may still be in flight behind the end event — defer
-        if (!canceled && pathsAtEnd && !selfHandled) endTimer = setTimeout(finishExternal, 700);
-        else finishExternal();
+        if (!canceled && pathsAtEnd && !selfAtEnd) {
+          endTimerSession = seqAtEnd;
+          endTimer = setTimeout(finishExternal, 700);
+        } else finishExternal();
       } else if (x === 5 && dragPaths && !selfHandled) {
         ctx.log("drag send request");
         presentDragUriList(dragPaths);
