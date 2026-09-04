@@ -86,6 +86,12 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
       if (!settled) {
         settled = true;
         done();
+        // destroy the write stream too: it was left open while runTransfer's
+        // cleanup unlinked the partial target — the fd and its allocated
+        // blocks lingered until a GC finalizer bun may never run
+        try {
+          ws.destroy();
+        } catch {}
         reject(e);
       }
     };

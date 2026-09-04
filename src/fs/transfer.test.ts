@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   lstatSync,
   mkdirSync,
@@ -8,6 +8,7 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
+  WriteStream,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -105,6 +106,27 @@ describe("copyFileProgress", () => {
     expect(h.bytes).toBe(10);
     expect(h.log[0]).toBe("open");
     expect(h.log.at(-1)).toBe("close");
+  });
+
+  test("mid-stream cancel destroys the write stream (no leaked fd / disk blocks)", async () => {
+    // the cancel path used to destroy only the read stream: the write stream
+    // stayed open while runTransfer's cleanup unlinked the partial target —
+    // allocated blocks lingered until a GC finalizer bun may never run
+    const src = path.join(dir, "in.bin");
+    const dest = path.join(dir, "out.bin");
+    writeFileSync(src, "0123456789".repeat(64));
+    const h = mkSink();
+    h.sink.cancelled = () => true; // cancel on the very first data chunk
+    const spy = spyOn(WriteStream.prototype, "destroy");
+    let caught: unknown = null;
+    try {
+      await copyFileProgress(src, dest, h.sink);
+    } catch (err) {
+      caught = err;
+    }
+    expect((caught as Error)?.message).toBe("cancelled");
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 
