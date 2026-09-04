@@ -189,4 +189,57 @@ describe("makeUndo", () => {
     // the batch returns to the undo stack even on failed redo (matches old behavior)
     expect(undo.undoDepth()).toBe(1);
   });
+
+  test("a second undo while one is in flight is ignored (no interleaved batches)", async () => {
+    // rapid ctrl+z used to pop TWO batches and run their fs closures
+    // concurrently against overlapping paths
+    const sink = recordingSink();
+    const undo = makeUndo(sink);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let ran = 0;
+    undo.pushUndoBatch("slow", [
+      async () => {
+        ran++;
+        await gate;
+      },
+    ]);
+    undo.pushUndoBatch("next", [
+      async () => {
+        ran++;
+      },
+    ]);
+    undo.undoLast(); // starts the slow batch, pops "slow"
+    undo.undoLast(); // in-flight → must be a no-op, NOT pop "next"
+    release();
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("status:Undid")));
+    expect(ran).toBe(1);
+    expect(undo.undoDepth()).toBe(1); // "next" still queued for a real second press
+  });
+
+  test("a second redo while one is in flight is ignored", async () => {
+    const sink = recordingSink();
+    const undo = makeUndo(sink);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let ran = 0;
+    undo.pushUndoBatch(
+      "slow",
+      [() => {}],
+      [
+        async () => {
+          ran++;
+          await gate;
+        },
+      ],
+    );
+    undo.undoLast();
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("status:Undid")));
+    undo.redoLast();
+    undo.redoLast(); // in-flight → no-op
+    release();
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("status:Redid")));
+    expect(ran).toBe(1);
+    expect(undo.redoDepth()).toBe(0);
+  });
 });
