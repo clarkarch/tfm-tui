@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,22 @@ import { clearIconCaches, iconCacheKey, iconPng, loadEmbeddedIcons, svgSourceMti
 const hasRsvg = Bun.which("rsvg-convert") !== null;
 const hasMagick = Bun.which("magick") !== null;
 const hasFfmpeg = Bun.which("ffmpeg") !== null;
+
+// sandbox the disk cache for the WHOLE file: iconPng/thumbPng read the real
+// ~/.cache/tfm before rasterizing, so an app-populated disk hit could make
+// the raster tests pass with a broken pipeline ("green suite lies") — and
+// the write-behind would leak test PNGs into the real cache. The disk-cache
+// test below keeps its own finer sandbox; this only guarantees isolation.
+const CACHE_SANDBOX = mkdtempSync(path.join(os.tmpdir(), "tfm-icons-cache-"));
+const REAL_CACHE_HOME = process.env.XDG_CACHE_HOME;
+beforeAll(() => {
+  process.env.XDG_CACHE_HOME = CACHE_SANDBOX;
+});
+afterAll(() => {
+  if (REAL_CACHE_HOME === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = REAL_CACHE_HOME;
+  rmSync(CACHE_SANDBOX, { recursive: true, force: true });
+});
 
 describe("icons", () => {
   test.skipIf(!hasRsvg)("iconPng renders a PNG and serves the second request from cache", async () => {
