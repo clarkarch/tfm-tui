@@ -26,10 +26,10 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Linux
 - A terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) — **recommended: kitty** (full experience incl. cross-app drag & drop); ghostty gets thumbnails but not cross-app drag; others fall back to Nerd Font glyphs
 - Runtime helpers (the installer checks these and tells you what's missing):
-  - `rsvg-convert` — theme-tinted icons (else Nerd Font glyphs)
-  - `magick` — SVG image thumbnails
-  - `ffmpeg` — video thumbnails & previews (else videos show plain icons)
-  - `gio` — Nautilus-compatible trash & starred files
+- `rsvg-convert` — theme-tinted icons and crisp SVG thumbnails (else Nerd Font glyphs; `magick` covers raster thumbnails as fallback)
+- `magick` — raster image thumbnails (fallback when `rsvg-convert` is missing)
+- `ffmpeg` — video thumbnails & previews (else videos show plain icons)
+- `gio` — starred-file metadata (`metadata::starred`; trash itself is built-in XDG, no `gio` needed)
   - `xdg-open` — opening files in their default app
   - `udisksctl` — removable-drive mount/eject
   - `wl-paste`/`wl-copy` or `xclip` — clipboard bridge with GUI apps
@@ -45,20 +45,24 @@ Installs to `~/.local/bin` as `tfm` (and `terminal-file-manager`). Prebuilt bina
 From source:
 
 ```bash
-bun install
+bun install --frozen-lockfile
+bun run check   # required gate: biome lint+format + tsc — must pass before pushing
+bun test        # full suite (bun test <file> for one module)
 bun run compile && cp dist/tfm ~/.local/bin/
 ```
 
-Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
+Dev: `bun run --watch src/index.ts`. Launch anywhere with `tfm ~/some/path`.
 
 ## Keys
 
 | Key | Action |
 |---|---|
 | type anywhere | live search · `enter` opens first match · `esc` cancels |
-| `enter` / `f2` | open / rename |
+| `enter` | open |
+| `f2` | rename (restore in trash) |
 | `backspace` | parent directory |
-| `esc` | menu (settings, view mode, sort, …) |
+| `alt+left` / `alt+right` | back / forward in history |
+| `esc` | open the esc menu (settings, view mode, sort, …) |
 | `ctrl+q` | quit |
 | `ctrl+z` / `ctrl+y` | undo / redo (`ctrl+shift+z` works too) |
 | `ctrl+x` / `ctrl+c` / `ctrl+v` | cut / copy / paste |
@@ -67,16 +71,37 @@ Dev: `bun dev`. Launch anywhere with `tfm ~/some/path`.
 | `ctrl+r` | reload sidebar places |
 | `ctrl+t` / `ctrl+w` | new tab / close tab (middle-click a chip also closes) |
 | `ctrl+tab` / `ctrl+shift+tab` | next / previous tab |
-| `delete` | trash (`delete` again in trash: permanent) |
+| `delete` | trash selection (delete forever in trash) |
+| `alt+enter` | properties for selection |
+| `ctrl+shift+n` / `ctrl+alt+n` | new folder / new file |
+| `ctrl+l` | edit the path bar |
+| `f9` | toggle preview pane |
+| `f4` | open terminal here |
+| `ctrl+g` | toggle grid/list view |
+| `ctrl+=` / `ctrl+-` | bigger / smaller tiles |
 | `ctrl+click` / `shift+click` | toggle / range select |
 | plain drag / `ctrl+drag` | drag out of terminal / move inside tfm |
 | right-click | context menu |
 
-All keys are remappable under `[keys]` in `config.toml` (or `esc` → Settings → Keys).
+Action keys under `[keys]` are remappable (`config.toml`, or `esc` → Settings → keys); arrows/`enter`/`esc`/search are structural.
 
 ## Config
 
-`~/.config/tfm/config.toml` — see [`config.example.toml`](config.example.toml). Themes, tile size, session restore, glyph-only icon mode.
+`~/.config/tfm/config.toml` — see [`config.example.toml`](config.example.toml). Themes, tile size, session restore, persistent undo, glyph-only icon mode.
+
+## Environment
+
+| Variable / flag | Effect |
+|---|---|
+| `TFM_CONFIG` | override config file path (`~/.config/tfm/config.toml` by default) |
+| `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` | honored for config, trash, session + undo journal |
+| `TFM_VERSION` | installer: pin a release tag instead of `latest` |
+| `TFM_INSTALL_DIR` | installer: destination dir (`~/.local/bin` by default) |
+| `TFM_NO_VERIFY=1` | installer: skip checksum verification (not recommended) |
+| `TFM_NO_SYNTAX_DL=1` | skip downloading extra tree-sitter grammars (offline machines) |
+| `--debug` / `-d` | verbose event log for bug reports |
+| `TFM_DEBUG_LOG` | debug log path (`/tmp/tfm-debug.log` by default) |
+| `TFM_DND_LOG` | drag-and-drop trace path (`/tmp/tfm-dnd.log` by default) |
 
 ## Limitations
 

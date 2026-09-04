@@ -1,4 +1,4 @@
-// Steals opencode's TUI theme assets and emits src/themes.ts with tfm-shaped
+// Steals opencode's TUI theme assets and emits src/config/themes.ts with tfm-shaped
 // dark palettes. Usage: bun scripts/gen-themes.ts [path-to-opencode-assets]
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";

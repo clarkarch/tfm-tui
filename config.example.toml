@@ -18,6 +18,7 @@ drag-threshold-cells = 1        # cells of movement before a press becomes a dra
 show-hidden          = false    # start with dotfiles visible (ctrl+h toggles at runtime)
 preview-enabled      = false    # right-side preview pane (text files, folder stats)
 restore-session      = false    # true = reopen the folder from the last quit instead of the launch cwd
+persist-undo         = false    # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
 transparent-bg       = false    # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 tab-bar              = false    # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 view-mode            = "grid"   # "grid" = icon tiles; "list" = compact rows with size + modified columns
