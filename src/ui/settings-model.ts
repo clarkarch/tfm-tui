@@ -4,7 +4,7 @@
 // generically here; hand-written rows are only the ones with special
 // presentations: theme presets, tab-bar adaptive/on, show-hidden state sync.
 // No renderer imports — ctx carries the sinks. ---
-import { spawn } from "node:child_process";
+import { spawnSafe } from "../fs/spawn-safe";
 import { THEME_PRESETS } from "../config/themes";
 import { themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
@@ -158,7 +158,9 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           kind: "action",
           label: "edit config.toml…",
           run: () => {
-            spawn("xdg-open", [configPath()], { stdio: "ignore", detached: true }).unref?.();
+            spawnSafe("xdg-open", [configPath()], { stdio: "ignore", detached: true }, (err) =>
+              ctx.warn(err.message, "config"),
+            ).unref?.();
           },
         },
         { kind: "action", label: "back", keepOpen: true, run: () => ctx.showRoot() },

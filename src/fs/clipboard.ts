@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnSafe } from "./spawn-safe";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -80,7 +80,9 @@ export const publishPathsToSystemClipboard = (
   if (!t || !items.length) return;
   const payload = items.map((i) => i.path).join("\n");
   try {
-    const p = spawn(t.put, [...t.putBase], { stdio: ["pipe", "ignore", "ignore"] });
+    const p = spawnSafe(t.put, [...t.putBase], { stdio: ["pipe", "ignore", "ignore"] }, (err) =>
+      log(`system clipboard FAILED: ${err.message}`),
+    );
     p.stdin?.end(payload);
     p.unref?.();
     log(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (text paths)`);

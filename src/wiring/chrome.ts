@@ -5,8 +5,8 @@
 // function is the TDZ seam). Async: index awaits it, everything downstream
 // gets a booted renderer. ---
 
-import { spawn } from "node:child_process";
 import { createCliRenderer } from "@opentui/core";
+import { spawnSafe } from "../fs/spawn-safe";
 import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar } from "../ui/ui-toolbar";
@@ -168,7 +168,9 @@ export const wireChrome = async (deps: {
     notify,
     upsertRecent: (paths) => upsertRecentXbel(paths),
     spawnOpen: (p) => {
-      spawn("xdg-open", [p], { stdio: "ignore", detached: true }).unref?.();
+      spawnSafe("xdg-open", [p], { stdio: "ignore", detached: true }, (err) =>
+        dlog(`open ${p}: ${err.message}`),
+      ).unref?.();
     },
     appForFile,
   });

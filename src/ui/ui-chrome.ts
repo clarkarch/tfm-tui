@@ -1,5 +1,5 @@
 import { Box, Text } from "@opentui/core";
-import { spawn } from "node:child_process";
+import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
 import { clearChildren } from "./uiutil";
 import { applySurface, rowSurface, slotBg, tileSurface } from "./style";
@@ -82,7 +82,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
   let mousePlaceIdx = -1;
 
   const mountDevice = (device: string) => {
-    spawn("udisksctl", ["mount", "-b", device], { stdio: "ignore" });
+    spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore" }, (err) =>
+      ctx.dlog(`mount ${device}: ${err.message}`),
+    );
     setTimeout(() => {
       void loadSystemPlaces().then(() => ctx.renderAll());
     }, 1200);
@@ -189,7 +191,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
   };
 
   const ejectDevice = (device: string) => {
-    spawn("udisksctl", ["unmount", "-b", device], { stdio: "ignore" });
+    spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore" }, (err) =>
+      ctx.dlog(`eject ${device}: ${err.message}`),
+    );
     setTimeout(() => {
       void loadSystemPlaces().then(() => ctx.renderAll());
     }, 1500);
