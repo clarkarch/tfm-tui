@@ -105,6 +105,25 @@ describe("runTransfer: same-fs move", () => {
     expect(h.calls).not.toContain("toast:show");
     expect(h.calls.some((c) => c.startsWith("undo:move to samefs-b:1:"))).toBe(true);
   });
+
+  test("stale cancelled flag from a past toast never blocks the next plain move", async () => {
+    // the toast's ✕ sets prog.cancelled=true; only toast-bearing transfers
+    // reset it — so a later plain (non-progress) move broke on iteration 1
+    // with "Moved 0 items" until some progress transfer happened to run
+    const h = makeHarness();
+    h.prog.cancelled = true;
+    h.prog.paused = true;
+    const src = path.join(ROOT, "stale-flag-src");
+    const destDir = path.join(ROOT, "stale-flag-dest");
+    W(src, "content");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("move", destDir, [src], "move after cancel");
+
+    expect(existsSync(path.join(destDir, "stale-flag-src"))).toBe(true);
+    expect(existsSync(src)).toBe(false);
+    expect(h.calls.some((c) => c.startsWith("undo:move after cancel:"))).toBe(true);
+  });
 });
 
 describe("runTransfer: cross-device move", () => {

@@ -107,13 +107,16 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // moves across a filesystem boundary go through the copy engine too
     // (rename can't cross devices) — those need the same pre-scan + toast
     // copies get, or a big cross-device move sits there silently for minutes
+    // stale toast flags must never outlive the transfer that set them: the ✕
+    // button sets cancelled=true and only toast-bearing transfers used to
+    // reset it, so every later plain move broke on iteration 1 ("Moved 0
+    // items") until some progress transfer happened to run. Reset always.
+    prog.paused = false;
+    prog.cancelled = false;
+    prog.doneFiles = 0;
+    prog.bytes = 0;
     const withProgress = op === "copy" || srcs.some((s) => isCrossDevice(s, destDir));
     if (withProgress) {
-      // pre-scan so the progress toast has real totals from byte one
-      prog.paused = false;
-      prog.cancelled = false;
-      prog.doneFiles = 0;
-      prog.bytes = 0;
       prog.verb = op === "copy" ? "copying" : "moving";
       let files = 0,
         bytes = 0;
