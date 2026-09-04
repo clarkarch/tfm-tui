@@ -81,13 +81,22 @@ export const makeChrome = (ctx: ChromeCtx) => {
   }[] = [];
   let mousePlaceIdx = -1;
 
+  // mount/eject reload: one pending reload at a time — rapid clicks used to
+  // stack redundant 1200/1500ms loadSystemPlaces+renderAll passes
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleDeviceReload = (ms: number): void => {
+    if (reloadTimer !== null) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      reloadTimer = null;
+      void loadSystemPlaces().then(() => ctx.renderAll());
+    }, ms);
+  };
+
   const mountDevice = (device: string) => {
     spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore" }, (err) =>
       ctx.dlog(`mount ${device}: ${err.message}`),
     );
-    setTimeout(() => {
-      void loadSystemPlaces().then(() => ctx.renderAll());
-    }, 1200);
+    scheduleDeviceReload(1200);
   };
 
   const makeRow = (place: Place): ReturnType<typeof Box> => {
@@ -194,9 +203,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore" }, (err) =>
       ctx.dlog(`eject ${device}: ${err.message}`),
     );
-    setTimeout(() => {
-      void loadSystemPlaces().then(() => ctx.renderAll());
-    }, 1500);
+    scheduleDeviceReload(1500);
   };
 
   const renderSidebar = () => {
