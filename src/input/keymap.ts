@@ -417,8 +417,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
 
     // --- keyboard navigation: sidebar <-> grid ---
-    if (handleShiftExtend(ev, ctrl)) return;
+    // sidebar focus swallows ALL keys — it must precede shift-extend or
+    // shift+arrows would mutate the grid selection while the sidebar is
+    // focused (it returns false when inactive, so grid extend is unchanged)
     if (handleSidebarKeys(ev)) return;
+    if (handleShiftExtend(ev, ctrl)) return;
     if (handleGridNavKeys(ev)) return;
     if (hit(ev, "parentDir")) {
       // virtual views have no fs parent (path.resolve would shred the URI)

@@ -377,6 +377,26 @@ describe("sidebar keyboard focus", () => {
     expect(h.router.sidebarActive()).toBe(false);
     expect(h.selection.focusIdx()).toBe(0);
   });
+
+  test("shift+arrows while the sidebar is focused stay in the sidebar (no grid extend)", () => {
+    // the sidebar swallows all keys while it has kb focus; shift+extend ran
+    // FIRST in the chain and extended the grid selection instead
+    const h = makeHarness();
+    h.key("down"); // grid focus on a.txt (focus-follows-select)
+    h.key("left"); // hand focus to the sidebar
+    h.key("down", { shift: true });
+    expect(h.router.sidebarActive()).toBe(true); // sidebar still focused
+    expect(h.router.placeIdx()).toBe(1); // sidebar focus moved
+    // NO extension: still just the original focus selection, not a.txt+b.txt
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
+  });
+
+  test("shift+arrows with the GRID focused still extend (reorder control)", () => {
+    const h = makeHarness();
+    h.key("down", { shift: true }); // grid: anchor + extend
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
+    expect(h.router.sidebarActive()).toBe(false);
+  });
 });
 
 describe("grid keys", () => {
