@@ -146,7 +146,15 @@ export const makeNotify = (
       ctx.rootAdd(node);
       // the proxy is dead weight post-mount — animate/dismiss via the real renderable
       const real: any = ctx.byId(nodeId);
-      if (!real) return null;
+      if (!real) {
+        // lookup miss (the memory-pressure scenario the guard anticipates):
+        // the node is mounted but untracked — no timer, no removal path. It
+        // must not sit on screen forever.
+        try {
+          node.destroy?.();
+        } catch {}
+        return null;
+      }
       // re-assert the slot: post-mount this is the prop value already, but a
       // concurrent show may have moved the reservation since y was computed
       try {
