@@ -12,6 +12,7 @@ import {
   xdgTrashMove,
   deviceOf,
   crossDevice,
+  atomicWriteFile,
 } from "./fsutil";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
@@ -245,5 +246,22 @@ describe("isTrashFilesDir", () => {
   test("virtual place URIs never match", () => {
     expect(isTrashFilesDir("recent://")).toBe(false);
     expect(isTrashFilesDir("starred://")).toBe(false);
+  });
+});
+
+describe("atomicWriteFile", () => {
+  test("writes the payload and leaves no tmp files behind", async () => {
+    const p = path.join(SANDBOX, "atomic-out.png");
+    await atomicWriteFile(p, new Uint8Array([1, 2, 3]));
+    expect([...readFileSync(p)]).toEqual([1, 2, 3]);
+    expect(existsSync(`${p}.tmp-`)).toBe(false);
+  });
+
+  test("failed rename (target dir removed mid-flight) cleans the tmp file", async () => {
+    // the tmp file goes next to the target; the target's parent is missing,
+    // so writeFile itself fails on ENOENT and nothing is left behind
+    const missing = path.join(SANDBOX, "atomic-gone", "out.png");
+    await expect(atomicWriteFile(missing, "x")).rejects.toThrow();
+    expect(existsSync(path.join(SANDBOX, "atomic-gone"))).toBe(false);
   });
 });

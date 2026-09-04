@@ -84,6 +84,20 @@ describe("icons", () => {
     expect(map.size).toBe(1);
   });
 
+  test("one unreadable embedded blob skips itself, the rest of the index still loads", async () => {
+    // the try/catch used to wrap the WHOLE loop: a single f.text() failure
+    // aborted the index and every later icon fell back to a glyph forever
+    const fake = [
+      { name: "folder-abcdef12.svg", text: async () => "<svg>FOLDER</svg>" },
+      { name: "disc-abcdef12.svg", text: async () => Promise.reject(new Error("corrupt blob")) },
+      { name: "file-abcdef12.svg", text: async () => "<svg>FILE</svg>" },
+    ];
+    const map = await loadEmbeddedIcons(fake);
+    expect(map.get("folder")).toBe("<svg>FOLDER</svg>");
+    expect(map.get("file")).toBe("<svg>FILE</svg>");
+    expect(map.has("disc")).toBe(false);
+  });
+
   test.skipIf(!hasMagick)("thumbPng rasterizes a file onto a bg", async () => {
     clearIconCaches();
     const svg =

@@ -6,9 +6,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { atomicWriteFile } from "../fs/fsutil";
 
 const home = os.homedir();
 
@@ -26,13 +27,15 @@ export type EmbeddedFile = { name?: unknown; text: () => Promise<string> };
 export const loadEmbeddedIcons = (files: readonly EmbeddedFile[]): Promise<Map<string, string>> =>
   (async () => {
     const map = new Map<string, string>();
-    try {
-      for (const f of files) {
+    for (const f of files) {
+      // per-entry guard: one unreadable blob must not abort the whole index
+      // (every later icon would fall back to a Nerd-Font glyph forever)
+      try {
         const raw = typeof f === "object" && f !== null && "name" in f ? f.name : undefined;
         const iconName = typeof raw === "string" ? raw.match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1] : undefined;
         if (iconName) map.set(iconName, await f.text());
-      }
-    } catch {}
+      } catch {}
+    }
     return map;
   })();
 
@@ -139,7 +142,7 @@ export const iconPng = async (name: string, fg: string, bg: string, pxW: number,
     try {
       const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH);
       iconCache.set(key, bytes);
-      void ensureIconDir().then(() => writeFile(iconDiskPath(key), bytes).catch(() => {}));
+      void ensureIconDir().then(() => atomicWriteFile(iconDiskPath(key), bytes).catch(() => {}));
       return bytes;
     } finally {
       releaseRasterSlot();
@@ -312,7 +315,7 @@ export const thumbPng = (
           ? renderVectorPng(path, pxW, pxH, bg)
           : renderRasterPng(path, pxW, pxH, bg));
       // write-behind: never block the render on the cache write
-      void ensureThumbDir().then(() => writeFile(thumbDiskPath(key), bytes).catch(() => {}));
+      void ensureThumbDir().then(() => atomicWriteFile(thumbDiskPath(key), bytes).catch(() => {}));
       return bytes;
     })();
     p.catch(() => thumbCache.delete(key));

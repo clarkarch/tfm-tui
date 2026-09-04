@@ -136,3 +136,17 @@ export const crossDevice = (a: string, b: string): boolean => {
     db = deviceOf(b);
   return da !== null && db !== null && da !== db;
 };
+
+// tmp+rename write: a crash or EDQUOT mid-write never leaves a truncated
+// file at the target path. Used for caches keyed by content version — a
+// partial write there would be served as a valid hit forever.
+export const atomicWriteFile = async (p: string, data: Uint8Array | string): Promise<void> => {
+  const tmp = `${p}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmp, data);
+  try {
+    await fsRename(tmp, p);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+};
