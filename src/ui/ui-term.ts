@@ -287,6 +287,9 @@ export const makeTerminal = (ctx: TermCtx) => {
     headerHot = false;
     ptyScreen = { mouse: false, alt: false };
     ptyScanTail = "";
+    // stale probe-tail bytes from the dead shell would corrupt the first
+    // DA/DSR reply of the next session
+    termProbeTail = "";
     downCell = null;
     const host: any = ctx.byId("tfm-term-host");
     if (host) {
@@ -363,7 +366,12 @@ export const makeTerminal = (ctx: TermCtx) => {
       rows: TERM_H,
       maxScrollback: 20_000,
       onData: (data: Uint8Array) => {
-        termChild?.terminal?.write(data);
+        // the only PTY write without a guard — a keystroke landing between
+        // shell death and the exited callback nulling termChild threw
+        // inside the renderer callback (uncaughtException → exit(1))
+        try {
+          termChild?.terminal?.write(data);
+        } catch {}
       },
       onTerminalResize: (cols: number, rows: number) => {
         try {
