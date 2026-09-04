@@ -29,6 +29,10 @@ export type SettingRow =
       names: string[];
       getIdx: () => number;
       setIdx: (i: number) => void;
+      // shown when getIdx() is -1 (value matches no preset). Only the theme
+      // row goes custom today — a bare "custom" never says custom *what*,
+      // so the theme row reports "~<nearest preset>" instead.
+      customLabel?: () => string;
     }
   // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
   | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
@@ -70,6 +74,26 @@ export const applyAdjust = (row: SettingRow, dir: number): boolean => {
 // runtime-only), or -1 when customized
 export const themePresetIdx = (presets: ThemePreset[], theme: unknown): number =>
   presets.findIndex((p) => JSON.stringify(p.theme) === JSON.stringify(theme));
+
+// nearest preset by shared key values (for the "~Name" custom label when the
+// live theme matches no preset exactly). -1 when presets is empty.
+export const themeNearestIdx = (presets: ThemePreset[], theme: unknown): number => {
+  if (typeof theme !== "object" || theme === null) return -1;
+  const t = theme as Record<string, unknown>;
+  let best = -1,
+    bestScore = -1;
+  for (let i = 0; i < presets.length; i++) {
+    const p = presets[i]?.theme as Record<string, unknown>;
+    if (typeof p !== "object" || p === null) continue;
+    let score = 0;
+    for (const k of Object.keys(p)) if (t[k] === p[k]) score++;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  }
+  return best;
+};
 
 // zoom step for the zoomIn/zoomOut keybinds (ctrl+= / ctrl+-): grid view
 // scales tile W/H plus the icon cells so tiles and glyphs grow together;

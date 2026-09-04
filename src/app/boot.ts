@@ -9,6 +9,21 @@
 
 import { debugLog } from "./log";
 
+// First non-flag argv element is the launch dir (`tfm ~/some/path`); flags
+// (--debug, --version, …) are skipped. Handles both layouts: `bun
+// src/index.ts DIR` (argv[1] is the script) and the compiled binary `tfm DIR`
+// (argv[1] is already the first user arg). Returns null when absent so
+// callers keep process.cwd(). Pure (no fs probe here) — index.ts validates
+// + chdirs.
+export const launchDirFromArgv = (argv: string[]): string | null => {
+  const args = argv.slice(1);
+  if (args.length && /index\.[tj]s$/.test(args[0] as string)) args.shift();
+  for (const a of args) {
+    if (a.length > 0 && !a.startsWith("-")) return a;
+  }
+  return null;
+};
+
 export type BootCtx = {
   waitForResolution(): Promise<void>;
   buildLayout(): void;

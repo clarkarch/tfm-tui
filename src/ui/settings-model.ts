@@ -6,7 +6,12 @@
 // No renderer imports — ctx carries the sinks. ---
 import { spawnSafe } from "../fs/spawn-safe";
 import { THEME_PRESETS } from "../config/themes";
-import { themePresetIdx as settingsThemePresetIdx, type SettingGroup, type SettingRow } from "./settings";
+import {
+  themeNearestIdx as settingsThemeNearestIdx,
+  themePresetIdx as settingsThemePresetIdx,
+  type SettingGroup,
+  type SettingRow,
+} from "./settings";
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
 import { KEY_SCHEMA, UI_SCHEMA, keybindConflict, type KeyAction, type UiSchemaRow } from "../config/config-schema";
 
@@ -112,6 +117,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         setIdx: (i) => {
           commit({ ui: { ...ctx.config.ui }, theme: { ...THEME_PRESETS[i]!.theme }, keys: { ...ctx.config.keys } });
         },
+        // hand-edited themes match no preset: name the nearest one with a ~
+        // prefix (picking any preset returns to an exact match)
+        customLabel: () => {
+          const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
+          return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
+        },
       },
       {
         kind: "toggle",
@@ -149,7 +160,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     { header: "general", rows: generalRows() },
     { header: "layout", rows: uiRowsIn("layout").map(schemaRow) },
     { header: "behavior", rows: uiRowsIn("behavior").map(schemaRow) },
-    { header: "keybindings", rows: KEY_SCHEMA.map((r) => keybindRow(r.action, r.label)) },
+    { header: "keys", rows: KEY_SCHEMA.map((r) => keybindRow(r.action, r.label)) },
     {
       header: "config",
       rows: [

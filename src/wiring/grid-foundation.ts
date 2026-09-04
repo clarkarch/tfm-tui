@@ -42,7 +42,7 @@ export const wireGridFoundation = (deps: {
     renderGrid: () => getGrid().renderGrid(),
     // arrow wrappers: performRename/pushUndoBatch belong to the fileops wiring (TDZ)
     performRename: (p, name) => getFileops().fileops.performRename(p, name),
-    pushUndoBatch: (label, undos, redos) => getFileops().undo.pushUndoBatch(label, undos, redos),
+    pushUndoBatch: (label, undos, redos, data) => getFileops().undo.pushUndoBatch(label, undos, redos, data),
     setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
     isVirtualCwd: core.isVirtualCwd,

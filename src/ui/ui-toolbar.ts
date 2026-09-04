@@ -6,6 +6,7 @@
 
 import path from "node:path";
 import os from "node:os";
+import { statSync } from "node:fs";
 import { Box, Input, InputRenderable, Text } from "@opentui/core";
 import { applySurface, btnSurface } from "./style";
 import type { Theme } from "../config/config";
@@ -36,6 +37,7 @@ export type ToolbarCtx = {
   closeFileMenu(): void;
   blurTerminal(): void;
   navigate(dir: string): void;
+  setStatusMsg(msg: string): void;
   canBack(): boolean;
   canFwd(): boolean;
   goBack(): void;
@@ -44,6 +46,18 @@ export type ToolbarCtx = {
   sortEntries(): ListEntry[];
   cwd(): string;
   home: string;
+};
+
+// path-bar commit check: virtual places always navigate; real paths must be
+// existing dirs (navigate() silently ignores the rest). Pure for tests — the
+// widget decides whether to stay in the edit on false.
+export const isNavigableTarget = (target: string): boolean => {
+  if (isVirtualUri(target)) return true;
+  try {
+    return statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
 };
 
 export const makeToolbar = (ctx: ToolbarCtx) => {
@@ -157,6 +171,13 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         box.add(input);
         input.on?.("enter", () => {
           const target = String(input.value ?? "").replace(/^~(?=\/|$)/, ctx.home);
+          // validate before leaving the edit: navigate() silently ignores
+          // non-dirs, which used to eat the keystroke with zero feedback.
+          // Stay in the edit on failure so the path can be fixed in place.
+          if (!isNavigableTarget(target)) {
+            ctx.setStatusMsg(`No such folder: ${target}`);
+            return;
+          }
           pathEditMode = false;
           renderCrumbs();
           ctx.navigate(target);
@@ -293,7 +314,9 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       id: "tfm-search",
       width: 16,
       visible: false,
-      placeholder: "Search",
+      // names the behavior: live substring filter that also reveals dotfiles
+      // while active (grid forces showHidden during search)
+      placeholder: "Search (live filter)",
       backgroundColor: ctx.colors().accentBg,
       focusedBackgroundColor: ctx.colors().accentBg,
       textColor: ctx.colors().white,

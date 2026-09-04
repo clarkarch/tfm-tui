@@ -4,7 +4,7 @@
 // Renderer-free — node access goes through byId; renderGrid/termHasFocus
 // arrive as getters so the factory can exist pre-boot (TDZ seam rule). ---
 
-import { debounced, type Scheduler } from "../ui/uiutil";
+import { debounced, type Scheduler } from "../lib/uiutil";
 
 export type SearchCtx = {
   byId: (id: string) => any;

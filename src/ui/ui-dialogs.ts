@@ -160,10 +160,15 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
         if (all) conflictPolicy = all;
         closeConflict(choice);
       };
+      // hard-sliced names used to truncate silently — same-prefix files in
+      // one folder were indistinguishable at the exact moment of choice
+      const ellipsize = (s: string, max: number): string =>
+        s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s;
+      const locationLine = ` an item called "${name}" already exists in ${parentName}`;
       const rows: ReturnType<typeof Box>[] = [
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` Replace "${name.slice(0, CONFLICT_W - 14)}"?`, fg: c.accent }),
+          Text({ content: ` Replace "${ellipsize(name, CONFLICT_W - 14)}"?`, fg: c.accent }),
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
@@ -172,7 +177,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
           Text({
-            content: ` an item called "${name}" already exists in ${parentName}`.slice(0, CONFLICT_W - 1),
+            content: ellipsize(locationLine, CONFLICT_W - 1),
             fg: c.sidebarFgMuted,
           }),
         ),

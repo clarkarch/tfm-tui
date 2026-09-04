@@ -1,7 +1,8 @@
 // --- Keyboard wiring: the modal precedence chain router lives in ./keymap
-// (quit > conflict > yes/no > rename > props > esc-menu > terminal >
-// path-edit > file menu > search > sidebar > grid > chords) + sidebar
-// kb-focus state. Last wiring step — everything it reads exists by now. ---
+// (capture > quit > conflict > yes/no > rename > props > esc-menu >
+// terminal > path-edit > file menu > search > sidebar > grid > actions —
+// mirrored from its header) + sidebar kb-focus state. Last wiring step —
+// everything it reads exists by now. ---
 
 import { makeKeyRouter } from "../input/keymap";
 import { zoomUiPatch } from "../ui/settings";
@@ -101,6 +102,7 @@ export const wireKeymap = (deps: {
     setClipboard: fileops.fileops.setClipboard,
     isVirtualCwd: core.isVirtualCwd,
     pasteSmart: fileops.fileops.pasteSmart,
+    setStatusMsg: nav.setStatusMsg,
     undoLast: fileops.undo.undoLast,
     redoLast: fileops.undo.redoLast,
   });

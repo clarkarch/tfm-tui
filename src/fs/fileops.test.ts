@@ -166,7 +166,7 @@ describe("runTransfer: cross-device move", () => {
     expect(existsSync(path.join(src, "f1.txt"))).toBe(true);
     expect(existsSync(src)).toBe(true);
     expect(existsSync(path.join(destDir, "cancel-tree"))).toBe(false);
-    expect(h.calls).toContain("toast:finish:✗ Moved cancelled");
+    expect(h.calls).toContain("toast:finish:✗ Move cancelled");
     expect(h.calls).toContain("notify:move cancelled");
   });
 
@@ -206,9 +206,84 @@ describe("trash guards", () => {
     W(src, "keep me");
     const trashFiles = path.join(trashDir(), "files");
     await h.ops.moveInto(trashFiles, [{ path: src, isDir: false }]);
-    expect(h.calls).toContain("status:Can't move items into Trash");
+    expect(h.calls).toContain("status:Can't move into Trash");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     expect(existsSync(src)).toBe(true);
     expect(existsSync(path.join(trashFiles, "move-guard-src.txt"))).toBe(false);
+  });
+});
+
+describe("human-friendly statuses and labels", () => {
+  test("performRename to the same name reports Name unchanged, no undo", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "same-name.txt");
+    W(src, "keep me");
+    await h.ops.performRename(src, "same-name.txt");
+    expect(h.calls).toContain("status:Name unchanged");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    expect(existsSync(src)).toBe(true);
+  });
+
+  test("performRename success names both ends in status and notify", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "old-name.txt");
+    W(src, "data");
+    await h.ops.performRename(src, "new-name.txt");
+    expect(h.calls).toContain("status:Renamed old-name.txt → new-name.txt · ctrl+z to undo");
+    expect(h.calls).toContain("notify:rename");
+    expect(h.calls.some((c) => c.startsWith("undo:rename old-name.txt → new-name.txt:1:"))).toBe(true);
+  });
+
+  test("moveInto a dir into itself reports Already here, no transfer", async () => {
+    const h = makeHarness();
+    const dir = path.join(ROOT, "self-drop");
+    mkdirSync(dir, { recursive: true });
+    await h.ops.moveInto(dir, [{ path: dir, isDir: true }]);
+    expect(h.calls).toContain("status:Already here");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("runTransfer with nothing to do reports it instead of Moved 0 items", async () => {
+    const h = makeHarness();
+    await h.ops.runTransfer("move", ROOT, [], "move 0 items");
+    await h.ops.runTransfer("copy", ROOT, [], "paste 0 items");
+    expect(h.calls).toContain("status:Nothing to move");
+    expect(h.calls).toContain("status:Nothing to copy");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("setClipboard stages (not done): Copy/Cut … · paste to complete", () => {
+    const h = makeHarness();
+    h.ops.setClipboard("copy", [
+      { path: "/a", isDir: false },
+      { path: "/b", isDir: false },
+    ]);
+    expect(h.calls).toContain("status:Copy 2 items · paste to complete");
+    h.ops.setClipboard("cut", [{ path: "/a", isDir: false }]);
+    expect(h.calls).toContain("status:Cut 1 item · paste to complete");
+  });
+
+  test("paste labels carry counts and destination", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "label-src.txt");
+    const destDir = path.join(ROOT, "label-dest");
+    W(src, "data");
+    mkdirSync(destDir, { recursive: true });
+    h.ops.setClipboard("copy", [{ path: src, isDir: false }]);
+    h.ops.pasteSmart(destDir);
+    const deadline = Date.now() + 2000;
+    while (!h.calls.some((c) => c.startsWith("undo:")) && Date.now() < deadline) await Bun.sleep(10);
+    expect(h.calls.some((c) => c.startsWith("undo:paste 1 item:1:"))).toBe(true);
+    expect(h.calls).toContain("status:Copied 1 item to ~/label-dest · ctrl+z to undo");
+  });
+
+  test("moveInto labels carry counts and destination", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "label-mv.txt");
+    const destDir = path.join(ROOT, "label-mv-dest");
+    W(src, "data");
+    mkdirSync(destDir, { recursive: true });
+    await h.ops.moveInto(destDir, [{ path: src, isDir: false }]);
+    expect(h.calls.some((c) => c.startsWith(`undo:move 1 item to ${path.basename(destDir)}:1:`))).toBe(true);
   });
 });

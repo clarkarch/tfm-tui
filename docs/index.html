@@ -237,7 +237,7 @@
     <div class="card">
       <div class="ico">⌘</div>
       <h3>Desktop integration</h3>
-      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every operation.</p>
+      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every reversible operation — permanent delete / empty trash cannot be undone.</p>
     </div>
     <div class="card">
       <div class="ico">&gt;_</div>
@@ -304,6 +304,7 @@ preview-enabled <span class="c">=</span> <span class="v">false</span>   <span cl
 view-mode       <span class="c">=</span> <span class="s">"grid"</span>  <span class="c"># "grid" tiles or "list" rows</span>
 ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># or "outline" — rounded borders</span>
 restore-session <span class="c">=</span> <span class="v">false</span>   <span class="c"># reopen last folder on launch</span>
+persist-undo    <span class="c">=</span> <span class="v">false</span>   <span class="c"># undo history survives restarts</span>
 transparent-bg  <span class="c">=</span> <span class="v">false</span>   <span class="c"># follow kitty background_opacity</span>
 
 <span class="k">[theme]</span>
@@ -328,10 +329,10 @@ quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="
     <div>
       <h4>Optional helpers</h4>
       <ul>
-        <li><code>rsvg-convert</code> — tinted icons</li>
-        <li><code>magick</code> / <code>ffmpeg</code> — SVG / video thumbnails</li>
-        <li><code>gio</code>, <code>xdg-open</code>, <code>udisksctl</code> — trash, default apps, mounts</li>
-        <li><code>wl-clipboard</code> / <code>xclip</code> — clipboard bridge</li>
+        <li><code>rsvg-convert</code> — tinted icons and SVG thumbnails (<code>magick</code> covers rasters as fallback)</li>
+        <li><code>magick</code> / <code>ffmpeg</code> — raster / video thumbnails</li>
+        <li><code>gio</code> — starred-file metadata (trash is built-in XDG), <code>xdg-open</code> / <code>udisksctl</code> — default apps / mounts</li>
+        <li><code>wl-paste</code> / <code>wl-copy</code> or <code>xclip</code> — clipboard bridge</li>
       </ul>
     </div>
     <div>

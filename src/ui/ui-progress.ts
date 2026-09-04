@@ -52,9 +52,10 @@ export const barLine = (bytes: number, totalBytes: number, cells: number): strin
   return `${"█".repeat(filled) + "░".repeat(Math.max(0, cells - filled))} ${fmtBytes(bytes)}/${fmtBytes(totalBytes)}`;
 };
 
-// tiny transfers don't need a toast
-export const shouldToast = (totalBytes: number, totalFiles: number): boolean =>
-  totalBytes > 4 * 1024 * 1024 || totalFiles > 4;
+// tiny transfers don't need a toast — canonical predicate lives in
+// ./fsutil (the transfer pre-scan shares it); re-exported here so the
+// widget's existing import surface doesn't move.
+export { shouldToast } from "../fs/fsutil";
 
 export const makeProgress = (ctx: ProgressCtx) => {
   const PROG_T_TITLE = "tfm-prog-title";

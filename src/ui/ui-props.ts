@@ -100,6 +100,8 @@ export const makeProps = (ctx: PropsCtx) => {
     try {
       st = statSync(targetPath);
     } catch {
+      // right-click → Properties on a just-deleted file must say so, not blink
+      ctx.setStatusMsg("Can't show properties (source gone)");
       return;
     }
     ctx.floats.open("props", rawCloseProps);
@@ -290,7 +292,9 @@ export const makeProps = (ctx: PropsCtx) => {
             const n: any = ctx.byId("tfm-props-size");
             if (n) {
               try {
-                n.content = "huge";
+                // dirWalkStats gives up past 200k entries (null) — say that
+                // instead of a bare word that reads like a bug
+                n.content = "200k+ entries — too large to scan";
               } catch {}
             }
           }

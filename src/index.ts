@@ -10,10 +10,26 @@
 // in milliseconds, not after OpenTUI natives + the whole graph load (~250ms).
 
 import pkg from "../package.json";
+import { statSync } from "node:fs";
 
 if (process.argv.includes("--version") || process.argv.includes("-v")) {
   console.log(`tfm ${pkg.version}`);
   process.exit(0);
+}
+
+// optional launch dir (`tfm ~/some/path`): chdir before anything resolves
+// the cwd, so tabs/history/session all start there. Static imports above are
+// already hoisted, but none of them touch the cwd — only the graph below
+// does. Non-dirs warn on stderr (pre-alternate-screen, so it stays visible).
+const { launchDirFromArgv } = await import("./app/boot");
+const launchDir = launchDirFromArgv(process.argv);
+if (launchDir) {
+  try {
+    if (statSync(launchDir).isDirectory()) process.chdir(launchDir);
+    else console.error(`tfm: not a directory: ${launchDir}`);
+  } catch {
+    console.error(`tfm: not a directory: ${launchDir}`);
+  }
 }
 
 // wall-clock start precedes the graph load so the launch toast tells the

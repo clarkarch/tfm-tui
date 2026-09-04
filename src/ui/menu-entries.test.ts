@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { makeMenuEntries, pasteLabel, type MenuEntriesCtx, type SortMode } from "./menu-entries";
+import { makeMenuEntries, pasteLabel, type MenuEntriesCtx } from "./menu-entries";
+import type { SortMode } from "../lib/sort";
 import { trashDir } from "../fs/fsutil";
 import type { ClipItem, GridTileRef } from "../input/grid-input";
 import type { Place } from "../fs/places";
@@ -41,8 +42,14 @@ const baseCtx = (): MenuEntriesCtx & {
     setClipboard: (m, items) => calls.push(`clip:${m}:${items.length}`),
     startInlineRename: (k) => calls.push(`rename:${k}`),
     startInlineCreate: (k) => calls.push(`create:${k}`),
-    trashPaths: (ps) => calls.push(`trash:${ps.join(",")}`),
-    restoreFromTrash: (ps) => calls.push(`restore:${ps.join(",")}`),
+    trashPaths: (ps) => {
+      calls.push(`trash:${ps.join(",")}`);
+      return Promise.resolve();
+    },
+    restoreFromTrash: (ps) => {
+      calls.push(`restore:${ps.join(",")}`);
+      return Promise.resolve();
+    },
     openProperties: (p) => calls.push(`props:${p}`),
     selectAll: () => calls.push("selectAll"),
     cwd: () => "/home/u",

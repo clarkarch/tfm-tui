@@ -3,7 +3,7 @@
 // icon queue resets first so every raster re-renders at the new cell pixels
 // (kitty rasters are baked at exact sizes). ---
 
-import type { Scheduler } from "../ui/uiutil";
+import type { Scheduler } from "../lib/uiutil";
 
 export type ResizeCtx = {
   resetIconQueue(): void;

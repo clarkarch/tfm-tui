@@ -6,9 +6,9 @@ import { InputRenderable, Text } from "@opentui/core";
 import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { UndoUnit } from "../app/undo";
+import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../app/undo";
+import { fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import type { Theme } from "../config/config";
-import { fsErrText, uniqueTarget } from "../fs/fsutil";
 
 export type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
 
@@ -22,7 +22,7 @@ export type RenameCtx = {
   renderAll(): void;
   renderGrid(): void | Promise<void>;
   performRename(p: string, name: string): void | Promise<void>;
-  pushUndoBatch(label: string, undos: Array<() => Promise<void> | void>, redos: Array<UndoUnit>): void;
+  pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
   setStatusMsg(msg: string): void;
   notify(msg: string, title?: string): void;
   isVirtualCwd(): boolean;
@@ -34,9 +34,7 @@ export type RenameCtx = {
 
 // nautilus naming for an unused "Untitled …" base: "Untitled 2.txt", "Untitled 3.txt" …
 export const uniqueUntitledName = (dir: string, base: string): string => {
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
+  const { stem, ext } = splitStemExt(base);
   let n = base;
   let i = 2;
   while (existsSync(path.join(dir, n))) n = `${stem} ${i++}${ext}`;
@@ -46,21 +44,23 @@ export const uniqueUntitledName = (dir: string, base: string): string => {
 export const tileLabelFor = (name: string, maxW: number): string =>
   name.length > maxW - 2 ? `${name.slice(0, maxW - 5)}…` : name;
 
-const redoCreateUnit = (k: string, kind: "file" | "folder"): UndoUnit =>
-  kind === "folder"
-    ? async () => {
-        try {
-          if (!existsSync(k)) await mkdir(k, { recursive: true });
-        } catch {}
-      }
-    : async () => {
-        try {
-          if (!existsSync(k)) await writeFile(k, "");
-        } catch {}
-      };
-
 export const makeRename = (ctx: RenameCtx) => {
   let renameEdit: RenameEdit | null = null;
+
+  // undo pair for an inline create: undo removes the entry, redo recreates it
+  // empty. Redo reuses the journal interpreter so the live closure and the
+  // persisted step can't drift apart. Labels carry the entry name (like the
+  // rename label carries old → new) so multi-create undos stay clear.
+  const pushCreateBatch = (kind: "file" | "folder", key: string): void => {
+    const redoStep: UndoStep =
+      kind === "folder" ? { op: "mkdir-if-missing", path: key } : { op: "write-empty-if-missing", path: key };
+    ctx.pushUndoBatch(
+      `new ${kind} ${path.basename(key)}`,
+      [() => rm(key, { recursive: true })],
+      [stepToUnit(redoStep)],
+      { units: [{ op: "rm", path: key }], redos: [redoStep] },
+    );
+  };
 
   // restores the plain label node; commit=true runs performRename afterwards
   const finishInlineRename = (commit: boolean): void => {
@@ -120,20 +120,15 @@ export const makeRename = (ctx: RenameCtx) => {
       // recreates it
       const k = edit.key;
       const dir = path.dirname(k);
-      let target = k;
       if (value !== path.basename(k)) {
-        target = path.join(dir, value);
+        let target = path.join(dir, value);
         // create never replaces: a typed name that exists gets the same
         // "name 2" dedupe the initial Untitled naming used. existsSync guard
         // right before the rename — Linux rename would silently overwrite.
         if (existsSync(target)) target = uniqueTarget(dir, value);
         void fsRename(k, target)
           .then(() => {
-            ctx.pushUndoBatch(
-              `new ${edit.createKind} ${path.basename(target)}`,
-              [() => rm(target, { recursive: true })],
-              [redoCreateUnit(target, edit.createKind!)],
-            );
+            pushCreateBatch(edit.createKind!, target);
             const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
             ctx.setStatusMsg(msg);
             ctx.notify(msg, "create");
@@ -146,11 +141,7 @@ export const makeRename = (ctx: RenameCtx) => {
           });
         return;
       }
-      ctx.pushUndoBatch(
-        `new ${edit.createKind} ${value}`,
-        [() => rm(k, { recursive: true })],
-        [redoCreateUnit(k, edit.createKind)],
-      );
+      pushCreateBatch(edit.createKind, k);
       const msg = `Created ${value} · ctrl+z to undo`;
       ctx.setStatusMsg(msg);
       ctx.notify(msg, "create");
@@ -164,10 +155,18 @@ export const makeRename = (ctx: RenameCtx) => {
   const startInlineRename = (key: string, createKind?: "file" | "folder"): void => {
     if (renameEdit) finishInlineRename(false);
     const refs = ctx.tileRefs.get(key);
-    if (!refs) return;
+    // stale selection (tile rebuilt under us, or the file vanished mid-press):
+    // say so instead of dead-ending — keyboard rename gives no other signal
+    if (!refs) {
+      ctx.setStatusMsg("Can't rename here");
+      return;
+    }
     const tile: any = ctx.byId(refs.tileId);
     const label: any = ctx.byId(refs.labelId);
-    if (!tile || !label || !existsSync(key)) return;
+    if (!tile || !label || !existsSync(key)) {
+      ctx.setStatusMsg("Can't rename here (source gone)");
+      return;
+    }
     // remember where the label sits so finishInlineRename can restore it in
     // place (grid tile: below the icon; list row: right after it — an append
     // would drop the name after the size/date columns)
@@ -224,7 +223,11 @@ export const makeRename = (ctx: RenameCtx) => {
   // "Renamed to …" toast and a second undo batch for a file just created).
   const startInlineCreate = (kind: "file" | "folder"): void => {
     if (renameEdit) finishInlineRename(false);
-    if (ctx.isVirtualCwd() || ctx.inTrashView()) return;
+    // trash and virtual views are read-only workspaces, not creation targets
+    if (ctx.isVirtualCwd() || ctx.inTrashView()) {
+      ctx.setStatusMsg("Can't create here");
+      return;
+    }
     const name = uniqueUntitledName(ctx.cwd(), kind === "folder" ? "Untitled folder" : "Untitled.txt");
     const target = path.join(ctx.cwd(), name);
     const made = kind === "folder" ? mkdir(target, { recursive: true }) : writeFile(target, "");
@@ -235,7 +238,11 @@ export const makeRename = (ctx: RenameCtx) => {
         if (idx >= 0) ctx.selectTileAt(idx);
         startInlineRename(target, kind);
       })
-      .catch(() => ctx.setStatusMsg("Create failed"));
+      .catch((err) => {
+        const summary = `Create failed (${fsErrText(err)})`;
+        ctx.setStatusMsg(summary);
+        ctx.notify(summary, "create failed");
+      });
   };
 
   return {

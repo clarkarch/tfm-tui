@@ -47,6 +47,14 @@ const panelRows = () => {
 };
 
 describe("openContextMenu", () => {
+  test("initial focus skips a leading separator", async () => {
+    menu.openContextMenu(5, 5, "", [{ sep: true, label: "", action: () => {} }, ...mkEntries(2)]);
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.idx).toBe(1);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
   test("mounts the menu node and paints the entries", async () => {
     menu.openContextMenu(5, 5, "", mkEntries(3));
     await t.renderOnce();

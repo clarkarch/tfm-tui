@@ -1,24 +1,29 @@
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { fsErrText, fsMove, trashDir, uniqueTarget, xdgTrashMove, safeRestoreMove } from "./fsutil";
+import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrashMove, safeRestoreMove } from "./fsutil";
+import { sharedOpQueue } from "../lib/op-queue";
+import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
 // --- Trash operations: trash / restore / delete-forever / empty. The fs
 // primitives come from fsutil; UI feedback (status, notifications, refresh)
 // and the undo stack arrive through an injected sink, so this module never
-// touches the renderer or app state. ---
-
-export type UndoPair = () => Promise<void> | void;
+// touches the renderer or app state.
+//
+// Concurrency: every op runs through the shared serial queue so two rapid
+// trashes, a paste during a move, or undo mid-transfer never interleave on
+// the same paths. The public methods stay fire-and-forget (void) for
+// backwards compat but also return a Promise callers/tests can await. ---
 
 export type TrashOpsSink = {
   /** push a completed undo batch (already paired with redos) */
-  pushUndoBatch(label: string, units: UndoPair[], redos: UndoPair[]): void;
+  pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
   /** status bar one-liner */
-  status(msg: string): void;
+  setStatusMsg(msg: string): void;
   /** toast notification */
   notify(msg: string, title?: string): void;
   /** schedule a grid refresh */
-  refresh(): void;
+  renderAll(): void;
   /** debug event log — undo/redo closures fail silently otherwise */
   log?(msg: string): void;
 };
@@ -42,10 +47,14 @@ export const trashOrigPath = async (name: string): Promise<string | null> => {
 };
 
 export const makeTrashOps = (sink: TrashOpsSink) => {
-  const trashPaths = (paths: string[]): void => {
-    void (async () => {
-      const units: UndoPair[] = [];
-      const redos: UndoPair[] = [];
+  const queue = sharedOpQueue();
+
+  const trashPaths = (paths: string[]): Promise<void> => {
+    const run = queue.enqueue(async () => {
+      const units: UndoUnit[] = [];
+      const redos: UndoUnit[] = [];
+      const dUnits: UndoStep[] = [];
+      const dRedos: UndoStep[] = [];
       let ok = 0;
       const failWhy = new Set<string>();
       for (const p of paths) {
@@ -55,15 +64,13 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         try {
           const loc = await xdgTrashMove(p);
           const hit = path.basename(loc);
-          const from = path.join(trashDir(), "files", hit);
+          const from = path.join(path.dirname(loc), hit);
           units.push(async () => {
             await safeRestoreMove(from, p);
-            try {
-              await rm(path.join(trashDir(), "info", `${hit}.trashinfo`));
-            } catch (err) {
-              sink.log?.(`undo trash ${p}: ${fsErrText(err)}`);
-            }
+            await rmTrashInfo(hit, sink.log?.bind(sink));
           });
+          dUnits.push({ op: "restore-move", from, to: p });
+          dUnits.push({ op: "rm-trashinfo", name: hit });
           redos.push(async () => {
             try {
               if (existsSync(p)) await xdgTrashMove(p);
@@ -71,26 +78,41 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
               sink.log?.(`redo trash ${p}: ${fsErrText(err)}`);
             }
           });
+          dRedos.push({ op: "trash-if-exists", path: p });
           ok++;
         } catch (err) {
           failWhy.add(fsErrText(err));
         }
       }
-      sink.pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units, redos);
-      sink.refresh();
+      if (units.length)
+        sink.pushUndoBatch(`trash ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });
+      sink.renderAll();
       const failed = paths.length - ok;
-      const why = [...failWhy][0];
+      // full success omits the total (it equals ok); partial failures read
+      // "ok of N". The undo hint shows whenever anything landed (ok > 0),
+      // not just on clean sweeps.
       const summary = failed
-        ? `Trashed ${ok}/${paths.length} · ${failed} FAILED${why ? ` (${why})` : ""}`
+        ? `Trashed ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
         : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
-      sink.status(ok === paths.length ? `${summary} · ctrl+z to undo` : summary);
-      if (failed > 0) sink.notify(summary, "trash failed");
-      else sink.notify(`${summary} · ctrl+z to undo`, "trash");
-    })();
+      const hinted = ok > 0 ? `${summary} · ctrl+z to undo` : summary;
+      sink.setStatusMsg(hinted);
+      if (failed > 0) sink.notify(hinted, "trash failed");
+      else sink.notify(hinted, "trash");
+    });
+    // fire-and-forget safe: outcomes are reported via sink, never thrown
+    run.catch(() => {});
+    return run;
   };
 
-  const restoreFromTrash = (paths: string[]): void => {
-    void (async () => {
+  const restoreFromTrash = (paths: string[]): Promise<void> => {
+    const run = queue.enqueue(async () => {
+      const units: UndoUnit[] = [];
+      const redos: UndoUnit[] = [];
+      // journal: undos only. The redo needs a runtime trash location (re-trash
+      // then re-resolve), which step data can't express — same precedent as
+      // replace-stash batches, which also ship without redos.
+      const dUnits: UndoStep[] = [];
+      const dRedos: UndoStep[] = [];
       let ok = 0;
       const failWhy = new Set<string>();
       for (const src of paths) {
@@ -100,65 +122,93 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           continue;
         }
         try {
-          await mkdir(path.dirname(orig), { recursive: true });
-          let dest = orig;
-          if (existsSync(dest)) dest = uniqueTarget(path.dirname(dest), path.basename(dest));
-          await fsMove(src, dest);
-          try {
-            await rm(path.join(trashDir(), "info", `${path.basename(src)}.trashinfo`));
-          } catch (err) {
-            sink.log?.(`restore cleanup ${src}: ${fsErrText(err)}`);
-          }
+          // safeRestoreMove owns the occupied-target bump (never clobbers)
+          // and returns the final dest for the journal + cleanup below
+          const restoredDest = await safeRestoreMove(src, orig);
+          await rmTrashInfo(path.basename(src), sink.log?.bind(sink));
+          // undo = send it back to trash; redo = restore again (trashinfo
+          // still resolves via Path= after the undo re-trash)
+          units.push(async () => {
+            try {
+              await xdgTrashMove(restoredDest);
+            } catch (err) {
+              sink.log?.(`undo restore ${restoredDest}: ${fsErrText(err)}`);
+              throw err;
+            }
+          });
+          dUnits.push({ op: "trash", path: restoredDest });
+          redos.push(async () => {
+            try {
+              const loc = await xdgTrashMove(restoredDest).catch(() => null);
+              if (loc) {
+                const back = await trashOrigPath(path.basename(loc));
+                await safeRestoreMove(loc, back ?? restoredDest);
+                await rmTrashInfo(path.basename(loc));
+              }
+            } catch (err) {
+              sink.log?.(`redo restore ${restoredDest}: ${fsErrText(err)}`);
+            }
+          });
           ok++;
         } catch (err) {
           failWhy.add(fsErrText(err));
         }
       }
-      sink.refresh();
+      if (units.length)
+        sink.pushUndoBatch(`restore ${ok} item${ok === 1 ? "" : "s"}`, units, redos, {
+          units: dUnits,
+          redos: dRedos,
+        });
+      sink.renderAll();
       const failed = paths.length - ok;
-      const why = [...failWhy][0];
-      const summary = `Restored ${ok} of ${paths.length}${failed ? ` · ${failed} FAILED${why ? ` (${why})` : ""}` : ""}`;
-      sink.status(summary);
+      const base = failed
+        ? `Restored ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
+        : `Restored ${ok} item${ok === 1 ? "" : "s"}`;
+      const summary = !failed || ok > 0 ? `${base} · ctrl+z to undo` : base;
+      sink.setStatusMsg(summary);
       sink.notify(summary, failed ? "restore failed" : "restore");
-    })();
+    });
+    run.catch(() => {});
+    return run;
   };
 
-  const deleteForever = (paths: string[]): void => {
-    void (async () => {
+  const deleteForever = (paths: string[]): Promise<void> => {
+    const run = queue.enqueue(async () => {
       let ok = 0;
       const failWhy = new Set<string>();
       for (const p of paths) {
         try {
           await rm(p, { recursive: true });
-          try {
-            await rm(path.join(trashDir(), "info", `${path.basename(p)}.trashinfo`));
-          } catch (err) {
-            sink.log?.(`delete cleanup ${p}: ${fsErrText(err)}`);
-          }
+          await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
           ok++;
         } catch (err) {
           failWhy.add(fsErrText(err));
         }
       }
-      sink.refresh();
+      sink.renderAll();
       const failed = paths.length - ok;
-      const why = [...failWhy][0];
-      const summary = `Deleted ${ok} of ${paths.length}${failed ? ` · ${failed} FAILED${why ? ` (${why})` : ""}` : ""}`;
-      sink.status(summary);
+      // irreversible by design — no undo batch; say so explicitly
+      const summary = failed
+        ? `Deleted ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
+        : `Deleted ${ok} item${ok === 1 ? "" : "s"} · cannot be undone`;
+      sink.setStatusMsg(summary);
       sink.notify(summary, failed ? "delete failed" : "delete");
-    })();
+    });
+    run.catch(() => {});
+    return run;
   };
 
-  const emptyTrash = (): void => {
-    void (async () => {
+  const emptyTrash = (): Promise<void> => {
+    const run = queue.enqueue(async () => {
       const filesDir = path.join(trashDir(), "files");
       let names: string[];
       try {
         names = await readdir(filesDir);
       } catch (err) {
-        sink.refresh();
-        sink.notify(`Could not read trash (${fsErrText(err)})`, "empty failed");
-        sink.status("Trash unreadable");
+        const reason = fsErrText(err);
+        sink.renderAll();
+        sink.notify(`Could not read trash (${reason})`, "empty failed");
+        sink.setStatusMsg(`Trash unreadable (${reason})`);
         return;
       }
       let n = 0;
@@ -166,27 +216,27 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       for (const k of names) {
         try {
           await rm(path.join(filesDir, k), { recursive: true });
-          try {
-            await rm(path.join(trashDir(), "info", `${k}.trashinfo`));
-          } catch (err) {
-            sink.log?.(`empty cleanup ${k}: ${fsErrText(err)}`);
-          }
+          await rmTrashInfo(k, sink.log?.bind(sink));
           n++;
         } catch (err) {
           failWhy.add(fsErrText(err));
         }
       }
-      sink.refresh();
+      sink.renderAll();
       const failed = names.length - n;
-      const why = [...failWhy][0];
       if (failed > 0) {
-        sink.notify(`Emptied ${n}/${names.length} · ${failed} FAILED${why ? ` (${why})` : ""}`, "empty failed");
-        sink.status(`Trash partially emptied (${n}/${names.length})`);
+        sink.notify(`Emptied ${n} of ${names.length} · ${failSuffix(failed, failWhy)}`, "empty failed");
+        sink.setStatusMsg(`Trash partially emptied (${n} of ${names.length})`);
         return;
       }
-      sink.notify(`Emptied ${n} item${n === 1 ? "" : "s"}`, "trash");
-      sink.status(`Trash emptied (${n})`);
-    })();
+      // irreversible by design — no undo batch; say so explicitly. Status and
+      // notify carry the same sentence (they diverged before for no reason).
+      const summary = `Emptied ${n} item${n === 1 ? "" : "s"} · cannot be undone`;
+      sink.notify(summary, "empty");
+      sink.setStatusMsg(summary);
+    });
+    run.catch(() => {});
+    return run;
   };
 
   return { trashPaths, restoreFromTrash, deleteForever, emptyTrash };
@@ -203,13 +253,17 @@ export type TrashConfirmsCtx = {
 
 export const makeTrashConfirms = (ctx: TrashConfirmsCtx) => {
   const confirmEmptyTrash = (): void => {
-    ctx.confirm("Empty Trash?", "Empty", () => ctx.emptyTrash(), true);
+    // count is best-effort (home trash only; -1 when unreadable) — the prompt
+    // names the count when known so "empty everything" isn't a blind click
+    const n = countTrashItems();
+    const what = n >= 0 ? `Empty Trash (${n} item${n === 1 ? "" : "s"})?` : "Empty Trash?";
+    ctx.confirm(`${what} This cannot be undone.`, "Empty Trash", () => ctx.emptyTrash(), true);
   };
 
   const confirmDeleteForever = (paths: string[]): void => {
     ctx.confirm(
-      `Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}?`,
-      "Delete",
+      `Permanently delete ${paths.length} item${paths.length === 1 ? "" : "s"}? This cannot be undone.`,
+      "Delete permanently",
       () => ctx.deleteForever(paths),
       true,
     );

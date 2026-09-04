@@ -110,7 +110,7 @@ describe("copyFileProgress", () => {
 
   test("mid-stream cancel destroys the write stream (no leaked fd / disk blocks)", async () => {
     // the cancel path used to destroy only the read stream: the write stream
-    // stayed open while runTransfer's cleanup unlinked the partial target —
+    // stayed open while the tmp/dest cleanup unlinked the partial file —
     // allocated blocks lingered until a GC finalizer bun may never run
     const src = path.join(dir, "in.bin");
     const dest = path.join(dir, "out.bin");
@@ -127,6 +127,39 @@ describe("copyFileProgress", () => {
     expect((caught as Error)?.message).toBe("cancelled");
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  test("lands atomically: no half-visible dest, no tmp orphans left behind", async () => {
+    const src = path.join(dir, "atomic.bin");
+    const dest = path.join(dir, "atomic-out.bin");
+    writeFileSync(src, "0123456789");
+    const h = mkSink();
+    await copyFileProgress(src, dest, h.sink);
+    const leftovers = readdirSync(dir).filter((f) => f.includes(".tfm-part-"));
+    expect(leftovers).toEqual([]);
+    expect(readFileSync(dest, "utf8")).toBe("0123456789");
+  });
+
+  test("preserves mode and mtime from the source", async () => {
+    const src = path.join(dir, "meta.txt");
+    const dest = path.join(dir, "meta-out.txt");
+    writeFileSync(src, "meta");
+    const { chmodSync, utimesSync } = await import("node:fs");
+    chmodSync(src, 0o640);
+    const atime = new Date("2020-01-02T03:04:05Z");
+    const mtime = new Date("2021-06-07T08:09:10Z");
+    utimesSync(src, atime, mtime);
+    const h = mkSink();
+    await copyFileProgress(src, dest, h.sink);
+    const st = lstatSync(dest);
+    expect(st.mode & 0o777).toBe(0o640);
+    expect(Math.floor(st.mtimeMs / 1000)).toBe(Math.floor(mtime.getTime() / 1000));
+  });
+
+  test("failed copy leaves neither dest nor tmp orphan", async () => {
+    const h = mkSink();
+    await expect(copyFileProgress(path.join(dir, "missing-src"), path.join(dir, "nope.bin"), h.sink)).rejects.toThrow();
+    expect(readdirSync(dir).filter((f) => f.includes(".tfm-part-") || f === "nope.bin")).toEqual([]);
   });
 });
 

@@ -9,7 +9,7 @@ import { makeEscMenu } from "../ui/ui-settings";
 import { makeRetheme } from "../ui/ui-retheme";
 import { clearIconCaches } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
-import { clearChildren } from "../ui/uiutil";
+import { clearChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
@@ -104,6 +104,9 @@ export const wireRetheme = (deps: {
     fileMenuIsOpen: chrome.menu.isFileMenuOpen,
     renderFileMenu: chrome.menu.renderFileMenu,
     setStatusMsg: nav.setStatusMsg,
+    // toggling [ui] persist-undo persists the live stack (or clears the
+    // journal file) immediately — not on the next file op
+    onConfigApplied: () => fileops.syncUndoJournal(),
   });
 
   return retheme;

@@ -1,11 +1,16 @@
 // --- Live directory watching: external changes refresh the grid. Owns the
 // FSWatcher lifecycle for the active cwd; the app-facing surface is
 // syncCwdWatcher(), called from renderAll so the watched dir always matches
-// state.cwd. Renderer-free — cwd/renaming/renderGrid arrive as getters. ---
+// state.cwd. Renderer-free — cwd/renaming/renderGrid arrive as getters.
+//
+// Limits (documented, not hidden): single non-recursive node:fs.watch on cwd
+// only — rapid external changes during a long transfer surface on the next
+// renderAll/sync. Errors are logged via the injected log (default silent for
+// backwards compat) instead of being swallowed invisibly. ---
 
 import { watch } from "node:fs";
 import path from "node:path";
-import { debounced, type Scheduler } from "../ui/uiutil";
+import { debounced, type Scheduler } from "../lib/uiutil";
 
 export type CwdWatcherCtx = {
   cwd: () => string;
@@ -18,6 +23,8 @@ export type CwdWatcherCtx = {
   watchImpl?: (dir: string, cb: () => void) => { on(ev: string, cb: (e: unknown) => void): unknown; close(): void };
   // injectable clock for the coalesce debounce (tests use a virtual one)
   sched?: Scheduler;
+  // errors are surfaced (default silent for backwards compat), never swallowed
+  log?: (msg: string) => void;
 };
 
 export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
@@ -40,7 +47,9 @@ export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
     if (watcher) {
       try {
         watcher.close();
-      } catch {}
+      } catch (err) {
+        ctx.log?.(`watcher close failed: ${err}`);
+      }
       watcher = null;
     }
     watchErrored = false;
@@ -62,12 +71,18 @@ export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
     closeWatcher();
     try {
       watcher = doWatch(dir, onCwdChanged) as ReturnType<typeof watch>;
-      watcher.on("error", () => {
-        // never swallow silently: mark dead so the next sync re-arms
+      watcher.on("error", (err) => {
+        // never swallow silently: mark dead so the next sync re-arms (ANY
+        // error — ENOENT or otherwise — means the kernel watch is gone)
         watchErrored = true;
+        ctx.log?.(`watcher error on ${dir}: ${err}`);
       });
-    } catch {}
+    } catch (err) {
+      // dir vanished between resolve and watch — retried on the next sync
+      watchErrored = true;
+      ctx.log?.(`watcher failed on ${dir}: ${err}`);
+    }
   };
 
-  return { syncCwdWatcher };
+  return { syncCwdWatcher, closeWatcher };
 };

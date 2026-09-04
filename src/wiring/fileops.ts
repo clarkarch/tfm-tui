@@ -5,6 +5,7 @@
 // wiring (gridCtx takes moveInto directly). ---
 
 import { makeUndo } from "../app/undo";
+import { clearUndoJournal, readUndoJournal, saveUndoJournal } from "../fs/undo-journal";
 import { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import { makeProgress } from "../ui/ui-progress";
 import { makeFileOps } from "../fs/fileops";
@@ -30,11 +31,38 @@ export const wireFileops = (deps: {
 
   // --- Undo stack — state machine lives in ./undo (pure, tested) — results
   // surface via sink; the override (conflict) prompt dialog lives in ./ui-dialogs ---
-  const undo = makeUndo({
-    status: nav.setStatusMsg,
-    notify: chrome.notify,
-    refresh: nav.renderAll,
-  });
+  // Persistent undo ([ui] persist-undo, off by default): the journalable tail
+  // is saved synchronously on every stack change and re-adopted at boot.
+  // Function declaration (hoisted) so the onChange closure below is TDZ-safe.
+  function syncUndoJournal(): void {
+    if (core.config.ui.persistUndo) {
+      try {
+        saveUndoJournal(undo.snapshotData());
+      } catch (err) {
+        dlog(`undo journal save failed: ${err}`);
+      }
+    } else {
+      clearUndoJournal();
+    }
+  }
+  const undo = makeUndo(
+    {
+      setStatusMsg: nav.setStatusMsg,
+      notify: chrome.notify,
+      renderAll: nav.renderAll,
+    },
+    { log: (msg) => dlog(msg), onChange: syncUndoJournal },
+  );
+  if (core.config.ui.persistUndo) {
+    const restored = readUndoJournal();
+    if (restored.length) {
+      const n = undo.adoptBatches(restored);
+      dlog(`undo journal: adopted ${n} batches from previous session`);
+    }
+  } else {
+    // don't let a stale journal linger from when the option was last on
+    clearUndoJournal();
+  }
 
   const conflict = makeConflict(chrome.dialogs, {
     colors: themeGet,
@@ -95,9 +123,9 @@ export const wireFileops = (deps: {
 
   const trash = makeTrashOps({
     pushUndoBatch: undo.pushUndoBatch,
-    status: nav.setStatusMsg,
+    setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
-    refresh: nav.renderAll,
+    renderAll: nav.renderAll,
     log: (msg) => appendLog(`trashops: ${msg}`),
   });
 
@@ -117,6 +145,7 @@ export const wireFileops = (deps: {
 
   return {
     undo,
+    syncUndoJournal,
     conflict,
     progress,
     fileops,

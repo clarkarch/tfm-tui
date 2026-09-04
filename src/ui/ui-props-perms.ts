@@ -5,6 +5,7 @@ import path from "node:path";
 import { applySurface, rowSurface, slotBg } from "./style";
 import type { Theme } from "../config/config";
 import { idName, permWords } from "../fs/propsinfo";
+import { fsErrText } from "../fs/fsutil";
 import type { ListEntry } from "./ui-menu";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
@@ -61,8 +62,11 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
   const applyMode = async (nm: number): Promise<void> => {
     try {
       await chmod(targetPath, nm);
-    } catch {
-      ctx.setStatusMsg("chmod failed");
+    } catch (err) {
+      // status-only like the other panel-local failures: a toast would fight
+      // the open properties panel, but the reason still shows (was bare
+      // "chmod failed" with no reason)
+      ctx.setStatusMsg(`Chmod failed (${fsErrText(err)})`);
       return;
     }
     try {

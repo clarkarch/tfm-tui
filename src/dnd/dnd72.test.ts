@@ -1,7 +1,25 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { makeDnd72, splitOsc72Seq, type Dnd72Ctx } from "./dnd72";
 import { gridDrag } from "../input/grid-input";
 import { startDropFrame, uriListPayload } from "./osc72";
+import { trashDir } from "../fs/fsutil";
+
+// trash-place routing compares against trashDir() (XDG-aware), so sandbox
+// XDG_DATA_HOME like the trashops tests do — a hardcoded ~/.local/share
+// path diverges under relocation, which is exactly the bug being pinned
+const oldDataHome = process.env.XDG_DATA_HOME;
+const XDG_ROOT = mkdtempSync(path.join(os.tmpdir(), "tfm-dnd-xdg-"));
+beforeAll(() => {
+  process.env.XDG_DATA_HOME = path.join(XDG_ROOT, "data");
+});
+afterAll(() => {
+  if (oldDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = oldDataHome;
+  rmSync(XDG_ROOT, { recursive: true, force: true });
+});
 
 const baseCtx = () => {
   const tx: string[] = [];
@@ -41,7 +59,10 @@ const baseCtx = () => {
     finishDrag: () => logs.push("finishDrag"),
     escMenuOpen: () => false,
     fileMenuOpen: () => false,
-    trashPaths: (ps) => ctx.trashed.push(ps),
+    trashPaths: (ps) => {
+      ctx.trashed.push(ps);
+      return Promise.resolve();
+    },
     moveInto: async (destDir, items) => {
       ctx.moveIns.push([destDir, items]);
     },
@@ -131,7 +152,7 @@ describe("incoming drop", () => {
     feed("t=r:x=1", b64("file:///home/u/a.txt\r\nfile:///home/u"));
     feed("t=r:x=1"); // empty frame + m=0 → finish
     await settleUntil(() => ctx.runTransfers.length > 0);
-    expect(ctx.runTransfers).toEqual([["copy", "/home/u", ["/home/u/a.txt", "/home/u"], "drop"]]);
+    expect(ctx.runTransfers).toEqual([["copy", "/home/u", ["/home/u/a.txt", "/home/u"], "drop 2 items"]]);
   });
 
   test("startDropFrame requests the 1-based wire index", () => {
@@ -207,7 +228,7 @@ describe("self drop", () => {
 
   test("drop onto the trash place trashes instead of moving", async () => {
     const { ctx, feed } = baseCtx();
-    ctx.hitTargetAt = () => ({ kind: "place", path: "/home/u/.local/share/Trash/files" });
+    ctx.hitTargetAt = () => ({ kind: "place", path: path.join(trashDir(), "files") });
     makeDnd72(ctx);
     gridDrag.keys = [{ path: "/d/a", isDir: false }];
     feed("t=o:x=1:y=1");
@@ -282,6 +303,24 @@ describe("external drag end", () => {
     while (ctx.trashed.length === 0 && Date.now() < deadline) await Bun.sleep(10);
     expect(ctx.trashed).toEqual([["/d/b"]]);
     gridDrag.keys = null;
+  });
+});
+
+describe("wire errors", () => {
+  test("drop error names the reason in status and toast", () => {
+    const { ctx, feed, status, notes } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=R", "denied by target");
+    expect(status).toContain("Drop failed (denied by target)");
+    expect(notes).toContain("drop failed: Drop failed (denied by target)");
+  });
+
+  test("drag offer error names the reason in status and toast", () => {
+    const { ctx, feed, status, notes } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=E", "offer timeout");
+    expect(status).toContain("Drag failed (offer timeout)");
+    expect(notes).toContain("drag failed: Drag failed (offer timeout)");
   });
 });
 
