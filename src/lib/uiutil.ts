@@ -1,8 +1,8 @@
 // --- Renderer-agnostic UI utilities. Canonical home (was src/ui/uiutil.ts).
 // Moved to src/lib/ because fs/ (watcher, recent-open) and app/ (nav,
 // render-all) need debounced/safeRenderStep — importing those from ui/
-// inverted the layering (fs -> ui for a 3-line debounce). ui/uiutil.ts
-// re-exports everything here so existing imports keep working. ---
+// inverted the layering (fs -> ui for a 3-line debounce). All import sites
+// were rewritten; there is no re-export shim. ---
 
 type ChildHost = { getChildren: () => Iterable<unknown>; remove: (child: unknown) => void };
 

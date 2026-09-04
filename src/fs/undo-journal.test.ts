@@ -110,7 +110,6 @@ describe("undo journal file", () => {
 describe("persist-undo option", () => {
   test("off by default, parsed per-key like every ui bool", () => {
     expect(defaultConfig.ui.persistUndo).toBe(false);
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { parse } = require("smol-toml") as typeof import("smol-toml");
     expect(parseConfigDoc(parse("[ui]\npersist-undo = true")).ui.persistUndo).toBe(true);
     expect(parseConfigDoc(parse('[ui]\npersist-undo = "yes"')).ui.persistUndo).toBe(false);
