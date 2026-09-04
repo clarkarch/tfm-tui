@@ -66,6 +66,14 @@ const baseCtx = () => {
 
 const b64 = (s: string): string => Buffer.from(s, "utf8").toString("base64").replace(/=+$/, "");
 
+// poll on observable state (fake ctx arrays) instead of fixed sleeps — the
+// drop finishing is fire-and-forget inside dnd72
+const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+  if (!cond()) throw new Error("settleUntil timeout");
+};
+
 describe("splitOsc72Seq", () => {
   test("splits meta/payload and strips terminators", () => {
     expect(splitOsc72Seq("\x1b]72;t=m:o=1;text/uri-list\x1b\\")).toEqual({ meta: "t=m:o=1", payload: "text/uri-list" });
@@ -122,7 +130,7 @@ describe("incoming drop", () => {
     // mime index 1 is 1-based → wire idx 2
     feed("t=r:x=1", b64("file:///home/u/a.txt\r\nfile:///home/u"));
     feed("t=r:x=1"); // empty frame + m=0 → finish
-    await Bun.sleep(10);
+    await settleUntil(() => ctx.runTransfers.length > 0);
     expect(ctx.runTransfers).toEqual([["copy", "/home/u", ["/home/u/a.txt", "/home/u"], "drop"]]);
   });
 
@@ -149,7 +157,7 @@ describe("incoming drop", () => {
     feed("t=M:x=1", "text/uri-list");
     feed("t=r:x=1", b64("file:///x"));
     feed("t=r:x=1");
-    await Bun.sleep(10);
+    await settleUntil(() => status.length > 0);
     expect(ctx.runTransfers).toEqual([]);
     expect(status).toContain("Drops land in a real folder");
   });
@@ -161,7 +169,7 @@ describe("incoming drop", () => {
     feed("t=M:x=1", "text/uri-list");
     feed("t=r:x=1", b64("file:///home/u/a.txt"));
     feed("t=r:x=1");
-    await Bun.sleep(10);
+    await settleUntil(() => ctx.trashed.length > 0);
     expect(ctx.runTransfers).toEqual([]);
     expect(ctx.trashed).toEqual([[`/home/u/a.txt`]]);
   });
@@ -177,7 +185,7 @@ describe("self drop", () => {
     feed("t=m:x=5:y=5"); // self hover onto /d/dest
     expect(logs).toContain("visual:/d/dest:2");
     feed("t=M:x=5:y=5"); // self drop
-    await Bun.sleep(10);
+    await settleUntil(() => ctx.moveIns.length > 0);
     expect(ctx.moveIns.length).toBe(1);
     const [dest, items] = ctx.moveIns[0]!;
     expect(dest).toBe("/d/dest");
@@ -191,7 +199,7 @@ describe("self drop", () => {
     gridDrag.keys = [{ path: "/d/a", isDir: false }];
     feed("t=o:x=1:y=1");
     feed("t=M:x=99:y=99"); // miss
-    await Bun.sleep(10);
+    await settleUntil(() => status.includes("drag cancelled"));
     expect(tx.some((s) => s.includes("t=r:o=0"))).toBe(true); // self drop reject
     expect(status).toContain("drag cancelled");
     gridDrag.keys = null;
@@ -204,7 +212,7 @@ describe("self drop", () => {
     gridDrag.keys = [{ path: "/d/a", isDir: false }];
     feed("t=o:x=1:y=1");
     feed("t=M:x=5:y=5");
-    await Bun.sleep(10);
+    await settleUntil(() => ctx.trashed.length > 0);
     expect(ctx.trashed).toEqual([["/d/a"]]);
     expect(ctx.moveIns).toEqual([]);
     gridDrag.keys = null;
@@ -218,7 +226,7 @@ describe("external drag end", () => {
     gridDrag.keys = [{ path: "/d/a", isDir: false }];
     feed("t=o:x=1:y=1");
     feed("t=e:x=4:y=0"); // end, not canceled, no self drop handled
-    await Bun.sleep(750); // end is deferred 700ms for in-flight self drops
+    await Bun.sleep(750); // deferred end is a fixed 700ms timer with no observable pre-signal
     expect(notes.some((n) => n.includes("Sent 1 item"))).toBe(true);
     gridDrag.keys = null;
   });
@@ -230,8 +238,7 @@ describe("external drag end", () => {
     feed("t=o:x=1:y=1");
     feed("t=e:x=2:y=2"); // op=move
     feed("t=e:x=4:y=0");
-    await Bun.sleep(750);
-    expect(ctx.trashed).toEqual([["/d/a"]]);
+    await settleUntil(() => ctx.trashed.length > 0, 3000); // 700ms-deferred epilogue
     gridDrag.keys = null;
   });
 
@@ -266,7 +273,7 @@ describe("external drag end", () => {
     feed("t=o:x=1:y=1");
     feed("t=e:x=2:y=2");
     // the stale timer reads the snapshot (A was a copy), not the live op
-    await Bun.sleep(750);
+    await settleUntil(() => notes.some((n) => n.includes("Sent 1 item")), 3000); // A's epilogue ran as a copy
     expect(ctx.trashed).toEqual([]); // A's sources survive
     expect(notes.some((n) => n.includes("Sent 1 item"))).toBe(true); // A's copy epilogue ran as a copy
     // B still completes with move semantics

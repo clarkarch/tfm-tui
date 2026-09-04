@@ -5,7 +5,7 @@
 
 import { watch } from "node:fs";
 import path from "node:path";
-import { debounced } from "../ui/uiutil";
+import { debounced, type Scheduler } from "../ui/uiutil";
 
 export type CwdWatcherCtx = {
   cwd: () => string;
@@ -16,6 +16,8 @@ export type CwdWatcherCtx = {
   // injectable for tests; defaults to node:fs watch. Returns a handle with
   // an "error" subscription and close() — the structural surface used here.
   watchImpl?: (dir: string, cb: () => void) => { on(ev: string, cb: (e: unknown) => void): unknown; close(): void };
+  // injectable clock for the coalesce debounce (tests use a virtual one)
+  sched?: Scheduler;
 };
 
 export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
@@ -25,10 +27,14 @@ export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
   const doWatch = ctx.watchImpl ?? ((dir: string, cb: () => void) => watch(dir, cb));
 
   // fs events burst in clusters; coalesce them into one grid rebuild
-  const onCwdChanged = debounced(200, () => {
-    if (ctx.isRenaming()) return;
-    if (path.resolve(ctx.cwd()) === watchedDir) void ctx.renderGrid();
-  });
+  const onCwdChanged = debounced(
+    200,
+    () => {
+      if (ctx.isRenaming()) return;
+      if (path.resolve(ctx.cwd()) === watchedDir) void ctx.renderGrid();
+    },
+    ctx.sched ?? globalThis,
+  );
 
   const closeWatcher = (): void => {
     if (watcher) {

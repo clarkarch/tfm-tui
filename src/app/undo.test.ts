@@ -11,7 +11,13 @@ const recordingSink = (): UndoSink & { notes: string[] } => {
   };
 };
 
-const settle = () => Bun.sleep(20);
+// poll on observable state (sink notes / stack depths / ran[]) — never a
+// fixed sleep, which races fire-and-forget ops under parallel-suite load
+const settleUntil = async (cond: () => boolean): Promise<void> => {
+  const deadline = Date.now() + 2000;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+  if (!cond()) throw new Error("settleUntil timeout");
+};
 
 describe("makeUndo", () => {
   test("pushUndoBatch ignores empty unit lists", () => {
@@ -39,8 +45,7 @@ describe("makeUndo", () => {
       ],
     );
     undo.undoLast();
-    await settle();
-    expect(undo.redoDepth()).toBe(1);
+    await settleUntil(() => undo.redoDepth() === 1);
     undo.pushUndoBatch("fresh op", [() => {}]);
     expect(undo.redoDepth()).toBe(0);
   });
@@ -59,7 +64,7 @@ describe("makeUndo", () => {
     expect(undo.undoDepth()).toBe(MAX_UNDO_BATCHES);
     // oldest five (op 0..4) were shifted — next undo reverses the newest
     undo.undoLast();
-    await settle();
+    await settleUntil(() => ran.length === 1);
     expect(ran).toEqual([String(MAX_UNDO_BATCHES + 4)]);
     // batch was pushed without redos → not redoable, no hint
     expect(sink.notes).toContain("status:Undid: op 34");
@@ -81,7 +86,7 @@ describe("makeUndo", () => {
       },
     ]);
     undo.undoLast();
-    await settle();
+    await settleUntil(() => ran.length === 3);
     expect(ran).toEqual(["c", "b", "a"]);
   });
 
@@ -90,7 +95,7 @@ describe("makeUndo", () => {
     const undo = makeUndo(sink);
     undo.pushUndoBatch("one-way", [() => {}]);
     undo.undoLast();
-    await settle();
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("status:Undid")));
     expect(undo.redoDepth()).toBe(0);
     expect(sink.notes).toContain("status:Undid: one-way");
     expect(sink.notes.some((n) => n.includes("ctrl+y"))).toBe(false);
@@ -100,7 +105,7 @@ describe("makeUndo", () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     undo.undoLast();
-    await settle();
+    await settleUntil(() => sink.notes.length === 1);
     expect(sink.notes).toEqual(["status:Nothing to undo"]);
   });
 
@@ -119,7 +124,7 @@ describe("makeUndo", () => {
       [() => {}],
     );
     undo.undoLast();
-    await settle();
+    await settleUntil(() => sink.notes.some((n) => n.includes("1 FAILED")));
     // failed runs get no ctrl+y hint (original behavior) but stay redoable
     expect(sink.notes).toContain("status:Undo messy · 1 FAILED (permission denied)");
     expect(sink.notes).toContain("notify:undo failed:Undo messy · 1 FAILED (permission denied)");
@@ -144,9 +149,9 @@ describe("makeUndo", () => {
       ],
     );
     undo.undoLast();
-    await settle();
+    await settleUntil(() => ran.length === 1);
     undo.redoLast();
-    await settle();
+    await settleUntil(() => ran.length === 2);
     expect(ran).toEqual(["u", "r"]);
     expect(undo.undoDepth()).toBe(1);
     expect(undo.redoDepth()).toBe(0);
@@ -158,7 +163,7 @@ describe("makeUndo", () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     undo.redoLast();
-    await settle();
+    await settleUntil(() => sink.notes.length === 1);
     expect(sink.notes).toEqual(["status:Nothing to redo"]);
   });
 
@@ -176,9 +181,9 @@ describe("makeUndo", () => {
       ],
     );
     undo.undoLast();
-    await settle();
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("status:Undid")));
     undo.redoLast();
-    await settle();
+    await settleUntil(() => sink.notes.some((n) => n.includes("1 FAILED")));
     expect(sink.notes).toContain("status:Redo op · 1 FAILED (source gone)");
     expect(sink.notes).toContain("notify:redo failed:Redo op · 1 FAILED (source gone)");
     // the batch returns to the undo stack even on failed redo (matches old behavior)

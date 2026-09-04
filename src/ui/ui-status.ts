@@ -4,16 +4,18 @@
 // injected (selection's updateSelectionStatusReal) so this module stays
 // renderer-free — nodes arrive through byId. ---
 
-import { debounced } from "./uiutil";
+import { debounced, type Scheduler } from "./uiutil";
 
 export type StatusCtx = {
   byId(id: string): any;
   refresh(): void;
   resetDelayMs?: number;
+  // injectable clock (tests use a virtual one); defaults to real timers
+  sched?: Scheduler;
 };
 
 export const makeStatus = (ctx: StatusCtx) => {
-  const clearStatusMsg = debounced(ctx.resetDelayMs ?? 2500, () => ctx.refresh());
+  const clearStatusMsg = debounced(ctx.resetDelayMs ?? 2500, () => ctx.refresh(), ctx.sched ?? globalThis);
 
   const setStatusMsg = (text: string): void => {
     const status: any = ctx.byId("tfm-status-label");
