@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeCwdWatcher } from "./watcher";
@@ -92,5 +92,65 @@ describe("makeCwdWatcher", () => {
     writeFileSync(path.join(dir, "after-virtual"), "x");
     await sleep(600);
     expect(gridRenders).toBe(0);
+  });
+
+  test("a failed watch() for the current dir is retried on the next sync", async () => {
+    // the early-return keyed on watchedDir alone assumed "recorded == alive":
+    // once a watch() call threw (dir vanished between listing and watching),
+    // watchedDir stayed latched and every later sync for the same dir
+    // early-returned — the grid went permanently stale with no signal
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-watch-vanish-"));
+    let gridRenders = 0;
+    let virtual = false;
+    const { syncCwdWatcher } = makeCwdWatcher({
+      cwd: () => (virtual ? "recent://" : dir),
+      isVirtualCwd: () => virtual,
+      isRenaming: () => false,
+      renderGrid: () => {
+        gridRenders++;
+      },
+    });
+    syncCwdWatcher(); // arms on the real dir
+    virtual = true;
+    syncCwdWatcher(); // hop away: watcher closed, watchedDir cleared
+    rmSync(dir, { recursive: true });
+    virtual = false;
+    syncCwdWatcher(); // watch() throws ENOENT — must not latch as "watched"
+    mkdirSync(dir, { recursive: true });
+    syncCwdWatcher(); // same dir again — must re-arm, not early-return
+    writeFileSync(path.join(dir, "after-recovery"), "x");
+    await settleUntil(() => gridRenders > 0);
+  });
+
+  test("an errored watcher is re-armed on the next sync (injected watch)", () => {
+    // after the watched dir is replaced (rm -rf + mkdir), the kernel watch
+    // dies with an error event; the old handler swallowed it and the dead
+    // watcher stayed armed-never-again until the user navigated away and back
+    const fakeWatchers: { on: (ev: string, cb: (e: unknown) => void) => void; close: () => void }[] = [];
+    let errorCb: ((e: unknown) => void) | null = null;
+    let watchCalls = 0;
+    const { syncCwdWatcher } = makeCwdWatcher({
+      cwd: () => "/w",
+      isVirtualCwd: () => false,
+      isRenaming: () => false,
+      renderGrid: () => {},
+      watchImpl: (_dir, cb) => {
+        void cb;
+        watchCalls++;
+        const w = {
+          on: (ev: string, cb: (e: unknown) => void) => {
+            if (ev === "error") errorCb = cb;
+          },
+          close: () => {},
+        };
+        fakeWatchers.push(w);
+        return w;
+      },
+    });
+    syncCwdWatcher();
+    expect(watchCalls).toBe(1);
+    errorCb!(new Error("watch died")); // kernel watch gone (dir replaced)
+    syncCwdWatcher();
+    expect(watchCalls).toBe(2); // re-armed instead of staying dead
   });
 });
