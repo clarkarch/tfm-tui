@@ -1,5 +1,5 @@
 import { Box, Text } from "@opentui/core";
-import { chromeSurface } from "./style";
+import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { clearChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
@@ -30,7 +30,7 @@ export type MenuCtx = {
   termH(): number;
   stripSelectable(): void;
   drainIconQueue(): void;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   colors(): Theme;
   menuW: number;
   floats: Floats;
@@ -160,7 +160,7 @@ export const makeMenu = (ctx: MenuCtx) => {
         // above every modal (props/prompt/conflict/toast) — context menus can be
         // spawned from inside any of them
         zIndex: FLOAT_Z.filemenu,
-        ...chromeSurface(ctx.uiStyle(), colors, colors.sidebarBg),
+        ...floatSurface(ctx.uiStyle(), colors, colors.sidebarBg),
         flexDirection: "column",
       },
       Box({ id: "tfm-filemenu-panel", width: "100%", flexDirection: "column" }),

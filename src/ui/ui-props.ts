@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { applySurface, btnSurface, slotBg } from "./style";
+import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
@@ -60,7 +60,7 @@ export type PropsCtx = {
   floats: Floats;
   renderAll(): void;
   setStatusMsg(msg: string): void;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   colors(): Theme;
   home: string;
   makeIconSlot(

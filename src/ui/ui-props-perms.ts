@@ -2,7 +2,7 @@ import { Box, Text } from "@opentui/core";
 import { statSync, openSync, readSync, closeSync } from "node:fs";
 import { chmod } from "node:fs/promises";
 import path from "node:path";
-import { applySurface, rowSurface, slotBg } from "./style";
+import { applySurface, rowSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { idName, permWords } from "../fs/propsinfo";
 import { fsErrText } from "../fs/fsutil";
@@ -22,7 +22,7 @@ export type PermsCtx = {
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   closeFileMenu(): void;
   setStatusMsg(msg: string): void;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   colors(): Theme;
   makeIconSlot(
     name: string,

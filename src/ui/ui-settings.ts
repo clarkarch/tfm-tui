@@ -11,7 +11,7 @@
 // cancels capture.
 
 import { Box, RGBA, Text } from "@opentui/core";
-import { chromeSurface, type UiStyle } from "./style";
+import { floatSurface, type UiStyle } from "./style";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { IconState, IconSpec } from "./ui-slots";
 import type { Theme } from "../config/config";
@@ -494,7 +494,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       Box({
         id: "tfm-menu-panel",
         width: ctx.menuW(),
-        ...chromeSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
+        ...floatSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
         paddingTop: 1,
         paddingBottom: 1,
         onMouseDown: (ev: any) => {

@@ -70,6 +70,13 @@ describe("parseConfigDoc", () => {
     const cfg2 = parseConfigDocBody(serializeConfig(cfg));
     expect(cfg2).toEqual(cfg);
   });
+
+  test("ui-style outline-partial round-trips; garbage still falls back to solid", () => {
+    const cfg: Config = structuredClone(defaultConfig);
+    cfg.ui.uiStyle = "outline-partial";
+    expect(parseConfigDocBody(serializeConfig(cfg)).ui.uiStyle).toBe("outline-partial");
+    expect(parseConfigDoc({ ui: { "ui-style": "neon" } }).ui.uiStyle).toBe("solid");
+  });
 });
 
 // parse a serialized config without touching the fs (strip nothing: smol-toml

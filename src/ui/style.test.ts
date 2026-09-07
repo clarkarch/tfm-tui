@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { applySurface, btnSurface, chromeSurface, rowSurface, sideInnerWidth, slotBg, tileSurface } from "./style";
+import {
+  applySurface,
+  btnSurface,
+  chromeSurface,
+  floatSurface,
+  rowSurface,
+  sideInnerWidth,
+  slotBg,
+  tileSurface,
+} from "./style";
 import type { Theme } from "../config/config";
 import { glyph, ensureGlyphFallbacks, glyphFor } from "./glyphs";
 
@@ -54,6 +63,29 @@ describe("surface builders", () => {
   test("slotBg: outline rasters flatten onto the canvas bg, not the panel bg", () => {
     expect(slotBg("outline", theme, theme.sidebarBg)).toBe("#1a1b26");
     expect(slotBg("solid", theme, theme.sidebarBg)).toBe("#16161e");
+  });
+
+  test("floatSurface: only pure outline floats border-only; solid + outline-partial fill", () => {
+    // outline-partial = outline chrome, SOLID floats (readable over a live
+    // grid / transparent terminal bg); solid + outline behavior is frozen
+    expect(floatSurface("outline", theme, theme.sidebarBg)).toEqual({
+      border: true,
+      borderStyle: "rounded",
+      borderColor: "#3b4261",
+    });
+    expect(floatSurface("solid", theme, theme.sidebarBg)).toEqual({ backgroundColor: "#16161e" });
+    expect(floatSurface("outline-partial", theme, theme.sidebarBg)).toEqual({ backgroundColor: "#16161e" });
+  });
+
+  test("outline-partial matches outline on every background-chrome seam", () => {
+    expect(sideInnerWidth("outline-partial", 28)).toBe(sideInnerWidth("outline", 28));
+    expect(chromeSurface("outline-partial", theme, theme.sidebarBg)).toEqual(
+      chromeSurface("outline", theme, theme.sidebarBg),
+    );
+    expect(tileSurface("outline-partial", theme, "rest")).toEqual(tileSurface("outline", theme, "rest"));
+    expect(rowSurface("outline-partial", theme, "rest")).toEqual(rowSurface("outline", theme, "rest"));
+    expect(btnSurface("outline-partial", theme, false)).toEqual(btnSurface("outline", theme, false));
+    expect(slotBg("outline-partial", theme, theme.sidebarBg)).toBe(slotBg("outline", theme, theme.sidebarBg));
   });
 });
 

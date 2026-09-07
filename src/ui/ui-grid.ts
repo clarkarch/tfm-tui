@@ -271,7 +271,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       slotEl = s.el;
     }
     row.add(slotEl);
-    const listW = Math.max(40, ctx.termW() - sw - ctx.reservedRight() - (ctx.uiStyle() === "outline" ? 6 : 3));
+    const listW = Math.max(40, ctx.termW() - sw - ctx.reservedRight() - (ctx.uiStyle() === "solid" ? 3 : 6));
     const nameMax = Math.max(12, listW - 27 - iconW);
     const label = entry.name.length > nameMax ? `${entry.name.slice(0, nameMax - 1)}…` : entry.name;
     row.add(Text({ id: labelId, content: label, fg: baseFg }));

@@ -44,7 +44,7 @@ export type ViewMode = "grid" | "list";
 
 // surface-style vocabulary — the ui-style key's value type. The solid/outline
 // painting decisions live in ./style (the surface seam), which re-exports this.
-export type UiStyle = "solid" | "outline";
+export type UiStyle = "solid" | "outline" | "outline-partial";
 
 export type UiConfig = {
   sidebarWidth: number;
@@ -325,9 +325,9 @@ const UI_ROWS: SchemaRow[] = [
     section: "ui",
     tomlKey: "ui-style",
     prop: "uiStyle",
-    values: ["solid", "outline"],
+    values: ["solid", "outline", "outline-partial"],
     def: "solid",
-    doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest',
+    doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels',
     label: "ui style",
     group: "general",
   },

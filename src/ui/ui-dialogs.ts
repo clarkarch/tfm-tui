@@ -1,6 +1,6 @@
 import { Box, RGBA, Text } from "@opentui/core";
 import path from "node:path";
-import { applySurface, btnSurface, chromeSurface } from "./style";
+import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { FLOAT_Z, type Floats } from "./floats";
 
@@ -15,7 +15,7 @@ export type DialogsCtx = {
   rootAdd(node: any): void;
   stripSelectable(): void;
   termH(): number;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   colors(): Theme;
   // skeleton baseline for ANY future dialog: the context menu floats above
   // every modal, so a scrim must never come up under an open menu. The real
@@ -53,7 +53,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
         {
           id: `${opts.id}-panel`,
           width: opts.width,
-          ...chromeSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
+          ...floatSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
           paddingTop: 1,
           paddingBottom: 1,
           flexDirection: "column",

@@ -222,6 +222,36 @@ describe("rethemeChrome", () => {
     expect(node.width).toBe(ctx.calls.geom.sw);
     expect(node.backgroundColor).toBeTruthy();
   });
+
+  test("outline-partial repaints floats solid (fill, no border ring)", () => {
+    // outline-partial = outline chrome + SOLID floats; pure outline keeps its
+    // border-only floats. The repaint path must match the build path or a
+    // runtime style flip leaves the live panel mismatched.
+    for (const [style, filled] of [
+      ["outline", false],
+      ["outline-partial", true],
+    ] as const) {
+      const ctx = mkCtx();
+      (ctx.config.ui as any).uiStyle = style;
+      // float repaints only run while their layer is open
+      ctx.escMenu.isOpen = () => true;
+      (ctx as any).fileMenuIsOpen = () => true;
+      const retheme = makeRetheme(ctx as any);
+      ctx.calls.setOnId.length = 0;
+      retheme.rethemeChrome();
+      const painted = new Map(ctx.calls.setOnId);
+      for (const id of ["tfm-menu-panel", "tfm-filemenu"]) {
+        const node: any = {};
+        painted.get(id)!(node);
+        if (filled) {
+          expect(node.backgroundColor, `${id} @ ${style}`).toBeTruthy();
+          expect(node.border, `${id} @ ${style}`).toBe(false);
+        } else {
+          expect(node.border, `${id} @ ${style}`).toBe(true);
+        }
+      }
+    }
+  });
 });
 
 describe("scheduleSaveConfig", () => {

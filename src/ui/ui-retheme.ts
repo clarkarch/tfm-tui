@@ -8,7 +8,7 @@
 import { watch } from "node:fs";
 import path from "node:path";
 import { bumpHex } from "../config/color";
-import { applySurface, chromeSurface } from "./style";
+import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { debounced } from "../lib/uiutil";
@@ -83,8 +83,8 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       n.fg = colors.sidebarFgMuted;
     });
     setOnId("tfm-prompt-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-    // 1-row header can't carry a border ring — just drop the fill in outline
-    setOnId("tfm-term-header", (n) => applySurface(n, st === "outline" ? {} : { backgroundColor: colors.sidebarBg }));
+    // 1-row header can't carry a border ring — just drop the fill in outline variants
+    setOnId("tfm-term-header", (n) => applySurface(n, st === "solid" ? { backgroundColor: colors.sidebarBg } : {}));
 
     // toolbar hover buttons: box bg must track the new palette between raster swaps
     ctx.repaintButtons();
@@ -98,11 +98,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       });
     }
     if (ctx.escMenu.isOpen()) {
-      setOnId("tfm-menu-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
+      setOnId("tfm-menu-panel", (n) => applySurface(n, floatSurface(st, colors, colors.sidebarBg)));
       ctx.escMenu.renderMenuContent();
     }
     if (ctx.fileMenuIsOpen()) {
-      setOnId("tfm-filemenu", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
+      setOnId("tfm-filemenu", (n) => applySurface(n, floatSurface(st, colors, colors.sidebarBg)));
       ctx.renderFileMenu();
     }
   };

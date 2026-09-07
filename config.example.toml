@@ -23,7 +23,7 @@ transparent-bg       = false    # true = follow a transparent terminal bg (kitty
 transparent-icons    = false    # true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)
 tab-bar              = false    # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 view-mode            = "grid"   # "grid" = icon tiles; "list" = compact rows with size + modified columns
-ui-style             = "solid"  # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest
+ui-style             = "solid"  # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 word-wrap            = false    # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
 show-launch-time     = false    # true = show a notification with the app launch time in ms (debug aid); also enabled by --debug
 

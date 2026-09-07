@@ -111,9 +111,12 @@ describe("generic schema rows", () => {
   test("cycle row maps index -> schema value", () => {
     const h = mk();
     const row = h.byLabel("ui style");
-    expect(asCycle(row).names).toEqual(["solid", "outline"]);
+    // outline-partial added intentionally: outline chrome + solid floats
+    expect(asCycle(row).names).toEqual(["solid", "outline", "outline-partial"]);
     asCycle(row).setIdx(1);
     expect(h.config.ui.uiStyle).toBe("outline");
+    asCycle(row).setIdx(2);
+    expect(h.config.ui.uiStyle).toBe("outline-partial");
   });
 
   test("panel-repainting rows are flagged (theme / ui style / transparent bg / transparent icons)", () => {

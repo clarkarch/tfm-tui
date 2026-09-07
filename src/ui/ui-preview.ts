@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { clearChildren } from "../lib/uiutil";
-import { slotBg } from "./style";
+import { slotBg, type UiStyle } from "./style";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, syntaxStyleSig } from "./syntax";
@@ -34,7 +34,7 @@ export type PreviewCtx = {
   renderer: any;
   byId(id: string): any;
   colors(): Theme;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   previewEnabled(): boolean; // config.ui.previewEnabled
   previewWidth(): number; // config.ui.previewWidth
   termH(): number; // renderer.terminalHeight — LIVE read

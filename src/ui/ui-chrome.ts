@@ -2,7 +2,7 @@ import { Box, Text } from "@opentui/core";
 import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
 import { clearChildren } from "../lib/uiutil";
-import { applySurface, rowSurface, slotBg, tileSurface } from "./style";
+import { applySurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
 import { buildSections, loadSystemPlaces, type Place } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
@@ -32,7 +32,7 @@ type IconSpec = {
 
 export type ChromeCtx = {
   byId(id: string): any;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
   sideInnerW(): number; // index keeps this helper (outline insets by 2)

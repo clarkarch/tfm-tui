@@ -1,7 +1,7 @@
 import { Box, EmbeddedTerminalRenderable, Text } from "@opentui/core";
 import { clearChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
-import { applySurface } from "./style";
+import { applySurface, type UiStyle } from "./style";
 import { gridDrag } from "../input/grid-input";
 import type { Theme } from "../config/config";
 
@@ -18,7 +18,7 @@ import type { Theme } from "../config/config";
 export type TermCtx = {
   renderer: any;
   byId(id: string): any;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number;
   escHintBtn(id: string, onClose: () => void): any;
@@ -352,7 +352,7 @@ export const makeTerminal = (ctx: TermCtx) => {
         height: 1,
         flexDirection: "row",
         paddingLeft: 1,
-        ...(ctx.uiStyle() === "outline" ? {} : { backgroundColor: colors.sidebarBg }),
+        ...(ctx.uiStyle() === "solid" ? { backgroundColor: colors.sidebarBg } : {}),
       },
       Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
       Box({ flexGrow: 1 }),

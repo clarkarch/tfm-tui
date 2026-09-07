@@ -8,7 +8,7 @@ import path from "node:path";
 import os from "node:os";
 import { statSync } from "node:fs";
 import { Box, Input, InputRenderable, Text } from "@opentui/core";
-import { applySurface, btnSurface } from "./style";
+import { applySurface, btnSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import type { IconSpec, IconState } from "./ui-slots";
@@ -29,7 +29,7 @@ export type ToolbarCtx = {
   byId(id: string): any;
   clearChildren(node: unknown): void;
   stripSelectable(): void;
-  uiStyle(): "solid" | "outline";
+  uiStyle(): UiStyle;
   // live theme — always read through the getter, never captured
   colors(): Theme;
   makeIconSlot: MakeIconSlotFn;
