@@ -316,3 +316,25 @@ describe("action rows + close policy", () => {
     expect(floats.isOpen("escmenu")).toBe(false);
   });
 });
+
+describe("menu placement", () => {
+  test("esc menu opens vertically centered, not top-third", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    expect(panel).toBeTruthy();
+    // yogaNode is protected (TS-level only) — reachable at runtime; the
+    // computed top IS the painted position, not a prop echo
+    const yoga = panel.yogaNode;
+    const top = yoga.getComputedTop();
+    const h = yoga.getComputedHeight();
+    const scrim: any = t.renderer.root.findDescendantById("tfm-menu");
+    // centered in the terminal (yoga rounding may drift a cell)…
+    expect(Math.abs(top - (TERM_H - h) / 2)).toBeLessThanOrEqual(1);
+    // …and the old top-third pad is gone (a coincident height could satisfy
+    // the centering formula under the old code — zero pad kills that hole)
+    expect(scrim.yogaNode.getComputedPadding(1)).toBe(0); // Edge.Top
+  });
+});

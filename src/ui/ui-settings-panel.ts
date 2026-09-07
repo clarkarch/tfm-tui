@@ -48,12 +48,6 @@ export const SETTINGS_W = 62;
 const CAT_W = 18;
 const SET_LABEL_W = 17;
 
-// scrim paddingTop that vertically centers a panel of `contentH` rows
-// (the -2 covers the panel's own top/bottom padding); clamps to 1 when the
-// panel is taller than the terminal
-export const panelPadTop = (termH: number, contentH: number): number =>
-  Math.max(1, Math.floor((termH - contentH - 2) / 2));
-
 // right-pane window size: a COMPACT dialog, not a full-screen sheet — capped
 // at 14 rows (panel ≈ 21 rows total with chrome); shrinks on tiny terminals.
 // Categories with more rows wheel-scroll/arrow-scroll.

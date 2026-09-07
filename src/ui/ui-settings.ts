@@ -19,7 +19,6 @@ import { keySpecFromEvent, validateKeybindSpec } from "../config/config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
 import {
   ensureVisible,
-  panelPadTop,
   renderSettingsPanel,
   settingsVisRows,
   SETTINGS_W,
@@ -412,25 +411,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       });
     }
 
-    // center the panel vertically based on its actual CONTENT HEIGHT — child
-    // count is wrong for the settings view, whose two-pane container is
-    // many rows tall but counts as ONE child (that mismatch made the panel
-    // start far down the screen and bleed past the bottom edge)
-    const scrim: any = ctx.byId("tfm-menu");
-    if (scrim) {
-      const childH = (n: any): number => {
-        try {
-          if (typeof n.height === "number") return n.height;
-        } catch {}
-        return 1;
-      };
-      let contentH = 0;
-      for (const ch of panel.getChildren()) contentH += childH(ch);
-      try {
-        scrim.paddingTop = panelPadTop(ctx.renderer().terminalHeight, contentH);
-      } catch {}
-    }
-
+    // vertical centering is structural (scrim justifyContent:center) — no
+    // manual padding math: content-height heuristics broke on the settings
+    // view, whose two-pane container counts as ONE child while spanning many
+    // rows (that mismatch pushed the panel off the bottom edge)
     ctx.stripSelectable();
     void ctx.drainIconQueue();
   };
@@ -482,7 +466,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         width: "100%",
         height: "100%",
         alignItems: "center",
-        paddingTop: Math.max(2, Math.round(ctx.renderer().terminalHeight / 3)),
+        justifyContent: "center",
         zIndex: FLOAT_Z.escmenu,
         backgroundColor: RGBA.fromInts(0, 0, 0, 150),
         // mouse-first: first outside click cancels an in-flight capture,
