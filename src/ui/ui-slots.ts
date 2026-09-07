@@ -70,6 +70,8 @@ export type SlotsCtx = {
   // live theme — always read through the getter, never captured
   colors(): Theme;
   uiStyle(): string;
+  // [ui] transparent-icons — read live like uiStyle (toggle re-rasters)
+  iconsTransparent(): boolean;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
   // true while a modal menu/scrim owns the screen (drain re-applies scrim)
@@ -240,6 +242,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
           dimHex(st.bg, dimFactor),
           Math.max(1, Math.round(wCells * cellW)),
           Math.max(1, Math.round(heightCells * cellH)),
+          // bg arrives ignored in transparent mode (the key drops it, so all
+          // states share one raster) — kept in the signature for call-site compat
+          { transparent: ctx.iconsTransparent() },
         );
         const img = new ImageRenderable(ctx.renderer(), {
           id: `${slotId}-${idPrefix}${si}`,

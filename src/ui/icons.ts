@@ -69,15 +69,33 @@ export const iconCacheKey = (
   pxW: number,
   pxH: number,
   srcMtimeMs: number,
-): string => `${name}:${fg}:${bg}:${pxW}x${pxH}|src${srcMtimeMs}`;
+  transparent = false,
+): string =>
+  transparent
+    ? // bg-insensitive: one raster serves every tile state (rest/hover/selected)
+      `${name}:${fg}:${pxW}x${pxH}|src${srcMtimeMs}|t`
+    : `${name}:${fg}:${bg}:${pxW}x${pxH}|src${srcMtimeMs}`;
 
-const rasterizeSvg = async (name: string, fg: string, bg: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+const rasterizeSvg = async (
+  name: string,
+  fg: string,
+  bg: string,
+  pxW: number,
+  pxH: number,
+  transparent = false,
+): Promise<Uint8Array> => {
   const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
   const tinted = /#[0-9a-fA-F]{6}/.test(svg)
     ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
     : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
 
-  const proc = spawn("rsvg-convert", ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)]);
+  // transparent mode omits --background-color entirely (its default is none =
+  // keep alpha); the flattened path bakes bg in because kitty alpha on icon
+  // rasters proved unreliable (tint/fringe) — see [ui] transparent-icons
+  const args = transparent
+    ? ["-w", String(pxW), "-h", String(pxH)]
+    : ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)];
+  const proc = spawn("rsvg-convert", args);
   const chunks: Buffer[] = [];
   proc.stdout.on("data", (c: Buffer) => {
     chunks.push(c);
@@ -98,9 +116,10 @@ const iconCache = new Map<string, Uint8Array>();
 const inflightIcons = new Map<string, Promise<Uint8Array>>();
 
 // Disk cache for rendered rasters: keyed by everything that changes the output
-// (name, tint, bg, pixel size, SVG source version) plus a pipeline-version
-// salt. Theme switches naturally miss because fg/bg are part of the key.
-const ICON_DISK_VER = "v2";
+// (name, tint, bg, pixel size, SVG source version, transparency mode) plus a
+// pipeline-version salt. Theme switches naturally miss because fg/bg are part
+// of the key.
+const ICON_DISK_VER = "v3";
 const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
   path.join(iconDiskDir(), `${createHash("sha1").update(`${ICON_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
@@ -124,8 +143,16 @@ const releaseRasterSlot = () => {
   rasterWaiters.shift()?.();
 };
 
-export const iconPng = async (name: string, fg: string, bg: string, pxW: number, pxH: number): Promise<Uint8Array> => {
-  const key = iconCacheKey(name, fg, bg, pxW, pxH, svgSourceMtime(name));
+export const iconPng = async (
+  name: string,
+  fg: string,
+  bg: string,
+  pxW: number,
+  pxH: number,
+  opts?: { transparent?: boolean },
+): Promise<Uint8Array> => {
+  const transparent = opts?.transparent ?? false;
+  const key = iconCacheKey(name, fg, bg, pxW, pxH, svgSourceMtime(name), transparent);
   const hit = iconCache.get(key);
   if (hit) return hit;
   // identical requests racing (e.g. 15 folder rows) share one render
@@ -140,7 +167,7 @@ export const iconPng = async (name: string, fg: string, bg: string, pxW: number,
   const job = (async () => {
     await acquireRasterSlot();
     try {
-      const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH);
+      const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH, transparent);
       iconCache.set(key, bytes);
       void ensureIconDir().then(() => atomicWriteFile(iconDiskPath(key), bytes).catch(() => {}));
       return bytes;

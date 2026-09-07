@@ -169,6 +169,17 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
+  test("transparent-icons flip invalidates the raster caches (icons re-raster)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.transparentIcons = true;
+    retheme.applyConfig(fresh);
+    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.resetIconQueue).toBe(1);
+    expect(ctx.calls.renderAll).toBe(1);
+  });
+
   test("theme flip is diffed against the LAST APPLIED state, not the caller's config (pinned regression)", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);

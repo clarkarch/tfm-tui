@@ -58,6 +58,7 @@ export type UiConfig = {
   restoreSession: boolean;
   persistUndo: boolean;
   transparentBg: boolean;
+  transparentIcons: boolean;
   uiStyle: UiStyle;
   tabBar: boolean;
   viewMode: ViewMode;
@@ -286,6 +287,16 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = follow a transparent terminal bg (kitty background_opacity); false = force opaque",
     label: "transparent bg",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "transparent-icons",
+    prop: "transparentIcons",
+    def: false,
+    doc: "true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)",
+    label: "transparent icons",
     group: "general",
   },
   {

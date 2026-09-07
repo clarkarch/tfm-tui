@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
 import { clearIconCaches, iconCacheKey, iconPng, loadEmbeddedIcons, svgSourceMtime, thumbPng } from "./icons";
@@ -53,6 +54,34 @@ describe("icons", () => {
 
   test("missing icon rejects", async () => {
     expect(iconPng("no-such-icon-xyz", "#ffffff", "#000000", 8, 8)).rejects.toThrow();
+  });
+
+  test("transparent cache keys ignore bg but differ from flattened keys", () => {
+    const t1 = iconCacheKey("folder", "#fff", "#111111", 16, 16, 1000, true);
+    const t2 = iconCacheKey("folder", "#fff", "#222222", 16, 16, 1000, true);
+    expect(t1).toBe(t2); // bg-insensitive: one raster serves every tile state
+    expect(t1).not.toBe(iconCacheKey("folder", "#fff", "#111111", 16, 16, 1000));
+    expect(t1).not.toBe(iconCacheKey("folder", "#fff", "#111111", 16, 16, 1000, false));
+  });
+
+  test.skipIf(!hasRsvg)("transparent iconPng keeps alpha; flattened iconPng is fully opaque", async () => {
+    clearIconCaches();
+    // the folder glyph never fills the whole canvas: skipping the bg flatten
+    // must leave transparent pixels, flattening must leave none
+    const bytes = await iconPng("folder", "#c0caf5", "#1a1b26", 32, 32, { transparent: true });
+    expect(pngAlphaMin(bytes)).toBe(0);
+    clearIconCaches();
+    const flat = await iconPng("folder", "#c0caf5", "#1a1b26", 32, 32);
+    expect(pngAlphaMin(flat)).toBe(255);
+    clearIconCaches();
+  });
+
+  test.skipIf(!hasRsvg)("transparent iconPng serves every bg from one raster", async () => {
+    clearIconCaches();
+    const a = await iconPng("folder", "#c0caf5", "#111111", 16, 16, { transparent: true });
+    const b = await iconPng("folder", "#c0caf5", "#222222", 16, 16, { transparent: true });
+    expect(b).toBe(a); // same object = memory-cache hit across bgs
+    clearIconCaches();
   });
 
   test("icon cache key includes the SVG source version (edited assets re-raster)", () => {
@@ -181,3 +210,86 @@ describe("icons", () => {
     expect(dv.getUint32(20)).toBe(64); // IHDR height
   });
 });
+
+// minimum alpha over a PNG's pixels (0 = some pixel fully transparent,
+// 255 = fully opaque). Handles the 8-bit truecolor outputs rsvg-convert
+// produces (color type 2 = no alpha channel, 6 = RGBA); anything else throws
+// so an encoder change fails loudly instead of asserting on garbage.
+const pngAlphaMin = (bytes: Uint8Array): number => {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let off = 8; // skip the signature
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idat: Uint8Array[] = [];
+  while (off + 8 <= bytes.length) {
+    const len = dv.getUint32(off);
+    const type =
+      String.fromCharCode(bytes[off + 4]!) +
+      String.fromCharCode(bytes[off + 5]!) +
+      String.fromCharCode(bytes[off + 6]!) +
+      String.fromCharCode(bytes[off + 7]!);
+    const data = bytes.subarray(off + 8, off + 8 + len);
+    if (type === "IHDR") {
+      width = dv.getUint32(off + 8);
+      height = dv.getUint32(off + 12);
+      // data[] is chunk-relative: bit depth / color type sit 8/9 past the
+      // width+height+compression+filter+interlace header, NOT at [0]/[1]
+      bitDepth = data[8]!;
+      colorType = data[9]!;
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    off += 12 + len;
+  }
+  if (colorType === 2) return 255; // truecolor without an alpha channel
+  if (colorType !== 6 || bitDepth !== 8)
+    throw new Error(`unsupported PNG for alpha scan: colorType=${colorType} bitDepth=${bitDepth}`);
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * 4;
+  let min = 255;
+  let prev = Buffer.alloc(stride);
+  let p = 0;
+  for (let y = 0; y < height; y++) {
+    const filter = raw[p++]!;
+    const cur = raw.subarray(p, p + stride);
+    p += stride;
+    const recon = Buffer.alloc(stride);
+    for (let i = 0; i < stride; i++) {
+      const a = i >= 4 ? recon[i - 4]! : 0;
+      const b = prev[i]!;
+      const c = i >= 4 ? prev[i - 4]! : 0;
+      let v: number;
+      switch (filter) {
+        case 0:
+          v = cur[i]!;
+          break;
+        case 1:
+          v = (cur[i]! + a) & 255;
+          break;
+        case 2:
+          v = (cur[i]! + b) & 255;
+          break;
+        case 3:
+          v = (cur[i]! + ((a + b) >> 1)) & 255;
+          break;
+        default: {
+          // Paeth
+          const pa = Math.abs(b - c);
+          const pb = Math.abs(a - c);
+          const pc = Math.abs(a + b - 2 * c);
+          v = (cur[i]! + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+          break;
+        }
+      }
+      recon[i] = v;
+    }
+    for (let i = 3; i < stride; i += 4) if (recon[i]! < min) min = recon[i]!;
+    if (min === 0) break;
+    prev = recon;
+  }
+  return min;
+};

@@ -63,7 +63,9 @@ export const btnSurface = (style: UiStyle, c: Theme, hovered: boolean, restBg?: 
 };
 
 // raster slots flatten icons onto a bg hex; outline rest states sit on the
-// canvas, so the flatten target must be canvas bg instead of panel bg
+// canvas, so the flatten target must be canvas bg instead of panel bg.
+// Ignored when [ui] transparent-icons is on (the raster keeps its alpha and
+// the key drops bg) — kept in IconState for call-site compat.
 export const slotBg = (style: UiStyle, c: Theme, panelBg: string): string => (style === "outline" ? c.bg : panelBg);
 
 // post-mutation of real renderables (findDescendantById results). "transparent"

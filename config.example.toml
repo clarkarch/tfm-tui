@@ -20,6 +20,7 @@ preview-enabled      = false    # right-side preview pane (text files, folder st
 restore-session      = false    # true = reopen the folder from the last quit instead of the launch cwd
 persist-undo         = false    # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
 transparent-bg       = false    # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
+transparent-icons    = false    # true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)
 tab-bar              = false    # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 view-mode            = "grid"   # "grid" = icon tiles; "list" = compact rows with size + modified columns
 ui-style             = "solid"  # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest

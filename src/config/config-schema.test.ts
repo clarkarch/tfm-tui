@@ -56,6 +56,12 @@ describe("parseConfigDoc", () => {
     expect(cfg.keys.quit).toEqual(["ctrl+q"]);
   });
 
+  test("transparent-icons defaults off, parses when set", () => {
+    expect(parseConfigDoc(undefined).ui.transparentIcons).toBe(false);
+    expect(parseConfigDoc({ ui: { "transparent-icons": true } }).ui.transparentIcons).toBe(true);
+    expect(parseConfigDoc({ ui: { "transparent-icons": "yes" } }).ui.transparentIcons).toBe(false);
+  });
+
   test("round-trip: serialize -> parse -> identical config", () => {
     const cfg: Config = structuredClone(defaultConfig);
     cfg.ui.sidebarWidth = 40;

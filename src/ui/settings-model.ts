@@ -147,8 +147,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     for (const row of uiRowsIn("general")) {
       if (row.prop === "showHidden" || row.prop === "tabBar") continue;
       const built = schemaRow(row);
-      // these change the PANEL's own colors — their adjust must re-render it
-      if (row.prop === "uiStyle" || row.prop === "transparentBg") {
+      // these change the PANEL's own colors (or its icons) — their adjust must re-render it
+      if (row.prop === "uiStyle" || row.prop === "transparentBg" || row.prop === "transparentIcons") {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }
       rows.push(built);

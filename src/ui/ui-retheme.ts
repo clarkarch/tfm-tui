@@ -111,7 +111,8 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // APPLIED state (not the caller's pre-call `config`) means a settings row
   // can mutate config first and call applyConfig(config) and the flip is
   // still seen — the old self-compare skipped raster invalidation silently.
-  const themeSig = (c: Config): string => JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle]);
+  const themeSig = (c: Config): string =>
+    JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.transparentIcons]);
   let lastThemeSig = themeSig(ctx.config);
 
   const applyConfig = (fresh: Config): void => {
