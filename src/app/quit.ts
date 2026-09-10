@@ -17,6 +17,7 @@ export type QuitCtx = {
   flushSession?(): void;
   destroy(): void;
   exit(code: number): void;
+  onQuit?: () => void;
 };
 
 export const makeQuit =
@@ -38,6 +39,9 @@ export const makeQuit =
     } catch {}
     try {
       ctx.closeTerminal?.();
+    } catch {}
+    try {
+      ctx.onQuit?.();
     } catch {}
     try {
       ctx.destroy();

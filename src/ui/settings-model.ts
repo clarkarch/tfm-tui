@@ -6,6 +6,7 @@
 // No renderer imports — ctx carries the sinks. ---
 import { spawnSafe } from "../fs/spawn-safe";
 import { THEME_PRESETS } from "../config/themes";
+import type { LoadedPlugin } from "../plugins/plugin-api";
 import {
   themeNearestIdx as settingsThemeNearestIdx,
   themePresetIdx as settingsThemePresetIdx,
@@ -13,7 +14,16 @@ import {
   type SettingRow,
 } from "./settings";
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
-import { KEY_SCHEMA, UI_SCHEMA, keybindConflict, type KeyAction, type UiSchemaRow } from "../config/config-schema";
+import {
+  KEY_SCHEMA,
+  UI_SCHEMA,
+  keybindConflict,
+  keySpecEqual,
+  validateKeybindSpec,
+  type KeyAction,
+  type UiSchemaRow,
+} from "../config/config-schema";
+import { getPluginCommandBinds, setPluginCommandBinds } from "../plugins/plugin-api";
 
 export type SettingsModelCtx = {
   // live object refs — getters/setters read through them on every call
@@ -24,10 +34,25 @@ export type SettingsModelCtx = {
   showRoot(): void;
   // conflict toasts for remapping (wired to notify in the settings wiring)
   warn(message: string, title?: string): void;
+  // installed plugins (loader aggregates them; absent = no plugins). The
+  // model renders one category PER PLUGIN (never inside core groups), each
+  // led by a core-built on/off toggle over the plugin's own store.
+  plugins?: () => LoadedPlugin[];
+  // git installer orchestration (wired in wiring/settings — prompt, danger
+  // confirm, clone/pull/rm, rescan). Optional so row SHAPE stays testable
+  // without it; rows no-op when absent. Never throws (fire-and-forget).
+  pluginInstall?: {
+    addFromUrl(): void;
+    openFolder(): void;
+    update(name: string): void;
+    remove(name: string): void;
+  };
 };
 
 export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const themePresetIdx = (): number => settingsThemePresetIdx(THEME_PRESETS, ctx.config.theme);
+  // plugin rows are boot-loaded once (restart-to-reload); absent without plugins
+  const loadedPlugins = (): LoadedPlugin[] => ctx.plugins?.() ?? [];
 
   // fresh-object commit: applyConfig diffs vs its LAST-APPLIED state, but
   // building a fresh Config keeps renderer-flipping rows correct regardless
@@ -88,12 +113,19 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     label,
     get: () => ctx.config.keys[action] ?? [],
     set: (v) => {
-      // conflict check: reject a bind another action already owns
+      // conflict check: reject a bind another core action already owns — and
+      // (P1-2) one a plugin command owns, so core remaps can't silently
+      // shadow plugin binds either direction.
       for (const spec of v) {
         const clash = keybindConflict(ctx.config, action, spec);
         if (clash) {
           const labelOf = KEY_SCHEMA.find((r) => r.action === clash)?.label ?? clash;
           ctx.warn(`"${spec}" is already used by: ${labelOf}`, "keybind conflict");
+          return;
+        }
+        const pluginOwner = pluginBindOwner(spec);
+        if (pluginOwner) {
+          ctx.warn(`"${spec}" is already used by: ${pluginOwner}`, "keybind conflict");
           return;
         }
       }
@@ -179,5 +211,193 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     },
   ];
 
-  return { settingGroups, resetToDefaults };
+  // one category per installed plugin, each led by its on/off toggle. The
+  // toggle is `repaint` so flipping it rebuilds the panel live (rows vanish
+  // or appear without a restart); the toggle itself always stays so a
+  // disabled plugin can be re-enabled. Reads the store on every build, so
+  // the rows always reflect the persisted flag. A throwing store/row never
+  // breaks the other plugins' categories — that plugin degrades to its
+  // toggle alone (or enabled=true when even the flag read fails).
+  const safeEnabled = (p: LoadedPlugin): boolean => {
+    try {
+      return p.store.get("enabled", true);
+    } catch (err) {
+      try {
+        ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
+      } catch {}
+      return true;
+    }
+  };
+  // owner lookup across plugin commands (core coverage lives in
+  // keybindConflict, which only knows KeyAction).
+  const pluginBindOwner = (spec: string, except?: { plugin: LoadedPlugin; id: string }): string | null => {
+    for (const q of loadedPlugins()) {
+      for (const qc of q.commands) {
+        if (except && q === except.plugin && qc.id === except.id) continue;
+        for (const owned of getPluginCommandBinds(q, qc.id)) {
+          if (keySpecEqual(owned, spec)) return qc.title;
+        }
+      }
+    }
+    return null;
+  };
+
+  // installer category — ALWAYS first so the Plugins view exists (and the
+  // install flow is discoverable) before anything is installed. Rows dispatch
+  // to the wiring-provided orchestration; they no-op when it is absent.
+  const installGroup = (): SettingGroup => ({
+    header: "add plugins",
+    rows: [
+      {
+        kind: "action",
+        label: "Add from git URL…",
+        keepOpen: true,
+        run: () => {
+          try {
+            ctx.pluginInstall?.addFromUrl();
+          } catch (err) {
+            try {
+              ctx.warn(`add plugin failed: ${err instanceof Error ? err.message : err}`, "plugins");
+            } catch {}
+          }
+        },
+      },
+      {
+        kind: "action",
+        label: "Open plugins folder…",
+        // not keepOpen: navigating with the menu up strands the user over a
+        // changed cwd — close first (rowActivate closes, then runs), landing
+        // in the folder
+        run: () => {
+          try {
+            ctx.pluginInstall?.openFolder();
+          } catch (err) {
+            try {
+              ctx.warn(`open plugins folder failed: ${err instanceof Error ? err.message : err}`, "plugins");
+            } catch {}
+          }
+        },
+      },
+    ],
+  });
+
+  // per-plugin lifecycle rows (git update + remove with danger confirm —
+  // the orchestration rescans + rebuilds the panel afterwards)
+  const lifecycleRows = (p: LoadedPlugin): SettingRow[] => [
+    {
+      kind: "action",
+      label: "Update from git",
+      keepOpen: true,
+      run: () => {
+        try {
+          ctx.pluginInstall?.update(p.name);
+        } catch (err) {
+          try {
+            ctx.warn(`update ${p.name} failed: ${err instanceof Error ? err.message : err}`, "plugins");
+          } catch {}
+        }
+      },
+    },
+    {
+      kind: "action",
+      label: "Remove…",
+      keepOpen: true,
+      run: () => {
+        try {
+          ctx.pluginInstall?.remove(p.name);
+        } catch (err) {
+          try {
+            ctx.warn(`remove ${p.name} failed: ${err instanceof Error ? err.message : err}`, "plugins");
+          } catch {}
+        }
+      },
+    },
+  ];
+
+  const pluginGroups = (): SettingGroup[] => [
+    installGroup(),
+    ...loadedPlugins().map((p) => {
+      const enabledRow: SettingRow = {
+        kind: "toggle",
+        label: "enabled",
+        repaint: true,
+        get: () => safeEnabled(p),
+        set: (v) => {
+          try {
+            p.store.set("enabled", v);
+          } catch (err) {
+            try {
+              ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
+            } catch {}
+          }
+        },
+      };
+      let rows: SettingRow[];
+      try {
+        rows = safeEnabled(p) ? p.rows : [];
+      } catch {
+        rows = [];
+      }
+      // one remappable keybind row per plugin command (persisted in the
+      // plugin's own store under keys:<id>, never in config.toml).
+      let keyRows: SettingRow[] = [];
+      try {
+        if (safeEnabled(p) && p.commands.length) {
+          keyRows = p.commands.map(
+            (c): SettingRow => ({
+              kind: "keybind",
+              label: `${c.title} (key)`,
+              get: () => getPluginCommandBinds(p, c.id),
+              set: (v) => {
+                // every rejection warns through the guarded helper (a
+                // throwing warn must never escape a row setter)
+                const reject = (message: string): void => {
+                  try {
+                    ctx.warn(message, "keybind conflict");
+                  } catch {}
+                };
+                for (const spec of v) {
+                  const problem = validateKeybindSpec(spec);
+                  if (problem) {
+                    reject(`"${spec}" invalid: ${problem}`);
+                    return;
+                  }
+                  // core owns its binds — plugins remap around them
+                  for (const row of KEY_SCHEMA) {
+                    for (const owned of ctx.config.keys[row.action] ?? []) {
+                      if (keySpecEqual(owned, spec)) {
+                        reject(`"${spec}" is already used by: ${row.label}`);
+                        return;
+                      }
+                    }
+                  }
+                  // other plugins (and sibling commands) own theirs too
+                  const siblingOwner = pluginBindOwner(spec, { plugin: p, id: c.id });
+                  if (siblingOwner) {
+                    reject(`"${spec}" is already used by: ${siblingOwner}`);
+                    return;
+                  }
+                }
+                try {
+                  setPluginCommandBinds(p, c.id, v);
+                } catch (err) {
+                  try {
+                    ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
+                  } catch {}
+                }
+              },
+            }),
+          );
+        }
+      } catch {
+        keyRows = [];
+      }
+      return {
+        header: p.name,
+        rows: [enabledRow, ...rows, ...keyRows, ...lifecycleRows(p)],
+      };
+    }),
+  ];
+
+  return { settingGroups, pluginGroups, resetToDefaults };
 };

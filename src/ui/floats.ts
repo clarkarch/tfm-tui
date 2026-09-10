@@ -18,7 +18,7 @@
 //
 // Pure module: no renderer imports. z-order table exported for the widgets. ---
 
-export type FloatKind = "filemenu" | "props" | "conflict" | "yesno" | "escmenu";
+export type FloatKind = "filemenu" | "props" | "conflict" | "yesno" | "escmenu" | "pick" | "prompt";
 
 // z-order of the floating layers — the one table documenting which layer
 // renders above which. Outside the stack: band rect 2500 (gesture), progress
@@ -29,6 +29,14 @@ export const FLOAT_Z: Record<FloatKind, number> = {
   conflict: 3400,
   yesno: 3450,
   filemenu: 3600,
+  // generic filter-list overlay (api.ui.pick, e.g. the palette plugin): the
+  // newest modal wins, so it sits on top; opening one dismisses the rest
+  // through the standard modal policy below
+  pick: 3700,
+  // single-line text prompt (plugin git-URL entry): above pick so it
+  // replaces the palette via the modal policy instead of stacking scrims
+  // (floats depth stays 1)
+  prompt: 3750,
 };
 
 export type Floats = {

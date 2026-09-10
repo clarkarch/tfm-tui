@@ -1,13 +1,22 @@
 // --- Keyboard wiring: the modal precedence chain router lives in ./keymap
-// (capture > quit > conflict > yes/no > rename > props > esc-menu >
-// terminal > path-edit > file menu > search > sidebar > grid > actions —
-// mirrored from its header) + sidebar kb-focus state. Last wiring step —
-// everything it reads exists by now. ---
+// (capture > quit > overlay-modals (prompt/conflict/yes-no/rename/props) >
+// pick > esc-menu > terminal > path-edit > file menu > search > sidebar >
+// grid > actions — mirrored from its header) + sidebar kb-focus state + the
+// generic pick overlay widget (api.ui.pick primitive) and the single-line
+// prompt overlay (plugin git-URL entry). Last wiring step — everything it
+// reads exists by now. ---
 
 import { makeKeyRouter } from "../input/keymap";
+import { makePick } from "../ui/ui-pick";
+import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
+import { clearChildren } from "../lib/uiutil";
+import { getPluginCommandBinds } from "../plugins/plugin-api";
+import { dlog } from "../app/log";
+import type { Command } from "../lib/command";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
+import type { PluginsWiring } from "./plugins";
 import type { RethemeWiring } from "./settings";
 
 export type KeymapWiring = ReturnType<typeof wireKeymap>;
@@ -20,11 +29,51 @@ export const wireKeymap = (deps: {
   grid: GridWiring;
   fileops: FileopsWiring;
   settings: SettingsWiring;
+  plugins: PluginsWiring;
   getRetheme: () => RethemeWiring;
 }) => {
-  const { core, nav, chrome, gridFoundation, grid, fileops, settings, getRetheme } = deps;
+  const { core, nav, chrome, gridFoundation, grid, fileops, settings, plugins, getRetheme } = deps;
   const { state, floats } = core;
   const { byId } = core.lookup;
+
+  // --- Generic pick overlay (api.ui.pick): created before the router so the
+  // interception branch closes over it directly; its item source reads the
+  // merged core+plugin command list fresh on every open (remaps and plugin
+  // contributions apply without rebuilds). coreCommands is backfilled after
+  // the router exists — keypresses can't precede the wiring return. ---
+  let coreCommands: () => Command[] = () => [];
+  const pick = makePick({
+    renderer: () => chrome.renderer,
+    byId,
+    rootAdd: (node) => chrome.renderer.root.add(node),
+    clearChildren,
+    stripSelectable: core.lookup.stripSelectable,
+    colors: core.themeGet,
+    uiStyle: () => core.config.ui.uiStyle,
+    floats,
+    commands: () =>
+      [...coreCommands(), ...plugins.plugins.flatMap((p) => p.commands.map((c) => ({ ...c, hint: c.hint ?? "" })))].map(
+        (c) => ({ label: c.title, hint: c.hint || undefined, run: c.run }),
+      ),
+    onError: (err) => {
+      dlog(`plugin command failed: ${err instanceof Error ? err.message : err}`);
+    },
+  });
+
+  // --- Single-line prompt overlay (plugin git-URL entry): same Input-native
+  // typing rule as pick; the router delegates to it above pick so pasting a
+  // URL never leaks keys into the grid or type-to-search. ---
+  const prompt = makePrompt({
+    renderer: () => chrome.renderer,
+    byId,
+    rootAdd: (node) => chrome.renderer.root.add(node),
+    stripSelectable: core.lookup.stripSelectable,
+    escHintBtn: core.slots.escHintBtn,
+    drainIconQueue: () => core.slots.drainIconQueue(),
+    colors: core.themeGet,
+    uiStyle: () => core.config.ui.uiStyle,
+    floats,
+  });
 
   const keyRouter = makeKeyRouter({
     byId,
@@ -105,9 +154,23 @@ export const wireKeymap = (deps: {
     setStatusMsg: nav.setStatusMsg,
     undoLast: fileops.undo.undoLast,
     redoLast: fileops.undo.redoLast,
+    pluginCommands: () =>
+      plugins.plugins.flatMap((p) =>
+        p.commands.map((c) => ({ id: c.id, binds: getPluginCommandBinds(p, c.id), run: c.run })),
+      ),
+    pick: {
+      isOpen: () => pick.isOpen(),
+      handleKey: (ev) => pick.handleKey(ev),
+    },
+    prompt: {
+      isOpen: () => prompt.isOpen(),
+      handleKey: (ev) => prompt.handleKey(ev),
+    },
   });
+
+  coreCommands = () => keyRouter.commands();
 
   chrome.renderer.keyInput.on("keypress", (e: any) => keyRouter.handleKey(e));
 
-  return { keyRouter };
+  return { keyRouter, pick, prompt };
 };

@@ -46,6 +46,10 @@ export type PreviewCtx = {
   drainIconQueue(): void;
   nextIconId(): string; // `tfm-icon-${iconSeq++}`
   fallbackGlyphFor(name: string): string; // glyph[name] ?? glyph.file!
+  // plugin preview text (first matching ext wins in load order). Null/empty =
+  // fall through to core. Throwing never breaks the pane. Stale guarded by
+  // the same gen-counter as core file reads.
+  pluginPreview?: (path: string) => Promise<string | null>;
 };
 
 export const makePreview = (ctx: PreviewCtx) => {
@@ -135,6 +139,23 @@ export const makePreview = (ctx: PreviewCtx) => {
       }
       void ctx.drainIconQueue();
       return;
+    }
+
+    // plugin previews win over core (csv viewers, log colorizers…) — first
+    // matching ext in load order. Empty/throwing falls through to core.
+    if (ctx.pluginPreview) {
+      try {
+        const text = await ctx.pluginPreview(key);
+        if (gen !== previewGen) return;
+        if (typeof text === "string" && text.length) {
+          const maxLines = Math.max(4, ctx.termH() - 8);
+          for (const line of text.split("\n").slice(0, maxLines)) {
+            pane.add(Text({ content: ` ${line}`.slice(0, Math.max(0, ctx.previewWidth() - 1)), fg: colors.sidebarFg }));
+          }
+          return;
+        }
+      } catch {}
+      if (gen !== previewGen) return;
     }
 
     // pictures and videos (ffmpeg present): render the actual content instead

@@ -51,6 +51,10 @@ export type FileOpsCtx = {
   crossDevice?(a: string, b: string): boolean;
   // /tmp/tfm-dnd.log debug sink
   log(msg: string): void;
+  // plugin event fan-out (optional; never throws into the transfer).
+  // Always fires on completion — including cancel/failure, with the outcome
+  // attached — so plugins can't mistake a cancelled op for a success.
+  onFileOp?: (op: string, paths: string[], dest?: string, outcome?: { cancelled: boolean; failed: number }) => void;
 };
 
 export const makeFileOps = (ctx: FileOpsCtx) => {
@@ -325,6 +329,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (cancelled) ctx.notify(msg, `${op} cancelled`);
     else if (failed > 0) ctx.notify(msg, `${op} failed`);
     else ctx.notify(msg, op);
+    try {
+      ctx.onFileOp?.(op, [...srcs], destDir, { cancelled, failed });
+    } catch {}
   };
 
   // rename with nautilus-style collision handling: rename() would otherwise
@@ -374,10 +381,16 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       const renamedMsg = `Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ctrl+z to undo`;
       ctx.setStatusMsg(renamedMsg);
       ctx.notify(renamedMsg, "rename");
+      try {
+        ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 0 });
+      } catch {}
     } catch (err) {
       const summary = `Rename failed (${fsErrText(err)})`;
       ctx.setStatusMsg(summary);
       ctx.notify(summary, "rename failed");
+      try {
+        ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 1 });
+      } catch {}
     }
   };
 

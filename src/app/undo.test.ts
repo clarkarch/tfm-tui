@@ -30,6 +30,25 @@ describe("makeUndo", () => {
     expect(undo.undoDepth()).toBe(0);
   });
 
+  test("onEvent fires with the batch label on pop, silent on empty stacks", async () => {
+    const events: Array<{ op: string; label: string }> = [];
+    const sink = recordingSink();
+    const undo = makeUndo({ ...sink, onEvent: (op, label) => events.push({ op, label }) });
+    // empty stacks: status notes, no events (a no-op is not an undo)
+    undo.undoLast();
+    undo.redoLast();
+    expect(events).toEqual([]);
+    undo.pushUndoBatch("op", [() => {}], [() => {}]);
+    undo.undoLast();
+    expect(events).toEqual([{ op: "undo", label: "op" }]);
+    await settleUntil(() => undo.redoDepth() === 1);
+    undo.redoLast();
+    expect(events).toEqual([
+      { op: "undo", label: "op" },
+      { op: "redo", label: "op" },
+    ]);
+  });
+
   test("a fresh push clears stale redos (history fork)", async () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);

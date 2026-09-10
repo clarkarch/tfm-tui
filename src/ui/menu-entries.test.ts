@@ -5,6 +5,28 @@ import type { SortMode } from "../lib/sort";
 import { trashDir } from "../fs/fsutil";
 import type { ClipItem, GridTileRef } from "../input/grid-input";
 import type { Place } from "../fs/places";
+import type { LoadedPlugin } from "../plugins/plugin-api";
+
+// full-shape fakes (absent builders are null, never undefined — matches what
+// the loader hands out, so the guards are exercised exactly as in prod)
+const fakePlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => ({
+  rows: [],
+  fileMenu: null,
+  sidebarMenu: null,
+  emptyAreaMenu: null,
+  commands: [],
+  preview: [],
+  store: {
+    get: (_k: string, fb: unknown) => fb as never,
+    set: () => {},
+    remove: () => {},
+    keys: () => [],
+    subscribe: () => () => {},
+  },
+  deactivate: null,
+  file: `/fake/${over.name}.ts`,
+  ...over,
+});
 
 const TRASH_FILES = path.join(trashDir(), "files");
 
@@ -236,5 +258,145 @@ describe("sortEntries / emptyAreaEntries", () => {
     const m = makeMenuEntries(ctx);
     const entries = m.emptyAreaEntries(0, 0);
     expect(entries.map((e) => e.label)).toEqual(["Empty Trash", "Select all"]);
+  });
+});
+
+describe("plugin fileMenu entries", () => {
+  test("plugin entries append after core rows with the selection paths", () => {
+    const ctx = baseCtx();
+    (ctx as any).plugins = () => [
+      fakePlugin({
+        name: "insp",
+        fileMenu: (sel: { paths: string[] }) => [
+          {
+            label: `Inspect ${sel.paths.length}`,
+            run: (paths: string[]) => ctx.calls.push(`inspect:${paths.join(",")}`),
+          },
+        ],
+      }),
+    ];
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a", false, 0, 0);
+    expect(entries.at(-1)!.label).toBe("Inspect 1");
+    entries.at(-1)!.action();
+    // menu closes before the plugin runs (same rule as Properties…)
+    expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("inspect:/a"));
+  });
+
+  test("a throwing fileMenu never breaks the menu; malformed entries drop", () => {
+    const ctx = baseCtx();
+    (ctx as any).plugins = () => [
+      fakePlugin({
+        name: "bad",
+        fileMenu: () => {
+          throw new Error("boom");
+        },
+      }),
+      fakePlugin({
+        name: "messy",
+        fileMenu: () => [{ label: "Good" } as any, { label: 42, run: () => {} } as any, null as any],
+      }),
+    ];
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a", false, 0, 0);
+    expect(entries.some((e) => e.label.startsWith("Inspect"))).toBe(false);
+    expect(entries.some((e) => e.label === "Good")).toBe(false); // missing run
+    expect(entries.some((e) => e.label === "Open")).toBe(true); // core intact
+  });
+
+  test("no plugins field means no plugin section (existing menus frozen)", () => {
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    expect(m.fileEntriesFor("/a", false, 0, 0).some((e) => e.sep)).toBe(false);
+  });
+
+  test("sidebar plugins append after core rows with the place target", () => {
+    const ctx = baseCtx();
+    (ctx as any).plugins = () => [
+      fakePlugin({
+        name: "side",
+        sidebarMenu: (place: { path?: string | null }) => [
+          { label: `Side ${place.path}`, run: (paths: string[]) => ctx.calls.push(`side:${paths.join(",")}`) },
+        ],
+      }),
+    ];
+    const m = makeMenuEntries(ctx);
+    const entries = m.sidebarEntriesFor({ path: "/media/usb" } as any, 0, 0);
+    expect(entries.at(-1)!.label).toBe("Side /media/usb");
+    entries.at(-1)!.action();
+    expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("side:/media/usb"));
+  });
+
+  test("empty-area plugins append with cwd; throwing builder drops section only", () => {
+    const ctx = baseCtx();
+    (ctx as any).plugins = () => [
+      fakePlugin({
+        name: "bad",
+        emptyAreaMenu: () => {
+          throw new Error("boom");
+        },
+      }),
+      fakePlugin({
+        name: "good",
+        emptyAreaMenu: (area: { cwd: string }) => [{ label: `Here ${area.cwd}`, run: () => {} }],
+      }),
+    ];
+    const m = makeMenuEntries(ctx);
+    const entries = m.emptyAreaEntries(0, 0);
+    expect(entries.some((e) => e.label === "Here /home/u")).toBe(true);
+    expect(entries.some((e) => e.label === "New File")).toBe(true);
+  });
+
+  test("an async-rejecting plugin run still closes the menu and reports (no unhandled rejection)", async () => {
+    const ctx = baseCtx();
+    const errs: Array<{ name: string; err: unknown }> = [];
+    (ctx as any).onPluginError = (name: string, err: unknown) => errs.push({ name, err });
+    (ctx as any).plugins = () => [
+      fakePlugin({
+        name: "slow-boom",
+        fileMenu: () => [
+          {
+            label: "SlowBoom",
+            run: async () => {
+              throw new Error("async-run-boom");
+            },
+          },
+        ],
+      }),
+    ];
+    const m = makeMenuEntries(ctx);
+    const boom = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label === "SlowBoom")!;
+    expect(() => boom.action()).not.toThrow();
+    expect(ctx.calls).toContain("close");
+    await Bun.sleep(10);
+    expect(errs.length).toBe(1);
+    expect(errs[0]!.name).toBe("slow-boom");
+  });
+
+  test("a throwing plugin run still closes the menu and reports via onPluginError", () => {
+    const ctx = baseCtx();
+    const errs: Array<{ name: string; err: unknown }> = [];
+    (ctx as any).onPluginError = (name: string, err: unknown) => errs.push({ name, err });
+    (ctx as any).plugins = () => [
+      fakePlugin({
+        name: "boom",
+        fileMenu: () => [
+          {
+            label: "Boom",
+            run: () => {
+              throw new Error("run-boom");
+            },
+          },
+        ],
+      }),
+    ];
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a", false, 0, 0);
+    const boom = entries.find((e) => e.label === "Boom")!;
+    expect(() => boom.action()).not.toThrow();
+    // close runs first even when the plugin throws (same ordering rule)
+    expect(ctx.calls).toContain("close");
+    expect(errs.length).toBe(1);
+    expect(errs[0]!.name).toBe("boom");
   });
 });

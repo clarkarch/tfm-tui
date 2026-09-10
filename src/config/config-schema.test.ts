@@ -7,6 +7,7 @@ import {
   defaultConfig,
   exampleToml,
   keyMatch,
+  keySpecEqual,
   keySpecFromEvent,
   keybindConflict,
   parseConfigDoc,
@@ -164,6 +165,17 @@ describe("key specs", () => {
     expect(keybindConflict(defaultConfig, "quit", "ctrl+n")).toBeNull();
     // redo carries ctrl+shift+z AND ctrl+y — both are taken
     expect(keybindConflict(defaultConfig, "undo", "ctrl+shift+z")).toBe("redo");
+  });
+
+  test("keySpecEqual aliases enter/return (dispatch accepts both spellings)", () => {
+    // the router matches enter as return and back — validation must agree or
+    // an enter/return collision passes checks but shadows at runtime
+    expect(keySpecEqual("enter", "return")).toBe(true);
+    expect(keySpecEqual("alt+enter", "alt+return")).toBe(true);
+    expect(keySpecEqual("ctrl+q", "ctrl+q")).toBe(true);
+    expect(keySpecEqual("ctrl+q", "ctrl+shift+q")).toBe(false);
+    expect(keySpecEqual("ctrl+q", "ctrl+w")).toBe(false);
+    expect(keySpecEqual("nope++", "ctrl+q")).toBe(false);
   });
 });
 

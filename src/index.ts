@@ -4,7 +4,7 @@
 // (the wiring modules receive them as getters) — the same seam rule the
 // widget factories use internally. Order:
 //   core → nav → chrome (renderer boots here) → grid foundation → fileops →
-//   grid → settings → watcher → boot → retheme → dnd → resize → keymap ---
+//   plugins → grid → settings → watcher → boot → retheme → dnd → resize → keymap ---
 //
 // The app graph loads LAZILY (dynamic imports below): --version must answer
 // in milliseconds, not after OpenTUI natives + the whole graph load (~250ms).
@@ -43,6 +43,7 @@ const { wireChrome } = await import("./wiring/chrome");
 const { wireGridFoundation } = await import("./wiring/grid-foundation");
 const { wireFileops } = await import("./wiring/fileops");
 const { wireGrid } = await import("./wiring/grid");
+const { wirePlugins } = await import("./wiring/plugins");
 const { wireSettings, wireRetheme } = await import("./wiring/settings");
 const { wireWatcher, wireBoot, wireDnd, wireResize } = await import("./wiring/io");
 const { wireKeymap } = await import("./wiring/keymap");
@@ -96,6 +97,23 @@ const fileops = wireFileops({
   finishDrag: () => grid.finishDrag(),
 });
 
+// --- plugins: user extensions (after fileops — api context needs selection
+// + nav/chrome sinks; before grid — menu entries merge plugin sections;
+// before settings — aggregated rows feed the settings model) ---
+// getKeymap/getPick close over `keymap`, which wires LAST — wirePlugins
+// degrades both via tdzSafe until the keymap exists, so an eager plugin
+// calling api.commands()/ui.pick at activate top level gets []/noop instead
+// of a TDZ throw (lazy post-boot calls see the full table).
+const plugins = await wirePlugins({
+  core,
+  nav,
+  chrome,
+  gridFoundation,
+  getKeymap: () => ({ commands: () => keymap.keyRouter.commands() }),
+  getPick: () => keymap.pick,
+  getConfirm: () => fileops.yesNo,
+});
+
 // --- grid: preview, mouse pipeline, grid renderer, props, menu entries ---
 const grid = wireGrid({
   core,
@@ -103,15 +121,21 @@ const grid = wireGrid({
   chrome,
   gridFoundation,
   fileops,
+  plugins,
 });
 
 // --- settings: settings model + esc menu ---
+// getPrompt closes over `keymap`, which wires LAST — only called from
+// post-boot installer rows, so the TDZ is settled by first use (same seam
+// as wirePlugins' getKeymap/getPick above).
 const settings = wireSettings({
   core,
   nav,
   chrome,
   grid,
+  plugins,
   getRetheme: () => retheme,
+  getPrompt: () => keymap.prompt,
 });
 
 // --- watcher → boot → retheme: the boot sequence starts between the esc-menu
@@ -164,5 +188,6 @@ const keymap = wireKeymap({
   grid,
   fileops,
   settings,
+  plugins,
   getRetheme: () => retheme,
 });

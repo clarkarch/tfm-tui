@@ -15,6 +15,8 @@ import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 // the same paths. The public methods stay fire-and-forget (void) for
 // backwards compat but also return a Promise callers/tests can await. ---
 
+export type TrashOpName = "trash" | "restore" | "delete-forever" | "empty";
+
 export type TrashOpsSink = {
   /** push a completed undo batch (already paired with redos) */
   pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
@@ -26,6 +28,10 @@ export type TrashOpsSink = {
   renderAll(): void;
   /** debug event log — undo/redo closures fail silently otherwise */
   log?(msg: string): void;
+  // plugin event fan-out: fires on every completion (op names are the stable
+  // vocabulary — trash/restore/delete-forever/empty, never method names).
+  // Never throws into the op.
+  onEvent?(op: TrashOpName, paths: string[]): void;
 };
 
 // XDG trashinfo -> original absolute path. Spec says URL-encoded; nautilus
@@ -48,6 +54,11 @@ export const trashOrigPath = async (name: string): Promise<string | null> => {
 
 export const makeTrashOps = (sink: TrashOpsSink) => {
   const queue = sharedOpQueue();
+  const emit = (op: TrashOpName, paths: string[]): void => {
+    try {
+      sink.onEvent?.(op, [...paths]);
+    } catch {}
+  };
 
   const trashPaths = (paths: string[]): Promise<void> => {
     const run = queue.enqueue(async () => {
@@ -98,6 +109,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       sink.setStatusMsg(hinted);
       if (failed > 0) sink.notify(hinted, "trash failed");
       else sink.notify(hinted, "trash");
+      emit("trash", paths);
     });
     // fire-and-forget safe: outcomes are reported via sink, never thrown
     run.catch(() => {});
@@ -167,6 +179,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const summary = !failed || ok > 0 ? `${base} · ctrl+z to undo` : base;
       sink.setStatusMsg(summary);
       sink.notify(summary, failed ? "restore failed" : "restore");
+      emit("restore", paths);
     });
     run.catch(() => {});
     return run;
@@ -193,6 +206,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         : `Deleted ${ok} item${ok === 1 ? "" : "s"} · cannot be undone`;
       sink.setStatusMsg(summary);
       sink.notify(summary, failed ? "delete failed" : "delete");
+      emit("delete-forever", paths);
     });
     run.catch(() => {});
     return run;
@@ -209,6 +223,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         sink.renderAll();
         sink.notify(`Could not read trash (${reason})`, "empty failed");
         sink.setStatusMsg(`Trash unreadable (${reason})`);
+        emit("empty", []);
         return;
       }
       let n = 0;
@@ -234,6 +249,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const summary = `Emptied ${n} item${n === 1 ? "" : "s"} · cannot be undone`;
       sink.notify(summary, "empty");
       sink.setStatusMsg(summary);
+      emit("empty", []);
     });
     run.catch(() => {});
     return run;

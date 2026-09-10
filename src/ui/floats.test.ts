@@ -86,7 +86,9 @@ describe("floats policy", () => {
   });
 
   test("FLOAT_Z documents the render order (popup above every modal)", () => {
-    const kinds: FloatKind[] = ["escmenu", "props", "conflict", "yesno", "filemenu"];
+    // prompt sits above pick: it opens over the palette without stacking
+    // scrims (added with the plugin git-URL installer)
+    const kinds: FloatKind[] = ["escmenu", "props", "conflict", "yesno", "filemenu", "pick", "prompt"];
     expect(kinds.every((k, i) => kinds.slice(i + 1).every((j) => FLOAT_Z[k]! < FLOAT_Z[j]!))).toBe(true);
   });
 });

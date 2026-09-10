@@ -84,6 +84,31 @@ describe("trashPaths", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("onEvent fires with the stable op name (trash, not trashPaths)", async () => {
+    const root = sandbox();
+    try {
+      const events: Array<{ op: string; paths: string[] }> = [];
+      const file = path.join(root, "doomed.txt");
+      writeFileSync(file, "bye");
+      const sink = recordingSink();
+      const ops = makeTrashOps({ ...sink, onEvent: (op, paths) => events.push({ op, paths }) });
+      await ops.trashPaths([file]);
+      expect(events).toEqual([{ op: "trash", paths: [file] }]);
+      // a throwing listener never breaks the op
+      const ops2 = makeTrashOps({
+        ...sink,
+        onEvent: () => {
+          throw new Error("listener-boom");
+        },
+      });
+      const file2 = path.join(root, "doomed2.txt");
+      writeFileSync(file2, "bye");
+      await expect(ops2.trashPaths([file2])).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("trashOrigPath", () => {

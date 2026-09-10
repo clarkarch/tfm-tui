@@ -42,6 +42,13 @@ describe("icons", () => {
     clearIconCaches();
   });
 
+  test.skipIf(!hasRsvg)("power-plug asset rasterizes (esc-menu Plugins entry icon)", async () => {
+    clearIconCaches();
+    const bytes = await iconPng("power-plug", "#c0caf5", "#1a1b26", 16, 16);
+    expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    clearIconCaches();
+  });
+
   test.skipIf(!hasRsvg)("different tints/size produce distinct renders", async () => {
     clearIconCaches();
     const a = await iconPng("folder", "#c0caf5", "#1a1b26", 16, 16);

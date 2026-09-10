@@ -1,15 +1,20 @@
 // --- Keyboard router: ONE keypress entry point with a strict precedence
-// chain — capture > quit > conflict > yes/no > rename > props > esc-menu >
+// chain — capture > quit > overlay-modals (prompt/conflict/yes-no/rename/
+// props, which keep their keys even above an open pick) > pick > esc-menu >
 // terminal > path-edit > file menu > search > sidebar > grid > actions.
 // Action keys are remappable via config [keys] (see config-schema.ts);
 // modal-internal nav (arrows/enter/esc inside menus) and type-to-search stay
 // structural. The order IS load-bearing — do not reorder; handleKey below is
-// the canonical sequence, this header mirrors it. ---
+// the canonical sequence, this header mirrors it.
+// Every remappable action ALSO lives in the commands() table (same closures)
+// so the pick overlay runs exactly what the keypress would. ---
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { loadSystemPlaces } from "../fs/places";
 import type { KeyAction } from "../config/config-schema";
-import { keyMatch, parseKeySpec } from "../config/config-schema";
+import { KEY_SCHEMA, keyMatch, parseKeySpec } from "../config/config-schema";
+import type { Command } from "../lib/command";
+import { invokeIsolated } from "../lib/uiutil";
 import type { Selection } from "./selection";
 import { TileVisual } from "./grid-input";
 
@@ -41,6 +46,12 @@ export type KeyRouterCtx = {
   isRenaming(): boolean;
   propsIsOpen(): boolean;
   closeProps(): void;
+  // pick overlay (command palette): open instance swallows everything below
+  // (typing reaches its focused Input natively, like type-to-search)
+  pick: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void };
+  // single-line prompt overlay (plugin git-URL entry): same Input-native
+  // typing rule. Optional so older fakes read as closed; wiring always sets it.
+  prompt?: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void };
   escMenu: {
     isOpen(): boolean;
     closeMenu(): void;
@@ -105,6 +116,11 @@ export type KeyRouterCtx = {
   setStatusMsg(msg: string): void;
   undoLast(): void;
   redoLast(): void;
+  // plugin commands with effective binds (live read: remaps apply instantly).
+  // Absent = no plugins. Dispatched after core actions, before grid nav and
+  // type-to-search — same priority as core togglePreview etc. Core wins ties
+  // (checked first), so a conflicting plugin bind is shadowed until remapped.
+  pluginCommands?: () => Array<{ id: string; binds: string[]; run: () => void }>;
 };
 
 export const makeKeyRouter = (ctx: KeyRouterCtx) => {
@@ -135,6 +151,18 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     return false;
   };
 
+  // does this event match any of the plugin's effective binds?
+  const hitBinds = (ev: KeyPressEvent, binds: string[]): boolean => {
+    for (const specText of binds) {
+      const spec = parseKeySpec(specText);
+      if (!spec) continue;
+      if (keyMatch(ev, spec)) return true;
+      const alias = enterAlias(spec.name);
+      if (alias && keyMatch(ev, { ...spec, name: alias })) return true;
+    }
+    return false;
+  };
+
   const setSidebarFocus = (idx: number): boolean => {
     if (idx < 0 || idx >= ctx.placesHost.length) return false;
     placeIdx = idx;
@@ -159,12 +187,22 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   // --- Precedence stages below: each returns true when it consumes the event.
-  // Order is load-bearing (capture > quit > conflict > yes/no > rename >
-  // props > esc-menu > terminal > path-edit > file menu > search > sidebar >
-  // grid > actions) — do not reorder; mirrors the module header. ---
+  // Order is load-bearing (capture > quit > prompt > conflict > yes/no >
+  // rename > props > esc-menu > terminal > path-edit > file menu > search >
+  // sidebar > grid > actions) — do not reorder; mirrors the module header. ---
 
   // Modal layers swallow everything while open (mostly mouse-driven dialogs).
-  const handleModalKeys = (ev: KeyPressEvent): boolean => {
+  // true modals that keep their keys even above the pick overlay: floats
+  // policy normally prevents modal+pick coexistence (opening one dismisses
+  // the other), but a confirm opened over pick — or any open race — must not
+  // leave esc dead. Called BEFORE the pick branch; handleModalKeys delegates.
+  const handleOverlayModalKeys = (ev: KeyPressEvent): boolean => {
+    // text prompt above everything (incl. pick): its Input owns typing, the
+    // router just delegates keys and swallows the rest
+    if (ctx.prompt?.isOpen()) {
+      ctx.prompt.handleKey(ev);
+      return true;
+    }
     // override/conflict modal: esc = skip, everything else swallowed
     if (ctx.conflict.isOpen()) {
       if (ev.name === "escape") ctx.conflict.closeConflict("skip");
@@ -184,6 +222,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       if (ev.name === "escape" || ev.name === "return") ctx.closeProps();
       return true;
     }
+    return false;
+  };
+
+  const handleModalKeys = (ev: KeyPressEvent): boolean => {
+    if (handleOverlayModalKeys(ev)) return true;
     if (ctx.escMenu.isOpen()) {
       if (ev.name === "escape") ctx.escMenu.closeMenu();
       else if (ev.name === "up") ctx.escMenu.moveMenu(-1);
@@ -362,13 +405,186 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     return false;
   };
 
+  // --- Action table: every remappable action as a callable closure. handleKey
+  // below calls these (guards preserved at the call sites); the pick overlay
+  // runs them through commands() — one table, two dispatchers, identical
+  // behavior. Guarded actions (trash/copy/cut/rename) no-op on empty
+  // selection instead of falling through: the chain pre-checks the guard so
+  // keypress behavior is unchanged, while palette runs stay safe. ---
+  const doQuit = (): void => {
+    ctx.quit();
+  };
+  const doHistBack = (): void => {
+    ctx.goBack();
+  };
+  const doHistForward = (): void => {
+    ctx.goFwd();
+  };
+  const doShowProps = (): void => {
+    const sel = selection.selPaths();
+    if (sel.length) ctx.openProperties(sel.map((s) => s.path));
+    else if (!ctx.isVirtualCwd()) ctx.openProperties([ctx.state.cwd]);
+  };
+  const doNewFolder = (): void => {
+    ctx.startInlineCreate("folder");
+  };
+  const doNewFile = (): void => {
+    ctx.startInlineCreate("file");
+  };
+  const doPathEdit = (): void => {
+    ctx.enterPathEdit();
+  };
+  const doTogglePreview = (): void => {
+    ctx.togglePreview();
+  };
+  const doOpenTerminal = (): void => {
+    ctx.openTerminal();
+  };
+  const doToggleView = (): void => {
+    ctx.toggleViewMode();
+  };
+  const doZoomIn = (): void => {
+    ctx.zoomTiles(1);
+  };
+  const doZoomOut = (): void => {
+    ctx.zoomTiles(-1);
+  };
+  const doParentDir = (): void => {
+    // virtual views have no fs parent (path.resolve would shred the URI)
+    if (ctx.isVirtualCwd()) {
+      ctx.navigate(ctx.home);
+      return;
+    }
+    const cwd = path.resolve(ctx.state.cwd);
+    const parent = path.dirname(cwd);
+    if (parent !== cwd) ctx.navigate(parent);
+  };
+  const doOpenMenu = (): void => {
+    ctx.escMenu.openMenu();
+  };
+  const doToggleHidden = (): void => {
+    ctx.state.showHidden = !ctx.state.showHidden;
+    void ctx.renderGrid();
+  };
+  const doReloadPlaces = (): void => {
+    void loadSystemPlaces().then(() => ctx.renderAll());
+  };
+  const doNewTab = (): void => {
+    ctx.newTab();
+  };
+  const doCloseTab = (): void => {
+    ctx.closeTab();
+  };
+  const doPrevTab = (): void => {
+    ctx.switchTab(ctx.tabModel.active === 0 ? ctx.tabModel.list.length - 1 : ctx.tabModel.active - 1);
+  };
+  const doNextTab = (): void => {
+    ctx.switchTab(ctx.tabModel.active === ctx.tabModel.list.length - 1 ? 0 : ctx.tabModel.active + 1);
+  };
+  const doSelectAll = (): void => {
+    selection.selectAll();
+  };
+  const doTrash = (): void => {
+    const selected = selection.selPaths();
+    if (!selected.length) return;
+    if (ctx.inTrashView()) {
+      // no cursor coords in a keybind — the confirm dialog is a centered modal
+      ctx.confirmDeleteForever(selected.map((item) => item.path));
+    } else ctx.trashPaths(selected.map((item) => item.path));
+  };
+  const doRenameOrRestore = (): void => {
+    const selected = selection.selPaths();
+    if (selected.length !== 1 || !selected[0]) return;
+    // in the trash rename restores instead
+    if (ctx.inTrashView()) {
+      ctx.restoreFromTrash(selected.map((item) => item.path));
+      return;
+    }
+    ctx.startInlineRename(selected[0].path);
+  };
+  const doCopy = (): void => {
+    const selected = selection.selPaths();
+    if (selected.length) ctx.setClipboard("copy", selected);
+  };
+  const doCut = (): void => {
+    const selected = selection.selPaths();
+    if (selected.length) ctx.setClipboard("cut", selected);
+  };
+  const doPaste = (): void => {
+    // virtual views and the trash aren't paste targets — say so instead of
+    // swallowing the key (pasteSmart itself guards Trash/files too)
+    if (ctx.isVirtualCwd() || ctx.inTrashView()) {
+      ctx.setStatusMsg("Can't paste here");
+      return;
+    }
+    ctx.pasteSmart(ctx.state.cwd);
+  };
+  const doRedo = (): void => {
+    ctx.redoLast();
+  };
+  const doUndo = (): void => {
+    ctx.undoLast();
+  };
+
+  const labelOf = (action: KeyAction): string => KEY_SCHEMA.find((r) => r.action === action)?.label ?? action;
+
+  // KEY_SCHEMA order (config order) doubles as the palette listing order
+  const ACTION_TABLE: Array<{ action: KeyAction; run: () => void }> = [
+    { action: "quit", run: doQuit },
+    { action: "openMenu", run: doOpenMenu },
+    { action: "toggleHidden", run: doToggleHidden },
+    { action: "reloadPlaces", run: doReloadPlaces },
+    { action: "newTab", run: doNewTab },
+    { action: "closeTab", run: doCloseTab },
+    { action: "nextTab", run: doNextTab },
+    { action: "prevTab", run: doPrevTab },
+    { action: "selectAll", run: doSelectAll },
+    { action: "trash", run: doTrash },
+    { action: "renameOrRestore", run: doRenameOrRestore },
+    { action: "copy", run: doCopy },
+    { action: "cut", run: doCut },
+    { action: "paste", run: doPaste },
+    { action: "undo", run: doUndo },
+    { action: "redo", run: doRedo },
+    { action: "parentDir", run: doParentDir },
+    { action: "histBack", run: doHistBack },
+    { action: "histForward", run: doHistForward },
+    { action: "showProps", run: doShowProps },
+    { action: "newFolder", run: doNewFolder },
+    { action: "newFile", run: doNewFile },
+    { action: "pathEdit", run: doPathEdit },
+    { action: "togglePreview", run: doTogglePreview },
+    { action: "openTerminal", run: doOpenTerminal },
+    { action: "toggleView", run: doToggleView },
+    { action: "zoomIn", run: doZoomIn },
+    { action: "zoomOut", run: doZoomOut },
+  ];
+
+  // fresh titles/hints on every call so remaps apply without rebuilds
+  const commands = (): Command[] =>
+    ACTION_TABLE.map(({ action, run }) => ({
+      id: action,
+      title: labelOf(action),
+      hint: ctx.keybinds(action).join(" "),
+      run,
+    }));
+
   const handleKey = (ev: KeyPressEvent): void => {
     const ctrl = !!ev.ctrl || !!ev.control;
     // keybind capture in the settings panel is the ONE state above quit:
     // recording ctrl+q must not quit the app mid-capture
     if (ctx.escMenu.captureKey(ev)) return;
     if (hit(ev, "quit")) {
-      ctx.quit();
+      doQuit();
+      return;
+    }
+    // a true modal open above the pick overlay keeps its keys (see
+    // handleOverlayModalKeys) — esc must reach a confirm opened over pick.
+    if (handleOverlayModalKeys(ev)) return;
+    // pick overlay (command palette) open: it swallows everything below
+    // (typing reaches its focused Input natively, like type-to-search)
+    if (ctx.pick.isOpen()) {
+      ctx.pick.handleKey(ev);
       return;
     }
     if (handleModalKeys(ev)) return;
@@ -384,50 +600,64 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // so alt+arrows and alt+enter must dispatch BEFORE it (plain arrows and
     // return are unaffected — they match no bind unless remapped onto one) ---
     if (hit(ev, "histBack")) {
-      ctx.goBack();
+      doHistBack();
       return;
     }
     if (hit(ev, "histForward")) {
-      ctx.goFwd();
+      doHistForward();
       return;
     }
     if (hit(ev, "showProps")) {
-      const sel = selection.selPaths();
-      if (sel.length) ctx.openProperties(sel.map((s) => s.path));
-      else if (!ctx.isVirtualCwd()) ctx.openProperties([ctx.state.cwd]);
+      doShowProps();
       return;
     }
     if (hit(ev, "newFolder")) {
-      ctx.startInlineCreate("folder");
+      doNewFolder();
       return;
     }
     if (hit(ev, "newFile")) {
-      ctx.startInlineCreate("file");
+      doNewFile();
       return;
     }
     if (hit(ev, "pathEdit")) {
-      ctx.enterPathEdit();
+      doPathEdit();
       return;
     }
     if (hit(ev, "togglePreview")) {
-      ctx.togglePreview();
+      doTogglePreview();
       return;
     }
     if (hit(ev, "openTerminal")) {
-      ctx.openTerminal();
+      doOpenTerminal();
       return;
     }
     if (hit(ev, "toggleView")) {
-      ctx.toggleViewMode();
+      doToggleView();
       return;
     }
     if (hit(ev, "zoomIn")) {
-      ctx.zoomTiles(1);
+      doZoomIn();
       return;
     }
     if (hit(ev, "zoomOut")) {
-      ctx.zoomTiles(-1);
+      doZoomOut();
       return;
+    }
+
+    // --- plugin commands (core wins ties — checked first above) ---
+    if (ctx.pluginCommands) {
+      try {
+        for (const cmd of ctx.pluginCommands()) {
+          if (cmd.binds.length && hitBinds(ev, cmd.binds)) {
+            // invokeIsolated: async plugin runs must not reject unhandled
+            invokeIsolated(
+              () => cmd.run(),
+              () => {},
+            );
+            return;
+          }
+        }
+      } catch {}
     }
 
     // --- keyboard navigation: sidebar <-> grid ---
@@ -438,14 +668,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (handleShiftExtend(ev, ctrl)) return;
     if (handleGridNavKeys(ev)) return;
     if (hit(ev, "parentDir")) {
-      // virtual views have no fs parent (path.resolve would shred the URI)
-      if (ctx.isVirtualCwd()) {
-        ctx.navigate(ctx.home);
-        return;
-      }
-      const cwd = path.resolve(ctx.state.cwd);
-      const parent = path.dirname(cwd);
-      if (parent !== cwd) ctx.navigate(parent);
+      doParentDir();
       return;
     }
     if (!ctrl && !ev.shift && typeof ev.name === "string" && ev.name.length === 1 && /[a-z0-9._-]/i.test(ev.name)) {
@@ -454,90 +677,76 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
 
     if (hit(ev, "openMenu")) {
-      ctx.escMenu.openMenu();
+      doOpenMenu();
       return;
     }
     if (hit(ev, "toggleHidden")) {
-      ctx.state.showHidden = !ctx.state.showHidden;
-      void ctx.renderGrid();
+      doToggleHidden();
       return;
     }
     if (hit(ev, "reloadPlaces")) {
-      void loadSystemPlaces().then(() => ctx.renderAll());
+      doReloadPlaces();
       return;
     }
 
     // --- tabs (kitty needs map no_op for ctrl+tab / ctrl+shift+tab — its
     // default next_tab/previous_tab eat the keys before they reach us) ---
     if (hit(ev, "newTab")) {
-      ctx.newTab();
+      doNewTab();
       return;
     }
     if (hit(ev, "closeTab")) {
-      ctx.closeTab();
+      doCloseTab();
       return;
     }
     if (hit(ev, "prevTab")) {
-      ctx.switchTab(ctx.tabModel.active === 0 ? ctx.tabModel.list.length - 1 : ctx.tabModel.active - 1);
+      doPrevTab();
       return;
     }
     if (hit(ev, "nextTab")) {
-      ctx.switchTab(ctx.tabModel.active === ctx.tabModel.list.length - 1 ? 0 : ctx.tabModel.active + 1);
+      doNextTab();
       return;
     }
 
     // --- file operations ---
     if (hit(ev, "selectAll")) {
-      selection.selectAll();
+      doSelectAll();
       return;
     }
     const selected = selection.selPaths();
     if (hit(ev, "trash") && selected.length) {
-      if (ctx.inTrashView()) {
-        // no cursor coords in a keybind — the confirm dialog is a centered modal
-        ctx.confirmDeleteForever(selected.map((item) => item.path));
-      } else ctx.trashPaths(selected.map((item) => item.path));
+      doTrash();
       return;
     }
     if (hit(ev, "renameOrRestore") && selected.length === 1 && selected[0]) {
-      // in the trash rename restores instead
-      if (ctx.inTrashView()) {
-        ctx.restoreFromTrash(selected.map((item) => item.path));
-        return;
-      }
-      ctx.startInlineRename(selected[0].path);
+      doRenameOrRestore();
       return;
     }
     if (hit(ev, "copy") && selected.length) {
-      ctx.setClipboard("copy", selected);
+      doCopy();
       return;
     }
     if (hit(ev, "cut") && selected.length) {
-      ctx.setClipboard("cut", selected);
+      doCut();
       return;
     }
     if (hit(ev, "paste")) {
-      // virtual views and the trash aren't paste targets — say so instead of
-      // swallowing the key (pasteSmart itself guards Trash/files too)
-      if (ctx.isVirtualCwd() || ctx.inTrashView()) {
-        ctx.setStatusMsg("Can't paste here");
-        return;
-      }
-      ctx.pasteSmart(ctx.state.cwd);
+      doPaste();
       return;
     }
     if (hit(ev, "redo")) {
-      ctx.redoLast();
+      doRedo();
       return;
     }
     if (hit(ev, "undo")) {
-      ctx.undoLast();
+      doUndo();
       return;
     }
   };
 
   return {
     handleKey,
+    commands,
     // kb-focus highlight read by makeChrome
     sidebarActive: (): boolean => sidebarActive,
     placeIdx: (): number => placeIdx,

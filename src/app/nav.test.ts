@@ -131,6 +131,36 @@ describe("makeNav", () => {
     expect(calls[calls.length - 1]).toBe("render");
     expect(calls).toContain("clearSearch");
   });
+
+  test("goBack/goFwd emit navigate with the resolved history entry", () => {
+    const st = mkState("/a");
+    st.history = ["/a", "/b", "/c"];
+    st.histIdx = 2;
+    const { hooks } = mkHooks();
+    const seen: string[] = [];
+    const nav = makeNav(st, { ...hooks, onNavigate: (d) => seen.push(d) });
+    nav.goBack();
+    expect(seen).toEqual(["/b"]);
+    nav.goBack();
+    nav.goFwd();
+    expect(seen).toEqual(["/b", "/a", "/b"]);
+    // bounds: no move, no emit
+    st.histIdx = 0;
+    seen.length = 0;
+    nav.goBack();
+    expect(seen).toEqual([]);
+  });
+
+  test("onNavigate fires on real navigations, not on no-ops or dead dirs", () => {
+    const st = mkState(RECENT_URI);
+    const { hooks } = mkHooks();
+    const seen: string[] = [];
+    const nav = makeNav(st, { ...hooks, onNavigate: (d) => seen.push(d) });
+    nav.navigate(RECENT_URI); // no-op re-enter
+    expect(seen).toEqual([]);
+    nav.navigate("starred://");
+    expect(seen).toEqual(["starred://"]);
+  });
 });
 
 describe("makeSessionSync", () => {

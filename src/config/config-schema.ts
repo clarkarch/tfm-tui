@@ -558,22 +558,35 @@ export const keySpecFromEvent = (e: KeyEventLike): string | null => {
   return [...mods, name].join("+");
 };
 
+// OpenTUI reports Enter as "return" (kitty/legacy forms vary) — the router
+// accepts both spellings, so conflict checks must treat them as one key or
+// an enter/return collision passes validation but shadows at runtime.
+const canonKeyName = (name: string): string => (name === "enter" || name === "return" ? "enter" : name);
+
+// spec-string equality for conflict checks (modifiers + canonical name).
+// Shared by keybindConflict and the plugin bind checks in settings-model —
+// one comparator so validation and dispatch can't disagree. (The runtime
+// baseCode fallback in keyMatch is event-specific and stays in the router.)
+export const keySpecEqual = (a: string, b: string): boolean => {
+  const pa = parseKeySpec(a);
+  const pb = parseKeySpec(b);
+  return (
+    !!pa &&
+    !!pb &&
+    canonKeyName(pa.name) === canonKeyName(pb.name) &&
+    pa.ctrl === pb.ctrl &&
+    pa.shift === pb.shift &&
+    pa.meta === pb.meta
+  );
+};
+
 // first OTHER action that already owns this spec, for conflict checks
 export const keybindConflict = (cfg: Config, action: KeyAction, specStr: string): KeyAction | null => {
-  const spec = parseKeySpec(specStr);
-  if (!spec) return null;
+  if (!parseKeySpec(specStr)) return null;
   for (const row of KEY_ROWS) {
     if (row.action === action) continue;
     for (const s of cfg.keys[row.action] ?? []) {
-      const other = parseKeySpec(s);
-      if (
-        other &&
-        other.name === spec.name &&
-        other.ctrl === spec.ctrl &&
-        other.shift === spec.shift &&
-        other.meta === spec.meta
-      )
-        return row.action;
+      if (keySpecEqual(s, specStr)) return row.action;
     }
   }
   return null;

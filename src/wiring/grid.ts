@@ -3,6 +3,7 @@
 // the grid renderer, properties dialog and the menu entry builders. Runs
 // AFTER the fileops wiring — gridCtx takes moveInto directly. ---
 
+import path from "node:path";
 import { registerSyntaxParsers } from "../ui/syntax";
 import { makePreview } from "../ui/ui-preview";
 import { finishDragState, makeEntryMouseHandlers, type BandCtx, type GridMenuEntry } from "../input/grid-input";
@@ -15,6 +16,7 @@ import { dlog } from "../app/log";
 import type { ListEntry } from "../ui/ui-menu";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, NavWiring } from "./types";
+import type { PluginsWiring } from "./plugins";
 
 export const wireGrid = (deps: {
   core: CoreWiring;
@@ -22,8 +24,9 @@ export const wireGrid = (deps: {
   chrome: ChromeWiring;
   gridFoundation: GridFoundationWiring;
   fileops: FileopsWiring;
+  plugins: PluginsWiring;
 }) => {
-  const { core, nav, chrome, gridFoundation, fileops } = deps;
+  const { core, nav, chrome, gridFoundation, fileops, plugins } = deps;
   const { selection, rename } = gridFoundation;
   const { byId, stripSelectable } = core.lookup;
   const { themeGet, home, state } = core;
@@ -50,6 +53,24 @@ export const wireGrid = (deps: {
     drainIconQueue: () => core.slots.drainIconQueue(),
     nextIconId: core.slots.nextIconId,
     fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    pluginPreview: async (filePath) => {
+      // path.extname, not split(".").pop(): dotfiles (".bashrc") have no ext,
+      // "foo." has none either — the naive split claims "bashrc"/"".
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      if (!ext) return null;
+      // first matching ext in load order wins; a throwing/empty render falls
+      // through to the next plugin, then to core — never a blank pane.
+      for (const p of plugins.plugins) {
+        for (const pv of p.preview) {
+          if (!pv.exts.includes(ext)) continue;
+          try {
+            const text = await pv.render(filePath);
+            if (typeof text === "string" && text.length) return text;
+          } catch {}
+        }
+      }
+      return null;
+    },
   });
 
   // Rubber-band gesture state + commit logic live in ./grid-input; this is the
@@ -198,6 +219,14 @@ export const wireGrid = (deps: {
     selectAll: selection.selectAll,
     cwd: () => state.cwd,
     sortState: state,
+    plugins: () => plugins.plugins,
+    onPluginError: (name, err) => {
+      const msg = `plugin ${name} failed: ${err instanceof Error ? err.message : err}`;
+      dlog(msg);
+      try {
+        chrome.notify(msg, "plugins");
+      } catch {}
+    },
   });
 
   return {

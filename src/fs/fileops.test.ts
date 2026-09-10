@@ -185,6 +185,59 @@ describe("runTransfer: cross-device move", () => {
   });
 });
 
+describe("onFileOp fan-out", () => {
+  test("successful transfer reports a clean outcome (not a phantom success)", async () => {
+    const seen: Array<{
+      op: string;
+      paths: string[];
+      dest?: string;
+      outcome?: { cancelled: boolean; failed: number };
+    }> = [];
+    const h = makeHarness({ onFileOp: (op, paths, dest, outcome) => seen.push({ op, paths, dest, outcome }) });
+    const src = path.join(ROOT, "fanout-src");
+    const destDir = path.join(ROOT, "fanout-dest");
+    W(src, "content");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.op).toBe("copy");
+    expect(seen[0]!.paths).toEqual([src]);
+    expect(seen[0]!.dest).toBe(destDir);
+    expect(seen[0]!.outcome).toEqual({ cancelled: false, failed: 0 });
+  });
+
+  test("cancelled transfer reports cancelled:true (never a fake success)", async () => {
+    const seen: Array<{ outcome?: { cancelled: boolean; failed: number } }> = [];
+    const h = makeHarness({
+      crossDevice: (a, b) => a.includes("dev-a") !== b.includes("dev-a"),
+      paintProgress: () => {
+        h.prog.cancelled = true;
+      },
+      onFileOp: (_op, _paths, _dest, outcome) => seen.push({ outcome }),
+    });
+    const src = path.join(ROOT, "dev-a", "fanout-cancel-tree");
+    const destDir = path.join(ROOT, "dev-b-fanout-cancel");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("move", destDir, [src], "move cancelled");
+
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.outcome?.cancelled).toBe(true);
+  });
+
+  test("failed rename reports failed:1", async () => {
+    const seen: Array<{ op: string; outcome?: { cancelled: boolean; failed: number } }> = [];
+    const h = makeHarness({ onFileOp: (op, _paths, _dest, outcome) => seen.push({ op, outcome }) });
+    await h.ops.performRename(path.join(ROOT, "no-such-file.txt"), "renamed.txt");
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.op).toBe("rename");
+    expect(seen[0]!.outcome).toEqual({ cancelled: false, failed: 1 });
+  });
+});
+
 describe("trash guards", () => {
   test("pasteSmart into Trash/files refuses with a status, moves nothing", () => {
     // dest-based (not view-based): pasting onto a real place while viewing

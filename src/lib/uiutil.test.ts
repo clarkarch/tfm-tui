@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clearChildren, debounced, safeRenderStep, type Scheduler } from "./uiutil";
+import { clearChildren, debounced, invokeIsolated, safeRenderStep, withTimeout, type Scheduler } from "./uiutil";
 
 // Bun 1.3.14 has no fake timers, so debounced takes an injected Scheduler:
 // these tests advance a virtual clock and never race the wall clock (a
@@ -98,6 +98,95 @@ describe("debounced", () => {
     run();
     await Bun.sleep(50);
     expect(runs).toBe(1);
+  });
+});
+
+describe("withTimeout", () => {
+  test("resolves with the value and clears its timer", async () => {
+    const { sched, advance, pending } = mkClock();
+    const p = withTimeout(Promise.resolve("ok"), 5000, sched);
+    advance(1);
+    await expect(p).resolves.toBe("ok");
+    expect(pending()).toBe(0);
+  });
+
+  test("rejects with the inner error and clears its timer", async () => {
+    const { sched, advance, pending } = mkClock();
+    const p = withTimeout(Promise.reject(new Error("inner")), 5000, sched);
+    advance(1);
+    await expect(p).rejects.toThrow("inner");
+    expect(pending()).toBe(0);
+  });
+
+  test("times out a hanging promise and clears nothing stale", async () => {
+    const { sched, advance, pending } = mkClock();
+    const p = withTimeout(new Promise(() => {}), 5000, sched);
+    const settled: string[] = [];
+    p.then(
+      () => settled.push("resolved"),
+      (e: unknown) => settled.push(`rejected:${e instanceof Error ? e.message : e}`),
+    );
+    expect(settled).toEqual([]);
+    advance(4999);
+    await Promise.resolve();
+    expect(settled).toEqual([]);
+    advance(1);
+    await Promise.resolve();
+    expect(settled).toEqual(["rejected:timeout"]);
+    expect(pending()).toBe(0);
+  });
+});
+
+describe("invokeIsolated", () => {
+  test("sync return passes through silently", () => {
+    const errs: unknown[] = [];
+    expect(() =>
+      invokeIsolated(
+        () => 42,
+        (e: unknown) => errs.push(e),
+      ),
+    ).not.toThrow();
+    expect(errs).toEqual([]);
+  });
+
+  test("sync throw is reported, not rethrown", () => {
+    const errs: unknown[] = [];
+    expect(() =>
+      invokeIsolated(
+        () => {
+          throw new Error("sync-boom");
+        },
+        (e: unknown) => errs.push(e),
+      ),
+    ).not.toThrow();
+    expect(errs.length).toBe(1);
+  });
+
+  test("async rejection is reported (no unhandled rejection)", async () => {
+    const errs: unknown[] = [];
+    invokeIsolated(
+      async () => {
+        throw new Error("async-boom");
+      },
+      (e: unknown) => errs.push(e),
+    );
+    await Bun.sleep(10);
+    expect(errs.length).toBe(1);
+    expect(String(errs[0])).toContain("async-boom");
+  });
+
+  test("a throwing reporter never propagates", async () => {
+    expect(() =>
+      invokeIsolated(
+        async () => {
+          throw new Error("x");
+        },
+        () => {
+          throw new Error("reporter-boom");
+        },
+      ),
+    ).not.toThrow();
+    await Bun.sleep(10);
   });
 });
 

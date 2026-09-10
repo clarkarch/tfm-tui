@@ -12,6 +12,7 @@ import { makeFileOps } from "../fs/fileops";
 import { makeTerminal } from "../ui/ui-term";
 import { makeTrashOps, makeTrashConfirms } from "../fs/trashops";
 import { appendLog, dlog } from "../app/log";
+import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
 
@@ -50,6 +51,11 @@ export const wireFileops = (deps: {
       setStatusMsg: nav.setStatusMsg,
       notify: chrome.notify,
       renderAll: nav.renderAll,
+      onEvent: (op, label) => {
+        try {
+          sharedPluginEvents().emit("undo", { op, label });
+        } catch {}
+      },
     },
     { log: (msg) => dlog(msg), onChange: syncUndoJournal },
   );
@@ -100,6 +106,8 @@ export const wireFileops = (deps: {
     home,
     refreshCutVisuals: gridFoundation.selection.refreshCutVisuals,
     log: (msg) => dlog(msg),
+    onFileOp: (op, paths, dest, outcome) =>
+      sharedPluginEvents().emit("file-op", { op, paths, ...(dest ? { dest } : {}), ...(outcome ? { outcome } : {}) }),
   });
 
   // --- Embedded terminal pane — widget lives in ./ui-term ---
@@ -127,6 +135,13 @@ export const wireFileops = (deps: {
     notify: chrome.notify,
     renderAll: nav.renderAll,
     log: (msg) => appendLog(`trashops: ${msg}`),
+    // plugin event fan-out through the sink seam (no method wrapping — the
+    // op names are the stable vocabulary, never the method names).
+    onEvent: (op, paths) => {
+      try {
+        sharedPluginEvents().emit("trash", { op, paths });
+      } catch {}
+    },
   });
 
   // floating Yes/No confirmation — widget lives in ./ui-dialogs

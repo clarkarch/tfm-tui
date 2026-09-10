@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { makeSettingModel, type SettingsModelCtx } from "./settings-model";
 import { defaultConfig, KEY_SCHEMA, type Config } from "../config/config-schema";
 import { THEME_PRESETS } from "../config/themes";
+import { makePluginStore } from "../plugins/plugins";
+import type { LoadedPlugin } from "../plugins/plugin-api";
 import type { SettingGroup, SettingRow } from "./settings";
 
 // The fake ctx mirrors the REAL applyConfig contract (ui-retheme): it merges
 // the fresh object's sections into the live config via Object.assign — rows
 // read through ctx.config on every call, so a fake that ignored the merge
 // would lie about coverage (AGENTS.md fake-guard rule).
-const mk = () => {
+const mk = (plugins?: () => LoadedPlugin[]) => {
   const config = structuredClone(defaultConfig);
   const state = { showHidden: false };
   const applied: Config[] = [];
@@ -33,6 +38,7 @@ const mk = () => {
     warn: (message, title) => {
       warns.push({ message, title });
     },
+    ...(plugins ? { plugins } : {}),
   };
   const model = makeSettingModel(ctx);
   const groups = (): SettingGroup[] => model.settingGroups();
@@ -44,6 +50,25 @@ const mk = () => {
   };
   return { ctx, config, state, applied, warns, model, groups, rows, byLabel, saves: () => saves, roots: () => roots };
 };
+
+const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => ({
+  rows: [],
+  fileMenu: null,
+  sidebarMenu: null,
+  emptyAreaMenu: null,
+  commands: [],
+  preview: [],
+  store: {
+    get: (_k: string, fb: unknown) => fb as never,
+    set: () => {},
+    remove: () => {},
+    keys: () => [],
+    subscribe: () => () => {},
+  },
+  deactivate: null,
+  file: `/fake/${over.name}.ts`,
+  ...over,
+});
 
 const isKeybind = (r: SettingRow): r is Extract<SettingRow, { kind: "keybind" }> => r.kind === "keybind";
 const asToggle = (r: SettingRow): Extract<SettingRow, { kind: "toggle" }> => {
@@ -84,6 +109,212 @@ describe("settingGroups shape", () => {
       .rows.map((r) => r.label);
     expect(layout).toContain("sidebar width");
     expect(layout).not.toContain("preview pane");
+  });
+
+  test("each plugin gets its OWN category with an on/off toggle first", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const hello: SettingRow = { kind: "action", label: "Say hello", run: () => {} };
+      const plug = (): LoadedPlugin[] => [
+        mkPlugin({ name: "hello", rows: [hello], store: makePluginStore(dir, "hello") }),
+      ];
+      // settings groups stay frozen at the five core categories…
+      expect(
+        mk(plug)
+          .groups()
+          .map((g) => g.header),
+      ).toEqual(["general", "layout", "behavior", "keys", "config"]);
+      expect(() => mk(plug).byLabel("Say hello")).toThrow();
+      // …plugin rows live behind pluginGroups(), one category per plugin
+      // (plus the leading "add plugins" installer category — always first
+      // so the Plugins view exists before anything is installed)
+      const h = mk(plug);
+      expect(h.model.pluginGroups().map((g) => g.header)).toEqual(["add plugins", "hello"]);
+      const rows = h.model.pluginGroups().find((g) => g.header === "hello")!.rows;
+      expect(rows.map((r) => r.label)).toEqual(["enabled", "Say hello", "Update from git", "Remove…"]);
+      const toggle = rows[0]!;
+      if (toggle.kind !== "toggle") throw new Error("first plugin row must be the enabled toggle");
+      expect(toggle.get()).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("disabling a plugin hides its rows but keeps the toggle (re-enable path)", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const hello: SettingRow = { kind: "action", label: "Say hello", run: () => {} };
+      const h = mk(() => [mkPlugin({ name: "hello", rows: [hello], store: makePluginStore(dir, "hello") })]);
+      const toggle = h.model.pluginGroups().find((g) => g.header === "hello")!.rows[0]!;
+      if (toggle.kind !== "toggle") throw new Error("first plugin row must be the enabled toggle");
+      // the toggle rebuilds the panel so the rows vanish/appear live
+      expect(toggle.repaint).toBe(true);
+      toggle.set(false);
+      expect(
+        h.model
+          .pluginGroups()
+          .find((g) => g.header === "hello")!
+          .rows.map((r) => r.label),
+      ).toEqual(["enabled", "Update from git", "Remove…"]);
+      toggle.set(true);
+      expect(
+        h.model
+          .pluginGroups()
+          .find((g) => g.header === "hello")!
+          .rows.map((r) => r.label),
+      ).toEqual(["enabled", "Say hello", "Update from git", "Remove…"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("installer category exists even without plugins (Plugins view is discoverable pre-install)", () => {
+    for (const h of [mk(), mk(() => [])]) {
+      expect(h.model.pluginGroups().map((g) => g.header)).toEqual(["add plugins"]);
+      expect(h.model.pluginGroups()[0]!.rows.map((r) => r.label)).toEqual([
+        "Add from git URL…",
+        "Open plugins folder…",
+      ]);
+    }
+  });
+
+  test("plugin commands get remappable keybind rows (persisted in own store)", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const h = mk(() => [
+        mkPlugin({
+          name: "demo",
+          commands: [{ id: "demo:hi", title: "Say hi", run: () => {}, defaultBinds: ["ctrl+j"] }],
+          store: makePluginStore(dir, "demo"),
+        }),
+      ]);
+      const group = h.model.pluginGroups().find((g) => g.header === "demo")!;
+      const keyRow = group.rows.find((r) => r.label === "Say hi (key)")!;
+      if (keyRow.kind !== "keybind") throw new Error("expected keybind row");
+      expect(keyRow.get()).toEqual(["ctrl+j"]);
+      keyRow.set(["ctrl+k"]);
+      expect(keyRow.get()).toEqual(["ctrl+k"]);
+      expect(makePluginStore(dir, "demo").get<string[]>("keys:demo:hi", [])).toEqual(["ctrl+k"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin remap conflicting with core is rejected with a warn", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const h = mk(() => [
+        mkPlugin({
+          name: "demo",
+          commands: [{ id: "demo:hi", title: "Say hi", run: () => {}, defaultBinds: ["ctrl+j"] }],
+          store: makePluginStore(dir, "demo"),
+        }),
+      ]);
+      const group = h.model.pluginGroups().find((g) => g.header === "demo")!;
+      const keyRow = group.rows.find((r) => r.label === "Say hi (key)")!;
+      if (keyRow.kind !== "keybind") throw new Error("expected keybind row");
+      keyRow.set(["ctrl+q"]); // owned by core quit
+      expect(h.warns.length).toBe(1);
+      expect(h.warns[0]!.message).toContain("ctrl+q");
+      expect(keyRow.get()).toEqual(["ctrl+j"]); // unchanged
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("core remap onto a plugin bind is rejected (no silent shadowing)", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const h = mk(() => [
+        mkPlugin({
+          name: "demo",
+          commands: [{ id: "demo:hi", title: "Say hi", run: () => {}, defaultBinds: ["ctrl+j"] }],
+          store: makePluginStore(dir, "demo"),
+        }),
+      ]);
+      asKeybind(h.byLabel("undo last file op")).set(["ctrl+j"]); // owned by demo:hi
+      expect(h.warns.length).toBe(1);
+      expect(h.warns[0]!.message).toContain("Say hi");
+      expect(h.applied.length).toBe(0);
+      expect(h.config.keys.undo).toEqual(defaultConfig.keys.undo);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin remap conflicting with a sibling plugin is rejected", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const h = mk(() => [
+        mkPlugin({
+          name: "aaa",
+          commands: [{ id: "aaa:hi", title: "Hi A", run: () => {}, defaultBinds: ["ctrl+j"] }],
+          store: makePluginStore(dir, "aaa"),
+        }),
+        mkPlugin({
+          name: "bbb",
+          commands: [{ id: "bbb:hi", title: "Hi B", run: () => {} }],
+          store: makePluginStore(dir, "bbb"),
+        }),
+      ]);
+      const bGroup = h.model.pluginGroups().find((g) => g.header === "bbb")!;
+      const bKey = bGroup.rows.find((r) => r.label === "Hi B (key)")!;
+      if (bKey.kind !== "keybind") throw new Error("expected keybind row");
+      bKey.set(["ctrl+j"]); // owned by aaa:hi
+      expect(h.warns.length).toBe(1);
+      expect(h.warns[0]!.message).toContain("Hi A");
+      expect(bKey.get()).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a throwing plugin store degrades to toggle-only, other plugins intact", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const bad: LoadedPlugin = mkPlugin({
+        name: "bad",
+        rows: [{ kind: "action", label: "Bad row", run: () => {} }],
+        store: {
+          get: () => {
+            throw new Error("store-boom");
+          },
+          set: () => {
+            throw new Error("store-boom");
+          },
+          remove: () => {
+            throw new Error("store-boom");
+          },
+          keys: () => {
+            throw new Error("store-boom");
+          },
+          subscribe: () => () => {},
+        },
+      });
+      const good: LoadedPlugin = mkPlugin({
+        name: "good",
+        rows: [{ kind: "action", label: "Good row", run: () => {} }],
+        store: makePluginStore(dir, "good"),
+      });
+      const h = mk(() => [bad, good]);
+      const groups = h.model.pluginGroups();
+      expect(groups.map((g) => g.header)).toEqual(["add plugins", "bad", "good"]);
+      // bad plugin keeps its toggle (enabled=true fallback), rows still listed
+      // but toggle get/set never throw
+      const badToggle = groups.find((g) => g.header === "bad")!.rows[0]!;
+      if (badToggle.kind !== "toggle") throw new Error("expected toggle");
+      expect(() => badToggle.get()).not.toThrow();
+      expect(() => badToggle.set(false)).not.toThrow();
+      expect(h.warns.length).toBeGreaterThan(0);
+      expect(groups.find((g) => g.header === "good")!.rows.map((r) => r.label)).toEqual([
+        "enabled",
+        "Good row",
+        "Update from git",
+        "Remove…",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -203,6 +434,51 @@ describe("keybind rows", () => {
     h.config.keys.redo = ["ctrl+j"];
     const row = h.byLabel("redo (ctrl+shift+z works too)");
     expect(asKeybind(row).get()).toEqual(["ctrl+j"]);
+  });
+});
+
+describe("plugin installer rows", () => {
+  const asAction = (r: SettingRow): Extract<SettingRow, { kind: "action" }> => {
+    if (r.kind !== "action") throw new Error(`not an action: ${r.label}`);
+    return r;
+  };
+
+  test("installer + update/remove rows dispatch to the injected installer", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const h = mk(() => [mkPlugin({ name: "demo", store: makePluginStore(dir, "demo") })]);
+      const calls: string[] = [];
+      h.ctx.pluginInstall = {
+        addFromUrl: () => calls.push("add"),
+        openFolder: () => calls.push("open"),
+        update: (n) => calls.push(`update:${n}`),
+        remove: (n) => calls.push(`remove:${n}`),
+      };
+      const install = h.model.pluginGroups().find((g) => g.header === "add plugins")!;
+      for (const row of install.rows) asAction(row).run();
+      const demo = h.model.pluginGroups().find((g) => g.header === "demo")!;
+      for (const row of demo.rows.filter((r) => r.label === "Update from git" || r.label === "Remove…")) {
+        asAction(row).run();
+      }
+      expect(calls).toEqual(["add", "open", "update:demo", "remove:demo"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("installer rows render and no-op without an injected installer (never throw)", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
+    try {
+      const h = mk(() => [mkPlugin({ name: "demo", store: makePluginStore(dir, "demo") })]);
+      expect(h.ctx.pluginInstall).toBeUndefined();
+      const all = h.model.pluginGroups().flatMap((g) => g.rows);
+      for (const label of ["Add from git URL…", "Open plugins folder…", "Update from git", "Remove…"]) {
+        const row = all.find((r) => r.label === label)!;
+        expect(() => asAction(row).run()).not.toThrow();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

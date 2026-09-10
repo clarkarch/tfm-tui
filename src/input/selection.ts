@@ -33,6 +33,7 @@ export type SelectionCtx = {
   viewH(): number;
   rowHInit(): number;
   renderPreview(): void | Promise<void>;
+  onSelection?: (paths: string[]) => void;
 };
 
 export type Selection = ReturnType<typeof makeSelection>;
@@ -96,7 +97,19 @@ export const makeSelection = (ctx: SelectionCtx) => {
   };
 
   let selStatusGen = 0;
+  // last emitted selection (joined): rubber-band moves and rebuilds call
+  // updateSelectionStatusReal constantly with unchanged paths — plugins must
+  // not be spammed with identical events.
+  let lastEmittedSel = "";
   const updateSelectionStatusReal = (): void => {
+    try {
+      const paths = selPaths().map((s) => s.path);
+      const sig = paths.join("\0");
+      if (sig !== lastEmittedSel) {
+        lastEmittedSel = sig;
+        ctx.onSelection?.(paths);
+      }
+    } catch {}
     const gen = ++selStatusGen;
     const sel: { key: string; isDir: boolean }[] = [];
     tileRefs.forEach((r, k) => {

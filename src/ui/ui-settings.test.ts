@@ -77,7 +77,15 @@ let scrim: boolean;
 let cancelledBand: number;
 let warns: Array<[string, string | undefined]>;
 let groups: SettingGroup[];
+let plugGroups: SettingGroup[];
 let quitCalls: number;
+// icon names requested through the slot sink (the entry's icon choice is
+// observable here — the sink IS the seam, not fake bookkeeping)
+let requestedIcons: string[];
+// rescan hook: openMenu re-reads the plugins dir so added/removed plugins
+// reflect without a restart (code edits still need one — Bun module cache)
+let reloadImpl: () => Promise<unknown>;
+let reloadCalls: number;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: 90, height: TERM_H });
@@ -86,7 +94,13 @@ beforeAll(async () => {
   cancelledBand = 0;
   warns = [];
   groups = mkGroups();
+  plugGroups = [];
   quitCalls = 0;
+  requestedIcons = [];
+  reloadCalls = 0;
+  reloadImpl = async () => {
+    reloadCalls++;
+  };
   let iconSeq = 0;
 
   menu = makeEscMenu({
@@ -98,6 +112,7 @@ beforeAll(async () => {
     stripSelectable: () => {},
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
     makeIconSlot: (name: string, states: any, heightCells?: number, initialState?: number) => {
+      requestedIcons.push(name);
       const slotId = `slot-${iconSeq++}`;
       return {
         el: null,
@@ -116,6 +131,8 @@ beforeAll(async () => {
     uiStyle: () => "solid",
     menuW: () => 36,
     settingGroups: () => groups,
+    pluginGroups: () => plugGroups,
+    reloadPlugins: () => reloadImpl(),
     warn: (message, title) => {
       warns.push([message, title]);
     },
@@ -302,6 +319,104 @@ describe("keybind capture", () => {
     expect(menu.captureKey({ name: "escape", ctrl: false, shift: false, meta: false })).toBe(true);
     await t.renderOnce();
     expect((groups[0]!.rows.find((r) => r.kind === "keybind") as { get(): string[] }).get()).toEqual(binds);
+  });
+});
+
+describe("plugins view (separate from settings)", () => {
+  const openRoot = async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+  };
+
+  // hand-built groups (the toggle construction itself is pinned in
+  // settings-model.test — here the view only renders what it's given)
+  const helloGroup = (run: () => void): SettingGroup => ({
+    header: "hello",
+    rows: [
+      { kind: "toggle", label: "enabled", get: () => true, set: () => {} },
+      { kind: "action", label: "Say hello", run },
+    ],
+  });
+
+  test("root menu shows Plugins iff a plugin category exists", async () => {
+    plugGroups = [];
+    await openRoot();
+    expect(t.captureCharFrame()).not.toContain("Plugins");
+    plugGroups = [helloGroup(() => {})];
+    requestedIcons.length = 0;
+    await openRoot();
+    expect(t.captureCharFrame()).toContain("Plugins");
+    // F06A5 (md-power_plug) through the whole pipeline, not cog-box
+    expect(requestedIcons).toContain("power-plug");
+    expect(requestedIcons).not.toContain("cog-box");
+    plugGroups = [];
+  });
+
+  test("activating Plugins opens its own view rendering that plugin's rows", async () => {
+    plugGroups = [helloGroup(() => {})];
+    await openRoot();
+    menu.moveMenu(1); // root order: Settings, Plugins, Quit
+    menu.menuActivate();
+    await t.renderOnce();
+    const frame = t.captureCharFrame();
+    expect(frame).toContain("Say hello");
+    expect(frame).toContain("enabled"); // core-built on/off toggle, first row
+    expect(frame).toContain("Menu — plugins");
+    // core settings stay out of the plugins view
+    expect(frame).not.toContain("sidebar width");
+    plugGroups = [];
+  });
+
+  test("plugin action runs without closing the menu only when keepOpen", async () => {
+    let ran = 0;
+    plugGroups = [helloGroup(() => ran++)];
+    await openRoot();
+    menu.moveMenu(1);
+    menu.menuActivate();
+    await t.renderOnce();
+    menu.moveMenu(1); // rows: enabled toggle, then Say hello
+    menu.menuActivate(); // activates the "Say hello" row (no keepOpen -> closes)
+    expect(ran).toBe(1);
+    expect(floats.isOpen("escmenu")).toBe(false);
+    plugGroups = [];
+  });
+
+  test("openMenu rescans the plugins dir (adds/removes without restart)", async () => {
+    plugGroups = [];
+    reloadCalls = 0;
+    await openRoot();
+    expect(reloadCalls).toBe(1);
+    menu.closeMenu();
+    await t.renderOnce();
+    await openRoot();
+    expect(reloadCalls).toBe(2);
+    plugGroups = [];
+  });
+
+  test("rows arriving with the rescan render once it settles", async () => {
+    plugGroups = [];
+    let release!: () => void;
+    reloadImpl = () => new Promise<void>((r) => (release = r));
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    // rescan lands while the menu is open with new rows available
+    plugGroups = [helloGroup(() => {})];
+    release();
+    const deadline = Date.now() + 2000;
+    while (!t.captureCharFrame().includes("Plugins") && Date.now() < deadline) {
+      await t.renderOnce();
+    }
+    expect(t.captureCharFrame()).toContain("Plugins");
+    menu.closeMenu();
+    await t.renderOnce();
+    reloadImpl = async () => {
+      reloadCalls++;
+    };
+    plugGroups = [];
   });
 });
 

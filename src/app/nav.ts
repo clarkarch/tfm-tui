@@ -42,21 +42,31 @@ export type NavHooks = {
   // transient UI pointing at the old folder (fires on every path, even no-ops)
   exitPathEdit: () => void;
   closeFileMenuIfOpen: () => void;
+  // plugin event fan-out (optional; never throws into navigation)
+  onNavigate?: (dir: string) => void;
 };
 
 export const makeNav = (state: AppState, hooks: NavHooks) => {
   const canBack = () => state.histIdx > 0;
   const canFwd = () => state.histIdx < state.history.length - 1;
+  // history-button/back-key moves are navigations too — plugins watching
+  // navigate must see them, not just navigate() calls.
   const goBack = () => {
     if (canBack()) {
       state.histIdx--;
       hooks.renderAll();
+      try {
+        hooks.onNavigate?.(state.history[state.histIdx]!);
+      } catch {}
     }
   };
   const goFwd = () => {
     if (canFwd()) {
       state.histIdx++;
       hooks.renderAll();
+      try {
+        hooks.onNavigate?.(state.history[state.histIdx]!);
+      } catch {}
     }
   };
 
@@ -64,6 +74,12 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
     state.history = state.history.slice(0, state.histIdx + 1);
     state.history.push(dir);
     state.histIdx++;
+  };
+
+  const emitNavigate = (dir: string): void => {
+    try {
+      hooks.onNavigate?.(dir);
+    } catch {}
   };
 
   const navigate = (dir: string) => {
@@ -78,6 +94,7 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
       pushHistory(dir);
       hooks.clearSearch();
       hooks.renderAll();
+      emitNavigate(dir);
       return;
     }
     let target: string;
@@ -94,6 +111,7 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
     pushHistory(target);
     hooks.clearSearch();
     hooks.renderAll();
+    emitNavigate(target);
   };
 
   return { canBack, canFwd, goBack, goFwd, navigate };

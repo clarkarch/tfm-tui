@@ -64,6 +64,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
   ];
   const tabModel = { active: 1, list: [0, 1, 2] };
   const binds: Record<string, string[]> = structuredClone(defaultConfig.keys);
+  const pickState = { open: false };
 
   const ctx: KeyRouterCtx = {
     byId: () => undefined,
@@ -150,12 +151,18 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     setStatusMsg: (m) => calls.push(`setStatusMsg:${m}`),
     undoLast: rec("undo"),
     redoLast: rec("redo"),
+    pick: {
+      isOpen: () => pickState.open,
+      handleKey: (e) => {
+        calls.push(`pick:${e.name}`);
+      },
+    },
     ...over,
   };
   const router = makeKeyRouter(ctx);
   const key = (name: string, opts: { ctrl?: boolean; shift?: boolean; meta?: boolean } = {}): void =>
     router.handleKey({ name, ctrl: !!opts.ctrl, shift: !!opts.shift, meta: !!opts.meta });
-  return { router, ctx, calls, selection, places, tabModel, state, escMenuState, seedTiles, key, binds };
+  return { router, ctx, calls, selection, places, tabModel, state, escMenuState, seedTiles, key, binds, pickState };
 };
 
 // --- the modal precedence chain is load-bearing: quit > conflict > yes/no >
@@ -186,6 +193,21 @@ describe("precedence chain", () => {
     expect(h.calls).toEqual([]);
     h.key("escape");
     expect(h.calls).toEqual(["yesno:close"]);
+  });
+
+  test("prompt overlay delegates keys above pick (esc/typing reach it)", () => {
+    // the plugin git-URL prompt owns typing while open — grid keys (incl.
+    // type-to-search) must not fire underneath it, even over an open pick
+    const h = makeHarness({
+      prompt: {
+        isOpen: () => true,
+        handleKey: (e) => h.calls.push(`prompt:${e.name}`),
+      },
+    });
+    h.pickState.open = true;
+    h.key("g");
+    h.key("escape");
+    expect(h.calls).toEqual(["prompt:g", "prompt:escape"]);
   });
 
   test("inline rename swallows every key (esc/enter handled at the source)", () => {
@@ -708,5 +730,108 @@ describe("remappable action keys", () => {
     h.calls.length = 0;
     h.key("b", { ctrl: true });
     expect(h.calls).toEqual(["back"]);
+  });
+});
+
+describe("command table (everything is a command)", () => {
+  test("commands() covers every KeyAction (palette parity with keybinds)", async () => {
+    const h = makeHarness();
+    const { KEY_SCHEMA } = await import("../config/config-schema");
+    const ids = h.router.commands().map((c) => c.id);
+    for (const row of KEY_SCHEMA) {
+      expect(ids, `missing command for ${row.action}`).toContain(row.action);
+    }
+  });
+
+  test("command run() dispatches exactly like its keypress", () => {
+    const h = makeHarness();
+    const byId = (id: string) => h.router.commands().find((c) => c.id === id)!;
+    byId("quit").run();
+    byId("newTab").run();
+    byId("undo").run();
+    expect(h.calls).toEqual(["quit", "tab:new", "undo"]);
+  });
+
+  test("command hints reflect the live binds", () => {
+    const h = makeHarness();
+    const quit = h.router.commands().find((c) => c.id === "quit")!;
+    expect(quit.hint).toContain("ctrl+q");
+    h.binds.quit = ["ctrl+x", "ctrl+q"];
+    expect(h.router.commands().find((c) => c.id === "quit")!.hint).toBe("ctrl+x ctrl+q");
+  });
+
+  test("a true modal above pick keeps its keys (esc reaches the conflict)", () => {
+    // floats policy normally prevents coexistence, but a confirm opened over
+    // pick — or any open race — must not leave esc dead
+    const h = makeHarness({
+      conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) },
+    });
+    h.pickState.open = true;
+    h.key("escape");
+    expect(h.calls).toEqual(["conflict:close:skip"]);
+    h.calls.length = 0;
+    h.key("g");
+    expect(h.calls).toEqual([]);
+  });
+
+  test("open pick overlay swallows grid keys; esc delegates to it", () => {
+    const h = makeHarness();
+    h.key("g");
+    expect(h.calls).toContain("search:begin:g");
+    h.calls.length = 0;
+    h.pickState.open = true;
+    h.key("g");
+    h.key("escape");
+    expect(h.calls).toEqual(["pick:g", "pick:escape"]);
+  });
+});
+
+describe("plugin commands (keybinds)", () => {
+  test("plugin bind dispatches before type-to-search", () => {
+    const h = makeHarness({
+      pluginCommands: () => [{ id: "demo:hi", binds: ["ctrl+j"], run: () => h.calls.push("plugin:hi") }],
+    } as any);
+    h.calls.length = 0;
+    h.key("j", { ctrl: true });
+    expect(h.calls).toEqual(["plugin:hi"]);
+  });
+
+  test("async-rejecting plugin run is swallowed (no unhandled rejection)", async () => {
+    const h = makeHarness({
+      pluginCommands: () => [
+        {
+          id: "demo:slow",
+          binds: ["ctrl+j"],
+          run: async () => {
+            throw new Error("async-boom");
+          },
+        },
+      ],
+    } as any);
+    h.calls.length = 0;
+    expect(() => h.key("j", { ctrl: true })).not.toThrow();
+    await Bun.sleep(10);
+    expect(h.calls).toEqual([]);
+  });
+
+  test("core wins ties; throwing plugin run is swallowed", () => {
+    const h = makeHarness({
+      pluginCommands: () => [
+        { id: "demo:quit", binds: ["ctrl+q"], run: () => h.calls.push("plugin:quit") },
+        {
+          id: "demo:boom",
+          binds: ["ctrl+j"],
+          run: () => {
+            throw new Error("boom");
+          },
+        },
+      ],
+    } as any);
+    h.calls.length = 0;
+    h.key("q", { ctrl: true });
+    expect(h.calls).toEqual(["quit"]);
+    h.calls.length = 0;
+    expect(() => h.key("j", { ctrl: true })).not.toThrow();
+    expect(h.calls).toEqual([]);
   });
 });

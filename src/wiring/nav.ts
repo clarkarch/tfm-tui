@@ -13,6 +13,7 @@ import { makeTabs } from "../app/tabs";
 import { makeSearch } from "../input/search";
 import { appendLog } from "../app/log";
 import { xtShiftEscapeFrame } from "../ui/ui-term";
+import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, GridWiring } from "./types";
 
@@ -64,6 +65,7 @@ export const wireNav = (deps: {
   const quitApp = makeQuit({
     disableDrops: () => getDnd().disableDrops(),
     releaseShiftCapture: () => process.stdout.write(xtShiftEscapeFrame(false)),
+    onQuit: () => sharedPluginEvents().emit("quit", {}),
     closeTerminal: () => getTerm().closeTerminalPane(),
     flushSession: () => {
       if (!core.isVirtualCwd()) {
@@ -91,6 +93,7 @@ export const wireNav = (deps: {
     closeFileMenuIfOpen: () => {
       if (getChrome().menu.isFileMenuOpen()) getChrome().menu.closeFileMenu();
     },
+    onNavigate: (dir) => sharedPluginEvents().emit("navigate", { dir }),
   });
 
   // --- Tabs: `state` is always the ACTIVE tab's view; switching copies the

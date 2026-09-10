@@ -46,6 +46,57 @@ export const debounced = (ms: number, fn: () => void, sched: Scheduler = globalT
   };
 };
 
+// promise timeout with timer cleanup on BOTH paths: the timer that fires the
+// rejection must be cleared when the inner promise settles first, or every
+// call leaks a live handle that holds the event loop (the plugin
+// runDeactivate/activate races leaked one 5s timer per unload). Scheduler is
+// injectable like debounced so tests run on the virtual clock.
+export const withTimeout = <T>(promise: Promise<T>, ms: number, sched: Scheduler = globalThis): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const t = sched.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("timeout"));
+    }, ms);
+    promise.then(
+      (v) => {
+        if (settled) return;
+        settled = true;
+        sched.clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        if (settled) return;
+        settled = true;
+        sched.clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+
+// plugin-run guard: plugin run() closures are typed sync but may be async —
+// a sync try/catch misses rejections (unhandled rejection, no report). This
+// reports sync throws AND async rejections through `report`, never throws
+// itself (a throwing reporter is swallowed too).
+export const invokeIsolated = (thunk: () => unknown, report: (err: unknown) => void): void => {
+  const safeReport = (err: unknown): void => {
+    try {
+      report(err);
+    } catch {}
+  };
+  let r: unknown;
+  try {
+    r = thunk();
+  } catch (err) {
+    safeReport(err);
+    return;
+  }
+  if (r instanceof Promise) {
+    r.catch(safeReport);
+  }
+};
+
 // render-path guard: a throw inside one repaint step must not blank the pane
 // or kill the rest — log it (injected) and keep the other steps running
 

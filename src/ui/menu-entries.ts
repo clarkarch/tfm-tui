@@ -8,6 +8,8 @@ import { setBookmarked, loadSystemPlaces, type Place } from "../fs/places";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import type { ListEntry } from "./ui-menu";
 import type { ClipItem, GridTileRef } from "../input/grid-input";
+import type { LoadedPlugin, PluginFileMenuEntry } from "../plugins/plugin-api";
+import { invokeIsolated } from "../lib/uiutil";
 import type { SortMode } from "../lib/sort";
 export type { SortMode } from "../lib/sort";
 
@@ -39,6 +41,12 @@ export type MenuEntriesCtx = {
   cwd(): string;
   // state is a stable object ref — mutated in place by pick()
   sortState: { sortBy: SortMode; sortAsc: boolean };
+  // installed plugins (loader aggregates them; absent = no plugin section).
+  // fileMenu builders run with the selection-aware paths at menu-build time.
+  plugins?: () => LoadedPlugin[];
+  // runtime isolation: a throwing plugin run() must never break the menu's
+  // close path — reported once per invocation, menu stays intact.
+  onPluginError?: (pluginName: string, err: unknown) => void;
 };
 
 // "Paste" / "Paste 3 items" — shared by sidebar, file menu and empty-area menu
@@ -47,6 +55,97 @@ export const pasteLabel = (n: number, into = ""): string =>
 
 export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
   const trashFiles = (): string => path.join(trashDir(), "files");
+
+  // plugin menu sections: one entry list per installed plugin. A throwing
+  // builder or a malformed entry drops that plugin's section — never the menu
+  // (a throw after the panel started building would leave it half-rendered).
+  // A throwing run() still closes the menu first, then reports via
+  // onPluginError — the menu's close path never breaks.
+  const toListEntries = (
+    pluginName: string,
+    items: PluginFileMenuEntry[] | null | undefined,
+    paths: string[],
+  ): ListEntry[] => {
+    const out: ListEntry[] = [];
+    for (const e of items ?? []) {
+      if (!e || typeof e.label !== "string" || typeof e.run !== "function") continue;
+      const run = e.run;
+      const hint = typeof e.hint === "string" ? e.hint : undefined;
+      out.push({
+        label: e.label,
+        ...(hint ? { hint } : {}),
+        action: () => {
+          ctx.closeFileMenu();
+          // invokeIsolated: plugin run() may be async (typed sync) — sync
+          // try/catch alone would leave rejections unhandled and unreported.
+          invokeIsolated(
+            () => run(paths),
+            (err) => ctx.onPluginError?.(pluginName, err),
+          );
+        },
+      });
+    }
+    return out;
+  };
+
+  const pluginEntriesFor = (targets: ClipItem[]): ListEntry[] => {
+    const paths = targets.map((t) => t.path);
+    const out: ListEntry[] = [];
+    for (const p of ctx.plugins?.() ?? []) {
+      if (!p.fileMenu) continue;
+      try {
+        out.push(...toListEntries(p.name, p.fileMenu({ paths }), paths));
+      } catch {}
+    }
+    return out;
+  };
+
+  const pluginSidebarFor = (place: { path?: string | null; scheme?: string }): ListEntry[] => {
+    const paths = place.path ? [place.path] : [];
+    const out: ListEntry[] = [];
+    for (const p of ctx.plugins?.() ?? []) {
+      if (!p.sidebarMenu) continue;
+      try {
+        out.push(...toListEntries(p.name, p.sidebarMenu({ path: place.path, scheme: place.scheme }), paths));
+      } catch {}
+    }
+    return out;
+  };
+
+  const pluginEmptyFor = (cwd: string): ListEntry[] => {
+    const out: ListEntry[] = [];
+    for (const p of ctx.plugins?.() ?? []) {
+      if (!p.emptyAreaMenu) continue;
+      try {
+        out.push(...toListEntries(p.name, p.emptyAreaMenu({ cwd }), [cwd]));
+      } catch {}
+    }
+    return out;
+  };
+
+  const withPluginSection = (entries: ListEntry[], targets: ClipItem[]): ListEntry[] => {
+    const extra = pluginEntriesFor(targets);
+    if (!extra.length) return entries;
+    entries.push({ sep: true, label: "", action: () => {} }, ...extra);
+    return entries;
+  };
+
+  const withSidebarPluginSection = (
+    entries: ListEntry[],
+    place: { path?: string | null; scheme?: string },
+  ): ListEntry[] => {
+    const extra = pluginSidebarFor(place);
+    if (!extra.length) return entries;
+    entries.push({ sep: true, label: "", action: () => {} }, ...extra);
+    return entries;
+  };
+
+  const withEmptyPluginSection = (entries: ListEntry[], cwd: string): ListEntry[] => {
+    const extra = pluginEmptyFor(cwd);
+    if (!extra.length) return entries;
+    entries.push({ sep: true, label: "", action: () => {} }, ...extra);
+    return entries;
+  };
 
   const selectAllEntry = (): ListEntry => ({
     icon: "select-all",
@@ -134,7 +233,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       });
     }
-    return entries;
+    return withSidebarPluginSection(entries, { path: place.path, scheme: place.scheme });
   };
 
   const fileEntriesFor = (targetPath: string, isDir: boolean, _x: number, _y: number): ListEntry[] => {
@@ -170,7 +269,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         },
       );
-      return entries;
+      return withPluginSection(entries, targets);
     }
     if (isDir)
       entries.push({
@@ -249,7 +348,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         ctx.openProperties(inSel && targets.length > 1 ? targets.map((t) => t.path) : targetPath);
       },
     });
-    return entries;
+    return withPluginSection(entries, targets);
   };
 
   const sortEntries = (): ListEntry[] => {
@@ -294,12 +393,12 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       });
       entries.push(selectAllEntry());
-      return entries;
+      return withEmptyPluginSection(entries, ctx.cwd());
     }
     if (isVirtualUri(ctx.cwd())) {
       // read-only virtual views: nothing to paste or create here
       entries.push(selectAllEntry());
-      return entries;
+      return withEmptyPluginSection(entries, ctx.cwd());
     }
     entries.push(
       {
@@ -346,7 +445,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
     );
-    return entries;
+    return withEmptyPluginSection(entries, ctx.cwd());
   };
 
   return { sidebarEntriesFor, fileEntriesFor, sortEntries, emptyAreaEntries };

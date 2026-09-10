@@ -48,6 +48,13 @@ export type EscMenuCtx = {
   // root-view width — same value the context menu uses (MENU_W in ./ui-menu)
   menuW(): number;
   settingGroups(): SettingGroup[];
+  // plugin-contributed groups for the DEDICATED Plugins view (separate from
+  // settings — plugins add, never modify core rows). Empty without plugins.
+  pluginGroups(): SettingGroup[];
+  // rescan the plugins dir (adds/removes/edits without restart — edits
+  // hot-reload via hashed staging). Never rejects — the loader isolates per
+  // plugin.
+  reloadPlugins(): Promise<unknown>;
   // conflict/rejection toasts for the keybind capture flow (wired to notify)
   warn(message: string, title?: string): void;
   // open/close orchestration + the dismiss-others policy live in ./floats
@@ -59,7 +66,7 @@ export type EscMenuCtx = {
 
 export const makeEscMenu = (ctx: EscMenuCtx) => {
   let menuOpen = false;
-  let menuView: "root" | "settings" = "root";
+  let menuView: "root" | "settings" | "plugins" = "root";
   // panel cursor state — rendered by ./ui-settings-panel, mutated by the ops here
   const st: SettingsPanelState = {
     catIdx: 0,
@@ -70,8 +77,23 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     capturing: null,
   };
 
-  const groups = (): SettingGroup[] => ctx.settingGroups();
+  // settings and plugins views share the panel renderer; the plugins view
+  // only sees plugin groups (a plugin can never inject rows into settings)
+  const groups = (): SettingGroup[] => (menuView === "plugins" ? ctx.pluginGroups() : ctx.settingGroups());
   const rowsOf = (gi: number): SettingRow[] => groups()[gi]?.rows ?? [];
+  // every keyboard/panel op below branches root vs panel — never on a single view
+  const inPanelView = (): boolean => menuView !== "root";
+
+  // root <-> panel-view transitions reset the shared cursor state (same reset
+  // Settings always did — the panel is rebuilt fresh for either view)
+  const enterView = (view: "settings" | "plugins"): void => {
+    menuView = view;
+    st.catIdx = 0;
+    st.menuIdx = 0;
+    st.pane = "rows";
+    st.scrollOff = 0;
+    renderMenuContent();
+  };
 
   const rootMenuItems = (): {
     icon: string;
@@ -86,15 +108,20 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       // stays open: the action switches the menu to the settings view; closing
       // first would destroy the scrim/panel the view renders into
       keepOpen: true,
-      action: () => {
-        menuView = "settings";
-        st.catIdx = 0;
-        st.menuIdx = 0;
-        st.pane = "rows";
-        st.scrollOff = 0;
-        renderMenuContent();
-      },
+      action: () => enterView("settings"),
     },
+    // plugins get their OWN view (same panel UI, separate entry) — and only
+    // when at least one plugin contributes rows
+    ...(ctx.pluginGroups().length
+      ? [
+          {
+            icon: "power-plug",
+            label: "Plugins",
+            keepOpen: true,
+            action: () => enterView("plugins"),
+          },
+        ]
+      : []),
     {
       icon: "power",
       label: "Quit",
@@ -115,7 +142,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const visibleRows = (): number => settingsVisRows(ctx.renderer().terminalHeight);
 
   const adjustSelectedSetting = (dir: number): void => {
-    if (menuView !== "settings") return;
+    if (!inPanelView()) return;
     if (st.pane === "cats") {
       switchCategory(st.catIdx + dir);
       return;
@@ -230,21 +257,36 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       return;
     }
     if (row.kind === "action") {
+      // runtime isolation: a throwing plugin row must never break the
+      // menu's close path — the menu still closes, the error is logged.
       if (row.keepOpen) {
-        row.run();
+        try {
+          row.run();
+        } catch (err) {
+          ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+        }
         renderMenuContent();
       } else {
         closeMenu();
-        row.run();
+        try {
+          row.run();
+        } catch (err) {
+          ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+        }
       }
       return;
     }
-    applyAdjust(row, 1);
+    try {
+      applyAdjust(row, 1);
+    } catch (err) {
+      ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+      return;
+    }
     afterAdjust(rowIdx, row);
   };
 
   const menuActivate = () => {
-    if (menuView === "settings") {
+    if (inPanelView()) {
       if (st.pane === "cats") {
         switchCategory(st.catIdx);
         return;
@@ -264,7 +306,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const menuTab = (): void => {
-    if (menuView !== "settings" || st.capturing !== null) return;
+    if (!inPanelView() || st.capturing !== null) return;
     st.pane = st.pane === "cats" ? "rows" : "cats";
     renderMenuContent();
   };
@@ -290,7 +332,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (!panel) return;
     ctx.clearChildren(panel);
     try {
-      buildMenuContent(c, panel, isSettingsView());
+      buildMenuContent(c, panel, menuView);
       retryArmed = true; // a successful build re-arms the one-shot retry
     } catch (err) {
       logRenderFailure(err);
@@ -317,11 +359,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.log?.(`esc-menu render failed: ${err}`);
   };
 
-  const isSettingsView = (): boolean => menuView === "settings";
-
-  const buildMenuContent = (c: Theme, panel: any, isSettings: boolean) => {
+  const buildMenuContent = (c: Theme, panel: any, view: "root" | "settings" | "plugins") => {
     menuC = c;
-    const panelW = isSettings ? SETTINGS_W : ctx.menuW();
+    const panelView = view !== "root";
+    const panelW = panelView ? SETTINGS_W : ctx.menuW();
     try {
       panel.width = panelW;
     } catch {}
@@ -329,7 +370,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     panel.add(
       Box(
         { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-        Text({ content: isSettings ? "Menu — settings" : "Menu", fg: c.accent }),
+        Text({
+          content: view === "plugins" ? "Menu — plugins" : view === "settings" ? "Menu — settings" : "Menu",
+          fg: c.accent,
+        }),
         Box({ flexGrow: 1 }),
         ctx.escHintBtn("tfm-esc-menu", closeMenu),
       ),
@@ -341,7 +385,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       ),
     );
 
-    if (!isSettings) {
+    if (!panelView) {
       const hoverSelect = (index: number) => () => {
         if (st.menuIdx !== index) {
           st.menuIdx = index;
@@ -490,6 +534,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       }),
     );
     ctx.renderer().root.add(scrim);
+    // rescan the plugins dir on every open (the scan itself never rejects —
+    // the loader isolates per plugin): added/removed plugins render once it
+    // settles if the menu is still up; edited code still needs a restart
+    void ctx.reloadPlugins().then(() => {
+      if (menuOpen) renderMenuContent();
+    });
     renderMenuContent();
   };
 
@@ -498,7 +548,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const moveMenu = (delta: number) => {
-    if (menuView !== "settings") {
+    if (!inPanelView()) {
       const count = rootMenuItems().length;
       st.menuIdx = (st.menuIdx + delta + count) % count;
       renderMenuContent();

@@ -6,6 +6,7 @@
 
 import { makeSelection } from "../input/selection";
 import { makeRename } from "../ui/ui-rename";
+import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring } from "./types";
 
@@ -28,6 +29,7 @@ export const wireGridFoundation = (deps: {
     viewH: () => chrome.renderer.terminalHeight - 3,
     rowHInit: () => core.geometry.tileH,
     renderPreview: () => getGrid().renderPreview(),
+    onSelection: (paths) => sharedPluginEvents().emit("selection", { paths }),
   });
 
   // --- inline rename/create: widget + state live in ./ui-rename ---

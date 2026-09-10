@@ -59,6 +59,8 @@ const CAT_ICONS: Record<string, string> = {
   behavior: "clock",
   keybindings: "pencil",
   config: "file-document",
+  // installer category (verified F0415 glyph + assets/icons/plus.svg — no new asset)
+  "add plugins": "plus",
 };
 
 export const ensureVisible = (st: SettingsPanelState, vis: number): void => {

@@ -20,6 +20,7 @@ export const glyph: Record<string, string> = {
   "desktop-tower": "\u{F01C5}",
   cog: "\u{F0493}",
   power: "\u{F0425}",
+  "power-plug": "\u{F06A5}",
   eye: "\u{F0208}",
   "eye-off": "\u{F0209}",
   "content-copy": "\u{F018F}",

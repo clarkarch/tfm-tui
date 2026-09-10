@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Text } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
-import { makeNotify, truncateToastText, type NotifyCtx } from "./notify";
+import { MAX_TOAST_LINES, makeNotify, truncateToastText, wrapToastText, type NotifyCtx } from "./notify";
 import { makeProgress } from "./ui-progress";
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {
@@ -45,6 +45,27 @@ describe("truncateToastText", () => {
   });
 });
 
+describe("wrapToastText", () => {
+  test("short text stays one line; words wrap greedily within budget", () => {
+    expect(wrapToastText("abc", 5)).toEqual(["abc"]);
+    expect(wrapToastText("aa bb cc", 5)).toEqual(["aa bb", "cc"]);
+    expect(wrapToastText("", 5)).toEqual([""]);
+  });
+
+  test("space-less runs hard-slice (URLs never push one giant line)", () => {
+    expect(wrapToastText("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
+  });
+
+  test("overflow past the cap folds into a visible ellipsis, never a silent cut", () => {
+    const lines = wrapToastText("one two three four five six", 7, 2);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]!.endsWith("…")).toBe(true);
+    expect(lines[1]!.length).toBeLessThanOrEqual(7);
+    // default cap applies without the arg
+    expect(wrapToastText(Array.from({ length: 20 }, (_, i) => `w${i}`).join(" "), 10)).toHaveLength(MAX_TOAST_LINES);
+  });
+});
+
 describe("notify stacking", () => {
   test("consecutive toasts stack at increasing y, never the same slot", async () => {
     const { ctx, nodes, removed } = makeFake();
@@ -57,6 +78,16 @@ describe("notify stacking", () => {
     await settleUntil(() => removed.length >= 2);
     expect(removed).toContain("tfm-toast-1");
     expect(removed).toContain("tfm-toast-2");
+  });
+
+  test("long warnings wrap over rows instead of one truncated line", async () => {
+    const { ctx, nodes } = makeFake();
+    const { notify } = makeNotify(ctx);
+    // 33-char budget: three rows (title + 3) — the follower tiles below all of it
+    notify("clone failed: Repository not found on this remote host today ok");
+    expect(nodes.get("tfm-toast-1").top).toBe(1);
+    notify("next");
+    expect(nodes.get("tfm-toast-2").top).toBe(1 + 4 + 1);
   });
 
   test("sticky toasts never auto-dismiss; close() fades out and reflows", async () => {

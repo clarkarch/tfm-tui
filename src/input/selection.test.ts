@@ -273,6 +273,28 @@ describe("updateSelectionStatusReal", () => {
     }
   });
 
+  test("onSelection fires on change and dedupes repeats (rubber-band spam)", () => {
+    const h = makeHarness();
+    const seen: string[][] = [];
+    (h.ctx as { onSelection?: (paths: string[]) => void }).onSelection = (paths) => seen.push(paths);
+    h.addTile("/a");
+    h.sel.setFocusKeys(["/a"]);
+    h.sel.selectTileAt(0);
+    h.sel.updateSelectionStatusReal();
+    expect(seen).toEqual([["/a"]]);
+    // rebuilds/rubber-band moves re-call with unchanged paths — silent
+    h.sel.updateSelectionStatusReal();
+    h.sel.updateSelectionStatusReal();
+    expect(seen).toEqual([["/a"]]);
+    // real changes fire (selectTileAt clears first — the empty intermediate
+    // is a genuine change, not spam)
+    h.addTile("/b");
+    h.sel.setFocusKeys(["/a", "/b"]);
+    h.sel.selectTileAt(1);
+    h.sel.updateSelectionStatusReal();
+    expect(seen).toEqual([["/a"], [], ["/b"]]);
+  });
+
   test("a newer status request wins over a still-in-flight older one", async () => {
     const h = makeHarness();
     h.nodes.set("tfm-status-label", { id: "tfm-status-label", content: "" });

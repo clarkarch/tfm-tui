@@ -22,13 +22,47 @@ export type ToastHandle = { id: number; nodeId: string; close: () => void };
 
 // one width for every toast (plain notifies AND the progress toast) —
 // content-sized widths left the stack with zigzag edges on both sides.
-// 36 fits typical summaries untruncated; longer failure lines ellipsize
-// (the full text always persists on the status bar).
+// Messages word-wrap up to MAX_TOAST_LINES rows (the stack already tiles
+// mixed heights); only beyond that does the last line ellipsize. Titles
+// stay one truncated line.
 export const TOAST_W = 36;
+export const MAX_TOAST_LINES = 3;
 
 // truncate with an ellipsis instead of a hard cut
 export const truncateToastText = (s: string, budget: number): string =>
   s.length > budget ? `${s.slice(0, Math.max(0, budget - 1))}…` : s;
+
+// greedy word wrap with hard-slicing for space-less runs (URLs, hashes).
+// Always returns ≥1 line; overflow past maxLines folds into an ellipsis on
+// the last kept line so the cut is visible, never silent.
+export const wrapToastText = (s: string, budget: number, maxLines: number = MAX_TOAST_LINES): string[] => {
+  const chunks: string[] = [];
+  for (const word of s.split(/\s+/).filter(Boolean)) {
+    let rest = word;
+    while (rest.length > budget) {
+      chunks.push(rest.slice(0, budget));
+      rest = rest.slice(budget);
+    }
+    if (rest) chunks.push(rest);
+  }
+  if (!chunks.length) return [""];
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of chunks) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length <= budget) cur = next;
+    else {
+      lines.push(cur);
+      cur = w;
+    }
+  }
+  if (cur) lines.push(cur);
+  if (lines.length <= maxLines) return lines;
+  const kept = lines.slice(0, maxLines);
+  const tail = `${kept[maxLines - 1]!}…`;
+  kept[maxLines - 1] = tail.length > budget ? truncateToastText(tail, budget) : tail;
+  return kept;
+};
 
 type ToastEntry = { id: number; nodeId: string; height: number; sticky: boolean; timer: any };
 
@@ -182,12 +216,15 @@ export const makeNotify = (
   return {
     notify(message, title = "tfm") {
       const w = TOAST_W;
+      const lines = wrapToastText(message, w - 3);
       pushToast(
         w,
-        3,
+        // short messages keep the classic 3-row shape (title + line + air);
+        // longer ones grow instead of truncating
+        Math.max(3, 1 + lines.length),
         [
           Text({ content: truncateToastText(title, w - 3), fg: ctx.white() }),
-          Text({ content: truncateToastText(message, w - 3), fg: ctx.sidebarFgMuted() }),
+          ...lines.map((line) => Text({ content: line, fg: ctx.sidebarFgMuted() })),
         ],
         false,
       );

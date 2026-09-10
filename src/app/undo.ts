@@ -62,6 +62,9 @@ export type UndoSink = {
   setStatusMsg: (msg: string) => void;
   notify: (message: string, title?: string) => void;
   renderAll: () => void;
+  // plugin event fan-out: fires ONLY on an actual pop (empty stacks and the
+  // in-flight guard are silent no-ops, never events). Never throws into undo.
+  onEvent?: (op: "undo" | "redo", label: string) => void;
 };
 
 export const MAX_UNDO_BATCHES = 30;
@@ -152,6 +155,12 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     onChange();
   };
 
+  const emit = (op: "undo" | "redo", label: string): void => {
+    try {
+      sink.onEvent?.(op, label);
+    } catch {}
+  };
+
   const undoLast = (): void => {
     if (running) return; // in-flight fs closures must not interleave
     const entry = undoStack.pop();
@@ -159,6 +168,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
       sink.setStatusMsg("Nothing to undo");
       return;
     }
+    emit("undo", entry.batch.label);
     running = true;
     void (async () => {
       try {
@@ -195,6 +205,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
       sink.setStatusMsg("Nothing to redo");
       return;
     }
+    emit("redo", entry.batch.label);
     running = true;
     void (async () => {
       try {
