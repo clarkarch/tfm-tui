@@ -213,6 +213,7 @@ export const wireGrid = (deps: {
     setClipboard: fileops.fileops.setClipboard,
     startInlineRename: rename.startInlineRename,
     startInlineCreate: rename.startInlineCreate,
+    startBulkRename: gridFoundation.startBulkRename,
     trashPaths: fileops.trash.trashPaths,
     restoreFromTrash: fileops.trash.restoreFromTrash,
     openProperties: props.openProperties,

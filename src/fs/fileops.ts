@@ -391,6 +391,63 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     }
   };
 
+  // bulk rename: pairs come from the planner in ./bulk-rename (no collisions,
+  // no swaps), so plain sequential renames are safe and the whole batch is ONE
+  // undo step. A vanished source or fs error counts per pair; the rest land.
+  const performBulkRename = async (pairs: Array<{ from: string; to: string }>): Promise<void> => {
+    if (!pairs.length) {
+      ctx.setStatusMsg("Nothing to rename");
+      return;
+    }
+    const units: UndoUnit[] = [];
+    const redos: UndoUnit[] = [];
+    const dUnits: UndoStep[] = [];
+    const dRedos: UndoStep[] = [];
+    let ok = 0;
+    let failed = 0;
+    const failWhy = new Set<string>();
+    for (const { from, to } of pairs) {
+      try {
+        if (!existsSync(from)) {
+          failed++;
+          failWhy.add("source gone");
+          continue;
+        }
+        await fsRename(from, to);
+        units.push(() => fsRename(to, from));
+        dUnits.push({ op: "rename", from: to, to: from });
+        redos.push(async () => {
+          try {
+            if (existsSync(from) && !existsSync(to)) await fsRename(from, to);
+          } catch (err) {
+            ctx.log(`redo rename ${to}: ${fsErrText(err)}`);
+          }
+        });
+        dRedos.push({ op: "rename-if", from, to });
+        ok++;
+      } catch (err) {
+        failed++;
+        failWhy.add(fsErrText(err));
+      }
+    }
+    ctx.pushUndoBatch(`rename ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });
+    ctx.renderAll();
+    const bits = [`Renamed ${ok} item${ok === 1 ? "" : "s"}`];
+    if (failed) bits.push(failSuffix(failed, failWhy));
+    if (ok) bits.push("ctrl+z to undo");
+    const msg = bits.join(" · ");
+    ctx.setStatusMsg(msg);
+    ctx.notify(msg, failed ? "rename failed" : "rename");
+    try {
+      ctx.onFileOp?.(
+        "rename",
+        pairs.map((p) => p.from),
+        undefined,
+        { cancelled: false, failed },
+      );
+    } catch {}
+  };
+
   // --- internal clipboard (cut/copy pending items) ---
   let clipboard: { mode: "copy" | "cut"; items: ClipItem[] } | null = null;
 
@@ -486,6 +543,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   return {
     runTransfer,
     performRename,
+    performBulkRename,
     setClipboard,
     pasteSmart,
     moveInto,

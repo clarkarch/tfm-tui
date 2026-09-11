@@ -59,7 +59,7 @@ Dev: `bun run --watch src/index.ts`. Launch anywhere with `tfm ~/some/path`.
 |---|---|
 | type anywhere | live search · `enter` opens first match · `esc` cancels |
 | `enter` | open |
-| `f2` | rename (restore in trash) |
+| `f2` | rename — bulk rename when multiple selected (restore in trash) |
 | `backspace` | parent directory |
 | `alt+left` / `alt+right` | back / forward in history |
 | `esc` | open the esc menu (settings, view mode, sort, …) |

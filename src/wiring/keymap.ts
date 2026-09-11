@@ -1,5 +1,5 @@
 // --- Keyboard wiring: the modal precedence chain router lives in ./keymap
-// (capture > quit > overlay-modals (prompt/conflict/yes-no/rename/props) >
+// (capture > quit > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/props) >
 // pick > esc-menu > terminal > path-edit > file menu > search > sidebar >
 // grid > actions — mirrored from its header) + sidebar kb-focus state + the
 // generic pick overlay widget (api.ui.pick primitive) and the single-line
@@ -88,6 +88,10 @@ export const wireKeymap = (deps: {
     },
     yesNo: { isOpen: () => floats.isOpen("yesno"), close: () => fileops.yesNo.close() },
     isRenaming: gridFoundation.rename.isRenaming,
+    bulkRename: {
+      isOpen: () => floats.isOpen("bulkrename"),
+      handleKey: (ev) => gridFoundation.bulkRename.handleKey(ev),
+    },
     propsIsOpen: () => floats.isOpen("props"),
     closeProps: grid.props.closeProps,
     escMenu: { ...settings.escMenu, isOpen: () => floats.isOpen("escmenu") },
@@ -124,6 +128,7 @@ export const wireKeymap = (deps: {
     restoreFromTrash: fileops.trash.restoreFromTrash,
     startInlineRename: gridFoundation.rename.startInlineRename,
     startInlineCreate: gridFoundation.rename.startInlineCreate,
+    startBulkRename: gridFoundation.startBulkRename,
     openProperties: grid.props.openProperties,
     enterPathEdit: chrome.toolbar.enterPathEdit,
     openTerminal: () => fileops.terminal.openTerminalHere(),

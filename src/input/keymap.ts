@@ -1,5 +1,5 @@
 // --- Keyboard router: ONE keypress entry point with a strict precedence
-// chain — capture > quit > overlay-modals (prompt/conflict/yes-no/rename/
+// chain — capture > quit > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/
 // props, which keep their keys even above an open pick) > pick > esc-menu >
 // terminal > path-edit > file menu > search > sidebar > grid > actions.
 // Action keys are remappable via config [keys] (see config-schema.ts);
@@ -52,6 +52,9 @@ export type KeyRouterCtx = {
   // single-line prompt overlay (plugin git-URL entry): same Input-native
   // typing rule. Optional so older fakes read as closed; wiring always sets it.
   prompt?: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void };
+  // bulk-rename modal (F2 on a multi-selection): the focused Textarea owns
+  // typing; esc cancels, alt+enter submits natively
+  bulkRename: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void };
   escMenu: {
     isOpen(): boolean;
     closeMenu(): void;
@@ -104,6 +107,7 @@ export type KeyRouterCtx = {
   restoreFromTrash(paths: string[]): Promise<void>;
   startInlineRename(p: string): void;
   startInlineCreate(kind: "file" | "folder"): void;
+  startBulkRename(paths: string[]): void;
   openProperties(paths: string[]): void;
   enterPathEdit(): void;
   openTerminal(): void;
@@ -187,9 +191,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   // --- Precedence stages below: each returns true when it consumes the event.
-  // Order is load-bearing (capture > quit > prompt > conflict > yes/no >
-  // rename > props > esc-menu > terminal > path-edit > file menu > search >
-  // sidebar > grid > actions) — do not reorder; mirrors the module header. ---
+  // Order is load-bearing (capture > quit > prompt > bulk-rename > conflict >
+  // yes/no > rename > props > esc-menu > terminal > path-edit > file menu >
+  // search > sidebar > grid > actions) — do not reorder; mirrors the module
+  // header. ---
 
   // Modal layers swallow everything while open (mostly mouse-driven dialogs).
   // true modals that keep their keys even above the pick overlay: floats
@@ -201,6 +206,12 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // router just delegates keys and swallows the rest
     if (ctx.prompt?.isOpen()) {
       ctx.prompt.handleKey(ev);
+      return true;
+    }
+    // bulk-rename modal: Textarea owns typing, esc closes (alt+enter reaches
+    // the textarea's native submit binding through the same dispatch)
+    if (ctx.bulkRename.isOpen()) {
+      ctx.bulkRename.handleKey(ev);
       return true;
     }
     // override/conflict modal: esc = skip, everything else swallowed
@@ -494,13 +505,19 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
   const doRenameOrRestore = (): void => {
     const selected = selection.selPaths();
-    if (selected.length !== 1 || !selected[0]) return;
-    // in the trash rename restores instead
+    if (!selected.length) return;
+    // in the trash rename restores instead — single-only (bulk rename is an
+    // fs rename, not a trashinfo restore)
     if (ctx.inTrashView()) {
-      ctx.restoreFromTrash(selected.map((item) => item.path));
+      if (selected.length === 1) ctx.restoreFromTrash(selected.map((item) => item.path));
       return;
     }
-    ctx.startInlineRename(selected[0].path);
+    if (selected.length > 1) {
+      ctx.startBulkRename(selected.map((item) => item.path));
+      return;
+    }
+    const only = selected[0];
+    if (only) ctx.startInlineRename(only.path);
   };
   const doCopy = (): void => {
     const selected = selection.selPaths();
@@ -718,7 +735,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       doTrash();
       return;
     }
-    if (hit(ev, "renameOrRestore") && selected.length === 1 && selected[0]) {
+    if (hit(ev, "renameOrRestore") && selected.length) {
       doRenameOrRestore();
       return;
     }

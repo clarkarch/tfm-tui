@@ -33,6 +33,7 @@ export type MenuEntriesCtx = {
   setClipboard(mode: "copy" | "cut", items: ClipItem[]): void;
   startInlineRename(key: string): void;
   startInlineCreate(kind: "file" | "folder"): void;
+  startBulkRename(paths: string[]): void;
   trashPaths(paths: string[]): Promise<void>;
   restoreFromTrash(paths: string[]): Promise<void>;
   openProperties(p: string | string[]): void;
@@ -324,10 +325,11 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         : []),
       {
         icon: "pencil",
-        label: "Rename…",
+        label: targets.length > 1 ? `Rename ${targets.length} items…` : "Rename…",
         action: () => {
           ctx.closeFileMenu();
-          ctx.startInlineRename(targetPath);
+          if (targets.length > 1) ctx.startBulkRename(targets.map((t) => t.path));
+          else ctx.startInlineRename(targetPath);
         },
       },
       {

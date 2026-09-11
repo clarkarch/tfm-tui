@@ -66,6 +66,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
   const tabModel = { active: 1, list: [0, 1, 2] };
   const binds: Record<string, string[]> = structuredClone(defaultConfig.keys);
   const pickState = { open: false };
+  const bulkState = { open: false };
 
   const ctx: KeyRouterCtx = {
     byId: () => undefined,
@@ -140,6 +141,11 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     },
     startInlineRename: (p) => calls.push(`rename:${p}`),
     startInlineCreate: (k) => calls.push(`create:${k}`),
+    startBulkRename: (ps) => calls.push(`bulkopen:${ps.join(",")}`),
+    bulkRename: {
+      isOpen: () => bulkState.open,
+      handleKey: (e) => calls.push(`bulk:${e.name}`),
+    },
     openProperties: (ps) => calls.push(`props:${ps.join(",")}`),
     enterPathEdit: rec("pathedit:enter"),
     openTerminal: rec("term:open"),
@@ -163,7 +169,21 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
   const router = makeKeyRouter(ctx);
   const key = (name: string, opts: { ctrl?: boolean; shift?: boolean; meta?: boolean } = {}): void =>
     router.handleKey({ name, ctrl: !!opts.ctrl, shift: !!opts.shift, meta: !!opts.meta });
-  return { router, ctx, calls, selection, places, tabModel, state, escMenuState, seedTiles, key, binds, pickState };
+  return {
+    router,
+    ctx,
+    calls,
+    selection,
+    places,
+    tabModel,
+    state,
+    escMenuState,
+    seedTiles,
+    key,
+    binds,
+    pickState,
+    bulkState,
+  };
 };
 
 // --- the modal precedence chain is load-bearing: quit > conflict > yes/no >
@@ -209,6 +229,16 @@ describe("precedence chain", () => {
     h.key("g");
     h.key("escape");
     expect(h.calls).toEqual(["prompt:g", "prompt:escape"]);
+  });
+
+  test("bulk-rename modal swallows every key (the textarea owns typing)", () => {
+    const h = makeHarness();
+    h.bulkState.open = true;
+    h.key("escape");
+    h.key("down");
+    h.key("g");
+    h.key("a", { ctrl: true });
+    expect(h.calls).toEqual(["bulk:escape", "bulk:down", "bulk:g", "bulk:a"]);
   });
 
   test("inline rename swallows every key (esc/enter handled at the source)", () => {
@@ -559,6 +589,20 @@ describe("file operation keys", () => {
     h2.key("down");
     h2.key("f2");
     expect(h2.calls).toEqual(["restore:a.txt"]);
+  });
+
+  test("f2 on a multi-selection opens bulk rename with every selected path", () => {
+    const h = makeHarness();
+    h.key("a", { ctrl: true });
+    h.key("f2");
+    expect(h.calls).toEqual(["bulkopen:a.txt,b.txt,c.txt,d.txt"]);
+  });
+
+  test("multi-selection f2 in the trash view is a no-op (restore stays single)", () => {
+    const h = makeHarness({ inTrashView: () => true });
+    h.key("a", { ctrl: true });
+    h.key("f2");
+    expect(h.calls).toEqual([]);
   });
 
   test("ctrl+c / ctrl+x put items on the clipboard; ctrl+v pastes", () => {

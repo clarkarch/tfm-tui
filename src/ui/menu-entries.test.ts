@@ -61,6 +61,7 @@ const baseCtx = (): MenuEntriesCtx & {
     setClipboard: (m, items) => calls.push(`clip:${m}:${items.length}`),
     startInlineRename: (k) => calls.push(`rename:${k}`),
     startInlineCreate: (k) => calls.push(`create:${k}`),
+    startBulkRename: (ps) => calls.push(`bulkrename:${ps.join(",")}`),
     trashPaths: (ps) => {
       calls.push(`trash:${ps.join(",")}`);
       return Promise.resolve();
@@ -131,6 +132,24 @@ describe("fileEntriesFor", () => {
     expect(ctx.calls).toContain("clip:cut:2");
     trash!.action();
     expect(ctx.calls).toContain("trash:/a,/b");
+  });
+
+  test("rename opens bulk rename for a multi-selection, inline for one", () => {
+    const ctx = baseCtx();
+    ctx.tileRefs = new Map<string, GridTileRef>([["/a", { selected: true, isDir: false }]]);
+    ctx.selPaths = () => [
+      { path: "/a", isDir: false },
+      { path: "/b", isDir: false },
+    ];
+    const m = makeMenuEntries(ctx);
+    const bulk = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label.startsWith("Rename"))!;
+    expect(bulk.label).toBe("Rename 2 items…");
+    bulk.action();
+    expect(ctx.calls).toContain("bulkrename:/a,/b");
+
+    const solo = m.fileEntriesFor("/z", false, 0, 0).find((e) => e.label.startsWith("Rename"))!;
+    solo.action();
+    expect(ctx.calls).toContain("rename:/z");
   });
 
   test("properties target the whole selection, single when outside it", () => {

@@ -407,7 +407,7 @@ const KEY_ROWS: KeyRow[] = (
     ["prevTab", "previous tab (cycle)", ["ctrl+shift+tab"]],
     ["selectAll", "select all", ["ctrl+a"]],
     ["trash", "trash selection (delete forever in trash)", ["delete"]],
-    ["renameOrRestore", "rename (restore in trash)", ["f2"]],
+    ["renameOrRestore", "rename / bulk rename on multi-selection (restore in trash)", ["f2"]],
     ["copy", "copy selection", ["ctrl+c"]],
     ["cut", "cut selection", ["ctrl+x"]],
     ["paste", "paste clipboard", ["ctrl+v"]],

@@ -6,6 +6,8 @@
 
 import { makeSelection } from "../input/selection";
 import { makeRename } from "../ui/ui-rename";
+import { makeBulkRename } from "../ui/ui-bulk-rename";
+import { clearChildren } from "../lib/uiutil";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring } from "./types";
@@ -55,5 +57,33 @@ export const wireGridFoundation = (deps: {
     selectTileAt: selection.selectTileAt,
   });
 
-  return { selection, rename };
+  // --- bulk rename: F2 on a multi-selection edits names one-per-line in a
+  // modal (widget + planner); apply is ONE undo batch via fileops ---
+  const bulkRename = makeBulkRename({
+    renderer: () => chrome.renderer,
+    byId: core.lookup.byId,
+    rootAdd: (node) => chrome.renderer.root.add(node),
+    clearChildren,
+    stripSelectable: core.lookup.stripSelectable,
+    escHintBtn: core.slots.escHintBtn,
+    drainIconQueue: () => core.slots.drainIconQueue(),
+    colors: core.themeGet,
+    uiStyle: () => core.config.ui.uiStyle,
+    floats: core.floats,
+    // arrow wrapper: performBulkRename belongs to the fileops wiring (TDZ)
+    performBulkRename: (pairs) => getFileops().fileops.performBulkRename(pairs),
+    setStatusMsg: nav.setStatusMsg,
+  });
+  // rename guard here (both callers — keymap F2 and the context menu — route
+  // through it): virtual views span directories, so one-name-per-line is
+  // ambiguous; trash uses restore, not rename
+  const startBulkRename = (paths: string[]): void => {
+    if (core.isVirtualCwd() || core.inTrashView()) {
+      nav.setStatusMsg("Can't rename here");
+      return;
+    }
+    bulkRename.open(paths);
+  };
+
+  return { selection, rename, bulkRename, startBulkRename };
 };

@@ -18,7 +18,7 @@
 //
 // Pure module: no renderer imports. z-order table exported for the widgets. ---
 
-export type FloatKind = "filemenu" | "props" | "conflict" | "yesno" | "escmenu" | "pick" | "prompt";
+export type FloatKind = "filemenu" | "props" | "conflict" | "yesno" | "escmenu" | "pick" | "prompt" | "bulkrename";
 
 // z-order of the floating layers — the one table documenting which layer
 // renders above which. Outside the stack: band rect 2500 (gesture), progress
@@ -37,6 +37,9 @@ export const FLOAT_Z: Record<FloatKind, number> = {
   // replaces the palette via the modal policy instead of stacking scrims
   // (floats depth stays 1)
   prompt: 3750,
+  // bulk-rename editor (F2 on a multi-selection): newest modal, same
+  // replace-don't-stack rule
+  bulkrename: 3760,
 };
 
 export type Floats = {

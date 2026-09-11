@@ -23,6 +23,7 @@ import type { makeRecentOpen } from "../fs/recent-open";
 import type { makeDialogs } from "../ui/ui-dialogs";
 import type { makeSelection } from "../input/selection";
 import type { makeRename } from "../ui/ui-rename";
+import type { makeBulkRename } from "../ui/ui-bulk-rename";
 import type { makeUndo } from "../app/undo";
 import type { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import type { makeFileOps } from "../fs/fileops";
@@ -59,6 +60,8 @@ export type ChromeWiring = {
 export type GridFoundationWiring = {
   selection: ReturnType<typeof makeSelection>;
   rename: ReturnType<typeof makeRename>;
+  bulkRename: ReturnType<typeof makeBulkRename>;
+  startBulkRename: (paths: string[]) => void;
 };
 
 export type FileopsWiring = {

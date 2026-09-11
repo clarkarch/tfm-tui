@@ -185,6 +185,47 @@ describe("runTransfer: cross-device move", () => {
   });
 });
 
+describe("performBulkRename", () => {
+  test("renames all pairs in ONE undo batch (undone as one step)", async () => {
+    const h = makeHarness();
+    const a = path.join(ROOT, "bulk-a.txt");
+    const b = path.join(ROOT, "bulk-b.txt");
+    W(a, "A");
+    W(b, "B");
+    await h.ops.performBulkRename([
+      { from: a, to: path.join(ROOT, "bulk-A.txt") },
+      { from: b, to: path.join(ROOT, "bulk-B.txt") },
+    ]);
+    expect(existsSync(path.join(ROOT, "bulk-A.txt"))).toBe(true);
+    expect(existsSync(path.join(ROOT, "bulk-B.txt"))).toBe(true);
+    expect(existsSync(a)).toBe(false);
+    expect(h.calls).toContain("undo:rename 2 items:2:2");
+    expect(h.calls).toContain("status:Renamed 2 items · ctrl+z to undo");
+    expect(h.calls).toContain("notify:rename");
+  });
+
+  test("a vanished source is reported FAILED; the rest still land", async () => {
+    const h = makeHarness();
+    const good = path.join(ROOT, "bulk-good.txt");
+    W(good, "x");
+    await h.ops.performBulkRename([
+      { from: good, to: path.join(ROOT, "bulk-good2.txt") },
+      { from: path.join(ROOT, "bulk-gone.txt"), to: path.join(ROOT, "bulk-gone2.txt") },
+    ]);
+    expect(existsSync(path.join(ROOT, "bulk-good2.txt"))).toBe(true);
+    expect(h.calls.some((c) => c.includes("1 FAILED (source gone)"))).toBe(true);
+    expect(h.calls).toContain("undo:rename 1 item:1:1");
+    expect(h.calls).toContain("notify:rename failed");
+  });
+
+  test("no pairs reports Nothing to rename", async () => {
+    const h = makeHarness();
+    await h.ops.performBulkRename([]);
+    expect(h.calls).toContain("status:Nothing to rename");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+});
+
 describe("onFileOp fan-out", () => {
   test("successful transfer reports a clean outcome (not a phantom success)", async () => {
     const seen: Array<{
