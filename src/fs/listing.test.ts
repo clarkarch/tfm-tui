@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { compareEntries, extOf, listDir, type Entry } from "./listing";
+import { compareEntries, listDir, type Entry } from "./listing";
 import { RECENT_URI, STARRED_URI } from "./uri";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
@@ -33,16 +33,6 @@ afterAll(() => {
   if (oldState === undefined) delete process.env.XDG_STATE_HOME;
   else process.env.XDG_STATE_HOME = oldState;
   rmSync(SANDBOX, { recursive: true, force: true });
-});
-
-describe("extOf", () => {
-  test("lowercases and handles dotfiles / no-ext / multi-dot", () => {
-    expect(extOf("Photo.JPG")).toBe("jpg");
-    expect(extOf("archive.tar.gz")).toBe("gz");
-    expect(extOf("Makefile")).toBe("");
-    expect(extOf(".hidden")).toBe(""); // leading dot = no ext
-    expect(extOf(".config.toml")).toBe("toml");
-  });
 });
 
 describe("compareEntries", () => {

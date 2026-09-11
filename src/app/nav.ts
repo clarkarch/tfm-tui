@@ -35,7 +35,7 @@ export const initialAppState = (config: Config, cwd: string = process.cwd()): Ap
   sortAsc: true,
 });
 
-export type NavHooks = {
+type NavHooks = {
   renderAll: () => void;
   clearSearch: () => void;
   // close the inline path edit + any open file menu — navigate must leave no
@@ -51,24 +51,14 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
   const canFwd = () => state.histIdx < state.history.length - 1;
   // history-button/back-key moves are navigations too — plugins watching
   // navigate must see them, not just navigate() calls.
-  const goBack = () => {
-    if (canBack()) {
-      state.histIdx--;
-      hooks.renderAll();
-      try {
-        hooks.onNavigate?.(state.history[state.histIdx]!);
-      } catch {}
-    }
+  const step = (delta: number): void => {
+    if (delta < 0 ? !canBack() : !canFwd()) return;
+    state.histIdx += delta;
+    hooks.renderAll();
+    emitNavigate(state.history[state.histIdx]!);
   };
-  const goFwd = () => {
-    if (canFwd()) {
-      state.histIdx++;
-      hooks.renderAll();
-      try {
-        hooks.onNavigate?.(state.history[state.histIdx]!);
-      } catch {}
-    }
-  };
+  const goBack = (): void => step(-1);
+  const goFwd = (): void => step(1);
 
   const pushHistory = (dir: string): void => {
     state.history = state.history.slice(0, state.histIdx + 1);
@@ -120,7 +110,7 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
 // --- Session save/restore scheduling: the debounced write fires after the
 // navigation settles (renderAll calls it), restore adopts the saved tabs into
 // the live model at boot. Off unless [ui] restore-session = true. ---
-export type SessionSyncCtx = {
+type SessionSyncCtx = {
   state: TabStateRef;
   tabModel: ReturnType<typeof makeTabs>;
   config: Config;

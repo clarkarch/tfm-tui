@@ -29,7 +29,7 @@ const nullSink: TransferSink = {
 // undoable in memory, just not restorable after a restart). ---
 
 export type UndoUnit = () => Promise<void> | void;
-export type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
+type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
 
 // --- Serializable undo steps: every undo/redo closure in the app is one of
 // these fs operations (moves, trashes, renames, creates). Conditional (-if-)
@@ -122,13 +122,13 @@ export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}
   }
 };
 
-export const dataToBatch = (data: UndoBatchData, log: (msg: string) => void = () => {}): OpBatch => ({
+const dataToBatch = (data: UndoBatchData, log: (msg: string) => void = () => {}): OpBatch => ({
   label: data.label,
   units: data.units.map((s) => stepToUnit(s, log)),
   redos: data.redos.map((s) => stepToUnit(s, log)),
 });
 
-export type UndoOpts = {
+type UndoOpts = {
   /** debug sink for rehydrated-step logs (defaults to silent) */
   log?: (msg: string) => void;
   /** fired on push/undo/redo so the wiring can persist the journal */

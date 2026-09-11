@@ -23,6 +23,7 @@ export const wireGridFoundation = (deps: {
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     byId: core.lookup.byId,
+    setText: core.lookup.setTextOnId,
     setIconState: core.slots.setIconState,
     isCutKey: core.isCutKey,
     scroller: () => core.scrollerRef.current,

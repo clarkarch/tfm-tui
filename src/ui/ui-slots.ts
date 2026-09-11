@@ -21,7 +21,6 @@ export type IconState = { fg: string; bg: string };
 // - nav slots (back/fwd): Enabled/Disabled + HoverOffset (note: Enabled=0,
 //   Disabled=1 — the inverse sense of a toggle, hence the separate helper)
 export const IconStateIdx = { Rest: 0, Active: 1, Selected: 2, Cut: 3, HoverOffset: 2 } as const;
-export type IconStateIndex = (typeof IconStateIdx)[keyof typeof IconStateIdx];
 
 /** Toggle slot (off/on × normal/hover): star, crumbs, hover buttons, esc hint. */
 export const toggleIconState = (on: boolean, hover: boolean): number =>
@@ -47,7 +46,7 @@ export type IconSpec = {
   done?: boolean;
 };
 
-export type ThumbJob = {
+type ThumbJob = {
   slotId: string;
   path: string;
   mtimeMs: number;

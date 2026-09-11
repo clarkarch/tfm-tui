@@ -40,7 +40,7 @@ export type Theme = {
   ansi15: string;
 };
 
-export type ViewMode = "grid" | "list";
+type ViewMode = "grid" | "list";
 
 // surface-style vocabulary — the ui-style key's value type. The solid/outline
 // painting decisions live in ./style (the surface seam), which re-exports this.
@@ -100,25 +100,25 @@ export type KeyAction =
   | "zoomIn"
   | "zoomOut";
 
-export type KeysConfig = Record<KeyAction, string[]>;
+type KeysConfig = Record<KeyAction, string[]>;
 
 export type Config = { ui: UiConfig; theme: Theme; keys: KeysConfig };
 
 // --- schema ---
 
-export type GuiGroup = "general" | "layout" | "behavior" | "keys";
+type GuiGroup = "general" | "layout" | "behavior" | "keys";
 
 type RowCommon = { tomlKey: string; prop: string; doc: string; label: string; group?: GuiGroup };
 
-export type SchemaRow =
+type SchemaRow =
   | (RowCommon & { kind: "int"; section: "ui"; min: number; max: number; step: number; def: number })
   | (RowCommon & { kind: "bool"; section: "ui"; def: boolean })
   | (RowCommon & { kind: "enum"; section: "ui"; values: readonly string[]; def: string })
   | (RowCommon & { kind: "key"; section: "keys"; action: KeyAction; def: string[] })
   | (RowCommon & { kind: "hex"; section: "theme"; def: string; group?: undefined });
 
-export type KeyRow = Extract<SchemaRow, { kind: "key" }>;
-export type ThemeRow = Extract<SchemaRow, { kind: "hex" }>;
+type KeyRow = Extract<SchemaRow, { kind: "key" }>;
+type ThemeRow = Extract<SchemaRow, { kind: "hex" }>;
 export type UiSchemaRow = Extract<SchemaRow, { section: "ui" }>;
 
 const UI_ROWS: SchemaRow[] = [
@@ -441,12 +441,7 @@ const KEY_ROWS: KeyRow[] = (
 export const SCHEMA: SchemaRow[] = [...UI_ROWS, ...THEME_ROWS, ...KEY_ROWS];
 
 export const UI_SCHEMA = UI_ROWS;
-export const THEME_SCHEMA = THEME_ROWS;
 export const KEY_SCHEMA = KEY_ROWS;
-
-// GUI categories that derive rows from the schema (theme is preset-only and
-// the config-actions group is hand-written in settings-model).
-export const SCHEMA_GROUPS: GuiGroup[] = ["general", "layout", "behavior", "keys"];
 
 export const defaultConfig: Config = {
   ui: Object.fromEntries(UI_ROWS.map((r) => [r.prop, r.def])),
@@ -456,7 +451,7 @@ export const defaultConfig: Config = {
 
 // --- key specs ---
 
-export type KeySpec = { name: string; ctrl: boolean; shift: boolean; meta: boolean };
+type KeySpec = { name: string; ctrl: boolean; shift: boolean; meta: boolean };
 
 export const parseKeySpec = (s: string): KeySpec | null => {
   if (typeof s !== "string") return null;
@@ -476,11 +471,6 @@ export const parseKeySpec = (s: string): KeySpec | null => {
   }
   if (!spec.name) return null;
   return spec;
-};
-
-export const specToString = (spec: KeySpec): string => {
-  const mods = [spec.ctrl ? "ctrl" : "", spec.shift ? "shift" : "", spec.meta ? "alt" : ""].filter(Boolean);
-  return [...mods, spec.name].join("+");
 };
 
 // bare unmodified printable keys feed type-to-search — binding them to an
@@ -530,7 +520,7 @@ export const validateKeybindSpec = (s: string): string | null => {
 
 // mirror OpenTUI's matcher (keybinding.internal.ts): name + modifiers, with
 // the kitty base-layout codepoint as a fallback for non-Latin layouts
-export type KeyEventLike = {
+type KeyEventLike = {
   name?: string;
   ctrl?: boolean;
   shift?: boolean;

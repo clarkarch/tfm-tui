@@ -61,6 +61,7 @@ beforeAll(async () => {
     colors: () => colors,
     uiStyle: () => "solid",
     byId: (id) => t.renderer.root.findDescendantById(id),
+    setText: () => {},
     setIconState: (spec, idx) => {
       iconStateCalls.push({ spec, idx });
     },

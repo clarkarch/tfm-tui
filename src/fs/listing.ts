@@ -7,14 +7,9 @@ import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "./uri";
 import { readRecentXbel, readStarredList } from "./recent";
 import type { SortMode } from "../lib/sort";
+import { extOf } from "./filetype";
 
 export type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
-
-export const extOf = (n: string): string => {
-  const b = n.startsWith(".") ? n.slice(1) : n;
-  const i = b.lastIndexOf(".");
-  return i > 0 ? b.slice(i + 1).toLowerCase() : "";
-};
 
 export const compareEntries =
   (sortBy: SortMode, sortAsc: boolean) =>
@@ -44,39 +39,32 @@ const statEntry = (abs: string): { size?: number; mtimeMs?: number } => {
   }
 };
 
-export const recentEntries = async (): Promise<Entry[]> => {
+// shared stat-and-build for the virtual places: vanished files are dropped,
+// an explicit mtime (XBEL Modified) wins over the fs mtime
+const statEntries = (items: Array<{ path: string; mtimeMs?: number }>): Entry[] => {
   const out: Entry[] = [];
-  for (const it of readRecentXbel()) {
-    let st: any = null;
+  for (const it of items) {
+    let st: ReturnType<typeof statSync>;
     try {
       st = statSync(it.path);
     } catch {
       continue;
-    } // drop vanished files
+    }
     out.push({
       name: path.basename(it.path),
       isDir: st.isDirectory(),
       abs: it.path,
       size: st.size,
-      mtimeMs: it.modified,
+      mtimeMs: it.mtimeMs ?? st.mtimeMs ?? 0,
     });
   }
   return out;
 };
 
-export const starredEntries = async (): Promise<Entry[]> => {
-  const out: Entry[] = [];
-  for (const p of readStarredList()) {
-    let st: any = null;
-    try {
-      st = statSync(p);
-    } catch {
-      continue;
-    }
-    out.push({ name: path.basename(p), isDir: st.isDirectory(), abs: p, size: st.size, mtimeMs: st.mtimeMs ?? 0 });
-  }
-  return out;
-};
+const recentEntries = async (): Promise<Entry[]> =>
+  statEntries(readRecentXbel().map((it) => ({ path: it.path, mtimeMs: it.modified })));
+
+const starredEntries = async (): Promise<Entry[]> => statEntries(readStarredList().map((p) => ({ path: p })));
 
 export const listDir = async (
   dir: string,

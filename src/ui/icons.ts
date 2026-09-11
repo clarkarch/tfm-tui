@@ -22,7 +22,7 @@ const home = os.homedir();
 // index and every icon fell back to glyphs in the shipped binary).
 // Memoize the PROMISE, not the Map: assigning the Map first let concurrent
 // callers resolve against a half-filled index during the await loop.
-export type EmbeddedFile = { name?: unknown; text: () => Promise<string> };
+type EmbeddedFile = { name?: unknown; text: () => Promise<string> };
 
 export const loadEmbeddedIcons = (files: readonly EmbeddedFile[]): Promise<Map<string, string>> =>
   (async () => {

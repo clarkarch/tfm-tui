@@ -2,6 +2,7 @@ import { cp, mkdir, rename as fsRename, rm, writeFile, open } from "node:fs/prom
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToUri } from "./uri";
 
 // --- Deterministic fs+path operations: the primitives runTransfer, trash and
 // undo sit on. No prompts, no UI, no state — callers own decisions; these own
@@ -91,7 +92,7 @@ export const failSuffix = (failed: number, failWhy: Set<string>): string => {
 
 // errno-style .code off an unknown caught value (fs renames, child-proc
 // failures) — structural narrowing instead of `any`
-const errCode = (err: unknown): unknown => {
+export const errCode = (err: unknown): unknown => {
   if (typeof err === "object" && err !== null && "code" in err) return err.code;
   return undefined;
 };
@@ -156,20 +157,15 @@ export const rmTrashInfo = async (name: string, log?: (msg: string) => void): Pr
 // --- XDG trash spec helpers ---
 
 // Percent-encode an absolute path per the trash spec (Path= must be
-// URL-encoded). Encode each segment so `/` separators survive and spaces,
-// `%`, `#`, non-ASCII round-trip through decodeURIComponent on read.
-export const encodeTrashPath = (p: string): string => {
-  const abs = path.resolve(p);
-  return abs
-    .split(path.sep)
-    .map((seg, i) => (i === 0 && seg === "" ? "" : encodeURIComponent(seg)))
-    .join(path.sep);
-};
+// URL-encoded). Uses the shared path->URI encoder minus the scheme, so `/`
+// separators survive and spaces, `%`, `#`, non-ASCII round-trip through
+// decodeURIComponent on read.
+export const encodeTrashPath = (p: string): string => pathToUri(path.resolve(p)).slice(7);
 
 // Candidate trash roots for a target: home trash always, plus the topdir
 // trash ($topdir/.Trash-$uid) when the target lives on another filesystem
 // (removable media — spec §2). Resolved per call for env-redirection tests.
-export const trashRootsFor = (target: string): string[] => {
+const trashRootsFor = (target: string): string[] => {
   const home = trashDir();
   let targetDev: number | null = null;
   let homeDev: number | null = null;

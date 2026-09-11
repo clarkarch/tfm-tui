@@ -10,7 +10,7 @@ import { FLOAT_Z, type Floats } from "./floats";
 // their panel rows fresh (they close over live state). Theme and renderer
 // access arrive through ctx. ---
 
-export type DialogsCtx = {
+type DialogsCtx = {
   byId(id: string): any;
   rootAdd(node: any): void;
   stripSelectable(): void;
@@ -111,7 +111,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
 
 export type ConflictChoice = "replace" | "keepBoth" | "skip";
 
-export type ConflictCtx = {
+type ConflictCtx = {
   colors(): Theme;
   drainIconQueue(): void | Promise<void>;
   // open/close orchestration + the dismiss-others policy live in ./floats
@@ -225,7 +225,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
 // State lives here; the trash-bound wrappers (confirmEmptyTrash /
 // confirmDeleteForever) live in ./trashops. ---
 
-export type YesNoCtx = {
+type YesNoCtx = {
   colors(): Theme;
   // false while the renderer hasn't laid out yet (same gate as makeConflict callers)
   canOpen(): boolean;

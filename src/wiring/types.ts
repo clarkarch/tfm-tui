@@ -25,7 +25,6 @@ import type { makeSelection } from "../input/selection";
 import type { makeRename } from "../ui/ui-rename";
 import type { makeUndo } from "../app/undo";
 import type { makeConflict, makeYesNo } from "../ui/ui-dialogs";
-import type { makeProgress } from "../ui/ui-progress";
 import type { makeFileOps } from "../fs/fileops";
 import type { makeTerminal } from "../ui/ui-term";
 import type { makeTrashConfirms, makeTrashOps } from "../fs/trashops";
@@ -33,7 +32,6 @@ import type { makePreview } from "../ui/ui-preview";
 import type { makeGridRenderer } from "../ui/ui-grid";
 import type { makeProps } from "../ui/ui-props";
 import type { makeMenuEntries } from "../ui/menu-entries";
-import type { makeSettingModel } from "../ui/settings-model";
 import type { makeEscMenu } from "../ui/ui-settings";
 
 export type NavWiring = {
@@ -43,8 +41,8 @@ export type NavWiring = {
   tabModel: ReturnType<typeof makeTabs>;
   search: ReturnType<typeof makeSearch>;
 } & Pick<ReturnType<typeof makeNav>, "canBack" | "canFwd" | "goBack" | "goFwd" | "navigate"> &
-  Pick<ReturnType<typeof makeTabs>, "switchTab" | "newTab" | "closeTab" | "syncTabFromState"> &
-  Pick<ReturnType<typeof makeSessionSync>, "scheduleSaveSession" | "restoreSession"> &
+  Pick<ReturnType<typeof makeTabs>, "switchTab" | "newTab" | "closeTab"> &
+  Pick<ReturnType<typeof makeSessionSync>, "restoreSession"> &
   Pick<ReturnType<typeof makeSearch>, "clearSearch" | "beginTypeToSearch" | "wireSearchInput">;
 
 export type ChromeWiring = {
@@ -67,12 +65,10 @@ export type FileopsWiring = {
   undo: ReturnType<typeof makeUndo>;
   syncUndoJournal: () => void;
   conflict: ReturnType<typeof makeConflict>;
-  progress: ReturnType<typeof makeProgress>;
   fileops: ReturnType<typeof makeFileOps>;
   terminal: ReturnType<typeof makeTerminal>;
   trash: ReturnType<typeof makeTrashOps>;
   yesNo: ReturnType<typeof makeYesNo>;
-  confirmYesNo: ReturnType<typeof makeYesNo>["confirm"];
 } & ReturnType<typeof makeTrashConfirms>;
 
 export type GridWiring = {
@@ -85,6 +81,5 @@ export type GridWiring = {
 };
 
 export type SettingsWiring = {
-  settingGroups: ReturnType<typeof makeSettingModel>["settingGroups"];
   escMenu: ReturnType<typeof makeEscMenu>;
 };

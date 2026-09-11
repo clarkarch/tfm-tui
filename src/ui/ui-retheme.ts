@@ -13,7 +13,7 @@ import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { debounced } from "../lib/uiutil";
 
-export type RethemeCtx = {
+type RethemeCtx = {
   // live object refs — applyConfig mutates them in place
   config: Config;
   colors: Theme;

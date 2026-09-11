@@ -67,7 +67,6 @@ export type Dnd72Ctx = {
   // trash view — external drops land in Trash: route them through trashPaths
   // (trashinfo metadata), never a raw copy into Trash/files
   inTrashView(): boolean;
-  home: string;
   setStatusMsg(msg: string): void;
   notify(msg: string, title?: string): void;
   // sanctioned OSC receiver — never a second process.stdin listener
@@ -217,9 +216,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       return;
     }
     const text = Buffer.from(b64, "base64").toString("utf8");
-    let paths = dropPayloadToPaths(text);
-    // some sources deliver bare paths (text/plain) instead of file:// URIs
-    if (!paths.length) paths = text.split(/\r?\n/).filter((l) => l.startsWith("/"));
+    const paths = dropPayloadToPaths(text);
     ctx.log(`paths: ${paths.join(" | ") || "(none)"}`);
     if (!paths.length) return;
     // dropping onto Trash trashes (same as the trash-place self-drop route)

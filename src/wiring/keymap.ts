@@ -11,15 +11,13 @@ import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
 import { clearChildren } from "../lib/uiutil";
-import { getPluginCommandBinds } from "../plugins/plugin-api";
+import { flattenPluginCommands, getPluginCommandBinds } from "../plugins/plugin-api";
 import { dlog } from "../app/log";
 import type { Command } from "../lib/command";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
 import type { PluginsWiring } from "./plugins";
 import type { RethemeWiring } from "./settings";
-
-export type KeymapWiring = ReturnType<typeof wireKeymap>;
 
 export const wireKeymap = (deps: {
   core: CoreWiring;
@@ -52,9 +50,11 @@ export const wireKeymap = (deps: {
     uiStyle: () => core.config.ui.uiStyle,
     floats,
     commands: () =>
-      [...coreCommands(), ...plugins.plugins.flatMap((p) => p.commands.map((c) => ({ ...c, hint: c.hint ?? "" })))].map(
-        (c) => ({ label: c.title, hint: c.hint || undefined, run: c.run }),
-      ),
+      [...coreCommands(), ...flattenPluginCommands(plugins.plugins)].map((c) => ({
+        label: c.title,
+        hint: c.hint || undefined,
+        run: c.run,
+      })),
     onError: (err) => {
       dlog(`plugin command failed: ${err instanceof Error ? err.message : err}`);
     },

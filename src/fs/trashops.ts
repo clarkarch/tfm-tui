@@ -15,7 +15,7 @@ import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 // the same paths. The public methods stay fire-and-forget (void) for
 // backwards compat but also return a Promise callers/tests can await. ---
 
-export type TrashOpName = "trash" | "restore" | "delete-forever" | "empty";
+type TrashOpName = "trash" | "restore" | "delete-forever" | "empty";
 
 export type TrashOpsSink = {
   /** push a completed undo batch (already paired with redos) */
@@ -261,7 +261,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
 // --- Trash-bound Yes/No wrappers: label + verb bindings onto the floating
 // confirm dialog (both are destructive → danger styling). Extracted so the
 // exact prompts are testable without a renderer. ---
-export type TrashConfirmsCtx = {
+type TrashConfirmsCtx = {
   confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): void;
   emptyTrash(): void;
   deleteForever(paths: string[]): void;

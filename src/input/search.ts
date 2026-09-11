@@ -6,7 +6,7 @@
 
 import { debounced, type Scheduler } from "../lib/uiutil";
 
-export type SearchCtx = {
+type SearchCtx = {
   byId: (id: string) => any;
   renderGrid: () => void | Promise<void>;
   // the embedded terminal owns the keyboard — never hijack into search

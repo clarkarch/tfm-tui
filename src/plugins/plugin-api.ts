@@ -13,6 +13,9 @@ import type { PluginEventName, PluginEventPayload } from "../lib/plugin-events";
 
 export const PLUGIN_API_VERSION = 2;
 
+// plugin names become path segments — reject anything that could escape
+export const PLUGIN_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+
 // per-plugin JSON state (plugins/<name>/state.json). Synchronous on purpose:
 // SettingRow get/set closures are sync, so the store loads once and writes
 // through on set. Namespaced by the loader: api.store() always returns the
@@ -21,25 +24,19 @@ export const PLUGIN_API_VERSION = 2;
 export type PluginStore = {
   get<T>(key: string, fallback: T): T;
   set(key: string, value: unknown): void;
-  remove(key: string): void;
-  keys(): string[];
-  subscribe(listener: () => void): () => void;
 };
 
 export type PluginApi = {
-  version: number;
   notify(message: string, title?: string): void;
   setStatusMsg(message: string): void;
   log(message: string): void;
   store(pluginName: string): PluginStore;
   // live file-manager context (read at call time, never cached by plugins):
-  // the current multi-selection, cwd, and the ops to move/refresh the view.
-  // Spawning helpers (xdg-open, ffmpeg…) is the plugin's own job — Bun gives
-  // it full node:child_process, so core exposes no process wrappers.
+  // the current multi-selection and cwd. Spawning helpers (xdg-open, ffmpeg…)
+  // is the plugin's own job — Bun gives it full node:child_process, so core
+  // exposes no process wrappers.
   selection(): Array<{ path: string; isDir: boolean }>;
   cwd(): string;
-  navigate(dir: string): void;
-  refresh(): void;
   // every dispatchable action, core table first then plugin contributions in
   // load order. Prefer LAZY calls (inside run/open): the keymap wires last,
   // so a top-level call during your own activate sees only plugin commands
@@ -104,7 +101,7 @@ export type PluginPreview = {
 // api.commands() list the palette plugin shows. May be async — the loader
 // awaits it (a slow activate blocks only its own load). deactivate runs on
 // unload/remove/disable so timers/listeners/children never leak.
-export type PluginActivateResult = {
+type PluginActivateResult = {
   rows?: SettingRow[];
   fileMenu?: (sel: { paths: string[] }) => PluginFileMenuEntry[];
   // sidebar right-click (place target) + empty-area right-click (cwd).
@@ -144,6 +141,11 @@ export const getPluginCommandBinds = (plugin: LoadedPlugin, cmdId: string): stri
 export const setPluginCommandBinds = (plugin: LoadedPlugin, cmdId: string, binds: string[]): void => {
   plugin.store.set(`keys:${cmdId}`, [...binds]);
 };
+
+// plugin-contributed commands as dispatchable Command[] (hint falls back to
+// "" — most plugin commands carry no bind); core table comes first at callers
+export const flattenPluginCommands = (plugins: Array<{ commands: PluginCommand[] }>): Command[] =>
+  plugins.flatMap((p) => p.commands.map((c) => ({ ...c, hint: c.hint ?? "" })));
 
 // one installed plugin, as the loader hands it to the settings model and
 // the menu builders: its rows, its file-menu builder (null when the plugin

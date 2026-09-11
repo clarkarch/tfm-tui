@@ -3,12 +3,14 @@
 // byte-exact with yazi's reference implementation; ./dnd72 owns the
 // write/log/state-machine side. ---
 
+import { fileUriToPath, pathToUri } from "../fs/uri";
+
 // path -> file:// uri, escaping every segment except the root slashes
-export const percentEncodePath = (p: string): string => encodeURIComponent(p).replace(/%2F/g, "/");
+export const percentEncodePath = (p: string): string => pathToUri(p).slice(7);
 
 // enter/ready (t=m/t=M) meta string -> fields. x/y are NaN when absent;
 // m means "more chunks coming".
-export type Osc72Meta = { t: string; x: number; y: number; m: boolean };
+type Osc72Meta = { t: string; x: number; y: number; m: boolean };
 
 export const parseOsc72Meta = (meta: string): Osc72Meta => {
   let t = "";
@@ -70,14 +72,7 @@ export const uriListToPaths = (data: string): string[] =>
   data
     .split(/\r?\n/)
     .filter((l) => l.startsWith("file://"))
-    .map((l) => {
-      let u = l.slice(7);
-      if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
-      try {
-        u = decodeURIComponent(u);
-      } catch {}
-      return u;
-    });
+    .map(fileUriToPath);
 
 export const dropPayloadToPaths = (text: string): string[] => {
   const paths = uriListToPaths(text);

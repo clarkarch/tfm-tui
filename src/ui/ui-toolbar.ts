@@ -15,7 +15,7 @@ import type { IconSpec, IconState } from "./ui-slots";
 import { navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 
-export type MakeIconSlotFn = (
+type MakeIconSlotFn = (
   name: string,
   states: IconState[],
   heightCells?: number,
@@ -24,7 +24,7 @@ export type MakeIconSlotFn = (
   statesFactory?: () => IconState[],
 ) => { spec: IconSpec; el: any };
 
-export type ToolbarCtx = {
+type ToolbarCtx = {
   renderer(): any;
   byId(id: string): any;
   clearChildren(node: unknown): void;

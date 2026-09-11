@@ -1,4 +1,5 @@
 import { spawnSafe } from "./spawn-safe";
+import { fileUriToPath, pathToUri } from "./uri";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
@@ -14,9 +15,9 @@ import path from "node:path";
 // `copy\nfile://…` lines (same as Nautilus) instead of bare paths —
 // file-manager interop wins over clean text paste. ---
 
-export const CLIP_TYPE = "x-special/gnome-copied-files";
+const CLIP_TYPE = "x-special/gnome-copied-files";
 
-export type ClipTool = {
+type ClipTool = {
   get: string;
   put: string;
   putBase: string[];
@@ -50,26 +51,9 @@ export const sysClipTool = (): ClipTool | null => {
 };
 
 // "/home/me/a b.txt" -> "file:///home/me/a%20b.txt"
-export const fileUriFor = (p: string): string => {
-  const abs = path.resolve(p);
-  const encoded = abs
-    .split(path.sep)
-    .map((seg, i) => (i === 0 && seg === "" ? "" : encodeURIComponent(seg)))
-    .join("/");
-  return `file://${encoded}`;
-};
+export const fileUriFor = (p: string): string => pathToUri(path.resolve(p));
 
-// "file:///home/me/a%20b.txt" -> "/home/me/a b.txt"
-const decodeFileUri = (l: string): string => {
-  let u = l.slice(7);
-  if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
-  try {
-    u = decodeURIComponent(u);
-  } catch {}
-  return u;
-};
-
-export type CopiedFiles = { op: "copy" | "move"; paths: string[] };
+type CopiedFiles = { op: "copy" | "move"; paths: string[] };
 
 // internal-clipboard cut check (tile dimming): the pressed path is "cut" when
 // the pending clipboard is a cut containing it. null clipboard = nothing cut.
@@ -85,7 +69,7 @@ export const parseCopiedFiles = (text: string): CopiedFiles | null => {
   if (!lines.length) return null;
   const op: "copy" | "move" = lines[0] === "cut" ? "move" : "copy";
   const body = lines[0] === "copy" || lines[0] === "cut" ? lines.slice(1) : lines;
-  const paths = body.filter((l) => l.startsWith("file://")).map(decodeFileUri);
+  const paths = body.filter((l) => l.startsWith("file://")).map(fileUriToPath);
   if (!paths.length) return null;
   return { op, paths };
 };

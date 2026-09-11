@@ -11,7 +11,6 @@ import type { ClipItem, GridTileRef } from "../input/grid-input";
 import type { LoadedPlugin, PluginFileMenuEntry } from "../plugins/plugin-api";
 import { invokeIsolated } from "../lib/uiutil";
 import type { SortMode } from "../lib/sort";
-export type { SortMode } from "../lib/sort";
 
 export type MenuEntriesCtx = {
   closeFileMenu(): void;

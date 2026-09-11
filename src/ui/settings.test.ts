@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyAdjust, flattenRows, themePresetIdx, zoomUiPatch, type SettingGroup, type SettingRow } from "./settings";
+import { applyAdjust, themePresetIdx, zoomUiPatch, type SettingRow } from "./settings";
 import { THEME_PRESETS } from "../config/themes";
 import { defaultConfig, type UiConfig } from "../config/config-schema";
 
@@ -113,22 +113,6 @@ describe("applyAdjust", () => {
     const row: SettingRow = { kind: "action", label: "a", run: () => r.log("ran") };
     expect(applyAdjust(row, 1)).toBe(false);
     expect(r.calls).toEqual([]);
-  });
-});
-
-describe("flattenRows", () => {
-  test("concatenates group rows in order", () => {
-    const groups: SettingGroup[] = [
-      { rows: [{ kind: "action", label: "one", run: () => {} }] },
-      {
-        header: "h",
-        rows: [
-          { kind: "action", label: "two", run: () => {} },
-          { kind: "action", label: "three", run: () => {} },
-        ],
-      },
-    ];
-    expect(flattenRows(groups).map((r) => r.label)).toEqual(["one", "two", "three"]);
   });
 });
 

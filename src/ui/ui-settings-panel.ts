@@ -22,7 +22,7 @@ export type SettingsPanelState = {
   capturing: number | null;
 };
 
-export type SettingsPanelHooks = {
+type SettingsPanelHooks = {
   groups(): SettingGroup[];
   // visible row count for the right pane (panel chrome takes ~6 rows)
   visRows(): number;

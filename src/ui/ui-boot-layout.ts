@@ -40,7 +40,7 @@ export const buildTitle = (opts: { width: number; colors: Theme }): any =>
     Text({ id: "tfm-title-sub", content: " terminal file manager", fg: opts.colors.sidebarFgMuted }),
   );
 
-export type AppContainerOpts = {
+type AppContainerOpts = {
   sw: number;
   sideInnerW: number;
   colors: Theme; // eager object — see buildTitle
@@ -112,7 +112,7 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
     }),
   );
 
-export type BootLayoutCtx = {
+type BootLayoutCtx = {
   renderer: any;
   byId: (id: string) => any;
   colors: Theme; // eager object — see buildTitle

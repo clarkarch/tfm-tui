@@ -15,7 +15,7 @@ import type { Theme } from "../config/config";
 // into the PTY (the VT never registers a "drop" mouse listener, so the event
 // bubbles up to the host).
 
-export type TermCtx = {
+type TermCtx = {
   renderer: any;
   byId(id: string): any;
   uiStyle(): UiStyle;
@@ -88,7 +88,7 @@ export const xtShiftEscapeFrame = (enable: boolean): string => (enable ? "\x1b[>
 
 // single-quote a path for shell input; embedded quotes use the '\'' idiom,
 // which survives every POSIX shell
-export const shellQuotePath = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`;
+const shellQuotePath = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`;
 export const shellQuotePaths = (paths: string[]): string => paths.map(shellQuotePath).join(" ");
 
 export type TermDropSink = {
@@ -122,7 +122,7 @@ export const pasteDroppedPaths = (paths: string[] | null | undefined, sink: Term
 // Only valid while the inner program has NO mouse mode and NO alt screen —
 // those apps receive real mouse bytes instead.
 
-export type PtyScreenState = { mouse: boolean; alt: boolean };
+type PtyScreenState = { mouse: boolean; alt: boolean };
 
 // scan PTY output for DECSET/DECRST 1000/1002/1003 (mouse reporting) and 1049
 // (alt screen). Sequences may split across chunks — the caller carries `tail`.

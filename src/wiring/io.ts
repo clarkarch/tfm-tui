@@ -18,8 +18,6 @@ import { configPath } from "../config/config";
 import { debugLog, dlog, isDebug, DEBUG_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
-export type WatcherWiring = ReturnType<typeof makeCwdWatcher>;
-export type DndWiring = ReturnType<typeof makeDnd72>;
 
 // narrowed shape of CliRenderer's private native binding — diagnostics only
 type NativeStatsReach = { lib?: { getAllocatorStats?: () => AllocatorStats | null } };
@@ -152,7 +150,6 @@ export const wireDnd = (deps: {
     cwd: () => core.state.cwd,
     virtualCwd: core.isVirtualCwd,
     inTrashView: core.inTrashView,
-    home: core.home,
     setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
     subscribeOsc: (cb) => chrome.renderer.subscribeOsc(cb),

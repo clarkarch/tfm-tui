@@ -77,16 +77,15 @@ export const wireChrome = async (deps: {
     kbActive: () => getKeyRouter().sidebarActive(),
     kbIdx: () => getKeyRouter().placeIdx(),
     tabs: () => nav.tabModel,
-    closeTab: (i) => nav.closeTab(i),
-    switchTab: (i) => nav.switchTab(i),
-    newTab: () => nav.newTab(),
+    closeTab: nav.closeTab,
+    switchTab: nav.switchTab,
+    newTab: nav.newTab,
+    // toolbar is built after the chrome ctx (TDZ seam) — keep the arrow
     hoverBtn: (id, icon, onMouseDown) => toolbar.hoverBtn(id, icon, onMouseDown),
     stripSelectable,
-    drainIconQueue: () => drainIconQueue(),
-    makeIconSlot: (name, states, heightCells, initialState, onMouseDown, statesFactory) =>
-      makeIconSlot(name, states, heightCells, initialState, onMouseDown, statesFactory),
-    setIconState: (spec, stateIdx) => setIconState(spec, stateIdx),
-    home,
+    drainIconQueue,
+    makeIconSlot,
+    setIconState,
     stateCwd: () => state.cwd,
   });
 

@@ -7,7 +7,7 @@
 import path from "node:path";
 import { debounced } from "../lib/uiutil";
 
-export type RecentOpenCtx = {
+type RecentOpenCtx = {
   inTrashView: () => boolean;
   notify: (msg: string, title?: string) => void;
   upsertRecent: (paths: string[]) => void | Promise<void>;

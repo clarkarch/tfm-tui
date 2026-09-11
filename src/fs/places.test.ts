@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildSections, loadSystemPlaces, parseLsblk, systemBookmarks, systemUserDirs } from "./places";
+import { buildSections, loadSystemPlaces, parseLsblk } from "./places";
 import { isVirtualUri } from "./uri";
 
 const oldConfigHome = process.env.XDG_CONFIG_HOME;
@@ -61,8 +61,6 @@ describe("loadSystemPlaces + buildSections", () => {
     try {
       process.env.XDG_CONFIG_HOME = tmp.configHome;
       await loadSystemPlaces();
-      expect(systemUserDirs().map((d) => d.key)).toEqual(["XDG_DOCUMENTS_DIR"]);
-      expect(systemBookmarks().map((b) => b.p)).toEqual([tmp.bookmarkDir]);
       const flat = buildSections().flat();
       expect(flat[0]!.label).toBe("Home");
       expect(flat.some((p) => p.label === "Documents" && p.path === tmp.docs)).toBe(true);
@@ -78,8 +76,6 @@ describe("loadSystemPlaces + buildSections", () => {
   test("missing config dir yields empty groups without throwing", async () => {
     process.env.XDG_CONFIG_HOME = path.join(os.tmpdir(), `tfm-places-nonexistent-${process.pid}`);
     await loadSystemPlaces();
-    expect(systemUserDirs()).toEqual([]);
-    expect(systemBookmarks()).toEqual([]);
     const flat = buildSections().flat();
     expect(flat.some((p) => p.label === "Home")).toBe(true);
     expect(flat.some((p) => p.label === "This Device")).toBe(true);

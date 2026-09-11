@@ -3,7 +3,7 @@
 // a "plugins" category in the esc-menu settings view.
 //
 // No imports needed: tfm calls activate(api) and renders the returned rows
-// with the same panel as core settings. api = { version, notify,
+// with the same panel as core settings. api = { notify,
 // setStatusMsg, log, store, ... } (see plugins-sample/showcase.ts for the
 // full v2 surface: events, commands+keybinds, menus, preview, confirm).
 // store(name) persists per-plugin JSON at plugins/<name>/state.json — plugin

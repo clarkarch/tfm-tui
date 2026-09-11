@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 // --- File type classification (extension -> icon-name category), shared by
 // grid tiles, preview gating and the properties dialog. Returns icon NAMES
@@ -275,24 +276,23 @@ export const mimeCategory = (mime: string): string => {
   return "file";
 };
 
+// lowercased extension without the dot; dotfiles (".bashrc") have none
+export const extOf = (name: string): string => path.extname(name).slice(1).toLowerCase();
+
 export const fileIconFor = (name: string): string => {
-  const dot = name.lastIndexOf(".");
-  if (dot <= 0) return "file";
-  const ext = name.slice(dot + 1).toLowerCase();
+  const ext = extOf(name);
   return FILE_ICON_BY_EXT[ext] ?? (globs2ByExt?.get(ext) ? mimeCategory(globs2ByExt.get(ext)!) : undefined) ?? "file";
 };
 
 export const fileIsImage = (name: string): boolean => {
-  const dot = name.lastIndexOf(".");
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  const ext = extOf(name);
   if (FILE_ICON_BY_EXT[ext] === "file-image") return true;
   const mime = globs2ByExt?.get(ext);
   return !!mime && mime.startsWith("image/");
 };
 
 export const fileIsVideo = (name: string): boolean => {
-  const dot = name.lastIndexOf(".");
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  const ext = extOf(name);
   // ext table first: `.ts` is TypeScript for us even though globs2 says video/mp2t
   if (FILE_ICON_BY_EXT[ext] === "file-video") return true;
   const mime = globs2ByExt?.get(ext);

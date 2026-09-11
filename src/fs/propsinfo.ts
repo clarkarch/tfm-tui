@@ -1,7 +1,7 @@
 import { readFileSync, type Dirent } from "node:fs";
 import { lstat, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { FILE_ICON_BY_EXT, mimeForExt } from "./filetype";
+import { FILE_ICON_BY_EXT, extOf, mimeForExt } from "./filetype";
 
 // --- Pure display formatters + fs walkers for the properties dialog and
 // status rows. No renderer, no app state. ---
@@ -46,16 +46,16 @@ export const idName = (uid: number): string => {
   return idNameCache.get(uid) ?? String(uid);
 };
 
+export const pad2 = (n: number): string => String(n).padStart(2, "0");
+
 export const fmtDate = (ms?: number): string => {
   if (!ms) return "-";
   const d = new Date(ms);
-  const p2 = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 };
 
 export const mimeLabelFor = (name: string): string => {
-  const dot = name.lastIndexOf(".");
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  const ext = extOf(name);
   const mime = mimeForExt(ext);
   if (mime) return mime;
   const cat = FILE_ICON_BY_EXT[ext];

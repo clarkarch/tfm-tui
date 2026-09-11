@@ -260,7 +260,7 @@ export const wireSettings = (deps: {
     quit: nav.quitApp,
   });
 
-  return { settingGroups, escMenu };
+  return { escMenu };
 };
 
 export const wireRetheme = (deps: {

@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { pathToUri } from "./uri";
+import { fileUriToPath, pathToUri } from "./uri";
 import { trashDir } from "./fsutil";
 
 // --- System places sources, Nautilus-style: XDG user dirs, GTK bookmarks,
@@ -26,19 +26,15 @@ export type Place = {
   bookmarked?: boolean;
 };
 
-export type UserDir = { key: string; label: string; p: string };
+type UserDir = { key: string; label: string; p: string };
 
-export type MountEntry = { label: string; target: string; removable: boolean; device: string };
+type MountEntry = { label: string; target: string; removable: boolean; device: string };
 
-export type BookmarkEntry = { p: string; label: string };
+type BookmarkEntry = { p: string; label: string };
 
 let sysUserDirs: UserDir[] = [];
 let sysBookmarks: BookmarkEntry[] = [];
 let sysMounts: MountEntry[] = [];
-
-export const systemUserDirs = (): UserDir[] => sysUserDirs;
-export const systemBookmarks = (): BookmarkEntry[] => sysBookmarks;
-export const systemMounts = (): MountEntry[] => sysMounts;
 
 export const loadSystemPlaces = async (): Promise<void> => {
   sysUserDirs = await readUserDirs();
@@ -62,7 +58,7 @@ const expandXdgValue = (raw: string): string => {
   return v.replace(/^\$HOME/, home).replace(/^~/, home);
 };
 
-export async function readUserDirs(): Promise<UserDir[]> {
+async function readUserDirs(): Promise<UserDir[]> {
   try {
     const text = await readFile(xdgUserDirsFile(), "utf8");
     const out: UserDir[] = [];
@@ -87,7 +83,7 @@ export async function readUserDirs(): Promise<UserDir[]> {
   }
 }
 
-export async function readBookmarks(): Promise<BookmarkEntry[]> {
+async function readBookmarks(): Promise<BookmarkEntry[]> {
   try {
     const file = gtkBookmarksFile();
     const text = await readFile(file, "utf8");
@@ -98,12 +94,7 @@ export async function readBookmarks(): Promise<BookmarkEntry[]> {
       const uri = sp === -1 ? line : line.slice(0, sp);
       const label = sp === -1 ? "" : line.slice(sp + 1).trim();
       if (!uri.startsWith("file://")) continue;
-      let p: string;
-      try {
-        p = decodeURIComponent(uri.slice("file://".length));
-      } catch {
-        continue;
-      }
+      const p = fileUriToPath(uri);
       try {
         if (!statSync(p).isDirectory()) continue;
       } catch {
@@ -118,10 +109,8 @@ export async function readBookmarks(): Promise<BookmarkEntry[]> {
 }
 
 // --- GTK bookmark toggle (properties dialog; folders only, nautilus-compatible) ---
-export const gtkBookmarksFile = (): string =>
+const gtkBookmarksFile = (): string =>
   path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "gtk-3.0", "bookmarks");
-
-export const bookmarkUri = pathToUri;
 
 export const isBookmarked = (dir: string): boolean => sysBookmarks.some((b) => path.resolve(b.p) === path.resolve(dir));
 
@@ -132,7 +121,7 @@ export const setBookmarked = async (dir: string, on: boolean): Promise<void> => 
   try {
     lines = (await readFile(file, "utf8")).split("\n");
   } catch {}
-  const uri = bookmarkUri(dir);
+  const uri = pathToUri(dir);
   const kept = lines.filter((l) => l.trim() && l.split(" ")[0] !== uri);
   if (on) kept.push(uri);
   await mkdir(path.dirname(file), { recursive: true });
@@ -192,7 +181,7 @@ export function parseLsblk(json: any): MountEntry[] {
   return out;
 }
 
-export async function listMounts(): Promise<MountEntry[]> {
+async function listMounts(): Promise<MountEntry[]> {
   try {
     const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"]);
     return parseLsblk(JSON.parse(stdout));

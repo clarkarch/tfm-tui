@@ -22,9 +22,9 @@ export type PluginEventPayload = {
   boot: Record<string, never>;
 };
 
-export type PluginEventUnsub = () => void;
+type PluginEventUnsub = () => void;
 
-export type PluginEvents = {
+type PluginEvents = {
   on<E extends PluginEventName>(evt: E, cb: (payload: PluginEventPayload[E]) => void): PluginEventUnsub;
   emit<E extends PluginEventName>(evt: E, payload: PluginEventPayload[E]): void;
 };

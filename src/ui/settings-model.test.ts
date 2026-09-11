@@ -61,9 +61,6 @@ const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin 
   store: {
     get: (_k: string, fb: unknown) => fb as never,
     set: () => {},
-    remove: () => {},
-    keys: () => [],
-    subscribe: () => () => {},
   },
   deactivate: null,
   file: `/fake/${over.name}.ts`,
@@ -282,13 +279,6 @@ describe("settingGroups shape", () => {
           set: () => {
             throw new Error("store-boom");
           },
-          remove: () => {
-            throw new Error("store-boom");
-          },
-          keys: () => {
-            throw new Error("store-boom");
-          },
-          subscribe: () => () => {},
         },
       });
       const good: LoadedPlugin = mkPlugin({

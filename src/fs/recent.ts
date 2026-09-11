@@ -8,7 +8,7 @@ import { parseIso, pathToUri, uriToPath, xdgDataHome, xdgStateHome } from "./uri
 // Persistence only: read/write these two registries, nothing else. Batching
 // opens and building grid Entries live in ./recent-open and ./listing. ---
 
-export type XbelItem = { path: string; modified: number };
+type XbelItem = { path: string; modified: number };
 
 const xbelPath = (): string => path.join(xdgDataHome(), "recently-used.xbel");
 

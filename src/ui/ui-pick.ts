@@ -19,7 +19,7 @@ export type PickItem = {
   run: () => void;
 };
 
-export type PickCtx = {
+type PickCtx = {
   renderer(): any;
   byId(id: string): any;
   rootAdd(node: any): void;

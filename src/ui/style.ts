@@ -21,15 +21,15 @@ export type { UiStyle };
 // only floating layers differ (floatSurface below). Branch background-chrome
 // choices on this, never on === "outline" directly, so a fourth style can't
 // silently fall through to solid fills.
-export const isOutlineVariant = (style: UiStyle): boolean => style !== "solid";
+const isOutlineVariant = (style: UiStyle): boolean => style !== "solid";
 
 // inner width available to children of the sidebar panel: outline variants'
 // border ring reserves one cell per side (yoga setBorder)
 export const sideInnerWidth = (style: UiStyle, sw: number): number => (isOutlineVariant(style) ? sw - 2 : sw);
 
-export type SurfaceState = "rest" | "hover" | "selected" | "cut";
+type SurfaceState = "rest" | "hover" | "selected" | "cut";
 
-export type SurfaceOpts = {
+type SurfaceOpts = {
   backgroundColor?: string;
   border?: boolean;
   borderStyle?: "rounded";

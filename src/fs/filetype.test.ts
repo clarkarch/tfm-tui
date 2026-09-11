@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   FILE_ICON_BY_EXT,
+  extOf,
   fileIconFor,
   fileIsImage,
   fileIsVideo,
@@ -8,6 +9,16 @@ import {
   mimeCategory,
   mimeForExt,
 } from "./filetype";
+
+describe("extOf", () => {
+  test("lowercases and handles dotfiles / no-ext / multi-dot", () => {
+    expect(extOf("Photo.JPG")).toBe("jpg");
+    expect(extOf("archive.tar.gz")).toBe("gz");
+    expect(extOf("Makefile")).toBe("");
+    expect(extOf(".hidden")).toBe(""); // leading dot = no ext
+    expect(extOf(".config.toml")).toBe("toml");
+  });
+});
 
 describe("mimeCategory", () => {
   test("media-type prefixes map to their icon categories", () => {

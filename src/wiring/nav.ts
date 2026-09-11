@@ -80,7 +80,7 @@ export const wireNav = (deps: {
   // --- Status bar writes live in ./ui-status (tested). The refresh target is
   // selection's, created further down the wiring — arrow defers it. ---
   const { setStatusMsg } = makeStatus({
-    byId: core.lookup.byId,
+    setText: core.lookup.setTextOnId,
     refresh: () => getGridFoundation().selection.updateSelectionStatusReal(),
   });
 
@@ -137,8 +137,6 @@ export const wireNav = (deps: {
     switchTab,
     newTab,
     closeTab,
-    syncTabFromState,
-    scheduleSaveSession,
     restoreSession,
     search,
     clearSearch,

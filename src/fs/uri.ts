@@ -28,6 +28,18 @@ export const uriToPath = (uri: string): string | null => {
   }
 };
 
+// lenient file:// -> path decode for external payloads (kitty/yazi drops,
+// gnome-clipboard payloads): strips an optional authority part with the first
+// slash and swallows malformed percent escapes instead of dropping the line.
+export const fileUriToPath = (uri: string): string => {
+  let u = uri.slice(7);
+  if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
+  try {
+    u = decodeURIComponent(u);
+  } catch {}
+  return u;
+};
+
 // path -> file:// URI, percent-encoding every segment except the root slash.
 // (Named xmlEscapeUri in the monolith days — it escapes for URIs, not XML.)
 export const pathToUri = (p: string): string =>

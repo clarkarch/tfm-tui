@@ -25,7 +25,7 @@ import {
   type SettingsPanelState,
 } from "./ui-settings-panel";
 
-export type EscMenuCtx = {
+type EscMenuCtx = {
   renderer(): any;
   byId(id: string): any;
   clearChildren(node: any): void;

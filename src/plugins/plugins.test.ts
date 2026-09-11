@@ -14,13 +14,12 @@ import path from "node:path";
 import {
   copyStagedPlugin,
   hashPluginFolder,
-  loadPlugins,
   makePluginRegistry,
   makePluginStore,
   pluginBuildDir,
   pluginsDir,
-  type PluginApi,
 } from "./plugins";
+import type { LoadedPlugin, PluginApi } from "./plugin-api";
 
 // Loader contract: each *.ts file in the plugins dir contributes its
 // activate(api) rows; a broken plugin is isolated (recorded + warned, never
@@ -39,8 +38,17 @@ afterAll(() => {
   rmSync(cacheSandbox, { recursive: true, force: true });
 });
 
+const loadPlugins = async (deps: {
+  dir: string;
+  api: PluginApi;
+  warn(message: string): void;
+}): Promise<{ plugins: LoadedPlugin[]; errors: string[] }> => {
+  const reg = makePluginRegistry(deps);
+  await reg.scan();
+  return { plugins: [...reg.plugins], errors: [...reg.errors] };
+};
+
 const mkApi = (dir: string, notes: string[]): PluginApi => ({
-  version: 2,
   notify: (message) => {
     notes.push(message);
   },
@@ -51,8 +59,6 @@ const mkApi = (dir: string, notes: string[]): PluginApi => ({
   store: (name) => makePluginStore(dir, name),
   selection: () => [],
   cwd: () => "/home/u",
-  navigate: () => {},
-  refresh: () => {},
   commands: () => [],
   ui: { pick: () => {}, confirm: async () => false, notifySticky: () => () => {} },
   events: { on: () => () => {} },
@@ -692,28 +698,6 @@ describe("lifecycle v2 (async activate + deactivate + store scope)", () => {
       expect(makePluginStore(dir, "aaa").get("k", "")).toBe("from-aaa");
       expect(makePluginStore(dir, "bbb").get("k", "")).toBe("");
       expect(logs.some((l) => l.includes("asked for store"))).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("store remove/keys/subscribe work and persist", () => {
-    const dir = mkDir();
-    try {
-      const store = makePluginStore(dir, "hello");
-      let fires = 0;
-      const unsub = store.subscribe(() => fires++);
-      store.set("a", 1);
-      store.set("b", 2);
-      expect(store.keys().sort()).toEqual(["a", "b"]);
-      expect(fires).toBe(2);
-      store.remove("a");
-      expect(store.keys()).toEqual(["b"]);
-      expect(fires).toBe(3);
-      unsub();
-      store.set("c", 3);
-      expect(fires).toBe(3);
-      expect(makePluginStore(dir, "hello").keys().sort()).toEqual(["b", "c"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

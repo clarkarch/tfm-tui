@@ -9,7 +9,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 // kills the whole TUI. Returns the child (null never — spawn always returns
 // on POSIX) with the listener armed; onFail receives the failure. ---
 
-export type SpawnFail = (err: Error) => void;
+type SpawnFail = (err: Error) => void;
 
 export const spawnSafe = (
   cmd: string,

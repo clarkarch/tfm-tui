@@ -86,7 +86,7 @@ export const wireFileops = (deps: {
     makeIconSlot,
     setIconState,
     drainIconQueue,
-    notifySticky: (children, opts) => chrome.notifySticky(children, opts),
+    notifySticky: chrome.notifySticky,
   });
 
   // --- File operations: runTransfer/performRename/paste/clipboard
@@ -162,12 +162,10 @@ export const wireFileops = (deps: {
     undo,
     syncUndoJournal,
     conflict,
-    progress,
     fileops,
     terminal,
     trash,
     yesNo,
-    confirmYesNo: yesNo.confirm,
     confirmEmptyTrash,
     confirmDeleteForever,
   };

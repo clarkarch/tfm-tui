@@ -9,19 +9,17 @@ import type { Tab } from "../app/tabs";
 // Pure read/write of the session document; the caller owns when to save and
 // how to adopt the restored slots. ---
 
-export type SessionTab = Tab;
-
 export const sessionFile = (): string =>
   path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state"), "tfm", "session.json");
 
-export const saveSession = async (cwd: string, tabs: SessionTab[], activeTab: number): Promise<void> => {
+export const saveSession = async (cwd: string, tabs: Tab[], activeTab: number): Promise<void> => {
   await mkdir(path.dirname(sessionFile()), { recursive: true });
   await writeFile(sessionFile(), JSON.stringify({ cwd, tabs, activeTab }));
 };
 
 // synchronous final write for quit: process.exit() kills pending async IO,
 // so the debounced 400ms save would lose the last navigation
-export const saveSessionSync = (cwd: string, tabs: SessionTab[], activeTab: number): void => {
+export const saveSessionSync = (cwd: string, tabs: Tab[], activeTab: number): void => {
   mkdirSync(path.dirname(sessionFile()), { recursive: true });
   writeFileSync(sessionFile(), JSON.stringify({ cwd, tabs, activeTab }));
 };
@@ -40,11 +38,11 @@ const usable = (p: string): boolean => {
 // Parse + sanitize the session file. Returns null when there is nothing to
 // restore (missing file, garbage JSON, or no tab with a usable history) —
 // callers then keep their default tab.
-export const readRestoredSession = (): { tabs: SessionTab[]; activeTab: number } | null => {
+export const readRestoredSession = (): { tabs: Tab[]; activeTab: number } | null => {
   try {
     const doc = JSON.parse(readFileSync(sessionFile(), "utf8"));
     if (Array.isArray(doc?.tabs)) {
-      const restored: SessionTab[] = [];
+      const restored: Tab[] = [];
       for (const t of doc.tabs) {
         const hist: string[] = Array.isArray(t?.history)
           ? t.history.filter((p: unknown) => typeof p === "string" && usable(p as string))

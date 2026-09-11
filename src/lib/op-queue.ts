@@ -18,7 +18,7 @@ export const makeOpQueue = () => {
   return { enqueue };
 };
 
-export type OpQueue = ReturnType<typeof makeOpQueue>;
+type OpQueue = ReturnType<typeof makeOpQueue>;
 
 // module-level shared queue for all file mutations so trash + transfer +
 // restore (different factories) still serialize against each other

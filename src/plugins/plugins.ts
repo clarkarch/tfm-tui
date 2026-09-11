@@ -12,6 +12,7 @@
 // the core config TOML (the static config-schema can't take
 // runtime-registered keys). ---
 
+import type { Stats } from "node:fs";
 import {
   cpSync,
   existsSync,
@@ -32,6 +33,7 @@ import { withTimeout } from "../lib/uiutil";
 import { validateKeybindSpec } from "../config/config-schema";
 import {
   PLUGIN_API_VERSION,
+  PLUGIN_NAME_RE,
   type LoadedPlugin,
   type PluginApi,
   type PluginCommand,
@@ -40,16 +42,6 @@ import {
   type PluginPreview,
   type PluginStore,
 } from "./plugin-api";
-
-export type {
-  LoadedPlugin,
-  PluginApi,
-  PluginCommand,
-  PluginFileMenuEntry,
-  PluginModule,
-  PluginStore,
-} from "./plugin-api";
-export { PLUGIN_API_VERSION } from "./plugin-api";
 
 // user plugin home: alongside config.toml (XDG_CONFIG_HOME aware so tests
 // can sandbox it — never hardcode ~/.config)
@@ -67,37 +59,44 @@ export const pluginBuildDir = (): string => {
   return path.join(base, "tfm", "plugin-build");
 };
 
+// shared recursive walk for the plugin-folder passes: readdir sorted (stable
+// hash order), lstat only — symlinks are never followed (a link to /etc must
+// not leak outside content into the hash or the staged copy) — and missing
+// dirs/entries are skipped. Visitors decide what each entry means (the
+// hash/fingerprint passes skip state.json + symlinks; staging removes them).
+type PluginWalkEntry = { full: string; name: string; st: Stats };
+
+const walkPluginTree = (dir: string, visit: (e: PluginWalkEntry) => void): void => {
+  let names: string[];
+  try {
+    names = readdirSync(dir).sort();
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const full = path.join(dir, name);
+    let st: Stats;
+    try {
+      st = lstatSync(full);
+    } catch {
+      continue;
+    }
+    visit({ full, name, st });
+    if (st.isDirectory()) walkPluginTree(full, visit);
+  }
+};
+
+// state.json is excluded — store writes must not look like code edits
+const skipCodeEntry = (e: PluginWalkEntry): boolean => e.name === "state.json" || e.st.isSymbolicLink();
+
 // content hash of a plugin folder (all files, sorted, content + name).
-// state.json is EXCLUDED — store writes must not look like code edits.
-// Symlinks are SKIPPED (lstat, never stat): a link pointing outside the folder
-// would otherwise pull foreign content into the hash and the staged copy
-// (info leak + disk/hash DoS). Bounded: at most 1000 files / 10MB hashed.
-// Also used as the rescan fast path (folderFingerprint below) — keep it cheap.
+// Bounded: at most 1000 files / 10MB hashed.
 export const hashPluginFolder = (folder: string): string => {
   const files: string[] = [];
-  const walk = (dir: string): void => {
-    if (files.length > 1000) return;
-    let names: string[];
-    try {
-      names = readdirSync(dir).sort();
-    } catch {
-      return;
-    }
-    for (const n of names) {
-      if (n === "state.json") continue;
-      const full = path.join(dir, n);
-      let st: ReturnType<typeof lstatSync> | undefined;
-      try {
-        st = lstatSync(full);
-      } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) continue;
-      if (st.isDirectory()) walk(full);
-      else if (st.isFile()) files.push(full);
-    }
-  };
-  walk(folder);
+  walkPluginTree(folder, (e) => {
+    if (files.length > 1000 || skipCodeEntry(e)) return;
+    if (e.st.isFile()) files.push(e.full);
+  });
   const h = createHash("sha256");
   let bytes = 0;
   for (const f of files) {
@@ -118,34 +117,14 @@ export const hashPluginFolder = (folder: string): string => {
 // cheap folder fingerprint for the rescan fast path: max mtimeMs + file
 // count over non-state, non-symlink files. Catches helper-file edits the old
 // main-file-only check missed (P0-5) without paying the content hash.
-export const folderFingerprint = (folder: string): string => {
+const folderFingerprint = (folder: string): string => {
   let maxMtime = 0;
   let count = 0;
-  const walk = (dir: string): void => {
-    let names: string[];
-    try {
-      names = readdirSync(dir).sort();
-    } catch {
-      return;
-    }
-    for (const n of names) {
-      if (n === "state.json") continue;
-      const full = path.join(dir, n);
-      let st: ReturnType<typeof lstatSync> | undefined;
-      try {
-        st = lstatSync(full);
-      } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) continue;
-      if (st.isDirectory()) walk(full);
-      else if (st.isFile()) {
-        count++;
-        if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
-      }
-    }
-  };
-  walk(folder);
+  walkPluginTree(folder, (e) => {
+    if (skipCodeEntry(e) || !e.st.isFile()) return;
+    count++;
+    if (e.st.mtimeMs > maxMtime) maxMtime = e.st.mtimeMs;
+  });
   return `${maxMtime}|${count}`;
 };
 
@@ -153,29 +132,12 @@ export const folderFingerprint = (folder: string): string => {
 // links — a staged link to /etc would resolve outside content at import).
 // Best-effort; a failure leaves the link (import still sandboxed to the file).
 const stripStagedSymlinks = (dest: string): void => {
-  const walk = (dir: string): void => {
-    let names: string[];
+  walkPluginTree(dest, (e) => {
+    if (!e.st.isSymbolicLink()) return;
     try {
-      names = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const n of names) {
-      const full = path.join(dir, n);
-      let st: ReturnType<typeof lstatSync> | undefined;
-      try {
-        st = lstatSync(full);
-      } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) {
-        try {
-          rmSync(full, { force: true });
-        } catch {}
-      } else if (st.isDirectory()) walk(full);
-    }
-  };
-  walk(dest);
+      rmSync(e.full, { force: true });
+    } catch {}
+  });
 };
 
 // copy a plugin folder to its hashed staging dir, prune older hashes for the
@@ -211,17 +173,10 @@ export const copyStagedPlugin = (srcFolder: string, name: string, hash: string, 
   return stagedMain;
 };
 
-// kept for tests/samples: hash-then-copy in one call.
-export const stagePluginFolder = (srcFolder: string, name: string, mainBase: string): string =>
-  copyStagedPlugin(srcFolder, name, hashPluginFolder(srcFolder), mainBase);
-
-// plugin names become path segments — reject anything that could escape
-const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
-
 // state lives INSIDE the plugin folder (plugins/<name>/state.json) so a
 // plugin is one self-contained directory
 const statePath = (dir: string, name: string): string => {
-  if (!NAME_RE.test(name)) throw new Error(`unsafe plugin name: ${JSON.stringify(name)}`);
+  if (!PLUGIN_NAME_RE.test(name)) throw new Error(`unsafe plugin name: ${JSON.stringify(name)}`);
   return path.join(dir, name, "state.json");
 };
 
@@ -267,14 +222,6 @@ export const makePluginStore = (dir: string, name: string): PluginStore => {
     }
     return cache;
   };
-  const listeners = new Set<() => void>();
-  const emit = (): void => {
-    for (const fn of [...listeners]) {
-      try {
-        fn();
-      } catch {}
-    }
-  };
   const persist = (): void => {
     mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.tmp`;
@@ -292,22 +239,6 @@ export const makePluginStore = (dir: string, name: string): PluginStore => {
     set: (key: string, value: unknown): void => {
       load()[key] = value;
       persist();
-      emit();
-    },
-    remove: (key: string): void => {
-      const data = load();
-      if (key in data) {
-        delete data[key];
-        persist();
-        emit();
-      }
-    },
-    keys: (): string[] => Object.keys(load()),
-    subscribe: (listener: () => void): (() => void) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
     },
   };
 };
@@ -318,18 +249,14 @@ const isPluginModule = (mod: unknown): mod is PluginModule => {
   return typeof m.name === "string" && typeof m.activate === "function";
 };
 
-// bind accessors live in ./plugin-api (leaf) — re-exported here so existing
-// import sites keep working.
-export { getPluginCommandBinds, setPluginCommandBinds } from "./plugin-api";
-
-export type PluginScanDiff = {
+type PluginScanDiff = {
   added: string[];
   removed: string[];
   changed: string[];
   errors: string[];
 };
 
-export type PluginRegistry = {
+type PluginRegistry = {
   // live array — mutated in place on every scan so holders (settings model,
   // menu entries, api.commands merge) see adds/removes without re-wiring
   plugins: LoadedPlugin[];
@@ -436,7 +363,7 @@ export const makePluginRegistry = (deps: {
   const loadOne = async (stagedFile: string, originalFile: string): Promise<LoadedPlugin> => {
     const mod: unknown = (await import(pathToFileURL(stagedFile).href)).default;
     if (!isPluginModule(mod)) throw new Error(`default export must be { name, activate }`);
-    if (!NAME_RE.test(mod.name)) throw new Error(`unsafe plugin name: ${JSON.stringify(mod.name)}`);
+    if (!PLUGIN_NAME_RE.test(mod.name)) throw new Error(`unsafe plugin name: ${JSON.stringify(mod.name)}`);
     const m = mod as PluginModule & { minApiVersion?: unknown; apiVersion?: unknown };
     if (typeof m.minApiVersion === "number" && PLUGIN_API_VERSION < m.minApiVersion) {
       throw new Error(`requires apiVersion >= ${m.minApiVersion} (core is ${PLUGIN_API_VERSION})`);
@@ -691,14 +618,4 @@ export const makePluginRegistry = (deps: {
   };
 
   return { plugins, errors, scan };
-};
-
-export const loadPlugins = async (deps: {
-  dir: string;
-  api: PluginApi;
-  warn(message: string): void;
-}): Promise<{ plugins: LoadedPlugin[]; errors: string[] }> => {
-  const reg = makePluginRegistry(deps);
-  await reg.scan();
-  return { plugins: [...reg.plugins], errors: [...reg.errors] };
 };

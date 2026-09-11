@@ -67,7 +67,7 @@ export const wrapToastText = (s: string, budget: number, maxLines: number = MAX_
 type ToastEntry = { id: number; nodeId: string; height: number; sticky: boolean; timer: any };
 
 // shared slide-in animation (slide-out is just the reverse direction)
-export const animateLeft = (node: any, from: number, to: number, ms: number): void => {
+const animateLeft = (node: any, from: number, to: number, ms: number): void => {
   const steps = 8;
   let i = 0;
   const tick = () => {

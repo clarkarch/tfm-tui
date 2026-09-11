@@ -11,7 +11,7 @@ import type { Theme } from "../config/config";
 import { fsErrText } from "../fs/fsutil";
 import { fileIsImage, fileIsVideo, fileIconFor } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
-import { fmtBytes } from "../fs/propsinfo";
+import { fmtBytes, pad2 } from "../fs/propsinfo";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { clearChildren } from "../lib/uiutil";
 import type { SortMode } from "../lib/sort";
@@ -22,7 +22,7 @@ import type { IconSpec } from "./ui-slots";
 
 export type GridState = { cwd: string; showHidden: boolean; sortBy: SortMode; sortAsc: boolean };
 
-export type GridRendererCtx = {
+type GridRendererCtx = {
   termW(): number;
   termH(): number;
   scroller(): any | null;
@@ -68,6 +68,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
   let tileSeq = 0;
   const { selection } = ctx;
+
+  // list-view row density, clamped to what the builders can render
+  const rowH = (): number => Math.min(3, Math.max(1, ctx.listRowH()));
 
   const clearGrid = (): void => {
     const scroller = ctx.scroller();
@@ -220,10 +223,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   const fmtDateShort = (ms?: number): string => {
     if (!ms) return "-";
     const d = new Date(ms);
-    const p2 = (n: number) => String(n).padStart(2, "0");
     return d.getFullYear() === new Date().getFullYear()
-      ? `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
-      : `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+      ? `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+      : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   };
 
   const buildListRow = (entry: Entry, idx: number): any => {
@@ -231,7 +233,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const sw = ctx.sw();
     const colors = ctx.colors();
     // density knob [ui] list-row-height: 1 = compact, icon scales with height
-    const h = Math.min(3, Math.max(1, ctx.listRowH()));
+    const h = rowH();
     const { aspect } = ctx.cellMetrics();
     const key = entry.abs ?? path.join(cwd, entry.name);
     const rowId = `tfm-tile-${tileSeq++}`;
@@ -393,7 +395,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     selection.setFocusIdx(-1);
     selection.setSelAnchor(null);
     selection.setCols(cols);
-    selection.setRowH(isList ? Math.min(3, Math.max(1, ctx.listRowH())) : TILE_H);
+    selection.setRowH(isList ? rowH() : TILE_H);
     selection.updateSelectionStatusReal();
   };
 

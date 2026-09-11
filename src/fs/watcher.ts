@@ -12,7 +12,7 @@ import { watch } from "node:fs";
 import path from "node:path";
 import { debounced, type Scheduler } from "../lib/uiutil";
 
-export type CwdWatcherCtx = {
+type CwdWatcherCtx = {
   cwd: () => string;
   isVirtualCwd: () => boolean;
   // our own create+inline-edit would wipe the editor mid-keystroke
@@ -84,5 +84,5 @@ export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
     }
   };
 
-  return { syncCwdWatcher, closeWatcher };
+  return { syncCwdWatcher };
 };

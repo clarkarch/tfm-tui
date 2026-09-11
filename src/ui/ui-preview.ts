@@ -16,7 +16,7 @@ import type { Theme } from "../config/config";
 // gen-counter guards stale async file reads so a slow preview can't paint
 // over a newer one. tfm-preview-* ids stay byte-identical. ---
 
-export type ThumbJobLike = {
+type ThumbJobLike = {
   slotId: string;
   path: string;
   mtimeMs: number;
@@ -30,7 +30,7 @@ export type ThumbJobLike = {
   priority?: boolean;
 };
 
-export type PreviewCtx = {
+type PreviewCtx = {
   renderer: any;
   byId(id: string): any;
   colors(): Theme;

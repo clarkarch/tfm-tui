@@ -7,7 +7,7 @@
 
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { rm, rename as fsRename } from "node:fs/promises";
+import { readdir, rm, rename as fsRename } from "node:fs/promises";
 import {
   failSuffix,
   fsErrText,
@@ -66,8 +66,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // trashPaths; drag-restore onto real places stays allowed (dest-based, not
   // view-based, so it never blocks legitimate outs). Subtree check lives in
   // ./fsutil (isInTrashFiles) next to the other Trash path semantics.
-
-  const scanTreeWired = (root: string): Promise<{ files: number; bytes: number }> => scanTree(root);
 
   // stash the replace victim in the trash so ctrl+z can bring it back.
   // Shared by runTransfer collisions and performRename collisions (same 13
@@ -145,7 +143,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // best-effort sweep of crashed-transfer orphans (<dest>.tfm-part-*) so a
     // SIGKILL during the last run doesn't pile up tmp files in the dest dir
     try {
-      const { readdir } = await import("node:fs/promises");
       const kids = await readdir(destDir).catch(() => [] as string[]);
       for (const k of kids) {
         if (k.includes(".tfm-part-")) {
@@ -188,7 +185,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         bytes = 0;
       for (const s of srcs) {
         try {
-          const r = await scanTreeWired(s);
+          const r = await scanTree(s);
           files += r.files;
           bytes += r.bytes;
         } catch {}
@@ -400,13 +397,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // tfm publishes x-special/gnome-copied-files (copy|cut header + file://
   // URIs) so Tfm->Nautilus / Tfm->Tfm paste-as-files works (bridge lives in
   // ./clipboard, tested)
-  const toSystemClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
-    publishPathsToSystemClipboard(mode, items, ctx.log);
-  };
-
   const setClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
     clipboard = items.length ? { mode, items } : null;
-    if (clipboard) toSystemClipboard(mode, items);
+    if (clipboard) publishPathsToSystemClipboard(mode, items, ctx.log);
     // staging, not done — "Copied …" here made paste look already finished
     ctx.setStatusMsg(
       clipboard

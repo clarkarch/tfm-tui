@@ -72,7 +72,6 @@ const baseCtx = () => {
     cwd: () => "/home/u",
     virtualCwd: () => false,
     inTrashView: () => false,
-    home: "/home/u",
     setStatusMsg: (m) => status.push(m),
     notify: (m, t) => notes.push(`${t}: ${m}`),
     subscribeOsc: (cb) => {

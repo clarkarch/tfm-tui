@@ -5,9 +5,9 @@
 // imports ./plugins (sibling) or ui/ (layering: the settings model must not
 // pull node:fs through here; wiring passes callbacks instead).
 // Security: argv is array-passed (no shell), dash-prefixed URLs rejected,
-// file:// and bare paths rejected, names gated by NAME_RE (same as the
-// loader — keep the two in sync), .tmp staging dirs are dot-prefixed so the
-// rescan skips them. ---
+// file:// and bare paths rejected, names gated by PLUGIN_NAME_RE (shared
+// leaf with the loader), .tmp staging dirs are dot-prefixed so the rescan
+// skips them. ---
 
 import {
   cpSync,
@@ -21,12 +21,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { PLUGIN_NAME_RE } from "./plugin-api";
 
-// same as NAME_RE in ./plugins (duplicated, not imported: importing the
-// fs-heavy loader here would let ui/ reach node:fs through this module)
-const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
-
-export type ParsedGitUrl = { url: string; ref?: string; subdir?: string };
+type ParsedGitUrl = { url: string; ref?: string; subdir?: string };
 
 const REF_RE = /^[A-Za-z0-9._\-/]+$/;
 const SUBDIR_RE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
@@ -95,7 +92,7 @@ const baseOf = (s: string): string => {
 // plugin's own name (repo names often differ from plugin names).
 export const derivePluginName = (parsed: ParsedGitUrl): string => {
   const base = parsed.subdir ? baseOf(parsed.subdir) : baseOf(parsed.url);
-  if (!NAME_RE.test(base)) throw new Error(`could not derive plugin name from ${JSON.stringify(base)}`);
+  if (!PLUGIN_NAME_RE.test(base)) throw new Error(`could not derive plugin name from ${JSON.stringify(base)}`);
   return base;
 };
 
@@ -131,12 +128,12 @@ export const findPluginMains = (root: string): string[] => {
   return out;
 };
 
-export type ExecResult = { exit: number; output: string };
+type ExecResult = { exit: number; output: string };
 export type ExecFn = (cmd: string, args: string[], opts?: { cwd?: string }) => Promise<ExecResult>;
 
 // production spawn: array argv (no shell), piped output, 120s kill cap.
 // Never throws — failures arrive as non-zero exit (callers surface output).
-export const defaultExec: ExecFn = async (cmd, args, opts) => {
+const defaultExec: ExecFn = async (cmd, args, opts) => {
   try {
     const proc = Bun.spawn([cmd, ...args], {
       cwd: opts?.cwd,
@@ -212,7 +209,7 @@ export const installPlugin = async (opts: {
   const parsed = parseGitUrl(raw);
   // fail fast on underivable names before paying for a clone
   derivePluginName(parsed);
-  const tmp = path.join(dir, `.tmp-install-${process.pid}-${Math.floor(Math.random() * 1e9).toString(36)}`);
+  const tmp = path.join(dir, `.tmp-install-${process.pid}-${crypto.randomUUID()}`);
   mkdirSync(dir, { recursive: true });
   rmrf(tmp);
   try {
@@ -235,7 +232,7 @@ export const installPlugin = async (opts: {
     // source root (helpers ride along) under the file's own name
     const srcFolder = main.includes("/") ? path.join(source, path.dirname(main)) : source;
     const finalName = main.includes("/") ? path.basename(path.dirname(main)) : path.basename(main, ".ts");
-    if (!NAME_RE.test(finalName)) throw new Error(`unsafe plugin name: ${JSON.stringify(finalName)}`);
+    if (!PLUGIN_NAME_RE.test(finalName)) throw new Error(`unsafe plugin name: ${JSON.stringify(finalName)}`);
     const dest = path.join(dir, finalName);
     if (existsSync(dest)) throw new Error(`"${finalName}" already installed (remove it first)`);
     cpSync(srcFolder, dest, { recursive: true });
@@ -259,7 +256,7 @@ export const installPlugin = async (opts: {
 
 export const updatePlugin = async (opts: { dir: string; name: string; exec?: ExecFn }): Promise<string> => {
   const { dir, name, exec = defaultExec } = opts;
-  if (!NAME_RE.test(name)) throw new Error(`unsafe plugin name: ${JSON.stringify(name)}`);
+  if (!PLUGIN_NAME_RE.test(name)) throw new Error(`unsafe plugin name: ${JSON.stringify(name)}`);
   const dest = path.join(dir, name);
   try {
     if (!statSync(dest).isDirectory()) throw new Error();
@@ -280,7 +277,7 @@ export const updatePlugin = async (opts: { dir: string; name: string; exec?: Exe
   // (enabled flag, keybinds) and the provenance record survive the refresh.
   const src = readSource(dest);
   if (!src) throw new Error(`"${name}" is not a git checkout (installed manually?)`);
-  const tmp = path.join(dir, `.tmp-update-${process.pid}-${Math.floor(Math.random() * 1e9).toString(36)}`);
+  const tmp = path.join(dir, `.tmp-update-${process.pid}-${crypto.randomUUID()}`);
   rmrf(tmp);
   try {
     const args = ["clone", "--depth", "1"];
@@ -312,7 +309,7 @@ export const updatePlugin = async (opts: { dir: string; name: string; exec?: Exe
 };
 
 export const removePluginDir = (dir: string, name: string): string => {
-  if (!NAME_RE.test(name)) throw new Error(`unsafe plugin name: ${JSON.stringify(name)}`);
+  if (!PLUGIN_NAME_RE.test(name)) throw new Error(`unsafe plugin name: ${JSON.stringify(name)}`);
   // existence-checked: silent success on a missing dir would let the caller
   // toast "Removed <name>" for nothing (mirrors updatePlugin's guard)
   try {

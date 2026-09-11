@@ -88,10 +88,9 @@ export const wireCore = (deps: {
   const scrollerRef: { current: ScrollBoxRenderable | null } = { current: null };
 
   // --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred.
-  // URI/XDG primitives live in ./uri; this wrapper keeps the historic
-  // call-signature (defaults to the current cwd). ---
-  function isVirtualCwd(p: string = state.cwd): boolean {
-    return isVirtualUri(p);
+  // URI/XDG primitives live in ./uri.
+  function isVirtualCwd(): boolean {
+    return isVirtualUri(state.cwd);
   }
 
   // --- Trash view detection: the path comparison is pure (./fsutil, honors

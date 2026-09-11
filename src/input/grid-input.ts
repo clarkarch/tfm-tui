@@ -8,7 +8,7 @@ export type ClipItem = { path: string; isDir: boolean };
 
 // Mouse-event shape the tile pipeline actually reads (cell coords, button,
 // modifiers). The renderer hands a richer object; handlers only touch these.
-export type TileMouseEvent = {
+type TileMouseEvent = {
   x: number;
   y: number;
   button?: number;

@@ -7,7 +7,7 @@
 import type { DropTarget } from "./dnd72";
 import type { SelTileRef } from "../input/selection";
 
-export type HitTargetCtx = {
+type HitTargetCtx = {
   // terminal cell -> renderable number (renderer.hitTest in the app)
   hitTest: (x: number, y: number) => number | null | undefined;
   // renderable number -> node (Renderable.renderablesByNumber in the app)

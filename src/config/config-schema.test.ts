@@ -14,7 +14,6 @@ import {
   parseKeySpec,
   serializeBody,
   serializeConfig,
-  specToString,
   validateKeybindSpec,
   type Config,
 } from "./config-schema";
@@ -122,10 +121,6 @@ describe("key specs", () => {
     expect(parseKeySpec("ctrl+")).toBeNull();
     expect(parseKeySpec("ctrl+a+b")).toBeNull();
     expect(parseKeySpec("")).toBeNull();
-  });
-
-  test("specToString is canonical", () => {
-    expect(specToString(parseKeySpec("shift+ctrl+z")!)).toBe("ctrl+shift+z");
   });
 
   test("keyMatch honors modifiers exactly", () => {

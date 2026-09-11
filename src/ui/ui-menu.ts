@@ -23,7 +23,7 @@ export type ListEntry = {
   sep?: boolean;
 };
 
-export type MenuCtx = {
+type MenuCtx = {
   byId(id: string): any;
   rootAdd(node: any): void;
   termW(): number;

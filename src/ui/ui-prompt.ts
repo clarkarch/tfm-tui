@@ -14,7 +14,7 @@ import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
 
-export type PromptCtx = {
+type PromptCtx = {
   renderer(): any;
   byId(id: string): any;
   rootAdd(node: any): void;

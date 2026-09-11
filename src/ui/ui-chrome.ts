@@ -30,7 +30,7 @@ type IconSpec = {
   done?: boolean;
 };
 
-export type ChromeCtx = {
+type ChromeCtx = {
   byId(id: string): any;
   uiStyle(): UiStyle;
   colors(): Theme;
@@ -65,7 +65,6 @@ export type ChromeCtx = {
     statesFactory?: () => IconState[],
   ): { el: any; slotId: string; spec: IconSpec };
   setIconState(spec: any, stateIdx: number): boolean;
-  home: string;
   stateCwd(): string; // live state.cwd
 };
 

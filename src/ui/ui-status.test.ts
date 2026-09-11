@@ -34,7 +34,10 @@ const mkEnv = (resetDelayMs = 30) => {
   let refreshes = 0;
   const clock = makeClock();
   const { setStatusMsg } = makeStatus({
-    byId: (id) => nodes[id],
+    setText: (id, text) => {
+      const n = nodes[id];
+      if (n) n.content = text;
+    },
     refresh: () => {
       refreshes++;
     },
@@ -52,7 +55,12 @@ describe("makeStatus", () => {
   });
 
   test("a missing node is tolerated (rebuilds kill nodes constantly)", () => {
-    const { setStatusMsg } = makeStatus({ byId: () => null, refresh: () => {}, resetDelayMs: 5, sched: makeClock() });
+    const { setStatusMsg } = makeStatus({
+      setText: () => {},
+      refresh: () => {},
+      resetDelayMs: 5,
+      sched: makeClock(),
+    });
     expect(() => setStatusMsg("x")).not.toThrow();
   });
 
@@ -83,7 +91,10 @@ describe("makeStatus", () => {
     const nodes: Record<string, { content: string }> = { "tfm-status-label": { content: "" } };
     let refreshes = 0;
     const { setStatusMsg } = makeStatus({
-      byId: (id) => nodes[id],
+      setText: (id, text) => {
+        const n = nodes[id];
+        if (n) n.content = text;
+      },
       refresh: () => {
         refreshes++;
       },

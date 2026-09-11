@@ -9,15 +9,8 @@ import { xdgDataHome } from "./uri";
 // run a command with a short timeout; returns trimmed stdout, "" on failure
 export const runOutShort = async (cmd: string[], timeoutMs = 1500): Promise<string> => {
   try {
-    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const timer = setTimeout(() => {
-      try {
-        proc.kill();
-      } catch {}
-    }, timeoutMs);
-    const out = (await new Response(proc.stdout).text()).trim();
-    clearTimeout(timer);
-    return out;
+    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: timeoutMs });
+    return (await new Response(proc.stdout).text()).trim();
   } catch {
     return "";
   }

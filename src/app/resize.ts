@@ -5,7 +5,7 @@
 
 import type { Scheduler } from "../lib/uiutil";
 
-export type ResizeCtx = {
+type ResizeCtx = {
   resetIconQueue(): void;
   renderAll(): void;
   delayMs?: number;

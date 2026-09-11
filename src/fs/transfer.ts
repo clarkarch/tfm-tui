@@ -1,6 +1,7 @@
 import { createReadStream, createWriteStream, type ReadStream, type Stats } from "node:fs";
 import { lstat, mkdir, readlink, readdir, rename, rm, symlink, open, chmod, utimes } from "node:fs/promises";
 import path from "node:path";
+import { errCode } from "./fsutil";
 
 // --- Copy engine: tree walking, pre-scan and streamed file copy with
 // pause/cancel/progress. UI-agnostic: callers inject a TransferSink wired to
@@ -109,7 +110,7 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
                   rs.destroy(new Error("cancelled"));
                 } catch {}
               }
-              if (sink.repaint) sink.repaint();
+              sink.repaint();
             });
             const done = () => sink.clearStream(rs);
             let settled = false;
@@ -184,8 +185,7 @@ export const copyTreeProgress = async (src: string, dest: string, sink: Transfer
     try {
       await symlink(target, dest);
     } catch (err: unknown) {
-      const code = typeof err === "object" && err !== null && "code" in err ? err.code : undefined;
-      if (code !== "EEXIST") throw err;
+      if (errCode(err) !== "EEXIST") throw err;
     }
     sink.fileDone();
     sink.repaint(true);

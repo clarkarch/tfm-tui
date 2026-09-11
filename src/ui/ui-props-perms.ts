@@ -15,7 +15,7 @@ import type { ListEntry } from "./ui-menu";
 // base id and byId hits the Box first, mutating it no-ops). Split from
 // ./ui-props (the dialog shell): this owns the mode-bit state machine. ---
 
-export type PermsCtx = {
+type PermsCtx = {
   byId(id: string): any;
   setTextOnId(nodeId: string, s: string): void;
   setOnId(id: string, fn: (n: any) => void): void;
@@ -32,7 +32,7 @@ export type PermsCtx = {
   ): { el: any; slotId: string; spec: any };
 };
 
-export type PermsDeps = {
+type PermsDeps = {
   // rows are appended here, in dialog order
   panel: any;
   targetPath: string;

@@ -20,7 +20,7 @@ import { TileVisual } from "./grid-input";
 
 // Keypress shape the router actually reads. The renderer hands a richer
 // object (scan codes, text, meta); dispatch only touches name + modifiers.
-export type KeyPressEvent = {
+type KeyPressEvent = {
   name?: string;
   shift?: boolean;
   ctrl?: boolean;
@@ -29,7 +29,7 @@ export type KeyPressEvent = {
 };
 
 // structural subset of index's AppState — the router only touches these
-export type KeyState = {
+type KeyState = {
   cwd: string;
   showHidden: boolean;
 };

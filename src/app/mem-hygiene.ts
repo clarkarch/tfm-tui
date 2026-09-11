@@ -21,7 +21,7 @@ export const nativeMemLine = (stats: AllocatorStats | null): string => {
   return out;
 };
 
-export type MemHygieneCtx = {
+type MemHygieneCtx = {
   // renderer.lib.getAllocatorStats() is private — narrow-cast it at the call
   // site (see NativeStatsReach in wiring/io)
   allocatorStats: () => AllocatorStats | null;

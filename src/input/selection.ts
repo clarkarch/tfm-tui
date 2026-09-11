@@ -27,6 +27,7 @@ export type SelectionCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
   byId(id: string): any;
+  setText(id: string, s: string): void;
   setIconState(spec: any, mode: number): void;
   isCutKey(key: string): boolean;
   scroller(): any | null;
@@ -117,12 +118,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
     });
     const setStatus = (s: string) => {
       if (gen !== selStatusGen) return;
-      const status: any = ctx.byId("tfm-status-label");
-      if (status) {
-        try {
-          status.content = s;
-        } catch {}
-      }
+      ctx.setText("tfm-status-label", s);
     };
     if (sel.length === 0) {
       setStatus("");

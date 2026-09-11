@@ -33,6 +33,10 @@ const makeHarness = () => {
     colors: () => COLORS,
     uiStyle: () => "solid",
     byId,
+    setText: (id, text) => {
+      const n = nodes.get(id);
+      if (n) n.content = text;
+    },
     setIconState: (spec: any, mode: number) => {
       if (spec) iconEvents.push({ key: spec.__key, mode });
     },

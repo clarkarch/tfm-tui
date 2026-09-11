@@ -9,14 +9,8 @@ import { dlog } from "../app/log";
 import type { Command } from "../lib/command";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { KEY_SCHEMA, keySpecEqual } from "../config/config-schema";
-import { getPluginCommandBinds } from "../plugins/plugin-api";
-import {
-  makePluginRegistry,
-  makePluginStore,
-  pluginsDir,
-  PLUGIN_API_VERSION,
-  type PluginApi,
-} from "../plugins/plugins";
+import { flattenPluginCommands, getPluginCommandBinds, type PluginApi } from "../plugins/plugin-api";
+import { makePluginRegistry, makePluginStore, pluginsDir } from "../plugins/plugins";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
 
@@ -59,7 +53,6 @@ export const wirePlugins = async (deps: {
   const dir = pluginsDir();
   let loaded: Array<{ commands: Array<{ id: string; title: string; hint?: string; run: () => void }> }> = [];
   const api: PluginApi = {
-    version: PLUGIN_API_VERSION,
     notify: (message, title) => chrome.notify(message, title ?? "tfm"),
     setStatusMsg: nav.setStatusMsg,
     log: (message) => dlog(message),
@@ -68,15 +61,10 @@ export const wirePlugins = async (deps: {
     // run minutes later still sees the current state, never a stale capture
     selection: () => gridFoundation.selection.selPaths(),
     cwd: () => core.state.cwd,
-    navigate: nav.navigate,
-    refresh: nav.renderAll,
     // core table first, then plugin contributions in load order (hints fall
     // back to "" — most plugin commands carry no bind). Both late getters go
     // through tdzSafe: they close over wirings that initialize after scan.
-    commands: () => [
-      ...tdzSafe(() => getKeymap().commands(), [] as Command[])(),
-      ...loaded.flatMap((p) => p.commands.map((c) => ({ ...c, hint: c.hint ?? "" }))),
-    ],
+    commands: () => [...tdzSafe(() => getKeymap().commands(), [] as Command[])(), ...flattenPluginCommands(loaded)],
     ui: {
       pick: (opts) => {
         const noop: () => {

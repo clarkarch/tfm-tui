@@ -10,7 +10,7 @@ import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "
 import { fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import type { Theme } from "../config/config";
 
-export type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
+type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
 
 export type RenameCtx = {
   renderer(): any;

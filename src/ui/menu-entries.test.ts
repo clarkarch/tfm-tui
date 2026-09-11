@@ -19,9 +19,6 @@ const fakePlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugi
   store: {
     get: (_k: string, fb: unknown) => fb as never,
     set: () => {},
-    remove: () => {},
-    keys: () => [],
-    subscribe: () => () => {},
   },
   deactivate: null,
   file: `/fake/${over.name}.ts`,

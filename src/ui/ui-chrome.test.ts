@@ -157,7 +157,6 @@ beforeAll(async () => {
       calls.iconStates.push({ spec, idx });
       return true;
     },
-    home: HOME,
     stateCwd: () => cwd,
   });
 });

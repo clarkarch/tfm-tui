@@ -20,9 +20,9 @@ import { mountPermsEditor } from "./ui-props-perms";
 // renderer arrive via ctx (same seam as ui-dialogs); every tfm-props-* id
 // must stay byte-identical for rethemeChrome. ---
 
-export type PropsIconState = { fg: string; bg: string };
+type PropsIconState = { fg: string; bg: string };
 
-export type PropsThumbJob = {
+type PropsThumbJob = {
   slotId: string;
   path: string;
   mtimeMs: number;
@@ -36,7 +36,7 @@ export type PropsThumbJob = {
   priority?: boolean;
 };
 
-export type PropsCtx = {
+type PropsCtx = {
   byId(id: string): any;
   openDialog(opts: {
     id: string;

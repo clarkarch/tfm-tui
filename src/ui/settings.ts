@@ -40,8 +40,6 @@ export type SettingRow =
 
 export type SettingGroup = { header?: string; rows: SettingRow[] };
 
-export const flattenRows = (groups: SettingGroup[]): SettingRow[] => groups.flatMap((g) => g.rows);
-
 // apply one left/right adjustment to a row; false = nothing happened (action
 // rows, steppers pinned at min/max)
 export const applyAdjust = (row: SettingRow, dir: number): boolean => {

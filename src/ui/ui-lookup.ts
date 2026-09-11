@@ -3,7 +3,7 @@
 // and never run before the renderer boots. The renderer root arrives via a
 // getter — this module never imports the renderer. ---
 
-export type LookupCtx = { root: () => any };
+type LookupCtx = { root: () => any };
 
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

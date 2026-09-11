@@ -2,24 +2,15 @@
 // serializer (with regenerated doc comments) and the example TOML live in
 // ./config-schema — this module is just file location + read/write. ---
 import { readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse } from "smol-toml";
+import { atomicWriteFile } from "../fs/fsutil";
 import { parseConfigDoc, serializeConfig, type Config } from "./config-schema";
 
-export type {
-  Config,
-  GuiGroup,
-  KeyAction,
-  KeysConfig,
-  KeySpec,
-  SchemaRow,
-  Theme,
-  UiConfig,
-  ViewMode,
-} from "./config-schema";
-export { defaultConfig, exampleToml } from "./config-schema";
+export { defaultConfig } from "./config-schema";
+export type { Config, Theme, UiConfig } from "./config-schema";
 
 export function configPath(): string {
   if (process.env.TFM_CONFIG) return process.env.TFM_CONFIG;
@@ -46,12 +37,8 @@ export function loadConfig(): Config {
   return parseConfigDoc(doc);
 }
 
-export { serializeConfig };
-
 export async function saveConfig(cfg: Config): Promise<void> {
   const file = configPath();
   await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  await writeFile(tmp, serializeConfig(cfg));
-  await rename(tmp, file);
+  await atomicWriteFile(file, serializeConfig(cfg));
 }

@@ -6,8 +6,8 @@
 
 import { debounced, type Scheduler } from "../lib/uiutil";
 
-export type StatusCtx = {
-  byId(id: string): any;
+type StatusCtx = {
+  setText(id: string, s: string): void;
   refresh(): void;
   resetDelayMs?: number;
   // injectable clock (tests use a virtual one); defaults to real timers
@@ -18,12 +18,7 @@ export const makeStatus = (ctx: StatusCtx) => {
   const clearStatusMsg = debounced(ctx.resetDelayMs ?? 2500, () => ctx.refresh(), ctx.sched ?? globalThis);
 
   const setStatusMsg = (text: string): void => {
-    const status: any = ctx.byId("tfm-status-label");
-    if (status) {
-      try {
-        status.content = text;
-      } catch {}
-    }
+    ctx.setText("tfm-status-label", text);
     clearStatusMsg();
   };
 

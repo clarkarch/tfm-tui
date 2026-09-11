@@ -22,6 +22,7 @@ const makeSelectionForTest = () => {
     colors: () => COLORS,
     uiStyle: () => "solid",
     byId: () => undefined,
+    setText: () => {},
     setIconState: () => {},
     isCutKey: () => false,
     scroller: () => null,
