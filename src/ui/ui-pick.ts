@@ -77,13 +77,13 @@ export const makePick = (ctx: PickCtx) => {
   let items: PickItem[] = [];
   let title = "";
   let query = "";
-  let idx = 0;
+  let idx = -1;
   let results: PickItem[] = [];
 
   const rawClose = (): void => {
     opened = false;
     query = "";
-    idx = 0;
+    idx = -1;
     results = [];
     try {
       const input: any = ctx.byId("tfm-pick-input");
@@ -102,7 +102,7 @@ export const makePick = (ctx: PickCtx) => {
     if (!list) return;
     const colors = ctx.colors();
     results = filterItems(items, query).slice(0, MAX_ROWS);
-    if (idx >= results.length) idx = Math.max(0, results.length - 1);
+    if (idx >= results.length) idx = results.length - 1;
     ctx.clearChildren(list);
     if (!results.length) {
       list.add(
@@ -127,7 +127,11 @@ export const makePick = (ctx: PickCtx) => {
             paddingRight: 1,
             backgroundColor: active ? colors.accentBg : undefined,
             onMouseDown: () => activate(i),
-            onMouseOver: () => {
+            // move, not over: OpenTUI re-fires synthetic "over" after every
+            // hit-grid-changing render (recheckHoverState), which would snap
+            // the cursor back to the row under a stationary mouse and fight
+            // arrow-key nav. Real motion dispatches "move".
+            onMouseMove: () => {
               if (idx !== i) {
                 idx = i;
                 renderList();
@@ -152,7 +156,7 @@ export const makePick = (ctx: PickCtx) => {
     title = opts.title;
     items = opts.items ?? ctx.commands();
     query = "";
-    idx = 0;
+    idx = -1;
     const colors = ctx.colors();
     const scrim = Box(
       {
@@ -228,11 +232,13 @@ export const makePick = (ctx: PickCtx) => {
 
   const move = (delta: number): void => {
     if (!results.length) return;
-    idx = (idx + delta + results.length) % results.length;
+    // idx -1 = no cursor yet: down fills the first row, up the last
+    idx = idx < 0 ? (delta >= 0 ? 0 : results.length - 1) : (idx + delta + results.length) % results.length;
     renderList();
   };
 
   const activate = (i = idx): void => {
+    if (i < 0) return;
     const item = results[i];
     if (!item) return;
     close();
@@ -264,7 +270,7 @@ export const makePick = (ctx: PickCtx) => {
     // test seam: drive the filter without Input events
     setFilter: (q: string): void => {
       query = q;
-      idx = 0;
+      idx = -1;
       renderList();
     },
   };

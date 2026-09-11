@@ -89,7 +89,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const enterView = (view: "settings" | "plugins"): void => {
     menuView = view;
     st.catIdx = 0;
-    st.menuIdx = 0;
+    // no row cursor until the first arrow/hover (category highlight stays)
+    st.menuIdx = -1;
     st.pane = "rows";
     st.scrollOff = 0;
     renderMenuContent();
@@ -295,7 +296,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       return;
     }
     const items = rootMenuItems();
-    const it = items[st.menuIdx] ?? items[0];
+    const it = items[st.menuIdx];
     if (!it) return;
     if (it.keepOpen) {
       it.action();
@@ -417,7 +418,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             paddingRight: 1,
             backgroundColor: active ? c.accentBg : undefined,
             onMouseDown: onClick,
-            onMouseOver: hoverSelect(index),
+            onMouseMove: hoverSelect(index),
           },
           ...(icon
             ? [
@@ -492,7 +493,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.floats.open("escmenu", rawCloseMenu);
     menuOpen = true;
     menuView = "root";
-    st.menuIdx = 0;
+    st.menuIdx = -1;
     st.catIdx = 0;
     st.pane = "rows";
     st.scrollOff = 0;
@@ -550,7 +551,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const moveMenu = (delta: number) => {
     if (!inPanelView()) {
       const count = rootMenuItems().length;
-      st.menuIdx = (st.menuIdx + delta + count) % count;
+      if (!count) return;
+      st.menuIdx = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
       renderMenuContent();
       return;
     }
@@ -560,7 +562,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     }
     const count = rowsOf(st.catIdx).length;
     if (!count) return;
-    st.menuIdx = (st.menuIdx + delta + count) % count;
+    st.menuIdx = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
     ensureVisible(st, visibleRows());
     renderMenuContent();
   };
@@ -568,7 +570,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // the "back" action row returns to the root view
   const showRoot = (): void => {
     menuView = "root";
-    st.menuIdx = 0;
+    st.menuIdx = -1;
     st.pane = "rows";
     st.capturing = null;
   };

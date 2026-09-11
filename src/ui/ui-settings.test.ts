@@ -149,12 +149,17 @@ afterAll(() => {
 });
 
 // openMenu is a no-op while open (shared instance state across tests) — close
-// first so every test starts from the root view with reset cursor/pane/capture
+// first so every test starts from the root view. BOTH views now open with NO
+// cursor (menuIdx -1); these tests select the first row explicitly to reach
+// the historic "row 0 active" baseline (a dedicated test pins the no-cursor
+// default).
 const openSettings = async () => {
   menu.closeMenu();
   await t.renderOnce();
   menu.openMenu();
-  menu.menuActivate(); // root cursor is Settings (keepOpen) — switches the view
+  menu.moveMenu(1); // root: down fills first row = Settings
+  menu.menuActivate(); // keepOpen -> switches the view
+  menu.moveMenu(1); // settings: down fills first row (baseline)
   await t.renderOnce();
 };
 
@@ -195,13 +200,25 @@ describe("esc-menu root view", () => {
   test("root activate: Quit closes the menu and runs; nothing leaks into floats", async () => {
     menu.openMenu();
     await t.renderOnce();
-    menu.moveMenu(1); // cursor to Quit
+    menu.moveMenu(-1); // up from no-cursor fills the LAST row = Quit
     menu.menuActivate();
     await t.renderOnce();
     expect(quitCalls).toBe(1);
     expect(floats.isOpen("escmenu")).toBe(false);
     expect(scrim).toBe(false);
     expect(t.renderer.root.findDescendantById("tfm-menu")).toBeFalsy();
+  });
+
+  test("the root menu opens with no cursor; enter is a no-op until an arrow", async () => {
+    const before = quitCalls;
+    menu.openMenu();
+    await t.renderOnce();
+    menu.menuActivate(); // no cursor -> nothing happens
+    await t.renderOnce();
+    expect(quitCalls).toBe(before);
+    expect(floats.isOpen("escmenu")).toBe(true);
+    menu.closeMenu();
+    await t.renderOnce();
   });
 });
 
@@ -238,7 +255,9 @@ describe("settings view", () => {
   test("hover paints the hovered row by id WITHOUT a rebuild (prev row restored)", async () => {
     await openSettings();
     (t.renderer.root.findDescendantById("tfm-set-row-2") as any).processMouseEvent({
-      type: "over",
+      // "move": hover-select is driven by motion so a post-rebuild synthetic
+      // "over" can't steal the cursor (see ui-menu hover/arrow regression)
+      type: "move",
       button: 0,
       x: 0,
       y: 0,
@@ -357,7 +376,8 @@ describe("plugins view (separate from settings)", () => {
   test("activating Plugins opens its own view rendering that plugin's rows", async () => {
     plugGroups = [helloGroup(() => {})];
     await openRoot();
-    menu.moveMenu(1); // root order: Settings, Plugins, Quit
+    menu.moveMenu(1); // no cursor -> Settings
+    menu.moveMenu(1); // Settings -> Plugins
     menu.menuActivate();
     await t.renderOnce();
     const frame = t.captureCharFrame();
@@ -373,10 +393,12 @@ describe("plugins view (separate from settings)", () => {
     let ran = 0;
     plugGroups = [helloGroup(() => ran++)];
     await openRoot();
-    menu.moveMenu(1);
+    menu.moveMenu(1); // no cursor -> Settings
+    menu.moveMenu(1); // Settings -> Plugins
     menu.menuActivate();
     await t.renderOnce();
-    menu.moveMenu(1); // rows: enabled toggle, then Say hello
+    menu.moveMenu(1); // view opens with no cursor -> enabled toggle
+    menu.moveMenu(1); // -> "Say hello"
     menu.menuActivate(); // activates the "Say hello" row (no keepOpen -> closes)
     expect(ran).toBe(1);
     expect(floats.isOpen("escmenu")).toBe(false);
@@ -451,5 +473,23 @@ describe("menu placement", () => {
     // …and the old top-third pad is gone (a coincident height could satisfy
     // the centering formula under the old code — zero pad kills that hole)
     expect(scrim.yogaNode.getComputedPadding(1)).toBe(0); // Edge.Top
+  });
+});
+
+describe("no initial cursor (fresh views)", () => {
+  test("a freshly entered settings view highlights nothing until an arrow", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    menu.moveMenu(1); // root: down fills Settings
+    menu.menuActivate();
+    await t.renderOnce();
+    // no row selected yet
+    expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]);
+    menu.moveMenu(1); // first arrow selects row 0
+    await t.renderOnce();
+    expect(bgInts("tfm-set-row-0")).toEqual(hexInts(colors.accentBg));
+    menu.closeMenu();
+    await t.renderOnce();
   });
 });

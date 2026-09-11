@@ -972,3 +972,22 @@ describe("plugin commands (keybinds)", () => {
     expect(h.calls).toEqual([]);
   });
 });
+
+describe("file menu with no initial cursor", () => {
+  test("down/up from idx -1 fill first/last actionable; enter is a no-op", () => {
+    const calls: string[] = [];
+    const fmenu = {
+      idx: -1,
+      subIdx: null as number | null,
+      entries: [{ action: () => calls.push("a") }, { sep: true, action: () => {} }, { action: () => calls.push("b") }],
+    };
+    const h = makeHarness({ getFileMenuState: () => fmenu });
+    h.key("return"); // no cursor -> nothing runs
+    expect(calls).toEqual([]);
+    h.key("down"); // first non-sep
+    expect(fmenu.idx).toBe(0);
+    fmenu.idx = -1;
+    h.key("up"); // last non-sep
+    expect(fmenu.idx).toBe(2);
+  });
+});

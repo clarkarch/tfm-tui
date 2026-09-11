@@ -98,7 +98,7 @@ export const makeMenu = (ctx: MenuCtx) => {
           } catch {}
           onActivate();
         },
-        onMouseOver: onHover,
+        onMouseMove: onHover,
       },
       ...(entry.icon
         ? [
@@ -221,10 +221,11 @@ export const makeMenu = (ctx: MenuCtx) => {
           e,
           i === state!.idx,
           () => {
-            // hovering another row swaps/closes the flyout
+            // hovering another row swaps/closes the flyout; a freshly opened
+            // flyout has NO cursor until the next move/hover
             if (state && state.idx !== i) {
               state.idx = i;
-              state.subIdx = e.submenu ? firstActionable(e.submenu) : null;
+              state.subIdx = e.submenu ? -1 : null;
               renderFileMenu();
             }
           },
@@ -232,7 +233,7 @@ export const makeMenu = (ctx: MenuCtx) => {
             if (!state) return;
             if (e.submenu) {
               state.idx = i;
-              state.subIdx = firstActionable(e.submenu);
+              state.subIdx = -1;
               renderFileMenu();
             } else {
               e.action();
@@ -246,17 +247,13 @@ export const makeMenu = (ctx: MenuCtx) => {
     ctx.stripSelectable();
   };
 
-  const firstActionable = (entries: ListEntry[]): number | null => {
-    const i = entries.findIndex((e) => !e.sep);
-    return i < 0 ? null : i;
-  };
-
   // keyboard ops the router calls (state stays internal; see getFileMenuState)
   const openSubmenu = (): void => {
     if (!state) return;
     const subs = state.entries[state.idx]?.submenu;
     if (!subs?.length) return;
-    state.subIdx = firstActionable(subs);
+    // open with no cursor; the next arrow/hover selects
+    state.subIdx = -1;
     renderFileMenu();
   };
   const closeSubmenu = (): void => {
@@ -268,14 +265,15 @@ export const makeMenu = (ctx: MenuCtx) => {
     const items = subEntries();
     if (!state || state.subIdx === null || !items || !items.length) return;
     const count = items.length;
-    let i = (state.subIdx + delta + count) % count;
+    // from "no cursor" (-1): down fills first, up fills last
+    let i = state.subIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (state.subIdx + delta + count) % count;
     for (let n = 0; items[i]?.sep && n < count; n++) i = (i + delta + count) % count;
     state.subIdx = i;
     renderSubMenu();
   };
   const activateSub = (): void => {
     const items = subEntries();
-    const it = items && state && state.subIdx !== null ? items[state.subIdx] : undefined;
+    const it = items && state && state.subIdx !== null && state.subIdx >= 0 ? items[state.subIdx] : undefined;
     if (it && !it.sep) it.action();
   };
 
@@ -290,13 +288,10 @@ export const makeMenu = (ctx: MenuCtx) => {
       py = y;
     if (px + w > ctx.termW() - 1) px = Math.max(0, ctx.termW() - w - 1);
     if (py + h > ctx.termH() - 1) py = Math.max(0, ctx.termH() - h - 1);
-    // start focus on the first actionable row — a leading separator would
-    // strand keyboard highlight on a spacer until the first arrow key
+    // no cursor on open — the first arrow/hover selects (Nautilus-style). The
+    // key router's step() treats idx -1 as "fill first (down) / last (up)".
     state = {
-      idx: Math.max(
-        0,
-        entries.findIndex((e) => !e.sep),
-      ),
+      idx: -1,
       entries,
       subIdx: null,
       px,

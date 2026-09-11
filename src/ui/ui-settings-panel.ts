@@ -64,9 +64,10 @@ const CAT_ICONS: Record<string, string> = {
 };
 
 export const ensureVisible = (st: SettingsPanelState, vis: number): void => {
+  // no cursor yet (freshly opened) — nothing to scroll to
+  if (st.menuIdx < 0) return;
   if (st.menuIdx < st.scrollOff) st.scrollOff = st.menuIdx;
   if (st.menuIdx >= st.scrollOff + vis) st.scrollOff = st.menuIdx - vis + 1;
-  if (st.scrollOff < 0) st.scrollOff = 0;
 };
 
 export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState, h: SettingsPanelHooks) => {
@@ -311,7 +312,10 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
         paddingRight: 1,
         backgroundColor: capturingThis ? c.hoverBg : active ? c.accentBg : undefined,
         onMouseDown: onClick,
-        onMouseOver: () => {
+        // move, not over: a rebuild (arrow-key nav) makes OpenTUI re-fire
+        // synthetic "over" for the row under a stationary mouse, snapping the
+        // cursor back. Real motion dispatches "move".
+        onMouseMove: () => {
           if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
           const prev = st.pane === "rows" ? st.menuIdx : -1;
           st.menuIdx = index;

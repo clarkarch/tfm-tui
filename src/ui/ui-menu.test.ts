@@ -54,10 +54,12 @@ const panelRows = () => {
 };
 
 describe("openContextMenu", () => {
-  test("initial focus skips a leading separator", async () => {
+  test("opens with NO cursor highlight", async () => {
     menu.openContextMenu(5, 5, "", [{ sep: true, label: "", action: () => {} }, ...mkEntries(2)]);
     await t.renderOnce();
-    expect(menu.fileMenuState()!.idx).toBe(1);
+    expect(menu.fileMenuState()!.idx).toBe(-1);
+    const ints = (r: any) => (r.backgroundColor ? [...r.backgroundColor.toInts()] : [0, 0, 0, 0]);
+    for (const r of panelRows()) expect(ints(r)).toEqual([0, 0, 0, 0]);
     menu.closeFileMenu();
     await t.renderOnce();
   });
@@ -92,7 +94,7 @@ describe("keyboard nav contract (live state, no setter)", () => {
     menu.openContextMenu(2, 2, "", mkEntries(3));
     await t.renderOnce();
     const st = menu.fileMenuState()!;
-    expect(st.idx).toBe(0);
+    expect(st.idx).toBe(-1);
 
     st.idx = 2; // exactly what the key router does
     menu.renderFileMenu();
@@ -169,13 +171,17 @@ describe("flyout submenus", () => {
     // submenu rows rasterize the chevron via an icon slot, not a text glyph
     expect(iconSlots).toContain("chevron-right");
     expect(menu.fileMenuState()!.subIdx).toBe(null);
+    // no cursor on open — the parent must be selected before a flyout opens
+    menu.fileMenuState()!.idx = 0;
 
     menu.openSubmenu();
     await t.renderOnce();
-    expect(menu.fileMenuState()!.subIdx).toBe(0);
+    expect(menu.fileMenuState()!.subIdx).toBe(-1); // open, no cursor
     expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeTruthy();
     expect(t.captureCharFrame()).toContain("Open With…");
 
+    menu.moveSub(1); // first move fills the first item
+    expect(menu.fileMenuState()!.subIdx).toBe(0);
     menu.activateSub();
     expect(subCalls).toEqual(["open"]);
     menu.closeFileMenu();
@@ -187,6 +193,7 @@ describe("flyout submenus", () => {
     // px clamps to 80-36-1=43; right flyout (43+36+36) overflows -> flip left
     menu.openContextMenu(60, 5, "", entries);
     await t.renderOnce();
+    menu.fileMenuState()!.idx = 0;
     menu.openSubmenu();
     await t.renderOnce();
     const sub = t.renderer.root.findDescendantById("tfm-filemenu-sub") as any;
@@ -199,6 +206,7 @@ describe("flyout submenus", () => {
     const entries: ListEntry[] = [{ label: "Open", action: () => {}, submenu: [{ label: "Open", action: () => {} }] }];
     menu.openContextMenu(3, 3, "", entries);
     await t.renderOnce();
+    menu.fileMenuState()!.idx = 0;
     menu.openSubmenu();
     await t.renderOnce();
     expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeTruthy();
@@ -206,5 +214,26 @@ describe("flyout submenus", () => {
     await t.renderOnce();
     expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeFalsy();
     expect(t.renderer.root.findDescendantById("tfm-filemenu")).toBeFalsy();
+  });
+});
+
+describe("hover vs arrow keys (stationary-mouse regression)", () => {
+  test("a rebuild does not let a stationary hover steal the keyboard cursor", async () => {
+    menu.openContextMenu(2, 2, "", mkEntries(3));
+    await t.renderOnce();
+    // hover row 1: screen y = py(2) + divider(1) + index(1)
+    await t.mockMouse.moveTo(4, 4);
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.idx).toBe(1);
+
+    // arrow nav to row 2, which rebuilds the panel (hit grid changes; the
+    // renderer then re-fires synthetic "over" on the row under the mouse)
+    menu.fileMenuState()!.idx = 2;
+    menu.renderFileMenu();
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.idx).toBe(2); // not snapped back to row 1
+
+    menu.closeFileMenu();
+    await t.renderOnce();
   });
 });

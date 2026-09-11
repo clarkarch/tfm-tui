@@ -286,8 +286,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const inSub = fmenu.subIdx !== null;
     const count = entries.length;
     const step = (delta: number) => {
+      if (count === 0) return;
+      // idx -1 = no cursor yet: down fills the first row, up the last
+      let i = fmenu.idx < 0 ? (delta >= 0 ? 0 : count - 1) : (fmenu.idx + delta + count) % count;
       // skip separators; bounded so an all-separator menu can't spin forever
-      let i = (fmenu.idx + delta + count) % count;
       for (let n = 0; entries[i]?.sep && n < count; n++) i = (i + delta + count) % count;
       fmenu.idx = i;
       fmenu.subIdx = null; // moving to another parent closes the flyout

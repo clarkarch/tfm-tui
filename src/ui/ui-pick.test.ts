@@ -129,6 +129,7 @@ describe("pick widget", () => {
       const frame = t.captureCharFrame();
       expect(frame).toContain("quit tfm");
       expect(frame).not.toContain("new tab");
+      pick.handleKey({ name: "down" }); // no cursor until the first move
       pick.handleKey({ name: "return" });
       expect(ran).toBe("quit tfm");
       expect(floats.isOpen("pick")).toBe(false);
@@ -175,6 +176,7 @@ describe("pick widget", () => {
       );
       pick.open({ title: "Palette" });
       await t.renderOnce();
+      pick.handleKey({ name: "down" });
       expect(() => pick.handleKey({ name: "return" })).not.toThrow();
       expect(floats.isOpen("pick")).toBe(false);
       await Bun.sleep(10);
@@ -226,6 +228,7 @@ describe("pick widget", () => {
       );
       pick.open({ title: "Palette" });
       await t.renderOnce();
+      pick.handleKey({ name: "down" });
       expect(() => pick.handleKey({ name: "return" })).not.toThrow();
       expect(floats.isOpen("pick")).toBe(false);
       expect(errs.length).toBe(1);
