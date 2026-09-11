@@ -228,7 +228,10 @@ export const makeProps = (ctx: PropsCtx) => {
     let heroEl: ReturnType<typeof Box>;
     if (wantsThumb) {
       const slotId = ctx.nextIconId();
-      heroEl = Box({ id: slotId, width: heroW, height: ICON_H });
+      // flex row + center, exactly like the grid/list thumb slots: the raster
+      // is narrower than the slot when the image aspect differs from the cell
+      // aspect, and without this it sits left-aligned instead of centered
+      heroEl = Box({ id: slotId, width: heroW, height: ICON_H, flexDirection: "row", justifyContent: "center" });
       ctx.pushThumbJob({
         slotId,
         path: targetPath,
@@ -251,10 +254,23 @@ export const makeProps = (ctx: PropsCtx) => {
     }
     panel.add(
       Box(
-        { width: "100%", height: ICON_H + 1, flexDirection: "row", justifyContent: "center", alignItems: "center" },
+        {
+          width: "100%",
+          height: ICON_H + 1,
+          flexDirection: "row",
+          justifyContent: "center",
+          alignItems: "center",
+          // kitty rasters are fixed pixel surfaces (cell box minus the 2px
+          // bleed inset) anchored at the slot's top-left, so they read one
+          // cell right of the flex-centered box — nudge the whole hero left
+          paddingRight: 2,
+        },
         heroEl,
       ),
     );
+    // one blank row of breathing room between the hero and the filename
+    // (a plain " " measures empty — the nbsp forces the row to lay out)
+    panel.add(Box({ width: "100%", height: 1 }, Text({ content: "\u00A0" })));
     panel.add(
       Box(
         { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
@@ -379,7 +395,15 @@ export const makeProps = (ctx: PropsCtx) => {
     ).el;
     panel.add(
       Box(
-        { width: "100%", height: ICON_H + 1, flexDirection: "row", justifyContent: "center", alignItems: "center" },
+        {
+          width: "100%",
+          height: ICON_H + 1,
+          flexDirection: "row",
+          justifyContent: "center",
+          alignItems: "center",
+          // same raster offset as the single-file hero (see above)
+          paddingRight: 2,
+        },
         heroEl,
       ),
     );

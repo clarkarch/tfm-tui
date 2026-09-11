@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box } from "@opentui/core";
+import { Box, Yoga } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeProps } from "./ui-props";
 import { makeDialogs } from "./ui-dialogs";
@@ -30,6 +30,8 @@ let iconStates: Array<{ spec: any; idx: number }>;
 let contextMenus: Array<{ title: string; entries: ListEntry[] }>;
 let statusMsgs: string[];
 let renderAllCount: number;
+let thumbJobs: Array<{ slotId: string; [k: string]: unknown }> = [];
+let iconIdSeq = 0;
 let fileA: string;
 let fileSh: string;
 let dirD: string;
@@ -111,8 +113,10 @@ beforeAll(async () => {
     stripSelectable: () => {},
     drainIconQueue: () => {},
     drainThumbs: () => {},
-    pushThumbJob: () => {},
-    nextIconId: () => `icon-${Math.random()}`,
+    pushThumbJob: (job) => {
+      thumbJobs.push(job);
+    },
+    nextIconId: () => `icon-${++iconIdSeq}`,
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
     closeFileMenu: () => {},
     openContextMenu: (_x, _y, title, entries) => {
@@ -309,5 +313,54 @@ describe("multi-selection properties", () => {
     expect(frame).not.toContain("items selected");
     props.closeProps();
     await t.renderOnce();
+  });
+});
+
+describe("image hero centering", () => {
+  test("the thumbnail slot centers its raster (parity with grid/list slots)", async () => {
+    const img = path.join(sandbox, "pic.png");
+    writeFileSync(img, "x");
+    thumbJobs = [];
+    props.openProperties(img);
+    await settle(() => thumbJobs.length > 0);
+    const job = thumbJobs.at(-1)!;
+    const slot: any = byId(job.slotId);
+    expect(slot).toBeTruthy();
+    // a raster narrower than the slot must center, not hug the left edge
+    expect(slot.yogaNode.getFlexDirection()).toBe(Yoga.FLEX_DIRECTION_ROW);
+    expect(slot.yogaNode.getJustifyContent()).toBe(Yoga.JUSTIFY_CENTER);
+    props.closeProps();
+  });
+
+  test("the hero row shifts thumbnails one cell left (image width lands centered)", async () => {
+    const img = path.join(sandbox, "pic2.png");
+    writeFileSync(img, "x");
+    thumbJobs = [];
+    props.openProperties(img);
+    await settle(() => thumbJobs.length > 0);
+    const slot: any = byId(thumbJobs.at(-1)!.slotId);
+    const heroRow: any = slot?.parent;
+    expect(heroRow?.yogaNode?.getPadding?.(Yoga.EDGE_RIGHT)?.value ?? 0).toBe(2);
+    props.closeProps();
+  });
+
+  test("the icon hero shifts the same cell (same raster anchoring)", async () => {
+    props.openProperties(fileA);
+    await t.renderOnce();
+    const slot: any = byId("slot-file-document");
+    const heroRow: any = slot?.parent;
+    expect(slot).toBeTruthy();
+    expect(heroRow?.yogaNode?.getPadding?.(Yoga.EDGE_RIGHT)?.value ?? 0).toBe(2);
+    props.closeProps();
+  });
+
+  test("the multi-select hero shifts the same cell", async () => {
+    props.openProperties([fileA, fileSh]);
+    await t.renderOnce();
+    const slot: any = byId("slot-select-all");
+    const heroRow: any = slot?.parent;
+    expect(slot).toBeTruthy();
+    expect(heroRow?.yogaNode?.getPadding?.(Yoga.EDGE_RIGHT)?.value ?? 0).toBe(2);
+    props.closeProps();
   });
 });
