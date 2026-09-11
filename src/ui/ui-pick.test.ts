@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { filterItems, fuzzyScore, makePick, type PickItem } from "./ui-pick";
 import { makeFloats } from "./floats";
@@ -69,6 +70,8 @@ const mkPick = (
     colors: () => colors,
     uiStyle: () => "solid",
     floats,
+    escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
+    drainIconQueue: () => {},
     commands,
     ...(onError ? { onError } : {}),
   });

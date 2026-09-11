@@ -322,7 +322,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
 
   // Slots INSIDE a modal (menu rows, context menus, prompts) sit above the
   // scrim and keep their crisp rasters.
-  const MODAL_ROOT_IDS = new Set(["tfm-menu", "tfm-filemenu", "tfm-prompt"]);
+  const MODAL_ROOT_IDS = new Set(["tfm-menu", "tfm-filemenu", "tfm-filemenu-sub", "tfm-prompt"]);
 
   // mounted icon-slot nodes: heterogeneous OpenTUI renderables (byId
   // returns any by design — see ./ui-lookup), narrowed structurally here

@@ -14,7 +14,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 
 ## Features
 
-- **Mouse-first**: click, rubber-band select, context menus, inline rename
+- **Mouse-first**: click, rubber-band select, context menus with nested `Open ▸` submenus (open in new tab, terminal, **Open With…** app picker), inline rename
 - **Drag & drop**: move between folders (`ctrl+drag`), drag out to other apps, drop in from outside — cross-app DnD is kitty-only (OSC 72), in-app drag works everywhere
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
 - **Embedded terminal**: right-click empty space → **Open Terminal Here** runs `$SHELL` in a pane at the current folder; keys hand off to tfm when you click the grid

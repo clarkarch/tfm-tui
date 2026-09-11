@@ -16,6 +16,9 @@ import type { SortMode } from "../lib/sort";
 export type MenuEntriesCtx = {
   closeFileMenu(): void;
   navigate(dir: string): void;
+  newTab(dir: string): void;
+  // open a file with a chosen application (the pick overlay lists handlers)
+  openWith(path: string): void;
   renderAll(): void;
   renderGrid(): void | Promise<void>;
   openTerminalHere(dir?: string): void;
@@ -169,18 +172,28 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     const target = place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : place.path;
     const entries: ListEntry[] = [];
     if (target) {
-      entries.push({
-        icon: "folder",
-        label: "Open",
-        action: () => {
-          ctx.closeFileMenu();
-          ctx.navigate(target);
+      const openSub: ListEntry[] = [
+        {
+          icon: "folder",
+          label: "Open",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.navigate(target);
+          },
         },
-      });
-      // terminal + paste need a real fs dir: virtual URIs are not shell cwds
+        {
+          icon: "plus",
+          label: "Open in New Tab",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.newTab(target);
+          },
+        },
+      ];
+      // terminal needs a real fs dir: virtual URIs are not shell cwds
       // (openTerminalHere only falls back to home on its no-arg path)
       if (!place.scheme) {
-        entries.push({
+        openSub.push({
           icon: "terminal",
           label: "Open Terminal Here",
           action: () => {
@@ -189,6 +202,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         });
       }
+      entries.push({ icon: "folder", label: "Open", action: () => {}, submenu: openSub });
       // paste into real places (not virtual views, not the trash)
       if (!place.scheme && target !== trashFiles()) {
         entries.push({
@@ -280,24 +294,66 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       );
       return withPluginSection(entries, targets);
     }
-    if (isDir)
+    // nested Open: dirs can open in a new tab / terminal, files offer the
+    // default app or an "Open With…" chooser. A parent row is a flyout, not
+    // directly actionable.
+    if (isDir) {
       entries.push({
         icon: "folder",
         label: "Open",
-        action: () => {
-          ctx.closeFileMenu();
-          ctx.navigate(targetPath);
-        },
+        action: () => {},
+        submenu: [
+          {
+            icon: "folder",
+            label: "Open",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.navigate(targetPath);
+            },
+          },
+          {
+            icon: "plus",
+            label: "Open in New Tab",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.newTab(targetPath);
+            },
+          },
+          {
+            icon: "terminal",
+            label: "Open Terminal Here",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.openTerminalHere(targetPath);
+            },
+          },
+        ],
       });
-    else
+    } else {
       entries.push({
         icon: "eye",
         label: "Open",
-        action: () => {
-          ctx.closeFileMenu();
-          ctx.openFileDefault(targetPath);
-        },
+        action: () => {},
+        submenu: [
+          {
+            icon: "eye",
+            label: "Open",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.openFileDefault(targetPath);
+            },
+          },
+          {
+            icon: "cog",
+            label: "Open With…",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.openWith(targetPath);
+            },
+          },
+        ],
       });
+    }
     // actions apply to the whole live selection when the right-clicked tile is
     // part of it (Nautilus behavior), otherwise just this tile
     const inSel = !!ctx.tileRefs.get(targetPath)?.selected;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { desktopAppName, runOutShort } from "./apps";
+import { desktopAppName, appsForFile, parseGioMime, runOutShort } from "./apps";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 afterEach(() => {
@@ -52,5 +52,45 @@ describe("desktopAppName", () => {
 
   test("empty id yields empty name", async () => {
     expect(await desktopAppName("")).toBe("");
+  });
+});
+
+describe("parseGioMime", () => {
+  test("keeps the default first, dedupes, ignores prose", () => {
+    const out =
+      "Default application for “text/plain”: dev.zed.Zed.desktop\n" +
+      "Registered applications:\n\tdev.zed.Zed.desktop\n\tvim.desktop\n" +
+      "Recommended applications:\n\tvim.desktop\n";
+    expect(parseGioMime(out)).toEqual(["dev.zed.Zed.desktop", "vim.desktop"]);
+  });
+
+  test("empty output yields no handlers", () => {
+    expect(parseGioMime("")).toEqual([]);
+  });
+});
+
+describe("appsForFile", () => {
+  test("resolves handlers that exist on disk, drops unknown ids", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-apps-openwith-"));
+    process.env.XDG_DATA_HOME = root;
+    try {
+      const dir = path.join(root, "applications");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "tfm-openwith.desktop"), `[Desktop Entry]\nType=Application\nName=Fake Editor\n`);
+      const run = async (cmd: string[]): Promise<string> =>
+        cmd[0] === "xdg-mime"
+          ? "text/plain"
+          : "Default application for “text/plain”: tfm-openwith.desktop\n" +
+            "Registered applications:\n\ttfm-openwith.desktop\n\tdefinitely-missing.desktop\n";
+      const apps = await appsForFile("/tmp/x.txt", run);
+      expect(apps.map((a) => a.name)).toEqual(["Fake Editor"]);
+      expect(apps[0]!.file).toBe(path.join(dir, "tfm-openwith.desktop"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed mime probe yields no apps", async () => {
+    expect(await appsForFile("/x.txt", async () => "")).toEqual([]);
   });
 });

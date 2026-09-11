@@ -44,6 +44,8 @@ const baseCtx = (): MenuEntriesCtx & {
     sortState: sort,
     closeFileMenu: () => calls.push("close"),
     navigate: (d) => calls.push(`navigate:${d}`),
+    newTab: (d) => calls.push(`newTab:${d}`),
+    openWith: (p) => calls.push(`openWith:${p}`),
     renderAll: () => calls.push("renderAll"),
     renderGrid: () => {
       calls.push("renderGrid");
@@ -107,13 +109,21 @@ describe("fileEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const file = m.fileEntriesFor("/a", false, 0, 0);
     expect(file[0]!.label).toBe("Open");
-    file[0]!.action();
+    expect(file[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open With…"]);
+    file[0]!.submenu![0]!.action();
     expect(ctx.calls).toContain("open:/a");
+    file[0]!.submenu![1]!.action();
+    expect(ctx.calls).toContain("openWith:/a");
 
     const dir = m.fileEntriesFor("/d", true, 0, 0);
     expect(dir[0]!.label).toBe("Open");
-    dir[0]!.action();
+    expect(dir[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open in New Tab", "Open Terminal Here"]);
+    dir[0]!.submenu![0]!.action();
     expect(ctx.calls).toContain("navigate:/d");
+    dir[0]!.submenu![1]!.action();
+    expect(ctx.calls).toContain("newTab:/d");
+    dir[0]!.submenu![2]!.action();
+    expect(ctx.calls).toContain("term:/d");
     const paste = dir.find((e) => e.label.includes("into folder"));
     expect(paste?.label).toBe("Paste 1 item into folder");
     paste!.action();
@@ -209,14 +219,17 @@ describe("sidebarEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const home = m.sidebarEntriesFor(place({ path: "/home/u" }), 0, 0);
     expect(home.some((e) => e.label.startsWith("Paste"))).toBe(true);
-    expect(home.some((e) => e.label === "Open Terminal Here")).toBe(true);
+    const homeOpen = home.find((e) => e.label === "Open")!;
+    expect(homeOpen.submenu!.map((e) => e.label)).toEqual(["Open", "Open in New Tab", "Open Terminal Here"]);
+    homeOpen.submenu![2]!.action();
+    expect(ctx.calls).toContain("term:/home/u");
 
     const trash = m.sidebarEntriesFor(place({ path: TRASH_FILES }), 0, 0);
     expect(trash.some((e) => e.label.startsWith("Paste"))).toBe(false);
     expect(trash.some((e) => e.label === "Empty Trash")).toBe(true);
 
     const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
-    recent.find((e) => e.label === "Open")!.action();
+    recent.find((e) => e.label === "Open")!.submenu![0]!.action();
     expect(ctx.calls).toContain("navigate:recent://");
   });
 
@@ -227,6 +240,7 @@ describe("sidebarEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
     expect(recent.some((e) => e.label === "Open Terminal Here")).toBe(false);
+    expect(recent.find((e) => e.label === "Open")!.submenu!.some((e) => e.label === "Open Terminal Here")).toBe(false);
     expect(recent.some((e) => e.label.startsWith("Paste"))).toBe(false);
   });
 

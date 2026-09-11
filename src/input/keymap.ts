@@ -92,9 +92,17 @@ export type KeyRouterCtx = {
   // home dir — backspace target inside virtual views (URIs have no fs parent)
   home: string;
   // --- file menu ---
-  getFileMenuState(): { idx: number; entries: Array<{ sep?: boolean; action(): void }> } | null;
+  getFileMenuState(): {
+    idx: number;
+    subIdx: number | null;
+    entries: Array<{ sep?: boolean; submenu?: unknown[]; action(): void }>;
+  } | null;
   closeFileMenu(): void;
   renderFileMenu(): void;
+  openFileSubmenu(): void;
+  closeFileSubmenu(): void;
+  moveFileSubmenu(delta: number): void;
+  activateFileSubmenu(): void;
   // --- tabs ---
   tabModel: { active: number; list: unknown[] };
   newTab(): void;
@@ -267,24 +275,42 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     return false;
   };
 
-  // File context menu: arrows move, enter activates, esc closes. Returns true
-  // when the menu is open (it swallows all other keys while open).
+  // File context menu: arrows move, enter activates, esc closes. A parent row
+  // with a submenu opens a flyout on right/enter; while it is open, left/esc
+  // close it and up/down/enter act on the flyout. Returns true when the menu is
+  // open (it swallows all other keys while open).
   const handleFileMenuKeys = (ev: KeyPressEvent): boolean => {
     const fmenu = ctx.getFileMenuState();
     if (!fmenu) return false;
     const entries = fmenu.entries;
+    const inSub = fmenu.subIdx !== null;
     const count = entries.length;
     const step = (delta: number) => {
       // skip separators; bounded so an all-separator menu can't spin forever
       let i = (fmenu.idx + delta + count) % count;
       for (let n = 0; entries[i]?.sep && n < count; n++) i = (i + delta + count) % count;
       fmenu.idx = i;
+      fmenu.subIdx = null; // moving to another parent closes the flyout
       ctx.renderFileMenu();
     };
-    if (ev.name === "escape") ctx.closeFileMenu();
-    else if (ev.name === "up") step(-1);
-    else if (ev.name === "down") step(1);
-    else if (ev.name === "return") entries[fmenu.idx]?.action();
+    if (ev.name === "escape") {
+      if (inSub) ctx.closeFileSubmenu();
+      else ctx.closeFileMenu();
+    } else if (ev.name === "up") {
+      if (inSub) ctx.moveFileSubmenu(-1);
+      else step(-1);
+    } else if (ev.name === "down") {
+      if (inSub) ctx.moveFileSubmenu(1);
+      else step(1);
+    } else if (ev.name === "right") {
+      if (!inSub && entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
+    } else if (ev.name === "left") {
+      if (inSub) ctx.closeFileSubmenu();
+    } else if (ev.name === "return") {
+      if (inSub) ctx.activateFileSubmenu();
+      else if (entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
+      else entries[fmenu.idx]?.action();
+    }
     return true;
   };
 

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeMenu, type ListEntry } from "./ui-menu";
 import { makeFloats } from "./floats";
@@ -14,6 +15,8 @@ import type { Theme } from "../config/config";
 let t: TestRendererSetup;
 let floats: ReturnType<typeof makeFloats>;
 let menu: ReturnType<typeof makeMenu>;
+// icon slots requested by the widget (chevron-right for submenu rows, etc.)
+const iconSlots: string[] = [];
 const colors = defaultConfig.theme as Theme & Record<string, any>;
 
 const mkEntries = (n: number): ListEntry[] =>
@@ -33,7 +36,11 @@ beforeAll(async () => {
     colors: () => colors,
     menuW: 36,
     floats,
-    makeIconSlot: () => ({ el: null as any, slotId: "", spec: null }),
+    // real node so painted frames work (the widget wraps the raster in a box)
+    makeIconSlot: (name) => {
+      iconSlots.push(name);
+      return { el: Box({ width: 1, height: 1 }), slotId: `slot-${name}`, spec: null as any };
+    },
   });
 });
 
@@ -121,7 +128,6 @@ describe("close + floats policy", () => {
     expect(menu.isFileMenuOpen()).toBe(false);
     expect(floats.isOpen("filemenu")).toBe(false);
   });
-
   test("re-opening replaces the popup (exactly one menu node on the tree)", async () => {
     menu.openContextMenu(4, 4, "", mkEntries(2));
     await t.renderOnce();
@@ -141,5 +147,64 @@ describe("close + floats policy", () => {
     expect(frame).not.toContain("entry-0\n"); // stale ones are gone
     menu.closeFileMenu();
     await t.renderOnce();
+  });
+});
+
+describe("flyout submenus", () => {
+  test("chevron paints; opening the flyout mounts and activates items", async () => {
+    const subCalls: string[] = [];
+    const entries: ListEntry[] = [
+      {
+        label: "Open",
+        action: () => {},
+        submenu: [
+          { label: "Open", action: () => subCalls.push("open") },
+          { label: "Open With…", action: () => subCalls.push("openwith") },
+        ],
+      },
+      { label: "Trash", action: () => {} },
+    ];
+    menu.openContextMenu(5, 5, "", entries);
+    await t.renderOnce();
+    // submenu rows rasterize the chevron via an icon slot, not a text glyph
+    expect(iconSlots).toContain("chevron-right");
+    expect(menu.fileMenuState()!.subIdx).toBe(null);
+
+    menu.openSubmenu();
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.subIdx).toBe(0);
+    expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeTruthy();
+    expect(t.captureCharFrame()).toContain("Open With…");
+
+    menu.activateSub();
+    expect(subCalls).toEqual(["open"]);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
+  test("flies out to the LEFT when the right edge would overflow", async () => {
+    const entries: ListEntry[] = [{ label: "Open", action: () => {}, submenu: [{ label: "Open", action: () => {} }] }];
+    // px clamps to 80-36-1=43; right flyout (43+36+36) overflows -> flip left
+    menu.openContextMenu(60, 5, "", entries);
+    await t.renderOnce();
+    menu.openSubmenu();
+    await t.renderOnce();
+    const sub = t.renderer.root.findDescendantById("tfm-filemenu-sub") as any;
+    expect(sub.left).toBe(menu.fileMenuState()!.px - 36);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
+  test("closing the menu tears the flyout down too", async () => {
+    const entries: ListEntry[] = [{ label: "Open", action: () => {}, submenu: [{ label: "Open", action: () => {} }] }];
+    menu.openContextMenu(3, 3, "", entries);
+    await t.renderOnce();
+    menu.openSubmenu();
+    await t.renderOnce();
+    expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeTruthy();
+    menu.closeFileMenu();
+    await t.renderOnce();
+    expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeFalsy();
+    expect(t.renderer.root.findDescendantById("tfm-filemenu")).toBeFalsy();
   });
 });

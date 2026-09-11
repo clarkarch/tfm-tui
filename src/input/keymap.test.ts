@@ -122,6 +122,10 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     getFileMenuState: () => null,
     closeFileMenu: rec("fmenu:close"),
     renderFileMenu: rec("fmenu:render"),
+    openFileSubmenu: rec("fmenu:sub-open"),
+    closeFileSubmenu: rec("fmenu:sub-close"),
+    moveFileSubmenu: rec("fmenu:sub-move"),
+    activateFileSubmenu: rec("fmenu:sub-activate"),
     tabModel,
     newTab: rec("tab:new"),
     closeTab: rec("tab:close"),
@@ -317,6 +321,7 @@ describe("file menu keys", () => {
     const calls: string[] = [];
     const fmenu = {
       idx: 0,
+      subIdx: null as number | null,
       entries: [
         { action: () => calls.push("act:A") },
         { sep: true, action: () => {} },
@@ -336,9 +341,52 @@ describe("file menu keys", () => {
   });
 
   test("escape closes the menu", () => {
-    const h = makeHarness({ getFileMenuState: () => ({ idx: 0, entries: [{ action: () => {} }] }) });
+    const h = makeHarness({ getFileMenuState: () => ({ idx: 0, subIdx: null, entries: [{ action: () => {} }] }) });
     h.key("escape");
     expect(h.calls).toEqual(["fmenu:close"]);
+  });
+
+  test("right opens the submenu only on a parent row", () => {
+    const parent = {
+      idx: 0,
+      subIdx: null as number | null,
+      entries: [{ action: () => {}, submenu: [{ action: () => {} }] }],
+    };
+    const leaf = { idx: 0, subIdx: null as number | null, entries: [{ action: () => {} }] };
+    const h1 = makeHarness({ getFileMenuState: () => parent });
+    h1.key("right");
+    expect(h1.calls).toContain("fmenu:sub-open");
+    const h2 = makeHarness({ getFileMenuState: () => leaf });
+    h2.key("right");
+    expect(h2.calls).not.toContain("fmenu:sub-open");
+  });
+
+  test("with the flyout open, keys act on the submenu; left/esc close it", () => {
+    const open = { idx: 0, subIdx: 1 as number | null, entries: [{ action: () => {}, submenu: [{}] }] };
+    const h = makeHarness({ getFileMenuState: () => open });
+    h.key("down");
+    expect(h.calls).toContain("fmenu:sub-move");
+    expect(h.calls).not.toContain("fmenu:render"); // parent didn't move
+    h.key("return");
+    expect(h.calls).toContain("fmenu:sub-activate");
+    h.key("left");
+    expect(h.calls).toContain("fmenu:sub-close");
+    h.key("escape");
+    expect(h.calls).toContain("fmenu:sub-close");
+    expect(h.calls).not.toContain("fmenu:close");
+  });
+
+  test("enter opens a parent row's submenu instead of activating it", () => {
+    const calls: string[] = [];
+    const fmenu = {
+      idx: 0,
+      subIdx: null as number | null,
+      entries: [{ action: () => calls.push("parent"), submenu: [{ action: () => {} }] }],
+    };
+    const h = makeHarness({ getFileMenuState: () => fmenu });
+    h.key("return");
+    expect(calls).toEqual([]);
+    expect(h.calls).toContain("fmenu:sub-open");
   });
 });
 

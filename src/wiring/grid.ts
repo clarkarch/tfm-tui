@@ -6,6 +6,7 @@
 import path from "node:path";
 import { registerSyntaxParsers } from "../ui/syntax";
 import { availableCompressionFormats, canExtract, compressionExt, compressionHint } from "../fs/archive";
+import { appsForFile, launchApp } from "../fs/apps";
 import type { makePick } from "../ui/ui-pick";
 import { makePreview } from "../ui/ui-preview";
 import { finishDragState, makeEntryMouseHandlers, type BandCtx, type GridMenuEntry } from "../input/grid-input";
@@ -202,6 +203,29 @@ export const wireGrid = (deps: {
   const menuEntries = makeMenuEntries({
     closeFileMenu: chrome.menu.closeFileMenu,
     navigate: nav.navigate,
+    newTab: nav.newTab,
+    // "Open With…": enumerate handlers for the file's mime, then let the
+    // generic pick overlay choose (same pick instance the compress picker uses)
+    openWith: (p) => {
+      void appsForFile(p).then((apps) => {
+        if (!apps.length) {
+          nav.setStatusMsg("No applications found");
+          return;
+        }
+        getPick().open({
+          title: "Open with…",
+          placeholder: "Filter applications…",
+          items: apps.map((a) => ({
+            label: a.name,
+            hint: a.id.replace(/\.desktop$/, ""),
+            run: () => {
+              launchApp(a.file, p, (err) => dlog(`gio launch failed: ${err.message}`));
+              chrome.notify(`Opening ${path.basename(p)} · ${a.name}`, "open");
+            },
+          })),
+        });
+      });
+    },
     renderAll: nav.renderAll,
     renderGrid,
     openTerminalHere: fileops.terminal.openTerminalHere,

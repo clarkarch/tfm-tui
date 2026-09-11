@@ -103,6 +103,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     }
     if (ctx.fileMenuIsOpen()) {
       setOnId("tfm-filemenu", (n) => applySurface(n, floatSurface(st, colors, colors.sidebarBg)));
+      setOnId("tfm-filemenu-sub", (n) => applySurface(n, floatSurface(st, colors, colors.sidebarBg)));
       ctx.renderFileMenu();
     }
   };

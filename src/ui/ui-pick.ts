@@ -28,6 +28,9 @@ type PickCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
   floats: Floats;
+  // shared close-X widget (icon slot); mirrors prompt/props
+  escHintBtn(id: string, onClose: () => void): any;
+  drainIconQueue(): unknown;
   // live item source — read fresh on every open so remaps and plugin
   // contributions apply without rebuilds
   commands(): PickItem[];
@@ -183,7 +186,7 @@ export const makePick = (ctx: PickCtx) => {
           { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
           Text({ content: title, fg: colors.accent }),
           Box({ flexGrow: 1 }),
-          Text({ content: "esc", fg: colors.sidebarFgMuted }),
+          ctx.escHintBtn("tfm-pick-close", () => close()),
         ),
         Box(
           // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
@@ -202,6 +205,7 @@ export const makePick = (ctx: PickCtx) => {
     );
     ctx.rootAdd(scrim);
     ctx.stripSelectable();
+    void ctx.drainIconQueue();
     const input: any = ctx.byId("tfm-pick-input");
     if (input?.on) {
       input.on("input", () => {

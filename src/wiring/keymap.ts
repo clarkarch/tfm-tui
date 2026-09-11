@@ -49,6 +49,8 @@ export const wireKeymap = (deps: {
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     floats,
+    escHintBtn: core.slots.escHintBtn,
+    drainIconQueue: () => core.slots.drainIconQueue(),
     commands: () =>
       [...coreCommands(), ...flattenPluginCommands(plugins.plugins)].map((c) => ({
         label: c.title,
@@ -118,6 +120,10 @@ export const wireKeymap = (deps: {
     getFileMenuState: chrome.menu.fileMenuState,
     closeFileMenu: chrome.menu.closeFileMenu,
     renderFileMenu: chrome.menu.renderFileMenu,
+    openFileSubmenu: chrome.menu.openSubmenu,
+    closeFileSubmenu: chrome.menu.closeSubmenu,
+    moveFileSubmenu: chrome.menu.moveSub,
+    activateFileSubmenu: chrome.menu.activateSub,
     tabModel: nav.tabModel,
     newTab: nav.newTab,
     closeTab: nav.closeTab,
