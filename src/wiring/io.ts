@@ -15,7 +15,7 @@ import { loadSystemPlaces } from "../fs/places";
 import { startMemHygiene, type AllocatorStats } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame } from "../ui/ui-term";
 import { configPath } from "../config/config";
-import { debugLog, dlog, isDebug, DEBUG_LOG } from "../app/log";
+import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
 
@@ -36,6 +36,10 @@ export const wireWatcher = (deps: {
     isVirtualCwd: core.isVirtualCwd,
     isRenaming: () => getGridFoundation().rename.isRenaming(),
     renderGrid: () => getGrid().renderGrid(),
+    // our own diagnostic sinks: dlog appends on every mouse event and defaults
+    // to /tmp/tfm-dnd.log — when that IS the cwd, each click would otherwise
+    // full-rebuild the grid 200ms later (visible flash after every select)
+    ignorePaths: () => [DND_LOG, DEBUG_LOG],
   });
   return { syncCwdWatcher };
 };

@@ -1,8 +1,9 @@
 // --- Grid renderer: the async clear-and-rebuild of the file area (grid tiles
 // OR list rows), the tile/list-row builders, empty/restricted states and the
-// thumbnail handoff. Gen-counter guards stale async rebuilds; selection state
-// lives in ./selection and is reset at every rebuild tail. No module-level
-// renderer imports — everything arrives via ctx (live getters for geometry). ---
+// thumbnail handoff. Gen-counter guards stale async rebuilds; selection lives
+// in ./selection and is preserved by path across rebuilds (vanished files
+// drop, surviving keys keep their state). No module-level renderer imports —
+// everything arrives via ctx (live getters for geometry). ---
 import { Box, Text } from "@opentui/core";
 import { statSync } from "node:fs";
 import path from "node:path";
@@ -311,6 +312,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     if (!scroller) return;
     const gen = ++gridGen;
     const state = ctx.state;
+    // selection must survive rebuilds by path — a busy cwd (and /tmp on this
+    // box, which contains our own dnd log) re-renders constantly; wiping it
+    // made selection vanish mid-interaction. Vanished files drop naturally:
+    // restore only touches keys still present in the new tile set.
+    const prevSel = new Set<string>();
+    selection.tileRefs.forEach((r, k) => {
+      if (r.selected) prevSel.add(k);
+    });
+    const prevFocusKey = selection.focusKeys()[selection.focusIdx()] ?? null;
+    const anchorIdx = selection.selAnchor();
+    const prevAnchorKey = anchorIdx === null ? null : (selection.focusKeys()[anchorIdx] ?? null);
     // a rebuild destroys the edit input; drop the state with it
     ctx.clearRenameEdit();
     clearGrid();
@@ -392,8 +404,19 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     void ctx.drainIconQueue();
     void ctx.drainThumbs();
     selection.setFocusKeys([...selection.tileRefs.keys()]);
-    selection.setFocusIdx(-1);
-    selection.setSelAnchor(null);
+    // restore the pre-rebuild selection/focus by path (stale gen = newer
+    // render owns the refs — never restore into it)
+    if (gen !== gridGen) return;
+    selection.tileRefs.forEach((ref, key) => {
+      if (prevSel.has(key)) {
+        ref.selected = true;
+        selection.setTileVisual(key, TileVisual.Selected);
+      }
+    });
+    const focusKeyIdx = prevFocusKey ? selection.focusKeys().indexOf(prevFocusKey) : -1;
+    selection.setFocusIdx(focusKeyIdx);
+    const anchorNewIdx = prevAnchorKey === null ? -1 : selection.focusKeys().indexOf(prevAnchorKey);
+    selection.setSelAnchor(anchorNewIdx < 0 ? null : anchorNewIdx);
     selection.setCols(cols);
     selection.setRowH(isList ? rowH() : TILE_H);
     selection.updateSelectionStatusReal();

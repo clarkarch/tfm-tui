@@ -208,6 +208,34 @@ describe("renderGrid (grid tiles)", () => {
     expect(thumbJobs.find((j) => j.path.endsWith("a.txt"))).toBeUndefined();
   });
 
+  test("re-render preserves selection, focus and anchor by path", async () => {
+    const aIdx = selection.focusKeys().indexOf(path.join(tmp, "a.txt"));
+    selection.selectTileAt(aIdx);
+    selection.setSelAnchor(0);
+    const focusKey = selection.focusKeys()[selection.focusIdx()]!;
+    iconStateCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+    const ref = selection.tileRefs.get(path.join(tmp, "a.txt"))!;
+    expect(ref.selected).toBe(true);
+    expect(selection.focusKeys()[selection.focusIdx()]).toBe(focusKey);
+    expect(selection.selAnchor()).toBe(0);
+    // repainted as Selected (icon state 2) after the rebuild
+    expect(iconStateCalls.some((c) => c.idx === 2)).toBe(true);
+  });
+
+  test("re-render drops selection for vanished files, keeps the rest", async () => {
+    writeFileSync(path.join(tmp, "gone.txt"), "x");
+    await renderGrid();
+    const goneIdx = selection.focusKeys().indexOf(path.join(tmp, "gone.txt"));
+    selection.selectRange(0, goneIdx); // subdir (index 0) through gone.txt
+    rmSync(path.join(tmp, "gone.txt"));
+    await renderGrid();
+    await t.renderOnce();
+    expect(selection.tileRefs.get(path.join(tmp, "gone.txt"))).toBeUndefined();
+    expect(selection.tileRefs.get(path.join(tmp, "subdir"))!.selected).toBe(true);
+  });
+
   test("cut (pending-move) tiles are dimmed at rebuild", async () => {
     cutKeys.add(path.join(tmp, "a.txt"));
     iconStateCalls.length = 0;
