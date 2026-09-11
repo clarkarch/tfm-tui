@@ -316,7 +316,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       visible: false,
       // live substring filter; honors the show-hidden toggle (grid lists and
       // recursive search both pass state.showHidden)
-      placeholder: "Search (live filter)",
+      placeholder: "Search",
       backgroundColor: ctx.colors().accentBg,
       focusedBackgroundColor: ctx.colors().accentBg,
       textColor: ctx.colors().white,
