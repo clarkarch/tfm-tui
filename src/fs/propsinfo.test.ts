@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadGlobs2 } from "./filetype";
@@ -36,14 +36,19 @@ describe("fmtDate", () => {
 });
 
 describe("mimeLabelFor", () => {
-  test("globs2 mime wins when loaded, else category fallback, else data", async () => {
-    // pre-globs2: extension classifier falls back to category labels
-    expect(mimeLabelFor("noext")).toBe("data");
-    expect(mimeLabelFor("photo.png")).toBe("image/*");
+  test("uses globs2 when present, else category labels, else data", async () => {
+    // load first: globs2 is a global module cache shared across the whole test
+    // process, so asserting the un-loaded state is order-dependent (and lies
+    // once any other file has loaded it). Assert what the environment yields.
     await loadGlobs2();
-    expect(mimeLabelFor("photo.png")).toBe("image/png");
-    expect(mimeLabelFor("song.mp3")).toBe("audio/mpeg");
     expect(mimeLabelFor("noext")).toBe("data");
+    if (existsSync("/usr/share/mime/globs2")) {
+      expect(mimeLabelFor("photo.png")).toBe("image/png");
+      expect(mimeLabelFor("song.mp3")).toBe("audio/mpeg");
+    } else {
+      // no shared-mime-info: extension classifier falls back to the category
+      expect(mimeLabelFor("photo.png")).toBe("image/*");
+    }
   });
 });
 

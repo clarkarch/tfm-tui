@@ -5,8 +5,10 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 ![alpha](https://img.shields.io/badge/status-alpha-red) [![website](https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white)](https://clarkarch.github.io/tfm-tui/)
 
 > [!WARNING]
-> Experimental and vibecoded. Don't use it on files you can't lose. Try it in a
-> container: `podman run --rm -it archlinux bash`
+> Experimental vibecoded software, expect rough edges. Don't test on files you can't afford to lose. If you want to test safely, use Podman: `podman run --rm -it archlinux bash`
+
+> [!IMPORTANT]
+> This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
 
 ![tfm](screenshot.png)
 
@@ -29,14 +31,14 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
   (kitty, ghostty, WezTerm, Konsole…). Without it you get Nerd Font glyphs.
   Cross-app drag needs kitty.
 - Optional tools (the installer lists what's missing):
-  - `rsvg-convert`, icons and SVG thumbnails
-  - `magick`, raster image thumbnails
-  - `ffmpeg`, video thumbnails
-  - `gio`, starred files
-  - `xdg-open`, open files in their default app
-  - `udisksctl`, mount/eject drives
-  - `wl-clipboard` / `xclip`, clipboard with GUI apps
-  - `tar` / `unzip` / `zip` / `7z`, archives
+  - `rsvg-convert` (icons and SVG thumbnails)
+  - `magick` (raster image thumbnails)
+  - `ffmpeg` (video thumbnails)
+  - `gio` (starred files)
+  - `xdg-open` (open files in their default app)
+  - `udisksctl` (mount/eject drives)
+  - `wl-clipboard` / `xclip` (clipboard with GUI apps)
+  - `tar` / `unzip` / `zip` / `7z` (archives)
 
 ## Install
 

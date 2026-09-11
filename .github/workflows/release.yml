@@ -27,7 +27,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.0
 
       - name: Version matches package.json
         run: test "v$(bun -e 'console.log(require("./package.json").version)')" = "${{ github.ref_name }}"
