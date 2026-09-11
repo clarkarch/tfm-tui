@@ -95,6 +95,24 @@ describe("pick widget", () => {
     }
   });
 
+  test("input bar keeps a blank row before the options", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const pick = mkPick(t, floats, () => CMDS);
+      pick.open({ title: "Command palette" });
+      await t.renderOnce();
+      const lines = t.captureCharFrame().split("\n");
+      const input = lines.findIndex((l) => l.includes("Type a command"));
+      const first = lines.findIndex((l) => l.includes("new tab"));
+      expect(input).toBeGreaterThanOrEqual(0);
+      expect(first).toBe(input + 2); // exactly one blank spacer row
+      expect(lines[input + 1]?.trim()).toBe("");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   test("setFilter narrows; activate runs the highlighted item and closes", async () => {
     const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
     try {

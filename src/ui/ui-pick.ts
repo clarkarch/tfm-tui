@@ -186,7 +186,8 @@ export const makePick = (ctx: PickCtx) => {
           Text({ content: "esc", fg: colors.sidebarFgMuted }),
         ),
         Box(
-          { width: "100%", height: 1, paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
+          // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
+          { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
           Input({
             id: "tfm-pick-input",
             width: PANEL_W - 6,
