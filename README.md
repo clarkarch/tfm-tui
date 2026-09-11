@@ -19,14 +19,14 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
 - **Embedded terminal**: right-click empty space → **Open Terminal Here** runs `$SHELL` in a pane at the current folder; keys hand off to tfm when you click the grid
 - **Archives**: right-click an archive → **Extract Here** (staged, conflict-aware, undoable); right-click a selection → **Compress to…** opens a floating picker listing every format the installed tools can produce (`.tar.gz`, `.zip`, `.7z`, `.tar`, `.tar.xz`, `.tar.bz2`, `.tar.zst`, `.tar.lzma`, `.tar.lz4`, `.tar.br`, …)
-- **Previews**: kitty image thumbnails, tree-sitter syntax highlighting, folder stats
+- **Previews**: kitty-protocol image thumbnails, tree-sitter syntax highlighting, folder stats
 - **Search**: type anywhere to filter the open folder; `[ui] recursive-search = true` also searches inside subfolders (fd when installed, built-in walk otherwise)
 - **Themes**: 30+ bundled presets (Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized, …) with live switching, fully configurable via `config.toml`
 
 ## Requirements
 
 - Linux
-- A terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) — **recommended: kitty** (full experience incl. cross-app drag & drop); ghostty gets thumbnails but not cross-app drag; others fall back to Nerd Font glyphs
+- A terminal implementing the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) for image thumbnails — kitty, ghostty, WezTerm, Konsole, and friends all count (it's the protocol, not kitty the terminal). **Cross-app drag & drop is kitty-only** (OSC 72); without the protocol tfm falls back to Nerd Font glyphs
 - Runtime helpers (the installer checks these and tells you what's missing):
 - `rsvg-convert` — theme-tinted icons and crisp SVG thumbnails (else Nerd Font glyphs; `magick` covers raster thumbnails as fallback)
 - `magick` — raster image thumbnails (fallback when `rsvg-convert` is missing)
@@ -112,10 +112,10 @@ Action keys under `[keys]` are remappable (`config.toml`, or `esc` → Settings 
 ## Limitations
 
 - Linux only; no macOS/Windows support
-- Image thumbnails need a kitty-graphics-protocol terminal (kitty, ghostty); others fall back to Nerd Font glyphs
+- Image thumbnails need a terminal that implements the kitty graphics protocol (kitty, ghostty, WezTerm, Konsole, …) — this is the protocol, not kitty the terminal; terminals without it (or with only sixel) fall back to Nerd Font glyphs
 - tmux hides rasters unless `allow-passthrough` is on; icons render but won't display images
 - Cross-device moves are copy+delete (no atomic rename across filesystems) — they run through the copy engine with the progress toast
-- Drag & drop to/from other apps is kitty-only (OSC 72): ghostty does image thumbnails and in-app drag (`ctrl+drag`), but cross-app drag **won't** work there
+- Drag & drop to/from other apps is kitty-only (OSC 72): any kitty-graphics terminal shows thumbnails and in-app drag (`ctrl+drag`), but cross-app drag **won't** work outside kitty
 - Custom kitty themes might misbehave
 
 ## License
