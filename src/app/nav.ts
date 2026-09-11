@@ -22,17 +22,25 @@ export type AppState = {
   showHidden: boolean;
   sortBy: SortMode;
   sortAsc: boolean;
+  // one-shot: a launch FILE path (`tfm some/file.txt`) the first grid build
+  // highlights, then clears (see ui-grid's rebuild tail)
+  pendingSelect?: string | null;
 };
 
 // boot state: the start dir is its own one-entry history; sort defaults to
 // name-ascending (the settings/menu own changes afterwards)
-export const initialAppState = (config: Config, cwd: string = process.cwd()): AppState => ({
+export const initialAppState = (
+  config: Config,
+  cwd: string = process.cwd(),
+  pendingSelect: string | null = null,
+): AppState => ({
   cwd,
   history: [cwd],
   histIdx: 0,
   showHidden: config.ui.showHidden,
   sortBy: "name",
   sortAsc: true,
+  pendingSelect,
 });
 
 type NavHooks = {

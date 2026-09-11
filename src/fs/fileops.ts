@@ -448,6 +448,35 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     } catch {}
   };
 
+  // duplicate = copy in place: runTransfer's same-path branch makes
+  // "name (copy)" without a conflict prompt. A cross-directory selection
+  // (search results, recent view) groups by parent so each copy lands next to
+  // its source instead of flattening into one dir. One undo batch per dir.
+  //
+  // Re-entry guard: a spammed ctrl+d (terminal autorepeat) used to start one
+  // batch per keypress — each a real copy + renderAll + notify — and the
+  // native renderer OOMs on the flood (crash log: "Failed to create
+  // SyntaxStyle" → console overlay alloc fails → exit). Ignore while running.
+  let duplicating = false;
+  const duplicate = async (paths: string[]): Promise<void> => {
+    if (duplicating) return;
+    duplicating = true;
+    try {
+      const byDir = new Map<string, string[]>();
+      for (const p of paths) {
+        const d = path.dirname(p);
+        const group = byDir.get(d);
+        if (group) group.push(p);
+        else byDir.set(d, [p]);
+      }
+      for (const [dir, group] of byDir) {
+        await runTransfer("copy", dir, group, `duplicate ${group.length} item${group.length === 1 ? "" : "s"}`);
+      }
+    } finally {
+      duplicating = false;
+    }
+  };
+
   // --- internal clipboard (cut/copy pending items) ---
   let clipboard: { mode: "copy" | "cut"; items: ClipItem[] } | null = null;
 
@@ -544,6 +573,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     runTransfer,
     performRename,
     performBulkRename,
+    duplicate,
+    // the same progress sink transfers report into — the trash wiring drives
+    // deleteForever through it so deletes get the toast + cancel for free
+    progressSink: transferSink,
     setClipboard,
     pasteSmart,
     moveInto,

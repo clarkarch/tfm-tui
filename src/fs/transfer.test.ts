@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -12,7 +13,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { copyFileProgress, copyTreeProgress, scanTree, type TransferSink } from "./transfer";
+import { copyFileProgress, copyTreeProgress, rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
 // exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
@@ -207,5 +208,53 @@ describe("copyTreeProgress", () => {
     h.setPaused(false);
     await p;
     expect(readFileSync(path.join(dir, "dst", "a.txt"), "utf8")).toBe("A");
+  });
+});
+
+describe("rmTreeProgress", () => {
+  test("removes nested trees, counting files/bytes like scanTree", async () => {
+    W(path.join(dir, "t", "a.txt"), "AAA");
+    W(path.join(dir, "t", "deep", "b.txt"), "BB");
+    const h = mkSink();
+    await rmTreeProgress(path.join(dir, "t"), h.sink);
+    expect(existsSync(path.join(dir, "t"))).toBe(false);
+    expect(h.files).toBe(2);
+    expect(h.bytes).toBe(5);
+  });
+
+  test("a symlink is unlinked, never followed into its target", async () => {
+    W(path.join(dir, "real", "keep.txt"), "keep");
+    symlinkSync(path.join(dir, "real"), path.join(dir, "link"));
+    const h = mkSink();
+    await rmTreeProgress(path.join(dir, "link"), h.sink);
+    expect(existsSync(path.join(dir, "link"))).toBe(false);
+    expect(readFileSync(path.join(dir, "real", "keep.txt"), "utf8")).toBe("keep");
+    expect(h.files).toBe(1); // the link itself counts once, target untouched
+  });
+
+  test("cancel after the first file throws cancelled and leaves the rest", async () => {
+    W(path.join(dir, "t", "a.txt"), "A");
+    W(path.join(dir, "t", "b.txt"), "B");
+    const h = mkSink({ cancelAfterFiles: 1 });
+    let caught: unknown = null;
+    try {
+      await rmTreeProgress(path.join(dir, "t"), h.sink);
+    } catch (err) {
+      caught = err;
+    }
+    expect((caught as Error)?.message).toBe("cancelled");
+    expect(h.files).toBe(1);
+    expect(existsSync(path.join(dir, "t"))).toBe(true);
+    // readdir order is fs-dependent: exactly one of the two files survives
+    expect(readdirSync(path.join(dir, "t")).length).toBe(1);
+  });
+
+  test("directory-only trees remove without counting files", async () => {
+    mkdirSync(path.join(dir, "empty", "nested", "deep"), { recursive: true });
+    const h = mkSink();
+    await rmTreeProgress(path.join(dir, "empty"), h.sink);
+    expect(existsSync(path.join(dir, "empty"))).toBe(false);
+    expect(h.files).toBe(0);
+    expect(h.bytes).toBe(0);
   });
 });

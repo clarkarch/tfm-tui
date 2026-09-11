@@ -31,6 +31,7 @@ export type MenuEntriesCtx = {
   selPaths(): ClipItem[];
   openFileDefault(p: string): void;
   setClipboard(mode: "copy" | "cut", items: ClipItem[]): void;
+  duplicate(paths: string[]): void;
   startInlineRename(key: string): void;
   startInlineCreate(kind: "file" | "folder"): void;
   startBulkRename(paths: string[]): void;
@@ -309,6 +310,14 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         action: () => {
           ctx.closeFileMenu();
           ctx.setClipboard("cut", targets);
+        },
+      },
+      {
+        icon: "content-copy",
+        label: `Duplicate${nSuffix}`,
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.duplicate(targets.map((t) => t.path));
         },
       },
       ...(isDir

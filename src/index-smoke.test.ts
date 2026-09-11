@@ -76,3 +76,68 @@ describe("index.ts --version", () => {
     }
   });
 });
+
+describe("index.ts --help / bad flags", () => {
+  // timeout-gated: if the fast path ever regresses these would boot the TUI and
+  // a bare spawnSync would hang the suite (bun ignores SIGTERM)
+  bootTest(
+    "--help prints usage and exits 0 without booting",
+    () => {
+      const proc = Bun.spawnSync({
+        cmd: ["timeout", "-k", "2", "8", "bun", "src/index.ts", "--help"],
+        cwd: path.resolve(import.meta.dir, ".."),
+        env: { ...process.env, TFM_CONFIG: path.join(TMP, "config.toml") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = new TextDecoder().decode(proc.stdout);
+      expect(out).toContain("Usage: tfm [OPTIONS] [PATH]");
+      expect(out).toContain("--config");
+      expect(proc.exitCode).toBe(0);
+      expect(out).not.toContain("\x1b[?1049");
+    },
+    15000,
+  );
+
+  bootTest(
+    "an unknown option exits 2 with a hint",
+    () => {
+      const proc = Bun.spawnSync({
+        cmd: ["timeout", "-k", "2", "8", "bun", "src/index.ts", "--nope"],
+        cwd: path.resolve(import.meta.dir, ".."),
+        env: { ...process.env, TFM_CONFIG: path.join(TMP, "config.toml") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const err = new TextDecoder().decode(proc.stderr);
+      expect(err).toContain("unknown option '--nope'");
+      expect(err).toContain("tfm --help");
+      expect(proc.exitCode).toBe(2);
+    },
+    15000,
+  );
+});
+
+describe("index.ts bad PATH", () => {
+  // timeout-gated like the boot test: an unpatched build would boot the TUI
+  // here instead of exiting, and a bare spawn would hang the suite
+  bootTest(
+    "a nonexistent PATH exits 1 without booting",
+    () => {
+      const proc = Bun.spawnSync({
+        cmd: ["timeout", "-k", "2", "8", "bun", "src/index.ts", "/definitely/not/here"],
+        cwd: path.resolve(import.meta.dir, ".."),
+        env: { ...process.env, TFM_CONFIG: path.join(TMP, "config.toml") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const err = new TextDecoder().decode(proc.stderr);
+      const out = new TextDecoder().decode(proc.stdout);
+      expect(err).toContain("no such file or directory");
+      expect(proc.exitCode).toBe(1);
+      // hard-fail BEFORE the renderer: no alternate-screen frame was emitted
+      expect(out).not.toContain("\x1b[?1049");
+    },
+    15000,
+  );
+});

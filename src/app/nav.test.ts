@@ -279,4 +279,11 @@ describe("initialAppState", () => {
   test("cwd defaults to the process dir", () => {
     expect(initialAppState({ ui: { showHidden: false } } as any).cwd).toBe(process.cwd());
   });
+
+  test("pendingSelect seeds from the launch file (null by default)", () => {
+    expect(initialAppState({ ui: { showHidden: false } } as any, "/x").pendingSelect).toBeNull();
+    expect(initialAppState({ ui: { showHidden: false } } as any, "/x", "/x/pick.txt").pendingSelect).toBe(
+      "/x/pick.txt",
+    );
+  });
 });

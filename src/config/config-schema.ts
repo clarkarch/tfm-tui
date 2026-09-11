@@ -53,6 +53,7 @@ export type UiConfig = {
   iconCells: number;
   doubleClickMs: number;
   showHidden: boolean;
+  recursiveSearch: boolean;
   previewEnabled: boolean;
   previewWidth: number;
   restoreSession: boolean;
@@ -84,6 +85,7 @@ export type KeyAction =
   | "renameOrRestore"
   | "copy"
   | "cut"
+  | "duplicate"
   | "paste"
   | "undo"
   | "redo"
@@ -252,6 +254,16 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "bool",
     section: "ui",
+    tomlKey: "recursive-search",
+    prop: "recursiveSearch",
+    def: false,
+    doc: "true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)",
+    label: "recursive search",
+    group: "general",
+  },
+  {
+    kind: "bool",
+    section: "ui",
     tomlKey: "preview-enabled",
     prop: "previewEnabled",
     def: false,
@@ -410,6 +422,7 @@ const KEY_ROWS: KeyRow[] = (
     ["renameOrRestore", "rename / bulk rename on multi-selection (restore in trash)", ["f2"]],
     ["copy", "copy selection", ["ctrl+c"]],
     ["cut", "cut selection", ["ctrl+x"]],
+    ["duplicate", "duplicate selection (copy in place)", ["ctrl+d"]],
     ["paste", "paste clipboard", ["ctrl+v"]],
     ["undo", "undo last file op", ["ctrl+z"]],
     ["redo", "redo (ctrl+shift+z works too)", ["ctrl+y", "ctrl+shift+z"]],

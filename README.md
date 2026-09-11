@@ -19,6 +19,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
 - **Embedded terminal**: right-click empty space → **Open Terminal Here** runs `$SHELL` in a pane at the current folder; keys hand off to tfm when you click the grid
 - **Previews**: kitty image thumbnails, tree-sitter syntax highlighting, folder stats
+- **Search**: type anywhere to filter the open folder; `[ui] recursive-search = true` also searches inside subfolders (fd when installed, built-in walk otherwise)
 - **Themes**: 30+ bundled presets (Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized, …) with live switching, fully configurable via `config.toml`
 
 ## Requirements
@@ -51,7 +52,7 @@ bun test        # full suite (bun test <file> for one module)
 bun run compile && cp dist/tfm ~/.local/bin/
 ```
 
-Dev: `bun run --watch src/index.ts`. Launch anywhere with `tfm ~/some/path`.
+Dev: `bun run --watch src/index.ts`. Launch `tfm [OPTIONS] [PATH]` — a directory opens it, a file opens its parent and highlights the file (`tfm ~/Downloads/report.pdf`); `tfm --help` lists the flags. An unknown flag or a nonexistent PATH exits non-zero instead of opening somewhere unexpected.
 
 ## Keys
 
@@ -65,7 +66,7 @@ Dev: `bun run --watch src/index.ts`. Launch anywhere with `tfm ~/some/path`.
 | `esc` | open the esc menu (settings, view mode, sort, …) |
 | `ctrl+q` | quit |
 | `ctrl+z` / `ctrl+y` | undo / redo (`ctrl+shift+z` works too) |
-| `ctrl+x` / `ctrl+c` / `ctrl+v` | cut / copy / paste |
+| `ctrl+x` / `ctrl+c` / `ctrl+d` / `ctrl+v` | cut / copy / duplicate in place / paste |
 | `ctrl+a` | select all |
 | `ctrl+h` | toggle hidden files |
 | `ctrl+r` | reload sidebar places |
@@ -99,6 +100,9 @@ Action keys under `[keys]` are remappable (`config.toml`, or `esc` → Settings 
 | `TFM_INSTALL_DIR` | installer: destination dir (`~/.local/bin` by default) |
 | `TFM_NO_VERIFY=1` | installer: skip checksum verification (not recommended) |
 | `TFM_NO_SYNTAX_DL=1` | skip downloading extra tree-sitter grammars (offline machines) |
+| `--help` / `-h` | print usage and exit |
+| `--version` / `-v` | print version and exit |
+| `--config FILE` / `-c FILE` | alternate config file (same as `TFM_CONFIG`) |
 | `--debug` / `-d` | verbose event log for bug reports |
 | `TFM_DEBUG_LOG` | debug log path (`/tmp/tfm-debug.log` by default) |
 | `TFM_DND_LOG` | drag-and-drop trace path (`/tmp/tfm-dnd.log` by default) |

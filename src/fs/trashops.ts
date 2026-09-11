@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrashMove, safeRestoreMove } from "./fsutil";
+import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
@@ -17,9 +18,26 @@ import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
 type TrashOpName = "trash" | "restore" | "delete-forever" | "empty";
 
+// delete-progress driver (optional; the wiring supplies the prog/toast glue,
+// which lives in ui-progress). When present, deleteForever/emptyTrash pre-scan
+// for totals and stream per-file checkpoints through `sink`, so the toast
+// shows counts and cancel stops mid-tree. Absent = plain rm (headless callers).
+export type DeleteProgress = {
+  sink: TransferSink;
+  /** reset counters, set totals, arm the toast when it's worth showing */
+  start(totalFiles: number, totalBytes: number): void;
+  cancelled(): boolean;
+  /** swap the live toast for the final state (no-op when none showed) */
+  finish(msg: string): void;
+  /** clear the active flag */
+  stop(): void;
+};
+
 export type TrashOpsSink = {
   /** push a completed undo batch (already paired with redos) */
   pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
+  /** optional delete-progress driver (see DeleteProgress) */
+  deleteProgress?: DeleteProgress;
   /** status bar one-liner */
   setStatusMsg(msg: string): void;
   /** toast notification */
@@ -187,25 +205,59 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
 
   const deleteForever = (paths: string[]): Promise<void> => {
     const run = queue.enqueue(async () => {
-      let ok = 0;
-      const failWhy = new Set<string>();
-      for (const p of paths) {
-        try {
-          await rm(p, { recursive: true });
-          await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
-          ok++;
-        } catch (err) {
-          failWhy.add(fsErrText(err));
+      const dp = sink.deleteProgress;
+      // pre-scan so the toast has honest totals; a vanished path scans as 0
+      if (dp) {
+        let files = 0;
+        let bytes = 0;
+        for (const p of paths) {
+          try {
+            const r = await scanTree(p);
+            files += r.files;
+            bytes += r.bytes;
+          } catch {}
         }
+        dp.start(files || Math.max(1, paths.length), bytes);
+      }
+      let ok = 0;
+      let cancelled = false;
+      const failWhy = new Set<string>();
+      try {
+        for (const p of paths) {
+          if (dp?.cancelled()) {
+            cancelled = true;
+            break;
+          }
+          try {
+            if (dp) await rmTreeProgress(p, dp.sink);
+            else await rm(p, { recursive: true });
+            await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
+            ok++;
+          } catch (err) {
+            // cancel raced the last file: the checkpoint threw, not the fs
+            if (dp?.cancelled()) {
+              cancelled = true;
+              break;
+            }
+            failWhy.add(fsErrText(err));
+          }
+        }
+      } finally {
+        dp?.stop();
       }
       sink.renderAll();
       const failed = paths.length - ok;
       // irreversible by design — no undo batch; say so explicitly
-      const summary = failed
-        ? `Deleted ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
-        : `Deleted ${ok} item${ok === 1 ? "" : "s"} · cannot be undone`;
+      const summary = cancelled
+        ? `Delete cancelled · ${ok} of ${paths.length} removed`
+        : failed
+          ? `Deleted ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
+          : `Deleted ${ok} item${ok === 1 ? "" : "s"} · cannot be undone`;
       sink.setStatusMsg(summary);
-      sink.notify(summary, failed ? "delete failed" : "delete");
+      if (dp) dp.finish(cancelled ? "✗ Delete cancelled" : failed ? "✗ Delete failed" : `✓ Deleted ${ok}`);
+      if (cancelled) sink.notify(summary, "delete cancelled");
+      else if (failed > 0) sink.notify(summary, "delete failed");
+      else sink.notify(summary, "delete");
       emit("delete-forever", paths);
     });
     run.catch(() => {});
@@ -226,24 +278,60 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         emit("empty", []);
         return;
       }
-      let n = 0;
-      const failWhy = new Set<string>();
-      for (const k of names) {
-        try {
-          await rm(path.join(filesDir, k), { recursive: true });
-          await rmTrashInfo(k, sink.log?.bind(sink));
-          n++;
-        } catch (err) {
-          failWhy.add(fsErrText(err));
+      const dp = sink.deleteProgress;
+      if (dp) {
+        let files = 0;
+        let bytes = 0;
+        for (const k of names) {
+          try {
+            const r = await scanTree(path.join(filesDir, k));
+            files += r.files;
+            bytes += r.bytes;
+          } catch {}
         }
+        dp.start(files || Math.max(1, names.length), bytes);
+      }
+      let n = 0;
+      let cancelled = false;
+      const failWhy = new Set<string>();
+      try {
+        for (const k of names) {
+          if (dp?.cancelled()) {
+            cancelled = true;
+            break;
+          }
+          try {
+            if (dp) await rmTreeProgress(path.join(filesDir, k), dp.sink);
+            else await rm(path.join(filesDir, k), { recursive: true });
+            await rmTrashInfo(k, sink.log?.bind(sink));
+            n++;
+          } catch (err) {
+            if (dp?.cancelled()) {
+              cancelled = true;
+              break;
+            }
+            failWhy.add(fsErrText(err));
+          }
+        }
+      } finally {
+        dp?.stop();
       }
       sink.renderAll();
       const failed = names.length - n;
+      if (cancelled) {
+        const summary = `Empty cancelled · ${n} of ${names.length} removed`;
+        sink.setStatusMsg(summary);
+        sink.notify(summary, "empty cancelled");
+        dp?.finish("✗ Delete cancelled");
+        return;
+      }
       if (failed > 0) {
+        dp?.finish("✗ Delete failed");
         sink.notify(`Emptied ${n} of ${names.length} · ${failSuffix(failed, failWhy)}`, "empty failed");
         sink.setStatusMsg(`Trash partially emptied (${n} of ${names.length})`);
         return;
       }
+      dp?.finish(`✓ Emptied ${n}`);
       // irreversible by design — no undo batch; say so explicitly. Status and
       // notify carry the same sentence (they diverged before for no reason).
       const summary = `Emptied ${n} item${n === 1 ? "" : "s"} · cannot be undone`;

@@ -10,25 +10,75 @@
 // in milliseconds, not after OpenTUI natives + the whole graph load (~250ms).
 
 import pkg from "../package.json";
-import { statSync } from "node:fs";
+import path from "node:path";
+import { statSync, type Stats } from "node:fs";
+import { parseArgs, usageText } from "./app/cli";
 
-if (process.argv.includes("--version") || process.argv.includes("-v")) {
+// --- CLI: one parse for the whole process. --help/--version and parse errors
+// answer BEFORE the lazy app graph loads, so they stay instant. ---
+const cli = parseArgs(process.argv);
+// help/version win over a parse error (GNU behavior: `tfm --help --bogus` helps)
+if (cli.help) {
+  console.log(usageText());
+  process.exit(0);
+}
+if (cli.version) {
   console.log(`tfm ${pkg.version}`);
   process.exit(0);
 }
+if (cli.error) {
+  console.error(`tfm: ${cli.error}`);
+  console.error("try 'tfm --help'");
+  process.exit(2);
+}
+if (cli.config) process.env.TFM_CONFIG = path.resolve(cli.config);
 
-// optional launch dir (`tfm ~/some/path`): chdir before anything resolves
-// the cwd, so tabs/history/session all start there. Static imports above are
-// already hoisted, but none of them touch the cwd — only the graph below
-// does. Non-dirs warn on stderr (pre-alternate-screen, so it stays visible).
-const { launchDirFromArgv } = await import("./app/boot");
-const launchDir = launchDirFromArgv(process.argv);
-if (launchDir) {
+// launch PATH (`tfm ~/some/path`): chdir before anything resolves the cwd, so
+// tabs/history/session all start there. A FILE opens its parent and is then
+// selected by the grid. An invalid explicit path is a HARD ERROR (exit 1, no
+// boot): the message must stay visible instead of being wiped by the alternate
+// screen, and a wrong path is a typo, not "open wherever I happen to be".
+// An explicit path also suppresses session restore — the user asked for a
+// location, the saved session must not silently win.
+const fail = (msg: string): never => {
+  console.error(msg);
+  process.exit(1);
+};
+let pendingSelect: string | null = null;
+let explicitPath = false;
+const target = cli.paths[0];
+if (cli.paths.length > 1) console.error(`tfm: only the first path is used: ${target}`);
+if (target === "") fail("tfm: empty path");
+if (target) {
+  const abs = path.resolve(target);
+  let st: Stats | null = null;
   try {
-    if (statSync(launchDir).isDirectory()) process.chdir(launchDir);
-    else console.error(`tfm: not a directory: ${launchDir}`);
-  } catch {
-    console.error(`tfm: not a directory: ${launchDir}`);
+    st = statSync(abs);
+  } catch {}
+  if (st === null) {
+    console.error(`tfm: ${target}: no such file or directory`);
+    process.exit(1);
+  }
+  const why = (err: unknown): string => `tfm: ${target}: ${err instanceof Error ? err.message : String(err)}`;
+  if (st.isDirectory()) {
+    try {
+      process.chdir(abs);
+    } catch (err) {
+      fail(why(err));
+    }
+    explicitPath = true;
+  } else if (st.isFile()) {
+    try {
+      process.chdir(path.dirname(abs));
+    } catch (err) {
+      fail(why(err));
+    }
+    // canonicalize via cwd: chdir resolves symlinks, so a symlinked launch dir
+    // would otherwise set pendingSelect to a path the grid never uses as a key
+    pendingSelect = path.join(process.cwd(), path.basename(abs));
+    explicitPath = true;
+  } else {
+    fail(`tfm: ${target}: not a directory`);
   }
 }
 
@@ -54,6 +104,7 @@ if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.sli
 const core = wireCore({
   renderer: () => chrome.renderer,
   clipboard: () => fileops.fileops.clipboard(),
+  pendingSelect,
 });
 
 // --- nav: renderAll, quit, status, history, tabs, session, type-to-search ---
@@ -154,6 +205,7 @@ wireBoot({
   grid,
   fileops,
   bootStart,
+  skipSessionRestore: explicitPath,
 });
 
 const retheme = wireRetheme({

@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream, type ReadStream, type Stats } from "node:fs";
-import { lstat, mkdir, readlink, readdir, rename, rm, symlink, open, chmod, utimes } from "node:fs/promises";
+import { lstat, mkdir, readlink, readdir, rename, rm, rmdir, symlink, open, chmod, utimes } from "node:fs/promises";
 import path from "node:path";
 import { errCode } from "./fsutil";
 
@@ -212,4 +212,28 @@ export const copyTreeProgress = async (src: string, dest: string, sink: Transfer
     sink.fileDone();
     sink.repaint(true);
   }
+};
+
+// Recursive delete with per-entry checkpoints (pause/cancel) and progress
+// accounting. Same lstat semantics as scanTree: symlinks are unlinked, never
+// followed into their target; only files/links count toward files/bytes,
+// directories are checkpointed but not counted. Throws Error("cancelled")
+// from the sink's checkpoint (or the real rm error) — the caller decides
+// whether that ends a batch, exactly like copyTreeProgress. ---
+export const rmTreeProgress = async (root: string, sink: TransferSink): Promise<void> => {
+  const st = await lstat(root);
+  if (st.isDirectory()) {
+    for (const k of await readdir(root)) {
+      await sink.checkpoint();
+      await rmTreeProgress(path.join(root, k), sink);
+    }
+    await sink.checkpoint();
+    await rmdir(root);
+    return;
+  }
+  await sink.checkpoint();
+  await rm(root, { force: true });
+  sink.addBytes(st.size ?? 0);
+  sink.fileDone();
+  sink.repaint(true);
 };

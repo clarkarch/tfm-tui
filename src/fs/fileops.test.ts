@@ -226,6 +226,44 @@ describe("performBulkRename", () => {
   });
 });
 
+describe("duplicate", () => {
+  test("copies in place with (copy) naming, one undo batch", async () => {
+    const h = makeHarness();
+    const a = path.join(ROOT, "dup-a.txt");
+    W(a, "A");
+    await h.ops.duplicate([a]);
+    const copy = path.join(ROOT, "dup-a (copy).txt");
+    expect(readFileSync(copy, "utf8")).toBe("A");
+    expect(existsSync(a)).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("undo:duplicate 1 item:1:"))).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("status:Copied 1 item"))).toBe(true);
+  });
+
+  test("overlapping calls collapse into one batch (ctrl+d spam guard)", async () => {
+    const h = makeHarness();
+    const a = path.join(ROOT, "dup-spam.txt");
+    W(a, "x");
+    await Promise.all([h.ops.duplicate([a]), h.ops.duplicate([a])]);
+    expect(existsSync(path.join(ROOT, "dup-spam (copy).txt"))).toBe(true);
+    expect(existsSync(path.join(ROOT, "dup-spam (copy 2).txt"))).toBe(false);
+    expect(h.calls.filter((c) => c.startsWith("undo:duplicate 1 item:1:")).length).toBe(1);
+  });
+
+  test("selection spanning directories duplicates next to each source", async () => {
+    const h = makeHarness();
+    const one = path.join(ROOT, "dup-d1", "one.txt");
+    const two = path.join(ROOT, "dup-d2", "two.txt");
+    W(one, "1");
+    W(two, "2");
+    await h.ops.duplicate([one, two]);
+    expect(existsSync(path.join(ROOT, "dup-d1", "one (copy).txt"))).toBe(true);
+    expect(existsSync(path.join(ROOT, "dup-d2", "two (copy).txt"))).toBe(true);
+    // one batch per directory — never a cross-dir flatten
+    expect(h.calls.some((c) => c.startsWith("undo:duplicate 1 item:1:"))).toBe(true);
+    expect(existsSync(path.join(ROOT, "dup-d1", "two (copy).txt"))).toBe(false);
+  });
+});
+
 describe("onFileOp fan-out", () => {
   test("successful transfer reports a clean outcome (not a phantom success)", async () => {
     const seen: Array<{

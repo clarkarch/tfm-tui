@@ -16,6 +16,7 @@ double-click-ms      = 400      # 100..2000
 toast-duration-ms    = 3000     # how long notifications stay up, 1000..10000
 drag-threshold-cells = 1        # cells of movement before a press becomes a drag, 1..5
 show-hidden          = false    # start with dotfiles visible (ctrl+h toggles at runtime)
+recursive-search     = false    # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
 preview-enabled      = false    # right-side preview pane (text files, folder stats)
 restore-session      = false    # true = reopen the folder from the last quit instead of the launch cwd
 persist-undo         = false    # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
@@ -75,6 +76,7 @@ trash             = ["delete"]                  # default: delete
 rename-or-restore = ["f2"]                      # default: f2
 copy              = ["ctrl+c"]                  # default: ctrl+c
 cut               = ["ctrl+x"]                  # default: ctrl+x
+duplicate         = ["ctrl+d"]                  # default: ctrl+d
 paste             = ["ctrl+v"]                  # default: ctrl+v
 undo              = ["ctrl+z"]                  # default: ctrl+z
 redo              = ["ctrl+y", "ctrl+shift+z"]  # default: ctrl+y or ctrl+shift+z

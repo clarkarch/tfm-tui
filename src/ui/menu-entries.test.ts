@@ -59,6 +59,7 @@ const baseCtx = (): MenuEntriesCtx & {
     selPaths: () => [{ path: "/a", isDir: false }],
     openFileDefault: (p) => calls.push(`open:${p}`),
     setClipboard: (m, items) => calls.push(`clip:${m}:${items.length}`),
+    duplicate: (ps) => calls.push(`duplicate:${ps.join(",")}`),
     startInlineRename: (k) => calls.push(`rename:${k}`),
     startInlineCreate: (k) => calls.push(`create:${k}`),
     startBulkRename: (ps) => calls.push(`bulkrename:${ps.join(",")}`),
@@ -150,6 +151,20 @@ describe("fileEntriesFor", () => {
     const solo = m.fileEntriesFor("/z", false, 0, 0).find((e) => e.label.startsWith("Rename"))!;
     solo.action();
     expect(ctx.calls).toContain("rename:/z");
+  });
+
+  test("duplicate targets the whole selection", () => {
+    const ctx = baseCtx();
+    ctx.tileRefs = new Map<string, GridTileRef>([["/a", { selected: true, isDir: false }]]);
+    ctx.selPaths = () => [
+      { path: "/a", isDir: false },
+      { path: "/b", isDir: false },
+    ];
+    const m = makeMenuEntries(ctx);
+    const dup = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label.startsWith("Duplicate"))!;
+    expect(dup.label).toBe("Duplicate 2 items");
+    dup.action();
+    expect(ctx.calls).toContain("duplicate:/a,/b");
   });
 
   test("properties target the whole selection, single when outside it", () => {

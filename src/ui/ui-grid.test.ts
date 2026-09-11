@@ -6,6 +6,7 @@ import { Box, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeGridRenderer, type GridState } from "./ui-grid";
 import { makeSelection } from "../input/selection";
+import type { Entry } from "../fs/listing";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SortMode } from "../lib/sort";
@@ -36,6 +37,11 @@ let thumbJobs: any[];
 let iconSlots: Array<{ name: string; heightCells: number; initialState: number }>;
 let mouseHandlers: Array<{ name: string; key: string; idx: number }>;
 let searchQuery: string;
+let recursiveSearch: boolean;
+let searchCalls: string[];
+let searchSignals: AbortSignal[];
+let searchGate: Promise<void> | null;
+let searchEntries: Entry[];
 let viewMode: "grid" | "list";
 let selection: ReturnType<typeof makeSelection>;
 let renderGrid: () => Promise<void>;
@@ -50,6 +56,11 @@ beforeAll(async () => {
   iconSlots = [];
   mouseHandlers = [];
   searchQuery = "";
+  recursiveSearch = false;
+  searchCalls = [];
+  searchSignals = [];
+  searchGate = null;
+  searchEntries = [];
   viewMode = "grid";
   let iconSeq = 0;
 
@@ -78,6 +89,13 @@ beforeAll(async () => {
     scroller: () => ({ content }),
     state: gridState,
     searchQuery: () => searchQuery,
+    recursiveSearch: () => recursiveSearch,
+    searchTree: async (root, q, opts) => {
+      searchCalls.push(`${root}|${q}|hidden=${opts?.hidden ?? false}`);
+      if (opts?.signal) searchSignals.push(opts.signal);
+      if (searchGate) await searchGate;
+      return searchEntries;
+    },
     pathEditMode: () => false,
     sw: () => SW,
     tileW: () => TILE_W,
@@ -155,7 +173,7 @@ describe("renderGrid (grid tiles)", () => {
     expect(mouseHandlers[0]!.idx).toBe(0);
   });
 
-  test("hides dotfiles unless showHidden (or a search) is on", async () => {
+  test("hides dotfiles unless showHidden is on", async () => {
     writeFileSync(path.join(tmp, ".secret"), "x");
     await renderGrid();
     await t.renderOnce();
@@ -181,6 +199,125 @@ describe("renderGrid (grid tiles)", () => {
     await t.renderOnce();
     expect(t.captureCharFrame()).toContain("no matches");
     searchQuery = "";
+  });
+
+  test("in-dir search honors the show-hidden toggle", async () => {
+    writeFileSync(path.join(tmp, ".shidden"), "x");
+    searchQuery = "shidden";
+    gridState.showHidden = false;
+    await renderGrid();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("no matches");
+    gridState.showHidden = true;
+    await renderGrid();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain(".shidden");
+    gridState.showHidden = false;
+    searchQuery = "";
+  });
+
+  test("recursive mode swaps in subtree matches; off filters in place", async () => {
+    searchCalls = [];
+    searchEntries = [
+      { name: "deep/b.md", isDir: false, abs: path.join(tmp, "deep", "b.md") },
+      { name: "deep/other", isDir: true, abs: path.join(tmp, "deep", "other") },
+    ];
+    // off (default): the dir filter runs, search backend never gets called
+    searchQuery = "b.";
+    recursiveSearch = false;
+    await renderGrid();
+    await t.renderOnce();
+    expect(searchCalls).toEqual([]);
+    expect(selection.tileRefs.has(path.join(tmp, "deep", "b.md"))).toBe(false);
+
+    // on: the fake backend's entries become the grid, keys are absolute
+    recursiveSearch = true;
+    await renderGrid();
+    await t.renderOnce();
+    expect(searchCalls.length).toBe(1);
+    // recursive search honors the show-hidden toggle (fd skips .git/.cache)
+    expect(searchCalls[0]).toBe(`${tmp}|b.|hidden=false`);
+    // ...and a signal is always handed to the backend for cancellation
+    expect(searchSignals.length).toBe(1);
+    const keys = [...selection.tileRefs.keys()];
+    expect(keys).toContain(path.join(tmp, "deep", "b.md"));
+    expect(keys).toContain(path.join(tmp, "deep", "other"));
+    // mouse handlers got the results — selection/ops work on abs paths
+    expect(mouseHandlers.some((m) => m.key === path.join(tmp, "deep", "b.md"))).toBe(true);
+
+    // showHidden on → the backend is asked to include hidden entries
+    searchCalls = [];
+    gridState.showHidden = true;
+    await renderGrid();
+    expect(searchCalls[0]).toBe(`${tmp}|b.|hidden=true`);
+    gridState.showHidden = false;
+
+    // virtual cwds never recurse — results stay a same-dir filter
+    searchCalls = [];
+    gridState.cwd = "recent://";
+    await renderGrid();
+    await t.renderOnce();
+    expect(searchCalls).toEqual([]);
+    gridState.cwd = tmp;
+    recursiveSearch = false;
+    searchQuery = "";
+    searchEntries = [];
+  });
+
+  test("a new render aborts the previous in-flight search", async () => {
+    searchCalls = [];
+    searchSignals = [];
+    searchEntries = [{ name: "b.md", isDir: false, abs: path.join(tmp, "b.md") }];
+    recursiveSearch = true;
+    searchQuery = "b";
+    let release!: () => void;
+    searchGate = new Promise<void>((r) => {
+      release = r;
+    });
+    const first = renderGrid();
+    await Promise.resolve();
+    expect(searchSignals.length).toBe(1);
+    expect(searchSignals[0]!.aborted).toBe(false);
+    // second render (still gated) must abort the first search
+    const second = renderGrid();
+    await Promise.resolve();
+    expect(searchSignals[0]!.aborted).toBe(true);
+    release();
+    searchGate = null;
+    await first;
+    await second;
+    recursiveSearch = false;
+    searchQuery = "";
+    searchEntries = [];
+    searchSignals = [];
+  });
+
+  test("a pending launch-file is selected once, then cleared", async () => {
+    const picked = path.join(tmp, "picked.txt");
+    writeFileSync(picked, "x");
+    await renderGrid();
+    gridState.pendingSelect = picked;
+    await renderGrid();
+    await t.renderOnce();
+    // the file's tile is selected and focused on the first build after the flag
+    expect(selection.tileRefs.get(picked)?.selected).toBe(true);
+    expect(selection.focusIdx()).toBe(selection.focusKeys().indexOf(picked));
+    // one-shot: consumed, and a later rebuild does NOT re-select it
+    expect(gridState.pendingSelect).toBeNull();
+    selection.clearTileSelection();
+    await renderGrid();
+    expect(selection.tileRefs.get(picked)?.selected).toBe(false);
+  });
+
+  test("pending launch-file selection works in list view too", async () => {
+    const picked = path.join(tmp, "list-pick.txt");
+    writeFileSync(picked, "x");
+    viewMode = "list";
+    gridState.pendingSelect = picked;
+    await renderGrid();
+    await t.renderOnce();
+    expect(selection.tileRefs.get(picked)?.selected).toBe(true);
+    viewMode = "grid";
   });
 
   test("long names ellipsize to the tile width", async () => {

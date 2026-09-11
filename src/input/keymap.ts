@@ -115,6 +115,7 @@ export type KeyRouterCtx = {
   toggleViewMode(): void;
   zoomTiles(dir: number): void;
   setClipboard(mode: "copy" | "cut", items: Array<{ path: string; isDir: boolean }>): void;
+  duplicate(paths: string[]): void;
   isVirtualCwd(): boolean;
   pasteSmart(dir: string): void;
   setStatusMsg(msg: string): void;
@@ -523,6 +524,16 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const selected = selection.selPaths();
     if (selected.length) ctx.setClipboard("copy", selected);
   };
+  const doDuplicate = (): void => {
+    const selected = selection.selPaths();
+    if (!selected.length) return;
+    // no fs destination in virtual views (cwd is a URI), no duplicate in trash
+    if (ctx.isVirtualCwd() || ctx.inTrashView()) {
+      ctx.setStatusMsg("Can't duplicate here");
+      return;
+    }
+    ctx.duplicate(selected.map((s) => s.path));
+  };
   const doCut = (): void => {
     const selected = selection.selPaths();
     if (selected.length) ctx.setClipboard("cut", selected);
@@ -560,6 +571,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "renameOrRestore", run: doRenameOrRestore },
     { action: "copy", run: doCopy },
     { action: "cut", run: doCut },
+    { action: "duplicate", run: doDuplicate },
     { action: "paste", run: doPaste },
     { action: "undo", run: doUndo },
     { action: "redo", run: doRedo },
@@ -731,7 +743,13 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
     const selected = selection.selPaths();
-    if (hit(ev, "trash") && selected.length) {
+    // terminal autorepeat (ev.repeated) must never enqueue fs work: holding
+    // ctrl+d used to start one real copy per keypress until the native
+    // renderer OOM'd (crash log: "Failed to create SyntaxStyle"). copy/cut
+    // stay reachable on repeat (idempotent clipboard writes); rename is
+    // already guarded by the inline-edit modal swallowing keys.
+    const repeated = ev.repeated === true;
+    if (hit(ev, "trash") && selected.length && !repeated) {
       doTrash();
       return;
     }
@@ -747,7 +765,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       doCut();
       return;
     }
-    if (hit(ev, "paste")) {
+    if (hit(ev, "duplicate") && selected.length && !repeated) {
+      doDuplicate();
+      return;
+    }
+    if (hit(ev, "paste") && !repeated) {
       doPaste();
       return;
     }

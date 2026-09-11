@@ -29,6 +29,8 @@ export const wireCore = (deps: {
   renderer(): any;
   // live fileops clipboard read (isCutKey tile dimming)
   clipboard(): { mode: "copy" | "cut"; items: { path: string }[] } | null;
+  // a launch FILE path (`tfm some/file.txt`) to highlight after the first build
+  pendingSelect?: string | null;
 }) => {
   // --- Config (TOML at ~/.config/tfm/config.toml, TFM_CONFIG overrides path) ---
   const config = loadConfig();
@@ -82,7 +84,7 @@ export const wireCore = (deps: {
   // --- App state & history (type + boot-state factory live in ./nav with the
   // navigation logic) ---
   const home = os.homedir();
-  const state = initialAppState(config);
+  const state = initialAppState(config, process.cwd(), deps.pendingSelect ?? null);
 
   // --- Grid scroll container — assigned during boot (buildLayout step) ---
   const scrollerRef: { current: ScrollBoxRenderable | null } = { current: null };

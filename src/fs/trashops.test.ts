@@ -298,3 +298,103 @@ describe("makeTrashConfirms", () => {
     expect(fired).toEqual([]);
   });
 });
+
+describe("delete progress driver", () => {
+  const W = (p: string, s = "x") => {
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, s);
+  };
+
+  // the real wiring maps the driver onto prog+toast; here it records the
+  // driver contract and its sink drives the real rmTreeProgress engine
+  const fakeDriver = (opts: { cancelAfterFiles?: number } = {}) => {
+    const calls: string[] = [];
+    let cancelled = false;
+    let done = 0;
+    const driver: NonNullable<TrashOpsSink["deleteProgress"]> = {
+      sink: {
+        checkpoint: async () => {
+          if (cancelled) throw new Error("cancelled");
+        },
+        paused: () => false,
+        cancelled: () => cancelled,
+        addBytes: () => {},
+        fileDone: () => {
+          done++;
+          if (opts.cancelAfterFiles !== undefined && done >= opts.cancelAfterFiles) cancelled = true;
+        },
+        setStream: () => {},
+        clearStream: () => {},
+        repaint: () => {},
+      },
+      start: (files, bytes) => calls.push(`start:${files}:${bytes}`),
+      cancelled: () => cancelled,
+      finish: (msg) => calls.push(`finish:${msg}`),
+      stop: () => calls.push("stop"),
+    };
+    return { driver, calls, files: () => done };
+  };
+
+  test("deleteForever pre-scans totals, streams the engine, finishes the toast", async () => {
+    const root = sandbox();
+    try {
+      const tree = path.join(root, "tree");
+      W(path.join(tree, "a.txt"), "AAA");
+      W(path.join(tree, "sub", "b.txt"), "BB");
+      const sink = recordingSink();
+      const p = fakeDriver();
+      sink.deleteProgress = p.driver;
+      makeTrashOps(sink).deleteForever([tree]);
+      await settleUntil(() => p.calls.includes("stop"));
+      expect(existsSync(tree)).toBe(false);
+      expect(p.calls).toContain("start:2:5");
+      expect(p.calls).toContain("finish:✓ Deleted 1");
+      expect(sink.notes.some((n) => n === "setStatusMsg:Deleted 1 item · cannot be undone")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("cancel stops mid-tree, reports the partial removal, keeps what's left", async () => {
+    const root = sandbox();
+    try {
+      const tree = path.join(root, "tree");
+      W(path.join(tree, "a.txt"), "A");
+      W(path.join(tree, "b.txt"), "B");
+      W(path.join(tree, "c.txt"), "C");
+      const sink = recordingSink();
+      const p = fakeDriver({ cancelAfterFiles: 1 });
+      sink.deleteProgress = p.driver;
+      makeTrashOps(sink).deleteForever([tree]);
+      await settleUntil(() => p.calls.includes("stop"));
+      expect(existsSync(tree)).toBe(true);
+      expect(p.files()).toBe(1);
+      expect(p.calls).toContain("finish:✗ Delete cancelled");
+      expect(sink.notes.some((n) => n === "setStatusMsg:Delete cancelled · 0 of 1 removed")).toBe(true);
+      expect(sink.notes.some((n) => n.startsWith("notify:delete cancelled"))).toBe(true);
+      expect(sink.batches.length).toBe(0); // irreversible by design
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("emptyTrash streams through the same driver", async () => {
+    const root = sandbox();
+    try {
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "files", "a"), "1");
+      writeFileSync(path.join(trashDir(), "files", "b"), "2");
+      const sink = recordingSink();
+      const p = fakeDriver();
+      sink.deleteProgress = p.driver;
+      makeTrashOps(sink).emptyTrash();
+      await settleUntil(() => p.calls.includes("stop"));
+      expect(p.calls).toContain("start:2:2");
+      expect(p.calls).toContain("finish:✓ Emptied 2");
+      expect(sink.notes.some((n) => n === "notify:empty:Emptied 2 items · cannot be undone")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

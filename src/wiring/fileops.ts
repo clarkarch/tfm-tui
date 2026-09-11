@@ -11,6 +11,7 @@ import { makeProgress } from "../ui/ui-progress";
 import { makeFileOps } from "../fs/fileops";
 import { makeTerminal } from "../ui/ui-term";
 import { makeTrashOps, makeTrashConfirms } from "../fs/trashops";
+import { shouldToast } from "../fs/fsutil";
 import { appendLog, dlog } from "../app/log";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
@@ -134,6 +135,32 @@ export const wireFileops = (deps: {
     setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
     renderAll: nav.renderAll,
+    // delete progress: the driver maps trashops' calls onto the SAME prog
+    // state + toast transfers use (pause/cancel included). Flags reset at
+    // start so a stale cancel from an earlier op can't abort the delete.
+    deleteProgress: {
+      sink: fileops.progressSink,
+      start: (totalFiles, totalBytes) => {
+        const p = progress.prog;
+        p.paused = false;
+        p.cancelled = false;
+        p.doneFiles = 0;
+        p.bytes = 0;
+        p.totalFiles = totalFiles;
+        p.totalBytes = totalBytes;
+        p.verb = "deleting";
+        if (shouldToast(totalBytes, totalFiles)) {
+          p.active = true;
+          progress.showProgressToast();
+          progress.paintProgress(true);
+        }
+      },
+      cancelled: () => progress.prog.cancelled,
+      finish: (msg) => progress.finishProgressToast(msg),
+      stop: () => {
+        progress.prog.active = false;
+      },
+    },
     log: (msg) => appendLog(`trashops: ${msg}`),
     // plugin event fan-out through the sink seam (no method wrapping — the
     // op names are the stable vocabulary, never the method names).

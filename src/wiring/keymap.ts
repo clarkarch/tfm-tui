@@ -154,6 +154,7 @@ export const wireKeymap = (deps: {
       getRetheme().scheduleSaveConfig();
     },
     setClipboard: fileops.fileops.setClipboard,
+    duplicate: (paths) => void fileops.fileops.duplicate(paths),
     isVirtualCwd: core.isVirtualCwd,
     pasteSmart: fileops.fileops.pasteSmart,
     setStatusMsg: nav.setStatusMsg,

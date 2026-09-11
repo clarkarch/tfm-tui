@@ -7,7 +7,8 @@
 import { Box, Text } from "@opentui/core";
 import { statSync } from "node:fs";
 import path from "node:path";
-import { listDir, type Entry } from "../fs/listing";
+import { compareEntries, listDir, type Entry } from "../fs/listing";
+import { searchTree } from "../fs/search";
 import type { Theme } from "../config/config";
 import { fsErrText } from "../fs/fsutil";
 import { fileIsImage, fileIsVideo, fileIconFor } from "../fs/filetype";
@@ -21,7 +22,15 @@ import type { Selection } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
 import type { IconSpec } from "./ui-slots";
 
-export type GridState = { cwd: string; showHidden: boolean; sortBy: SortMode; sortAsc: boolean };
+export type GridState = {
+  cwd: string;
+  showHidden: boolean;
+  sortBy: SortMode;
+  sortAsc: boolean;
+  // one-shot: a launch FILE path to highlight after the first build (set by
+  // the CLI, consumed + cleared here)
+  pendingSelect?: string | null;
+};
 
 type GridRendererCtx = {
   termW(): number;
@@ -29,6 +38,10 @@ type GridRendererCtx = {
   scroller(): any | null;
   state: GridState;
   searchQuery(): string;
+  // [ui] recursive-search: type-to-search walks the subtree (fd/walk) instead
+  // of filtering the open dir; test seam injects a fake backend
+  recursiveSearch(): boolean;
+  searchTree?(root: string, query: string, opts?: { hidden?: boolean; signal?: AbortSignal }): Promise<Entry[]>;
   pathEditMode(): boolean;
   // geometry — live getters, rewritten by applyConfig
   sw(): number;
@@ -68,6 +81,9 @@ type GridRendererCtx = {
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
   let tileSeq = 0;
+  // in-flight recursive search; a newer render aborts it so stale keystroke
+  // walks don't keep eating disk while a fresh query runs
+  let searchAbort: AbortController | null = null;
   const { selection } = ctx;
 
   // list-view row density, clamped to what the builders can render
@@ -113,9 +129,14 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const wantsThumb = !entry.isDir && (fileIsImage(entry.name) || (isVideo && canThumbVideo()));
     let stat: any = null;
     if (wantsThumb) {
-      try {
-        stat = statSync(key);
-      } catch {}
+      // recursive-search entries (and sort-filled listDir rows) already carry
+      // size/mtime — reuse them instead of a second stat per thumbnail
+      if (entry.size !== undefined && entry.mtimeMs !== undefined) stat = { size: entry.size, mtimeMs: entry.mtimeMs };
+      else {
+        try {
+          stat = statSync(key);
+        } catch {}
+      }
     }
     const useThumb =
       wantsThumb && stat && typeof stat.size === "number" && stat.size > 0 && stat.size <= THUMB_MAX_BYTES;
@@ -311,6 +332,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const scroller = ctx.scroller();
     if (!scroller) return;
     const gen = ++gridGen;
+    // cancel any in-flight recursive search: the previous query's fd walk must
+    // not keep running behind this render (navigate/clear/retype all land here)
+    searchAbort?.abort();
+    searchAbort = null;
     const state = ctx.state;
     // selection must survive rebuilds by path — a busy cwd (and /tmp on this
     // box, which contains our own dnd log) re-renders constantly; wiping it
@@ -327,9 +352,27 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     ctx.clearRenameEdit();
     clearGrid();
     const q = ctx.searchQuery().trim().toLowerCase();
+    // recursive search replaces the listing with subtree matches; virtual
+    // places have no fs root to walk, so they keep the in-dir filter
+    const recursive = q.length > 0 && ctx.recursiveSearch() && state.cwd !== RECENT_URI && state.cwd !== STARRED_URI;
     let allEntries: Entry[];
     try {
-      allEntries = await listDir(state.cwd, state.showHidden || q.length > 0, state.sortBy, state.sortAsc);
+      if (recursive) {
+        const ac = new AbortController();
+        searchAbort = ac;
+        // honor the show-hidden toggle: skipping hidden dirs keeps fd out of
+        // .git/.cache, which dominate the walk on large trees
+        allEntries = await (ctx.searchTree ?? searchTree)(state.cwd, q, {
+          hidden: state.showHidden,
+          signal: ac.signal,
+        });
+        // release the slot only if a newer render didn't already replace it
+        if (searchAbort === ac) searchAbort = null;
+        // stable display: name order, dirs first
+        allEntries.sort(compareEntries("name", true));
+      } else {
+        allEntries = await listDir(state.cwd, state.showHidden, state.sortBy, state.sortAsc);
+      }
     } catch (err) {
       // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
       if (gen !== gridGen) return;
@@ -343,7 +386,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       void ctx.drainIconQueue();
       return;
     }
-    const entries = q ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
+    const entries = q && !recursive ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
     if (gen !== gridGen) return;
 
     if (entries.length === 0) {
@@ -419,6 +462,14 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     selection.setSelAnchor(anchorNewIdx < 0 ? null : anchorNewIdx);
     selection.setCols(cols);
     selection.setRowH(isList ? rowH() : TILE_H);
+    // one-shot launch-file highlight (`tfm some/file.txt`): after the first
+    // build, select the tile whose key is that path, then clear the request
+    if (state.pendingSelect) {
+      const pending = state.pendingSelect;
+      state.pendingSelect = null;
+      const idx = selection.focusKeys().indexOf(pending);
+      if (idx >= 0) selection.selectTileAt(idx);
+    }
     selection.updateSelectionStatusReal();
   };
 

@@ -55,6 +55,9 @@ export const wireBoot = (deps: {
   grid: GridWiring;
   fileops: FileopsWiring;
   bootStart: number;
+  // an explicit CLI path suppresses session restore: the user asked for a
+  // location, the saved session must not silently win
+  skipSessionRestore?: boolean;
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
   void runBoot({
@@ -80,7 +83,9 @@ export const wireBoot = (deps: {
       });
     },
     loadGlobs2: () => loadGlobs2(),
-    restoreSession: () => nav.restoreSession(),
+    restoreSession: () => {
+      if (!deps.skipSessionRestore) nav.restoreSession();
+    },
     loadSystemPlaces: () => loadSystemPlaces(),
     renderAll: nav.renderAll,
     debugTrace: () => {

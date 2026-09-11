@@ -314,8 +314,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       id: "tfm-search",
       width: 16,
       visible: false,
-      // names the behavior: live substring filter that also reveals dotfiles
-      // while active (grid forces showHidden during search)
+      // live substring filter; honors the show-hidden toggle (grid lists and
+      // recursive search both pass state.showHidden)
       placeholder: "Search (live filter)",
       backgroundColor: ctx.colors().accentBg,
       focusedBackgroundColor: ctx.colors().accentBg,

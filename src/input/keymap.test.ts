@@ -153,6 +153,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     toggleViewMode: rec("view:toggle"),
     zoomTiles: (d) => calls.push(`zoom:${d}`),
     setClipboard: (mode, items) => calls.push(`clip:${mode}:${items.length}`),
+    duplicate: (paths) => calls.push(`duplicate:${paths.join(",")}`),
     isVirtualCwd: () => false,
     pasteSmart: (d) => calls.push(`paste:${d}`),
     setStatusMsg: (m) => calls.push(`setStatusMsg:${m}`),
@@ -167,8 +168,17 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     ...over,
   };
   const router = makeKeyRouter(ctx);
-  const key = (name: string, opts: { ctrl?: boolean; shift?: boolean; meta?: boolean } = {}): void =>
-    router.handleKey({ name, ctrl: !!opts.ctrl, shift: !!opts.shift, meta: !!opts.meta });
+  const key = (
+    name: string,
+    opts: { ctrl?: boolean; shift?: boolean; meta?: boolean; repeated?: boolean } = {},
+  ): void =>
+    router.handleKey({
+      name,
+      ctrl: !!opts.ctrl,
+      shift: !!opts.shift,
+      meta: !!opts.meta,
+      repeated: !!opts.repeated,
+    });
   return {
     router,
     ctx,
@@ -612,6 +622,40 @@ describe("file operation keys", () => {
     h.key("x", { ctrl: true });
     h.key("v", { ctrl: true });
     expect(h.calls).toEqual(["clip:copy:4", "clip:cut:4", "paste:/tmp/tfm-kb/sub"]);
+  });
+
+  test("ctrl+d duplicates the selection; empty selection is a no-op", () => {
+    const h = makeHarness();
+    h.key("d", { ctrl: true });
+    expect(h.calls).toEqual([]);
+    h.key("a", { ctrl: true });
+    h.key("d", { ctrl: true });
+    expect(h.calls).toEqual(["duplicate:a.txt,b.txt,c.txt,d.txt"]);
+  });
+
+  test("autorepeat never enqueues file ops (ctrl+d spam crashed the renderer)", () => {
+    const h = makeHarness();
+    h.key("a", { ctrl: true });
+    h.key("d", { ctrl: true, repeated: true });
+    h.key("d", { ctrl: true, repeated: true });
+    h.key("delete", { repeated: true });
+    h.key("v", { ctrl: true, repeated: true });
+    expect(h.calls).toEqual([]);
+    // a real (non-repeat) press still dispatches
+    h.key("d", { ctrl: true });
+    expect(h.calls).toEqual(["duplicate:a.txt,b.txt,c.txt,d.txt"]);
+  });
+
+  test("ctrl+d in a virtual cwd or trash reports it can't duplicate", () => {
+    const h = makeHarness({ isVirtualCwd: () => true });
+    h.key("a", { ctrl: true });
+    h.key("d", { ctrl: true });
+    expect(h.calls).toEqual(["setStatusMsg:Can't duplicate here"]);
+    h.calls.length = 0;
+    const h2 = makeHarness({ inTrashView: () => true });
+    h2.key("a", { ctrl: true });
+    h2.key("d", { ctrl: true });
+    expect(h2.calls).toEqual(["setStatusMsg:Can't duplicate here"]);
   });
 
   test("ctrl+v in a virtual cwd reports it can't paste there", () => {
