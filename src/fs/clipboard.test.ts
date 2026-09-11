@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fileUriFor, isCutKeyFor, parseCopiedFiles, sysClipTool } from "./clipboard";
+import {
+  isCutKeyFor,
+  parseCopiedFiles,
+  parsePlainPaths,
+  publishPathsToSystemClipboard,
+  sysClipTool,
+} from "./clipboard";
 
 const oldWayland = process.env.WAYLAND_DISPLAY;
 const oldDisplay = process.env.DISPLAY;
@@ -31,7 +37,7 @@ describe("parseCopiedFiles", () => {
     expect(res!.paths).toEqual(["/tmp/x", "/tmp/y"]);
   });
 
-  test("plain text paths are ignored (tfm publishes gnome-copied-files; pastes come back as URIs)", () => {
+  test("bare paths are not URIs (the read path falls back to parsePlainPaths)", () => {
     expect(parseCopiedFiles("/tmp/plain\n/tmp/paths")).toBeNull();
   });
 
@@ -46,11 +52,67 @@ describe("parseCopiedFiles", () => {
     expect(res!.paths).toEqual(["/tmp/%zz.txt"]);
   });
 
-  test("published gnome payloads round-trip through the parser (cross-instance paste)", () => {
-    const uri = fileUriFor("/home/me/a b.txt");
-    expect(uri).toBe("file:///home/me/a%20b.txt");
-    const res = parseCopiedFiles(`copy\n${uri}`);
+  test("gnome payloads from other file managers round-trip through the parser", () => {
+    const res = parseCopiedFiles("copy\nfile:///home/me/a%20b.txt");
     expect(res).toEqual({ op: "copy", paths: ["/home/me/a b.txt"] });
+  });
+});
+
+describe("parsePlainPaths", () => {
+  const exists = (p: string) => p === "/tmp/a" || p === "/tmp/b";
+
+  test("accepts only absolute paths that exist (tfm's own text publish)", () => {
+    expect(parsePlainPaths("/tmp/a\nrelative/miss\n/tmp/gone\n/tmp/b", exists)).toEqual({
+      op: "copy",
+      paths: ["/tmp/a", "/tmp/b"],
+    });
+  });
+
+  test("random copied prose pastes nothing, never a file op", () => {
+    expect(parsePlainPaths("hello world\nnot a path", exists)).toBeNull();
+  });
+
+  test("blank input yields null", () => {
+    expect(parsePlainPaths("", exists)).toBeNull();
+    expect(parsePlainPaths("\n\n", exists)).toBeNull();
+  });
+});
+
+describe("publishPathsToSystemClipboard", () => {
+  // the external-paste contract: whatever wl-copy/xclip receives must be
+  // readable by a text/plain client. wl-copy offers ONE mime type — passing
+  // `-t x-special/gnome-copied-files` makes terminals/editors paste NOTHING.
+  test("sends bare paths with no -t (wl-copy infers text/plain)", () => {
+    process.env.WAYLAND_DISPLAY = "wayland-0";
+    let argv: string[] = [];
+    let payload = "";
+    const fakeSpawn = ((_cmd: string, args: string[]) => {
+      argv = args;
+      return {
+        stdin: { end: (s: string) => (payload = s) },
+        unref: () => {},
+      };
+    }) as unknown as Parameters<typeof publishPathsToSystemClipboard>[3];
+    publishPathsToSystemClipboard("copy", [{ path: "/home/me/a b.txt" }, { path: "/tmp/x" }], () => {}, fakeSpawn);
+    expect(argv).toEqual([]); // no -t: wl-copy advertises text/plain + UTF8_STRING
+    expect(payload).toBe("/home/me/a b.txt\n/tmp/x");
+  });
+
+  test("xclip path: bare paths, no gnome mime arg", () => {
+    delete process.env.WAYLAND_DISPLAY;
+    process.env.DISPLAY = ":0";
+    let argv: string[] = [];
+    let payload = "";
+    const fakeSpawn = ((_cmd: string, args: string[]) => {
+      argv = args;
+      return {
+        stdin: { end: (s: string) => (payload = s) },
+        unref: () => {},
+      };
+    }) as unknown as Parameters<typeof publishPathsToSystemClipboard>[3];
+    publishPathsToSystemClipboard("cut", [{ path: "/tmp/x" }], () => {}, fakeSpawn);
+    expect(argv).toEqual(["-selection", "clipboard", "-l", "10"]);
+    expect(payload).toBe("/tmp/x");
   });
 });
 
@@ -61,6 +123,7 @@ describe("sysClipTool", () => {
     const t = sysClipTool();
     expect(t!.put).toBe("wl-copy");
     expect(t!.getArgs).toEqual(["-t", "x-special/gnome-copied-files"]);
+    expect(t!.getTextArgs).toEqual([]);
   });
 
   test("X11 xclip serves enough requests then exits (probes + fetch, no mid-paste expiry)", () => {
@@ -69,7 +132,7 @@ describe("sysClipTool", () => {
     const t = sysClipTool();
     expect(t!.put).toBe("xclip");
     expect(t!.putBase).toEqual(["-selection", "clipboard", "-l", "10"]);
-    expect(t!.putMimeArgs).toEqual(["-t", "x-special/gnome-copied-files"]);
+    expect(t!.getTextArgs).toEqual(["-selection", "clipboard", "-o"]);
   });
 
   test("no display at all → null", () => {

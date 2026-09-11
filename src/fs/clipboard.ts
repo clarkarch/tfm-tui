@@ -1,19 +1,20 @@
+import { existsSync } from "node:fs";
 import { spawnSafe } from "./spawn-safe";
-import { fileUriToPath, pathToUri } from "./uri";
+import { fileUriToPath } from "./uri";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import path from "node:path";
 
 // --- System clipboard bridge (Nautilus-style copied-files). Nautilus
 // publishes files on the CLIPBOARD selection as MIME
 // `x-special/gnome-copied-files`: first line = "copy"|"cut", then one
 // file:// URI per line (percent-encoded).
 //
-// We publish the SAME gnome format (not bare text paths) so Tfm→Nautilus
-// paste-as-files works and cross-instance Tfm→Tfm pastes round-trip through
-// readCopiedFilesFromSystemClipboard. Pasting into a text editor yields
-// `copy\nfile://…` lines (same as Nautilus) instead of bare paths —
-// file-manager interop wins over clean text paste. ---
+// We publish BARE PATHS, not the gnome format: a selection owner has exactly
+// ONE mime type (wl-copy/xclip can't offer text/plain AND gnome-copied-files
+// at once), and publishing the gnome type makes every text client (terminals,
+// editors, browsers) paste NOTHING — not even the URIs. Bare text keeps
+// paste-anywhere working; Tfm→Nautilus paste-as-files is drag-out's job
+// (OSC 72), and the read side still accepts Nautilus's gnome payload. ---
 
 const CLIP_TYPE = "x-special/gnome-copied-files";
 
@@ -21,9 +22,9 @@ type ClipTool = {
   get: string;
   put: string;
   putBase: string[];
-  /** extra args to offer the gnome mime type on publish */
-  putMimeArgs: string[];
   getArgs: string[];
+  /** read without a mime filter — the bare-path text fallback */
+  getTextArgs: string[];
 };
 
 export const sysClipTool = (): ClipTool | null => {
@@ -32,8 +33,8 @@ export const sysClipTool = (): ClipTool | null => {
       get: "wl-paste",
       put: "wl-copy",
       putBase: [],
-      putMimeArgs: ["-t", CLIP_TYPE],
       getArgs: ["-t", CLIP_TYPE],
+      getTextArgs: [],
     };
   }
   if (process.env.DISPLAY) {
@@ -43,15 +44,12 @@ export const sysClipTool = (): ClipTool | null => {
       get: "xclip",
       put: "xclip",
       putBase: ["-selection", "clipboard", "-l", "10"],
-      putMimeArgs: ["-t", CLIP_TYPE],
       getArgs: ["-selection", "clipboard", "-o", "-t", CLIP_TYPE],
+      getTextArgs: ["-selection", "clipboard", "-o"],
     };
   }
   return null;
 };
-
-// "/home/me/a b.txt" -> "file:///home/me/a%20b.txt"
-export const fileUriFor = (p: string): string => pathToUri(path.resolve(p));
 
 type CopiedFiles = { op: "copy" | "move"; paths: string[] };
 
@@ -74,51 +72,78 @@ export const parseCopiedFiles = (text: string): CopiedFiles | null => {
   return { op, paths };
 };
 
+// tfm's own publish format: bare absolute paths, one per line. Only paths
+// that EXIST are accepted — random copied prose must never turn a paste into
+// a file op, and stale pastes shouldn't spawn error toasts. `exists` is
+// injectable so tests stay fs-free.
+export const parsePlainPaths = (text: string, exists: (p: string) => boolean = existsSync): CopiedFiles | null => {
+  const paths = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("/") && exists(l));
+  return paths.length ? { op: "copy", paths } : null;
+};
+
 const execFileP = promisify(execFile);
 
 type ClipLog = (msg: string) => void;
 
-// publish gnome-copied-files so GUI file managers (and other tfm instances)
-// can paste as files; fails silently with a log line when no tool is available
+// publish bare paths (one per line) as text/plain so paste-anywhere works in
+// terminals/editors/browsers; fails silently with a log line when no tool is
+// available. spawnFn is injectable so tests pin the exact argv + payload a
+// text/plain client receives (the contract a gnome-MIME publish broke once).
 export const publishPathsToSystemClipboard = (
   mode: string,
   items: { path: string }[],
   log: ClipLog = () => {},
+  spawnFn: typeof spawnSafe = spawnSafe,
 ): void => {
   const t = sysClipTool();
   if (!t || !items.length) return;
-  const header = mode === "cut" ? "cut" : "copy";
-  const payload = [header, ...items.map((i) => fileUriFor(i.path))].join("\n");
+  const payload = items.map((i) => i.path).join("\n");
   try {
-    const p = spawnSafe(t.put, [...t.putMimeArgs, ...t.putBase], { stdio: ["pipe", "ignore", "ignore"] }, (err) =>
+    const p = spawnFn(t.put, [...t.putBase], { stdio: ["pipe", "ignore", "ignore"] }, (err) =>
       log(`system clipboard FAILED: ${err.message}`),
     );
     p.stdin?.end(payload);
     p.unref?.();
-    log(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (${CLIP_TYPE})`);
+    log(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (text paths)`);
   } catch (err) {
     log(`system clipboard FAILED: ${err}`);
   }
 };
 
-// read a file payload from the system clipboard (gnome-copied-files only)
+// read a file payload from the system clipboard: Nautilus's gnome-copied-files
+// first, then tfm's own bare-path text publish (a second instance's clipboard
+// carries text/plain, not the gnome MIME). null when neither yields paths.
 export const readCopiedFilesFromSystemClipboard = async (log: ClipLog = () => {}): Promise<CopiedFiles | null> => {
   const t = sysClipTool();
   if (!t) {
     log("paste: no system clipboard tool");
     return null;
   }
+  const read = async (args: string[]): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileP(t.get, args);
+      return String(stdout ?? "");
+    } catch (err) {
+      log(`paste: clipboard read failed (${args.join(" ") || "default"}): ${err}`);
+      return null;
+    }
+  };
   log(`paste: reading system clipboard via ${t.get}`);
-  try {
-    const { stdout } = await execFileP(t.get, t.getArgs);
-    const text = String(stdout ?? "");
-    const lines = text.split(/\r?\n/).filter(Boolean);
+  const gnome = await read(t.getArgs);
+  if (gnome) {
+    const lines = gnome.split(/\r?\n/).filter(Boolean);
     log(`paste: system clip lines=${lines.length} head=${JSON.stringify(lines.slice(0, 2))}`);
-    const parsed = parseCopiedFiles(text);
-    if (!parsed) log("paste: no file:// uris in system clip");
-    return parsed;
-  } catch (err) {
-    log(`paste: system clipboard read failed: ${err}`);
-    return null;
+    const parsed = parseCopiedFiles(gnome);
+    if (parsed) return parsed;
+    const plain = parsePlainPaths(gnome);
+    if (plain) return plain;
   }
+  // gnome MIME not offered (a text-only clipboard): re-read without the filter
+  const text = await read(t.getTextArgs);
+  const plain = text ? parsePlainPaths(text) : null;
+  if (!plain) log("paste: no usable file paths in system clip");
+  return plain;
 };
