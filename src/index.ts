@@ -173,6 +173,9 @@ const grid = wireGrid({
   gridFoundation,
   fileops,
   plugins,
+  // getPick closes over `keymap` (wires last) — only called from the
+  // "Compress to…" action at interaction time, so the TDZ is long settled
+  getPick: () => keymap.pick,
 });
 
 // --- settings: settings model + esc menu ---

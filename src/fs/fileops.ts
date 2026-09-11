@@ -6,8 +6,9 @@
 // internal clipboard. Same seam as grid-input.ts: no renderer imports. ---
 
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readdir, rm, rename as fsRename } from "node:fs/promises";
+import { mkdir, readdir, rm, rename as fsRename } from "node:fs/promises";
 import {
   failSuffix,
   fsErrText,
@@ -21,6 +22,19 @@ import {
   crossDevice as fsCrossDevice,
 } from "./fsutil";
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
+import {
+  commonParent,
+  compressPlan,
+  compressionExt,
+  detectArchiveFormat,
+  extractPlan,
+  listArchiveEntries,
+  runArchiveTool,
+  uniqueArchiveTarget,
+  type ArchiveFormat,
+  type ArchiveRun,
+  type CompressionFormat,
+} from "./archive";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { sharedOpQueue } from "../lib/op-queue";
 import type { ConflictChoice } from "../ui/ui-dialogs";
@@ -49,6 +63,9 @@ export type FileOpsCtx = {
   refreshCutVisuals(): void;
   // injectable for tests — real impl lstats st.dev (fsutil)
   crossDevice?(a: string, b: string): boolean;
+  // archive engine seam (tests inject; default = src/fs/archive)
+  runArchive?: ArchiveRun;
+  listArchive?: (fmt: ArchiveFormat, file: string) => Promise<number>;
   // /tmp/tfm-dnd.log debug sink
   log(msg: string): void;
   // plugin event fan-out (optional; never throws into the transfer).
@@ -60,6 +77,66 @@ export type FileOpsCtx = {
 export const makeFileOps = (ctx: FileOpsCtx) => {
   const { prog, conflict } = ctx;
   const queue = sharedOpQueue();
+  const runArchive: ArchiveRun = ctx.runArchive ?? runArchiveTool;
+  const listArchive =
+    ctx.listArchive ?? ((fmt: ArchiveFormat, file: string) => listArchiveEntries(fmt, file, runArchive));
+
+  // archive progress helpers: reset shared flags per op (stale-cancel lesson),
+  // arm the toast only when the total clears shouldToast
+  const resetProg = (): void => {
+    prog.paused = false;
+    prog.cancelled = false;
+    prog.doneFiles = 0;
+    prog.bytes = 0;
+    prog.totalFiles = 0;
+    prog.totalBytes = 0;
+  };
+  const setProgVerb = (verb: string, totalFiles: number, totalBytes = 0): void => {
+    prog.verb = verb;
+    prog.totalFiles = totalFiles;
+    prog.totalBytes = totalBytes;
+  };
+  const armProgressToast = (): void => {
+    if (shouldToast(prog.totalBytes, prog.totalFiles)) {
+      prog.active = true;
+      ctx.showProgressToast();
+      ctx.paintProgress(true);
+    }
+  };
+  // register the live child so the toast's ✕ kills it (SIGTERM) and the pause
+  // button stops/resumes it (SIGSTOP/SIGCONT) — archive tools report no bytes,
+  // so the ReadStream path never applies
+  const onArchiveChild = (child: ChildProcess): void => {
+    prog.processCancel = () => {
+      // SIGCONT first: a paused (SIGSTOPped) child ignores SIGTERM/SIGKILL
+      // until it is resumed, and a stuck child would lock the serial op queue
+      try {
+        child.kill("SIGCONT");
+      } catch {}
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+    };
+    prog.processPause = () => {
+      if (!child.pid) return;
+      try {
+        process.kill(child.pid, prog.paused ? "SIGSTOP" : "SIGCONT");
+      } catch {}
+    };
+  };
+  const clearArchiveChild = (): void => {
+    prog.processCancel = null;
+    prog.processPause = null;
+  };
+
+  // first non-blank line of a tool's stderr — the actionable part of a failure
+  const firstErrLine = (s: string): string => {
+    for (const line of s.split("\n")) {
+      const t = line.trim();
+      if (t) return t;
+    }
+    return "";
+  };
 
   // Trash/files (or anything under it) is not a paste/move target: files
   // landing there without .trashinfo are unrestorable. Trashing goes through
@@ -140,12 +217,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.setStatusMsg(op === "copy" ? "Nothing to copy" : "Nothing to move");
       return;
     }
-    // best-effort sweep of crashed-transfer orphans (<dest>.tfm-part-*) so a
-    // SIGKILL during the last run doesn't pile up tmp files in the dest dir
+    // best-effort sweep of crashed-transfer orphans (<dest>.tfm-part-*) and
+    // crashed-extract staging (`.tfm-extract-*`) so a SIGKILL during the last
+    // run doesn't pile up tmp dirs in the dest dir. Safe against live ops: the
+    // serial op queue means no extract/transfer is running here concurrently.
     try {
       const kids = await readdir(destDir).catch(() => [] as string[]);
       for (const k of kids) {
-        if (k.includes(".tfm-part-")) {
+        if (k.includes(".tfm-part-") || k.startsWith(".tfm-extract-")) {
           try {
             await rm(path.join(destDir, k), { recursive: true, force: true });
           } catch {}
@@ -569,11 +648,249 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     );
   };
 
+  // --- Archive ops. The engine (argv + child runner) is ./archive; here we
+  // own conflict/undo/progress. Extract stages into a hidden dir first, then
+  // moves the top-level entries into place through the SAME conflict prompt as
+  // runTransferInner — a tool that overwrites on its own would silently destroy
+  // colliding files. Undo trashes what landed (a move-back to staging would
+  // resurrect a deleted staging dir). Compress writes to a `.tfm-part-*` temp
+  // so a cancel/crash can't leave a half-written archive (and the existing
+  // orphan sweep in runTransferInner cleans a killed run). ---
+  const extractArchive = (files: string[], destDir: string): Promise<void> =>
+    queue.enqueue(() => extractArchiveInner(files, destDir));
+
+  const extractArchiveInner = async (files: string[], destDir: string): Promise<void> => {
+    if (!files.length) {
+      ctx.setStatusMsg("Nothing to extract");
+      return;
+    }
+    if (destDir.includes("://")) {
+      ctx.setStatusMsg("Can't extract here");
+      return;
+    }
+    conflict.resetPolicy();
+    resetProg();
+    const units: UndoUnit[] = [];
+    const dUnits: UndoStep[] = [];
+    const failWhy = new Set<string>();
+    const staging: string[] = [];
+    let ok = 0;
+    let skipped = 0;
+    let failed = 0;
+    let cancelled = false;
+    try {
+      // one total across all archives so the bar doesn't reset per file
+      let totalFiles = 0;
+      for (const f of files) {
+        const fmt = detectArchiveFormat(f);
+        if (fmt && existsSync(f)) totalFiles += await listArchive(fmt, f);
+      }
+      setProgVerb("extracting", totalFiles);
+      armProgressToast();
+      for (const file of files) {
+        if (cancelled || prog.cancelled) {
+          cancelled = true;
+          break;
+        }
+        const fmt = detectArchiveFormat(file);
+        if (!fmt || !existsSync(file)) {
+          skipped++;
+          continue;
+        }
+        const stage = path.join(destDir, `.tfm-extract-${process.pid}-${Math.random().toString(36).slice(2, 10)}`);
+        await mkdir(stage, { recursive: true });
+        staging.push(stage);
+        const res = await runArchive(extractPlan(fmt, file, stage), {
+          onLine: () => {
+            prog.doneFiles++;
+            ctx.paintProgress();
+          },
+          onChild: onArchiveChild,
+        });
+        if (prog.cancelled) {
+          cancelled = true;
+          break;
+        }
+        if (res.code !== 0 && res.code !== 1) {
+          // exit 1 is a warning for tar/unzip/7z (some members skipped) — the
+          // rest extracted fine, so don't discard the stage over it
+          failed++;
+          failWhy.add(firstErrLine(res.stderr) || "extract failed");
+          continue;
+        }
+        let entries: string[];
+        try {
+          entries = await readdir(stage);
+        } catch {
+          entries = [];
+        }
+        let movedHere = 0;
+        for (const name of entries) {
+          const src = path.join(stage, name);
+          let target = path.join(destDir, name);
+          if (existsSync(target)) {
+            const choice = conflict.policy() ?? (await conflict.promptConflict(target, 0));
+            if (choice === "skip") {
+              skipped++;
+              continue;
+            }
+            if (choice === "keepBoth") target = uniqueTarget(destDir, name);
+            else
+              await stashVictim(target, units, dUnits, (err) => {
+                failWhy.add(fsErrText(err));
+                ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — proceeding without undo`);
+              });
+          }
+          try {
+            await fsMove(src, target);
+            units.push(() => xdgTrashMove(target).then(() => undefined));
+            dUnits.push({ op: "trash", path: target });
+            movedHere++;
+          } catch (err) {
+            failed++;
+            failWhy.add(fsErrText(err));
+          }
+        }
+        // an archive that yielded nothing is not a success and must not
+        // advertise an undo with no units. Collision-skips are already counted
+        // per entry — only an empty archive adds an archive-level skip.
+        if (movedHere) ok++;
+        else if (!entries.length) skipped++;
+      }
+    } finally {
+      clearArchiveChild();
+      prog.active = false;
+      for (const s of staging) {
+        try {
+          await rm(s, { recursive: true, force: true });
+        } catch {}
+      }
+    }
+    ctx.pushUndoBatch(`extract ${ok} archive${ok === 1 ? "" : "s"}`, units, [], { units: dUnits, redos: [] });
+    ctx.renderAll();
+    const bits = [cancelled ? `Extract cancelled (${ok} done)` : `Extracted ${ok} archive${ok === 1 ? "" : "s"}`];
+    if (skipped) bits.push(`${skipped} skipped`);
+    if (failed) bits.push(failSuffix(failed, failWhy));
+    if (units.length && !cancelled) bits.push("ctrl+z to undo");
+    const msg = bits.join(" · ");
+    ctx.setStatusMsg(msg);
+    if (prog.toastUp) {
+      ctx.finishProgressToast(cancelled ? "✗ Extract cancelled" : failed ? "✗ Extract failed" : `✓ Extracted ${ok}`);
+    }
+    if (cancelled) ctx.notify(msg, "extract cancelled");
+    else if (failed > 0) ctx.notify(msg, "extract failed");
+    else ctx.notify(msg, "extract");
+    try {
+      ctx.onFileOp?.("extract", [...files], destDir, { cancelled, failed });
+    } catch {}
+  };
+
+  const compressPaths = (paths: string[], format: CompressionFormat, destDir: string): Promise<void> =>
+    queue.enqueue(() => compressPathsInner(paths, format, destDir));
+
+  const compressPathsInner = async (paths: string[], format: CompressionFormat, destDir: string): Promise<void> => {
+    if (destDir.includes("://")) {
+      ctx.setStatusMsg("Can't compress here");
+      return;
+    }
+    const srcs = paths.filter((p) => !p.includes("://") && existsSync(p));
+    if (!srcs.length) {
+      ctx.setStatusMsg("Nothing to compress");
+      return;
+    }
+    conflict.resetPolicy();
+    resetProg();
+    const units: UndoUnit[] = [];
+    const dUnits: UndoStep[] = [];
+    const failWhy = new Set<string>();
+    let failed = 0;
+    let cancelled = false;
+    const parent = commonParent(srcs);
+    // relative to the common parent: a basename-only list silently drops
+    // outside-cwd selections (two `foo`s in different dirs collapse to one)
+    const names = srcs.map((p) => path.relative(parent, p));
+    const ext = compressionExt(format);
+    const base = srcs.length === 1 ? path.basename(srcs[0]!) : "archive";
+    let out = path.join(destDir, `${base}${ext}`);
+    if (existsSync(out)) {
+      const choice = conflict.policy() ?? (await conflict.promptConflict(out, 0));
+      if (choice === "skip") {
+        ctx.setStatusMsg("Compress cancelled");
+        return;
+      }
+      if (choice === "keepBoth") out = uniqueArchiveTarget(destDir, base, ext);
+      else
+        await stashVictim(out, units, dUnits, (err) => {
+          failWhy.add(fsErrText(err));
+          ctx.log(`replace stash failed ${out}: ${fsErrText(err)} — proceeding without undo`);
+        });
+    }
+    const tmp = `${out}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+    let totalFiles = 0;
+    for (const s of srcs) {
+      try {
+        totalFiles += (await scanTree(s)).files;
+      } catch {}
+    }
+    prog.totalBytes = 0;
+    setProgVerb("compressing", totalFiles);
+    armProgressToast();
+    try {
+      const res = await runArchive(compressPlan(format, tmp, names, parent), {
+        cwd: parent,
+        onLine: () => {
+          prog.doneFiles++;
+          ctx.paintProgress();
+        },
+        onChild: onArchiveChild,
+      });
+      if (prog.cancelled) {
+        cancelled = true;
+      } else if (res.code !== 0) {
+        failed++;
+        failWhy.add(firstErrLine(res.stderr) || "compress failed");
+      } else {
+        await fsRename(tmp, out);
+        units.push(() => xdgTrashMove(out).then(() => undefined));
+        dUnits.push({ op: "trash", path: out });
+      }
+    } catch (err) {
+      failed++;
+      failWhy.add(fsErrText(err));
+    } finally {
+      // success already renamed tmp away; force rm is a no-op then and the
+      // cancel/fail cleanup otherwise
+      try {
+        await rm(tmp, { force: true });
+      } catch {}
+      clearArchiveChild();
+      prog.active = false;
+    }
+    ctx.pushUndoBatch(`compress ${path.basename(out)}`, units, [], { units: dUnits, redos: [] });
+    ctx.renderAll();
+    const bits = [cancelled ? "Compress cancelled" : `Compressed ${path.basename(out)}`];
+    if (failed) bits.push(failSuffix(failed, failWhy));
+    if (!failed && !cancelled) bits.push("ctrl+z to undo");
+    const msg = bits.join(" · ");
+    ctx.setStatusMsg(msg);
+    if (prog.toastUp) {
+      ctx.finishProgressToast(cancelled ? "✗ Compress cancelled" : failed ? "✗ Compress failed" : `✓ ${base}${ext}`);
+    }
+    if (cancelled) ctx.notify(msg, "compress cancelled");
+    else if (failed > 0) ctx.notify(msg, "compress failed");
+    else ctx.notify(msg, "compress");
+    try {
+      ctx.onFileOp?.("compress", srcs, out, { cancelled, failed });
+    } catch {}
+  };
+
   return {
     runTransfer,
     performRename,
     performBulkRename,
     duplicate,
+    extractArchive,
+    compressPaths,
     // the same progress sink transfers report into — the trash wiring drives
     // deleteForever through it so deletes get the toast + cancel for free
     progressSink: transferSink,

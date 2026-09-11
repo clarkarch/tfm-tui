@@ -5,6 +5,8 @@
 
 import path from "node:path";
 import { registerSyntaxParsers } from "../ui/syntax";
+import { availableCompressionFormats, canExtract, compressionExt, compressionHint } from "../fs/archive";
+import type { makePick } from "../ui/ui-pick";
 import { makePreview } from "../ui/ui-preview";
 import { finishDragState, makeEntryMouseHandlers, type BandCtx, type GridMenuEntry } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
@@ -25,8 +27,10 @@ export const wireGrid = (deps: {
   gridFoundation: GridFoundationWiring;
   fileops: FileopsWiring;
   plugins: PluginsWiring;
+  // pick overlay wires LAST (wiring/keymap) — lazy getter, action-time only
+  getPick(): ReturnType<typeof makePick>;
 }) => {
-  const { core, nav, chrome, gridFoundation, fileops, plugins } = deps;
+  const { core, nav, chrome, gridFoundation, fileops, plugins, getPick } = deps;
   const { selection, rename } = gridFoundation;
   const { byId, stripSelectable } = core.lookup;
   const { themeGet, home, state } = core;
@@ -221,6 +225,25 @@ export const wireGrid = (deps: {
     openProperties: props.openProperties,
     selectAll: selection.selectAll,
     cwd: () => state.cwd,
+    canExtract: (p) => canExtract(p),
+    extractArchive: (files, dest) => {
+      void fileops.fileops.extractArchive(files, dest);
+    },
+    compressionFormats: () => availableCompressionFormats(),
+    compressTo: (paths) => {
+      const cwd = state.cwd;
+      getPick().open({
+        title: "Compress to…",
+        placeholder: "Filter formats…",
+        items: availableCompressionFormats().map((fmt) => ({
+          label: compressionExt(fmt),
+          hint: compressionHint(fmt),
+          run: () => {
+            void fileops.fileops.compressPaths(paths, fmt, cwd);
+          },
+        })),
+      });
+    },
     sortState: state,
     plugins: () => plugins.plugins,
     onPluginError: (name, err) => {

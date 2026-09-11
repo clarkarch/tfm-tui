@@ -18,6 +18,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - **Drag & drop**: move between folders (`ctrl+drag`), drag out to other apps, drop in from outside — cross-app DnD is kitty-only (OSC 72), in-app drag works everywhere
 - **Desktop integration**: GTK bookmarks, recent files (`recently-used.xbel`), XDG trash with restore, system clipboard bridge
 - **Embedded terminal**: right-click empty space → **Open Terminal Here** runs `$SHELL` in a pane at the current folder; keys hand off to tfm when you click the grid
+- **Archives**: right-click an archive → **Extract Here** (staged, conflict-aware, undoable); right-click a selection → **Compress to…** opens a floating picker listing every format the installed tools can produce (`.tar.gz`, `.zip`, `.7z`, `.tar`, `.tar.xz`, `.tar.bz2`, `.tar.zst`, `.tar.lzma`, `.tar.lz4`, `.tar.br`, …)
 - **Previews**: kitty image thumbnails, tree-sitter syntax highlighting, folder stats
 - **Search**: type anywhere to filter the open folder; `[ui] recursive-search = true` also searches inside subfolders (fd when installed, built-in walk otherwise)
 - **Themes**: 30+ bundled presets (Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized, …) with live switching, fully configurable via `config.toml`
@@ -30,6 +31,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - `rsvg-convert` — theme-tinted icons and crisp SVG thumbnails (else Nerd Font glyphs; `magick` covers raster thumbnails as fallback)
 - `magick` — raster image thumbnails (fallback when `rsvg-convert` is missing)
 - `ffmpeg` — video thumbnails & previews (else videos show plain icons)
+- `tar` — extract/compress tar archives; `gzip`/`bzip2`/`xz`/`zstd`/`lzma`/`lz4`/`brotli`/`lzip`/`lzop`/`compress` add the matching `.tar.*` choice; `unzip`+`zip` (or `7z` as a fallback) for `.zip`, plus `.7z` (missing tools just hide their picker rows)
 - `gio` — starred-file metadata (`metadata::starred`; trash itself is built-in XDG, no `gio` needed)
   - `xdg-open` — opening files in their default app
   - `udisksctl` — removable-drive mount/eject

@@ -6,6 +6,7 @@ import path from "node:path";
 import { trashDir } from "../fs/fsutil";
 import { setBookmarked, loadSystemPlaces, type Place } from "../fs/places";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
+import type { CompressionFormat } from "../fs/archive";
 import type { ListEntry } from "./ui-menu";
 import type { ClipItem, GridTileRef } from "../input/grid-input";
 import type { LoadedPlugin, PluginFileMenuEntry } from "../plugins/plugin-api";
@@ -40,6 +41,13 @@ export type MenuEntriesCtx = {
   openProperties(p: string | string[]): void;
   selectAll(): void;
   cwd(): string;
+  // archive ops + host-gated availability (src/fs/archive via the wiring).
+  // canExtract decides the per-target entry; compressTo opens the floating
+  // format picker; compressionFormats only gates whether the row shows at all.
+  canExtract(p: string): boolean;
+  extractArchive(files: string[], destDir: string): void;
+  compressionFormats(): CompressionFormat[];
+  compressTo(paths: string[]): void;
   // state is a stable object ref — mutated in place by pick()
   sortState: { sortBy: SortMode; sortAsc: boolean };
   // installed plugins (loader aggregates them; absent = no plugin section).
@@ -350,6 +358,32 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
     );
+    // archive ops: real paths only (a recent:// target is not compressible and
+    // a virtual cwd has no place to extract into)
+    if (!isVirtualUri(ctx.cwd())) {
+      const archives = targets.map((t) => t.path).filter((p) => ctx.canExtract(p));
+      if (!isDir && archives.length) {
+        entries.push({
+          icon: "zip-box",
+          label: archives.length > 1 ? `Extract ${archives.length} Archives Here` : "Extract Here",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.extractArchive(archives, ctx.cwd());
+          },
+        });
+      }
+      const formats = ctx.compressionFormats();
+      if (formats.length) {
+        entries.push({
+          icon: "package",
+          label: "Compress to…",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.compressTo(targets.map((t) => t.path));
+          },
+        });
+      }
+    }
     entries.push({
       icon: "information",
       label: "Properties…",

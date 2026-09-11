@@ -143,7 +143,7 @@ describe("pick widget", () => {
       await t.renderOnce();
       pick.setFilter("zzz-nope");
       await t.renderOnce();
-      expect(t.captureCharFrame()).toContain("No matching commands");
+      expect(t.captureCharFrame()).toContain("No matching items");
       pick.handleKey({ name: "return" }); // nothing to run — stays open, no crash
       expect(floats.isOpen("pick")).toBe(true);
       pick.handleKey({ name: "escape" });

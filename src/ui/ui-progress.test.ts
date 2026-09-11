@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { barLine, makeProgress, pctOf, shouldToast, type ProgressCtx } from "./ui-progress";
+import { barLine, barLineFiles, makeProgress, pctOf, pctOfFiles, shouldToast, type ProgressCtx } from "./ui-progress";
 import type { ToastHandle } from "./notify";
 
 const MB = 1024 * 1024;
@@ -58,6 +58,16 @@ describe("barLine", () => {
 
   test("full bar when bytes exceed total", () => {
     expect(barLine(200, 100, 14)).toBe("██████████████ 200 B/100 B");
+  });
+});
+
+describe("pctOfFiles / barLineFiles", () => {
+  test("file-count bar for tools that report no bytes", () => {
+    expect(pctOfFiles(0, 0)).toBe(0);
+    expect(pctOfFiles(1, 4)).toBe(25);
+    expect(pctOfFiles(9, 4)).toBe(100);
+    expect(barLineFiles(1, 4, 14)).toBe("████░░░░░░░░░░ 1/4");
+    expect(barLineFiles(9, 4, 14)).toBe("██████████████ 4/4");
   });
 });
 

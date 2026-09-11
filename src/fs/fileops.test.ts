@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeFileOps, type FileOpsCtx } from "./fileops";
 import { trashDir } from "./fsutil";
+import type { ArchiveRun, ToolSpec } from "./archive";
+import type { ProgressState } from "../ui/ui-progress";
 
 // runTransfer is the only path copies/moves take — these tests pin the wiring:
 // same-fs move = plain rename (no toast), cross-device move = copy engine +
@@ -39,7 +42,7 @@ const W = (p: string, s = "x") => {
 
 const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
   const calls: string[] = [];
-  const prog = {
+  const prog: ProgressState = {
     active: false,
     verb: "copying",
     doneFiles: 0,
@@ -50,7 +53,13 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
     cancelled: false,
     currentRs: null,
     toastUp: false,
+    processCancel: null,
+    processPause: null,
   };
+  // mirror production: an empty batch is dropped, and the real closures are
+  // captured so tests can EXECUTE undo (not just assert a recorded label)
+  let lastUnits: Array<() => void | Promise<void>> = [];
+  let lastRedos: Array<() => void | Promise<void>> = [];
   const ctx: FileOpsCtx = {
     conflict: {
       resetPolicy: () => calls.push("policy:reset"),
@@ -71,7 +80,12 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
       calls.push(`toast:finish:${msg}`);
     },
     pauseGate: async () => {},
-    pushUndoBatch: (label, units, redos) => calls.push(`undo:${label}:${units.length}:${redos.length}`),
+    pushUndoBatch: (label, units, redos) => {
+      if (!units.length) return;
+      lastUnits = units;
+      lastRedos = redos;
+      calls.push(`undo:${label}:${units.length}:${redos.length}`);
+    },
     renderAll: () => calls.push("renderAll"),
     setStatusMsg: (msg) => calls.push(`status:${msg}`),
     notify: (_msg, title) => calls.push(`notify:${title ?? ""}`),
@@ -81,7 +95,7 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
     ...over,
   };
   const ops = makeFileOps(ctx);
-  return { ops, ctx, calls, prog };
+  return { ops, ctx, calls, prog, undoUnits: () => lastUnits, redoUnits: () => lastRedos };
 };
 
 // 6 files keeps the transfer past the shouldToast threshold (totalFiles > 4)
@@ -123,6 +137,20 @@ describe("runTransfer: same-fs move", () => {
     expect(existsSync(path.join(destDir, "stale-flag-src"))).toBe(true);
     expect(existsSync(src)).toBe(false);
     expect(h.calls.some((c) => c.startsWith("undo:move after cancel:"))).toBe(true);
+  });
+
+  test("sweeps crashed .tfm-extract-* staging before a transfer", async () => {
+    const h = makeHarness();
+    const destDir = path.join(ROOT, "sweep-dest");
+    mkdirSync(destDir, { recursive: true });
+    mkdirSync(path.join(destDir, ".tfm-extract-dead"));
+    const src = path.join(ROOT, "sweep-src.txt");
+    W(src, "x");
+
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+
+    expect(existsSync(path.join(destDir, ".tfm-extract-dead"))).toBe(false);
+    expect(existsSync(path.join(destDir, "sweep-src.txt"))).toBe(true);
   });
 });
 
@@ -417,5 +445,338 @@ describe("human-friendly statuses and labels", () => {
     mkdirSync(destDir, { recursive: true });
     await h.ops.moveInto(destDir, [{ path: src, isDir: false }]);
     expect(h.calls.some((c) => c.startsWith(`undo:move 1 item to ${path.basename(destDir)}:1:`))).toBe(true);
+  });
+});
+
+// --- archive ops: the engine is injected (never shell out) -----------------
+// The fake mirrors what tar/unzip do to the filesystem: extraction writes
+// entries into the staging dir passed via -C, compression writes the temp
+// archive the caller then renames into place.
+const fakeArchive = (opts: { entries?: Record<string, string>; stdout?: string } = {}) => {
+  const runs: ToolSpec[] = [];
+  const runArchive: ArchiveRun = async (spec) => {
+    runs.push(spec);
+    const entries = opts.entries ?? { foo: "extracted" };
+    const argAfter = (flag: string): string => spec.args[spec.args.indexOf(flag) + 1]!;
+    if (spec.tool === "tar" && spec.args.includes("-x")) {
+      const stage = argAfter("-C");
+      for (const [name, body] of Object.entries(entries)) {
+        const p = path.join(stage, name);
+        mkdirSync(path.dirname(p), { recursive: true });
+        writeFileSync(p, body);
+      }
+    } else if (spec.tool === "tar" && spec.args.includes("-c")) {
+      writeFileSync(argAfter("-f"), "archive-bytes");
+    } else if (spec.tool === "zip") {
+      writeFileSync(spec.args[1]!, "archive-bytes");
+    } else if (spec.tool === "7z") {
+      writeFileSync(argAfter("-y"), "archive-bytes");
+    }
+    return { code: 0, stdout: opts.stdout ?? "", stderr: "" };
+  };
+  return { runArchive, runs };
+};
+
+describe("extractArchive", () => {
+  test("stages, moves entries in, cleans staging, one undo batch", async () => {
+    const { runArchive, runs } = fakeArchive();
+    const h = makeHarness({ runArchive, listArchive: async () => 1 });
+    const destDir = path.join(ROOT, "x-dest");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x.tar.gz");
+    W(archive, "not-really");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("extracted");
+    // staging is gone, only the extracted entry remains
+    expect(readdirSync(destDir)).toEqual(["foo"]);
+    expect(runs[0]!.args).toContain("-x");
+    expect(h.calls.some((c) => c.startsWith("undo:extract 1 archive:1:0"))).toBe(true);
+    expect(h.calls).toContain("status:Extracted 1 archive · ctrl+z to undo");
+    expect(h.calls).toContain("notify:extract");
+  });
+
+  test("collision defaults to skip, leaving the existing entry untouched", async () => {
+    const { runArchive } = fakeArchive({ entries: { foo: "new" } });
+    const h = makeHarness({ runArchive, listArchive: async () => 1 });
+    const destDir = path.join(ROOT, "x-skip");
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(destDir, "foo"), "old");
+    const archive = path.join(ROOT, "x-skip.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("old");
+    expect(h.calls).toContain("conflict:prompt");
+    expect(h.calls.some((c) => c.includes("1 skipped"))).toBe(true);
+  });
+
+  test("keep both creates a (copy) sibling", async () => {
+    const { runArchive } = fakeArchive({ entries: { foo: "new" } });
+    const h = makeHarness({
+      runArchive,
+      listArchive: async () => 1,
+      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "keepBoth" },
+    });
+    const destDir = path.join(ROOT, "x-keepboth");
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(destDir, "foo"), "old");
+    const archive = path.join(ROOT, "x-keepboth.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("old");
+    expect(readFileSync(path.join(destDir, "foo (copy)"), "utf8")).toBe("new");
+  });
+
+  test("cancel kills the run and discards the staging dir", async () => {
+    const { runArchive, runs } = fakeArchive();
+    const h = makeHarness({
+      listArchive: async () => 1,
+      runArchive: (spec, opts) => {
+        opts?.onLine?.("foo");
+        return runArchive(spec, opts);
+      },
+      paintProgress: () => {
+        h.prog.cancelled = true;
+      },
+    });
+    const destDir = path.join(ROOT, "x-cancel");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-cancel.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(readdirSync(destDir)).toEqual([]);
+    expect(runs.length).toBe(1);
+    // nothing landed, so no undo batch (production drops empty batches)
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    expect(h.calls).toContain("status:Extract cancelled (0 done)");
+    expect(h.calls).toContain("notify:extract cancelled");
+  });
+
+  test("cancel wakes a paused child (SIGCONT) before hard-killing it", async () => {
+    const killed: string[] = [];
+    const child = { kill: (sig: string) => killed.push(sig), pid: 0 } as unknown as ChildProcess;
+    const h = makeHarness({
+      listArchive: async () => 1,
+      runArchive: async (_spec, opts) => {
+        opts?.onChild?.(child);
+        h.prog.cancelled = true;
+        h.prog.processCancel?.();
+        return { code: -1, stdout: "", stderr: "" };
+      },
+    });
+    const destDir = path.join(ROOT, "x-pause-cancel");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-pause-cancel.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    // SIGCONT first: a SIGSTOPped process ignores SIGKILL until resumed
+    expect(killed).toEqual(["SIGCONT", "SIGKILL"]);
+    expect(h.calls).toContain("status:Extract cancelled (0 done)");
+  });
+
+  test("undo units trash the entries that landed (executed, not just recorded)", async () => {
+    const { runArchive } = fakeArchive();
+    const h = makeHarness({ runArchive, listArchive: async () => 1 });
+    const destDir = path.join(ROOT, "x-undo");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-undo.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+    expect(existsSync(path.join(destDir, "foo"))).toBe(true);
+
+    const units = h.undoUnits();
+    expect(units.length).toBe(1);
+    for (const u of [...units].reverse()) await u();
+    expect(existsSync(path.join(destDir, "foo"))).toBe(false);
+  });
+
+  test("fatal tool exit cleans staging, reports failure, records no undo", async () => {
+    const h = makeHarness({
+      listArchive: async () => 1,
+      runArchive: async () => ({ code: 2, stdout: "", stderr: "boom happened\nmore\n" }),
+    });
+    const destDir = path.join(ROOT, "x-fatal");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-fatal.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(readdirSync(destDir)).toEqual([]);
+    expect(h.calls.some((c) => c.includes("1 FAILED (boom happened)"))).toBe(true);
+    expect(h.calls).toContain("notify:extract failed");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("warning exit (1) still lands the extracted entries", async () => {
+    const h = makeHarness({
+      listArchive: async () => 1,
+      runArchive: async (spec) => {
+        const stage = spec.args[spec.args.indexOf("-C") + 1]!;
+        writeFileSync(path.join(stage, "foo"), "extracted");
+        return { code: 1, stdout: "", stderr: "warning: skipped one member" };
+      },
+    });
+    const destDir = path.join(ROOT, "x-warn");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-warn.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("extracted");
+    expect(h.calls).toContain("status:Extracted 1 archive · ctrl+z to undo");
+  });
+
+  test("an archive whose entries all collide-and-skip advertises no undo", async () => {
+    const { runArchive } = fakeArchive({ entries: { foo: "new" } });
+    const h = makeHarness({ runArchive, listArchive: async () => 1 });
+    const destDir = path.join(ROOT, "x-allskip");
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(destDir, "foo"), "old");
+    const archive = path.join(ROOT, "x-allskip.tar.gz");
+    W(archive, "x");
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(h.calls.some((c) => c.includes("ctrl+z to undo"))).toBe(false);
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("virtual destinations are refused", async () => {
+    const h = makeHarness();
+    await h.ops.extractArchive([path.join(ROOT, "x.tar.gz")], "recent://");
+    expect(h.calls).toContain("status:Can't extract here");
+  });
+
+  test("reports onFileOp with the archive paths", async () => {
+    const seen: Array<{ op: string; dest?: string; outcome?: { cancelled: boolean; failed: number } }> = [];
+    const { runArchive } = fakeArchive();
+    const h = makeHarness({
+      runArchive,
+      listArchive: async () => 1,
+      onFileOp: (op, _p, dest, outcome) => seen.push({ op, dest, outcome }),
+    });
+    const destDir = path.join(ROOT, "x-fanout");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-fanout.tar.gz");
+    W(archive, "x");
+    await h.ops.extractArchive([archive], destDir);
+    expect(seen).toEqual([{ op: "extract", dest: destDir, outcome: { cancelled: false, failed: 0 } }]);
+  });
+});
+
+describe("compressPaths", () => {
+  test("writes a temp then renames it into place, one undo batch", async () => {
+    const { runArchive, runs } = fakeArchive();
+    const h = makeHarness({ runArchive });
+    const destDir = path.join(ROOT, "c-dest");
+    mkdirSync(destDir, { recursive: true });
+    const a = path.join(ROOT, "c-src", "a.txt");
+    const b = path.join(ROOT, "c-src", "b.txt");
+    W(a, "a");
+    W(b, "b");
+
+    await h.ops.compressPaths([a, b], "tar.gz", destDir);
+
+    const out = path.join(destDir, "archive.tar.gz");
+    expect(readFileSync(out, "utf8")).toBe("archive-bytes");
+    // no .tfm-part leftovers
+    expect(readdirSync(destDir)).toEqual(["archive.tar.gz"]);
+    const spec = runs.find((r) => r.args.includes("-c"))!;
+    expect(spec.args).toEqual([
+      "-c",
+      "-z",
+      "-v",
+      "-f",
+      expect.stringContaining(".tfm-part-"),
+      "-C",
+      path.join(ROOT, "c-src"),
+      "--",
+      "a.txt",
+      "b.txt",
+    ]);
+    expect(h.calls.some((c) => c.startsWith("undo:compress archive.tar.gz:1:0"))).toBe(true);
+    expect(h.calls).toContain("status:Compressed archive.tar.gz · ctrl+z to undo");
+  });
+
+  test("existing archive: skip leaves it alone, keep both gets a (copy) name", async () => {
+    const { runArchive, runs } = fakeArchive();
+    const h = makeHarness({ runArchive });
+    const destDir = path.join(ROOT, "c-collide");
+    mkdirSync(destDir, { recursive: true });
+    const a = path.join(ROOT, "c-collide-src", "only.txt");
+    W(a, "x");
+    W(path.join(destDir, "only.txt.tar.gz"), "old");
+
+    await h.ops.compressPaths([a], "tar.gz", destDir);
+    expect(readFileSync(path.join(destDir, "only.txt.tar.gz"), "utf8")).toBe("old");
+    expect(runs.some((r) => r.args.includes("-c"))).toBe(false);
+
+    const h2 = makeHarness({
+      runArchive,
+      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "keepBoth" },
+    });
+    await h2.ops.compressPaths([a], "tar.gz", destDir);
+    expect(readFileSync(path.join(destDir, "only.txt (copy).tar.gz"), "utf8")).toBe("archive-bytes");
+  });
+
+  test("cancel removes the half-written temp and reports cancelled", async () => {
+    const { runArchive } = fakeArchive();
+    const h = makeHarness({
+      runArchive: (spec, opts) => {
+        opts?.onLine?.("x");
+        return runArchive(spec, opts);
+      },
+      paintProgress: () => {
+        h.prog.cancelled = true;
+      },
+    });
+    const destDir = path.join(ROOT, "c-cancel");
+    mkdirSync(destDir, { recursive: true });
+    const a = path.join(ROOT, "c-cancel-src", "x.txt");
+    W(a, "x");
+
+    await h.ops.compressPaths([a], "tar.gz", destDir);
+
+    expect(readdirSync(destDir)).toEqual([]);
+    expect(h.calls).toContain("status:Compress cancelled");
+    expect(h.calls).toContain("notify:compress cancelled");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("cross-directory selection stores relative paths, not collapsed basenames", async () => {
+    const { runArchive, runs } = fakeArchive();
+    const h = makeHarness({ runArchive });
+    const destDir = path.join(ROOT, "c-cross-dest");
+    mkdirSync(destDir, { recursive: true });
+    const a = path.join(ROOT, "c-cross", "a", "foo.txt");
+    const b = path.join(ROOT, "c-cross", "b", "foo.txt");
+    W(a, "a");
+    W(b, "b");
+
+    await h.ops.compressPaths([a, b], "tar.gz", destDir);
+
+    const spec = runs.find((r) => r.args.includes("-c"))!;
+    // both `foo.txt` entries survive under distinct relative paths (a basename
+    // list would store foo.txt twice and drop the second file)
+    expect(spec.args.slice(spec.args.indexOf("--") + 1)).toEqual(["a/foo.txt", "b/foo.txt"]);
+    expect(spec.args).toContain(path.join(ROOT, "c-cross"));
+  });
+
+  test("virtual destination is refused", async () => {
+    const h = makeHarness();
+    await h.ops.compressPaths([path.join(ROOT, "noop.txt")], "tar.gz", "recent://");
+    expect(h.calls).toContain("status:Can't compress here");
   });
 });

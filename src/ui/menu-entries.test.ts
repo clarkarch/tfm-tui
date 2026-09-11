@@ -74,6 +74,10 @@ const baseCtx = (): MenuEntriesCtx & {
     openProperties: (p) => calls.push(`props:${p}`),
     selectAll: () => calls.push("selectAll"),
     cwd: () => "/home/u",
+    canExtract: () => true,
+    extractArchive: (files, dest) => calls.push(`extract:${files.join(",")}:${dest}`),
+    compressionFormats: () => ["tar.gz", "zip"],
+    compressTo: (paths) => calls.push(`compressTo:${paths.join(",")}`),
   };
 };
 
@@ -429,5 +433,68 @@ describe("plugin fileMenu entries", () => {
     expect(ctx.calls).toContain("close");
     expect(errs.length).toBe(1);
     expect(errs[0]!.name).toBe("boom");
+  });
+});
+
+describe("archive entries", () => {
+  test("an archive target gets Extract Here plus one Compress to… row", () => {
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a.tar.gz", false, 0, 0);
+    expect(entries.find((e) => e.label === "Extract Here")!.icon).toBe("zip-box");
+    expect(entries.find((e) => e.label === "Compress to…")).toBeTruthy();
+    expect(entries.filter((e) => e.label.startsWith("Compress")).length).toBe(1);
+
+    entries.find((e) => e.label === "Extract Here")!.action();
+    expect(ctx.calls).toContain("extract:/a.tar.gz:/home/u");
+    entries.find((e) => e.label === "Compress to…")!.action();
+    expect(ctx.calls).toContain("compressTo:/a.tar.gz");
+    // menu closes before the op starts (same rule as Properties…)
+    expect(ctx.calls.indexOf("close")).toBeLessThan(ctx.calls.indexOf("extract:/a.tar.gz:/home/u"));
+  });
+
+  test("non-archives hide extract but keep compress", () => {
+    const ctx = baseCtx();
+    ctx.canExtract = () => false;
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a.txt", false, 0, 0);
+    expect(entries.some((e) => e.label === "Extract Here")).toBe(false);
+    expect(entries.some((e) => e.label === "Compress to…")).toBe(true);
+  });
+
+  test("multi-selection of archives labels the count and extracts only archives", () => {
+    const ctx = baseCtx();
+    ctx.tileRefs = new Map<string, GridTileRef>([
+      ["/a.tar.gz", { selected: true, isDir: false }],
+      ["/b.zip", { selected: true, isDir: false }],
+      ["/c.txt", { selected: true, isDir: false }],
+    ]);
+    ctx.selPaths = () => [
+      { path: "/a.tar.gz", isDir: false },
+      { path: "/b.zip", isDir: false },
+      { path: "/c.txt", isDir: false },
+    ];
+    ctx.canExtract = (p) => p.endsWith(".tar.gz") || p.endsWith(".zip");
+    const m = makeMenuEntries(ctx);
+    const extract = m.fileEntriesFor("/a.tar.gz", false, 0, 0).find((e) => e.label === "Extract 2 Archives Here")!;
+    extract.action();
+    expect(ctx.calls).toContain("extract:/a.tar.gz,/b.zip:/home/u");
+  });
+
+  test("virtual cwd hides archive entries", () => {
+    const ctx = baseCtx();
+    ctx.cwd = () => "recent://";
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a.tar.gz", false, 0, 0);
+    expect(entries.some((e) => e.label === "Extract Here")).toBe(false);
+    expect(entries.some((e) => e.label.startsWith("Compress to"))).toBe(false);
+  });
+
+  test("directories compress but never extract", () => {
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/some-dir", true, 0, 0);
+    expect(entries.some((e) => e.label === "Extract Here")).toBe(false);
+    expect(entries.some((e) => e.label === "Compress to…")).toBe(true);
   });
 });

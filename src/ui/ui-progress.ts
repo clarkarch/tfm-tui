@@ -42,6 +42,10 @@ export type ProgressState = {
   cancelled: boolean;
   currentRs: ReadStream | null;
   toastUp: boolean;
+  // external-process controls (archive tools): cancel/pause hooks the toast
+  // buttons invoke when no ReadStream is live
+  processCancel?: (() => void) | null;
+  processPause?: (() => void) | null;
 };
 
 export const pctOf = (bytes: number, totalBytes: number): number =>
@@ -50,6 +54,16 @@ export const pctOf = (bytes: number, totalBytes: number): number =>
 export const barLine = (bytes: number, totalBytes: number, cells: number): string => {
   const filled = Math.round((pctOf(bytes, totalBytes) / 100) * cells);
   return `${"█".repeat(filled) + "░".repeat(Math.max(0, cells - filled))} ${fmtBytes(bytes)}/${fmtBytes(totalBytes)}`;
+};
+
+// archive tools report entry names, not bytes — a file-count bar keeps the
+// progress honest when totalBytes is unknown (totalBytes stays 0)
+export const pctOfFiles = (done: number, total: number): number =>
+  total > 0 ? Math.min(100, Math.floor((done / total) * 100)) : 0;
+
+export const barLineFiles = (done: number, total: number, cells: number): string => {
+  const filled = Math.round((pctOfFiles(done, total) / 100) * cells);
+  return `${"█".repeat(filled) + "░".repeat(Math.max(0, cells - filled))} ${Math.min(done, total)}/${total}`;
 };
 
 // tiny transfers don't need a toast — canonical predicate lives in
@@ -101,11 +115,18 @@ export const makeProgress = (ctx: ProgressCtx) => {
     if (!force && now - progLastPaint < 120) return;
     progLastPaint = now;
     const spin = prog.paused ? "⏸" : SPIN_FRAMES[progSpinIdx];
+    const filesMode = prog.totalBytes <= 0 && prog.totalFiles > 0;
+    const pct = filesMode ? pctOfFiles(prog.doneFiles, prog.totalFiles) : pctOf(prog.bytes, prog.totalBytes);
+    progSetText(PROG_T_TITLE, `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pct}%)`);
     progSetText(
-      PROG_T_TITLE,
-      `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pctOf(prog.bytes, prog.totalBytes)}%)`,
+      PROG_T_BAR,
+      truncateToastText(
+        filesMode
+          ? barLineFiles(prog.doneFiles, prog.totalFiles, PROG_BAR_CELLS)
+          : barLine(prog.bytes, prog.totalBytes, PROG_BAR_CELLS),
+        TOAST_W - 2,
+      ),
     );
-    progSetText(PROG_T_BAR, truncateToastText(barLine(prog.bytes, prog.totalBytes, PROG_BAR_CELLS), TOAST_W - 2));
   };
 
   const showProgressToast = (): void => {
@@ -168,6 +189,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
                 prog.currentRs?.pause();
               } catch {}
             }
+            prog.processPause?.();
             setPauseVisual();
           },
           onMouseOver: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", true),
@@ -188,6 +210,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
             try {
               prog.currentRs?.destroy(new Error("cancelled"));
             } catch {}
+            prog.processCancel?.();
           },
           onMouseOver: () => progPaint(progCloseSpec.spec, "tfm-prog-close", true),
           onMouseOut: () => progPaint(progCloseSpec.spec, "tfm-prog-close", false),

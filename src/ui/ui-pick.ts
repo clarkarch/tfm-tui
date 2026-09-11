@@ -105,7 +105,7 @@ export const makePick = (ctx: PickCtx) => {
       list.add(
         Box(
           { width: "100%", height: 1, paddingLeft: 2, paddingRight: 1 },
-          Text({ content: "No matching commands", fg: colors.sidebarFgMuted }),
+          Text({ content: "No matching items", fg: colors.sidebarFgMuted }),
         ),
       );
       return;
@@ -139,7 +139,7 @@ export const makePick = (ctx: PickCtx) => {
     });
   };
 
-  const open = (opts: { title: string; items?: PickItem[] }): void => {
+  const open = (opts: { title: string; items?: PickItem[]; placeholder?: string }): void => {
     // re-invoking while open replaces title/items (palette re-run with fresh
     // commands) — routed through close() so the floats stack never holds two
     // pick entries (a stale entry would keep isOpen true after closing).
@@ -191,7 +191,7 @@ export const makePick = (ctx: PickCtx) => {
           Input({
             id: "tfm-pick-input",
             width: PANEL_W - 6,
-            placeholder: "Type a command…",
+            placeholder: opts.placeholder ?? "Type a command…",
             backgroundColor: colors.accentBg,
             focusedBackgroundColor: colors.accentBg,
             textColor: colors.white,
