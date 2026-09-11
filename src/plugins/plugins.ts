@@ -262,6 +262,10 @@ type PluginRegistry = {
   plugins: LoadedPlugin[];
   errors: string[];
   scan: () => Promise<PluginScanDiff>;
+  // best-effort quit teardown: quit is synchronous (process.exit kills pending
+  // async IO), so the returned promises are NOT awaited — only a deactivate's
+  // sync prefix runs. Remove/reload use the awaited path below.
+  deactivateAll: () => void;
 };
 
 // one discoverable plugin: folders are canonical (<name>/<name>.ts), legacy
@@ -331,8 +335,11 @@ export const makePluginRegistry = (deps: {
   dir: string;
   api: PluginApi;
   warn(message: string): void;
+  // bridge a plugin's `slots` contribution into the OpenTUI slot registry.
+  // Returns an unregister fn stored as LoadedPlugin.disposeSlots.
+  registerSlots?: (name: string, slots: Record<string, unknown>) => () => void;
 }): PluginRegistry => {
-  const { dir, api, warn } = deps;
+  const { dir, api, warn, registerSlots } = deps;
   const plugins: LoadedPlugin[] = [];
   const errors: string[] = [];
   // main-path -> last-seen version; warned keys dedupe repeat toasts across
@@ -467,8 +474,44 @@ export const makePluginRegistry = (deps: {
         : typeof (mod as { deactivate?: unknown }).deactivate === "function"
           ? ((mod as { deactivate: () => void | Promise<void> }).deactivate as () => void | Promise<void>)
           : null;
+    const meta = (v: unknown): string => (typeof v === "string" ? v.slice(0, 200) : "");
+    // OpenTUI slot contributions (statusbar / sidebar-footer). Registering is
+    // isolated: a throw drops just the slots, never the plugin.
+    let disposeSlots: (() => void) | null = null;
+    if (result.slots !== undefined) {
+      if (typeof result.slots !== "object" || result.slots === null || Array.isArray(result.slots)) {
+        throw new Error(`slots must be an object`);
+      }
+      // per-entry validation (mirrors preview/commands): a slot value must be
+      // a renderer function or a managed `{ render }` object; bad ones drop.
+      const clean: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(result.slots as Record<string, unknown>)) {
+        const ok =
+          typeof val === "function" ||
+          (typeof val === "object" && val !== null && typeof (val as { render?: unknown }).render === "function");
+        if (!ok) {
+          try {
+            api.log(`plugin ${m.name}: slot ${JSON.stringify(key)} invalid — dropped`);
+          } catch {}
+          continue;
+        }
+        clean[key] = val;
+      }
+      if (registerSlots && Object.keys(clean).length) {
+        try {
+          disposeSlots = registerSlots(m.name, clean);
+        } catch (err) {
+          try {
+            api.log(`plugin ${m.name} slots failed to register: ${err instanceof Error ? err.message : err}`);
+          } catch {}
+        }
+      }
+    }
     return {
       name: mod.name,
+      version: meta(m.version),
+      author: meta(m.author),
+      description: meta(m.description),
       rows: result.rows ?? [],
       fileMenu: fileMenu as ((sel: { paths: string[] }) => PluginFileMenuEntry[]) | null,
       sidebarMenu: sidebarMenu as ((place: { path?: string | null; scheme?: string }) => PluginFileMenuEntry[]) | null,
@@ -477,6 +520,7 @@ export const makePluginRegistry = (deps: {
       preview,
       store: ownStore,
       deactivate,
+      disposeSlots,
       file: originalFile,
     };
   };
@@ -485,6 +529,9 @@ export const makePluginRegistry = (deps: {
   // cleaned up on both paths via withTimeout — a bare Promise.race leaks the
   // timeout handle on success and holds the event loop per unload).
   const runDeactivate = async (p: LoadedPlugin): Promise<void> => {
+    try {
+      p.disposeSlots?.();
+    } catch {}
     if (!p.deactivate) return;
     try {
       await withTimeout(
@@ -495,6 +542,25 @@ export const makePluginRegistry = (deps: {
       try {
         api.log(`plugin ${p.name} deactivate failed: ${err instanceof Error ? err.message : err}`);
       } catch {}
+    }
+  };
+
+  // quit teardown: call every deactivate synchronously (promises ignored) so a
+  // sync prefix flushes before process.exit. Async cleanup must use
+  // events.on("quit") — see docs/plugins.md.
+  const deactivateAll = (): void => {
+    for (const p of [...plugins]) {
+      try {
+        p.disposeSlots?.();
+      } catch {}
+      if (!p.deactivate) continue;
+      try {
+        void p.deactivate();
+      } catch (err) {
+        try {
+          api.log(`plugin ${p.name} deactivate failed: ${err instanceof Error ? err.message : err}`);
+        } catch {}
+      }
     }
   };
 
@@ -617,5 +683,5 @@ export const makePluginRegistry = (deps: {
     return diff;
   };
 
-  return { plugins, errors, scan };
+  return { plugins, errors, scan, deactivateAll };
 };

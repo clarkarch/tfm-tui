@@ -33,6 +33,12 @@ if (cli.error) {
 }
 if (cli.config) process.env.TFM_CONFIG = path.resolve(cli.config);
 
+// headless subcommand (`tfm plugins …`) — answers before the TUI graph loads
+if (cli.command?.name === "plugins") {
+  const { runPluginsCli } = await import("./app/plugins-cli");
+  process.exit(await runPluginsCli(cli.command.args));
+}
+
 // launch PATH (`tfm ~/some/path`): chdir before anything resolves the cwd, so
 // tabs/history/session all start there. A FILE opens its parent and is then
 // selected by the grid. An invalid explicit path is a HARD ERROR (exit 1, no
@@ -117,6 +123,7 @@ const nav = wireNav({
   getTermHasFocus: () => fileops.terminal.termHasFocus(),
   getTerm: () => fileops.terminal,
   getWatcher: () => watcher,
+  getPlugins: () => plugins,
 });
 
 // --- chrome: file menu, sidebar, toolbar, renderer boot, notify, dialogs ---
@@ -163,6 +170,7 @@ const plugins = await wirePlugins({
   getKeymap: () => ({ commands: () => keymap.keyRouter.commands() }),
   getPick: () => keymap.pick,
   getConfirm: () => fileops.yesNo,
+  getPrompt: () => keymap.prompt,
 });
 
 // --- grid: preview, mouse pipeline, grid renderer, props, menu entries ---
@@ -209,6 +217,7 @@ wireBoot({
   fileops,
   bootStart,
   skipSessionRestore: explicitPath,
+  mountSlots: () => plugins.mountSlots(),
 });
 
 const retheme = wireRetheme({

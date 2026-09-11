@@ -12,12 +12,14 @@ export type CliOptions = {
   version: boolean;
   config: string | null;
   paths: string[];
+  // `tfm plugins <args>` — a headless management subcommand (no TUI boot)
+  command: { name: string; args: string[] } | null;
   // first parse failure; when set, callers print it + usage hint and exit 2
   error: string | null;
 };
 
 export const parseArgs = (argv: string[]): CliOptions => {
-  const opts: CliOptions = { help: false, version: false, config: null, paths: [], error: null };
+  const opts: CliOptions = { help: false, version: false, config: null, paths: [], command: null, error: null };
   let args = argv.slice(1);
   // `bun src/index.ts PATH` has the script as argv[1]; the compiled `tfm PATH`
   // does not. Only strip under a JS runner — otherwise a real path named
@@ -25,6 +27,13 @@ export const parseArgs = (argv: string[]): CliOptions => {
   const runner = (argv[0] ?? "").replace(/\\/g, "/").split("/").pop() ?? "";
   if (/^(bun|node|deno)(\.exe)?$/.test(runner) && args.length && /index\.[tj]s$/.test(args[0] as string)) {
     args = args.slice(1);
+  }
+
+  // subcommand form short-circuits option parsing: everything after `plugins`
+  // belongs to it (so a URL with dashes isn't read as a flag)
+  if (args[0] === "plugins") {
+    opts.command = { name: "plugins", args: args.slice(1) };
+    return opts;
   }
 
   const fail = (msg: string): CliOptions => {
@@ -89,4 +98,7 @@ Options:
   -d, --debug        write a verbose event log (for bug reports)
   -c, --config FILE  use FILE instead of ~/.config/tfm/config.toml
   --                 treat the rest as PATH (names that start with '-')
+
+Commands:
+  plugins [list|search|add|remove|update|new]   manage plugins (see 'tfm plugins help')
 `;

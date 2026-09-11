@@ -59,9 +59,19 @@ const mkApi = (dir: string, notes: string[]): PluginApi => ({
   store: (name) => makePluginStore(dir, name),
   selection: () => [],
   cwd: () => "/home/u",
+  navigate: () => {},
+  open: () => {},
+  reveal: () => {},
+  select: () => {},
   commands: () => [],
-  ui: { pick: () => {}, confirm: async () => false, notifySticky: () => () => {} },
+  ui: {
+    pick: () => {},
+    confirm: async () => false,
+    prompt: async () => null,
+    notifySticky: () => () => {},
+  },
   events: { on: () => () => {} },
+  hooks: { beforeFileOp: () => () => {} },
 });
 
 const mkDir = (): string => mkdtempSync(path.join(os.tmpdir(), "tfm-plugins-test-"));
@@ -766,6 +776,95 @@ describe("staged builds (hot-reload machinery)", () => {
         lingering = rd(pluginBuildDir()).filter((e) => e.startsWith("bad-"));
       } catch {}
       expect(lingering).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("manifest metadata", () => {
+  test("version/author/description surface on the loaded plugin (capped, defaulted)", async () => {
+    const dir = mkDir();
+    try {
+      writePlugin(
+        dir,
+        "meta.ts",
+        `export default { name: "meta", version: "1.2.3", author: "someone", description: "does things", activate: () => ({}) };\n`,
+      );
+      writePlugin(dir, "plain.ts", `export default { name: "plain", activate: () => ({}) };\n`);
+      const { plugins } = await loadPlugins({ dir, api: mkApi(dir, []), warn: () => {} });
+      const meta = plugins.find((p) => p.name === "meta")!;
+      expect([meta.version, meta.author, meta.description]).toEqual(["1.2.3", "someone", "does things"]);
+      const plain = plugins.find((p) => p.name === "plain")!;
+      expect([plain.version, plain.author, plain.description]).toEqual(["", "", ""]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("deactivateAll (quit teardown)", () => {
+  test("calls each plugin's deactivate synchronously", async () => {
+    const dir = mkDir();
+    const mark = path.join(dir, "marks.txt");
+    process.env.TFM_TEST_MARK = mark;
+    try {
+      writePlugin(
+        dir,
+        "d.ts",
+        `import { appendFileSync } from "node:fs";\n` +
+          `export default { name: "d", activate: () => ({}), deactivate() { appendFileSync(process.env.TFM_TEST_MARK, "d\\n"); } };\n`,
+      );
+      const reg = makePluginRegistry({ dir, api: mkApi(dir, []), warn: () => {} });
+      await reg.scan();
+      reg.deactivateAll();
+      expect(readFileSync(mark, "utf8")).toBe("d\n");
+    } finally {
+      delete process.env.TFM_TEST_MARK;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("slot contributions (loader bridge)", () => {
+  test("registerSlots receives the contribution; remove disposes it", async () => {
+    const dir = mkDir();
+    const registered: string[] = [];
+    const disposed: string[] = [];
+    try {
+      writePlugin(
+        dir,
+        "bars.ts",
+        `export default { name: "bars", activate: () => ({ slots: { statusbar: () => null } }) };\n`,
+      );
+      const reg = makePluginRegistry({
+        dir,
+        api: mkApi(dir, []),
+        warn: () => {},
+        registerSlots: (name, slots) => {
+          registered.push(`${name}:${Object.keys(slots).join(",")}`);
+          return () => disposed.push(name);
+        },
+      });
+      await reg.scan();
+      expect(registered).toEqual(["bars:statusbar"]);
+      // removing the plugin folder must unregister its slots (no leak)
+      rmSync(path.join(dir, "bars"), { recursive: true, force: true });
+      await reg.scan();
+      expect(disposed).toEqual(["bars"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed slots field fails the plugin load", async () => {
+    const dir = mkDir();
+    try {
+      writePlugin(dir, "bad.ts", `export default { name: "bad", activate: () => ({ slots: [] }) };\n`);
+      const { plugins, errors } = await loadPlugins({ dir, api: mkApi(dir, []), warn: () => {} });
+      expect(plugins).toEqual([]);
+      expect(errors.length).toBe(1);
+      expect(errors[0]).toContain("slots must be an object");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -27,8 +27,15 @@ export const wireNav = (deps: {
   getTermHasFocus: () => boolean;
   getTerm: () => { closeTerminalPane(): void };
   getWatcher: () => { syncCwdWatcher(): void };
+  // plugin teardown at quit (wired after nav; lazy getter). Best-effort sync.
+  getPlugins?: () => {
+    deactivateAll(): void;
+    refreshSlots?(): void;
+    disposeSlots?(): void;
+  };
 }) => {
-  const { core, getChrome, getDnd, getGridFoundation, getGrid, getTermHasFocus, getTerm, getWatcher } = deps;
+  const { core, getChrome, getDnd, getGridFoundation, getGrid, getTermHasFocus, getTerm, getWatcher, getPlugins } =
+    deps;
 
   // --- renderAll orchestration lives in ./render-all (tested): tab-sync +
   // cwd-sync, then the named steps in insertion order, each guarded. ---
@@ -52,6 +59,7 @@ export const wireNav = (deps: {
       preview: () => {
         void getGrid().renderPreview();
       },
+      pluginSlots: () => getPlugins?.().refreshSlots?.(),
       stripSelectable: () => core.lookup.stripSelectable(),
     },
   });
@@ -65,7 +73,15 @@ export const wireNav = (deps: {
   const quitApp = makeQuit({
     disableDrops: () => getDnd().disableDrops(),
     releaseShiftCapture: () => process.stdout.write(xtShiftEscapeFrame(false)),
-    onQuit: () => sharedPluginEvents().emit("quit", {}),
+    onQuit: () => {
+      sharedPluginEvents().emit("quit", {});
+      // best-effort: call each plugin's deactivate (sync prefix only — quit is
+      // synchronous, see docs/plugins.md)
+      try {
+        getPlugins?.().disposeSlots?.();
+        getPlugins?.().deactivateAll();
+      } catch {}
+    },
     closeTerminal: () => getTerm().closeTerminalPane(),
     flushSession: () => {
       if (!core.isVirtualCwd()) {

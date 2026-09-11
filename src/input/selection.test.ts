@@ -367,3 +367,34 @@ describe("keyboard scrolling", () => {
     expect(h.scrolls).toEqual([{ x: 0, y: 0 }]);
   });
 });
+
+describe("selectPaths (plugin api.select)", () => {
+  test("selects the listed paths, ignores unknown ones, focuses the first match", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a", "b", "c"]);
+    ["a", "b", "c"].forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectPaths(["c", "/nope", "a"]);
+    expect(h.sel.tileRefs.get("a")!.selected).toBe(true);
+    expect(h.sel.tileRefs.get("c")!.selected).toBe(true);
+    expect(h.sel.tileRefs.get("b")!.selected).toBe(false);
+    expect(h.sel.focusIdx()).toBe(0); // first match in focus order
+    expect(
+      h.sel
+        .selPaths()
+        .map((s) => s.path)
+        .sort(),
+    ).toEqual(["a", "c"]);
+  });
+
+  test("an all-unknown list clears the selection", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a"]);
+    h.addTile("a");
+    h.sel.selectTileAt(0);
+    h.sel.selectPaths(["/nope"]);
+    expect(h.sel.tileRefs.get("a")!.selected).toBe(false);
+    expect(h.sel.selPaths()).toEqual([]);
+  });
+});

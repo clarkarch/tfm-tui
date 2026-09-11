@@ -52,6 +52,9 @@ const mk = (plugins?: () => LoadedPlugin[]) => {
 };
 
 const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => ({
+  version: "",
+  author: "",
+  description: "",
   rows: [],
   fileMenu: null,
   sidebarMenu: null,
@@ -492,5 +495,17 @@ describe("config group", () => {
     expect(back.kind).toBe("action");
     if (back.kind === "action") back.run();
     expect(h.roots()).toBe(1);
+  });
+});
+
+describe("plugin manifest header", () => {
+  test("version/author/description surface in the category header (name-only when absent)", () => {
+    const h = mk(() => [
+      mkPlugin({ name: "meta", version: "1.2.3", author: "someone", description: "does things", rows: [] }),
+      mkPlugin({ name: "plain", rows: [] }),
+    ]);
+    const headers = h.model.pluginGroups().map((g) => g.header);
+    expect(headers).toContain("meta · 1.2.3 · someone · does things");
+    expect(headers).toContain("plain");
   });
 });

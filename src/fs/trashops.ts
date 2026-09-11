@@ -4,6 +4,7 @@ import path from "node:path";
 import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrashMove, safeRestoreMove } from "./fsutil";
 import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
+import { sharedPluginHooks } from "../lib/plugin-hooks";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
 // --- Trash operations: trash / restore / delete-forever / empty. The fs
@@ -77,8 +78,18 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       sink.onEvent?.(op, [...paths]);
     } catch {}
   };
+  // plugin veto channel: a beforeFileOp hook can block trash/restore/delete
+  const vetoedByPlugin = (op: TrashOpName, paths: string[]): boolean => {
+    const veto = sharedPluginHooks().beforeFileOp({ op, paths });
+    if (!veto) return false;
+    const msg = `Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`;
+    sink.setStatusMsg(msg);
+    sink.notify(msg, "blocked");
+    return true;
+  };
 
   const trashPaths = (paths: string[]): Promise<void> => {
+    if (vetoedByPlugin("trash", paths)) return Promise.resolve();
     const run = queue.enqueue(async () => {
       const units: UndoUnit[] = [];
       const redos: UndoUnit[] = [];
@@ -135,6 +146,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   };
 
   const restoreFromTrash = (paths: string[]): Promise<void> => {
+    if (vetoedByPlugin("restore", paths)) return Promise.resolve();
     const run = queue.enqueue(async () => {
       const units: UndoUnit[] = [];
       const redos: UndoUnit[] = [];
@@ -204,6 +216,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   };
 
   const deleteForever = (paths: string[]): Promise<void> => {
+    if (vetoedByPlugin("delete-forever", paths)) return Promise.resolve();
     const run = queue.enqueue(async () => {
       const dp = sink.deleteProgress;
       // pre-scan so the toast has honest totals; a vanished path scans as 0
@@ -265,6 +278,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   };
 
   const emptyTrash = (): Promise<void> => {
+    if (vetoedByPlugin("empty", [])) return Promise.resolve();
     const run = queue.enqueue(async () => {
       const filesDir = path.join(trashDir(), "files");
       let names: string[];

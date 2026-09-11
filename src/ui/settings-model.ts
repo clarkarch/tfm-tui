@@ -392,8 +392,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       } catch {
         keyRows = [];
       }
+      // manifest metadata in the category header: name · version · author · description
+      const meta = [p.version, p.author, p.description.slice(0, 40)].filter(Boolean).join(" · ");
       return {
-        header: p.name,
+        header: meta ? `${p.name} · ${meta}` : p.name,
         rows: [enabledRow, ...rows, ...keyRows, ...lifecycleRows(p)],
       };
     }),

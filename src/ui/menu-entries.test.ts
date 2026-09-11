@@ -10,6 +10,9 @@ import type { LoadedPlugin } from "../plugins/plugin-api";
 // full-shape fakes (absent builders are null, never undefined — matches what
 // the loader hands out, so the guards are exercised exactly as in prod)
 const fakePlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => ({
+  version: "",
+  author: "",
+  description: "",
   rows: [],
   fileMenu: null,
   sidebarMenu: null,

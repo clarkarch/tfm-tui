@@ -221,6 +221,48 @@ export const makeSelection = (ctx: SelectionCtx) => {
     updateSelectionStatusReal();
   };
 
+  // select an explicit set of paths (plugin api.select). Paths not currently
+  // listed are ignored; focus lands on the first match. Used to drive the
+  // selection from outside the mouse/keyboard pipeline.
+  const selectPaths = (paths: string[]): void => {
+    // clear refs inline: clearTileSelection() would emit a spurious empty
+    // selection event to plugins before the real one
+    tileRefs.forEach((refs, k) => {
+      if (refs.selected) {
+        refs.selected = false;
+        setTileVisual(k, TileVisual.Rest);
+      }
+    });
+    const want = new Set(paths);
+    let firstIdx = -1;
+    for (let i = 0; i < focusKeys.length; i++) {
+      const k = focusKeys[i]!;
+      if (!want.has(k)) continue;
+      const r = tileRefs.get(k);
+      if (!r) continue;
+      r.selected = true;
+      setTileVisual(k, TileVisual.Selected);
+      if (firstIdx < 0) firstIdx = i;
+    }
+    // focus/anchor always follow the new selection (-1/null when nothing matched)
+    focusIdx = firstIdx;
+    selAnchor = firstIdx < 0 ? null : firstIdx;
+    if (firstIdx >= 0) {
+      void ctx.renderPreview();
+      const scroller = ctx.scroller();
+      if (scroller) {
+        try {
+          const row = Math.floor(firstIdx / colsAtBuild);
+          const vh = ctx.viewH();
+          const top = scroller.scrollTop;
+          if (row * rowHAtBuild < top) scroller.scrollTo({ x: 0, y: row * rowHAtBuild });
+          else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * rowHAtBuild - vh });
+        } catch {}
+      }
+    }
+    updateSelectionStatusReal();
+  };
+
   // re-apply resting visuals after a cut/copy/paste so dimming tracks the clipboard
   const refreshCutVisuals = (): void => {
     tileRefs.forEach((refs, key) => {
@@ -262,6 +304,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
     selectTileAt,
     moveFocus,
     selectAll,
+    selectPaths,
     refreshCutVisuals,
   };
 };

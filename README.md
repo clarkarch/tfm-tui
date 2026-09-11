@@ -69,6 +69,21 @@ Everything is remappable: `esc` → Settings → keys.
 `~/.config/tfm/config.toml`, see [config.example.toml](config.example.toml).
 Override the path with `TFM_CONFIG`; XDG homes are honored. `--debug` writes a log.
 
+## Plugins
+
+TypeScript plugins in `~/.config/tfm/plugins/<name>/<name>.ts` with full trust,
+hot reload, commands/keybinds, context menus, previews, events, pre-op veto
+hooks, and **UI slots** (render OpenTUI widgets into the statusbar / sidebar
+footer). Install from a git URL in `esc` → Plugins, or:
+
+```bash
+tfm plugins search
+tfm plugins add <url|id>
+tfm plugins new my-plugin
+```
+
+See [docs/plugins.md](docs/plugins.md).
+
 ## Limitations
 
 - Linux only.

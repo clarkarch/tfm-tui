@@ -398,3 +398,27 @@ describe("delete progress driver", () => {
     }
   });
 });
+
+describe("trash pre-op veto", () => {
+  test("a beforeFileOp hook blocks trashing; the file stays put", async () => {
+    const root = sandbox();
+    const { sharedPluginHooks } = await import("../lib/plugin-hooks");
+    const off = sharedPluginHooks().onBeforeFileOp((p) =>
+      p.op === "trash" ? { skip: true, reason: "nope" } : undefined,
+    );
+    try {
+      const file = path.join(root, "keep.txt");
+      writeFileSync(file, "keep");
+      const sink = recordingSink();
+      makeTrashOps(sink).trashPaths([file]);
+      await settleUntil(() => sink.notes.length > 0);
+      expect(existsSync(file)).toBe(true);
+      expect(sink.notes.some((n) => n === "setStatusMsg:Blocked by plugin: nope")).toBe(true);
+      expect(sink.notes.some((n) => n.startsWith("notify:blocked:"))).toBe(true);
+      expect(sink.batches.length).toBe(0);
+    } finally {
+      off();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

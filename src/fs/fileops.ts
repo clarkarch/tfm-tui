@@ -37,6 +37,7 @@ import {
 } from "./archive";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { sharedOpQueue } from "../lib/op-queue";
+import { sharedPluginHooks } from "../lib/plugin-hooks";
 import type { ConflictChoice } from "../ui/ui-dialogs";
 import type { ProgressState } from "../ui/ui-progress";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
@@ -138,6 +139,17 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     return "";
   };
 
+  // plugin veto channel: a beforeFileOp hook returning { skip: true } blocks the
+  // op before any work. Sync + isolated inside the hook bus.
+  const vetoedByPlugin = (op: string, paths: string[], dest?: string): boolean => {
+    const veto = sharedPluginHooks().beforeFileOp({ op, paths, ...(dest ? { dest } : {}) });
+    if (!veto) return false;
+    const msg = `Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`;
+    ctx.setStatusMsg(msg);
+    ctx.notify(msg, "blocked");
+    return true;
+  };
+
   // Trash/files (or anything under it) is not a paste/move target: files
   // landing there without .trashinfo are unrestorable. Trashing goes through
   // trashPaths; drag-restore onto real places stays allowed (dest-based, not
@@ -202,8 +214,18 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // Crash semantics: each file lands via tmp+rename (no half-visible dest);
   // a multi-file batch is per-file atomic, not batch-atomic — completed files
   // stay undoable via the pushed batch.
-  const runTransfer = (op: "copy" | "move", destDir: string, srcs: string[], label: string): Promise<void> =>
-    queue.enqueue(() => runTransferInner(op, destDir, srcs, label));
+  const runTransfer = (
+    op: "copy" | "move",
+    destDir: string,
+    srcs: string[],
+    label: string,
+    veto = true,
+  ): Promise<void> => {
+    // plugin veto BEFORE enqueue (and before any caller side effects — paste
+    // clears its clipboard only after this returns false)
+    if (veto && vetoedByPlugin(op, srcs, destDir)) return Promise.resolve();
+    return queue.enqueue(() => runTransferInner(op, destDir, srcs, label));
+  };
   const runTransferInner = async (
     op: "copy" | "move",
     destDir: string,
@@ -419,6 +441,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.renderAll();
       return;
     }
+    if (vetoedByPlugin("rename", [p], dest)) return;
     let finalDest = dest;
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
@@ -478,6 +501,13 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.setStatusMsg("Nothing to rename");
       return;
     }
+    if (
+      vetoedByPlugin(
+        "rename",
+        pairs.map((x) => x.from),
+      )
+    )
+      return;
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
@@ -539,6 +569,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   let duplicating = false;
   const duplicate = async (paths: string[]): Promise<void> => {
     if (duplicating) return;
+    if (vetoedByPlugin("duplicate", paths)) return;
     duplicating = true;
     try {
       const byDir = new Map<string, string[]>();
@@ -549,7 +580,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         else byDir.set(d, [p]);
       }
       for (const [dir, group] of byDir) {
-        await runTransfer("copy", dir, group, `duplicate ${group.length} item${group.length === 1 ? "" : "s"}`);
+        // veto=false: duplicate already ran the "duplicate" hook above; the
+        // inner copy must not re-fire a copy hook per destination dir
+        await runTransfer("copy", dir, group, `duplicate ${group.length} item${group.length === 1 ? "" : "s"}`, false);
       }
     } finally {
       duplicating = false;
@@ -579,6 +612,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const mode = clipboard.mode === "copy" ? "copy" : "move";
     const srcs = clipboard.items.map((i) => i.path);
     const n = srcs.length;
+    // veto BEFORE consuming the clipboard: a blocked paste must leave the
+    // pending copy/cut untouched (runTransfer re-checks are skipped below)
+    if (vetoedByPlugin(mode, srcs, dest)) return;
     clipboard = null;
     ctx.refreshCutVisuals();
     await runTransfer(
@@ -588,6 +624,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       mode === "copy"
         ? `paste ${n} item${n === 1 ? "" : "s"}`
         : `move ${n} item${n === 1 ? "" : "s"} to ${path.basename(dest) || "/"}`,
+      false,
     );
   };
 

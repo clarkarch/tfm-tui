@@ -58,10 +58,13 @@ export const wireBoot = (deps: {
   // an explicit CLI path suppresses session restore: the user asked for a
   // location, the saved session must not silently win
   skipSessionRestore?: boolean;
+  // plugin UI slots mount into the boot layout (see app/boot.ts)
+  mountSlots?: () => void;
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
   void runBoot({
     waitForResolution: () => waitForResolution(chrome.renderer),
+    mountSlots: deps.mountSlots,
     buildLayout: () => {
       // scroller/band rect/drag ghost — module: ./ui-boot-layout (ids stay
       // byte-identical; band gesture fns wired there straight from grid-input)

@@ -7,6 +7,7 @@ import { makeFileOps, type FileOpsCtx } from "./fileops";
 import { trashDir } from "./fsutil";
 import type { ArchiveRun, ToolSpec } from "./archive";
 import type { ProgressState } from "../ui/ui-progress";
+import { sharedPluginHooks } from "../lib/plugin-hooks";
 
 // runTransfer is the only path copies/moves take — these tests pin the wiring:
 // same-fs move = plain rename (no toast), cross-device move = copy engine +
@@ -778,5 +779,65 @@ describe("compressPaths", () => {
     const h = makeHarness();
     await h.ops.compressPaths([path.join(ROOT, "noop.txt")], "tar.gz", "recent://");
     expect(h.calls).toContain("status:Can't compress here");
+  });
+});
+
+describe("plugin pre-op veto", () => {
+  test("a beforeFileOp hook blocks the transfer with a status and no undo", async () => {
+    const h = makeHarness();
+    const off = sharedPluginHooks().onBeforeFileOp((p) =>
+      p.op === "move" ? { skip: true, reason: "nope" } : undefined,
+    );
+    try {
+      const src = path.join(ROOT, "veto-src.txt");
+      const destDir = path.join(ROOT, "veto-dest");
+      W(src, "keep");
+      mkdirSync(destDir, { recursive: true });
+      await h.ops.runTransfer("move", destDir, [src], "move");
+      expect(existsSync(src)).toBe(true);
+      expect(existsSync(path.join(destDir, "veto-src.txt"))).toBe(false);
+      expect(h.calls).toContain("status:Blocked by plugin: nope");
+      expect(h.calls).toContain("notify:blocked");
+      expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    } finally {
+      off();
+    }
+  });
+
+  test("a rename hook blocks performRename", async () => {
+    const h = makeHarness();
+    const off = sharedPluginHooks().onBeforeFileOp((p) => (p.op === "rename" ? { skip: true } : undefined));
+    try {
+      const src = path.join(ROOT, "veto-rename.txt");
+      W(src, "x");
+      await h.ops.performRename(src, "veto-renamed.txt");
+      expect(existsSync(src)).toBe(true);
+      expect(h.calls).toContain("status:Blocked by plugin");
+      expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    } finally {
+      off();
+    }
+  });
+});
+
+describe("plugin veto keeps caller state intact", () => {
+  test("a vetoed paste does not consume the internal clipboard", async () => {
+    const h = makeHarness();
+    const off = sharedPluginHooks().onBeforeFileOp((p) => (p.op === "copy" ? { skip: true } : undefined));
+    try {
+      const src = path.join(ROOT, "veto-paste-src.txt");
+      const destDir = path.join(ROOT, "veto-paste-dest");
+      W(src, "x");
+      mkdirSync(destDir, { recursive: true });
+      h.ops.setClipboard("copy", [{ path: src, isDir: false }]);
+      h.ops.pasteSmart(destDir);
+      await Bun.sleep(30);
+      expect(h.ops.clipboard()?.items.length).toBe(1); // NOT consumed
+      expect(existsSync(path.join(destDir, "veto-paste-src.txt"))).toBe(false);
+      expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+      expect(h.calls).toContain("status:Blocked by plugin");
+    } finally {
+      off();
+    }
   });
 });

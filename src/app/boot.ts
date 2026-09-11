@@ -12,6 +12,9 @@ import { debugLog } from "./log";
 export type BootCtx = {
   waitForResolution(): Promise<void>;
   buildLayout(): void;
+  // mount plugin UI slots into the boot layout (after buildLayout, before the
+  // first renderAll so contributions paint on the first frame)
+  mountSlots?(): void;
   loadGlobs2(): Promise<void>;
   restoreSession(): void;
   loadSystemPlaces(): Promise<void>;
@@ -31,6 +34,7 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   await ctx.waitForResolution();
   debugLog("boot: buildLayout");
   ctx.buildLayout();
+  ctx.mountSlots?.();
   debugLog("boot: loadGlobs2");
   await ctx.loadGlobs2();
   debugLog("boot: restoreSession");

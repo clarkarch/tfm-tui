@@ -10,8 +10,9 @@
 import type { SettingRow } from "../ui/settings";
 import type { Command } from "../lib/command";
 import type { PluginEventName, PluginEventPayload } from "../lib/plugin-events";
+import type { FileOpHookDecision, FileOpHookPayload } from "../lib/plugin-hooks";
 
-export const PLUGIN_API_VERSION = 2;
+export const PLUGIN_API_VERSION = 3;
 
 // plugin names become path segments — reject anything that could escape
 export const PLUGIN_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
@@ -37,6 +38,14 @@ export type PluginApi = {
   // exposes no process wrappers.
   selection(): Array<{ path: string; isDir: boolean }>;
   cwd(): string;
+  // action surface — drive tfm, not just observe it. navigate flips the cwd,
+  // open launches a file's default app, reveal jumps to a file's folder and
+  // highlights it, select replaces the grid selection with the given paths
+  // (paths not currently listed are ignored).
+  navigate(dir: string): void;
+  open(path: string): void;
+  reveal(path: string): void;
+  select(paths: string[]): void;
   // every dispatchable action, core table first then plugin contributions in
   // load order. Prefer LAZY calls (inside run/open): the keymap wires last,
   // so a top-level call during your own activate sees only plugin commands
@@ -50,6 +59,9 @@ export type PluginApi = {
   ui: {
     pick(opts: { title: string; items: Array<{ label: string; hint?: string; run: () => void }> }): void;
     confirm(opts: { title: string; body?: string; danger?: boolean }): Promise<boolean>;
+    // single-line text input (the prompt widget the installer uses). Resolves
+    // the trimmed value, or null on cancel/close.
+    prompt(opts: { title: string; value?: string; placeholder?: string; okLabel?: string }): Promise<string | null>;
     notifySticky(message: string, title?: string): () => void;
   };
   // push channel (polling selection()/cwd() is the pull fallback).
@@ -60,6 +72,12 @@ export type PluginApi = {
   // never complete — flush files in deactivate instead.
   events: {
     on<E extends PluginEventName>(evt: E, cb: (payload: PluginEventPayload[E]) => void): () => void;
+  };
+  // INTERCEPT channel: veto a file operation before core starts it. Sync-only
+  // and first-skip-wins; return { skip: true, reason? } to block. Unsubscribe
+  // on deactivate like events listeners.
+  hooks: {
+    beforeFileOp(fn: (payload: FileOpHookPayload) => FileOpHookDecision): () => void;
   };
 };
 
@@ -112,11 +130,20 @@ type PluginActivateResult = {
   // preview renderers by extension (checked before core's text/image/video
   // branches). First plugin in load order whose exts match wins.
   preview?: PluginPreview[];
+  // OpenTUI slot contributions: return real renderables for tfm's UI regions
+  // ("statusbar", "sidebar-footer"). Structural (no @opentui import here) —
+  // the ctx/data shape is documented in docs/plugins.md. Requires the plugin
+  // file to import @opentui/core (runtime support is installed at boot).
+  slots?: Record<string, (ctx: Readonly<object>, data: object) => unknown>;
   deactivate?: () => void | Promise<void>;
 };
 
 export type PluginModule = {
   name: string;
+  // optional manifest metadata, surfaced in the Plugins view for transparency
+  version?: string;
+  author?: string;
+  description?: string;
   apiVersion?: number;
   minApiVersion?: number;
   activate: (api: PluginApi) => PluginActivateResult | undefined | Promise<PluginActivateResult | undefined>;
@@ -154,6 +181,9 @@ export const flattenPluginCommands = (plugins: Array<{ commands: PluginCommand[]
 // else the module-level one, else null. file is the main path (reload key).
 export type LoadedPlugin = {
   name: string;
+  version: string;
+  author: string;
+  description: string;
   rows: SettingRow[];
   fileMenu: ((sel: { paths: string[] }) => PluginFileMenuEntry[]) | null;
   sidebarMenu: ((place: { path?: string | null; scheme?: string }) => PluginFileMenuEntry[]) | null;
@@ -162,5 +192,8 @@ export type LoadedPlugin = {
   preview: PluginPreview[];
   store: PluginStore;
   deactivate: (() => void | Promise<void>) | null;
+  // slot contributions' unregister (set when the plugin returned `slots`);
+  // called on reload/remove/quit so registry entries never leak
+  disposeSlots?: (() => void) | null;
   file: string;
 };

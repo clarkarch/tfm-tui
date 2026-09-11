@@ -5,9 +5,14 @@
 // isolates per plugin. ---
 
 import { Text } from "@opentui/core";
+import path from "node:path";
+import pkg from "../../package.json";
 import { dlog } from "../app/log";
 import type { Command } from "../lib/command";
 import { sharedPluginEvents } from "../lib/plugin-events";
+import { sharedPluginHooks } from "../lib/plugin-hooks";
+import { installPluginRuntimeSupport } from "../ui/ui-plugin-runtime";
+import { makePluginSlots } from "../ui/ui-plugin-slots";
 import { KEY_SCHEMA, keySpecEqual } from "../config/config-schema";
 import { flattenPluginCommands, getPluginCommandBinds, type PluginApi } from "../plugins/plugin-api";
 import { makePluginRegistry, makePluginStore, pluginsDir } from "../plugins/plugins";
@@ -48,9 +53,28 @@ export const wirePlugins = async (deps: {
     confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): boolean;
     isOpen(): boolean;
   };
+  // single-line prompt (keymap wires LAST — lazy getter like getPick)
+  getPrompt?: () => {
+    open(opts: { title: string; placeholder?: string; okLabel?: string; initial?: string }): Promise<string | null>;
+  };
 }) => {
-  const { core, nav, chrome, gridFoundation, getKeymap, getPick, getConfirm } = deps;
+  const { core, nav, chrome, gridFoundation, getKeymap, getPick, getConfirm, getPrompt } = deps;
+  // must run before the first external plugin import (registry.scan) so plugin
+  // files can import @opentui/core against THIS process's singleton
+  installPluginRuntimeSupport();
   const dir = pluginsDir();
+  // UI-extension host: plugins returning `slots` render real OpenTUI nodes
+  // into tfm's statusbar / sidebar-footer. Context is a stable ref with live
+  // getters; mounted at boot (see wireBoot).
+  const slotContext = {
+    app: "tfm",
+    version: pkg.version,
+    renderer: () => chrome.renderer,
+    colors: () => core.colors,
+    cwd: () => core.state.cwd,
+    selection: () => gridFoundation.selection.selPaths().map((s) => s.path),
+  };
+  const slotRegistry = makePluginSlots({ renderer: chrome.renderer, context: slotContext, log: (m) => dlog(m) });
   let loaded: Array<{ commands: Array<{ id: string; title: string; hint?: string; run: () => void }> }> = [];
   const api: PluginApi = {
     notify: (message, title) => chrome.notify(message, title ?? "tfm"),
@@ -61,6 +85,30 @@ export const wirePlugins = async (deps: {
     // run minutes later still sees the current state, never a stale capture
     selection: () => gridFoundation.selection.selPaths(),
     cwd: () => core.state.cwd,
+    // action surface: let a plugin drive tfm (not just observe). All guarded —
+    // a throwing action must never break the plugin that called it.
+    navigate: (dir) => {
+      try {
+        nav.navigate(dir);
+      } catch {}
+    },
+    open: (p) => {
+      try {
+        chrome.openFileDefault(p);
+      } catch {}
+    },
+    reveal: (p) => {
+      if (!p) return;
+      try {
+        core.state.pendingSelect = p;
+        nav.navigate(path.dirname(p));
+      } catch {}
+    },
+    select: (paths) => {
+      try {
+        gridFoundation.selection.selectPaths(paths);
+      } catch {}
+    },
     // core table first, then plugin contributions in load order (hints fall
     // back to "" — most plugin commands carry no bind). Both late getters go
     // through tdzSafe: they close over wirings that initialize after scan.
@@ -119,6 +167,20 @@ export const wirePlugins = async (deps: {
           // backstop: a dialog that never closes must not pend forever.
           hardTimer = setTimeout(() => done(false), 5 * 60 * 1000);
         }),
+      prompt: (opts) => {
+        const p = tdzSafe(() => getPrompt?.(), null)();
+        if (!p) return Promise.resolve(null);
+        try {
+          return p.open({
+            title: opts.title,
+            ...(opts.value !== undefined ? { initial: opts.value } : {}),
+            ...(opts.placeholder !== undefined ? { placeholder: opts.placeholder } : {}),
+            ...(opts.okLabel !== undefined ? { okLabel: opts.okLabel } : {}),
+          });
+        } catch {
+          return Promise.resolve(null);
+        }
+      },
       notifySticky: (message, title) => {
         try {
           const handle = chrome.notifySticky(
@@ -142,6 +204,9 @@ export const wirePlugins = async (deps: {
     events: {
       on: (evt, cb) => (sharedPluginEvents().on as (e: typeof evt, c: typeof cb) => () => void)(evt, cb),
     },
+    hooks: {
+      beforeFileOp: (fn) => sharedPluginHooks().onBeforeFileOp(fn),
+    },
   };
   const warn = (message: string): void => {
     chrome.notify(message, "plugins");
@@ -151,7 +216,12 @@ export const wirePlugins = async (deps: {
   // so the model, menus and api.commands merge see adds/removes with no
   // re-wiring; rescan also surfaces from the esc menu (no restart for
   // add/remove/edit — edits hot-reload via hashed staging, see plugins.ts)
-  const registry = makePluginRegistry({ dir, api, warn });
+  const registry = makePluginRegistry({
+    dir,
+    api,
+    warn,
+    registerSlots: (name, slots) => slotRegistry.register({ id: name, slots: slots as never }),
+  });
   await registry.scan();
   loaded = registry.plugins;
   // colliding defaults load silently shadowed (core-wins at dispatch) — make
@@ -187,5 +257,18 @@ export const wirePlugins = async (deps: {
   } catch {}
   // promise confirm (danger-aware Yes/No) shared with the settings installer
   // rows — same dialog plugins get via api.ui.confirm, no second wrapper
-  return { plugins: registry.plugins, reloadPlugins: () => registry.scan(), confirm: api.ui.confirm };
+  return {
+    plugins: registry.plugins,
+    reloadPlugins: () => registry.scan(),
+    confirm: api.ui.confirm,
+    deactivateAll: registry.deactivateAll,
+    // UI slots: mount after the boot layout exists; refresh with renderAll so
+    // contributions see fresh cwd/selection
+    slotRegistry,
+    mountSlots: () => slotRegistry.mount((id) => core.lookup.byId(id)),
+    refreshSlots: () => slotRegistry.refresh(),
+    disposeSlots: () => slotRegistry.dispose(),
+    // exposed for tests/consumers that want the built api surface
+    api,
+  };
 };
