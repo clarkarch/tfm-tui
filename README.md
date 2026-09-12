@@ -19,6 +19,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
   Cross-app drag is kitty-only.
 - Places sidebar, GTK bookmarks, recent files, XDG trash with restore, clipboard.
 - Embedded terminal (right-click → Open Terminal Here).
+- Auto-hide panes: sidebar/preview/terminal collapse to the edge and slide back (animated) when the mouse nears them.
 - Extract and compress archives (right-click).
 - Image/video thumbnails, text syntax highlighting, folder sizes.
 - Type-to-search, tabs, undo/redo, 30+ themes.
