@@ -232,6 +232,8 @@ export const wireGrid = (deps: {
     renderAll: nav.renderAll,
     renderGrid,
     openTerminalHere: fileops.terminal.openTerminalHere,
+    connectServer: chrome.connectServer,
+    disconnectServer: chrome.disconnectServer,
     clipboard: fileops.fileops.clipboard,
     pasteSmart: fileops.fileops.pasteSmart,
     confirmEmptyTrash: fileops.confirmEmptyTrash,

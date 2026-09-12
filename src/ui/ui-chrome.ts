@@ -47,6 +47,9 @@ type ChromeCtx = {
   dlog(msg: string): void;
   trashPaths(paths: string[]): Promise<void>;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
+  // network: with no arg opens the "Connect to Server…" prompt; with a URI
+  // connects straight to a saved connection
+  connectServer(raw?: string): void;
   kbActive(): boolean; // sidebarActive
   kbIdx(): number; // placeIdx
   tabs(): { list: Tab[]; active: number }; // live tabModel read
@@ -142,8 +145,13 @@ export const makeChrome = (ctx: ChromeCtx) => {
           }
           ctx.blurTerminal();
           ctx.closeFileMenu();
+          if (place.action === "connect") {
+            ctx.connectServer();
+            return;
+          }
           const target = placeTarget();
           if (target) ctx.navigate(target);
+          else if (place.networkUri) ctx.connectServer(place.networkUri);
           else if (place.mountDevice) mountDevice(place.mountDevice);
         },
         onMouseDrop: () => {

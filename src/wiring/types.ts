@@ -55,6 +55,8 @@ export type ChromeWiring = {
   notifySticky: ReturnType<typeof makeNotify>["notifySticky"];
   openFileDefault: ReturnType<typeof makeRecentOpen>["openFileDefault"];
   dialogs: ReturnType<typeof makeDialogs>;
+  connectServer: (raw?: string) => void;
+  disconnectServer: (mountPath: string) => void;
 };
 
 export type GridFoundationWiring = {

@@ -422,3 +422,22 @@ describe("trash pre-op veto", () => {
     }
   });
 });
+
+describe("trashPaths network guard", () => {
+  test("refuses a gvfs path instead of writing a bogus local .trashinfo", async () => {
+    const oldRuntime = process.env.XDG_RUNTIME_DIR;
+    const root = sandbox();
+    process.env.XDG_RUNTIME_DIR = "/run/user/4242";
+    try {
+      const sink = recordingSink();
+      const ops = makeTrashOps(sink);
+      await ops.trashPaths(["/run/user/4242/gvfs/sftp:host=x,user=y/doomed.txt"]);
+      expect(sink.batches.length).toBe(0);
+      expect(sink.notes.some((n) => n.includes("Trash isn't available on network locations"))).toBe(true);
+    } finally {
+      if (oldRuntime === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = oldRuntime;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

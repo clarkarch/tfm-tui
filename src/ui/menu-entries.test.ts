@@ -46,6 +46,8 @@ const baseCtx = (): MenuEntriesCtx & {
     tileRefs,
     sortState: sort,
     closeFileMenu: () => calls.push("close"),
+    connectServer: (raw) => calls.push(`connect:${raw ?? ""}`),
+    disconnectServer: (p) => calls.push(`disconnect:${p}`),
     navigate: (d) => calls.push(`navigate:${d}`),
     newTab: (d) => calls.push(`newTab:${d}`),
     openWith: (p) => calls.push(`openWith:${p}`),
@@ -95,6 +97,9 @@ const place = (p: Partial<Place>): Place => ({
   mountDevice: p.mountDevice,
   scheme: p.scheme,
   bookmarked: p.bookmarked,
+  network: p.network,
+  networkUri: p.networkUri,
+  action: p.action,
 });
 
 describe("pasteLabel", () => {
@@ -234,6 +239,31 @@ describe("sidebarEntriesFor", () => {
     const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
     recent.find((e) => e.label === "Open")!.submenu![0]!.action();
     expect(ctx.calls).toContain("navigate:recent://");
+  });
+
+  test("network places: mounted share disconnects, saved connection connects", () => {
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    const mountPath = "/run/user/4242/gvfs/sftp:host=example.com,user=bob";
+    const mounted = m.sidebarEntriesFor(
+      place({ path: mountPath, network: true, networkUri: "sftp://bob@example.com/" }),
+      0,
+      0,
+    );
+    mounted.find((e) => e.label === "Disconnect")!.action();
+    expect(ctx.calls).toContain(`disconnect:${mountPath}`);
+
+    const saved = m.sidebarEntriesFor(
+      place({ path: null, network: true, networkUri: "sftp://bob@example.com/" }),
+      0,
+      0,
+    );
+    saved.find((e) => e.label === "Connect")!.action();
+    expect(ctx.calls).toContain("connect:sftp://bob@example.com/");
+
+    const connectRow = m.sidebarEntriesFor(place({ path: null, action: "connect" }), 0, 0);
+    connectRow.find((e) => e.label === "Connect to Server…")!.action();
+    expect(ctx.calls).toContain("connect:");
   });
 
   test("no terminal / paste on virtual places (URIs are not shell cwds)", () => {

@@ -5,6 +5,7 @@ import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrash
 import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
+import { isNetworkPath } from "./network";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
 // --- Trash operations: trash / restore / delete-forever / empty. The fs
@@ -89,6 +90,14 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   };
 
   const trashPaths = (paths: string[]): Promise<void> => {
+    // network shares have no usable trash: xdgTrashMove would write a LOCAL
+    // .trashinfo pointing at a FUSE path that dies on unmount (unrestorable,
+    // remote file gone) — refuse instead of pretending it worked
+    if (paths.some(isNetworkPath)) {
+      sink.setStatusMsg("Trash isn't available on network locations");
+      sink.notify("Trash isn't available on network locations", "trash");
+      return Promise.resolve();
+    }
     if (vetoedByPlugin("trash", paths)) return Promise.resolve();
     const run = queue.enqueue(async () => {
       const units: UndoUnit[] = [];

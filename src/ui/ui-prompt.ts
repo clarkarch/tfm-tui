@@ -32,8 +32,22 @@ export const makePrompt = (ctx: PromptCtx) => {
   let opened = false;
   let resolveFn: ((v: string | null) => void) | null = null;
   let focusTimer: ReturnType<typeof setTimeout> | null = null;
+  // password mode: no Input (OpenTUI can't mask one); the router feeds keys to
+  // handleKey, which keeps the secret private and paints bullets instead
+  let passwordMode = false;
+  let secret = "";
+
+  const paintMask = (): void => {
+    try {
+      const node: any = ctx.byId("tfm-prompt-mask");
+      if (!node) return;
+      node.content = secret ? "•".repeat(secret.length) : "Password";
+      node.fg = secret ? ctx.colors().white : ctx.colors().sidebarFgMuted;
+    } catch {}
+  };
 
   const readValue = (): string => {
+    if (passwordMode) return secret;
     try {
       return String(ctx.byId("tfm-prompt-input")?.value ?? "").trim();
     } catch {
@@ -43,6 +57,8 @@ export const makePrompt = (ctx: PromptCtx) => {
 
   const rawClose = (): void => {
     opened = false;
+    passwordMode = false;
+    secret = "";
     if (focusTimer !== null) {
       clearTimeout(focusTimer);
       focusTimer = null;
@@ -86,6 +102,7 @@ export const makePrompt = (ctx: PromptCtx) => {
     placeholder?: string;
     okLabel?: string;
     initial?: string;
+    password?: boolean;
   }): Promise<string | null> =>
     new Promise<string | null>((resolve) => {
       // re-invoking while open replaces (same rule as pick): the stale
@@ -93,6 +110,8 @@ export const makePrompt = (ctx: PromptCtx) => {
       if (opened) close();
       ctx.floats.open("prompt", rawClose);
       opened = true;
+      passwordMode = !!opts.password;
+      secret = "";
       resolveFn = resolve;
       const c = ctx.colors();
       const okLabel = opts.okLabel ?? "OK";
@@ -152,15 +171,17 @@ export const makePrompt = (ctx: PromptCtx) => {
             // and the input paints underneath the next sibling (invisible
             // whenever that row paints anything) — auto height fits both
             { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
-            Input({
-              id: "tfm-prompt-input",
-              width: PANEL_W - 6,
-              placeholder: opts.placeholder ?? "",
-              backgroundColor: c.accentBg,
-              focusedBackgroundColor: c.accentBg,
-              textColor: c.white,
-              ...(opts.initial ? { value: opts.initial } : {}),
-            }),
+            opts.password
+              ? Text({ id: "tfm-prompt-mask", content: "Password", fg: c.sidebarFgMuted })
+              : Input({
+                  id: "tfm-prompt-input",
+                  width: PANEL_W - 6,
+                  placeholder: opts.placeholder ?? "",
+                  backgroundColor: c.accentBg,
+                  focusedBackgroundColor: c.accentBg,
+                  textColor: c.white,
+                  ...(opts.initial ? { value: opts.initial } : {}),
+                }),
           ),
           // breathing room above the buttons: fixed height + padding OVERFLOWS
           // a 1-row box in @opentui/core 0.5.9 (the input painted underneath
@@ -188,20 +209,44 @@ export const makePrompt = (ctx: PromptCtx) => {
       void ctx.drainIconQueue();
       // focus after mount (same deferred pattern as pick: focusing a
       // pre-mount node is a silent no-op); the timer dies with the prompt
-      // (hidden inputs keep renderer focus — see the clearSearch lesson)
-      focusTimer = setTimeout(() => {
-        focusTimer = null;
-        try {
-          ctx.byId("tfm-prompt-input")?.focus?.();
-        } catch {}
-      }, 10);
+      // (hidden inputs keep renderer focus — see the clearSearch lesson).
+      // Password mode has no Input to focus — the router feeds it keys.
+      if (!passwordMode) {
+        focusTimer = setTimeout(() => {
+          focusTimer = null;
+          try {
+            ctx.byId("tfm-prompt-input")?.focus?.();
+          } catch {}
+        }, 10);
+      }
     });
 
-  const handleKey = (ev: { name?: string }): boolean => {
+  const handleKey = (ev: {
+    name?: string;
+    sequence?: unknown;
+    ctrl?: boolean;
+    control?: boolean;
+    meta?: boolean;
+  }): boolean => {
     if (ev.name === "escape") cancel();
     else if (ev.name === "return") submit();
-    // everything else (typing) reaches the focused Input natively — the
-    // keymap swallows the event around us either way (same as pick)
+    else if (passwordMode) {
+      // no Input in password mode — collect the masked secret here
+      if (ev.name === "backspace" || ev.name === "delete") {
+        secret = secret.slice(0, -1);
+        paintMask();
+      } else {
+        const ctrl = !!ev.ctrl || !!ev.control;
+        const seq = typeof ev.sequence === "string" ? ev.sequence : "";
+        const ch = seq.length === 1 && seq.charCodeAt(0) >= 0x20 ? seq : "";
+        if (ch && !ctrl && !ev.meta) {
+          secret += ch;
+          paintMask();
+        }
+      }
+    }
+    // everything else (typing) reaches the focused Input natively in normal
+    // mode — the keymap swallows the event around us either way (same as pick)
     return true;
   };
 
@@ -212,6 +257,11 @@ export const makePrompt = (ctx: PromptCtx) => {
     isOpen: (): boolean => opened,
     // test seam: drive the value without Input events
     setValue: (v: string): void => {
+      if (passwordMode) {
+        secret = v;
+        paintMask();
+        return;
+      }
       try {
         const input: any = ctx.byId("tfm-prompt-input");
         if (input) input.value = v;

@@ -109,6 +109,7 @@ export type KeyAction =
   | "pathEdit"
   | "togglePreview"
   | "openTerminal"
+  | "connectServer"
   | "toggleView"
   | "zoomIn"
   | "zoomOut";
@@ -571,6 +572,7 @@ const KEY_ROWS: KeyRow[] = (
     ["pathEdit", "edit the path bar", ["ctrl+l"]],
     ["togglePreview", "toggle preview pane", ["f9"]],
     ["openTerminal", "open terminal here", ["f4"]],
+    ["connectServer", "connect to a network server (gvfs)", ["ctrl+shift+s"]],
     ["toggleView", "toggle grid/list view", ["ctrl+g"]],
     ["zoomIn", "bigger tiles", ["ctrl+="]],
     ["zoomOut", "smaller tiles", ["ctrl+-"]],

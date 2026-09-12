@@ -6,7 +6,12 @@
 // gets a booted renderer. ---
 
 import { createCliRenderer } from "@opentui/core";
+import path from "node:path";
+import { readdir } from "node:fs/promises";
 import { spawnSafe } from "../fs/spawn-safe";
+import { loadSystemPlaces } from "../fs/places";
+import { buildMountArgs, buildUnmountArgs, gvfsRoot, takeGioPrompt, type GioPrompt } from "../fs/network";
+import { makeNetworkActions, type GioResult } from "../fs/netmount";
 import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar } from "../ui/ui-toolbar";
@@ -29,6 +34,16 @@ export const wireChrome = async (deps: {
   getGrid: () => GridWiring;
   getFileops: () => FileopsWiring;
   getKeyRouter: () => { sidebarActive(): boolean; placeIdx(): number };
+  // network "Connect to Server…" prompt — prompt overlaps keymap, wired LAST
+  getPrompt: () => {
+    open(o: {
+      title: string;
+      placeholder?: string;
+      okLabel?: string;
+      initial?: string;
+      password?: boolean;
+    }): Promise<string | null>;
+  };
   // grid's finishDragCtx (internal drag commit) — grid wiring builds it later
   finishDrag(): void;
 }) => {
@@ -55,6 +70,18 @@ export const wireChrome = async (deps: {
     floats: core.floats,
     makeIconSlot,
   });
+
+  // --- Network locations: "+ → connect" calls land here. The impls are
+  // assigned further down (they need notify); the wrappers only defer, and
+  // nothing invokes them before the wiring returns (TDZ seam rule). ---
+  let connectServerImpl: (raw?: string) => Promise<void> = async () => {};
+  let disconnectServerImpl: (mountPath: string) => Promise<void> = async () => {};
+  const connectServer = (raw?: string): void => {
+    void connectServerImpl(raw);
+  };
+  const disconnectServer = (mountPath: string): void => {
+    void disconnectServerImpl(mountPath);
+  };
 
   // --- Places sidebar + tab strip — widget lives in ./ui-chrome ---
   const chrome = makeChrome({
@@ -87,6 +114,7 @@ export const wireChrome = async (deps: {
     makeIconSlot,
     setIconState,
     stateCwd: () => state.cwd,
+    connectServer,
   });
 
   // --- Toolbar — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
@@ -185,6 +213,137 @@ export const wireChrome = async (deps: {
     closeFileMenu: menu.closeFileMenu,
   });
 
+  // --- Network location actions (impls for the deferred wrappers above):
+  // connect through gvfs, driving credential prompts through the shared text
+  // overlay, then refresh places and navigate the FUSE path. `gio` is spawned
+  // argv-array (never shelled) with stdin/stdout pipes the app scripts, so
+  // gio's own terminal prompt never touches the TUI. ---
+  const GIO_TIMEOUT_MS = 120_000;
+
+  const runGio = async (args: string[], interactive: boolean): Promise<GioResult> => {
+    const proc = Bun.spawn(["gio", ...args], {
+      stdin: interactive ? "pipe" : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      // LC_ALL=C pins the prompt labels to English (User/Password/Domain) so
+      // takeGioPrompt's matcher is deterministic under any user locale
+      env: { ...process.env, LC_ALL: "C", LANG: "C" },
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    let cancelled = false;
+    const arm = (): void => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          proc.kill();
+        } catch {}
+      }, GIO_TIMEOUT_MS);
+    };
+    arm();
+    let buf = "";
+    let stderr = "";
+
+    const answerPrompt = async (p: GioPrompt): Promise<void> => {
+      if (p.message) {
+        // last line is the specific ask ("Enter user and password for …");
+        // the first is a generic "Authentication Required"
+        const line = p.message.split("\n").filter(Boolean).pop();
+        if (line) nav.setStatusMsg(line.slice(0, 120));
+      }
+      const answer = await deps.getPrompt().open({
+        title: p.title,
+        ...(p.default ? { initial: p.default } : {}),
+        ...(p.kind === "choice" ? { placeholder: "Number" } : {}),
+        okLabel: p.kind === "choice" ? "Send" : "OK",
+        password: p.password,
+      });
+      if (answer === null) {
+        cancelled = true;
+        try {
+          proc.kill();
+        } catch {}
+        return;
+      }
+      try {
+        if (proc.stdin) {
+          proc.stdin.write(`${answer}\n`);
+          proc.stdin.flush?.();
+        }
+      } catch {}
+      arm();
+    };
+
+    const stdoutDone = (async () => {
+      const dec = new TextDecoder();
+      for await (const chunk of proc.stdout) {
+        buf += dec.decode(chunk as Uint8Array, { stream: true });
+        if (!interactive) continue;
+        for (;;) {
+          const p = takeGioPrompt(buf);
+          if (!p) break;
+          buf = buf.slice(p.consumed);
+          await answerPrompt(p);
+          if (cancelled) return;
+        }
+      }
+    })();
+    const stderrDone = (async () => {
+      const dec = new TextDecoder();
+      for await (const chunk of proc.stderr) stderr += dec.decode(chunk as Uint8Array, { stream: true });
+    })();
+    const code = await proc.exited;
+    clearTimeout(timer);
+    await Promise.all([stdoutDone, stderrDone]);
+    if (cancelled) return { code: 130, stdout: "", stderr: "cancelled" };
+    return { code, stdout: "", stderr: timedOut ? stderr || "timed out" : stderr };
+  };
+
+  const network = makeNetworkActions({
+    gvfsRoot,
+    // mount can prompt for credentials; unmount never does
+    mount: (uri) => runGio(buildMountArgs(uri), true),
+    unmount: (uri) => runGio(buildUnmountArgs(uri), false),
+    readdir: (dir) => readdir(dir),
+    setStatus: (m) => nav.setStatusMsg(m),
+    notify: (m, t) => {
+      try {
+        notify(m, t);
+      } catch {}
+    },
+    log: (m) => dlog(m),
+  });
+
+  connectServerImpl = async (raw?: string): Promise<void> => {
+    let input = raw ?? "";
+    if (!input) {
+      const v = await deps.getPrompt().open({
+        title: "Connect to Server…",
+        placeholder: "sftp://user@host/path",
+        okLabel: "Connect",
+      });
+      if (!v) return;
+      input = v;
+    }
+    const mountPath = await network.connect(input);
+    if (!mountPath) return;
+    await loadSystemPlaces();
+    nav.renderAll();
+    nav.navigate(mountPath);
+  };
+
+  disconnectServerImpl = async (mountPath: string): Promise<void> => {
+    const cwd = core.state.cwd;
+    // leave the share before unmounting it — navigating away first avoids
+    // reading a dead FUSE path
+    if (cwd === mountPath || cwd.startsWith(mountPath + path.sep)) nav.navigate(core.home);
+    const ok = await network.disconnect(mountPath);
+    if (!ok) return;
+    await loadSystemPlaces();
+    nav.renderAll();
+  };
+
   return {
     renderer,
     menu,
@@ -194,5 +353,7 @@ export const wireChrome = async (deps: {
     notifySticky,
     openFileDefault,
     dialogs,
+    connectServer,
+    disconnectServer,
   };
 };

@@ -14,6 +14,7 @@ import { sideInnerWidth } from "../ui/style";
 import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
+import { isNetworkPath } from "../fs/network";
 import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup } from "../ui/ui-lookup";
@@ -100,6 +101,12 @@ export const wireCore = (deps: {
     return isVirtualUri(state.cwd);
   }
 
+  // --- Network cwd (gvfs FUSE path): live directory watching is skipped and
+  // the trash refuses — the share is a real dir but not a local one. ---
+  function isNetworkCwd(): boolean {
+    return isNetworkPath(state.cwd);
+  }
+
   // --- Trash view detection: the path comparison is pure (./fsutil, honors
   // $XDG_DATA_HOME); this wrapper reads the live cwd. ---
   function inTrashView(): boolean {
@@ -124,6 +131,7 @@ export const wireCore = (deps: {
     scrollerRef,
     isVirtualCwd,
     inTrashView,
+    isNetworkCwd,
     isCutKey,
   };
 };

@@ -138,6 +138,7 @@ export const wireKeymap = (deps: {
     openProperties: grid.props.openProperties,
     enterPathEdit: chrome.toolbar.enterPathEdit,
     openTerminal: () => fileops.terminal.openTerminalHere(),
+    connectServer: chrome.connectServer,
     // config flips go through the single applyConfig -> save path (same as
     // the settings GUI rows) so geometry repaints and persistence stay in sync
     togglePreview: () => {

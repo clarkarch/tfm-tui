@@ -35,7 +35,9 @@ export const wireWatcher = (deps: {
   const { core, getGridFoundation, getGrid } = deps;
   const { syncCwdWatcher } = makeCwdWatcher({
     cwd: () => core.state.cwd,
-    isVirtualCwd: core.isVirtualCwd,
+    // network (gvfs FUSE) mounts get no watcher: inotify over FUSE is
+    // unreliable and can storm; the grid refreshes on navigation instead
+    isVirtualCwd: () => core.isVirtualCwd() || core.isNetworkCwd(),
     isRenaming: () => getGridFoundation().rename.isRenaming(),
     renderGrid: () => getGrid().renderGrid(),
     // our own diagnostic sinks: dlog appends on every mouse event and defaults

@@ -119,6 +119,7 @@ export type KeyRouterCtx = {
   openProperties(paths: string[]): void;
   enterPathEdit(): void;
   openTerminal(): void;
+  connectServer(raw?: string): void;
   togglePreview(): void;
   toggleViewMode(): void;
   zoomTiles(dir: number): void;
@@ -480,6 +481,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doOpenTerminal = (): void => {
     ctx.openTerminal();
   };
+  const doConnectServer = (): void => {
+    ctx.connectServer();
+  };
   const doToggleView = (): void => {
     ctx.toggleViewMode();
   };
@@ -612,6 +616,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "pathEdit", run: doPathEdit },
     { action: "togglePreview", run: doTogglePreview },
     { action: "openTerminal", run: doOpenTerminal },
+    { action: "connectServer", run: doConnectServer },
     { action: "toggleView", run: doToggleView },
     { action: "zoomIn", run: doZoomIn },
     { action: "zoomOut", run: doZoomOut },
@@ -686,6 +691,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
     if (hit(ev, "openTerminal")) {
       doOpenTerminal();
+      return;
+    }
+    if (hit(ev, "connectServer")) {
+      doConnectServer();
       return;
     }
     if (hit(ev, "toggleView")) {

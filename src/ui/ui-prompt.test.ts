@@ -127,4 +127,27 @@ describe("prompt widget", () => {
       t.renderer.destroy();
     }
   });
+
+  test("password mode masks keystrokes and never mounts an Input", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const prompt = mkPrompt(t, floats);
+      const pending = prompt.open({ title: "Password", okLabel: "OK", password: true });
+      await t.renderOnce();
+      // no Input node — the router feeds handleKey so the secret is never rendered
+      expect(t.renderer.root.findDescendantById("tfm-prompt-input")).toBeFalsy();
+      expect(t.renderer.root.findDescendantById("tfm-prompt-mask")).toBeTruthy();
+      prompt.handleKey({ name: "p", sequence: "p" });
+      prompt.handleKey({ name: "w", sequence: "w" });
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).not.toContain("pw");
+      expect(frame).toContain("••");
+      prompt.handleKey({ name: "return" });
+      await expect(pending).resolves.toBe("pw");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
 });

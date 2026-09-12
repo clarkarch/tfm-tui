@@ -12,6 +12,7 @@ export const glyph: Record<string, string> = {
   folder: "\u{F024B}",
   harddisk: "\u{F02CA}",
   usb: "\u{F0553}",
+  network: "\u{F059F}",
   eject: "\u{F01EA}",
   search: "\u{F002}",
   file: "\u{F0214}",

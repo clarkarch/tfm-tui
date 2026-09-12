@@ -153,6 +153,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     openProperties: (ps) => calls.push(`props:${ps.join(",")}`),
     enterPathEdit: rec("pathedit:enter"),
     openTerminal: rec("term:open"),
+    connectServer: rec("connect:server"),
     togglePreview: rec("preview:toggle"),
     toggleViewMode: rec("view:toggle"),
     zoomTiles: (d) => calls.push(`zoom:${d}`),
@@ -849,6 +850,12 @@ describe("remappable action keys", () => {
     h.key("f9");
     h.key("f4");
     expect(h.calls).toEqual(["pathedit:enter", "preview:toggle", "term:open"]);
+  });
+
+  test("ctrl+shift+s opens the network connect prompt", () => {
+    const h = makeHarness();
+    h.key("s", { ctrl: true, shift: true });
+    expect(h.calls).toEqual(["connect:server"]);
   });
 
   test("ctrl+g toggles grid/list, ctrl+= / ctrl+- zoom tile size", () => {

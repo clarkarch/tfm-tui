@@ -158,6 +158,7 @@ beforeAll(async () => {
       return true;
     },
     stateCwd: () => cwd,
+    connectServer: () => {},
   });
 });
 

@@ -133,6 +133,9 @@ const chrome = await wireChrome({
   getGrid: () => grid,
   getFileops: () => fileops,
   getKeyRouter: () => keymap.keyRouter,
+  // network "Connect to Server…" prompt — keymap wires LAST (TDZ seam, same
+  // as the getGrid/getFileops getters above)
+  getPrompt: () => keymap.prompt,
   finishDrag: () => grid.finishDrag(),
 });
 

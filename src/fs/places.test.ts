@@ -90,6 +90,31 @@ describe("virtual place uris used by places", () => {
   });
 });
 
+describe("network places", () => {
+  test("a remote gvfs bookmark becomes a network place; Connect row always present", async () => {
+    const root = path.join(os.tmpdir(), `tfm-net-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    const configHome = path.join(root, "config");
+    mkdirSync(path.join(configHome, "gtk-3.0"), { recursive: true });
+    writeFileSync(path.join(configHome, "gtk-3.0", "bookmarks"), "sftp://bob@example.com/pub remote\n");
+    const oldRuntime = process.env.XDG_RUNTIME_DIR;
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      // nonexistent runtime dir -> listNetworkMounts finds no real mounts
+      process.env.XDG_RUNTIME_DIR = path.join(root, "runtime");
+      await loadSystemPlaces();
+      const flat = buildSections().flat();
+      expect(flat.some((p) => p.action === "connect" && p.label === "Connect to Server…")).toBe(true);
+      const remote = flat.find((p) => p.network && p.networkUri === "sftp://bob@example.com/pub");
+      expect(remote?.label).toBe("remote");
+      expect(remote?.path).toBeNull();
+    } finally {
+      if (oldRuntime === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = oldRuntime;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 function mkdtempAndDirs() {
   const root = path.join(os.tmpdir(), `tfm-places-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const configHome = path.join(root, "config");

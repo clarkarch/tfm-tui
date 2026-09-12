@@ -6,6 +6,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileUriToPath, pathToUri } from "./uri";
 import { trashDir } from "./fsutil";
+import { parseServerInput } from "./network";
+import { listNetworkMounts, type NetworkMount } from "./netmount";
 
 // --- System places sources, Nautilus-style: XDG user dirs, GTK bookmarks,
 // lsblk mounts and the sidebar section model built from them. Owns the
@@ -24,22 +26,29 @@ export type Place = {
   mountDevice?: string;
   scheme?: "recent" | "starred";
   bookmarked?: boolean;
+  // network locations (gvfs): `action:"connect"` opens the server prompt,
+  // `networkUri` is the gvfs URI for an active mount or a saved connection
+  network?: boolean;
+  networkUri?: string;
+  action?: "connect";
 };
 
 type UserDir = { key: string; label: string; p: string };
 
 type MountEntry = { label: string; target: string; removable: boolean; device: string };
 
-type BookmarkEntry = { p: string; label: string };
+type BookmarkEntry = { p: string; label: string; remote?: boolean; uri?: string };
 
 let sysUserDirs: UserDir[] = [];
 let sysBookmarks: BookmarkEntry[] = [];
 let sysMounts: MountEntry[] = [];
+let sysNetwork: NetworkMount[] = [];
 
 export const loadSystemPlaces = async (): Promise<void> => {
   sysUserDirs = await readUserDirs();
   sysBookmarks = await readBookmarks();
   sysMounts = await listMounts();
+  sysNetwork = await listNetworkMounts();
 };
 
 const xdgUserDirsFile = () => path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "user-dirs.dirs");
@@ -93,14 +102,21 @@ async function readBookmarks(): Promise<BookmarkEntry[]> {
       const sp = line.indexOf(" ");
       const uri = sp === -1 ? line : line.slice(0, sp);
       const label = sp === -1 ? "" : line.slice(sp + 1).trim();
-      if (!uri.startsWith("file://")) continue;
-      const p = fileUriToPath(uri);
-      try {
-        if (!statSync(p).isDirectory()) continue;
-      } catch {
+      if (uri.startsWith("file://")) {
+        const p = fileUriToPath(uri);
+        try {
+          if (!statSync(p).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        out.push({ p, label: label || path.basename(p) });
         continue;
       }
-      out.push({ p, label: label || path.basename(p) });
+      // remote gvfs bookmark (sftp://, smb://, …) — kept so saved connections
+      // persist across sessions and Nautilus shares the same list
+      const parsed = parseServerInput(uri);
+      if (!parsed) continue;
+      out.push({ p: "", label: label || parsed.label, remote: true, uri: parsed.uri });
     }
     return out;
   } catch {
@@ -112,7 +128,8 @@ async function readBookmarks(): Promise<BookmarkEntry[]> {
 const gtkBookmarksFile = (): string =>
   path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "gtk-3.0", "bookmarks");
 
-export const isBookmarked = (dir: string): boolean => sysBookmarks.some((b) => path.resolve(b.p) === path.resolve(dir));
+export const isBookmarked = (dir: string): boolean =>
+  sysBookmarks.some((b) => !b.remote && b.p && path.resolve(b.p) === path.resolve(dir));
 
 // rewrite preserving order + custom labels; additions go last (nautilus does too)
 export const setBookmarked = async (dir: string, on: boolean): Promise<void> => {
@@ -207,13 +224,15 @@ export function buildSections(): Place[][] {
 
   const dirs: Place[] = sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }));
 
-  const bookmarks: Place[] = sysBookmarks.map((b) => ({
-    icon: "bookmark",
-    label: b.label,
-    path: b.p,
-    ejectable: false,
-    bookmarked: true,
-  }));
+  const bookmarks: Place[] = sysBookmarks
+    .filter((b) => !b.remote)
+    .map((b) => ({
+      icon: "bookmark",
+      label: b.label,
+      path: b.p,
+      ejectable: false,
+      bookmarked: true,
+    }));
 
   const devices: Place[] = [
     { icon: "harddisk", label: "This Device", path: "/", ejectable: false },
@@ -229,9 +248,41 @@ export function buildSections(): Place[][] {
     ),
   ];
 
+  // Network: an always-present "Connect to Server…" row, active gvfs mounts,
+  // and saved remote bookmarks that aren't mounted yet (click connects). A
+  // bookmark whose share is already mounted is shown once, as the mount.
+  const normUri = (u: string): string => u.replace(/\/+$/, "").toLowerCase();
+  const mounted = new Map(sysNetwork.map((m) => [normUri(m.uri), m]));
+  const network: Place[] = [
+    { icon: "network", label: "Connect to Server…", path: null, ejectable: false, action: "connect" },
+    ...sysNetwork.map(
+      (m): Place => ({
+        icon: "network",
+        label: m.label,
+        path: m.path,
+        ejectable: false,
+        network: true,
+        networkUri: m.uri,
+      }),
+    ),
+    ...sysBookmarks
+      .filter((b) => b.remote && b.uri && !mounted.has(normUri(b.uri)))
+      .map(
+        (b): Place => ({
+          icon: "network",
+          label: b.label,
+          path: null,
+          ejectable: false,
+          network: true,
+          networkUri: b.uri,
+        }),
+      ),
+  ];
+
   const groups = [defaults];
   if (dirs.length) groups.push(dirs);
   if (bookmarks.length) groups.push(bookmarks);
   groups.push(devices);
+  groups.push(network);
   return groups;
 }

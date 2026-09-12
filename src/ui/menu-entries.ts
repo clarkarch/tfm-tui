@@ -22,6 +22,11 @@ export type MenuEntriesCtx = {
   renderAll(): void;
   renderGrid(): void | Promise<void>;
   openTerminalHere(dir?: string): void;
+  // network locations (gvfs): no-arg opens the "Connect to Server…" prompt,
+  // a URI arg connects straight to a saved connection; disconnect takes the
+  // active mount's local path
+  connectServer(raw?: string): void;
+  disconnectServer(path: string): void;
   // clipboard is a mutable let in ./fileops — read live, never captured
   clipboard(): { mode: "copy" | "cut"; items: ClipItem[] } | null;
   pasteSmart(dest: string): void;
@@ -253,6 +258,36 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         action: () => {
           ctx.closeFileMenu();
           ctx.mountDevice(place.mountDevice!);
+        },
+      });
+    }
+    // network locations: active mounts can disconnect, unmounted saved
+    // connections connect, and the pseudo-row opens the prompt
+    if (place.action === "connect") {
+      entries.push({
+        icon: "network",
+        label: "Connect to Server…",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.connectServer();
+        },
+      });
+    } else if (place.network && place.path) {
+      entries.push({
+        icon: "network",
+        label: "Disconnect",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.disconnectServer(place.path!);
+        },
+      });
+    } else if (place.network && place.networkUri) {
+      entries.push({
+        icon: "network",
+        label: "Connect",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.connectServer(place.networkUri!);
         },
       });
     }

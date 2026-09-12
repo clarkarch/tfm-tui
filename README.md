@@ -18,6 +18,10 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Drag files between folders (ctrl+drag), out to other apps, or in from outside.
   Cross-app drag is kitty-only.
 - Places sidebar, GTK bookmarks, recent files, XDG trash with restore, clipboard.
+- Network locations: connect to `sftp://`, `smb://`, WebDAV, FTP… shares through
+  gvfs (sidebar or right-click → Connect to Server…); saved connections live in
+  your GTK bookmarks. Credentials are prompted in-app (passwords masked); ssh
+  keys/agent work without prompting.
 - Embedded terminal (right-click → Open Terminal Here).
 - Auto-hide panes: sidebar/preview/terminal collapse to the edge and slide back (animated) when the mouse nears them.
 - Extract and compress archives (right-click).
@@ -35,7 +39,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
   - `rsvg-convert` (icons and SVG thumbnails)
   - `magick` (raster image thumbnails)
   - `ffmpeg` (video thumbnails)
-  - `gio` (starred files)
+  - `gio` (starred files, network locations)
   - `xdg-open` (open files in their default app)
   - `udisksctl` (mount/eject drives)
   - `wl-clipboard` / `xclip` (clipboard with GUI apps)
@@ -61,7 +65,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 - `ctrl+c/x/v/d` copy/cut/paste/duplicate · `ctrl+z/y` undo/redo
 - `ctrl+t/w` new/close tab · `ctrl+tab` switch tab
 - `delete` trash · `alt+enter` properties · `ctrl+q` quit
-- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f9` preview · `f4` terminal
+- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f9` preview · `f4` terminal · `ctrl+shift+s` connect to server
 
 Everything is remappable: `esc` → Settings → keys.
 
