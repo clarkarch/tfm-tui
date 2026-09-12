@@ -319,6 +319,20 @@ describe("wire errors", () => {
     feed("t=E", "offer timeout");
     expect(notes).toContain("drag failed:error: Drag failed (offer timeout)");
   });
+
+  test("E with an OK payload is the start-drag ack, not an error", () => {
+    // kitty answers our StartDrag with `E:OK` ~5ms after every ACCEPTED drag
+    // and the session continues normally — it must stay silent
+    const { ctx, feed, notes, status } = baseCtx();
+    makeDnd72(ctx);
+    gridDrag.ctrl = false;
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=64:y=10");
+    feed("t=E", "OK");
+    expect(notes).toEqual([]);
+    expect(status).toEqual(["Dragging 1 item — drop into another app or a folder"]);
+    gridDrag.keys = null;
+  });
 });
 
 describe("payload length", () => {

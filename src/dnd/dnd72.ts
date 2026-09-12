@@ -345,6 +345,14 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       return;
     }
     if (t === "E") {
+      // kitty ACKs our StartDrag with `E:OK` ~5ms after every ACCEPTED drag
+      // and the session continues normally — only a non-OK payload is a real
+      // failure (every E in the wild has been exactly "OK"; a genuine reason
+      // names itself, so the match stays tight)
+      if (payload.trim().toLowerCase() === "ok") {
+        ctx.log("drag acknowledged");
+        return;
+      }
       ctx.log(`drag offer error: ${payload}`);
       const summary = `Drag failed (${shortReason(payload)})`;
       ctx.notify(summary, "drag failed", "error");
