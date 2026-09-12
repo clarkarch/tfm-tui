@@ -56,10 +56,21 @@ export type UiConfig = {
   recursiveSearch: boolean;
   previewEnabled: boolean;
   previewWidth: number;
+  sidebarAutoHide: boolean;
+  sidebarCollapseStyle: string;
+  previewAutoHide: boolean;
+  previewCollapseStyle: string;
+  terminalAutoHide: boolean;
+  terminalCollapseStyle: string;
+  hoverZoneCells: number;
+  hoverOpenDelayMs: number;
+  hoverCloseDelayMs: number;
+  hoverAnimMs: number;
   restoreSession: boolean;
   persistUndo: boolean;
   transparentBg: boolean;
   transparentIcons: boolean;
+  sidebarTitle: boolean;
   uiStyle: UiStyle;
   tabBar: boolean;
   viewMode: ViewMode;
@@ -108,7 +119,7 @@ export type Config = { ui: UiConfig; theme: Theme; keys: KeysConfig };
 
 // --- schema ---
 
-type GuiGroup = "general" | "layout" | "behavior" | "keys";
+type GuiGroup = "appearance" | "layout" | "panes" | "behavior" | "files" | "advanced" | "keys";
 
 type RowCommon = { tomlKey: string; prop: string; doc: string; label: string; group?: GuiGroup };
 
@@ -203,6 +214,131 @@ const UI_ROWS: SchemaRow[] = [
     group: "layout",
   },
   {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "preview-enabled",
+    prop: "previewEnabled",
+    def: false,
+    doc: "right-side preview pane (text files, folder stats)",
+    label: "preview pane",
+    group: "panes",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-auto-hide",
+    prop: "sidebarAutoHide",
+    def: false,
+    doc: "true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)",
+    label: "sidebar auto-hide",
+    group: "panes",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "sidebar-collapse-style",
+    prop: "sidebarCollapseStyle",
+    values: ["rail", "hidden", "min"],
+    def: "hidden",
+    doc: '"rail" = icon-only strip; "hidden" = width 0; "min" = shrink to a sliver',
+    label: "sidebar collapse",
+    group: "panes",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "preview-auto-hide",
+    prop: "previewAutoHide",
+    def: false,
+    doc: "true = collapse the preview pane until the mouse nears the right edge",
+    label: "preview auto-hide",
+    group: "panes",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "preview-collapse-style",
+    prop: "previewCollapseStyle",
+    values: ["rail", "hidden", "min"],
+    def: "hidden",
+    doc: '"rail" = narrow strip; "hidden" = width 0; "min" = shrink to a sliver',
+    label: "preview collapse",
+    group: "panes",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "terminal-auto-hide",
+    prop: "terminalAutoHide",
+    def: false,
+    doc: "true = the open terminal pane collapses to its header until the mouse nears the bottom edge (the shell stays alive)",
+    label: "terminal auto-hide",
+    group: "panes",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "terminal-collapse-style",
+    prop: "terminalCollapseStyle",
+    values: ["header", "hidden"],
+    def: "hidden",
+    doc: '"header" = keep the title row visible; "hidden" = height 0',
+    label: "terminal collapse",
+    group: "panes",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "hover-zone-cells",
+    prop: "hoverZoneCells",
+    min: 1,
+    max: 8,
+    step: 1,
+    def: 8,
+    doc: "cells from the edge that trigger an auto-hide expand, 1..8",
+    label: "hover zone",
+    group: "panes",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "hover-open-delay-ms",
+    prop: "hoverOpenDelayMs",
+    min: 0,
+    max: 1000,
+    step: 25,
+    def: 195,
+    doc: "delay before an auto-hide panel expands, 0..1000 ms",
+    label: "hover open delay",
+    group: "panes",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "hover-close-delay-ms",
+    prop: "hoverCloseDelayMs",
+    min: 0,
+    max: 2000,
+    step: 25,
+    def: 175,
+    doc: "delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms",
+    label: "hover close delay",
+    group: "panes",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "hover-anim-ms",
+    prop: "hoverAnimMs",
+    min: 0,
+    max: 600,
+    step: 20,
+    def: 120,
+    doc: "auto-hide slide duration, 0..600 ms (0 = instant)",
+    label: "hover animation",
+    group: "panes",
+  },
+  {
     kind: "int",
     section: "ui",
     tomlKey: "double-click-ms",
@@ -244,62 +380,12 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "bool",
     section: "ui",
-    tomlKey: "show-hidden",
-    prop: "showHidden",
-    def: false,
-    doc: "start with dotfiles visible (ctrl+h toggles at runtime)",
-    label: "hidden files",
-    group: "general",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "recursive-search",
-    prop: "recursiveSearch",
-    def: false,
-    doc: "true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)",
-    label: "recursive search",
-    group: "general",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "preview-enabled",
-    prop: "previewEnabled",
-    def: false,
-    doc: "right-side preview pane (text files, folder stats)",
-    label: "preview pane",
-    group: "general",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "restore-session",
-    prop: "restoreSession",
-    def: false,
-    doc: "true = reopen the folder from the last quit instead of the launch cwd",
-    label: "restore session",
-    group: "general",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "persist-undo",
-    prop: "persistUndo",
-    def: false,
-    doc: "true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)",
-    label: "persistent undo",
-    group: "general",
-  },
-  {
-    kind: "bool",
-    section: "ui",
     tomlKey: "transparent-bg",
     prop: "transparentBg",
     def: false,
     doc: "true = follow a transparent terminal bg (kitty background_opacity); false = force opaque",
     label: "transparent bg",
-    group: "general",
+    group: "appearance",
   },
   {
     kind: "bool",
@@ -309,7 +395,17 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)",
     label: "transparent icons",
-    group: "general",
+    group: "appearance",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-title",
+    prop: "sidebarTitle",
+    def: true,
+    doc: 'true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it',
+    label: "sidebar title",
+    group: "appearance",
   },
   {
     kind: "bool",
@@ -319,18 +415,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)",
     label: "tab bar",
-    group: "general",
-  },
-  {
-    kind: "enum",
-    section: "ui",
-    tomlKey: "view-mode",
-    prop: "viewMode",
-    values: ["grid", "list"],
-    def: "grid",
-    doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns',
-    label: "view mode",
-    group: "general",
+    group: "appearance",
   },
   {
     kind: "enum",
@@ -341,7 +426,18 @@ const UI_ROWS: SchemaRow[] = [
     def: "solid",
     doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels',
     label: "ui style",
-    group: "general",
+    group: "appearance",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "view-mode",
+    prop: "viewMode",
+    values: ["grid", "list"],
+    def: "grid",
+    doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns',
+    label: "view mode",
+    group: "layout",
   },
   {
     kind: "bool",
@@ -356,12 +452,52 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "bool",
     section: "ui",
+    tomlKey: "show-hidden",
+    prop: "showHidden",
+    def: false,
+    doc: "start with dotfiles visible (ctrl+h toggles at runtime)",
+    label: "hidden files",
+    group: "files",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "recursive-search",
+    prop: "recursiveSearch",
+    def: false,
+    doc: "true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)",
+    label: "recursive search",
+    group: "files",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "restore-session",
+    prop: "restoreSession",
+    def: false,
+    doc: "true = reopen the folder from the last quit instead of the launch cwd",
+    label: "restore session",
+    group: "files",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "persist-undo",
+    prop: "persistUndo",
+    def: false,
+    doc: "true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)",
+    label: "persistent undo",
+    group: "files",
+  },
+  {
+    kind: "bool",
+    section: "ui",
     tomlKey: "show-launch-time",
     prop: "showLaunchTime",
     def: false,
     doc: "true = show a notification with the app launch time in ms (debug aid); also enabled by --debug",
     label: "show launch time",
-    group: "general",
+    group: "advanced",
   },
 ];
 

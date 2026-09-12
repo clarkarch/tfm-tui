@@ -9,6 +9,8 @@ import { makeCwdWatcher } from "../fs/watcher";
 import { makeDnd72 } from "../dnd/dnd72";
 import { makeHitTargetAt } from "../dnd/hit-target";
 import { makeResizeWatcher } from "../app/resize";
+import { makeHoverDrawer } from "../ui/ui-hover-drawer";
+import { gridDrag } from "../input/grid-input";
 import { waitForResolution } from "../ui/ui-lookup";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces } from "../fs/places";
@@ -186,4 +188,50 @@ export const wireResize = (deps: { core: CoreWiring; nav: NavWiring; chrome: Chr
     renderAll: nav.renderAll,
   });
   chrome.renderer.on(CliRenderEvents.RESIZE, onResize);
+};
+
+// --- Hover drawer: auto-hide/collapse panels until the mouse nears an edge.
+// The panel policy + timelines live in ./ui-hover-drawer (pure decision fns
+// are tested); the wiring supplies the live config/state getters and the
+// suppression predicate (a drag to the edge must not pop the drawer). ---
+export const wireHoverDrawer = (deps: {
+  core: CoreWiring;
+  chrome: ChromeWiring;
+  fileops: FileopsWiring;
+  gridFoundation: GridFoundationWiring;
+  grid: GridWiring;
+}) => {
+  const { core, chrome, fileops, gridFoundation, grid } = deps;
+  return makeHoverDrawer({
+    renderer: chrome.renderer,
+    byId: core.lookup.byId,
+    ui: () => core.config.ui,
+    terminalOpen: () => fileops.terminal.isOpen(),
+    blocked: () =>
+      core.floats.depth() > 0 || chrome.toolbar.pathEditMode() || gridFoundation.rename.isRenaming() || gridDrag.active,
+    setEffectiveSidebar: (n) => {
+      core.geometry.sidebarEff = n;
+    },
+    setEffectivePreview: (n) => {
+      core.geometry.previewEff = n;
+    },
+    // a pane slide changes the columns the grid can fit; rebuild once on settle
+    // (the drawer coalesces bursts) and keep the scroll offset so the view
+    // doesn't jump to top
+    onSettle: () => {
+      const scroller = core.scrollerRef.current;
+      const y = scroller?.scrollTop ?? 0;
+      void grid.renderGrid().then(() => {
+        try {
+          if (scroller) scroller.scrollTop = y;
+        } catch {}
+        // reclaim the old tiles' native buffers now instead of waiting for the
+        // 10s mem-hygiene poke (same mitigation as a theme flip)
+        try {
+          Bun.gc(false);
+        } catch {}
+      });
+    },
+    log: (msg) => dlog(msg),
+  });
 };

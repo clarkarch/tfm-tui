@@ -133,51 +133,56 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     },
   });
 
-  const uiRowsIn = (group: UiSchemaRow["group"]): UiSchemaRow[] =>
+  const uiRowsIn = (group: NonNullable<UiSchemaRow["group"]>): UiSchemaRow[] =>
     UI_SCHEMA.filter((r): r is UiSchemaRow => r.section === "ui" && r.group === group);
 
-  // general: hand-rolled rows first (theme / hidden-files state sync), then
-  // schema rows minus the two with special presentations (show-hidden, tab-bar)
-  const generalRows = (): SettingRow[] => {
-    const rows: SettingRow[] = [
-      {
-        kind: "cycle",
-        label: "theme",
-        repaint: true,
-        names: THEME_PRESETS.map((p) => p.name),
-        getIdx: themePresetIdx,
-        setIdx: (i) => {
-          commit({ ui: { ...ctx.config.ui }, theme: { ...THEME_PRESETS[i]!.theme }, keys: { ...ctx.config.keys } });
-        },
-        // hand-edited themes match no preset: name the nearest one with a ~
-        // prefix (picking any preset returns to an exact match)
-        customLabel: () => {
-          const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
-          return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
-        },
-      },
-      {
-        kind: "toggle",
-        label: "hidden files",
-        // state.showHidden is the effective runtime flag (the remap bind writes
-        // it without persisting); config is only updated when the GUI commits
-        get: () => ctx.state.showHidden,
-        set: (v) => {
-          ctx.state.showHidden = v;
-          commitUi({ showHidden: v });
-        },
-      },
-      // cycle, not toggle: false = adaptive (strip only with 2+ tabs), true = always
-      {
-        kind: "cycle",
-        label: "tab bar",
-        names: ["adaptive", "on"],
-        getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
-        setIdx: (i) => commitUi({ tabBar: i === 1 }),
-      },
-    ];
-    for (const row of uiRowsIn("general")) {
-      if (row.prop === "showHidden" || row.prop === "tabBar") continue;
+  // rows with a presentation a generic schema row can't express (theme presets,
+  // adaptive/on tab bar, live show-hidden state sync) are built by hand and
+  // spliced into their category; the schema row still exists for parsing
+  const SPECIAL_UI_PROPS = new Set(["showHidden", "tabBar"]);
+
+  const themeRow = (): SettingRow => ({
+    kind: "cycle",
+    label: "theme",
+    repaint: true,
+    names: THEME_PRESETS.map((p) => p.name),
+    getIdx: themePresetIdx,
+    setIdx: (i) => {
+      commit({ ui: { ...ctx.config.ui }, theme: { ...THEME_PRESETS[i]!.theme }, keys: { ...ctx.config.keys } });
+    },
+    // hand-edited themes match no preset: name the nearest one with a ~
+    // prefix (picking any preset returns to an exact match)
+    customLabel: () => {
+      const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
+      return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
+    },
+  });
+
+  const hiddenFilesRow = (): SettingRow => ({
+    kind: "toggle",
+    label: "hidden files",
+    // state.showHidden is the effective runtime flag (the remap bind writes
+    // it without persisting); config is only updated when the GUI commits
+    get: () => ctx.state.showHidden,
+    set: (v) => {
+      ctx.state.showHidden = v;
+      commitUi({ showHidden: v });
+    },
+  });
+
+  // cycle, not toggle: false = adaptive (strip only with 2+ tabs), true = always
+  const tabBarRow = (): SettingRow => ({
+    kind: "cycle",
+    label: "tab bar",
+    names: ["adaptive", "on"],
+    getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
+    setIdx: (i) => commitUi({ tabBar: i === 1 }),
+  });
+
+  const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
+    const rows: SettingRow[] = [];
+    for (const row of uiRowsIn(group)) {
+      if (SPECIAL_UI_PROPS.has(row.prop)) continue;
       const built = schemaRow(row);
       // these change the PANEL's own colors (or its icons) — their adjust must re-render it
       if (row.prop === "uiStyle" || row.prop === "transparentBg" || row.prop === "transparentIcons") {
@@ -188,28 +193,54 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     return rows;
   };
 
-  const settingGroups = (): SettingGroup[] => [
-    { header: "general", rows: generalRows() },
-    { header: "layout", rows: uiRowsIn("layout").map(schemaRow) },
-    { header: "behavior", rows: uiRowsIn("behavior").map(schemaRow) },
-    { header: "keys", rows: KEY_SCHEMA.map((r) => keybindRow(r.action, r.label)) },
+  // ordered categories: schema `group` id -> GUI label + category icon. Icons
+  // are existing assets/icons SVGs; a wrong name silently falls back to the
+  // generic cog (AGENTS.md), so keep these byte-identical to filenames.
+  const CATEGORIES: { id: NonNullable<UiSchemaRow["group"]>; label: string; icon: string }[] = [
+    { id: "appearance", label: "appearance", icon: "pencil" },
+    { id: "layout", label: "layout", icon: "select-all" },
+    { id: "panes", label: "panes", icon: "desktop-tower" },
+    { id: "behavior", label: "behavior", icon: "clock" },
+    { id: "files", label: "files & session", icon: "folder" },
+    { id: "keys", label: "keys", icon: "sort" },
+    { id: "advanced", label: "advanced", icon: "cog" },
+  ];
+
+  const advancedRows = (): SettingRow[] => [
+    ...genericUiRows("advanced"),
+    { kind: "action", label: "reset to defaults", keepOpen: true, run: resetToDefaults },
     {
-      header: "config",
-      rows: [
-        { kind: "action", label: "reset to defaults", keepOpen: true, run: resetToDefaults },
-        {
-          kind: "action",
-          label: "edit config.toml…",
-          run: () => {
-            spawnSafe("xdg-open", [configPath()], { stdio: "ignore", detached: true }, (err) =>
-              ctx.warn(err.message, "config"),
-            ).unref?.();
-          },
-        },
-        { kind: "action", label: "back", keepOpen: true, run: () => ctx.showRoot() },
-      ],
+      kind: "action",
+      label: "edit config.toml…",
+      run: () => {
+        spawnSafe("xdg-open", [configPath()], { stdio: "ignore", detached: true }, (err) =>
+          ctx.warn(err.message, "config"),
+        ).unref?.();
+      },
     },
   ];
+
+  const settingGroups = (): SettingGroup[] =>
+    CATEGORIES.map((cat) => {
+      let rows: SettingRow[];
+      switch (cat.id) {
+        case "keys":
+          rows = KEY_SCHEMA.map((r) => keybindRow(r.action, r.label));
+          break;
+        case "appearance":
+          rows = [themeRow(), ...genericUiRows("appearance"), tabBarRow()];
+          break;
+        case "files":
+          rows = [hiddenFilesRow(), ...genericUiRows("files")];
+          break;
+        case "advanced":
+          rows = advancedRows();
+          break;
+        default:
+          rows = genericUiRows(cat.id);
+      }
+      return { header: cat.label, icon: cat.icon, rows };
+    });
 
   // one category per installed plugin, each led by its on/off toggle. The
   // toggle is `repaint` so flipping it rebuilds the panel live (rows vanish

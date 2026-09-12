@@ -26,12 +26,15 @@ import {
 // eager object, NOT a getter — these three ctxs read fields directly, so the
 // type must reject the themeGet function (a bare Record<string, any> would
 // silently accept it and every field read would be undefined at boot)
-export const buildTitle = (opts: { width: number; colors: Theme }): any =>
+export const buildTitle = (opts: { width: number; colors: Theme; visible?: boolean }): any =>
   Box(
     {
       id: "tfm-title-box",
       width: opts.width,
       height: 5,
+      // [ui] sidebar-title: hidden removes it from layout (the places list
+      // moves up, no blank 5-row gap)
+      visible: opts.visible !== false,
       flexDirection: "column",
       justifyContent: "center",
       paddingLeft: 1,
@@ -62,6 +65,8 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
         height: "100%",
         ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg),
         flexDirection: "column",
+        // auto-hide animation clips the label column instead of rebuilding rows
+        overflow: "hidden",
       },
       o.title,
       Box({ id: "tfm-places", width: o.sideInnerW, flexDirection: "column" }),
@@ -98,7 +103,7 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
         },
         Text({ id: "tfm-status-label", content: "", fg: o.colors.sidebarFgMuted }),
       ),
-      Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }),
+      Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column", overflow: "hidden" }),
     ),
     Box({
       id: "tfm-preview",
@@ -109,6 +114,8 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,
+      // auto-hide animation clips the content instead of rebuilding it
+      overflow: "hidden",
     }),
   );
 

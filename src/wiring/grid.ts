@@ -146,7 +146,10 @@ export const wireGrid = (deps: {
     searchQuery: () => nav.search.getQuery(),
     recursiveSearch: () => core.config.ui.recursiveSearch,
     pathEditMode: () => chrome.toolbar.pathEditMode(),
-    sw: () => core.geometry.sw,
+    // column math reads the EFFECTIVE sidebar width (hover drawer rewrites it
+    // as the sidebar collapses); core.geometry.sw is the config width used for
+    // sidebar content, which stays baked at full size and clips
+    sw: () => core.geometry.sidebarEff,
     tileW: () => core.geometry.tileW,
     tileH: () => core.geometry.tileH,
     iconCells: () => core.geometry.iconCells,
@@ -157,7 +160,7 @@ export const wireGrid = (deps: {
     previewWidth: () => core.config.ui.previewWidth,
     viewMode: () => core.config.ui.viewMode,
     wordWrap: () => core.config.ui.wordWrap,
-    reservedRight: () => (core.config.ui.previewEnabled ? core.config.ui.previewWidth : 0),
+    reservedRight: () => core.geometry.previewEff,
     cellMetrics: core.slots.cellMetrics,
     makeIconSlot: core.slots.makeIconSlot,
     pushThumbJob: core.slots.pushThumbJob,

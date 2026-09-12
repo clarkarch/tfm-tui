@@ -45,6 +45,11 @@ export const wireCore = (deps: {
     tileW: config.ui.tileWidth,
     tileH: config.ui.tileHeight,
     iconCells: config.ui.iconCells,
+    // effective pane widths the grid reads for column math. The hover drawer
+    // rewrites these as panes collapse/expand; `sw` above stays the config
+    // width for sidebar CONTENT (baked at full size and clipped, not rebuilt).
+    sidebarEff: config.ui.sidebarWidth,
+    previewEff: config.ui.previewEnabled ? config.ui.previewWidth : 0,
   };
 
   // inner width available to children of the sidebar panel (outline border

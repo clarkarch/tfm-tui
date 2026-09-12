@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeSettingModel, type SettingsModelCtx } from "./settings-model";
-import { defaultConfig, KEY_SCHEMA, type Config } from "../config/config-schema";
+import { defaultConfig, KEY_SCHEMA, UI_SCHEMA, type Config } from "../config/config-schema";
 import { THEME_PRESETS } from "../config/themes";
 import { makePluginStore } from "../plugins/plugins";
 import type { LoadedPlugin } from "../plugins/plugin-api";
@@ -91,7 +91,40 @@ const asKeybind = (r: SettingRow): Extract<SettingRow, { kind: "keybind" }> => {
 describe("settingGroups shape", () => {
   test("headers in the documented order", () => {
     const h = mk();
-    expect(h.groups().map((g) => g.header)).toEqual(["general", "layout", "behavior", "keys", "config"]);
+    expect(h.groups().map((g) => g.header)).toEqual([
+      "appearance",
+      "layout",
+      "panes",
+      "behavior",
+      "files & session",
+      "keys",
+      "advanced",
+    ]);
+  });
+
+  test("every schema row is reachable in exactly one GUI category", () => {
+    const h = mk();
+    // label is unique per core row; a row that lost its group would silently
+    // never render (the discoverability invariant this regroup must protect)
+    const labels = h.groups().flatMap((g) => g.rows.map((r) => r.label));
+    for (const row of UI_SCHEMA) {
+      expect(labels.filter((l) => l === row.label)).toHaveLength(1);
+    }
+  });
+
+  test("auto-hide toggles and their hover timing share the panes category", () => {
+    const h = mk();
+    const panes = h
+      .groups()
+      .find((g) => g.header === "panes")!
+      .rows.map((r) => r.label);
+    for (const label of ["sidebar auto-hide", "hover zone", "hover animation", "preview pane"]) {
+      expect(panes).toContain(label);
+    }
+  });
+
+  test("every core category carries an icon (silent-fallback guard)", () => {
+    for (const g of mk().groups()) expect(typeof g.icon).toBe("string");
   });
 
   test("every keybind action gets a row", () => {
@@ -118,12 +151,12 @@ describe("settingGroups shape", () => {
       const plug = (): LoadedPlugin[] => [
         mkPlugin({ name: "hello", rows: [hello], store: makePluginStore(dir, "hello") }),
       ];
-      // settings groups stay frozen at the five core categories…
+      // settings groups stay frozen at the core categories…
       expect(
         mk(plug)
           .groups()
           .map((g) => g.header),
-      ).toEqual(["general", "layout", "behavior", "keys", "config"]);
+      ).toEqual(["appearance", "layout", "panes", "behavior", "files & session", "keys", "advanced"]);
       expect(() => mk(plug).byLabel("Say hello")).toThrow();
       // …plugin rows live behind pluginGroups(), one category per plugin
       // (plus the leading "add plugins" installer category — always first
@@ -488,13 +521,12 @@ describe("config group", () => {
     expect(h.config.ui.sidebarWidth).toBe(defaultConfig.ui.sidebarWidth);
   });
 
-  test("back row routes to showRoot", () => {
+  test("advanced has no back row (esc closes the menu)", () => {
     const h = mk();
-    const cfg = h.groups().find((g) => g.header === "config")!.rows;
-    const back = cfg.find((r) => r.label === "back")!;
-    expect(back.kind).toBe("action");
-    if (back.kind === "action") back.run();
-    expect(h.roots()).toBe(1);
+    const cfg = h.groups().find((g) => g.header === "advanced")!.rows;
+    expect(cfg.some((r) => r.label === "back")).toBe(false);
+    expect(cfg.map((r) => r.label)).toContain("reset to defaults");
+    expect(cfg.map((r) => r.label)).toContain("edit config.toml…");
   });
 });
 

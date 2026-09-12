@@ -443,6 +443,7 @@ export const makeTerminal = (ctx: TermCtx) => {
     syncTerminalTheme,
     termHasFocus,
     blurTerminal,
+    isOpen: () => term !== null,
     ownsKeyboard: () => termFocused || termHasFocus(),
   };
 };

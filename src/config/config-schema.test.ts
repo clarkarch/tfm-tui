@@ -108,7 +108,7 @@ describe("serializeConfig", () => {
 
   test("example toml = header + default body", () => {
     expect(exampleToml()).toBe(EXAMPLE_HEADER + serializeBody(defaultConfig));
-    expect(exampleToml()).toContain("drag-threshold-cells = 1");
+    expect(exampleToml()).toMatch(/drag-threshold-cells\s+=\s+1/);
   });
 });
 

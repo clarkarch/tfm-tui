@@ -269,8 +269,11 @@ export const wireRetheme = (deps: {
   chrome: ChromeWiring;
   fileops: FileopsWiring;
   settings: SettingsWiring;
+  // hover drawer (wired just before this) — rethemeChrome rewrites the sidebar
+  // width by id, so an auto-hidden panel must be resynced after applyConfig
+  getHover: () => { refresh(): void };
 }) => {
-  const { core, nav, chrome, fileops, settings } = deps;
+  const { core, nav, chrome, fileops, settings, getHover } = deps;
 
   // --- Config application & persistence: lives in ./ui-retheme (rethemeChrome,
   // applyConfig, scheduleSaveConfig, live reload). Geometry rewrites go
@@ -310,6 +313,9 @@ export const wireRetheme = (deps: {
     // journal file) immediately — not on the next file op
     onConfigApplied: () => {
       fileops.syncUndoJournal();
+      try {
+        getHover().refresh();
+      } catch {}
       try {
         const idx = themePresetIdx(THEME_PRESETS, core.config.theme);
         sharedPluginEvents().emit("theme", {

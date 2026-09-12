@@ -38,7 +38,7 @@ export type SettingRow =
   | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
   | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
 
-export type SettingGroup = { header?: string; rows: SettingRow[] };
+export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] };
 
 // apply one left/right adjustment to a row; false = nothing happened (action
 // rows, steppers pinned at min/max)

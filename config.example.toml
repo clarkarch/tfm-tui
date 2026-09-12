@@ -6,27 +6,38 @@
 # reserved for type-to-search.
 
 [ui]
-sidebar-width        = 26       # 16..60 cells (grid + list)
-tile-width           = 20       # 10..40 cells (grid view)
-tile-height          = 5        # 3..10 cells (grid view)
-icon-cells           = 3        # grid icon height in rows, 1..5
-list-row-height      = 1        # list view row height in cells, 1..3 (icon scales with it)
-preview-width        = 40       # 20..80 cells
-double-click-ms      = 400      # 100..2000
-toast-duration-ms    = 3000     # how long notifications stay up, 1000..10000
-drag-threshold-cells = 1        # cells of movement before a press becomes a drag, 1..5
-show-hidden          = false    # start with dotfiles visible (ctrl+h toggles at runtime)
-recursive-search     = false    # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
-preview-enabled      = false    # right-side preview pane (text files, folder stats)
-restore-session      = false    # true = reopen the folder from the last quit instead of the launch cwd
-persist-undo         = false    # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
-transparent-bg       = false    # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
-transparent-icons    = false    # true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)
-tab-bar              = false    # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
-view-mode            = "grid"   # "grid" = icon tiles; "list" = compact rows with size + modified columns
-ui-style             = "solid"  # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
-word-wrap            = false    # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
-show-launch-time     = false    # true = show a notification with the app launch time in ms (debug aid); also enabled by --debug
+sidebar-width           = 26        # 16..60 cells (grid + list)
+tile-width              = 20        # 10..40 cells (grid view)
+tile-height             = 5         # 3..10 cells (grid view)
+icon-cells              = 3         # grid icon height in rows, 1..5
+list-row-height         = 1         # list view row height in cells, 1..3 (icon scales with it)
+preview-width           = 40        # 20..80 cells
+preview-enabled         = false     # right-side preview pane (text files, folder stats)
+sidebar-auto-hide       = false     # true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)
+sidebar-collapse-style  = "hidden"  # "rail" = icon-only strip; "hidden" = width 0; "min" = shrink to a sliver
+preview-auto-hide       = false     # true = collapse the preview pane until the mouse nears the right edge
+preview-collapse-style  = "hidden"  # "rail" = narrow strip; "hidden" = width 0; "min" = shrink to a sliver
+terminal-auto-hide      = false     # true = the open terminal pane collapses to its header until the mouse nears the bottom edge (the shell stays alive)
+terminal-collapse-style = "hidden"  # "header" = keep the title row visible; "hidden" = height 0
+hover-zone-cells        = 8         # cells from the edge that trigger an auto-hide expand, 1..8
+hover-open-delay-ms     = 195       # delay before an auto-hide panel expands, 0..1000 ms
+hover-close-delay-ms    = 175       # delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms
+hover-anim-ms           = 120       # auto-hide slide duration, 0..600 ms (0 = instant)
+double-click-ms         = 400       # 100..2000
+toast-duration-ms       = 3000      # how long notifications stay up, 1000..10000
+drag-threshold-cells    = 1         # cells of movement before a press becomes a drag, 1..5
+transparent-bg          = false     # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
+transparent-icons       = false     # true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)
+sidebar-title           = true      # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
+tab-bar                 = false     # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
+ui-style                = "solid"   # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
+view-mode               = "grid"    # "grid" = icon tiles; "list" = compact rows with size + modified columns
+word-wrap               = false     # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
+show-hidden             = false     # start with dotfiles visible (ctrl+h toggles at runtime)
+recursive-search        = false     # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
+restore-session         = false     # true = reopen the folder from the last quit instead of the launch cwd
+persist-undo            = false     # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
+show-launch-time        = false     # true = show a notification with the app launch time in ms (debug aid); also enabled by --debug
 
 [theme]
 bg             = "#1a1b26"  # background

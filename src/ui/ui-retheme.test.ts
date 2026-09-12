@@ -180,6 +180,28 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
+  test("a value-only knob skips the heavy renderAll (no grid rebuild churn)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.toastDurationMs = 5000;
+    fresh.ui.hoverAnimMs = 200;
+    retheme.applyConfig(fresh);
+    // consumers read these live; a full clear-and-rebuild was pure native churn
+    expect(ctx.calls.renderAll).toBe(0);
+    expect(ctx.config.ui.toastDurationMs).toBe(5000);
+    expect(ctx.config.ui.hoverAnimMs).toBe(200);
+  });
+
+  test("a layout knob still re-renders", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.sidebarWidth = 31;
+    retheme.applyConfig(fresh);
+    expect(ctx.calls.renderAll).toBe(1);
+  });
+
   test("theme flip is diffed against the LAST APPLIED state, not the caller's config (pinned regression)", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);

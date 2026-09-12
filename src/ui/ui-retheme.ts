@@ -116,6 +116,35 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.transparentIcons]);
   let lastThemeSig = themeSig(ctx.config);
 
+  // UI keys that a settings adjust can change WITHOUT the heavy renderAll steps
+  // (sidebar/grid/preview rebuilds). Their consumers read config live on the
+  // next use, and the settings panel repaints the row's value text by id — so a
+  // full clear-and-rebuild is pure native-alloc churn (the esc-menu settings
+  // session was a documented OOM contributor). Everything else defaults to
+  // rebuild, so a newly added visual key is safe unless explicitly listed.
+  const RENDER_EXEMPT = new Set<string>([
+    "toastDurationMs",
+    "doubleClickMs",
+    "dragThresholdCells",
+    "hoverZoneCells",
+    "hoverOpenDelayMs",
+    "hoverCloseDelayMs",
+    "hoverAnimMs",
+    "persistUndo",
+    "restoreSession",
+    "showLaunchTime",
+  ]);
+
+  // rebuild-relevant signature: all UI keys except the exempt ones, plus theme
+  const renderSig = (c: Config): string => {
+    const ui: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(c.ui)) {
+      if (!RENDER_EXEMPT.has(k)) ui[k] = v;
+    }
+    return JSON.stringify([ui, c.theme]);
+  };
+  let lastRenderSig = renderSig(ctx.config);
+
   const applyConfig = (fresh: Config): void => {
     const themeChanged = lastThemeSig !== themeSig(fresh);
     Object.assign(ctx.config.ui, fresh.ui);
@@ -124,6 +153,8 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     Object.assign(ctx.colors, fresh.theme);
     if (!ctx.config.ui.transparentBg) ctx.colors.bg = bumpHex(ctx.colors.bg);
     lastThemeSig = themeSig(ctx.config);
+    const renderChanged = lastRenderSig !== renderSig(ctx.config);
+    lastRenderSig = renderSig(ctx.config);
 
     ctx.setSw(ctx.config.ui.sidebarWidth);
     ctx.setTileW(ctx.config.ui.tileWidth);
@@ -162,7 +193,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     try {
       ctx.onConfigApplied?.();
     } catch {}
-    ctx.renderAll();
+    // skip the full repaint for value-only knobs (no layout/theme change):
+    // the settings row already repainted its own value text
+    if (renderChanged) ctx.renderAll();
   };
 
   // signature of the last file WE wrote; the watcher skips it so saving

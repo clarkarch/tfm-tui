@@ -46,7 +46,7 @@ type SettingsPanelHooks = {
 // settings panel is wider than the root menu (categories + value columns)
 export const SETTINGS_W = 62;
 const CAT_W = 18;
-const SET_LABEL_W = 17;
+const SET_LABEL_W = 19;
 
 // right-pane window size: a COMPACT dialog, not a full-screen sheet — capped
 // at 14 rows (panel ≈ 21 rows total with chrome); shrinks on tiny terminals.
@@ -54,12 +54,8 @@ const SET_LABEL_W = 17;
 export const settingsVisRows = (termH: number): number => Math.min(14, Math.max(5, termH - 12));
 
 const CAT_ICONS: Record<string, string> = {
-  general: "cog",
-  layout: "select-all",
-  behavior: "clock",
-  keybindings: "pencil",
-  config: "file-document",
-  // installer category (verified F0415 glyph + assets/icons/plus.svg — no new asset)
+  // fallback for groups that don't carry an explicit icon (plugins/installs
+  // and older fakes); core categories set `icon` in settings-model
   "add plugins": "plus",
 };
 
@@ -97,7 +93,7 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
   const catPane = Box({ width: CAT_W, flexDirection: "column" });
   cats.forEach((g, gi) => {
     const active = gi === st.catIdx;
-    const icon = CAT_ICONS[g.header ?? ""] ?? "cog";
+    const icon = g.icon ?? CAT_ICONS[g.header ?? ""] ?? "cog";
     const paintCat = (hover: boolean) => {
       h.setOnId(`tfm-set-cat-${gi}`, (n) => {
         n.backgroundColor = active ? c.accentBg : hover ? c.hoverBg : undefined;

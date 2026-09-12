@@ -101,7 +101,7 @@ const { wireFileops } = await import("./wiring/fileops");
 const { wireGrid } = await import("./wiring/grid");
 const { wirePlugins } = await import("./wiring/plugins");
 const { wireSettings, wireRetheme } = await import("./wiring/settings");
-const { wireWatcher, wireBoot, wireDnd, wireResize } = await import("./wiring/io");
+const { wireWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer } = await import("./wiring/io");
 const { wireKeymap } = await import("./wiring/keymap");
 
 if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
@@ -208,6 +208,17 @@ const watcher = wireWatcher({
   getGrid: () => grid,
 });
 
+// hover drawer BEFORE boot: it collapses panels at construction and publishes
+// the collapsed effective widths, so the boot sequence's first renderAll and
+// the first grid build already use them
+const hover = wireHoverDrawer({
+  core,
+  chrome,
+  fileops,
+  gridFoundation,
+  grid,
+});
+
 wireBoot({
   core,
   nav,
@@ -226,6 +237,7 @@ const retheme = wireRetheme({
   chrome,
   fileops,
   settings,
+  getHover: () => hover,
 });
 
 // --- dnd (OSC 72) + resize + keyboard router ---

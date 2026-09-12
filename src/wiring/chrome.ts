@@ -127,7 +127,7 @@ export const wireChrome = async (deps: {
     tabBarVisible: core.config.ui.tabBar,
     previewWidth: core.config.ui.previewWidth,
     previewEnabled: core.config.ui.previewEnabled,
-    title: buildTitle({ width: core.sideInnerW(), colors: core.colors }),
+    title: buildTitle({ width: core.sideInnerW(), colors: core.colors, visible: core.config.ui.sidebarTitle }),
     toolbarShell: toolbar.makeToolbarShell(),
   });
 
