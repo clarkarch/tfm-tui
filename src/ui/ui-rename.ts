@@ -8,6 +8,7 @@ import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../app/undo";
 import { fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 
 type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
@@ -23,8 +24,7 @@ export type RenameCtx = {
   renderGrid(): void | Promise<void>;
   performRename(p: string, name: string): void | Promise<void>;
   pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
-  setStatusMsg(msg: string): void;
-  notify(msg: string, title?: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   isVirtualCwd(): boolean;
   inTrashView(): boolean;
   cwd(): string;
@@ -106,7 +106,7 @@ export const makeRename = (ctx: RenameCtx) => {
           .catch(() => {
             // surface it: a silent rejection left the half-created entry on
             // disk AND on screen with no error and no repaint
-            ctx.setStatusMsg("Delete failed");
+            ctx.notify("Delete failed", "create failed", "error");
             void ctx.renderAll();
           });
       }
@@ -130,21 +130,19 @@ export const makeRename = (ctx: RenameCtx) => {
           .then(() => {
             pushCreateBatch(edit.createKind!, target);
             const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
-            ctx.setStatusMsg(msg);
-            ctx.notify(msg, "create");
+            ctx.notify(msg, "create", "success");
             void ctx.renderAll();
           })
           .catch((err: unknown) => {
             // the placeholder still exists under the old name — repaint it
-            ctx.setStatusMsg(`Create failed (${fsErrText(err)})`);
+            ctx.notify(`Create failed (${fsErrText(err)})`, "create failed", "error");
             void ctx.renderAll();
           });
         return;
       }
       pushCreateBatch(edit.createKind, k);
       const msg = `Created ${value} · ctrl+z to undo`;
-      ctx.setStatusMsg(msg);
-      ctx.notify(msg, "create");
+      ctx.notify(msg, "create", "success");
       return;
     }
     // plain F2 rename: goes through performRename, which owns conflict
@@ -158,13 +156,13 @@ export const makeRename = (ctx: RenameCtx) => {
     // stale selection (tile rebuilt under us, or the file vanished mid-press):
     // say so instead of dead-ending — keyboard rename gives no other signal
     if (!refs) {
-      ctx.setStatusMsg("Can't rename here");
+      ctx.notify("Can't rename here", "rename", "error");
       return;
     }
     const tile: any = ctx.byId(refs.tileId);
     const label: any = ctx.byId(refs.labelId);
     if (!tile || !label || !existsSync(key)) {
-      ctx.setStatusMsg("Can't rename here (source gone)");
+      ctx.notify("Can't rename here (source gone)", "rename", "error");
       return;
     }
     // remember where the label sits so finishInlineRename can restore it in
@@ -225,7 +223,7 @@ export const makeRename = (ctx: RenameCtx) => {
     if (renameEdit) finishInlineRename(false);
     // trash and virtual views are read-only workspaces, not creation targets
     if (ctx.isVirtualCwd() || ctx.inTrashView()) {
-      ctx.setStatusMsg("Can't create here");
+      ctx.notify("Can't create here", "create", "error");
       return;
     }
     const name = uniqueUntitledName(ctx.cwd(), kind === "folder" ? "Untitled folder" : "Untitled.txt");
@@ -240,8 +238,7 @@ export const makeRename = (ctx: RenameCtx) => {
       })
       .catch((err) => {
         const summary = `Create failed (${fsErrText(err)})`;
-        ctx.setStatusMsg(summary);
-        ctx.notify(summary, "create failed");
+        ctx.notify(summary, "create failed", "error");
       });
   };
 

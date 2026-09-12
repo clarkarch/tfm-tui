@@ -161,7 +161,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     duplicate: (paths) => calls.push(`duplicate:${paths.join(",")}`),
     isVirtualCwd: () => false,
     pasteSmart: (d) => calls.push(`paste:${d}`),
-    setStatusMsg: (m) => calls.push(`setStatusMsg:${m}`),
+    notify: (m, t, l) => calls.push(`notify:${t}:${l}:${m}`),
     undoLast: rec("undo"),
     redoLast: rec("redo"),
     pick: {
@@ -298,7 +298,7 @@ describe("precedence chain", () => {
     h.key("escape");
     h.key("down");
     h.key("x");
-    expect(h.calls).toEqual(["setStatusMsg:Terminal owns keyboard — click the grid to leave"]);
+    expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard — click the grid to leave"]);
   });
 
   test("path edit: esc exits, everything else swallowed", () => {
@@ -699,26 +699,26 @@ describe("file operation keys", () => {
     const h = makeHarness({ isVirtualCwd: () => true });
     h.key("a", { ctrl: true });
     h.key("d", { ctrl: true });
-    expect(h.calls).toEqual(["setStatusMsg:Can't duplicate here"]);
+    expect(h.calls).toEqual(["notify:duplicate:error:Can't duplicate here"]);
     h.calls.length = 0;
     const h2 = makeHarness({ inTrashView: () => true });
     h2.key("a", { ctrl: true });
     h2.key("d", { ctrl: true });
-    expect(h2.calls).toEqual(["setStatusMsg:Can't duplicate here"]);
+    expect(h2.calls).toEqual(["notify:duplicate:error:Can't duplicate here"]);
   });
 
   test("ctrl+v in a virtual cwd reports it can't paste there", () => {
     const h = makeHarness({ isVirtualCwd: () => true });
     h.key("a", { ctrl: true });
     h.key("v", { ctrl: true });
-    expect(h.calls).toEqual(["setStatusMsg:Can't paste here"]);
+    expect(h.calls).toEqual(["notify:paste:error:Can't paste here"]);
   });
 
   test("ctrl+v in trash view reports it can't paste there (no trashinfo on paste)", () => {
     const h = makeHarness({ inTrashView: () => true });
     h.key("a", { ctrl: true });
     h.key("v", { ctrl: true });
-    expect(h.calls).toEqual(["setStatusMsg:Can't paste here"]);
+    expect(h.calls).toEqual(["notify:paste:error:Can't paste here"]);
   });
 
   test("ctrl+z undoes; ctrl+y and ctrl+shift+z redo", () => {

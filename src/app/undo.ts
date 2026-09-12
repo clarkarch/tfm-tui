@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
 import { failSuffix, fsErrText, rmTrashInfo, safeRestoreMove, xdgTrashMove } from "../fs/fsutil";
 import { copyTreeProgress, type TransferSink } from "../fs/transfer";
+import type { NotifyLevel } from "../lib/notify-level";
 
 // progress-less sink for journal redo copies (no toast to report into)
 const nullSink: TransferSink = {
@@ -59,8 +60,7 @@ export type UndoBatchData = {
 export type UndoJournalData = { units: UndoStep[]; redos: UndoStep[] };
 
 export type UndoSink = {
-  setStatusMsg: (msg: string) => void;
-  notify: (message: string, title?: string) => void;
+  notify: (message: string, title?: string, level?: NotifyLevel) => void;
   renderAll: () => void;
   // plugin event fan-out: fires ONLY on an actual pop (empty stacks and the
   // in-flight guard are silent no-ops, never events). Never throws into undo.
@@ -161,11 +161,22 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     } catch {}
   };
 
+  // empty-stack notices report a no-op: throttle them (autorepeat held on
+  // ctrl+z/ctrl+y would otherwise stack a toast per press — same flood class
+  // the clipboard staging coalesces above)
+  let lastEmptyAt = 0;
+  const noteEmpty = (op: "undo" | "redo"): void => {
+    const now = Date.now();
+    if (now - lastEmptyAt < 1500) return;
+    lastEmptyAt = now;
+    sink.notify(op === "undo" ? "Nothing to undo" : "Nothing to redo", op, "info");
+  };
+
   const undoLast = (): void => {
     if (running) return; // in-flight fs closures must not interleave
     const entry = undoStack.pop();
     if (!entry) {
-      sink.setStatusMsg("Nothing to undo");
+      noteEmpty("undo");
       return;
     }
     emit("undo", entry.batch.label);
@@ -189,8 +200,11 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
         const summary = failed
           ? `Undo ${entry.batch.label} · ${failSuffix(failed, failWhy)}`
           : `Undid: ${entry.batch.label}`;
-        sink.setStatusMsg(failed || !entry.batch.redos.length ? summary : `${summary} · ctrl+y to redo`);
-        sink.notify(summary, failed ? "undo failed" : "undo");
+        sink.notify(
+          failed || !entry.batch.redos.length ? summary : `${summary} · ctrl+y to redo`,
+          failed ? "undo failed" : "undo",
+          failed ? "error" : "success",
+        );
         onChange();
       } finally {
         running = false;
@@ -202,7 +216,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     if (running) return;
     const entry = redoStack.pop();
     if (!entry) {
-      sink.setStatusMsg("Nothing to redo");
+      noteEmpty("redo");
       return;
     }
     emit("redo", entry.batch.label);
@@ -224,8 +238,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
         const summary = failed
           ? `Redo ${entry.batch.label} · ${failSuffix(failed, failWhy)}`
           : `Redid: ${entry.batch.label} · ctrl+z to undo`;
-        sink.setStatusMsg(summary);
-        sink.notify(summary, failed ? "redo failed" : "redo");
+        sink.notify(summary, failed ? "redo failed" : "redo", failed ? "error" : "success");
         onChange();
       } finally {
         running = false;

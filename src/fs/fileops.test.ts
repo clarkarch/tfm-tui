@@ -88,8 +88,7 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
       calls.push(`undo:${label}:${units.length}:${redos.length}`);
     },
     renderAll: () => calls.push("renderAll"),
-    setStatusMsg: (msg) => calls.push(`status:${msg}`),
-    notify: (_msg, title) => calls.push(`notify:${title ?? ""}`),
+    notify: (msg, title, level) => calls.push(`notify:${title ?? ""}:${level ?? ""}:${msg}`),
     home: HOME,
     refreshCutVisuals: () => calls.push("cut"),
     log: () => {},
@@ -196,7 +195,7 @@ describe("runTransfer: cross-device move", () => {
     expect(existsSync(src)).toBe(true);
     expect(existsSync(path.join(destDir, "cancel-tree"))).toBe(false);
     expect(h.calls).toContain("toast:finish:✗ Move cancelled");
-    expect(h.calls).toContain("notify:move cancelled");
+    expect(h.calls.some((c) => c.startsWith("notify:move cancelled:info:"))).toBe(true);
   });
 
   test("copy op unaffected: still streams with the toast (control)", async () => {
@@ -229,8 +228,7 @@ describe("performBulkRename", () => {
     expect(existsSync(path.join(ROOT, "bulk-B.txt"))).toBe(true);
     expect(existsSync(a)).toBe(false);
     expect(h.calls).toContain("undo:rename 2 items:2:2");
-    expect(h.calls).toContain("status:Renamed 2 items · ctrl+z to undo");
-    expect(h.calls).toContain("notify:rename");
+    expect(h.calls).toContain("notify:rename:success:Renamed 2 items · ctrl+z to undo");
   });
 
   test("a vanished source is reported FAILED; the rest still land", async () => {
@@ -244,13 +242,13 @@ describe("performBulkRename", () => {
     expect(existsSync(path.join(ROOT, "bulk-good2.txt"))).toBe(true);
     expect(h.calls.some((c) => c.includes("1 FAILED (source gone)"))).toBe(true);
     expect(h.calls).toContain("undo:rename 1 item:1:1");
-    expect(h.calls).toContain("notify:rename failed");
+    expect(h.calls.some((c) => c.startsWith("notify:rename failed:error:"))).toBe(true);
   });
 
   test("no pairs reports Nothing to rename", async () => {
     const h = makeHarness();
     await h.ops.performBulkRename([]);
-    expect(h.calls).toContain("status:Nothing to rename");
+    expect(h.calls).toContain("notify:rename:info:Nothing to rename");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 });
@@ -265,7 +263,7 @@ describe("duplicate", () => {
     expect(readFileSync(copy, "utf8")).toBe("A");
     expect(existsSync(a)).toBe(true);
     expect(h.calls.some((c) => c.startsWith("undo:duplicate 1 item:1:"))).toBe(true);
-    expect(h.calls.some((c) => c.startsWith("status:Copied 1 item"))).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("notify:copy:success:Copied 1 item"))).toBe(true);
   });
 
   test("overlapping calls collapse into one batch (ctrl+d spam guard)", async () => {
@@ -356,7 +354,7 @@ describe("trash guards", () => {
     W(src, "keep me");
     h.ops.setClipboard("copy", [{ path: src, isDir: false }]);
     h.ops.pasteSmart(path.join(trashDir(), "files"));
-    expect(h.calls).toContain("status:Can't paste into Trash");
+    expect(h.calls).toContain("notify:paste:error:Can't paste into Trash");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     expect(existsSync(src)).toBe(true);
   });
@@ -367,7 +365,7 @@ describe("trash guards", () => {
     W(src, "keep me");
     const trashFiles = path.join(trashDir(), "files");
     await h.ops.moveInto(trashFiles, [{ path: src, isDir: false }]);
-    expect(h.calls).toContain("status:Can't move into Trash");
+    expect(h.calls).toContain("notify:move:error:Can't move into Trash");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     expect(existsSync(src)).toBe(true);
     expect(existsSync(path.join(trashFiles, "move-guard-src.txt"))).toBe(false);
@@ -380,7 +378,7 @@ describe("human-friendly statuses and labels", () => {
     const src = path.join(ROOT, "same-name.txt");
     W(src, "keep me");
     await h.ops.performRename(src, "same-name.txt");
-    expect(h.calls).toContain("status:Name unchanged");
+    expect(h.calls).toContain("notify:rename:info:Name unchanged");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     expect(existsSync(src)).toBe(true);
   });
@@ -390,8 +388,7 @@ describe("human-friendly statuses and labels", () => {
     const src = path.join(ROOT, "old-name.txt");
     W(src, "data");
     await h.ops.performRename(src, "new-name.txt");
-    expect(h.calls).toContain("status:Renamed old-name.txt → new-name.txt · ctrl+z to undo");
-    expect(h.calls).toContain("notify:rename");
+    expect(h.calls).toContain("notify:rename:success:Renamed old-name.txt → new-name.txt · ctrl+z to undo");
     expect(h.calls.some((c) => c.startsWith("undo:rename old-name.txt → new-name.txt:1:"))).toBe(true);
   });
 
@@ -400,7 +397,7 @@ describe("human-friendly statuses and labels", () => {
     const dir = path.join(ROOT, "self-drop");
     mkdirSync(dir, { recursive: true });
     await h.ops.moveInto(dir, [{ path: dir, isDir: true }]);
-    expect(h.calls).toContain("status:Already here");
+    expect(h.calls).toContain("notify:move:info:Already here");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 
@@ -408,8 +405,8 @@ describe("human-friendly statuses and labels", () => {
     const h = makeHarness();
     await h.ops.runTransfer("move", ROOT, [], "move 0 items");
     await h.ops.runTransfer("copy", ROOT, [], "paste 0 items");
-    expect(h.calls).toContain("status:Nothing to move");
-    expect(h.calls).toContain("status:Nothing to copy");
+    expect(h.calls).toContain("notify:move:info:Nothing to move");
+    expect(h.calls).toContain("notify:copy:info:Nothing to copy");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 
@@ -419,9 +416,23 @@ describe("human-friendly statuses and labels", () => {
       { path: "/a", isDir: false },
       { path: "/b", isDir: false },
     ]);
-    expect(h.calls).toContain("status:Copy 2 items · paste to complete");
+    expect(h.calls).toContain("notify:copy:info:Copy 2 items · paste to complete");
     h.ops.setClipboard("cut", [{ path: "/a", isDir: false }]);
-    expect(h.calls).toContain("status:Cut 1 item · paste to complete");
+    expect(h.calls).toContain("notify:cut:info:Cut 1 item · paste to complete");
+  });
+
+  test("re-staging the identical clipboard stays silent (autorepeat coalesces)", () => {
+    const h = makeHarness();
+    const items = [
+      { path: "/a", isDir: false },
+      { path: "/b", isDir: false },
+    ];
+    h.ops.setClipboard("copy", items);
+    h.ops.setClipboard("copy", items);
+    expect(h.calls.filter((c) => c.startsWith("notify:copy:info:Copy"))).toHaveLength(1);
+    // a genuine change (mode flip) still reports
+    h.ops.setClipboard("cut", items);
+    expect(h.calls).toContain("notify:cut:info:Cut 2 items · paste to complete");
   });
 
   test("paste labels carry counts and destination", async () => {
@@ -435,7 +446,7 @@ describe("human-friendly statuses and labels", () => {
     const deadline = Date.now() + 2000;
     while (!h.calls.some((c) => c.startsWith("undo:")) && Date.now() < deadline) await Bun.sleep(10);
     expect(h.calls.some((c) => c.startsWith("undo:paste 1 item:1:"))).toBe(true);
-    expect(h.calls).toContain("status:Copied 1 item to ~/label-dest · ctrl+z to undo");
+    expect(h.calls).toContain("notify:copy:success:Copied 1 item to ~/label-dest · ctrl+z to undo");
   });
 
   test("moveInto labels carry counts and destination", async () => {
@@ -494,8 +505,7 @@ describe("extractArchive", () => {
     expect(readdirSync(destDir)).toEqual(["foo"]);
     expect(runs[0]!.args).toContain("-x");
     expect(h.calls.some((c) => c.startsWith("undo:extract 1 archive:1:0"))).toBe(true);
-    expect(h.calls).toContain("status:Extracted 1 archive · ctrl+z to undo");
-    expect(h.calls).toContain("notify:extract");
+    expect(h.calls).toContain("notify:extract:success:Extracted 1 archive · ctrl+z to undo");
   });
 
   test("collision defaults to skip, leaving the existing entry untouched", async () => {
@@ -556,8 +566,7 @@ describe("extractArchive", () => {
     expect(runs.length).toBe(1);
     // nothing landed, so no undo batch (production drops empty batches)
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
-    expect(h.calls).toContain("status:Extract cancelled (0 done)");
-    expect(h.calls).toContain("notify:extract cancelled");
+    expect(h.calls).toContain("notify:extract cancelled:info:Extract cancelled (0 done)");
   });
 
   test("cancel wakes a paused child (SIGCONT) before hard-killing it", async () => {
@@ -581,7 +590,7 @@ describe("extractArchive", () => {
 
     // SIGCONT first: a SIGSTOPped process ignores SIGKILL until resumed
     expect(killed).toEqual(["SIGCONT", "SIGKILL"]);
-    expect(h.calls).toContain("status:Extract cancelled (0 done)");
+    expect(h.calls).toContain("notify:extract cancelled:info:Extract cancelled (0 done)");
   });
 
   test("undo units trash the entries that landed (executed, not just recorded)", async () => {
@@ -615,7 +624,7 @@ describe("extractArchive", () => {
 
     expect(readdirSync(destDir)).toEqual([]);
     expect(h.calls.some((c) => c.includes("1 FAILED (boom happened)"))).toBe(true);
-    expect(h.calls).toContain("notify:extract failed");
+    expect(h.calls.some((c) => c.startsWith("notify:extract failed:error:"))).toBe(true);
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 
@@ -636,7 +645,7 @@ describe("extractArchive", () => {
     await h.ops.extractArchive([archive], destDir);
 
     expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("extracted");
-    expect(h.calls).toContain("status:Extracted 1 archive · ctrl+z to undo");
+    expect(h.calls).toContain("notify:extract:success:Extracted 1 archive · ctrl+z to undo");
   });
 
   test("an archive whose entries all collide-and-skip advertises no undo", async () => {
@@ -657,7 +666,7 @@ describe("extractArchive", () => {
   test("virtual destinations are refused", async () => {
     const h = makeHarness();
     await h.ops.extractArchive([path.join(ROOT, "x.tar.gz")], "recent://");
-    expect(h.calls).toContain("status:Can't extract here");
+    expect(h.calls).toContain("notify:extract:error:Can't extract here");
   });
 
   test("reports onFileOp with the archive paths", async () => {
@@ -708,7 +717,7 @@ describe("compressPaths", () => {
       "b.txt",
     ]);
     expect(h.calls.some((c) => c.startsWith("undo:compress archive.tar.gz:1:0"))).toBe(true);
-    expect(h.calls).toContain("status:Compressed archive.tar.gz · ctrl+z to undo");
+    expect(h.calls).toContain("notify:compress:success:Compressed archive.tar.gz · ctrl+z to undo");
   });
 
   test("existing archive: skip leaves it alone, keep both gets a (copy) name", async () => {
@@ -751,8 +760,7 @@ describe("compressPaths", () => {
     await h.ops.compressPaths([a], "tar.gz", destDir);
 
     expect(readdirSync(destDir)).toEqual([]);
-    expect(h.calls).toContain("status:Compress cancelled");
-    expect(h.calls).toContain("notify:compress cancelled");
+    expect(h.calls).toContain("notify:compress cancelled:info:Compress cancelled");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 
@@ -778,7 +786,7 @@ describe("compressPaths", () => {
   test("virtual destination is refused", async () => {
     const h = makeHarness();
     await h.ops.compressPaths([path.join(ROOT, "noop.txt")], "tar.gz", "recent://");
-    expect(h.calls).toContain("status:Can't compress here");
+    expect(h.calls).toContain("notify:compress:error:Can't compress here");
   });
 });
 
@@ -796,8 +804,7 @@ describe("plugin pre-op veto", () => {
       await h.ops.runTransfer("move", destDir, [src], "move");
       expect(existsSync(src)).toBe(true);
       expect(existsSync(path.join(destDir, "veto-src.txt"))).toBe(false);
-      expect(h.calls).toContain("status:Blocked by plugin: nope");
-      expect(h.calls).toContain("notify:blocked");
+      expect(h.calls).toContain("notify:blocked:info:Blocked by plugin: nope");
       expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     } finally {
       off();
@@ -812,7 +819,7 @@ describe("plugin pre-op veto", () => {
       W(src, "x");
       await h.ops.performRename(src, "veto-renamed.txt");
       expect(existsSync(src)).toBe(true);
-      expect(h.calls).toContain("status:Blocked by plugin");
+      expect(h.calls.some((c) => c.startsWith("notify:blocked:info:Blocked by plugin"))).toBe(true);
       expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     } finally {
       off();
@@ -835,7 +842,7 @@ describe("plugin veto keeps caller state intact", () => {
       expect(h.ops.clipboard()?.items.length).toBe(1); // NOT consumed
       expect(existsSync(path.join(destDir, "veto-paste-src.txt"))).toBe(false);
       expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
-      expect(h.calls).toContain("status:Blocked by plugin");
+      expect(h.calls.some((c) => c.startsWith("notify:blocked:info:Blocked by plugin"))).toBe(true);
     } finally {
       off();
     }

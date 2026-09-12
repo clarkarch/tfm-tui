@@ -112,8 +112,7 @@ describe("makeRename (renderer)", () => {
         return Promise.resolve();
       },
       pushUndoBatch: (label, undos, redos) => calls.push(`undo:${label}:${undos.length}:${redos.length}`),
-      setStatusMsg: (msg) => calls.push(`status:${msg}`),
-      notify: (msg, title) => calls.push(`notify:${title}:${msg}`),
+      notify: (msg, title, level) => calls.push(`notify:${title}:${level}:${msg}`),
       isVirtualCwd: () => false,
       inTrashView: () => false,
       cwd: () => dir,
@@ -145,7 +144,7 @@ describe("makeRename (renderer)", () => {
     await t.renderOnce();
     const undoCalls = calls.filter((c) => c.startsWith("undo:"));
     expect(undoCalls).toEqual(["undo:new file notes.txt:1:1"]); // single batch, final name
-    expect(calls).toContain("notify:create:Created notes.txt · ctrl+z to undo");
+    expect(calls).toContain("notify:create:success:Created notes.txt · ctrl+z to undo");
     expect(calls.some((c) => c.startsWith("rename:"))).toBe(false); // no rename detour
     expect(calls).toContain("renderAll");
     // the file landed under the typed name; no placeholder left behind

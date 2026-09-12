@@ -35,7 +35,7 @@ const mkCtx = () => {
     renderCrumbs: 0,
     refreshNav: 0,
     renderMenuContent: 0,
-    setStatusMsg: [] as string[],
+    notify: [] as Array<[string, string?, string?]>,
   };
   const ctx = {
     config,
@@ -92,8 +92,8 @@ const mkCtx = () => {
     },
     fileMenuIsOpen: () => false,
     renderFileMenu: () => {},
-    setStatusMsg: (msg: string) => {
-      calls.setStatusMsg.push(msg);
+    notify: (msg: string, title?: string, level?: string) => {
+      calls.notify.push([msg, title, level]);
     },
     calls,
   };

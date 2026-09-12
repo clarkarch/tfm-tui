@@ -24,7 +24,6 @@ type BulkRenameCtx = {
   uiStyle(): UiStyle;
   floats: Floats;
   performBulkRename(pairs: BulkRenamePair[]): void | Promise<void>;
-  setStatusMsg(msg: string): void;
 };
 
 const PANEL_W = 76;

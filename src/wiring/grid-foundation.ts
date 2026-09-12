@@ -48,7 +48,6 @@ export const wireGridFoundation = (deps: {
     // arrow wrappers: performRename/pushUndoBatch belong to the fileops wiring (TDZ)
     performRename: (p, name) => getFileops().fileops.performRename(p, name),
     pushUndoBatch: (label, undos, redos, data) => getFileops().undo.pushUndoBatch(label, undos, redos, data),
-    setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
     isVirtualCwd: core.isVirtualCwd,
     inTrashView: core.inTrashView,
@@ -72,14 +71,13 @@ export const wireGridFoundation = (deps: {
     floats: core.floats,
     // arrow wrapper: performBulkRename belongs to the fileops wiring (TDZ)
     performBulkRename: (pairs) => getFileops().fileops.performBulkRename(pairs),
-    setStatusMsg: nav.setStatusMsg,
   });
   // rename guard here (both callers — keymap F2 and the context menu — route
   // through it): virtual views span directories, so one-name-per-line is
   // ambiguous; trash uses restore, not rename
   const startBulkRename = (paths: string[]): void => {
     if (core.isVirtualCwd() || core.inTrashView()) {
-      nav.setStatusMsg("Can't rename here");
+      chrome.notify("Can't rename here", "rename", "error");
       return;
     }
     bulkRename.open(paths);

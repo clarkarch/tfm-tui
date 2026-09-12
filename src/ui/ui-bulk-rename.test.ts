@@ -37,7 +37,6 @@ const mkBulk = (
     performBulkRename: (pairs) => {
       performed.push(...pairs);
     },
-    setStatusMsg: () => {},
   });
 
 const TWO = ["/tfm-bulk/IMG_001.jpg", "/tfm-bulk/IMG_002.jpg"];

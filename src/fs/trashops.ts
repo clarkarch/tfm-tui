@@ -5,13 +5,14 @@ import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrash
 import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
+import type { NotifyLevel } from "../lib/notify-level";
 import { isNetworkPath } from "./network";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
 // --- Trash operations: trash / restore / delete-forever / empty. The fs
-// primitives come from fsutil; UI feedback (status, notifications, refresh)
-// and the undo stack arrive through an injected sink, so this module never
-// touches the renderer or app state.
+// primitives come from fsutil; UI feedback (leveled toast notifications,
+// refresh) and the undo stack arrive through an injected sink, so this module
+// never touches the renderer or app state.
 //
 // Concurrency: every op runs through the shared serial queue so two rapid
 // trashes, a paste during a move, or undo mid-transfer never interleave on
@@ -40,10 +41,8 @@ export type TrashOpsSink = {
   pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
   /** optional delete-progress driver (see DeleteProgress) */
   deleteProgress?: DeleteProgress;
-  /** status bar one-liner */
-  setStatusMsg(msg: string): void;
-  /** toast notification */
-  notify(msg: string, title?: string): void;
+  /** leveled toast notification (the status bar is selection info only) */
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   /** schedule a grid refresh */
   renderAll(): void;
   /** debug event log — undo/redo closures fail silently otherwise */
@@ -84,8 +83,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
     const veto = sharedPluginHooks().beforeFileOp({ op, paths });
     if (!veto) return false;
     const msg = `Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`;
-    sink.setStatusMsg(msg);
-    sink.notify(msg, "blocked");
+    sink.notify(msg, "blocked", "info");
     return true;
   };
 
@@ -94,8 +92,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
     // .trashinfo pointing at a FUSE path that dies on unmount (unrestorable,
     // remote file gone) — refuse instead of pretending it worked
     if (paths.some(isNetworkPath)) {
-      sink.setStatusMsg("Trash isn't available on network locations");
-      sink.notify("Trash isn't available on network locations", "trash");
+      sink.notify("Trash isn't available on network locations", "trash", "error");
       return Promise.resolve();
     }
     if (vetoedByPlugin("trash", paths)) return Promise.resolve();
@@ -144,9 +141,8 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         ? `Trashed ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
         : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
       const hinted = ok > 0 ? `${summary} · ctrl+z to undo` : summary;
-      sink.setStatusMsg(hinted);
-      if (failed > 0) sink.notify(hinted, "trash failed");
-      else sink.notify(hinted, "trash");
+      if (failed > 0) sink.notify(hinted, "trash failed", "error");
+      else sink.notify(hinted, "trash", "success");
       emit("trash", paths);
     });
     // fire-and-forget safe: outcomes are reported via sink, never thrown
@@ -216,8 +212,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         ? `Restored ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
         : `Restored ${ok} item${ok === 1 ? "" : "s"}`;
       const summary = !failed || ok > 0 ? `${base} · ctrl+z to undo` : base;
-      sink.setStatusMsg(summary);
-      sink.notify(summary, failed ? "restore failed" : "restore");
+      sink.notify(summary, failed ? "restore failed" : "restore", failed ? "error" : "success");
       emit("restore", paths);
     });
     run.catch(() => {});
@@ -275,11 +270,10 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         : failed
           ? `Deleted ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
           : `Deleted ${ok} item${ok === 1 ? "" : "s"} · cannot be undone`;
-      sink.setStatusMsg(summary);
       if (dp) dp.finish(cancelled ? "✗ Delete cancelled" : failed ? "✗ Delete failed" : `✓ Deleted ${ok}`);
-      if (cancelled) sink.notify(summary, "delete cancelled");
-      else if (failed > 0) sink.notify(summary, "delete failed");
-      else sink.notify(summary, "delete");
+      if (cancelled) sink.notify(summary, "delete cancelled", "info");
+      else if (failed > 0) sink.notify(summary, "delete failed", "error");
+      else sink.notify(summary, "delete", "success");
       emit("delete-forever", paths);
     });
     run.catch(() => {});
@@ -296,8 +290,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       } catch (err) {
         const reason = fsErrText(err);
         sink.renderAll();
-        sink.notify(`Could not read trash (${reason})`, "empty failed");
-        sink.setStatusMsg(`Trash unreadable (${reason})`);
+        sink.notify(`Could not read trash (${reason})`, "empty failed", "error");
         emit("empty", []);
         return;
       }
@@ -343,23 +336,19 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const failed = names.length - n;
       if (cancelled) {
         const summary = `Empty cancelled · ${n} of ${names.length} removed`;
-        sink.setStatusMsg(summary);
-        sink.notify(summary, "empty cancelled");
+        sink.notify(summary, "empty cancelled", "info");
         dp?.finish("✗ Delete cancelled");
         return;
       }
       if (failed > 0) {
         dp?.finish("✗ Delete failed");
-        sink.notify(`Emptied ${n} of ${names.length} · ${failSuffix(failed, failWhy)}`, "empty failed");
-        sink.setStatusMsg(`Trash partially emptied (${n} of ${names.length})`);
+        sink.notify(`Emptied ${n} of ${names.length} · ${failSuffix(failed, failWhy)}`, "empty failed", "error");
         return;
       }
       dp?.finish(`✓ Emptied ${n}`);
-      // irreversible by design — no undo batch; say so explicitly. Status and
-      // notify carry the same sentence (they diverged before for no reason).
+      // irreversible by design — no undo batch; say so explicitly.
       const summary = `Emptied ${n} item${n === 1 ? "" : "s"} · cannot be undone`;
-      sink.notify(summary, "empty");
-      sink.setStatusMsg(summary);
+      sink.notify(summary, "empty", "success");
       emit("empty", []);
     });
     run.catch(() => {});

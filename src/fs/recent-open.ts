@@ -6,10 +6,11 @@
 
 import path from "node:path";
 import { debounced } from "../lib/uiutil";
+import type { NotifyLevel } from "../lib/notify-level";
 
 type RecentOpenCtx = {
   inTrashView: () => boolean;
-  notify: (msg: string, title?: string) => void;
+  notify: (msg: string, title?: string, level?: NotifyLevel) => void;
   upsertRecent: (paths: string[]) => void | Promise<void>;
   spawnOpen: (p: string) => void;
   appForFile: (p: string) => Promise<string | null>;
@@ -37,7 +38,7 @@ export const makeRecentOpen = (ctx: RecentOpenCtx) => {
     void (async () => {
       const base = path.basename(p);
       const app = await ctx.appForFile(p);
-      ctx.notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open");
+      ctx.notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open", "info");
     })();
   };
 

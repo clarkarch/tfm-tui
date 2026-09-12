@@ -73,7 +73,7 @@ const baseCtx = () => {
     virtualCwd: () => false,
     inTrashView: () => false,
     setStatusMsg: (m) => status.push(m),
-    notify: (m, t) => notes.push(`${t}: ${m}`),
+    notify: (m, t, l) => notes.push(`${t}:${l}: ${m}`),
     subscribeOsc: (cb) => {
       oscCb = cb;
     },
@@ -171,15 +171,15 @@ describe("incoming drop", () => {
   });
 
   test("virtual cwd refuses drops", async () => {
-    const { ctx, feed, status } = baseCtx();
+    const { ctx, feed, notes } = baseCtx();
     ctx.virtualCwd = () => true;
     makeDnd72(ctx);
     feed("t=M:x=1", "text/uri-list");
     feed("t=r:x=1", b64("file:///x"));
     feed("t=r:x=1");
-    await settleUntil(() => status.length > 0);
+    await settleUntil(() => notes.length > 0);
     expect(ctx.runTransfers).toEqual([]);
-    expect(status).toContain("Drops land in a real folder");
+    expect(notes).toContain("drop:info: Drops land in a real folder");
   });
 
   test("trash view trashes external drops (no raw copy without trashinfo)", async () => {
@@ -295,7 +295,7 @@ describe("external drag end", () => {
     // the stale timer reads the snapshot (A was a copy), not the live op
     await settleUntil(() => notes.some((n) => n.includes("Sent 1 item")), 3000); // A's epilogue ran as a copy
     expect(ctx.trashed).toEqual([]); // A's sources survive
-    expect(notes.some((n) => n.includes("Sent 1 item"))).toBe(true); // A's copy epilogue ran as a copy
+    expect(notes).toContain("drag & drop:success: Sent 1 item"); // A's copy epilogue ran as a copy
     // B still completes with move semantics
     feed("t=e:x=4:y=0");
     const deadline = Date.now() + 3000;
@@ -306,20 +306,18 @@ describe("external drag end", () => {
 });
 
 describe("wire errors", () => {
-  test("drop error names the reason in status and toast", () => {
-    const { ctx, feed, status, notes } = baseCtx();
+  test("drop error names the reason in the toast", () => {
+    const { ctx, feed, notes } = baseCtx();
     makeDnd72(ctx);
     feed("t=R", "denied by target");
-    expect(status).toContain("Drop failed (denied by target)");
-    expect(notes).toContain("drop failed: Drop failed (denied by target)");
+    expect(notes).toContain("drop failed:error: Drop failed (denied by target)");
   });
 
-  test("drag offer error names the reason in status and toast", () => {
-    const { ctx, feed, status, notes } = baseCtx();
+  test("drag offer error names the reason in the toast", () => {
+    const { ctx, feed, notes } = baseCtx();
     makeDnd72(ctx);
     feed("t=E", "offer timeout");
-    expect(status).toContain("Drag failed (offer timeout)");
-    expect(notes).toContain("drag failed: Drag failed (offer timeout)");
+    expect(notes).toContain("drag failed:error: Drag failed (offer timeout)");
   });
 });
 

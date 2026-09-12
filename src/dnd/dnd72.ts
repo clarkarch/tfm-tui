@@ -25,6 +25,7 @@ import {
 } from "./osc72";
 import { gridDrag, TileVisual, type ClipItem, type GridTileRef, type TileVisualMode } from "../input/grid-input";
 import { trashDir } from "../fs/fsutil";
+import type { NotifyLevel } from "../lib/notify-level";
 
 // terminal-provided error text can be long or binary — keep one short line
 // for the status bar; the full payload stays in the debug log
@@ -67,8 +68,10 @@ export type Dnd72Ctx = {
   // trash view — external drops land in Trash: route them through trashPaths
   // (trashinfo metadata), never a raw copy into Trash/files
   inTrashView(): boolean;
+  // live drag state stays on the status bar (transient, reclaimed after);
+  // outcomes (sent/failed) surface as leveled toasts
   setStatusMsg(msg: string): void;
-  notify(msg: string, title?: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   // sanctioned OSC receiver — never a second process.stdin listener
   subscribeOsc(cb: (seq: string) => void): void;
 };
@@ -212,7 +215,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     ctx.log(`drop complete, uri-list bytes=${b64 ? Buffer.from(b64, "base64").length : 0}`);
     if (!b64) return;
     if (ctx.virtualCwd()) {
-      ctx.setStatusMsg("Drops land in a real folder");
+      ctx.notify("Drops land in a real folder", "drop", "info");
       return;
     }
     const text = Buffer.from(b64, "base64").toString("utf8");
@@ -262,7 +265,12 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
           if (!canceled && pathsAtEnd && !selfAtEnd) {
             // released over another app: honor move semantics by trashing our copies
             if (opAtEnd === 2) void ctx.trashPaths(pathsAtEnd);
-            else ctx.notify(`Sent ${pathsAtEnd.length} item${pathsAtEnd.length === 1 ? "" : "s"}`, "drag & drop");
+            else
+              ctx.notify(
+                `Sent ${pathsAtEnd.length} item${pathsAtEnd.length === 1 ? "" : "s"}`,
+                "drag & drop",
+                "success",
+              );
           } else if (canceled) ctx.setStatusMsg("drag cancelled");
           if (dragSession === seqAtEnd) {
             dragPaths = null;
@@ -333,15 +341,13 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     if (t === "R") {
       ctx.log(`drop error: ${payload}`);
       const summary = `Drop failed (${shortReason(payload)})`;
-      ctx.setStatusMsg(summary);
-      ctx.notify(summary, "drop failed");
+      ctx.notify(summary, "drop failed", "error");
       return;
     }
     if (t === "E") {
       ctx.log(`drag offer error: ${payload}`);
       const summary = `Drag failed (${shortReason(payload)})`;
-      ctx.setStatusMsg(summary);
-      ctx.notify(summary, "drag failed");
+      ctx.notify(summary, "drag failed", "error");
       return;
     }
     ctx.log(`unhandled osc72 type t=${JSON.stringify(t)} x=${x} y=${y} payloadLen=${payload.length}`);

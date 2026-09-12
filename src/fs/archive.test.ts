@@ -85,15 +85,24 @@ describe("extractPlan", () => {
     });
     expect(extractPlan("zip", "/x/a.zip", "/stage", which("7z"))).toEqual({
       tool: "7z",
-      args: ["x", "-y", "-o/stage", "/x/a.zip"],
+      args: ["x", "-bb1", "-y", "-o/stage", "/x/a.zip"],
     });
   });
 
   test("7z extracts via 7z", () => {
     expect(extractPlan("7z", "/x/a.7z", "/stage", which("7z"))).toEqual({
       tool: "7z",
-      args: ["x", "-y", "-o/stage", "/x/a.7z"],
+      args: ["x", "-bb1", "-y", "-o/stage", "/x/a.7z"],
     });
+  });
+
+  test("7z carries -bb1 (one line per file) so the file-count bar advances", () => {
+    // plain `7z a/x` emits a fixed ~6 header lines no matter the entry count,
+    // so the bar sat at 0 until completion — same freeze class as tar without -v
+    expect(extractPlan("7z", "/x/a.7z", "/stage", which("7z")).args).toContain("-bb1");
+    expect(extractPlan("zip", "/x/a.zip", "/stage", which("7z")).args).toContain("-bb1");
+    expect(compressPlan("7z", "/out/a.7z", ["foo"], "/src", which("7z")).args).toContain("-bb1");
+    expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("7z")).args).toContain("-bb1");
   });
 });
 
@@ -122,7 +131,7 @@ describe("compressPlan / compressionExt / compressionHint", () => {
     });
     expect(compressPlan("zip", "/o/a.zip", ["-v"], "/src", which("7z"))).toEqual({
       tool: "7z",
-      args: ["a", "-tzip", "-y", "/o/a.zip", "--", "./-v"],
+      args: ["a", "-bb1", "-tzip", "-y", "/o/a.zip", "--", "./-v"],
     });
   });
 
@@ -133,11 +142,11 @@ describe("compressPlan / compressionExt / compressionHint", () => {
     });
     expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("7z"))).toEqual({
       tool: "7z",
-      args: ["a", "-tzip", "-y", "/out/a.zip", "--", "foo"],
+      args: ["a", "-bb1", "-tzip", "-y", "/out/a.zip", "--", "foo"],
     });
     expect(compressPlan("7z", "/out/a.7z", ["foo"], "/src", which("7z"))).toEqual({
       tool: "7z",
-      args: ["a", "-t7z", "-y", "/out/a.7z", "--", "foo"],
+      args: ["a", "-bb1", "-t7z", "-y", "/out/a.7z", "--", "foo"],
     });
   });
 

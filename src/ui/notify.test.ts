@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { Text } from "@opentui/core";
+import { Box, Text } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
-import { MAX_TOAST_LINES, makeNotify, truncateToastText, wrapToastText, type NotifyCtx } from "./notify";
+import {
+  MAX_TOAST_LINES,
+  makeNotify,
+  toastLevelMeta,
+  truncateToastText,
+  wrapToastText,
+  type NotifyCtx,
+} from "./notify";
 import { makeProgress } from "./ui-progress";
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {
@@ -15,11 +22,18 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
 const makeFake = (opts?: { durationMs?: number }) => {
   const nodes = new Map<string, any>();
   const removed: string[] = [];
+  const icons: Array<{ name: string; fg: string }> = [];
   const ctx: NotifyCtx = {
     rootAdd: (_node: any) => {},
     remove: (node: any) => {
       removed.push(node.id);
     },
+    makeIconSlot: (name: string, states: Array<{ fg: string; bg: string }>) => {
+      icons.push({ name, fg: states[0]?.fg ?? "" });
+      return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} };
+    },
+    drainIconQueue: () => {},
+    stripSelectable: () => {},
     byId: (id: string): any => {
       let n = nodes.get(id);
       if (!n) {
@@ -32,10 +46,43 @@ const makeFake = (opts?: { durationMs?: number }) => {
     accentBg: () => "#1a1b26",
     white: () => "#ffffff",
     sidebarFgMuted: () => "#666666",
+    ansi1: () => "#e06c75",
+    ansi2: () => "#7fd88f",
     durationMs: () => opts?.durationMs ?? 25,
   };
-  return { ctx, nodes, removed };
+  return { ctx, nodes, removed, icons };
 };
+
+describe("toastLevelMeta", () => {
+  const colors = { white: "#ffffff", muted: "#666666", red: "#e06c75", green: "#7fd88f" };
+  test("info keeps the classic white title + muted body + base duration", () => {
+    expect(toastLevelMeta("info", colors, 3000)).toEqual({
+      icon: "information",
+      titleFg: "#ffffff",
+      bodyFg: "#666666",
+      duration: 3000,
+    });
+  });
+  test("success tints the title green with a check icon", () => {
+    expect(toastLevelMeta("success", colors, 3000)).toEqual({
+      icon: "check",
+      titleFg: "#7fd88f",
+      bodyFg: "#666666",
+      duration: 3000,
+    });
+  });
+  test("error tints the title red, brightens the body, lingers 5s", () => {
+    expect(toastLevelMeta("error", colors, 3000)).toEqual({
+      icon: "close",
+      titleFg: "#e06c75",
+      bodyFg: "#ffffff",
+      duration: 5000,
+    });
+  });
+  test("error never shortens a longer configured duration", () => {
+    expect(toastLevelMeta("error", colors, 10000).duration).toBe(10000);
+  });
+});
 
 describe("truncateToastText", () => {
   test("short text passes through, long text gets an ellipsis", () => {
@@ -90,6 +137,20 @@ describe("notify stacking", () => {
     expect(nodes.get("tfm-toast-2").top).toBe(1 + 4 + 1);
   });
 
+  test("each level queues its raster icon slot with the level tint", () => {
+    const { ctx, icons } = makeFake();
+    const { notify } = makeNotify(ctx);
+    notify("a", "t", "info");
+    notify("b", "t", "success");
+    notify("c", "t", "error");
+    // white info, green check, red close — the meta→slot wiring, not just names
+    expect(icons).toEqual([
+      { name: "information", fg: "#ffffff" },
+      { name: "check", fg: "#7fd88f" },
+      { name: "close", fg: "#e06c75" },
+    ]);
+  });
+
   test("sticky toasts never auto-dismiss; close() fades out and reflows", async () => {
     // the progress toast lives on a sticky handle — it must survive past
     // the auto-dismiss window, share the fade-out with plain notifies, and
@@ -132,6 +193,13 @@ describe("notify stacking (real renderer)", () => {
         accentBg: () => "#1a1b26",
         white: () => "#ffffff",
         sidebarFgMuted: () => "#666666",
+        makeIconSlot: (name: string) => ({
+          el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
+          slotId: `tfm-icon-test-${name}`,
+          spec: {},
+        }),
+        drainIconQueue: () => {},
+        stripSelectable: () => {},
         durationMs: () => 10000,
       });
       notify("first-msg");
@@ -179,6 +247,13 @@ describe("notify stacking (real renderer)", () => {
         accentBg: () => "#1a1b26",
         white: () => "#ffffff",
         sidebarFgMuted: () => "#666666",
+        makeIconSlot: (name: string) => ({
+          el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
+          slotId: `tfm-icon-test-${name}`,
+          spec: {},
+        }),
+        drainIconQueue: () => {},
+        stripSelectable: () => {},
         durationMs: () => 10000,
       });
       const colors = () => ({ white: "#ffffff", accentBg: "#1a1b26", hoverBg: "#2a2b36" }) as any;

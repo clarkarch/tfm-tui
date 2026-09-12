@@ -131,7 +131,8 @@ export const wireChrome = async (deps: {
     closeFileMenu: menu.closeFileMenu,
     blurTerminal: () => getFileops().terminal.blurTerminal(),
     navigate: nav.navigate,
-    setStatusMsg: nav.setStatusMsg,
+    // arrow wrapper: notify is declared below (TDZ seam rule)
+    notify: (m, t, l) => notify(m, t, l),
     canBack: nav.canBack,
     canFwd: nav.canFwd,
     goBack: nav.goBack,
@@ -185,6 +186,11 @@ export const wireChrome = async (deps: {
     accentBg: () => core.colors.accentBg,
     white: () => core.colors.white,
     sidebarFgMuted: () => core.colors.sidebarFgMuted,
+    ansi1: () => core.colors.ansi1,
+    ansi2: () => core.colors.ansi2,
+    makeIconSlot: core.slots.makeIconSlot,
+    drainIconQueue: () => core.slots.drainIconQueue(),
+    stripSelectable: core.lookup.stripSelectable,
     durationMs: () => core.config.ui.toastDurationMs,
   });
 
@@ -306,10 +312,9 @@ export const wireChrome = async (deps: {
     mount: (uri) => runGio(buildMountArgs(uri), true),
     unmount: (uri) => runGio(buildUnmountArgs(uri), false),
     readdir: (dir) => readdir(dir),
-    setStatus: (m) => nav.setStatusMsg(m),
-    notify: (m, t) => {
+    notify: (m, t, l) => {
       try {
-        notify(m, t);
+        notify(m, t, l);
       } catch {}
     },
     log: (m) => dlog(m),

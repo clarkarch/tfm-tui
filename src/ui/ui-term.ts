@@ -4,6 +4,7 @@ import { fsErrText } from "../fs/fsutil";
 import { applySurface, type UiStyle } from "./style";
 import { gridDrag } from "../input/grid-input";
 import type { Theme } from "../config/config";
+import type { NotifyLevel } from "../lib/notify-level";
 
 // --- Embedded terminal pane ("Open Terminal Here") ---
 // OpenTUI's EmbeddedTerminalRenderable draws the VT stream; the PTY belongs to
@@ -24,7 +25,7 @@ type TermCtx = {
   escHintBtn(id: string, onClose: () => void): any;
   stripSelectable(): void;
   drainIconQueue(): void;
-  notify(message: string, title?: string): void;
+  notify(message: string, title?: string, level?: NotifyLevel): void;
   renderAll(): void;
   cwd(): string;
   virtualCwd(): boolean;
@@ -413,7 +414,7 @@ export const makeTerminal = (ctx: TermCtx) => {
         },
       });
     } catch (err) {
-      ctx.notify(`terminal failed (${fsErrText(err)})`, "terminal");
+      ctx.notify(`terminal failed (${fsErrText(err)})`, "terminal", "error");
       closeTerminalPane();
       return;
     }

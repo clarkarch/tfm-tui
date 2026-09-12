@@ -49,7 +49,6 @@ export const wireFileops = (deps: {
   }
   const undo = makeUndo(
     {
-      setStatusMsg: nav.setStatusMsg,
       notify: chrome.notify,
       renderAll: nav.renderAll,
       onEvent: (op, label) => {
@@ -102,7 +101,6 @@ export const wireFileops = (deps: {
     pauseGate: progress.pauseGate,
     pushUndoBatch: undo.pushUndoBatch,
     renderAll: nav.renderAll,
-    setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
     home,
     refreshCutVisuals: gridFoundation.selection.refreshCutVisuals,
@@ -132,7 +130,6 @@ export const wireFileops = (deps: {
 
   const trash = makeTrashOps({
     pushUndoBatch: undo.pushUndoBatch,
-    setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
     renderAll: nav.renderAll,
     // delete progress: the driver maps trashops' calls onto the SAME prog

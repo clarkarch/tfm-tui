@@ -14,6 +14,7 @@ import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import type { IconSpec, IconState } from "./ui-slots";
 import { navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
+import type { NotifyLevel } from "../lib/notify-level";
 
 type MakeIconSlotFn = (
   name: string,
@@ -37,7 +38,7 @@ type ToolbarCtx = {
   closeFileMenu(): void;
   blurTerminal(): void;
   navigate(dir: string): void;
-  setStatusMsg(msg: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   canBack(): boolean;
   canFwd(): boolean;
   goBack(): void;
@@ -175,7 +176,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           // non-dirs, which used to eat the keystroke with zero feedback.
           // Stay in the edit on failure so the path can be fixed in place.
           if (!isNavigableTarget(target)) {
-            ctx.setStatusMsg(`No such folder: ${target}`);
+            ctx.notify(`No such folder: ${target}`, "navigate", "error");
             return;
           }
           pathEditMode = false;

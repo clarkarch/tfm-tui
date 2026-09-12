@@ -1,10 +1,13 @@
 import { Box, Text } from "@opentui/core";
+import type { NotifyLevel } from "../lib/notify-level";
 
 // --- Toast notifications (top-right stack, animated slide-in + fade-out).
 // THE single toast stack: plain auto-dismiss toasts AND the sticky transfer
 // progress toast all live here as entries, so expiry/close reflows every
 // survivor uniformly and two toasts can never share a slot. Takes the theme
-// colors and a host handle via ctx so it never imports app state. ---
+// colors and a host handle via ctx so it never imports app state. The level
+// vocabulary lives in ../lib/notify-level (leaf, so fs/app/input can name it
+// without importing from ui/). ---
 
 export type NotifyCtx = {
   rootAdd(node: any): void;
@@ -14,8 +17,40 @@ export type NotifyCtx = {
   accentBg(): string;
   white(): string;
   sidebarFgMuted(): string;
+  // level tints — optional with a white fallback; the icon plumbing below
+  // (slot/drain/selectable) is required
+  ansi1?(): string;
+  ansi2?(): string;
+  // raster level icon: single-state slot (fg = level color on the toast bg);
+  // the async drain swaps the fallback glyph for the tinted raster
+  makeIconSlot(
+    name: string,
+    states: { fg: string; bg: string }[],
+    heightCells?: number,
+  ): { el: any; slotId: string; spec: any };
+  drainIconQueue(): unknown;
+  stripSelectable(): void;
   // config knob [ui] toast-duration-ms (default 3000)
   durationMs?(): number;
+};
+
+// error toasts linger so the failure is actually read; a longer configured
+// duration always wins (never shorten what the user asked for)
+export const ERROR_TOAST_MS = 5000;
+
+// pure level mapping (tested): raster icon + title/body fg + lifetime. Stays
+// on existing Theme keys (white/muted/ansi1/ansi2) — no new theme knobs.
+// Toasts keep their accentBg fill in every ui-style (a border ring would clip
+// the 3-row shape, same reason tiles stay fill-only).
+export const toastLevelMeta = (
+  level: NotifyLevel,
+  colors: { white: string; muted: string; red: string; green: string },
+  durationMs: number,
+): { icon: "information" | "check" | "close"; titleFg: string; bodyFg: string; duration: number } => {
+  if (level === "error")
+    return { icon: "close", titleFg: colors.red, bodyFg: colors.white, duration: Math.max(durationMs, ERROR_TOAST_MS) };
+  if (level === "success") return { icon: "check", titleFg: colors.green, bodyFg: colors.muted, duration: durationMs };
+  return { icon: "information", titleFg: colors.white, bodyFg: colors.muted, duration: durationMs };
 };
 
 export type ToastHandle = { id: number; nodeId: string; close: () => void };
@@ -83,7 +118,7 @@ const animateLeft = (node: any, from: number, to: number, ms: number): void => {
 export const makeNotify = (
   ctx: NotifyCtx,
 ): {
-  notify: (message: string, title?: string) => void;
+  notify: (message: string, title?: string, level?: NotifyLevel) => void;
   notifySticky: (children: any[], opts?: { width?: number; height?: number }) => ToastHandle | null;
 } => {
   let toasts: ToastEntry[] = [];
@@ -154,7 +189,13 @@ export const makeNotify = (
     fade();
   };
 
-  const pushToast = (width: number, height: number, children: any[], sticky: boolean): ToastHandle | null => {
+  const pushToast = (
+    width: number,
+    height: number,
+    children: any[],
+    sticky: boolean,
+    duration?: number,
+  ): ToastHandle | null => {
     // toasts fire from all over (incl. error paths during native memory
     // pressure — see the OOM note in AGENTS.md); a missing toast must never
     // take the app down, so the whole build is guarded
@@ -199,8 +240,7 @@ export const makeNotify = (
       const entry: ToastEntry = { id, nodeId, height, sticky, timer: null };
       toasts.push(entry);
       if (!sticky) {
-        const duration = ctx.durationMs?.() ?? 3000;
-        entry.timer = setTimeout(() => fadeOut(id), duration);
+        entry.timer = setTimeout(() => fadeOut(id), duration ?? ctx.durationMs?.() ?? 3000);
       }
       return {
         id,
@@ -214,20 +254,56 @@ export const makeNotify = (
   };
 
   return {
-    notify(message, title = "tfm") {
-      const w = TOAST_W;
-      const lines = wrapToastText(message, w - 3);
-      pushToast(
-        w,
-        // short messages keep the classic 3-row shape (title + line + air);
-        // longer ones grow instead of truncating
-        Math.max(3, 1 + lines.length),
-        [
-          Text({ content: truncateToastText(title, w - 3), fg: ctx.white() }),
-          ...lines.map((line) => Text({ content: line, fg: ctx.sidebarFgMuted() })),
-        ],
-        false,
-      );
+    notify(message, title = "tfm", level: NotifyLevel = "info") {
+      // total-failure-safe like pushToast: toasts fire from error paths under
+      // native memory pressure, so a throw anywhere in the build drops the
+      // toast instead of taking the reporting call site down with it
+      try {
+        const w = TOAST_W;
+        const lines = wrapToastText(message, w - 3);
+        const meta = toastLevelMeta(
+          level,
+          {
+            white: ctx.white(),
+            muted: ctx.sidebarFgMuted(),
+            red: ctx.ansi1?.() ?? ctx.white(),
+            green: ctx.ansi2?.() ?? ctx.white(),
+          },
+          ctx.durationMs?.() ?? 3000,
+        );
+        // the level icon is a fixed 2-cell raster slot beside the title (same
+        // shape as the progress toast's button slots); the drain swaps the
+        // fallback glyph for the tinted raster async
+        const slot = ctx.makeIconSlot(meta.icon, [{ fg: meta.titleFg, bg: ctx.accentBg() }], 1);
+        pushToast(
+          w,
+          // short messages keep the classic 3-row shape (title + line + air);
+          // longer ones grow instead of truncating
+          Math.max(3, 1 + lines.length),
+          [
+            Box(
+              { height: 1, flexDirection: "row", columnGap: 1 },
+              slot.el,
+              Text({ content: truncateToastText(title, w - 4), fg: meta.titleFg }),
+            ),
+            ...lines.map((line) => Text({ content: line, fg: meta.bodyFg })),
+          ],
+          false,
+          meta.duration,
+        );
+      } catch {
+        return;
+      }
+      // icon Texts must not enter text-selection mode; the drain is what
+      // swaps the fallback glyph for the raster (its async rejection is
+      // dropped — same fire-and-forget contract as the progress toast)
+      try {
+        ctx.stripSelectable();
+      } catch {}
+      try {
+        const pending = ctx.drainIconQueue() as unknown;
+        if (pending instanceof Promise) pending.catch(() => {});
+      } catch {}
     },
     notifySticky(children, opts) {
       return pushToast(opts?.width ?? TOAST_W, opts?.height ?? 4, children, true);

@@ -40,8 +40,7 @@ const recordingSink = (): TrashOpsSink & {
     notes,
     batches,
     pushUndoBatch: (label, units, redos) => batches.push({ label, units: units.length, redos: redos.length }),
-    setStatusMsg: (msg) => notes.push(`setStatusMsg:${msg}`),
-    notify: (msg, title) => notes.push(`notify:${title ?? ""}:${msg}`),
+    notify: (msg, title, level) => notes.push(`notify:${title ?? ""}:${level ?? ""}:${msg}`),
     renderAll: () => notes.push("renderAll"),
   };
 };
@@ -65,7 +64,7 @@ describe("trashPaths", () => {
       expect(sink.batches[0]!.label).toBe("trash 1 item");
       expect(sink.batches[0]!.units).toBe(1);
       expect(sink.batches[0]!.redos).toBe(1);
-      expect(sink.notes.some((n) => n === "setStatusMsg:Trashed 1 item · ctrl+z to undo")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:trash:success:Trashed 1 item · ctrl+z to undo")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -142,7 +141,7 @@ describe("restoreFromTrash", () => {
       await settleUntil(() => existsSync(path.join(origDir, "gone.txt")));
       expect(existsSync(path.join(origDir, "gone.txt"))).toBe(true);
       expect(existsSync(path.join(trashDir(), "info", "gone.txt.trashinfo"))).toBe(false);
-      expect(sink.notes.some((n) => n === "setStatusMsg:Restored 1 item · ctrl+z to undo")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item · ctrl+z to undo")).toBe(true);
       // restore is reversible: undo batch re-trashes the restored item
       expect(sink.batches.length).toBe(1);
       expect(sink.batches[0]!.label).toBe("restore 1 item");
@@ -186,7 +185,7 @@ describe("deleteForever / emptyTrash", () => {
       expect(existsSync(path.join(trashDir(), "files", "x.txt"))).toBe(false);
       expect(existsSync(path.join(trashDir(), "info", "x.txt.trashinfo"))).toBe(false);
       expect(sink.batches.length).toBe(0);
-      expect(sink.notes.some((n) => n === "setStatusMsg:Deleted 1 item · cannot be undone")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:delete:success:Deleted 1 item · cannot be undone")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -203,8 +202,7 @@ describe("deleteForever / emptyTrash", () => {
       makeTrashOps(sink).emptyTrash();
       await settleUntil(() => !existsSync(path.join(trashDir(), "files", "a")));
       expect(existsSync(path.join(trashDir(), "files", "a"))).toBe(false);
-      expect(sink.notes.some((n) => n === "notify:empty:Emptied 2 items · cannot be undone")).toBe(true);
-      expect(sink.notes.some((n) => n === "setStatusMsg:Emptied 2 items · cannot be undone")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:empty:success:Emptied 2 items · cannot be undone")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -216,8 +214,7 @@ describe("deleteForever / emptyTrash", () => {
       const sink = recordingSink();
       makeTrashOps(sink).emptyTrash();
       await Bun.sleep(30);
-      expect(sink.notes.some((n) => n.startsWith("notify:empty failed:Could not read trash"))).toBe(true);
-      expect(sink.notes.some((n) => n === "setStatusMsg:Trash unreadable (source gone)")).toBe(true);
+      expect(sink.notes.some((n) => n.startsWith("notify:empty failed:error:Could not read trash"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -349,7 +346,7 @@ describe("delete progress driver", () => {
       expect(existsSync(tree)).toBe(false);
       expect(p.calls).toContain("start:2:5");
       expect(p.calls).toContain("finish:✓ Deleted 1");
-      expect(sink.notes.some((n) => n === "setStatusMsg:Deleted 1 item · cannot be undone")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:delete:success:Deleted 1 item · cannot be undone")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -370,8 +367,7 @@ describe("delete progress driver", () => {
       expect(existsSync(tree)).toBe(true);
       expect(p.files()).toBe(1);
       expect(p.calls).toContain("finish:✗ Delete cancelled");
-      expect(sink.notes.some((n) => n === "setStatusMsg:Delete cancelled · 0 of 1 removed")).toBe(true);
-      expect(sink.notes.some((n) => n.startsWith("notify:delete cancelled"))).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:delete cancelled:info:Delete cancelled · 0 of 1 removed")).toBe(true);
       expect(sink.batches.length).toBe(0); // irreversible by design
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -392,7 +388,7 @@ describe("delete progress driver", () => {
       await settleUntil(() => p.calls.includes("stop"));
       expect(p.calls).toContain("start:2:2");
       expect(p.calls).toContain("finish:✓ Emptied 2");
-      expect(sink.notes.some((n) => n === "notify:empty:Emptied 2 items · cannot be undone")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:empty:success:Emptied 2 items · cannot be undone")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -413,7 +409,7 @@ describe("trash pre-op veto", () => {
       makeTrashOps(sink).trashPaths([file]);
       await settleUntil(() => sink.notes.length > 0);
       expect(existsSync(file)).toBe(true);
-      expect(sink.notes.some((n) => n === "setStatusMsg:Blocked by plugin: nope")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:blocked:info:Blocked by plugin: nope")).toBe(true);
       expect(sink.notes.some((n) => n.startsWith("notify:blocked:"))).toBe(true);
       expect(sink.batches.length).toBe(0);
     } finally {

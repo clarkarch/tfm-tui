@@ -126,8 +126,8 @@ beforeAll(async () => {
     renderAll: () => {
       renderAllCount++;
     },
-    setStatusMsg: (msg) => {
-      statusMsgs.push(msg);
+    notify: (msg, title, level) => {
+      statusMsgs.push(`${title}:${level}:${msg}`);
     },
     uiStyle: () => "solid",
     colors: () => colors,
@@ -202,6 +202,14 @@ describe("single-file properties", () => {
     expect(byId("tfm-props")).toBeFalsy();
     expect(props.isOpen()).toBe(false);
     expect(floats.isOpen("props")).toBe(false);
+  });
+
+  test("source-gone target toasts instead of blinking", async () => {
+    statusMsgs.length = 0;
+    props.openProperties(path.join(sandbox, "vanished.txt"));
+    await t.renderOnce();
+    expect(props.isOpen()).toBe(false);
+    expect(statusMsgs).toContain("properties:error:Can't show properties (source gone)");
   });
 
   test("exec checkbox only exists for exec-capable files (shebang/ext/mode)", async () => {

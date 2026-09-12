@@ -14,6 +14,7 @@ import type { ListEntry } from "./ui-menu";
 import { FLOAT_Z, type Floats } from "./floats";
 import { IconStateIdx, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
+import type { NotifyLevel } from "../lib/notify-level";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -59,7 +60,7 @@ type PropsCtx = {
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   floats: Floats;
   renderAll(): void;
-  setStatusMsg(msg: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   uiStyle(): UiStyle;
   colors(): Theme;
   home: string;
@@ -101,7 +102,7 @@ export const makeProps = (ctx: PropsCtx) => {
       st = statSync(targetPath);
     } catch {
       // right-click → Properties on a just-deleted file must say so, not blink
-      ctx.setStatusMsg("Can't show properties (source gone)");
+      ctx.notify("Can't show properties (source gone)", "properties", "error");
       return;
     }
     ctx.floats.open("props", rawCloseProps);
@@ -346,7 +347,7 @@ export const makeProps = (ctx: PropsCtx) => {
         setOnId: ctx.setOnId,
         openContextMenu: ctx.openContextMenu,
         closeFileMenu: ctx.closeFileMenu,
-        setStatusMsg: ctx.setStatusMsg,
+        notify: ctx.notify,
         uiStyle: ctx.uiStyle,
         colors: () => colors,
         makeIconSlot: ctx.makeIconSlot,

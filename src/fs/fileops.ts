@@ -39,6 +39,7 @@ import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } fro
 import { sharedOpQueue } from "../lib/op-queue";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
 import type { ConflictChoice } from "../ui/ui-dialogs";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { ProgressState } from "../ui/ui-progress";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 import type { ClipItem } from "../input/grid-input";
@@ -57,8 +58,7 @@ export type FileOpsCtx = {
   pauseGate(): Promise<void>;
   pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
   renderAll(): void;
-  setStatusMsg(msg: string): void;
-  notify(msg: string, title?: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   home: string;
   // cut-tile dimming repaint (tile visuals live in ./selection)
   refreshCutVisuals(): void;
@@ -145,8 +145,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const veto = sharedPluginHooks().beforeFileOp({ op, paths, ...(dest ? { dest } : {}) });
     if (!veto) return false;
     const msg = `Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`;
-    ctx.setStatusMsg(msg);
-    ctx.notify(msg, "blocked");
+    ctx.notify(msg, "blocked", "info");
     return true;
   };
 
@@ -236,7 +235,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // self-drops filter everything out upstream (moveInto) — landing here
     // with nothing to do would report a confusing "Moved 0 items"
     if (!srcs.length) {
-      ctx.setStatusMsg(op === "copy" ? "Nothing to copy" : "Nothing to move");
+      ctx.notify(op === "copy" ? "Nothing to copy" : "Nothing to move", op, "info");
       return;
     }
     // best-effort sweep of crashed-transfer orphans (<dest>.tfm-part-*) and
@@ -406,10 +405,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     ctx.renderAll();
     const verb = op === "copy" ? "Copied" : "Moved";
     const opNoun = op === "copy" ? "Copy" : "Move";
-    // status and notify share the full sentence including the destination —
-    // they diverged before (status dropped the "to ~/…" tail) for no reason.
-    // The destination folds into the verb phrase ("Copied 2 items to ~/Docs"),
-    // never after the undo hint ("…undo to ~/Docs" misreads).
+    // the outcome surfaces once, as a leveled toast (the status bar is
+    // selection info only). The destination folds into the verb phrase
+    // ("Copied 2 items to ~/Docs"), never after the undo hint.
     const landed = !cancelled && !failed && ok + replaced > 0;
     const destTail = landed ? ` to ~/${path.relative(ctx.home, destDir) || "/"}` : "";
     const bits = [`${verb} ${ok} item${ok === 1 ? "" : "s"}${destTail}`];
@@ -419,14 +417,13 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (ok || replaced) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
-    ctx.setStatusMsg(msg);
     // always surface the outcome — success, failure, or cancel
     if (prog.toastUp) {
       ctx.finishProgressToast(cancelled ? `✗ ${opNoun} cancelled` : failed ? `✗ ${opNoun} failed` : `✓ ${verb} ${ok}`);
     }
-    if (cancelled) ctx.notify(msg, `${op} cancelled`);
-    else if (failed > 0) ctx.notify(msg, `${op} failed`);
-    else ctx.notify(msg, op);
+    if (cancelled) ctx.notify(msg, `${op} cancelled`, "info");
+    else if (failed > 0) ctx.notify(msg, `${op} failed`, "error");
+    else ctx.notify(msg, op, "success");
     try {
       ctx.onFileOp?.(op, [...srcs], destDir, { cancelled, failed });
     } catch {}
@@ -437,7 +434,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const performRename = async (p: string, v: string): Promise<void> => {
     const dest = path.join(path.dirname(p), v);
     if (path.resolve(dest) === path.resolve(p)) {
-      ctx.setStatusMsg("Name unchanged");
+      ctx.notify("Name unchanged", "rename", "info");
       ctx.renderAll();
       return;
     }
@@ -475,18 +472,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       const renameLabel = `rename ${path.basename(p)} → ${path.basename(finalDest)}`;
       ctx.pushUndoBatch(renameLabel, units, redos, { units: dUnits, redos: dRedos });
       ctx.renderAll();
-      // status and notify share the sentence (they diverged on the basename
-      // prefix before); the arrow names both ends so multi-tab renames stay clear
+      // the arrow names both ends so multi-tab renames stay clear
       const renamedMsg = `Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ctrl+z to undo`;
-      ctx.setStatusMsg(renamedMsg);
-      ctx.notify(renamedMsg, "rename");
+      ctx.notify(renamedMsg, "rename", "success");
       try {
         ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 0 });
       } catch {}
     } catch (err) {
       const summary = `Rename failed (${fsErrText(err)})`;
-      ctx.setStatusMsg(summary);
-      ctx.notify(summary, "rename failed");
+      ctx.notify(summary, "rename failed", "error");
       try {
         ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 1 });
       } catch {}
@@ -498,7 +492,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // undo step. A vanished source or fs error counts per pair; the rest land.
   const performBulkRename = async (pairs: Array<{ from: string; to: string }>): Promise<void> => {
     if (!pairs.length) {
-      ctx.setStatusMsg("Nothing to rename");
+      ctx.notify("Nothing to rename", "rename", "info");
       return;
     }
     if (
@@ -545,8 +539,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (ok) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
-    ctx.setStatusMsg(msg);
-    ctx.notify(msg, failed ? "rename failed" : "rename");
+    ctx.notify(msg, failed ? "rename failed" : "rename", failed ? "error" : "success");
     try {
       ctx.onFileOp?.(
         "rename",
@@ -596,14 +589,23 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // URIs) so Tfm->Nautilus / Tfm->Tfm paste-as-files works (bridge lives in
   // ./clipboard, tested)
   const setClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
+    // identical re-stage (autorepeat re-cuts/copies the same selection):
+    // the op is idempotent, so stay silent instead of stacking a toast per
+    // press — a toast is an allocation, a status overwrite was not
+    const same =
+      clipboard !== null &&
+      clipboard.mode === mode &&
+      clipboard.items.length === items.length &&
+      clipboard.items.every((it, i) => it.path === items[i]?.path);
     clipboard = items.length ? { mode, items } : null;
     if (clipboard) publishPathsToSystemClipboard(mode, items, ctx.log);
     // staging, not done — "Copied …" here made paste look already finished
-    ctx.setStatusMsg(
-      clipboard
-        ? `${mode === "cut" ? "Cut" : "Copy"} ${items.length} item${items.length === 1 ? "" : "s"} · paste to complete`
-        : "",
-    );
+    if (clipboard && !same)
+      ctx.notify(
+        `${mode === "cut" ? "Cut" : "Copy"} ${items.length} item${items.length === 1 ? "" : "s"} · paste to complete`,
+        mode,
+        "info",
+      );
     ctx.refreshCutVisuals();
   };
 
@@ -630,7 +632,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
 
   const pasteSmart = (dest: string): void => {
     if (isInTrashFiles(dest)) {
-      ctx.setStatusMsg("Can't paste into Trash");
+      ctx.notify("Can't paste into Trash", "paste", "error");
       return;
     }
     if (clipboard?.items.length) {
@@ -650,7 +652,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       } else {
         // neither internal nor system clipboard holds files — say so instead
         // of a silent no-op (bare-text clips intentionally don't qualify)
-        ctx.setStatusMsg("Nothing to paste");
+        ctx.notify("Nothing to paste", "paste", "info");
       }
     });
   };
@@ -659,7 +661,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // trashing goes through trashPaths (trashinfo metadata) — a raw move
     // into Trash/files orphans the .trashinfo OriginalPath chain
     if (isInTrashFiles(destDir)) {
-      ctx.setStatusMsg("Can't move into Trash");
+      ctx.notify("Can't move into Trash", "move", "error");
       return;
     }
     const srcs = items
@@ -668,7 +670,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // everything filtered out = drop onto itself — say so instead of
     // reporting a confusing "Moved 0 items" via runTransfer
     if (!srcs.length) {
-      ctx.setStatusMsg("Already here");
+      ctx.notify("Already here", "move", "info");
       return;
     }
     ctx.log(
@@ -698,11 +700,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
 
   const extractArchiveInner = async (files: string[], destDir: string): Promise<void> => {
     if (!files.length) {
-      ctx.setStatusMsg("Nothing to extract");
+      ctx.notify("Nothing to extract", "extract", "info");
       return;
     }
     if (destDir.includes("://")) {
-      ctx.setStatusMsg("Can't extract here");
+      ctx.notify("Can't extract here", "extract", "error");
       return;
     }
     conflict.resetPolicy();
@@ -810,13 +812,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (units.length && !cancelled) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
-    ctx.setStatusMsg(msg);
     if (prog.toastUp) {
       ctx.finishProgressToast(cancelled ? "✗ Extract cancelled" : failed ? "✗ Extract failed" : `✓ Extracted ${ok}`);
     }
-    if (cancelled) ctx.notify(msg, "extract cancelled");
-    else if (failed > 0) ctx.notify(msg, "extract failed");
-    else ctx.notify(msg, "extract");
+    if (cancelled) ctx.notify(msg, "extract cancelled", "info");
+    else if (failed > 0) ctx.notify(msg, "extract failed", "error");
+    else ctx.notify(msg, "extract", "success");
     try {
       ctx.onFileOp?.("extract", [...files], destDir, { cancelled, failed });
     } catch {}
@@ -827,12 +828,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
 
   const compressPathsInner = async (paths: string[], format: CompressionFormat, destDir: string): Promise<void> => {
     if (destDir.includes("://")) {
-      ctx.setStatusMsg("Can't compress here");
+      ctx.notify("Can't compress here", "compress", "error");
       return;
     }
     const srcs = paths.filter((p) => !p.includes("://") && existsSync(p));
     if (!srcs.length) {
-      ctx.setStatusMsg("Nothing to compress");
+      ctx.notify("Nothing to compress", "compress", "info");
       return;
     }
     conflict.resetPolicy();
@@ -852,7 +853,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (existsSync(out)) {
       const choice = conflict.policy() ?? (await conflict.promptConflict(out, 0));
       if (choice === "skip") {
-        ctx.setStatusMsg("Compress cancelled");
+        ctx.notify("Compress cancelled", "compress cancelled", "info");
         return;
       }
       if (choice === "keepBoth") out = uniqueArchiveTarget(destDir, base, ext);
@@ -909,13 +910,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (!failed && !cancelled) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
-    ctx.setStatusMsg(msg);
     if (prog.toastUp) {
       ctx.finishProgressToast(cancelled ? "✗ Compress cancelled" : failed ? "✗ Compress failed" : `✓ ${base}${ext}`);
     }
-    if (cancelled) ctx.notify(msg, "compress cancelled");
-    else if (failed > 0) ctx.notify(msg, "compress failed");
-    else ctx.notify(msg, "compress");
+    if (cancelled) ctx.notify(msg, "compress cancelled", "info");
+    else if (failed > 0) ctx.notify(msg, "compress failed", "error");
+    else ctx.notify(msg, "compress", "success");
     try {
       ctx.onFileOp?.("compress", srcs, out, { cancelled, failed });
     } catch {}

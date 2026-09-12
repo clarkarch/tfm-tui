@@ -164,7 +164,7 @@ export const wireKeymap = (deps: {
     duplicate: (paths) => void fileops.fileops.duplicate(paths),
     isVirtualCwd: core.isVirtualCwd,
     pasteSmart: fileops.fileops.pasteSmart,
-    setStatusMsg: nav.setStatusMsg,
+    notify: chrome.notify,
     undoLast: fileops.undo.undoLast,
     redoLast: fileops.undo.redoLast,
     pluginCommands: () =>

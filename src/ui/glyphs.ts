@@ -37,6 +37,7 @@ export const glyph: Record<string, string> = {
   pause: "\u{F03E4}",
   play: "\u{F040A}",
   close: "\u{F0156}",
+  check: "\u{F012C}",
   terminal: "\u{F120}",
   plus: "\u{F0415}",
   disc: "\u{F05EE}",

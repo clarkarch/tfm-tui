@@ -8,8 +8,7 @@ const recordingSink = (): UndoSink & { notes: string[] } => {
   const notes: string[] = [];
   return {
     notes,
-    setStatusMsg: (msg) => notes.push(`setStatusMsg:${msg}`),
-    notify: (msg, title) => notes.push(`notify:${title ?? ""}:${msg}`),
+    notify: (msg, title, level) => notes.push(`notify:${title ?? ""}:${level ?? ""}:${msg}`),
     renderAll: () => notes.push("renderAll"),
   };
 };
@@ -89,7 +88,7 @@ describe("makeUndo", () => {
     await settleUntil(() => ran.length === 1);
     expect(ran).toEqual([String(MAX_UNDO_BATCHES + 4)]);
     // batch was pushed without redos → not redoable, no hint
-    expect(sink.notes).toContain("setStatusMsg:Undid: op 34");
+    expect(sink.notes).toContain("notify:undo:success:Undid: op 34");
   });
 
   test("undo runs units in reverse order", async () => {
@@ -117,18 +116,27 @@ describe("makeUndo", () => {
     const undo = makeUndo(sink);
     undo.pushUndoBatch("one-way", [() => {}]);
     undo.undoLast();
-    await settleUntil(() => sink.notes.some((n) => n.startsWith("setStatusMsg:Undid")));
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
     expect(undo.redoDepth()).toBe(0);
-    expect(sink.notes).toContain("setStatusMsg:Undid: one-way");
+    expect(sink.notes).toContain("notify:undo:success:Undid: one-way");
     expect(sink.notes.some((n) => n.includes("ctrl+y"))).toBe(false);
   });
 
-  test("undo on empty stack only sets status", async () => {
+  test("undo on empty stack toasts once", async () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     undo.undoLast();
     await settleUntil(() => sink.notes.length === 1);
-    expect(sink.notes).toEqual(["setStatusMsg:Nothing to undo"]);
+    expect(sink.notes).toEqual(["notify:undo:info:Nothing to undo"]);
+  });
+
+  test("rapid empty-stack notices coalesce (autorepeat doesn't stack toasts)", () => {
+    const sink = recordingSink();
+    const undo = makeUndo(sink);
+    undo.undoLast();
+    undo.undoLast();
+    undo.redoLast();
+    expect(sink.notes.filter((n) => n.startsWith("notify:"))).toHaveLength(1);
   });
 
   test("undo failure keeps going, reports count + first reason, stays redoable", async () => {
@@ -148,8 +156,8 @@ describe("makeUndo", () => {
     undo.undoLast();
     await settleUntil(() => sink.notes.some((n) => n.includes("1 FAILED")));
     // failed runs get no ctrl+y hint (original behavior) but stay redoable
-    expect(sink.notes).toContain("setStatusMsg:Undo messy · 1 FAILED (permission denied)");
-    expect(sink.notes).toContain("notify:undo failed:Undo messy · 1 FAILED (permission denied)");
+    expect(sink.notes).toContain("notify:undo failed:error:Undo messy · 1 FAILED (permission denied)");
+    expect(sink.notes.filter((n) => n.startsWith("notify:"))).toHaveLength(1);
     expect(undo.redoDepth()).toBe(1);
   });
 
@@ -177,16 +185,16 @@ describe("makeUndo", () => {
     expect(ran).toEqual(["u", "r"]);
     expect(undo.undoDepth()).toBe(1);
     expect(undo.redoDepth()).toBe(0);
-    expect(sink.notes).toContain("setStatusMsg:Redid: op · ctrl+z to undo");
-    expect(sink.notes).toContain("notify:redo:Redid: op · ctrl+z to undo");
+    expect(sink.notes).toContain("notify:redo:success:Redid: op · ctrl+z to undo");
+    expect(sink.notes).toContain("notify:redo:success:Redid: op · ctrl+z to undo");
   });
 
-  test("redo on empty stack only sets status", async () => {
+  test("redo on empty stack toasts once", async () => {
     const sink = recordingSink();
     const undo = makeUndo(sink);
     undo.redoLast();
     await settleUntil(() => sink.notes.length === 1);
-    expect(sink.notes).toEqual(["setStatusMsg:Nothing to redo"]);
+    expect(sink.notes).toEqual(["notify:redo:info:Nothing to redo"]);
   });
 
   test("redo failure reports count + reason", async () => {
@@ -203,11 +211,11 @@ describe("makeUndo", () => {
       ],
     );
     undo.undoLast();
-    await settleUntil(() => sink.notes.some((n) => n.startsWith("setStatusMsg:Undid")));
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
     undo.redoLast();
     await settleUntil(() => sink.notes.some((n) => n.includes("1 FAILED")));
-    expect(sink.notes).toContain("setStatusMsg:Redo op · 1 FAILED (source gone)");
-    expect(sink.notes).toContain("notify:redo failed:Redo op · 1 FAILED (source gone)");
+    expect(sink.notes).toContain("notify:redo failed:error:Redo op · 1 FAILED (source gone)");
+    expect(sink.notes.filter((n) => n.startsWith("notify:"))).toHaveLength(2); // undo ok + redo failed
     // the batch returns to the undo stack even on failed redo (matches old behavior)
     expect(undo.undoDepth()).toBe(1);
   });
@@ -234,7 +242,7 @@ describe("makeUndo", () => {
     undo.undoLast(); // starts the slow batch, pops "slow"
     undo.undoLast(); // in-flight → must be a no-op, NOT pop "next"
     release();
-    await settleUntil(() => sink.notes.some((n) => n.startsWith("setStatusMsg:Undid")));
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
     expect(ran).toBe(1);
     expect(undo.undoDepth()).toBe(1); // "next" still queued for a real second press
   });
@@ -256,11 +264,11 @@ describe("makeUndo", () => {
       ],
     );
     undo.undoLast();
-    await settleUntil(() => sink.notes.some((n) => n.startsWith("setStatusMsg:Undid")));
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
     undo.redoLast();
     undo.redoLast(); // in-flight → no-op
     release();
-    await settleUntil(() => sink.notes.some((n) => n.startsWith("setStatusMsg:Redid")));
+    await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:redo:")));
     expect(ran).toBe(1);
     expect(undo.redoDepth()).toBe(0);
   });
@@ -301,13 +309,13 @@ describe("journal data (persistent undo)", () => {
       undo.undoLast();
       // poll on the batch having FINISHED (undo = move back + redoable), not
       // on the file's location — the rename can land mid-batch under load
-      await settleUntil(() => sink.notes.some((n) => n.startsWith("setStatusMsg:Undid")));
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
       expect(existsSync(moved)).toBe(false);
       expect(existsSync(orig)).toBe(true);
-      expect(sink.notes).toContain("setStatusMsg:Undid: rename · ctrl+y to redo");
+      expect(sink.notes).toContain("notify:undo:success:Undid: rename · ctrl+y to redo");
       // and redo re-applies
       undo.redoLast();
-      await settleUntil(() => sink.notes.some((n) => n.startsWith("setStatusMsg:Redid")));
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:redo:")));
       expect(existsSync(moved)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });

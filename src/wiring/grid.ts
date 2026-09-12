@@ -191,7 +191,7 @@ export const wireGrid = (deps: {
     closeFileMenu: chrome.menu.closeFileMenu,
     openContextMenu: (x, y, title, entries) => chrome.menu.openContextMenu(x, y, title, entries),
     renderAll: nav.renderAll,
-    setStatusMsg: nav.setStatusMsg,
+    notify: chrome.notify,
     uiStyle,
     colors: themeGet,
     home,
@@ -212,7 +212,7 @@ export const wireGrid = (deps: {
     openWith: (p) => {
       void appsForFile(p).then((apps) => {
         if (!apps.length) {
-          nav.setStatusMsg("No applications found");
+          chrome.notify("No applications found", "open", "error");
           return;
         }
         getPick().open({

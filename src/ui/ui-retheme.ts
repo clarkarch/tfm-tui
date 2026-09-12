@@ -12,6 +12,7 @@ import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { debounced } from "../lib/uiutil";
+import type { NotifyLevel } from "../lib/notify-level";
 
 type RethemeCtx = {
   // live object refs — applyConfig mutates them in place
@@ -37,7 +38,7 @@ type RethemeCtx = {
   escMenu: { isOpen(): boolean; renderMenuContent(): void };
   fileMenuIsOpen(): boolean;
   renderFileMenu(): void;
-  setStatusMsg(msg: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   // side-effect hook for non-visual config consumers (undo journal sync).
   // Runs at the end of every applyConfig — optional so tests stay light.
   onConfigApplied?(): void;
@@ -226,7 +227,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         const fresh = loadConfig();
         if (JSON.stringify(fresh) === lastSavedSig) return;
         applyConfig(fresh);
-        ctx.setStatusMsg("config reloaded");
+        ctx.notify("config reloaded", "config", "success");
       } catch {}
     });
     const watcher = watch(path.dirname(cfgPath), (_event, filename) => {

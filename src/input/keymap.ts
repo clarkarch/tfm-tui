@@ -15,6 +15,7 @@ import type { KeyAction } from "../config/config-schema";
 import { KEY_SCHEMA, keyMatch, parseKeySpec } from "../config/config-schema";
 import type { Command } from "../lib/command";
 import { invokeIsolated } from "../lib/uiutil";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { Selection } from "./selection";
 import { TileVisual } from "./grid-input";
 
@@ -127,7 +128,7 @@ export type KeyRouterCtx = {
   duplicate(paths: string[]): void;
   isVirtualCwd(): boolean;
   pasteSmart(dir: string): void;
-  setStatusMsg(msg: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   undoLast(): void;
   redoLast(): void;
   // plugin commands with effective binds (live read: remaps apply instantly).
@@ -259,12 +260,12 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return true;
     }
     // embedded terminal owns the keyboard while focused — everything below is
-    // host UI. Say so on the status bar (once per focus visit, not per key)
-    // instead of dead-ending silently: users otherwise think the app hung.
+    // host UI. Toast once per focus visit, not per key, instead of
+    // dead-ending silently: users otherwise think the app hung.
     if (ctx.termOwnsKeyboard()) {
       if (!termHintShown) {
         termHintShown = true;
-        ctx.setStatusMsg("Terminal owns keyboard — click the grid to leave");
+        ctx.notify("Terminal owns keyboard — click the grid to leave", "terminal", "info");
       }
       return true;
     }
@@ -561,7 +562,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (!selected.length) return;
     // no fs destination in virtual views (cwd is a URI), no duplicate in trash
     if (ctx.isVirtualCwd() || ctx.inTrashView()) {
-      ctx.setStatusMsg("Can't duplicate here");
+      ctx.notify("Can't duplicate here", "duplicate", "error");
       return;
     }
     ctx.duplicate(selected.map((s) => s.path));
@@ -574,7 +575,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // virtual views and the trash aren't paste targets — say so instead of
     // swallowing the key (pasteSmart itself guards Trash/files too)
     if (ctx.isVirtualCwd() || ctx.inTrashView()) {
-      ctx.setStatusMsg("Can't paste here");
+      ctx.notify("Can't paste here", "paste", "error");
       return;
     }
     ctx.pasteSmart(ctx.state.cwd);

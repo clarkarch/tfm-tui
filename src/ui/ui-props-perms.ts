@@ -7,6 +7,7 @@ import type { Theme } from "../config/config";
 import { idName, permWords } from "../fs/propsinfo";
 import { fsErrText } from "../fs/fsutil";
 import type { ListEntry } from "./ui-menu";
+import type { NotifyLevel } from "../lib/notify-level";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
 // class row to pick access (cursor popup via openContextMenu), the checkbox
@@ -21,7 +22,7 @@ type PermsCtx = {
   setOnId(id: string, fn: (n: any) => void): void;
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   closeFileMenu(): void;
-  setStatusMsg(msg: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   uiStyle(): UiStyle;
   colors(): Theme;
   makeIconSlot(
@@ -63,10 +64,9 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
     try {
       await chmod(targetPath, nm);
     } catch (err) {
-      // status-only like the other panel-local failures: a toast would fight
-      // the open properties panel, but the reason still shows (was bare
-      // "chmod failed" with no reason)
-      ctx.setStatusMsg(`Chmod failed (${fsErrText(err)})`);
+      // one toast, not a status write: toasts are non-modal chrome above the
+      // dialog (same stack as the progress toast), so nothing fights
+      ctx.notify(`Chmod failed (${fsErrText(err)})`, "permissions", "error");
       return;
     }
     try {

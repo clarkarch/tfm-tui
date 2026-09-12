@@ -1,6 +1,7 @@
 import path from "node:path";
 import { readdir } from "node:fs/promises";
 import { gvfsRoot, parseGvfsName, parseServerInput } from "./network";
+import type { NotifyLevel } from "../lib/notify-level";
 
 // --- Network location orchestration: connect/disconnect through `gio mount`
 // and enumerate active gvfs mounts. All process/fs access is injected (sink),
@@ -16,8 +17,7 @@ export type NetworkSink = {
   mount(uri: string): Promise<GioResult>;
   unmount(uri: string): Promise<GioResult>;
   readdir(dir: string): Promise<string[]>;
-  setStatus(msg: string): void;
-  notify(msg: string, title?: string): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   log?(msg: string): void;
 };
 
@@ -90,7 +90,7 @@ export const makeNetworkActions = (sink: NetworkSink) => {
   const connect = async (raw: string): Promise<string | null> => {
     const parsed = parseServerInput(raw);
     if (!parsed) {
-      sink.setStatus("Unsupported server address");
+      sink.notify("Unsupported server address", "network", "error");
       return null;
     }
     const before = new Set(await readNames());
@@ -98,23 +98,23 @@ export const makeNetworkActions = (sink: NetworkSink) => {
     try {
       res = await sink.mount(parsed.uri);
     } catch (err) {
-      sink.notify(`Connect failed: ${errMessage(err)}`, "network");
+      sink.notify(`Connect failed: ${errMessage(err)}`, "network", "error");
       return null;
     }
     if (res.code !== 0) {
       const why = lastLine(res.stderr) || lastLine(res.stdout) || "unknown error";
-      sink.notify(`Connect failed: ${why}`, "network");
+      sink.notify(`Connect failed: ${why}`, "network", "error");
       sink.log?.(`gio mount ${parsed.uri} exit ${res.code}: ${why}`);
       return null;
     }
     const name = await resolveName(parsed.uri, before);
     if (!name) {
-      sink.setStatus(`Connected to ${parsed.label} (mount path not found)`);
+      sink.notify(`Connected to ${parsed.label} (mount path not found)`, "network", "error");
       return null;
     }
     const mountPath = path.join(sink.gvfsRoot(), name);
     uriByPath.set(mountPath, parsed.uri);
-    sink.notify(`Connected to ${parsed.label}`, "network");
+    sink.notify(`Connected to ${parsed.label}`, "network", "success");
     return mountPath;
   };
 
@@ -122,24 +122,24 @@ export const makeNetworkActions = (sink: NetworkSink) => {
     const name = path.basename(mountPath);
     const uri = uriByPath.get(mountPath) ?? fallbackUri ?? parseGvfsName(name)?.uri;
     if (!uri) {
-      sink.setStatus("Can't determine the mount to disconnect");
+      sink.notify("Can't determine the mount to disconnect", "network", "error");
       return false;
     }
     let res: GioResult;
     try {
       res = await sink.unmount(uri);
     } catch (err) {
-      sink.notify(`Disconnect failed: ${errMessage(err)}`, "network");
+      sink.notify(`Disconnect failed: ${errMessage(err)}`, "network", "error");
       return false;
     }
     if (res.code !== 0) {
       const why = lastLine(res.stderr) || lastLine(res.stdout) || "unknown error";
-      sink.notify(`Disconnect failed: ${why}`, "network");
+      sink.notify(`Disconnect failed: ${why}`, "network", "error");
       sink.log?.(`gio mount -u ${uri} exit ${res.code}: ${why}`);
       return false;
     }
     uriByPath.delete(mountPath);
-    sink.notify(`Disconnected ${parseGvfsName(name)?.label ?? uri}`, "network");
+    sink.notify(`Disconnected ${parseGvfsName(name)?.label ?? uri}`, "network", "success");
     return true;
   };
 

@@ -136,10 +136,12 @@ export const extractPlan = (
       tool: "tar",
       args: ["-x", "-v", ...def.filter, "-f", file, "-C", destDir, "--no-same-owner"],
     };
-  if (def.kind === "7z") return { tool: "7z", args: ["x", "-y", `-o${destDir}`, file] };
+  // -bb1: one line per entry — plain `7z x` emits a fixed header no matter
+  // the entry count, freezing the file-count bar at 0 (same class as tar -v)
+  if (def.kind === "7z") return { tool: "7z", args: ["x", "-bb1", "-y", `-o${destDir}`, file] };
   return zipExtractTool(which) === "unzip"
     ? { tool: "unzip", args: ["-o", file, "-d", destDir] }
-    : { tool: "7z", args: ["x", "-y", `-o${destDir}`, file] };
+    : { tool: "7z", args: ["x", "-bb1", "-y", `-o${destDir}`, file] };
 };
 
 export const listArgs = (fmt: ArchiveFormat, file: string, which: WhichFn = Bun.which): string[] => {
@@ -166,11 +168,13 @@ export const compressPlan = (
   // --files-from=…): tar/7z get an explicit `--`, zip an escaped "./" operand
   if (def.kind === "tar")
     return { tool: "tar", args: ["-c", ...def.filter, "-v", "-f", outFile, "-C", parent, "--", ...names] };
-  if (def.kind === "7z") return { tool: "7z", args: ["a", "-t7z", "-y", outFile, "--", ...names] };
+  // -bb1: one `+ name` line per added file — `zip -r` is chatty by default
+  // but 7z is not, and without it the file-count bar never advances
+  if (def.kind === "7z") return { tool: "7z", args: ["a", "-bb1", "-t7z", "-y", outFile, "--", ...names] };
   const zipNames = names.map((n) => (n.startsWith("-") ? `./${n}` : n));
   return zipCreateTool(which) === "zip"
     ? { tool: "zip", args: ["-r", outFile, ...zipNames] }
-    : { tool: "7z", args: ["a", "-tzip", "-y", outFile, "--", ...zipNames] };
+    : { tool: "7z", args: ["a", "-bb1", "-tzip", "-y", outFile, "--", ...zipNames] };
 };
 
 export const availableCompressionFormats = (which: WhichFn = Bun.which): CompressionFormat[] =>
