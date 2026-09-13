@@ -185,7 +185,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       if (SPECIAL_UI_PROPS.has(row.prop)) continue;
       const built = schemaRow(row);
       // these change the PANEL's own colors (or its icons) — their adjust must re-render it
-      if (row.prop === "uiStyle" || row.prop === "transparentBg" || row.prop === "transparentIcons") {
+      if (row.prop === "uiStyle" || row.prop === "transparentBg" || row.prop === "icons") {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }
       rows.push(built);

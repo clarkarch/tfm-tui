@@ -376,9 +376,9 @@ describe("generic schema rows", () => {
     expect(h.config.ui.uiStyle).toBe("outline-partial");
   });
 
-  test("panel-repainting rows are flagged (theme / ui style / transparent bg / transparent icons)", () => {
+  test("panel-repainting rows are flagged (theme / ui style / transparent bg / icons)", () => {
     const h = mk();
-    for (const label of ["theme", "ui style", "transparent bg", "transparent icons"]) {
+    for (const label of ["theme", "ui style", "transparent bg", "icons"]) {
       const row = h.byLabel(label);
       expect("repaint" in row && row.repaint).toBe(true);
     }

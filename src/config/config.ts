@@ -10,7 +10,7 @@ import { atomicWriteFile } from "../fs/fsutil";
 import { parseConfigDoc, serializeConfig, type Config } from "./config-schema";
 
 export { defaultConfig } from "./config-schema";
-export type { Config, Theme, UiConfig } from "./config-schema";
+export type { Config, Theme, UiConfig, IconMode } from "./config-schema";
 
 export function configPath(): string {
   if (process.env.TFM_CONFIG) return process.env.TFM_CONFIG;

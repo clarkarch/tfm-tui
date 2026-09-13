@@ -9,8 +9,8 @@
 
 import { Box, ImageRenderable, Text } from "@opentui/core";
 import { iconPng, thumbPng } from "./icons";
-import type { Theme } from "../config/config";
-import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
+import type { IconMode, Theme } from "../config/config";
+import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
 
 export type IconState = { fg: string; bg: string };
 
@@ -69,8 +69,8 @@ export type SlotsCtx = {
   // live theme — always read through the getter, never captured
   colors(): Theme;
   uiStyle(): string;
-  // [ui] transparent-icons — read live like uiStyle (toggle re-rasters)
-  iconsTransparent(): boolean;
+  // [ui] icons — read live like uiStyle (mode flip re-rasters)
+  iconsMode(): IconMode;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
   // true while a modal menu/scrim owns the screen (drain re-applies scrim)
@@ -231,6 +231,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
     idPrefix = "s",
   ) => {
     const { cellW, cellH } = cellMetrics();
+    // `transparent` = raster keeps alpha; strip it inside floating layers in
+    // partial mode so an opaque island can't blend the desktop through.
+    const transparent = iconTransparent(ctx.iconsMode(), isFloatChild(ctx.byId(slotId)));
     const imgs: any[] = [];
     for (let si = 0; si < states.length; si++) {
       try {
@@ -243,7 +246,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
           Math.max(1, Math.round(heightCells * cellH)),
           // bg arrives ignored in transparent mode (the key drops it, so all
           // states share one raster) — kept in the signature for call-site compat
-          { transparent: ctx.iconsTransparent() },
+          { transparent },
         );
         const img = new ImageRenderable(ctx.renderer(), {
           id: `${slotId}-${idPrefix}${si}`,
@@ -320,9 +323,20 @@ export const makeSlots = (ctx: SlotsCtx) => {
     if (ctx.modalOpen()) setScrim(true);
   };
 
-  // Slots INSIDE a modal (menu rows, context menus, prompts) sit above the
-  // scrim and keep their crisp rasters.
-  const MODAL_ROOT_IDS = new Set(["tfm-menu", "tfm-filemenu", "tfm-filemenu-sub", "tfm-prompt"]);
+  // Slots INSIDE a floating layer (menu rows, dialogs, prompts) sit above the
+  // scrim and keep their crisp rasters; `transparent-partial` also uses this to
+  // keep their rasters opaque over the float's solid fill.
+  const FLOAT_ROOT_IDS = new Set([
+    "tfm-menu",
+    "tfm-filemenu",
+    "tfm-filemenu-sub",
+    "tfm-prompt",
+    "tfm-props",
+    "tfm-conflict",
+    "tfm-yesno",
+    "tfm-pick",
+    "tfm-bulkrename",
+  ]);
 
   // mounted icon-slot nodes: heterogeneous OpenTUI renderables (byId
   // returns any by design — see ./ui-lookup), narrowed structurally here
@@ -334,10 +348,10 @@ export const makeSlots = (ctx: SlotsCtx) => {
     getChildren?: () => Iterable<SlotNode>;
   };
 
-  const isModalChild = (slot: SlotNode | null | undefined): boolean => {
+  const isFloatChild = (slot: SlotNode | null | undefined): boolean => {
     let cur: SlotNode | null | undefined = slot?.parent;
     while (cur) {
-      if (typeof cur.id === "string" && MODAL_ROOT_IDS.has(cur.id)) return true;
+      if (typeof cur.id === "string" && FLOAT_ROOT_IDS.has(cur.id)) return true;
       cur = cur.parent;
     }
     return false;
@@ -347,7 +361,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     for (const spec of allSpecs.values()) {
       const slot: SlotNode | null = ctx.byId(spec.slotId);
       if (!slot) continue;
-      if (on && isModalChild(slot)) continue;
+      if (on && isFloatChild(slot)) continue;
       const kids = [...(slot.getChildren?.() ?? [])];
       const glyphNode = kids.find((k) => k.id === `${spec.slotId}-g`);
       if (!glyphNode) continue;

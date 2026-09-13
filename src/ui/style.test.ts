@@ -4,6 +4,7 @@ import {
   btnSurface,
   chromeSurface,
   floatSurface,
+  iconTransparent,
   rowSurface,
   sideInnerWidth,
   slotBg,
@@ -86,6 +87,20 @@ describe("surface builders", () => {
     expect(rowSurface("outline-partial", theme, "rest")).toEqual(rowSurface("outline", theme, "rest"));
     expect(btnSurface("outline-partial", theme, false)).toEqual(btnSurface("outline", theme, false));
     expect(slotBg("outline-partial", theme, theme.sidebarBg)).toBe(slotBg("outline", theme, theme.sidebarBg));
+  });
+});
+
+describe("iconTransparent", () => {
+  test("opaque never keeps alpha; transparent always does", () => {
+    expect(iconTransparent("opaque", false)).toBe(false);
+    expect(iconTransparent("opaque", true)).toBe(false);
+    expect(iconTransparent("transparent", false)).toBe(true);
+    expect(iconTransparent("transparent", true)).toBe(true);
+  });
+
+  test("transparent-partial flattens only inside floating layers", () => {
+    expect(iconTransparent("transparent-partial", false)).toBe(true);
+    expect(iconTransparent("transparent-partial", true)).toBe(false);
   });
 });
 

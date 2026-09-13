@@ -56,10 +56,16 @@ describe("parseConfigDoc", () => {
     expect(cfg.keys.quit).toEqual(["ctrl+q"]);
   });
 
-  test("transparent-icons defaults off, parses when set", () => {
-    expect(parseConfigDoc(undefined).ui.transparentIcons).toBe(false);
-    expect(parseConfigDoc({ ui: { "transparent-icons": true } }).ui.transparentIcons).toBe(true);
-    expect(parseConfigDoc({ ui: { "transparent-icons": "yes" } }).ui.transparentIcons).toBe(false);
+  test("icons defaults to opaque, parses the mode enum", () => {
+    expect(parseConfigDoc(undefined).ui.icons).toBe("opaque");
+    expect(parseConfigDoc({ ui: { icons: "transparent" } }).ui.icons).toBe("transparent");
+    expect(parseConfigDoc({ ui: { icons: "transparent-partial" } }).ui.icons).toBe("transparent-partial");
+    expect(parseConfigDoc({ ui: { icons: "yes" } }).ui.icons).toBe("opaque");
+  });
+
+  test("icons accepts the legacy boolean form", () => {
+    expect(parseConfigDoc({ ui: { icons: true } }).ui.icons).toBe("transparent");
+    expect(parseConfigDoc({ ui: { icons: false } }).ui.icons).toBe("opaque");
   });
 
   test("round-trip: serialize -> parse -> identical config", () => {

@@ -23,7 +23,7 @@ const makeHarness = () => {
     clearChildren: () => {},
     colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
     uiStyle: () => "solid",
-    iconsTransparent: () => false,
+    iconsMode: () => "opaque",
     iconCells: () => 3,
     modalOpen: () => modalUp,
     glyphFor: () => "F",

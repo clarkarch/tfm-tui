@@ -46,6 +46,13 @@ type ViewMode = "grid" | "list";
 // painting decisions live in ./style (the surface seam), which re-exports this.
 export type UiStyle = "solid" | "outline" | "outline-partial";
 
+// icon-raster mode. `opaque` flattens every icon onto its surface bg
+// (default); `transparent` keeps alpha everywhere (may fringe on some
+// terminals); `transparent-partial` keeps alpha except inside FLOATING layers
+// (menus/dialogs), whose rasters flatten so an opaque island never blends the
+// desktop through.
+export type IconMode = "opaque" | "transparent" | "transparent-partial";
+
 export type UiConfig = {
   sidebarWidth: number;
   tileWidth: number;
@@ -70,7 +77,7 @@ export type UiConfig = {
   restoreSession: boolean;
   persistUndo: boolean;
   transparentBg: boolean;
-  transparentIcons: boolean;
+  icons: IconMode;
   sidebarTitle: boolean;
   uiStyle: UiStyle;
   tabBar: boolean;
@@ -403,13 +410,14 @@ const UI_ROWS: SchemaRow[] = [
     group: "appearance",
   },
   {
-    kind: "bool",
+    kind: "enum",
     section: "ui",
-    tomlKey: "transparent-icons",
-    prop: "transparentIcons",
-    def: false,
-    doc: "true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)",
-    label: "transparent icons",
+    tomlKey: "icons",
+    prop: "icons",
+    values: ["opaque", "transparent", "transparent-partial"],
+    def: "opaque",
+    doc: '"opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs',
+    label: "icons",
     group: "appearance",
   },
   {
@@ -768,6 +776,8 @@ const coerceRow = (row: SchemaRow, raw: unknown): { ok: boolean; value: unknown 
     case "bool":
       return typeof raw === "boolean" ? { ok: true, value: raw } : { ok: false, value: row.def };
     case "enum":
+      // legacy boolean form: `icons = true` meant the old `transparent`
+      if (row.prop === "icons" && typeof raw === "boolean") return { ok: true, value: raw ? "transparent" : "opaque" };
       return typeof raw === "string" && (row.values as readonly string[]).includes(raw)
         ? { ok: true, value: raw }
         : { ok: false, value: row.def };

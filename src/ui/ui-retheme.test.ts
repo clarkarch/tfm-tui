@@ -169,11 +169,11 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
-  test("transparent-icons flip invalidates the raster caches (icons re-raster)", () => {
+  test("icons mode flip invalidates the raster caches (icons re-raster)", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
-    fresh.ui.transparentIcons = true;
+    fresh.ui.icons = "transparent";
     retheme.applyConfig(fresh);
     expect(ctx.calls.clearIconCaches).toBe(1);
     expect(ctx.calls.resetIconQueue).toBe(1);

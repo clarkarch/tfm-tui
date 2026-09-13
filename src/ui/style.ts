@@ -13,9 +13,15 @@
 //   a live grid or a transparent terminal bg.
 //   - input fields keep their fill in all modes (InputRenderable extends
 //     TextareaRenderable and has no border support)
-import type { Theme, UiStyle } from "../config/config-schema";
+import type { IconMode, Theme, UiStyle } from "../config/config-schema";
 
 export type { UiStyle };
+
+// icon raster transparency: opaque never keeps alpha, transparent always does,
+// partial only OUTSIDE floating layers (floatChild = slot lives in a
+// menu/dialog, painted over an opaque island).
+export const iconTransparent = (mode: IconMode, floatChild: boolean): boolean =>
+  mode === "transparent" || (mode === "transparent-partial" && !floatChild);
 
 // outline-partial shares every BACKGROUND-chrome decision with outline —
 // only floating layers differ (floatSurface below). Branch background-chrome
@@ -83,8 +89,8 @@ export const btnSurface = (style: UiStyle, c: Theme, hovered: boolean, restBg?: 
 
 // raster slots flatten icons onto a bg hex; outline-variant rest states sit on
 // the canvas, so the flatten target must be canvas bg instead of panel bg.
-// Ignored when [ui] transparent-icons is on (the raster keeps its alpha and
-// the key drops bg) — kept in IconState for call-site compat.
+// Ignored when [ui] icons is "transparent" (raster keeps alpha, key drops bg) —
+// kept in IconState for call-site compat.
 export const slotBg = (style: UiStyle, c: Theme, panelBg: string): string => (isOutlineVariant(style) ? c.bg : panelBg);
 
 // post-mutation of real renderables (findDescendantById results). "transparent"

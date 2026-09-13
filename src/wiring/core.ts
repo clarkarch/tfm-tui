@@ -82,7 +82,7 @@ export const wireCore = (deps: {
     clearChildren,
     colors: themeGet,
     uiStyle: () => config.ui.uiStyle,
-    iconsTransparent: () => config.ui.transparentIcons,
+    iconsMode: () => config.ui.icons,
     iconCells: () => geometry.iconCells,
     modalOpen: () => floats.isOpen("escmenu"),
     glyphFor,

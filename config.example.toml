@@ -28,7 +28,7 @@ double-click-ms         = 400       # 100..2000
 toast-duration-ms       = 3000      # how long notifications stay up, 1000..10000
 drag-threshold-cells    = 1         # cells of movement before a press becomes a drag, 1..5
 transparent-bg          = false     # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
-transparent-icons       = false     # true = rasterized icons keep transparency instead of flattening onto the tile bg (may fringe on some terminals); false = flatten (default)
+icons                   = "opaque"  # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
 sidebar-title           = true      # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 tab-bar                 = false     # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 ui-style                = "solid"   # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels

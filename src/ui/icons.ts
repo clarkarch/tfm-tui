@@ -91,7 +91,7 @@ const rasterizeSvg = async (
 
   // transparent mode omits --background-color entirely (its default is none =
   // keep alpha); the flattened path bakes bg in because kitty alpha on icon
-  // rasters proved unreliable (tint/fringe) — see [ui] transparent-icons
+  // rasters proved unreliable (tint/fringe) — see [ui] icons
   const args = transparent
     ? ["-w", String(pxW), "-h", String(pxH)]
     : ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)];
