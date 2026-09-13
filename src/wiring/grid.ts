@@ -377,16 +377,6 @@ export const wireGrid = (deps: {
       });
     },
     sortState: state,
-    dualPane: () => core.config.ui.dualPane,
-    transferToOtherPane: (op, paths) => {
-      if (!paths.length) return;
-      const dest = core.otherState().cwd;
-      if (core.isVirtualCwd() || isVirtualUri(dest) || isTrashFilesDir(dest)) {
-        chrome.notify(`Can't ${op} to the other pane`, op, "error");
-        return;
-      }
-      void fileops.fileops.runTransfer(op, dest, paths, `${op} to other pane`);
-    },
     plugins: () => plugins.plugins,
     onPluginError: (name, err) => {
       const msg = `plugin ${name} failed: ${err instanceof Error ? err.message : err}`;

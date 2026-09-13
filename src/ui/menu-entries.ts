@@ -49,10 +49,6 @@ export type MenuEntriesCtx = {
   openProperties(p: string | string[]): void;
   selectAll(): void;
   cwd(): string;
-  // dual pane: when on, the file menu offers copy/move into the other pane's
-  // directory. Optional so single-pane fakes / tests skip the rows.
-  dualPane?(): boolean;
-  transferToOtherPane?(op: "copy" | "move", paths: string[]): void;
   // archive ops + host-gated availability (src/fs/archive via the wiring).
   // canExtract decides the per-target entry; compressTo opens the floating
   // format picker; compressionFormats only gates whether the row shows at all.
@@ -423,32 +419,6 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           ctx.duplicate(targets.map((t) => t.path));
         },
       },
-      ...(ctx.dualPane?.()
-        ? ([
-            {
-              icon: "content-copy",
-              label: `Copy${nSuffix} to other pane`,
-              action: () => {
-                ctx.closeFileMenu();
-                ctx.transferToOtherPane?.(
-                  "copy",
-                  targets.map((t) => t.path),
-                );
-              },
-            },
-            {
-              icon: "content-cut",
-              label: `Move${nSuffix} to other pane`,
-              action: () => {
-                ctx.closeFileMenu();
-                ctx.transferToOtherPane?.(
-                  "move",
-                  targets.map((t) => t.path),
-                );
-              },
-            },
-          ] satisfies ListEntry[])
-        : []),
       ...(isDir
         ? [
             {
