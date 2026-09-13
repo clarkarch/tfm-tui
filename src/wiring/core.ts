@@ -10,7 +10,7 @@ import os from "node:os";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
-import { applySurface, paneSurface, sideInnerWidth } from "../ui/style";
+import { applySurface, sideInnerWidth } from "../ui/style";
 import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
@@ -134,16 +134,16 @@ export const wireCore = (deps: {
   // live internal clipboard, created later by the fileops wiring. ---
   const isCutKey = (key: string): boolean => isCutKeyFor(deps.clipboard(), key);
 
-  // --- Active-pane cue: the active pane keeps the main bg, the other dims to
-  // the sidebar surface. Cheap (two node writes); called from renderAll so it
-  // tracks focus/tab/theme changes. No-op before the boot layout exists. ---
+  // --- Dual-pane focus cue: no per-pane background. Tinting the inactive pane
+  // (sidebarBg) fought the tiles/empty states, which paint the main bg, giving
+  // a patchwork in solid mode. Clear any stale fill instead; focus reads from
+  // the selection, preview and divider. No-op before the boot layout exists. ---
   const refreshPaneFocus = (): void => {
     for (const i of [0, 1] as const) {
       const node = lookup.byId(`tfm-pane-col-${i}`);
       if (!node) continue;
-      const active = panes.active === i;
       try {
-        applySurface(node, paneSurface(config.ui.uiStyle, colors, active));
+        applySurface(node, {});
       } catch {}
     }
   };

@@ -47,11 +47,9 @@ export const chromeSurface = (style: UiStyle, c: Theme, bg: string): SurfaceOpts
 export const floatSurface = (style: UiStyle, c: Theme, bg: string): SurfaceOpts =>
   style === "outline" ? { border: true, borderStyle: "rounded", borderColor: c.border } : { backgroundColor: bg };
 
-// dual-pane focus cue: the inactive pane dims to the sidebar surface. FILL ONLY
-// — a border ring per pane would reserve 2 cells and fight the column math, and
-// outline variants carry no rest-state fills at all, so the cue is solid-only.
-export const paneSurface = (style: UiStyle, c: Theme, active: boolean): SurfaceOpts =>
-  isOutlineVariant(style) ? {} : { backgroundColor: active ? c.bg : c.sidebarBg };
+// dual-pane focus cue: NONE. A tinted inactive pane (sidebarBg) painted over
+// the main bg while that pane's tiles/empty states paint the main bg produced a
+// patchwork in solid mode; focus is shown by the selection and the divider.
 
 // grid tiles: rest goes bare in outline variants, interaction states keep fills
 export const tileSurface = (style: UiStyle, c: Theme, state: SurfaceState): SurfaceOpts => {
