@@ -95,6 +95,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // signature of the last painted tile set — an unchanged pane skips the
   // clear+rebuild (renderAll repaints both panes on any navigation)
   let lastSig = "";
+  // Animation gate: rebuilds also fire for pure layout/geometry changes (hover
+  // drawer collapse, dual-pane toggle, resize, theme flip) which must NOT replay
+  // the entry animation — the tiles rebuilt for the same files, they didn't
+  // appear. Only a content change (cwd/list/query/sort/view) animates.
+  let lastContentSig: string | null = null;
   // in-flight recursive search; a newer render aborts it so stale keystroke
   // walks don't keep eating disk while a fresh query runs
   let searchAbort: AbortController | null = null;
@@ -403,6 +408,20 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         ctx.colors(),
         typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
       ]);
+    // content-only signature: what the animation keys off (the listed files +
+    // how they're shown), WITHOUT geometry/theme — layout-only rebuilds keep it
+    const contentSigOf = (list: Entry[] | string): string =>
+      JSON.stringify([
+        state.cwd,
+        state.showHidden,
+        state.sortBy,
+        state.sortAsc,
+        ctx.viewMode(),
+        ctx.wordWrap(),
+        q,
+        recursive,
+        typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
+      ]);
     let allEntries: Entry[];
     try {
       if (recursive) {
@@ -435,6 +454,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         `can't open this folder (${fsErrText(err)})`,
         ctx.pathEditMode() ? "" : "edit the path above to go elsewhere",
       ]);
+      lastContentSig = contentSigOf(`err:${fsErrText(err)}`);
       ctx.stripSelectable();
       // no tiles to navigate: clear the old listing's nav geometry or arrows
       // consume keys against a phantom list (focusKeys still holds the previous
@@ -466,6 +486,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
               ? "nothing starred yet"
               : "this folder is empty",
       ]);
+      lastContentSig = contentSigOf("empty");
       // no tiles to navigate: drop the previous listing's focusKeys/cols/rowH
       selection.setFocusKeys([]);
       selection.setCols(1);
@@ -552,11 +573,19 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     }
     selection.updateSelectionStatusReal();
     // animate the new tiles in (tileRefs is in display order); the animator
-    // reads [ui] file-animation live and snaps everything to rest when off
+    // reads [ui] file-animation live and snaps everything to rest when off.
+    // Only a CONTENT change animates — a layout-only rebuild (hover drawer,
+    // dual-pane toggle, resize, theme flip) rebuilt the same files and must
+    // not replay it.
     if (gen === gridGen) {
-      try {
-        ctx.fileAnim({ tiles: [...selection.tileRefs.values()].map((r) => r.tileId), inner: innerId });
-      } catch {}
+      const contentSig = contentSigOf(entries);
+      const contentChanged = lastContentSig !== null && contentSig !== lastContentSig;
+      lastContentSig = contentSig;
+      if (contentChanged) {
+        try {
+          ctx.fileAnim({ tiles: [...selection.tileRefs.values()].map((r) => r.tileId), inner: innerId });
+        } catch {}
+      }
     }
   };
 

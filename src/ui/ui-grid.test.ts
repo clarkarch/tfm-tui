@@ -222,6 +222,26 @@ describe("renderGrid (grid tiles)", () => {
     gridState.sortAsc = true;
   });
 
+  test("a layout-only rebuild (dual-pane toggle / hover drawer width) does NOT replay the animation", async () => {
+    gridState.sortAsc = true; // known content state; baseline the content sig
+    await renderGrid();
+    fileAnimCalls = [];
+    // geometry change rebuilds (col math moves) but the CONTENT signature is
+    // unchanged, so the sink gets stops only, never a play
+    availWSet = 30;
+    await renderGrid();
+    expect(selection.colsAtBuild()).toBe(2); // the rebuild really happened
+    expect(fileAnimCalls.at(-1)!.tiles).toEqual([]); // stop, no play
+    availWSet = null;
+
+    // a real content change afterwards still animates
+    gridState.sortAsc = false;
+    await renderGrid();
+    const play = fileAnimCalls.at(-1)!;
+    expect(play.tiles.length).toBeGreaterThan(0);
+    gridState.sortAsc = true;
+  });
+
   test("hides dotfiles unless showHidden is on", async () => {
     writeFileSync(path.join(tmp, ".secret"), "x");
     await renderGrid();
