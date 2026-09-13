@@ -302,9 +302,15 @@ export const wireRetheme = (deps: {
     clearIconCaches,
     resetIconQueue: () => core.slots.resetIconQueue(),
     syncTerminalTheme: fileops.terminal.syncTerminalTheme,
-    repaintButtons: chrome.toolbar.repaintButtons,
-    renderCrumbs: chrome.toolbar.renderCrumbs,
-    refreshNav: chrome.toolbar.refreshNav,
+    repaintButtons: () => {
+      for (const t of chrome.toolbars) t.repaintButtons();
+    },
+    renderCrumbs: () => {
+      for (const t of chrome.toolbars) t.renderCrumbs();
+    },
+    refreshNav: () => {
+      for (const t of chrome.toolbars) t.refreshNav();
+    },
     escMenu: settings.escMenu,
     fileMenuIsOpen: chrome.menu.isFileMenuOpen,
     renderFileMenu: chrome.menu.renderFileMenu,
@@ -323,6 +329,12 @@ export const wireRetheme = (deps: {
           theme: core.config.theme,
         });
       } catch {}
+    },
+    normalizePanes: () => {
+      if (!core.config.ui.dualPane && core.panes.active !== 0) {
+        core.setActivePane(0);
+        core.refreshPaneFocus();
+      }
     },
   });
 

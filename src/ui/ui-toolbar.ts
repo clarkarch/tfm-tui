@@ -26,6 +26,9 @@ type MakeIconSlotFn = (
 ) => { spec: IconSpec; el: any };
 
 type ToolbarCtx = {
+  // per-pane id prefix ("tfm-p0-"/"tfm-p1-") — dual pane builds one toolbar
+  // instance per pane, so every node id must be unique across the registry
+  prefix: string;
   renderer(): any;
   byId(id: string): any;
   clearChildren(node: unknown): void;
@@ -37,6 +40,8 @@ type ToolbarCtx = {
   setIconState(spec: IconSpec, index: number): void;
   closeFileMenu(): void;
   blurTerminal(): void;
+  // focus this toolbar's pane on any press (deferred: grid wires after chrome)
+  focusPane?(): void;
   navigate(dir: string): void;
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   canBack(): boolean;
@@ -63,23 +68,27 @@ export const isNavigableTarget = (target: string): boolean => {
 
 export const makeToolbar = (ctx: ToolbarCtx) => {
   const { makeIconSlot, setIconState } = ctx;
+  // every node id in this pane's toolbar is namespaced so two instances can
+  // coexist in the global renderable registry
+  const id = (name: string): string => `${ctx.prefix}${name}`;
 
   // --- nav buttons: 4 baked rasters each (enabled/disabled × normal/hover;
   // bg baked into the png so the wrapper box bg must swap in lockstep) ---
-  const navSpecs: Record<"tfm-nav-back" | "tfm-nav-fwd", IconSpec | undefined> = {
-    "tfm-nav-back": undefined,
-    "tfm-nav-fwd": undefined,
+  const navSpecs: Record<string, IconSpec | undefined> = {
+    [id("nav-back")]: undefined,
+    [id("nav-fwd")]: undefined,
   };
   const navHover: Record<string, boolean> = {};
 
-  const navBtnBg = (id: string) => {
+  const navBtnBg = (btnId: string) => {
     try {
-      const n: any = ctx.byId(id);
-      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[id]));
+      const n: any = ctx.byId(btnId);
+      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
     } catch {}
   };
 
-  const makeNavButton = (id: "tfm-nav-back" | "tfm-nav-fwd", iconName: string, onActivate: () => void) => {
+  const makeNavButton = (key: "nav-back" | "nav-fwd", iconName: string, onActivate: () => void) => {
+    const btnId = id(key);
     const states = (): IconState[] => [
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().bg },
       { fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().bg },
@@ -87,24 +96,25 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       { fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().hoverBg },
     ];
     const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
-    navSpecs[id] = slot.spec;
+    navSpecs[btnId] = slot.spec;
     return Box(
       {
-        id,
+        id: btnId,
         height: 1,
         width: 3,
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
         onMouseDown: () => {
+          ctx.focusPane?.();
           ctx.closeFileMenu();
           onActivate();
         },
         onMouseOver: () => {
-          navHover[id] = true;
+          navHover[btnId] = true;
           refreshNav();
         },
         onMouseOut: () => {
-          navHover[id] = false;
+          navHover[btnId] = false;
           refreshNav();
         },
       },
@@ -113,21 +123,23 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   };
 
   const refreshNav = () => {
-    const setBtn = (id: string, spec: IconSpec | undefined, on: boolean) => {
+    const setBtn = (btnId: string, on: boolean) => {
+      const spec = navSpecs[btnId];
       if (!spec) return;
-      setIconState(spec, navIconState(on, !!navHover[id]));
-      navBtnBg(id);
+      setIconState(spec, navIconState(on, !!navHover[btnId]));
+      navBtnBg(btnId);
     };
-    setBtn("tfm-nav-back", navSpecs["tfm-nav-back"], ctx.canBack());
-    setBtn("tfm-nav-fwd", navSpecs["tfm-nav-fwd"], ctx.canFwd());
+    setBtn(id("nav-back"), ctx.canBack());
+    setBtn(id("nav-fwd"), ctx.canFwd());
   };
 
   // retheme helper: box bg must track the new palette between raster swaps
   const repaintButtons = (): void => {
-    for (const id of ["tfm-nav-back", "tfm-nav-fwd", "tfm-search-btn", "tfm-sort-btn"]) {
+    for (const key of ["nav-back", "nav-fwd", "search-btn", "sort-btn"]) {
+      const btnId = id(key);
       try {
-        const n: any = ctx.byId(id);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[id]));
+        const n: any = ctx.byId(btnId);
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
       } catch {}
     }
   };
@@ -152,17 +164,17 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   };
 
   const renderCrumbs = () => {
-    const box: any = ctx.byId("tfm-crumbs");
+    const box: any = ctx.byId(id("crumbs"));
     if (!box) return;
 
     if (pathEditMode) {
       ctx.clearChildren(box);
-      let input: any = ctx.byId("tfm-path-input");
+      let input: any = ctx.byId(id("path-input"));
       if (!input) {
         // real class instance: proxied composition nodes don't mount under an
         // already-mounted parent
         input = new InputRenderable(ctx.renderer(), {
-          id: "tfm-path-input",
+          id: id("path-input"),
           flexGrow: 1,
           value: isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()),
           backgroundColor: ctx.colors().accentBg,
@@ -250,13 +262,13 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       const paintHover = (on: boolean) => {
         if (iconSlot && !current) setIconState(iconSlot.spec, toggleIconState(on, false));
         try {
-          const n: any = ctx.byId(`tfm-crumb-${i}`);
+          const n: any = ctx.byId(id(`crumb-${i}`));
           if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on && !current));
         } catch {}
       };
       const crumb = Box(
         {
-          id: `tfm-crumb-${i}`,
+          id: id(`crumb-${i}`),
           height: 1,
           flexDirection: "row",
           alignItems: "center",
@@ -265,7 +277,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           ...(current
             ? {}
             : {
-                onMouseDown: () => ctx.navigate(c.target),
+                onMouseDown: () => {
+                  ctx.focusPane?.();
+                  ctx.navigate(c.target);
+                },
                 onMouseOver: () => paintHover(true),
                 onMouseOut: () => paintHover(false),
               }),
@@ -300,7 +315,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         width: 3,
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
-        onMouseDown,
+        onMouseDown: (ev: any) => {
+          ctx.focusPane?.();
+          onMouseDown(ev);
+        },
         onMouseOver: () => paint(true),
         onMouseOut: () => paint(false),
       },
@@ -309,10 +327,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   };
 
   const makeSearch = () => {
-    const wrap = Box({ id: "tfm-search-wrap", height: 1, flexDirection: "row" });
+    const wrap = Box({ id: id("search-wrap"), height: 1, flexDirection: "row" });
 
     const input = Input({
-      id: "tfm-search",
+      id: id("search"),
       width: 16,
       visible: false,
       // live substring filter; honors the show-hidden toggle (grid lists and
@@ -324,10 +342,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     });
 
     wrap.add(
-      hoverBtn("tfm-search-btn", "search", () => {
+      hoverBtn(id("search-btn"), "search", () => {
         ctx.closeFileMenu();
         ctx.blurTerminal();
-        const el: any = ctx.byId("tfm-search");
+        const el: any = ctx.byId(id("search"));
         if (!el) return;
         el.visible = !el.visible;
         if (el.visible) el.focus();
@@ -338,7 +356,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   };
 
   const makeSortButton = (): ReturnType<typeof Box> =>
-    hoverBtn("tfm-sort-btn", "sort", (ev: any) => {
+    hoverBtn(id("sort-btn"), "sort", (ev: any) => {
       ctx.closeFileMenu();
       ctx.openContextMenu(ev.x, ev.y, "", ctx.sortEntries());
     });
@@ -346,7 +364,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   const makeToolbarShell = (): ReturnType<typeof Box> =>
     Box(
       {
-        id: "tfm-toolbar",
+        id: id("toolbar"),
         width: "100%",
         height: 1,
         flexDirection: "row",
@@ -356,10 +374,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       },
       Box(
         { height: 1, flexGrow: 1, flexBasis: 0, overflow: "hidden", flexDirection: "row", columnGap: 1 },
-        makeNavButton("tfm-nav-back", "chevron-left", ctx.goBack),
-        makeNavButton("tfm-nav-fwd", "chevron-right", ctx.goFwd),
+        makeNavButton("nav-back", "chevron-left", ctx.goBack),
+        makeNavButton("nav-fwd", "chevron-right", ctx.goFwd),
         Box({
-          id: "tfm-crumbs",
+          id: id("crumbs"),
           flexGrow: 1,
           flexBasis: 0,
           height: 1,
@@ -369,6 +387,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           onMouseDown: () => {
             const now = Date.now();
             if (pathEditMode) return;
+            ctx.focusPane?.();
             ctx.closeFileMenu();
             if (now - crumbClickAt < 350) {
               crumbClickAt = 0;

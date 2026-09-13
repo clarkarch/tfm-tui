@@ -15,6 +15,9 @@ type HitTargetCtx = {
   // sidebar place records, index-aligned with the tfm-place-N ids
   placesHost: () => Array<{ place?: { path?: string | null } }>;
   tileRefs: Map<string, SelTileRef>;
+  // per-pane cwds, index-aligned with tfm-pane-N — a drop on a pane's EMPTY
+  // background (no tile under the cursor) targets that pane's directory
+  panesCwd?: () => string[];
 };
 
 export const makeHitTargetAt =
@@ -39,6 +42,12 @@ export const makeHitTargetAt =
                 return { kind: "folder", path: k };
               }
             }
+          }
+          // pane column/background (tfm-pane-0 / tfm-pane-col-1) → its cwd
+          const pane = /^tfm-pane-(?:col-)?(\d+)$/.exec(id);
+          if (pane) {
+            const cwd = ctx.panesCwd?.()[Number(pane[1])];
+            return cwd ? { kind: "folder", path: cwd } : null;
           }
         }
         cur = cur.parent;

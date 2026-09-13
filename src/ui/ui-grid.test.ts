@@ -44,7 +44,9 @@ let searchGate: Promise<void> | null;
 let searchEntries: Entry[];
 let viewMode: "grid" | "list";
 let selection: ReturnType<typeof makeSelection>;
-let renderGrid: () => Promise<void>;
+let renderGrid: (force?: boolean) => Promise<void>;
+let availWSet: number | null;
+let tilePrefix: string;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: TERM_W, height: TERM_H });
@@ -62,6 +64,8 @@ beforeAll(async () => {
   searchGate = null;
   searchEntries = [];
   viewMode = "grid";
+  availWSet = null;
+  tilePrefix = "tfm-tile-";
   let iconSeq = 0;
 
   t.renderer.root.add(Box({ id: "tfm-scroll-test", flexDirection: "column", flexGrow: 1 }));
@@ -109,6 +113,11 @@ beforeAll(async () => {
     viewMode: () => viewMode,
     wordWrap: () => false,
     reservedRight: () => 0,
+    // per-pane width: null falls back to termW - sw - reservedRight
+    availW: () => availWSet ?? TERM_W - SW,
+    get tileIdPrefix() {
+      return tilePrefix;
+    },
     cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: ASPECT }),
     makeIconSlot: (name: string, states: any, heightCells: number, initialState: number) => {
       iconSlots.push({ name, heightCells, initialState });
@@ -171,6 +180,24 @@ describe("renderGrid (grid tiles)", () => {
     expect(mouseHandlers.map((m) => m.name)).toEqual(["subdir", "a.txt", "b.md"]);
     expect(mouseHandlers[0]!.key).toBe(path.join(tmp, "subdir"));
     expect(mouseHandlers[0]!.idx).toBe(0);
+  });
+
+  test("per-pane availW drives column math (dual pane halves the width)", async () => {
+    availWSet = 30; // floor((30 - 3) / 10) = 2
+    await renderGrid();
+    expect(selection.colsAtBuild()).toBe(2);
+    availWSet = null;
+    await renderGrid();
+    expect(selection.colsAtBuild()).toBe(5);
+  });
+
+  test("tileIdPrefix namespaces generated ids per pane", async () => {
+    tilePrefix = "tfm-tile-p1-";
+    await renderGrid();
+    const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids.every((id) => id.startsWith("tfm-tile-p1-"))).toBe(true);
+    tilePrefix = "tfm-tile-";
   });
 
   test("hides dotfiles unless showHidden is on", async () => {
@@ -351,7 +378,7 @@ describe("renderGrid (grid tiles)", () => {
     selection.setSelAnchor(0);
     const focusKey = selection.focusKeys()[selection.focusIdx()]!;
     iconStateCalls.length = 0;
-    await renderGrid();
+    await renderGrid(true); // force a rebuild: same listing, selection must survive
     await t.renderOnce();
     const ref = selection.tileRefs.get(path.join(tmp, "a.txt"))!;
     expect(ref.selected).toBe(true);
@@ -376,11 +403,19 @@ describe("renderGrid (grid tiles)", () => {
   test("cut (pending-move) tiles are dimmed at rebuild", async () => {
     cutKeys.add(path.join(tmp, "a.txt"));
     iconStateCalls.length = 0;
-    await renderGrid();
+    await renderGrid(true); // force: cut state is out-of-band, dims at rebuild
     await t.renderOnce();
     // setTileVisual(Rest) on a cut key routes icon state 3 (cut)
     expect(iconStateCalls.some((c) => c.idx === 3)).toBe(true);
     cutKeys.clear();
+  });
+
+  test("an unchanged listing skips the rebuild (no cross-pane refresh)", async () => {
+    gridState.cwd = tmp;
+    await renderGrid();
+    const slotsBefore = iconSlots.length;
+    await renderGrid(); // identical signature: must NOT rebuild
+    expect(iconSlots.length).toBe(slotsBefore);
   });
 });
 

@@ -4,11 +4,12 @@
 // refreshCutVisuals directly) while rename's performRename/pushUndoBatch stay
 // deferred arrows into it (TDZ seam rule). ---
 
-import { makeSelection } from "../input/selection";
+import { makeSelection, type SelTileRef, type Selection } from "../input/selection";
 import { makeRename } from "../ui/ui-rename";
 import { makeBulkRename } from "../ui/ui-bulk-rename";
 import { clearChildren } from "../lib/uiutil";
 import { sharedPluginEvents } from "../lib/plugin-events";
+import { activeFacade, activeMapFacade } from "../app/panes";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring } from "./types";
 
@@ -21,19 +22,38 @@ export const wireGridFoundation = (deps: {
 }) => {
   const { core, nav, chrome, getGrid, getFileops } = deps;
 
-  const selection = makeSelection({
-    colors: core.themeGet,
-    uiStyle: () => core.config.ui.uiStyle,
-    byId: core.lookup.byId,
-    setText: core.lookup.setTextOnId,
-    setIconState: core.slots.setIconState,
-    isCutKey: core.isCutKey,
-    scroller: () => core.scrollerRef.current,
-    viewH: () => chrome.renderer.terminalHeight - 3,
-    rowHInit: () => core.geometry.tileH,
-    renderPreview: () => getGrid().renderPreview(),
-    onSelection: (paths) => sharedPluginEvents().emit("selection", { paths }),
+  const selectionFor = (pane: 0 | 1): Selection =>
+    makeSelection({
+      colors: core.themeGet,
+      uiStyle: () => core.config.ui.uiStyle,
+      byId: core.lookup.byId,
+      setText: core.lookup.setTextOnId,
+      setIconState: core.slots.setIconState,
+      isCutKey: core.isCutKey,
+      scroller: () => core.scrollerRefs[pane]!.current,
+      viewH: () => chrome.renderer.terminalHeight - 3,
+      rowHInit: () => core.geometry.tileH,
+      renderPreview: () => getGrid().renderPreview(),
+      onSelection: (paths) => sharedPluginEvents().emit("selection", { paths }),
+      isActive: () => core.panes.active === pane,
+    });
+
+  // two independent selections; `selection` is a stable facade over the active
+  // pane so every existing consumer reads the active pane without changes.
+  // tileRefs is overridden with a live map facade because ui-rename/preview and
+  // the menu capture it ONCE at construction.
+  const selections: [Selection, Selection] = [selectionFor(0), selectionFor(1)];
+  const activeTileRefs = activeMapFacade(() => selections[core.panes.active]!.tileRefs as Map<string, SelTileRef>);
+  const selection = activeFacade(() => selections[core.panes.active]!, {
+    tileRefs: activeTileRefs as unknown,
   });
+
+  // cut/copy/paste dimming must repaint in BOTH panes (a path can be visible on
+  // either side); the facade method only reaches the active one.
+  const refreshCutVisuals = (): void => {
+    selections[0].refreshCutVisuals();
+    selections[1].refreshCutVisuals();
+  };
 
   // --- inline rename/create: widget + state live in ./ui-rename ---
   const rename = makeRename({
@@ -83,5 +103,5 @@ export const wireGridFoundation = (deps: {
     bulkRename.open(paths);
   };
 
-  return { selection, rename, bulkRename, startBulkRename };
+  return { selection, selections, refreshCutVisuals, rename, bulkRename, startBulkRename };
 };

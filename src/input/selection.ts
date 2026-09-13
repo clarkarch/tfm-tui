@@ -35,6 +35,10 @@ export type SelectionCtx = {
   rowHInit(): number;
   renderPreview(): void | Promise<void>;
   onSelection?: (paths: string[]) => void;
+  // false for an inactive pane: its selection must not drive the shared status
+  // bar or emit plugin selection events (the active pane owns those). Absent =
+  // always active (single-pane callers / tests).
+  isActive?: () => boolean;
 };
 
 export type Selection = ReturnType<typeof makeSelection>;
@@ -103,6 +107,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
   // not be spammed with identical events.
   let lastEmittedSel = "";
   const updateSelectionStatusReal = (): void => {
+    // an inactive pane's selection never drives the shared status/events
+    if (ctx.isActive && !ctx.isActive()) return;
     try {
       const paths = selPaths().map((s) => s.path);
       const sig = paths.join("\0");

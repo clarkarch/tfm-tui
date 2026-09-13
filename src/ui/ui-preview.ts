@@ -2,7 +2,7 @@ import { Box, CodeRenderable, Text, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { clearChildren } from "../lib/uiutil";
+import { clearChildren, debounced, type Scheduler } from "../lib/uiutil";
 import { slotBg, type UiStyle } from "./style";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
@@ -37,6 +37,14 @@ type PreviewCtx = {
   uiStyle(): UiStyle;
   previewEnabled(): boolean; // config.ui.previewEnabled
   previewWidth(): number; // config.ui.previewWidth
+  // Is the preview ACTUALLY on screen? With auto-hide on it is collapsed most
+  // of the time, yet every selection move would still rebuild the pane (and
+  // allocate its native Text/Code buffers) — pure wasted churn that OOMs this
+  // app. Skip the rebuild entirely while hidden/collapsed. Absent = visible.
+  visible?(): boolean;
+  // coalesce rapid selection-driven rebuilds (arrow keys, rubber band) instead
+  // of clearing + re-allocating the pane per step; injectable for tests
+  sched?: Scheduler;
   termH(): number; // renderer.terminalHeight — LIVE read
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
   focusKey(): string | null; // focused tile's key, else null
@@ -79,8 +87,9 @@ export const makePreview = (ctx: PreviewCtx) => {
   // reuse the (already-parsed/highlighted) node when the same file is previewed again
   let previewCodeCache: { key: string; mtimeMs: number; size: number; node: any } | null = null;
 
-  const renderPreview = async () => {
+  const renderPreviewNow = async () => {
     if (!ctx.previewEnabled()) return;
+    if (ctx.visible && !ctx.visible()) return;
     const colors = ctx.colors();
     const gen = ++previewGen;
     const pane: any = ctx.byId("tfm-preview");
@@ -219,6 +228,20 @@ export const makePreview = (ctx: PreviewCtx) => {
       pane.add(codeNode);
       void ctx.drainIconQueue();
     } catch {}
+  };
+
+  // public entry: coalesce bursts. A holding arrow key / band drag fires
+  // renderPreview per step; without this each rebuild clears the pane and
+  // allocates a fresh native TextBuffer per preview line.
+  const schedulePreview = debounced(
+    60,
+    () => {
+      void renderPreviewNow();
+    },
+    ctx.sched ?? globalThis,
+  );
+  const renderPreview = (): void => {
+    schedulePreview();
   };
 
   return { renderPreview };

@@ -8,6 +8,8 @@ import { debounced, type Scheduler } from "../lib/uiutil";
 
 type SearchCtx = {
   byId: (id: string) => any;
+  // this pane's search input id (toolbar nodes are per-pane now)
+  inputId: string;
   renderGrid: () => void | Promise<void>;
   // the embedded terminal owns the keyboard — never hijack into search
   termHasFocus: () => boolean;
@@ -27,7 +29,7 @@ export const makeSearch = (ctx: SearchCtx) => {
       focusTimer = null;
     }
     try {
-      const el: any = ctx.byId("tfm-search");
+      const el: any = ctx.byId(ctx.inputId);
       if (el) {
         el.value = "";
         el.visible = false;
@@ -47,7 +49,7 @@ export const makeSearch = (ctx: SearchCtx) => {
   // that char instead of doing legacy jump-ahead
   const beginTypeToSearch = (ch: string): void => {
     if (ctx.termHasFocus()) return;
-    const el: any = ctx.byId("tfm-search");
+    const el: any = ctx.byId(ctx.inputId);
     if (!el) return;
     el.visible = true;
     el.value = ch;
@@ -66,7 +68,7 @@ export const makeSearch = (ctx: SearchCtx) => {
   // live in the global key handler (enter commits into the first match,
   // escape cancels) — no listeners for those here by design
   const wireSearchInput = (): void => {
-    const inputEl: any = ctx.byId("tfm-search");
+    const inputEl: any = ctx.byId(ctx.inputId);
     if (!inputEl?.on) return;
     const renderSearchResults = debounced(150, () => void ctx.renderGrid(), sched);
     inputEl.on("input", () => {

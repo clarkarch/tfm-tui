@@ -17,6 +17,7 @@ import type { IconState, IconSpec } from "./ui-slots";
 import type { Theme } from "../config/config";
 import { keySpecFromEvent, validateKeybindSpec } from "../config/config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
+import { pokeGc } from "../app/mem-hygiene";
 import {
   ensureVisible,
   renderSettingsPanel,
@@ -486,6 +487,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const scrim: any = ctx.byId("tfm-menu");
     scrim?.parent?.remove(scrim);
     ctx.setScrim(false);
+    // esc-menu open/close churns native allocations (documented leak vector);
+    // a rapid cycle can exhaust the allocator before the 10s hygiene tick, so
+    // drain finalizers immediately on close.
+    pokeGc();
   };
 
   const openMenu = () => {

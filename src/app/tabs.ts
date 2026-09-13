@@ -1,11 +1,11 @@
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 
-// --- Tabs model: each tab owns its own history; `state` is always the ACTIVE
-// tab's view. Switching copies the live history refs into the outgoing tab
-// slot and adopts the incoming one (ref identity is load-bearing — navigate()
-// reassigns `state.history`, so syncs must copy the CURRENT ref). Pure data
-// machine — rendering/session I/O stay in the wiring layer. ---
+// --- Tabs model: a browser-style tab list, ONE PER PANE. Each pane owns its
+// own model instance; `state.history/histIdx` are ALWAYS this pane's active
+// tab (sync via syncTabFromState()/adoptTab() — navigate reassigns `history`,
+// so refs must be copied, not values). Pure data machine — rendering/session
+// I/O stay in the wiring layer. ---
 
 export type Tab = { history: string[]; histIdx: number };
 export type TabStateRef = { history: string[]; histIdx: number; cwd: string };
@@ -50,7 +50,7 @@ export const makeTabs = (state: TabStateRef, hooks: TabsHooks) => {
     hooks.onChanged();
   };
 
-  // opens right of the active tab at the same folder, with a fresh history
+  // opens right of the active tab at the given folder, with a fresh history
   const newTab = (dir?: string): void => {
     const start = dir ?? state.cwd;
     list.splice(active + 1, 0, { history: [start], histIdx: 0 });
@@ -95,4 +95,13 @@ export const makeTabs = (state: TabStateRef, hooks: TabsHooks) => {
     closeTab,
     adoptTabs,
   };
+};
+
+// cycle the active tab, wrapping (ctrl+tab / ctrl+shift+tab). No-op with <2 tabs.
+export const nextTab = (model: ReturnType<typeof makeTabs>): void => {
+  if (model.list.length > 1) model.switchTab(model.active === model.list.length - 1 ? 0 : model.active + 1);
+};
+
+export const prevTab = (model: ReturnType<typeof makeTabs>): void => {
+  if (model.list.length > 1) model.switchTab(model.active === 0 ? model.list.length - 1 : model.active - 1);
 };

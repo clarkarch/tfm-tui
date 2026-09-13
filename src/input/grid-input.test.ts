@@ -25,6 +25,7 @@ const makeCtx = (): GridInputCtx & {
   menus: string[];
   logs: string[];
   selStatusRefreshes: { n: number };
+  focusCalls: { n: number };
 } => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
@@ -42,6 +43,7 @@ const makeCtx = (): GridInputCtx & {
   const menus: string[] = [];
   const logs: string[] = [];
   const selStatus = { n: 0 };
+  const focusCalls = { n: 0 };
   let anchor: number | null = null;
   const focused = 0;
   return {
@@ -51,6 +53,7 @@ const makeCtx = (): GridInputCtx & {
     menus,
     logs,
     selStatusRefreshes: selStatus,
+    focusCalls,
     byId: () => null,
     termW: () => 80,
     termH: () => 24,
@@ -103,6 +106,9 @@ const makeCtx = (): GridInputCtx & {
     moveInto: async (dest, items) => {
       moved.push({ dest, n: items.length });
     },
+    focusPane: () => {
+      focusCalls.n++;
+    },
   };
 };
 
@@ -110,6 +116,32 @@ const press = (
   h: ReturnType<ReturnType<typeof makeEntryMouseHandlers>>,
   ev: Partial<{ button: number; x: number; y: number; modifiers: Record<string, boolean> }>,
 ) => h.onMouseDown({ x: 0, y: 0, button: 0, modifiers: {}, ...ev } as any);
+
+describe("dual-pane focus", () => {
+  test("a tile press focuses its pane before any selection work", () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, {});
+    press(h, { button: 2 });
+    expect(ctx.focusCalls.n).toBe(2);
+  });
+});
+
+describe("cross-pane internal drag (shared gridDrag, per-pane ctxs)", () => {
+  test("a file dragged from pane A drops into pane B's folder", () => {
+    const src = makeCtx();
+    const dst = makeCtx();
+    const hSrc = makeEntryMouseHandlers(src)({ isDir: false }, "/w/a.txt", 0);
+    const hDst = makeEntryMouseHandlers(dst)({ isDir: true }, "/w/sub", 3);
+    press(hSrc, {});
+    hSrc.onMouseDrag({ x: 9, y: 9 } as any);
+    expect(gridDrag.active).toBe(true);
+    // the drop lands on the target tile itself; the destination comes from that
+    // tile's own key, NOT from gridDrag.dropTarget (which over may never set)
+    hDst.onMouseDrop();
+    expect(dst.moved).toEqual([{ dest: "/w/sub", n: 1 }]);
+  });
+});
 
 describe("plain click + drag", () => {
   test("click selects single tile and arms drag payload; drop moves it", () => {

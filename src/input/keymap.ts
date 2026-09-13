@@ -105,7 +105,8 @@ export type KeyRouterCtx = {
   moveFileSubmenu(delta: number): void;
   activateFileSubmenu(): void;
   // --- tabs ---
-  tabModel: { active: number; list: unknown[] };
+  nextTab(): void;
+  prevTab(): void;
   newTab(): void;
   closeTab(): void;
   switchTab(i: number): void;
@@ -124,6 +125,9 @@ export type KeyRouterCtx = {
   togglePreview(): void;
   toggleViewMode(): void;
   zoomTiles(dir: number): void;
+  switchPane(): void;
+  copyToOtherPane(): void;
+  moveToOtherPane(): void;
   setClipboard(mode: "copy" | "cut", items: Array<{ path: string; isDir: boolean }>): void;
   duplicate(paths: string[]): void;
   isVirtualCwd(): boolean;
@@ -494,6 +498,15 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doZoomOut = (): void => {
     ctx.zoomTiles(-1);
   };
+  const doSwitchPane = (): void => {
+    ctx.switchPane();
+  };
+  const doCopyToOtherPane = (): void => {
+    ctx.copyToOtherPane();
+  };
+  const doMoveToOtherPane = (): void => {
+    ctx.moveToOtherPane();
+  };
   const doParentDir = (): void => {
     // virtual views have no fs parent (path.resolve would shred the URI)
     if (ctx.isVirtualCwd()) {
@@ -521,10 +534,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     ctx.closeTab();
   };
   const doPrevTab = (): void => {
-    ctx.switchTab(ctx.tabModel.active === 0 ? ctx.tabModel.list.length - 1 : ctx.tabModel.active - 1);
+    ctx.prevTab();
   };
   const doNextTab = (): void => {
-    ctx.switchTab(ctx.tabModel.active === ctx.tabModel.list.length - 1 ? 0 : ctx.tabModel.active + 1);
+    ctx.nextTab();
   };
   const doSelectAll = (): void => {
     selection.selectAll();
@@ -621,6 +634,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "toggleView", run: doToggleView },
     { action: "zoomIn", run: doZoomIn },
     { action: "zoomOut", run: doZoomOut },
+    { action: "switchPane", run: doSwitchPane },
+    { action: "copyToOtherPane", run: doCopyToOtherPane },
+    { action: "moveToOtherPane", run: doMoveToOtherPane },
   ];
 
   // fresh titles/hints on every call so remaps apply without rebuilds
@@ -708,6 +724,18 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
     if (hit(ev, "zoomOut")) {
       doZoomOut();
+      return;
+    }
+    if (hit(ev, "switchPane") && ev.repeated !== true) {
+      doSwitchPane();
+      return;
+    }
+    if (hit(ev, "copyToOtherPane") && ev.repeated !== true) {
+      doCopyToOtherPane();
+      return;
+    }
+    if (hit(ev, "moveToOtherPane") && ev.repeated !== true) {
+      doMoveToOtherPane();
       return;
     }
 

@@ -10,7 +10,7 @@ import os from "node:os";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
-import { sideInnerWidth } from "../ui/style";
+import { applySurface, paneSurface, sideInnerWidth } from "../ui/style";
 import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
@@ -22,6 +22,7 @@ import { makeSlots } from "../ui/ui-slots";
 import { makeFloats } from "../ui/floats";
 import { clearChildren } from "../lib/uiutil";
 import { initialAppState } from "../app/nav";
+import { activeFacade, activeState, makePanePair, otherState, setActivePane, togglePane } from "../app/panes";
 
 export type CoreWiring = ReturnType<typeof wireCore>;
 
@@ -88,12 +89,28 @@ export const wireCore = (deps: {
   });
 
   // --- App state & history (type + boot-state factory live in ./nav with the
-  // navigation logic) ---
+  // navigation logic). Two panes, each an independent AppState; `state` is a
+  // stable facade over the ACTIVE pane so every existing `core.state` consumer
+  // keeps reading/writing the active view. Dual pane off = pane 1 lies dormant.
   const home = os.homedir();
-  const state = initialAppState(config, process.cwd(), deps.pendingSelect ?? null);
+  const panes = makePanePair(
+    initialAppState(config, process.cwd(), deps.pendingSelect ?? null),
+    initialAppState(config, process.cwd()),
+  );
+  const state = activeFacade(() => activeState(panes));
 
-  // --- Grid scroll container — assigned during boot (buildLayout step) ---
-  const scrollerRef: { current: ScrollBoxRenderable | null } = { current: null };
+  // --- Grid scroll containers — assigned during boot (buildLayout step), one
+  // per pane. `scrollerRef` stays the active pane's live ref for the same
+  // facade reason as `state`. ---
+  const scrollerRefs: Array<{ current: ScrollBoxRenderable | null }> = [{ current: null }, { current: null }];
+  const scrollerRef = {
+    get current(): ScrollBoxRenderable | null {
+      return scrollerRefs[panes.active]!.current;
+    },
+    set current(v: ScrollBoxRenderable | null) {
+      scrollerRefs[panes.active]!.current = v;
+    },
+  };
 
   // --- Virtual places: Recent (freedesktop recently-used.xbel) & Starred.
   // URI/XDG primitives live in ./uri.
@@ -117,6 +134,20 @@ export const wireCore = (deps: {
   // live internal clipboard, created later by the fileops wiring. ---
   const isCutKey = (key: string): boolean => isCutKeyFor(deps.clipboard(), key);
 
+  // --- Active-pane cue: the active pane keeps the main bg, the other dims to
+  // the sidebar surface. Cheap (two node writes); called from renderAll so it
+  // tracks focus/tab/theme changes. No-op before the boot layout exists. ---
+  const refreshPaneFocus = (): void => {
+    for (const i of [0, 1] as const) {
+      const node = lookup.byId(`tfm-pane-col-${i}`);
+      if (!node) continue;
+      const active = panes.active === i;
+      try {
+        applySurface(node, paneSurface(config.ui.uiStyle, colors, active));
+      } catch {}
+    }
+  };
+
   return {
     config,
     colors,
@@ -128,7 +159,14 @@ export const wireCore = (deps: {
     slots,
     home,
     state,
+    panes,
+    activeState: () => activeState(panes),
+    otherState: () => otherState(panes),
+    setActivePane: (i: 0 | 1) => setActivePane(panes, i),
+    togglePane: () => togglePane(panes),
+    refreshPaneFocus,
     scrollerRef,
+    scrollerRefs,
     isVirtualCwd,
     inTrashView,
     isNetworkCwd,

@@ -164,21 +164,45 @@ describe("makeNav", () => {
 });
 
 describe("makeSessionSync", () => {
-  test("restoreSession off by config flag: state untouched", () => {
-    const st = mkState("/a");
-    const tabs = makeTabs(st, { onChanged() {}, status() {}, quit() {} });
-    const { restoreSession } = makeSessionSync({
-      state: st,
-      tabModel: tabs,
-      config: { ui: { restoreSession: false } } as any,
-      isVirtualCwd: () => false,
+  const mkModels = (a: AppState, b: AppState) => [
+    makeTabs(a, { onChanged() {}, status() {}, quit() {} }),
+    makeTabs(b, { onChanged() {}, status() {}, quit() {} }),
+  ];
+
+  const mkCtx = (models: ReturnType<typeof mkModels>, paneRef: { v: 0 | 1 }, config: any, isVirtualCwd = () => false) =>
+    makeSessionSync({
+      paneTabs: () => [
+        { tabs: models[0]!.list, activeTab: models[0]!.active },
+        { tabs: models[1]!.list, activeTab: models[1]!.active },
+      ],
+      syncTabsFromState: () => {
+        models[0]!.syncTabFromState();
+        models[1]!.syncTabFromState();
+      },
+      adoptPaneTabs: (pane, tabs, activeTab) => models[pane]!.adoptTabs(tabs, activeTab),
+      adoptDefaultTabs: () => {
+        models[0]!.adoptTab();
+        models[1]!.adoptTab();
+      },
+      activePane: () => paneRef.v,
+      setActivePane: (i) => {
+        paneRef.v = i;
+      },
+      config,
+      isVirtualCwd,
     });
+
+  test("restoreSession off by config flag: state untouched", () => {
+    const a = mkState("/a");
+    const b = mkState("/b");
+    const models = mkModels(a, b);
+    const { restoreSession } = mkCtx(models, { v: 0 }, { ui: { restoreSession: false } });
     restoreSession();
-    expect(st.history).toEqual(["/a"]);
-    expect(tabs.list.length).toBe(1);
+    expect(a.history).toEqual(["/a"]);
+    expect(models[0]!.list.length).toBe(1);
   });
 
-  test("restoreSession adopts saved tabs (ref identity with the model)", async () => {
+  test("restoreSession adopts both panes' tabs (ref identity) and the active pane", () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "tfm-sess-"));
     const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-sess-cwd-"));
     process.env.XDG_STATE_HOME = stateDir;
@@ -186,41 +210,67 @@ describe("makeSessionSync", () => {
       mkdirSync(path.join(stateDir, "tfm"), { recursive: true });
       writeFileSync(
         path.join(stateDir, "tfm", "session.json"),
-        JSON.stringify({ cwd: dir, tabs: [{ history: [dir], histIdx: 0 }], activeTab: 0 }),
+        JSON.stringify({
+          panes: [
+            { tabs: [{ history: [dir], histIdx: 0 }], activeTab: 0 },
+            { tabs: [{ history: [os.tmpdir()], histIdx: 0 }], activeTab: 0 },
+          ],
+          activePane: 1,
+        }),
       );
-      const st = mkState("/a");
-      const tabs = makeTabs(st, { onChanged() {}, status() {}, quit() {} });
-      const { restoreSession } = makeSessionSync({
-        state: st,
-        tabModel: tabs,
-        config: { ui: { restoreSession: true } } as any,
-        isVirtualCwd: () => false,
-      });
+      const a = mkState("/a");
+      const b = mkState("/b");
+      const models = mkModels(a, b);
+      const paneRef: { v: 0 | 1 } = { v: 0 };
+      const { restoreSession } = mkCtx(models, paneRef, { ui: { restoreSession: true, dualPane: true } });
       restoreSession();
-      expect(st.history).toBe(tabs.list[0]!.history);
-      expect(st.history).toEqual([dir]);
+      expect(a.history).toBe(models[0]!.list[0]!.history);
+      expect(a.history).toEqual([dir]);
+      expect(b.history).toEqual([os.tmpdir()]);
+      expect(paneRef.v).toBe(1);
     } finally {
       delete process.env.XDG_STATE_HOME;
     }
   });
 
-  test("scheduleSaveSession writes the session file after the debounce window", async () => {
+  test("restoreSession clamps pane 1 to pane 0 when dual pane is off", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "tfm-sess-clamp-"));
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-sess-clamp-cwd-"));
+    process.env.XDG_STATE_HOME = stateDir;
+    try {
+      mkdirSync(path.join(stateDir, "tfm"), { recursive: true });
+      writeFileSync(
+        path.join(stateDir, "tfm", "session.json"),
+        JSON.stringify({
+          panes: [
+            { tabs: [{ history: [dir], histIdx: 0 }], activeTab: 0 },
+            { tabs: [{ history: [dir], histIdx: 0 }], activeTab: 0 },
+          ],
+          activePane: 1,
+        }),
+      );
+      const models = mkModels(mkState("/a"), mkState("/b"));
+      const paneRef: { v: 0 | 1 } = { v: 1 };
+      const { restoreSession } = mkCtx(models, paneRef, { ui: { restoreSession: true, dualPane: false } });
+      restoreSession();
+      expect(paneRef.v).toBe(0);
+    } finally {
+      delete process.env.XDG_STATE_HOME;
+    }
+  });
+
+  test("scheduleSaveSession writes both pane tab lists after the debounce window", async () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "tfm-sess-save-"));
     process.env.XDG_STATE_HOME = stateDir;
     try {
-      const st = mkState("/a");
-      const tabs = makeTabs(st, { onChanged() {}, status() {}, quit() {} });
-      const { scheduleSaveSession } = makeSessionSync({
-        state: st,
-        tabModel: tabs,
-        config: { ui: { restoreSession: false } } as any,
-        isVirtualCwd: () => false,
-      });
+      const models = mkModels(mkState("/a"), mkState("/b"));
+      const { scheduleSaveSession } = mkCtx(models, { v: 0 }, { ui: { restoreSession: false } });
       scheduleSaveSession();
       const file = path.join(stateDir, "tfm", "session.json");
       await settleUntil(() => {
         try {
-          return JSON.parse(require("node:fs").readFileSync(file, "utf8")).cwd === "/a";
+          const doc = JSON.parse(require("node:fs").readFileSync(file, "utf8"));
+          return doc.panes[0].tabs[0].history[0] === "/a" && doc.panes[1].tabs[0].history[0] === "/b";
         } catch {
           return false;
         }
@@ -234,14 +284,8 @@ describe("makeSessionSync", () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "tfm-sess-virt-"));
     process.env.XDG_STATE_HOME = stateDir;
     try {
-      const st = mkState("recent://");
-      const tabs = makeTabs(st, { onChanged() {}, status() {}, quit() {} });
-      const { scheduleSaveSession } = makeSessionSync({
-        state: st,
-        tabModel: tabs,
-        config: { ui: { restoreSession: false } } as any,
-        isVirtualCwd: () => true,
-      });
+      const models = mkModels(mkState("recent://"), mkState("recent://"));
+      const { scheduleSaveSession } = mkCtx(models, { v: 0 }, { ui: { restoreSession: false } }, () => true);
       scheduleSaveSession();
       await new Promise((r) => setTimeout(r, 550));
       let threw = false;

@@ -87,6 +87,11 @@ export type GridInputCtx = {
   dragThresholdCells?(): number;
   setStatusMsg(msg: string): void;
   log(msg: string): void;
+  // dual pane: focus this tile's pane on press. Tile mousedown stops
+  // propagation, so the scroller's own focusPane never sees a file click —
+  // without this, clicking a tile in pane 1 leaves pane 0 active (status,
+  // preview and every keybind then target the wrong side).
+  focusPane?(): void;
 } & GridSelectionDeps &
   GridMenuDeps &
   GridNavDeps;
@@ -368,6 +373,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         try {
           ev.stopPropagation?.();
         } catch {}
+        ctx.focusPane?.();
         ctx.closeFileMenu();
         const rk = ctx.renameEditKey();
         if (rk && rk !== key) ctx.finishInlineRename(false);
@@ -391,7 +397,12 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       },
       onMouseDrop: () => {
         const keys = gridDrag.keys;
-        const dest = gridDrag.dropTarget;
+        // The drop is delivered to the tile UNDER THE CURSOR (its own `key`),
+        // so use that folder as the destination. Do NOT rely on
+        // gridDrag.dropTarget: over fires before the drag trips and doesn't
+        // re-fire while the pointer stays on one tile, so the hover-set proxy
+        // is frequently null at release (this is what broke cross-pane drops).
+        const dest = entry.isDir ? key : gridDrag.dropTarget;
         ctx.log(
           `tile drop keys=${keys?.length ?? -1}[${keys?.map((item) => item.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${entry.isDir}`,
         );

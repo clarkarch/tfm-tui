@@ -56,6 +56,12 @@ type GridRendererCtx = {
   viewMode(): "grid" | "list";
   wordWrap(): boolean;
   reservedRight(): number;
+  // per-pane content width; when absent falls back to termW - sw - reservedRight
+  // (single-pane callers / tests)
+  availW?(): number;
+  // unique tile id prefix per pane (dual pane) so both panes' tile ids can't
+  // collide in the global renderable registry; default "tfm-tile-"
+  tileIdPrefix?: string;
   // ui-slots
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
   makeIconSlot(
@@ -81,10 +87,15 @@ type GridRendererCtx = {
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
   let tileSeq = 0;
+  // signature of the last painted tile set — an unchanged pane skips the
+  // clear+rebuild (renderAll repaints both panes on any navigation)
+  let lastSig = "";
   // in-flight recursive search; a newer render aborts it so stale keystroke
   // walks don't keep eating disk while a fresh query runs
   let searchAbort: AbortController | null = null;
   const { selection } = ctx;
+  const tilePrefix = (): string => ctx.tileIdPrefix ?? "tfm-tile-";
+  const availW = (): number => (ctx.availW ? ctx.availW() : ctx.termW() - ctx.sw() - ctx.reservedRight());
 
   // list-view row density, clamped to what the builders can render
   const rowH = (): number => Math.min(3, Math.max(1, ctx.listRowH()));
@@ -151,7 +162,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const ICON_CELLS_H = ctx.iconCells();
     const colors = ctx.colors();
     const key = entry.abs ?? path.join(cwd, entry.name);
-    const tileId = `tfm-tile-${tileSeq++}`;
+    const tileId = `${tilePrefix()}${tileSeq++}`;
     const labelId = `${tileId}-label`;
     const tile = Box({
       id: tileId,
@@ -252,13 +263,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
 
   const buildListRow = (entry: Entry, idx: number): any => {
     const cwd = ctx.state.cwd;
-    const sw = ctx.sw();
     const colors = ctx.colors();
     // density knob [ui] list-row-height: 1 = compact, icon scales with height
     const h = rowH();
     const { aspect } = ctx.cellMetrics();
     const key = entry.abs ?? path.join(cwd, entry.name);
-    const rowId = `tfm-tile-${tileSeq++}`;
+    const rowId = `${tilePrefix()}${tileSeq++}`;
     const labelId = `${rowId}-label`;
     const dim = entry.name.startsWith(".");
     const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
@@ -295,7 +305,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       slotEl = s.el;
     }
     row.add(slotEl);
-    const listW = Math.max(40, ctx.termW() - sw - ctx.reservedRight() - (ctx.uiStyle() === "solid" ? 3 : 6));
+    const listW = Math.max(20, availW() - (ctx.uiStyle() === "solid" ? 3 : 6));
     const nameMax = Math.max(12, listW - 27 - iconW);
     const label = entry.name.length > nameMax ? `${entry.name.slice(0, nameMax - 1)}…` : entry.name;
     row.add(Text({ id: labelId, content: label, fg: baseFg }));
@@ -327,8 +337,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     return row;
   };
 
-  // --- grid rebuild: clear, list, lay out tiles/rows, repaint cut dims ---
-  const renderGrid = async (): Promise<void> => {
+  // --- grid rebuild: clear, list, lay out tiles/rows, repaint cut dims.
+  // `force` skips the unchanged-signature fast path (out-of-band state changes
+  // like the cut clipboard; navigation does not force). ---
+  const renderGrid = async (force = false): Promise<void> => {
     const scroller = ctx.scroller();
     if (!scroller) return;
     const gen = ++gridGen;
@@ -348,13 +360,38 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const prevFocusKey = selection.focusKeys()[selection.focusIdx()] ?? null;
     const anchorIdx = selection.selAnchor();
     const prevAnchorKey = anchorIdx === null ? null : (selection.focusKeys()[anchorIdx] ?? null);
-    // a rebuild destroys the edit input; drop the state with it
-    ctx.clearRenameEdit();
-    clearGrid();
+    // a rebuild destroys the edit input; dropped once we actually rebuild (a
+    // skipped render leaves an in-progress rename/edit alone)
     const q = ctx.searchQuery().trim().toLowerCase();
     // recursive search replaces the listing with subtree matches; virtual
     // places have no fs root to walk, so they keep the in-dir filter
     const recursive = q.length > 0 && ctx.recursiveSearch() && state.cwd !== RECENT_URI && state.cwd !== STARRED_URI;
+    // Signature of everything that affects the painted tiles. renderAll repaints
+    // BOTH panes on any navigation, so without this a move in one pane visibly
+    // rebuilds the other (and churns native buffers). Empty/error states sign
+    // separately; theme/geometry/search changes move the signature too.
+    const sigOf = (list: Entry[] | string): string =>
+      JSON.stringify([
+        state.cwd,
+        state.showHidden,
+        state.sortBy,
+        state.sortAsc,
+        ctx.viewMode(),
+        ctx.wordWrap(),
+        ctx.tileW(),
+        ctx.tileH(),
+        ctx.iconCells(),
+        ctx.termW(),
+        ctx.termH(),
+        ctx.availW?.() ?? 0,
+        q,
+        recursive,
+        ctx.pathEditMode(),
+        ctx.tileIdPrefix ?? "",
+        state.pendingSelect ?? "",
+        ctx.colors(),
+        typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
+      ]);
     let allEntries: Entry[];
     try {
       if (recursive) {
@@ -376,6 +413,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     } catch (err) {
       // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
       if (gen !== gridGen) return;
+      const sig = sigOf(`err:${fsErrText(err)}`);
+      if (!force && sig === lastSig) return;
+      lastSig = sig;
+      ctx.clearRenameEdit();
+      clearGrid();
       await ctx.waitForResolution();
       if (gen !== gridGen) return;
       buildEmptyPane("close", [
@@ -386,10 +428,16 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       void ctx.drainIconQueue();
       return;
     }
+    const isList = ctx.viewMode() === "list";
     const entries = q && !recursive ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
     if (gen !== gridGen) return;
 
     if (entries.length === 0) {
+      const sig = sigOf("empty");
+      if (!force && sig === lastSig) return;
+      lastSig = sig;
+      ctx.clearRenameEdit();
+      clearGrid();
       await ctx.waitForResolution();
       if (gen !== gridGen) return;
       buildEmptyPane("folder", [
@@ -405,15 +453,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       return;
     }
 
-    await ctx.waitForResolution();
-    if (gen !== gridGen) return;
-    const { aspect } = ctx.cellMetrics();
-    const isList = ctx.viewMode() === "list";
-    const TILE_H = ctx.tileH();
-    const cols = isList ? 1 : Math.max(1, Math.floor((ctx.termW() - ctx.sw() - ctx.reservedRight() - 3) / ctx.tileW()));
-
     // list view always shows size + modified columns, so fetch whatever stats
-    // the active sort mode didn't already populate
+    // the active sort mode didn't already populate BEFORE signing (a size/mtime
+    // change must move the signature)
     if (isList) {
       for (const en of entries) {
         if (en.size !== undefined && en.mtimeMs !== undefined) continue;
@@ -424,6 +466,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         } catch {}
       }
     }
+
+    const sig = sigOf(entries);
+    if (!force && sig === lastSig) return;
+    lastSig = sig;
+    ctx.clearRenameEdit();
+    clearGrid();
+    await ctx.waitForResolution();
+    if (gen !== gridGen) return;
+    const { aspect } = ctx.cellMetrics();
+    const TILE_H = ctx.tileH();
+    const cols = isList ? 1 : Math.max(1, Math.floor((availW() - 3) / ctx.tileW()));
 
     let tileIdx = 0;
     if (isList) {

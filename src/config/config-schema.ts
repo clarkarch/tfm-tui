@@ -56,6 +56,7 @@ export type UiConfig = {
   recursiveSearch: boolean;
   previewEnabled: boolean;
   previewWidth: number;
+  dualPane: boolean;
   sidebarAutoHide: boolean;
   sidebarCollapseStyle: string;
   previewAutoHide: boolean;
@@ -112,7 +113,10 @@ export type KeyAction =
   | "connectServer"
   | "toggleView"
   | "zoomIn"
-  | "zoomOut";
+  | "zoomOut"
+  | "switchPane"
+  | "copyToOtherPane"
+  | "moveToOtherPane";
 
 type KeysConfig = Record<KeyAction, string[]>;
 
@@ -222,6 +226,16 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "right-side preview pane (text files, folder stats)",
     label: "preview pane",
+    group: "panes",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "dual-pane",
+    prop: "dualPane",
+    def: false,
+    doc: "true = two independent file panes side by side (tab switches the active pane); false = single pane",
+    label: "dual pane",
     group: "panes",
   },
   {
@@ -576,6 +590,9 @@ const KEY_ROWS: KeyRow[] = (
     ["toggleView", "toggle grid/list view", ["ctrl+g"]],
     ["zoomIn", "bigger tiles", ["ctrl+="]],
     ["zoomOut", "smaller tiles", ["ctrl+-"]],
+    ["switchPane", "switch active pane (dual pane)", ["tab"]],
+    ["copyToOtherPane", "copy selection to the other pane", ["f5"]],
+    ["moveToOtherPane", "move selection to the other pane", ["f6"]],
   ] as const
 ).map(([action, label, def]) => ({
   kind: "key",

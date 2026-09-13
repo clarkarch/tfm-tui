@@ -12,6 +12,8 @@ import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
 import { clearChildren } from "../lib/uiutil";
 import { flattenPluginCommands, getPluginCommandBinds } from "../plugins/plugin-api";
+import { isVirtualUri } from "../fs/uri";
+import { isTrashFilesDir } from "../fs/fsutil";
 import { dlog } from "../app/log";
 import type { Command } from "../lib/command";
 import type { CoreWiring } from "./core";
@@ -77,6 +79,32 @@ export const wireKeymap = (deps: {
     floats,
   });
 
+  // Copy/move the active selection into the other pane's directory through the
+  // same runTransfer path as every other transfer (conflict prompt, undo,
+  // progress). Destination guards mirror pasteSmart's.
+  const transferToOtherPane = (op: "copy" | "move"): void => {
+    if (!core.config.ui.dualPane) {
+      chrome.notify("Dual pane is off", op, "info");
+      return;
+    }
+    const selected = gridFoundation.selection.selPaths();
+    if (!selected.length) {
+      chrome.notify(`Nothing to ${op}`, op, "info");
+      return;
+    }
+    const dest = core.otherState().cwd;
+    if (core.isVirtualCwd() || isVirtualUri(dest) || isTrashFilesDir(dest)) {
+      chrome.notify(`Can't ${op} to the other pane`, op, "error");
+      return;
+    }
+    void fileops.fileops.runTransfer(
+      op,
+      dest,
+      selected.map((s) => s.path),
+      `${op} to other pane`,
+    );
+  };
+
   const keyRouter = makeKeyRouter({
     byId,
     state,
@@ -98,12 +126,12 @@ export const wireKeymap = (deps: {
     closeProps: grid.props.closeProps,
     escMenu: { ...settings.escMenu, isOpen: () => floats.isOpen("escmenu") },
     termOwnsKeyboard: fileops.terminal.ownsKeyboard,
-    pathEditMode: chrome.toolbar.pathEditMode,
-    pathInputVisible: () => !!byId("tfm-path-input")?.visible,
-    searchVisible: () => !!byId("tfm-search")?.visible,
-    searchQuery: () => nav.search.getQuery(),
+    pathEditMode: () => chrome.activeToolbar().pathEditMode(),
+    pathInputVisible: () => !!byId(`tfm-p${core.panes.active}-path-input`)?.visible,
+    searchQuery: () => nav.activeSearch().getQuery(),
+    searchVisible: () => !!byId(`tfm-p${core.panes.active}-search`)?.visible,
     clearSearch: nav.clearSearch,
-    exitPathEdit: chrome.toolbar.exitPathEdit,
+    exitPathEdit: () => chrome.activeToolbar().exitPathEdit(),
     beginTypeToSearch: nav.beginTypeToSearch,
     renderGrid: grid.renderGrid,
     renderPreview: grid.renderPreview,
@@ -124,7 +152,8 @@ export const wireKeymap = (deps: {
     closeFileSubmenu: chrome.menu.closeSubmenu,
     moveFileSubmenu: chrome.menu.moveSub,
     activateFileSubmenu: chrome.menu.activateSub,
-    tabModel: nav.tabModel,
+    nextTab: nav.nextTab,
+    prevTab: nav.prevTab,
     newTab: nav.newTab,
     closeTab: nav.closeTab,
     switchTab: nav.switchTab,
@@ -136,7 +165,7 @@ export const wireKeymap = (deps: {
     startInlineCreate: gridFoundation.rename.startInlineCreate,
     startBulkRename: gridFoundation.startBulkRename,
     openProperties: grid.props.openProperties,
-    enterPathEdit: chrome.toolbar.enterPathEdit,
+    enterPathEdit: () => chrome.activeToolbar().enterPathEdit(),
     openTerminal: () => fileops.terminal.openTerminalHere(),
     connectServer: chrome.connectServer,
     // config flips go through the single applyConfig -> save path (same as
@@ -160,6 +189,15 @@ export const wireKeymap = (deps: {
       getRetheme().applyConfig({ ...core.config, ui: { ...ui, ...patch } });
       getRetheme().scheduleSaveConfig();
     },
+    switchPane: () => {
+      if (!core.config.ui.dualPane) return;
+      // a selection must not survive a pane switch
+      gridFoundation.selections[core.panes.active]!.clearTileSelection();
+      core.togglePane();
+      nav.renderAll();
+    },
+    copyToOtherPane: () => transferToOtherPane("copy"),
+    moveToOtherPane: () => transferToOtherPane("move"),
     setClipboard: fileops.fileops.setClipboard,
     duplicate: (paths) => void fileops.fileops.duplicate(paths),
     isVirtualCwd: core.isVirtualCwd,

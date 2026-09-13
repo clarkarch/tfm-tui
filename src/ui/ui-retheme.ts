@@ -42,6 +42,9 @@ type RethemeCtx = {
   // side-effect hook for non-visual config consumers (undo journal sync).
   // Runs at the end of every applyConfig — optional so tests stay light.
   onConfigApplied?(): void;
+  // dual pane: re-clamp the active pane when dual is disabled (a hidden pane
+  // must never own input/status) and repaint the focus cue.
+  normalizePanes?(): void;
 };
 
 export const makeRetheme = (ctx: RethemeCtx) => {
@@ -71,6 +74,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       n.fg = colors.sidebarFgMuted;
     });
     setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
+    setOnId("tfm-pane-divider", (n) => {
+      n.backgroundColor = colors.divider;
+    });
     setOnId(BAND_ID, (n) => {
       n.borderColor = colors.accent;
     });
@@ -91,13 +97,20 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     ctx.repaintButtons();
     ctx.renderCrumbs();
     ctx.refreshNav();
-    for (const id of ["tfm-search", "tfm-path-input", "tfm-prompt-input"]) {
-      setOnId(id, (n) => {
-        n.backgroundColor = colors.accentBg;
-        n.focusedBackgroundColor = colors.accentBg;
-        n.textColor = colors.white;
-      });
+    for (const p of ["tfm-p0-", "tfm-p1-"]) {
+      for (const name of ["search", "path-input"]) {
+        setOnId(`${p}${name}`, (n) => {
+          n.backgroundColor = colors.accentBg;
+          n.focusedBackgroundColor = colors.accentBg;
+          n.textColor = colors.white;
+        });
+      }
     }
+    setOnId("tfm-prompt-input", (n) => {
+      n.backgroundColor = colors.accentBg;
+      n.focusedBackgroundColor = colors.accentBg;
+      n.textColor = colors.white;
+    });
     if (ctx.escMenu.isOpen()) {
       setOnId("tfm-menu-panel", (n) => applySurface(n, floatSurface(st, colors, colors.sidebarBg)));
       ctx.escMenu.renderMenuContent();
@@ -173,6 +186,19 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         pane.width = ctx.config.ui.previewWidth;
       } catch {}
     }
+    // dual-pane visibility: pane 1 + divider show only while enabled. renderAll
+    // (below, via renderSig) rebuilds both grids through the new pane width.
+    for (const id of ["tfm-pane-col-1", "tfm-pane-divider"]) {
+      const node: any = ctx.byId(id);
+      if (node) {
+        try {
+          node.visible = ctx.config.ui.dualPane;
+        } catch {}
+      }
+    }
+    try {
+      ctx.normalizePanes?.();
+    } catch {}
 
     if (themeChanged) {
       ctx.clearIconCaches();

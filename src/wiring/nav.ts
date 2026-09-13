@@ -8,8 +8,8 @@ import { makeRenderAll } from "../app/render-all";
 import { makeQuit } from "../app/quit";
 import { makeStatus } from "../ui/ui-status";
 import { makeNav, makeSessionSync } from "../app/nav";
-import { saveSessionSync } from "../fs/session";
-import { makeTabs } from "../app/tabs";
+import { saveSessionSync, type PaneTabs } from "../fs/session";
+import { makeTabs, nextTab as cycleNextTab, prevTab as cyclePrevTab } from "../app/tabs";
 import { makeSearch } from "../input/search";
 import { appendLog } from "../app/log";
 import { xtShiftEscapeFrame } from "../ui/ui-term";
@@ -41,14 +41,24 @@ export const wireNav = (deps: {
   // cwd-sync, then the named steps in insertion order, each guarded. ---
   const renderAll = makeRenderAll({
     state: core.state,
-    syncTabFromState: () => syncTabFromState(),
+    syncTabFromState: () => syncTabsFromState(),
     scheduleSaveSession: () => scheduleSaveSession(),
+    syncPaneCwds: () => {
+      for (const s of core.panes.states) s.cwd = s.history[s.histIdx] ?? s.cwd;
+    },
     log: (msg) => appendLog(msg),
     steps: {
       cwdWatcher: () => getWatcher().syncCwdWatcher(),
-      tabbar: () => getChrome().chrome.renderTabbar(),
-      nav: () => getChrome().toolbar.refreshNav(),
-      crumbs: () => getChrome().toolbar.renderCrumbs(),
+      tabbar: () => {
+        getChrome().chrome.renderTabbar(0);
+        getChrome().chrome.renderTabbar(1);
+      },
+      nav: () => {
+        for (const t of getChrome().toolbars) t.refreshNav();
+      },
+      crumbs: () => {
+        for (const t of getChrome().toolbars) t.renderCrumbs();
+      },
       sidebar: () => getChrome().chrome.renderSidebar(),
       iconQueue: () => {
         void core.slots.drainIconQueue();
@@ -56,6 +66,7 @@ export const wireNav = (deps: {
       grid: () => {
         void getGrid().renderGrid();
       },
+      paneFocus: () => core.refreshPaneFocus(),
       preview: () => {
         void getGrid().renderPreview();
       },
@@ -85,8 +96,8 @@ export const wireNav = (deps: {
     closeTerminal: () => getTerm().closeTerminalPane(),
     flushSession: () => {
       if (!core.isVirtualCwd()) {
-        syncTabFromState();
-        saveSessionSync(core.state.cwd, tabModel.list, tabModel.active);
+        syncTabsFromState();
+        saveSessionSync(paneTabs(), core.panes.active);
       }
     },
     destroy: () => getChrome().renderer.destroy(),
@@ -105,40 +116,69 @@ export const wireNav = (deps: {
   const { canBack, canFwd, goBack, goFwd, navigate } = makeNav(core.state, {
     renderAll,
     clearSearch: () => clearSearch(),
-    exitPathEdit: () => getChrome().toolbar.exitPathEdit(),
+    exitPathEdit: () => getChrome().activeToolbar().exitPathEdit(),
     closeFileMenuIfOpen: () => {
       if (getChrome().menu.isFileMenuOpen()) getChrome().menu.closeFileMenu();
     },
     onNavigate: (dir) => sharedPluginEvents().emit("navigate", { dir }),
   });
 
-  // --- Tabs: `state` is always the ACTIVE tab's view; switching copies the
-  // live history refs into the outgoing tab slot and adopts the incoming one.
-  // Model lives in ./tabs (pure, tested) — rendering/session I/O stay out. ---
-  const tabModel = makeTabs(core.state, {
-    onChanged: renderAll,
-    status: setStatusMsg,
-    quit: quitApp,
-  });
-  const { switchTab, newTab, closeTab, syncTabFromState } = tabModel;
+  // --- Tabs: ONE model per pane — each pane is a browser-like tab list. The
+  // focused pane's model backs the tab keybinds/menu; both get painted. Model
+  // lives in ./tabs (pure, tested) — rendering/session I/O stay out. ---
+  const tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>] = [
+    makeTabs(core.panes.states[0], { onChanged: renderAll, status: setStatusMsg, quit: quitApp }),
+    makeTabs(core.panes.states[1], { onChanged: renderAll, status: setStatusMsg, quit: quitApp }),
+  ];
+  const activeTabModel = () => tabModels[core.panes.active]!;
+  const syncTabsFromState = (): void => {
+    tabModels[0].syncTabFromState();
+    tabModels[1].syncTabFromState();
+  };
+  const paneTabs = (): [PaneTabs, PaneTabs] => [
+    { tabs: tabModels[0].list, activeTab: tabModels[0].active },
+    { tabs: tabModels[1].list, activeTab: tabModels[1].active },
+  ];
+  const switchTab = (i: number): void => activeTabModel().switchTab(i);
+  const newTab = (dir?: string): void => activeTabModel().newTab(dir);
+  const closeTab = (i?: number): void => activeTabModel().closeTab(i);
+  const nextTab = (): void => cycleNextTab(activeTabModel());
+  const prevTab = (): void => cyclePrevTab(activeTabModel());
 
   // --- Session save/restore scheduling — logic lives in ./nav (tested) ---
   const { scheduleSaveSession, restoreSession } = makeSessionSync({
-    state: core.state,
-    tabModel,
+    paneTabs,
+    syncTabsFromState,
+    adoptPaneTabs: (pane, tabs, activeTab) => tabModels[pane]!.adoptTabs(tabs, activeTab),
+    adoptDefaultTabs: () => {
+      tabModels[0].adoptTab();
+      tabModels[1].adoptTab();
+    },
+    activePane: () => core.panes.active,
+    setActivePane: (i) => core.setActivePane(i),
     config: core.config,
     isVirtualCwd: core.isVirtualCwd,
   });
 
-  // --- Type-to-search: query state + begin/clear/input-wiring live in ./search;
-  // the keymap drives begin/clear, the grid reads the query via getQuery(). ---
-  const search = makeSearch({
-    byId: core.lookup.byId,
-    // arrow wrappers: termHasFocus/renderGrid belong to later wirings (TDZ)
-    termHasFocus: () => getTermHasFocus(),
-    renderGrid: () => getGrid().renderGrid(),
-  });
-  const { clearSearch, beginTypeToSearch, wireSearchInput } = search;
+  // --- Type-to-search: ONE query + input per pane (each pane's toolbar has
+  // its own search box). The keymap drives the focused pane's; its grid reads
+  // its own query so a search filters only that side. ---
+  const mkSearch = (pane: 0 | 1) =>
+    makeSearch({
+      byId: core.lookup.byId,
+      inputId: `tfm-p${pane}-search`,
+      // arrow wrappers: termHasFocus/renderGrid belong to later wirings (TDZ)
+      termHasFocus: () => getTermHasFocus(),
+      renderGrid: () => getGrid().renderPane(pane),
+    });
+  const searches: [ReturnType<typeof makeSearch>, ReturnType<typeof makeSearch>] = [mkSearch(0), mkSearch(1)];
+  const activeSearch = () => searches[core.panes.active]!;
+  const clearSearch = (): void => activeSearch().clearSearch();
+  const beginTypeToSearch = (ch: string): void => activeSearch().beginTypeToSearch(ch);
+  const wireSearchInput = (): void => {
+    searches[0].wireSearchInput();
+    searches[1].wireSearchInput();
+  };
 
   return {
     renderAll,
@@ -149,12 +189,22 @@ export const wireNav = (deps: {
     goBack,
     goFwd,
     navigate,
-    tabModel,
+    get tabModel() {
+      return activeTabModel();
+    },
+    tabModels,
+    activeTabModel,
     switchTab,
     newTab,
     closeTab,
+    nextTab,
+    prevTab,
     restoreSession,
-    search,
+    get search() {
+      return activeSearch();
+    },
+    searches,
+    activeSearch,
     clearSearch,
     beginTypeToSearch,
     wireSearchInput,

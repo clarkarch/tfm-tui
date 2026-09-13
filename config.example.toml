@@ -13,6 +13,7 @@ icon-cells              = 3         # grid icon height in rows, 1..5
 list-row-height         = 1         # list view row height in cells, 1..3 (icon scales with it)
 preview-width           = 40        # 20..80 cells
 preview-enabled         = false     # right-side preview pane (text files, folder stats)
+dual-pane               = false     # true = two independent file panes side by side (tab switches the active pane); false = single pane
 sidebar-auto-hide       = false     # true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)
 sidebar-collapse-style  = "hidden"  # "rail" = icon-only strip; "hidden" = width 0; "min" = shrink to a sliver
 preview-auto-hide       = false     # true = collapse the preview pane until the mouse nears the right edge
@@ -74,33 +75,36 @@ ansi14         = "#7dcfff"  # terminal color 14 (bright cyan)
 ansi15         = "#c0caf5"  # terminal color 15 (bright white)
 
 [keys]
-quit              = ["ctrl+q"]                  # default: ctrl+q
-open-menu         = ["escape"]                  # default: escape
-toggle-hidden     = ["ctrl+h"]                  # default: ctrl+h
-reload-places     = ["ctrl+r"]                  # default: ctrl+r
-new-tab           = ["ctrl+t"]                  # default: ctrl+t
-close-tab         = ["ctrl+w"]                  # default: ctrl+w
-next-tab          = ["ctrl+tab"]                # default: ctrl+tab
-prev-tab          = ["ctrl+shift+tab"]          # default: ctrl+shift+tab
-select-all        = ["ctrl+a"]                  # default: ctrl+a
-trash             = ["delete"]                  # default: delete
-rename-or-restore = ["f2"]                      # default: f2
-copy              = ["ctrl+c"]                  # default: ctrl+c
-cut               = ["ctrl+x"]                  # default: ctrl+x
-duplicate         = ["ctrl+d"]                  # default: ctrl+d
-paste             = ["ctrl+v"]                  # default: ctrl+v
-undo              = ["ctrl+z"]                  # default: ctrl+z
-redo              = ["ctrl+y", "ctrl+shift+z"]  # default: ctrl+y or ctrl+shift+z
-parent-dir        = ["backspace"]               # default: backspace
-hist-back         = ["alt+left"]                # default: alt+left
-hist-forward      = ["alt+right"]               # default: alt+right
-show-props        = ["alt+enter"]               # default: alt+enter
-new-folder        = ["ctrl+shift+n"]            # default: ctrl+shift+n
-new-file          = ["ctrl+alt+n"]              # default: ctrl+alt+n
-path-edit         = ["ctrl+l"]                  # default: ctrl+l
-toggle-preview    = ["f9"]                      # default: f9
-open-terminal     = ["f4"]                      # default: f4
-connect-server    = ["ctrl+shift+s"]            # default: ctrl+shift+s
-toggle-view       = ["ctrl+g"]                  # default: ctrl+g
-zoom-in           = ["ctrl+="]                  # default: ctrl+=
-zoom-out          = ["ctrl+-"]                  # default: ctrl+-
+quit               = ["ctrl+q"]                  # default: ctrl+q
+open-menu          = ["escape"]                  # default: escape
+toggle-hidden      = ["ctrl+h"]                  # default: ctrl+h
+reload-places      = ["ctrl+r"]                  # default: ctrl+r
+new-tab            = ["ctrl+t"]                  # default: ctrl+t
+close-tab          = ["ctrl+w"]                  # default: ctrl+w
+next-tab           = ["ctrl+tab"]                # default: ctrl+tab
+prev-tab           = ["ctrl+shift+tab"]          # default: ctrl+shift+tab
+select-all         = ["ctrl+a"]                  # default: ctrl+a
+trash              = ["delete"]                  # default: delete
+rename-or-restore  = ["f2"]                      # default: f2
+copy               = ["ctrl+c"]                  # default: ctrl+c
+cut                = ["ctrl+x"]                  # default: ctrl+x
+duplicate          = ["ctrl+d"]                  # default: ctrl+d
+paste              = ["ctrl+v"]                  # default: ctrl+v
+undo               = ["ctrl+z"]                  # default: ctrl+z
+redo               = ["ctrl+y", "ctrl+shift+z"]  # default: ctrl+y or ctrl+shift+z
+parent-dir         = ["backspace"]               # default: backspace
+hist-back          = ["alt+left"]                # default: alt+left
+hist-forward       = ["alt+right"]               # default: alt+right
+show-props         = ["alt+enter"]               # default: alt+enter
+new-folder         = ["ctrl+shift+n"]            # default: ctrl+shift+n
+new-file           = ["ctrl+alt+n"]              # default: ctrl+alt+n
+path-edit          = ["ctrl+l"]                  # default: ctrl+l
+toggle-preview     = ["f9"]                      # default: f9
+open-terminal      = ["f4"]                      # default: f4
+connect-server     = ["ctrl+shift+s"]            # default: ctrl+shift+s
+toggle-view        = ["ctrl+g"]                  # default: ctrl+g
+zoom-in            = ["ctrl+="]                  # default: ctrl+=
+zoom-out           = ["ctrl+-"]                  # default: ctrl+-
+switch-pane        = ["tab"]                     # default: tab
+copy-to-other-pane = ["f5"]                      # default: f5
+move-to-other-pane = ["f6"]                      # default: f6

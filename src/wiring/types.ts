@@ -40,7 +40,13 @@ export type NavWiring = {
   quitApp: ReturnType<typeof makeQuit>;
   setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
   tabModel: ReturnType<typeof makeTabs>;
+  tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>];
+  activeTabModel: () => ReturnType<typeof makeTabs>;
+  nextTab: () => void;
+  prevTab: () => void;
   search: ReturnType<typeof makeSearch>;
+  searches: [ReturnType<typeof makeSearch>, ReturnType<typeof makeSearch>];
+  activeSearch: () => ReturnType<typeof makeSearch>;
 } & Pick<ReturnType<typeof makeNav>, "canBack" | "canFwd" | "goBack" | "goFwd" | "navigate"> &
   Pick<ReturnType<typeof makeTabs>, "switchTab" | "newTab" | "closeTab"> &
   Pick<ReturnType<typeof makeSessionSync>, "restoreSession"> &
@@ -50,7 +56,8 @@ export type ChromeWiring = {
   renderer: Awaited<ReturnType<typeof createCliRenderer>>;
   menu: ReturnType<typeof makeMenu>;
   chrome: ReturnType<typeof makeChrome>;
-  toolbar: ReturnType<typeof makeToolbar>;
+  toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>];
+  activeToolbar: () => ReturnType<typeof makeToolbar>;
   notify: ReturnType<typeof makeNotify>["notify"];
   notifySticky: ReturnType<typeof makeNotify>["notifySticky"];
   openFileDefault: ReturnType<typeof makeRecentOpen>["openFileDefault"];
@@ -61,6 +68,8 @@ export type ChromeWiring = {
 
 export type GridFoundationWiring = {
   selection: ReturnType<typeof makeSelection>;
+  selections: [ReturnType<typeof makeSelection>, ReturnType<typeof makeSelection>];
+  refreshCutVisuals: () => void;
   rename: ReturnType<typeof makeRename>;
   bulkRename: ReturnType<typeof makeBulkRename>;
   startBulkRename: (paths: string[]) => void;
@@ -79,6 +88,9 @@ export type FileopsWiring = {
 export type GridWiring = {
   renderPreview: ReturnType<typeof makePreview>["renderPreview"];
   renderGrid: ReturnType<typeof makeGridRenderer>["renderGrid"];
+  renderPane: (pane: 0 | 1) => Promise<void>;
+  focusPane: (pane: 0 | 1) => void;
+  dropIntoPane: (pane: 0 | 1) => void;
   finishDrag: () => void;
   bandCtx: BandCtx;
   props: ReturnType<typeof makeProps>;

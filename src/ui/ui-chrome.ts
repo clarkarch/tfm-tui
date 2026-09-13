@@ -52,11 +52,13 @@ type ChromeCtx = {
   connectServer(raw?: string): void;
   kbActive(): boolean; // sidebarActive
   kbIdx(): number; // placeIdx
-  tabs(): { list: Tab[]; active: number }; // live tabModel read
-  closeTab(i: number): void;
-  switchTab(i: number): void;
-  newTab(): void;
-  hoverBtn(id: string, iconName: string, onMouseDown: (ev: any) => void): any;
+  tabs(pane: 0 | 1): { list: Tab[]; active: number }; // live per-pane tab model
+  // focus a pane (tab strip / chip press) before acting on it
+  focusPane(pane: 0 | 1): void;
+  closeTab(pane: 0 | 1, i: number): void;
+  switchTab(pane: 0 | 1, i: number): void;
+  newTab(pane: 0 | 1, dir?: string): void;
+  hoverBtn(pane: 0 | 1, id: string, iconName: string, onMouseDown: (ev: any) => void): any;
   stripSelectable(): void;
   drainIconQueue(): void;
   makeIconSlot(
@@ -82,6 +84,18 @@ export const makeChrome = (ctx: ChromeCtx) => {
     place: Place;
   }[] = [];
   let mousePlaceIdx = -1;
+  // signature of the last rendered places list (labels/paths/theme/geometry).
+  // renderSidebar rebuilds only when it changes — otherwise a pane-focus or
+  // navigation would clear and recreate every icon slot, flashing the fallback
+  // glyph before the raster drains (the dual-pane sidebar flicker).
+  let lastPlacesSig = "";
+
+  // is this place the one matching the CURRENT (focused pane's) cwd?
+  const isPlaceSelected = (place: Place): boolean => {
+    if (place.path) return path.resolve(place.path) === path.resolve(ctx.stateCwd());
+    const target = place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : null;
+    return !!place.scheme && !!target && ctx.stateCwd() === target;
+  };
 
   // mount/eject reload: one pending reload at a time — rapid clicks used to
   // stack redundant 1200/1500ms loadSystemPlaces+renderAll passes
@@ -105,9 +119,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const idx = placesHost.length;
     const placeTarget = (): string | null =>
       place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : place.path;
-    const selected = place.path
-      ? path.resolve(place.path) === path.resolve(ctx.stateCwd())
-      : !!place.scheme && ctx.stateCwd() === placeTarget();
+    const selected = isPlaceSelected(place);
     const colors = ctx.colors();
     const st = ctx.uiStyle();
     const normFg = colors.sidebarFg;
@@ -217,10 +229,34 @@ export const makeChrome = (ctx: ChromeCtx) => {
   const renderSidebar = () => {
     const hostBox: any = ctx.byId("tfm-places");
     if (!hostBox) return;
+    const groups = buildSections();
+    const sig = JSON.stringify([
+      ctx.uiStyle(),
+      ctx.sideInnerW(),
+      ctx.colors(),
+      groups.map((g) =>
+        g.map((p) => [
+          p.label,
+          p.path ?? "",
+          p.scheme ?? "",
+          p.icon,
+          p.ejectable ?? false,
+          p.device ?? "",
+          p.networkUri ?? "",
+          p.action ?? "",
+          p.mountDevice ?? "",
+        ]),
+      ),
+    ]);
+    if (sig === lastPlacesSig && placesHost.length) {
+      // same places — just move the cwd highlight, no slot re-creation
+      normalizePlaces();
+      return;
+    }
+    lastPlacesSig = sig;
     clearChildren(hostBox);
     placesHost.length = 0;
 
-    const groups = buildSections();
     groups.forEach((group, gi) => {
       for (const place of group) hostBox.add(makeRow(place));
       if (gi < groups.length - 1) hostBox.add(makeDivider());
@@ -230,11 +266,14 @@ export const makeChrome = (ctx: ChromeCtx) => {
     }
   };
 
-  // --- Tab strip: one clickable chip per open tab + a new-tab button ---
-  const renderTabbar = (): void => {
+  // --- Tab strip: one clickable chip per open tab + a new-tab button. One
+  // strip PER PANE (ids `tfm-p0-tabbar` / `tfm-p1-tabbar`). ---
+  const renderTabbar = (pane: 0 | 1): void => {
     const colors = ctx.colors();
-    const bar: any = ctx.byId("tfm-tabbar");
+    const prefix = `tfm-p${pane}-`;
+    const bar: any = ctx.byId(`${prefix}tabbar`);
     if (!bar) return;
+    const tabs = ctx.tabs(pane);
     // a chip is a valid drop target only for a single dragged folder — dropping
     // navigates THAT tab to it (browser-style)
     const dragTabDir = (): string | null => {
@@ -248,21 +287,22 @@ export const makeChrome = (ctx: ChromeCtx) => {
     // earns a row once there's something to switch to (visible=false is
     // display:none in yoga — no empty row left)
     try {
-      bar.visible = ctx.tabBar() || ctx.tabs().list.length > 1;
+      bar.visible = ctx.tabBar() || tabs.list.length > 1;
     } catch {}
     clearChildren(bar);
-    ctx.tabs().list.forEach((t, i) => {
-      const tabId = `tfm-tab-${i}`;
+    tabs.list.forEach((t, i) => {
+      const tabId = `${prefix}tab-${i}`;
+      const active = i === tabs.active;
       const paint = () => {
         const n: any = ctx.byId(tabId);
-        if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, i === ctx.tabs().active ? "selected" : "rest"));
+        if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, active ? "selected" : "rest"));
       };
       // ✕ flatten target must match the chip's own fill, or the raster shows as
       // a square patch on the active tab (accentBg) vs the canvas (rest states)
       const closeStates = (): IconState[] => [
         {
           fg: colors.sidebarFgMuted,
-          bg: i === ctx.tabs().active ? colors.accentBg : slotBg(ctx.uiStyle(), colors, colors.bg),
+          bg: active ? colors.accentBg : slotBg(ctx.uiStyle(), colors, colors.bg),
         },
         { fg: colors.white, bg: colors.hoverBg },
       ];
@@ -275,7 +315,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
           try {
             ev.stopPropagation?.();
           } catch {} // ✕ must not also activate the chip
-          ctx.closeTab(i);
+          ctx.closeTab(pane, i);
         },
         closeStates,
       );
@@ -301,23 +341,24 @@ export const makeChrome = (ctx: ChromeCtx) => {
             columnGap: 1,
             paddingLeft: 1,
             paddingRight: 1,
-            ...tileSurface(ctx.uiStyle(), colors, i === ctx.tabs().active ? "selected" : "rest"),
+            ...tileSurface(ctx.uiStyle(), colors, active ? "selected" : "rest"),
             onMouseDown: (ev: any) => {
               try {
                 ev.stopPropagation?.();
               } catch {}
+              ctx.focusPane(pane);
               ctx.closeFileMenu();
               if (ev.button === 1)
-                ctx.closeTab(i); // middle-click also closes
-              else ctx.switchTab(i);
+                ctx.closeTab(pane, i); // middle-click also closes
+              else ctx.switchTab(pane, i);
             },
             onMouseDrop: () => {
               const keys = gridDrag.keys;
               ctx.finishDrag();
               const first = keys?.length === 1 ? keys[0] : undefined;
-              ctx.dlog(`tab drop chip=${i} keys=${keys?.length ?? -1} dir=${first?.isDir ?? "-"}`);
+              ctx.dlog(`tab drop pane=${pane} chip=${i} keys=${keys?.length ?? -1} dir=${first?.isDir ?? "-"}`);
               if (!first?.isDir) return;
-              ctx.switchTab(i);
+              ctx.switchTab(pane, i);
               ctx.navigate(first.path);
             },
             onMouseOver: () => {
@@ -328,19 +369,24 @@ export const makeChrome = (ctx: ChromeCtx) => {
                 if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected"));
                 return;
               }
-              if (i !== ctx.tabs().active) {
+              if (!active) {
                 const n: any = ctx.byId(tabId);
                 if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "hover"));
               }
             },
             onMouseOut: paint,
           },
-          Text({ content: tabTitle(t), fg: i === ctx.tabs().active ? colors.white : colors.sidebarFg }),
+          Text({ content: tabTitle(t), fg: active ? colors.white : colors.sidebarFg }),
           closeWrap,
         ),
       );
     });
-    bar.add(ctx.hoverBtn("tfm-tab-new", "plus", () => ctx.newTab()));
+    bar.add(
+      ctx.hoverBtn(pane, `${prefix}tab-new`, "plus", () => {
+        ctx.focusPane(pane);
+        ctx.newTab(pane);
+      }),
+    );
     ctx.stripSelectable();
     void ctx.drainIconQueue();
   };
@@ -358,6 +404,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
   const normalizePlaces = () => {
     const colors = ctx.colors();
     placesHost.forEach((rec, i) => {
+      // recompute from the live cwd: the focused pane can change between
+      // renders without the places list changing (rebuild is skipped then)
+      rec.selected = isPlaceSelected(rec.place);
       const isSel = rec.selected;
       const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
       const row: any = ctx.byId(rec.rowId);

@@ -63,7 +63,6 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     { selected: false, place: { path: "/home" } as any },
     { selected: false, place: { path: "/media/usb", mountDevice: "sdb1" } as any },
   ];
-  const tabModel = { active: 1, list: [0, 1, 2] };
   const binds: Record<string, string[]> = structuredClone(defaultConfig.keys);
   const pickState = { open: false };
   const bulkState = { open: false };
@@ -126,11 +125,11 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     closeFileSubmenu: rec("fmenu:sub-close"),
     moveFileSubmenu: rec("fmenu:sub-move"),
     activateFileSubmenu: rec("fmenu:sub-activate"),
-    tabModel,
+    nextTab: rec("tab:next"),
+    prevTab: rec("tab:prev"),
     newTab: rec("tab:new"),
     closeTab: rec("tab:close"),
     switchTab: (i) => {
-      tabModel.active = i;
       calls.push(`tab:switch:${i}`);
     },
     inTrashView: () => false,
@@ -157,6 +156,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     togglePreview: rec("preview:toggle"),
     toggleViewMode: rec("view:toggle"),
     zoomTiles: (d) => calls.push(`zoom:${d}`),
+    switchPane: rec("pane:switch"),
+    copyToOtherPane: rec("pane:copy"),
+    moveToOtherPane: rec("pane:move"),
     setClipboard: (mode, items) => calls.push(`clip:${mode}:${items.length}`),
     duplicate: (paths) => calls.push(`duplicate:${paths.join(",")}`),
     isVirtualCwd: () => false,
@@ -190,7 +192,6 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     calls,
     selection,
     places,
-    tabModel,
     state,
     escMenuState,
     seedTiles,
@@ -600,18 +601,9 @@ describe("tabs", () => {
     const h = makeHarness();
     h.key("t", { ctrl: true });
     h.key("w", { ctrl: true });
-    h.key("tab", { ctrl: true }); // active 1 -> 2
-    h.key("tab", { ctrl: true, shift: true }); // 2 -> 1
-    expect(h.calls).toEqual(["tab:new", "tab:close", "tab:switch:2", "tab:switch:1"]);
-  });
-
-  test("ctrl+tab wraps at the end; ctrl+shift+tab wraps at the start", () => {
-    const h = makeHarness({ tabModel: { active: 2, list: [0, 1, 2] } });
     h.key("tab", { ctrl: true });
-    expect(h.calls).toEqual(["tab:switch:0"]);
-    const h2 = makeHarness({ tabModel: { active: 0, list: [0, 1, 2] } });
-    h2.key("tab", { ctrl: true, shift: true });
-    expect(h2.calls).toEqual(["tab:switch:2"]);
+    h.key("tab", { ctrl: true, shift: true });
+    expect(h.calls).toEqual(["tab:new", "tab:close", "tab:next", "tab:prev"]);
   });
 });
 
@@ -996,5 +988,32 @@ describe("file menu with no initial cursor", () => {
     fmenu.idx = -1;
     h.key("up"); // last non-sep
     expect(fmenu.idx).toBe(2);
+  });
+});
+
+describe("dual-pane actions", () => {
+  test("tab/f5/f6 dispatch switchPane/copyToOtherPane/moveToOtherPane", () => {
+    const h = makeHarness();
+    h.key("tab");
+    h.key("f5");
+    h.key("f6");
+    expect(h.calls).toEqual(["pane:switch", "pane:copy", "pane:move"]);
+  });
+
+  test("autorepeat never starts cross-pane work (op-flood guard)", () => {
+    const h = makeHarness();
+    h.key("tab", { repeated: true });
+    h.key("f5", { repeated: true });
+    h.key("f6", { repeated: true });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("a remap moves the pane switch off tab", () => {
+    const h = makeHarness();
+    h.binds.switchPane = ["ctrl+u"];
+    h.key("tab");
+    expect(h.calls).toEqual([]);
+    h.key("u", { ctrl: true });
+    expect(h.calls).toEqual(["pane:switch"]);
   });
 });

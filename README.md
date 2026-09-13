@@ -18,6 +18,9 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Drag files between folders (ctrl+drag), out to other apps, or in from outside.
   Cross-app drag is kitty-only.
 - Places sidebar, GTK bookmarks, recent files, XDG trash with restore, clipboard.
+- Dual pane: two independent file panes side by side, each with its own top bar
+  (path, sort, search) and its own tabs. `Tab` switches the focused side, `F5`
+  copies the selection to the other pane, `F6` moves it.
 - Network locations: connect to `sftp://`, `smb://`, WebDAV, FTP… shares through
   gvfs (sidebar or right-click → Connect to Server…); saved connections live in
   your GTK bookmarks. Credentials are prompted in-app (passwords masked); ssh
@@ -63,7 +66,8 @@ bun run compile && cp dist/tfm ~/.local/bin/
 
 - `enter` open · `f2` rename · `backspace` up · `escape` menu
 - `ctrl+c/x/v/d` copy/cut/paste/duplicate · `ctrl+z/y` undo/redo
-- `ctrl+t/w` new/close tab · `ctrl+tab` switch tab
+- `tab` switch focused pane · `f5`/`f6` copy/move to the other pane (dual pane)
+- `ctrl+t/w` new/close tab · `ctrl+tab` switch tab (per pane)
 - `delete` trash · `alt+enter` properties · `ctrl+q` quit
 - `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f9` preview · `f4` terminal · `ctrl+shift+s` connect to server
 

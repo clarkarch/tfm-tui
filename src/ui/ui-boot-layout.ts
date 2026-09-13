@@ -51,8 +51,10 @@ type AppContainerOpts = {
   tabBarVisible: boolean;
   previewWidth: number;
   previewEnabled: boolean;
+  dualPane: boolean;
   title: any;
-  toolbarShell: any;
+  // one toolbar shell per pane (ids already prefixed by the toolbar factory)
+  toolbarShells: [any, any];
 };
 
 export const buildAppContainer = (o: AppContainerOpts): any =>
@@ -79,17 +81,44 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
         ...chromeSurface(o.uiStyle, o.colors, o.colors.bg),
         flexDirection: "column",
       },
-      o.toolbarShell,
-      Box({
-        id: "tfm-tabbar",
-        width: "100%",
-        height: 1,
-        flexDirection: "row",
-        columnGap: 1,
-        paddingLeft: 1,
-        visible: o.tabBarVisible,
-      }),
-      Box({ id: "tfm-grid-host", flexGrow: 1, width: "100%", flexDirection: "column" }),
+      // Each pane is a self-contained column: its own top bar, its own tab
+      // strip, its own grid. Status + terminal stay global below both.
+      Box(
+        { id: "tfm-panes", flexGrow: 1, width: "100%", flexDirection: "row" },
+        Box(
+          { id: "tfm-pane-col-0", flexGrow: 1, height: "100%", flexDirection: "column" },
+          o.toolbarShells[0],
+          Box({
+            id: "tfm-p0-tabbar",
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            columnGap: 1,
+            visible: o.tabBarVisible,
+          }),
+          Box({ id: "tfm-pane-0", flexGrow: 1, width: "100%", flexDirection: "column" }),
+        ),
+        Box({
+          id: "tfm-pane-divider",
+          width: 1,
+          height: "100%",
+          visible: o.dualPane,
+          backgroundColor: o.colors.divider,
+        }),
+        Box(
+          { id: "tfm-pane-col-1", flexGrow: 1, height: "100%", flexDirection: "column", visible: o.dualPane },
+          o.toolbarShells[1],
+          Box({
+            id: "tfm-p1-tabbar",
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            columnGap: 1,
+            visible: o.tabBarVisible,
+          }),
+          Box({ id: "tfm-pane-1", flexGrow: 1, width: "100%", flexDirection: "column" }),
+        ),
+      ),
       // status bar sits above the embedded terminal pane (zero-height until opened),
       // so with a terminal open the bar hugs its top edge instead of sinking below it
       Box(
@@ -124,6 +153,9 @@ type BootLayoutCtx = {
   byId: (id: string) => any;
   colors: Theme; // eager object — see buildTitle
   bandCtx: BandCtx;
+  focusPane: (index: number) => void;
+  // drop released over the pane's empty background = move into that pane's cwd
+  dropIntoPane: (pane: number) => void;
   closeFileMenu: () => void;
   clearSearch: () => void;
   blurTerminal: () => void;
@@ -136,40 +168,51 @@ type BootLayoutCtx = {
   emptyAreaEntries: (x: number, y: number) => any[];
 };
 
-// returns the scroller so index can keep its `scroller` live-let (the grid
-// renderer reads it through a getter)
-export const buildBootLayout = (ctx: BootLayoutCtx): ScrollBoxRenderable => {
-  const scroller = new ScrollBoxRenderable(ctx.renderer, {
-    id: "tfm-scroll",
-    flexGrow: 1,
-    width: "100%",
-    scrollY: true,
-    viewportCulling: true,
-    contentOptions: { flexDirection: "column" },
-    onMouseDown: (ev: any) => {
-      ctx.closeFileMenu();
-      ctx.clearSearch();
-      ctx.blurTerminal();
-      if (ctx.pathEditMode()) {
-        ctx.exitPathEdit();
-        return;
-      }
-      if (ctx.isRenaming()) ctx.finishInlineRename(false);
-      // left-click clears (and may start a rubber band); right-click opens the
-      // background menu WITHOUT cancelling the selection (Nautilus behavior)
-      if (ev.button === 0) ctx.clearTileSelection();
-      // band shows only once a drag actually moves the pointer
-      beginBand(ev);
-      if (ev.button === 2) ctx.openContextMenu(ev.x, ev.y, "", ctx.emptyAreaEntries(ev.x, ev.y));
-    },
-    onMouseDrag: (ev: any) => updateBandRect(ctx.bandCtx, ev),
-    onMouseDragEnd: (ev: any) => finalizeBand(ctx.bandCtx, ev),
-    onMouseUp: (ev: any) => {
-      if (bandActive()) finalizeBand(ctx.bandCtx, ev);
-    },
-  });
-  const host: any = ctx.byId("tfm-grid-host");
-  host.add(scroller);
+// returns both scrollers (one per pane) so the wiring can keep its live
+// scrollerRefs; `tfm-scroll` stays pane 0's byte-identical id
+export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, ScrollBoxRenderable] => {
+  const makeScroller = (id: string, pane: number): ScrollBoxRenderable =>
+    new ScrollBoxRenderable(ctx.renderer, {
+      id,
+      flexGrow: 1,
+      width: "100%",
+      scrollY: true,
+      viewportCulling: true,
+      contentOptions: { flexDirection: "column" },
+      onMouseDown: (ev: any) => {
+        // clicking a pane focuses it before any selection/band work, so the
+        // facade selection + status target the right pane
+        ctx.focusPane(pane);
+        ctx.closeFileMenu();
+        ctx.clearSearch();
+        ctx.blurTerminal();
+        if (ctx.pathEditMode()) {
+          ctx.exitPathEdit();
+          return;
+        }
+        if (ctx.isRenaming()) ctx.finishInlineRename(false);
+        // left-click clears (and may start a rubber band); right-click opens the
+        // background menu WITHOUT cancelling the selection (Nautilus behavior)
+        if (ev.button === 0) ctx.clearTileSelection();
+        // band shows only once a drag actually moves the pointer
+        beginBand(ev);
+        if (ev.button === 2) ctx.openContextMenu(ev.x, ev.y, "", ctx.emptyAreaEntries(ev.x, ev.y));
+      },
+      onMouseDrag: (ev: any) => updateBandRect(ctx.bandCtx, ev),
+      onMouseDragEnd: (ev: any) => finalizeBand(ctx.bandCtx, ev),
+      onMouseUp: (ev: any) => {
+        if (bandActive()) finalizeBand(ctx.bandCtx, ev);
+      },
+      // dropping onto the pane's background (no tile under the cursor) targets
+      // the pane's current directory — otherwise an empty destination pane can
+      // never receive a drag
+      onMouseDrop: () => ctx.dropIntoPane(pane),
+    });
+
+  const scroller0 = makeScroller("tfm-scroll", 0);
+  const scroller1 = makeScroller("tfm-scroll-2", 1);
+  ctx.byId("tfm-pane-0")?.add(scroller0);
+  ctx.byId("tfm-pane-1")?.add(scroller1);
 
   ctx.renderer.root.add(
     Box({
@@ -202,5 +245,5 @@ export const buildBootLayout = (ctx: BootLayoutCtx): ScrollBoxRenderable => {
     ),
   );
 
-  return scroller;
+  return [scroller0, scroller1];
 };

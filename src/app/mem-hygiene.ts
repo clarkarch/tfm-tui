@@ -30,12 +30,20 @@ type MemHygieneCtx = {
   intervalMs?: number;
 };
 
+// Best-effort native-allocator drain, safe to call from anywhere (including
+// UI close paths and tests). Bun.gc(false) runs finalizers that free OpenTUI's
+// native buffers; without an explicit poke they wait for heap pressure that
+// native growth never provides.
+export const pokeGc = (): void => {
+  try {
+    Bun.gc(false);
+  } catch {}
+};
+
 // returns a stop() so tests (or a future settings knob) can tear it down
 export const startMemHygiene = (ctx: MemHygieneCtx): (() => void) => {
   const timer = setInterval(() => {
-    try {
-      Bun.gc(false);
-    } catch {}
+    pokeGc();
     if (ctx.debugLog) ctx.debugLog(`mem ${nativeMemLine(ctx.allocatorStats())}`);
   }, ctx.intervalMs ?? 10000);
   timer.unref?.();

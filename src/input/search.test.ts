@@ -62,6 +62,7 @@ const makeHarness = () => {
   let renders = 0;
   const search = makeSearch({
     byId: (id) => (id === "tfm-search" ? el : null),
+    inputId: "tfm-search",
     renderGrid: () => {
       renders++;
     },
@@ -88,6 +89,7 @@ describe("makeSearch", () => {
     let renders = 0;
     const search = makeSearch({
       byId: (id) => (id === "tfm-search" ? el : null),
+      inputId: "tfm-search",
       renderGrid: () => {
         renders++;
       },
@@ -127,6 +129,7 @@ describe("makeSearch", () => {
   test("missing/malformed search node never throws", () => {
     const search = makeSearch({
       byId: () => null,
+      inputId: "tfm-search",
       renderGrid: () => {},
       termHasFocus: () => false,
       sched: makeClock(),
@@ -151,6 +154,7 @@ describe("makeSearch", () => {
   test("wireSearchInput without a node is a no-op", () => {
     const search = makeSearch({
       byId: () => null,
+      inputId: "tfm-search",
       renderGrid: () => {},
       termHasFocus: () => false,
       sched: makeClock(),

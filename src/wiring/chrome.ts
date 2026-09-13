@@ -103,12 +103,13 @@ export const wireChrome = async (deps: {
     moveInto: (dest, items) => getFileops().fileops.moveInto(dest, items),
     kbActive: () => getKeyRouter().sidebarActive(),
     kbIdx: () => getKeyRouter().placeIdx(),
-    tabs: () => nav.tabModel,
-    closeTab: nav.closeTab,
-    switchTab: nav.switchTab,
-    newTab: nav.newTab,
-    // toolbar is built after the chrome ctx (TDZ seam) — keep the arrow
-    hoverBtn: (id, icon, onMouseDown) => toolbar.hoverBtn(id, icon, onMouseDown),
+    tabs: (pane) => nav.tabModels[pane]!,
+    focusPane: (pane) => getGrid().focusPane(pane),
+    closeTab: (pane, i) => nav.tabModels[pane]!.closeTab(i),
+    switchTab: (pane, i) => nav.tabModels[pane]!.switchTab(i),
+    newTab: (pane, dir) => nav.tabModels[pane]!.newTab(dir),
+    // toolbars are built after the chrome ctx (TDZ seam) — keep the arrow
+    hoverBtn: (pane, id, icon, onMouseDown) => toolbars[pane]!.hoverBtn(id, icon, onMouseDown),
     stripSelectable,
     drainIconQueue,
     makeIconSlot,
@@ -117,31 +118,41 @@ export const wireChrome = async (deps: {
     connectServer,
   });
 
-  // --- Toolbar — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
-  // path edit, sort/search buttons). ---
-  const toolbar = makeToolbar({
-    renderer: () => renderer,
-    byId,
-    clearChildren,
-    stripSelectable,
-    uiStyle,
-    colors: themeGet,
-    makeIconSlot,
-    setIconState,
-    closeFileMenu: menu.closeFileMenu,
-    blurTerminal: () => getFileops().terminal.blurTerminal(),
-    navigate: nav.navigate,
-    // arrow wrapper: notify is declared below (TDZ seam rule)
-    notify: (m, t, l) => notify(m, t, l),
-    canBack: nav.canBack,
-    canFwd: nav.canFwd,
-    goBack: nav.goBack,
-    goFwd: nav.goFwd,
-    openContextMenu: menu.openContextMenu,
-    sortEntries: () => getGrid().menuEntries.sortEntries(),
-    cwd: () => state.cwd,
-    home,
-  });
+  // --- Toolbars — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
+  // path edit, sort/search buttons). ONE PER PANE, each with its own id prefix
+  // so the nodes can coexist in the renderable registry. ---
+  const makePaneToolbar = (pane: 0 | 1) =>
+    makeToolbar({
+      prefix: `tfm-p${pane}-`,
+      renderer: () => renderer,
+      byId,
+      clearChildren,
+      stripSelectable,
+      uiStyle,
+      colors: themeGet,
+      makeIconSlot,
+      setIconState,
+      closeFileMenu: menu.closeFileMenu,
+      blurTerminal: () => getFileops().terminal.blurTerminal(),
+      focusPane: () => getGrid().focusPane(pane),
+      navigate: nav.navigate,
+      // arrow wrapper: notify is declared below (TDZ seam rule)
+      notify: (m, t, l) => notify(m, t, l),
+      // the toolbar shows ITS pane's history, not the focused pane's: `state`
+      // is the active-pane facade, so read the real per-pane state here
+      canBack: () => core.panes.states[pane]!.histIdx > 0,
+      canFwd: () => core.panes.states[pane]!.histIdx < core.panes.states[pane]!.history.length - 1,
+      goBack: nav.goBack,
+      goFwd: nav.goFwd,
+      openContextMenu: menu.openContextMenu,
+      sortEntries: () => getGrid().menuEntries.sortEntries(),
+      cwd: () => core.panes.states[pane]!.cwd,
+      home,
+    });
+  const toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>] = [
+    makePaneToolbar(0),
+    makePaneToolbar(1),
+  ];
 
   // --- Layout: the pre-mount skeleton (title + three panels) lives in
   // ./ui-boot-layout; ids are repainted by rethemeChrome, so they must stay
@@ -156,8 +167,9 @@ export const wireChrome = async (deps: {
     tabBarVisible: core.config.ui.tabBar,
     previewWidth: core.config.ui.previewWidth,
     previewEnabled: core.config.ui.previewEnabled,
+    dualPane: core.config.ui.dualPane,
     title: buildTitle({ width: core.sideInnerW(), colors: core.colors, visible: core.config.ui.sidebarTitle }),
-    toolbarShell: toolbar.makeToolbarShell(),
+    toolbarShells: [toolbars[0].makeToolbarShell(), toolbars[1].makeToolbarShell()],
   });
 
   // --- Renderer boot ---
@@ -353,7 +365,8 @@ export const wireChrome = async (deps: {
     renderer,
     menu,
     chrome,
-    toolbar,
+    toolbars,
+    activeToolbar: () => toolbars[core.panes.active]!,
     notify,
     notifySticky,
     openFileDefault,

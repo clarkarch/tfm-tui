@@ -9,10 +9,9 @@ import { statSync } from "node:fs";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import type { SortMode } from "../lib/sort";
 import type { Config } from "../config/config";
-import type { TabStateRef } from "./tabs";
-import type { makeTabs } from "./tabs";
+import type { Tab } from "./tabs";
 import { debounced } from "../lib/uiutil";
-import { readRestoredSession, saveSession } from "../fs/session";
+import { readRestoredSession, saveSession, type PaneTabs } from "../fs/session";
 import { debugLog } from "./log";
 
 export type AppState = {
@@ -115,30 +114,38 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
   return { canBack, canFwd, goBack, goFwd, navigate };
 };
 
-// --- Session save/restore scheduling: the debounced write fires after the
-// navigation settles (renderAll calls it), restore adopts the saved tabs into
-// the live model at boot. Off unless [ui] restore-session = true. ---
+// --- Session save/restore scheduling: each pane's tab list is written after
+// the navigation settles (renderAll calls this); restore adopts both panes at
+// boot. Off unless [ui] restore-session = true. ---
 type SessionSyncCtx = {
-  state: TabStateRef;
-  tabModel: ReturnType<typeof makeTabs>;
+  paneTabs: () => [PaneTabs, PaneTabs];
+  syncTabsFromState: () => void;
+  adoptPaneTabs: (pane: 0 | 1, tabs: Tab[], activeTab: number) => void;
+  adoptDefaultTabs: () => void;
+  activePane: () => 0 | 1;
+  setActivePane: (i: 0 | 1) => void;
   config: Config;
   isVirtualCwd: () => boolean;
 };
 
 export const makeSessionSync = (ctx: SessionSyncCtx) => {
   const scheduleSaveSession = debounced(400, () => {
-    ctx.tabModel.syncTabFromState();
+    ctx.syncTabsFromState();
     if (ctx.isVirtualCwd()) return;
-    void saveSession(ctx.state.cwd, ctx.tabModel.list, ctx.tabModel.active).catch(() => {});
+    void saveSession(ctx.paneTabs(), ctx.activePane()).catch(() => {});
   });
 
   const restoreSession = (): void => {
     if (!ctx.config.ui.restoreSession) return;
     const restored = readRestoredSession();
     if (restored) {
-      ctx.tabModel.adoptTabs(restored.tabs, restored.activeTab);
+      ctx.adoptPaneTabs(0, restored.panes[0].tabs, restored.panes[0].activeTab);
+      ctx.adoptPaneTabs(1, restored.panes[1].tabs, restored.panes[1].activeTab);
+      // a session saved with pane 1 active must not leave input targeting a
+      // hidden pane when dual pane is off
+      ctx.setActivePane(ctx.config.ui.dualPane ? restored.activePane : 0);
     } else {
-      ctx.tabModel.adoptTab();
+      ctx.adoptDefaultTabs();
     }
   };
 

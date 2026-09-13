@@ -15,6 +15,9 @@ export type RenderAllCtx = {
   scheduleSaveSession(): void;
   log(msg: string): void;
   steps: Record<string, () => void | Promise<void>>;
+  // dual pane: sync EVERY pane's cwd from its history, not just the active one
+  // (the active `state` facade handles its own). Optional for single-pane tests.
+  syncPaneCwds?(): void;
 };
 
 export const makeRenderAll = (ctx: RenderAllCtx): (() => void) => {
@@ -22,6 +25,7 @@ export const makeRenderAll = (ctx: RenderAllCtx): (() => void) => {
   return () => {
     ctx.syncTabFromState();
     ctx.state.cwd = ctx.state.history[ctx.state.histIdx] ?? ctx.state.cwd;
+    ctx.syncPaneCwds?.();
     for (const name of names) {
       // per-step timings feed slow-boot reports; measured always (ns-cheap),
       // logged only under --debug so hot-path renders stay quiet

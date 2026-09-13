@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeHitTargetAt } from "./hit-target";
+import { mergedMapFacade } from "../app/panes";
 
 // fake renderable chain: child nodes link to parents via .parent
 const node = (id: string | undefined, parent?: any): any => ({ id, parent });
@@ -66,5 +67,32 @@ describe("makeHitTargetAt", () => {
   test("chain with no match ends null", () => {
     const { ctx } = mkCtx(node("tfm-scroller", node(undefined)));
     expect(makeHitTargetAt(ctx)(3, 3, null)).toBeNull();
+  });
+
+  test("dual pane: resolves a tile from the OTHER pane via the merged live map", () => {
+    // the wiring passes mergedMapFacade over both panes' tileRefs, and ids are
+    // pane-prefixed — a cross-pane drop target must still resolve
+    const pane0 = new Map<string, any>([["/a/one", { isDir: true, tileId: "tfm-tile-p0-0" }]]);
+    const pane1 = new Map<string, any>([["/b/two", { isDir: true, tileId: "tfm-tile-p1-0" }]]);
+    const chain = node("tfm-tile-p1-0-label", node("tfm-tile-p1-0"));
+    const ctx = {
+      hitTest: () => 7,
+      byNumber: () => chain,
+      placesHost: () => [],
+      tileRefs: mergedMapFacade(() => [pane0, pane1]),
+    };
+    expect(makeHitTargetAt(ctx)(3, 3, null)).toEqual({ kind: "folder", path: "/b/two" });
+  });
+
+  test("dropping on a pane's EMPTY background targets that pane's cwd", () => {
+    const chain = node(undefined, node("tfm-scroll", node("tfm-pane-1", node("tfm-panes"))));
+    const ctx = {
+      hitTest: () => 7,
+      byNumber: () => chain,
+      placesHost: () => [],
+      tileRefs: new Map<string, any>(),
+      panesCwd: () => ["/left/dir", "/right/dir"],
+    };
+    expect(makeHitTargetAt(ctx)(3, 3, null)).toEqual({ kind: "folder", path: "/right/dir" });
   });
 });

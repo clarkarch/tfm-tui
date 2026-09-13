@@ -6,11 +6,14 @@ import { CliRenderEvents, Renderable } from "@opentui/core";
 import { runBoot } from "../app/boot";
 import { buildBootLayout } from "../ui/ui-boot-layout";
 import { makeCwdWatcher } from "../fs/watcher";
+import { isVirtualUri } from "../fs/uri";
+import { isNetworkPath } from "../fs/network";
 import { makeDnd72 } from "../dnd/dnd72";
 import { makeHitTargetAt } from "../dnd/hit-target";
 import { makeResizeWatcher } from "../app/resize";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { gridDrag } from "../input/grid-input";
+import { mergedMapFacade } from "../app/panes";
 import { waitForResolution } from "../ui/ui-lookup";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces } from "../fs/places";
@@ -33,18 +36,31 @@ export const wireWatcher = (deps: {
   getGrid: () => GridWiring;
 }) => {
   const { core, getGridFoundation, getGrid } = deps;
-  const { syncCwdWatcher } = makeCwdWatcher({
-    cwd: () => core.state.cwd,
-    // network (gvfs FUSE) mounts get no watcher: inotify over FUSE is
-    // unreliable and can storm; the grid refreshes on navigation instead
-    isVirtualCwd: () => core.isVirtualCwd() || core.isNetworkCwd(),
-    isRenaming: () => getGridFoundation().rename.isRenaming(),
-    renderGrid: () => getGrid().renderGrid(),
-    // our own diagnostic sinks: dlog appends on every mouse event and defaults
-    // to /tmp/tfm-dnd.log — when that IS the cwd, each click would otherwise
-    // full-rebuild the grid 200ms later (visible flash after every select)
-    ignorePaths: () => [DND_LOG, DEBUG_LOG],
-  });
+  // one watcher per pane so external changes refresh BOTH sides of a dual
+  // workspace. Pane 1's watcher stands down (isVirtualCwd true) while dual
+  // pane is off, so a hidden pane never holds an inotify watch.
+  const makeFor = (pane: 0 | 1) =>
+    makeCwdWatcher({
+      cwd: () => core.panes.states[pane].cwd,
+      // network (gvfs FUSE) mounts get no watcher: inotify over FUSE is
+      // unreliable and can storm; the grid refreshes on navigation instead
+      isVirtualCwd: () => {
+        if (pane === 1 && !core.config.ui.dualPane) return true;
+        const cwd = core.panes.states[pane].cwd;
+        return isVirtualUri(cwd) || isNetworkPath(cwd);
+      },
+      isRenaming: () => getGridFoundation().rename.isRenaming(),
+      renderGrid: () => getGrid().renderPane(pane),
+      // our own diagnostic sinks: dlog appends on every mouse event and defaults
+      // to /tmp/tfm-dnd.log — when that IS the cwd, each click would otherwise
+      // full-rebuild the grid 200ms later (visible flash after every select)
+      ignorePaths: () => [DND_LOG, DEBUG_LOG],
+    });
+  const watchers = [makeFor(0), makeFor(1)];
+  const syncCwdWatcher = (): void => {
+    watchers[0]!.syncCwdWatcher();
+    watchers[1]!.syncCwdWatcher();
+  };
   return { syncCwdWatcher };
 };
 
@@ -70,24 +86,29 @@ export const wireBoot = (deps: {
     waitForResolution: () => waitForResolution(chrome.renderer),
     mountSlots: deps.mountSlots,
     buildLayout: () => {
-      // scroller/band rect/drag ghost — module: ./ui-boot-layout (ids stay
-      // byte-identical; band gesture fns wired there straight from grid-input)
-      core.scrollerRef.current = buildBootLayout({
+      // scrollers x2 (one per pane)/band rect/drag ghost — module:
+      // ./ui-boot-layout (ids stay byte-identical; band gesture fns wired
+      // there straight from grid-input)
+      const scrollers = buildBootLayout({
         renderer: chrome.renderer,
         byId: core.lookup.byId,
         colors: core.colors,
         bandCtx: grid.bandCtx,
+        focusPane: (i) => grid.focusPane(i as 0 | 1),
+        dropIntoPane: (i) => grid.dropIntoPane(i as 0 | 1),
         closeFileMenu: chrome.menu.closeFileMenu,
         clearSearch: nav.clearSearch,
         blurTerminal: fileops.terminal.blurTerminal,
-        pathEditMode: chrome.toolbar.pathEditMode,
-        exitPathEdit: chrome.toolbar.exitPathEdit,
+        pathEditMode: () => chrome.activeToolbar().pathEditMode(),
+        exitPathEdit: () => chrome.activeToolbar().exitPathEdit(),
         isRenaming: gridFoundation.rename.isRenaming,
         finishInlineRename: gridFoundation.rename.finishInlineRename,
         clearTileSelection: gridFoundation.selection.clearTileSelection,
         openContextMenu: (x: number, y: number, t: string, e: any[]) => chrome.menu.openContextMenu(x, y, t, e),
         emptyAreaEntries: grid.menuEntries.emptyAreaEntries,
       });
+      core.scrollerRefs[0]!.current = scrollers[0];
+      core.scrollerRefs[1]!.current = scrollers[1];
     },
     loadGlobs2: () => loadGlobs2(),
     restoreSession: () => {
@@ -135,6 +156,12 @@ export const wireDnd = (deps: {
   fileops: FileopsWiring;
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops } = deps;
+  // drop-target tile resolution must find a tile in EITHER pane; the merged
+  // live map unions both panes' tileRefs (pane-prefixed ids make them unique).
+  const allTileRefs = mergedMapFacade(() => [
+    gridFoundation.selections[0].tileRefs,
+    gridFoundation.selections[1].tileRefs,
+  ]);
   const { enableDrops, disableDrops } = makeDnd72({
     log: (msg) => dlog(msg),
     writeFrame: (s) => {
@@ -148,9 +175,10 @@ export const wireDnd = (deps: {
       hitTest: (x, y) => chrome.renderer.hitTest(x, y),
       byNumber: (num) => Renderable.renderablesByNumber.get(num),
       placesHost: () => chrome.chrome.placesHost,
-      tileRefs: gridFoundation.selection.tileRefs,
+      tileRefs: allTileRefs,
+      panesCwd: () => [core.panes.states[0]!.cwd, core.panes.states[1]!.cwd],
     }),
-    tileRefs: gridFoundation.selection.tileRefs,
+    tileRefs: allTileRefs,
     setTileVisual: gridFoundation.selection.setTileVisual,
     hoverPlace: (p) => {
       const idx = chrome.chrome.placesHost.findIndex((pl: { place: { path?: string | null } }) => pl.place.path === p);
@@ -210,7 +238,10 @@ export const wireHoverDrawer = (deps: {
     ui: () => core.config.ui,
     terminalOpen: () => fileops.terminal.isOpen(),
     blocked: () =>
-      core.floats.depth() > 0 || chrome.toolbar.pathEditMode() || gridFoundation.rename.isRenaming() || gridDrag.active,
+      core.floats.depth() > 0 ||
+      chrome.activeToolbar().pathEditMode() ||
+      gridFoundation.rename.isRenaming() ||
+      gridDrag.active,
     setEffectiveSidebar: (n) => {
       core.geometry.sidebarEff = n;
     },
@@ -233,6 +264,9 @@ export const wireHoverDrawer = (deps: {
           Bun.gc(false);
         } catch {}
       });
+      // a preview that just EXPANDED was skipped while collapsed (visible()
+      // gate) — render it now so it shows the focused file instead of blank
+      void grid.renderPreview();
     },
     log: (msg) => dlog(msg),
   });

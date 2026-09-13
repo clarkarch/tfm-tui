@@ -103,7 +103,7 @@ export const wireFileops = (deps: {
     renderAll: nav.renderAll,
     notify: chrome.notify,
     home,
-    refreshCutVisuals: gridFoundation.selection.refreshCutVisuals,
+    refreshCutVisuals: gridFoundation.refreshCutVisuals,
     log: (msg) => dlog(msg),
     onFileOp: (op, paths, dest, outcome) =>
       sharedPluginEvents().emit("file-op", { op, paths, ...(dest ? { dest } : {}), ...(outcome ? { outcome } : {}) }),

@@ -47,6 +47,7 @@ let calls: {
 let cwd: string;
 let tabBar: boolean;
 let tabModel: { list: Tab[]; active: number };
+let tabModel1: { list: Tab[]; active: number };
 let kbActive: boolean;
 let kbIdx: number;
 
@@ -83,13 +84,15 @@ beforeAll(async () => {
   cwd = HOME;
   tabBar = false;
   tabModel = { list: mkTabs(2), active: 1 };
+  tabModel1 = { list: mkTabs(3), active: 2 };
   kbActive = false;
   kbIdx = -1;
 
   const host = Box(
     { flexDirection: "row" },
     Box({ id: "tfm-places", flexDirection: "column", width: 20 }),
-    Box({ id: "tfm-tabbar", flexDirection: "row", height: 1 }),
+    Box({ id: "tfm-p0-tabbar", flexDirection: "row", height: 1 }),
+    Box({ id: "tfm-p1-tabbar", flexDirection: "row", height: 1 }),
   );
   t.renderer.root.add(host);
   await t.renderOnce();
@@ -129,17 +132,18 @@ beforeAll(async () => {
     },
     kbActive: () => kbActive,
     kbIdx: () => kbIdx,
-    tabs: () => tabModel,
-    closeTab: (i) => {
+    tabs: (pane: 0 | 1) => (pane === 1 ? tabModel1 : tabModel),
+    focusPane: () => {},
+    closeTab: (_pane: 0 | 1, i: number) => {
       calls.closeTab.push(i);
     },
-    switchTab: (i) => {
+    switchTab: (_pane: 0 | 1, i: number) => {
       calls.switchTab.push(i);
     },
-    newTab: () => {
+    newTab: (_pane: 0 | 1) => {
       calls.newTab++;
     },
-    hoverBtn: () => Box({ id: "tfm-tab-new", width: 3, height: 1 }),
+    hoverBtn: () => Box({ id: "tfm-p0-tab-new", width: 3, height: 1 }),
     stripSelectable: () => {},
     drainIconQueue: () => {},
     makeIconSlot: (name: string, states: any, heightCells?: number, initialState?: number) => ({
@@ -209,6 +213,21 @@ describe("renderSidebar", () => {
     expect(calls.contextMenu.at(-1)!.title).toBe("Home");
     expect(calls.closeFileMenu).toBeGreaterThan(0);
   });
+
+  test("a cwd-only change repaints the highlight without rebuilding rows", async () => {
+    cwd = HOME;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const row0 = chrome.placesHost[0]!.row;
+    const spec0 = chrome.placesHost[0]!.specs[0];
+    cwd = "/elsewhere/entirely";
+    chrome.renderSidebar();
+    await t.renderOnce();
+    // same node + slot (no fallback-glyph flash), highlight moved off Home
+    expect(chrome.placesHost[0]!.row).toBe(row0);
+    expect(chrome.placesHost[0]!.specs[0]).toBe(spec0);
+    expect(chrome.placesHost[0]!.selected).toBe(false);
+  });
 });
 
 describe("place drops (OSC-72 / internal drag targets)", () => {
@@ -272,32 +291,46 @@ describe("renderTabbar", () => {
   test("mounts one chip per tab + the new-tab button", async () => {
     tabBar = false;
     tabModel = { list: mkTabs(2), active: 1 };
-    chrome.renderTabbar();
+    chrome.renderTabbar(0);
     await t.renderOnce();
-    expect(byId("tfm-tab-0")).toBeTruthy();
-    expect(byId("tfm-tab-1")).toBeTruthy();
-    expect(byId("tfm-tab-new")).toBeTruthy();
+    expect(byId("tfm-p0-tab-0")).toBeTruthy();
+    expect(byId("tfm-p0-tab-1")).toBeTruthy();
+    expect(byId("tfm-p0-tab-new")).toBeTruthy();
     expect(t.captureCharFrame()).toContain("dir1"); // active tab title paints
   });
 
+  test("pane 1's strip renders its OWN tab model, independently", async () => {
+    tabModel = { list: mkTabs(2), active: 0 };
+    tabModel1 = { list: mkTabs(3), active: 2 };
+    chrome.renderTabbar(0);
+    chrome.renderTabbar(1);
+    await t.renderOnce();
+    expect(byId("tfm-p1-tab-0")).toBeTruthy();
+    expect(byId("tfm-p1-tab-2")).toBeTruthy();
+    expect(byId("tfm-p1-tab-3")).toBeFalsy();
+    expect(t.captureCharFrame()).toContain("dir2"); // pane 1's active chip title
+    tabModel = { list: mkTabs(2), active: 1 };
+    tabModel1 = { list: mkTabs(3), active: 2 };
+  });
+
   test("visibility: adaptive (off) hides the strip for a single tab, the setting forces it", () => {
-    const bar: any = byId("tfm-tabbar");
+    const bar: any = byId("tfm-p0-tabbar");
     tabModel = { list: mkTabs(1), active: 0 };
-    chrome.renderTabbar();
+    chrome.renderTabbar(0);
     expect(bar.visible).toBe(false); // adaptive, one tab
     tabModel = { list: mkTabs(2), active: 0 };
-    chrome.renderTabbar();
+    chrome.renderTabbar(0);
     expect(bar.visible).toBe(true); // adaptive, two tabs
     tabBar = true;
     tabModel = { list: mkTabs(1), active: 0 };
-    chrome.renderTabbar();
+    chrome.renderTabbar(0);
     expect(bar.visible).toBe(true); // forced on
     tabBar = false;
     tabModel = { list: mkTabs(2), active: 1 };
   });
 
   test("clicking a chip switches tabs; middle-click closes it", () => {
-    const chip0: any = byId("tfm-tab-0");
+    const chip0: any = byId("tfm-p0-tab-0");
     chip0.processMouseEvent({
       type: "down",
       button: 0,
@@ -318,10 +351,10 @@ describe("renderTabbar", () => {
 
   test("dropping a single dragged folder on a chip navigates that tab to it", async () => {
     tabModel = { list: mkTabs(2), active: 1 }; // previous test rendered a 1-tab bar
-    chrome.renderTabbar();
+    chrome.renderTabbar(0);
     await t.renderOnce();
     gridDrag.keys = [{ path: "/x/afolder", isDir: true }];
-    (byId("tfm-tab-1") as any).processMouseEvent({
+    (byId("tfm-p0-tab-1") as any).processMouseEvent({
       type: "drop",
       button: 0,
       x: 0,
@@ -333,7 +366,7 @@ describe("renderTabbar", () => {
     // a file (non-dir) never triggers chip navigation
     const navBefore = calls.navigate.length;
     gridDrag.keys = [{ path: "/x/afile", isDir: false }];
-    (byId("tfm-tab-1") as any).processMouseEvent({
+    (byId("tfm-p0-tab-1") as any).processMouseEvent({
       type: "drop",
       button: 0,
       x: 0,
