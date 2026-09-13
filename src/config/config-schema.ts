@@ -86,6 +86,8 @@ export type UiConfig = {
   dragThresholdCells: number;
   listRowHeight: number;
   wordWrap: boolean;
+  fileAnimation: string;
+  fileAnimationMs: number;
   showLaunchTime: boolean;
 };
 
@@ -449,6 +451,30 @@ const UI_ROWS: SchemaRow[] = [
     def: "solid",
     doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels',
     label: "ui style",
+    group: "appearance",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "file-animation",
+    prop: "fileAnimation",
+    values: ["off", "fade", "slide", "stagger"],
+    def: "fade",
+    doc: '"off" = no animation; "fade" = fade in; "slide" = rise up into place; "stagger" = top-to-bottom fade cascade',
+    label: "file animation",
+    group: "appearance",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "file-animation-ms",
+    prop: "fileAnimationMs",
+    min: 0,
+    max: 800,
+    step: 20,
+    def: 180,
+    doc: "content-area file animation duration, 0..800 ms (0 = instant)",
+    label: "file animation ms",
     group: "appearance",
   },
   {

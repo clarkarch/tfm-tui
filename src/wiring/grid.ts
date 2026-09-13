@@ -17,6 +17,7 @@ import {
   type GridMenuEntry,
 } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
+import { makeFileAnim } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { waitForResolution } from "../ui/ui-lookup";
@@ -204,6 +205,16 @@ export const wireGrid = (deps: {
     const main = chrome.renderer.terminalWidth - core.geometry.sidebarEff - core.geometry.previewEff;
     return core.config.ui.dualPane ? Math.floor((main - 1) / 2) : main;
   };
+  // one animator per pane (each owns its reused timeline so a rebuild in one
+  // pane can't clobber the other's); reads [ui] file-animation live
+  const makeFileAnimator = () =>
+    makeFileAnim({
+      renderer: chrome.renderer,
+      byId: core.lookup.byId,
+      style: () => core.config.ui.fileAnimation,
+      ms: () => core.config.ui.fileAnimationMs,
+    });
+  const fileAnims = [makeFileAnimator(), makeFileAnimator()] as const;
   const makeRenderer = (pane: 0 | 1) =>
     makeGridRenderer({
       termW: () => chrome.renderer.terminalWidth,
@@ -237,6 +248,7 @@ export const wireGrid = (deps: {
       drainIconQueue: () => core.slots.drainIconQueue(),
       drainThumbs: () => core.slots.drainThumbs(),
       stripSelectable,
+      fileAnim: (target) => fileAnims[pane].play(target),
       selection: selections[pane],
       entryMouseHandlers: entryMouseHandlers[pane],
       isCutKey: core.isCutKey,

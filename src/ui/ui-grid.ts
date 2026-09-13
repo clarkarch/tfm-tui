@@ -75,6 +75,10 @@ type GridRendererCtx = {
   drainIconQueue(): void | Promise<void>;
   drainThumbs(): void | Promise<void>;
   stripSelectable(): void;
+  // animate the freshly built tiles/rows in ([ui] file-animation); no-op on
+  // "off". `inner` is the single container node slide animates; passing an
+  // empty target stops any in-flight animation (called before clearGrid)
+  fileAnim(target: { tiles: string[]; inner?: string | null }): void;
   // selection module + mouse handlers
   selection: Selection;
   entryMouseHandlers(entry: Entry, key: string, idx: number): any;
@@ -103,6 +107,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   const clearGrid = (): void => {
     const scroller = ctx.scroller();
     if (!scroller) return;
+    // stop any in-flight file animation BEFORE the nodes it targets are
+    // destroyed — a frame callback writing opacity/translateY to a just-removed
+    // renderable is the use-after-destroy path
+    try {
+      ctx.fileAnim({ tiles: [], inner: null });
+    } catch {}
     clearChildren(scroller.content);
     selection.tileRefs.clear();
   };
@@ -478,16 +488,22 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const TILE_H = ctx.tileH();
     const cols = isList ? 1 : Math.max(1, Math.floor((availW() - 3) / ctx.tileW()));
 
+    // one container wraps every row so `slide` can shift the whole grid with a
+    // single render-only translateY instead of touching each image tile
+    const innerId = `${tilePrefix()}inner`;
+    const inner = Box({ id: innerId, width: "100%", flexDirection: "column" });
+
     let tileIdx = 0;
     if (isList) {
-      for (const e of entries) scroller.content.add(buildListRow(e, tileIdx++));
+      for (const e of entries) inner.add(buildListRow(e, tileIdx++));
     } else {
       for (let i = 0; i < entries.length; i += cols) {
         const row = Box({ height: TILE_H, flexDirection: "row" });
         for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++));
-        scroller.content.add(row);
+        inner.add(row);
       }
     }
+    scroller.content.add(inner);
 
     // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
     selection.tileRefs.forEach((_: any, key: string) => {
@@ -524,6 +540,13 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       if (idx >= 0) selection.selectTileAt(idx);
     }
     selection.updateSelectionStatusReal();
+    // animate the new tiles in (tileRefs is in display order); the animator
+    // reads [ui] file-animation live and snaps everything to rest when off
+    if (gen === gridGen) {
+      try {
+        ctx.fileAnim({ tiles: [...selection.tileRefs.values()].map((r) => r.tileId), inner: innerId });
+      } catch {}
+    }
   };
 
   return { renderGrid };

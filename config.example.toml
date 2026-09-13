@@ -32,6 +32,8 @@ icons                   = "opaque"  # "opaque" = icons flattened onto the tile b
 sidebar-title           = true      # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 tab-bar                 = false     # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 ui-style                = "solid"   # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
+file-animation          = "fade"    # "off" = no animation; "fade" = fade in; "slide" = rise up into place; "stagger" = top-to-bottom fade cascade
+file-animation-ms       = 180       # content-area file animation duration, 0..800 ms (0 = instant)
 view-mode               = "grid"    # "grid" = icon tiles; "list" = compact rows with size + modified columns
 word-wrap               = false     # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
 show-hidden             = false     # start with dotfiles visible (ctrl+h toggles at runtime)

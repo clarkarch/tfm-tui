@@ -47,6 +47,7 @@ let selection: ReturnType<typeof makeSelection>;
 let renderGrid: (force?: boolean) => Promise<void>;
 let availWSet: number | null;
 let tilePrefix: string;
+let fileAnimCalls: Array<{ tiles: string[]; inner: string | null }>;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: TERM_W, height: TERM_H });
@@ -66,6 +67,7 @@ beforeAll(async () => {
   viewMode = "grid";
   availWSet = null;
   tilePrefix = "tfm-tile-";
+  fileAnimCalls = [];
   let iconSeq = 0;
 
   t.renderer.root.add(Box({ id: "tfm-scroll-test", flexDirection: "column", flexGrow: 1 }));
@@ -131,6 +133,9 @@ beforeAll(async () => {
     drainIconQueue: () => {},
     drainThumbs: () => {},
     stripSelectable: () => {},
+    fileAnim: (target: { tiles: string[]; inner?: string | null }) => {
+      fileAnimCalls.push({ tiles: [...target.tiles], inner: target.inner ?? null });
+    },
     selection,
     entryMouseHandlers: (e: any, key: string, idx: number) => {
       mouseHandlers.push({ name: e.name, key, idx });
@@ -198,6 +203,23 @@ describe("renderGrid (grid tiles)", () => {
     expect(ids.length).toBeGreaterThan(0);
     expect(ids.every((id) => id.startsWith("tfm-tile-p1-"))).toBe(true);
     tilePrefix = "tfm-tile-";
+  });
+
+  test("hands built tile ids + the container to the file animation sink, but not on a skipped render", async () => {
+    fileAnimCalls = [];
+    gridState.sortAsc = false; // force a signature change so a real rebuild runs
+    await renderGrid();
+    const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
+    // clearGrid stops the previous animation first, then the rebuild plays
+    const play = fileAnimCalls.at(-1)!;
+    expect(play.tiles).toEqual(ids);
+    expect(play.inner).toContain("inner");
+    expect(fileAnimCalls[0]!.tiles).toEqual([]); // the stop call, before clear
+
+    const count = fileAnimCalls.length;
+    await renderGrid(); // unchanged signature → no clear/rebuild, no replay
+    expect(fileAnimCalls.length).toBe(count);
+    gridState.sortAsc = true;
   });
 
   test("hides dotfiles unless showHidden is on", async () => {
