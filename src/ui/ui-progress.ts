@@ -2,6 +2,7 @@ import { Box, Text } from "@opentui/core";
 import type { ReadStream } from "node:fs";
 import { fmtBytes } from "../fs/propsinfo";
 import { toggleIconState } from "./ui-slots";
+import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
 import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
 
@@ -51,9 +52,12 @@ export type ProgressState = {
 export const pctOf = (bytes: number, totalBytes: number): number =>
   totalBytes > 0 ? Math.min(100, Math.floor((bytes / totalBytes) * 100)) : 0;
 
+const barCells = (filled: number, cells: number): string =>
+  "█".repeat(filled) + "░".repeat(Math.max(0, cells - filled));
+
 export const barLine = (bytes: number, totalBytes: number, cells: number): string => {
   const filled = Math.round((pctOf(bytes, totalBytes) / 100) * cells);
-  return `${"█".repeat(filled) + "░".repeat(Math.max(0, cells - filled))} ${fmtBytes(bytes)}/${fmtBytes(totalBytes)}`;
+  return `${barCells(filled, cells)} ${fmtBytes(bytes)}/${fmtBytes(totalBytes)}`;
 };
 
 // archive tools report entry names, not bytes — a file-count bar keeps the
@@ -63,7 +67,7 @@ export const pctOfFiles = (done: number, total: number): number =>
 
 export const barLineFiles = (done: number, total: number, cells: number): string => {
   const filled = Math.round((pctOfFiles(done, total) / 100) * cells);
-  return `${"█".repeat(filled) + "░".repeat(Math.max(0, cells - filled))} ${Math.min(done, total)}/${total}`;
+  return `${barCells(filled, cells)} ${Math.min(done, total)}/${total}`;
 };
 
 // tiny transfers don't need a toast — canonical predicate lives in
@@ -97,8 +101,6 @@ export const makeProgress = (ctx: ProgressCtx) => {
   let progLastPaint = 0;
   let progSpinIdx = 0;
   let progSpinTimer: any = null;
-
-  const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
   const progSetText = (nodeId: string, s: string): void => {
     const n: any = ctx.byId(nodeId);
@@ -257,7 +259,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
 
   // pause/cancel gates used between files AND mid-stream
   const pauseGate = async (): Promise<void> => {
-    while (prog.paused && !prog.cancelled) await sleepMs(80);
+    while (prog.paused && !prog.cancelled) await sleep(80);
   };
 
   return { prog, paintProgress, showProgressToast, finishProgressToast, pauseGate };

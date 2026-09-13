@@ -71,7 +71,9 @@ describe("payload encode/decode round trip", () => {
 
   test("uriListToPaths decodes file lines, drops others; host part is stripped with the first slash", () => {
     expect(uriListToPaths("file:///tmp/a%20b\r\nhttp://x/y\r\ngarbage")).toEqual(["/tmp/a b"]);
-    expect(uriListToPaths("file://localhost/tmp/z")).toEqual(["tmp/z"]);
+    // host-strip must KEEP the leading slash — "tmp/z" is cwd-relative and either
+    // ENOENTs or copies to the wrong place (was pinned to the buggy output)
+    expect(uriListToPaths("file://localhost/tmp/z")).toEqual(["/tmp/z"]);
   });
 
   test("dropPayloadToPaths falls back to bare absolute paths", () => {

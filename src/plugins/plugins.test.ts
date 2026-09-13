@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  renameSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -150,6 +151,93 @@ describe("loadPlugins", () => {
       expect(store.get("k", 0)).toBe(0);
       store.set("k", 7);
       expect(makePluginStore(dir, "aaa").get("k", 0)).toBe(7);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("duplicate-name loser never activates (no leaked listeners/timers/slots)", async () => {
+    const dir = mkDir();
+    try {
+      writePlugin(
+        dir,
+        "aaa.ts",
+        `export default { name: "dup", activate: () => ({ slots: { statusbar: () => ({}) } }) };\n`,
+      );
+      writePlugin(
+        dir,
+        "zzz.ts",
+        `export default { name: "dup", activate: () => ({ slots: { statusbar: () => ({}) } }) };\n`,
+      );
+      const notes: string[] = [];
+      const registered: string[] = [];
+      const reg = makePluginRegistry({
+        dir,
+        api: mkApi(dir, notes),
+        warn: () => {},
+        registerSlots: (name) => {
+          registered.push(name);
+          return () => {};
+        },
+      });
+      await reg.scan();
+      // slot registration happens INSIDE loadOne after activate — the
+      // pre-flight duplicate check must trip before that, or the loser's slots
+      // (and listeners/timers) are live forever
+      expect(registered).toEqual(["dup"]);
+      expect(reg.plugins.map((p) => p.name)).toEqual(["dup"]);
+      expect(reg.errors.length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a renamed plugin folder loads on the SAME rescan (no false duplicate error)", async () => {
+    const dir = mkDir();
+    try {
+      mkdirSync(path.join(dir, "old"));
+      writePlugin(path.join(dir, "old"), "old.ts", GOOD_A);
+      const notes: string[] = [];
+      const warns: string[] = [];
+      const reg = makePluginRegistry({ dir, api: mkApi(dir, notes), warn: (m) => warns.push(m) });
+      await reg.scan();
+      expect(reg.plugins.map((p) => p.name)).toEqual(["aaa"]);
+      // rename the folder AND its main file -> the old path is removed and the
+      // new one loads; removals-first ordering means the duplicate check no
+      // longer trips on the plugin's own previous name
+      renameSync(path.join(dir, "old"), path.join(dir, "new"));
+      renameSync(path.join(dir, "new", "old.ts"), path.join(dir, "new", "new.ts"));
+      await reg.scan();
+      expect(warns).toEqual([]);
+      expect(reg.plugins.map((p) => p.name)).toEqual(["aaa"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed settings rows drop individually; the plugin still loads", async () => {
+    const dir = mkDir();
+    try {
+      writePlugin(
+        dir,
+        "rows.ts",
+        `export default {
+          name: "rows",
+          activate: () => ({
+            rows: [
+              { kind: "toggle", label: "good", get: () => false, set: () => {} },
+              { kind: "toggle", label: "missing-setters" },
+              { kind: "stepper", label: "bad-stepper", get: () => 1, set: () => {} },
+              { kind: "nope", label: "unknown-kind" },
+            ],
+          }),
+        };\n`,
+      );
+      const notes: string[] = [];
+      const { plugins, errors } = await loadPlugins({ dir, api: mkApi(dir, notes), warn: () => {} });
+      expect(errors).toEqual([]);
+      expect(plugins.map((p) => p.name)).toEqual(["rows"]);
+      expect(plugins[0]!.rows.map((r) => r.label)).toEqual(["good"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -778,6 +866,25 @@ describe("staged builds (hot-reload machinery)", () => {
       expect(lingering).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a rename past the byte cap changes the hash (tail paths fold in)", () => {
+    // content beyond the 10MB cap can't be hashed (that defeats the cap), so
+    // the unhashed tail's PATHS fold into the hash — an add/remove/rename there
+    // still reloads (a content-only edit there still misses; the cap is the tradeoff)
+    const src = mkdtempSync(path.join(os.tmpdir(), "tfm-hash-cap-"));
+    try {
+      const folder = path.join(src, "big");
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(path.join(folder, "big.ts"), "x");
+      writeFileSync(path.join(folder, "blob.bin"), Buffer.alloc(11 * 1024 * 1024));
+      writeFileSync(path.join(folder, "tail.txt"), "tail");
+      const before = hashPluginFolder(folder);
+      renameSync(path.join(folder, "tail.txt"), path.join(folder, "tail2.txt"));
+      expect(hashPluginFolder(folder)).not.toBe(before);
+    } finally {
+      rmSync(src, { recursive: true, force: true });
     }
   });
 });

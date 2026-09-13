@@ -33,6 +33,10 @@ const isOutlineVariant = (style: UiStyle): boolean => style !== "solid";
 // border ring reserves one cell per side (yoga setBorder)
 export const sideInnerWidth = (style: UiStyle, sw: number): number => (isOutlineVariant(style) ? sw - 2 : sw);
 
+// list-row width slack beyond the sizing columns: outline variants dedicate
+// cells to the panel border rings, so they get a wider budget
+export const sidePadDelta = (style: UiStyle): number => (isOutlineVariant(style) ? 6 : 3);
+
 type SurfaceState = "rest" | "hover" | "selected" | "cut";
 
 type SurfaceOpts = {

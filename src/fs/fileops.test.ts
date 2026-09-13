@@ -143,13 +143,13 @@ describe("runTransfer: same-fs move", () => {
     const h = makeHarness();
     const destDir = path.join(ROOT, "sweep-dest");
     mkdirSync(destDir, { recursive: true });
-    mkdirSync(path.join(destDir, ".tfm-extract-dead"));
+    mkdirSync(path.join(destDir, ".tfm-extract-1234-ab12cd34"));
     const src = path.join(ROOT, "sweep-src.txt");
     W(src, "x");
 
     await h.ops.runTransfer("copy", destDir, [src], "paste");
 
-    expect(existsSync(path.join(destDir, ".tfm-extract-dead"))).toBe(false);
+    expect(existsSync(path.join(destDir, ".tfm-extract-1234-ab12cd34"))).toBe(false);
     expect(existsSync(path.join(destDir, "sweep-src.txt"))).toBe(true);
   });
 });
@@ -198,6 +198,28 @@ describe("runTransfer: cross-device move", () => {
     expect(h.calls.some((c) => c.startsWith("notify:move cancelled:info:"))).toBe(true);
   });
 
+  test("source-removal failure keeps the complete copy (no total loss)", async () => {
+    const h = makeHarness({
+      crossDevice: fakeSplit,
+      removeTree: async () => {
+        throw new Error("simulated partial rm failure");
+      },
+    });
+    const src = path.join(ROOT, "dev-a", "rmfail-tree");
+    const destDir = path.join(ROOT, "dev-b-rmfail");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("move", destDir, [src], "move to dev-b-rmfail");
+
+    // the ONE complete copy must survive the source-removal failure (the old
+    // half-copy cleanup deleted it — total data loss on a partial rm(src))
+    expect(readFileSync(path.join(destDir, "rmfail-tree", "f1.txt"), "utf8")).toBe("content-1");
+    expect(existsSync(src)).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("notify:move failed:error:"))).toBe(true);
+    expect(h.calls.some((c) => c.includes("source partially removed"))).toBe(true);
+  });
+
   test("copy op unaffected: still streams with the toast (control)", async () => {
     const h = makeHarness();
     const src = path.join(ROOT, "copy-src");
@@ -210,6 +232,61 @@ describe("runTransfer: cross-device move", () => {
     expect(readFileSync(path.join(destDir, "copy-src", "f1.txt"), "utf8")).toBe("content-1");
     expect(existsSync(path.join(src, "f1.txt"))).toBe(true);
     expect(h.calls).toContain("toast:show");
+  });
+});
+
+describe("runTransfer: self-drop and orphan-sweep guards", () => {
+  test("copying a folder into itself is refused (no self-copy recursion)", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "self-src");
+    seedTree(src);
+    await h.ops.runTransfer("copy", src, [src], "paste into itself");
+    // recursion would mkdir src/src and descend forever — completing with the
+    // destination absent proves the guard fired
+    expect(existsSync(path.join(src, "self-src"))).toBe(false);
+    expect(readdirSync(src).sort()).toEqual(["f1.txt", "f2.txt", "f3.txt", "f4.txt", "f5.txt", "f6.txt"]);
+    expect(h.calls.some((c) => c.includes("into itself"))).toBe(true);
+  });
+
+  test("copying a folder into its own subtree is refused too", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "self-sub-src");
+    const sub = path.join(src, "sub");
+    seedTree(src);
+    mkdirSync(sub, { recursive: true });
+    await h.ops.runTransfer("copy", sub, [src], "paste into subtree");
+    expect(existsSync(path.join(sub, "self-sub-src"))).toBe(false);
+    expect(h.calls.some((c) => c.includes("into itself"))).toBe(true);
+  });
+
+  test("moving a folder into itself is refused too", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "self-move");
+    seedTree(src);
+    await h.ops.runTransfer("move", src, [src], "move into itself");
+    expect(existsSync(path.join(src, "self-move"))).toBe(false);
+    expect(existsSync(src)).toBe(true);
+  });
+
+  test("orphan sweep removes only temp-shaped names, not user files", async () => {
+    const h = makeHarness();
+    const destDir = path.join(ROOT, "sweep-anchored");
+    mkdirSync(destDir, { recursive: true });
+    // real orphaned temps (pid + 8-char rand) get swept
+    writeFileSync(path.join(destDir, "f.txt.tfm-part-1234-ab12cd34"), "x");
+    mkdirSync(path.join(destDir, ".tfm-extract-5678-ef56gh78"));
+    // user files that merely LOOK related must survive
+    writeFileSync(path.join(destDir, "notes.tfm-part-2.md"), "keep me");
+    mkdirSync(path.join(destDir, ".tfm-extract-backup"));
+    const src = path.join(ROOT, "sweep-anchored-src.txt");
+    W(src, "x");
+
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+
+    expect(existsSync(path.join(destDir, "f.txt.tfm-part-1234-ab12cd34"))).toBe(false);
+    expect(existsSync(path.join(destDir, ".tfm-extract-5678-ef56gh78"))).toBe(false);
+    expect(existsSync(path.join(destDir, "notes.tfm-part-2.md"))).toBe(true);
+    expect(existsSync(path.join(destDir, ".tfm-extract-backup"))).toBe(true);
   });
 });
 
@@ -488,6 +565,80 @@ const fakeArchive = (opts: { entries?: Record<string, string>; stdout?: string }
   };
   return { runArchive, runs };
 };
+
+describe("rename undo / replace-stash guards", () => {
+  test("undo of a rename bumps to (copy) instead of clobbering a recreated file", async () => {
+    const h = makeHarness();
+    const a = path.join(ROOT, "ren-undo-a.txt");
+    W(a, "A");
+    await h.ops.performRename(a, "ren-undo-b.txt");
+    // the original name is reoccupied BEFORE ctrl+z
+    W(a, "NEW");
+    await h.undoUnits()[0]!();
+    // the recreated file survives; the renamed one lands next to it as a copy
+    expect(readFileSync(a, "utf8")).toBe("NEW");
+    expect(existsSync(path.join(ROOT, "ren-undo-b.txt"))).toBe(false);
+    expect(readFileSync(path.join(ROOT, "ren-undo-a (copy).txt"), "utf8")).toBe("A");
+  });
+
+  test("a failed rename AFTER a successful stash still records the undo batch", async () => {
+    // stash succeeds (unit recorded) but the rename itself fails — the stash's
+    // restore unit must not be stranded with no undo entry
+    const h = makeHarness({
+      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "replace" as const },
+      stashVictim: async (_victim, units) => {
+        units.push(async () => {});
+        return true;
+      },
+    });
+    const src = path.join(ROOT, "ren-m2-src.txt");
+    W(src, "A");
+    const dest = path.join(ROOT, "ren-m2-dest");
+    mkdirSync(dest, { recursive: true });
+    W(path.join(dest, "child.txt"), "x"); // non-empty dir => rename fails ENOTEMPTY
+    await h.ops.performRename(src, "ren-m2-dest");
+    expect(existsSync(src)).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("notify:rename failed:error:"))).toBe(true);
+    expect(h.undoUnits().length).toBe(1);
+  });
+
+  test("a failed replace-stash aborts the copy (victim preserved)", async () => {
+    const h = makeHarness({
+      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "replace" as const },
+      stashVictim: async (_victim, _units, _d, onFail) => {
+        onFail(new Error("disk full"));
+        return false;
+      },
+    });
+    const src = path.join(ROOT, "m1-copy-src.txt");
+    W(src, "NEW");
+    const destDir = path.join(ROOT, "m1-copy-dest");
+    mkdirSync(destDir, { recursive: true });
+    const victim = path.join(destDir, "m1-copy-src.txt");
+    W(victim, "OLD");
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+    expect(readFileSync(victim, "utf8")).toBe("OLD");
+    expect(h.calls.some((c) => c.startsWith("notify:copy failed:error:"))).toBe(true);
+  });
+
+  test("a failed replace-stash aborts the rename (existing file preserved)", async () => {
+    const h = makeHarness({
+      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "replace" as const },
+      stashVictim: async (_victim, _units, _d, onFail) => {
+        onFail(new Error("disk full"));
+        return false;
+      },
+    });
+    const a = path.join(ROOT, "m1-ren-a.txt");
+    W(a, "A");
+    const b = path.join(ROOT, "m1-ren-b.txt");
+    W(b, "OLD");
+    await h.ops.performRename(a, "m1-ren-b.txt");
+    expect(readFileSync(b, "utf8")).toBe("OLD");
+    expect(readFileSync(a, "utf8")).toBe("A");
+    expect(h.calls).toContain("notify:rename failed:error:Replace failed — existing file kept");
+  });
+});
 
 describe("extractArchive", () => {
   test("stages, moves entries in, cleans staging, one undo batch", async () => {

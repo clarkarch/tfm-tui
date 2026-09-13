@@ -10,7 +10,7 @@ import { isVirtualUri } from "../fs/uri";
 import { isNetworkPath } from "../fs/network";
 import { makeDnd72 } from "../dnd/dnd72";
 import { makeHitTargetAt } from "../dnd/hit-target";
-import { makeResizeWatcher } from "../app/resize";
+import { debounced } from "../lib/uiutil";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { gridDrag } from "../input/grid-input";
 import { mergedMapFacade } from "../app/panes";
@@ -80,9 +80,14 @@ export const wireBoot = (deps: {
   skipSessionRestore?: boolean;
   // plugin UI slots mount into the boot layout (see app/boot.ts)
   mountSlots?: () => void;
+  // re-apply the hover drawer's panel states AFTER the boot layout mounts
+  // (constructed pre-boot, its collapse writes hit no nodes yet — without
+  // this, auto-hidden panels paint expanded while the grid is laid out
+  // collapsed)
+  afterLayout?: () => void;
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
-  void runBoot({
+  runBoot({
     waitForResolution: () => waitForResolution(chrome.renderer),
     mountSlots: deps.mountSlots,
     buildLayout: () => {
@@ -109,6 +114,11 @@ export const wireBoot = (deps: {
       });
       core.scrollerRefs[0]!.current = scrollers[0];
       core.scrollerRefs[1]!.current = scrollers[1];
+      // the hover drawer's construction-time collapse wrote to no nodes (they
+      // only mount here) — re-apply its panel states now that they exist
+      try {
+        deps.afterLayout?.();
+      } catch {}
     },
     loadGlobs2: () => loadGlobs2(),
     restoreSession: () => {
@@ -138,9 +148,17 @@ export const wireBoot = (deps: {
         debugLog: isDebug ? (msg) => debugLog(msg) : undefined,
       }),
     wireSearchInput: () => nav.wireSearchInput(),
+    reportBootError: (name, err) => {
+      // a throw here (native OOM during buildLayout, globs2 io, …) must not
+      // leave a blank-but-alive TUI — report it and keep whatever rendered
+      try {
+        dlog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
+        chrome.notify(`Startup step "${name}" failed`, "boot error", "error");
+      } catch {}
+    },
     isDebug,
     showLaunchTime: () => core.config.ui.showLaunchTime,
-  });
+  }).catch(() => {}); // every step is guarded in ./boot; this catches the tail
 };
 
 // --- OSC 72 (kitty drag-and-drop): wire format per yazi's reference impl;
@@ -210,12 +228,15 @@ export const wireDnd = (deps: {
   return { enableDrops, disableDrops };
 };
 
-// --- resize: repave rasters and rebuild layout (debounce lives in ./resize) ---
+// --- resize: repave rasters and rebuild layout. The trailing debounce lives
+// in ./lib/uiutil (debounced) — the same timing tenant ui-status uses; only
+// the body differs (icon-queue reset first so every raster re-renders at the
+// new cell pixels). ---
 export const wireResize = (deps: { core: CoreWiring; nav: NavWiring; chrome: ChromeWiring }) => {
   const { core, nav, chrome } = deps;
-  const { onResize } = makeResizeWatcher({
-    resetIconQueue: () => core.slots.resetIconQueue(),
-    renderAll: nav.renderAll,
+  const onResize = debounced(150, () => {
+    core.slots.resetIconQueue();
+    nav.renderAll();
   });
   chrome.renderer.on(CliRenderEvents.RESIZE, onResize);
 };

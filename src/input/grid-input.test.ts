@@ -26,6 +26,7 @@ const makeCtx = (): GridInputCtx & {
   logs: string[];
   selStatusRefreshes: { n: number };
   focusCalls: { n: number };
+  blurCalls: { n: number };
 } => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
@@ -44,8 +45,9 @@ const makeCtx = (): GridInputCtx & {
   const logs: string[] = [];
   const selStatus = { n: 0 };
   const focusCalls = { n: 0 };
+  const blurCalls = { n: 0 };
   let anchor: number | null = null;
-  const focused = 0;
+  let focused = 0;
   return {
     visuals,
     statuses,
@@ -54,6 +56,7 @@ const makeCtx = (): GridInputCtx & {
     logs,
     selStatusRefreshes: selStatus,
     focusCalls,
+    blurCalls,
     byId: () => null,
     termW: () => 80,
     termH: () => 24,
@@ -86,6 +89,9 @@ const makeCtx = (): GridInputCtx & {
       anchor = v;
     },
     getFocusIdx: () => focused,
+    setFocusIdx: (v) => {
+      focused = v;
+    },
     selPaths: () => [...refs.entries()].filter(([, r]) => r.selected).map(([p, r]) => ({ path: p, isDir: r.isDir })),
     dblClickMs: () => 500,
     navigate: () => {},
@@ -109,6 +115,9 @@ const makeCtx = (): GridInputCtx & {
     focusPane: () => {
       focusCalls.n++;
     },
+    blurTerminal: () => {
+      blurCalls.n++;
+    },
   };
 };
 
@@ -124,6 +133,17 @@ describe("dual-pane focus", () => {
     press(h, {});
     press(h, { button: 2 });
     expect(ctx.focusCalls.n).toBe(2);
+  });
+
+  test("a tile press blurs the embedded terminal (stale ownsKeyboard lock)", () => {
+    // tile mousedown stops propagation, so the scroller's blurTerminal never
+    // runs — without this explicit call a focused terminal's termFocused flag
+    // stays true and every key is swallowed with a lying "Terminal owns
+    // keyboard" toast
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, {});
+    expect(ctx.blurCalls.n).toBe(1);
   });
 });
 
@@ -177,7 +197,8 @@ describe("deferred ctrl toggle (the moved-0-items regression)", () => {
     h.onMouseUp();
     // toggle fires synchronously; drag-state cleanup is deferred a tick
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
-    await Bun.sleep(2);
+    // settle the deferred cleanup via the observable state (never a bare sleep)
+    for (let i = 0; i < 50 && gridDrag.keys; i++) await Bun.sleep(1);
     expect(gridDrag.keys).toBeNull();
   });
 
@@ -206,6 +227,20 @@ describe("deferred ctrl toggle (the moved-0-items regression)", () => {
 });
 
 describe("selection model", () => {
+  test("plain click moves the keyboard focus (shift+arrow extends from the click)", () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/c.txt", 2);
+    press(h, { x: 3, y: 3 });
+    expect(ctx.getFocusIdx()).toBe(2);
+  });
+
+  test("shift+click range moves the keyboard focus to the clicked tile", () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/c.txt", 2);
+    press(h, { modifiers: { shift: true } });
+    // the next shift+down computes its endpoint from THIS tile, not a stale idx
+    expect(ctx.getFocusIdx()).toBe(2);
+  });
   test("plain click on selected tile of a multi-selection keeps the group", () => {
     const ctx = makeCtx();
     ctx.tileRefs.get("/w/a.txt")!.selected = true;

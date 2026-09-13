@@ -1,44 +1,15 @@
 import type { ThemePreset } from "../config/themes";
 import { UI_SCHEMA, type UiConfig } from "../config/config-schema";
+import type { SettingRow, SettingGroup } from "../config/config-schema";
 
 // --- Settings model: declarative rows drive both rendering and key/mouse
-// input. This module owns the row TYPE and the pure row semantics (adjust /
-// flatten / theme-preset lookup); the get/set closures that wire rows to
-// config/state live in ./settings-model, the panel in ./ui-settings-panel. ---
+// input. This module owns the row semantics (adjust / flatten / theme-preset
+// lookup); the get/set closures that wire rows to config/state live in
+// ./settings-model, the panel in ./ui-settings-panel. The row/group TYPES
+// live in ./config/config-schema (a leaf) so the plugin api can reference
+// them without importing ui/ — re-exported here for existing callers. ---
 
-export type SettingRow =
-  // `repaint` rows (theme / ui-style / transparent-bg) change the panel's own
-  // colors — their adjust re-renders the panel; other value rows update their
-  // value text by id (targeted, no rebuild — see the OOM note in AGENTS.md)
-  | { kind: "toggle"; label: string; repaint?: boolean; get: () => boolean; set: (v: boolean) => void }
-  | {
-      kind: "stepper";
-      label: string;
-      repaint?: boolean;
-      min: number;
-      max: number;
-      step: number;
-      fmt: (v: number) => string;
-      get: () => number;
-      set: (v: number) => void;
-    }
-  | {
-      kind: "cycle";
-      label: string;
-      repaint?: boolean;
-      names: string[];
-      getIdx: () => number;
-      setIdx: (i: number) => void;
-      // shown when getIdx() is -1 (value matches no preset). Only the theme
-      // row goes custom today — a bare "custom" never says custom *what*,
-      // so the theme row reports "~<nearest preset>" instead.
-      customLabel?: () => string;
-    }
-  // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
-  | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
-  | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
-
-export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] };
+export type { SettingRow, SettingGroup };
 
 // apply one left/right adjustment to a row; false = nothing happened (action
 // rows, steppers pinned at min/max)

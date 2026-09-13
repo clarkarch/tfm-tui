@@ -7,7 +7,7 @@
 // (bind accessors below) — no imports beyond types, so ui/ AND fs/ can use
 // it without layering violations or import cycles.
 
-import type { SettingRow } from "../ui/settings";
+import type { SettingRow } from "../config/config-schema";
 import type { Command } from "../lib/command";
 import type { PluginEventName, PluginEventPayload } from "../lib/plugin-events";
 import type { FileOpHookDecision, FileOpHookPayload } from "../lib/plugin-hooks";

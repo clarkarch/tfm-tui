@@ -46,7 +46,7 @@ export type IconSpec = {
   done?: boolean;
 };
 
-type ThumbJob = {
+export type ThumbJob = {
   slotId: string;
   path: string;
   mtimeMs: number;
@@ -90,13 +90,14 @@ export const dimHex = (hex: string, f: number): string => {
 };
 
 export const makeSlots = (ctx: SlotsCtx) => {
-  const iconQueue: IconSpec[] = [];
   // registry of every queued slot, drained or not: setScrim must reach
   // rasters that finished BEFORE the modal opened (the old queue pruned
   // done specs at the end of each drain — scrim then iterated an almost
   // empty queue and kitty rasters floated over the menu), and
   // resetIconQueue must re-queue drained slots for theme/resize re-rasters.
   // Pruned lazily in drainIconQueue when the slot node is gone from the tree.
+  // This is the ONLY registry — a second `iconQueue` (the old design) grew
+  // unbounded and re-armed dead specs on every reset.
   const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
   let thumbJobs: ThumbJob[] = [];
@@ -127,7 +128,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
       initialState,
       ...(statesFactory ? { statesFactory } : {}),
     };
-    iconQueue.push(spec);
     allSpecs.set(slotId, spec);
     return {
       el: Box(
@@ -267,7 +267,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const drainIconQueue = async () => {
     if (!ctx.renderer().resolution) return;
     const aspect = cellMetrics().aspect;
-    const pending = iconQueue.filter((s) => !s.done);
+    const pending = [...allSpecs.values()].filter((s) => !s.done);
     await Promise.all(
       pending.map(async (spec) => {
         spec.done = true;
@@ -440,10 +440,10 @@ export const makeSlots = (ctx: SlotsCtx) => {
     setScrim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
     resetIconQueue: (): void => {
-      // boot-baked slots may have already drained and left the queue —
-      // the registry keeps them reachable for theme/resize re-rasters
+      // boot-baked slots may have already drained and left the pending set —
+      // the registry keeps them reachable for theme/resize re-rasters (the
+      // old second queue grew unbounded; allSpecs prunes by node-liveness)
       for (const s of allSpecs.values()) s.done = false;
-      for (const s of iconQueue) s.done = false;
     },
     pushThumbJob: (job: ThumbJob): void => {
       thumbJobs.push(job);

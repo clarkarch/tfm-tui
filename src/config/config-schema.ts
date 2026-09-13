@@ -5,6 +5,79 @@
 // derive from this table. Adding a knob = adding a row here, nothing else.
 // Pure module: no fs, no renderer. ---
 
+// Settings-row type lives HERE (a leaf, no imports) so the plugin api can
+// reference plugin-provided rows without importing a ui/ module — ui/settings
+// re-exports it, keeping the layering acyclic.
+// `repaint` rows (theme / ui-style / transparent-bg) change the panel's own
+// colors — their adjust re-renders the panel; other value rows update their
+// value text by id (targeted, no rebuild — see the OOM note in AGENTS.md)
+export type SettingRow =
+  | { kind: "toggle"; label: string; repaint?: boolean; get: () => boolean; set: (v: boolean) => void }
+  | {
+      kind: "stepper";
+      label: string;
+      repaint?: boolean;
+      min: number;
+      max: number;
+      step: number;
+      fmt: (v: number) => string;
+      get: () => number;
+      set: (v: number) => void;
+    }
+  | {
+      kind: "cycle";
+      label: string;
+      repaint?: boolean;
+      names: string[];
+      getIdx: () => number;
+      setIdx: (i: number) => void;
+      // shown when getIdx() is -1 (value matches no preset). Only the theme
+      // row goes custom today — a bare "custom" never says custom *what*,
+      // so the theme row reports "~<nearest preset>" instead.
+      customLabel?: () => string;
+    }
+  // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
+  | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
+  | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
+
+export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] };
+
+// structural validation for plugin settings rows (mirrors per-entry preview/
+// commands validation): a malformed row like {kind:"toggle"} with no get/set
+// would otherwise crash the settings panel at render or throw out of the
+// keypress handler on adjust — invalid entries drop, the plugin stays.
+export const isValidSettingRow = (r: unknown): boolean => {
+  if (typeof r !== "object" || r === null) return false;
+  const row = r as Record<string, unknown>;
+  if (typeof row.label !== "string") return false;
+  switch (row.kind) {
+    case "toggle":
+      return typeof row.get === "function" && typeof row.set === "function";
+    case "stepper":
+      return (
+        typeof row.min === "number" &&
+        typeof row.max === "number" &&
+        typeof row.step === "number" &&
+        typeof row.fmt === "function" &&
+        typeof row.get === "function" &&
+        typeof row.set === "function"
+      );
+    case "cycle":
+      return (
+        Array.isArray(row.names) &&
+        row.names.every((s) => typeof s === "string") &&
+        typeof row.getIdx === "function" &&
+        typeof row.setIdx === "function"
+      );
+    case "keybind":
+      return typeof row.get === "function" && typeof row.set === "function";
+    case "action":
+      return typeof row.run === "function";
+    default:
+      return false;
+  }
+};
+
 export type Theme = {
   bg: string;
   sidebarBg: string;

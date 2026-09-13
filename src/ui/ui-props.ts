@@ -7,6 +7,7 @@ import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
+import { type IconState, type ThumbJob } from "./ui-slots";
 import { dirWalkStats, fmtBytes, fmtDate, mimeLabelFor } from "../fs/propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
@@ -21,21 +22,9 @@ import type { NotifyLevel } from "../lib/notify-level";
 // renderer arrive via ctx (same seam as ui-dialogs); every tfm-props-* id
 // must stay byte-identical for rethemeChrome. ---
 
-type PropsIconState = { fg: string; bg: string };
-
-type PropsThumbJob = {
-  slotId: string;
-  path: string;
-  mtimeMs: number;
-  size: number;
-  wCells: number;
-  hCells?: number;
-  bg?: string;
-  vector: boolean;
-  video?: boolean;
-  fallbackGlyph: string;
-  priority?: boolean;
-};
+// shared slot/thumb types live in ./ui-slots (the queue they feed) — the old
+// byte-identical local mirrors drifted when ui-slots gained a field
+type PropsIconState = IconState;
 
 type PropsCtx = {
   byId(id: string): any;
@@ -53,7 +42,7 @@ type PropsCtx = {
   stripSelectable(): void;
   drainIconQueue(): void;
   drainThumbs(): void;
-  pushThumbJob(job: PropsThumbJob): void;
+  pushThumbJob(job: ThumbJob): void;
   nextIconId(): string;
   escHintBtn(id: string, onClose: () => void): any;
   closeFileMenu(): void;

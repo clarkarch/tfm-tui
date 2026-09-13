@@ -213,7 +213,7 @@ describe("deleteForever / emptyTrash", () => {
     try {
       const sink = recordingSink();
       makeTrashOps(sink).emptyTrash();
-      await Bun.sleep(30);
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:empty failed:error:Could not read trash")));
       expect(sink.notes.some((n) => n.startsWith("notify:empty failed:error:Could not read trash"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -311,6 +311,9 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
       settleTimer = null;
+      // never rebuild under a modal/drag/rename — the column math would run
+      // on a hidden grid and churn native buffers for nothing
+      if (ctx.blocked()) return;
       ctx.onSettle?.();
     }, 80);
   };

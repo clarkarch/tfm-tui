@@ -43,10 +43,11 @@ export const parseGitUrl = (raw: string): ParsedGitUrl => {
   const [first, subdir] = parts as [string, string | undefined];
   // argv is array-passed straight to `git` (never shelled), so metacharacters
   // are inert by construction — the denylist below is belt-and-braces against
-  // pastes that were never URLs at all. The dash-prefix check is the one that
-  // matters (a leading `-` would parse as a git flag). Tab is deliberately
-  // NOT a separator: it fails the control-char check above (paste format is
-  // space-separated only).
+  // pastes that were never URLs at all. Dash checks: a URL that STARTS with
+  // `-` parses as a git flag, and a HOST that starts with `-` (ssh://-oProxy
+  // …) is handed to ssh as an option (git passes the host as an argv element
+  // with no `--`). Tab is deliberately NOT a separator: it fails the
+  // control-char check above (paste format is space-separated only).
   if (!first || first.startsWith("-")) throw new Error(`invalid git URL: ${JSON.stringify(first ?? "")}`);
   if (first.includes(";") || first.includes("|") || first.includes("`") || first.includes("$(")) {
     throw new Error(`invalid git URL: ${JSON.stringify(first)}`);
@@ -66,6 +67,17 @@ export const parseGitUrl = (raw: string): ParsedGitUrl => {
     url.startsWith("git://") ||
     SCP_RE.test(url);
   if (!ok) throw new Error(`unsupported git URL (use https://, ssh://, git:// or git@host:…): ${JSON.stringify(url)}`);
+  // host leading with `-` = ssh option injection (git forwards the host to
+  // ssh as an argv element without `--`)
+  const host = ((): string | null => {
+    const uri = url.match(/^(?:https?|ssh|git):\/\/([^/?#@]+)/);
+    if (uri) return uri[1] ?? null;
+    const scp = url.match(/^[\w.-]+@([^/]+):/);
+    return scp ? (scp[1] ?? null) : null;
+  })();
+  if (host !== null && host.startsWith("-")) {
+    throw new Error(`invalid git URL (host starts with '-'): ${JSON.stringify(url)}`);
+  }
   if (subdir !== undefined) {
     const segs = subdir.split("/");
     if (!SUBDIR_RE.test(subdir) || segs.some((s) => s === "" || s === "." || s === "..")) {

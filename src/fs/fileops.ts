@@ -14,6 +14,7 @@ import {
   fsErrText,
   fsMove,
   isInTrashFiles,
+  isWithinOrEqual,
   rmTrashInfo,
   safeRestoreMove,
   shouldToast,
@@ -64,6 +65,17 @@ export type FileOpsCtx = {
   refreshCutVisuals(): void;
   // injectable for tests — real impl lstats st.dev (fsutil)
   crossDevice?(a: string, b: string): boolean;
+  // injectable source-removal for cross-device moves (tests force a partial
+  // rm failure); real impl is rm(p, { recursive: true })
+  removeTree?(p: string): Promise<void>;
+  // injectable stash (tests force a failed replace-stash); real impl moves
+  // the victim to trash via xdgTrashMove
+  stashVictim?: (
+    victimDest: string,
+    units: UndoUnit[],
+    dUnits: UndoStep[],
+    onStashFailed: (err: unknown) => void,
+  ) => Promise<boolean>;
   // archive engine seam (tests inject; default = src/fs/archive)
   runArchive?: ArchiveRun;
   listArchive?: (fmt: ArchiveFormat, file: string) => Promise<number>;
@@ -160,27 +172,24 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // lines twice before). Re-checks existence first — the target may have
   // vanished while the conflict prompt was up. Returns true when an undo
   // unit was recorded; appends the journal mirror to dUnits alongside.
-  const stashVictim = async (
-    victimDest: string,
-    units: UndoUnit[],
-    dUnits: UndoStep[],
-    onStashFailed: (err: unknown) => void,
-  ): Promise<boolean> => {
-    try {
-      if (!existsSync(victimDest)) return false;
-      const trashLoc = await xdgTrashMove(victimDest);
-      units.push(async () => {
-        await safeRestoreMove(trashLoc, victimDest);
-        await rmTrashInfo(path.basename(trashLoc), ctx.log);
-      });
-      dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
-      dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
-      return true;
-    } catch (err) {
-      onStashFailed(err);
-      return false;
-    }
-  };
+  const stashVictim: FileOpsCtx["stashVictim"] =
+    ctx.stashVictim ??
+    (async (victimDest, units, dUnits, onStashFailed) => {
+      try {
+        if (!existsSync(victimDest)) return false;
+        const trashLoc = await xdgTrashMove(victimDest);
+        units.push(async () => {
+          await safeRestoreMove(trashLoc, victimDest);
+          await rmTrashInfo(path.basename(trashLoc), ctx.log);
+        });
+        dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
+        dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
+        return true;
+      } catch (err) {
+        onStashFailed(err);
+        return false;
+      }
+    });
 
   // wire the copy engine (./transfer) to the live progress state
   const transferSink: TransferSink = {
@@ -206,6 +215,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   };
   const copyTreeProgressWired = (src: string, dest: string): Promise<void> => copyTreeProgress(src, dest, transferSink);
   const isCrossDevice = (a: string, b: string): boolean => (ctx.crossDevice ?? fsCrossDevice)(a, b);
+  const removeTree = ctx.removeTree ?? ((p: string) => rm(p, { recursive: true }));
 
   // every destructive-but-reversible file op funnels through here so overrides
   // are asked once and undo covers the whole batch. Serialized through the
@@ -245,7 +255,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     try {
       const kids = await readdir(destDir).catch(() => [] as string[]);
       for (const k of kids) {
-        if (k.includes(".tfm-part-") || k.startsWith(".tfm-extract-")) {
+        // anchor to the exact temp-name shape (<name>.tfm-part-<pid>-<rand8>
+        // and .tfm-extract-<pid>-<rand8>) — a substring match silently
+        // deleted real user files like notes.tfm-part-2.md
+        if (/\.tfm-part-\d+-[0-9a-z]{8}$/.test(k) || /^\.tfm-extract-\d+-[0-9a-z]{8}$/.test(k)) {
           try {
             await rm(path.join(destDir, k), { recursive: true, force: true });
           } catch {}
@@ -262,7 +275,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       skipped = 0,
       replaced = 0,
       failed = 0,
-      gone = 0;
+      gone = 0,
+      selfDrop = 0;
     const failWhy = new Set<string>();
     const total = srcs.length;
     // moves across a filesystem boundary go through the copy engine too
@@ -315,6 +329,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           skipped++;
           continue;
         }
+        // pasting a folder into itself / into its own subtree would copy it
+        // inside a destination that grows as we copy — unbounded recursion.
+        // moveInto filters this upstream for drops; paste has no ancestor
+        // check, so refuse here for BOTH ops.
+        if (isWithinOrEqual(destDir, src)) {
+          selfDrop++;
+          continue;
+        }
         const base = path.basename(src);
         let target = path.join(destDir, base);
         // nautilus semantics: paste-in-place never asks, it just makes "name (copy)"
@@ -331,12 +353,17 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             continue;
           }
           if (choice === "keepBoth") target = uniqueTarget(destDir, base);
-          else if (
-            await stashVictim(target, units, dUnits, (err) => {
+          else {
+            const stashed = await stashVictim(target, units, dUnits, (err) => {
               failWhy.add(fsErrText(err));
-              ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — proceeding without undo`);
-            })
-          ) {
+              ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — original kept`);
+            });
+            // a failed stash must abort the overwrite, not proceed silently
+            // without undo (the victim is then destroyed for good)
+            if (!stashed) {
+              failed++;
+              continue;
+            }
             replaced++;
           }
         }
@@ -353,7 +380,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             // cancel raced the final byte: copy completed but the source must
             // survive a cancelled move — surface as cancelled, drop the copy
             if (prog.cancelled) throw new Error("cancelled");
-            await rm(src, { recursive: true });
+            try {
+              await removeTree(src);
+            } catch (err) {
+              // source is partially deleted; the copy in `target` is now the
+              // ONLY complete data — clearing it (the half-copy cleanup below)
+              // would lose everything. Keep it and report loudly.
+              copiedHere = false;
+              throw new Error(`source partially removed: ${fsErrText(err)}`);
+            }
           } else await fsMove(src, target);
           const t = target,
             s = src;
@@ -414,6 +449,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (replaced) bits.push(`${replaced} replaced`);
     if (skipped) bits.push(`${skipped} skipped`);
     if (gone) bits.push(`${gone} source gone`);
+    if (selfDrop) bits.push(`${selfDrop} folder into itself`);
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (ok || replaced) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
@@ -452,14 +488,22 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       if (choice === "keepBoth") {
         finalDest = uniqueTarget(path.dirname(finalDest), path.basename(finalDest));
       } else {
-        await stashVictim(finalDest, units, dUnits, (err) => {
-          ctx.log(`replace stash failed ${finalDest}: ${fsErrText(err)} — proceeding without undo`);
+        const stashed = await stashVictim(finalDest, units, dUnits, (err) => {
+          ctx.log(`replace stash failed ${finalDest}: ${fsErrText(err)} — original kept`);
         });
+        // a failed stash must not proceed to rename over the victim (that
+        // destroys it with no undo path)
+        if (!stashed) {
+          ctx.notify("Replace failed — existing file kept", "rename failed", "error");
+          ctx.renderAll();
+          return;
+        }
       }
     }
+    let renameFailed: string | null = null;
     try {
       await fsRename(p, finalDest);
-      units.push(() => fsRename(finalDest, p));
+      units.push(() => safeRestoreMove(finalDest, p).then(() => undefined));
       dUnits.push({ op: "rename", from: finalDest, to: p });
       redos.push(async () => {
         try {
@@ -469,20 +513,30 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         }
       });
       dRedos.push({ op: "rename-if", from: p, to: finalDest });
-      const renameLabel = `rename ${path.basename(p)} → ${path.basename(finalDest)}`;
-      ctx.pushUndoBatch(renameLabel, units, redos, { units: dUnits, redos: dRedos });
-      ctx.renderAll();
-      // the arrow names both ends so multi-tab renames stay clear
-      const renamedMsg = `Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ctrl+z to undo`;
-      ctx.notify(renamedMsg, "rename", "success");
-      try {
-        ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 0 });
-      } catch {}
     } catch (err) {
-      const summary = `Rename failed (${fsErrText(err)})`;
-      ctx.notify(summary, "rename failed", "error");
+      renameFailed = fsErrText(err);
+      ctx.log(`rename failed ${p} → ${finalDest}: ${renameFailed}`);
+    }
+    // the stash's restore unit must survive a failed rename too — otherwise the
+    // stashed victim sits in the trash with no undo entry (the batch was pushed
+    // inside the try before)
+    if (units.length) {
+      ctx.pushUndoBatch(`rename ${path.basename(p)} → ${path.basename(finalDest)}`, units, redos, {
+        units: dUnits,
+        redos: dRedos,
+      });
+    }
+    ctx.renderAll();
+    if (renameFailed) {
+      ctx.notify(`Rename failed (${renameFailed})`, "rename failed", "error");
       try {
         ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 1 });
+      } catch {}
+    } else {
+      // the arrow names both ends so multi-tab renames stay clear
+      ctx.notify(`Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ctrl+z to undo`, "rename", "success");
+      try {
+        ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 0 });
       } catch {}
     }
   };
@@ -517,7 +571,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           continue;
         }
         await fsRename(from, to);
-        units.push(() => fsRename(to, from));
+        units.push(() => safeRestoreMove(to, from).then(() => undefined));
         dUnits.push({ op: "rename", from: to, to: from });
         redos.push(async () => {
           try {
@@ -664,9 +718,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.notify("Can't move into Trash", "move", "error");
       return;
     }
-    const srcs = items
-      .filter((it) => !(it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep))))
-      .map((it) => it.path);
+    const srcs = items.filter((it) => !(it.isDir && isWithinOrEqual(destDir, it.path))).map((it) => it.path);
     // everything filtered out = drop onto itself — say so instead of
     // reporting a confusing "Moved 0 items" via runTransfer
     if (!srcs.length) {
@@ -774,11 +826,16 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               continue;
             }
             if (choice === "keepBoth") target = uniqueTarget(destDir, name);
-            else
-              await stashVictim(target, units, dUnits, (err) => {
+            else {
+              const stashed = await stashVictim(target, units, dUnits, (err) => {
                 failWhy.add(fsErrText(err));
-                ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — proceeding without undo`);
+                ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — original kept`);
               });
+              if (!stashed) {
+                failed++;
+                continue;
+              }
+            }
           }
           try {
             await fsMove(src, target);
@@ -857,11 +914,16 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         return;
       }
       if (choice === "keepBoth") out = uniqueArchiveTarget(destDir, base, ext);
-      else
-        await stashVictim(out, units, dUnits, (err) => {
+      else {
+        const stashed = await stashVictim(out, units, dUnits, (err) => {
           failWhy.add(fsErrText(err));
-          ctx.log(`replace stash failed ${out}: ${fsErrText(err)} — proceeding without undo`);
+          ctx.log(`replace stash failed ${out}: ${fsErrText(err)} — original kept`);
         });
+        if (!stashed) {
+          ctx.notify("Replace failed — existing archive kept", "compress failed", "error");
+          return;
+        }
+      }
     }
     const tmp = `${out}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
     let totalFiles = 0;

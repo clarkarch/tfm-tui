@@ -97,6 +97,10 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   let dragOp = 1; // 1 copy / 2 move
   let selfHandled = false; // self-drop already moved/copied the files
   let selfTargetKey: string | null = null; // folder tile currently highlighted
+  // session whose self-drop already finished — the end event (t=e:x=4:y=1,
+  // canceled=true) that follows every accepted drop must not overwrite the
+  // status with "drag cancelled" after a successful internal move
+  let selfDropDoneSession = -1;
   let endTimer: ReturnType<typeof setTimeout> | null = null;
   let endTimerSession = 0; // which drag session the pending epilogue belongs to
   // monotonically rising session token: the deferred end epilogue closes over
@@ -136,6 +140,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     dragPaths = paths;
     dragOp = 1;
     selfHandled = false;
+    selfDropDoneSession = -1;
     ctx.finishDrag(); // pointer is about to be grabbed by the terminal
     write(agreeDragFrame(), "agree drag either");
     presentDragUriList(paths);
@@ -158,6 +163,8 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     }
     if (target.kind === "folder") {
       selfTargetKey = target.path;
+      // a folder tile wins over any previous place hover highlight
+      ctx.clearHoverPlace();
       ctx.setTileVisual(target.path, TileVisual.Selected);
     } else {
       ctx.hoverPlace(target.path);
@@ -175,8 +182,10 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     }
     const paths = dragPaths;
     selfHandled = true;
+    selfDropDoneSession = dragSession;
     const target = ctx.hitTargetAt(x, y, dragPaths);
     clearSelfDropHighlight();
+    ctx.clearHoverPlace();
     dragPaths = null;
     selfHandled = false;
     if (!paths?.length || !target) {
@@ -261,6 +270,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
         const pathsAtEnd = dragPaths;
         const opAtEnd = dragOp;
         const selfAtEnd = selfHandled;
+        const selfDoneAtEnd = selfDropDoneSession === seqAtEnd;
         const finishExternal = (): void => {
           if (!canceled && pathsAtEnd && !selfAtEnd) {
             // released over another app: honor move semantics by trashing our copies
@@ -271,7 +281,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
                 "drag & drop",
                 "success",
               );
-          } else if (canceled) ctx.setStatusMsg("drag cancelled");
+          } else if (canceled && !selfDoneAtEnd) ctx.setStatusMsg("drag cancelled");
           if (dragSession === seqAtEnd) {
             dragPaths = null;
             selfHandled = false;
@@ -348,8 +358,9 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       // kitty ACKs our StartDrag with `E:OK` ~5ms after every ACCEPTED drag
       // and the session continues normally — only a non-OK payload is a real
       // failure (every E in the wild has been exactly "OK"; a genuine reason
-      // names itself, so the match stays tight)
-      if (payload.trim().toLowerCase() === "ok") {
+      // names itself, so the match stays tight). A bare `E` (empty payload)
+      // is the same ack, not an error.
+      if (!payload.trim() || payload.trim().toLowerCase() === "ok") {
         ctx.log("drag acknowledged");
         return;
       }

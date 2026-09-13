@@ -71,4 +71,42 @@ describe("runBoot", () => {
     expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("hygiene"));
     expect(calls.indexOf("hygiene")).toBeLessThan(calls.indexOf("search"));
   });
+
+  test("a throwing step is reported but the sequence continues (no blank TUI)", async () => {
+    const calls: string[] = [];
+    const reported: string[] = [];
+    // buildLayout throws (native-OOM class) — renderAll must STILL run so the
+    // app paints instead of a silently-alive blank pane
+    await runBoot(
+      mkCtx(calls, {
+        buildLayout: () => {
+          calls.push("layout");
+          throw new Error("boom");
+        },
+        reportBootError: (name, _err) => {
+          reported.push(name);
+        },
+      }),
+    );
+    expect(reported).toEqual(["buildLayout"]);
+    expect(calls).toContain("render"); // boot completes despite the throw
+  });
+
+  test("a rejecting async step is reported but the sequence continues", async () => {
+    const calls: string[] = [];
+    const reported: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        loadSystemPlaces: async () => {
+          calls.push("places");
+          throw new Error("async-boom");
+        },
+        reportBootError: (name) => {
+          reported.push(name);
+        },
+      }),
+    );
+    expect(reported).toEqual(["loadSystemPlaces"]);
+    expect(calls).toContain("render");
+  });
 });

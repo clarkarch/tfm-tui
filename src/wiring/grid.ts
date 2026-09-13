@@ -151,6 +151,9 @@ export const wireGrid = (deps: {
         s.setSelAnchor(v);
       },
       getFocusIdx: () => s.focusIdx(),
+      setFocusIdx: (v: number) => {
+        s.setFocusIdx(v);
+      },
       selPaths: s.selPaths,
       dblClickMs: () => core.config.ui.doubleClickMs,
       dragThresholdCells: () => core.config.ui.dragThresholdCells,
@@ -169,6 +172,7 @@ export const wireGrid = (deps: {
       // --- host ---
       setStatusMsg: nav.setStatusMsg,
       focusPane: () => focusPane(pane),
+      blurTerminal: () => fileops.terminal.blurTerminal(),
       log: (msg: string) => dlog(msg),
     };
   };

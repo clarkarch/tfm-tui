@@ -429,6 +429,15 @@ describe("search keys", () => {
     h.key("return");
     expect(h.calls).toEqual(["search:clear", "renderGrid"]);
   });
+
+  test("return ignores a stale pre-debounce listing (query outran the grid)", () => {
+    // the render is debounced 150ms after the first char — fast 2nd+ char +
+    // Enter must not open a tile that satisfies the OLD listing only
+    const h = makeHarness(searchOn({} as Harness, "ab"));
+    h.seedTiles(["a.txt", "b.txt"]);
+    h.key("return");
+    expect(h.calls).toEqual(["search:clear", "renderGrid"]);
+  });
 });
 
 describe("shift+arrows extend from anchor", () => {
@@ -969,6 +978,18 @@ describe("plugin commands (keybinds)", () => {
     h.calls.length = 0;
     expect(() => h.key("j", { ctrl: true })).not.toThrow();
     expect(h.calls).toEqual([]);
+  });
+
+  test("core wins over plugin binds for the LATE action group too (ctrl+t newTab)", () => {
+    // the plugin block used to dispatch BEFORE the late core-actions group
+    // (openMenu/newTab/trash/copy/undo), so a plugin defaultBind of ctrl+t
+    // silently swallowed newTab while the load-time log claimed the opposite
+    const h = makeHarness({
+      pluginCommands: () => [{ id: "demo:tab", binds: ["ctrl+t"], run: () => h.calls.push("plugin:tab") }],
+    } as any);
+    h.calls.length = 0;
+    h.key("t", { ctrl: true });
+    expect(h.calls).toEqual(["tab:new"]);
   });
 });
 

@@ -23,10 +23,12 @@ const collectTsFiles = (dir: string): string[] => {
 
 // biome format terminates every import/export statement with ';' — statement
 // splitting survives multi-line import lists and ignores relative-looking
-// string literals inside function bodies.
+// string literals inside function bodies. Dynamic `import("./x")` calls are
+// matched separately (the lazy app graph + plugins-cli route through them).
 const relativeSpecifiersOf = (file: string): string[] => {
+  const content = readFileSync(file, "utf8");
   const specs: string[] = [];
-  for (const stmt of readFileSync(file, "utf8").split(";")) {
+  for (const stmt of content.split(";")) {
     if (!/^\s*(import|export)\b/.test(stmt)) continue;
     const from = stmt.match(/\bfrom\s+["'](\.[^"']+)["']/);
     if (from) {
@@ -35,6 +37,9 @@ const relativeSpecifiersOf = (file: string): string[] => {
     }
     const bare = stmt.match(/^\s*import\s+["'](\.[^"']+)["']/);
     if (bare) specs.push(bare[1]!);
+  }
+  for (const m of content.matchAll(/import\(["'](\.[^"']+)["']\)/g)) {
+    specs.push(m[1]!);
   }
   return specs;
 };

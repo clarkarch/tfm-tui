@@ -61,6 +61,7 @@ export type GridSelectionDeps = {
   getSelAnchor(): number | null;
   setSelAnchor(v: number | null): void;
   getFocusIdx(): number;
+  setFocusIdx(v: number): void;
   selPaths(): ClipItem[];
 };
 /** Context menu + inline rename (owned by the menu/rename widgets). */
@@ -92,6 +93,11 @@ export type GridInputCtx = {
   // without this, clicking a tile in pane 1 leaves pane 0 active (status,
   // preview and every keybind then target the wrong side).
   focusPane?(): void;
+  // blur the embedded terminal on any tile press: tile mousedown stops
+  // propagation so the scroller's blurTerminal never runs, and a stale
+  // termFocused flag makes ownsKeyboard() swallow every key with a lying
+  // "Terminal owns keyboard" toast
+  blurTerminal?(): void;
 } & GridSelectionDeps &
   GridMenuDeps &
   GridNavDeps;
@@ -307,6 +313,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       if (!(mods.shift || mods.alt)) return false;
       if (ctx.getSelAnchor() === null) ctx.setSelAnchor(ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
       ctx.selectRange(ctx.getSelAnchor()!, idx);
+      // the keyboard extend endpoint must follow the clicked tile, or the next
+      // shift+arrow extends from a stale focusIdx and collapses the range
+      ctx.setFocusIdx(idx);
       ctx.updateSelectionStatusReal();
       void ctx.renderPreview();
       armDragPayload(ev, ctx.selPaths(), false);
@@ -318,6 +327,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       const wasSelected = !!ctx.tileRefs.get(key)?.selected;
       ctx.clearTileSelection();
       ctx.setSelAnchor(idx);
+      ctx.setFocusIdx(idx);
       const ref = ctx.tileRefs.get(key);
       if (ref) {
         if (wasSelected && prevSel.length > 1) {
@@ -374,6 +384,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
           ev.stopPropagation?.();
         } catch {}
         ctx.focusPane?.();
+        ctx.blurTerminal?.();
         ctx.closeFileMenu();
         const rk = ctx.renameEditKey();
         if (rk && rk !== key) ctx.finishInlineRename(false);

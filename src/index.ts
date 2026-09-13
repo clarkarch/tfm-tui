@@ -4,7 +4,8 @@
 // (the wiring modules receive them as getters) — the same seam rule the
 // widget factories use internally. Order:
 //   core → nav → chrome (renderer boots here) → grid foundation → fileops →
-//   plugins → grid → settings → watcher → boot → retheme → dnd → resize → keymap ---
+//   plugins → grid → settings → watcher → hover drawer → boot → retheme →
+//   dnd → resize → keymap ---
 //
 // The app graph loads LAZILY (dynamic imports below): --version must answer
 // in milliseconds, not after OpenTUI natives + the whole graph load (~250ms).
@@ -232,6 +233,7 @@ wireBoot({
   bootStart,
   skipSessionRestore: explicitPath,
   mountSlots: () => plugins.mountSlots(),
+  afterLayout: () => hover.refresh(),
 });
 
 const retheme = wireRetheme({

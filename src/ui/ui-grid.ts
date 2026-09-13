@@ -13,6 +13,7 @@ import type { Theme } from "../config/config";
 import { fsErrText } from "../fs/fsutil";
 import { fileIsImage, fileIsVideo, fileIconFor } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
+import { sidePadDelta, type UiStyle } from "./style";
 import { fmtBytes, pad2 } from "../fs/propsinfo";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { clearChildren } from "../lib/uiutil";
@@ -49,7 +50,7 @@ type GridRendererCtx = {
   tileH(): number;
   iconCells(): number;
   listRowH(): number;
-  uiStyle(): string;
+  uiStyle(): UiStyle;
   colors(): Theme;
   previewEnabled(): boolean;
   previewWidth(): number;
@@ -315,7 +316,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       slotEl = s.el;
     }
     row.add(slotEl);
-    const listW = Math.max(20, availW() - (ctx.uiStyle() === "solid" ? 3 : 6));
+    const listW = Math.max(20, availW() - sidePadDelta(ctx.uiStyle()));
     const nameMax = Math.max(12, listW - 27 - iconW);
     const label = entry.name.length > nameMax ? `${entry.name.slice(0, nameMax - 1)}…` : entry.name;
     row.add(Text({ id: labelId, content: label, fg: baseFg }));
@@ -435,6 +436,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         ctx.pathEditMode() ? "" : "edit the path above to go elsewhere",
       ]);
       ctx.stripSelectable();
+      // no tiles to navigate: clear the old listing's nav geometry or arrows
+      // consume keys against a phantom list (focusKeys still holds the previous
+      // folder's paths with emptied tileRefs)
+      selection.setFocusKeys([]);
+      selection.setCols(1);
+      selection.setRowH(ctx.viewMode() === "list" ? rowH() : ctx.tileH());
       void ctx.drainIconQueue();
       return;
     }
@@ -459,6 +466,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
               ? "nothing starred yet"
               : "this folder is empty",
       ]);
+      // no tiles to navigate: drop the previous listing's focusKeys/cols/rowH
+      selection.setFocusKeys([]);
+      selection.setCols(1);
+      selection.setRowH(isList ? rowH() : ctx.tileH());
       void ctx.drainIconQueue();
       return;
     }

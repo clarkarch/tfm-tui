@@ -6,6 +6,7 @@ import { clearChildren, debounced, type Scheduler } from "../lib/uiutil";
 import { slotBg, type UiStyle } from "./style";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
+import type { ThumbJob } from "./ui-slots";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, syntaxStyleSig } from "./syntax";
 import type { Theme } from "../config/config";
 
@@ -16,19 +17,7 @@ import type { Theme } from "../config/config";
 // gen-counter guards stale async file reads so a slow preview can't paint
 // over a newer one. tfm-preview-* ids stay byte-identical. ---
 
-type ThumbJobLike = {
-  slotId: string;
-  path: string;
-  mtimeMs: number;
-  size: number;
-  wCells: number;
-  hCells?: number;
-  bg?: string;
-  vector: boolean;
-  video?: boolean;
-  fallbackGlyph: string;
-  priority?: boolean;
-};
+type ThumbJobLike = ThumbJob;
 
 type PreviewCtx = {
   renderer: any;

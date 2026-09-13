@@ -36,13 +36,19 @@ export const makeQuit =
     }
     try {
       ctx.flushSession?.();
-    } catch {}
+    } catch {
+      failed = true;
+    }
     try {
       ctx.closeTerminal?.();
-    } catch {}
+    } catch {
+      failed = true;
+    }
     try {
       ctx.onQuit?.();
-    } catch {}
+    } catch {
+      failed = true;
+    }
     try {
       ctx.destroy();
     } catch {

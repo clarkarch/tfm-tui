@@ -50,6 +50,11 @@ describe("parseGitUrl", () => {
     expect(() => parseGitUrl("--upload-pack=touch pwn")).toThrow();
     expect(() => parseGitUrl("https://github.com/u/repo\nrm -rf /")).toThrow();
     expect(() => parseGitUrl("https://github.com/u/repo;touch pwn")).toThrow();
+    // a host starting with `-` is handed to ssh as an option (no `--`) —
+    // git forwards the host as an argv element, so ssh://-oProxyCommand=…
+    // is an option-injection vector, not a URL
+    expect(() => parseGitUrl("ssh://-oProxyCommand=x/u/repo")).toThrow("starts with '-'");
+    expect(() => parseGitUrl("git@-evil.com:u/repo")).toThrow("starts with '-'");
     // a single space is the URL/subdir separator by design (not a rejection):
     // "…/re po" means repo "re" + subdir "po"
     expect(parseGitUrl("https://github.com/u/re po")).toEqual({ url: "https://github.com/u/re", subdir: "po" });

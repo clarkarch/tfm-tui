@@ -43,6 +43,19 @@ export const isInTrashFiles = (p: string): boolean => {
   }
 };
 
+// is `inner` the same path as `outer` or anywhere inside it? Ancestor
+// relationship for self-drop guards (copying a folder into itself/its own
+// subtree recurses unboundedly) — shared by runTransfer and moveInto.
+export const isWithinOrEqual = (inner: string, outer: string): boolean => {
+  try {
+    const i = path.resolve(inner);
+    const o = path.resolve(outer);
+    return i === o || i.startsWith(o + path.sep);
+  } catch {
+    return false;
+  }
+};
+
 // best-effort count of home-trash entries for the empty-trash confirm
 // prompt. -1 when the trash is unreadable (prompt omits the count then).
 export const countTrashItems = (): number => {
@@ -128,7 +141,13 @@ export const fsMove = async (src: string, dest: string): Promise<void> => {
     // cleanup — this fallback is for single renames that unexpectedly hit
     // EXDEV (bind mounts). Remove source only after the copy succeeded.
     await cp(src, dest, { recursive: true, preserveTimestamps: true });
-    await rm(src, { recursive: true });
+    try {
+      await rm(src, { recursive: true });
+    } catch (err) {
+      // partial source deletion; the complete copy in dest is the only intact
+      // data now — keep it and say what actually happened instead of a bare errno
+      throw new Error(`source partially removed: ${fsErrText(err)}`);
+    }
   }
 };
 

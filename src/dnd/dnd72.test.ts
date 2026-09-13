@@ -139,6 +139,18 @@ describe("outgoing drag", () => {
     expect(tx).toEqual([]);
     gridDrag.keys = null;
   });
+
+  test("bare E ack (empty payload) is not a drag error", () => {
+    const { ctx, feed, notes } = baseCtx();
+    makeDnd72(ctx);
+    gridDrag.ctrl = false;
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=64:y=10");
+    feed("t=E"); // kitty's StartDrag ack with an EMPTY payload
+    feed("t=E", "OK"); // and the OK payload form
+    expect(notes).toEqual([]);
+    gridDrag.keys = null;
+  });
 });
 
 describe("incoming drop", () => {
@@ -237,6 +249,41 @@ describe("self drop", () => {
     expect(ctx.moveIns).toEqual([]);
     gridDrag.keys = null;
   });
+
+  test("a completed self-drop does not paint 'drag cancelled' after the end event", async () => {
+    const { ctx, feed, status } = baseCtx();
+    makeDnd72(ctx);
+    gridDrag.ctrl = false;
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=M:x=5:y=5"); // self drop — moves /d/a into /d/dest
+    await settleUntil(() => ctx.moveIns.length > 0);
+    feed("t=e:x=4:y=1"); // kitty's canceled=true end event after every drop
+    await settleUntil(() => status.length > 0);
+    expect(status).not.toContain("drag cancelled");
+    gridDrag.keys = null;
+  });
+
+  test("hovering a folder clears a previous place hover (no lingering highlight)", () => {
+    const { ctx, feed, logs } = baseCtx();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=m:x=5:y=5"); // folder target
+    expect(logs).toContain("clearHoverPlace");
+    gridDrag.keys = null;
+  });
+
+  test("self-drop clears the place hover highlight", async () => {
+    const { ctx, feed, logs } = baseCtx();
+    ctx.hitTargetAt = () => ({ kind: "place", path: "/places/Downloads" });
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=M:x=5:y=5");
+    await settleUntil(() => logs.includes("clearHoverPlace"));
+    gridDrag.keys = null;
+  });
 });
 
 describe("external drag end", () => {
@@ -246,7 +293,7 @@ describe("external drag end", () => {
     gridDrag.keys = [{ path: "/d/a", isDir: false }];
     feed("t=o:x=1:y=1");
     feed("t=e:x=4:y=0"); // end, not canceled, no self drop handled
-    await Bun.sleep(750); // deferred end is a fixed 700ms timer with no observable pre-signal
+    await settleUntil(() => notes.some((n) => n.includes("Sent 1 item")), 3000); // 700ms-deferred epilogue
     expect(notes.some((n) => n.includes("Sent 1 item"))).toBe(true);
     gridDrag.keys = null;
   });

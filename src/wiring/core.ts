@@ -70,8 +70,17 @@ export const wireCore = (deps: {
 
   // --- Floating layers: THE single source of truth for which modal/cursor
   // layer is open + the dismiss-others policy. Pure module, created before
-  // any widget (makeSlots reads its escmenu state through a getter). ---
-  const floats = makeFloats();
+  // any widget (makeSlots reads its escmenu state through a getter). Modal
+  // open/close dims the background rasters via slots.setScrim (the scrim used
+  // to be esc-menu-only, so props/conflict/pick rasters floated over modals).
+  // `slots` is TDZ here — the callback fires post-construction only.
+  const floats = makeFloats({
+    onModalChange: (open) => {
+      try {
+        slots.setScrim(open);
+      } catch {}
+    },
+  });
 
   // --- Icon slots / thumbs / modal scrim — widget lives in ./ui-slots.
   // Called before the renderer boots: every ctx field the drain path needs is
@@ -84,7 +93,7 @@ export const wireCore = (deps: {
     uiStyle: () => config.ui.uiStyle,
     iconsMode: () => config.ui.icons,
     iconCells: () => geometry.iconCells,
-    modalOpen: () => floats.isOpen("escmenu"),
+    modalOpen: () => floats.hasModal(),
     glyphFor,
   });
 

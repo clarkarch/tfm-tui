@@ -33,7 +33,12 @@ export const uriToPath = (uri: string): string | null => {
 // slash and swallows malformed percent escapes instead of dropping the line.
 export const fileUriToPath = (uri: string): string => {
   let u = uri.slice(7);
-  if (!u.startsWith("/")) u = u.slice(u.indexOf("/") + 1);
+  // file://host/path → /path (keep the slash: a host-strip that drops it turns
+  // an absolute path into a cwd-relative one that ENOENTs or copies wrongly)
+  if (!u.startsWith("/")) {
+    const slash = u.indexOf("/");
+    if (slash >= 0) u = u.slice(slash);
+  }
   try {
     u = decodeURIComponent(u);
   } catch {}

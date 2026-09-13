@@ -244,19 +244,27 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
     if (capturingThis) {
       control = Box({ flexGrow: 1 }, Text({ content: "press a key…", fg: c.accent }));
     } else if (rowSpec.kind === "toggle") {
-      const on = rowSpec.get();
+      // plugin rows are validated at load, but a throwing get()/set() must not
+      // brick the panel mid-render — treat a throwing row as off
+      let on = false;
+      try {
+        on = rowSpec.get();
+      } catch {}
       control = Box(
         { width: 6, justifyContent: "flex-end" },
         Text({ id: `tfm-set-rowv-${index}`, content: on ? "on" : "off", fg: on ? c.accent : c.sidebarFgMuted }),
       );
     } else if (rowSpec.kind === "stepper" || rowSpec.kind === "cycle") {
-      const value =
-        rowSpec.kind === "stepper"
-          ? rowSpec.fmt(rowSpec.get())
-          : (() => {
-              const i = rowSpec.getIdx();
-              return i >= 0 ? (rowSpec.names[i] ?? "?") : (rowSpec.customLabel?.() ?? "custom");
-            })();
+      let value = "";
+      try {
+        value =
+          rowSpec.kind === "stepper"
+            ? rowSpec.fmt(rowSpec.get())
+            : (() => {
+                const i = rowSpec.getIdx();
+                return i >= 0 ? (rowSpec.names[i] ?? "?") : (rowSpec.customLabel?.() ?? "custom");
+              })();
+      } catch {} // a throwing plugin row renders as empty, never bricks the panel
       control = Box(
         { flexDirection: "row", alignItems: "center" },
         chevron("‹", active, index, rowSpec, -1),
@@ -280,11 +288,16 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
         }
         st.menuIdx = index;
         st.pane = "rows";
-        applyAdjust(rowSpec, 1);
-        h.afterAdjust(index, rowSpec);
+        try {
+          applyAdjust(rowSpec, 1);
+          h.afterAdjust(index, rowSpec);
+        } catch {} // a throwing plugin row never breaks the click handler
       };
     } else if (rowSpec.kind === "keybind") {
-      const binds = rowSpec.get();
+      let binds: string[] = [];
+      try {
+        binds = rowSpec.get();
+      } catch {}
       const shown = binds.length ? binds.join(" / ") : "unset";
       control = Box(
         { width: 18, justifyContent: "flex-end", paddingRight: 1 },

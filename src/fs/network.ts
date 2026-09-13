@@ -103,8 +103,6 @@ export const parseGvfsName = (name: string): GvfsMountName | null => {
   return { scheme, host, user, share, uri, label: share ? `${host}/${share}` : host };
 };
 
-export const networkMountLabel = (name: string): string => parseGvfsName(name)?.label ?? name;
-
 // --- gio credential prompts ---
 // `gio mount` (glib gio-tool-mount.c ask_password_cb / ask_question_cb) prints
 // a message line, then a prompt with NO trailing newline, then fgets-blocks on

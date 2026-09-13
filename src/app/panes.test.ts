@@ -163,4 +163,14 @@ describe("merged map facade", () => {
     });
     expect(seen.sort()).toEqual(["a", "b", "c"]);
   });
+
+  test("writes throw instead of silently eating (the old fall-through bug)", () => {
+    const a = new Map<string, number>([["a", 1]]);
+    const f = mergedMapFacade(() => [a]);
+    // a write used to hit a throwaway Map and appear to succeed while
+    // mutating nothing — it must fail loudly
+    expect(() => f.set("b", 2)).toThrow("read-only");
+    expect(() => f.delete("a")).toThrow("read-only");
+    expect(() => f.clear()).toThrow("read-only");
+  });
 });

@@ -163,16 +163,20 @@ describe("notify stacking", () => {
     expect(nodes.get(sticky!.nodeId).top).toBe(1);
     expect(nodes.get("tfm-toast-2").top).toBe(6);
     // past the auto-dismiss window: nothing left on its own (sticky never
-    // auto-dismisses; the plain toast's 10s window hasn't elapsed either)
-    await Bun.sleep(100);
-    expect(removed).toEqual([]);
+    // auto-dismisses; the plain toast's 10s window hasn't elapsed either) —
+    // poll for the FORBIDDEN removal so a regression fails fast
+    const deadline = Date.now() + 500;
+    while (Date.now() < deadline) {
+      await Bun.sleep(20);
+      expect(removed).toEqual([]);
+    }
     sticky!.close();
     await settleUntil(() => removed.includes(sticky!.nodeId));
     expect(removed).toEqual([sticky!.nodeId]);
     expect(nodes.get("tfm-toast-2").top).toBe(1);
     // double close is a safe no-op
     sticky!.close();
-    await Bun.sleep(200);
+    await settleUntil(() => removed.length > 1 || Date.now() > deadline); // poll, never a bare sleep
     expect(removed).toEqual([sticky!.nodeId]);
   });
 });
@@ -204,8 +208,15 @@ describe("notify stacking (real renderer)", () => {
       });
       notify("first-msg");
       notify("second-msg with a much longer tail");
-      // slide-in takes ~180ms; only then are both toasts on screen
-      await Bun.sleep(350);
+      // slide-in takes ~180ms — poll the PAINTED frame until both toasts show
+      // (never a bare sleep; animated renders are timing-dependent)
+      const slideIn = Date.now() + 3000;
+      while (Date.now() < slideIn) {
+        await r.renderOnce();
+        const rows = r.captureCharFrame().split("\n");
+        if (rows.some((row) => row.includes("first-msg")) && rows.some((row) => row.includes("longer tail"))) break;
+        await Bun.sleep(20);
+      }
       await r.renderOnce();
       const frame = r.captureCharFrame();
       const rows = frame.split("\n");
@@ -270,7 +281,14 @@ describe("notify stacking (real renderer)", () => {
       progress.showProgressToast();
       stopSpinner = () => progress.finishProgressToast("done");
       notify("late-note");
-      await Bun.sleep(350);
+      // poll the painted frame until all three are up (slide-in timing)
+      const slideIn = Date.now() + 3000;
+      while (Date.now() < slideIn) {
+        await r.renderOnce();
+        const rows = r.captureCharFrame().split("\n");
+        if (rows.some((row) => row.includes("copying")) && rows.some((row) => row.includes("late-note"))) break;
+        await Bun.sleep(20);
+      }
       await r.renderOnce();
       const rows = r.captureCharFrame().split("\n");
       const rowOf = (s: string): number => rows.findIndex((row) => row.includes(s));

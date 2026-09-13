@@ -30,7 +30,12 @@ export const tdzSafe = <T>(get: () => T, fallback: T): (() => T) => {
   return () => {
     try {
       return get();
-    } catch {
+    } catch (err) {
+      // pre-boot eager calls legitimately hit this; a dlog keeps a REAL
+      // wiring-order bug honest instead of a silent fallback forever
+      try {
+        dlog(`tdzSafe fallback: ${err instanceof Error ? err.message : err}`);
+      } catch {}
       return fallback;
     }
   };

@@ -52,15 +52,35 @@ export type Floats = {
   isOpen(kind: FloatKind): boolean;
   top(): FloatKind | null;
   depth(): number;
+  /** any layer above the filemenu popup is a modal (the popup may live
+   * inside one — props + its permission menu). Used for the raster scrim. */
+  hasModal(): boolean;
 };
 
-export const makeFloats = (): Floats => {
+// `onModalChange` fires on every 0<->1 modal transition (the background
+// raster scrim hooks here). Keep it optional so the pure module stays
+// renderer-free and the existing tests call makeFloats() with no args.
+export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {}): Floats => {
+  const { onModalChange } = opts;
   type Entry = { kind: FloatKind; closer: () => void };
   let stack: Entry[] = [];
+  let modalLast = false;
 
   // top-down so children tear down before their parents
   const runClosers = (entries: Entry[]): void => {
     for (const e of [...entries].reverse()) e.closer();
+  };
+
+  const hasModal = (): boolean => stack.some((e) => e.kind !== "filemenu");
+
+  const syncModal = (): void => {
+    if (!onModalChange) return;
+    const now = hasModal();
+    if (now === modalLast) return;
+    modalLast = now;
+    try {
+      onModalChange(now);
+    } catch {}
   };
 
   const open = (kind: FloatKind, closer: () => void): void => {
@@ -72,8 +92,13 @@ export const makeFloats = (): Floats => {
       const all = stack;
       stack = [];
       runClosers(all);
+      // stack-emptied dip: a modal the closer itself just cleared (e.g. a
+      // confirm opening over the esc-menu ran its setScrim(false)) must
+      // refire below, or the new modal paints with rasters un-dimmed
+      syncModal();
     }
     stack.push({ kind, closer });
+    syncModal();
   };
 
   const close = (kind: FloatKind): void => {
@@ -82,12 +107,14 @@ export const makeFloats = (): Floats => {
     const victims = stack.slice(idx); // kind + everything above it
     stack = stack.slice(0, idx);
     runClosers(victims);
+    syncModal();
   };
 
   const closeAll = (): void => {
     const all = stack;
     stack = [];
     runClosers(all);
+    syncModal();
   };
 
   return {
@@ -97,5 +124,6 @@ export const makeFloats = (): Floats => {
     isOpen: (kind) => stack.some((e) => e.kind === kind),
     top: () => (stack.length ? stack[stack.length - 1]!.kind : null),
     depth: () => stack.length,
+    hasModal,
   };
 };

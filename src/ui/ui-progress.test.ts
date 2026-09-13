@@ -147,9 +147,13 @@ describe("makeProgress gates", () => {
     showProgressToast(); // second transfer lands inside the linger window
     expect(calls).toEqual(["sticky:show", "sticky:close", "sticky:show"]);
     expect(prog.toastUp).toBe(true);
-    // past the old lifecycle's linger point: it must not close the new toast
-    await Bun.sleep(2100);
-    expect(calls).toEqual(["sticky:show", "sticky:close", "sticky:show"]);
-    expect(prog.toastUp).toBe(true);
+    // past the old lifecycle's linger point: it must not close the new toast.
+    // Poll the forbidden close so a regression fails fast instead of at the end.
+    const deadline = Date.now() + 2300;
+    while (Date.now() < deadline) {
+      await Bun.sleep(50);
+      expect(calls).toEqual(["sticky:show", "sticky:close", "sticky:show"]);
+      expect(prog.toastUp).toBe(true);
+    }
   });
 });

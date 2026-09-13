@@ -91,4 +91,42 @@ describe("floats policy", () => {
     const kinds: FloatKind[] = ["escmenu", "props", "conflict", "yesno", "filemenu", "pick", "prompt", "bulkrename"];
     expect(kinds.every((k, i) => kinds.slice(i + 1).every((j) => FLOAT_Z[k]! < FLOAT_Z[j]!))).toBe(true);
   });
+
+  test("onModalChange fires on modal 0<->1 transposes only (not popup churn)", () => {
+    const states: boolean[] = [];
+    const f = makeFloats({ onModalChange: (open) => states.push(open) });
+    const noop = () => {};
+    f.open("filemenu", noop); // popup is not a modal — silent
+    expect(states).toEqual([]);
+    f.open("props", noop); // modal up
+    expect(states).toEqual([true]);
+    f.open("filemenu", noop); // popup INSIDE the modal — still modal, silent
+    expect(states).toEqual([true]);
+    f.close("filemenu");
+    expect(states).toEqual([true]);
+    f.close("props"); // last modal down
+    expect(states).toEqual([true, false]);
+  });
+
+  test("hasModal() is false for a bare popup, true for any modal", () => {
+    const f = makeFloats();
+    expect(f.hasModal()).toBe(false);
+    f.open("filemenu", () => {});
+    expect(f.hasModal()).toBe(false);
+    f.open("conflict", () => {});
+    expect(f.hasModal()).toBe(true);
+  });
+
+  test("a modal replacing another refires off-then-on (scrim never sticks un-dimmed)", () => {
+    // a confirm/prompt over the Plugins-view esc-menu runs the esc closer
+    // (setScrim(false)) — without the stack-emptied dip sync the new modal
+    // paints with background rasters floating over it
+    const states: boolean[] = [];
+    const f = makeFloats({ onModalChange: (open) => states.push(open) });
+    const noop = () => {};
+    f.open("escmenu", noop);
+    f.open("yesno", noop);
+    expect(states).toEqual([true, false, true]);
+    expect(f.hasModal()).toBe(true);
+  });
 });

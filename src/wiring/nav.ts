@@ -95,10 +95,11 @@ export const wireNav = (deps: {
     },
     closeTerminal: () => getTerm().closeTerminalPane(),
     flushSession: () => {
-      if (!core.isVirtualCwd()) {
-        syncTabsFromState();
-        saveSessionSync(paneTabs(), core.panes.active);
-      }
+      // no isVirtualCwd() guard: restore deliberately accepts recent:// and
+      // starred:// tabs, so quitting from a virtual place must still persist
+      // the session (the old guard silently dropped BOTH panes' real-dir tabs)
+      syncTabsFromState();
+      saveSessionSync(paneTabs(), core.panes.active);
     },
     destroy: () => getChrome().renderer.destroy(),
     exit: (code) => process.exit(code),

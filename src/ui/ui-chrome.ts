@@ -17,18 +17,9 @@ import type { ListEntry } from "./ui-menu";
 // / tfm-tab-N / tfm-tab-new) stay byte-identical — rethemeChrome (./ui-retheme)
 // and the OSC-72 self-hover path share placesHost via the returned ref. ---
 
-// structural mirrors of ./ui-slots's icon-slot types (they are module-private
-// there; the functions arrive via ctx, like ui-props does)
-type IconState = { fg: string; bg: string };
-type IconSpec = {
-  slotId: string;
-  name: string;
-  heightCells: number;
-  states: IconState[];
-  statesFactory?: () => IconState[];
-  initialState: number;
-  done?: boolean;
-};
+// shared icon-slot types come from ./ui-slots (their queue) — the old
+// byte-identical structural mirrors drifted when ui-slots gained a field
+import { type IconState, type IconSpec } from "./ui-slots";
 
 type ChromeCtx = {
   byId(id: string): any;
@@ -148,7 +139,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         flexDirection: "row",
         columnGap: 1,
         paddingLeft: 1,
-        ...(selected ? { backgroundColor: colors.accentBg } : rowSurface(st, colors, "rest")),
+        ...rowSurface(st, colors, selected ? "selected" : "rest"),
         onMouseDown: (ev: any) => {
           if (ev.button === 2) {
             ctx.closeFileMenu();
@@ -411,15 +402,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
       const row: any = ctx.byId(rec.rowId);
       const label: any = ctx.byId(rec.labelId);
-      if (row)
-        applySurface(
-          row,
-          isSel
-            ? { backgroundColor: colors.accentBg }
-            : isHover
-              ? { backgroundColor: colors.hoverBg }
-              : rowSurface(ctx.uiStyle(), colors, "rest"),
-        );
+      if (row) applySurface(row, rowSurface(ctx.uiStyle(), colors, isSel ? "selected" : isHover ? "hover" : "rest"));
       rec.specs.forEach((s) => {
         ctx.setIconState(s, selectIconState(isSel, isHover));
       });

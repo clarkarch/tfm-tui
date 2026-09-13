@@ -122,6 +122,13 @@ export const mergedMapFacade = <K, V>(maps: () => Array<Map<K, V>>): Map<K, V> =
           for (const m of list) yield* m;
         };
       }
+      // writes used to fall through to a throwaway Map and APPEAR to succeed
+      // while mutating nothing — a silent .delete() would corrupt state
+      if (prop === "set" || prop === "delete" || prop === "clear") {
+        return () => {
+          throw new Error("mergedMapFacade is read-only");
+        };
+      }
       return Reflect.get(_t, prop);
     },
   });

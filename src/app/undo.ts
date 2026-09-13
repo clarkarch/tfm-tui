@@ -86,7 +86,9 @@ export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}
     case "restore-move":
       return () => safeRestoreMove(step.from, step.to).then(() => undefined);
     case "rename":
-      return () => fsRename(step.from, step.to);
+      // bump to "name (copy)" instead of clobbering whatever now occupies the
+      // original name (same guard every other undo inverse uses)
+      return () => safeRestoreMove(step.from, step.to).then(() => undefined);
     case "rename-if":
       return async () => {
         try {

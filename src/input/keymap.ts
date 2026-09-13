@@ -333,10 +333,16 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return true;
     }
     // enter commits: open the first folder match (dirs sort first in the
-    // filtered grid); fall back to opening the first file match
+    // filtered grid); fall back to opening the first file match. The grid
+    // render is DEBOUNCED 150ms after the first char, so a fast 2nd+ char +
+    // Enter can read a stale pre-debounce listing — only open a match that
+    // still satisfies the live query.
     if (ev.name === "return") {
-      const firstDir = selection.focusKeys().find((key) => selection.tileRefs.get(key)?.isDir);
-      const targetKey = firstDir ?? selection.focusKeys()[0];
+      const q = (ctx.searchQuery?.() ?? "").toLowerCase();
+      const matchesQ = (k?: string): boolean => !q || !k || path.basename(k).toLowerCase().includes(q);
+      const firstDir = selection.focusKeys().find((key) => selection.tileRefs.get(key)?.isDir && matchesQ(key));
+      const fallback = selection.focusKeys().find((key) => matchesQ(key));
+      const targetKey = firstDir ?? fallback;
       const refs = targetKey !== undefined ? selection.tileRefs.get(targetKey) : undefined;
       if (targetKey && refs) {
         if (refs.isDir) ctx.navigate(targetKey);
@@ -690,11 +696,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       doShowProps();
       return;
     }
-    if (hit(ev, "newFolder")) {
+    if (hit(ev, "newFolder") && ev.repeated !== true) {
       doNewFolder();
       return;
     }
-    if (hit(ev, "newFile")) {
+    if (hit(ev, "newFile") && ev.repeated !== true) {
       doNewFile();
       return;
     }
@@ -739,22 +745,6 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
 
-    // --- plugin commands (core wins ties — checked first above) ---
-    if (ctx.pluginCommands) {
-      try {
-        for (const cmd of ctx.pluginCommands()) {
-          if (cmd.binds.length && hitBinds(ev, cmd.binds)) {
-            // invokeIsolated: async plugin runs must not reject unhandled
-            invokeIsolated(
-              () => cmd.run(),
-              () => {},
-            );
-            return;
-          }
-        }
-      } catch {}
-    }
-
     // --- keyboard navigation: sidebar <-> grid ---
     // sidebar focus swallows ALL keys — it must precede shift-extend or
     // shift+arrows would mutate the grid selection while the sidebar is
@@ -766,7 +756,15 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       doParentDir();
       return;
     }
-    if (!ctrl && !ev.shift && typeof ev.name === "string" && ev.name.length === 1 && /[a-z0-9._-]/i.test(ev.name)) {
+    if (
+      !ctrl &&
+      !ev.shift &&
+      !ev.meta &&
+      !ev.option &&
+      typeof ev.name === "string" &&
+      ev.name.length === 1 &&
+      /[a-z0-9._-]/i.test(ev.name)
+    ) {
       ctx.beginTypeToSearch(ev.name);
       return;
     }
@@ -846,6 +844,27 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (hit(ev, "undo")) {
       doUndo();
       return;
+    }
+
+    // --- plugin commands: LAST, after every core action — "core wins ties"
+    // means a plugin defaultBind colliding with ctrl+t/ctrl+c/ctrl+z must NOT
+    // swallow the core op. Structural keys (arrows/enter/esc/type-to-search)
+    // preempt above too: validateKeybindSpec accepts key NAMES like enter/arrows,
+    // so a plugin registering one is shadowed silently — structural keys are
+    // never dispatchable plugin binds.
+    if (ctx.pluginCommands) {
+      try {
+        for (const cmd of ctx.pluginCommands()) {
+          if (cmd.binds.length && hitBinds(ev, cmd.binds)) {
+            // invokeIsolated: async plugin runs must not reject unhandled
+            invokeIsolated(
+              () => cmd.run(),
+              () => {},
+            );
+            return;
+          }
+        }
+      } catch {}
     }
   };
 

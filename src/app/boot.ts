@@ -23,29 +23,52 @@ export type BootCtx = {
   launchToast(): void;
   startHygiene(): void;
   wireSearchInput(): void;
+  // a step threw (native OOM in buildLayout, globs2, …): log + notify so a
+  // partial boot renders and reports instead of a blank-but-alive TUI
+  reportBootError?(name: string, err: unknown): void;
   isDebug: boolean;
   showLaunchTime(): boolean;
+};
+
+const bootLog = (msg: string): void => debugLog(msg);
+
+// one boot step, isolated: a throw is logged/reported and the sequence
+// continues — the first render must still happen even if a later step broke.
+const guard = (ctx: BootCtx, name: string, fn: () => void | Promise<void>): Promise<void> => {
+  try {
+    const r = fn();
+    if (r instanceof Promise) {
+      return r.catch((err) => {
+        bootLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
+        ctx.reportBootError?.(name, err);
+      });
+    }
+    return Promise.resolve();
+  } catch (err) {
+    bootLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
+    ctx.reportBootError?.(name, err);
+    return Promise.resolve();
+  }
 };
 
 export const runBoot = async (ctx: BootCtx): Promise<void> => {
   // ISO timestamps on every line already give a full timeline in the debug
   // log — free profiling for slow-boot reports, silent in production
-  debugLog("boot: waitResolution");
-  await ctx.waitForResolution();
-  debugLog("boot: buildLayout");
-  ctx.buildLayout();
-  ctx.mountSlots?.();
-  debugLog("boot: loadGlobs2");
-  await ctx.loadGlobs2();
-  debugLog("boot: restoreSession");
-  ctx.restoreSession();
-  debugLog("boot: loadSystemPlaces");
-  await ctx.loadSystemPlaces();
-  debugLog("boot: renderAll");
-  ctx.renderAll();
-  debugLog("boot: done");
-  if (ctx.isDebug) ctx.debugTrace();
-  if (ctx.isDebug || ctx.showLaunchTime()) ctx.launchToast();
-  ctx.startHygiene();
-  ctx.wireSearchInput();
+  await guard(ctx, "waitResolution", () => ctx.waitForResolution());
+  bootLog("boot: buildLayout");
+  await guard(ctx, "buildLayout", () => ctx.buildLayout());
+  await guard(ctx, "mountSlots", () => ctx.mountSlots?.());
+  bootLog("boot: loadGlobs2");
+  await guard(ctx, "loadGlobs2", () => ctx.loadGlobs2());
+  bootLog("boot: restoreSession");
+  await guard(ctx, "restoreSession", () => ctx.restoreSession());
+  bootLog("boot: loadSystemPlaces");
+  await guard(ctx, "loadSystemPlaces", () => ctx.loadSystemPlaces());
+  bootLog("boot: renderAll");
+  await guard(ctx, "renderAll", () => ctx.renderAll());
+  bootLog("boot: done");
+  if (ctx.isDebug) await guard(ctx, "debugTrace", () => ctx.debugTrace());
+  if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());
+  await guard(ctx, "startHygiene", () => ctx.startHygiene());
+  await guard(ctx, "wireSearchInput", () => ctx.wireSearchInput());
 };

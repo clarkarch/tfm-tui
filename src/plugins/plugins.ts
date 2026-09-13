@@ -42,6 +42,7 @@ import {
   type PluginPreview,
   type PluginStore,
 } from "./plugin-api";
+import { isValidSettingRow, type SettingRow } from "../config/config-schema";
 
 // user plugin home: alongside config.toml (XDG_CONFIG_HOME aware so tests
 // can sandbox it — never hardcode ~/.config)
@@ -90,26 +91,41 @@ const walkPluginTree = (dir: string, visit: (e: PluginWalkEntry) => void): void 
 const skipCodeEntry = (e: PluginWalkEntry): boolean => e.name === "state.json" || e.st.isSymbolicLink();
 
 // content hash of a plugin folder (all files, sorted, content + name).
-// Bounded: at most 1000 files / 10MB hashed.
+// Bounded: at most 1000 files / 10MB hashed. Beyond-cap files can't be
+// content-hashed (that defeats the cap), so their PATHS fold into the hash —
+// an add/remove/rename past the cap still changes it (a content-only edit
+// there still misses; the cap is the tradeoff).
 export const hashPluginFolder = (folder: string): string => {
   const files: string[] = [];
+  const tailNames: string[] = [];
   walkPluginTree(folder, (e) => {
-    if (files.length > 1000 || skipCodeEntry(e)) return;
-    if (e.st.isFile()) files.push(e.full);
+    if (skipCodeEntry(e)) return;
+    if (e.st.isFile()) {
+      if (files.length >= 1000) tailNames.push(path.relative(folder, e.full));
+      else files.push(e.full);
+    }
   });
   const h = createHash("sha256");
   let bytes = 0;
+  let cutByteCap = false;
   for (const f of files) {
     const rel = path.relative(folder, f);
     h.update(rel);
     h.update("\0");
     try {
       const data = readFileSync(f);
+      if (bytes + data.length > 10 * 1024 * 1024) {
+        cutByteCap = true;
+        tailNames.push(rel);
+        continue;
+      }
       bytes += data.length;
-      if (bytes > 10 * 1024 * 1024) break;
       h.update(data);
     } catch {}
     h.update("\0");
+  }
+  if (cutByteCap || tailNames.length) {
+    h.update(`truncated:${tailNames.sort().join("\0")}`);
   }
   return h.digest("hex").slice(0, 16);
 };
@@ -367,10 +383,20 @@ export const makePluginRegistry = (deps: {
     } catch {}
   };
 
-  const loadOne = async (stagedFile: string, originalFile: string): Promise<LoadedPlugin> => {
+  const loadOne = async (
+    stagedFile: string,
+    originalFile: string,
+    rejectDuplicate?: (name: string) => boolean,
+  ): Promise<LoadedPlugin> => {
     const mod: unknown = (await import(pathToFileURL(stagedFile).href)).default;
     if (!isPluginModule(mod)) throw new Error(`default export must be { name, activate }`);
     if (!PLUGIN_NAME_RE.test(mod.name)) throw new Error(`unsafe plugin name: ${JSON.stringify(mod.name)}`);
+    // duplicate check BEFORE activate: a rejected duplicate must never have
+    // run (its listeners/timers/slots would be live forever — the loaded
+    // instance is discarded and runDeactivate never sees it)
+    if (rejectDuplicate?.(mod.name)) {
+      throw new Error(`duplicate plugin name ${JSON.stringify(mod.name)} (first file wins)`);
+    }
     const m = mod as PluginModule & { minApiVersion?: unknown; apiVersion?: unknown };
     if (typeof m.minApiVersion === "number" && PLUGIN_API_VERSION < m.minApiVersion) {
       throw new Error(`requires apiVersion >= ${m.minApiVersion} (core is ${PLUGIN_API_VERSION})`);
@@ -507,12 +533,23 @@ export const makePluginRegistry = (deps: {
         }
       }
     }
+    const rawRows = result.rows ?? [];
+    if (!Array.isArray(rawRows)) throw new Error(`rows must be an array`);
+    const rows = (rawRows as unknown[]).filter((r): r is SettingRow => {
+      if (isValidSettingRow(r)) return true;
+      try {
+        api.log(
+          `plugin ${m.name}: settings row ${JSON.stringify((r as { label?: unknown })?.label ?? "<unnamed>")} invalid — dropped`,
+        );
+      } catch {}
+      return false;
+    });
     return {
       name: mod.name,
       version: meta(m.version),
       author: meta(m.author),
       description: meta(m.description),
-      rows: result.rows ?? [],
+      rows,
       fileMenu: fileMenu as ((sel: { paths: string[] }) => PluginFileMenuEntry[]) | null,
       sidebarMenu: sidebarMenu as ((place: { path?: string | null; scheme?: string }) => PluginFileMenuEntry[]) | null,
       emptyAreaMenu: emptyAreaMenu as ((area: { cwd: string }) => PluginFileMenuEntry[]) | null,
@@ -555,7 +592,8 @@ export const makePluginRegistry = (deps: {
       } catch {}
       if (!p.deactivate) continue;
       try {
-        void p.deactivate();
+        const r = p.deactivate();
+        if (r instanceof Promise) void r.catch(() => {});
       } catch (err) {
         try {
           api.log(`plugin ${p.name} deactivate failed: ${err instanceof Error ? err.message : err}`);
@@ -570,8 +608,7 @@ export const makePluginRegistry = (deps: {
       warn: (m) => warnOnce(`discover:${m}`, m),
       log: (m) => api.log(m),
     });
-    const seen = new Set(plugins.map((p) => p.name));
-    const live = new Set<string>();
+    const live = new Set(found.map((f) => f.file));
     // rm a staged build dir when no live snap references its hash (failed
     // loads must not litter plugin-build; P1-12).
     const pruneUnreferencedStage = (folderName: string, hash: string): void => {
@@ -580,8 +617,22 @@ export const makePluginRegistry = (deps: {
         rmSync(path.join(pluginBuildDir(), `${folderName}-${hash}`), { recursive: true, force: true });
       } catch {}
     };
+    // REMOVALS FIRST: a renamed folder is a NEW file, and loading it before
+    // retiring the old name trips the duplicate check against the plugin's own
+    // previous name (a load-late + misleading "duplicate plugin name" error).
+    for (const [file, snap] of [...snaps]) {
+      if (live.has(file)) continue;
+      snaps.delete(file);
+      const i = plugins.findIndex((p) => p.name === snap.name);
+      if (i >= 0) {
+        const [gone] = plugins.splice(i, 1);
+        if (gone) await runDeactivate(gone);
+      }
+      diff.removed.push(snap.name);
+      for (const k of [...warned]) if (k.startsWith(file)) warned.delete(k);
+    }
+    const seen = new Set(plugins.map((p) => p.name));
     for (const { file } of found) {
-      live.add(file);
       const srcFolder = path.dirname(file);
       const mainBase = path.basename(file);
       const folderName = path.basename(srcFolder);
@@ -615,8 +666,7 @@ export const makePluginRegistry = (deps: {
       if (!prev) {
         try {
           const staged = copyStagedPlugin(srcFolder, folderName, hash, mainBase);
-          const lp = await loadOne(staged, file);
-          if (seen.has(lp.name)) throw new Error(`duplicate plugin name ${JSON.stringify(lp.name)} (first file wins)`);
+          const lp = await loadOne(staged, file, (name) => seen.has(name));
           seen.add(lp.name);
           plugins.push(lp);
           snaps.set(file, { fp, hash, name: lp.name });
@@ -638,12 +688,9 @@ export const makePluginRegistry = (deps: {
       // could double-fire.
       try {
         const staged = copyStagedPlugin(srcFolder, folderName, hash, mainBase);
-        const lp = await loadOne(staged, file);
-        // name change across reload: keep first-wins semantics
-        if (lp.name !== prev.name && seen.has(lp.name)) {
-          pruneUnreferencedStage(folderName, hash);
-          throw new Error(`duplicate plugin name ${JSON.stringify(lp.name)} (first file wins)`);
-        }
+        // name change across reload: keep first-wins semantics (pre-empts
+        // activate like the fresh-path duplicate check)
+        const lp = await loadOne(staged, file, (name) => name !== prev.name && seen.has(name));
         const idx = plugins.findIndex((p) => p.name === prev.name);
         const old = idx >= 0 ? plugins[idx] : undefined;
         if (old) await runDeactivate(old);
@@ -666,17 +713,6 @@ export const makePluginRegistry = (deps: {
         diff.errors.push(message);
         warnOnce(vkey, message);
       }
-    }
-    for (const [file, snap] of [...snaps]) {
-      if (live.has(file)) continue;
-      snaps.delete(file);
-      const i = plugins.findIndex((p) => p.name === snap.name);
-      if (i >= 0) {
-        const [gone] = plugins.splice(i, 1);
-        if (gone) await runDeactivate(gone);
-      }
-      diff.removed.push(snap.name);
-      for (const k of [...warned]) if (k.startsWith(file)) warned.delete(k);
     }
     errors.length = 0;
     errors.push(...diff.errors);

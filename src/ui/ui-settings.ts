@@ -156,8 +156,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       switchCategory(st.catIdx + dir);
       return;
     }
-    if (!applyAdjust(row, dir)) return;
-    afterAdjust(st.menuIdx, row);
+    // a throwing plugin row set()/get()/getIdx() must not throw out of the
+    // keypress handler — afterAdjust re-reads the row, so it sits in the SAME
+    // try, not after it
+    try {
+      if (applyAdjust(row, dir)) afterAdjust(st.menuIdx, row);
+    } catch {}
   };
 
   const cancelCapture = (): boolean => {
@@ -250,8 +254,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const row = rowsOf(st.catIdx)[rowIdx];
     if (!row) return;
     if (row.kind === "toggle") {
-      applyAdjust(row, 1);
-      afterAdjust(rowIdx, row);
+      try {
+        applyAdjust(row, 1);
+        afterAdjust(rowIdx, row);
+      } catch (err) {
+        ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+      }
       return;
     }
     if (row.kind === "keybind") {
