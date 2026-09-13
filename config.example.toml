@@ -32,7 +32,7 @@ icons                      = "opaque"    # "opaque" = icons flattened onto the t
 sidebar-title              = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 tab-bar                    = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 ui-style                   = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
-file-animation             = true        # true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)
+file-animation             = false       # true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)
 file-animation-slide       = false       # true = files rise up into place (distance = file-animation-slide-pct)
 file-animation-stagger     = false       # true = top-to-bottom cascade instead of one wave
 file-animation-ms          = 180         # content-area file animation duration, 0..800 ms (0 = instant)
@@ -113,6 +113,7 @@ connect-server     = ["ctrl+shift+s"]            # default: ctrl+shift+s
 toggle-view        = ["ctrl+g"]                  # default: ctrl+g
 zoom-in            = ["ctrl+="]                  # default: ctrl+=
 zoom-out           = ["ctrl+-"]                  # default: ctrl+-
+toggle-dual-pane   = ["ctrl+shift+d"]            # default: ctrl+shift+d
 switch-pane        = ["tab"]                     # default: tab
 copy-to-other-pane = ["f5"]                      # default: f5
 move-to-other-pane = ["f6"]                      # default: f6

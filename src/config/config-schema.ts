@@ -538,7 +538,7 @@ const UI_ROWS: SchemaRow[] = [
     section: "ui",
     tomlKey: "file-animation",
     prop: "fileAnimation",
-    def: true,
+    def: false,
     doc: "true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)",
     label: "file animation",
     group: "animations",
