@@ -159,8 +159,14 @@ export type UiConfig = {
   dragThresholdCells: number;
   listRowHeight: number;
   wordWrap: boolean;
-  fileAnimation: string;
+  fileAnimation: boolean;
+  fileAnimationSlide: boolean;
+  fileAnimationStagger: boolean;
   fileAnimationMs: number;
+  fileAnimationStaggerPct: number;
+  fileAnimationSlidePct: number;
+  fileAnimationSlideDir: string;
+  fileAnimationEase: string;
   showLaunchTime: boolean;
 };
 
@@ -206,7 +212,7 @@ export type Config = { ui: UiConfig; theme: Theme; keys: KeysConfig };
 
 // --- schema ---
 
-type GuiGroup = "appearance" | "layout" | "panes" | "behavior" | "files" | "advanced" | "keys";
+type GuiGroup = "appearance" | "layout" | "animations" | "panes" | "behavior" | "files" | "advanced" | "keys";
 
 type RowCommon = { tomlKey: string; prop: string; doc: string; label: string; group?: GuiGroup };
 
@@ -527,15 +533,34 @@ const UI_ROWS: SchemaRow[] = [
     group: "appearance",
   },
   {
-    kind: "enum",
+    kind: "bool",
     section: "ui",
     tomlKey: "file-animation",
     prop: "fileAnimation",
-    values: ["off", "fade", "slide", "stagger"],
-    def: "fade",
-    doc: '"off" = no animation; "fade" = fade in; "slide" = rise up into place; "stagger" = top-to-bottom fade cascade',
+    def: true,
+    doc: "true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)",
     label: "file animation",
-    group: "appearance",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-animation-slide",
+    prop: "fileAnimationSlide",
+    def: false,
+    doc: "true = files rise up into place (distance = file-animation-slide-pct)",
+    label: "slide",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-animation-stagger",
+    prop: "fileAnimationStagger",
+    def: false,
+    doc: "true = top-to-bottom cascade instead of one wave",
+    label: "stagger",
+    group: "animations",
   },
   {
     kind: "int",
@@ -547,8 +572,56 @@ const UI_ROWS: SchemaRow[] = [
     step: 20,
     def: 180,
     doc: "content-area file animation duration, 0..800 ms (0 = instant)",
-    label: "file animation ms",
-    group: "appearance",
+    label: "animation ms",
+    group: "animations",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "file-animation-stagger-pct",
+    prop: "fileAnimationStaggerPct",
+    min: 0,
+    max: 300,
+    step: 5,
+    def: 40,
+    doc: "how spread the cascade wave is, 0..300% (0 = all tiles at once; over 100 = the wave outlives the duration)",
+    label: "stagger spread",
+    group: "animations",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "file-animation-slide-pct",
+    prop: "fileAnimationSlidePct",
+    min: 0,
+    max: 150,
+    step: 5,
+    def: 70,
+    doc: "how far files slide, 0..150% of the viewport (0 = fade in place; clamped to whole cells)",
+    label: "slide distance",
+    group: "animations",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "file-animation-slide-dir",
+    prop: "fileAnimationSlideDir",
+    values: ["up", "down", "left", "right"],
+    def: "up",
+    doc: '"up"/"down" = files rise/drop vertically; "left"/"right" = files slide in horizontally',
+    label: "slide direction",
+    group: "animations",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "file-animation-ease",
+    prop: "fileAnimationEase",
+    values: ["linear", "ease-out", "ease-in-out"],
+    def: "ease-out",
+    doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
+    label: "easing",
+    group: "animations",
   },
   {
     kind: "enum",

@@ -17,7 +17,7 @@ import {
   type GridMenuEntry,
 } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
-import { makeFileAnim } from "../ui/ui-grid-anim";
+import { type EaseKey, fileAnimStyleFrom, makeFileAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { waitForResolution } from "../ui/ui-lookup";
@@ -210,13 +210,23 @@ export const wireGrid = (deps: {
     return core.config.ui.dualPane ? Math.floor((main - 1) / 2) : main;
   };
   // one animator per pane (each owns its reused timeline so a rebuild in one
-  // pane can't clobber the other's); reads [ui] file-animation live
+  // pane can't clobber the other's); reads [ui] file-animation-* live
   const makeFileAnimator = () =>
     makeFileAnim({
       renderer: chrome.renderer,
       byId: core.lookup.byId,
-      style: () => core.config.ui.fileAnimation,
-      ms: () => core.config.ui.fileAnimationMs,
+      opts: () => ({
+        style: fileAnimStyleFrom({
+          enabled: core.config.ui.fileAnimation,
+          slide: core.config.ui.fileAnimationSlide,
+          stagger: core.config.ui.fileAnimationStagger,
+        }),
+        ms: core.config.ui.fileAnimationMs,
+        staggerPct: core.config.ui.fileAnimationStaggerPct,
+        slidePct: core.config.ui.fileAnimationSlidePct,
+        dir: core.config.ui.fileAnimationSlideDir as SlideDir,
+        ease: core.config.ui.fileAnimationEase as EaseKey,
+      }),
     });
   const fileAnims = [makeFileAnimator(), makeFileAnimator()] as const;
   const makeRenderer = (pane: 0 | 1) =>

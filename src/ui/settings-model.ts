@@ -199,6 +199,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const CATEGORIES: { id: NonNullable<UiSchemaRow["group"]>; label: string; icon: string }[] = [
     { id: "appearance", label: "appearance", icon: "pencil" },
     { id: "layout", label: "layout", icon: "select-all" },
+    { id: "animations", label: "animations", icon: "play" },
     { id: "panes", label: "panes", icon: "desktop-tower" },
     { id: "behavior", label: "behavior", icon: "clock" },
     { id: "files", label: "files & session", icon: "folder" },
