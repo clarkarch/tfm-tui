@@ -156,6 +156,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     togglePreview: rec("preview:toggle"),
     toggleViewMode: rec("view:toggle"),
     zoomTiles: (d) => calls.push(`zoom:${d}`),
+    toggleDualPane: rec("pane:toggle-dual"),
     switchPane: rec("pane:switch"),
     copyToOtherPane: rec("pane:copy"),
     moveToOtherPane: rec("pane:move"),
@@ -1019,6 +1020,15 @@ describe("dual-pane actions", () => {
     h.key("f5");
     h.key("f6");
     expect(h.calls).toEqual(["pane:switch", "pane:copy", "pane:move"]);
+  });
+
+  test("ctrl+shift+d toggles dual pane (never on autorepeat)", () => {
+    const h = makeHarness();
+    h.key("d", { ctrl: true, shift: true });
+    expect(h.calls).toEqual(["pane:toggle-dual"]);
+    h.calls.length = 0;
+    h.key("d", { ctrl: true, shift: true, repeated: true });
+    expect(h.calls).toEqual([]);
   });
 
   test("autorepeat never starts cross-pane work (op-flood guard)", () => {

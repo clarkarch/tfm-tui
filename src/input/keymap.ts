@@ -125,6 +125,7 @@ export type KeyRouterCtx = {
   togglePreview(): void;
   toggleViewMode(): void;
   zoomTiles(dir: number): void;
+  toggleDualPane(): void;
   switchPane(): void;
   copyToOtherPane(): void;
   moveToOtherPane(): void;
@@ -504,6 +505,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doZoomOut = (): void => {
     ctx.zoomTiles(-1);
   };
+  const doToggleDualPane = (): void => {
+    ctx.toggleDualPane();
+  };
   const doSwitchPane = (): void => {
     ctx.switchPane();
   };
@@ -640,6 +644,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "toggleView", run: doToggleView },
     { action: "zoomIn", run: doZoomIn },
     { action: "zoomOut", run: doZoomOut },
+    { action: "toggleDualPane", run: doToggleDualPane },
     { action: "switchPane", run: doSwitchPane },
     { action: "copyToOtherPane", run: doCopyToOtherPane },
     { action: "moveToOtherPane", run: doMoveToOtherPane },
@@ -730,6 +735,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
     if (hit(ev, "zoomOut")) {
       doZoomOut();
+      return;
+    }
+    if (hit(ev, "toggleDualPane") && ev.repeated !== true) {
+      doToggleDualPane();
       return;
     }
     if (hit(ev, "switchPane") && ev.repeated !== true) {

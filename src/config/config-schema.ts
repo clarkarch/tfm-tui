@@ -202,6 +202,7 @@ export type KeyAction =
   | "toggleView"
   | "zoomIn"
   | "zoomOut"
+  | "toggleDualPane"
   | "switchPane"
   | "copyToOtherPane"
   | "moveToOtherPane";
@@ -770,6 +771,7 @@ const KEY_ROWS: KeyRow[] = (
     ["toggleView", "toggle grid/list view", ["ctrl+g"]],
     ["zoomIn", "bigger tiles", ["ctrl+="]],
     ["zoomOut", "smaller tiles", ["ctrl+-"]],
+    ["toggleDualPane", "toggle dual pane", ["ctrl+shift+d"]],
     ["switchPane", "switch active pane (dual pane)", ["tab"]],
     ["copyToOtherPane", "copy selection to the other pane", ["f5"]],
     ["moveToOtherPane", "move selection to the other pane", ["f6"]],

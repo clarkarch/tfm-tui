@@ -175,6 +175,13 @@ export const wireKeymap = (deps: {
       getRetheme().applyConfig({ ...core.config, ui: { ...ui, previewEnabled: !ui.previewEnabled } });
       getRetheme().scheduleSaveConfig();
     },
+    toggleDualPane: () => {
+      const ui = core.config.ui;
+      getRetheme().applyConfig({ ...core.config, ui: { ...ui, dualPane: !ui.dualPane } });
+      getRetheme().scheduleSaveConfig();
+      // applyConfig handles the repaint + its normalizePanes hook resets the
+      // active pane when turning off
+    },
     toggleViewMode: () => {
       const ui = core.config.ui;
       const viewMode = ui.viewMode === "grid" ? "list" : "grid";
