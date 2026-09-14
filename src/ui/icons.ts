@@ -115,6 +115,31 @@ const rasterizeSvg = async (
 const iconCache = new Map<string, Uint8Array>();
 const inflightIcons = new Map<string, Promise<Uint8Array>>();
 
+// --- bounded LRU for the in-memory raster tiers (nautilus caps its icon/
+// texture caches at 100/200/1000; without a cap a long session that browsed
+// hundreds of folders/themes keeps every PNG forever). Map iteration order is
+// insertion order, so delete+re-set on hit = touch-to-back and the head is the
+// least-recently-used entry. The disk tier below is unbounded and serves misses.
+export const lruGet = <V>(m: Map<string, V>, k: string): V | undefined => {
+  const v = m.get(k);
+  if (v !== undefined) {
+    m.delete(k);
+    m.set(k, v);
+  }
+  return v;
+};
+export const lruSet = <V>(m: Map<string, V>, k: string, v: V, cap: number): void => {
+  m.delete(k); // overwrite = recency refresh too (a no-op delete when new)
+  m.set(k, v);
+  while (m.size > cap) {
+    const oldest = m.keys().next().value;
+    if (oldest === undefined) break;
+    m.delete(oldest);
+  }
+};
+const ICON_CACHE_MAX = 400;
+const THUMB_CACHE_MAX = 200;
+
 // Disk cache for rendered rasters: keyed by everything that changes the output
 // (name, tint, bg, pixel size, SVG source version, transparency mode) plus a
 // pipeline-version salt. Theme switches naturally miss because fg/bg are part
@@ -153,7 +178,7 @@ export const iconPng = async (
 ): Promise<Uint8Array> => {
   const transparent = opts?.transparent ?? false;
   const key = iconCacheKey(name, fg, bg, pxW, pxH, svgSourceMtime(name), transparent);
-  const hit = iconCache.get(key);
+  const hit = lruGet(iconCache, key);
   if (hit) return hit;
   // identical requests racing (e.g. 15 folder rows) share one render
   const running = inflightIcons.get(key);
@@ -161,14 +186,14 @@ export const iconPng = async (
   try {
     const cached = readFileSync(iconDiskPath(key));
     const bytes = new Uint8Array(cached);
-    iconCache.set(key, bytes);
+    lruSet(iconCache, key, bytes, ICON_CACHE_MAX);
     return bytes;
   } catch {}
   const job = (async () => {
     await acquireRasterSlot();
     try {
       const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH, transparent);
-      iconCache.set(key, bytes);
+      lruSet(iconCache, key, bytes, ICON_CACHE_MAX);
       void ensureIconDir().then(() => atomicWriteFile(iconDiskPath(key), bytes).catch(() => {}));
       return bytes;
     } finally {
@@ -299,9 +324,33 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
 
 const thumbCache = new Map<string, Promise<Uint8Array>>();
 
-// Disk cache keyed by everything that changes the output (path, mtime, size,
+// Nautilus refuses to thumbnail files modified <3s ago (THUMBNAIL_CREATION_
+// DELAY_SECS) — a mid-download file would otherwise re-spawn a renderer on
+// every watcher rebuild, always producing pixels for a version that's already
+// gone. Waiting it out inside the job is the lazy re-queue: the promise keeps
+// its slot, the worker just yields to the next job meanwhile. Pure so it's
+// testable without a clock seam; clamped so a skewed future mtime can never
+// park a worker for hours.
+export const THUMB_COOL_MS = 3000;
+export const thumbCooloffMs = (mtimeMs: number, now: number): number => {
+  if (mtimeMs <= 0) return 0;
+  const wait = THUMB_COOL_MS - (now - mtimeMs);
+  return wait > 0 ? Math.min(wait, THUMB_COOL_MS) : 0;
+};
+
+// Keys whose renderer already failed (corrupt jpg, magick choked). Without
+// this the self-evicting cache re-spawned the doomed renderer on EVERY rebuild
+// for as long as the folder was open. The key carries path+size+mtime, so any
+// real change to the file retries naturally. Wiped wholesale past the cap —
+// memory bound only; a lost sentinel costs one wasted spawn, nothing else.
+const failedThumbs = new Set<string>();
+const FAILED_THUMBS_MAX = 4096;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// --- Disk cache keyed by everything that changes the output (path, mtime, size,
 // pixel size, bg, vector flag) plus a pipeline-version salt — renderer swaps
-// and file edits miss naturally. No eviction (icon disk cache has none either).
+// and file edits miss naturally. The disk tier is unbounded on purpose (the
+// memory layer above now is LRU-capped).
 // v2: raster path decodes JPEGs at ~2x target (jpeg:size hint) — pixels differ
 // slightly from v1 full-decode thumbs, so old entries must regenerate.
 const THUMB_DISK_VER = "v2";
@@ -329,13 +378,18 @@ export const thumbPng = (
   // bg in the key: thumbnails are flattened onto it, so a theme swap must miss
   const mode = video ? "video" : vector ? "vec" : "raster";
   const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`;
-  let p = thumbCache.get(key);
+  if (failedThumbs.has(key)) return Promise.reject(new Error(`thumb previously failed: ${path}`));
+  let p = lruGet(thumbCache, key);
   if (!p) {
     p = (async () => {
       try {
         const cached = readFileSync(thumbDiskPath(key));
         return new Uint8Array(cached);
       } catch {}
+      // a disk hit means these pixels were already rendered once — never cool
+      // off those, only the expensive live render
+      const wait = thumbCooloffMs(mtimeMs, Date.now());
+      if (wait > 0) await sleep(wait);
       const bytes = await (video
         ? renderVideoPng(path, pxW, pxH)
         : vector
@@ -345,8 +399,12 @@ export const thumbPng = (
       void ensureThumbDir().then(() => atomicWriteFile(thumbDiskPath(key), bytes).catch(() => {}));
       return bytes;
     })();
-    p.catch(() => thumbCache.delete(key));
-    thumbCache.set(key, p);
+    p.catch(() => {
+      thumbCache.delete(key);
+      if (failedThumbs.size >= FAILED_THUMBS_MAX) failedThumbs.clear();
+      failedThumbs.add(key);
+    });
+    lruSet(thumbCache, key, p, THUMB_CACHE_MAX);
   }
   return p;
 };
@@ -356,4 +414,5 @@ export const thumbPng = (
 export const clearIconCaches = (): void => {
   iconCache.clear();
   thumbCache.clear();
+  failedThumbs.clear();
 };

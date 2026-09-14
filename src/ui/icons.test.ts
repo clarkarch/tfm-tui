@@ -1,9 +1,20 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { writeFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
-import { clearIconCaches, iconCacheKey, iconPng, loadEmbeddedIcons, svgSourceMtime, thumbPng } from "./icons";
+import {
+  THUMB_COOL_MS,
+  clearIconCaches,
+  iconCacheKey,
+  iconPng,
+  loadEmbeddedIcons,
+  lruGet,
+  lruSet,
+  svgSourceMtime,
+  thumbCooloffMs,
+  thumbPng,
+} from "./icons";
 
 // exercises the real rsvg-convert/magick pipeline (both are dev-machine deps);
 // failures here mean the raster pipeline or its cache keys broke.
@@ -215,6 +226,97 @@ describe("icons", () => {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     expect(dv.getUint32(16)).toBe(48); // IHDR width
     expect(dv.getUint32(20)).toBe(64); // IHDR height
+  });
+});
+
+// The in-memory layers are the only unbounded ones — every raster ever served
+// would otherwise live until the process exits. lruGet touches on hit, lruSet
+// evicts from the Map's insertion head (least-recently-used) past the cap.
+describe("icon/thumb memory cache LRU", () => {
+  test("lruGet keeps the entry hot (eviction takes the untouched one)", () => {
+    const m = new Map<string, number>();
+    lruSet(m, "a", 1, 2);
+    lruSet(m, "b", 2, 2);
+    expect(lruGet(m, "a")).toBe(1);
+    lruSet(m, "c", 3, 2);
+    expect(m.has("b")).toBe(false); // b was untouched → first out
+    expect(m.has("a")).toBe(true);
+    expect(m.has("c")).toBe(true);
+  });
+
+  test("lruSet overwrites in place without growing past the cap", () => {
+    const m = new Map<string, number>();
+    lruSet(m, "a", 1, 2);
+    lruSet(m, "b", 2, 2);
+    lruSet(m, "a", 9, 2);
+    expect(m.size).toBe(2);
+    expect(m.get("a")).toBe(9);
+    lruSet(m, "c", 3, 2);
+    expect(m.has("b")).toBe(false);
+  });
+
+  test("lruGet misses without mutating the queue", () => {
+    const m = new Map<string, number>();
+    lruSet(m, "a", 1, 2);
+    expect(lruGet(m, "zz")).toBeUndefined();
+    expect([...m.keys()]).toEqual(["a"]);
+  });
+});
+
+// Files modified within the cool-off window are still being written: rendering
+// them spawns a renderer for pixels that are stale before they land (a
+// download re-thumbing on every watcher rebuild). Clock skew can't park a
+// worker longer than the window either.
+describe("thumbCooloffMs", () => {
+  const NOW = 1_000_000;
+  test("fresh file waits out the full window", () => {
+    expect(thumbCooloffMs(NOW, NOW)).toBe(THUMB_COOL_MS);
+  });
+  test("partial age waits the remainder", () => {
+    expect(thumbCooloffMs(NOW - 1000, NOW)).toBe(THUMB_COOL_MS - 1000);
+  });
+  test("settled file never waits", () => {
+    expect(thumbCooloffMs(NOW - THUMB_COOL_MS, NOW)).toBe(0);
+    expect(thumbCooloffMs(NOW - THUMB_COOL_MS - 5000, NOW)).toBe(0);
+  });
+  test("future mtime (clock skew) is clamped to one window", () => {
+    expect(thumbCooloffMs(NOW + 60_000, NOW)).toBe(THUMB_COOL_MS);
+  });
+  test("unknown mtime 0 is treated as settled (the old tests pass 1/2/3)", () => {
+    expect(thumbCooloffMs(0, NOW)).toBe(0);
+  });
+});
+
+// magick/rsvg missing (CI) can't prove the sentinel end to end — thumbPng
+// rejects at the spawn before the failure is recorded either way, so the
+// "second call rejects fast" contract is only asserted with a real binary.
+describe("thumb failure sentinel", () => {
+  test.skipIf(!hasMagick && !hasRsvg)("a doomed file is not re-rendered per request", async () => {
+    clearIconCaches();
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-fail-"));
+    // not a PNG: the raster/vector pipeline must choke on it
+    const bad = path.join(dir, "broken.svg");
+    writeFileSync(bad, "this is not an image");
+    const first = await thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+    expect(first).toBeTruthy();
+    // second request must reject from the sentinel, not by spawning again
+    // (a renderer spawn — even one that fails — takes far longer than this;
+    // the sentinel path is a synchronous rejection)
+    const t0 = Date.now();
+    const second = await thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true).then(
+      () => null,
+      (e: unknown) => String(e),
+    );
+    expect(second).toContain("previously failed");
+    expect(Date.now() - t0).toBeLessThan(50);
+    // a different version of the same path is a different key — it retries
+    const edited = thumbPng(bad, 6, 1, 32, 32, "#1a1b26", true);
+    await edited.catch(() => {});
+    rmSync(dir, { recursive: true, force: true });
+    clearIconCaches();
   });
 });
 
