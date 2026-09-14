@@ -302,6 +302,7 @@ export const wireRetheme = (deps: {
     clearIconCaches,
     resetIconQueue: () => core.slots.resetIconQueue(),
     syncTerminalTheme: fileops.terminal.syncTerminalTheme,
+    syncTerminalHeight: () => fileops.terminal.syncTerminalHeight(),
     repaintButtons: () => {
       for (const t of chrome.toolbars) t.repaintButtons();
     },

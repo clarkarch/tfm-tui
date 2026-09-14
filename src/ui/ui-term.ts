@@ -276,6 +276,28 @@ export const makeTerminal = (ctx: TermCtx) => {
     } catch {}
   };
 
+  // live-resize for the [ui] terminal-height stepper: applyConfig is
+  // RENDER_EXEMPT for it (no renderAll), so the open pane must resize
+  // itself. Only the VT node resizes here — the host box belongs to the
+  // hover drawer (it clips it while auto-hidden), which already sizes the
+  // host from live config on refresh. The layout change flows into
+  // onTerminalResize, which resizes the PTY. No-op while closed.
+  const syncTerminalHeight = (): void => {
+    let node: any = term;
+    if (!node) {
+      try {
+        node = ctx.byId("tfm-term");
+      } catch {
+        node = null;
+      }
+    }
+    if (!node) return;
+    const h = ctx.termH();
+    try {
+      node.height = h;
+    } catch {}
+  };
+
   const closeTerminalPane = (): void => {
     try {
       term?.blur();
@@ -449,6 +471,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   return {
     openTerminalHere,
     closeTerminalPane,
+    syncTerminalHeight,
     syncTerminalTheme,
     termHasFocus,
     blurTerminal,

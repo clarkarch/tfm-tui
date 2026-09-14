@@ -32,6 +32,9 @@ type RethemeCtx = {
   clearIconCaches(): void;
   resetIconQueue(): void;
   syncTerminalTheme(): void;
+  // live-resize for the RENDER_EXEMPT terminal-height knob (no renderAll):
+  // the open pane resizes its VT node itself. Optional so tests stay light.
+  syncTerminalHeight?(): void;
   repaintButtons(): void;
   renderCrumbs(): void;
   refreshNav(): void;
@@ -253,6 +256,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     }
     try {
       ctx.onConfigApplied?.();
+    } catch {}
+    // terminal-height is RENDER_EXEMPT (no renderAll above) — the open pane
+    // resizes its VT node itself, after the hover drawer settled the host.
+    try {
+      ctx.syncTerminalHeight?.();
     } catch {}
     // skip the full repaint for value-only knobs (no layout/theme change):
     // the settings row already repainted its own value text

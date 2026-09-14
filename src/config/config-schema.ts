@@ -332,7 +332,7 @@ const UI_ROWS: SchemaRow[] = [
     max: 30,
     step: 1,
     def: 12,
-    doc: "embedded terminal pane height in rows, 4..30 (sizes a newly opened pane)",
+    doc: "embedded terminal pane height in rows, 4..30 (applies live to the open pane)",
     label: "terminal height",
     group: "layout",
     subsection: "sizes",

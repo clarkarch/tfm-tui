@@ -1,7 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Box } from "@opentui/core";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
   hexToRgb16,
   kittyDeleteAllImages,
+  makeTerminal,
   pasteDroppedPaths,
   promptClickArrows,
   ptyScreenState,
@@ -189,5 +192,81 @@ describe("promptClickArrows", () => {
 
   test("click on the cursor cell does nothing", () => {
     expect(promptClickArrows(5, 1, 5, 1, "hello")).toBe(null);
+  });
+});
+
+describe("syncTerminalHeight", () => {
+  let t: TestRendererSetup;
+  let termH = 9;
+
+  const mkTerm = () =>
+    makeTerminal({
+      renderer: t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      uiStyle: () => "solid",
+      colors: () => ({}),
+      sw: () => 26,
+      termH: () => termH,
+      escHintBtn: () => null,
+      stripSelectable: () => {},
+      drainIconQueue: () => {},
+      notify: () => {},
+      renderAll: () => {},
+      cwd: () => "/tmp",
+      virtualCwd: () => false,
+      home: "/tmp",
+      finishDrag: () => {},
+      dlog: () => {},
+    } as any);
+
+  beforeAll(async () => {
+    t = await createTestRenderer({ width: 80, height: 24 });
+    t.renderer.root.add(
+      Box(
+        { width: "100%", height: "100%", flexDirection: "column" },
+        Box({ id: "tfm-term-host", width: "100%", height: 1 }, Box({ id: "tfm-term", width: "100%", height: 12 })),
+      ),
+    );
+    await t.renderOnce();
+  });
+
+  afterAll(() => t.renderer.destroy());
+
+  test("resizes the live pane node to the current config value", async () => {
+    termH = 9;
+    mkTerm().syncTerminalHeight();
+    await t.renderOnce();
+    const node = t.renderer.root.findDescendantById("tfm-term") as any;
+    expect(node.height).toBe(9);
+  });
+
+  test("leaves the host box alone (the hover drawer owns host height)", async () => {
+    termH = 7;
+    mkTerm().syncTerminalHeight();
+    await t.renderOnce();
+    const host = t.renderer.root.findDescendantById("tfm-term-host") as any;
+    expect(host.height).toBe(1);
+  });
+
+  test("no-ops when the pane is closed", () => {
+    const fac = makeTerminal({
+      renderer: { resolution: null },
+      byId: () => null,
+      uiStyle: () => "solid",
+      colors: () => ({}),
+      sw: () => 26,
+      termH: () => 9,
+      escHintBtn: () => null,
+      stripSelectable: () => {},
+      drainIconQueue: () => {},
+      notify: () => {},
+      renderAll: () => {},
+      cwd: () => "/tmp",
+      virtualCwd: () => false,
+      home: "/tmp",
+      finishDrag: () => {},
+      dlog: () => {},
+    } as any);
+    expect(() => fac.syncTerminalHeight()).not.toThrow();
   });
 });

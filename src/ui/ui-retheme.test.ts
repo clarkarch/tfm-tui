@@ -31,6 +31,7 @@ const mkCtx = () => {
     clearIconCaches: 0,
     resetIconQueue: 0,
     syncTerminalTheme: 0,
+    syncTerminalHeight: 0,
     repaintButtons: 0,
     renderCrumbs: 0,
     refreshNav: 0,
@@ -74,6 +75,9 @@ const mkCtx = () => {
     },
     syncTerminalTheme: () => {
       calls.syncTerminalTheme++;
+    },
+    syncTerminalHeight: () => {
+      calls.syncTerminalHeight++;
     },
     repaintButtons: () => {
       calls.repaintButtons++;
@@ -200,6 +204,18 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(0);
     expect(ctx.config.ui.toastDurationMs).toBe(5000);
     expect(ctx.config.ui.hoverAnimMs).toBe(200);
+  });
+
+  test("a terminal-height change syncs the open pane without a full renderAll", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.terminalHeight = 16;
+    retheme.applyConfig(fresh);
+    expect(ctx.config.ui.terminalHeight).toBe(16);
+    expect(ctx.calls.syncTerminalHeight).toBe(1);
+    // value-only knob: the settings row repainted itself, no grid rebuild churn
+    expect(ctx.calls.renderAll).toBe(0);
   });
 
   test("a layout knob still re-renders", () => {

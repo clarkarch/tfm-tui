@@ -8,7 +8,7 @@
 [ui]
 sidebar-width                   = 26          # 16..60 cells (grid + list)
 preview-width                   = 40          # 20..80 cells
-terminal-height                 = 12          # embedded terminal pane height in rows, 4..30 (sizes a newly opened pane)
+terminal-height                 = 12          # embedded terminal pane height in rows, 4..30 (applies live to the open pane)
 tile-width                      = 20          # 10..40 cells (grid view)
 tile-height                     = 5           # 3..10 cells (grid view)
 icon-cells                      = 3           # grid icon height in rows, 1..5
