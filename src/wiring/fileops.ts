@@ -116,6 +116,7 @@ export const wireFileops = (deps: {
     uiStyle,
     colors: themeGet,
     sw: () => core.geometry.sw,
+    termH: () => core.config.ui.terminalHeight,
     escHintBtn: (id, onClose) => core.slots.escHintBtn(id, onClose),
     stripSelectable,
     drainIconQueue: () => drainIconQueue(),

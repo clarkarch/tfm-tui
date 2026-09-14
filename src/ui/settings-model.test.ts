@@ -124,6 +124,82 @@ describe("settingGroups shape", () => {
     }
   });
 
+  test("long groups carry section headers between topics (dividers)", () => {
+    const h = mk();
+    const anim = h
+      .groups()
+      .find((g) => g.header === "animations")!
+      .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    expect(anim).toContain("##files");
+    expect(anim).toContain("##file hover");
+    expect(anim).toContain("##sidebar intro");
+    expect(anim).toContain("##sidebar hover");
+    // the FIRST section gets a divider too — headers sit before AND between topics
+    expect(anim[0]).toBe("##files");
+    expect(anim.indexOf("file animation")).toBeGreaterThan(anim.indexOf("##files"));
+    expect(anim.indexOf("file animation")).toBeLessThan(anim.indexOf("##file hover"));
+    expect(anim.indexOf("hover lift direction")).toBeLessThan(anim.indexOf("##sidebar intro"));
+    expect(anim.indexOf("include title in intro")).toBeLessThan(anim.indexOf("##sidebar hover"));
+  });
+
+  test("panes group carries auto-hide / hover-timing section headers", () => {
+    const h = mk();
+    const panes = h
+      .groups()
+      .find((g) => g.header === "panes")!
+      .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    expect(panes[0]).toBe("##panes");
+    expect(panes).toContain("##auto-hide");
+    expect(panes).toContain("##hover timing");
+    expect(panes.indexOf("preview pane")).toBeGreaterThan(panes.indexOf("##panes"));
+    expect(panes.indexOf("dual pane")).toBeLessThan(panes.indexOf("##auto-hide"));
+    expect(panes.indexOf("hover animation")).toBeGreaterThan(panes.indexOf("##hover timing"));
+  });
+
+  test("layout group sections sizes/grid/list/view, terminal height beside the widths", () => {
+    const h = mk();
+    const layout = h
+      .groups()
+      .find((g) => g.header === "layout")!
+      .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    expect(layout).toEqual([
+      "##sizes",
+      "sidebar width",
+      "preview width",
+      "terminal height",
+      "##grid",
+      "grid tile width",
+      "grid tile height",
+      "grid icon size",
+      "word wrap (grid)",
+      "##list",
+      "list row height",
+      "##view",
+      "view mode",
+    ]);
+  });
+
+  test("terminal height stepper commits through the ui patch", () => {
+    const h = mk();
+    const row = h.byLabel("terminal height");
+    if (row.kind !== "stepper") throw new Error("terminal height must be a stepper");
+    expect(row.get()).toBe(12);
+    row.set(16);
+    expect(h.config.ui.terminalHeight).toBe(16);
+    expect(h.applied[h.applied.length - 1]!.ui.terminalHeight).toBe(16);
+    expect(h.saves()).toBe(1);
+  });
+
+  test("section headers never collide with schema row labels (discoverability invariant)", () => {
+    const h = mk();
+    const schemaLabels = new Set(UI_SCHEMA.map((r) => r.label));
+    for (const g of h.groups()) {
+      for (const r of g.rows) {
+        if (r.kind === "header") expect(schemaLabels.has(r.label)).toBe(false);
+      }
+    }
+  });
+
   test("every core category carries an icon (silent-fallback guard)", () => {
     for (const g of mk().groups()) expect(typeof g.icon).toBe("string");
   });

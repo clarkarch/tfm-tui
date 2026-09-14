@@ -143,6 +143,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "hoverOpenDelayMs",
     "hoverCloseDelayMs",
     "hoverAnimMs",
+    "terminalHeight",
     "fileAnimation",
     "fileAnimationSlide",
     "fileAnimationStagger",

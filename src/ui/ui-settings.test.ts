@@ -296,6 +296,82 @@ describe("settings view", () => {
     await t.renderOnce();
     expect(t.captureCharFrame()).toContain("1-12 of 20");
   });
+
+  test("header (divider) rows render as labels, never take the cursor, never activate", async () => {
+    const keep = groups;
+    let ran = 0;
+    groups = [
+      {
+        header: "general",
+        rows: [
+          { kind: "toggle", label: "aaa", get: () => false, set: () => {} },
+          { kind: "header", label: "section one" },
+          { kind: "toggle", label: "bbb", get: () => false, set: () => {} },
+          { kind: "action", label: "ccc", keepOpen: true, run: () => ran++ },
+        ],
+      },
+    ];
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1); // root: down fills Settings
+      menu.menuActivate();
+      await t.renderOnce();
+      // the divider label paints in the rows pane...
+      expect(t.captureCharFrame()).toContain("section one");
+      // ...as its own node, not a selectable row
+      expect(t.renderer.root.findDescendantById("tfm-set-sep-1")).toBeTruthy();
+      expect(t.renderer.root.findDescendantById("tfm-set-row-1")).toBeFalsy();
+      // the view opens with no cursor: first arrow fills row 0...
+      menu.moveMenu(1);
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-0")).toEqual(hexInts(colors.accentBg));
+      // ...second arrow skips the header and lands on row 2
+      menu.moveMenu(1);
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-2")).toEqual(hexInts(colors.accentBg));
+      // up from row 2 skips back over the header to row 0
+      menu.moveMenu(-1);
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-0")).toEqual(hexInts(colors.accentBg));
+      // hover over the divider never steals the cursor (handler-free node)
+      expect(t.renderer.root.findDescendantById("tfm-set-sep-1")).toBeTruthy();
+      menu.moveMenu(1); // row 0 -> skips to row 2 (toggle bbb)
+      menu.menuActivate(); // toggle adjust, not the ccc action
+      await t.renderOnce();
+      expect(ran).toBe(0);
+      expect(floats.isOpen("escmenu")).toBe(true);
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("all-header group: cursor parks on a header, activate/adjust stay no-ops", async () => {
+    const keep = groups;
+    groups = [{ header: "empty", rows: [{ kind: "header", label: "nothing here" }] }];
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1); // root: down fills Settings
+      menu.menuActivate();
+      await t.renderOnce();
+      menu.moveMenu(1); // nowhere interactive to land — parks on the header
+      menu.menuActivate(); // must not throw, must not close
+      menu.adjustSelectedSetting(1);
+      menu.adjustSelectedSetting(-1);
+      await t.renderOnce();
+      expect(floats.isOpen("escmenu")).toBe(true);
+      expect(t.captureCharFrame()).toContain("nothing here");
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
 });
 
 describe("keybind capture", () => {

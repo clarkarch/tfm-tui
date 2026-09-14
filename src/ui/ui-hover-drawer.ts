@@ -15,7 +15,6 @@
 
 import { createTimeline, engine, type JSAnimation } from "@opentui/core";
 import type { UiConfig } from "../config/config-schema";
-import { TERM_H } from "./ui-term";
 
 export type DrawerEdge = "left" | "right" | "bottom";
 
@@ -269,7 +268,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
       nodeId: "tfm-term-host",
       axis: "height",
       enabled: () => ctx.ui().terminalAutoHide && ctx.terminalOpen(),
-      expanded: () => TERM_H + 1,
+      expanded: () => ctx.ui().terminalHeight + 1,
       collapsed: () => collapsedHeight(ctx.ui().terminalCollapseStyle),
       size: () => ctx.renderer.terminalHeight,
       // terminal open + auto-hide just got disabled: restore its full height
@@ -278,7 +277,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
         const n = getNode("tfm-term-host");
         if (n) {
           try {
-            n.height = TERM_H + 1;
+            n.height = ctx.ui().terminalHeight + 1;
           } catch {}
         }
       },

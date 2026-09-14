@@ -191,6 +191,26 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
   const end = Math.min(rows.length, st.scrollOff + vis);
   const pane2 = Box({ flexGrow: 1, flexDirection: "column" });
 
+  // section divider: a muted label over the theme divider color. Deliberately
+  // handler-free (no mousedown/mousemove) so hover can never select it and a
+  // click passes to the panel beneath; its own id series (tfm-set-sep-*)
+  // keeps targeted row paints (tfm-set-row-*) from ever touching it.
+  const headerNode = (rowSpec: Extract<SettingRow, { kind: "header" }>, index: number) => {
+    const lead = ` ~~ ${rowSpec.label} `;
+    return Box(
+      {
+        id: `tfm-set-sep-${index}`,
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        paddingLeft: 1,
+        paddingRight: 1,
+      },
+      Text({ content: lead.slice(0, 30), fg: c.sidebarFgMuted }),
+      Text({ content: "~".repeat(Math.max(0, 38 - Math.min(lead.length, 30))), fg: c.divider }),
+    );
+  };
+
   const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) => {
     const tId = `tfm-chev-${index}-${dir}`;
     return Box(
@@ -345,7 +365,7 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
 
   for (let i = st.scrollOff; i < end; i++) {
     const rowSpec = rows[i];
-    if (rowSpec) pane2.add(rowNode(rowSpec, i));
+    if (rowSpec) pane2.add(rowSpec.kind === "header" ? headerNode(rowSpec, i) : rowNode(rowSpec, i));
   }
   if (canScroll) {
     pane2.add(

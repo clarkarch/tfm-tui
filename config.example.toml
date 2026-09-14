@@ -7,11 +7,13 @@
 
 [ui]
 sidebar-width                   = 26          # 16..60 cells (grid + list)
+preview-width                   = 40          # 20..80 cells
+terminal-height                 = 12          # embedded terminal pane height in rows, 4..30 (sizes a newly opened pane)
 tile-width                      = 20          # 10..40 cells (grid view)
 tile-height                     = 5           # 3..10 cells (grid view)
 icon-cells                      = 3           # grid icon height in rows, 1..5
+word-wrap                       = false       # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
 list-row-height                 = 1           # list view row height in cells, 1..3 (icon scales with it)
-preview-width                   = 40          # 20..80 cells
 preview-enabled                 = false       # right-side preview pane (text files, folder stats)
 dual-pane                       = false       # true = two independent file panes side by side (tab switches the active pane); false = single pane
 sidebar-auto-hide               = false       # true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)
@@ -55,7 +57,6 @@ sidebar-hover-animation         = false       # true = hovering a sidebar row nu
 sidebar-hover-include-label     = false       # true = the row label rides along with the hover nudge
 sidebar-hover-direction         = "left"      # "left" = the icon nudges into the row padding; "right" = it nudges toward the label
 view-mode                       = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
-word-wrap                       = false       # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
 show-hidden                     = false       # start with dotfiles visible (ctrl+h toggles at runtime)
 recursive-search                = false       # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
 restore-session                 = false       # true = reopen the folder from the last quit instead of the launch cwd

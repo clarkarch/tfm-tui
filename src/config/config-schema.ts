@@ -38,7 +38,11 @@ export type SettingRow =
     }
   // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
   | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
-  | { kind: "action"; label: string; keepOpen?: boolean; run: () => void };
+  | { kind: "action"; label: string; keepOpen?: boolean; run: () => void }
+  // divider rows split a long category into labeled sections (animations/panes).
+  // Non-interactive: never take the cursor, never adjust/activate — the settings
+  // shell + panel skip them the way the file menu skips separators.
+  | { kind: "header"; label: string };
 
 export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] };
 
@@ -73,6 +77,8 @@ export const isValidSettingRow = (r: unknown): boolean => {
       return typeof row.get === "function" && typeof row.set === "function";
     case "action":
       return typeof row.run === "function";
+    case "header":
+      return true; // label already checked above; no handlers to validate
     default:
       return false;
   }
@@ -156,6 +162,7 @@ export type UiConfig = {
   recursiveSearch: boolean;
   previewEnabled: boolean;
   previewWidth: number;
+  terminalHeight: number;
   dualPane: boolean;
   sidebarAutoHide: boolean;
   sidebarCollapseStyle: string;
@@ -250,7 +257,17 @@ export type Config = { ui: UiConfig; theme: Theme; keys: KeysConfig };
 
 type GuiGroup = "appearance" | "layout" | "animations" | "panes" | "behavior" | "files" | "advanced" | "keys";
 
-type RowCommon = { tomlKey: string; prop: string; doc: string; label: string; group?: GuiGroup };
+type RowCommon = {
+  tomlKey: string;
+  prop: string;
+  doc: string;
+  label: string;
+  group?: GuiGroup;
+  // GUI-only section divider (ui rows only; ignored by parse/serialize): when
+  // set on consecutive rows, settings-model renders one header row where the
+  // subsection name changes. Rows without one belong to the group's namesake.
+  subsection?: string;
+};
 
 type SchemaRow =
   | (RowCommon & { kind: "int"; section: "ui"; min: number; max: number; step: number; def: number })
@@ -276,58 +293,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "16..60 cells (grid + list)",
     label: "sidebar width",
     group: "layout",
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "tile-width",
-    prop: "tileWidth",
-    min: 10,
-    max: 40,
-    step: 1,
-    def: 20,
-    doc: "10..40 cells (grid view)",
-    label: "grid tile width",
-    group: "layout",
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "tile-height",
-    prop: "tileHeight",
-    min: 3,
-    max: 10,
-    step: 1,
-    def: 5,
-    doc: "3..10 cells (grid view)",
-    label: "grid tile height",
-    group: "layout",
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "icon-cells",
-    prop: "iconCells",
-    min: 1,
-    max: 5,
-    step: 1,
-    def: 3,
-    doc: "grid icon height in rows, 1..5",
-    label: "grid icon size",
-    group: "layout",
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "list-row-height",
-    prop: "listRowHeight",
-    min: 1,
-    max: 3,
-    step: 1,
-    def: 1,
-    doc: "list view row height in cells, 1..3 (icon scales with it)",
-    label: "list row height",
-    group: "layout",
+    subsection: "sizes",
   },
   {
     kind: "int",
@@ -341,6 +307,88 @@ const UI_ROWS: SchemaRow[] = [
     doc: "20..80 cells",
     label: "preview width",
     group: "layout",
+    subsection: "sizes",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "terminal-height",
+    prop: "terminalHeight",
+    min: 4,
+    max: 30,
+    step: 1,
+    def: 12,
+    doc: "embedded terminal pane height in rows, 4..30 (sizes a newly opened pane)",
+    label: "terminal height",
+    group: "layout",
+    subsection: "sizes",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "tile-width",
+    prop: "tileWidth",
+    min: 10,
+    max: 40,
+    step: 1,
+    def: 20,
+    doc: "10..40 cells (grid view)",
+    label: "grid tile width",
+    group: "layout",
+    subsection: "grid",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "tile-height",
+    prop: "tileHeight",
+    min: 3,
+    max: 10,
+    step: 1,
+    def: 5,
+    doc: "3..10 cells (grid view)",
+    label: "grid tile height",
+    group: "layout",
+    subsection: "grid",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "icon-cells",
+    prop: "iconCells",
+    min: 1,
+    max: 5,
+    step: 1,
+    def: 3,
+    doc: "grid icon height in rows, 1..5",
+    label: "grid icon size",
+    group: "layout",
+    subsection: "grid",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "word-wrap",
+    prop: "wordWrap",
+    def: false,
+    doc: "true = wrap long file names onto extra tile rows (grid view); false = single line cut with …",
+    label: "word wrap (grid)",
+    group: "layout",
+    subsection: "grid",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "list-row-height",
+    prop: "listRowHeight",
+    min: 1,
+    max: 3,
+    step: 1,
+    def: 1,
+    doc: "list view row height in cells, 1..3 (icon scales with it)",
+    label: "list row height",
+    group: "layout",
+    subsection: "list",
   },
   {
     kind: "bool",
@@ -351,6 +399,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "right-side preview pane (text files, folder stats)",
     label: "preview pane",
     group: "panes",
+    subsection: "panes",
   },
   {
     kind: "bool",
@@ -361,6 +410,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = two independent file panes side by side (tab switches the active pane); false = single pane",
     label: "dual pane",
     group: "panes",
+    subsection: "panes",
   },
   {
     kind: "bool",
@@ -371,6 +421,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)",
     label: "sidebar auto-hide",
     group: "panes",
+    subsection: "auto-hide",
   },
   {
     kind: "enum",
@@ -382,6 +433,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"rail" = icon-only strip; "hidden" = width 0; "min" = shrink to a sliver',
     label: "sidebar collapse",
     group: "panes",
+    subsection: "auto-hide",
   },
   {
     kind: "bool",
@@ -392,6 +444,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = collapse the preview pane until the mouse nears the right edge",
     label: "preview auto-hide",
     group: "panes",
+    subsection: "auto-hide",
   },
   {
     kind: "enum",
@@ -403,6 +456,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"rail" = narrow strip; "hidden" = width 0; "min" = shrink to a sliver',
     label: "preview collapse",
     group: "panes",
+    subsection: "auto-hide",
   },
   {
     kind: "bool",
@@ -413,6 +467,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = the open terminal pane collapses to its header until the mouse nears the bottom edge (the shell stays alive)",
     label: "terminal auto-hide",
     group: "panes",
+    subsection: "auto-hide",
   },
   {
     kind: "enum",
@@ -424,6 +479,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"header" = keep the title row visible; "hidden" = height 0',
     label: "terminal collapse",
     group: "panes",
+    subsection: "auto-hide",
   },
   {
     kind: "int",
@@ -437,6 +493,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "cells from the edge that trigger an auto-hide expand, 1..8",
     label: "hover zone",
     group: "panes",
+    subsection: "hover timing",
   },
   {
     kind: "int",
@@ -450,6 +507,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "delay before an auto-hide panel expands, 0..1000 ms",
     label: "hover open delay",
     group: "panes",
+    subsection: "hover timing",
   },
   {
     kind: "int",
@@ -463,6 +521,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms",
     label: "hover close delay",
     group: "panes",
+    subsection: "hover timing",
   },
   {
     kind: "int",
@@ -476,6 +535,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "auto-hide slide duration, 0..600 ms (0 = instant)",
     label: "hover animation",
     group: "panes",
+    subsection: "hover timing",
   },
   {
     kind: "int",
@@ -577,6 +637,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)",
     label: "file animation",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "bool",
@@ -587,6 +648,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = files rise up into place (distance = file-animation-slide-pct)",
     label: "slide",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "bool",
@@ -597,6 +659,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = top-to-bottom cascade instead of one wave",
     label: "stagger",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "int",
@@ -610,6 +673,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "content-area file animation duration, 0..800 ms (0 = instant)",
     label: "animation ms",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "int",
@@ -623,6 +687,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "how spread the cascade wave is, 0..300% (0 = all tiles at once; over 100 = the wave outlives the duration)",
     label: "stagger spread",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "int",
@@ -636,6 +701,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "how far files slide, 0..150% of the viewport (0 = fade in place; clamped to whole cells)",
     label: "slide distance",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "enum",
@@ -647,6 +713,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"up"/"down" = files rise/drop vertically; "left"/"right" = files slide in horizontally',
     label: "slide direction",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "enum",
@@ -658,6 +725,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
     label: "easing",
     group: "animations",
+    subsection: "files",
   },
   {
     kind: "bool",
@@ -668,6 +736,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)",
     label: "tile hover animation",
     group: "animations",
+    subsection: "file hover",
   },
   {
     kind: "bool",
@@ -678,6 +747,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = the filename rides along with the hover lift",
     label: "include filename in lift",
     group: "animations",
+    subsection: "file hover",
   },
   {
     kind: "enum",
@@ -689,6 +759,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally',
     label: "hover lift direction",
     group: "animations",
+    subsection: "file hover",
   },
   {
     kind: "bool",
@@ -699,6 +770,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = animate the places sidebar on boot (style = sidebar-animation-style)",
     label: "sidebar animation",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "enum",
@@ -710,6 +782,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"fade" = the whole sidebar fades in; "slide" = it slides in from the edge; "stagger" = places rows cascade in; "stagger-slide" = each row slides+fades in, files-style',
     label: "sidebar style",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "int",
@@ -723,6 +796,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "sidebar intro duration, 0..800 ms (0 = instant)",
     label: "sidebar ms",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "int",
@@ -736,6 +810,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "how far the sidebar slides in, 0..32 cells (0 = fade in place)",
     label: "sidebar slide",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "enum",
@@ -747,6 +822,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"left"/"right" = slides in horizontally from the edge; "up"/"down" = slides vertically',
     label: "sidebar direction",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "int",
@@ -760,6 +836,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "how spread the sidebar cascade is, 0..300% (0 = all rows at once)",
     label: "sidebar stagger",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "enum",
@@ -771,6 +848,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
     label: "sidebar easing",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "bool",
@@ -781,6 +859,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = the sidebar title joins the boot cascade first (stagger/stagger-slide only; fade/slide already move it with the whole panel)",
     label: "include title in intro",
     group: "animations",
+    subsection: "sidebar intro",
   },
   {
     kind: "bool",
@@ -791,6 +870,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = hovering a sidebar row nudges its icon one cell (rest layout unchanged; the cwd-selected row keeps its paint only)",
     label: "sidebar hover animation",
     group: "animations",
+    subsection: "sidebar hover",
   },
   {
     kind: "bool",
@@ -801,6 +881,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = the row label rides along with the hover nudge",
     label: "include label in nudge",
     group: "animations",
+    subsection: "sidebar hover",
   },
   {
     kind: "enum",
@@ -812,6 +893,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"left" = the icon nudges into the row padding; "right" = it nudges toward the label',
     label: "hover nudge direction",
     group: "animations",
+    subsection: "sidebar hover",
   },
   {
     kind: "enum",
@@ -823,16 +905,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns',
     label: "view mode",
     group: "layout",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "word-wrap",
-    prop: "wordWrap",
-    def: false,
-    doc: "true = wrap long file names onto extra tile rows (grid view); false = single line cut with …",
-    label: "word wrap (grid)",
-    group: "layout",
+    subsection: "view",
   },
   {
     kind: "bool",

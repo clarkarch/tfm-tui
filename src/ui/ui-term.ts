@@ -22,6 +22,7 @@ type TermCtx = {
   uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number;
+  termH(): number; // live [ui] terminal-height (rows of VT, +1 for the header)
   escHintBtn(id: string, onClose: () => void): any;
   stripSelectable(): void;
   drainIconQueue(): void;
@@ -33,8 +34,6 @@ type TermCtx = {
   finishDrag(): void; // ends an internal drag (finishDragState)
   dlog(msg: string): void;
 };
-
-export const TERM_H = 12;
 
 // Theme's 16 ANSI slots as const keys — the OSC 4 palette maps over them
 // with full type checking instead of a computed `any` index
@@ -353,7 +352,8 @@ export const makeTerminal = (ctx: TermCtx) => {
     host.onMouseDrop = handleTermDrop;
     const colors = ctx.colors();
     const cwd = dir ?? (ctx.virtualCwd() ? ctx.home : ctx.cwd());
-    host.height = TERM_H + 1;
+    const termH = ctx.termH(); // live [ui] terminal-height — sizes this new pane
+    host.height = termH + 1;
     const header = Box(
       {
         id: "tfm-term-header",
@@ -370,9 +370,9 @@ export const makeTerminal = (ctx: TermCtx) => {
     term = new EmbeddedTerminalRenderable(ctx.renderer, {
       id: "tfm-term",
       width: "100%",
-      height: TERM_H,
+      height: termH,
       cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
-      rows: TERM_H,
+      rows: termH,
       maxScrollback: 20_000,
       onData: (data: Uint8Array) => {
         // the only PTY write without a guard — a keystroke landing between
@@ -408,7 +408,7 @@ export const makeTerminal = (ctx: TermCtx) => {
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
         terminal: {
           cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
-          rows: TERM_H,
+          rows: termH,
           data(_pty, data) {
             answerTerminalProbes(data);
             // sniff mouse-mode/alt-screen DECSETs (split-safe) for the bridge

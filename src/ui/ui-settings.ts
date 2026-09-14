@@ -135,7 +135,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const switchCategory = (gi: number): void => {
     const n = groups().length;
     st.catIdx = ((gi % n) + n) % n;
-    st.menuIdx = 0;
+    // land on the first INTERACTIVE row — a leading header never takes the cursor
+    const rows = rowsOf(st.catIdx);
+    let i = 0;
+    for (let k = 0; rows[i]?.kind === "header" && k < rows.length; k++) i++;
+    st.menuIdx = i;
     st.pane = "rows";
     st.scrollOff = 0;
     renderMenuContent();
@@ -150,7 +154,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       return;
     }
     const row = rowsOf(st.catIdx)[st.menuIdx];
-    if (!row) return;
+    if (!row || row.kind === "header") return;
     // keybind/action rows have no left/right value — the arrows switch category
     if (row.kind === "keybind" || row.kind === "action") {
       switchCategory(st.catIdx + dir);
@@ -201,7 +205,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // Rows flagged `repaint` (theme / ui-style / transparent-bg) change the
   // panel's own colors and need the full rebuild.
   const afterAdjust = (index: number, row: SettingRow): void => {
-    if (row.kind === "action" || row.kind === "keybind") return;
+    if (row.kind === "action" || row.kind === "keybind" || row.kind === "header") return;
     if (row.repaint) {
       renderMenuContent();
       return;
@@ -252,7 +256,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       return;
     }
     const row = rowsOf(st.catIdx)[rowIdx];
-    if (!row) return;
+    if (!row || row.kind === "header") return;
     if (row.kind === "toggle") {
       try {
         applyAdjust(row, 1);
@@ -573,9 +577,14 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       switchCategory(st.catIdx + delta);
       return;
     }
-    const count = rowsOf(st.catIdx).length;
+    const rows = rowsOf(st.catIdx);
+    const count = rows.length;
     if (!count) return;
-    st.menuIdx = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
+    // idx -1 = no cursor yet: down fills the first row, up the last
+    let i = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
+    // skip headers; bounded so an all-header group can't spin forever
+    for (let k = 0; rows[i]?.kind === "header" && k < count; k++) i = (i + delta + count) % count;
+    st.menuIdx = i;
     ensureVisible(st, visibleRows());
     renderMenuContent();
   };

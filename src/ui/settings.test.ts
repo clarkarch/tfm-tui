@@ -114,6 +114,12 @@ describe("applyAdjust", () => {
     expect(applyAdjust(row, 1)).toBe(false);
     expect(r.calls).toEqual([]);
   });
+
+  test("header (divider) rows never adjust", () => {
+    const row: SettingRow = { kind: "header", label: "file hover" };
+    expect(applyAdjust(row, 1)).toBe(false);
+    expect(applyAdjust(row, -1)).toBe(false);
+  });
 });
 
 describe("themePresetIdx", () => {

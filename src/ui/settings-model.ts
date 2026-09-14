@@ -181,8 +181,16 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
 
   const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
     const rows: SettingRow[] = [];
+    // subsection dividers: one header row where the schema's subsection name
+    // changes — including the first section, so every group with dividers is
+    // uniformly labeled (groups without subsections render no headers at all)
+    let subsection = "";
     for (const row of uiRowsIn(group)) {
       if (SPECIAL_UI_PROPS.has(row.prop)) continue;
+      if (row.subsection && row.subsection !== subsection) {
+        subsection = row.subsection;
+        rows.push({ kind: "header", label: row.subsection });
+      }
       const built = schemaRow(row);
       // these change the PANEL's own colors (or its icons) — their adjust must re-render it
       if (row.prop === "uiStyle" || row.prop === "transparentBg" || row.prop === "icons") {

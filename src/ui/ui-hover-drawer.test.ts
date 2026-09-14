@@ -1,6 +1,6 @@
-// Pure decision logic for the hover drawer. The factory (timelines, mouse
-// handler) is renderer-coupled and not unit-tested; the contract that decides
-// WHEN a panel opens/closes and HOW SMALL it collapses is here.
+// Pure decision logic for the hover drawer + headless factory tests below
+// (timelines driven by mockMouse over a real test renderer, no fixed sleeps
+// beyond the poll tick).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
@@ -274,5 +274,76 @@ describe("makeHoverDrawer (headless)", () => {
     await t.renderOnce();
     expect(pane().visible).toBe(true);
     expect(pane().width).toBe(collapsedSize("rail"));
+  });
+});
+
+describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
+  let t2: TestRendererSetup;
+
+  const settleUntil = async (cond: () => boolean): Promise<void> => {
+    for (let i = 0; i < 300; i++) {
+      await Bun.sleep(3);
+      await t2.renderOnce();
+      if (cond()) return;
+    }
+    throw new Error("settleUntil timed out");
+  };
+
+  beforeAll(async () => {
+    t2 = await createTestRenderer({ width: 80, height: 24 });
+    t2.renderer.root.add(
+      Box(
+        { width: "100%", height: "100%", flexDirection: "column" },
+        Box({ id: "tfm-main", flexGrow: 1 }),
+        Box({ id: "tfm-term-host", width: "100%", height: 13 }),
+      ),
+    );
+    await t2.renderOnce();
+  });
+  afterAll(() => t2.renderer.destroy());
+
+  test("expand/collapse/restore size the host from live config, not the old const", async () => {
+    // 9 ≠ the old TERM_H 12: every size below proves the config value is read
+    const ui = {
+      ...defaultConfig.ui,
+      terminalHeight: 9,
+      terminalAutoHide: true,
+      terminalCollapseStyle: "hidden",
+      hoverZoneCells: 2,
+      hoverOpenDelayMs: 0,
+      hoverCloseDelayMs: 0,
+      hoverAnimMs: 0,
+    };
+    const drawer = makeHoverDrawer({
+      renderer: t2.renderer,
+      byId: (id) => t2.renderer.root.findDescendantById(id),
+      ui: () => ui,
+      terminalOpen: () => true,
+      blocked: () => false,
+      setEffectiveSidebar: () => {},
+      setEffectivePreview: () => {},
+    });
+    const host = () => t2.renderer.root.findDescendantById("tfm-term-host") as any;
+
+    await t2.renderOnce();
+    // the drawer only clips height — visibility belongs to the pane lifecycle
+    // (terminal applyVisible is deliberately a noop). Yoga clamps a 0-height
+    // box to 1 row, so collapse reads back ≤ 1, not exactly 0.
+    expect(host().height).toBeLessThanOrEqual(1);
+
+    await t2.mockMouse.moveTo(40, 23); // bottom edge, inside the zone
+    await settleUntil(() => host().height === 10);
+    expect(host().height).toBe(ui.terminalHeight + 1);
+    // (no onSettle assert: the terminal panel sets rebuildsGrid false — a
+    // height slide never rebuilds grid columns)
+
+    await t2.mockMouse.moveTo(40, 3); // far from the edge
+    await settleUntil(() => host().height <= 1);
+
+    // disabling auto-hide restores the full configured height (not the const)
+    ui.terminalAutoHide = false;
+    drawer.refresh();
+    await t2.renderOnce();
+    expect(host().height).toBe(10);
   });
 });
