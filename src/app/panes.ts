@@ -25,6 +25,18 @@ export const setActivePane = <T>(p: PanePair<T>, i: PaneIndex): void => {
   p.active = i;
 };
 
+// Move a pane's active tab to `dir` with a FRESH one-entry history — used when
+// dual pane turns on: the hidden pane's boot-era history is stale, and opening
+// at the current directory is the expectation (see normalizePanes wiring).
+export const pointPaneAt = <T extends { history: string[]; histIdx: number; cwd: string }>(
+  dst: T,
+  dir: string,
+): void => {
+  dst.history = [dir];
+  dst.histIdx = 0;
+  dst.cwd = dir;
+};
+
 export const togglePane = <T>(p: PanePair<T>): void => {
   p.active = otherPane(p);
 };

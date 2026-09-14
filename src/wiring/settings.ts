@@ -18,6 +18,7 @@ import { clearIconCaches } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
 import { clearChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
+import { pointPaneAt } from "../app/panes";
 import {
   AmbiguousPluginError,
   derivePluginName,
@@ -278,6 +279,7 @@ export const wireRetheme = (deps: {
   // --- Config application & persistence: lives in ./ui-retheme (rethemeChrome,
   // applyConfig, scheduleSaveConfig, live reload). Geometry rewrites go
   // through the core cell's setters — never bake them into consts. ---
+  let lastDual = core.config.ui.dualPane;
   const retheme = makeRetheme({
     config: core.config,
     colors: core.colors,
@@ -332,10 +334,16 @@ export const wireRetheme = (deps: {
       } catch {}
     },
     normalizePanes: () => {
-      if (!core.config.ui.dualPane && core.panes.active !== 0) {
+      const dual = core.config.ui.dualPane;
+      if (!dual && core.panes.active !== 0) {
         core.setActivePane(0);
         core.refreshPaneFocus();
       }
+      // dual pane just turned on: the hidden pane's cwd is stale from boot —
+      // open it at the active pane's current directory (both the keybind and
+      // the settings GUI row funnel through applyConfig, so one hook covers all)
+      else if (dual && !lastDual) pointPaneAt(core.panes.states[1]!, core.state.cwd);
+      lastDual = dual;
     },
   });
 

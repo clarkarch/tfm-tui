@@ -6,6 +6,7 @@ import {
   makePanePair,
   mergedMapFacade,
   otherState,
+  pointPaneAt,
   setActivePane,
   togglePane,
 } from "./panes";
@@ -33,6 +34,16 @@ describe("pane pair", () => {
     const p = makePanePair({ cwd: "/a" }, { cwd: "/b" });
     activeState(p).cwd = "/a/sub";
     expect(otherState(p).cwd).toBe("/b");
+  });
+});
+
+describe("pointPaneAt", () => {
+  test("moves a pane's active tab to a dir with fresh one-entry history", () => {
+    const dst = { cwd: "/boot", history: ["/boot", "/boot/stale"], histIdx: 1 };
+    pointPaneAt(dst, "/current");
+    expect(dst.cwd).toBe("/current");
+    expect(dst.history).toEqual(["/current"]);
+    expect(dst.histIdx).toBe(0);
   });
 });
 
