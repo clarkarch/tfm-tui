@@ -19,7 +19,7 @@ import type { ListEntry } from "./ui-menu";
 
 // shared icon-slot types come from ./ui-slots (their queue) — the old
 // byte-identical structural mirrors drifted when ui-slots gained a field
-import { type IconState, type IconSpec } from "./ui-slots";
+import type { IconState, IconSpec } from "./ui-slots";
 
 type ChromeCtx = {
   byId(id: string): any;
@@ -38,6 +38,9 @@ type ChromeCtx = {
   dlog(msg: string): void;
   trashPaths(paths: string[]): Promise<void>;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
+  // per-row hover nudge (icon lift, see ui-sidebar-hover) — built in the
+  // chrome wiring; paint stays owned by normalizePlaces below
+  hoverRow(key: string, hovered: boolean): void;
   // network: with no arg opens the "Connect to Server…" prompt; with a URI
   // connects straight to a saved connection
   connectServer(raw?: string): void;
@@ -182,8 +185,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
         onMouseOver: () => {
           mousePlaceIdx = idx;
           normalizePlaces();
+          ctx.hoverRow(`tfm-place-${idx}`, true);
         },
         onMouseOut: () => {
+          ctx.hoverRow(`tfm-place-${idx}`, false);
           if (mousePlaceIdx === idx) {
             mousePlaceIdx = -1;
             normalizePlaces();

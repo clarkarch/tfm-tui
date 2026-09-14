@@ -42,6 +42,7 @@ let calls: {
   contextMenu: Array<{ x: number; y: number; title: string }>;
   closeFileMenu: number;
   blurTerminal: number;
+  hoverRow: Array<[string, boolean]>;
   iconStates: Array<{ spec: any; idx: number }>;
 };
 let cwd: string;
@@ -79,6 +80,7 @@ beforeAll(async () => {
     contextMenu: [],
     closeFileMenu: 0,
     blurTerminal: 0,
+    hoverRow: [],
     iconStates: [],
   };
   cwd = HOME;
@@ -163,6 +165,9 @@ beforeAll(async () => {
     },
     stateCwd: () => cwd,
     connectServer: () => {},
+    hoverRow: (key: string, hovered: boolean) => {
+      calls.hoverRow.push([key, hovered]);
+    },
   });
 });
 
@@ -400,5 +405,30 @@ describe("normalizePlaces (hover/kb focus)", () => {
     kbActive = false;
     kbIdx = -1;
     chrome.clearMousePlace();
+  });
+
+  test("mouse over/out routes the row key to hoverRow (per-row nudge)", async () => {
+    cwd = HOME;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const over = (id: string, type: string) =>
+      (byId(id) as any).processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    const n = calls.hoverRow.length;
+    over("tfm-place-2", "over");
+    expect(calls.hoverRow.slice(n)).toEqual([["tfm-place-2", true]]);
+    // paint still normalizes alongside the nudge
+    expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.hoverBg));
+    over("tfm-place-2", "out");
+    expect(calls.hoverRow.slice(n)).toEqual([
+      ["tfm-place-2", true],
+      ["tfm-place-2", false],
+    ]);
+    expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.sidebarBg));
   });
 });

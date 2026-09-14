@@ -72,6 +72,37 @@ describe("runBoot", () => {
     expect(calls.indexOf("hygiene")).toBeLessThan(calls.indexOf("search"));
   });
 
+  test("sidebar intro plays right after the first render (cold boot only)", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        playSidebarIntro: () => {
+          calls.push("intro");
+        },
+      }),
+    );
+    expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("intro"));
+    expect(calls.indexOf("intro")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("a throwing intro is reported but the sequence continues", async () => {
+    const calls: string[] = [];
+    const reported: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        playSidebarIntro: () => {
+          calls.push("intro");
+          throw new Error("intro-boom");
+        },
+        reportBootError: (name) => {
+          reported.push(name);
+        },
+      }),
+    );
+    expect(reported).toEqual(["playSidebarIntro"]);
+    expect(calls).toContain("hygiene");
+  });
+
   test("a throwing step is reported but the sequence continues (no blank TUI)", async () => {
     const calls: string[] = [];
     const reported: string[] = [];

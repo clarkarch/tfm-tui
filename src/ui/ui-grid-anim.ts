@@ -43,15 +43,22 @@ export const easeAt = (k: EaseKey, p: number): number =>
   k === "linear" ? p : k === "ease-in-out" ? smoothstep(p) : outQuad(p);
 
 // per-index local progress for the cascading styles; `span` = fraction of the
-// timeline used to spread the cascade (0 = every tile at once)
-const staggerLocal = (t: number, i: number, n: number, span: number): number => {
+// timeline used to spread the cascade (0 = every tile at once). Shared with
+// the sidebar intro (staggered place rows), so it lives here, not inline.
+export const staggerLocal = (t: number, i: number, n: number, span: number): number => {
   const s = n > 1 ? span : 0;
   return clamp01(t * (1 + s) - (i / Math.max(1, n - 1)) * s);
 };
 
 // pure: renderable offsets are whole cells; a fractional translate breaks
 // child image placement coords (see write())
-export const quantizeDy = (dy: number): number => (Number.isFinite(dy) ? Math.round(dy) : 0);
+export const quantizeDy = (dy: number): number => {
+  if (!Number.isFinite(dy)) return 0;
+  const q = Math.round(dy);
+  // normalize -0: Math.round of a tiny negative is -0, and Object.is
+  // distinguishes it from +0 (trips exact asserts, paints identically)
+  return q === 0 ? 0 : q;
+};
 
 // pure: how far `slide` travels. Must be many cells: rounded to whole cells, a
 // short travel has only a handful of positions and reads as a few jumps.

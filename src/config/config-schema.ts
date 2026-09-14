@@ -129,6 +129,16 @@ export type HoverLiftOpts = {
   includeLabel: boolean;
 };
 
+// sidebar row hover-nudge controls ([ui] sidebar-hover-*). Rows are one cell
+// tall with icons in a shared column, so a vertical nudge would always paint
+// over a neighbour's icon — only the horizontal pair is offered.
+export type SidebarHoverDirection = "left" | "right";
+export type SidebarHoverOpts = {
+  enabled: boolean;
+  direction: SidebarHoverDirection;
+  includeLabel: boolean;
+};
+
 // icon-raster mode. `opaque` flattens every icon onto its surface bg
 // (default); `transparent` keeps alpha everywhere (may fringe on some
 // terminals); `transparent-partial` keeps alpha except inside FLOATING layers
@@ -180,6 +190,17 @@ export type UiConfig = {
   fileHoverAnimation: boolean;
   fileHoverIncludeLabel: boolean;
   fileHoverDirection: HoverLiftDirection;
+  sidebarAnimation: boolean;
+  sidebarAnimationStyle: string;
+  sidebarAnimationMs: number;
+  sidebarAnimationSlideCells: number;
+  sidebarAnimationSlideDir: string;
+  sidebarAnimationStaggerPct: number;
+  sidebarAnimationEase: string;
+  sidebarAnimationIncludeTitle: boolean;
+  sidebarHoverAnimation: boolean;
+  sidebarHoverIncludeLabel: boolean;
+  sidebarHoverDirection: SidebarHoverDirection;
   showLaunchTime: boolean;
 };
 
@@ -667,6 +688,129 @@ const UI_ROWS: SchemaRow[] = [
     def: "up",
     doc: '"up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally',
     label: "hover lift direction",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-animation",
+    prop: "sidebarAnimation",
+    def: false,
+    doc: "true = animate the places sidebar on boot (style = sidebar-animation-style)",
+    label: "sidebar animation",
+    group: "animations",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "sidebar-animation-style",
+    prop: "sidebarAnimationStyle",
+    values: ["fade", "slide", "stagger", "stagger-slide"],
+    def: "fade",
+    doc: '"fade" = the whole sidebar fades in; "slide" = it slides in from the edge; "stagger" = places rows cascade in; "stagger-slide" = each row slides+fades in, files-style',
+    label: "sidebar style",
+    group: "animations",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "sidebar-animation-ms",
+    prop: "sidebarAnimationMs",
+    min: 0,
+    max: 800,
+    step: 20,
+    def: 180,
+    doc: "sidebar intro duration, 0..800 ms (0 = instant)",
+    label: "sidebar ms",
+    group: "animations",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "sidebar-animation-slide-cells",
+    prop: "sidebarAnimationSlideCells",
+    min: 0,
+    max: 32,
+    step: 1,
+    def: 8,
+    doc: "how far the sidebar slides in, 0..32 cells (0 = fade in place)",
+    label: "sidebar slide",
+    group: "animations",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "sidebar-animation-slide-dir",
+    prop: "sidebarAnimationSlideDir",
+    values: ["left", "right", "up", "down"],
+    def: "left",
+    doc: '"left"/"right" = slides in horizontally from the edge; "up"/"down" = slides vertically',
+    label: "sidebar direction",
+    group: "animations",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "sidebar-animation-stagger-pct",
+    prop: "sidebarAnimationStaggerPct",
+    min: 0,
+    max: 300,
+    step: 5,
+    def: 40,
+    doc: "how spread the sidebar cascade is, 0..300% (0 = all rows at once)",
+    label: "sidebar stagger",
+    group: "animations",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "sidebar-animation-ease",
+    prop: "sidebarAnimationEase",
+    values: ["linear", "ease-out", "ease-in-out"],
+    def: "ease-out",
+    doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
+    label: "sidebar easing",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-animation-include-title",
+    prop: "sidebarAnimationIncludeTitle",
+    def: false,
+    doc: "true = the sidebar title joins the boot cascade first (stagger/stagger-slide only; fade/slide already move it with the whole panel)",
+    label: "include title in intro",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-hover-animation",
+    prop: "sidebarHoverAnimation",
+    def: false,
+    doc: "true = hovering a sidebar row nudges its icon one cell (rest layout unchanged; the cwd-selected row keeps its paint only)",
+    label: "sidebar hover animation",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-hover-include-label",
+    prop: "sidebarHoverIncludeLabel",
+    def: false,
+    doc: "true = the row label rides along with the hover nudge",
+    label: "include label in nudge",
+    group: "animations",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "sidebar-hover-direction",
+    prop: "sidebarHoverDirection",
+    values: ["left", "right"],
+    def: "left",
+    doc: '"left" = the icon nudges into the row padding; "right" = it nudges toward the label',
+    label: "hover nudge direction",
     group: "animations",
   },
   {

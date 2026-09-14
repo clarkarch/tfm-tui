@@ -234,6 +234,7 @@ wireBoot({
   skipSessionRestore: explicitPath,
   mountSlots: () => plugins.mountSlots(),
   afterLayout: () => hover.refresh(),
+  playSidebarIntro: () => chrome.sidebarIntro.play(),
 });
 
 const retheme = wireRetheme({

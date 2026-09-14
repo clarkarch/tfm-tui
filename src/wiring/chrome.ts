@@ -18,6 +18,10 @@ import { makeToolbar } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
 import { warmEmbeddedIcons } from "../ui/icons";
 import { makeNotify } from "../ui/notify";
+import { makeSidebarAnim } from "../ui/ui-sidebar-anim";
+import { makeSidebarHover } from "../ui/ui-sidebar-hover";
+import type { SidebarHoverDirection } from "../config/config-schema";
+import type { EaseKey, SlideDir } from "../ui/ui-grid-anim";
 import { makeRecentOpen } from "../fs/recent-open";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile } from "../fs/apps";
@@ -83,6 +87,11 @@ export const wireChrome = async (deps: {
     void disconnectServerImpl(mountPath);
   };
 
+  // --- Sidebar row hover nudge (per-row icon lift for every place/pin/device
+  // row). The impl is assigned below (it reads chrome.placesHost); the wrapper
+  // only defers — same TDZ seam as the network impls above. ---
+  let hoverRowImpl: (key: string, hovered: boolean) => void = () => {};
+
   // --- Places sidebar + tab strip — widget lives in ./ui-chrome ---
   const chrome = makeChrome({
     byId,
@@ -116,7 +125,34 @@ export const wireChrome = async (deps: {
     setIconState,
     stateCwd: () => state.cwd,
     connectServer,
+    hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
   });
+
+  // --- Sidebar hover animator (impl for the deferred wrapper above): row refs
+  // derive live from placesHost (main icon = specs[0], label + selection flag
+  // per row), so every place/pin/device row nudges without its own registry.
+  // Synchronous (no timeline), so it can live pre-renderer like the chrome. ---
+  const sidebarHover = makeSidebarHover({
+    byId,
+    rowRefs: () =>
+      new Map(
+        chrome.placesHost.map((r) => [
+          r.rowId,
+          {
+            rowId: r.rowId,
+            iconSlotId: r.specs[0]?.slotId ?? "",
+            labelId: r.labelId,
+            selected: r.selected,
+          },
+        ]),
+      ),
+    hoverOpts: () => ({
+      enabled: core.config.ui.sidebarHoverAnimation,
+      direction: core.config.ui.sidebarHoverDirection as SidebarHoverDirection,
+      includeLabel: core.config.ui.sidebarHoverIncludeLabel,
+    }),
+  });
+  hoverRowImpl = (key, hovered) => sidebarHover.playHover(key, hovered);
 
   // --- Toolbars — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
   // path edit, sort/search buttons). ONE PER PANE, each with its own id prefix
@@ -182,6 +218,31 @@ export const wireChrome = async (deps: {
   renderer.root.add(container);
   warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
   renderer.setBackgroundColor(core.colors.bg); // opencode-style: global bg lives on the renderer, not per-box
+
+  // --- Sidebar startup intro (cold-boot-only): one reused timeline over the
+  // places sidebar, played by the playSidebarIntro boot step after the first
+  // renderAll. Built here (post-renderer — engine.attach needs the frame
+  // loop); row ids resolve live from placesHost at play time, so the factory
+  // sees the rows renderAll just built. ---
+  const sidebarIntro = makeSidebarAnim({
+    renderer,
+    byId,
+    opts: () => ({
+      enabled: core.config.ui.sidebarAnimation,
+      style: core.config.ui.sidebarAnimationStyle,
+      ms: core.config.ui.sidebarAnimationMs,
+      slideCells: core.config.ui.sidebarAnimationSlideCells,
+      dir: core.config.ui.sidebarAnimationSlideDir as SlideDir,
+      staggerPct: core.config.ui.sidebarAnimationStaggerPct,
+      ease: core.config.ui.sidebarAnimationEase as EaseKey,
+      includeTitle: core.config.ui.sidebarAnimationIncludeTitle,
+    }),
+    rootId: () => "tfm-sidebar-root",
+    rowIds: () => chrome.placesHost.map((r) => r.rowId),
+    // a hidden title ([ui] sidebar-title off) resolves to nothing, so opting
+    // in while it is hidden cascades the rows exactly as before
+    titleId: () => (core.config.ui.sidebarTitle ? "tfm-title-box" : ""),
+  });
 
   // --- Notifications — its consumers (recent-open, undo, fileops, terminal,
   // trashops, settings, dnd72) take `notify` directly; the sticky transfer
@@ -365,6 +426,7 @@ export const wireChrome = async (deps: {
     renderer,
     menu,
     chrome,
+    sidebarIntro,
     toolbars,
     activeToolbar: () => toolbars[core.panes.active]!,
     notify,
