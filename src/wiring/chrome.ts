@@ -14,11 +14,11 @@ import { buildMountArgs, buildUnmountArgs, gvfsRoot, takeGioPrompt, type GioProm
 import { makeNetworkActions, type GioResult } from "../fs/netmount";
 import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
-import { makeToolbar } from "../ui/ui-toolbar";
+import { makeToolbar, toolbarItemIds, crumbItemIds } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
 import { warmEmbeddedIcons } from "../ui/icons";
 import { makeNotify } from "../ui/notify";
-import { makeSidebarAnim } from "../ui/ui-sidebar-anim";
+import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
 import type { EaseKey, SlideDir } from "../ui/ui-grid-anim";
@@ -183,6 +183,10 @@ export const wireChrome = async (deps: {
       openContextMenu: menu.openContextMenu,
       sortEntries: () => getGrid().menuEntries.sortEntries(),
       cwd: () => core.panes.states[pane]!.cwd,
+      // per-navigate new-crumbs cascade (see renderCrumbs' lastCrumbTargets
+      // guard): arrow-deferred, dirBarAnims is built post-renderer below
+      // (TDZ seam)
+      animateCrumbs: (ids: string[]) => dirBarAnims[pane]!.playIds(ids),
       home,
     });
   const toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>] = [
@@ -244,6 +248,50 @@ export const wireChrome = async (deps: {
     titleId: () => (core.config.ui.sidebarTitle ? "tfm-title-box" : ""),
   });
 
+  // --- Top bar intro (cold-boot-only): cascades each bar's buttons + crumbs
+  // left-to-right, played by the playTopbarIntro boot step right after the
+  // sidebar intro. Built here (post-renderer — engine.attach needs the frame
+  // loop); item ids resolve live — crumbs were just built by renderAll. ---
+  const topbarIntro = makeTopbarAnim({
+    renderer,
+    byId,
+    opts: () => ({
+      enabled: core.config.ui.topbarAnimation,
+      style: core.config.ui.topbarAnimationStyle,
+      ms: core.config.ui.topbarAnimationMs,
+      slideCells: core.config.ui.topbarAnimationSlideCells,
+      dir: core.config.ui.topbarAnimationSlideDir as SlideDir,
+      staggerPct: core.config.ui.topbarAnimationStaggerPct,
+      ease: core.config.ui.topbarAnimationEase as EaseKey,
+    }),
+    barIds: () => [...toolbarItemIds(byId, "tfm-p0-"), ...toolbarItemIds(byId, "tfm-p1-")],
+  });
+
+  // --- Directory-bar animation (per-navigate, not just boot): only the NEWLY
+  // appeared crumbs cascade in — the shared prefix stays put. One animator
+  // per pane; the toolbar diffs its crumb targets and hands the suffix ids to
+  // playIds (post-rebuild, so the fresh nodes are targeted). Rapid
+  // re-navigates retarget cleanly (playIds re-resolves + restarts the one
+  // reused timeline). ---
+  const makeDirBarAnim = (pane: 0 | 1) =>
+    makeTopbarAnim({
+      renderer,
+      byId,
+      opts: () => ({
+        enabled: core.config.ui.directoryBarAnimation,
+        style: core.config.ui.directoryBarStyle,
+        ms: core.config.ui.directoryBarMs,
+        slideCells: core.config.ui.directoryBarSlideCells,
+        dir: core.config.ui.directoryBarDir as SlideDir,
+        staggerPct: core.config.ui.directoryBarStaggerPct,
+        ease: core.config.ui.directoryBarEase as EaseKey,
+      }),
+      barIds: () => crumbItemIds(byId, `tfm-p${pane}-`),
+    });
+  const dirBarAnims: [ReturnType<typeof makeTopbarAnim>, ReturnType<typeof makeTopbarAnim>] = [
+    makeDirBarAnim(0),
+    makeDirBarAnim(1),
+  ];
   // --- Notifications — its consumers (recent-open, undo, fileops, terminal,
   // trashops, settings, dnd72) take `notify` directly; the sticky transfer
   // progress toast lives in the same stack via notifySticky, so every
@@ -427,6 +475,7 @@ export const wireChrome = async (deps: {
     menu,
     chrome,
     sidebarIntro,
+    topbarIntro,
     toolbars,
     activeToolbar: () => toolbars[core.panes.active]!,
     notify,

@@ -56,6 +56,20 @@ sidebar-animation-include-title = false       # true = the sidebar title joins t
 sidebar-hover-animation         = false       # true = hovering a sidebar row nudges its icon one cell (rest layout unchanged; the cwd-selected row keeps its paint only)
 sidebar-hover-include-label     = false       # true = the row label rides along with the hover nudge
 sidebar-hover-direction         = "left"      # "left" = the icon nudges into the row padding; "right" = it nudges toward the label
+topbar-animation                = false       # true = cascade each top bar button + crumb in on boot (style = topbar-animation-style)
+topbar-animation-style          = "fade"      # "fade" = all items fade in together; "slide" = they slide in from the edge as one wave; "stagger" = buttons + crumbs cascade left-to-right; "stagger-slide" = each item slides+fades in, files-style
+topbar-animation-ms             = 180         # top bar intro duration, 0..800 ms (0 = instant)
+topbar-animation-slide-cells    = 8           # how far the top bar slides in, 0..32 cells (0 = fade in place)
+topbar-animation-slide-dir      = "down"      # "down"/"up" = slides in vertically from the edge; "left"/"right" = slides horizontally
+topbar-animation-stagger-pct    = 40          # how spread the item cascade is, 0..300% (0 = all items at once)
+topbar-animation-ease           = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
+directory-bar-animation         = false       # true = rebuilt crumbs cascade in on every directory change (not just boot)
+directory-bar-style             = "stagger"   # "stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style
+directory-bar-ms                = 180         # directory bar animation duration, 0..800 ms (0 = instant)
+directory-bar-slide-cells       = 8           # how far crumbs slide in, 0..32 cells (0 = fade in place)
+directory-bar-dir               = "right"     # "right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically
+directory-bar-stagger-pct       = 40          # how spread the crumb cascade is, 0..300% (0 = all crumbs at once)
+directory-bar-ease              = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
 view-mode                       = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
 show-hidden                     = false       # start with dotfiles visible (ctrl+h toggles at runtime)
 recursive-search                = false       # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)

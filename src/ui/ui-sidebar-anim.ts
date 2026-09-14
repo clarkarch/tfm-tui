@@ -303,3 +303,202 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
 
   return { play, stop };
 };
+
+// --- Top bar intro: cold-boot fade/slide/stagger over the pane toolbars'
+// contents (buttons + crumbs), plus the per-navigate crumbs replay. Same
+// timeline engine + curves as the sidebar intro (`sidebarFrameAt`/
+// `sidebarStyleFrom` above); only the node resolution is new. `fade`/`slide`
+// move the entries as ONE wave (each runs i=0/n=1, so `slide` never staggers
+// the set apart), while the stagger styles cascade across them in list order.
+// Render-only props (opacity + whole-cell translates), same as the sidebar
+// intro, so rethemeChrome can never collide with a running intro. ---
+
+export type TopbarAnimOpts = {
+  enabled: boolean;
+  style: string;
+  ms: number;
+  slideCells: number;
+  dir: SlideDir;
+  staggerPct: number;
+  ease: EaseKey;
+};
+
+type TopbarAnimCtx = {
+  renderer: any;
+  byId(id: string): any;
+  opts(): TopbarAnimOpts;
+  barIds(): string[];
+  // virtual-clock seam for the 100ms start fallback (Bun has no fake timers)
+  sched?: Scheduler;
+};
+
+export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
+  let tl: ReturnType<typeof createTimeline> | null = null;
+  let usedMs = -1;
+  const holder = { p: 0 };
+  let entries: Array<{ node: any; i: number; n: number }> = [];
+  let cfg: SidebarAnimCfg = {};
+  let style: SidebarAnimStyle = "fade";
+  const sched: Scheduler = ctx.sched ?? globalThis;
+
+  // pending start gate: same 2nd-frame + 100ms-fallback shape as the sidebar
+  // intro (a wall-clock start can run a short intro before the terminal
+  // presents its first frame on cold boot, finishing unseen)
+  let frameCb: ((dt: number) => Promise<void>) | null = null;
+  let fallback: unknown = null;
+  const cancelGate = (): void => {
+    if (frameCb) {
+      try {
+        ctx.renderer?.removeFrameCallback?.(frameCb);
+      } catch {}
+      frameCb = null;
+    }
+    if (fallback !== null && fallback !== undefined) {
+      try {
+        sched.clearTimeout(fallback);
+      } catch {}
+      fallback = null;
+    }
+  };
+
+  const write = (node: any, f: SidebarAnimFrame): void => {
+    try {
+      node.opacity = Number.isFinite(f.opacity) ? f.opacity : 1;
+      // whole cells only: a fractional translate propagates to child image
+      // placements and OpenTUI's buffer.drawImage rejects them
+      node.translateX = quantizeDy(f.dx);
+      node.translateY = quantizeDy(f.dy);
+    } catch {}
+  };
+
+  const apply = (raw: number): void => {
+    for (const { node, i, n } of entries) {
+      if (!node) continue;
+      write(node, sidebarFrameAt(style, raw, i, n, cfg));
+    }
+  };
+
+  const settle = (): void => {
+    if (!entries.length) return;
+    for (const { node } of entries) if (node) write(node, { opacity: 1, dx: 0, dy: 0 });
+    // NO Bun.gc here (same reason as file-anim): a synchronous full GC inside
+    // the settle frame stalls the render loop for no measurable gain.
+  };
+
+  const stop = (): void => {
+    cancelGate();
+    if (tl) {
+      try {
+        engine.unregister(tl);
+      } catch {}
+    }
+    tl = null;
+    usedMs = -1;
+    settle();
+    entries = [];
+  };
+
+  // one item, recreated only when the duration changes (duration is baked at
+  // add time); restart() retargets the node list without accumulating items
+  const ensure = (ms: number): void => {
+    if (tl && usedMs === ms) return;
+    if (tl) {
+      try {
+        engine.unregister(tl);
+      } catch {}
+    }
+    usedMs = ms;
+    tl = createTimeline({ autoplay: false });
+    tl.add(holder, {
+      p: 1,
+      duration: ms,
+      ease: "linear",
+      onUpdate: (a: JSAnimation) => apply(a.progress),
+      onComplete: settle,
+    });
+  };
+
+  // shared start: resolve + dedupe the id list, stage frame 0, arm the
+  // 2nd-frame/timeout start gate. `play()` animates the ctx id list (boot
+  // intro); `playIds()` animates an explicit subset (per-navigate: only the
+  // newly appeared crumbs — the shared prefix stays put).
+  const run = (rawIds: string[]): void => {
+    try {
+      cancelGate();
+      const o = ctx.opts();
+      if (!o.enabled || !(o.ms > 0)) {
+        stop();
+        return;
+      }
+      const st = sidebarStyleFrom(o.style);
+      const seen = new Set<unknown>();
+      const bars: any[] = [];
+      for (const id of rawIds) {
+        let n: any = null;
+        try {
+          n = ctx.byId(id);
+        } catch {
+          n = null;
+        }
+        if (n && !seen.has(n)) {
+          seen.add(n);
+          bars.push(n);
+        }
+      }
+      if (!bars.length) {
+        stop();
+        return;
+      }
+      // fade/slide move the entries as one wave (i=0/n=1 each — `slide` must
+      // not stagger the set apart); the stagger styles cascade across them
+      const cascade = st === "stagger" || st === "stagger-slide";
+      entries = bars.map((node, i, arr) => (cascade ? { node, i, n: arr.length } : { node, i: 0, n: 1 }));
+      style = st;
+      cfg = {
+        dist: Number.isFinite(o.slideCells) && o.slideCells > 0 ? Math.round(o.slideCells) : 0,
+        span: o.staggerPct / 100,
+        ease: o.ease,
+        dir: o.dir,
+      };
+      ensure(o.ms);
+      // stage frame 0 synchronously so the first presented frame never flashes
+      // the finished bars before the intro starts
+      apply(0);
+      let frames = 0;
+      const cb = async (_dt: number): Promise<void> => {
+        frames++;
+        if (frames >= 2) {
+          cancelGate();
+          try {
+            tl?.restart();
+          } catch {}
+        }
+      };
+      if (typeof ctx.renderer?.setFrameCallback === "function") {
+        frameCb = cb;
+        try {
+          ctx.renderer.setFrameCallback(cb);
+        } catch {
+          frameCb = null;
+        }
+      }
+      fallback = sched.setTimeout(() => {
+        cancelGate();
+        try {
+          tl?.restart();
+        } catch {}
+      }, 100);
+    } catch {
+      stop();
+    }
+  };
+
+  const play = (): void => run(ctx.barIds() ?? []);
+  const playIds = (ids: string[]): void => run(ids ?? []);
+
+  try {
+    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
+  } catch {}
+
+  return { play, playIds, stop };
+};

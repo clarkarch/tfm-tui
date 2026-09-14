@@ -235,6 +235,7 @@ wireBoot({
   mountSlots: () => plugins.mountSlots(),
   afterLayout: () => hover.refresh(),
   playSidebarIntro: () => chrome.sidebarIntro.play(),
+  playTopbarIntro: () => chrome.topbarIntro.play(),
 });
 
 const retheme = wireRetheme({

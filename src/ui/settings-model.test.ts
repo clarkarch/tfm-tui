@@ -134,6 +134,8 @@ describe("settingGroups shape", () => {
     expect(anim).toContain("##file hover");
     expect(anim).toContain("##sidebar intro");
     expect(anim).toContain("##sidebar hover");
+    expect(anim).toContain("##top bar");
+    expect(anim).toContain("##directory bar");
     // the FIRST section gets a divider too — headers sit before AND between topics
     expect(anim[0]).toBe("##files");
     expect(anim.indexOf("file animation")).toBeGreaterThan(anim.indexOf("##files"));

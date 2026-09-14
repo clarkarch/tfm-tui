@@ -35,7 +35,7 @@ import type { makeGridRenderer } from "../ui/ui-grid";
 import type { makeProps } from "../ui/ui-props";
 import type { makeMenuEntries } from "../ui/menu-entries";
 import type { makeEscMenu } from "../ui/ui-settings";
-import type { makeSidebarAnim } from "../ui/ui-sidebar-anim";
+import type { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 
 export type NavWiring = {
   renderAll: ReturnType<typeof makeRenderAll>;
@@ -60,6 +60,7 @@ export type ChromeWiring = {
   menu: ReturnType<typeof makeMenu>;
   chrome: ReturnType<typeof makeChrome>;
   sidebarIntro: ReturnType<typeof makeSidebarAnim>;
+  topbarIntro: ReturnType<typeof makeTopbarAnim>;
   toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>];
   activeToolbar: () => ReturnType<typeof makeToolbar>;
   notify: ReturnType<typeof makeNotify>["notify"];

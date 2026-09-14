@@ -52,6 +52,11 @@ type ToolbarCtx = {
   sortEntries(): ListEntry[];
   cwd(): string;
   home: string;
+  // per-navigate directory-bar animation: renderCrumbs calls this with the ids
+  // of ONLY the newly appeared crumbs after rebuilding for a changed cwd
+  // (first build + same-target rebuilds pass nothing and stay silent). Wired
+  // to the dir-bar animator in wireChrome; absent = instant.
+  animateCrumbs?: (ids: string[]) => void;
 };
 
 // path-bar commit check: virtual places always navigate; real paths must be
@@ -64,6 +69,44 @@ export const isNavigableTarget = (target: string): boolean => {
   } catch {
     return false;
   }
+};
+
+// animation targets inside one toolbar (ids are prefix-namespaced per pane).
+// Crumb ids are dense (`crumb-0..N`), so the probe stops at the first miss;
+// the cap keeps a never-missing registry from looping forever. Only existing
+// nodes are returned — the animator skips the rest anyway, but callers
+// (startup cascade order asserts) want the resolved list.
+export const crumbItemIds = (byId: (id: string) => any, prefix: string, cap = 128): string[] => {
+  const ids: string[] = [];
+  for (let i = 0; i < cap; i++) {
+    let n: any = null;
+    try {
+      n = byId(`${prefix}crumb-${i}`);
+    } catch {
+      n = null;
+    }
+    if (!n) break;
+    ids.push(`${prefix}crumb-${i}`);
+  }
+  return ids;
+};
+
+// left-to-right cascade order: nav buttons, crumbs, sort + search buttons
+export const toolbarItemIds = (byId: (id: string) => any, prefix: string, cap = 128): string[] => {
+  const live = (id: string): boolean => {
+    try {
+      return !!byId(id);
+    } catch {
+      return false;
+    }
+  };
+  return [
+    `${prefix}nav-back`,
+    `${prefix}nav-fwd`,
+    ...crumbItemIds(byId, prefix, cap),
+    `${prefix}sort-btn`,
+    `${prefix}search-btn`,
+  ].filter(live);
 };
 
 export const makeToolbar = (ctx: ToolbarCtx) => {
@@ -149,6 +192,13 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
 
   let pathEditMode = false;
   let crumbClickAt = 0;
+  // per-navigate animation guard: the crumb TARGETS last built for. Null
+  // until the first build (which only records — the startup intro covers
+  // boot). On rebuild the shared target prefix stays put and only the suffix
+  // past the first divergence replays — drilling down animates just the new
+  // crumbs, going up animates nothing, same-target rebuilds (retheme,
+  // watcher, search, path edit) stay instant.
+  let lastCrumbTargets: string[] | null = null;
 
   const exitPathEdit = () => {
     if (!pathEditMode) return;
@@ -291,6 +341,25 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       box.add(crumb);
       if (i < crumbs.length - 1) box.add(crumbSep());
     });
+
+    const targets = crumbs.map((c) => c.target);
+    if (lastCrumbTargets === null) {
+      lastCrumbTargets = targets;
+    } else {
+      let common = 0;
+      while (
+        common < lastCrumbTargets.length &&
+        common < targets.length &&
+        lastCrumbTargets[common] === targets[common]
+      )
+        common++;
+      lastCrumbTargets = targets;
+      if (common < targets.length) {
+        try {
+          ctx.animateCrumbs?.(targets.slice(common).map((_, k) => id(`crumb-${common + k}`)));
+        } catch {}
+      }
+    }
   };
 
   // --- generic hover button: two baked rasters (normal/hover bg), wrapper box

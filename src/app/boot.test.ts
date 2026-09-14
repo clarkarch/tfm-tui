@@ -85,6 +85,23 @@ describe("runBoot", () => {
     expect(calls.indexOf("intro")).toBeLessThan(calls.indexOf("hygiene"));
   });
 
+  test("topbar intro plays right after the sidebar intro (cold boot only)", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        playSidebarIntro: () => {
+          calls.push("sidebar-intro");
+        },
+        playTopbarIntro: () => {
+          calls.push("topbar-intro");
+        },
+      }),
+    );
+    expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("sidebar-intro"));
+    expect(calls.indexOf("sidebar-intro")).toBeLessThan(calls.indexOf("topbar-intro"));
+    expect(calls.indexOf("topbar-intro")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
   test("a throwing intro is reported but the sequence continues", async () => {
     const calls: string[] = [];
     const reported: string[] = [];

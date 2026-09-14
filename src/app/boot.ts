@@ -27,6 +27,9 @@ export type BootCtx = {
   // cold-boot-only sidebar intro (see ui-sidebar-anim): plays right after the
   // first renderAll so the staged frame 0 never flashes the finished sidebar
   playSidebarIntro?(): void;
+  // cold-boot-only top bar intro (same module): plays right after the sidebar
+  // intro, so both staged frame-0s land before the first presented frame
+  playTopbarIntro?(): void;
   debugTrace(): void;
   launchToast(): void;
   startHygiene(): void;
@@ -76,6 +79,7 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   bootLog("boot: renderAll");
   await guard(ctx, "renderAll", () => ctx.renderAll());
   await guard(ctx, "playSidebarIntro", () => ctx.playSidebarIntro?.());
+  await guard(ctx, "playTopbarIntro", () => ctx.playTopbarIntro?.());
   bootLog("boot: done");
   if (ctx.isDebug) await guard(ctx, "debugTrace", () => ctx.debugTrace());
   if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());

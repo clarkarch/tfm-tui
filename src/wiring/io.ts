@@ -84,6 +84,9 @@ export const wireBoot = (deps: {
   // cold-boot-only sidebar intro, played after the first renderAll (built in
   // wireChrome; a no-op unless [ui] sidebar-animation is on)
   playSidebarIntro?: () => void;
+  // cold-boot-only top bar intro, played right after the sidebar intro (built
+  // in wireChrome; a no-op unless [ui] topbar-animation is on)
+  playTopbarIntro?: () => void;
   // re-apply the hover drawer's panel states AFTER the boot layout mounts
   // (constructed pre-boot, its collapse writes hit no nodes yet — without
   // this, auto-hidden panels paint expanded while the grid is laid out
@@ -142,6 +145,7 @@ export const wireBoot = (deps: {
     loadSystemPlaces: () => loadSystemPlaces(),
     renderAll: nav.renderAll,
     playSidebarIntro: () => deps.playSidebarIntro?.(),
+    playTopbarIntro: () => deps.playTopbarIntro?.(),
     debugTrace: () => {
       debugLog(
         `terminal ${chrome.renderer.terminalWidth}x${chrome.renderer.terminalHeight} cwd=${process.cwd()} config=${configPath()}`,
