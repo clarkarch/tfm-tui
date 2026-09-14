@@ -31,7 +31,14 @@ export type TransferSink = {
   repaint: (full?: boolean) => void;
 };
 
-export const scanTree = async (root: string): Promise<{ files: number; bytes: number }> => {
+// onTick (optional) fires every SCAN_TICK_FILES found files — nautilus updates
+// its "Preparing…" counter at the same rate so a huge-source scan never looks
+// dead. Callback is sync-only; callers must not await inside it.
+const SCAN_TICK_FILES = 100;
+export const scanTree = async (
+  root: string,
+  onTick?: (files: number) => void,
+): Promise<{ files: number; bytes: number }> => {
   let files = 0,
     bytes = 0;
   const stack = [root];
@@ -48,6 +55,7 @@ export const scanTree = async (root: string): Promise<{ files: number; bytes: nu
     if (!st.isDirectory()) {
       files++;
       bytes += st.size ?? 0;
+      if (onTick && files % SCAN_TICK_FILES === 0) onTick(files);
       continue;
     }
     let kids: string[];

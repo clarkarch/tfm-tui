@@ -999,3 +999,48 @@ describe("plugin veto keeps caller state intact", () => {
     }
   });
 });
+
+// scanTree over a big source tree used to be silent: seconds of nothing before
+// the first honest total existed, so the toast could only be armed afterwards.
+// preScan arms it mid-scan in counting mode, and a small tree must still never
+// flicker a toast at all.
+describe("preScan counting", () => {
+  test("big tree raises the toast while totals are still unknown", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "prescan-big");
+    const destDir = path.join(ROOT, "prescan-dest");
+    mkdirSync(src, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    for (let i = 0; i < 1100; i++) W(path.join(src, `f${i}`), "x");
+    const shown: Array<{ counting?: boolean; totalFiles: number }> = [];
+    h.ctx.showProgressToast = () => {
+      h.prog.toastUp = true;
+      shown.push({ counting: h.prog.counting, totalFiles: h.prog.totalFiles });
+    };
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+    // the very first show happened while still counting (pre-scan)
+    expect(shown[0]?.counting).toBe(true);
+    // ...and counting was cleared before the second (post-scan) arm
+    expect(shown[1]?.counting).toBeFalsy();
+    // the counting flag is gone by the time the transfer runs
+    expect(h.prog.counting).toBeFalsy();
+    expect(h.prog.totalFiles).toBe(1100);
+  });
+
+  test("small tree never touches counting paint and never arms mid-scan", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "prescan-small");
+    const destDir = path.join(ROOT, "prescan-small-dest");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+    let shows = 0;
+    h.ctx.showProgressToast = () => {
+      h.prog.toastUp = true;
+      shows++;
+    };
+    await h.ops.runTransfer("copy", destDir, [path.join(src, "f1.txt")], "paste");
+    // one file = under the toast threshold: exactly one show (the real one)
+    expect(shows).toBe(0);
+    expect(h.prog.counting).toBeFalsy();
+  });
+});

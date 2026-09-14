@@ -116,6 +116,46 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.paintProgress(true);
     }
   };
+  // Pre-scan in "counting" mode (nautilus' "Preparing…" counter): a huge
+  // source tree used to run scanTree in total silence — seconds of dead UI
+  // before the first honest total exists. The toast arms mid-scan once the
+  // scan is demonstrably big (>1000 files) or slow (>400ms), so small ops
+  // never pay a toast flicker. `armed` tells the caller the toast is already
+  // up: keep it for the transfer even if the totals later look toastless
+  // (slow disk + small tree is exactly when the user needs to see liveness).
+  const preScan = async (
+    srcs: string[],
+    withBytes: boolean,
+  ): Promise<{ files: number; bytes: number; armed: boolean }> => {
+    let files = 0,
+      bytes = 0,
+      armed = false;
+    const t0 = Date.now();
+    prog.counting = true;
+    prog.doneFiles = 0;
+    try {
+      for (const s of srcs) {
+        const base = files;
+        try {
+          const r = await scanTree(s, (f) => {
+            prog.doneFiles = base + f;
+            if (!armed && (prog.doneFiles >= 1000 || Date.now() - t0 > 400)) {
+              armed = true;
+              prog.active = true;
+              ctx.showProgressToast();
+            }
+            if (armed) ctx.paintProgress(true);
+          });
+          files += r.files;
+          if (withBytes) bytes += r.bytes;
+        } catch {}
+      }
+    } finally {
+      prog.counting = false;
+      prog.doneFiles = 0;
+    }
+    return { files, bytes, armed };
+  };
   // register the live child so the toast's ✕ kills it (SIGTERM) and the pause
   // button stops/resumes it (SIGSTOP/SIGCONT) — archive tools report no bytes,
   // so the ReadStream path never applies
@@ -295,18 +335,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const withProgress = op === "copy" || srcs.some((s) => isCrossDevice(s, destDir));
     if (withProgress) {
       prog.verb = op === "copy" ? "copying" : "moving";
-      let files = 0,
-        bytes = 0;
-      for (const s of srcs) {
-        try {
-          const r = await scanTree(s);
-          files += r.files;
-          bytes += r.bytes;
-        } catch {}
-      }
-      prog.totalFiles = files || Math.max(1, total);
-      prog.totalBytes = bytes;
-      if (shouldToast(prog.totalBytes, prog.totalFiles)) {
+      const r = await preScan(srcs, true);
+      prog.totalFiles = r.files || Math.max(1, total);
+      prog.totalBytes = r.bytes;
+      if (r.armed || shouldToast(prog.totalBytes, prog.totalFiles)) {
         prog.active = true;
         ctx.showProgressToast();
         ctx.paintProgress(true);
@@ -926,15 +958,13 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       }
     }
     const tmp = `${out}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-    let totalFiles = 0;
-    for (const s of srcs) {
-      try {
-        totalFiles += (await scanTree(s)).files;
-      } catch {}
-    }
+    const scan = await preScan(srcs, false);
     prog.totalBytes = 0;
-    setProgVerb("compressing", totalFiles);
-    armProgressToast();
+    setProgVerb("compressing", scan.files);
+    if (scan.armed) {
+      prog.active = true;
+      ctx.paintProgress(true);
+    } else armProgressToast();
     try {
       const res = await runArchive(compressPlan(format, tmp, names, parent), {
         cwd: parent,

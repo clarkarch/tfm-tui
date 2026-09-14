@@ -41,6 +41,9 @@ export type ProgressState = {
   totalBytes: number;
   paused: boolean;
   cancelled: boolean;
+  // pre-scan "counting" mode: totals are still unknown, so paintProgress shows
+  // an indeterminate `counting N files…` (nautilus' "Preparing" counter)
+  counting?: boolean;
   currentRs: ReadStream | null;
   toastUp: boolean;
   // external-process controls (archive tools): cancel/pause hooks the toast
@@ -74,6 +77,10 @@ export const barLineFiles = (done: number, total: number, cells: number): string
 // ./fsutil (the transfer pre-scan shares it); re-exported here so the
 // widget's existing import surface doesn't move.
 export { shouldToast } from "../fs/fsutil";
+
+// "counting N files…" — the pre-scan has no honest total yet, so the toast
+// must not print a fake `N/0 (0%)` bar. Pure so it's testable without a renderer.
+export const countingLine = (files: number): string => `counting ${files} file${files === 1 ? "" : "s"}…`;
 
 export const makeProgress = (ctx: ProgressCtx) => {
   const PROG_T_TITLE = "tfm-prog-title";
@@ -117,6 +124,11 @@ export const makeProgress = (ctx: ProgressCtx) => {
     if (!force && now - progLastPaint < 120) return;
     progLastPaint = now;
     const spin = prog.paused ? "⏸" : SPIN_FRAMES[progSpinIdx];
+    if (prog.counting) {
+      progSetText(PROG_T_TITLE, truncateToastText(`${spin} ${countingLine(prog.doneFiles)}`, TOAST_W - 2));
+      progSetText(PROG_T_BAR, "");
+      return;
+    }
     const filesMode = prog.totalBytes <= 0 && prog.totalFiles > 0;
     const pct = filesMode ? pctOfFiles(prog.doneFiles, prog.totalFiles) : pctOf(prog.bytes, prog.totalBytes);
     progSetText(PROG_T_TITLE, `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pct}%)`);

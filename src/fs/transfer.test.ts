@@ -94,6 +94,14 @@ describe("scanTree", () => {
     const r = await scanTree(path.join(dir, "does-not-exist"));
     expect(r).toEqual({ files: 0, bytes: 0 });
   });
+
+  test("onTick reports every 100th file (Preparing counter)", async () => {
+    for (let i = 0; i < 105; i++) W(path.join(dir, `f${i}`), "x");
+    const ticks: number[] = [];
+    const r = await scanTree(dir, (n) => ticks.push(n));
+    expect(r.files).toBe(105);
+    expect(ticks).toEqual([100]);
+  });
 });
 
 describe("copyFileProgress", () => {

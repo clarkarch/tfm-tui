@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { barLine, barLineFiles, makeProgress, pctOf, pctOfFiles, shouldToast, type ProgressCtx } from "./ui-progress";
+import {
+  barLine,
+  barLineFiles,
+  countingLine,
+  makeProgress,
+  pctOf,
+  pctOfFiles,
+  shouldToast,
+  type ProgressCtx,
+} from "./ui-progress";
 import type { ToastHandle } from "./notify";
 
 const MB = 1024 * 1024;
@@ -155,5 +164,51 @@ describe("makeProgress gates", () => {
       expect(calls).toEqual(["sticky:show", "sticky:close", "sticky:show"]);
       expect(prog.toastUp).toBe(true);
     }
+  });
+});
+
+// The pre-scan can run for seconds before any honest total exists. Painting
+// `0/N (0%)` against totalFiles 0 would read as a broken bar, so the counting
+// state owns its own line — and must stop owning it the moment totals land.
+describe("counting pre-scan paint", () => {
+  test("countingLine is singular-aware", () => {
+    expect(countingLine(0)).toBe("counting 0 files…");
+    expect(countingLine(1)).toBe("counting 1 file…");
+    expect(countingLine(1000)).toBe("counting 1000 files…");
+  });
+
+  test("paintProgress writes the counting line and blanks the bar", () => {
+    const nodes = new Map<string, { content: string }>();
+    for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
+    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) });
+    const { prog, paintProgress } = makeProgress(ctx);
+    prog.active = true;
+    prog.toastUp = true;
+    prog.counting = true;
+    prog.doneFiles = 37;
+    paintProgress(true);
+    expect(nodes.get("tfm-prog-title")!.content).toContain("counting 37 files…");
+    expect(nodes.get("tfm-prog-bar")!.content).toBe("");
+  });
+
+  test("clearing counting hands the paint back to the byte bar", () => {
+    const nodes = new Map<string, { content: string }>();
+    for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
+    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) });
+    const { prog, paintProgress } = makeProgress(ctx);
+    prog.active = true;
+    prog.toastUp = true;
+    prog.counting = true;
+    prog.doneFiles = 5;
+    paintProgress(true);
+    expect(nodes.get("tfm-prog-title")!.content).toContain("counting");
+    prog.counting = false;
+    prog.doneFiles = 2;
+    prog.bytes = 10;
+    prog.totalBytes = 20;
+    prog.totalFiles = 4;
+    paintProgress(true);
+    expect(nodes.get("tfm-prog-title")!.content).not.toContain("counting");
+    expect(nodes.get("tfm-prog-bar")!.content).toContain("10 B/20 B");
   });
 });
