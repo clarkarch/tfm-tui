@@ -1013,15 +1013,18 @@ describe("preScan counting", () => {
     mkdirSync(destDir, { recursive: true });
     for (let i = 0; i < 1100; i++) W(path.join(src, `f${i}`), "x");
     const shown: Array<{ counting?: boolean; totalFiles: number }> = [];
+    // mirror the real showProgressToast: a second call while the toast is up
+    // no-ops, so `shown` records genuine armings only
     h.ctx.showProgressToast = () => {
+      if (h.prog.toastUp) return;
       h.prog.toastUp = true;
-      shown.push({ counting: h.prog.counting, totalFiles: h.prog.totalFiles });
+      shown.push({ counting: !!h.prog.counting, totalFiles: h.prog.totalFiles });
     };
     await h.ops.runTransfer("copy", destDir, [src], "paste");
-    // the very first show happened while still counting (pre-scan)
-    expect(shown[0]?.counting).toBe(true);
-    // ...and counting was cleared before the second (post-scan) arm
-    expect(shown[1]?.counting).toBeFalsy();
+    // the very first (and only) show happened mid-scan, while still counting —
+    // the post-scan arm no-ops because the toast is up
+    expect(shown.length).toBe(1);
+    expect(shown[0]!.counting).toBe(true);
     // the counting flag is gone by the time the transfer runs
     expect(h.prog.counting).toBeFalsy();
     expect(h.prog.totalFiles).toBe(1100);
@@ -1042,5 +1045,27 @@ describe("preScan counting", () => {
     // one file = under the toast threshold: exactly one show (the real one)
     expect(shows).toBe(0);
     expect(h.prog.counting).toBeFalsy();
+  });
+
+  // ✕ during a long pre-scan must abort the SCAN (tick throw + loop break),
+  // not just the later copy loop — otherwise the counting toast visibly
+  // refuses to stop while the tree is walked to the end. totalFiles staying
+  // on the no-totals fallback proves the walk never finished (without the
+  // guards the scan completes and total becomes 5000).
+  test("cancel during the pre-scan aborts scan and copy phase", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "prescan-cancel");
+    const destDir = path.join(ROOT, "prescan-cancel-dest");
+    mkdirSync(src, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    for (let i = 0; i < 5000; i++) W(path.join(src, `f${i}`), "x");
+    h.ctx.paintProgress = () => {
+      h.prog.cancelled = true; // the toast ✕ lands on the first counting paint
+    };
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+    expect(h.prog.counting).toBeFalsy();
+    expect(h.prog.totalFiles).toBe(1);
+    expect(readdirSync(destDir).length).toBe(0);
+    expect(h.calls.some((c) => c.startsWith("notify:copy cancelled"))).toBe(true);
   });
 });

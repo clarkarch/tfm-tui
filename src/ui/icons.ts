@@ -138,6 +138,10 @@ export const lruSet = <V>(m: Map<string, V>, k: string, v: V, cap: number): void
   }
 };
 const ICON_CACHE_MAX = 400;
+// ponytail: evicting an entry whose render is still in flight drops the dedupe,
+// so a watcher rebuild can double-spawn it (self-correcting, and bounded by the
+// 8 workers + the drain's slot-liveness skip). Raise past ~1 full folder of
+// thumbs if image-heavy dirs ever show visible re-raster flicker.
 const THUMB_CACHE_MAX = 200;
 
 // Disk cache for rendered rasters: keyed by everything that changes the output
@@ -327,10 +331,13 @@ const thumbCache = new Map<string, Promise<Uint8Array>>();
 // Nautilus refuses to thumbnail files modified <3s ago (THUMBNAIL_CREATION_
 // DELAY_SECS) — a mid-download file would otherwise re-spawn a renderer on
 // every watcher rebuild, always producing pixels for a version that's already
-// gone. Waiting it out inside the job is the lazy re-queue: the promise keeps
-// its slot, the worker just yields to the next job meanwhile. Pure so it's
-// testable without a clock seam; clamped so a skewed future mtime can never
-// park a worker for hours.
+// gone. Waiting it out inside the job is the lazy re-queue (nautilus arms its
+// own backoff timer; we lean on the watcher's next rebuild instead, so the
+// final settled version is guaranteed a render — declining outright would
+// leave no thumb until a folder revisit). Cost: a cool-off sleeps THIS worker
+// (one of 8) for the remainder; the burst case (freshly extracted folder)
+// self-heals as files settle out of the window in drain order. Pure +
+// clamped for clock skew so a future mtime can never park a worker for hours.
 export const THUMB_COOL_MS = 3000;
 export const thumbCooloffMs = (mtimeMs: number, now: number): number => {
   if (mtimeMs <= 0) return 0;

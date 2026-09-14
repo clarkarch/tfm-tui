@@ -297,24 +297,25 @@ describe("thumb failure sentinel", () => {
     // not a PNG: the raster/vector pipeline must choke on it
     const bad = path.join(dir, "broken.svg");
     writeFileSync(bad, "this is not an image");
-    const first = await thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true).then(
-      () => null,
-      (e: unknown) => String(e),
-    );
-    expect(first).toBeTruthy();
-    // second request must reject from the sentinel, not by spawning again
-    // (a renderer spawn — even one that fails — takes far longer than this;
-    // the sentinel path is a synchronous rejection)
-    const t0 = Date.now();
-    const second = await thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true).then(
-      () => null,
-      (e: unknown) => String(e),
-    );
+    const errOf = async (p: Promise<Uint8Array>): Promise<string> =>
+      p.then(
+        () => "",
+        (e: unknown) => String(e),
+      );
+    const first = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
+    expect(first).toContain("exited");
+    // second request must reject from the sentinel, NOT by spawning again —
+    // the distinct message is the whole proof (no wall-clock bound needed)
+    const second = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
     expect(second).toContain("previously failed");
-    expect(Date.now() - t0).toBeLessThan(50);
-    // a different version of the same path is a different key — it retries
-    const edited = thumbPng(bad, 6, 1, 32, 32, "#1a1b26", true);
-    await edited.catch(() => {});
+    // a different version of the same path is a different key: it must get a
+    // REAL render attempt again (the renderer's own error, not the sentinel's)
+    const edited = await errOf(thumbPng(bad, 6, 1, 32, 32, "#1a1b26", true));
+    expect(edited).toContain("exited");
+    // and clearIconCaches wipes the sentinel (theme flip = honest retry)
+    clearIconCaches();
+    const afterClear = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
+    expect(afterClear).toContain("exited");
     rmSync(dir, { recursive: true, force: true });
     clearIconCaches();
   });

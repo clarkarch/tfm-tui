@@ -135,9 +135,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     prog.doneFiles = 0;
     try {
       for (const s of srcs) {
+        // ✕ during a long pre-scan must stop the scan, not just the later loop
+        if (prog.cancelled) break;
         const base = files;
         try {
           const r = await scanTree(s, (f) => {
+            if (prog.cancelled) throw new Error("cancelled");
             prog.doneFiles = base + f;
             if (!armed && (prog.doneFiles >= 1000 || Date.now() - t0 > 400)) {
               armed = true;
