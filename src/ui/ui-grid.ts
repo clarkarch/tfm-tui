@@ -608,10 +608,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // reads [ui] file-animation live and snaps everything to rest when off.
     // Only a CONTENT change animates — a layout-only rebuild (hover drawer,
     // dual-pane toggle, resize, theme flip) rebuilt the same files and must
-    // not replay it.
+    // not replay it. The very first build (lastContentSig null) IS content
+    // appearing, so it animates — that's the boot intro.
     if (gen === gridGen) {
       const contentSig = contentSigOf(entries);
-      const contentChanged = lastContentSig !== null && contentSig !== lastContentSig;
+      const contentChanged = lastContentSig === null || contentSig !== lastContentSig;
       lastContentSig = contentSig;
       if (contentChanged) {
         try {

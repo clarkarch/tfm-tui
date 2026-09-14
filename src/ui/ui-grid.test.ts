@@ -311,6 +311,73 @@ describe("renderGrid (grid tiles)", () => {
     await renderGrid();
   });
 
+  test("the first build plays the file animation (boot)", async () => {
+    // boot: the very first grid build is content appearing, so it animates —
+    // the content-sig gate must not swallow it (regression: lastContentSig
+    // started null and null never counted as "changed")
+    const bootContent = Box({ flexDirection: "column", flexGrow: 1 });
+    const bootAnim: Array<{ tiles: string[]; inner: string | null }> = [];
+    let bootSeq = 0;
+    const bootSelection = makeSelection({
+      colors: () => colors,
+      uiStyle: () => "solid",
+      byId: (id) => t.renderer.root.findDescendantById(id),
+      setText: () => {},
+      setIconState: () => {},
+      isCutKey: (key) => cutKeys.has(key),
+      scroller: () => null,
+      viewH: () => TERM_H - 3,
+      rowHInit: () => TILE_H,
+      renderPreview: () => {},
+    });
+    const { renderGrid: bootRender } = makeGridRenderer({
+      termW: () => TERM_W,
+      termH: () => TERM_H,
+      scroller: () => ({ content: bootContent }),
+      state: gridState,
+      searchQuery: () => "",
+      recursiveSearch: () => false,
+      pathEditMode: () => false,
+      sw: () => SW,
+      tileW: () => TILE_W,
+      tileH: () => TILE_H,
+      iconCells: () => ICON_CELLS,
+      hoverLiftOpts: () => hoverLiftOpts,
+      listRowH: () => 2,
+      uiStyle: () => "solid",
+      colors: () => colors,
+      previewEnabled: () => false,
+      previewWidth: () => 0,
+      viewMode: () => viewMode,
+      wordWrap: () => false,
+      reservedRight: () => 0,
+      availW: () => TERM_W - SW,
+      tileIdPrefix: "tfm-tile-boot-",
+      cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: ASPECT }),
+      makeIconSlot: (name: string) => {
+        const slotId = `boot-slot-${bootSeq++}`;
+        return { el: null, slotId, spec: { slotId, name } };
+      },
+      pushThumbJob: () => {},
+      nextIconId: () => `boot-icon-${bootSeq++}`,
+      drainIconQueue: () => {},
+      drainThumbs: () => {},
+      stripSelectable: () => {},
+      fileAnim: (target: { tiles: string[]; inner?: string | null }) => {
+        bootAnim.push({ tiles: [...target.tiles], inner: target.inner ?? null });
+      },
+      selection: bootSelection,
+      entryMouseHandlers: () => ({}),
+      isCutKey: (key) => cutKeys.has(key),
+      waitForResolution: () => Promise.resolve(),
+      clearRenameEdit: () => {},
+    });
+    await bootRender();
+    const play = bootAnim.at(-1)!;
+    expect(play.tiles.length).toBeGreaterThan(0);
+    expect(play.inner).toContain("inner");
+  });
+
   test("hands built tile ids + the container to the file animation sink, but not on a skipped render", async () => {
     fileAnimCalls = [];
     gridState.sortAsc = false; // force a signature change so a real rebuild runs
