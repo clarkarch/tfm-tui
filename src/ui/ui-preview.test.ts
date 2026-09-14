@@ -1,4 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Box, CodeRenderable, TextRenderable } from "@opentui/core";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { defaultConfig, type Theme } from "../config/config";
 import { makePreview } from "./ui-preview";
 import type { Scheduler } from "../lib/uiutil";
 
@@ -96,5 +102,128 @@ describe("preview visibility guard", () => {
     // would still be queued and flush would render twice
     expect(once).toBeGreaterThan(0);
     expect(once).toBe(2); // the "no selection" Box + Text pair, exactly once
+  });
+});
+
+// --- theme awareness (renderer-coupled, createTestRenderer pilot): the code
+// node must NOT survive a theme flip, and files without a tree-sitter
+// filetype must paint with the theme fg, not the terminal default. ---
+
+let t: TestRendererSetup;
+let tmpDir: string;
+
+beforeAll(async () => {
+  t = await createTestRenderer({ width: 100, height: 30 });
+  tmpDir = mkdtempSync(path.join(os.tmpdir(), "tfm-preview-"));
+});
+
+afterAll(() => t.renderer.destroy());
+
+const settleUntil = async (t: TestRendererSetup, cond: () => boolean): Promise<boolean> => {
+  // renderOnce per poll: Text()/Box() children are lazy VNode proxies until a
+  // frame is presented, so instanceof checks only pass post-render.
+  const deadline = Date.now() + 3000;
+  while (!cond() && Date.now() < deadline) {
+    await t.renderOnce();
+    await Bun.sleep(10);
+  }
+  return cond();
+};
+
+let paneSeq = 0;
+const mkLivePreview = (file: string) => {
+  const live: Theme = { ...defaultConfig.theme };
+  const clock = mkClock();
+  const id = `tfm-preview-${paneSeq++}`;
+  const pane = Box({ id, width: 40, height: 20 });
+  t.renderer.root.add(pane);
+  const p = makePreview({
+    renderer: t.renderer,
+    byId: () => t.renderer.root.findDescendantById(id),
+    colors: () => live,
+    uiStyle: () => "solid",
+    previewEnabled: () => true,
+    previewWidth: () => 40,
+    termH: () => 24,
+    cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+    focusKey: () => file,
+    tileRefs: new Map(),
+    pushThumbJob: () => {},
+    drainThumbs: () => {},
+    drainIconQueue: () => {},
+    nextIconId: () => "slot",
+    fallbackGlyphFor: () => "?",
+    sched: clock.sched,
+  });
+  const realPane = () => t.renderer.root.findDescendantById(id) as any;
+  const codeNodes = () =>
+    realPane()
+      .getChildren()
+      .filter((c: any) => c instanceof CodeRenderable);
+  return { live, clock, p, codeNodes, realPane };
+};
+
+describe("preview theme awareness", () => {
+  test("a theme flip evicts the cached code node (old colors must not survive)", async () => {
+    const file = path.join(tmpDir, "a.js");
+    writeFileSync(file, "const x = 1;\n");
+    const { live, clock, p, codeNodes } = mkLivePreview(file);
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => codeNodes().length === 1)).toBe(true);
+    const oldNode = codeNodes()[0] as any;
+    const oldStyle = oldNode.syntaxStyle;
+    // mutate the SAME live object (applyConfig Object.assigns onto it)
+    Object.assign(live, { accent: "#00ff00", syntaxString: "#ff00ff", sidebarFg: "#abcdef" });
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => codeNodes().length === 1 && (codeNodes()[0] as any) !== oldNode)).toBe(true);
+    expect((codeNodes()[0] as any).syntaxStyle).not.toBe(oldStyle);
+    // the evicted node is destroyed (not just detached), so its native
+    // buffers release and any in-flight highlight bails on isDestroyed
+    expect(oldNode.isDestroyed).toBe(true);
+  });
+
+  test("a file with a tree-sitter filetype paints unstyled text via baseHighlight default", async () => {
+    const file = path.join(tmpDir, "b.js");
+    writeFileSync(file, "let y = 2;\n");
+    const { clock, p, codeNodes } = mkLivePreview(file);
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => codeNodes().length === 1)).toBe(true);
+    expect((codeNodes()[0] as any).baseHighlight).toBe("default");
+  });
+
+  test("a no-filetype text file renders as theme-colored Text, not an unstyled Code node", async () => {
+    const file = path.join(tmpDir, "c.txt");
+    writeFileSync(file, "hello preview\n");
+    const { live, clock, p, codeNodes, realPane } = mkLivePreview(file);
+    Object.assign(live, { sidebarFg: "#aabbcc" });
+    p.renderPreview();
+    clock.flush();
+    // settle ON the body node itself: the header Textes paint synchronously,
+    // the file content only after the async readFile resolves.
+    const textOf = (c: any) => (c.content?.chunks ?? c.chunks ?? []).map((ch: any) => ch.text).join("");
+    const findBody = () =>
+      realPane()
+        .getChildren()
+        .find((c: any) => c instanceof TextRenderable && textOf(c).includes("hello preview"));
+    expect(await settleUntil(t, () => !!findBody())).toBe(true);
+    expect(codeNodes().length).toBe(0);
+    const body = findBody() as any;
+    expect([...body.fg.toInts()]).toEqual([0xaa, 0xbb, 0xcc, 0xff]); // live sidebarFg
+
+    // re-preview of the same unchanged file must REUSE the cached node
+    // (no fresh native TextBuffer per selection) ...
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => findBody() === body)).toBe(true);
+    // ... and a theme flip must evict it too (sig carries sidebarFg)
+    Object.assign(live, { sidebarFg: "#112233" });
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => !!findBody() && findBody() !== body)).toBe(true);
+    expect([...(findBody() as any).fg.toInts()]).toEqual([0x11, 0x22, 0x33, 0xff]);
+    expect(body.isDestroyed).toBe(true);
   });
 });

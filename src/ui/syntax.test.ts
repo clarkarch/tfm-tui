@@ -73,4 +73,11 @@ describe("buildSyntaxStyle", () => {
     const style = buildSyntaxStyle({ ...defaultConfig.theme });
     expect(style).toBeTruthy();
   });
+
+  test("registers a default style so unhighlighted text uses the theme fg", () => {
+    // OpenTUI paints every non-captured region via getStyle("default");
+    // without it, code/plain text falls back to the TERMINAL's fg.
+    const style = buildSyntaxStyle({ ...defaultConfig.theme });
+    expect(style.getStyle("default")?.fg).toBeDefined();
+  });
 });

@@ -1,4 +1,4 @@
-import { Box, CodeRenderable, Text, type SyntaxStyle } from "@opentui/core";
+import { Box, CodeRenderable, Text, TextRenderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -62,11 +62,18 @@ export const makePreview = (ctx: PreviewCtx) => {
     const colors = ctx.colors();
     const sig = syntaxStyleSig(colors as Theme);
     if (!previewSyntaxStyle || previewSyntaxSig !== sig) {
+      // Destroy the evicted node BEFORE the style: pane removal only detaches,
+      // so an orphaned node with an in-flight highlight would otherwise call
+      // getStyle() on the destroyed style (OpenTUI's catch degrades it to a
+      // warn + plain repaint) and hold its native buffers until finalizers.
+      // destroy() makes its continuations bail on isDestroyed.
+      try {
+        previewCodeCache?.node.destroy();
+      } catch {}
+      previewCodeCache = null;
       try {
         previewSyntaxStyle?.destroy();
       } catch {}
-      // cached nodes hold a reference to the old style
-      previewCodeCache = null;
       previewSyntaxStyle = buildSyntaxStyle(colors as Theme);
       previewSyntaxSig = sig;
     }
@@ -192,6 +199,12 @@ export const makePreview = (ctx: PreviewCtx) => {
     try {
       const text = (await readFile(key, "utf8")).slice(0, 65536);
       if (gen !== previewGen) return;
+      // Called BEFORE the cache check on purpose: it nulls previewCodeCache
+      // when the theme sig changed, so a stale styled node can't survive a
+      // re-preview of the same unchanged file (the cache-hit return below
+      // would otherwise keep painting the OLD theme until some OTHER file
+      // was previewed).
+      const syntaxStyle = getPreviewSyntaxStyle()!;
       const mtimeMs = st.mtimeMs ?? 0;
       const size = st.size ?? 0;
       if (
@@ -203,12 +216,33 @@ export const makePreview = (ctx: PreviewCtx) => {
         pane.add(previewCodeCache.node);
         return;
       }
+      const filetype = PREVIEW_FT_BY_EXT[path.extname(key).slice(1).toLowerCase()];
+      if (!filetype) {
+        // No tree-sitter filetype → CodeRenderable paints everything with the
+        // terminal default fg (it never consults syntaxStyle without a
+        // grammar). A real TextRenderable honours the theme instead — and is
+        // cached so re-previewing the same .txt doesn't realloc a TextBuffer
+        // every time (theme flips evict it, since the sig carries sidebarFg).
+        const textNode: any = new TextRenderable(ctx.renderer, {
+          id: `tfm-preview-code-${previewCodeSeq++}`,
+          content: text,
+          fg: colors.sidebarFg,
+          width: Math.max(8, ctx.previewWidth() - 2),
+          height: Math.max(1, ctx.termH() - 6),
+          selectable: false,
+        });
+        previewCodeCache = { key, mtimeMs, size, node: textNode };
+        pane.add(textNode);
+        void ctx.drainIconQueue();
+        return;
+      }
       // real class instance (not a proxied helper) so it mounts into the live pane
       const codeNode: any = new CodeRenderable(ctx.renderer, {
         id: `tfm-preview-code-${previewCodeSeq++}`,
         content: text,
-        filetype: PREVIEW_FT_BY_EXT[path.extname(key).slice(1).toLowerCase()],
-        syntaxStyle: getPreviewSyntaxStyle()!,
+        filetype,
+        syntaxStyle,
+        baseHighlight: "default",
         width: Math.max(8, ctx.previewWidth() - 2),
         height: Math.max(1, ctx.termH() - 6),
         selectable: false,

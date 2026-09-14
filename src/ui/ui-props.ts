@@ -7,7 +7,7 @@ import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
-import { type IconState, type ThumbJob } from "./ui-slots";
+import type { IconState, ThumbJob } from "./ui-slots";
 import { dirWalkStats, fmtBytes, fmtDate, mimeLabelFor } from "../fs/propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
