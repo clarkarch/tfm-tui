@@ -38,6 +38,7 @@ let thumbJobs: any[];
 let iconSlots: Array<{ name: string; heightCells: number; initialState: number }>;
 let mouseHandlers: Array<{ name: string; key: string; idx: number }>;
 let searchQuery: string;
+let wordWrap: boolean;
 let recursiveSearch: boolean;
 let searchCalls: string[];
 let searchSignals: AbortSignal[];
@@ -61,6 +62,7 @@ beforeAll(async () => {
   iconSlots = [];
   mouseHandlers = [];
   searchQuery = "";
+  wordWrap = false;
   recursiveSearch = false;
   searchCalls = [];
   searchSignals = [];
@@ -117,7 +119,7 @@ beforeAll(async () => {
     previewEnabled: () => false,
     previewWidth: () => 0,
     viewMode: () => viewMode,
-    wordWrap: () => false,
+    wordWrap: () => wordWrap,
     reservedRight: () => 0,
     // per-pane width: null falls back to termW - sw - reservedRight
     availW: () => availWSet ?? TERM_W - SW,
@@ -209,14 +211,19 @@ describe("renderGrid (grid tiles)", () => {
     tilePrefix = "tfm-tile-";
   });
 
-  test("hover lift never shifts the resting layout (no hover, no displacement)", async () => {
+  test("up lift reserves one top row so the icon never leaves the tile", async () => {
     hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
     await renderGrid();
     await t.renderOnce();
+    // the icon starts one row lower: the up motion lands exactly on the tile
+    // top instead of clipping above it (image rasters clip at the scroller —
+    // the reported top-row cutoff)
     for (const ref of selection.tileRefs.values()) {
+      if (!ref.hoverLift) continue;
       const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
-      expect(tile.getChildren()[0].marginTop || 0).toBe(0);
+      expect(tile.getChildren()[0].marginTop || 0).toBe(1);
     }
+    expect([...selection.tileRefs.values()].some((r) => r.hoverLift)).toBe(true);
 
     hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
     await renderGrid();
@@ -227,19 +234,22 @@ describe("renderGrid (grid tiles)", () => {
     }
   });
 
-  test("up lift skips the first row (above it is chrome, not tile spare)", async () => {
+  test("up lift works on the first row too (overpaints nothing — headroom)", async () => {
     availWSet = 30; // 2 cols: idx 0,1 first row, idx 2 second row
     hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
-    await renderGrid();
-    await t.renderOnce();
-    const refs = [...selection.tileRefs.values()];
-    expect(refs.length).toBe(3);
-    expect(refs[0]!.hoverLift).toBe(false);
-    expect(refs[1]!.hoverLift).toBe(false);
-    expect(refs[2]!.hoverLift).toBe(true);
-    availWSet = null;
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
-    await renderGrid();
+    try {
+      await renderGrid();
+      await t.renderOnce();
+      const refs = [...selection.tileRefs.values()];
+      expect(refs.length).toBe(3);
+      // every tile with spare room lifts — hover works on the top row exactly
+      // like every row below it (the headroom keeps the motion inside the tile)
+      for (const ref of refs) expect(ref.hoverLift).toBe(true);
+    } finally {
+      availWSet = null;
+      hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+      await renderGrid();
+    }
   });
 
   test("hover lift down uses the spare bottom row without a top margin", async () => {
@@ -254,20 +264,39 @@ describe("renderGrid (grid tiles)", () => {
     await renderGrid();
   });
 
-  test("a tile without spare room keeps the highlight but never lifts", async () => {
-    // list-row-height clamps, but grid spare is geometry-driven: with the
-    // fixed 1-cell lift this pins the spare-room check itself via a wrapped
-    // label consuming the vertical spare (word-wrap path is covered in the
-    // builder; here assert the flag exists and rest layout is untouched)
+  test("a wrapped label consumes the vertical spare: no lift, no headroom", async () => {
+    writeFileSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), "x");
+    wordWrap = true;
     hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
-    await renderGrid();
-    await t.renderOnce();
-    for (const ref of selection.tileRefs.values()) {
-      const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
-      expect(tile.getChildren()[0].marginTop || 0).toBe(0);
+    try {
+      await renderGrid();
+      await t.renderOnce();
+      // the wrapped tile keeps the highlight but never lifts (no room) and
+      // takes no headroom; single-line tiles still lift with headroom
+      let wrapped = 0;
+      let lifted = 0;
+      for (const [key, ref] of selection.tileRefs) {
+        const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
+        const margin = tile.getChildren()[0].marginTop || 0;
+        if (key.endsWith("a-very-long-file-name-that-wraps.txt")) {
+          wrapped++;
+          expect(ref.hoverLift).toBe(false);
+          expect(margin).toBe(0);
+        } else if (ref.hoverLift) {
+          lifted++;
+          expect(margin).toBe(1);
+        }
+      }
+      expect(wrapped).toBe(1);
+      expect(lifted).toBeGreaterThan(0);
+    } finally {
+      // a red run must not leak the long file / wordWrap flag into the next
+      // test (stale grid contents break unrelated counts)
+      rmSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), { force: true });
+      wordWrap = false;
+      hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+      await renderGrid();
     }
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
-    await renderGrid();
   });
 
   test("changing the hover lift direction rebuilds the tiles", async () => {

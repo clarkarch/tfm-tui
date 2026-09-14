@@ -175,7 +175,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     return { isVideo, stat, useThumb };
   };
 
-  const buildTile = (aspect: number, entry: Entry, idx: number, isFirstRow: boolean): any => {
+  const buildTile = (aspect: number, entry: Entry, idx: number): any => {
     // --- grid tile: icon/thumbnail slot + name label, regs in tileRefs ---
     const cwd = ctx.state.cwd;
     const TILE_W = ctx.tileW();
@@ -226,20 +226,20 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     }
     const maxLabelLines = Math.max(1, TILE_H - ICON_CELLS_H);
     const wrapOn = ctx.wordWrap() && entry.name.length > TILE_W - 2 && maxLabelLines > 1;
-    // Hover lift never touches the resting layout — the icon stays exactly
-    // where it is with the feature off. Only the hovered tile moves, by one
-    // cell, and only when it has room: up/down need one vertical spare row (a
-    // wrapped label consumes them all, so vertical lifts stay off there),
-    // left/right need one horizontal spare cell. Up paints above the tile,
-    // into the row above's empty bottom spare — except for the first row,
-    // where above is toolbar chrome, so those tiles keep the highlight only.
+    // Hover lift moves only the hovered tile, by one cell, and only when it
+    // has room: up/down need one vertical spare row (a wrapped label consumes
+    // them all, so vertical lifts stay off there), left/right need one
+    // horizontal spare cell. "Up" reserves one top row at build (the icon
+    // starts one row lower, the lift lands exactly on the tile top): image
+    // rasters clip at the scroller viewport, so an unreserved up-lift cut off
+    // the top-row icons. down/left/right stay inside the tile and reserve
+    // nothing; with the feature off the layout is byte-identical.
     const liftOpts = ctx.hoverLiftOpts?.();
     const liftDir = liftOpts?.direction ?? "up";
     const liftSpareV = TILE_H - ICON_CELLS_H - 1;
     const liftSpareH = TILE_W - slotW;
     const hoverLift =
       (liftOpts?.enabled ?? false) &&
-      !(liftDir === "up" && isFirstRow) &&
       (liftDir === "up" || liftDir === "down" ? !wrapOn && liftSpareV >= 1 : liftSpareH >= 1);
     const tileBox = Box(
       {
@@ -247,6 +247,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         height: ICON_CELLS_H,
         flexDirection: "row",
         justifyContent: "center",
+        marginTop: hoverLift && liftDir === "up" ? 1 : 0,
       },
       iconSlotEl,
     );
@@ -562,8 +563,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     } else {
       for (let i = 0; i < entries.length; i += cols) {
         const row = Box({ height: TILE_H, flexDirection: "row" });
-        const firstRow = i === 0;
-        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++, firstRow));
+        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++));
         inner.add(row);
       }
     }
