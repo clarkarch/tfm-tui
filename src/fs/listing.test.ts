@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync 
 import os from "node:os";
 import path from "node:path";
 import { compareEntries, listDir, type Entry } from "./listing";
+import { extOf } from "./filetype";
 import { RECENT_URI, STARRED_URI } from "./uri";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
@@ -63,6 +64,54 @@ describe("compareEntries", () => {
   test("type compares extension then name", () => {
     const list = [e("b.txt"), e("a.md"), e("a.txt")];
     expect([...list].sort(compareEntries("type", true)).map((x) => x.name)).toEqual(["a.md", "a.txt", "b.txt"]);
+  });
+
+  // the shared-collator/memo refactor must be order-identical to plain
+  // per-call localeCompare — a stray collator option (numeric, caseFirst)
+  // or a broken memo key would flip one of these pairs
+  test("name/type sorts match plain localeCompare semantics on tricky names", () => {
+    const names = [
+      "README",
+      "config.toml",
+      "archive.zip",
+      "Image2.png",
+      "image10.png",
+      "café.txt",
+      "cafe.txt",
+      "Zebra.tar.gz",
+      "a-b.ts",
+      "a_b.ts",
+      "2.txt",
+      "10.txt",
+    ];
+    const legacyName = (a: Entry, b: Entry): number => a.name.localeCompare(b.name);
+    const legacyType = (a: Entry, b: Entry): number =>
+      extOf(a.name).localeCompare(extOf(b.name)) || a.name.localeCompare(b.name);
+    const ref =
+      (cmp: (a: Entry, b: Entry) => number, asc: boolean) =>
+      (a: Entry, b: Entry): number =>
+        Number(b.isDir) - Number(a.isDir) || (asc ? cmp(a, b) : -cmp(a, b));
+    for (const asc of [true, false]) {
+      const mk = (): Entry[] => names.map((n) => e(n)).concat([e("some-dir", true)]);
+      expect(
+        mk()
+          .sort(compareEntries("name", asc))
+          .map((x) => x.name),
+      ).toEqual(
+        mk()
+          .sort(ref(legacyName, asc))
+          .map((x) => x.name),
+      );
+      expect(
+        mk()
+          .sort(compareEntries("type", asc))
+          .map((x) => x.name),
+      ).toEqual(
+        mk()
+          .sort(ref(legacyType, asc))
+          .map((x) => x.name),
+      );
+    }
   });
 });
 

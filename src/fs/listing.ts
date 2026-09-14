@@ -11,24 +11,40 @@ import { extOf } from "./filetype";
 
 export type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
 
-export const compareEntries =
-  (sortBy: SortMode, sortAsc: boolean) =>
-  (a: Entry, b: Entry): number => {
-    const cmp = (x: Entry, y: Entry): number => {
-      switch (sortBy) {
-        case "size":
-          return (x.size ?? 0) - (y.size ?? 0);
-        case "mtime":
-          return (x.mtimeMs ?? 0) - (y.mtimeMs ?? 0);
-        case "type":
-          return extOf(x.name).localeCompare(extOf(y.name)) || x.name.localeCompare(y.name);
-        default:
-          return x.name.localeCompare(y.name);
-      }
-    };
-    // dirs sort first, always — like nautilus
-    return Number(b.isDir) - Number(a.isDir) || (sortAsc ? cmp(a, b) : -cmp(a, b));
+// One collator for the whole process (JSC/Bun rebuilds collation data on every
+// String#localeCompare call, turning an n log n sort into a slow-mode flood —
+// Nautilus caches collation keys per file for the same reason). Default
+// options == localeCompare(undefined) semantics: pure speed, same order.
+const NAME_COLLATOR = new Intl.Collator();
+const cmpName = (a: string, b: string): number => NAME_COLLATOR.compare(a, b);
+
+export const compareEntries = (sortBy: SortMode, sortAsc: boolean) => {
+  // memoized so a "type" sort pays one extOf per NAME, not one per comparison
+  const exts = new Map<string, string>();
+  const extCached = (n: string): string => {
+    let e = exts.get(n);
+    if (e === undefined) {
+      e = extOf(n);
+      exts.set(n, e);
+    }
+    return e;
   };
+  const cmp = (x: Entry, y: Entry): number => {
+    switch (sortBy) {
+      case "size":
+        return (x.size ?? 0) - (y.size ?? 0);
+      case "mtime":
+        return (x.mtimeMs ?? 0) - (y.mtimeMs ?? 0);
+      case "type":
+        return cmpName(extCached(x.name), extCached(y.name)) || cmpName(x.name, y.name);
+      default:
+        return cmpName(x.name, y.name);
+    }
+  };
+  return (a: Entry, b: Entry): number =>
+    // dirs sort first, always — like nautilus
+    Number(b.isDir) - Number(a.isDir) || (sortAsc ? cmp(a, b) : -cmp(a, b));
+};
 
 const statEntry = (abs: string): { size?: number; mtimeMs?: number } => {
   try {
