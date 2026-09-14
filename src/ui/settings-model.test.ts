@@ -95,6 +95,7 @@ describe("settingGroups shape", () => {
       "appearance",
       "layout",
       "animations",
+      "optimization",
       "panes",
       "behavior",
       "files & session",
@@ -247,7 +248,17 @@ describe("settingGroups shape", () => {
         mk(plug)
           .groups()
           .map((g) => g.header),
-      ).toEqual(["appearance", "layout", "animations", "panes", "behavior", "files & session", "keys", "advanced"]);
+      ).toEqual([
+        "appearance",
+        "layout",
+        "animations",
+        "optimization",
+        "panes",
+        "behavior",
+        "files & session",
+        "keys",
+        "advanced",
+      ]);
       expect(() => mk(plug).byLabel("Say hello")).toThrow();
       // …plugin rows live behind pluginGroups(), one category per plugin
       // (plus the leading "add plugins" installer category — always first

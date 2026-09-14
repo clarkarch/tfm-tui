@@ -227,6 +227,7 @@ export const wireGrid = (deps: {
         slidePct: core.config.ui.fileAnimationSlidePct,
         dir: core.config.ui.fileAnimationSlideDir as SlideDir,
         ease: core.config.ui.fileAnimationEase as EaseKey,
+        containerFade: core.config.ui.fileAnimationContainerFade,
       }),
     });
   const fileAnims = [makeFileAnimator(), makeFileAnimator()] as const;
@@ -286,6 +287,7 @@ export const wireGrid = (deps: {
       drainThumbs: () => core.slots.drainThumbs(),
       stripSelectable,
       fileAnim: (target) => fileAnims[pane].play(target),
+      fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
       selection: selections[pane],
       entryMouseHandlers: entryMouseHandlers[pane],
       isCutKey: core.isCutKey,

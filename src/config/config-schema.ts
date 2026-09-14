@@ -194,6 +194,8 @@ export type UiConfig = {
   fileAnimationSlidePct: number;
   fileAnimationSlideDir: string;
   fileAnimationEase: string;
+  fileAnimationContainerFade: boolean;
+  fileAnimationVisibleOnly: boolean;
   fileHoverAnimation: boolean;
   fileHoverIncludeLabel: boolean;
   fileHoverDirection: HoverLiftDirection;
@@ -269,7 +271,16 @@ export type Config = { ui: UiConfig; theme: Theme; keys: KeysConfig };
 
 // --- schema ---
 
-type GuiGroup = "appearance" | "layout" | "animations" | "panes" | "behavior" | "files" | "advanced" | "keys";
+type GuiGroup =
+  | "appearance"
+  | "layout"
+  | "animations"
+  | "optimization"
+  | "panes"
+  | "behavior"
+  | "files"
+  | "advanced"
+  | "keys";
 
 type RowCommon = {
   tomlKey: string;
@@ -740,6 +751,28 @@ const UI_ROWS: SchemaRow[] = [
     label: "easing",
     group: "animations",
     subsection: "files",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-animation-container-fade",
+    prop: "fileAnimationContainerFade",
+    def: true,
+    doc: "true = fade the grid as one layer instead of per tile (same look, one opacity update per frame instead of one per file)",
+    label: "container fade",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-animation-visible-only",
+    prop: "fileAnimationVisibleOnly",
+    def: true,
+    doc: "true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)",
+    label: "visible files only",
+    group: "optimization",
+    subsection: "performance",
   },
   {
     kind: "bool",

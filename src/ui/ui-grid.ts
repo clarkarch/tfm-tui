@@ -83,8 +83,12 @@ type GridRendererCtx = {
   stripSelectable(): void;
   // animate the freshly built tiles/rows in ([ui] file-animation); no-op on
   // "off". `inner` is the single container node slide animates; passing an
-  // empty target stops any in-flight animation (called before clearGrid)
-  fileAnim(target: { tiles: string[]; inner?: string | null }): void;
+  // empty target stops any in-flight animation (called before clearGrid).
+  // `total` is the full file count when `tiles` is capped (visible-only).
+  fileAnim(target: { tiles: string[]; inner?: string | null; total?: number }): void;
+  // [ui] file-animation-visible-only: hand only the tiles on screen to the
+  // animator (off-screen ones would cost a native opacity push each per frame)
+  fileAnimVisibleOnly(): boolean;
   // selection module + mouse handlers
   selection: Selection;
   entryMouseHandlers(entry: Entry, key: string, idx: number): any;
@@ -616,7 +620,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       lastContentSig = contentSig;
       if (contentChanged) {
         try {
-          ctx.fileAnim({ tiles: [...selection.tileRefs.values()].map((r) => r.tileId), inner: innerId });
+          const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
+          // visible-only: off-screen tiles are never seen animating but each
+          // per-frame opacity change costs a native push — cap the list to the
+          // viewport (whole terminal as the safe upper bound) and keep the full
+          // count for the cascade timing (the animator normalizes by `total`)
+          const cap = ctx.fileAnimVisibleOnly()
+            ? isList
+              ? Math.ceil(ctx.termH() / rowH()) + 2
+              : cols * (Math.ceil(ctx.termH() / TILE_H) + 1)
+            : ids.length;
+          ctx.fileAnim({ tiles: ids.slice(0, cap), inner: innerId, total: ids.length });
         } catch {}
       }
     }

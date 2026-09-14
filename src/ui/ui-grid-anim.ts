@@ -25,9 +25,6 @@ export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slid
 export type EaseKey = "linear" | "ease-out" | "ease-in-out";
 export type SlideDir = "up" | "down" | "left" | "right";
 
-// above this the per-frame churn + kitty image-placement restarts are not
-// worth it; the grid just appears (ponytail: raise if it ever matters)
-const MAX_ANIM_NODES = 600;
 // `translateY` is whole-cells only (fractional coords crash image draw), so the
 // slide travel MUST be large: a 3-cell travel is just 4 integer positions over
 // ~40 frames and reads as 3 jumps. A viewport-ish travel gives ~1 step/frame.
@@ -122,11 +119,14 @@ export const fileAnimAt = (style: string, p: number, i: number, n: number, cfg: 
   return { opacity: e(t), dx: 0, dy: 0 };
 };
 
-// what the grid hands us: every tile id (fade/stagger/stagger-slide) plus the
-// single grid-container id. Slide animates ONLY the container — one node, never
-// the per-tile image placements, which is what made a per-tile translate churn
-// on image-heavy folders.
-export type FileAnimTarget = { tiles: string[]; inner?: string | null };
+// what the grid hands us: the tile ids to animate (fade/stagger/stagger-slide)
+// plus the single grid-container id. Slide animates ONLY the container — one
+// node, never the per-tile image placements, which is what made a per-tile
+// translate churn on image-heavy folders; `containerFade` does the same for
+// fade (one opacity push instead of one per file). `total` is the full file
+// count when `tiles` is capped to the viewport, so the cascade keeps its
+// original timing.
+export type FileAnimTarget = { tiles: string[]; inner?: string | null; total?: number };
 
 type FileAnimOpts = {
   style: FileAnimStyle;
@@ -135,6 +135,9 @@ type FileAnimOpts = {
   slidePct: number;
   dir: SlideDir;
   ease: EaseKey;
+  // [ui] file-animation-container-fade: fade the container node instead of
+  // every tile (identical look, one per-frame opacity write/push)
+  containerFade: boolean;
 };
 
 type FileAnimCtx = {
@@ -150,6 +153,8 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   let nodes: any[] = [];
   let cfg: FileAnimCfg = {};
   let style: FileAnimStyle = "fade";
+  // full file count when `nodes` is a viewport-capped subset (0 = use nodes.length)
+  let total = 0;
 
   const write = (node: any, f: { opacity: number; dx: number; dy: number }): void => {
     try {
@@ -163,10 +168,11 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   };
 
   const apply = (raw: number): void => {
+    const n = total > 0 ? total : nodes.length;
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
       if (!node) continue;
-      const f = fileAnimAt(style, raw, i, nodes.length, cfg);
+      const f = fileAnimAt(style, raw, i, n, cfg);
       write(node, f);
     }
   };
@@ -192,6 +198,7 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     usedMs = -1;
     settle();
     nodes = [];
+    total = 0;
   };
 
   // one item, recreated only when the duration changes (duration is baked at
@@ -218,10 +225,11 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     try {
       const o = ctx.opts();
       const vh = typeof ctx.renderer?.terminalHeight === "number" ? ctx.renderer.terminalHeight : 24;
-      // slide moves the whole grid as one container node; the rest are per-tile
-      const isSlide = o.style === "slide";
-      const ids = isSlide && target?.inner ? [target.inner] : (target?.tiles ?? []);
-      if (o.style === "off" || !(o.ms > 0) || ids.length === 0 || ids.length > MAX_ANIM_NODES) {
+      // slide (always) and fade (container-fade knob) move ONE container node;
+      // stagger styles animate the per-tile list the grid capped to the viewport
+      const container = o.style === "slide" || (o.style === "fade" && o.containerFade);
+      const ids = container && target?.inner ? [target.inner] : (target?.tiles ?? []);
+      if (o.style === "off" || !(o.ms > 0) || ids.length === 0) {
         stop();
         return;
       }
@@ -231,6 +239,7 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
         return;
       }
       nodes = resolved;
+      total = Math.max(target?.total ?? 0, nodes.length);
       style = o.style;
       cfg = {
         dist: slideTravel(vh, o.slidePct),

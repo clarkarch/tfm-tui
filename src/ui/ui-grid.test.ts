@@ -50,7 +50,8 @@ let renderGrid: (force?: boolean) => Promise<void>;
 let availWSet: number | null;
 let hoverLiftOpts: HoverLiftOpts;
 let tilePrefix: string;
-let fileAnimCalls: Array<{ tiles: string[]; inner: string | null }>;
+let visibleOnly: boolean;
+let fileAnimCalls: Array<{ tiles: string[]; inner: string | null; total: number }>;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: TERM_W, height: TERM_H });
@@ -72,6 +73,7 @@ beforeAll(async () => {
   availWSet = null;
   hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
+  visibleOnly = false;
   fileAnimCalls = [];
   let iconSeq = 0;
 
@@ -139,9 +141,14 @@ beforeAll(async () => {
     drainIconQueue: () => {},
     drainThumbs: () => {},
     stripSelectable: () => {},
-    fileAnim: (target: { tiles: string[]; inner?: string | null }) => {
-      fileAnimCalls.push({ tiles: [...target.tiles], inner: target.inner ?? null });
+    fileAnim: (target: { tiles: string[]; inner?: string | null; total?: number }) => {
+      fileAnimCalls.push({
+        tiles: [...target.tiles],
+        inner: target.inner ?? null,
+        total: target.total ?? target.tiles.length,
+      });
     },
+    fileAnimVisibleOnly: () => visibleOnly,
     selection,
     entryMouseHandlers: (e: any, key: string, idx: number) => {
       mouseHandlers.push({ name: e.name, key, idx });
@@ -316,7 +323,7 @@ describe("renderGrid (grid tiles)", () => {
     // the content-sig gate must not swallow it (regression: lastContentSig
     // started null and null never counted as "changed")
     const bootContent = Box({ flexDirection: "column", flexGrow: 1 });
-    const bootAnim: Array<{ tiles: string[]; inner: string | null }> = [];
+    const bootAnim: Array<{ tiles: string[]; inner: string | null; total: number }> = [];
     let bootSeq = 0;
     const bootSelection = makeSelection({
       colors: () => colors,
@@ -363,9 +370,14 @@ describe("renderGrid (grid tiles)", () => {
       drainIconQueue: () => {},
       drainThumbs: () => {},
       stripSelectable: () => {},
-      fileAnim: (target: { tiles: string[]; inner?: string | null }) => {
-        bootAnim.push({ tiles: [...target.tiles], inner: target.inner ?? null });
+      fileAnim: (target: { tiles: string[]; inner?: string | null; total?: number }) => {
+        bootAnim.push({
+          tiles: [...target.tiles],
+          inner: target.inner ?? null,
+          total: target.total ?? target.tiles.length,
+        });
       },
+      fileAnimVisibleOnly: () => visibleOnly,
       selection: bootSelection,
       entryMouseHandlers: () => ({}),
       isCutKey: (key) => cutKeys.has(key),
@@ -393,6 +405,52 @@ describe("renderGrid (grid tiles)", () => {
     await renderGrid(); // unchanged signature → no clear/rebuild, no replay
     expect(fileAnimCalls.length).toBe(count);
     gridState.sortAsc = true;
+  });
+
+  test("visible-files-only caps the animated list to the viewport; total keeps the true count", async () => {
+    // 30 fake entries through the recursive-search seam (no fs writes)
+    recursiveSearch = true;
+    searchQuery = "f";
+    searchEntries = Array.from({ length: 30 }, (_, i) => ({
+      name: `file-${String(i).padStart(2, "0")}.txt`,
+      isDir: false,
+    }));
+    visibleOnly = true;
+    try {
+      await renderGrid();
+      const gridPlay = fileAnimCalls.at(-1)!;
+      // grid cap = cols * (rows in the terminal + 1 margin) = 5 * 5 = 25
+      expect(selection.tileRefs.size).toBe(30);
+      expect(gridPlay.tiles.length).toBe(25);
+      expect(gridPlay.total).toBe(30);
+
+      // list cap = terminal rows / row height + margin = 14
+      searchQuery = "fi";
+      viewMode = "list";
+      await renderGrid();
+      const listPlay = fileAnimCalls.at(-1)!;
+      expect(listPlay.tiles.length).toBe(14);
+      expect(listPlay.total).toBe(30);
+
+      // knob off: the whole list goes to the animator again
+      searchQuery = "fil";
+      viewMode = "grid";
+      visibleOnly = false;
+      await renderGrid();
+      const fullPlay = fileAnimCalls.at(-1)!;
+      expect(fullPlay.tiles.length).toBe(30);
+      expect(fullPlay.total).toBe(30);
+    } finally {
+      // a failed assert above must not strand search mode into later tests
+      recursiveSearch = false;
+      searchQuery = "";
+      searchEntries = [];
+      searchCalls = [];
+      searchSignals = [];
+      visibleOnly = false;
+      viewMode = "grid";
+      await renderGrid();
+    }
   });
 
   test("a layout-only rebuild (dual-pane toggle / hover drawer width) does NOT replay the animation", async () => {

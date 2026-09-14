@@ -155,6 +155,8 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "fileAnimationSlidePct",
     "fileAnimationSlideDir",
     "fileAnimationEase",
+    "fileAnimationContainerFade",
+    "fileAnimationVisibleOnly",
     "fileHoverIncludeLabel",
     "sidebarAnimation",
     "sidebarAnimationStyle",

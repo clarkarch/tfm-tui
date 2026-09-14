@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box, Text } from "@opentui/core";
+import { Box, engine, Text } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
   easeAt,
@@ -183,6 +183,7 @@ describe("makeFileAnim (engine)", () => {
     slidePct: 70,
     dir: "up" as const,
     ease: "ease-out" as const,
+    containerFade: false,
     ...over,
   });
 
@@ -204,6 +205,72 @@ describe("makeFileAnim (engine)", () => {
     }
     await settleUntil(() => (byId("g-inner") as any)?.opacity === 1);
     expect((byId("g-inner") as any).translateY).toBe(0);
+  });
+
+  test("containerFade fades the container and never touches the tiles", async () => {
+    t.renderer.root.add(Box({ id: "gcf-inner", width: 40, height: 8, flexDirection: "column" }));
+    t.renderer.root.add(Box({ id: "gcf-tile", width: 8, height: 5 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "fade", containerFade: true, ms: 1000 }),
+    });
+    anim.play({ tiles: ["gcf-tile"], inner: "gcf-inner" });
+    // deterministic progress: no awaited frame between play and the tick
+    engine.update(500);
+    // the tile is untouched; the container carries the whole fade
+    expect((byId("gcf-tile") as any).opacity).toBe(1);
+    expect((byId("gcf-inner") as any).opacity).toBeCloseTo(fileAnimAt("fade", 0.5, 0, 1).opacity, 2);
+    anim.stop();
+    expect((byId("gcf-inner") as any).opacity).toBe(1);
+  });
+
+  test("without containerFade each tile fades itself and the container stays at rest", async () => {
+    t.renderer.root.add(Box({ id: "gpf-inner", width: 40, height: 8, flexDirection: "column" }));
+    t.renderer.root.add(Box({ id: "gpf-tile", width: 8, height: 5 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "fade", containerFade: false, ms: 1000 }),
+    });
+    anim.play({ tiles: ["gpf-tile"], inner: "gpf-inner" });
+    engine.update(500);
+    expect((byId("gpf-tile") as any).opacity).toBeCloseTo(fileAnimAt("fade", 0.5, 0, 1).opacity, 2);
+    expect((byId("gpf-inner") as any).opacity).toBe(1);
+    anim.stop();
+  });
+
+  test("a capped (visible-only) node list keeps the FULL count's cascade timing", async () => {
+    t.renderer.root.add(Box({ id: "gt-tile-a", width: 8, height: 5 }));
+    t.renderer.root.add(Box({ id: "gt-tile-b", width: 8, height: 5 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const mk = (total?: number) => {
+      const anim = makeFileAnim({
+        renderer: t.renderer,
+        byId,
+        opts: () => opts({ style: "stagger", ms: 1000, staggerPct: 40 }),
+      });
+      anim.play({ tiles: ["gt-tile-a", "gt-tile-b"], total });
+      return anim;
+    };
+    // without total the animator assumes 2 files: the second node lags hard
+    const a = mk();
+    engine.update(500);
+    const withoutTotal = (byId("gt-tile-b") as any).opacity;
+    a.stop();
+    // with total=10 the second node is near the front of a 10-file cascade
+    const b = mk(10);
+    engine.update(500);
+    const withTotal = (byId("gt-tile-b") as any).opacity;
+    const expected = fileAnimAt("stagger", 0.5, 1, 10, { span: 0.4, ease: "ease-out" }).opacity;
+    b.stop();
+    expect(withTotal).toBeGreaterThan(withoutTotal);
+    expect(withTotal).toBeCloseTo(expected, 2);
   });
 
   test("stop() cancels a running animation and rests its nodes", async () => {

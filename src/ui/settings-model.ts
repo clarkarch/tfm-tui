@@ -208,6 +208,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     { id: "appearance", label: "appearance", icon: "pencil" },
     { id: "layout", label: "layout", icon: "select-all" },
     { id: "animations", label: "animations", icon: "play" },
+    { id: "optimization", label: "optimization", icon: "power" },
     { id: "panes", label: "panes", icon: "desktop-tower" },
     { id: "behavior", label: "behavior", icon: "clock" },
     { id: "files", label: "files & session", icon: "folder" },
