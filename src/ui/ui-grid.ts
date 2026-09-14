@@ -179,7 +179,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     return { isVideo, stat, useThumb };
   };
 
-  const buildTile = (aspect: number, entry: Entry, idx: number): any => {
+  const buildTile = (aspect: number, entry: Entry, idx: number, inViewport: boolean): any => {
     // --- grid tile: icon/thumbnail slot + name label, regs in tileRefs ---
     const cwd = ctx.state.cwd;
     const TILE_W = ctx.tileW();
@@ -290,6 +290,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         wCells: slotW,
         vector: entry.name.toLowerCase().endsWith(".svg"),
         video: isVideo,
+        visible: inViewport,
         fallbackGlyph: glyph[fileIconFor(entry.name)] ?? glyph.file!,
       });
     }
@@ -308,7 +309,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   };
 
-  const buildListRow = (entry: Entry, idx: number): any => {
+  const buildListRow = (entry: Entry, idx: number, inViewport: boolean): any => {
     const cwd = ctx.state.cwd;
     const colors = ctx.colors();
     // density knob [ui] list-row-height: 1 = compact, icon scales with height
@@ -378,6 +379,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         hCells: h,
         vector: entry.name.toLowerCase().endsWith(".svg"),
         video: isVideo,
+        visible: inViewport,
         fallbackGlyph: glyph[fileIconFor(entry.name)] ?? glyph.file!,
       });
     }
@@ -562,12 +564,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const inner = Box({ id: innerId, width: "100%", flexDirection: "column" });
 
     let tileIdx = 0;
+    // viewport-sized tile budget for thumb-job ordering (same window math as
+    // the animation cap; a rebuild always starts at scrollTop 0): visible
+    // thumbs raster FIRST, off-screen backlog last — a huge folder used to
+    // make the visible tiles wait behind every spawn in the folder
+    const visCap = isList ? Math.ceil(ctx.termH() / rowH()) + 1 : cols * (Math.ceil(ctx.termH() / TILE_H) + 1);
     if (isList) {
-      for (const e of entries) inner.add(buildListRow(e, tileIdx++));
+      for (const e of entries) inner.add(buildListRow(e, tileIdx++, tileIdx <= visCap));
     } else {
       for (let i = 0; i < entries.length; i += cols) {
         const row = Box({ height: TILE_H, flexDirection: "row" });
-        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++));
+        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++, tileIdx <= visCap));
         inner.add(row);
       }
     }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dimHex, makeSlots, type SlotsCtx } from "./ui-slots";
+import { dimHex, makeSlots, thumbJobRank, type SlotsCtx, type ThumbJob } from "./ui-slots";
 import type { Theme } from "../config/config";
 
 // The scrim (setScrim) must cover every RASTERED slot, including ones whose
@@ -99,5 +99,33 @@ describe("icon slot scrim", () => {
     h.slots.resetIconQueue();
     await h.slots.drainIconQueue();
     expect(s.spec.states[0]!.fg).toBe("#ff0000");
+  });
+});
+
+describe("thumbJobRank", () => {
+  const job = (over: Partial<ThumbJob>): ThumbJob =>
+    ({
+      slotId: "s",
+      path: "/p",
+      mtimeMs: 0,
+      size: 0,
+      wCells: 1,
+      vector: false,
+      fallbackGlyph: "?",
+      ...over,
+    }) as ThumbJob;
+
+  test("visible tiles drain ahead of the off-screen backlog", () => {
+    expect(thumbJobRank(job({ visible: true }))).toBeLessThan(thumbJobRank(job({ visible: false })));
+  });
+
+  test("foreground jobs still outrank the whole folder backlog", () => {
+    expect(thumbJobRank(job({ priority: true, visible: false }))).toBeLessThan(thumbJobRank(job({ visible: true })));
+  });
+
+  // jobs built before this field existed (or with no viewport verdict) keep
+  // their old position — an absent flag must never demote them to last
+  test("missing visible flag ranks as visible", () => {
+    expect(thumbJobRank(job({}))).toBe(thumbJobRank(job({ visible: true })));
   });
 });

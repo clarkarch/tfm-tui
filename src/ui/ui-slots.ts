@@ -57,10 +57,18 @@ export type ThumbJob = {
   vector: boolean;
   video?: boolean;
   fallbackGlyph: string;
-  // foreground jobs (preview pane, properties hero) jump ahead of the folder's
-  // grid-thumbnail backlog instead of waiting FIFO behind it
+  // foreground jobs (preview/props) jump ahead of the folder's grid-thumbnail
+  // backlog instead of waiting FIFO behind it
   priority?: boolean;
+  // inside the viewport at build time — non-visible jobs drain LAST (nautilus
+  // moves visible files to the head of its IO queues for the same reason)
+  visible?: boolean;
 };
+
+// drain order: priority > visible > off-screen backlog. Stable sort keeps push
+// (display-row) order within each class, so the first screenful rasterizes
+// top-to-bottom before anything further down the folder is even spawned.
+export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible === false ? 2 : 1);
 
 export type SlotsCtx = {
   renderer(): any;
@@ -179,9 +187,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const jobs = thumbJobs;
     thumbJobs = [];
     if (!ctx.renderer().resolution || jobs.length === 0) return;
-    // priority jobs (preview/props) first — Array#sort is stable, so each
-    // class keeps its push order
-    jobs.sort((a, b) => (a.priority ? 0 : 1) - (b.priority ? 0 : 1));
+    // priority first, then visible tiles, then the off-screen backlog —
+    // Array#sort is stable, so each class keeps its push order
+    jobs.sort((a, b) => thumbJobRank(a) - thumbJobRank(b));
     const { cellW, cellH } = cellMetrics();
     let idx = 0;
     const worker = async () => {
