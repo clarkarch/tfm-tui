@@ -68,6 +68,18 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { icons: false } }).ui.icons).toBe("opaque");
   });
 
+  test("hover lift options parse with fallbacks (no distance knob: fixed 1 cell)", () => {
+    const defs = parseConfigDoc(undefined).ui;
+    expect(defs.fileHoverIncludeLabel).toBe(false);
+    expect(defs.fileHoverDirection).toBe("up");
+    expect("fileHoverDistance" in defs).toBe(false);
+    const cfg = parseConfigDoc({
+      ui: { "file-hover-include-label": true, "file-hover-direction": "sideways" },
+    }).ui;
+    expect(cfg.fileHoverIncludeLabel).toBe(true);
+    expect(cfg.fileHoverDirection).toBe("up");
+  });
+
   test("round-trip: serialize -> parse -> identical config", () => {
     const cfg: Config = structuredClone(defaultConfig);
     cfg.ui.sidebarWidth = 40;

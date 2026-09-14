@@ -135,6 +135,18 @@ describe("settingGroups shape", () => {
     expect(kb.every(isKeybind)).toBe(true);
   });
 
+  test("hover lift controls live in animations under sensible labels", () => {
+    const anim = mk()
+      .groups()
+      .find((g) => g.header === "animations")!
+      .rows.map((r) => r.label);
+    for (const label of ["tile hover animation", "include filename in lift", "hover lift direction"]) {
+      expect(anim).toContain(label);
+    }
+    expect(anim).not.toContain("tile hover pop");
+    expect(anim).not.toContain("hover lift distance");
+  });
+
   test("schema rows land in their declared group", () => {
     const h = mk();
     const layout = h

@@ -119,6 +119,16 @@ type ViewMode = "grid" | "list";
 // painting decisions live in ./style (the surface seam), which re-exports this.
 export type UiStyle = "solid" | "outline" | "outline-partial";
 
+// tile hover-lift controls ([ui] file-hover-*): which way the icon moves (one
+// cell, the terminal minimum) and whether the filename rides along. The grid
+// only lifts tiles that have one spare cell; the rest keep the highlight.
+export type HoverLiftDirection = "up" | "down" | "left" | "right";
+export type HoverLiftOpts = {
+  enabled: boolean;
+  direction: HoverLiftDirection;
+  includeLabel: boolean;
+};
+
 // icon-raster mode. `opaque` flattens every icon onto its surface bg
 // (default); `transparent` keeps alpha everywhere (may fringe on some
 // terminals); `transparent-partial` keeps alpha except inside FLOATING layers
@@ -167,6 +177,9 @@ export type UiConfig = {
   fileAnimationSlidePct: number;
   fileAnimationSlideDir: string;
   fileAnimationEase: string;
+  fileHoverAnimation: boolean;
+  fileHoverIncludeLabel: boolean;
+  fileHoverDirection: HoverLiftDirection;
   showLaunchTime: boolean;
 };
 
@@ -622,6 +635,37 @@ const UI_ROWS: SchemaRow[] = [
     def: "ease-out",
     doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
     label: "easing",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-hover-animation",
+    prop: "fileHoverAnimation",
+    def: false,
+    doc: "true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)",
+    label: "tile hover animation",
+    group: "animations",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-hover-include-label",
+    prop: "fileHoverIncludeLabel",
+    def: false,
+    doc: "true = the filename rides along with the hover lift",
+    label: "include filename in lift",
+    group: "animations",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "file-hover-direction",
+    prop: "fileHoverDirection",
+    values: ["up", "down", "left", "right"],
+    def: "up",
+    doc: '"up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally',
+    label: "hover lift direction",
     group: "animations",
   },
   {

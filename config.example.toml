@@ -40,6 +40,9 @@ file-animation-stagger-pct = 40          # how spread the cascade wave is, 0..30
 file-animation-slide-pct   = 70          # how far files slide, 0..150% of the viewport (0 = fade in place; clamped to whole cells)
 file-animation-slide-dir   = "up"        # "up"/"down" = files rise/drop vertically; "left"/"right" = files slide in horizontally
 file-animation-ease        = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
+file-hover-animation       = false       # true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)
+file-hover-include-label   = false       # true = the filename rides along with the hover lift
+file-hover-direction       = "up"        # "up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally
 view-mode                  = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
 word-wrap                  = false       # true = wrap long file names onto extra tile rows (grid view); false = single line cut with …
 show-hidden                = false       # start with dotfiles visible (ctrl+h toggles at runtime)

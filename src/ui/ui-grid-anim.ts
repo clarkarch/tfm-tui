@@ -15,6 +15,11 @@
 // curves read easing, slide distance/direction and stagger spread live at play
 
 import { createTimeline, engine, type JSAnimation } from "@opentui/core";
+import type { HoverLiftOpts, Theme, UiStyle } from "../config/config-schema";
+import type { SelTileRef } from "../input/selection";
+import { TileVisual } from "../input/grid-input";
+import { tileSurface } from "./style";
+import { IconStateIdx } from "./ui-slots";
 
 export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slide";
 export type EaseKey = "linear" | "ease-out" | "ease-in-out";
@@ -238,4 +243,239 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   } catch {}
 
   return { play, stop };
+};
+
+// --- Tile hover animation: move the icon on hover. The background highlight
+// still snaps instantly (that's today's setTileVisual behavior) — the feature
+// shifts the icon slot on hover and returns it on unhover, plus the exact same
+// endpoints: hoverBg fill, hover icon raster, cut-dim on out for clipboard
+// tiles.
+//
+// The resting layout is identical with the feature on or off — headroom is
+// never reserved, so the feature only ever moves the hovered tile by one cell.
+// Down/left/right stay inside their own tile (the build-time spare check
+// guarantees the landing room). Up paints above the tile into the row above's
+// empty bottom spare, which is why the grid marks first-row tiles unliftable
+// (above them is toolbar chrome) — they keep the highlight only. A whole-cell
+// translate cannot tween, so the lift is instant and there is no timeline.
+//
+// All operations are synchronous. Only ONE tile is "current" at a time; a new
+// over settles the abandoned tile. An out always releases a lift we own
+// (selection paints icon/bg, never translate, so a click that selected the
+// tile must still drop the icon). Every node write is try/catch — tiles die on
+// rebuilds.
+
+// pure: the rest-state tile background per ui-style, sourced from the SAME
+// surface seam setTileVisual paints through
+export const restTileBg = (style: UiStyle, colors: Theme): string =>
+  tileSurface(style, colors, "rest").backgroundColor ?? "transparent";
+
+// pure: whole-cell hover offset for a direction — always exactly one cell,
+// the terminal minimum (fractional offsets crash image draw: "y must be an
+// integer"). Unknown directions never move.
+export const hoverLiftDelta = (direction: string): { dx: number; dy: number } => {
+  switch (direction) {
+    case "up":
+      return { dx: 0, dy: -1 };
+    case "down":
+      return { dx: 0, dy: 1 };
+    case "left":
+      return { dx: -1, dy: 0 };
+    case "right":
+      return { dx: 1, dy: 0 };
+    default:
+      return { dx: 0, dy: 0 };
+  }
+};
+
+type TileHoverCtx = {
+  byId(id: string): any;
+  tileRefs(): Map<string, SelTileRef>;
+  colors(): Theme;
+  uiStyle(): UiStyle;
+  setIconState(spec: any, idx: number): void;
+  // clipboard cut-dim resolution (mirrors selection.setTileVisual)
+  isCutKey?(key: string): boolean;
+  hoverLiftOpts(): HoverLiftOpts;
+};
+
+type HoverCur = {
+  key: string;
+  refs: SelTileRef;
+  node: any;
+  slot: any;
+  label: any;
+};
+
+export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
+  let current: HoverCur | null = null;
+
+  // cut state is resolved like selection.setTileVisual: only unselected
+  // clipboard tiles render dimmed
+  const restIconIdx = (refs: SelTileRef, key: string): number => {
+    const cut = !refs.selected && ctx.isCutKey?.(key) === true;
+    return cut ? IconStateIdx.Cut : TileVisual.Rest;
+  };
+  const restLabelFg = (refs: SelTileRef, key: string): string =>
+    !refs.selected && ctx.isCutKey?.(key) === true ? ctx.colors().sidebarFgMuted : refs.baseFg;
+
+  const writeBg = (node: any, hex: string): void => {
+    try {
+      node.backgroundColor = hex === "transparent" ? "transparent" : hex;
+    } catch {}
+  };
+
+  // A tile copied from a previous build may have been destroyed by a grid
+  // rebuild, so only repaint the node refs when byId still resolves to them.
+  const ownedNode = (cur: HoverCur | null): any => {
+    if (!cur) return null;
+    try {
+      const node = ctx.byId(cur.refs.tileId);
+      return node === cur.node ? node : null;
+    } catch {
+      return null;
+    }
+  };
+  const ownedSlot = (cur: HoverCur | null): any => {
+    if (!cur) return null;
+    try {
+      return cur.refs.iconSlotId ? ctx.byId(cur.refs.iconSlotId) : null;
+    } catch {
+      return null;
+    }
+  };
+  const ownedLabel = (cur: HoverCur | null): any => {
+    if (!cur) return null;
+    try {
+      return cur.refs.labelId ? ctx.byId(cur.refs.labelId) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const dropLift = (cur: HoverCur | null): void => {
+    if (!cur) return;
+    const node = ownedNode(cur);
+    if (!node) return;
+    const slot = ownedSlot(cur);
+    const label = ownedLabel(cur);
+    try {
+      if (slot) {
+        slot.translateX = 0;
+        slot.translateY = 0;
+      }
+      if (label) {
+        label.translateX = 0;
+        label.translateY = 0;
+      }
+    } catch {}
+  };
+
+  // repaint `cur` to its resting look: cut-dim icon + label when the tile is
+  // on the clipboard (unselected), plain rest otherwise, plus the rest bg and a
+  // released lift. Skips a selected tile entirely — selection owns its visuals.
+  const restPaint = (cur: HoverCur | null): void => {
+    if (!cur) return;
+    try {
+      const node = ownedNode(cur);
+      if (!node) return;
+      if (!cur.refs.selected) {
+        ctx.setIconState(cur.refs.iconSpec, restIconIdx(cur.refs, cur.key));
+        const lab: any = ctx.byId(cur.refs.labelId);
+        if (lab) lab.fg = restLabelFg(cur.refs, cur.key);
+        writeBg(node, restTileBg(ctx.uiStyle(), ctx.colors()));
+      }
+    } catch {}
+    dropLift(cur);
+  };
+
+  const playHover = (key: string, hovered: boolean): void => {
+    try {
+      const refs = ctx.tileRefs().get(key);
+      if (!refs) return;
+      const node = ctx.byId(refs.tileId);
+      if (!node) return;
+      const slot = refs.iconSlotId ? ctx.byId(refs.iconSlotId) : null;
+      const labNode = refs.labelId ? ctx.byId(refs.labelId) : null;
+      const opts = ctx.hoverLiftOpts();
+
+      if (!opts.enabled) {
+        // feature off = today's instant snap, no lift
+        if (current) {
+          restPaint(current);
+          current = null;
+        }
+        if (refs.selected) return; // selection owns the icon/bg visuals
+        const offColors = ctx.colors();
+        const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors);
+        try {
+          ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
+          if (!hovered) {
+            const lab: any = ctx.byId(refs.labelId);
+            if (lab) lab.fg = restLabelFg(refs, key);
+          }
+          if (slot) {
+            slot.translateX = 0;
+            slot.translateY = 0;
+          }
+          if (labNode) {
+            labNode.translateX = 0;
+            labNode.translateY = 0;
+          }
+        } catch {}
+        writeBg(node, offHex);
+        return;
+      }
+
+      // an out ALWAYS releases a lift we own — selection paints icon/bg but
+      // never translate, so a click that selected the tile still drops it
+      if (!hovered) {
+        if (current?.key === key) {
+          dropLift(current);
+          current = null;
+        }
+        if (refs.selected) return; // selection owns the icon/bg visuals
+      } else if (refs.selected) {
+        return; // selection owns the icon/bg visuals
+      }
+
+      const colors = ctx.colors();
+      const toHex = hovered ? colors.hoverBg : restTileBg(ctx.uiStyle(), colors);
+      // icon raster + label flip instantly (hover-in never dims — cut only
+      // applies at Rest, exactly like setTileVisual)
+      try {
+        ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
+        if (!hovered) {
+          const lab: any = ctx.byId(refs.labelId);
+          if (lab) lab.fg = restLabelFg(refs, key);
+        }
+      } catch {}
+      writeBg(node, toHex);
+
+      // sweep: the pointer moved to another tile without an out landing first
+      if (hovered && current && current.key !== key) restPaint(current);
+      const delta = hoverLiftDelta(opts.direction);
+      const lift = hovered && refs.hoverLift === true;
+      try {
+        if (slot) {
+          slot.translateX = lift ? delta.dx : 0;
+          slot.translateY = lift ? delta.dy : 0;
+        }
+        if (labNode) {
+          const withLabel = lift && opts.includeLabel;
+          labNode.translateX = withLabel ? delta.dx : 0;
+          labNode.translateY = withLabel ? delta.dy : 0;
+        }
+      } catch {}
+      current = hovered ? { key, refs, node, slot, label: labNode } : null;
+    } catch {
+      // never strand a lifted tile when an unexpected lookup/paint fails
+      try {
+        dropLift(current);
+      } catch {}
+      current = null;
+    }
+  };
+
+  return { playHover };
 };

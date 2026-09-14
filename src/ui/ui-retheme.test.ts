@@ -180,6 +180,15 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
+  test("a hover-geometry toggle re-renders so tiles gain or lose lift room", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.fileHoverAnimation = true;
+    retheme.applyConfig(fresh);
+    expect(ctx.calls.renderAll).toBe(1);
+  });
+
   test("a value-only knob skips the heavy renderAll (no grid rebuild churn)", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);

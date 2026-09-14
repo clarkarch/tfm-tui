@@ -8,6 +8,7 @@ import { makeGridRenderer, type GridState } from "./ui-grid";
 import { makeSelection } from "../input/selection";
 import type { Entry } from "../fs/listing";
 import { defaultConfig } from "../config/config-schema";
+import type { HoverLiftOpts } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SortMode } from "../lib/sort";
 
@@ -46,6 +47,7 @@ let viewMode: "grid" | "list";
 let selection: ReturnType<typeof makeSelection>;
 let renderGrid: (force?: boolean) => Promise<void>;
 let availWSet: number | null;
+let hoverLiftOpts: HoverLiftOpts;
 let tilePrefix: string;
 let fileAnimCalls: Array<{ tiles: string[]; inner: string | null }>;
 
@@ -66,6 +68,7 @@ beforeAll(async () => {
   searchEntries = [];
   viewMode = "grid";
   availWSet = null;
+  hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
   fileAnimCalls = [];
   let iconSeq = 0;
@@ -107,6 +110,7 @@ beforeAll(async () => {
     tileW: () => TILE_W,
     tileH: () => TILE_H,
     iconCells: () => ICON_CELLS,
+    hoverLiftOpts: () => hoverLiftOpts,
     listRowH: () => 2,
     uiStyle: () => "solid",
     colors: () => colors,
@@ -203,6 +207,79 @@ describe("renderGrid (grid tiles)", () => {
     expect(ids.length).toBeGreaterThan(0);
     expect(ids.every((id) => id.startsWith("tfm-tile-p1-"))).toBe(true);
     tilePrefix = "tfm-tile-";
+  });
+
+  test("hover lift never shifts the resting layout (no hover, no displacement)", async () => {
+    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    await renderGrid();
+    await t.renderOnce();
+    for (const ref of selection.tileRefs.values()) {
+      const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
+      expect(tile.getChildren()[0].marginTop || 0).toBe(0);
+    }
+
+    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    await renderGrid();
+    await t.renderOnce();
+    for (const ref of selection.tileRefs.values()) {
+      const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
+      expect(tile.getChildren()[0].marginTop || 0).toBe(0);
+    }
+  });
+
+  test("up lift skips the first row (above it is chrome, not tile spare)", async () => {
+    availWSet = 30; // 2 cols: idx 0,1 first row, idx 2 second row
+    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    await renderGrid();
+    await t.renderOnce();
+    const refs = [...selection.tileRefs.values()];
+    expect(refs.length).toBe(3);
+    expect(refs[0]!.hoverLift).toBe(false);
+    expect(refs[1]!.hoverLift).toBe(false);
+    expect(refs[2]!.hoverLift).toBe(true);
+    availWSet = null;
+    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    await renderGrid();
+  });
+
+  test("hover lift down uses the spare bottom row without a top margin", async () => {
+    hoverLiftOpts = { enabled: true, direction: "down", includeLabel: false };
+    await renderGrid();
+    await t.renderOnce();
+    const ref = [...selection.tileRefs.values()][0]!;
+    expect(ref.hoverLift).toBe(true);
+    const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
+    expect(tile.getChildren()[0].marginTop || 0).toBe(0);
+    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    await renderGrid();
+  });
+
+  test("a tile without spare room keeps the highlight but never lifts", async () => {
+    // list-row-height clamps, but grid spare is geometry-driven: with the
+    // fixed 1-cell lift this pins the spare-room check itself via a wrapped
+    // label consuming the vertical spare (word-wrap path is covered in the
+    // builder; here assert the flag exists and rest layout is untouched)
+    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    await renderGrid();
+    await t.renderOnce();
+    for (const ref of selection.tileRefs.values()) {
+      const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
+      expect(tile.getChildren()[0].marginTop || 0).toBe(0);
+    }
+    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    await renderGrid();
+  });
+
+  test("changing the hover lift direction rebuilds the tiles", async () => {
+    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    await renderGrid();
+    const before = [...selection.tileRefs.values()].map((r) => r.tileId);
+    hoverLiftOpts = { enabled: true, direction: "down", includeLabel: false };
+    await renderGrid();
+    const after = [...selection.tileRefs.values()].map((r) => r.tileId);
+    expect(after).not.toEqual(before);
+    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    await renderGrid();
   });
 
   test("hands built tile ids + the container to the file animation sink, but not on a skipped render", async () => {

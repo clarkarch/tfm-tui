@@ -21,6 +21,9 @@ export type SelTileRef = {
   tileId: string;
   labelId: string;
   isDir: boolean;
+  // grid tiles with room for the configured hover distance/direction move
+  // their icon on hover (rest layout untouched); the rest keep the highlight.
+  hoverLift?: boolean;
 };
 
 export type SelectionCtx = {

@@ -10,6 +10,7 @@ import path from "node:path";
 import { compareEntries, listDir, type Entry } from "../fs/listing";
 import { searchTree } from "../fs/search";
 import type { Theme } from "../config/config";
+import type { HoverLiftOpts } from "../config/config-schema";
 import { fsErrText } from "../fs/fsutil";
 import { fileIsImage, fileIsVideo, fileIconFor } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
@@ -49,6 +50,10 @@ type GridRendererCtx = {
   tileW(): number;
   tileH(): number;
   iconCells(): number;
+  // hover lift headroom at build time: flags tiles with one spare cell for
+  // the lift direction so the hovered tile can nudge without landing on
+  // chrome or a wrapped label.
+  hoverLiftOpts?(): HoverLiftOpts;
   listRowH(): number;
   uiStyle(): UiStyle;
   colors(): Theme;
@@ -170,7 +175,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     return { isVideo, stat, useThumb };
   };
 
-  const buildTile = (aspect: number, entry: Entry, idx: number): any => {
+  const buildTile = (aspect: number, entry: Entry, idx: number, isFirstRow: boolean): any => {
     // --- grid tile: icon/thumbnail slot + name label, regs in tileRefs ---
     const cwd = ctx.state.cwd;
     const TILE_W = ctx.tileW();
@@ -219,19 +224,39 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       iconSpec = s.spec;
       iconSlotEl = s.el;
     }
+    const maxLabelLines = Math.max(1, TILE_H - ICON_CELLS_H);
+    const wrapOn = ctx.wordWrap() && entry.name.length > TILE_W - 2 && maxLabelLines > 1;
+    // Hover lift never touches the resting layout — the icon stays exactly
+    // where it is with the feature off. Only the hovered tile moves, by one
+    // cell, and only when it has room: up/down need one vertical spare row (a
+    // wrapped label consumes them all, so vertical lifts stay off there),
+    // left/right need one horizontal spare cell. Up paints above the tile,
+    // into the row above's empty bottom spare — except for the first row,
+    // where above is toolbar chrome, so those tiles keep the highlight only.
+    const liftOpts = ctx.hoverLiftOpts?.();
+    const liftDir = liftOpts?.direction ?? "up";
+    const liftSpareV = TILE_H - ICON_CELLS_H - 1;
+    const liftSpareH = TILE_W - slotW;
+    const hoverLift =
+      (liftOpts?.enabled ?? false) &&
+      !(liftDir === "up" && isFirstRow) &&
+      (liftDir === "up" || liftDir === "down" ? !wrapOn && liftSpareV >= 1 : liftSpareH >= 1);
     const tileBox = Box(
-      { width: slotW, height: ICON_CELLS_H, flexDirection: "row", justifyContent: "center" },
+      {
+        width: slotW,
+        height: ICON_CELLS_H,
+        flexDirection: "row",
+        justifyContent: "center",
+      },
       iconSlotEl,
     );
     tile.add(tileBox);
 
     const label = entry.name.length > TILE_W - 2 ? `${entry.name.slice(0, TILE_W - 5)}…` : entry.name;
-    // word wrap [ui] word-wrap: long names flow onto extra rows (capped at the
+    // word wrap [ui] word-wrap: long names flow onto extra tile rows (capped at the
     // space under the icon) via the native char-wrap buffer — filenames are
     // single runs, per-character wrap fills every line edge-to-edge; overflow
     // lines clip, too-long runs ellipsize. Off = today's single cut line.
-    const maxLabelLines = Math.max(1, TILE_H - ICON_CELLS_H);
-    const wrapOn = ctx.wordWrap() && entry.name.length > TILE_W - 2 && maxLabelLines > 1;
     const labelText: any = Text({
       id: labelId,
       content: wrapOn ? entry.name : label,
@@ -248,6 +273,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       tileId,
       labelId,
       isDir: entry.isDir,
+      hoverLift,
     });
 
     if (useThumb && stat) {
@@ -397,6 +423,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         ctx.tileW(),
         ctx.tileH(),
         ctx.iconCells(),
+        (() => {
+          const o = ctx.hoverLiftOpts?.();
+          // includeLabel rides live in the animator — no rebuild needed
+          return JSON.stringify([o?.enabled ?? false, o?.direction ?? "up"]);
+        })(),
         ctx.termW(),
         ctx.termH(),
         ctx.availW?.() ?? 0,
@@ -531,7 +562,8 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     } else {
       for (let i = 0; i < entries.length; i += cols) {
         const row = Box({ height: TILE_H, flexDirection: "row" });
-        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++));
+        const firstRow = i === 0;
+        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++, firstRow));
         inner.add(row);
       }
     }

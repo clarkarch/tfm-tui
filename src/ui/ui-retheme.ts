@@ -151,6 +151,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "fileAnimationSlidePct",
     "fileAnimationSlideDir",
     "fileAnimationEase",
+    "fileHoverIncludeLabel",
     "persistUndo",
     "restoreSession",
     "showLaunchTime",

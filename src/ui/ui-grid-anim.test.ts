@@ -1,7 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box } from "@opentui/core";
+import { Box, Text } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { easeAt, fileAnimAt, fileAnimStyleFrom, makeFileAnim, quantizeDy, slideTravel } from "./ui-grid-anim";
+import {
+  easeAt,
+  fileAnimAt,
+  fileAnimStyleFrom,
+  hoverLiftDelta,
+  makeFileAnim,
+  makeTileHoverAnim,
+  quantizeDy,
+  restTileBg,
+  slideTravel,
+} from "./ui-grid-anim";
 
 const CFG = { dist: 6, span: 0.4, ease: "ease-out", dir: "up" } as const;
 
@@ -256,5 +266,330 @@ describe("makeFileAnim (engine)", () => {
     expect(samples[t0Rest]![3]!).toBeGreaterThan(0);
     expect((byId("g3-inner") as any).translateY).toBe(0);
     for (let k = 0; k < 4; k++) expect((byId(`g3-tile-${k}`) as any).opacity).toBe(1);
+  });
+});
+
+describe("hoverLiftDelta", () => {
+  test("maps the four directions to exactly one cell (the terminal minimum)", () => {
+    expect(hoverLiftDelta("up")).toEqual({ dx: 0, dy: -1 });
+    expect(hoverLiftDelta("down")).toEqual({ dx: 0, dy: 1 });
+    expect(hoverLiftDelta("left")).toEqual({ dx: -1, dy: 0 });
+    expect(hoverLiftDelta("right")).toEqual({ dx: 1, dy: 0 });
+  });
+
+  test("an unknown direction never moves", () => {
+    expect(hoverLiftDelta("sideways")).toEqual({ dx: 0, dy: 0 });
+  });
+});
+describe("restTileBg", () => {
+  test("solid fills with colors.bg, outline variants sit bare", () => {
+    const colors = { bg: "#1a1b26" } as any;
+    expect(restTileBg("solid", colors)).toBe("#1a1b26");
+    expect(restTileBg("outline", colors)).toBe("transparent");
+    expect(restTileBg("outline-partial", colors)).toBe("transparent");
+  });
+});
+
+// real renderer glue: the hover highlight repaints instantly, lifts a reserved
+// icon up by one whole cell, yields to selection, and never strands the
+// previous tile when the pointer sweeps on
+describe("makeTileHoverAnim (engine)", () => {
+  let t: TestRendererSetup;
+  beforeAll(async () => {
+    t = await createTestRenderer({ width: 60, height: 20 });
+    await t.renderOnce();
+  });
+  afterAll(() => t.renderer.destroy());
+
+  const REST = [26, 27, 38, 255] as const;
+  const HOVER = [59, 66, 97, 255] as const;
+
+  // unique node ids per test: the shared renderer's root is never cleared
+  // between tests, so a reused id (like "tile-a") would resolve to a LEFTOVER
+  // node from an earlier test and silently fake the assertions green.
+  const makeRefs = (tag: string, isCutKey?: (k: string) => boolean, lift = false) => {
+    const refs = new Map<string, any>();
+    refs.set(`/w/a-${tag}`, {
+      selected: false,
+      iconSpec: { slotId: `slot-a-${tag}` },
+      iconSlotId: `slot-a-${tag}`,
+      tileId: `tile-a-${tag}`,
+      labelId: `lab-a-${tag}`,
+      baseFg: "#c0caf5",
+      isDir: false,
+      hoverLift: lift,
+    });
+    refs.set(`/w/b-${tag}`, {
+      selected: false,
+      iconSpec: { slotId: `slot-b-${tag}` },
+      iconSlotId: `slot-b-${tag}`,
+      tileId: `tile-b-${tag}`,
+      labelId: `lab-b-${tag}`,
+      baseFg: "#c0caf5",
+      isDir: false,
+      hoverLift: lift,
+    });
+    if (isCutKey)
+      refs.set(`/w/cut-${tag}`, {
+        selected: false,
+        iconSpec: { slotId: `slot-cut-${tag}` },
+        iconSlotId: `slot-cut-${tag}`,
+        tileId: `tile-cut-${tag}`,
+        labelId: `lab-cut-${tag}`,
+        baseFg: "#c0caf5",
+        isDir: false,
+        hoverLift: lift,
+      });
+    return refs;
+  };
+
+  const setup = async (
+    tag: string,
+    enabled = true,
+    isCutKey?: (k: string) => boolean,
+    lift = enabled,
+    vector: { direction?: string; includeLabel?: boolean } = {},
+  ) => {
+    const refs = makeRefs(tag, isCutKey, lift);
+    const iconCalls: number[] = [];
+    for (const [, r] of refs) {
+      t.renderer.root.add(Box({ id: r.tileId, width: 8, height: 5, backgroundColor: "#1a1b26" }));
+      t.renderer.root.add(Box({ id: r.iconSlotId, width: 4, height: 3 }));
+      t.renderer.root.add(Text({ id: r.labelId, content: "x", fg: r.baseFg }));
+    }
+    await t.renderOnce();
+    const anim = makeTileHoverAnim({
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      tileRefs: () => refs,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89" }) as any,
+      uiStyle: () => "solid" as const,
+      setIconState: (_spec, idx) => void iconCalls.push(idx),
+      isCutKey,
+      hoverLiftOpts: () => ({
+        enabled,
+        direction: (vector.direction ?? "up") as any,
+        includeLabel: vector.includeLabel ?? false,
+      }),
+    });
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    return { refs, iconCalls, anim, byId };
+  };
+
+  test("up lift overpaints the row above's empty spare (rest layout untouched)", async () => {
+    const key = "/w/lift";
+    const tileId = "tile-lift";
+    const slotId = "slot-lift";
+    const labelId = "lab-lift";
+    const refs = new Map<string, any>();
+    refs.set(key, {
+      selected: false,
+      iconSpec: { slotId },
+      iconSlotId: slotId,
+      tileId,
+      labelId,
+      baseFg: "#c0caf5",
+      isDir: false,
+      hoverLift: true,
+    });
+    const tile = Box({
+      id: tileId,
+      width: 8,
+      height: 5,
+      backgroundColor: "#1a1b26",
+      flexDirection: "column",
+      alignItems: "center",
+    });
+    // no reserved headroom: the icon starts at the tile's top edge, exactly
+    // like a production tile at rest
+    const iconBox = Box({
+      width: 4,
+      height: 3,
+      flexDirection: "row",
+      justifyContent: "center",
+    });
+    iconBox.add(Box({ id: slotId, width: 4, height: 3 }));
+    tile.add(iconBox);
+    tile.add(Text({ id: labelId, content: "x", fg: "#c0caf5" }));
+    t.renderer.root.add(tile);
+    await t.renderOnce();
+    const anim = makeTileHoverAnim({
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      tileRefs: () => refs,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89" }) as any,
+      uiStyle: () => "solid" as const,
+      setIconState: () => {},
+      hoverLiftOpts: () => ({ enabled: true, direction: "up", includeLabel: false }),
+    });
+    anim.playHover(key, true);
+    await t.renderOnce();
+
+    const tileNode = t.renderer.root.findDescendantById(tileId) as any;
+    const slotNode = t.renderer.root.findDescendantById(slotId) as any;
+    const labelNode = t.renderer.root.findDescendantById(labelId) as any;
+    const tileTop = tileNode.screenY;
+    // the motion lands one cell above the tile top — into the row above's
+    // empty bottom spare, which is why the grid never lifts first-row tiles
+    expect(slotNode.translateY).toBe(-1);
+    expect(labelNode.translateY).toBe(0);
+    expect(slotNode.screenY).toBe(tileTop - 1);
+    expect(slotNode.screenY + slotNode.height).toBeLessThanOrEqual(tileTop + tileNode.height);
+    expect(labelNode.screenY).toBeGreaterThanOrEqual(tileTop);
+    expect(labelNode.screenY + labelNode.height).toBeLessThanOrEqual(tileTop + tileNode.height);
+  });
+
+  test("tiles without spare room keep the highlight but do not lift", async () => {
+    const { anim, iconCalls, byId } = await setup("tight", true, undefined, false);
+    anim.playHover("/w/a-tight", true);
+    expect(iconCalls).toEqual([1]);
+    expect((byId("slot-a-tight") as any).translateY).toBe(0);
+    expect((byId("lab-a-tight") as any).translateY).toBe(0);
+    expect((byId("tile-a-tight") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+  });
+
+  test("hover-in lifts a reserved icon one cell and swaps the icon raster to Hover", async () => {
+    const { anim, iconCalls, byId } = await setup("in");
+    anim.playHover("/w/a-in", true);
+    expect(iconCalls).toEqual([1]);
+    expect((byId("slot-a-in") as any).translateY).toBe(-1);
+    expect((byId("lab-a-in") as any).translateY).toBe(0);
+    expect((byId("tile-a-in") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+  });
+
+  test("the lift is always exactly one cell (no distance knob)", async () => {
+    const { anim, byId } = await setup("one", true, undefined, true);
+    anim.playHover("/w/a-one", true);
+    expect((byId("slot-a-one") as any).translateY).toBe(-1);
+    expect((byId("slot-a-one") as any).translateX).toBe(0);
+    expect((byId("lab-a-one") as any).translateY).toBe(0);
+  });
+
+  test("include filename moves the label with the icon", async () => {
+    const { anim, byId } = await setup("nam", true, undefined, true, { includeLabel: true });
+    anim.playHover("/w/a-nam", true);
+    expect((byId("slot-a-nam") as any).translateY).toBe(-1);
+    expect((byId("lab-a-nam") as any).translateY).toBe(-1);
+    anim.playHover("/w/a-nam", false);
+    expect((byId("slot-a-nam") as any).translateY).toBe(0);
+    expect((byId("lab-a-nam") as any).translateY).toBe(0);
+  });
+
+  test("left direction moves the icon horizontally, never vertically", async () => {
+    const { anim, byId } = await setup("left", true, undefined, true, { direction: "left" });
+    anim.playHover("/w/a-left", true);
+    expect((byId("slot-a-left") as any).translateX).toBe(-1);
+    expect((byId("slot-a-left") as any).translateY).toBe(0);
+    expect((byId("lab-a-left") as any).translateX).toBe(0);
+    anim.playHover("/w/a-left", false);
+    expect((byId("slot-a-left") as any).translateX).toBe(0);
+  });
+
+  test("hover-out restores the icon and settles the lift", async () => {
+    const { anim, iconCalls, byId } = await setup("out");
+    anim.playHover("/w/a-out", true);
+    anim.playHover("/w/a-out", false);
+    expect(iconCalls).toEqual([1, 0]);
+    expect((byId("slot-a-out") as any).translateY).toBe(0);
+    expect((byId("lab-a-out") as any).translateY).toBe(0);
+    expect((byId("tile-a-out") as any).backgroundColor.toInts()).toEqual([...REST] as any);
+  });
+
+  test("a selected tile still settles the lifted icon on mouse-out", async () => {
+    const { anim, refs, iconCalls, byId } = await setup("sel");
+    anim.playHover("/w/a-sel", true);
+    expect(iconCalls).toEqual([1]);
+    refs.get("/w/a-sel")!.selected = true;
+    const calls = iconCalls.length;
+    anim.playHover("/w/a-sel", false);
+    expect((byId("slot-a-sel") as any).translateY).toBe(0);
+    expect((byId("lab-a-sel") as any).translateY).toBe(0);
+    // icon and bg stay selection-owned
+    expect(iconCalls.length).toBe(calls);
+  });
+
+  test("sweeping on to a second tile settles the first to rest instantly", async () => {
+    const { anim, byId } = await setup("sweep");
+    anim.playHover("/w/a-sweep", true);
+    expect((byId("tile-a-sweep") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+    expect((byId("slot-a-sweep") as any).translateY).toBe(-1);
+    expect((byId("lab-a-sweep") as any).translateY).toBe(0);
+    anim.playHover("/w/b-sweep", true);
+    const aBg = (byId("tile-a-sweep") as any).backgroundColor.toInts();
+    expect(aBg).toEqual([...REST] as any); // snapped to rest by the replacement
+    expect((byId("slot-a-sweep") as any).translateY).toBe(0);
+    expect((byId("lab-a-sweep") as any).translateY).toBe(0);
+    expect((byId("tile-b-sweep") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+    expect((byId("slot-b-sweep") as any).translateY).toBe(-1);
+    expect((byId("lab-b-sweep") as any).translateY).toBe(0);
+  });
+
+  test("a rebuild replaces the hovered node; the synthetic re-over presses the new tile", async () => {
+    const { anim, byId } = await setup("rebuild");
+    anim.playHover("/w/a-rebuild", true);
+    const old = byId("tile-a-rebuild");
+    (t.renderer.root as any).remove?.(old);
+    t.renderer.root.add(Box({ id: "tile-a-rebuild", width: 8, height: 5, backgroundColor: "#1a1b26" }));
+    t.renderer.root.add(Box({ id: "slot-rebuild", width: 4, height: 3 }));
+    await t.renderOnce();
+    anim.playHover("/w/a-rebuild", true);
+    expect((byId("tile-a-rebuild") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+  });
+
+  test("a cut (clipboard) tile keeps its dim after a hover cycle", async () => {
+    const { anim, iconCalls, byId } = await setup("cut", true, (k) => k.endsWith("cut-cut"));
+    anim.playHover("/w/cut-cut", true);
+    expect(iconCalls.at(-1)).toBe(1); // hover shows the bright raster
+    anim.playHover("/w/cut-cut", false);
+    // the icon returns to the CUT raster (not plain Rest), the label re-dims
+    expect(iconCalls.at(-1)).toBe(3); // IconStateIdx.Cut
+    expect((byId("lab-cut-cut") as any).fg.toInts()).toEqual([86, 95, 137, 255]); // #565f89
+    expect((byId("tile-cut-cut") as any).backgroundColor.toInts()).toEqual([...REST] as any);
+  });
+
+  test("disabled keeps today's instant snap (no lift)", async () => {
+    const { anim, iconCalls, byId } = await setup("off", false);
+    anim.playHover("/w/a-off", true);
+    expect(iconCalls).toEqual([1]);
+    expect((byId("tile-a-off") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+    anim.playHover("/w/a-off", false);
+    expect(iconCalls).toEqual([1, 0]);
+    expect((byId("tile-a-off") as any).backgroundColor.toInts()).toEqual([...REST] as any);
+    expect((byId("slot-a-off") as any).translateY).toBe(0);
+    expect((byId("lab-a-off") as any).translateY).toBe(0);
+  });
+
+  test("tiles lift their reserved icon without changing tile overflow", async () => {
+    const { anim, byId } = await setup("clip");
+    anim.playHover("/w/a-clip", true);
+    expect((byId("tile-a-clip") as any).overflow).toBe("visible");
+    expect((byId("slot-a-clip") as any).translateY).toBe(-1);
+    expect((byId("lab-a-clip") as any).translateY).toBe(0);
+    anim.playHover("/w/a-clip", false);
+    expect((byId("tile-a-clip") as any).overflow).toBe("visible");
+    expect((byId("slot-a-clip") as any).translateY).toBe(0);
+    expect((byId("lab-a-clip") as any).translateY).toBe(0);
+  });
+
+  test("thumbnail tiles also lift without changing tile overflow", async () => {
+    const refs = makeRefs("thumb", undefined, true);
+    const thumb = refs.get("/w/a-thumb")!;
+    delete thumb.iconSpec; // an image/video slot — flattened raster
+    for (const [, r] of refs) {
+      t.renderer.root.add(Box({ id: r.tileId, width: 8, height: 5, backgroundColor: "#1a1b26" }));
+      t.renderer.root.add(Box({ id: r.iconSlotId, width: 4, height: 3 }));
+      t.renderer.root.add(Text({ id: r.labelId, content: "x", fg: r.baseFg }));
+    }
+    await t.renderOnce();
+    const anim = makeTileHoverAnim({
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      tileRefs: () => refs,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89" }) as any,
+      uiStyle: () => "solid" as const,
+      setIconState: () => {},
+      hoverLiftOpts: () => ({ enabled: true, direction: "up", includeLabel: false }),
+    });
+    anim.playHover("/w/a-thumb", true);
+    expect((t.renderer.root.findDescendantById("tile-a-thumb") as any).overflow).toBe("visible");
+    expect((t.renderer.root.findDescendantById("slot-a-thumb") as any).translateY).toBe(-1);
+    expect((t.renderer.root.findDescendantById("lab-a-thumb") as any).translateY).toBe(0);
   });
 });

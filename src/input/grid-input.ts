@@ -98,6 +98,9 @@ export type GridInputCtx = {
   // termFocused flag makes ownsKeyboard() swallow every key with a lying
   // "Terminal owns keyboard" toast
   blurTerminal?(): void;
+  // animate the tile hover (instant highlight + one-cell lift, [ui] file-
+  // hover-animation). Absent = today's instant paint via setTileVisual.
+  hoverAnim?(key: string, hovered: boolean): void;
 } & GridSelectionDeps &
   GridMenuDeps &
   GridNavDeps;
@@ -435,7 +438,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
           return;
         }
         const refs = ctx.tileRefs.get(key);
-        if (!refs?.selected) ctx.setTileVisual(key, TileVisual.Hover);
+        if (refs?.selected) return;
+        if (ctx.hoverAnim) ctx.hoverAnim(key, true);
+        else ctx.setTileVisual(key, TileVisual.Hover);
       },
       onMouseOut: () => {
         if (gridDrag.active && gridDrag.dropTarget === key) {
@@ -444,7 +449,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
           return;
         }
         const refs = ctx.tileRefs.get(key);
-        if (!refs?.selected) ctx.setTileVisual(key, TileVisual.Rest);
+        if (refs?.selected) return;
+        if (ctx.hoverAnim) ctx.hoverAnim(key, false);
+        else ctx.setTileVisual(key, TileVisual.Rest);
       },
     };
   };

@@ -27,6 +27,7 @@ const makeCtx = (): GridInputCtx & {
   selStatusRefreshes: { n: number };
   focusCalls: { n: number };
   blurCalls: { n: number };
+  hoverCalls: [string, boolean][];
 } => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
@@ -46,6 +47,7 @@ const makeCtx = (): GridInputCtx & {
   const selStatus = { n: 0 };
   const focusCalls = { n: 0 };
   const blurCalls = { n: 0 };
+  const hoverCalls: [string, boolean][] = [];
   let anchor: number | null = null;
   let focused = 0;
   return {
@@ -57,11 +59,13 @@ const makeCtx = (): GridInputCtx & {
     selStatusRefreshes: selStatus,
     focusCalls,
     blurCalls,
+    hoverCalls,
     byId: () => null,
     termW: () => 80,
     termH: () => 24,
     tileRefs: refs as GridInputCtx["tileRefs"],
     setTileVisual: (key, mode) => void visuals.set(key, mode),
+    hoverAnim: (key, hovered) => void hoverCalls.push([key, hovered]),
     updateSelectionStatusReal: () => {
       selStatus.n++;
     },
@@ -334,5 +338,53 @@ describe("commitPendingCtrlToggle / finishDragState", () => {
     h.onMouseUp();
     for (let i = 0; i < 50 && gridDrag.keys; i++) await Bun.sleep(1); // settle deferred cleanup
     expect(ctx.selStatusRefreshes.n).toBe(0);
+  });
+});
+
+describe("hover animation routing", () => {
+  test("over/out on an unselected tile routes through hoverAnim, not setTileVisual", () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    h.onMouseOver();
+    expect(ctx.hoverCalls).toEqual([["/w/a.txt", true]]);
+    expect(ctx.visuals.get("/w/a.txt")).toBe(0); // no instant paint
+    h.onMouseOut();
+    expect(ctx.hoverCalls).toEqual([
+      ["/w/a.txt", true],
+      ["/w/a.txt", false],
+    ]);
+    expect(ctx.visuals.get("/w/a.txt")).toBe(0);
+  });
+
+  test("a selected tile gets no hover animation at all", () => {
+    const ctx = makeCtx();
+    ctx.tileRefs.get("/w/b.txt")!.selected = true;
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/b.txt", 1);
+    h.onMouseOver();
+    h.onMouseOut();
+    expect(ctx.hoverCalls).toEqual([]);
+  });
+
+  test("an active drag's drop-target hover keeps the instant Selected paint", () => {
+    const ctx = makeCtx();
+    gridDrag.active = true;
+    gridDrag.keys = [{ path: "/w/a.txt", isDir: false }];
+    const h = makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3);
+    h.onMouseOver();
+    expect(ctx.hoverCalls).toEqual([]);
+    expect(gridDrag.dropTarget).toBe("/w/sub");
+    expect(ctx.visuals.get("/w/sub")).toBe(2); // Selected
+    h.onMouseOut();
+    expect(ctx.visuals.get("/w/sub")).toBe(0);
+  });
+
+  test("without hoverAnim, over/out falls back to the instant tile paint", () => {
+    const ctx = makeCtx();
+    delete (ctx as any).hoverAnim;
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    h.onMouseOver();
+    expect(ctx.visuals.get("/w/a.txt")).toBe(1); // Hover
+    h.onMouseOut();
+    expect(ctx.visuals.get("/w/a.txt")).toBe(0); // Rest
   });
 });

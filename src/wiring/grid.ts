@@ -17,7 +17,7 @@ import {
   type GridMenuEntry,
 } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
-import { type EaseKey, fileAnimStyleFrom, makeFileAnim, type SlideDir } from "../ui/ui-grid-anim";
+import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { waitForResolution } from "../ui/ui-lookup";
@@ -173,6 +173,7 @@ export const wireGrid = (deps: {
       setStatusMsg: nav.setStatusMsg,
       focusPane: () => focusPane(pane),
       blurTerminal: () => fileops.terminal.blurTerminal(),
+      hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
       log: (msg: string) => dlog(msg),
     };
   };
@@ -229,6 +230,23 @@ export const wireGrid = (deps: {
       }),
     });
   const fileAnims = [makeFileAnimator(), makeFileAnimator()] as const;
+  // one hover animator per pane (whole-cell icon lift, synchronous) — reads
+  // [ui] file-hover-* live, lifts each pane's own reserved tiles
+  const makeHoverAnimator = (pane: 0 | 1) =>
+    makeTileHoverAnim({
+      byId,
+      tileRefs: () => selections[pane].tileRefs,
+      colors: themeGet,
+      uiStyle,
+      setIconState: core.slots.setIconState,
+      isCutKey: core.isCutKey,
+      hoverLiftOpts: () => ({
+        enabled: core.config.ui.fileHoverAnimation,
+        direction: core.config.ui.fileHoverDirection,
+        includeLabel: core.config.ui.fileHoverIncludeLabel,
+      }),
+    });
+  const hoverAnims = [makeHoverAnimator(0), makeHoverAnimator(1)] as const;
   const makeRenderer = (pane: 0 | 1) =>
     makeGridRenderer({
       termW: () => chrome.renderer.terminalWidth,
@@ -245,6 +263,11 @@ export const wireGrid = (deps: {
       tileW: () => core.geometry.tileW,
       tileH: () => core.geometry.tileH,
       iconCells: () => core.geometry.iconCells,
+      hoverLiftOpts: () => ({
+        enabled: core.config.ui.fileHoverAnimation,
+        direction: core.config.ui.fileHoverDirection,
+        includeLabel: core.config.ui.fileHoverIncludeLabel,
+      }),
       listRowH: () => core.config.ui.listRowHeight,
       uiStyle,
       colors: themeGet,
