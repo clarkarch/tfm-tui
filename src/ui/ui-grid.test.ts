@@ -31,6 +31,7 @@ const ASPECT = 0.5;
 let t: TestRendererSetup;
 let tmp: string;
 let content: Renderable;
+let scroller: { content: Renderable; scrollTop: number };
 let gridState: GridState;
 let cutKeys: Set<string>;
 let iconStateCalls: Array<{ spec: any; idx: number }>;
@@ -96,10 +97,13 @@ beforeAll(async () => {
     renderPreview: () => {},
   });
 
+  // the grid reads scroller.scrollTop to place its viewport window; a fresh
+  // literal per call lets a test dial the scroll offset in
+  scroller = { content, scrollTop: 0 };
   const { renderGrid: rg } = makeGridRenderer({
     termW: () => TERM_W,
     termH: () => TERM_H,
-    scroller: () => ({ content }),
+    scroller: () => scroller,
     state: gridState,
     searchQuery: () => searchQuery,
     recursiveSearch: () => recursiveSearch,
@@ -424,12 +428,13 @@ describe("renderGrid (grid tiles)", () => {
       expect(gridPlay.tiles.length).toBe(25);
       expect(gridPlay.total).toBe(30);
 
-      // list cap = terminal rows / row height + margin = 14
+      // list cap = floor(terminal rows / row height) + 1 margin = 13 (the
+      // same visibleTileCap math the thumb ranking uses)
       searchQuery = "fi";
       viewMode = "list";
       await renderGrid();
       const listPlay = fileAnimCalls.at(-1)!;
-      expect(listPlay.tiles.length).toBe(14);
+      expect(listPlay.tiles.length).toBe(13);
       expect(listPlay.total).toBe(30);
 
       // knob off: the whole list goes to the animator again
@@ -643,6 +648,46 @@ describe("renderGrid (grid tiles)", () => {
     expect(ref.iconSlotId).toBe(job.slotId);
     expect(ref.iconSpec).toBeUndefined();
     expect(thumbJobs.find((j) => j.path.endsWith("a.txt"))).toBeUndefined();
+  });
+
+  // the thumb jobs' `visible` flag is what thumbJobRank orders the drain by —
+  // the viewport window must follow scrollTop (a hover-drawer settle rebuilds
+  // mid-scroll) and mark only the first screenful of tiles for fast raster
+  test("thumb jobs flag viewport membership; scrolling moves the window", async () => {
+    const big = path.join(tmp, "viewport-dir");
+    mkdirSync(big);
+    for (let i = 1; i <= 60; i++) writeFileSync(path.join(big, `v${String(i).padStart(2, "0")}.png`), "x");
+    const prevCwd = gridState.cwd;
+    try {
+      gridState.cwd = big;
+      scroller.scrollTop = 0;
+      thumbJobs = [];
+      await renderGrid();
+      await t.renderOnce();
+      // grid: cols = floor((80-20-3)/10) = 5, rows = 24/6 = 4 → cap = 5*5 = 25
+      expect(thumbJobs.length).toBe(60);
+      const visAt = (name: string) => thumbJobs.find((j) => j.path.endsWith(name))!.visible;
+      expect(visAt("v01.png")).toBe(true);
+      expect(visAt("v25.png")).toBe(true);
+      expect(visAt("v26.png")).toBe(false);
+
+      // scrolled two tile-rows down (12 cells): window = [10, 35) — forced
+      // because scrollTop is deliberately not part of the content signature
+      scroller.scrollTop = 12;
+      thumbJobs = [];
+      await renderGrid(true);
+      await t.renderOnce();
+      expect(visAt("v10.png")).toBe(false);
+      expect(visAt("v11.png")).toBe(true);
+      expect(visAt("v35.png")).toBe(true);
+      expect(visAt("v36.png")).toBe(false);
+    } finally {
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      thumbJobs = [];
+      await renderGrid();
+      await t.renderOnce();
+    }
   });
 
   test("re-render preserves selection, focus and anchor by path", async () => {

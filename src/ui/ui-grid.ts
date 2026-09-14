@@ -98,6 +98,14 @@ type GridRendererCtx = {
   clearRenameEdit(): void;
 };
 
+// ONE viewport window for both the thumbnail drain ranking and the file
+// animation cap — they must agree, or a tile the animator skipped is also
+// (worse) not the one the thumb worker treats as urgent. `+1` row of slack
+// covers the partially visible one at the bottom. Pure, so both call sites
+// (and the test) read the same math.
+export const visibleTileCap = (termH: number, rowH: number, cols: number): number =>
+  cols * (Math.floor(termH / rowH) + 1);
+
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
   let tileSeq = 0;
@@ -564,17 +572,20 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const inner = Box({ id: innerId, width: "100%", flexDirection: "column" });
 
     let tileIdx = 0;
-    // viewport-sized tile budget for thumb-job ordering (same window math as
-    // the animation cap; a rebuild always starts at scrollTop 0): visible
-    // thumbs raster FIRST, off-screen backlog last — a huge folder used to
-    // make the visible tiles wait behind every spawn in the folder
-    const visCap = isList ? Math.ceil(ctx.termH() / rowH()) + 1 : cols * (Math.ceil(ctx.termH() / TILE_H) + 1);
+    // viewport window for thumb-job ranking: `visibleTileCap` tiles starting
+    // wherever the scroller sits (a hover-drawer settle rebuilds mid-scroll;
+    // a folder change always starts at 0) — visible thumbs raster FIRST,
+    // off-screen backlog last, so the first screenful lands before the tail
+    const visWin = visibleTileCap(ctx.termH(), isList ? rowH() : TILE_H, cols);
+    const scrollTop = Math.max(0, scroller?.scrollTop ?? 0);
+    const visFirst = isList ? Math.floor(scrollTop / rowH()) : Math.floor(scrollTop / TILE_H) * cols;
+    const inViewport = (i: number): boolean => i >= visFirst && i < visFirst + visWin;
     if (isList) {
-      for (const e of entries) inner.add(buildListRow(e, tileIdx++, tileIdx <= visCap));
+      for (const e of entries) inner.add(buildListRow(e, tileIdx, inViewport(tileIdx++)));
     } else {
       for (let i = 0; i < entries.length; i += cols) {
         const row = Box({ height: TILE_H, flexDirection: "row" });
-        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx++, tileIdx <= visCap));
+        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx, inViewport(tileIdx++)));
         inner.add(row);
       }
     }
@@ -630,12 +641,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
           // visible-only: off-screen tiles are never seen animating but each
           // per-frame opacity change costs a native push — cap the list to the
-          // viewport (whole terminal as the safe upper bound) and keep the full
+          // viewport (same window math as the thumb ranking) and keep the full
           // count for the cascade timing (the animator normalizes by `total`)
           const cap = ctx.fileAnimVisibleOnly()
-            ? isList
-              ? Math.ceil(ctx.termH() / rowH()) + 2
-              : cols * (Math.ceil(ctx.termH() / TILE_H) + 1)
+            ? visibleTileCap(ctx.termH(), isList ? rowH() : TILE_H, cols)
             : ids.length;
           ctx.fileAnim({ tiles: ids.slice(0, cap), inner: innerId, total: ids.length });
         } catch {}
