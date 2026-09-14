@@ -32,6 +32,10 @@ const SLIDE_FRACTION = 0.7;
 const SLIDE_MIN = 8;
 const SLIDE_MAX = 28;
 
+// ceiling for the PER-NODE styles (fade without container-fade, stagger,
+// stagger-slide): one native push per tile per frame. See play().
+export const MAX_PER_NODE_ANIM = 1000;
+
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 const outQuad = (p: number): number => p * (2 - p);
 const smoothstep = (p: number): number => p * p * (3 - 2 * p);
@@ -230,6 +234,17 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       const container = o.style === "slide" || (o.style === "fade" && o.containerFade);
       const ids = container && target?.inner ? [target.inner] : (target?.tiles ?? []);
       if (o.style === "off" || !(o.ms > 0) || ids.length === 0) {
+        stop();
+        return;
+      }
+      // ponytail: the per-node styles cost one native opacity/translate push per
+      // tile per frame (~13µs measured), so thousands of them is a multi-100ms
+      // frame. The grid caps its list to the viewport, but that cap is a user
+      // knob ([ui] file-animation-visible-only) — flip it off on a 10k folder
+      // and the churn is back, which is the exact hang this ceiling exists for.
+      // The one-container path is exempt because one push is one push. Raise it
+      // only with per-frame batching, not by taste.
+      if (!container && ids.length > MAX_PER_NODE_ANIM) {
         stop();
         return;
       }

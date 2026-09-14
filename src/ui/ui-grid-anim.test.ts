@@ -8,6 +8,7 @@ import {
   hoverLiftDelta,
   makeFileAnim,
   makeTileHoverAnim,
+  MAX_PER_NODE_ANIM,
   quantizeDy,
   restTileBg,
   slideTravel,
@@ -271,6 +272,57 @@ describe("makeFileAnim (engine)", () => {
     b.stop();
     expect(withTotal).toBeGreaterThan(withoutTotal);
     expect(withTotal).toBeCloseTo(expected, 2);
+  });
+
+  // the per-node styles cost one native push per tile per frame — past the
+  // ceiling the grid must just APPEAR (the hang this guard exists for), while
+  // the one-container path stays exempt no matter how many tiles it replaces
+  test("per-node style over MAX_PER_NODE_ANIM snaps to rest without animating", () => {
+    const fakes = Array.from({ length: MAX_PER_NODE_ANIM + 1 }, () => ({
+      opacity: 1,
+      translateX: 0,
+      translateY: 0,
+    }));
+    const byId = (id: string) => fakes[Number(id.slice(1))] ?? null;
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger", ms: 1000 }),
+    });
+    anim.play({ tiles: fakes.map((_, i) => `x${i}`) });
+    engine.update(500);
+    expect(fakes.every((n) => n.opacity === 1 && n.translateX === 0 && n.translateY === 0)).toBe(true);
+    anim.stop();
+  });
+
+  test("at-cap per-node list still animates", () => {
+    const fakes = Array.from({ length: MAX_PER_NODE_ANIM }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
+    const byId = (id: string) => fakes[Number(id.slice(1))] ?? null;
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger", ms: 1000 }),
+    });
+    anim.play({ tiles: fakes.map((_, i) => `x${i}`) });
+    engine.update(500);
+    expect(fakes[0]!.opacity).toBeLessThan(1);
+    anim.stop();
+    expect(fakes[0]!.opacity).toBe(1);
+  });
+
+  test("the container path is exempt from the per-node ceiling", () => {
+    const inner = { opacity: 1, translateX: 0, translateY: 0 };
+    const byId = (id: string) => (id === "big-inner" ? inner : { opacity: 1 });
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "fade", containerFade: true, ms: 1000 }),
+    });
+    anim.play({ tiles: Array.from({ length: MAX_PER_NODE_ANIM + 1 }, (_, i) => `t${i}`), inner: "big-inner" });
+    engine.update(500);
+    expect(inner.opacity).toBeLessThan(1);
+    anim.stop();
+    expect(inner.opacity).toBe(1);
   });
 
   test("stop() cancels a running animation and rests its nodes", async () => {
