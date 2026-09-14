@@ -4,6 +4,7 @@
 
 import { CliRenderEvents, Renderable } from "@opentui/core";
 import { runBoot } from "../app/boot";
+import { consumeRestartFlag } from "../app/restart";
 import { buildBootLayout } from "../ui/ui-boot-layout";
 import { makeCwdWatcher } from "../fs/watcher";
 import { isVirtualUri } from "../fs/uri";
@@ -18,7 +19,7 @@ import { waitForResolution } from "../ui/ui-lookup";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces } from "../fs/places";
 import { startMemHygiene, type AllocatorStats } from "../app/mem-hygiene";
-import { xtShiftEscapeFrame } from "../ui/ui-term";
+import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { configPath } from "../config/config";
 import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
@@ -89,6 +90,17 @@ export const wireBoot = (deps: {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
   runBoot({
     waitForResolution: () => waitForResolution(chrome.renderer),
+    // restart child only: the waiting parent never destroyed, so its kitty
+    // placements are still on screen under ours — delete-all once, first.
+    // Fresh boots skip this so other programs' images are never nuked. The
+    // flag is consumed (read+deleted) unconditionally, so a stale export can
+    // neither misfire here nor leak into shells/children.
+    isRestartChild: consumeRestartFlag(process.env),
+    clearStaleImages: () => {
+      try {
+        process.stdout.write(kittyDeleteAllImages());
+      } catch {}
+    },
     mountSlots: deps.mountSlots,
     buildLayout: () => {
       // scrollers x2 (one per pane)/band rect/drag ghost — module:

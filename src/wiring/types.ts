@@ -11,6 +11,7 @@ import type { createCliRenderer } from "@opentui/core";
 import type { BandCtx } from "../input/grid-input";
 import type { makeRenderAll } from "../app/render-all";
 import type { makeQuit } from "../app/quit";
+import type { makeRestart } from "../app/restart";
 import type { makeStatus } from "../ui/ui-status";
 import type { makeNav, makeSessionSync } from "../app/nav";
 import type { makeTabs } from "../app/tabs";
@@ -38,6 +39,7 @@ import type { makeEscMenu } from "../ui/ui-settings";
 export type NavWiring = {
   renderAll: ReturnType<typeof makeRenderAll>;
   quitApp: ReturnType<typeof makeQuit>;
+  restartApp: ReturnType<typeof makeRestart>;
   setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
   tabModel: ReturnType<typeof makeTabs>;
   tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>];

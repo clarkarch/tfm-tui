@@ -186,6 +186,7 @@ export type UiConfig = {
 // --- keybind actions (section [keys], kebab-case in TOML, camel props here) ---
 export type KeyAction =
   | "quit"
+  | "restart"
   | "openMenu"
   | "toggleHidden"
   | "reloadPlaces"
@@ -786,6 +787,7 @@ const THEME_ROWS: ThemeRow[] = (
 const KEY_ROWS: KeyRow[] = (
   [
     ["quit", "quit tfm", ["ctrl+q"]],
+    ["restart", "restart tfm", ["ctrl+alt+r"]],
     ["openMenu", "open the esc menu", ["escape"]],
     ["toggleHidden", "toggle hidden files", ["ctrl+h"]],
     ["reloadPlaces", "reload sidebar places", ["ctrl+r"]],

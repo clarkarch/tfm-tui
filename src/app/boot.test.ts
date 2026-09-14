@@ -109,4 +109,35 @@ describe("runBoot", () => {
     expect(reported).toEqual(["loadSystemPlaces"]);
     expect(calls).toContain("render");
   });
+
+  test("restart child clears stale kitty placements before anything draws", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls, { isRestartChild: true, clearStaleImages: () => calls.push("clearImages") }));
+    expect(calls[0]).toBe("clearImages");
+    expect(calls.indexOf("clearImages")).toBeLessThan(calls.indexOf("render"));
+  });
+
+  test("fresh boot never touches placements (other apps' images are safe)", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls, { clearStaleImages: () => calls.push("clearImages") }));
+    expect(calls).not.toContain("clearImages");
+  });
+
+  test("a throwing clearStaleImages is reported but the sequence continues", async () => {
+    const calls: string[] = [];
+    const reported: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        isRestartChild: true,
+        clearStaleImages: () => {
+          throw new Error("stdout closed");
+        },
+        reportBootError: (name) => {
+          reported.push(name);
+        },
+      }),
+    );
+    expect(reported).toEqual(["clearStaleImages"]);
+    expect(calls).toContain("render");
+  });
 });

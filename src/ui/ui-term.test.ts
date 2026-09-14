@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   hexToRgb16,
+  kittyDeleteAllImages,
   pasteDroppedPaths,
   promptClickArrows,
   ptyScreenState,
@@ -89,6 +90,12 @@ describe("xtShiftEscapeFrame", () => {
 
   test("release uses CSI > 0 s", () => {
     expect(xtShiftEscapeFrame(false)).toBe("\x1b[>0s");
+  });
+});
+
+describe("kittyDeleteAllImages", () => {
+  test("bare a=d deletes every visible placement, d=A also frees image data", () => {
+    expect(kittyDeleteAllImages()).toBe("\x1b_Ga=d,d=A\x1b\\");
   });
 });
 

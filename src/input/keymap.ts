@@ -1,5 +1,5 @@
 // --- Keyboard router: ONE keypress entry point with a strict precedence
-// chain — capture > quit > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/
+// chain — capture > quit/restart > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/
 // props, which keep their keys even above an open pick) > pick > esc-menu >
 // terminal > path-edit > file menu > search > sidebar > grid > actions.
 // Action keys are remappable via config [keys] (see config-schema.ts);
@@ -41,6 +41,7 @@ export type KeyRouterCtx = {
   // live keybind lookup — reads config.keys so remaps apply without rebuilds
   keybinds(action: KeyAction): string[];
   quit(): void;
+  restart(): void;
   // --- modal layers (precedence order) ---
   conflict: { isOpen(): boolean; closeConflict(policy: "skip"): void };
   yesNo: { isOpen(): boolean; close(): void };
@@ -207,7 +208,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   // --- Precedence stages below: each returns true when it consumes the event.
-  // Order is load-bearing (capture > quit > prompt > bulk-rename > conflict >
+  // Order is load-bearing (capture > quit/restart > prompt > bulk-rename > conflict >
   // yes/no > rename > props > esc-menu > terminal > path-edit > file menu >
   // search > sidebar > grid > actions) — do not reorder; mirrors the module
   // header. ---
@@ -467,6 +468,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doQuit = (): void => {
     ctx.quit();
   };
+  const doRestart = (): void => {
+    ctx.restart();
+  };
   const doHistBack = (): void => {
     ctx.goBack();
   };
@@ -615,6 +619,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // KEY_SCHEMA order (config order) doubles as the palette listing order
   const ACTION_TABLE: Array<{ action: KeyAction; run: () => void }> = [
     { action: "quit", run: doQuit },
+    { action: "restart", run: doRestart },
     { action: "openMenu", run: doOpenMenu },
     { action: "toggleHidden", run: doToggleHidden },
     { action: "reloadPlaces", run: doReloadPlaces },
@@ -666,6 +671,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (ctx.escMenu.captureKey(ev)) return;
     if (hit(ev, "quit")) {
       doQuit();
+      return;
+    }
+    // held restart must not queue overlapping teardown/spawn pairs
+    if (hit(ev, "restart") && ev.repeated !== true) {
+      doRestart();
       return;
     }
     // a true modal open above the pick overlay keeps its keys (see

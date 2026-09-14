@@ -6,6 +6,8 @@
 
 import { makeRenderAll } from "../app/render-all";
 import { makeQuit } from "../app/quit";
+import { makeRestart } from "../app/restart";
+import { sharedOpQueue } from "../lib/op-queue";
 import { makeStatus } from "../ui/ui-status";
 import { makeNav, makeSessionSync } from "../app/nav";
 import { saveSessionSync, type PaneTabs } from "../fs/session";
@@ -21,7 +23,7 @@ export const wireNav = (deps: {
   core: CoreWiring;
   // late clusters — every field below is only read at runtime, post-boot
   getChrome: () => ChromeWiring;
-  getDnd: () => { disableDrops(): void };
+  getDnd: () => { disableDrops(): void; enableDrops(): void };
   getGridFoundation: () => GridFoundationWiring;
   getGrid: () => GridWiring;
   getTermHasFocus: () => boolean;
@@ -80,8 +82,9 @@ export const wireNav = (deps: {
   // a shell with a foreground child can linger) and flushSession writes the
   // final session.json synchronously (process.exit kills pending async IO, so
   // the debounced save loses the last navigation). Both arrive as arrows —
-  // they close over later-defined bindings. ---
-  const quitApp = makeQuit({
+  // they close over later-defined bindings. The same step object feeds restart
+  // below (RestartCtx extends QuitCtx), so the two teardowns can't drift. ---
+  const quitSteps = {
     disableDrops: () => getDnd().disableDrops(),
     releaseShiftCapture: () => process.stdout.write(xtShiftEscapeFrame(false)),
     onQuit: () => {
@@ -102,7 +105,33 @@ export const wireNav = (deps: {
       saveSessionSync(paneTabs(), core.panes.active);
     },
     destroy: () => getChrome().renderer.destroy(),
-    exit: (code) => process.exit(code),
+    exit: (code: number) => process.exit(code),
+  };
+  const quitApp = makeQuit(quitSteps);
+
+  // --- Restart: same binary+args, parent WAITS (spawnSync) so the shell never
+  // wakes mid-handoff — fire-and-forget left the child competing with the
+  // shell for input (echoed mouse bytes, dead keys). Notify/recover arrive
+  // lazily; recover re-arms drops + shift-capture and re-renders (the renderer
+  // survives a failed spawn; the PTY pane and plugin instances don't — the
+  // failure toast says so). ---
+  const restartApp = makeRestart({
+    ...quitSteps,
+    execPath: process.execPath,
+    argv: process.argv.slice(1),
+    // the shared serial queue: a live op would race the child's orphan sweep
+    // while the parent loop is frozen inside spawnSync (see app/restart)
+    isBusy: () => !sharedOpQueue().isIdle(),
+    recover: () => {
+      try {
+        getDnd().enableDrops();
+      } catch {}
+      try {
+        process.stdout.write(xtShiftEscapeFrame(true));
+      } catch {}
+      renderAll();
+    },
+    notify: (msg, title, level) => getChrome().notify(msg, title, level),
   });
 
   // --- Status bar writes live in ./ui-status (tested). The refresh target is
@@ -184,6 +213,7 @@ export const wireNav = (deps: {
   return {
     renderAll,
     quitApp,
+    restartApp,
     setStatusMsg,
     canBack,
     canFwd,

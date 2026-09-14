@@ -87,6 +87,14 @@ export const terminalProbeReply = (buf: string): { resp: string; tail: string } 
 // sequence ignore it; alt+click is the universal fallback.
 export const xtShiftEscapeFrame = (enable: boolean): string => (enable ? "\x1b[>1s" : "\x1b[>0s");
 
+// kitty graphics delete-all (`a=d` bare deletes every visible placement,
+// `d=A` also frees the image data — spec "Deleting images"). Restart-gated
+// boot cleanup: a restart child can't know the waiting parent's placement IDs
+// (deletes are per-ID), and placements live in the terminal, NOT the
+// alt-screen, so the parent's thumbnails would ghost under the child's fresh
+// ones without this. Terminals without graphics support ignore the APC.
+export const kittyDeleteAllImages = (): string => "\x1b_Ga=d,d=A\x1b\\";
+
 // single-quote a path for shell input; embedded quotes use the '\'' idiom,
 // which survives every POSIX shell
 const shellQuotePath = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`;

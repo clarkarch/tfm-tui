@@ -11,6 +11,11 @@ import { debugLog } from "./log";
 
 export type BootCtx = {
   waitForResolution(): Promise<void>;
+  // restart child only (TFM_RESTART, wired in io.ts): delete the waiting
+  // parent's kitty placements before anything draws — per-ID deletes can't
+  // reach across processes (see kittyDeleteAllImages in ui-term)
+  isRestartChild?: boolean;
+  clearStaleImages?(): void;
   buildLayout(): void;
   // mount plugin UI slots into the boot layout (after buildLayout, before the
   // first renderAll so contributions paint on the first frame)
@@ -54,6 +59,7 @@ const guard = (ctx: BootCtx, name: string, fn: () => void | Promise<void>): Prom
 export const runBoot = async (ctx: BootCtx): Promise<void> => {
   // ISO timestamps on every line already give a full timeline in the debug
   // log — free profiling for slow-boot reports, silent in production
+  if (ctx.isRestartChild) await guard(ctx, "clearStaleImages", () => ctx.clearStaleImages?.());
   await guard(ctx, "waitResolution", () => ctx.waitForResolution());
   bootLog("boot: buildLayout");
   await guard(ctx, "buildLayout", () => ctx.buildLayout());

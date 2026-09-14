@@ -1,5 +1,5 @@
 // --- Keyboard wiring: the modal precedence chain router lives in ./keymap
-// (capture > quit > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/props) >
+// (capture > quit/restart > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/props) >
 // pick > esc-menu > terminal > path-edit > file menu > search > sidebar >
 // grid > actions — mirrored from its header) + sidebar kb-focus state + the
 // generic pick overlay widget (api.ui.pick primitive) and the single-line
@@ -110,6 +110,7 @@ export const wireKeymap = (deps: {
     state,
     keybinds: (action) => core.config.keys[action] ?? [],
     quit: nav.quitApp,
+    restart: nav.restartApp,
     // layer-open reads go through floats — the single source of truth; the
     // close fns are the widgets' (they route back through floats themselves)
     conflict: {

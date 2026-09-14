@@ -5,17 +5,27 @@
 
 export const makeOpQueue = () => {
   let tail: Promise<void> = Promise.resolve();
+  // in-flight + queued-behind count: restart refuses while nonzero (the
+  // parent loop freezes inside spawnSync, so a live op would race the
+  // child's orphan sweep — see app/restart)
+  let active = 0;
   const enqueue = <T>(fn: () => Promise<T>): Promise<T> => {
+    active++;
     const run = tail.then(fn, fn);
     // keep the chain alive even when this op rejects — the rejection still
     // propagates to this caller via `run`
     tail = run.then(
-      () => undefined,
-      () => undefined,
+      () => {
+        active--;
+      },
+      () => {
+        active--;
+      },
     );
     return run;
   };
-  return { enqueue };
+  const isIdle = (): boolean => active === 0;
+  return { enqueue, isIdle };
 };
 
 type OpQueue = ReturnType<typeof makeOpQueue>;

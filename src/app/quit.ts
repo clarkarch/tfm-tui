@@ -23,32 +23,7 @@ export type QuitCtx = {
 export const makeQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
-    let failed = false;
-    try {
-      ctx.disableDrops();
-    } catch {
-      failed = true;
-    }
-    try {
-      ctx.releaseShiftCapture();
-    } catch {
-      failed = true;
-    }
-    try {
-      ctx.flushSession?.();
-    } catch {
-      failed = true;
-    }
-    try {
-      ctx.closeTerminal?.();
-    } catch {
-      failed = true;
-    }
-    try {
-      ctx.onQuit?.();
-    } catch {
-      failed = true;
-    }
+    let failed = runTeardownSteps(ctx);
     try {
       ctx.destroy();
     } catch {
@@ -56,3 +31,36 @@ export const makeQuit =
     }
     ctx.exit(failed ? 1 : 0);
   };
+
+// --- The pre-destroy teardown steps, shared with restart (which runs them,
+// then waits out the child, and only destroys/exits once it's gone). Order is
+// load-bearing (see makeQuit) — keep the sequence here, not at call sites. ---
+export const runTeardownSteps = (ctx: QuitCtx): boolean => {
+  let failed = false;
+  try {
+    ctx.disableDrops();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.releaseShiftCapture();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.flushSession?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.closeTerminal?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.onQuit?.();
+  } catch {
+    failed = true;
+  }
+  return failed;
+};

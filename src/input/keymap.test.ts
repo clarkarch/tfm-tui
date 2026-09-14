@@ -72,6 +72,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     state,
     keybinds: (action) => binds[action] ?? [],
     quit: rec("quit"),
+    restart: rec("restart"),
     conflict: { isOpen: () => false, closeConflict: (p) => calls.push(`conflict:close:${p}`) },
     yesNo: { isOpen: () => false, close: rec("yesno:close") },
     isRenaming: () => false,
@@ -213,6 +214,29 @@ describe("precedence chain", () => {
     });
     h.key("q", { ctrl: true });
     expect(h.calls).toEqual(["quit"]);
+  });
+
+  test("ctrl+alt+r restarts above everything, even an open conflict", () => {
+    const h = makeHarness({
+      conflict: { isOpen: () => true, closeConflict: (p) => h.calls.push(`conflict:close:${p}`) },
+    });
+    h.key("r", { ctrl: true, meta: true });
+    expect(h.calls).toEqual(["restart"]);
+  });
+
+  test("held restart never queues overlapping teardown/spawn pairs", () => {
+    const h = makeHarness();
+    h.key("r", { ctrl: true, meta: true, repeated: true });
+    expect(h.calls).toEqual([]);
+  });
+
+  test("a remap moves restart off ctrl+alt+r", () => {
+    const h = makeHarness();
+    h.binds.restart = ["ctrl+alt+t"];
+    h.key("r", { ctrl: true, meta: true });
+    expect(h.calls).toEqual([]);
+    h.key("t", { ctrl: true, meta: true });
+    expect(h.calls).toEqual(["restart"]);
   });
 
   test("conflict modal: esc = skip, everything else swallowed", () => {

@@ -87,6 +87,7 @@ ansi15         = "#c0caf5"  # terminal color 15 (bright white)
 
 [keys]
 quit               = ["ctrl+q"]                  # default: ctrl+q
+restart            = ["ctrl+alt+r"]              # default: ctrl+alt+r
 open-menu          = ["escape"]                  # default: escape
 toggle-hidden      = ["ctrl+h"]                  # default: ctrl+h
 reload-places      = ["ctrl+r"]                  # default: ctrl+r
