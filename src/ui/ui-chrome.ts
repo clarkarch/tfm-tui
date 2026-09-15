@@ -404,6 +404,13 @@ export const makeChrome = (ctx: ChromeCtx) => {
       // renders without the places list changing (rebuild is skipped then)
       rec.selected = isPlaceSelected(rec.place);
       const isSel = rec.selected;
+      // a row that just became (still is) selected must never carry a hover
+      // lift: playHover only releases on a mouse out/over sweep, so a cwd change
+      // with the mouse resting on a lifted row (click, keyboard nav, grid/pane
+      // navigate) would strand its icon nudged. Release it here — the single
+      // repaint every selection change funnels through. hoverRow(key,false) is a
+      // safe no-op unless the animator actually owns this exact row.
+      if (isSel) ctx.hoverRow(rec.rowId, false);
       const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
       const row: any = ctx.byId(rec.rowId);
       const label: any = ctx.byId(rec.labelId);

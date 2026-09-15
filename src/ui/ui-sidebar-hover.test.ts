@@ -70,6 +70,20 @@ describe("makeSidebarHover", () => {
     expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(0);
   });
 
+  test("a lift owned before selection snaps back when the selected row re-fires over", () => {
+    // stuck-lift guard inside the ANIMATOR (the wiring's normalizePlaces call
+    // is pinned in ui-chrome.test.ts): over → unselected → lift; selection
+    // flips with the cursor stationary (no out); the repaint re-fires over →
+    // the owned lift is released, not just blocked
+    const { hover, nodes, refs } = setup();
+    hover.playHover("tfm-place-0", true);
+    expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(-1);
+    refs.get("tfm-place-0")!.selected = true;
+    hover.playHover("tfm-place-0", true);
+    expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(0);
+    expect((nodes.get("tfm-place-0-label") as any).translateX).toBe(0);
+  });
+
   test("disabled never lifts and drops a lift owned when it was on", () => {
     const { hover, nodes, setOpts } = setup();
     hover.playHover("tfm-place-0", true);

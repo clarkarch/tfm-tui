@@ -419,16 +419,42 @@ describe("normalizePlaces (hover/kb focus)", () => {
         y: 0,
         modifiers: { shift: false, alt: false, ctrl: false },
       });
-    const n = calls.hoverRow.length;
+    const nOver = calls.hoverRow.length;
     over("tfm-place-2", "over");
-    expect(calls.hoverRow.slice(n)).toEqual([["tfm-place-2", true]]);
+    // exclusivity: the only emission for THIS row on an over is the lift
+    expect(calls.hoverRow.slice(nOver).filter(([k]) => k === "tfm-place-2")).toEqual([["tfm-place-2", true]]);
     // paint still normalizes alongside the nudge
     expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.hoverBg));
+    const nOut = calls.hoverRow.length;
     over("tfm-place-2", "out");
-    expect(calls.hoverRow.slice(n)).toEqual([
-      ["tfm-place-2", true],
-      ["tfm-place-2", false],
-    ]);
+    expect(calls.hoverRow.slice(nOut).filter(([k]) => k === "tfm-place-2")).toEqual([["tfm-place-2", false]]);
     expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.sidebarBg));
+  });
+
+  test("a lifted row that becomes selected has its lift released on repaint", async () => {
+    // the stuck-lift regression: mouse rests on an unselected row (it lifts),
+    // then cwd changes to that row (click/keyboard/grid nav) with NO mouse out —
+    // normalizePlaces must route a release so the selected row never keeps nudging
+    cwd = HOME;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    // pick a row that is unselected while cwd=HOME and has a real path
+    const target = chrome.placesHost.find((r) => !r.selected && r.place.path);
+    expect(target).toBeTruthy();
+    (byId(target!.rowId) as any).processMouseEvent({
+      type: "over",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    // now navigate cwd to that row; the mouse stays put (no out event fires)
+    cwd = target!.place.path!;
+    const n = calls.hoverRow.length;
+    // go through the real funnel: renderSidebar's fast path (sig excludes cwd) →
+    // normalizePlaces, which recomputes selected from live cwd and must release
+    // the newly-selected row's lift via hoverRow(key, false)
+    chrome.renderSidebar();
+    expect(calls.hoverRow.slice(n).filter(([k]) => k === target!.rowId)).toEqual([[target!.rowId, false]]);
   });
 });

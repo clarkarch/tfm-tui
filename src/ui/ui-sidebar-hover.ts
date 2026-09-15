@@ -95,8 +95,17 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
         return;
       }
       // the cwd-selected row keeps its accent paint only (mirrors tiles,
-      // where selection owns the hovered tile's visuals)
-      if (refs.selected) return;
+      // where selection owns the hovered tile's visuals) — but a lift WE own
+      // on this row gets released first: a repaint can re-fire a synthetic
+      // over on the stationary cursor after the row's selection flipped with
+      // no out event, and the lift must not survive into the selected state
+      if (refs.selected) {
+        if (current?.key === key) {
+          dropLift(current);
+          current = null;
+        }
+        return;
+      }
 
       // sweep: the pointer moved to another row without an out landing first
       if (current && current.key !== key) {
