@@ -27,13 +27,13 @@ hover-open-delay-ms                   = 195         # delay before an auto-hide 
 hover-close-delay-ms                  = 175         # delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms
 hover-anim-ms                         = 120         # auto-hide slide duration, 0..600 ms (0 = instant)
 double-click-ms                       = 400         # 100..2000
-toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
 drag-threshold-cells                  = 1           # cells of movement before a press becomes a drag, 1..5
+toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
 transparent-bg                        = false       # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
+ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
-ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 file-animation                        = false       # true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)
 file-animation-slide                  = false       # true = files rise up into place (distance = file-animation-slide-pct)
 file-animation-stagger                = false       # true = top-to-bottom cascade instead of one wave
@@ -124,8 +124,6 @@ ansi15         = "#c0caf5"  # terminal color 15 (bright white)
 quit               = ["ctrl+q"]                  # default: ctrl+q
 restart            = ["ctrl+alt+r"]              # default: ctrl+alt+r
 open-menu          = ["escape"]                  # default: escape
-toggle-hidden      = ["ctrl+h"]                  # default: ctrl+h
-reload-places      = ["ctrl+r"]                  # default: ctrl+r
 new-tab            = ["ctrl+t"]                  # default: ctrl+t
 close-tab          = ["ctrl+w"]                  # default: ctrl+w
 next-tab           = ["ctrl+tab"]                # default: ctrl+tab
@@ -139,16 +137,17 @@ duplicate          = ["ctrl+d"]                  # default: ctrl+d
 paste              = ["ctrl+v"]                  # default: ctrl+v
 undo               = ["ctrl+z"]                  # default: ctrl+z
 redo               = ["ctrl+y", "ctrl+shift+z"]  # default: ctrl+y or ctrl+shift+z
-parent-dir         = ["backspace"]               # default: backspace
-hist-back          = ["alt+left"]                # default: alt+left
-hist-forward       = ["alt+right"]               # default: alt+right
 show-props         = ["alt+enter"]               # default: alt+enter
 new-folder         = ["ctrl+shift+n"]            # default: ctrl+shift+n
 new-file           = ["ctrl+alt+n"]              # default: ctrl+alt+n
+parent-dir         = ["backspace"]               # default: backspace
+hist-back          = ["alt+left"]                # default: alt+left
+hist-forward       = ["alt+right"]               # default: alt+right
 path-edit          = ["ctrl+l"]                  # default: ctrl+l
-toggle-preview     = ["f9"]                      # default: f9
-open-terminal      = ["f4"]                      # default: f4
 connect-server     = ["ctrl+shift+s"]            # default: ctrl+shift+s
+toggle-hidden      = ["ctrl+h"]                  # default: ctrl+h
+reload-places      = ["ctrl+r"]                  # default: ctrl+r
+toggle-preview     = ["f9"]                      # default: f9
 toggle-view        = ["ctrl+g"]                  # default: ctrl+g
 zoom-in            = ["ctrl+="]                  # default: ctrl+=
 zoom-out           = ["ctrl+-"]                  # default: ctrl+-
@@ -156,3 +155,4 @@ toggle-dual-pane   = ["ctrl+shift+d"]            # default: ctrl+shift+d
 switch-pane        = ["tab"]                     # default: tab
 copy-to-other-pane = ["f5"]                      # default: f5
 move-to-other-pane = ["f6"]                      # default: f6
+open-terminal      = ["f4"]                      # default: f4

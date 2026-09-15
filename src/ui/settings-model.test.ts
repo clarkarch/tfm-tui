@@ -182,6 +182,70 @@ describe("settingGroups shape", () => {
     ]);
   });
 
+  test("behavior/appearance/files carry subsection dividers (related options grouped)", () => {
+    const h = mk();
+    const seq = (header: string): string[] =>
+      h
+        .groups()
+        .find((g) => g.header === header)!
+        .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    // mouse gestures share a section; the lone toast row trails headerless
+    expect(seq("behavior")).toEqual(["##mouse", "double-click ms", "drag threshold", "toast duration"]);
+    // hidden files leads into its listing topic; session persistence is its own section
+    expect(seq("files & session")).toEqual([
+      "hidden files",
+      "##listing",
+      "recursive search",
+      "##session",
+      "restore session",
+      "persistent undo",
+    ]);
+    // theme preset leads; style surfaces share a section, chrome visibility another
+    expect(seq("appearance")).toEqual([
+      "theme",
+      "##style",
+      "transparent bg",
+      "icons",
+      "ui style",
+      "##chrome",
+      "sidebar title",
+      "tab bar",
+    ]);
+  });
+
+  test("keys category groups binds under subsection dividers", () => {
+    const h = mk();
+    const kb = h.groups().find((g) => g.header === "keys")!.rows;
+    const seq = kb.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    expect(kb.length).toBe(KEY_SCHEMA.length + 6);
+    expect(seq.filter((s) => s.startsWith("##"))).toEqual([
+      "##app",
+      "##tabs",
+      "##files",
+      "##navigation",
+      "##view",
+      "##panes",
+    ]);
+    // spot-check section membership across the boundaries
+    expect(seq.slice(0, 4)).toEqual(["##app", "quit tfm", "restart tfm", "open the esc menu"]);
+    expect(seq.slice(seq.indexOf("##tabs") + 1, seq.indexOf("##tabs") + 5)).toEqual([
+      "new tab",
+      "close tab",
+      "next tab (cycle)",
+      "previous tab (cycle)",
+    ]);
+    expect(seq.slice(seq.indexOf("##panes") + 1)).toEqual([
+      "toggle dual pane",
+      "switch active pane (dual pane)",
+      "copy selection to the other pane",
+      "move selection to the other pane",
+      "open terminal here",
+    ]);
+    expect(seq).toContain("connect to a network server (gvfs)");
+    expect(seq.indexOf("connect to a network server (gvfs)")).toBeGreaterThan(seq.indexOf("##navigation"));
+    expect(seq.indexOf("connect to a network server (gvfs)")).toBeLessThan(seq.indexOf("##view"));
+  });
+
   test("terminal height stepper commits through the ui patch", () => {
     const h = mk();
     const row = h.byLabel("terminal height");
@@ -210,8 +274,8 @@ describe("settingGroups shape", () => {
   test("every keybind action gets a row", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;
-    expect(kb.length).toBe(KEY_SCHEMA.length);
-    expect(kb.every(isKeybind)).toBe(true);
+    expect(kb.length).toBe(KEY_SCHEMA.length + 6);
+    expect(kb.filter((r) => r.kind !== "header").every(isKeybind)).toBe(true);
   });
 
   test("hover lift controls live in animations under sensible labels", () => {

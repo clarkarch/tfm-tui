@@ -179,6 +179,22 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
 
+  // keys category: same subsection-divider mechanism as genericUiRows —
+  // one header row where the schema subsection changes (first section leads
+  // with one too, so every binds group is labeled)
+  const keyRowsWithHeaders = (): SettingRow[] => {
+    const rows: SettingRow[] = [];
+    let subsection = "";
+    for (const r of KEY_SCHEMA) {
+      if (r.subsection && r.subsection !== subsection) {
+        subsection = r.subsection;
+        rows.push({ kind: "header", label: r.subsection });
+      }
+      rows.push(keybindRow(r.action, r.label));
+    }
+    return rows;
+  };
+
   const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
     const rows: SettingRow[] = [];
     // subsection dividers: one header row where the schema's subsection name
@@ -235,7 +251,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       let rows: SettingRow[];
       switch (cat.id) {
         case "keys":
-          rows = KEY_SCHEMA.map((r) => keybindRow(r.action, r.label));
+          rows = keyRowsWithHeaders();
           break;
         case "appearance":
           rows = [themeRow(), ...genericUiRows("appearance"), tabBarRow()];

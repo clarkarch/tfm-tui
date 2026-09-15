@@ -295,8 +295,8 @@ type RowCommon = {
   doc: string;
   label: string;
   group?: GuiGroup;
-  // GUI-only section divider (ui rows only; ignored by parse/serialize): when
-  // set on consecutive rows, settings-model renders one header row where the
+  // GUI-only section divider (ignored by parse/serialize): when set on
+  // consecutive rows, settings-model renders one header row where the
   // subsection name changes. Rows without one belong to the group's namesake.
   subsection?: string;
 };
@@ -581,6 +581,21 @@ const UI_ROWS: SchemaRow[] = [
     doc: "100..2000",
     label: "double-click ms",
     group: "behavior",
+    subsection: "mouse",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "drag-threshold-cells",
+    prop: "dragThresholdCells",
+    min: 1,
+    max: 5,
+    step: 1,
+    def: 1,
+    doc: "cells of movement before a press becomes a drag, 1..5",
+    label: "drag threshold",
+    group: "behavior",
+    subsection: "mouse",
   },
   {
     kind: "int",
@@ -596,19 +611,6 @@ const UI_ROWS: SchemaRow[] = [
     group: "behavior",
   },
   {
-    kind: "int",
-    section: "ui",
-    tomlKey: "drag-threshold-cells",
-    prop: "dragThresholdCells",
-    min: 1,
-    max: 5,
-    step: 1,
-    def: 1,
-    doc: "cells of movement before a press becomes a drag, 1..5",
-    label: "drag threshold",
-    group: "behavior",
-  },
-  {
     kind: "bool",
     section: "ui",
     tomlKey: "transparent-bg",
@@ -617,6 +619,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = follow a transparent terminal bg (kitty background_opacity); false = force opaque",
     label: "transparent bg",
     group: "appearance",
+    subsection: "style",
   },
   {
     kind: "enum",
@@ -628,26 +631,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs',
     label: "icons",
     group: "appearance",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "sidebar-title",
-    prop: "sidebarTitle",
-    def: true,
-    doc: 'true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it',
-    label: "sidebar title",
-    group: "appearance",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "tab-bar",
-    prop: "tabBar",
-    def: false,
-    doc: "true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)",
-    label: "tab bar",
-    group: "appearance",
+    subsection: "style",
   },
   {
     kind: "enum",
@@ -658,6 +642,28 @@ const UI_ROWS: SchemaRow[] = [
     def: "solid",
     doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels',
     label: "ui style",
+    group: "appearance",
+    subsection: "style",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-title",
+    prop: "sidebarTitle",
+    def: true,
+    doc: 'true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it',
+    label: "sidebar title",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "tab-bar",
+    prop: "tabBar",
+    def: false,
+    doc: "true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)",
+    label: "tab bar",
     group: "appearance",
   },
   {
@@ -1244,6 +1250,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)",
     label: "recursive search",
     group: "files",
+    subsection: "listing",
   },
   {
     kind: "bool",
@@ -1254,6 +1261,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = reopen the folder from the last quit instead of the launch cwd",
     label: "restore session",
     group: "files",
+    subsection: "session",
   },
   {
     kind: "bool",
@@ -1264,6 +1272,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)",
     label: "persistent undo",
     group: "files",
+    subsection: "session",
   },
   {
     kind: "bool",
@@ -1318,46 +1327,47 @@ const THEME_ROWS: ThemeRow[] = (
 
 // [keys] — one row per remappable action. Modal-internal nav keys (arrows,
 // enter, esc inside menus/dialogs) and the type-to-search catch-all are
-// structural and intentionally NOT remappable.
+// structural and intentionally NOT remappable. The 4th tuple element groups
+// binds under a settings-GUI divider (same subsection mechanism as ui rows).
 const KEY_ROWS: KeyRow[] = (
   [
-    ["quit", "quit tfm", ["ctrl+q"]],
-    ["restart", "restart tfm", ["ctrl+alt+r"]],
-    ["openMenu", "open the esc menu", ["escape"]],
-    ["toggleHidden", "toggle hidden files", ["ctrl+h"]],
-    ["reloadPlaces", "reload sidebar places", ["ctrl+r"]],
-    ["newTab", "new tab", ["ctrl+t"]],
-    ["closeTab", "close tab", ["ctrl+w"]],
-    ["nextTab", "next tab (cycle)", ["ctrl+tab"]],
-    ["prevTab", "previous tab (cycle)", ["ctrl+shift+tab"]],
-    ["selectAll", "select all", ["ctrl+a"]],
-    ["trash", "trash selection (delete forever in trash)", ["delete"]],
-    ["renameOrRestore", "rename / bulk rename on multi-selection (restore in trash)", ["f2"]],
-    ["copy", "copy selection", ["ctrl+c"]],
-    ["cut", "cut selection", ["ctrl+x"]],
-    ["duplicate", "duplicate selection (copy in place)", ["ctrl+d"]],
-    ["paste", "paste clipboard", ["ctrl+v"]],
-    ["undo", "undo last file op", ["ctrl+z"]],
-    ["redo", "redo (ctrl+shift+z works too)", ["ctrl+y", "ctrl+shift+z"]],
-    ["parentDir", "go to parent directory", ["backspace"]],
-    ["histBack", "back in history", ["alt+left"]],
-    ["histForward", "forward in history", ["alt+right"]],
-    ["showProps", "properties for selection", ["alt+enter"]],
-    ["newFolder", "new folder", ["ctrl+shift+n"]],
-    ["newFile", "new file", ["ctrl+alt+n"]],
-    ["pathEdit", "edit the path bar", ["ctrl+l"]],
-    ["togglePreview", "toggle preview pane", ["f9"]],
-    ["openTerminal", "open terminal here", ["f4"]],
-    ["connectServer", "connect to a network server (gvfs)", ["ctrl+shift+s"]],
-    ["toggleView", "toggle grid/list view", ["ctrl+g"]],
-    ["zoomIn", "bigger tiles", ["ctrl+="]],
-    ["zoomOut", "smaller tiles", ["ctrl+-"]],
-    ["toggleDualPane", "toggle dual pane", ["ctrl+shift+d"]],
-    ["switchPane", "switch active pane (dual pane)", ["tab"]],
-    ["copyToOtherPane", "copy selection to the other pane", ["f5"]],
-    ["moveToOtherPane", "move selection to the other pane", ["f6"]],
+    ["quit", "quit tfm", ["ctrl+q"], "app"],
+    ["restart", "restart tfm", ["ctrl+alt+r"], "app"],
+    ["openMenu", "open the esc menu", ["escape"], "app"],
+    ["newTab", "new tab", ["ctrl+t"], "tabs"],
+    ["closeTab", "close tab", ["ctrl+w"], "tabs"],
+    ["nextTab", "next tab (cycle)", ["ctrl+tab"], "tabs"],
+    ["prevTab", "previous tab (cycle)", ["ctrl+shift+tab"], "tabs"],
+    ["selectAll", "select all", ["ctrl+a"], "files"],
+    ["trash", "trash selection (delete forever in trash)", ["delete"], "files"],
+    ["renameOrRestore", "rename / bulk rename on multi-selection (restore in trash)", ["f2"], "files"],
+    ["copy", "copy selection", ["ctrl+c"], "files"],
+    ["cut", "cut selection", ["ctrl+x"], "files"],
+    ["duplicate", "duplicate selection (copy in place)", ["ctrl+d"], "files"],
+    ["paste", "paste clipboard", ["ctrl+v"], "files"],
+    ["undo", "undo last file op", ["ctrl+z"], "files"],
+    ["redo", "redo (ctrl+shift+z works too)", ["ctrl+y", "ctrl+shift+z"], "files"],
+    ["showProps", "properties for selection", ["alt+enter"], "files"],
+    ["newFolder", "new folder", ["ctrl+shift+n"], "files"],
+    ["newFile", "new file", ["ctrl+alt+n"], "files"],
+    ["parentDir", "go to parent directory", ["backspace"], "navigation"],
+    ["histBack", "back in history", ["alt+left"], "navigation"],
+    ["histForward", "forward in history", ["alt+right"], "navigation"],
+    ["pathEdit", "edit the path bar", ["ctrl+l"], "navigation"],
+    ["connectServer", "connect to a network server (gvfs)", ["ctrl+shift+s"], "navigation"],
+    ["toggleHidden", "toggle hidden files", ["ctrl+h"], "view"],
+    ["reloadPlaces", "reload sidebar places", ["ctrl+r"], "view"],
+    ["togglePreview", "toggle preview pane", ["f9"], "view"],
+    ["toggleView", "toggle grid/list view", ["ctrl+g"], "view"],
+    ["zoomIn", "bigger tiles", ["ctrl+="], "view"],
+    ["zoomOut", "smaller tiles", ["ctrl+-"], "view"],
+    ["toggleDualPane", "toggle dual pane", ["ctrl+shift+d"], "panes"],
+    ["switchPane", "switch active pane (dual pane)", ["tab"], "panes"],
+    ["copyToOtherPane", "copy selection to the other pane", ["f5"], "panes"],
+    ["moveToOtherPane", "move selection to the other pane", ["f6"], "panes"],
+    ["openTerminal", "open terminal here", ["f4"], "panes"],
   ] as const
-).map(([action, label, def]) => ({
+).map(([action, label, def, subsection]) => ({
   kind: "key",
   section: "keys",
   tomlKey: action.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`),
@@ -1366,6 +1376,7 @@ const KEY_ROWS: KeyRow[] = (
   doc: `default: ${def.join(" or ")}`,
   label,
   group: "keys" as GuiGroup,
+  subsection,
   def: [...def],
 }));
 
