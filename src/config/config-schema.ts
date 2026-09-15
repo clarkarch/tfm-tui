@@ -820,7 +820,7 @@ const UI_ROWS: SchemaRow[] = [
     min: 0,
     max: 1000,
     step: 10,
-    def: 80,
+    def: 0,
     doc: "wait for scroll to settle this long before playing the scroll-reveal (0 = play every notch; higher = one wave per pause: cheaper on huge folders and the wave actually completes visibly)",
     label: "scroll reveal delay",
     group: "optimization",
