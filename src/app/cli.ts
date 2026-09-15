@@ -21,11 +21,15 @@ export type CliOptions = {
 export const parseArgs = (argv: string[]): CliOptions => {
   const opts: CliOptions = { help: false, version: false, config: null, paths: [], command: null, error: null };
   let args = argv.slice(1);
-  // `bun src/index.ts PATH` has the script as argv[1]; the compiled `tfm PATH`
-  // does not. Only strip under a JS runner — otherwise a real path named
-  // `index.js` (or `path/index.ts`) passed to the compiled binary is swallowed.
+  // Two script-token layouts: `bun src/index.ts PATH` (argv[1] is the script)
+  // and the compiled binary, whose runtime injects `["bun",
+  // "/$bunfs/root/tfm", ...PATH]` — argv[0] is literally "bun" and argv[1] is
+  // the virtual entry, never a user path. Only strip under a JS runner —
+  // otherwise a real path named `index.js` (or `path/index.ts`) is swallowed.
   const runner = (argv[0] ?? "").replace(/\\/g, "/").split("/").pop() ?? "";
-  if (/^(bun|node|deno)(\.exe)?$/.test(runner) && args.length && /index\.[tj]s$/.test(args[0] as string)) {
+  const script = args[0] ?? "";
+  const isScriptToken = /index\.[tj]s$/.test(script) || script.startsWith("/$bunfs/");
+  if (/^(bun|node|deno)(\.exe)?$/.test(runner) && args.length && isScriptToken) {
     args = args.slice(1);
   }
 

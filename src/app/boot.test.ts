@@ -38,10 +38,12 @@ const mkCtx = (calls: string[], over: Partial<BootCtx> = {}): BootCtx => ({
 });
 
 describe("runBoot", () => {
-  test("the load-bearing order: resolution -> layout -> globs2 -> session -> places -> render", async () => {
+  test("the load-bearing order: resolution -> layout -> (globs2 ∥ places) -> session -> render", async () => {
     const calls: string[] = [];
     await runBoot(mkCtx(calls));
-    expect(calls).toEqual(["resolution", "layout", "globs2", "session", "places", "render", "hygiene", "search"]);
+    // globs2 and places overlap (independent, both only precede renderAll); their
+    // pushes land in call order since both stubs record synchronously.
+    expect(calls).toEqual(["resolution", "layout", "globs2", "places", "session", "render", "hygiene", "search"]);
   });
 
   test("quiet boot: no debug trace, no launch toast", async () => {

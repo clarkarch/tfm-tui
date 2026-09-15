@@ -45,10 +45,18 @@ let sysMounts: MountEntry[] = [];
 let sysNetwork: NetworkMount[] = [];
 
 export const loadSystemPlaces = async (): Promise<void> => {
-  sysUserDirs = await readUserDirs();
-  sysBookmarks = await readBookmarks();
-  sysMounts = await listMounts();
-  sysNetwork = await listNetworkMounts();
+  // four independent sources — await them concurrently so the sidebar load costs
+  // the slowest one (lsblk ~20ms), not their sum (~60ms serialized)
+  const [dirs, marks, mounts, network] = await Promise.all([
+    readUserDirs(),
+    readBookmarks(),
+    listMounts(),
+    listNetworkMounts(),
+  ]);
+  sysUserDirs = dirs;
+  sysBookmarks = marks;
+  sysMounts = mounts;
+  sysNetwork = network;
 };
 
 const xdgUserDirsFile = () => path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "user-dirs.dirs");

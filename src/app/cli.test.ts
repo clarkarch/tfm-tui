@@ -5,17 +5,31 @@ import { parseArgs, usageText } from "./cli";
 // `--` ends option parsing, `--config` takes a value in all the usual spellings.
 
 describe("parseArgs", () => {
-  test("skips the script token in the bun layout, not the compiled one", () => {
+  test("strips the script token in the bun layout", () => {
     expect(parseArgs(["bun", "src/index.ts", "/tmp/x"]).paths).toEqual(["/tmp/x"]);
     expect(parseArgs(["bun", "src/index.ts"]).paths).toEqual([]);
-    expect(parseArgs(["/home/u/.local/bin/tfm", "/tmp/x"]).paths).toEqual(["/tmp/x"]);
   });
 
-  test("the compiled binary keeps a path named index.js", () => {
-    expect(parseArgs(["/home/u/.local/bin/tfm", "index.js"]).paths).toEqual(["index.js"]);
-    expect(parseArgs(["/home/u/.local/bin/tfm", "sub/index.ts"]).paths).toEqual(["sub/index.ts"]);
-    // under bun it IS the script token, so it is stripped
-    expect(parseArgs(["bun", "src/index.ts", "index.js"]).paths).toEqual(["index.js"]);
+  // The compiled binary's runtime presents argv as ["bun", "/$bunfs/root/tfm",
+  // ...userArgs] — NOT [binaryPath, ...userArgs]. The virtual entry is a script
+  // token that must be stripped, or it is parsed as a launch PATH and the binary
+  // exits 1 ("no such file or directory") on every normal launch.
+  test("compiled binary strips the bunfs entry, keeping the user PATH", () => {
+    expect(parseArgs(["bun", "/$bunfs/root/tfm"]).paths).toEqual([]);
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "/tmp/x"]).paths).toEqual(["/tmp/x"]);
+    const r = parseArgs(["bun", "/$bunfs/root/tfm", "--config", "a.toml", "/tmp/x"]);
+    expect(r.config).toBe("a.toml");
+    expect(r.paths).toEqual(["/tmp/x"]);
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "plugins", "list"]).command).toEqual({
+      name: "plugins",
+      args: ["list"],
+    });
+  });
+
+  test("compiled binary keeps a user path named index.js", () => {
+    // only the /$bunfs/ entry is stripped; a real relative path survives
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "index.js"]).paths).toEqual(["index.js"]);
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "sub/index.ts"]).paths).toEqual(["sub/index.ts"]);
   });
 
   test("flags may come before or after the path (permutation)", () => {

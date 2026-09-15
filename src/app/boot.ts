@@ -70,12 +70,16 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   bootLog("boot: buildLayout");
   await guard(ctx, "buildLayout", () => ctx.buildLayout());
   await guard(ctx, "mountSlots", () => ctx.mountSlots?.());
-  bootLog("boot: loadGlobs2");
-  await guard(ctx, "loadGlobs2", () => ctx.loadGlobs2());
+  // globs2 (mime→icon for the listing) and system places (sidebar content) are
+  // independent and both only need to land BEFORE renderAll — overlap them.
+  // restoreSession stays ahead of renderAll (the restored tabs drive it).
+  bootLog("boot: loadGlobs2 + loadSystemPlaces");
+  await Promise.all([
+    guard(ctx, "loadGlobs2", () => ctx.loadGlobs2()),
+    guard(ctx, "loadSystemPlaces", () => ctx.loadSystemPlaces()),
+  ]);
   bootLog("boot: restoreSession");
   await guard(ctx, "restoreSession", () => ctx.restoreSession());
-  bootLog("boot: loadSystemPlaces");
-  await guard(ctx, "loadSystemPlaces", () => ctx.loadSystemPlaces());
   bootLog("boot: renderAll");
   await guard(ctx, "renderAll", () => ctx.renderAll());
   await guard(ctx, "playSidebarIntro", () => ctx.playSidebarIntro?.());
