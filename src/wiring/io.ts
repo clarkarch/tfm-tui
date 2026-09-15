@@ -285,6 +285,7 @@ export const wireHoverDrawer = (deps: {
     byId: core.lookup.byId,
     ui: () => core.config.ui,
     terminalOpen: () => fileops.terminal.isOpen(),
+    terminalFocused: () => fileops.terminal.ownsKeyboard(),
     blocked: () =>
       core.floats.depth() > 0 ||
       chrome.activeToolbar().pathEditMode() ||

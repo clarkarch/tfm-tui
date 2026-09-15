@@ -92,6 +92,7 @@ describe("makeHoverDrawer (headless)", () => {
       byId: (id) => t.renderer.root.findDescendantById(id),
       ui: () => ui,
       terminalOpen: () => false,
+      terminalFocused: () => false,
       blocked: () => false,
       setEffectiveSidebar: (n) => {
         eff.sidebar = n;
@@ -319,6 +320,7 @@ describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
       byId: (id) => t2.renderer.root.findDescendantById(id),
       ui: () => ui,
       terminalOpen: () => true,
+      terminalFocused: () => false,
       blocked: () => false,
       setEffectiveSidebar: () => {},
       setEffectivePreview: () => {},
@@ -345,5 +347,45 @@ describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
     drawer.refresh();
     await t2.renderOnce();
     expect(host().height).toBe(10);
+  });
+
+  test("a keyboard-focused terminal never collapses under auto-hide", async () => {
+    // typing into a 1-row pane is the bug: focusing the shell must pin the
+    // pane open until blur, even with the mouse far from the edge
+    const ui = {
+      ...defaultConfig.ui,
+      terminalHeight: 9,
+      terminalAutoHide: true,
+      terminalCollapseStyle: "hidden",
+      hoverZoneCells: 2,
+      hoverOpenDelayMs: 0,
+      hoverCloseDelayMs: 0,
+      hoverAnimMs: 0,
+    };
+    let focused = false;
+    makeHoverDrawer({
+      renderer: t2.renderer,
+      byId: (id) => t2.renderer.root.findDescendantById(id),
+      ui: () => ui,
+      terminalOpen: () => true,
+      terminalFocused: () => focused,
+      blocked: () => false,
+      setEffectiveSidebar: () => {},
+      setEffectivePreview: () => {},
+    });
+    const host = () => t2.renderer.root.findDescendantById("tfm-term-host") as any;
+
+    await t2.mockMouse.moveTo(40, 23);
+    await settleUntil(() => host().height === 10);
+
+    focused = true; // user tabs into the shell, mouse drifts away
+    await t2.mockMouse.moveTo(40, 3);
+    await Bun.sleep(30); // close delay is 0: any scheduled close has fired by now
+    await t2.renderOnce();
+    expect(host().height).toBe(10);
+
+    focused = false; // blur: the next move away may collapse again
+    await t2.mockMouse.moveTo(41, 4);
+    await settleUntil(() => host().height <= 1);
   });
 });

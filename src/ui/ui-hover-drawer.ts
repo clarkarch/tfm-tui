@@ -126,6 +126,9 @@ export type HoverDrawerCtx = {
   byId(id: string): any;
   ui(): UiConfig;
   terminalOpen(): boolean;
+  // keyboard focus inside the embedded shell — a focused terminal never
+  // collapses (typing into a 1-row pane), pinned open until blur
+  terminalFocused(): boolean;
   blocked(): boolean;
   // grid column budget a panel leaves on its side, so renderGrid re-columns
   // after an auto-hide (the node width changes but ctx.sw/previewEff don't)
@@ -341,7 +344,21 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     });
   };
 
+  // pin-open check shared by the timer path above and the direct-apply
+  // paths below (first-move snap, refresh): a focused terminal reads open
+  // no matter what the mouse says
+  const keepOpen = (p: Panel): boolean => p.key === "terminal" && ctx.terminalFocused();
+
   const schedule = (p: Panel, wants: boolean): void => {
+    // a keyboard-focused terminal never collapses: drop the close (and any
+    // armed close timer) instead of scheduling it — opens proceed normally
+    if (!wants && keepOpen(p)) {
+      if (p.timer) {
+        clearTimeout(p.timer);
+        p.timer = null;
+      }
+      return;
+    }
     if (wants === p.open) {
       if (p.timer) {
         clearTimeout(p.timer);
@@ -380,7 +397,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
       // own height on open; the drawer must reclaim it, not drift)
       if (!p.initialized) {
         p.initialized = true;
-        apply(p, wants, false);
+        apply(p, wants || keepOpen(p), false);
         continue;
       }
       schedule(p, wants);
@@ -408,7 +425,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
         writeEffective(p);
         continue;
       }
-      apply(p, p.open, false);
+      apply(p, p.open || keepOpen(p), false);
       p.initialized = true;
     }
   };
