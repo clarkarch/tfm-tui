@@ -5,6 +5,7 @@ import path from "node:path";
 import { Box, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeGridRenderer, hookScrollerScroll, type GridState } from "./ui-grid";
+import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { makeSelection } from "../input/selection";
 import type { Entry } from "../fs/listing";
 import { defaultConfig } from "../config/config-schema";
@@ -868,6 +869,50 @@ describe("renderGrid (panes)", () => {
     await t.renderOnce();
     expect(t.captureCharFrame()).toContain("this folder is empty");
     gridState.cwd = prevCwd;
+  });
+
+  test("empty virtual places paint their own icon, not the folder", async () => {
+    // sandbox the XDG homes so recent/starred read empty; trashDir() follows
+    // XDG_DATA_HOME, so the empty trash files dir is a real empty folder
+    const prevData = process.env.XDG_DATA_HOME;
+    const prevState = process.env.XDG_STATE_HOME;
+    process.env.XDG_DATA_HOME = path.join(tmp, "xdg-data");
+    process.env.XDG_STATE_HOME = path.join(tmp, "xdg-state");
+    const trashFiles = path.join(tmp, "xdg-data", "Trash", "files");
+    mkdirSync(trashFiles, { recursive: true });
+    const prevCwd = gridState.cwd;
+    const prevQuery = searchQuery;
+    try {
+      const cases: Array<[string, string, string]> = [
+        [RECENT_URI, "clock", "no recent files"],
+        [STARRED_URI, "star", "nothing starred yet"],
+        [trashFiles, "trash-can", "this folder is empty"],
+      ];
+      for (const [cwd, icon, text] of cases) {
+        gridState.cwd = cwd;
+        iconSlots.length = 0;
+        await renderGrid();
+        await t.renderOnce();
+        expect(t.captureCharFrame()).toContain(text);
+        expect(iconSlots.map((s) => s.name)).toContain(icon);
+      }
+      // a search with no matches paints the search icon
+      gridState.cwd = tmp;
+      searchQuery = "zzz-no-such-file";
+      iconSlots.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("no matches");
+      expect(iconSlots.map((s) => s.name)).toContain("search");
+    } finally {
+      searchQuery = prevQuery;
+      gridState.cwd = prevCwd;
+      if (prevData === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prevData;
+      if (prevState === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = prevState;
+      await renderGrid();
+    }
   });
 
   test("unreadable folder paints the error pane, not a blank grid", async () => {

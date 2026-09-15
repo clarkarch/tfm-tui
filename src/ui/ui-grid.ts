@@ -11,7 +11,7 @@ import { compareEntries, listDir, type Entry } from "../fs/listing";
 import { searchTree } from "../fs/search";
 import type { Theme } from "../config/config";
 import type { HoverLiftOpts } from "../config/config-schema";
-import { fsErrText } from "../fs/fsutil";
+import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
 import { fileIsImage, fileIsVideo, fileIconFor } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
 import { sidePadDelta, type UiStyle } from "./style";
@@ -671,6 +671,20 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     return typeof vh === "number" && vh > 0 ? vh : ctx.termH();
   };
 
+  // empty-pane icon follows the place: virtual places and the trash show
+  // their sidebar icon (clock/star/trash-can) instead of the generic folder,
+  // and a fruitless search shows the search icon
+  const emptyPaneIcon = (cwd: string, hasQuery: boolean): string =>
+    hasQuery
+      ? "search"
+      : cwd === RECENT_URI
+        ? "clock"
+        : cwd === STARRED_URI
+          ? "star"
+          : isTrashFilesDir(cwd)
+            ? "trash-can"
+            : "folder";
+
   // --- grid rebuild: clear, list, lay out tiles/rows, repaint cut dims.
   // `force` skips the unchanged-signature fast path (out-of-band state changes
   // like the cut clipboard; navigation does not force). ---
@@ -809,7 +823,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       clearGrid();
       await ctx.waitForResolution();
       if (gen !== gridGen) return;
-      buildEmptyPane("folder", [
+      buildEmptyPane(emptyPaneIcon(state.cwd, q.length > 0), [
         q
           ? "no matches"
           : state.cwd === RECENT_URI
