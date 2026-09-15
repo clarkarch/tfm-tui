@@ -11,6 +11,7 @@ import {
   MAX_PER_NODE_ANIM,
   quantizeDy,
   restTileBg,
+  revealStyleMap,
   slideTravel,
 } from "./ui-grid-anim";
 
@@ -49,6 +50,15 @@ describe("fileAnimStyleFrom", () => {
     expect(fileAnimStyleFrom({ enabled: true, slide: true, stagger: false })).toBe("slide");
     expect(fileAnimStyleFrom({ enabled: true, slide: false, stagger: true })).toBe("stagger");
     expect(fileAnimStyleFrom({ enabled: true, slide: true, stagger: true })).toBe("stagger-slide");
+  });
+});
+
+describe("revealStyleMap", () => {
+  test("slide maps to stagger-slide; the entry edge flips up/down; horizontal stays", () => {
+    expect(revealStyleMap("slide", "up", "bottom")).toEqual({ style: "stagger-slide", dir: "up" });
+    expect(revealStyleMap("slide", "up", "top")).toEqual({ style: "stagger-slide", dir: "down" });
+    expect(revealStyleMap("fade", "up", "top")).toEqual({ style: "fade", dir: "down" });
+    expect(revealStyleMap("stagger", "left", "bottom")).toEqual({ style: "stagger", dir: "left" });
   });
 });
 
@@ -208,6 +218,160 @@ describe("makeFileAnim (engine)", () => {
     }
     await settleUntil(() => (byId("g-inner") as any)?.opacity === 1);
     expect((byId("g-inner") as any).translateY).toBe(0);
+  });
+
+  test("a reveal play animates the entering rows, never the container", async () => {
+    t.renderer.root.add(Box({ id: "rv-inner", width: 40, height: 8, flexDirection: "column" }));
+    t.renderer.root.add(Box({ id: "rv-row", width: 40, height: 6 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "slide", ms: 1000 }),
+    });
+    // bottom entry: plain slide maps to the stagger-slide curve and starts
+    // BELOW the resting spot (dir "up") — on the ROW node, not the container
+    anim.play({ tiles: ["rv-row"], rows: ["rv-row"], rowsTotal: 1, total: 1, inner: "rv-inner", enterFrom: "bottom" });
+    engine.update(1);
+    expect((byId("rv-inner") as any).translateY).toBe(0);
+    expect((byId("rv-row") as any).translateY).toBeGreaterThan(0);
+    anim.stop();
+    expect((byId("rv-row") as any).translateY).toBe(0);
+    // top entry: files drop in from above (dir "down")
+    anim.play({ tiles: ["rv-row"], rows: ["rv-row"], rowsTotal: 1, total: 1, inner: "rv-inner", enterFrom: "top" });
+    engine.update(1);
+    expect((byId("rv-row") as any).translateY).toBeLessThan(0);
+    anim.stop();
+    // reveal + containerFade: the entering set fades ITSELF — a per-notch
+    // whole-grid container fade would flash the entire viewport
+    const cfade = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "fade", containerFade: true, ms: 1000 }),
+    });
+    cfade.play({ tiles: ["rv-row"], rows: [], total: 1, inner: "rv-inner", enterFrom: "bottom" });
+    engine.update(1);
+    expect((byId("rv-inner") as any).opacity).toBe(1);
+    expect((byId("rv-row") as any).opacity).toBeLessThan(1);
+    cfade.stop();
+    expect((byId("rv-row") as any).opacity).toBe(1);
+    // master off (file-animation = false ⇒ style off): a reveal is a no-op stop
+    const off = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "off", ms: 1000 }),
+    });
+    // master off (file-animation = false ⇒ style off): a reveal is a no-op
+    // stop — and it must SAY so (null mode) so the grid releases staged rows
+    expect(
+      off.play({ tiles: ["rv-row"], rows: ["rv-row"], rowsTotal: 1, total: 1, inner: "rv-inner", enterFrom: "bottom" }),
+    ).toBeNull();
+    engine.update(1);
+    expect((byId("rv-row") as any).opacity).toBe(1);
+    expect((byId("rv-row") as any).translateY).toBe(0);
+  });
+
+  test("a second reveal play APPENDS to the running wave (no mid-fade snap)", async () => {
+    t.renderer.root.add(Box({ id: "ap-a", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "ap-b", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "ap-c", width: 40, height: 6 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger", ms: 1000 }),
+    });
+    anim.play({ tiles: ["ap-a"], total: 1 });
+    engine.update(500);
+    const a1 = (byId("ap-a") as any).opacity;
+    anim.play({ tiles: ["ap-b"], total: 1, enterFrom: "bottom" });
+    engine.update(100);
+    const a2 = (byId("ap-a") as any).opacity;
+    // the in-flight node PROGRESSION continued (1 would mean the second play
+    // snapped it; anything below a1 would mean it rewound)
+    expect(a2).toBeGreaterThan(a1);
+    expect(a2).toBeLessThan(1);
+    // the new node joined at the back of the cascade (and frame 0 was staged
+    // synchronically — no first frame at full opacity)
+    expect((byId("ap-b") as any).opacity).toBeLessThan(1);
+    // a direction flip is irrelevant to a style with no offsets: still one wave
+    anim.play({ tiles: ["ap-c"], total: 1, enterFrom: "top" });
+    engine.update(50);
+    const a3 = (byId("ap-a") as any).opacity;
+    expect(a3).toBeGreaterThan(a2);
+    expect(a3).toBeLessThan(1);
+    engine.update(2000);
+    expect([byId("ap-a"), byId("ap-b"), byId("ap-c")].map((n) => (n as any).opacity)).toEqual([1, 1, 1]);
+    anim.stop();
+  });
+
+  test("a slide-direction reversal settles the old stagger-slide wave before restarting", async () => {
+    t.renderer.root.add(Box({ id: "rs-a", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "rs-b", width: 40, height: 6 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger-slide", ms: 1000 }),
+    });
+    anim.play({ tiles: ["rs-a"], total: 1, enterFrom: "bottom" }); // rises up
+    engine.update(300);
+    expect((byId("rs-a") as any).translateY).toBeGreaterThan(0);
+    anim.play({ tiles: ["rs-b"], total: 1, enterFrom: "top" }); // reversal: fresh wave…
+    expect((byId("rs-a") as any).translateY).toBe(0); // …old node settled, not stranded mid-slide
+    engine.update(2000);
+    expect((byId("rs-b") as any).opacity).toBe(1);
+    anim.stop();
+  });
+
+  test("reveal honors row-granularity: rows on, per-file tiles off; play returns the driven mode", async () => {
+    // syncWindow pre-stages ROW nodes at frame-0 opacity for a deferred
+    // reveal and reconciles with the mode play() RETURNS: rows-mode keeps
+    // the staged rows, anything else releases them (a row at opacity 0
+    // hides per-file children regardless). Break the useRows knob gate or
+    // the return value and THIS goes red.
+    t.renderer.root.add(Box({ id: "sr-row", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "sr-tile-a", width: 8, height: 5 }));
+    t.renderer.root.add(Box({ id: "sr-tile-b", width: 8, height: 5 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const target = {
+      tiles: ["sr-tile-a", "sr-tile-b"],
+      rows: ["sr-row"],
+      rowsTotal: 1,
+      total: 2,
+      enterFrom: "bottom" as const,
+    };
+    const rowsGran = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger", rowsGranularity: true, ms: 1000 }),
+    });
+    expect(rowsGran.play(target)).toBe("rows");
+    engine.update(500);
+    expect((byId("sr-row") as any).opacity).toBeLessThan(1); // the ROW carries the wave…
+    expect((byId("sr-tile-a") as any).opacity).toBe(1); // …tiles untouched
+    rowsGran.stop();
+    expect((byId("sr-row") as any).opacity).toBe(1);
+    // knob OFF: the cascade runs per FILE across the entering tiles
+    const perFile = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger", rowsGranularity: false, ms: 1000 }),
+    });
+    expect(perFile.play(target)).toBe("tiles");
+    engine.update(500);
+    const oa = (byId("sr-tile-a") as any).opacity;
+    const ob = (byId("sr-tile-b") as any).opacity;
+    expect((byId("sr-row") as any).opacity).toBe(1); // row NEVER animates here
+    expect(oa).toBeLessThan(1);
+    expect(ob).toBeLessThan(1);
+    expect(oa).toBeGreaterThan(ob); // own cascade slots, in order
+    perFile.stop();
+    expect([byId("sr-tile-a"), byId("sr-tile-b")].map((n) => (n as any).opacity)).toEqual([1, 1]);
   });
 
   test("containerFade fades the container and never touches the tiles", async () => {

@@ -4,13 +4,42 @@ import os from "node:os";
 import path from "node:path";
 import { Box, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { makeGridRenderer, type GridState } from "./ui-grid";
+import { makeGridRenderer, hookScrollerScroll, type GridState } from "./ui-grid";
 import { makeSelection } from "../input/selection";
 import type { Entry } from "../fs/listing";
 import { defaultConfig } from "../config/config-schema";
 import type { HoverLiftOpts } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SortMode } from "../lib/sort";
+import type { Scheduler } from "../lib/uiutil";
+
+// Shared virtual clock for the reveal-defer tests (Bun has no fake timers):
+// reset() drops strays so timer state never leaks between tests.
+let revealClock: { sched: Scheduler; flush: () => void; reset: () => void };
+const mkRevealClock = () => {
+  let seq = 0;
+  const timers = new Map<number, () => void>();
+  return {
+    sched: {
+      setTimeout: (cb: () => void) => {
+        const id = ++seq;
+        timers.set(id, cb);
+        return id;
+      },
+      clearTimeout: (h: unknown) => {
+        timers.delete(h as number);
+      },
+    } as Scheduler,
+    flush: () => {
+      const cbs = [...timers.values()];
+      timers.clear();
+      for (const cb of cbs) cb();
+    },
+    reset: () => {
+      timers.clear();
+    },
+  };
+};
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // grid renderer's observable contract: painted frames per view mode, the
@@ -31,7 +60,7 @@ const ASPECT = 0.5;
 let t: TestRendererSetup;
 let tmp: string;
 let content: Renderable;
-let scroller: { content: Renderable; scrollTop: number };
+let scroller: { content: Renderable; scrollTop: number; viewport?: { height: number } };
 let gridState: GridState;
 let cutKeys: Set<string>;
 let iconStateCalls: Array<{ spec: any; idx: number }>;
@@ -48,16 +77,23 @@ let searchEntries: Entry[];
 let viewMode: "grid" | "list";
 let selection: ReturnType<typeof makeSelection>;
 let renderGrid: (force?: boolean) => Promise<void>;
+let syncWindow: () => void;
+let windowedGridOn: boolean;
+let renamingOn: boolean;
 let availWSet: number | null;
 let hoverLiftOpts: HoverLiftOpts;
 let tilePrefix: string;
 let visibleOnly: boolean;
+let revealOn: boolean;
+let revealDelayMs: number;
+let fileAnimMode: "rows" | "tiles" | "container" | null;
 let fileAnimCalls: Array<{
   tiles: string[];
   rows: string[] | null;
   rowsTotal: number | null;
   inner: string | null;
   total: number;
+  enterFrom: string | null;
 }>;
 
 beforeAll(async () => {
@@ -81,6 +117,12 @@ beforeAll(async () => {
   hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
   visibleOnly = false;
+  windowedGridOn = false;
+  renamingOn = false;
+  revealOn = false;
+  revealDelayMs = 0;
+  fileAnimMode = "rows";
+  revealClock = mkRevealClock();
   fileAnimCalls = [];
   let iconSeq = 0;
 
@@ -106,7 +148,7 @@ beforeAll(async () => {
   // the grid reads scroller.scrollTop to place its viewport window; a fresh
   // literal per call lets a test dial the scroll offset in
   scroller = { content, scrollTop: 0 };
-  const { renderGrid: rg } = makeGridRenderer({
+  const { renderGrid: rg, syncWindow: sw } = makeGridRenderer({
     termW: () => TERM_W,
     termH: () => TERM_H,
     scroller: () => scroller,
@@ -157,6 +199,7 @@ beforeAll(async () => {
       rowsTotal?: number;
       inner?: string | null;
       total?: number;
+      enterFrom?: "top" | "bottom";
     }) => {
       fileAnimCalls.push({
         tiles: [...target.tiles],
@@ -164,9 +207,16 @@ beforeAll(async () => {
         rowsTotal: target.rowsTotal ?? null,
         inner: target.inner ?? null,
         total: target.total ?? target.tiles.length,
+        enterFrom: target.enterFrom ?? null,
       });
+      return fileAnimMode;
     },
     fileAnimVisibleOnly: () => visibleOnly,
+    fileAnimScrollReveal: () => revealOn,
+    fileAnimScrollRevealDelayMs: () => revealDelayMs,
+    sched: revealClock.sched,
+    windowedGrid: () => windowedGridOn,
+    isRenaming: () => renamingOn,
     selection,
     entryMouseHandlers: (e: any, key: string, idx: number) => {
       mouseHandlers.push({ name: e.name, key, idx });
@@ -177,6 +227,7 @@ beforeAll(async () => {
     clearRenameEdit: () => {},
   });
   renderGrid = rg;
+  syncWindow = sw;
 });
 
 afterAll(() => {
@@ -325,13 +376,20 @@ describe("renderGrid (grid tiles)", () => {
   });
 
   test("changing the hover lift direction rebuilds the tiles", async () => {
+    // tile ids are absolute now (the windowed grid needs them stable across
+    // slides), so "it actually rebuilt" is pinned on the layout the direction
+    // bakes: an up lift reserves a marginTop row, down/none never do.
+    const margins = (): number[] =>
+      [...selection.tileRefs.values()].map((r) => {
+        const tile = t.renderer.root.findDescendantById(r.tileId) as any;
+        return tile?.getChildren()[0]?.marginTop || 0;
+      });
     hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
     await renderGrid();
-    const before = [...selection.tileRefs.values()].map((r) => r.tileId);
+    expect(margins()).toContain(1);
     hoverLiftOpts = { enabled: true, direction: "down", includeLabel: false };
     await renderGrid();
-    const after = [...selection.tileRefs.values()].map((r) => r.tileId);
-    expect(after).not.toEqual(before);
+    expect(margins()).not.toContain(1);
     hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
     await renderGrid();
   });
@@ -394,6 +452,7 @@ describe("renderGrid (grid tiles)", () => {
           inner: target.inner ?? null,
           total: target.total ?? target.tiles.length,
         });
+        return "rows" as const;
       },
       fileAnimVisibleOnly: () => visibleOnly,
       selection: bootSelection,
@@ -837,5 +896,693 @@ describe("renderGrid (list view)", () => {
     expect(selection.colsAtBuild()).toBe(1);
     expect(selection.rowHAtBuild()).toBe(2);
     viewMode = "grid";
+  });
+});
+
+// --- [ui] windowed-grid: only the visible row window (+overscan) is built;
+// the full tileRefs/focusKeys list stays the selection's contract, spacers
+// keep the content height honest, and syncWindow slides on scroll ---
+describe("renderGrid (windowed grid)", () => {
+  // tmp is assigned in beforeAll — describe bodies run at collection time,
+  // so every path derives lazily inside the tests
+  const bigDir = (): string => path.join(tmp, "windowed-dir");
+  const byId = (id: string): any => t.renderer.root.findDescendantById(id);
+  const bigFile = (i: number): string => path.join(bigDir(), `w${String(i).padStart(4, "0")}.txt`);
+  const ensureBig = (): void => {
+    mkdirSync(bigDir(), { recursive: true });
+    for (let i = 1; i <= 500; i++) writeFileSync(bigFile(i), "x");
+  };
+
+  test("builds only the window but registers EVERY entry (grid + list)", async () => {
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      mouseHandlers.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      // the SELECTION contract: 500 refs + focusKeys even though ~30 tiles exist
+      expect(selection.tileRefs.size).toBe(500);
+      expect(selection.focusKeys().length).toBe(500);
+
+      // grid: 5 cols, TILE_H 6 → 5+1 visible rows + 1 overscan = rows 0..5;
+      // pad-top collapses at r0=0, pad-bottom fills the remaining 94 rows
+      const inner = byId("tfm-tile-inner");
+      expect(inner.getChildren()).toHaveLength(8);
+      expect(byId("tfm-tile-row-5")).toBeTruthy();
+      expect(byId("tfm-tile-row-6")).toBeFalsy();
+      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(0);
+      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((100 - 6) * 6);
+      // unbuilt rows are not built AT ALL (mouse handlers only exist per built tile)
+      expect(mouseHandlers.map((m) => m.idx)).toEqual([...Array(30).keys()]);
+      // absolute ids: tile 0 is index 0, and off-window refs point at nothing
+      expect(selection.tileRefs.get(bigFile(1))!.tileId).toBe("tfm-tile-0");
+      expect(byId("tfm-tile-300")).toBeFalsy();
+
+      // list view: rows ARE tiles — 13 visible + 1 overscan → rows 0..13,
+      // pad-bottom fills the remaining 486 rows (all at height 2)
+      viewMode = "list";
+      await renderGrid();
+      await t.renderOnce();
+      expect(byId("tfm-tile-inner").getChildren()).toHaveLength(16);
+      expect(byId("tfm-tile-13")).toBeTruthy();
+      expect(byId("tfm-tile-14")).toBeFalsy();
+      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((500 - 14) * 2);
+      expect(selection.tileRefs.size).toBe(500);
+    } finally {
+      viewMode = "grid";
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("syncWindow slides the window; selection survives and re-paints on re-entry", async () => {
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      selection.selectTileAt(1); // w0002.txt, row 0
+
+      // fling to row 50 (scrollTop 300 / TILE_H 6): rows 49..55 built now
+      scroller.scrollTop = 300;
+      mouseHandlers.length = 0;
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-0")).toBeFalsy();
+      expect(byId("tfm-tile-row-50")).toBeTruthy();
+      expect(byId("tfm-tile-inner").getChildren()).toHaveLength(9); // pad-top + 7 rows + pad-bottom
+      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(49 * 6);
+      // slide-built tiles carry ABSOLUTE indices (handlers, ids and the
+      // cascade window can never drift out of display order)
+      expect(mouseHandlers.map((m) => m.idx)).toEqual(Array.from({ length: 35 }, (_, i) => 245 + i));
+      // the model NEVER shrank: selection, status source and focus keys are
+      // the full list while the DOM holds only the window
+      expect(selection.selPaths().map((s) => s.path)).toEqual([bigFile(2)]);
+      expect(selection.focusKeys().length).toBe(500);
+      // a second syncWindow without scroll movement must not rebuild
+      const rows1 = byId("tfm-tile-inner").getChildren()[1];
+      syncWindow();
+      expect(byId("tfm-tile-inner").getChildren()[1]).toBe(rows1);
+
+      // ONE-row notch: the slide is INCREMENTAL — the inner and every
+      // surviving row keep their identity (destroying/rebuilding them is
+      // what flickered: each fresh icon slot repaints the fallback glyph
+      // until the async drain swaps the raster back in)
+      const innerNode = byId("tfm-tile-inner");
+      const row50 = byId("tfm-tile-row-50");
+      mouseHandlers.length = 0;
+      scroller.scrollTop = 306; // firstRow 51 → window 50..56
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-inner")).toBe(innerNode);
+      expect(byId("tfm-tile-row-50")).toBe(row50);
+      expect(byId("tfm-tile-row-49")).toBeFalsy(); // left edge dropped…
+      expect(byId("tfm-tile-row-56")).toBeTruthy(); // …right edge added
+      expect(innerNode.getChildren()).toHaveLength(9); // same row count
+      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(50 * 6);
+      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((100 - 1 - 56) * 6);
+      // only the ENTERING row built tiles (handlers are the proof of work)
+      expect(mouseHandlers.map((m) => m.idx)).toEqual([280, 281, 282, 283, 284]);
+
+      // UPWARD two-row notch: entering rows PREPEND in order (index-insert,
+      // not append) and display order must survive for band/anim/index math
+      mouseHandlers.length = 0;
+      scroller.scrollTop = 294; // firstRow 49 → window 48..54
+      syncWindow();
+      await t.renderOnce();
+      expect(
+        innerNode
+          .getChildren()
+          .slice(1, -1)
+          .map((c: any) => c.id),
+      ).toEqual(Array.from({ length: 7 }, (_, i) => `tfm-tile-row-${48 + i}`));
+      expect(byId("tfm-tile-row-55")).toBeFalsy();
+      expect(byId("tfm-tile-row-56")).toBeFalsy();
+      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(48 * 6);
+      expect(mouseHandlers.map((m) => m.idx)).toEqual([240, 241, 242, 243, 244, 245, 246, 247, 248, 249]);
+
+      // back to the top: no overlap → full rebuild, and the stale selection
+      // repaints as its row re-enters
+      scroller.scrollTop = 0;
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-0")).toBeTruthy();
+      const selBg = byId("tfm-tile-1").backgroundColor?.toInts();
+      const sibBg = byId("tfm-tile-2").backgroundColor?.toInts();
+      expect(selBg).not.toEqual(sibBg);
+    } finally {
+      selection.clearTileSelection();
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("an in-progress rename/create edit survives a scroll (slide gated)", async () => {
+    // the editor Input lives INSIDE the tile node — a slide during an edit
+    // would destroy the input and orphan a just-created file (clearRenameEdit
+    // is state-drop-only and skips the create cleanup), so the slide waits
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      renamingOn = true;
+      scroller.scrollTop = 300;
+      syncWindow();
+      expect(byId("tfm-tile-row-0")).toBeTruthy(); // window untouched…
+      expect(byId("tfm-tile-row-50")).toBeFalsy(); // …no slide happened
+      renamingOn = false;
+      syncWindow();
+      expect(byId("tfm-tile-row-50")).toBeTruthy(); // next chance lands it
+    } finally {
+      renamingOn = false;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a selected row re-entering via an INCREMENTAL slide keeps its selection", async () => {
+    // The fallback rebuild repaints every window row, but the incremental
+    // slide only repaints ENTERING rows from ref state — so buildTile's
+    // "preserve ref.selected on re-register" is the ONLY thing that stops a
+    // scrolled-out-then-back selection from silently dropping. Break that
+    // line in ui-grid.ts and THIS test must go red (not just the fling one).
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      selection.selectTileAt(1); // w0002.txt, row 0
+
+      // slide row 0 fully OUT of the window (down past r1), then INCREMENTALLY
+      // back so the row is re-added (buildTile re-registers ref #1)
+      scroller.scrollTop = 36; // firstRow 6 → window 5..11: row 0 dropped
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-0")).toBeFalsy();
+      expect(selection.selPaths().length).toBe(1); // model still selected
+
+      scroller.scrollTop = 0; // back to window 0..5
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-0")).toBeTruthy();
+      const selBg = byId("tfm-tile-1").backgroundColor?.toInts();
+      const sibBg = byId("tfm-tile-2").backgroundColor?.toInts();
+      expect(selBg).not.toEqual(sibBg); // ref.selected survived re-registration
+    } finally {
+      selection.clearTileSelection();
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("scroll reveal animates exactly the entering rows and follows the edge", async () => {
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    // a REAL chrome gap: the grid viewport is 20 rows inside a 24-row
+    // terminal — the bottom crossing must follow the viewport, not termH
+    // (termH math revealed row 5 while it was still off-screen: the
+    // "only the top animates" bug)
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+
+      // one notch down: visible range [0..3] → [1..4], so ROW 4 (tiles
+      // 20..24) crosses the bottom edge; row 5 (just built, off-screen) must
+      // NOT be revealed
+      scroller.scrollTop = 6;
+      syncWindow();
+      const down = fileAnimCalls.at(-1)!;
+      expect(down.enterFrom).toBe("bottom");
+      expect(down.rows).toEqual(["tfm-tile-row-4"]);
+      expect(down.tiles).toEqual([20, 21, 22, 23, 24].map((i) => `tfm-tile-${i}`));
+      expect(down.inner).toBeNull(); // NEVER the whole grid container
+
+      // jump up from deep: rows 8..9 newly cross the TOP edge
+      scroller.scrollTop = 60; // firstRow 10 → fallback rebuild, window 9..15
+      syncWindow();
+      scroller.scrollTop = 48; // firstRow 8 → window 7..13, visible 8..12
+      syncWindow();
+      const up = fileAnimCalls.at(-1)!;
+      expect(up.enterFrom).toBe("top");
+      expect(up.rows).toEqual(["tfm-tile-row-8", "tfm-tile-row-9"]);
+      expect(up.tiles.length).toBe(10);
+      expect(up.tiles[0]).toBe("tfm-tile-40");
+
+      // knob off: the slide does not touch the animator at all (no stop, no play)
+      revealOn = false;
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 54; // firstRow 9 → window 8..14
+      syncWindow();
+      expect(fileAnimCalls).toEqual([]);
+      revealOn = true;
+
+      // a fling PAST the window falls back to a whole rebuild — and reveals
+      // nothing (jumping users want immediacy)
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 540; // firstRow 90 → disjoint from 8..14
+      syncWindow();
+      expect(byId("tfm-tile-row-94")).toBeTruthy();
+      expect(fileAnimCalls.at(-1)!.tiles).toEqual([]);
+    } finally {
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("scroll-reveal delay defers the play until scroll settles: one wave, union of crossings", async () => {
+    // fast fling = a play per notch today: each new wave retriggers while the
+    // last is mid-flight, so nothing ever completes visibly AND every frame
+    // pays native pushes. With a settle delay, quick notches coalesce into
+    // ONE play over the union of crossed rows — cheaper and actually seen.
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    revealDelayMs = 80;
+    revealClock.reset();
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      // two quick notches: visible [0..3] → [1..4] → [2..5]; rows 4 AND 5
+      // cross, but nothing may play yet
+      scroller.scrollTop = 6;
+      syncWindow();
+      scroller.scrollTop = 12;
+      syncWindow();
+      expect(fileAnimCalls).toEqual([]);
+      // settle: exactly ONE play covering the union of both crossings
+      revealClock.flush();
+      expect(fileAnimCalls.length).toBe(1);
+      const play = fileAnimCalls[0]!;
+      expect(play.enterFrom).toBe("bottom");
+      expect(play.rows).toEqual(["tfm-tile-row-4", "tfm-tile-row-5"]);
+      expect(play.tiles.length).toBe(10);
+      expect(play.tiles[0]).toBe("tfm-tile-20");
+    } finally {
+      revealDelayMs = 0;
+      revealClock.reset();
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a fling past the window cancels a pending deferred reveal", async () => {
+    // the fallback rebuild shows the landing spot instantly by design — a
+    // late reveal firing after the jump would animate stale rows over it
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    revealDelayMs = 80;
+    revealClock.reset();
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 6; // row 4 crosses: pending, not played
+      syncWindow();
+      expect(fileAnimCalls).toEqual([]);
+      scroller.scrollTop = 540; // firstRow 90 → disjoint: fallback rebuild
+      syncWindow();
+      revealClock.flush();
+      // only the fallback's stop (empty tiles) may exist — never a reveal
+      expect(fileAnimCalls.every((c) => c.tiles.length === 0)).toBe(true);
+    } finally {
+      revealDelayMs = 0;
+      revealClock.reset();
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("navigating away drops a pending deferred reveal (no late stop into the new folder)", async () => {
+    // the pending play for the OLD folder's rows must die with the rebuild:
+    // firing later would stop() the new folder's boot wave mid-flight
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    revealDelayMs = 80;
+    revealClock.reset();
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 6; // row 4 crosses: pending, not played
+      syncWindow();
+      expect(fileAnimCalls).toEqual([]);
+      gridState.cwd = prevCwd; // navigate away: full rebuild
+      await renderGrid();
+      fileAnimCalls.length = 0; // drop the new folder's own content play
+      revealClock.flush();
+      expect(fileAnimCalls).toEqual([]); // stale bigDir reveal never fires
+    } finally {
+      revealDelayMs = 0;
+      revealClock.reset();
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("deferred reveal pre-stages entering rows invisible (no rest-then-snap flash)", async () => {
+    // with a settle delay the wave plays ~80ms AFTER the rows mount — if
+    // they sit at rest until then, the first wave tick snaps 1→0: visible,
+    // then invisible, then fading in = the flicker. Staging the crossing
+    // rows at frame-0 opacity at mount makes the delayed play a
+    // continuation, not a snap. Break the staging line and THIS goes red.
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    revealDelayMs = 80;
+    revealClock.reset();
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 6; // row 4 crosses into view
+      syncWindow();
+      await t.renderOnce();
+      expect(fileAnimCalls).toEqual([]); // still deferred
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(0); // staged, not resting
+      expect((byId("tfm-tile-row-0") as any).opacity).not.toBe(0); // survivors untouched
+      revealClock.flush(); // the wave plays over the staged set — no snap
+      expect(fileAnimCalls.length).toBe(1);
+      expect(fileAnimCalls[0]!.rows).toEqual(["tfm-tile-row-4"]);
+      // rows-mode: flush must NOT release the staged rows — the wave owns
+      // exactly them and starts from frame 0 (they'd blink back to rest)
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(0);
+    } finally {
+      revealDelayMs = 0;
+      revealClock.reset();
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("disabling reveal mid-pending restores staged rows (no stuck-invisible rows)", async () => {
+    // staged rows sit at opacity 0 waiting for a wave that will now never
+    // come — the knob-off cancel must put them back to rest, or they stay
+    // invisible until the next rebuild. Row 4 survives both slides below.
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    revealDelayMs = 80;
+    revealClock.reset();
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 6; // row 4 crosses, staged at 0
+      syncWindow();
+      await t.renderOnce();
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(0);
+      revealOn = false;
+      scroller.scrollTop = 12; // slide with knob off → cancel path
+      syncWindow();
+      await t.renderOnce();
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(1); // restored
+      revealClock.flush();
+      expect(fileAnimCalls).toEqual([]); // nothing late fires
+    } finally {
+      revealDelayMs = 0;
+      revealClock.reset();
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("flush releases staged rows when the wave drives per-file tiles (row-granularity off)", async () => {
+    // the mount-time staging is rows-only (cheapest addressing); the driven
+    // set is decided by the animator at flush. A row left at 0 would hide
+    // every per-file child regardless of its own opacity — flush must
+    // release the rows as soon as play() reports "tiles".
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    revealDelayMs = 80;
+    revealClock.reset();
+    fileAnimMode = "tiles";
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 6; // row 4 crosses, staged at 0
+      syncWindow();
+      await t.renderOnce();
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(0);
+      revealClock.flush();
+      expect(fileAnimCalls.length).toBe(1);
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(1); // released for the tiles wave
+    } finally {
+      fileAnimMode = "rows";
+      revealDelayMs = 0;
+      revealClock.reset();
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("flush releases staged rows when no wave comes (animation master off)", async () => {
+    // reveal knob ON + file-animation master OFF: play() early-returns null,
+    // nothing animates — without the release the rows would strand invisible
+    // until the next rebuild.
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    revealDelayMs = 80;
+    revealClock.reset();
+    fileAnimMode = null;
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      scroller.scrollTop = 6; // row 4 crosses, staged at 0
+      syncWindow();
+      await t.renderOnce();
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(0);
+      revealClock.flush();
+      expect((byId("tfm-tile-row-4") as any).opacity).toBe(1); // not stranded
+    } finally {
+      fileAnimMode = "rows";
+      revealDelayMs = 0;
+      revealClock.reset();
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("flipping windowed-grid forces a rebuild and full build disables sliding", async () => {
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      expect(byId("tfm-tile-inner").getChildren()).toHaveLength(8);
+      // toggle OFF: the same content with a different mode must rebuild
+      // (windowed is part of the render signature), yielding the full 100 rows
+      windowedGridOn = false;
+      await renderGrid();
+      await t.renderOnce();
+      expect(byId("tfm-tile-inner").getChildren()).toHaveLength(100);
+      // a full build has no window to slide: scrolling must not touch anything
+      scroller.scrollTop = 300;
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-0")).toBeTruthy();
+      expect(byId("tfm-tile-pad-top")).toBeFalsy();
+    } finally {
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("recursively-searched (flat) results window identically", async () => {
+    // results come from the injected fake; 40 abs-keyed entries exercise the
+    // same window with `entry.abs` instead of cwd-joined names
+    recursiveSearch = true;
+    searchQuery = "w";
+    searchEntries = Array.from({ length: 40 }, (_, i) => ({
+      name: `q${i}.txt`,
+      isDir: false,
+      abs: path.join(tmp, `q${i}.txt`),
+    })) as Entry[];
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      // 40 files / 5 cols = 8 rows, window rows 0..5 → 6 rows + pad
+      expect(byId("tfm-tile-inner").getChildren()).toHaveLength(8);
+      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe(2 * 6);
+      expect(selection.tileRefs.size).toBe(40);
+    } finally {
+      recursiveSearch = false;
+      searchQuery = "";
+      searchEntries = [];
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a deep stale scrollTop on a shrunk listing builds a CLAMPED window", async () => {
+    // mass-delete scenario: the watcher re-renders a 6-entry folder while the
+    // scroller still holds a deep (stale) offset — unclamped, windowRange
+    // produced r0 > r1 = a pads-only blank pane
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid(); // establish windowed state on the big folder
+      gridState.cwd = tmp; // small dir (few entries) under a stale deep offset
+      scroller.scrollTop = 3000;
+      await renderGrid();
+      await t.renderOnce();
+      // the clamp parks the window at the LAST rows (where a deep scroll
+      // legitimately lands on a short list) instead of building no rows at all
+      const totalRows = Math.ceil(selection.tileRefs.size / 5);
+      const r0 = Math.max(0, totalRows - 2);
+      expect(byId(`tfm-tile-row-${totalRows - 1}`)).toBeTruthy();
+      expect(byId(`tfm-tile-row-${r0}`)).toBeTruthy(); // no pads-only pane
+      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(r0 * 6);
+      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe(0);
+      expect([...byId("tfm-tile-inner").getChildren()].length).toBe(totalRows - r0 + 2);
+    } finally {
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+});
+
+describe("hookScrollerScroll", () => {
+  class FakeScroller {
+    #y = 0;
+    get scrollTop(): number {
+      return this.#y;
+    }
+    set scrollTop(v: number) {
+      this.#y = Math.max(0, v);
+    }
+  }
+
+  test("every scrollTop write fires the callback once; reads and clamping stay native", () => {
+    const s = new FakeScroller() as any;
+    let calls = 0;
+    expect(hookScrollerScroll(s, () => calls++)).toBe(true);
+    s.scrollTop = 5;
+    expect(s.scrollTop).toBe(5);
+    expect(calls).toBe(1);
+    s.scrollTop = -9; // the prototype's clamp still applies — the hook wraps it
+    expect(s.scrollTop).toBe(0);
+    expect(calls).toBe(2);
+    // never double-hook, and objects without an accessor are rejected
+    expect(hookScrollerScroll(s, () => calls++)).toBe(false);
+    expect(hookScrollerScroll({}, () => calls++)).toBe(false);
+  });
+
+  test("a scrollbar thumb drag (which bypasses the setter) notifies too", () => {
+    // ScrollBar's slider writes its private position field and then invokes
+    // the bar's _onChange closure — that's the only scroll path NOT going
+    // through scrollTop, so the hook chains it as well (original first)
+    const seen: Array<string | number> = [];
+    const sc = {
+      scrollTop: 0, // plain data property: no accessor to wrap here
+      verticalScrollBar: { _onChange: (p: number) => seen.push(`orig:${p}`) },
+    } as any;
+    expect(hookScrollerScroll(sc, () => seen.push("notify"))).toBe(true);
+    sc.verticalScrollBar._onChange(42);
+    expect(seen).toEqual(["orig:42", "notify"]);
   });
 });

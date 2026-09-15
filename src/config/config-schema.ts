@@ -194,10 +194,13 @@ export type UiConfig = {
   fileAnimationSlidePct: number;
   fileAnimationSlideDir: string;
   fileAnimationEase: string;
+  fileAnimationScrollReveal: boolean;
+  fileAnimationScrollRevealDelayMs: number;
   fileAnimationContainerFade: boolean;
   fileAnimationVisibleOnly: boolean;
   fileAnimationRowGranularity: boolean;
   fileAnimationMaxFiles: number;
+  windowedGrid: boolean;
   listingsCache: boolean;
   listingsCacheStats: boolean;
   listingsCacheTtl: number;
@@ -760,6 +763,31 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "bool",
     section: "ui",
+    tomlKey: "file-animation-scroll-reveal",
+    prop: "fileAnimationScrollReveal",
+    def: true,
+    doc: "true = animate grid rows as they scroll into view (slide follows the edge they entered from; rows leaving are already clipped, nothing to animate). Requires file-animation; a fast fling appears instantly",
+    label: "scroll reveal",
+    group: "animations",
+    subsection: "files",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "file-animation-scroll-reveal-delay-ms",
+    prop: "fileAnimationScrollRevealDelayMs",
+    min: 0,
+    max: 1000,
+    step: 10,
+    def: 80,
+    doc: "wait for scroll to settle this long before playing the scroll-reveal (0 = play every notch; higher = one wave per pause: cheaper on huge folders and the wave actually completes visibly)",
+    label: "scroll reveal delay",
+    group: "animations",
+    subsection: "files",
+  },
+  {
+    kind: "bool",
+    section: "ui",
     tomlKey: "file-animation-container-fade",
     prop: "fileAnimationContainerFade",
     def: true,
@@ -801,6 +829,17 @@ const UI_ROWS: SchemaRow[] = [
     def: 2000,
     doc: "skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list — huge folders jank; 0 = never skip)",
     label: "max animated files",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "windowed-grid",
+    prop: "windowedGrid",
+    def: true,
+    doc: "true = render only the visible rows (plus overscan) of a folder, sliding as you scroll — huge folders stop rebuilding/relaying thousands of off-screen tiles; selection and search still see every file",
+    label: "windowed grid",
     group: "optimization",
     subsection: "performance",
   },

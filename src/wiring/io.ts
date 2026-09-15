@@ -6,6 +6,7 @@ import { CliRenderEvents, Renderable } from "@opentui/core";
 import { runBoot } from "../app/boot";
 import { consumeRestartFlag } from "../app/restart";
 import { buildBootLayout } from "../ui/ui-boot-layout";
+import { hookScrollerScroll } from "../ui/ui-grid";
 import { makeCwdWatcher } from "../fs/watcher";
 import { isVirtualUri } from "../fs/uri";
 import { isNetworkPath } from "../fs/network";
@@ -132,6 +133,12 @@ export const wireBoot = (deps: {
       });
       core.scrollerRefs[0]!.current = scrollers[0];
       core.scrollerRefs[1]!.current = scrollers[1];
+      // [ui] windowed-grid: the hook wraps the scrollTop setter (wheel, drag
+      // auto-scroll, programmatic scrollTo) AND chains the scrollbar's
+      // _onChange — a thumb drag writes the position field raw, never the
+      // setter (ScrollBox exposes no scroll event)
+      hookScrollerScroll(scrollers[0], () => grid.syncWindowPane(0));
+      hookScrollerScroll(scrollers[1], () => grid.syncWindowPane(1));
       // the hover drawer's construction-time collapse wrote to no nodes (they
       // only mount here) — re-apply its panel states now that they exist
       try {

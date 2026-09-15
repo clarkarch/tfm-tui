@@ -18,6 +18,8 @@ import { sidePadDelta, type UiStyle } from "./style";
 import { fmtBytes, pad2 } from "../fs/propsinfo";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { clearChildren } from "../lib/uiutil";
+import type { FileAnimMode } from "./ui-grid-anim";
+import type { Scheduler } from "../lib/uiutil";
 import type { SortMode } from "../lib/sort";
 import { glyph } from "./glyphs";
 import type { Selection } from "../input/selection";
@@ -93,10 +95,27 @@ type GridRendererCtx = {
     rowsTotal?: number;
     inner?: string | null;
     total?: number;
-  }): void;
+    enterFrom?: "top" | "bottom";
+  }): FileAnimMode;
   // [ui] file-animation-visible-only: hand only the tiles on screen to the
   // animator (off-screen ones would cost a native opacity push each per frame)
   fileAnimVisibleOnly(): boolean;
+  // [ui] file-animation-scroll-reveal: animate the rows a window slide just
+  // mounted (rides the file-animation master; no-op while that is off)
+  fileAnimScrollReveal?(): boolean;
+  // [ui] file-animation-scroll-reveal-delay-ms: settle window before the
+  // reveal plays (0 = play every notch, like before). Virtual-clock seam:
+  // tests drive `sched`, production uses real timers.
+  fileAnimScrollRevealDelayMs?(): number;
+  sched?: Scheduler;
+  // [ui] windowed-grid: build only the visible row window (± overscan) and
+  // slide it on scroll. Optional so existing test fakes keep the full-build
+  // contract; the real default lives in config-schema (on).
+  windowedGrid?(): boolean;
+  // an inline rename/create edit is live on a tile node — a window slide must
+  // never destroy it (the watcher/hover-drawer skip rebuilds the same way;
+  // commit/cancel rebuilds or the next scroll notch lands the slide)
+  isRenaming?(): boolean;
   // [ui] listings-cache: reuse the folder's raw entry list across repaints
   // (src/fs/listing.ts); optional so test ctxs keep working, default = on
   listingsCache?(): boolean;
@@ -120,9 +139,81 @@ type GridRendererCtx = {
 export const visibleTileCap = (termH: number, rowH: number, cols: number): number =>
   cols * (Math.floor(termH / rowH) + 1);
 
+// rows of built-but-unseen slack above/below the viewport in windowed mode —
+// the scroll hook fires on EVERY integer row scroll, so this only absorbs
+// partial-row wheels; a fling past it just slides the window (incremental —
+// visible rows are never destroyed)
+const WINDOW_OVERSCAN = 1;
+
+// the windowed row range for a scroll offset — pure, used by BOTH the initial
+// windowed build and every slide so the two can never drift. firstRow is
+// CLAMPED to the row count: a listing that shrinks while scrolled deep
+// (mass-delete, watcher rebuild) renders against the still-stale scrollTop
+// before the next layout pass re-clamps it — an unclamped window (r0 > r1)
+// would build a pads-only pane (a blank flash + a wasted rebuild).
+const windowRange = (
+  scrollTop: number,
+  rowHgt: number,
+  rows: number,
+  termH: number,
+): { firstRow: number; r0: number; r1: number } => {
+  const firstRow = Math.max(0, Math.min(Math.floor(scrollTop / rowHgt), rows - 1));
+  return {
+    firstRow,
+    r0: Math.max(0, firstRow - WINDOW_OVERSCAN),
+    r1: Math.min(rows - 1, firstRow + Math.floor(termH / rowHgt) + WINDOW_OVERSCAN),
+  };
+};
+
+// wrap a scroller's `scrollTop` accessor AND its vertical scrollbar's onChange
+// so every scroll path notifies the windowed grid. The setter covers wheel
+// (ScrollBox does `scrollTop += n`), drag auto-scroll and programmatic
+// scrollTo, but a THUMB DRAG bypasses it entirely (ScrollBar's slider writes
+// its `_scrollPosition` field raw, then calls the bar's `_onChange` closure
+// — ScrollBox.ts wires that to content.translateY only). By `_onChange` run
+// time the scrollTop GETTER already reads the new position, so the chained
+// callback sees the same value every path does. ScrollBox exposes no scroll
+// event; this beats per-frame polling. A single notch can fire onScroll 2-3x
+// (setter + the slider re-entrancy in updateSliderFromScrollState + the
+// slide's own offset-restore write) — the callback MUST be idempotent;
+// syncWindow's range-equality guard makes the repeats free.
+export const hookScrollerScroll = (scroller: any, onScroll: () => void): boolean => {
+  let hooked = false;
+  try {
+    const proto = Object.getPrototypeOf(scroller);
+    const d = proto && Object.getOwnPropertyDescriptor(proto, "scrollTop");
+    if (d && typeof d.set === "function" && !Object.getOwnPropertyDescriptor(scroller, "scrollTop")) {
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        get: d.get,
+        set(value: number) {
+          d.set!.call(this, value);
+          try {
+            onScroll();
+          } catch {}
+        },
+      });
+      hooked = true;
+    }
+  } catch {}
+  try {
+    const bar = scroller?.verticalScrollBar;
+    if (bar && typeof bar._onChange === "function") {
+      const orig = bar._onChange.bind(bar);
+      bar._onChange = (position: number) => {
+        orig(position);
+        try {
+          onScroll();
+        } catch {}
+      };
+      hooked = true;
+    }
+  } catch {}
+  return hooked;
+};
+
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
-  let tileSeq = 0;
   // signature of the last painted tile set — an unchanged pane skips the
   // clear+rebuild (renderAll repaints both panes on any navigation)
   let lastSig = "";
@@ -134,6 +225,82 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // in-flight recursive search; a newer render aborts it so stale keystroke
   // walks don't keep eating disk while a fresh query runs
   let searchAbort: AbortController | null = null;
+  // last windowed build (null = full build / nothing painted): the cached
+  // entry list + row range syncWindow() slides against — a slide NEVER
+  // re-lists, it rebuilds rows from this snapshot
+  let win: {
+    entries: Entry[];
+    isList: boolean;
+    cols: number;
+    rowH: number;
+    rows: number;
+    r0: number;
+    r1: number;
+    // last synced VISIBLE row range (the build window leads it by the
+    // overscan row) — the scroll-reveal fires on rows crossing THIS, not the
+    // build edge, or every reveal would animate off-screen and arrive settled
+    vis: { top: number; bottom: number };
+  } | null = null;
+  // [ui] file-animation-scroll-reveal-delay-ms: deferred reveal state. A fast
+  // fling crosses a row per notch; playing every notch retriggers the wave
+  // mid-flight (nothing completes visibly) and pays native pushes per frame.
+  // Each slide MERGES its crossing into a pending set and re-arms a trailing
+  // timer — one play per pause, over the union. The timer is DROPPED (never
+  // flushed) on clearGrid/fallback, so a stale play can never stop() the new
+  // folder's intro wave after a navigate or a fling landing.
+  let revealTimer: unknown = null;
+  let pendingReveal: { rows: string[]; tiles: string[]; from: "top" | "bottom"; staged: any[] } | null = null;
+  const cancelPendingReveal = (): void => {
+    const sched: Scheduler = ctx.sched ?? globalThis;
+    if (revealTimer) {
+      try {
+        sched.clearTimeout(revealTimer);
+      } catch {}
+      revealTimer = null;
+    }
+    // staged rows sit at frame-0 opacity waiting for a wave that will now
+    // never come — put them back to rest, or they stay invisible until the
+    // next rebuild. On fallback/clearGrid the nodes are already dead or
+    // dying; the try/catch makes that a harmless no-op.
+    const staged = pendingReveal?.staged ?? [];
+    pendingReveal = null;
+    for (const n of staged) {
+      try {
+        n.opacity = 1;
+      } catch {}
+    }
+  };
+  const flushReveal = (): void => {
+    revealTimer = null;
+    const p = pendingReveal;
+    pendingReveal = null;
+    if (!p || (p.rows.length === 0 && p.tiles.length === 0)) return;
+    let mode: FileAnimMode = null;
+    try {
+      mode = ctx.fileAnim({
+        tiles: p.tiles,
+        rows: p.rows,
+        rowsTotal: p.rows.length,
+        total: p.tiles.length,
+        enterFrom: p.from,
+      });
+    } catch {}
+    // Reconcile the mount-time ROW staging with the set the animator
+    // actually drives: "rows" keeps the staged rows (the wave fades
+    // exactly them in — releasing here would blink them to rest).
+    // Anything else releases: "tiles" rides the row-granularity knob off
+    // (a row at opacity 0 would hide per-file children — the tiles
+    // self-stage via play's frame-0 pass, same as the delay-0 path),
+    // null = no wave at all (master off / maxFiles skip — without this
+    // the rows would strand invisible until the next rebuild).
+    if (mode !== "rows") {
+      for (const n of p.staged) {
+        try {
+          n.opacity = 1;
+        } catch {}
+      }
+    }
+  };
   const { selection } = ctx;
   const tilePrefix = (): string => ctx.tileIdPrefix ?? "tfm-tile-";
   const availW = (): number => (ctx.availW ? ctx.availW() : ctx.termW() - ctx.sw() - ctx.reservedRight());
@@ -142,8 +309,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   const rowH = (): number => Math.min(3, Math.max(1, ctx.listRowH()));
 
   const clearGrid = (): void => {
+    // a pending deferred reveal belongs to the OLD listing — drop it before
+    // anything else, or its late fire stops the new folder's intro wave
+    cancelPendingReveal();
     const scroller = ctx.scroller();
     if (!scroller) return;
+    win = null;
     // stop any in-flight file animation BEFORE the nodes it targets are
     // destroyed — a frame callback writing opacity/translateY to a just-removed
     // renderable is the use-after-destroy path
@@ -201,15 +372,37 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     return { isVideo, stat, useThumb };
   };
 
+  const entryKey = (entry: Entry): string => entry.abs ?? path.join(ctx.state.cwd, entry.name);
+
+  // Windowed mode registers a minimal ref for EVERY entry up front: the full
+  // tileRefs map is the selection's contract (selectAll/band/status/selPaths
+  // iterate it window-blind). setTileVisual no-ops on an id that is not
+  // mounted, so off-window refs hold state without costing nodes; building a
+  // row overwrites its ref with the live node data (Map.set keeps order).
+  const registerRef = (entry: Entry, idx: number): void => {
+    const dim = entry.name.startsWith(".");
+    const colors = ctx.colors();
+    const tileId = `${tilePrefix()}${idx}`;
+    // preserve a selection set while the ref existed (window slides re-register
+    // WITHOUT the full render's prevSel snapshot — the flag must survive)
+    const prevSel = selection.tileRefs.get(entryKey(entry))?.selected ?? false;
+    selection.tileRefs.set(entryKey(entry), {
+      selected: prevSel,
+      baseFg: dim ? colors.sidebarFgMuted : colors.sidebarFg,
+      tileId,
+      labelId: `${tileId}-label`,
+      isDir: entry.isDir,
+    });
+  };
+
   const buildTile = (aspect: number, entry: Entry, idx: number, inViewport: boolean): any => {
     // --- grid tile: icon/thumbnail slot + name label, regs in tileRefs ---
-    const cwd = ctx.state.cwd;
     const TILE_W = ctx.tileW();
     const TILE_H = ctx.tileH();
     const ICON_CELLS_H = ctx.iconCells();
     const colors = ctx.colors();
-    const key = entry.abs ?? path.join(cwd, entry.name);
-    const tileId = `${tilePrefix()}${tileSeq++}`;
+    const key = entryKey(entry);
+    const tileId = `${tilePrefix()}${idx}`;
     const labelId = `${tileId}-label`;
     const tile = Box({
       id: tileId,
@@ -295,7 +488,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     selection.tileRefs.set(key, {
       iconSpec,
       iconSlotId: slotId,
-      selected: false,
+      // survive window slides (the builder re-registers refs on every build;
+      // the full render's prevSel restore runs after and is still authoritative)
+      selected: selection.tileRefs.get(key)?.selected ?? false,
       baseFg,
       tileId,
       labelId,
@@ -332,13 +527,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   };
 
   const buildListRow = (entry: Entry, idx: number, inViewport: boolean): any => {
-    const cwd = ctx.state.cwd;
     const colors = ctx.colors();
     // density knob [ui] list-row-height: 1 = compact, icon scales with height
     const h = rowH();
     const { aspect } = ctx.cellMetrics();
-    const key = entry.abs ?? path.join(cwd, entry.name);
-    const rowId = `${tilePrefix()}${tileSeq++}`;
+    const key = entryKey(entry);
+    const rowId = `${tilePrefix()}${idx}`;
     const labelId = `${rowId}-label`;
     const dim = entry.name.startsWith(".");
     const baseFg = dim ? colors.sidebarFgMuted : colors.sidebarFg;
@@ -385,7 +579,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     selection.tileRefs.set(key, {
       iconSpec,
       iconSlotId: slotId,
-      selected: false,
+      selected: selection.tileRefs.get(key)?.selected ?? false,
       baseFg,
       tileId: rowId,
       labelId,
@@ -406,6 +600,63 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       });
     }
     return row;
+  };
+
+  // ONE window-row unit: a grid row Box (holding up to `cols` tiles) or, in
+  // list view, the row-tile itself. Indices are ALWAYS absolute so ids,
+  // mouse-handler idx and the thumb-ranking viewport stay aligned with the
+  // full tileRefs order across slides.
+  const buildRow = (
+    entries: Entry[],
+    isList: boolean,
+    cols: number,
+    rowHgt: number,
+    visFirst: number,
+    r: number,
+  ): any => {
+    const { aspect } = ctx.cellMetrics();
+    const visWin = visibleTileCap(ctx.termH(), rowHgt, cols);
+    const inViewport = (i: number): boolean => i >= visFirst && i < visFirst + visWin;
+    if (isList) return buildListRow(entries[r]!, r, inViewport(r));
+    const row = Box({ id: `${tilePrefix()}row-${r}`, height: rowHgt, flexDirection: "row" });
+    for (let i = r * cols; i < Math.min((r + 1) * cols, entries.length); i++) {
+      row.add(buildTile(aspect, entries[i]!, i, inViewport(i)));
+    }
+    return row;
+  };
+
+  // rows (and, in windowed mode, the pads) into a fresh `inner` container.
+  // Windowed child layout is a FIXED contract the slide relies on:
+  // [pad-top, row r0, ..., row r1, pad-bottom] — pads always exist (a height
+  // of 0 collapses them), so row r lives at child index 1+(r-r0) and the
+  // content height stays EXACT across slides (no scrollTop clamp). The full
+  // (non-windowed) build keeps the old pad-less shape.
+  const buildInner = (
+    entries: Entry[],
+    isList: boolean,
+    cols: number,
+    rowHgt: number,
+    rows: number,
+    r0: number,
+    r1: number,
+    visFirst: number,
+    pads: boolean,
+  ): any => {
+    const inner = Box({ id: `${tilePrefix()}inner`, width: "100%", flexDirection: "column" });
+    if (pads) inner.add(Box({ id: `${tilePrefix()}pad-top`, height: r0 * rowHgt }));
+    for (let r = r0; r <= r1; r++) inner.add(buildRow(entries, isList, cols, rowHgt, visFirst, r));
+    if (pads) inner.add(Box({ id: `${tilePrefix()}pad-bottom`, height: (rows - 1 - r1) * rowHgt }));
+    return inner;
+  };
+
+  // the scroller's LIVE viewport in cell rows — NOT ctx.termH(): chrome
+  // (toolbar/tabs/status) eats several terminal rows, so the full height
+  // overstates how many grid rows are on screen (the bottom reveal fired a
+  // row early, off-screen — the "only the top animates" bug). The ScrollBox
+  // clamps scroll against this same number (updateStickyState).
+  const visH = (scroller: any): number => {
+    const vh = scroller?.viewport?.height;
+    return typeof vh === "number" && vh > 0 ? vh : ctx.termH();
   };
 
   // --- grid rebuild: clear, list, lay out tiles/rows, repaint cut dims.
@@ -465,6 +716,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         ctx.pathEditMode(),
         ctx.tileIdPrefix ?? "",
         state.pendingSelect ?? "",
+        // a windowed-grid flip changes which nodes exist — must rebuild; so
+        // does list-row-height (the list builders read rowH() live, and the
+        // win cache/anim window math must not lag it)
+        ctx.windowedGrid?.() ?? false,
+        ctx.listRowH(),
         ctx.colors(),
         typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
       ]);
@@ -580,38 +836,48 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     clearGrid();
     await ctx.waitForResolution();
     if (gen !== gridGen) return;
-    const { aspect } = ctx.cellMetrics();
     const TILE_H = ctx.tileH();
     const cols = isList ? 1 : Math.max(1, Math.floor((availW() - 3) / ctx.tileW()));
+    const rowHgt = isList ? rowH() : TILE_H;
+    const totalRows = isList ? entries.length : Math.ceil(entries.length / cols);
 
-    // one container wraps every row so `slide` can shift the whole grid with a
-    // single render-only translateY instead of touching each image tile
-    const innerId = `${tilePrefix()}inner`;
-    const inner = Box({ id: innerId, width: "100%", flexDirection: "column" });
-
-    let tileIdx = 0;
+    // [ui] windowed-grid: build only the visible row window (+overscan); the
+    // scroller scroll hook slides it. A windowed build costs O(screen) nodes
+    // no matter the folder size; a plain build stays byte-identical to before.
+    const windowed = ctx.windowedGrid?.() ?? false;
+    const scrollTop = Math.max(0, scroller.scrollTop ?? 0);
+    const { firstRow, r0: wr0, r1: wr1 } = windowRange(scrollTop, rowHgt, totalRows, ctx.termH());
+    const r0 = windowed ? wr0 : 0;
+    const r1 = windowed ? wr1 : totalRows - 1;
     // viewport window for thumb-job ranking: `visibleTileCap` tiles starting
     // wherever the scroller sits (a hover-drawer settle rebuilds mid-scroll;
     // a folder change always starts at 0) — visible thumbs raster FIRST,
     // off-screen backlog last, so the first screenful lands before the tail
-    const visWin = visibleTileCap(ctx.termH(), isList ? rowH() : TILE_H, cols);
-    const scrollTop = Math.max(0, scroller?.scrollTop ?? 0);
-    const visFirst = isList ? Math.floor(scrollTop / rowH()) : Math.floor(scrollTop / TILE_H) * cols;
-    const inViewport = (i: number): boolean => i >= visFirst && i < visFirst + visWin;
-    // grid-view ROW ids for the row-granularity cascade (see the handoff below)
-    const rowIds: string[] = [];
-    if (isList) {
-      for (const e of entries) inner.add(buildListRow(e, tileIdx, inViewport(tileIdx++)));
-    } else {
-      for (let i = 0; i < entries.length; i += cols) {
-        const rowId = `${tilePrefix()}row-${rowIds.length}`;
-        const row = Box({ id: rowId, height: TILE_H, flexDirection: "row" });
-        for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx, inViewport(tileIdx++)));
-        inner.add(row);
-        rowIds.push(rowId);
-      }
-    }
-    scroller.content.add(inner);
+    const visFirst = isList ? firstRow : firstRow * cols;
+    // register EVERY entry first — the full tileRefs/focusKeys list is the
+    // selection's contract; built rows overwrite their minimal ref in place.
+    for (let i = 0; i < entries.length; i++) registerRef(entries[i]!, i);
+
+    // the container `slide` animates (and holds the row window + pads) — its
+    // id is absolute so it resolves across slides
+    const innerId = `${tilePrefix()}inner`;
+    scroller.content.add(buildInner(entries, isList, cols, rowHgt, totalRows, r0, r1, visFirst, windowed));
+    win = windowed
+      ? {
+          entries,
+          isList,
+          cols,
+          rowH: rowHgt,
+          rows: totalRows,
+          r0,
+          r1,
+          vis: { top: firstRow, bottom: Math.min(totalRows - 1, firstRow + Math.floor(visH(scroller) / rowHgt)) },
+        }
+      : null;
+    // grid-view ROW ids for the row-granularity cascade (see the handoff
+    // below): the FULL absolute list — un-built windowed rows resolve to
+    // nothing in the animator but keep the cascade timing aligned by index.
+    const rowIds: string[] = isList ? [] : Array.from({ length: totalRows }, (_, r) => `${tilePrefix()}row-${r}`);
 
     // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
     selection.tileRefs.forEach((_: any, key: string) => {
@@ -691,5 +957,178 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     }
   };
 
-  return { renderGrid };
+  // [ui] windowed-grid slide: the wiring's scroller hook calls this after
+  // EVERY scrollTop write (wheel, drag auto-scroll, scrollbar thumb drag,
+  // keyboard scrollTo). INCREMENTAL is the whole point: rows that merely left
+  // or entered the window are removed/added and the pads absorb the shift, so
+  // a visible row's node NEVER dies mid-scroll — a full clear+rebuild here
+  // would re-queue every icon slot through its fallback glyph on each notch
+  // (the flicker this replaced). Only a fling PAST the built window rebuilds
+  // it whole. Refs/focus/keys are untouched either way — the selection's
+  // full-list contract holds across slides. No-op while the last build was a
+  // full one (nothing to slide).
+  const syncWindow = (): void => {
+    if (!win) return;
+    if (ctx.isRenaming?.()) return;
+    const scroller = ctx.scroller();
+    if (!scroller) return;
+    const { entries, isList, cols, rowH: rh, rows } = win;
+    const old = { r0: win.r0, r1: win.r1 };
+    const scrollTop = Math.max(0, scroller.scrollTop ?? 0);
+    const { firstRow, r0, r1 } = windowRange(scrollTop, rh, rows, ctx.termH());
+    if (r0 === old.r0 && r1 === old.r1) return;
+    const visFirst = isList ? firstRow : firstRow * cols;
+    // operate on the MOUNTED nodes (VNode proxies no-op post-mount): content
+    // holds exactly [inner], inner exactly [pad-top, old.r0..old.r1, pad-bottom]
+    const inner: any = scroller.content.getChildren()[0];
+    const kids: any[] | null = inner && r0 <= old.r1 + 1 && r1 >= old.r0 - 1 ? inner.getChildren() : null;
+    const slideable = !!kids && kids.length === old.r1 - old.r0 + 3;
+    const paint = (a: number, b: number): void => {
+      if (a > b) return;
+      const lo = isList ? a : a * cols;
+      const hi = Math.min(entries.length - 1, isList ? b : (b + 1) * cols - 1);
+      for (let i = lo; i <= hi; i++) {
+        const key = entryKey(entries[i]!);
+        const ref = selection.tileRefs.get(key);
+        if (ref?.selected) selection.setTileVisual(key, TileVisual.Selected);
+        else if (ctx.isCutKey(key)) selection.setTileVisual(key, TileVisual.Rest);
+      }
+    };
+    if (!slideable) {
+      // the nodes a running animation targets ALL die here — stop it BEFORE
+      // destroying them (same use-after-destroy path as clearGrid); a fling
+      // shows its landing spot instantly, unrevealed — and any deferred
+      // reveal for the jumped-over rows is dropped, never flushed late
+      cancelPendingReveal();
+      try {
+        ctx.fileAnim({ tiles: [], inner: null });
+      } catch {}
+      clearChildren(scroller.content);
+      scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
+      paint(r0, r1);
+    } else {
+      const kidAt = (r: number): any => kids[1 + r - old.r0];
+      for (let r = old.r0; r < r0; r++) inner.remove(kidAt(r));
+      for (let r = old.r1; r > r1; r--) inner.remove(kidAt(r));
+      for (let r = r0; r < old.r0; r++) inner.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
+      for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
+        inner.add(buildRow(entries, isList, cols, rh, visFirst, r), inner.getChildren().length - 1);
+      // pads absorb the shift so the total content height never moves (the
+      // offsets above come from the pre-mutation snapshot — node identity,
+      // stable across the adds/removes)
+      kids[0].height = r0 * rh;
+      kids[kids.length - 1].height = (rows - 1 - r1) * rh;
+      paint(r0, Math.min(old.r0 - 1, r1));
+      paint(Math.max(old.r1 + 1, r0), r1);
+    }
+    // [ui] file-animation-scroll-reveal: keyed to the VIEWPORT edge, not the
+    // build — the window leads visibility by the overscan row, so revealing
+    // at build time faded rows off-screen that then arrived already settled
+    // (the "reveal doesn't work" bug). Rows crossing into view THIS notch
+    // animate now; a fling (fallback rebuild) lands instantly, unrevealed.
+    // NO stop call around the slide: the animator appends to a still-running
+    // wave, and detached-but-alive rows leave it safely (remove() only
+    // detaches; writes are try/catch'd until the GC finalizer reclaims them).
+    const visTop = firstRow;
+    const visBottom = Math.min(rows - 1, firstRow + Math.floor(visH(scroller) / rh));
+    const oldVis = win.vis;
+    if (slideable && !(ctx.fileAnimScrollReveal?.() ?? false)) cancelPendingReveal();
+    if (slideable && (ctx.fileAnimScrollReveal?.() ?? false)) {
+      const crossing: number[] = [];
+      let from: "top" | "bottom" | null = null;
+      if (visBottom > oldVis.bottom) {
+        for (let r = Math.max(oldVis.bottom + 1, r0); r <= Math.min(visBottom, r1); r++) crossing.push(r);
+        from = "bottom";
+      } else if (visTop < oldVis.top) {
+        for (let r = Math.max(visTop, r0); r < Math.min(oldVis.top, r1 + 1); r++) crossing.push(r);
+        from = "top";
+      }
+      if (from && crossing.length > 0) {
+        const rvRows: string[] = [];
+        const rvTiles: string[] = [];
+        for (const r of crossing) {
+          if (isList) rvTiles.push(`${tilePrefix()}${r}`);
+          else {
+            rvRows.push(`${tilePrefix()}row-${r}`);
+            for (let i = r * cols; i < Math.min((r + 1) * cols, entries.length); i++)
+              rvTiles.push(`${tilePrefix()}${i}`);
+          }
+        }
+        const delay = ctx.fileAnimScrollRevealDelayMs?.() ?? 0;
+        if (delay <= 0) {
+          try {
+            ctx.fileAnim({
+              tiles: rvTiles,
+              rows: rvRows,
+              rowsTotal: rvRows.length,
+              total: rvTiles.length,
+              enterFrom: from,
+            });
+          } catch {}
+        } else {
+          // defer: merge into the pending union (a row can cross, leave and
+          // re-cross inside one settle window on zigzag) and re-arm the
+          // trailing timer — latest edge wins
+          if (!pendingReveal) pendingReveal = { rows: [], tiles: [], from, staged: [] };
+          const rowSet = new Set(pendingReveal.rows);
+          const tileSet = new Set(pendingReveal.tiles);
+          for (const id of rvRows) {
+            if (!rowSet.has(id)) {
+              rowSet.add(id);
+              pendingReveal.rows.push(id);
+            }
+          }
+          for (const id of rvTiles) {
+            if (!tileSet.has(id)) {
+              tileSet.add(id);
+              pendingReveal.tiles.push(id);
+            }
+          }
+          pendingReveal.from = from;
+          // pre-stage the crossing rows at frame-0 opacity NOW: the wave
+          // plays ~delay ms after they mount, and sitting at rest until
+          // then snaps 1→0 on the first tick (visible → invisible →
+          // fading = the flicker). Children of inner are [pad-top, rows
+          // r0..r1, pad-bottom], so row r lives at index 1+(r-r0) — same
+          // contract the slide itself relies on. try/catch: a row missing
+          // here simply joins the wave unstaged (one-frame pop, not stuck).
+          try {
+            const kidsNow: any[] = inner.getChildren();
+            for (const r of crossing) {
+              const node = kidsNow[1 + (r - r0)];
+              if (!node || pendingReveal.staged.includes(node)) continue;
+              try {
+                node.opacity = 0;
+              } catch {
+                continue;
+              }
+              pendingReveal.staged.push(node);
+            }
+          } catch {}
+          const sched: Scheduler = ctx.sched ?? globalThis;
+          if (revealTimer) {
+            try {
+              sched.clearTimeout(revealTimer);
+            } catch {}
+            revealTimer = null;
+          }
+          try {
+            revealTimer = sched.setTimeout(flushReveal, delay);
+          } catch {}
+        }
+      }
+    }
+    win = { ...win, r0, r1, vis: { top: visTop, bottom: visBottom } };
+    ctx.stripSelectable();
+    void ctx.drainIconQueue();
+    void ctx.drainThumbs();
+    // pads keep the content height exact, so the offset survives untouched —
+    // restore anyway (matches the io drawer-settle pattern; the nested hook
+    // call range-checks equal and returns)
+    try {
+      scroller.scrollTop = scrollTop;
+    } catch {}
+  };
+
+  return { renderGrid, syncWindow };
 };

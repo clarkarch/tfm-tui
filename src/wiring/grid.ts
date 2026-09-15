@@ -290,6 +290,10 @@ export const wireGrid = (deps: {
       stripSelectable,
       fileAnim: (target) => fileAnims[pane].play(target),
       fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
+      fileAnimScrollReveal: () => core.config.ui.fileAnimationScrollReveal,
+      fileAnimScrollRevealDelayMs: () => core.config.ui.fileAnimationScrollRevealDelayMs,
+      windowedGrid: () => core.config.ui.windowedGrid,
+      isRenaming: rename.isRenaming,
       listingsCache: () => core.config.ui.listingsCache,
       listingsCacheStats: () => core.config.ui.listingsCacheStats,
       listingsCacheTtlMs: () => core.config.ui.listingsCacheTtl * 1000,
@@ -301,6 +305,9 @@ export const wireGrid = (deps: {
     });
   const renderers = [makeRenderer(0), makeRenderer(1)] as const;
   const renderPane = (pane: 0 | 1): Promise<void> => renderers[pane].renderGrid();
+  // [ui] windowed-grid: the boot layout's scrollers get their scrollTop
+  // hooked to this (wiring/io) — a slide rebuilds only the row window
+  const syncWindowPane = (pane: 0 | 1): void => renderers[pane].syncWindow();
   // render pane 0 always; pane 1 only while dual pane is on (its scroller is
   // hidden otherwise, so building its tiles would be wasted native allocs)
   const renderGrid = async (): Promise<void> => {
@@ -420,6 +427,7 @@ export const wireGrid = (deps: {
   return {
     renderPreview,
     renderGrid,
+    syncWindowPane,
     renderPane,
     focusPane,
     dropIntoPane,

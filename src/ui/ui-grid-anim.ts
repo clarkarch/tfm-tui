@@ -139,7 +139,29 @@ export type FileAnimTarget = {
   rowsTotal?: number;
   inner?: string | null;
   total?: number;
+  // [ui] file-animation-scroll-reveal: set by syncWindow for rows that just
+  // ENTERED the window. Never animates the container (a grid-wide slide/fade
+  // per notch would move the whole viewport — the entering set is a row or
+  // two, per-node is trivial), maps plain "slide" onto stagger-slide, and
+  // follows the edge the files crossed: bottom → rise up, top → drop in.
+  enterFrom?: "top" | "bottom";
 };
+
+// What play() actually drove (null = it declined: off/maxFiles/empty/stop).
+// Returned so syncWindow can reconcile its mount-time row staging with the
+// set the wave owns — a parent row at opacity 0 hides per-file children.
+export type FileAnimMode = "rows" | "tiles" | "container" | null;
+
+// pure: the style/direction a reveal play resolves to. A horizontal user
+// direction is kept (edge mapping only replaces the up/down defaults).
+export const revealStyleMap = (
+  style: FileAnimStyle,
+  dir: SlideDir,
+  enterFrom: "top" | "bottom",
+): { style: FileAnimStyle; dir: SlideDir } => ({
+  style: style === "slide" ? "stagger-slide" : style,
+  dir: dir === "up" || dir === "down" ? (enterFrom === "top" ? "down" : "up") : dir,
+});
 
 type FileAnimOpts = {
   style: FileAnimStyle;
@@ -244,7 +266,7 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     });
   };
 
-  const play = (target: FileAnimTarget): void => {
+  const play = (target: FileAnimTarget): FileAnimMode => {
     try {
       const o = ctx.opts();
       const vh = typeof ctx.renderer?.terminalHeight === "number" ? ctx.renderer.terminalHeight : 24;
@@ -254,19 +276,30 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       const fileCount = Math.max(target?.total ?? 0, target?.tiles?.length ?? 0);
       if (o.maxFiles > 0 && fileCount > o.maxFiles) {
         stop();
-        return;
+        return null;
       }
       // slide (always) and fade (container-fade knob) move ONE container node;
       // stagger styles animate the per-tile list the grid capped to the
       // viewport — unless the grid handed us ROW boxes and the
       // row-granularity knob is on: same cascade look, cols-times fewer nodes
+      // A reveal play is the exception: container moves are wrong per notch,
+      // and plain "slide" maps to the edge-following stagger-slide curve.
+      const reveal = !!target?.enterFrom;
+      const rm = reveal ? revealStyleMap(o.style, o.dir, target!.enterFrom!) : { style: o.style, dir: o.dir };
       const useRows =
-        o.rowsGranularity && (o.style === "stagger" || o.style === "stagger-slide") && (target?.rows?.length ?? 0) > 0;
-      let container = o.style === "slide" || (o.style === "fade" && o.containerFade);
+        (target?.rows?.length ?? 0) > 0 &&
+        o.rowsGranularity &&
+        (reveal || rm.style === "stagger" || rm.style === "stagger-slide");
+      // NOTE: a reveal rides the row-granularity knob like everything else.
+      // syncWindow pre-stages ROW nodes at mount, then reconciles with the
+      // mode this returns: "rows" keeps the staged set, "tiles" releases it
+      // (a row at opacity 0 would hide per-file children regardless — the
+      // tiles self-stage via play's frame-0 pass, same as the delay-0 path).
+      let container = !reveal && (rm.style === "slide" || (rm.style === "fade" && o.containerFade));
       let ids = container && target?.inner ? [target.inner] : useRows ? target.rows! : (target?.tiles ?? []);
-      if (o.style === "off" || !(o.ms > 0) || ids.length === 0) {
+      if (rm.style === "off" || !(o.ms > 0) || ids.length === 0) {
         stop();
-        return;
+        return null;
       }
       // ponytail: the per-node styles cost one native opacity/translate push per
       // tile per frame (~13µs measured), so thousands of them is a multi-100ms
@@ -284,29 +317,54 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
           container = true;
         } else {
           stop();
-          return;
+          return null;
         }
       }
       const resolved = ids.map((id) => ctx.byId(id)).filter(Boolean);
       if (resolved.length === 0) {
         stop();
-        return;
+        return null;
       }
-      nodes = resolved;
-      // rows keep their own total so the cascade timing matches the real row
-      // count; tiles keep the full file count (viewport-capped list case)
-      total = useRows ? Math.max(target?.rowsTotal ?? 0, nodes.length) : Math.max(target?.total ?? 0, nodes.length);
-      style = o.style;
-      cfg = {
-        dist: slideTravel(vh, o.slidePct),
-        span: o.staggerPct / 100,
-        ease: o.ease,
-        dir: o.dir,
-      };
-      ensure(o.ms);
-      tl?.restart();
+      const mode: FileAnimMode = container ? "container" : useRows ? "rows" : "tiles";
+      // [ui] file-animation-scroll-reveal continuity: a STILL-RUNNING wave
+      // (same resolved style, and same dir where the dir is even used — the
+      // slide-offset styles) is RETARGETED BY APPENDING — in-flight rows keep
+      // fading while the new ones join the back of the cascade. Stopping and
+      // restarting per notch snapped every entering row to rest a fraction
+      // into its fade, which made the reveal unreadable during continuous
+      // scroll (and froze any node missing from the new list). A finished
+      // wave, a style flip or a slide-direction reversal settles the old set
+      // first, then starts fresh — no half-faded node is left behind.
+      const running = !!tl && holder.p < 1 && style === rm.style && !(style === "stagger-slide" && cfg.dir !== rm.dir);
+      if (running) {
+        for (const node of resolved) if (!nodes.includes(node)) nodes.push(node);
+        // indices only ever grow, so earlier nodes' staggerLocal(i/n) moves
+        // FORWARD (never rewinds) as the wave absorbs the new set
+        total = Math.max(total, nodes.length);
+      } else {
+        settle();
+        nodes = resolved;
+        // rows keep their own total so the cascade timing matches the real row
+        // count; tiles keep the full file count (viewport-capped list case);
+        // a reveal cascades across just the entering set
+        total = useRows ? Math.max(target?.rowsTotal ?? 0, nodes.length) : Math.max(target?.total ?? 0, nodes.length);
+        style = rm.style;
+        cfg = {
+          dist: slideTravel(vh, o.slidePct),
+          span: o.staggerPct / 100,
+          ease: o.ease,
+          dir: rm.dir,
+        };
+        ensure(o.ms);
+        tl?.restart();
+      }
+      // stage frame 0 of the freshly added nodes synchronically — without
+      // this they'd present one frame at full opacity before the first tick
+      apply(holder.p);
+      return mode;
     } catch {
       stop();
+      return null;
     }
   };
 

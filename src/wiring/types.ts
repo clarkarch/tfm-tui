@@ -93,6 +93,7 @@ export type FileopsWiring = {
 export type GridWiring = {
   renderPreview: ReturnType<typeof makePreview>["renderPreview"];
   renderGrid: ReturnType<typeof makeGridRenderer>["renderGrid"];
+  syncWindowPane: (pane: 0 | 1) => void;
   renderPane: (pane: 0 | 1) => Promise<void>;
   focusPane: (pane: 0 | 1) => void;
   dropIntoPane: (pane: 0 | 1) => void;
