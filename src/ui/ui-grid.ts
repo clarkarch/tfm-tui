@@ -139,6 +139,18 @@ type GridRendererCtx = {
 export const visibleTileCap = (termH: number, rowH: number, cols: number): number =>
   cols * (Math.floor(termH / rowH) + 1);
 
+// the bottom VISIBLE row for a scroll offset — overlap-based, not full-row
+// math: a row counts the moment its TOP cell enters the viewport.
+// firstRow + floor(visH/rowH) waits until the row fits whole, delaying the
+// bottom scroll-reveal by up to rowH-1 cells. The -1 keeps exact alignment
+// from counting the next row (scrollTop=0, visH=10, rh=5 → rows 0..1, not 2).
+export const visibleBottomRow = (scrollTop: number, visH: number, rowHgt: number, rows: number): number => {
+  if (rows <= 0) return -1;
+  if (!(rowHgt > 0)) return rows - 1;
+  if (!(visH > 0)) return Math.max(0, Math.min(rows - 1, Math.floor(Math.max(0, scrollTop) / rowHgt)));
+  return Math.max(0, Math.min(rows - 1, Math.floor((Math.max(0, scrollTop) + visH - 1) / rowHgt)));
+};
+
 // rows of built-but-unseen slack above/below the viewport in windowed mode —
 // the scroll hook fires on EVERY integer row scroll, so this only absorbs
 // partial-row wheels; a fling past it just slides the window (incremental —
@@ -871,7 +883,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           rows: totalRows,
           r0,
           r1,
-          vis: { top: firstRow, bottom: Math.min(totalRows - 1, firstRow + Math.floor(visH(scroller) / rowHgt)) },
+          vis: { top: firstRow, bottom: visibleBottomRow(scrollTop, visH(scroller), rowHgt, totalRows) },
         }
       : null;
     // grid-view ROW ids for the row-granularity cascade (see the handoff
@@ -976,7 +988,6 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const old = { r0: win.r0, r1: win.r1 };
     const scrollTop = Math.max(0, scroller.scrollTop ?? 0);
     const { firstRow, r0, r1 } = windowRange(scrollTop, rh, rows, ctx.termH());
-    if (r0 === old.r0 && r1 === old.r1) return;
     const visFirst = isList ? firstRow : firstRow * cols;
     // operate on the MOUNTED nodes (VNode proxies no-op post-mount): content
     // holds exactly [inner], inner exactly [pad-top, old.r0..old.r1, pad-bottom]
@@ -994,32 +1005,41 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         else if (ctx.isCutKey(key)) selection.setTileVisual(key, TileVisual.Rest);
       }
     };
+    // a sub-row notch leaves the built window in place but can still push a
+    // partially visible row's TOP cell into view — the reveal below must run
+    // for those too, not just for slides (the range-equality repeats stay
+    // free: identical vis ranges cross nothing, so the animator is untouched)
+    const windowMoved = r0 !== old.r0 || r1 !== old.r1;
     if (!slideable) {
-      // the nodes a running animation targets ALL die here — stop it BEFORE
-      // destroying them (same use-after-destroy path as clearGrid); a fling
-      // shows its landing spot instantly, unrevealed — and any deferred
-      // reveal for the jumped-over rows is dropped, never flushed late
-      cancelPendingReveal();
-      try {
-        ctx.fileAnim({ tiles: [], inner: null });
-      } catch {}
-      clearChildren(scroller.content);
-      scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
-      paint(r0, r1);
+      if (windowMoved) {
+        // the nodes a running animation targets ALL die here — stop it BEFORE
+        // destroying them (same use-after-destroy path as clearGrid); a fling
+        // shows its landing spot instantly, unrevealed — and any deferred
+        // reveal for the jumped-over rows is dropped, never flushed late
+        cancelPendingReveal();
+        try {
+          ctx.fileAnim({ tiles: [], inner: null });
+        } catch {}
+        clearChildren(scroller.content);
+        scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
+        paint(r0, r1);
+      }
     } else {
-      const kidAt = (r: number): any => kids[1 + r - old.r0];
-      for (let r = old.r0; r < r0; r++) inner.remove(kidAt(r));
-      for (let r = old.r1; r > r1; r--) inner.remove(kidAt(r));
-      for (let r = r0; r < old.r0; r++) inner.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
-      for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
-        inner.add(buildRow(entries, isList, cols, rh, visFirst, r), inner.getChildren().length - 1);
-      // pads absorb the shift so the total content height never moves (the
-      // offsets above come from the pre-mutation snapshot — node identity,
-      // stable across the adds/removes)
-      kids[0].height = r0 * rh;
-      kids[kids.length - 1].height = (rows - 1 - r1) * rh;
-      paint(r0, Math.min(old.r0 - 1, r1));
-      paint(Math.max(old.r1 + 1, r0), r1);
+      if (windowMoved) {
+        const kidAt = (r: number): any => kids[1 + r - old.r0];
+        for (let r = old.r0; r < r0; r++) inner.remove(kidAt(r));
+        for (let r = old.r1; r > r1; r--) inner.remove(kidAt(r));
+        for (let r = r0; r < old.r0; r++) inner.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
+        for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
+          inner.add(buildRow(entries, isList, cols, rh, visFirst, r), inner.getChildren().length - 1);
+        // pads absorb the shift so the total content height never moves (the
+        // offsets above come from the pre-mutation snapshot — node identity,
+        // stable across the adds/removes)
+        kids[0].height = r0 * rh;
+        kids[kids.length - 1].height = (rows - 1 - r1) * rh;
+        paint(r0, Math.min(old.r0 - 1, r1));
+        paint(Math.max(old.r1 + 1, r0), r1);
+      }
     }
     // [ui] file-animation-scroll-reveal: keyed to the VIEWPORT edge, not the
     // build — the window leads visibility by the overscan row, so revealing
@@ -1030,7 +1050,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // wave, and detached-but-alive rows leave it safely (remove() only
     // detaches; writes are try/catch'd until the GC finalizer reclaims them).
     const visTop = firstRow;
-    const visBottom = Math.min(rows - 1, firstRow + Math.floor(visH(scroller) / rh));
+    const visBottom = visibleBottomRow(scrollTop, visH(scroller), rh, rows);
     const oldVis = win.vis;
     if (slideable && !(ctx.fileAnimScrollReveal?.() ?? false)) cancelPendingReveal();
     if (slideable && (ctx.fileAnimScrollReveal?.() ?? false)) {
@@ -1123,10 +1143,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     void ctx.drainIconQueue();
     void ctx.drainThumbs();
     // pads keep the content height exact, so the offset survives untouched —
-    // restore anyway (matches the io drawer-settle pattern; the nested hook
-    // call range-checks equal and returns)
+    // restore only after a slide moved the window (matches the io
+    // drawer-settle pattern; the nested hook call range-checks equal and
+    // returns). An unconditional write would recurse: the hook re-fires
+    // syncWindow, which no longer early-returns on equal windows.
     try {
-      scroller.scrollTop = scrollTop;
+      if (windowMoved) scroller.scrollTop = scrollTop;
     } catch {}
   };
 

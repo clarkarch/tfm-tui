@@ -1178,6 +1178,70 @@ describe("renderGrid (windowed grid)", () => {
     }
   });
 
+  test("scroll reveal fires on the TOP edge of a partially visible bottom row", async () => {
+    // viewport 20 / TILE_H 6: jumping 0 -> 11 shows row 5's top cell (y=30
+    // inside 11..30) while the old full-row math (firstRow + floor(visH/rh))
+    // still reports bottom=4. The reveal must follow overlap, not full rows.
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 11; // rem=5: row 5 peeks in by one cell
+      syncWindow();
+      const play = fileAnimCalls.at(-1)!;
+      expect(play.enterFrom).toBe("bottom");
+      expect(play.rows).toEqual(["tfm-tile-row-4", "tfm-tile-row-5"]);
+    } finally {
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("scroll reveal fires for a sub-row notch that leaves the build window in place", async () => {
+    // the build window only moves when firstRow crosses a row boundary, so a
+    // 570 -> 575 notch changes nothing built — but row 99's top cell (y=594
+    // inside 575..594) newly overlaps. Returning early on equal windows would
+    // delay the reveal until the next full-row notch.
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    revealOn = true;
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      scroller.scrollTop = 570; // fallback rebuild near the end, no reveal
+      syncWindow();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 575; // same build window, row 99 peeks in
+      syncWindow();
+      const play = fileAnimCalls.at(-1)!;
+      expect(play.enterFrom).toBe("bottom");
+      expect(play.rows).toEqual(["tfm-tile-row-99"]);
+    } finally {
+      revealOn = false;
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
   test("scroll-reveal delay defers the play until scroll settles: one wave, union of crossings", async () => {
     // fast fling = a play per notch today: each new wave retriggers while the
     // last is mid-flight, so nothing ever completes visibly AND every frame
