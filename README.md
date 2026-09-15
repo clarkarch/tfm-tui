@@ -97,6 +97,8 @@ See [docs/plugins.md](docs/plugins.md).
 - Thumbnails need the kitty graphics protocol; tmux hides them unless
   `allow-passthrough` is on.
 - Cross-app drag & drop is kitty-only.
+- Rasterized icons can show a black box when a floating UI paints over them
+  (menu scrims, rubber-band selection).
 - Custom kitty themes can misbehave.
 
 ## License
