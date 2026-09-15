@@ -29,9 +29,14 @@ curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz"
 
 # checksum: fail closed when the release ships one, fail open (with a loud
 # warning) only when the artifact has no published checksum at all.
+# NOTE: compare digests directly, never `sha256sum -c`: the published sidecar
+# embeds the release filename (tfm-<arch>.gz) while we save as tfm.gz, so -c
+# looks for a file that isn't there and fails every install.
 if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz.sha256" -o "$TMP/tfm.gz.sha256" 2>/dev/null; then
-  ( cd "$TMP" && sha256sum -c tfm.gz.sha256 --status ) \
-    || { echo "tfm install: CHECKSUM MISMATCH — refusing to install $TMP/tfm.gz" >&2; exit 1; }
+  want=$(cut -d' ' -f1 < "$TMP/tfm.gz.sha256")
+  got=$(sha256sum < "$TMP/tfm.gz" | cut -d' ' -f1)
+  [ -n "$want" ] && [ "$want" = "$got" ] \
+    || { echo "tfm install: CHECKSUM MISMATCH, refusing to install $TMP/tfm.gz" >&2; exit 1; }
   echo "tfm: checksum verified"
 elif [ "${TFM_NO_VERIFY:-}" = "1" ]; then
   echo "tfm: WARNING: no checksum published, installing unverified (TFM_NO_VERIFY=1)" >&2
