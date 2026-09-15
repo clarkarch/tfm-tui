@@ -5,7 +5,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 ![beta](https://img.shields.io/badge/status-beta-yellow) [![website](https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white)](https://clarkarch.github.io/tfm-tui/)
 
 > [!WARNING]
-> Beta software, usable daily, but **back up anything irreplaceable** first.
+> Beta software, usable daily, but back up anything irreplaceable first before performing a files op. 
 
 > [!IMPORTANT]
 > This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
