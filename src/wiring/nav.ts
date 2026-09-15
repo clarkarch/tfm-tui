@@ -6,7 +6,7 @@
 
 import { makeRenderAll } from "../app/render-all";
 import { makeQuit } from "../app/quit";
-import { makeRestart } from "../app/restart";
+import { makeRestart, restartArgs } from "../app/restart";
 import { sharedOpQueue } from "../lib/op-queue";
 import { makeStatus } from "../ui/ui-status";
 import { makeNav, makeSessionSync } from "../app/nav";
@@ -118,7 +118,10 @@ export const wireNav = (deps: {
   const restartApp = makeRestart({
     ...quitSteps,
     execPath: process.execPath,
-    argv: process.argv.slice(1),
+    // NOT slice(1): the compiled binary's argv carries the /$bunfs/ virtual
+    // entry at [1] — re-passing it makes the child treat it as a PATH (exit
+    // 1). restartArgs strips it (same rule as cli parseArgs).
+    argv: restartArgs(process.argv),
     // the shared serial queue: a live op would race the child's orphan sweep
     // while the parent loop is frozen inside spawnSync (see app/restart)
     isBusy: () => !sharedOpQueue().isIdle(),

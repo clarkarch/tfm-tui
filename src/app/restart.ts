@@ -32,6 +32,24 @@ export type RestartCheck = (path: string) => void;
 // re-sets it explicitly, so nested restarts keep working)
 export const RESTART_ENV = "TFM_RESTART";
 
+// Spawn args for the restart child: process.argv minus argv[0] minus the
+// script token. The compiled binary's runtime injects argv=["bun",
+// "/$bunfs/root/tfm", ...userArgs] (probed 2026-09), so a naive slice(1)
+// re-passes the virtual entry as a PATH and the child exits 1 ("no such
+// file or directory"). Same strip rule as parseArgs in ./cli (runner +
+// script-token shape), so dev (`bun src/index.ts …`) keeps working and a
+// real user path is never swallowed.
+export const restartArgs = (argv: string[]): string[] => {
+  const args = argv.slice(1);
+  const runner = (argv[0] ?? "").replace(/\\/g, "/").split("/").pop() ?? "";
+  const script = args[0] ?? "";
+  const isScriptToken = /index\.[tj]s$/.test(script) || script.startsWith("/$bunfs/");
+  if (/^(bun|node|deno)(\.exe)?$/.test(runner) && args.length && isScriptToken) {
+    return args.slice(1);
+  }
+  return args;
+};
+
 // read-and-clear the restart-generation marker. UNCONDITIONAL by design: a
 // stale "1" (user-exported, or inherited from a shell spawned before the
 // cleanup existed) must never misdetect a fresh boot as a restart child and

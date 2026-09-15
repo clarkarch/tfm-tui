@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { consumeRestartFlag, makeRestart, RESTART_ENV, type RestartCtx } from "./restart";
+import { consumeRestartFlag, makeRestart, RESTART_ENV, restartArgs, type RestartCtx } from "./restart";
 
 const mkCtx = (
   calls: string[],
@@ -182,6 +182,24 @@ describe("makeRestart", () => {
     expect(calls).toContain("notify:restart failed: boom");
     expect(calls).not.toContain("destroy");
     expect(ctx.codes).toEqual([]);
+  });
+});
+
+describe("restartArgs", () => {
+  test("compiled binary strips the /$bunfs/ virtual entry (else the child treats it as a PATH)", () => {
+    expect(restartArgs(["bun", "/$bunfs/root/tfm", "--debug", "/tmp"])).toEqual(["--debug", "/tmp"]);
+  });
+
+  test("compiled binary with no user args spawns bare", () => {
+    expect(restartArgs(["bun", "/$bunfs/root/tfm"])).toEqual([]);
+  });
+
+  test("dev runner strips the script token", () => {
+    expect(restartArgs(["/home/u/.bun/bin/bun", "/repo/src/index.ts", "/tmp"])).toEqual(["/tmp"]);
+  });
+
+  test("a real user path is never stripped (non-runner argv[0])", () => {
+    expect(restartArgs(["/usr/bin/tfm", "index.ts"])).toEqual(["index.ts"]);
   });
 });
 
