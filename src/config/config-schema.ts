@@ -198,6 +198,9 @@ export type UiConfig = {
   fileAnimationVisibleOnly: boolean;
   fileAnimationRowGranularity: boolean;
   fileAnimationMaxFiles: number;
+  listingsCache: boolean;
+  listingsCacheStats: boolean;
+  listingsCacheTtl: number;
   fileHoverAnimation: boolean;
   fileHoverIncludeLabel: boolean;
   fileHoverDirection: HoverLiftDirection;
@@ -798,6 +801,42 @@ const UI_ROWS: SchemaRow[] = [
     def: 2000,
     doc: "skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list — huge folders jank; 0 = never skip)",
     label: "max animated files",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "listings-cache",
+    prop: "listingsCache",
+    def: true,
+    doc: "true = reuse a folder's file list across repaints until the folder itself changes (back/forward and selection changes skip the disk; some network/fuse mounts freeze the folder timestamp, so entries refresh after ~2s regardless)",
+    label: "cache folder listings",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "listings-cache-stats",
+    prop: "listingsCacheStats",
+    def: true,
+    doc: "true = keep file sizes/dates inside the cached folder listing too, so size/date sorts stop re-stating every file on every repaint (displayed stats can lag a live edit by up to the cache ttl)",
+    label: "cache file stats",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "listings-cache-ttl",
+    prop: "listingsCacheTtl",
+    min: 1,
+    max: 300,
+    step: 1,
+    def: 2,
+    doc: "seconds a cached folder listing may serve possibly-stale sizes/dates (or files at all on mounts whose folder timestamps freeze) before re-reading; 1 = freshest, 300 = best on slow network mounts",
+    label: "listing cache ttl",
     group: "optimization",
     subsection: "performance",
   },

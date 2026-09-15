@@ -46,6 +46,9 @@ file-animation-container-fade   = true        # true = fade the grid as one laye
 file-animation-visible-only     = true        # true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)
 file-animation-row-granularity  = true        # true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)
 file-animation-max-files        = 2000        # skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list — huge folders jank; 0 = never skip)
+listings-cache                  = true        # true = reuse a folder's file list across repaints until the folder itself changes (back/forward and selection changes skip the disk; some network/fuse mounts freeze the folder timestamp, so entries refresh after ~2s regardless)
+listings-cache-stats            = true        # true = keep file sizes/dates inside the cached folder listing too, so size/date sorts stop re-stating every file on every repaint (displayed stats can lag a live edit by up to the cache ttl)
+listings-cache-ttl              = 2           # seconds a cached folder listing may serve possibly-stale sizes/dates (or files at all on mounts whose folder timestamps freeze) before re-reading; 1 = freshest, 300 = best on slow network mounts
 file-hover-animation            = false       # true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)
 file-hover-include-label        = false       # true = the filename rides along with the hover lift
 file-hover-direction            = "up"        # "up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally

@@ -97,6 +97,12 @@ type GridRendererCtx = {
   // [ui] file-animation-visible-only: hand only the tiles on screen to the
   // animator (off-screen ones would cost a native opacity push each per frame)
   fileAnimVisibleOnly(): boolean;
+  // [ui] listings-cache: reuse the folder's raw entry list across repaints
+  // (src/fs/listing.ts); optional so test ctxs keep working, default = on
+  listingsCache?(): boolean;
+  // [ui] listings-cache-stats / listings-cache-ttl (ms; config stores seconds)
+  listingsCacheStats?(): boolean;
+  listingsCacheTtlMs?(): number;
   // selection module + mouse handlers
   selection: Selection;
   entryMouseHandlers(entry: Entry, key: string, idx: number): any;
@@ -492,7 +498,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         // stable display: name order, dirs first
         allEntries.sort(compareEntries("name", true));
       } else {
-        allEntries = await listDir(state.cwd, state.showHidden, state.sortBy, state.sortAsc);
+        allEntries = await listDir(state.cwd, state.showHidden, state.sortBy, state.sortAsc, {
+          cache: ctx.listingsCache?.() ?? true,
+          cacheStats: ctx.listingsCacheStats?.() ?? true,
+          ttlMs: ctx.listingsCacheTtlMs?.(),
+        });
       }
     } catch (err) {
       // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane

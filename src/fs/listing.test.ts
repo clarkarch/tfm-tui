@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { compareEntries, listDir, type Entry } from "./listing";
@@ -205,6 +205,141 @@ describe("listDir", () => {
       expect(out.map((x) => x.name)).toEqual(["a-star.txt", "b-star.txt"]);
     } finally {
       rmSync(path.join(stateHome, "tfm", "starred.list"), { force: true });
+    }
+  });
+});
+
+// [ui] listings-cache (src/fs/listing.ts): a folder's raw scan is reused while
+// its dir-mtime signature is unchanged, with a ~2s TTL as the backstop for
+// filesystems whose dir mtimes freeze (some fuse/exFAT mounts). Tests simulate
+// a frozen mount by utimes-ing the dir BACK to a round-numbered timestamp —
+// exact under the s→ns round-trip, unlike restoring a real mtimeMs float.
+describe("listings cache", () => {
+  const FROZEN = 1700000000; // integer seconds → exact mtimeMs
+  const T0 = () => 0;
+
+  // dir with a.txt, first (caching) list, then b.txt added and the dir mtime
+  // rewound — a real "soundless" filesystem where no rescan trigger exists
+  const frozenDir = async (): Promise<string> => {
+    const dir = mktmp("tfm-lc-");
+    W(path.join(dir, "a.txt"));
+    utimesSync(dir, FROZEN, FROZEN);
+    await listDir(dir, false, "name", true, { now: T0 });
+    W(path.join(dir, "b.txt"));
+    utimesSync(dir, FROZEN, FROZEN);
+    return dir;
+  };
+
+  test("frozen dir mtime reuses the cached listing (no rescan trigger exists)", async () => {
+    const dir = await frozenDir();
+    try {
+      const out = await listDir(dir, false, "name", true, { now: T0 });
+      expect(out.map((x) => x.name)).toEqual(["a.txt"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("TTL expiry re-reads even a frozen dir", async () => {
+    const dir = await frozenDir();
+    try {
+      // 3s on a virtual clock = past the 2s window, no sleep needed
+      const out = await listDir(dir, false, "name", true, { now: () => 3000 });
+      expect(out.map((x) => x.name)).toEqual(["a.txt", "b.txt"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cache:false bypasses the reuse entirely", async () => {
+    const dir = await frozenDir();
+    try {
+      const out = await listDir(dir, false, "name", true, { cache: false, now: T0 });
+      expect(out.map((x) => x.name)).toEqual(["a.txt", "b.txt"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // listings-cache-stats OFF: the per-call fill loop keeps stats live — the
+  // exact mode that justifies shipping WITHOUT yazi's per-file watcher patch
+  test("with listings-cache-stats off, a cache hit still re-stats size/mtime", async () => {
+    const dir = mktmp("tfm-lc2-");
+    try {
+      const a = path.join(dir, "a.txt");
+      const b = path.join(dir, "b.txt");
+      W(a, "x".repeat(100));
+      W(b, "y");
+      utimesSync(dir, FROZEN, FROZEN);
+      await listDir(dir, false, "size", true, { now: T0, cacheStats: false }); // prime
+      rmSync(a); // vanish a name…
+      writeFileSync(b, "x".repeat(500)); // …and content-edit another in place…
+      utimesSync(dir, FROZEN, FROZEN); // …on a "soundless" mount: mtime rewound
+      const out = await listDir(dir, false, "size", true, { now: T0, cacheStats: false });
+      // a vanished name still listed ⇒ the CACHED scan was served (a rescan
+      // would drop it) — without this the fill assertion passes vacuously.
+      expect(out.map((x) => x.name)).toContain("a.txt");
+      // …yet the stat-fill re-stats per call, so the live file's size is fresh
+      expect(out.find((x) => x.name === "b.txt")?.size).toBe(500);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // listings-cache-stats ON (the default): sizes/dates ride in the cache and
+  // only refresh on a rescan — the staleness the speed is bought with. The
+  // name-sort prime pins the HIT-PATH fill too: a size sort on a cached
+  // raw listing must fill the cache itself, not just fresh scans.
+  test("with listings-cache-stats on, sizes lag a live edit until the TTL rescan", async () => {
+    const dir = mktmp("tfm-lc4-");
+    try {
+      const f = path.join(dir, "a.txt");
+      W(f, "x".repeat(500));
+      await listDir(dir, false, "name", true, { now: T0 }); // caches NO stats
+      const warm = await listDir(dir, false, "size", true, { now: () => 500 });
+      expect(warm[0]!.size).toBe(500); // size sort on a cache HIT fills the cache
+      writeFileSync(f, "x".repeat(900)); // in-place edit: dir mtime untouched
+      const stale = await listDir(dir, false, "size", true, { now: () => 1000 });
+      expect(stale[0]!.size).toBe(500); // next hit serves the cached stat…
+      const aged = await listDir(dir, false, "size", true, { now: () => 3000 });
+      expect(aged[0]!.size).toBe(900); // …TTL expiry re-scans and re-stats
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("[ui] listings-cache-ttl overrides the default window", async () => {
+    const dir = mktmp("tfm-lc5-");
+    try {
+      const f = path.join(dir, "a.txt");
+      W(f, "x".repeat(100));
+      await listDir(dir, false, "size", true, { now: T0 });
+      writeFileSync(f, "x".repeat(500));
+      // 100ms on the virtual clock is inside the default 2s window…
+      expect((await listDir(dir, false, "size", true, { now: () => 100 }))[0]!.size).toBe(100);
+      // …but expired at the requested 50ms
+      const out = await listDir(dir, false, "size", true, { now: () => 100, ttlMs: 50 });
+      expect(out[0]!.size).toBe(500);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("real mtime bump re-scans within the TTL", async () => {
+    const dir = mktmp("tfm-lc3-");
+    try {
+      W(path.join(dir, "a.txt"));
+      utimesSync(dir, FROZEN, FROZEN);
+      await listDir(dir, false, "name", true, { now: T0 });
+      // no rewind this time: the mtime really moved. The fallback covers
+      // filesystems that NEVER bump the dir mtime (the frozen-mount class) —
+      // then it synthesizes the bump so sig-mismatch → rescan still gets pinned
+      W(path.join(dir, "b.txt"));
+      if (statSync(dir).mtimeMs === FROZEN * 1000) utimesSync(dir, FROZEN + 0.5, FROZEN + 0.5);
+      const out = await listDir(dir, false, "name", true, { now: () => 1 });
+      expect(out.map((x) => x.name)).toEqual(["a.txt", "b.txt"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
