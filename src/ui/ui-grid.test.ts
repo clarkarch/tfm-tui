@@ -84,7 +84,6 @@ let availWSet: number | null;
 let hoverLiftOpts: HoverLiftOpts;
 let tilePrefix: string;
 let visibleOnly: boolean;
-let revealOn: boolean;
 let revealDelayMs: number;
 let fileAnimMode: "rows" | "tiles" | "container" | null;
 let fileAnimCalls: Array<{
@@ -119,7 +118,6 @@ beforeAll(async () => {
   visibleOnly = false;
   windowedGridOn = false;
   renamingOn = false;
-  revealOn = false;
   revealDelayMs = 0;
   fileAnimMode = "rows";
   revealClock = mkRevealClock();
@@ -212,7 +210,6 @@ beforeAll(async () => {
       return fileAnimMode;
     },
     fileAnimVisibleOnly: () => visibleOnly,
-    fileAnimScrollReveal: () => revealOn,
     fileAnimScrollRevealDelayMs: () => revealDelayMs,
     sched: revealClock.sched,
     windowedGrid: () => windowedGridOn,
@@ -1118,7 +1115,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     // a REAL chrome gap: the grid viewport is 20 rows inside a 24-row
     // terminal — the bottom crossing must follow the viewport, not termH
     // (termH math revealed row 5 while it was still off-screen: the
@@ -1153,14 +1150,6 @@ describe("renderGrid (windowed grid)", () => {
       expect(up.tiles.length).toBe(10);
       expect(up.tiles[0]).toBe("tfm-tile-40");
 
-      // knob off: the slide does not touch the animator at all (no stop, no play)
-      revealOn = false;
-      fileAnimCalls.length = 0;
-      scroller.scrollTop = 54; // firstRow 9 → window 8..14
-      syncWindow();
-      expect(fileAnimCalls).toEqual([]);
-      revealOn = true;
-
       // a fling PAST the window falls back to a whole rebuild — and reveals
       // nothing (jumping users want immediacy)
       fileAnimCalls.length = 0;
@@ -1169,7 +1158,6 @@ describe("renderGrid (windowed grid)", () => {
       expect(byId("tfm-tile-row-94")).toBeTruthy();
       expect(fileAnimCalls.at(-1)!.tiles).toEqual([]);
     } finally {
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1185,7 +1173,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     scroller.viewport = { height: 20 };
     try {
       gridState.cwd = bigDir();
@@ -1199,7 +1187,6 @@ describe("renderGrid (windowed grid)", () => {
       expect(play.enterFrom).toBe("bottom");
       expect(play.rows).toEqual(["tfm-tile-row-4", "tfm-tile-row-5"]);
     } finally {
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1216,7 +1203,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     scroller.viewport = { height: 20 };
     try {
       gridState.cwd = bigDir();
@@ -1233,7 +1220,6 @@ describe("renderGrid (windowed grid)", () => {
       expect(play.enterFrom).toBe("bottom");
       expect(play.rows).toEqual(["tfm-tile-row-99"]);
     } finally {
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1250,7 +1236,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     revealDelayMs = 80;
     revealClock.reset();
     scroller.viewport = { height: 20 };
@@ -1278,7 +1264,6 @@ describe("renderGrid (windowed grid)", () => {
     } finally {
       revealDelayMs = 0;
       revealClock.reset();
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1293,7 +1278,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     revealDelayMs = 80;
     revealClock.reset();
     scroller.viewport = { height: 20 };
@@ -1314,7 +1299,6 @@ describe("renderGrid (windowed grid)", () => {
     } finally {
       revealDelayMs = 0;
       revealClock.reset();
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1329,7 +1313,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     revealDelayMs = 80;
     revealClock.reset();
     scroller.viewport = { height: 20 };
@@ -1350,7 +1334,6 @@ describe("renderGrid (windowed grid)", () => {
     } finally {
       revealDelayMs = 0;
       revealClock.reset();
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1368,7 +1351,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     revealDelayMs = 80;
     revealClock.reset();
     scroller.viewport = { height: 20 };
@@ -1393,47 +1376,6 @@ describe("renderGrid (windowed grid)", () => {
     } finally {
       revealDelayMs = 0;
       revealClock.reset();
-      revealOn = false;
-      scroller.viewport = undefined;
-      windowedGridOn = false;
-      scroller.scrollTop = 0;
-      gridState.cwd = prevCwd;
-      await renderGrid();
-    }
-  });
-
-  test("disabling reveal mid-pending restores staged rows (no stuck-invisible rows)", async () => {
-    // staged rows sit at opacity 0 waiting for a wave that will now never
-    // come — the knob-off cancel must put them back to rest, or they stay
-    // invisible until the next rebuild. Row 4 survives both slides below.
-    ensureBig();
-    const prevCwd = gridState.cwd;
-    windowedGridOn = true;
-    revealOn = true;
-    revealDelayMs = 80;
-    revealClock.reset();
-    scroller.viewport = { height: 20 };
-    try {
-      gridState.cwd = bigDir();
-      scroller.scrollTop = 0;
-      await renderGrid();
-      await t.renderOnce();
-      fileAnimCalls.length = 0;
-      scroller.scrollTop = 6; // row 4 crosses, staged at 0
-      syncWindow();
-      await t.renderOnce();
-      expect((byId("tfm-tile-row-4") as any).opacity).toBe(0);
-      revealOn = false;
-      scroller.scrollTop = 12; // slide with knob off → cancel path
-      syncWindow();
-      await t.renderOnce();
-      expect((byId("tfm-tile-row-4") as any).opacity).toBe(1); // restored
-      revealClock.flush();
-      expect(fileAnimCalls).toEqual([]); // nothing late fires
-    } finally {
-      revealDelayMs = 0;
-      revealClock.reset();
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1450,7 +1392,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     revealDelayMs = 80;
     revealClock.reset();
     fileAnimMode = "tiles";
@@ -1472,7 +1414,6 @@ describe("renderGrid (windowed grid)", () => {
       fileAnimMode = "rows";
       revealDelayMs = 0;
       revealClock.reset();
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;
@@ -1488,7 +1429,7 @@ describe("renderGrid (windowed grid)", () => {
     ensureBig();
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
-    revealOn = true;
+
     revealDelayMs = 80;
     revealClock.reset();
     fileAnimMode = null;
@@ -1508,7 +1449,6 @@ describe("renderGrid (windowed grid)", () => {
       fileAnimMode = "rows";
       revealDelayMs = 0;
       revealClock.reset();
-      revealOn = false;
       scroller.viewport = undefined;
       windowedGridOn = false;
       scroller.scrollTop = 0;

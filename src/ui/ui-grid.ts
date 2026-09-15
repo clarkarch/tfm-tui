@@ -100,9 +100,9 @@ type GridRendererCtx = {
   // [ui] file-animation-visible-only: hand only the tiles on screen to the
   // animator (off-screen ones would cost a native opacity push each per frame)
   fileAnimVisibleOnly(): boolean;
-  // [ui] file-animation-scroll-reveal: animate the rows a window slide just
-  // mounted (rides the file-animation master; no-op while that is off)
-  fileAnimScrollReveal?(): boolean;
+  // scroll-reveal: animate the rows a window slide just mounted (rides the
+  // file-animation master; no-op while that is off). Always on while the
+  // grid is windowed — syncWindow only runs on windowed builds.
   // [ui] file-animation-scroll-reveal-delay-ms: settle window before the
   // reveal plays (0 = play every notch, like before). Virtual-clock seam:
   // tests drive `sched`, production uses real timers.
@@ -1041,19 +1041,20 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         paint(Math.max(old.r1 + 1, r0), r1);
       }
     }
-    // [ui] file-animation-scroll-reveal: keyed to the VIEWPORT edge, not the
-    // build — the window leads visibility by the overscan row, so revealing
-    // at build time faded rows off-screen that then arrived already settled
-    // (the "reveal doesn't work" bug). Rows crossing into view THIS notch
-    // animate now; a fling (fallback rebuild) lands instantly, unrevealed.
+    // scroll-reveal: keyed to the VIEWPORT edge, not the build — the window
+    // leads visibility by the overscan row, so revealing at build time faded
+    // rows off-screen that then arrived already settled (the "reveal doesn't
+    // work" bug). Rows crossing into view THIS notch animate now; a fling
+    // (fallback rebuild) lands instantly, unrevealed. Always on while the
+    // grid is windowed (syncWindow only runs on windowed builds) and gated
+    // by the file-animation master inside play().
     // NO stop call around the slide: the animator appends to a still-running
     // wave, and detached-but-alive rows leave it safely (remove() only
     // detaches; writes are try/catch'd until the GC finalizer reclaims them).
     const visTop = firstRow;
     const visBottom = visibleBottomRow(scrollTop, visH(scroller), rh, rows);
     const oldVis = win.vis;
-    if (slideable && !(ctx.fileAnimScrollReveal?.() ?? false)) cancelPendingReveal();
-    if (slideable && (ctx.fileAnimScrollReveal?.() ?? false)) {
+    if (slideable) {
       const crossing: number[] = [];
       let from: "top" | "bottom" | null = null;
       if (visBottom > oldVis.bottom) {

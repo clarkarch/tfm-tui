@@ -139,7 +139,7 @@ export type FileAnimTarget = {
   rowsTotal?: number;
   inner?: string | null;
   total?: number;
-  // [ui] file-animation-scroll-reveal: set by syncWindow for rows that just
+  // scroll-reveal: set by syncWindow for rows that just
   // ENTERED the window. Never animates the container (a grid-wide slide/fade
   // per notch would move the whole viewport — the entering set is a row or
   // two, per-node is trivial), maps plain "slide" onto stagger-slide, and
@@ -326,7 +326,7 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
         return null;
       }
       const mode: FileAnimMode = container ? "container" : useRows ? "rows" : "tiles";
-      // [ui] file-animation-scroll-reveal continuity: a STILL-RUNNING wave
+      // scroll-reveal continuity: a STILL-RUNNING wave
       // (same resolved style, and same dir where the dir is even used — the
       // slide-offset styles) is RETARGETED BY APPENDING — in-flight rows keep
       // fading while the new ones join the back of the cascade. Stopping and

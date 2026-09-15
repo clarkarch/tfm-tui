@@ -290,7 +290,6 @@ export const wireGrid = (deps: {
       stripSelectable,
       fileAnim: (target) => fileAnims[pane].play(target),
       fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
-      fileAnimScrollReveal: () => core.config.ui.fileAnimationScrollReveal,
       fileAnimScrollRevealDelayMs: () => core.config.ui.fileAnimationScrollRevealDelayMs,
       windowedGrid: () => core.config.ui.windowedGrid,
       isRenaming: rename.isRenaming,
