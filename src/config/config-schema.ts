@@ -196,6 +196,8 @@ export type UiConfig = {
   fileAnimationEase: string;
   fileAnimationContainerFade: boolean;
   fileAnimationVisibleOnly: boolean;
+  fileAnimationRowGranularity: boolean;
+  fileAnimationMaxFiles: number;
   fileHoverAnimation: boolean;
   fileHoverIncludeLabel: boolean;
   fileHoverDirection: HoverLiftDirection;
@@ -771,6 +773,31 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: "true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)",
     label: "visible files only",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-animation-row-granularity",
+    prop: "fileAnimationRowGranularity",
+    def: true,
+    doc: "true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)",
+    label: "row granularity",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "file-animation-max-files",
+    prop: "fileAnimationMaxFiles",
+    min: 0,
+    max: 50000,
+    step: 100,
+    def: 2000,
+    doc: "skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list — huge folders jank; 0 = never skip)",
+    label: "max animated files",
     group: "optimization",
     subsection: "performance",
   },

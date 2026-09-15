@@ -228,6 +228,8 @@ export const wireGrid = (deps: {
         dir: core.config.ui.fileAnimationSlideDir as SlideDir,
         ease: core.config.ui.fileAnimationEase as EaseKey,
         containerFade: core.config.ui.fileAnimationContainerFade,
+        rowsGranularity: core.config.ui.fileAnimationRowGranularity,
+        maxFiles: core.config.ui.fileAnimationMaxFiles,
       }),
     });
   const fileAnims = [makeFileAnimator(), makeFileAnimator()] as const;

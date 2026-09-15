@@ -129,8 +129,17 @@ export const fileAnimAt = (style: string, p: number, i: number, n: number, cfg: 
 // translate churn on image-heavy folders; `containerFade` does the same for
 // fade (one opacity push instead of one per file). `total` is the full file
 // count when `tiles` is capped to the viewport, so the cascade keeps its
-// original timing.
-export type FileAnimTarget = { tiles: string[]; inner?: string | null; total?: number };
+// original timing. `rows`/`rowsTotal` are the grid-view ROW boxes: a
+// row-major cascade on rows is visually identical to the per-tile one (tiles
+// in one row are adjacent cascade indices) but animates cols-times fewer
+// nodes — the huge-folder lag fix, gated by [ui] file-animation-row-granularity.
+export type FileAnimTarget = {
+  tiles: string[];
+  rows?: string[];
+  rowsTotal?: number;
+  inner?: string | null;
+  total?: number;
+};
 
 type FileAnimOpts = {
   style: FileAnimStyle;
@@ -142,6 +151,16 @@ type FileAnimOpts = {
   // [ui] file-animation-container-fade: fade the container node instead of
   // every tile (identical look, one per-frame opacity write/push)
   containerFade: boolean;
+  // [ui] file-animation-row-granularity: stagger styles animate grid ROWS
+  // instead of tiles when the grid provides them (tradeoff: tiles inside one
+  // row animate together — no per-tile micro-cascade within a row)
+  rowsGranularity: boolean;
+  // [ui] file-animation-max-files: skip the animation when the folder holds
+  // more than this many files (any animation write bumps the render-list
+  // revision, and the next frame re-walks EVERY node in the folder — the
+  // whole-grid rewalk, not the animated-node count, is what lags on huge
+  // folders). 0 = never skip.
+  maxFiles: number;
 };
 
 type FileAnimCtx = {
@@ -229,10 +248,22 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     try {
       const o = ctx.opts();
       const vh = typeof ctx.renderer?.terminalHeight === "number" ? ctx.renderer.terminalHeight : 24;
+      // max-files: the whole-grid render-list rewalk on every animation frame
+      // scales with TOTAL files — over the knob, appear instantly instead of
+      // janking through the animation (0 = the knob is off)
+      const fileCount = Math.max(target?.total ?? 0, target?.tiles?.length ?? 0);
+      if (o.maxFiles > 0 && fileCount > o.maxFiles) {
+        stop();
+        return;
+      }
       // slide (always) and fade (container-fade knob) move ONE container node;
-      // stagger styles animate the per-tile list the grid capped to the viewport
-      const container = o.style === "slide" || (o.style === "fade" && o.containerFade);
-      const ids = container && target?.inner ? [target.inner] : (target?.tiles ?? []);
+      // stagger styles animate the per-tile list the grid capped to the
+      // viewport — unless the grid handed us ROW boxes and the
+      // row-granularity knob is on: same cascade look, cols-times fewer nodes
+      const useRows =
+        o.rowsGranularity && (o.style === "stagger" || o.style === "stagger-slide") && (target?.rows?.length ?? 0) > 0;
+      let container = o.style === "slide" || (o.style === "fade" && o.containerFade);
+      let ids = container && target?.inner ? [target.inner] : useRows ? target.rows! : (target?.tiles ?? []);
       if (o.style === "off" || !(o.ms > 0) || ids.length === 0) {
         stop();
         return;
@@ -242,11 +273,19 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       // frame. The grid caps its list to the viewport, but that cap is a user
       // knob ([ui] file-animation-visible-only) — flip it off on a 10k folder
       // and the churn is back, which is the exact hang this ceiling exists for.
-      // The one-container path is exempt because one push is one push. Raise it
-      // only with per-frame batching, not by taste.
+      // Over the ceiling with a container available, DEGRADE to the container
+      // fade (one push/frame, still animates — "either lag or skip" was the
+      // bug); the bare stop() survives only as the no-container defensive
+      // guard. The one-container path is exempt because one push is one push.
+      // Raise the per-node ceiling only with per-frame batching, not by taste.
       if (!container && ids.length > MAX_PER_NODE_ANIM) {
-        stop();
-        return;
+        if (target?.inner) {
+          ids = [target.inner];
+          container = true;
+        } else {
+          stop();
+          return;
+        }
       }
       const resolved = ids.map((id) => ctx.byId(id)).filter(Boolean);
       if (resolved.length === 0) {
@@ -254,7 +293,9 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
         return;
       }
       nodes = resolved;
-      total = Math.max(target?.total ?? 0, nodes.length);
+      // rows keep their own total so the cascade timing matches the real row
+      // count; tiles keep the full file count (viewport-capped list case)
+      total = useRows ? Math.max(target?.rowsTotal ?? 0, nodes.length) : Math.max(target?.total ?? 0, nodes.length);
       style = o.style;
       cfg = {
         dist: slideTravel(vh, o.slidePct),
@@ -467,6 +508,17 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
         }
         if (refs.selected) return; // selection owns the icon/bg visuals
       } else if (refs.selected) {
+        // a repaint changing the hit grid re-fires a SYNTHETIC over on the
+        // STATIONARY cursor (AGENTS OpenTUI rule), so playHover(key, true) can
+        // arrive on a tile whose selection just flipped with NO out ever
+        // firing: the owned lift must be released here, or the selected tile
+        // stays nudged (the "hover stuck on select" bug) until the pointer
+        // leaves it — a mouse-out that may never come when the click is the
+        // last gesture before the user's eyes go to the preview/grid.
+        if (current?.key === key) {
+          dropLift(current);
+          current = null;
+        }
         return; // selection owns the icon/bg visuals
       }
 

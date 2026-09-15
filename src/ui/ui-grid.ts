@@ -84,8 +84,16 @@ type GridRendererCtx = {
   // animate the freshly built tiles/rows in ([ui] file-animation); no-op on
   // "off". `inner` is the single container node slide animates; passing an
   // empty target stops any in-flight animation (called before clearGrid).
-  // `total` is the full file count when `tiles` is capped (visible-only).
-  fileAnim(target: { tiles: string[]; inner?: string | null; total?: number }): void;
+  // `total` is the full file count when `tiles` is capped (visible-only);
+  // `rows`/`rowsTotal` are the grid-view row boxes for the row-granularity
+  // cascade (empty in list view — its rows ARE the tiles).
+  fileAnim(target: {
+    tiles: string[];
+    rows?: string[];
+    rowsTotal?: number;
+    inner?: string | null;
+    total?: number;
+  }): void;
   // [ui] file-animation-visible-only: hand only the tiles on screen to the
   // animator (off-screen ones would cost a native opacity push each per frame)
   fileAnimVisibleOnly(): boolean;
@@ -580,13 +588,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const scrollTop = Math.max(0, scroller?.scrollTop ?? 0);
     const visFirst = isList ? Math.floor(scrollTop / rowH()) : Math.floor(scrollTop / TILE_H) * cols;
     const inViewport = (i: number): boolean => i >= visFirst && i < visFirst + visWin;
+    // grid-view ROW ids for the row-granularity cascade (see the handoff below)
+    const rowIds: string[] = [];
     if (isList) {
       for (const e of entries) inner.add(buildListRow(e, tileIdx, inViewport(tileIdx++)));
     } else {
       for (let i = 0; i < entries.length; i += cols) {
-        const row = Box({ height: TILE_H, flexDirection: "row" });
+        const rowId = `${tilePrefix()}row-${rowIds.length}`;
+        const row = Box({ id: rowId, height: TILE_H, flexDirection: "row" });
         for (const e of entries.slice(i, i + cols)) row.add(buildTile(aspect, e, tileIdx, inViewport(tileIdx++)));
         inner.add(row);
+        rowIds.push(rowId);
       }
     }
     scroller.content.add(inner);
@@ -642,11 +654,28 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           // visible-only: off-screen tiles are never seen animating but each
           // per-frame opacity change costs a native push — cap the list to the
           // viewport (same window math as the thumb ranking) and keep the full
-          // count for the cascade timing (the animator normalizes by `total`)
-          const cap = ctx.fileAnimVisibleOnly()
-            ? visibleTileCap(ctx.termH(), isList ? rowH() : TILE_H, cols)
-            : ids.length;
-          ctx.fileAnim({ tiles: ids.slice(0, cap), inner: innerId, total: ids.length });
+          // count for the cascade timing (the animator normalizes by `total`).
+          // The slice starts at the SCROLL position (visFirst), not 0 — the old
+          // head-slice animated off-screen top tiles while the visible ones
+          // (scrolled deep into a big folder) never animated at all. With the
+          // knob off, everything animates (both tiles and rows) — a mid-scroll
+          // content change then animates the whole grid.
+          const visibleOnly = ctx.fileAnimVisibleOnly();
+          const cap = visibleOnly ? visibleTileCap(ctx.termH(), isList ? rowH() : TILE_H, cols) : ids.length;
+          // list view: rows ARE tiles, hand none (the animator uses tiles);
+          // grid view: slice rows with the same scroll-aligned window
+          const rows = isList
+            ? []
+            : visibleOnly
+              ? rowIds.slice(Math.floor(visFirst / cols), Math.floor(visFirst / cols) + Math.ceil(cap / cols))
+              : rowIds;
+          ctx.fileAnim({
+            tiles: ids.slice(visibleOnly ? visFirst : 0, (visibleOnly ? visFirst : 0) + cap),
+            rows,
+            rowsTotal: rowIds.length,
+            inner: innerId,
+            total: ids.length,
+          });
         } catch {}
       }
     }

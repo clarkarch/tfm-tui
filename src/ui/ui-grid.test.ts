@@ -52,7 +52,13 @@ let availWSet: number | null;
 let hoverLiftOpts: HoverLiftOpts;
 let tilePrefix: string;
 let visibleOnly: boolean;
-let fileAnimCalls: Array<{ tiles: string[]; inner: string | null; total: number }>;
+let fileAnimCalls: Array<{
+  tiles: string[];
+  rows: string[] | null;
+  rowsTotal: number | null;
+  inner: string | null;
+  total: number;
+}>;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: TERM_W, height: TERM_H });
@@ -145,9 +151,17 @@ beforeAll(async () => {
     drainIconQueue: () => {},
     drainThumbs: () => {},
     stripSelectable: () => {},
-    fileAnim: (target: { tiles: string[]; inner?: string | null; total?: number }) => {
+    fileAnim: (target: {
+      tiles: string[];
+      rows?: string[];
+      rowsTotal?: number;
+      inner?: string | null;
+      total?: number;
+    }) => {
       fileAnimCalls.push({
         tiles: [...target.tiles],
+        rows: target.rows ? [...target.rows] : null,
+        rowsTotal: target.rowsTotal ?? null,
         inner: target.inner ?? null,
         total: target.total ?? target.tiles.length,
       });
@@ -427,6 +441,16 @@ describe("renderGrid (grid tiles)", () => {
       expect(selection.tileRefs.size).toBe(30);
       expect(gridPlay.tiles.length).toBe(25);
       expect(gridPlay.total).toBe(30);
+      // rows: 30 files / 5 cols = 6 rows; the 25-tile viewport cap covers 5
+      // of them (ceil(25/5)), rowsTotal keeps the true count for the cascade
+      expect(gridPlay.rows).toEqual([
+        "tfm-tile-row-0",
+        "tfm-tile-row-1",
+        "tfm-tile-row-2",
+        "tfm-tile-row-3",
+        "tfm-tile-row-4",
+      ]);
+      expect(gridPlay.rowsTotal).toBe(6);
 
       // list cap = floor(terminal rows / row height) + 1 margin = 13 (the
       // same visibleTileCap math the thumb ranking uses)
@@ -445,6 +469,9 @@ describe("renderGrid (grid tiles)", () => {
       const fullPlay = fileAnimCalls.at(-1)!;
       expect(fullPlay.tiles.length).toBe(30);
       expect(fullPlay.total).toBe(30);
+      // all rows too — the knob off means everything animates
+      expect(fullPlay.rows!.length).toBe(6);
+      expect(fullPlay.rowsTotal).toBe(6);
     } finally {
       // a failed assert above must not strand search mode into later tests
       recursiveSearch = false;
@@ -454,6 +481,44 @@ describe("renderGrid (grid tiles)", () => {
       searchSignals = [];
       visibleOnly = false;
       viewMode = "grid";
+      await renderGrid();
+    }
+  });
+
+  // the animated window must follow scrollTop like the thumb window does —
+  // the old head-slice animated the off-screen TOP tiles while the visible
+  // ones (scrolled deep) never animated at all
+  test("file-anim window follows the scroll position (tiles AND rows)", async () => {
+    const big = path.join(tmp, "anim-window-dir");
+    mkdirSync(big);
+    for (let i = 1; i <= 60; i++) writeFileSync(path.join(big, `w${String(i).padStart(2, "0")}.png`), "x");
+    const prevCwd = gridState.cwd;
+    try {
+      gridState.cwd = big;
+      scroller.scrollTop = 12; // two tile-rows down: tiles [10,35), rows [2,7)
+      visibleOnly = true;
+      await renderGrid();
+      const play = fileAnimCalls.at(-1)!;
+      // 60 files / 5 cols = 12 rows; viewport cap 25 tiles = 5 rows from row 2
+      expect(play.tiles.length).toBe(25);
+      // the window STARTS at the first visible tile (index 10), not at 0 —
+      // the head-slice bug animated off-screen top tiles instead
+      const tileIds = [...selection.tileRefs.values()].map((r) => r.tileId);
+      expect(play.tiles[0]).toBe(tileIds[10]);
+      expect(play.tiles.at(-1)).toBe(tileIds[34]);
+      expect(play.total).toBe(60);
+      expect(play.rows).toEqual([
+        "tfm-tile-row-2",
+        "tfm-tile-row-3",
+        "tfm-tile-row-4",
+        "tfm-tile-row-5",
+        "tfm-tile-row-6",
+      ]);
+      expect(play.rowsTotal).toBe(12);
+    } finally {
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      visibleOnly = false;
       await renderGrid();
     }
   });

@@ -185,6 +185,8 @@ describe("makeFileAnim (engine)", () => {
     dir: "up" as const,
     ease: "ease-out" as const,
     containerFade: false,
+    rowsGranularity: true,
+    maxFiles: 0,
     ...over,
   });
 
@@ -274,10 +276,34 @@ describe("makeFileAnim (engine)", () => {
     expect(withTotal).toBeCloseTo(expected, 2);
   });
 
-  // the per-node styles cost one native push per tile per frame — past the
-  // ceiling the grid must just APPEAR (the hang this guard exists for), while
-  // the one-container path stays exempt no matter how many tiles it replaces
-  test("per-node style over MAX_PER_NODE_ANIM snaps to rest without animating", () => {
+  // over the per-node ceiling with a container available, the animation
+  // DEGRADES to the container fade instead of skipping (the old stop() made
+  // huge folders "either lag or skip" — a one-node fade still animates and
+  // costs one push per frame). Without a container there is nothing cheap to
+  // degrade to, so it still snaps to rest (defensive guard).
+  test("per-node style over MAX_PER_NODE_ANIM degrades to the container fade, never skips", () => {
+    const fakes = Array.from({ length: MAX_PER_NODE_ANIM + 1 }, () => ({
+      opacity: 1,
+      translateX: 0,
+      translateY: 0,
+    }));
+    const inner = { opacity: 1, translateX: 0, translateY: 0 };
+    const byId = (id: string) => (id === "bigd-inner" ? inner : (fakes[Number(id.slice(1))] ?? null));
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger", ms: 1000 }),
+    });
+    anim.play({ tiles: fakes.map((_, i) => `x${i}`), inner: "bigd-inner" });
+    engine.update(500);
+    // tiles untouched (at rest), the container carries the fade
+    expect(fakes.every((n) => n.opacity === 1 && n.translateX === 0 && n.translateY === 0)).toBe(true);
+    expect(inner.opacity).toBeLessThan(1);
+    anim.stop();
+    expect(inner.opacity).toBe(1);
+  });
+
+  test("over MAX_PER_NODE_ANIM with NO container still snaps to rest (nothing to degrade to)", () => {
     const fakes = Array.from({ length: MAX_PER_NODE_ANIM + 1 }, () => ({
       opacity: 1,
       translateX: 0,
@@ -293,6 +319,69 @@ describe("makeFileAnim (engine)", () => {
     engine.update(500);
     expect(fakes.every((n) => n.opacity === 1 && n.translateX === 0 && n.translateY === 0)).toBe(true);
     anim.stop();
+  });
+
+  // max-files: above the knob even the container fade is skipped — the
+  // whole-grid render-list rewalk per animation frame scales with TOTAL
+  // files, so a huge folder janks through ANY animation. Appear instantly.
+  test("over file-animation-max-files the animation is skipped entirely", () => {
+    const inner = { opacity: 1, translateX: 0, translateY: 0 };
+    const tiles = Array.from({ length: 30 }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
+    const byId = (id: string) => (id === "maxf-inner" ? inner : (tiles[Number(id.slice(1))] ?? null));
+    let maxFiles = 25;
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "fade", containerFade: true, ms: 1000, maxFiles }),
+    });
+    // total (30) over the knob (25): nothing animates, not even the container
+    anim.play({ tiles: tiles.map((_, i) => `x${i}`), inner: "maxf-inner", total: 30 });
+    engine.update(500);
+    expect(inner.opacity).toBe(1);
+    expect(tiles.every((n) => n.opacity === 1)).toBe(true);
+    // at/below the knob the same play animates normally (tiles is the
+    // viewport-capped subset in real handoffs, so its length ≤ total)
+    anim.play({ tiles: tiles.slice(0, 25).map((_, i) => `x${i}`), inner: "maxf-inner", total: 25 });
+    engine.update(500);
+    expect(inner.opacity).toBeLessThan(1);
+    anim.stop();
+    expect(inner.opacity).toBe(1);
+    // 0 = the knob is off: a huge total still animates
+    maxFiles = 0;
+    anim.play({ tiles: tiles.slice(0, 25).map((_, i) => `x${i}`), inner: "maxf-inner", total: 50000 });
+    engine.update(500);
+    expect(inner.opacity).toBeLessThan(1);
+    anim.stop();
+  });
+
+  // grid rows: a row-major cascade on the ROW boxes is visually identical to a
+  // per-tile one (tiles in one row are adjacent cascade indices) but animates
+  // cols-times fewer nodes — this is the huge-folder lag fix.
+  test("rows list animates the row nodes, tiles untouched, timing keyed to rowsTotal", () => {
+    const inner = { opacity: 1, translateX: 0, translateY: 0 };
+    const rows = Array.from({ length: 5 }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
+    const tiles = Array.from({ length: 25 }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
+    const byId = (id: string) =>
+      id === "rows-inner" ? inner : id.startsWith("r") ? rows[Number(id.slice(1))] : tiles[Number(id.slice(1))];
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger-slide", ms: 1000, staggerPct: 40 }),
+    });
+    anim.play({
+      tiles: tiles.map((_, i) => `x${i}`),
+      rows: rows.map((_, i) => `r${i}`),
+      inner: "rows-inner",
+      total: 25,
+      rowsTotal: 5,
+    });
+    engine.update(500);
+    // tiles never touched; row cascade keyed to rowsTotal (row 4 of 5 lags row 0)
+    expect(tiles.every((n) => n.opacity === 1 && n.translateY === 0)).toBe(true);
+    expect(rows[0]!.opacity).toBeGreaterThan(rows[4]!.opacity);
+    expect(rows[4]!.translateY).toBeGreaterThan(0);
+    anim.stop();
+    expect(rows.every((n) => n.opacity === 1 && n.translateY === 0)).toBe(true);
   });
 
   test("at-cap per-node list still animates", () => {
@@ -623,6 +712,21 @@ describe("makeTileHoverAnim (engine)", () => {
     expect((byId("lab-a-sel") as any).translateY).toBe(0);
     // icon and bg stay selection-owned
     expect(iconCalls.length).toBe(calls);
+  });
+
+  test("a tile selected under a stationary cursor settles its lift on the re-fire OVER", async () => {
+    // the real stuck-on-select: click a hovered tile → it becomes selected, but
+    // the pointer never moves so NO out fires. The selection repaint changes the
+    // hit grid and the terminal re-fires a SYNTHETIC over on the stationary
+    // cursor; playHover's selected branch must release its OWNED lift, or the
+    // selected tile stays nudged until the mouse leaves.
+    const { anim, refs, byId } = await setup("resel");
+    anim.playHover("/w/a-resel", true);
+    expect((byId("slot-a-resel") as any).translateY).toBe(-1);
+    refs.get("/w/a-resel")!.selected = true;
+    anim.playHover("/w/a-resel", true); // synthetic re-over, no out in between
+    expect((byId("slot-a-resel") as any).translateY).toBe(0);
+    expect((byId("lab-a-resel") as any).translateY).toBe(0);
   });
 
   test("sweeping on to a second tile settles the first to rest instantly", async () => {
