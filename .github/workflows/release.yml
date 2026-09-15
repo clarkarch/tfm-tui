@@ -3,7 +3,7 @@ name: Release
 # Produces the artifacts install.sh downloads: tfm-{x86_64,aarch64}-linux.gz
 # plus a .sha256 sidecar each (install.sh verifies when present and refuses
 # to install when absent). Tag a version to ship it:
-#   git tag v0.1.0-alpha.12 && git push origin v0.1.0-alpha.12
+#   git tag v0.1.0-beta.0 && git push origin v0.1.0-beta.0
 # Version must match package.json (checked below) so --version never lies.
 
 on:
