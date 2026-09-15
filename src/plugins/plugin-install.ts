@@ -75,7 +75,7 @@ export const parseGitUrl = (raw: string): ParsedGitUrl => {
     const scp = url.match(/^[\w.-]+@([^/]+):/);
     return scp ? (scp[1] ?? null) : null;
   })();
-  if (host !== null && host.startsWith("-")) {
+  if (host?.startsWith("-")) {
     throw new Error(`invalid git URL (host starts with '-'): ${JSON.stringify(url)}`);
   }
   if (subdir !== undefined) {
