@@ -5,7 +5,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 ![beta](https://img.shields.io/badge/status-beta-yellow) [![website](https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white)](https://clarkarch.github.io/tfm-tui/)
 
 > [!WARNING]
-> Beta software — usable daily, but back up anything irreplaceable first.
+> Beta software, usable daily, but **back up anything irreplaceable** first.
 
 > [!IMPORTANT]
 > This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
@@ -21,10 +21,8 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Dual pane: two independent file panes side by side, each with its own top bar
   (path, sort, search) and its own tabs. `Tab` switches the focused side, `F5`
   copies the selection to the other pane, `F6` moves it.
-- Network locations: connect to `sftp://`, `smb://`, WebDAV, FTP… shares through
-  gvfs (sidebar or right-click → Connect to Server…); saved connections live in
-  your GTK bookmarks. Credentials are prompted in-app (passwords masked); ssh
-  keys/agent work without prompting.
+- Network locations: `sftp://`, `smb://`, WebDAV, FTP… via gvfs
+  (sidebar → Connect to Server…), credentials prompted in-app.
 - Embedded terminal (right-click → Open Terminal Here).
 - Auto-hide panes: sidebar/preview/terminal collapse to the edge and slide back (animated) when the mouse nears them.
 - Extract and compress archives (right-click).

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tfm — terminal file manager</title>
+<title>tfm: terminal file manager</title>
 <meta name="description" content="A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails right inside your terminal. Built on OpenTUI + Bun.">
 <style>
   :root {
@@ -204,7 +204,7 @@
       <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash</code>
       <button class="copy" id="copyBtn" type="button">copy</button>
     </div>
-    <p class="warn">Linux only · beta software — back up anything irreplaceable first</p>
+    <p class="warn">Linux only · beta software, <b>back up anything irreplaceable</b> first</p>
   </div>
 
   <div class="term">
@@ -212,7 +212,7 @@
       <span class="dot" style="background:#f7768e"></span>
       <span class="dot" style="background:#e0af68"></span>
       <span class="dot" style="background:#9ece6a"></span>
-      <span class="title">tfm — ~</span>
+      <span class="title">tfm ~</span>
     </div>
     <img src="screenshot.png" alt="tfm browsing the home folder: places sidebar, grid of files, preview pane" width="1920" height="1080" loading="eager">
   </div>
@@ -227,17 +227,17 @@
     <div class="card">
       <div class="ico">➤</div>
       <h3>Mouse-first</h3>
-      <p>Click, rubber-band select, right-click context menus, inline rename — no memorizing a modal keymap to get things done. <kbd>ctrl</kbd>+click toggles, <kbd>shift</kbd>+click ranges.</p>
+      <p>Click, rubber-band select, right-click context menus, inline rename, no memorizing a modal keymap to get things done. <kbd>ctrl</kbd>+click toggles, <kbd>shift</kbd>+click ranges.</p>
     </div>
     <div class="card">
       <div class="ico">⇄</div>
       <h3>Drag &amp; drop</h3>
-      <p>Move files between folders with <kbd>ctrl</kbd>+drag. Drag <i>out</i> of the terminal to other apps and drop files <i>in</i> — cross-app DnD via the kitty graphics protocol (OSC 72).</p>
+      <p>Move files between folders with <kbd>ctrl</kbd>+drag. Drag <i>out</i> of the terminal to other apps and drop files <i>in</i>, cross-app DnD via the kitty graphics protocol (OSC 72).</p>
     </div>
     <div class="card">
       <div class="ico">⌘</div>
       <h3>Desktop integration</h3>
-      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every reversible operation — permanent delete / empty trash cannot be undone.</p>
+      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every reversible operation: permanent delete / empty trash cannot be undone.</p>
     </div>
     <div class="card">
       <div class="ico">&gt;_</div>
@@ -247,7 +247,27 @@
     <div class="card">
       <div class="ico">❐</div>
       <h3>Previews &amp; thumbnails</h3>
-      <p>Image and video thumbnails (kitty graphics), tree-sitter syntax-highlighted text previews, folder stats — with a disk-cached thumbnail pipeline so folder revisits are instant.</p>
+      <p>Image and video thumbnails (kitty graphics), tree-sitter syntax-highlighted text previews, folder stats, with a disk-cached thumbnail pipeline so folder revisits are instant.</p>
+    </div>
+    <div class="card">
+      <div class="ico">◫</div>
+      <h3>Dual pane</h3>
+      <p>Two independent file panes side by side, each with its own top bar and tabs. <kbd>tab</kbd> switches sides, <kbd>F5</kbd> / <kbd>F6</kbd> copy or move across.</p>
+    </div>
+    <div class="card">
+      <div class="ico">🌐</div>
+      <h3>Network locations</h3>
+      <p>Open <i>sftp://</i>, <i>smb://</i>, WebDAV and FTP shares through gvfs, sidebar → Connect to Server…, credentials prompted in-app.</p>
+    </div>
+    <div class="card">
+      <div class="ico">📦</div>
+      <h3>Archives</h3>
+      <p>Right-click → <i>Extract Here</i> (staged, conflict prompt, undoable) or <i>Compress to…</i> across 13 formats, from tar.gz to 7z.</p>
+    </div>
+    <div class="card">
+      <div class="ico">🔌</div>
+      <h3>Plugins</h3>
+      <p>TypeScript plugins with hot reload: commands, context menus, previews, events, UI slots. Install from a git URL or <i>tfm plugins add</i>.</p>
     </div>
     <div class="card">
       <div class="ico">◑</div>
@@ -260,14 +280,14 @@
 <section id="themes">
   <h2>Themes</h2>
   <p class="sub">32 bundled presets, switchable at runtime</p>
-  <p class="themes-note"><b>click any theme to restyle this page</b> — the same live palette swap ships inside tfm (<kbd>esc</kbd> → Settings → Theme).</p>
+  <p class="themes-note"><b>click any theme to restyle this page</b>, the same live palette swap ships inside tfm (<kbd>esc</kbd> → Settings → Theme).</p>
   <div class="grid" id="themeGrid"></div>
   <button class="btn reset" id="resetTheme" type="button">reset to Tokyo Night</button>
 </section>
 
 <section id="keys">
   <h2>Keys</h2>
-  <p class="sub">muscle-memory bindings — every one remappable under <i>[keys]</i> in config.toml</p>
+  <p class="sub">muscle-memory bindings, every one remappable under <i>[keys]</i> in config.toml</p>
   <div class="cols">
     <table>
       <tr><td><kbd>type anywhere</kbd></td><td>live search · enter opens first match</td></tr>
@@ -277,6 +297,7 @@
       <tr><td><kbd>ctrl</kbd>+<kbd>q</kbd></td><td>quit</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>z</kbd> / <kbd>ctrl</kbd>+<kbd>y</kbd></td><td>undo / redo</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>x</kbd> / <kbd>c</kbd> / <kbd>v</kbd></td><td>cut / copy / paste</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>d</kbd></td><td>duplicate</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>a</kbd></td><td>select all</td></tr>
     </table>
     <table>
@@ -288,21 +309,28 @@
       <tr><td><kbd>ctrl</kbd>+drag</td><td>move inside tfm</td></tr>
       <tr><td>right-click</td><td>context menu</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>h</kbd></td><td>toggle hidden files</td></tr>
+      <tr><td><kbd>tab</kbd></td><td>switch focused pane</td></tr>
+      <tr><td><kbd>F5</kbd> / <kbd>F6</kbd></td><td>copy / move to other pane</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>d</kbd></td><td>toggle dual pane</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>s</kbd></td><td>connect to server</td></tr>
+      <tr><td><kbd>F4</kbd> / <kbd>F9</kbd></td><td>terminal / preview</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>g</kbd> / <kbd>l</kbd></td><td>grid-list view / path bar</td></tr>
+      <tr><td><kbd>alt</kbd>+<kbd>enter</kbd></td><td>properties</td></tr>
     </table>
   </div>
 </section>
 
 <section id="config">
   <h2>Config</h2>
-  <p class="sub"><i>~/.config/tfm/config.toml</i> — invalid values fall back per-key, never fatal</p>
-  <pre><span class="c"># ~/.config/tfm/config.toml — see config.example.toml in the repo</span>
+  <p class="sub"><i>~/.config/tfm/config.toml</i>, invalid values fall back per-key, never fatal</p>
+  <pre><span class="c"># ~/.config/tfm/config.toml, see config.example.toml in the repo</span>
 <span class="k">[ui]</span>
 sidebar-width   <span class="c">=</span> <span class="v">26</span>      <span class="c"># 16..60 cells</span>
 tile-width      <span class="c">=</span> <span class="v">20</span>      <span class="c"># 10..40 cells (grid view)</span>
 tile-height     <span class="c">=</span> <span class="v">5</span>       <span class="c"># 3..10 cells</span>
 preview-enabled <span class="c">=</span> <span class="v">false</span>   <span class="c"># right-side preview pane</span>
 view-mode       <span class="c">=</span> <span class="s">"grid"</span>  <span class="c"># "grid" tiles or "list" rows</span>
-ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># or "outline" — rounded borders</span>
+ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># or "outline", rounded borders</span>
 restore-session <span class="c">=</span> <span class="v">false</span>   <span class="c"># reopen last folder on launch</span>
 persist-undo    <span class="c">=</span> <span class="v">false</span>   <span class="c"># undo history survives restarts</span>
 transparent-bg  <span class="c">=</span> <span class="v">false</span>   <span class="c"># follow kitty background_opacity</span>
@@ -323,22 +351,23 @@ quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="
       <h4>Requirements</h4>
       <ul>
         <li>Linux</li>
-        <li>kitty-graphics terminal — <b>kitty</b> recommended (full experience incl. cross-app DnD); ghostty gets thumbnails; others fall back to Nerd Font glyphs</li>
+        <li>kitty-graphics terminal for thumbnails (kitty, ghostty, WezTerm, Konsole…); cross-app DnD is kitty-only; others fall back to Nerd Font glyphs</li>
       </ul>
     </div>
     <div>
       <h4>Optional helpers</h4>
       <ul>
-        <li><code>rsvg-convert</code> — tinted icons and SVG thumbnails (<code>magick</code> covers rasters as fallback)</li>
-        <li><code>magick</code> / <code>ffmpeg</code> — raster / video thumbnails</li>
-        <li><code>gio</code> — starred-file metadata (trash is built-in XDG), <code>xdg-open</code> / <code>udisksctl</code> — default apps / mounts</li>
-        <li><code>wl-paste</code> / <code>wl-copy</code> or <code>xclip</code> — clipboard bridge</li>
+        <li><code>rsvg-convert</code>: tinted icons and SVG thumbnails (<code>magick</code> covers rasters as fallback)</li>
+        <li><code>magick</code> / <code>ffmpeg</code>: raster / video thumbnails</li>
+        <li><code>gio</code>: starred-file metadata (trash is built-in XDG), <code>xdg-open</code> / <code>udisksctl</code>: default apps / mounts</li>
+        <li><code>wl-paste</code> / <code>wl-copy</code> or <code>xclip</code>: clipboard bridge</li>
+        <li><code>tar</code> / <code>unzip</code> / <code>zip</code> / <code>7z</code>: archives</li>
       </ul>
     </div>
     <div>
       <h4>Know the limits</h4>
       <ul>
-        <li>experimental — expect rough edges</li>
+        <li>beta, usable daily, back up anything irreplaceable</li>
         <li>cross-app DnD is kitty-only (OSC 72)</li>
         <li>tmux needs <code>allow-passthrough</code> for images</li>
         <li>cross-device moves are copy+delete</li>

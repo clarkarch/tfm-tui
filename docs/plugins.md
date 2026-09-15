@@ -2,7 +2,7 @@
 
 tfm plugins are small TypeScript files, loaded with **full trust** (like vim
 plugins). They run in the same process, so a plugin can touch `node:fs`,
-`node:child_process`, the network — anything Bun can. Only install plugins you
+`node:child_process`, the network, anything Bun can. Only install plugins you
 trust.
 
 ## Layout
@@ -59,7 +59,7 @@ export default {
 
 `activate` may be async (10s cap). `deactivate` (or the returned one) runs on
 remove and reload. **On quit** every `deactivate` is called synchronously, but
-its returned promise is **not awaited** (quit is synchronous) — do sync cleanup
+its returned promise is **not awaited** (quit is synchronous, so do sync cleanup
 in `deactivate`, and anything async in an `api.events.on("quit")` listener
 (listeners must be synchronous too).
 
@@ -96,14 +96,14 @@ across reloads.
 
 ## UI slots
 
-`activate` can also return `slots` — real OpenTUI renderables painted into
+`activate` can also return `slots`: real OpenTUI renderables painted into
 tfm's layout. tfm mounts them at boot and refreshes them on every render, so
 they see fresh `cwd`/`selection`.
 
 Slot names:
 
-- `statusbar` — a 1-row segment row (after the status label).
-- `sidebar-footer` — a full-width stack under the places list.
+- `statusbar`: a 1-row segment row (after the status label).
+- `sidebar-footer`: a full-width stack under the places list.
 
 The contribution gets `(ctx, data)`:
 
@@ -129,7 +129,7 @@ export default {
 ```
 
 `ctx` is `{ app, version, renderer(), colors(), cwd(), selection() }` (stable
-ref, live getters). Plugin files may `import "@opentui/core"` — tfm installs
+ref, live getters). Plugin files may `import "@opentui/core"`, tfm installs
 OpenTUI's runtime module support before loading plugins, so you get the host's
 singleton (no second renderer). Read colors from `ctx.colors()` inside the
 contribution so a theme flip repaints; baked hex looks stale after a theme
@@ -143,7 +143,7 @@ nothing) is contained per contribution (it renders as empty).
 `activate` can return: `rows` (extra rows in your Plugins-view category),
 `fileMenu(sel)`, `sidebarMenu(place)`, `emptyAreaMenu({cwd})`, `commands`,
 `preview` (`[{ exts, render(path) }]`, text only), `slots` (OpenTUI UI
-contributions — see above), and `deactivate`.
+contributions, see above), and `deactivate`.
 
 ## Not available
 
