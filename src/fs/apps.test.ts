@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { desktopAppName, appsForFile, makeOpenAsRoot, parseGioMime, runOutShort } from "./apps";
+import { desktopAppName, appsForFile, makeLaunchAppAsRoot, makeOpenAsRoot, parseGioMime, runOutShort } from "./apps";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 afterEach(() => {
@@ -121,6 +121,70 @@ describe("appsForFile", () => {
       ),
     ).toEqual([]);
   });
+
+  test("probed mime with zero handlers falls back to ext mime (empty .txt sniffs as inode/x-empty)", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-apps-rescue-"));
+    process.env.XDG_DATA_HOME = root;
+    try {
+      const dir = path.join(root, "applications");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "tfm-rescue.desktop"), `[Desktop Entry]\nType=Application\nName=Rescue Editor\n`);
+      const seen: string[][] = [];
+      const run = async (cmd: string[]): Promise<string> => {
+        seen.push(cmd);
+        if (cmd[0] === "xdg-mime") return "inode/x-empty";
+        if (cmd.includes("inode/x-empty")) return "No default applications for “inode/x-empty”\n";
+        return "Default application for “text/plain”: tfm-rescue.desktop\n";
+      };
+      const apps = await appsForFile("/home/clark/Downloads/test.txt", run, () => "text/plain");
+      expect(apps.map((a) => a.name)).toEqual(["Rescue Editor"]);
+      expect(seen.filter((c) => c[0] === "gio").map((c) => c[c.length - 1])).toEqual(["inode/x-empty", "text/plain"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("probed mime with handlers never consults the fallback", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-apps-nofb-"));
+    process.env.XDG_DATA_HOME = root;
+    try {
+      const dir = path.join(root, "applications");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "tfm-nofb.desktop"), `[Desktop Entry]\nType=Application\nName=Direct Editor\n`);
+      const seen: string[][] = [];
+      const run = async (cmd: string[]): Promise<string> => {
+        seen.push(cmd);
+        if (cmd[0] === "xdg-mime") return "text/plain";
+        return "Default application for “text/plain”: tfm-nofb.desktop\n";
+      };
+      const apps = await appsForFile("/home/a/note.txt", run, () => {
+        throw new Error("fallback must not run");
+      });
+      expect(apps.map((a) => a.name)).toEqual(["Direct Editor"]);
+      expect(seen.filter((c) => c[0] === "gio")).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("throwing probed collect still tries the ext fallback", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-apps-throwfb-"));
+    process.env.XDG_DATA_HOME = root;
+    try {
+      const dir = path.join(root, "applications");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "tfm-throwfb.desktop"), `[Desktop Entry]\nType=Application\nName=Throw Fallback\n`);
+      const run = async (cmd: string[]): Promise<string> => {
+        if (cmd[0] === "xdg-mime") return "application/x-throwing";
+        if (cmd.includes("application/x-throwing")) throw new Error("gio exploded");
+        return "Default application for “text/plain”: tfm-throwfb.desktop\n";
+      };
+      const apps = await appsForFile("/home/a/note.txt", run, () => "text/plain");
+      expect(apps.map((a) => a.name)).toEqual(["Throw Fallback"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("makeOpenAsRoot", () => {
@@ -191,5 +255,53 @@ describe("makeOpenAsRoot", () => {
     expect(h.notes.length).toBe(1);
     expect(h.notes[0]!.startsWith("open:Can't open hosts as root")).toBe(true);
     expect(h.logs.some((l) => l.includes("exec failed"))).toBe(true);
+  });
+});
+
+describe("makeLaunchAppAsRoot", () => {
+  const harness = (
+    gate: () => Promise<boolean>,
+    exec?: (argv: string[]) => Promise<{ status: number | null; stderr: string }>,
+  ) => {
+    const execArgv: string[][] = [];
+    const notes: string[] = [];
+    const logs: string[] = [];
+    const launch = makeLaunchAppAsRoot({
+      ensureSudo: gate,
+      exec:
+        exec ??
+        (async (argv) => {
+          execArgv.push(argv);
+          return { status: 0, stderr: "" };
+        }),
+      notify: (m, t) => void notes.push(`${t}:${m}`),
+      log: (m) => void logs.push(m),
+    });
+    return { launch, execArgv, notes, logs };
+  };
+
+  test("gate denial execs nothing and stays silent", async () => {
+    const h = harness(async () => false);
+    await h.launch("/x/micro.desktop", "Micro", "/root/f");
+    expect(h.execArgv).toEqual([]);
+    expect(h.notes).toEqual([]);
+  });
+
+  test("gate success execs the exact sudo gio launch argv and notifies", async () => {
+    const h = harness(async () => true);
+    await h.launch("/x/micro.desktop", "Micro", "/root/f");
+    expect(h.execArgv).toEqual([["sudo", "-n", "-E", "gio", "launch", "/x/micro.desktop", "/root/f"]]);
+    expect(h.notes).toEqual(["open:Opening f · Micro as root"]);
+  });
+
+  test("non-zero exit errors with the tool's reason, never rejects", async () => {
+    const h = harness(
+      async () => true,
+      async () => ({ status: 1, stderr: "gio: Operation not supported\n" }),
+    );
+    await h.launch("/x/micro.desktop", "Micro", "/root/f");
+    expect(h.notes.length).toBe(1);
+    expect(h.notes[0]).toContain("open:Can't open f with Micro as root");
+    expect(h.notes[0]).toContain("Operation not supported");
   });
 });

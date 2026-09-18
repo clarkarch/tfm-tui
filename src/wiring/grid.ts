@@ -4,6 +4,7 @@
 // AFTER the fileops wiring — gridCtx takes moveInto directly. ---
 
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { registerSyntaxParsers } from "../ui/syntax";
 import { availableCompressionFormats, canExtract, compressionExt, compressionHint } from "../fs/archive";
 import { appsForFile, launchApp } from "../fs/apps";
@@ -25,7 +26,7 @@ import { waitForResolution } from "../ui/ui-lookup";
 import { glyph } from "../ui/glyphs";
 import { activeFacade } from "../app/panes";
 import { isVirtualUri } from "../fs/uri";
-import { isTrashFilesDir } from "../fs/fsutil";
+import { isTrashFilesDir, canReadSync } from "../fs/fsutil";
 import { dlog } from "../app/log";
 import type { ListEntry } from "../ui/ui-menu";
 import type { CoreWiring } from "./core";
@@ -358,7 +359,9 @@ export const wireGrid = (deps: {
     navigate: nav.navigate,
     newTab: nav.newTab,
     // "Open With…": enumerate handlers for the file's mime, then let the
-    // generic pick overlay choose (same pick instance the compress picker uses)
+    // generic pick overlay choose (same pick instance the compress picker uses).
+    // Unreadable files escalate: the chosen app launches elevated after the
+    // password prompt, same honest-toast contract as the adaptive open.
     openWith: (p) => {
       void appsForFile(p).then((apps) => {
         if (!apps.length) {
@@ -372,6 +375,13 @@ export const wireGrid = (deps: {
             label: a.name,
             hint: a.id.replace(/\.desktop$/, ""),
             run: () => {
+              // ENOENT (deleted between listing and pick, dangling symlink)
+              // launches unprivileged and errors honestly — no sudo prompt
+              // for something that isn't there
+              if (!canReadSync(p) && existsSync(p)) {
+                void chrome.launchAppAsRoot(a.file, a.name, p);
+                return;
+              }
               launchApp(a.file, p, (err) => dlog(`gio launch failed: ${err.message}`));
               chrome.notify(`Opening ${path.basename(p)} · ${a.name}`, "open");
             },

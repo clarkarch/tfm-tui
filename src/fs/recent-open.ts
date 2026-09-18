@@ -5,15 +5,20 @@
 // via ctx. ---
 
 import path from "node:path";
-import { accessSync, constants } from "node:fs";
+import { existsSync } from "node:fs";
 import { debounced } from "../lib/uiutil";
+import { canReadSync } from "./fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
 
 type RecentOpenCtx = {
   inTrashView: () => boolean;
   notify: (msg: string, title?: string, level?: NotifyLevel) => void;
   upsertRecent: (paths: string[]) => void | Promise<void>;
-  spawnOpen: (p: string) => void;
+  // onFailed fires when the spawn itself fails (missing binary etc.) so the
+  // optimistic Opening toast below can stand down — a failure toast already
+  // went out. (Success-first ordering can still double-toast: the spawn is
+  // fire-and-forget by design, so a late failure reads as a correction.)
+  spawnOpen: (p: string, onFailed: () => void) => void;
   appForFile: (p: string) => Promise<string | null>;
   // readability pre-check (tests fake it; default = R_OK probe). Unreadable
   // files escalate through openAsRoot instead of erroring — the open is
@@ -40,27 +45,25 @@ export const makeRecentOpen = (ctx: RecentOpenCtx) => {
   };
 
   const openFileDefault = (p: string): void => {
-    const canRead =
-      ctx.canRead ??
-      ((q: string): boolean => {
-        try {
-          accessSync(q, constants.R_OK);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-    if (!canRead(p)) {
-      void ctx.openAsRoot(p);
+    const canRead = ctx.canRead ?? canReadSync;
+    // canRead is false for ENOENT too — a file deleted between listing and
+    // open (or a dangling symlink, which accessSync follows) takes the plain
+    // path: the spawn fails with an honest error instead of popping a sudo
+    // prompt for something that isn't there.
+    if (!canRead(p) && existsSync(p)) {
+      void ctx.openAsRoot(p).catch(() => {});
       return;
     }
     recordOpen(p);
-    ctx.spawnOpen(p);
+    let failed = false;
+    ctx.spawnOpen(p, () => {
+      failed = true;
+    });
     // resolve what xdg-open will pick so the toast can say what launched
     void (async () => {
       const base = path.basename(p);
       const app = await ctx.appForFile(p);
-      ctx.notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open", "info");
+      if (!failed) ctx.notify(`Opening ${base}${app ? ` · ${app}` : ""}`, "open", "info");
     })();
   };
 

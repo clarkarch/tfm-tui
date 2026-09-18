@@ -26,6 +26,17 @@ export const sudoCachedArgv = (): string[] => ["sudo", "-n", "true"];
 // XDG_UTILS_ENABLE_DOUBLE_HYPEN=1 is visible — which sudo's env_reset strips,
 // so with `--` the open always died as `unexpected option '--'`.
 export const sudoOpenArgv = (file: string): string[] => ["sudo", "-n", "-E", "xdg-open", file];
+// elevated chosen-app launch (Open With… on an unreadable file). Same no-`--`
+// rule as the open above: both operands are absolute paths.
+export const sudoLaunchArgv = (desktopFile: string, file: string): string[] => [
+  "sudo",
+  "-n",
+  "-E",
+  "gio",
+  "launch",
+  desktopFile,
+  file,
+];
 
 export type SudoAuthDeps = {
   cached: () => Promise<boolean>;

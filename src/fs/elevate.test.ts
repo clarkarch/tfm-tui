@@ -7,6 +7,7 @@ import {
   sudoCpArgv,
   sudoExecError,
   sudoMvArgv,
+  sudoLaunchArgv,
   sudoOpenArgv,
   sudoRmArgv,
 } from "./elevate";
@@ -84,6 +85,17 @@ describe("ensureSudoAuth", () => {
 describe("sudo argv shapes", () => {
   test("open carries -n -E but no -- (sudo strips the HYPHEN var that makes -- legal)", () => {
     expect(sudoOpenArgv("/a/-dash.txt")).toEqual(["sudo", "-n", "-E", "xdg-open", "/a/-dash.txt"]);
+  });
+  test("launch carries desktop file + target, no --", () => {
+    expect(sudoLaunchArgv("/x/micro.desktop", "/root/f")).toEqual([
+      "sudo",
+      "-n",
+      "-E",
+      "gio",
+      "launch",
+      "/x/micro.desktop",
+      "/root/f",
+    ]);
   });
   test("rm carries --", () => {
     expect(sudoRmArgv("/a/-dash")).toEqual(["sudo", "-n", "rm", "-rf", "--", "/a/-dash"]);

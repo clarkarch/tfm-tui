@@ -7,6 +7,7 @@ import {
   fsErrText,
   failSuffix,
   fsMove,
+  canReadSync,
   isTrashFilesDir,
   safeRestoreMove,
   uniqueTarget,
@@ -43,6 +44,27 @@ const W = (p: string, s = "x") => {
   mkdirSync(path.dirname(p), { recursive: true });
   writeFileSync(p, s);
 };
+
+describe("canReadSync", () => {
+  test("true for a readable file, false for a missing path", () => {
+    const f = path.join(SANDBOX, "readable.txt");
+    writeFileSync(f, "x");
+    expect(canReadSync(f)).toBe(true);
+    expect(canReadSync(path.join(SANDBOX, "no-such-file.txt"))).toBe(false);
+  });
+
+  // root bypasses file modes, so a chmod-000 probe is meaningless as uid 0
+  test.skipIf(process.getuid?.() === 0)("chmod-000 is unreadable", () => {
+    const f = path.join(SANDBOX, "locked.txt");
+    writeFileSync(f, "x");
+    chmodSync(f, 0o000);
+    try {
+      expect(canReadSync(f)).toBe(false);
+    } finally {
+      chmodSync(f, 0o644);
+    }
+  });
+});
 
 describe("uniqueTarget", () => {
   test("contract: callers pass an OCCUPIED name — first suggestion is ' (copy)', never the base", () => {

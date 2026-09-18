@@ -1,5 +1,5 @@
 import { cp, mkdir, rename as fsRename, rm, writeFile, open } from "node:fs/promises";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToUri } from "./uri";
@@ -101,6 +101,18 @@ export const fsErrText = (err: unknown): string => {
 export const failSuffix = (failed: number, failWhy: Set<string>): string => {
   const why = [...failWhy][0];
   return `${failed} FAILED${why ? ` (${why})` : ""}`;
+};
+
+// sync readability probe behind the adaptive opens (default open + Open
+// With… route unreadable files through the sudo gate instead of spawning a
+// doomed unprivileged child). One syscall; callers, not this, decide.
+export const canReadSync = (p: string): boolean => {
+  try {
+    accessSync(p, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 // errno-style .code off an unknown caught value (fs renames, child-proc

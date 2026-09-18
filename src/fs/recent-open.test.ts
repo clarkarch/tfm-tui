@@ -91,4 +91,36 @@ describe("makeRecentOpen", () => {
     await settleUntil(() => calls.some((c) => c.startsWith("notify:")));
     expect(calls.some((c) => c.startsWith("escalate:"))).toBe(false);
   });
+
+  test("missing file takes the plain path, never escalates", async () => {
+    // canRead is false for ENOENT too — a file deleted between listing and
+    // open (or a dangling symlink) must spawn-and-error, not sudo-prompt
+    const { calls, ctx } = mkCtx({ canRead: () => false });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/definitely/not/here-tfm-xyz");
+    expect(calls).toContain("spawn:/definitely/not/here-tfm-xyz");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls.some((c) => c.startsWith("escalate:"))).toBe(false);
+  });
+
+  test("spawn failure suppresses the optimistic Opening toast", async () => {
+    let onFailed!: () => void;
+    let resolveProbe!: (app: string) => void;
+    const { calls, ctx } = mkCtx({
+      spawnOpen: (_p: string, f: () => void) => {
+        calls.push("spawn:x");
+        onFailed = f;
+      },
+      appForFile: () =>
+        new Promise<string>((res) => {
+          resolveProbe = res;
+        }),
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/movie.mp4");
+    onFailed(); // spawn fails before the app probe answers
+    resolveProbe("Video Player");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(calls.some((c) => c.includes("Opening movie.mp4"))).toBe(false);
+  });
 });

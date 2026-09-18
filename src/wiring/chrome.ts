@@ -25,7 +25,7 @@ import type { EaseKey, SlideDir } from "../ui/ui-grid-anim";
 import { makeRecentOpen } from "../fs/recent-open";
 import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
-import { appForFile, makeOpenAsRoot } from "../fs/apps";
+import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
 import { clearChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
@@ -327,6 +327,13 @@ export const wireChrome = async (deps: {
     notify,
     log: (msg) => dlog(msg),
   });
+  // same gate scope for Open With… on unreadable files: the picker lists the
+  // handlers, the chosen one launches elevated after the password prompt.
+  const launchAppAsRoot = makeLaunchAppAsRoot({
+    ensureSudo: ensureSudoChrome,
+    notify,
+    log: (msg) => dlog(msg),
+  });
 
   // --- Recent-files recording + default open: batching/toast logic lives in
   // ./recent-open (tested); xbel write, xdg-open spawn and the app probe are
@@ -336,8 +343,9 @@ export const wireChrome = async (deps: {
     inTrashView: core.inTrashView,
     notify,
     upsertRecent: (paths) => upsertRecentXbel(paths),
-    spawnOpen: (p) => {
+    spawnOpen: (p, onFailed) => {
       spawnSafe("xdg-open", [p], { stdio: "ignore", detached: true }, (err) => {
+        onFailed();
         dlog(`open ${p}: ${err.message}`);
         notify(`Can't open ${path.basename(p)} · ${err.message}`, "open", "error");
       }).unref?.();
@@ -497,6 +505,7 @@ export const wireChrome = async (deps: {
     notify,
     notifySticky,
     openFileDefault,
+    launchAppAsRoot,
     dialogs,
     connectServer,
     disconnectServer,
