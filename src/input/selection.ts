@@ -222,12 +222,47 @@ export const makeSelection = (ctx: SelectionCtx) => {
     return selectTileAt(next);
   };
 
+  // page jump for the pageUp/pageDown keybinds: visible rows (viewH/rowH
+  // from the build tail) times the column count, clamped to the listing
+  const pageBy = (dir: number): boolean => {
+    if (focusKeys.length === 0) return false;
+    const rows = Math.max(1, Math.floor(ctx.viewH() / Math.max(1, rowHAtBuild)));
+    const step = rows * Math.max(1, colsAtBuild);
+    const base = focusIdx === -1 ? (dir > 0 ? -1 : focusKeys.length) : focusIdx;
+    const next = Math.max(0, Math.min(focusKeys.length - 1, base + dir * step));
+    if (next === focusIdx) return false;
+    return selectTileAt(next);
+  };
+
   const selectAll = (): void => {
     tileRefs.forEach((r, k) => {
       r.selected = true;
       setTileVisual(k, TileVisual.Selected);
     });
     updateSelectionStatusReal();
+  };
+
+  // flip every tile's membership (yazi ctrl+r)
+  const invertSelection = (): void => {
+    tileRefs.forEach((r, k) => {
+      r.selected = !r.selected;
+      setTileVisual(k, r.selected ? TileVisual.Selected : TileVisual.Rest);
+    });
+    updateSelectionStatusReal();
+  };
+
+  // flip the focused tile only, focus stays put (yazi space toggles; unlike
+  // yazi there is no auto-advance — repeat space walks with arrows)
+  const toggleFocused = (): boolean => {
+    if (focusIdx < 0 || focusIdx >= focusKeys.length) return false;
+    const key = focusKeys[focusIdx]!;
+    const refs = tileRefs.get(key);
+    if (!refs) return false;
+    refs.selected = !refs.selected;
+    setTileVisual(key, refs.selected ? TileVisual.Selected : TileVisual.Rest);
+    updateSelectionStatusReal();
+    void ctx.renderPreview();
+    return true;
   };
 
   // select an explicit set of paths (plugin api.select). Paths not currently
@@ -312,7 +347,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
     selectRange,
     selectTileAt,
     moveFocus,
+    pageBy,
     selectAll,
+    invertSelection,
+    toggleFocused,
     selectPaths,
     refreshCutVisuals,
   };

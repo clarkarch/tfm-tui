@@ -82,7 +82,13 @@ describe("openDialog chokepoint", () => {
   test("yesno opens through floats; No routes back through floats", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);
-    const yesNo = makeYesNo(dialogs, { colors: ctx.colors, canOpen: () => true, floats });
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      canOpen: () => true,
+      floats,
+    });
     let confirmed = false;
     yesNo.confirm("Empty Trash?", "Empty", () => {
       confirmed = true;
@@ -91,6 +97,54 @@ describe("openDialog chokepoint", () => {
     yesNo.close();
     expect(floats.isOpen("yesno")).toBe(false);
     expect(confirmed).toBe(false);
+  });
+
+  test("keyboard: focus defaults to No, arrows move, submit activates", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      canOpen: () => true,
+      floats,
+    });
+    let confirmed = false;
+    yesNo.confirm("Empty Trash?", "Empty", () => {
+      confirmed = true;
+    });
+    yesNo.submit(); // No focused → closes as No
+    expect(confirmed).toBe(false);
+    expect(floats.isOpen("yesno")).toBe(false);
+
+    yesNo.confirm("Empty Trash?", "Empty", () => {
+      confirmed = true;
+    });
+    yesNo.moveFocus(1); // → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
+    expect(floats.isOpen("yesno")).toBe(false);
+  });
+
+  test("moveFocus wraps and is a no-op while closed", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      canOpen: () => true,
+      floats,
+    });
+    expect(() => yesNo.moveFocus(1)).not.toThrow();
+    expect(() => yesNo.submit()).not.toThrow();
+    let confirmed = false;
+    yesNo.confirm("Sure?", "Yes", () => {
+      confirmed = true;
+    });
+    yesNo.moveFocus(-1); // wraps No → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
   });
 
   test("scrim click routes to onClose (dismiss-by-click-away still works)", () => {

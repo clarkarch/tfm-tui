@@ -189,6 +189,51 @@ describe("selectRange / selectAll / clearTileSelection", () => {
   });
 });
 
+describe("toggleFocused / invertSelection", () => {
+  test("toggleFocused flips only the focused tile, focus stays put", () => {
+    const h = makeHarness();
+    const keys = ["a", "b", "c"];
+    h.sel.setFocusKeys(keys);
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(1);
+    expect(h.sel.toggleFocused()).toBe(true);
+    expect(h.sel.tileRefs.get("b")!.selected).toBe(false);
+    expect(h.sel.focusIdx()).toBe(1);
+    expect(h.sel.toggleFocused()).toBe(true);
+    expect(h.sel.tileRefs.get("b")!.selected).toBe(true);
+    expect(h.sel.selPaths().map((p) => p.path)).toEqual(["b"]);
+  });
+
+  test("toggleFocused with no focus is a no-op", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a"]);
+    h.addTile("a");
+    expect(h.sel.toggleFocused()).toBe(false);
+    expect(h.sel.selPaths()).toEqual([]);
+  });
+
+  test("invertSelection flips every tile", () => {
+    const h = makeHarness();
+    const keys = ["a", "b", "c"];
+    h.sel.setFocusKeys(keys);
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(0);
+    h.sel.invertSelection();
+    expect(
+      h.sel
+        .selPaths()
+        .map((p) => p.path)
+        .sort(),
+    ).toEqual(["b", "c"]);
+    h.sel.invertSelection();
+    expect(h.sel.selPaths().map((p) => p.path)).toEqual(["a"]);
+  });
+});
+
 describe("setTileVisual", () => {
   test("unknown tile key is a no-op", () => {
     const h = makeHarness();

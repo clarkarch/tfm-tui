@@ -183,6 +183,7 @@ export type UiConfig = {
   tabBar: boolean;
   viewMode: ViewMode;
   toastDurationMs: number;
+  typeToSearch: boolean;
   dragThresholdCells: number;
   listRowHeight: number;
   wordWrap: boolean;
@@ -235,6 +236,9 @@ export type UiConfig = {
 };
 
 // --- keybind actions (section [keys], kebab-case in TOML, camel props here) ---
+// Directional nav (move*/openSelected/extend*/page*/first/last) is one shared
+// vocabulary read in every context (grid, sidebar focus, file menu, esc menu,
+// search commit) — one row moves everywhere, so no cross-action conflicts.
 export type KeyAction =
   | "quit"
   | "restart"
@@ -270,7 +274,25 @@ export type KeyAction =
   | "toggleDualPane"
   | "switchPane"
   | "copyToOtherPane"
-  | "moveToOtherPane";
+  | "moveToOtherPane"
+  | "moveUp"
+  | "moveDown"
+  | "moveLeft"
+  | "moveRight"
+  | "openSelected"
+  | "extendUp"
+  | "extendDown"
+  | "extendLeft"
+  | "extendRight"
+  | "pageUp"
+  | "pageDown"
+  | "firstItem"
+  | "lastItem"
+  | "toggleFocused"
+  | "invertSelection"
+  | "startSearch"
+  | "cycleSort"
+  | "goHome";
 
 type KeysConfig = Record<KeyAction, string[]>;
 
@@ -608,6 +630,16 @@ const UI_ROWS: SchemaRow[] = [
     def: 3000,
     doc: "how long notifications stay up, 1000..10000",
     label: "toast duration",
+    group: "behavior",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "type-to-search",
+    prop: "typeToSearch",
+    def: true,
+    doc: "true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)",
+    label: "type to search",
     group: "behavior",
   },
   {
@@ -1325,10 +1357,11 @@ const THEME_ROWS: ThemeRow[] = (
   ] as const
 ).map(([prop, def, doc]) => ({ kind: "hex", section: "theme", tomlKey: prop, prop, def, doc, label: prop }));
 
-// [keys] — one row per remappable action. Modal-internal nav keys (arrows,
-// enter, esc inside menus/dialogs) and the type-to-search catch-all are
-// structural and intentionally NOT remappable. The 4th tuple element groups
-// binds under a settings-GUI divider (same subsection mechanism as ui rows).
+// [keys] — one row per remappable action. Directional nav included: the same
+// move*/openSelected binds drive the grid, sidebar focus, file menu, esc menu
+// and search commit. Still structural (not remappable): esc-close, tab inside
+// menus, and the type-to-search catch-all. The 4th tuple element groups binds
+// under a settings-GUI divider (same subsection mechanism as ui rows).
 const KEY_ROWS: KeyRow[] = (
   [
     ["quit", "quit tfm", ["ctrl+q"], "app"],
@@ -1353,12 +1386,32 @@ const KEY_ROWS: KeyRow[] = (
     ["parentDir", "go to parent directory", ["backspace"], "navigation"],
     ["histBack", "back in history", ["alt+left"], "navigation"],
     ["histForward", "forward in history", ["alt+right"], "navigation"],
+    ["goHome", "go home", [], "navigation"],
     ["pathEdit", "edit the path bar", ["ctrl+l"], "navigation"],
     ["connectServer", "connect to a network server (gvfs)", ["ctrl+shift+s"], "navigation"],
+    ["moveUp", "move up (grid / menus)", ["up"], "navigation"],
+    ["moveDown", "move down (grid / menus)", ["down"], "navigation"],
+    ["moveLeft", "move left (grid / menus)", ["left"], "navigation"],
+    ["moveRight", "move right (grid / menus)", ["right"], "navigation"],
+    ["openSelected", "open / activate (grid / menus / search)", ["return"], "navigation"],
+    ["pageUp", "page up", ["pageup"], "navigation"],
+    ["pageDown", "page down", ["pagedown"], "navigation"],
+    ["firstItem", "first item", ["home"], "navigation"],
+    ["lastItem", "last item", ["end"], "navigation"],
+    ["startSearch", "re-arm type-to-search filter", [], "navigation"],
+    ["extendUp", "extend selection up", ["shift+up"], "selection"],
+    ["extendDown", "extend selection down", ["shift+down"], "selection"],
+    ["extendLeft", "extend selection left", ["shift+left"], "selection"],
+    ["extendRight", "extend selection right", ["shift+right"], "selection"],
+    ["toggleFocused", "toggle focused file", ["space"], "selection"],
+    // unbound by default: ctrl+r reloads sidebar places (yazi preset flips
+    // the pair — reload goes unbound there instead)
+    ["invertSelection", "invert selection", [], "selection"],
     ["toggleHidden", "toggle hidden files", ["ctrl+h"], "view"],
     ["reloadPlaces", "reload sidebar places", ["ctrl+r"], "view"],
     ["togglePreview", "toggle preview pane", ["f9"], "view"],
     ["toggleView", "toggle grid/list view", ["ctrl+g"], "view"],
+    ["cycleSort", "cycle sort mode (name → size → mtime → type)", [], "view"],
     ["zoomIn", "bigger tiles", ["ctrl+="], "view"],
     ["zoomOut", "smaller tiles", ["ctrl+-"], "view"],
     ["toggleDualPane", "toggle dual pane", ["ctrl+shift+d"], "panes"],
@@ -1551,8 +1604,12 @@ const coerceRow = (row: SchemaRow, raw: unknown): { ok: boolean; value: unknown 
       return typeof raw === "string" && HEX_RE.test(raw) ? { ok: true, value: raw } : { ok: false, value: row.def };
     case "key": {
       if (!Array.isArray(raw)) return { ok: false, value: row.def };
+      // parse-only: bare letters/symbols are loadable from file/presets (the
+      // yazi preset binds j/k/h/l…). Dispatch order (bound keys before the
+      // type-to-search catch-all) + the [ui] type-to-search knob decide what
+      // typing does. The settings capture UI still validates strictly.
       const specs = raw
-        .filter((s): s is string => typeof s === "string" && validateKeybindSpec(s) === null)
+        .filter((s): s is string => typeof s === "string" && parseKeySpec(s) !== null)
         .filter((s, i, a) => a.indexOf(s) === i);
       return { ok: true, value: specs.length ? specs : row.def };
     }
@@ -1627,7 +1684,9 @@ export const EXAMPLE_HEADER =
   "# Override path with $TFM_CONFIG. Missing file = all defaults.\n" +
   "# Invalid values are ignored per-key (falls back to default), never fatal.\n" +
   "# [keys]: every action can carry several binds. Bare letters/numbers are\n" +
-  "# reserved for type-to-search.\n";
+  "# loadable here and in presets (bound bare keys navigate before the\n" +
+  "# type-to-search catch-all); [ui] type-to-search=off stops unbound ones\n" +
+  "# from filtering. The settings capture UI still reserves them.\n";
 
 export function exampleToml(): string {
   return EXAMPLE_HEADER + serializeBody(defaultConfig);

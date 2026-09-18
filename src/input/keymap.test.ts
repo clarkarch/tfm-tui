@@ -59,6 +59,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
 
   const state = { cwd: "/tmp/tfm-kb/sub", showHidden: false };
   const escMenuState = { open: false, capturing: false };
+  let typeToSearchOn = true;
   const places = [
     { selected: false, place: { path: "/home" } as any },
     { selected: false, place: { path: "/media/usb", mountDevice: "sdb1" } as any },
@@ -74,7 +75,18 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     quit: rec("quit"),
     restart: rec("restart"),
     conflict: { isOpen: () => false, closeConflict: (p) => calls.push(`conflict:close:${p}`) },
-    yesNo: { isOpen: () => false, close: rec("yesno:close") },
+    yesNo: {
+      isOpen: () => false,
+      close: rec("yesno:close"),
+      moveFocus: (d) => calls.push(`yesno:move:${d}`),
+      submit: rec("yesno:submit"),
+    },
+    typeToSearchEnabled: () => typeToSearchOn,
+    enableTypeToSearch: () => {
+      typeToSearchOn = true;
+      calls.push("search:enable");
+    },
+    cycleSort: rec("sort:cycle"),
     isRenaming: () => false,
     propsIsOpen: () => false,
     closeProps: rec("props:close"),
@@ -201,6 +213,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     binds,
     pickState,
     bulkState,
+    setTypeToSearch: (v: boolean) => {
+      typeToSearchOn = v;
+    },
   };
 };
 
@@ -250,7 +265,14 @@ describe("precedence chain", () => {
   });
 
   test("yes/no modal: esc = No, everything else swallowed", () => {
-    const h = makeHarness({ yesNo: { isOpen: () => true, close: () => h.calls.push("yesno:close") } });
+    const h = makeHarness({
+      yesNo: {
+        isOpen: () => true,
+        close: () => h.calls.push("yesno:close"),
+        moveFocus: (d) => h.calls.push(`yesno:move:${d}`),
+        submit: () => h.calls.push("yesno:submit"),
+      },
+    });
     h.key("x");
     expect(h.calls).toEqual([]);
     h.key("escape");
@@ -1034,6 +1056,167 @@ describe("file menu with no initial cursor", () => {
     fmenu.idx = -1;
     h.key("up"); // last non-sep
     expect(fmenu.idx).toBe(2);
+  });
+});
+
+describe("remappable grid + menu nav", () => {
+  test("remapped moveDown fires on the new key, old arrow goes dead", () => {
+    const h = makeHarness();
+    h.binds.moveDown = ["ctrl+n"];
+    h.key("down");
+    expect(h.selection.focusIdx()).toBe(-1);
+    h.key("n", { ctrl: true });
+    expect(h.selection.focusIdx()).toBe(0);
+  });
+
+  test("empty moveDown disables grid down", () => {
+    const h = makeHarness();
+    h.binds.moveDown = [];
+    h.key("down");
+    expect(h.selection.focusIdx()).toBe(-1);
+  });
+
+  test("remapped extendDown extends on the new bind, old shift+down dead", () => {
+    const h = makeHarness();
+    h.binds.extendDown = ["ctrl+e"];
+    h.key("down", { shift: true });
+    expect(h.selection.selPaths()).toEqual([]);
+    h.key("e", { ctrl: true });
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
+  });
+
+  test("file menu follows the remapped move binds", () => {
+    const fmenu = { idx: 0, subIdx: null as number | null, entries: [{ action: () => {} }, { action: () => {} }] };
+    const h = makeHarness({ getFileMenuState: () => fmenu });
+    h.binds.moveDown = ["ctrl+n"];
+    h.key("down");
+    expect(fmenu.idx).toBe(0);
+    h.key("n", { ctrl: true });
+    expect(fmenu.idx).toBe(1);
+  });
+
+  test("esc menu follows the remapped move binds", () => {
+    const h = makeHarness();
+    h.escMenuState.open = true;
+    h.binds.moveDown = ["ctrl+n"];
+    h.key("down");
+    expect(h.calls).toEqual([]);
+    h.key("n", { ctrl: true });
+    expect(h.calls).toEqual(["escmenu:move:1"]);
+  });
+
+  test("remapped openSelected opens the focused file", () => {
+    const h = makeHarness();
+    h.binds.openSelected = ["ctrl+o"];
+    h.key("down");
+    h.key("return");
+    expect(h.calls).toEqual([]);
+    h.key("o", { ctrl: true });
+    expect(h.calls).toEqual(["open:a.txt"]);
+  });
+
+  test("pageDown pages by the viewport, home/end jump to the ends", () => {
+    const h = makeHarness();
+    h.selection.setCols(1);
+    h.key("home");
+    expect(h.selection.focusIdx()).toBe(0);
+    h.key("end");
+    expect(h.selection.focusIdx()).toBe(3);
+    h.key("home");
+    h.key("pagedown");
+    expect(h.selection.focusIdx()).toBeGreaterThan(0);
+    h.key("pageup");
+    expect(h.selection.focusIdx()).toBe(0);
+  });
+
+  test("remapped pageDown fires on the new key", () => {
+    const h = makeHarness();
+    h.selection.setCols(1);
+    h.binds.pageDown = ["ctrl+v"];
+    // ctrl+v is paste by default — free it so the page bind owns the key
+    h.binds.paste = ["ctrl+y"];
+    h.key("pagedown");
+    expect(h.selection.focusIdx()).toBe(-1);
+    h.key("v", { ctrl: true });
+    expect(h.selection.focusIdx()).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("type-to-search toggle + yazi-style bare binds", () => {
+  test("bare j moves when bound to moveDown (preset-style multi-bind)", () => {
+    const h = makeHarness();
+    h.binds.moveDown = ["down", "j"];
+    h.key("j");
+    expect(h.selection.focusIdx()).toBe(0);
+    expect(h.calls).not.toContain("search:begin:j");
+  });
+
+  test("type-to-search off swallows unbound bare keys", () => {
+    const h = makeHarness();
+    h.setTypeToSearch(false);
+    h.key("x");
+    expect(h.calls).toEqual([]);
+  });
+
+  test("space toggles the focused file; ctrl+r inverts", () => {
+    const h = makeHarness();
+    h.binds.reloadPlaces = [];
+    h.binds.invertSelection = ["ctrl+r"];
+    h.key("down");
+    h.key("space");
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual([]);
+    h.key("space");
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
+    h.key("r", { ctrl: true });
+    expect(
+      h.selection
+        .selPaths()
+        .map((p) => p.path)
+        .sort(),
+    ).toEqual(["b.txt", "c.txt", "d.txt"]);
+  });
+
+  test("startSearch re-arms the filter and toasts", () => {
+    const h = makeHarness();
+    h.binds.startSearch = ["s", "/", "f"];
+    h.setTypeToSearch(false);
+    h.key("s");
+    expect(h.calls).toContain("search:enable");
+    expect(h.calls).toContain("notify:search:info:type-to-search on · type to filter, esc clears");
+  });
+
+  test("cycleSort + goHome dispatch through binds", () => {
+    const h = makeHarness();
+    h.binds.toggleHidden = [];
+    h.binds.cycleSort = ["ctrl+s"];
+    h.binds.goHome = ["ctrl+h"];
+    h.key("s", { ctrl: true });
+    h.key("h", { ctrl: true });
+    expect(h.calls).toEqual(["sort:cycle", "navigate:/home/u"]);
+  });
+
+  test("cycleSort/goHome palette runs match their keypresses", () => {
+    const h = makeHarness();
+    const byId = (id: string) => h.router.commands().find((c) => c.id === id)!;
+    byId("cycleSort").run();
+    byId("goHome").run();
+    expect(h.calls).toEqual(["sort:cycle", "navigate:/home/u"]);
+  });
+
+  test("yes/no: arrows move the cursor, return submits, esc closes", () => {
+    const h = makeHarness({
+      yesNo: {
+        isOpen: () => true,
+        close: () => h.calls.push("yesno:close"),
+        moveFocus: (d) => h.calls.push(`yesno:move:${d}`),
+        submit: () => h.calls.push("yesno:submit"),
+      },
+    });
+    h.key("down");
+    h.key("up");
+    h.key("return");
+    h.key("escape");
+    expect(h.calls).toEqual(["yesno:move:1", "yesno:move:-1", "yesno:submit", "yesno:close"]);
   });
 });
 

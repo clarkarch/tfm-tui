@@ -24,6 +24,13 @@ import {
   type UiSchemaRow,
 } from "../config/config-schema";
 import { getPluginCommandBinds, setPluginCommandBinds } from "../plugins/plugin-api";
+import {
+  KEYMAP_PRESET_NAMES,
+  PRESET_TYPE_TO_SEARCH,
+  PRESET_VIEW_MODE,
+  keymapPresetIdx,
+  presetKeys,
+} from "../config/keymap-presets";
 
 export type SettingsModelCtx = {
   // live object refs — getters/setters read through them on every call
@@ -179,11 +186,40 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
 
+  // keymap preset switch (tfm/yazi): one batch commit over the whole [keys]
+  // table + the type-to-search/view flips, like manual remaps (nothing
+  // stashed). Leads the keys category like the theme row leads appearance.
+  const keymapPresetRow = (): SettingRow => ({
+    kind: "cycle",
+    label: "keymap preset",
+    // repaint: one batch rewrites EVERY keybind row's value, so the panel
+    // must rebuild (afterAdjust only repaints the adjusted row itself —
+    // without this the new binds appear only as rows scroll into view)
+    repaint: true,
+    names: [...KEYMAP_PRESET_NAMES],
+    getIdx: () => keymapPresetIdx(ctx.config.keys),
+    setIdx: (i) => {
+      const name = KEYMAP_PRESET_NAMES[i]!;
+      commit({
+        ui: { ...ctx.config.ui, typeToSearch: PRESET_TYPE_TO_SEARCH[name], viewMode: PRESET_VIEW_MODE[name] },
+        theme: { ...ctx.config.theme },
+        keys: presetKeys(name),
+      });
+      ctx.warn(
+        name === "yazi"
+          ? "yazi keymap on · list view, hjkl move, space toggles, q quits, / searches"
+          : "tfm keymap on · grid view, type-to-search restored",
+        "keymap preset",
+      );
+    },
+    customLabel: () => "custom",
+  });
+
   // keys category: same subsection-divider mechanism as genericUiRows —
   // one header row where the schema subsection changes (first section leads
   // with one too, so every binds group is labeled)
   const keyRowsWithHeaders = (): SettingRow[] => {
-    const rows: SettingRow[] = [];
+    const rows: SettingRow[] = [keymapPresetRow()];
     let subsection = "";
     for (const r of KEY_SCHEMA) {
       if (r.subsection && r.subsection !== subsection) {

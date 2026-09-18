@@ -192,6 +192,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "persistUndo",
     "restoreSession",
     "showLaunchTime",
+    "typeToSearch",
   ]);
 
   // rebuild-relevant signature: all UI keys except the exempt ones, plus theme

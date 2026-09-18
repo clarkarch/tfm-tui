@@ -50,10 +50,17 @@ describe("parseConfigDoc", () => {
     expect(cfg.theme.accent).toBe("#7aa2f7");
   });
 
-  test("[keys]: filters invalid specs, dedupes, falls back when none left", () => {
-    const cfg = parseConfigDoc({ keys: { "new-tab": ["ctrl+n", "ctrl+n", "bare", "bogus+keys+x"], quit: [] } });
+  test("[keys]: filters unparseable specs, dedupes, falls back when none left", () => {
+    const cfg = parseConfigDoc({ keys: { "new-tab": ["ctrl+n", "ctrl+n", "bogus+keys+x"], quit: [] } });
     expect(cfg.keys.newTab).toEqual(["ctrl+n"]);
     expect(cfg.keys.quit).toEqual(["ctrl+q"]);
+  });
+
+  test("[keys]: bare letters load from file (presets bind j/k…; capture UI still reserves them)", () => {
+    const cfg = parseConfigDoc({ keys: { "toggle-hidden": ["ctrl+h", "."] } });
+    expect(cfg.keys.toggleHidden).toEqual(["ctrl+h", "."]);
+    // validateKeybindSpec stays strict for the settings capture flow
+    expect(validateKeybindSpec(".")).not.toBeNull();
   });
 
   test("icons defaults to opaque, parses the mode enum", () => {

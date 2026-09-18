@@ -3,7 +3,9 @@
 # Override path with $TFM_CONFIG. Missing file = all defaults.
 # Invalid values are ignored per-key (falls back to default), never fatal.
 # [keys]: every action can carry several binds. Bare letters/numbers are
-# reserved for type-to-search.
+# loadable here and in presets (bound bare keys navigate before the
+# type-to-search catch-all); [ui] type-to-search=off stops unbound ones
+# from filtering. The settings capture UI still reserves them.
 
 [ui]
 sidebar-width                         = 26          # 16..60 cells (grid + list)
@@ -29,6 +31,7 @@ hover-anim-ms                         = 120         # auto-hide slide duration, 
 double-click-ms                       = 400         # 100..2000
 drag-threshold-cells                  = 1           # cells of movement before a press becomes a drag, 1..5
 toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
+type-to-search                        = true        # true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)
 transparent-bg                        = false       # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
@@ -143,12 +146,30 @@ new-file           = ["ctrl+alt+n"]              # default: ctrl+alt+n
 parent-dir         = ["backspace"]               # default: backspace
 hist-back          = ["alt+left"]                # default: alt+left
 hist-forward       = ["alt+right"]               # default: alt+right
+go-home            = []                          # default: 
 path-edit          = ["ctrl+l"]                  # default: ctrl+l
 connect-server     = ["ctrl+shift+s"]            # default: ctrl+shift+s
+move-up            = ["up"]                      # default: up
+move-down          = ["down"]                    # default: down
+move-left          = ["left"]                    # default: left
+move-right         = ["right"]                   # default: right
+open-selected      = ["return"]                  # default: return
+page-up            = ["pageup"]                  # default: pageup
+page-down          = ["pagedown"]                # default: pagedown
+first-item         = ["home"]                    # default: home
+last-item          = ["end"]                     # default: end
+start-search       = []                          # default: 
+extend-up          = ["shift+up"]                # default: shift+up
+extend-down        = ["shift+down"]              # default: shift+down
+extend-left        = ["shift+left"]              # default: shift+left
+extend-right       = ["shift+right"]             # default: shift+right
+toggle-focused     = ["space"]                   # default: space
+invert-selection   = []                          # default: 
 toggle-hidden      = ["ctrl+h"]                  # default: ctrl+h
 reload-places      = ["ctrl+r"]                  # default: ctrl+r
 toggle-preview     = ["f9"]                      # default: f9
 toggle-view        = ["ctrl+g"]                  # default: ctrl+g
+cycle-sort         = []                          # default: 
 zoom-in            = ["ctrl+="]                  # default: ctrl+=
 zoom-out           = ["ctrl+-"]                  # default: ctrl+-
 toggle-dual-pane   = ["ctrl+shift+d"]            # default: ctrl+shift+d

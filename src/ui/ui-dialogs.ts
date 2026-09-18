@@ -227,6 +227,8 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
 
 type YesNoCtx = {
   colors(): Theme;
+  uiStyle(): UiStyle;
+  byId(id: string): any;
   // false while the renderer hasn't laid out yet (same gate as makeConflict callers)
   canOpen(): boolean;
   // open/close orchestration + the dismiss-others policy live in ./floats
@@ -239,21 +241,58 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
   const { openDialog, closeDialog, dialogBtn } = dialogs;
 
   let open = false;
+  // keyboard cursor over the two buttons (0 = No, 1 = Yes label). Defaults to
+  // No so an accidental Enter never confirms a destructive op.
+  let focusIdx = 0;
+  let pendingYes: (() => void) | null = null;
 
   // raw teardown — registered with floats at open time
   const rawClose = (): void => {
     closeDialog("tfm-yesno");
     open = false;
+    pendingYes = null;
   };
 
   const close = (): void => {
     ctx.floats.close("yesno");
   };
 
+  // keyboard cursor paint — same surface dialogBtn's hover uses, by id
+  const paintFocus = (): void => {
+    const c = ctx.colors();
+    for (let i = 0; i < 2; i++) {
+      try {
+        const node: any = ctx.byId(`tfm-yesno-b${i}`);
+        if (node) applySurface(node, btnSurface(ctx.uiStyle(), c, i === focusIdx, c.sidebarBg));
+      } catch {}
+    }
+  };
+
+  // arrows move the cursor between No/Yes; submit activates the focused one.
+  // Focus defaults to No so a stray Enter never confirms a destructive op.
+  const moveFocus = (delta: number): void => {
+    if (!open) return;
+    focusIdx = (focusIdx + delta + 2) % 2;
+    paintFocus();
+  };
+
+  const submit = (): void => {
+    if (!open) return;
+    if (focusIdx === 1) {
+      const cb = pendingYes;
+      close();
+      cb?.();
+    } else {
+      close();
+    }
+  };
+
   const confirm = (message: string, yesLabel: string, onYes: () => void, danger = false): boolean => {
     if (open || !ctx.canOpen()) return false;
     ctx.floats.open("yesno", rawClose);
     open = true;
+    focusIdx = 0;
+    pendingYes = onYes;
     const c = ctx.colors();
     const yesFg = danger ? c.ansi1 : c.accent;
     let bseq = 0;
@@ -287,5 +326,5 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     return true;
   };
 
-  return { confirm, close, isOpen: (): boolean => open };
+  return { confirm, close, isOpen: (): boolean => open, moveFocus, submit };
 };

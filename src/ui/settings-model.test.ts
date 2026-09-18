@@ -189,8 +189,14 @@ describe("settingGroups shape", () => {
         .groups()
         .find((g) => g.header === header)!
         .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    // mouse gestures share a section; the lone toast row trails headerless
-    expect(seq("behavior")).toEqual(["##mouse", "double-click ms", "drag threshold", "toast duration"]);
+    // mouse gestures share a section; the lone toast + type-to-search rows trail headerless
+    expect(seq("behavior")).toEqual([
+      "##mouse",
+      "double-click ms",
+      "drag threshold",
+      "toast duration",
+      "type to search",
+    ]);
     // hidden files leads into its listing topic; session persistence is its own section
     expect(seq("files & session")).toEqual([
       "hidden files",
@@ -217,17 +223,18 @@ describe("settingGroups shape", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;
     const seq = kb.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    expect(kb.length).toBe(KEY_SCHEMA.length + 6);
+    expect(kb.length).toBe(KEY_SCHEMA.length + 8);
     expect(seq.filter((s) => s.startsWith("##"))).toEqual([
       "##app",
       "##tabs",
       "##files",
       "##navigation",
+      "##selection",
       "##view",
       "##panes",
     ]);
-    // spot-check section membership across the boundaries
-    expect(seq.slice(0, 4)).toEqual(["##app", "quit tfm", "restart tfm", "open the esc menu"]);
+    // spot-check section membership across the boundaries (preset leads)
+    expect(seq.slice(0, 5)).toEqual(["keymap preset", "##app", "quit tfm", "restart tfm", "open the esc menu"]);
     expect(seq.slice(seq.indexOf("##tabs") + 1, seq.indexOf("##tabs") + 5)).toEqual([
       "new tab",
       "close tab",
@@ -244,6 +251,43 @@ describe("settingGroups shape", () => {
     expect(seq).toContain("connect to a network server (gvfs)");
     expect(seq.indexOf("connect to a network server (gvfs)")).toBeGreaterThan(seq.indexOf("##navigation"));
     expect(seq.indexOf("connect to a network server (gvfs)")).toBeLessThan(seq.indexOf("##view"));
+  });
+
+  test("keymap preset row applies the yazi batch + type-to-search flip + list view", () => {
+    const h = mk();
+    const row = h.byLabel("keymap preset");
+    if (row.kind !== "cycle") throw new Error("keymap preset must be a cycle");
+    expect(row.names).toEqual(["tfm", "yazi"]);
+    expect(row.getIdx()).toBe(0);
+    row.setIdx(1);
+    expect(h.config.keys.moveDown).toEqual(["down", "j"]);
+    expect(h.config.keys.copy).toEqual(["y"]);
+    expect(h.config.ui.typeToSearch).toBe(false);
+    expect(h.config.ui.viewMode).toBe("list");
+    expect(h.saves()).toBe(1);
+    expect(h.warns.at(-1)?.title).toBe("keymap preset");
+    expect(h.warns.at(-1)?.message).toContain("list view");
+    // switching back restores canonical defaults exactly (batch, no stash)
+    row.setIdx(0);
+    expect(h.config.keys).toEqual(defaultConfig.keys);
+    expect(h.config.ui.typeToSearch).toBe(true);
+    expect(h.config.ui.viewMode).toBe("grid");
+  });
+
+  test("keymap preset row is repaint (batch rewrites every row's value)", () => {
+    const h = mk();
+    const row = h.byLabel("keymap preset");
+    if (row.kind !== "cycle") throw new Error("keymap preset must be a cycle");
+    expect(row.repaint).toBe(true);
+  });
+
+  test("keymap preset row reports custom once hand-edited", () => {
+    const h = mk();
+    h.config.keys.quit = ["ctrl+q", "q"];
+    const row = h.byLabel("keymap preset");
+    if (row.kind !== "cycle") throw new Error("keymap preset must be a cycle");
+    expect(row.getIdx()).toBe(-1);
+    expect(row.customLabel?.()).toBe("custom");
   });
 
   test("terminal height stepper commits through the ui patch", () => {
@@ -274,8 +318,8 @@ describe("settingGroups shape", () => {
   test("every keybind action gets a row", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;
-    expect(kb.length).toBe(KEY_SCHEMA.length + 6);
-    expect(kb.filter((r) => r.kind !== "header").every(isKeybind)).toBe(true);
+    expect(kb.length).toBe(KEY_SCHEMA.length + 8);
+    expect(kb.filter((r) => r.kind !== "header" && r.label !== "keymap preset").every(isKeybind)).toBe(true);
   });
 
   test("hover lift controls live in animations under sensible labels", () => {

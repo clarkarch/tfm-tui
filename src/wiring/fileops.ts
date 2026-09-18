@@ -181,6 +181,8 @@ export const wireFileops = (deps: {
   // floating Yes/No confirmation — widget lives in ./ui-dialogs
   const yesNo = makeYesNo(chrome.dialogs, {
     colors: themeGet,
+    uiStyle: () => core.config.ui.uiStyle,
+    byId: core.lookup.byId,
     canOpen: () => !!chrome.renderer.resolution,
     floats: core.floats,
   });

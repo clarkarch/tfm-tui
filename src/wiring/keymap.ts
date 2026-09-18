@@ -10,6 +10,7 @@ import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
+import { cycleSortMode } from "../lib/sort";
 import { clearChildren } from "../lib/uiutil";
 import { flattenPluginCommands, getPluginCommandBinds } from "../plugins/plugin-api";
 import { isVirtualUri } from "../fs/uri";
@@ -117,7 +118,20 @@ export const wireKeymap = (deps: {
       isOpen: () => floats.isOpen("conflict"),
       closeConflict: (p: "skip") => fileops.conflict.closeConflict(p),
     },
-    yesNo: { isOpen: () => floats.isOpen("yesno"), close: () => fileops.yesNo.close() },
+    yesNo: {
+      isOpen: () => floats.isOpen("yesno"),
+      close: () => fileops.yesNo.close(),
+      moveFocus: (d) => fileops.yesNo.moveFocus(d),
+      submit: () => fileops.yesNo.submit(),
+    },
+    typeToSearchEnabled: () => core.config.ui.typeToSearch,
+    // startSearch re-arms the filter (yazi preset leaves it off) through the
+    // single applyConfig -> save path like every other config flip
+    enableTypeToSearch: () => {
+      if (core.config.ui.typeToSearch) return;
+      getRetheme().applyConfig({ ...core.config, ui: { ...core.config.ui, typeToSearch: true } });
+      getRetheme().scheduleSaveConfig();
+    },
     isRenaming: gridFoundation.rename.isRenaming,
     bulkRename: {
       isOpen: () => floats.isOpen("bulkrename"),
@@ -188,6 +202,15 @@ export const wireKeymap = (deps: {
       const viewMode = ui.viewMode === "grid" ? "list" : "grid";
       getRetheme().applyConfig({ ...core.config, ui: { ...ui, viewMode } });
       getRetheme().scheduleSaveConfig();
+    },
+    // single-key sort cycle on the ACTIVE pane's state (same nautilus
+    // semantics + renderGrid tail as the sort menu's pick)
+    cycleSort: () => {
+      const s = core.activeState();
+      const next = cycleSortMode(s.sortBy);
+      s.sortBy = next.sortBy;
+      s.sortAsc = next.sortAsc;
+      void grid.renderGrid();
     },
     zoomTiles: (dir) => {
       const ui = core.config.ui;
