@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSafe } from "./spawn-safe";
-import { sudoOpenArgv } from "./elevate";
+import { runSudo, sudoOpenArgv } from "./elevate";
+import { extOf, mimeForExt } from "./filetype";
 import type { NotifyLevel } from "../lib/notify-level";
 import { xdgDataHome } from "./uri";
 
@@ -77,13 +78,17 @@ export const parseGioMime = (out: string): string[] => {
 export type AppChoice = { id: string; name: string; file: string };
 
 // launchable handlers for a file: default + registered apps that resolve to a
-// real .desktop file. `run` is injectable so tests never shell out.
+// real .desktop file. `run` is injectable so tests never shell out. When the
+// content probe fails (EACCES on a root-owned file), fall back to ext→mime —
+// `gio mime` needs no file access. `mimeByExt` is injectable so tests don't
+// depend on the boot-loaded globs2 cache.
 export const appsForFile = async (
   p: string,
   run: (cmd: string[]) => Promise<string> = runOutShort,
+  mimeByExt: (ext: string) => string | undefined = mimeForExt,
 ): Promise<AppChoice[]> => {
   try {
-    const mime = await run(["xdg-mime", "query", "filetype", p]);
+    const mime = (await run(["xdg-mime", "query", "filetype", p])) || mimeByExt(extOf(p)) || "";
     if (!mime) return [];
     const ids = parseGioMime(await run(["gio", "mime", mime]));
     const out: AppChoice[] = [];
@@ -103,16 +108,22 @@ export const launchApp = (desktopFile: string, file: string, onFail?: (e: Error)
   spawnSafe("gio", ["launch", desktopFile, file], { stdio: "ignore", detached: true }, onFail);
 };
 
-// elevated open: password gate first, then the default app as root. Seams
-// injected so tests capture argv without spawning (the wiring passes a
-// spawnSafe argv with XDG_UTILS_ENABLE_DOUBLE_HYPEN=1, which xdg-open needs
-// to honor `--`).
+// Escalation primitive behind the adaptive open: password gate first, then
+// the default app as root. The open runs awaited (not detached
+// fire-and-forget) so a failure — e.g. root GUI apps unable to reach the
+// user's Wayland display — surfaces as an honest error toast instead of a
+// lying "Opening …". `exec` is injectable so tests capture argv without
+// spawning. Never rejects (gate-cancel stays silent), so callers can
+// fire-and-forget it.
 export const makeOpenAsRoot = (deps: {
   ensureSudo: (opLabel: string) => Promise<boolean>;
-  spawnOpen: (argv: string[]) => void;
+  exec?: (argv: string[]) => Promise<{ status: number | null; stderr: string }>;
   notify: (msg: string, title?: string, level?: NotifyLevel) => void;
   log: (msg: string) => void;
 }): ((p: string) => Promise<void>) => {
+  const exec =
+    deps.exec ??
+    ((argv: string[]): Promise<{ status: number | null; stderr: string }> => runSudo(argv, { timeoutMs: 30_000 }));
   return async (p: string): Promise<void> => {
     let ok = false;
     try {
@@ -121,12 +132,25 @@ export const makeOpenAsRoot = (deps: {
       deps.log(`open-as-root gate failed: ${err}`);
     }
     if (!ok) return;
+    const base = path.basename(p);
+    let r: { status: number | null; stderr: string };
     try {
-      deps.spawnOpen(sudoOpenArgv(p));
+      r = await exec(sudoOpenArgv(p));
     } catch (err) {
-      deps.log(`open-as-root spawn failed: ${err}`);
+      deps.log(`open-as-root exec failed: ${err}`);
+      deps.notify(`Can't open ${base} as root · ${err instanceof Error ? err.message : err}`, "open", "error");
       return;
     }
-    deps.notify(`Opening ${path.basename(p)} as root`, "open", "info");
+    if (r.status === 0) {
+      deps.notify(`Opening ${base} as root`, "open", "info");
+      return;
+    }
+    const why =
+      r.stderr
+        .split("\n")
+        .map((l) => l.trim())
+        .find(Boolean) ?? `exit ${r.status}`;
+    deps.log(`open-as-root failed for ${p}: ${why}`);
+    deps.notify(`Can't open ${base} as root · ${why} (try sudoedit in a terminal)`, "open", "error");
   };
 };

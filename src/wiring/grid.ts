@@ -394,7 +394,6 @@ export const wireGrid = (deps: {
     tileRefs: selection.tileRefs,
     selPaths: selection.selPaths,
     openFileDefault: chrome.openFileDefault,
-    openAsRoot: (p: string) => chrome.openAsRoot(p),
     setClipboard: fileops.fileops.setClipboard,
     duplicate: (paths) => void fileops.fileops.duplicate(paths),
     startInlineRename: rename.startInlineRename,

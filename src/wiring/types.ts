@@ -66,7 +66,6 @@ export type ChromeWiring = {
   notify: ReturnType<typeof makeNotify>["notify"];
   notifySticky: ReturnType<typeof makeNotify>["notifySticky"];
   openFileDefault: ReturnType<typeof makeRecentOpen>["openFileDefault"];
-  openAsRoot: (p: string) => Promise<void>;
   dialogs: ReturnType<typeof makeDialogs>;
   connectServer: (raw?: string) => void;
   disconnectServer: (mountPath: string) => void;

@@ -546,18 +546,9 @@ describe("archive entries", () => {
   });
 });
 
-describe("open as root", () => {
-  test("file submenu gains Open as Root only when the seam exists", () => {
-    const plain = makeMenuEntries(baseCtx());
-    expect(plain.fileEntriesFor("/a", false, 0, 0)[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open With…"]);
-    const ctx = baseCtx() as ReturnType<typeof baseCtx> & { openAsRoot: (p: string) => void };
-    ctx.openAsRoot = async (p: string) => {
-      ctx.calls.push(`root:${p}`);
-    };
-    const m = makeMenuEntries(ctx);
-    const sub = m.fileEntriesFor("/a", false, 0, 0)[0]!.submenu!;
-    expect(sub.map((e) => e.label)).toEqual(["Open", "Open With…", "Open as Root"]);
-    sub[2]!.action();
-    expect(ctx.calls).toEqual(["close", "root:/a"]);
+describe("open submenu", () => {
+  test("file submenu is exactly Open + Open With… (escalation is adaptive, no row)", () => {
+    const m = makeMenuEntries(baseCtx());
+    expect(m.fileEntriesFor("/a", false, 0, 0)[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open With…"]);
   });
 });

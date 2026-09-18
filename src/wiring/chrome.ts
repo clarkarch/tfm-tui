@@ -316,43 +316,34 @@ export const wireChrome = async (deps: {
     durationMs: () => core.config.ui.toastDurationMs,
   });
 
+  // --- Escalation primitive for the adaptive open: password gate (cached
+  // timestamp first), then the default app elevated with the user's env
+  // preserved (-E keeps Wayland / display sockets, so GUI editors work).
+  // One gate per wire scope, like wireFileops. Built before makeRecentOpen
+  // so the open can take it directly. ---
+  const ensureSudoChrome = makeEnsureSudo({ getPrompt: deps.getPrompt, notify });
+  const openAsRoot = makeOpenAsRoot({
+    ensureSudo: ensureSudoChrome,
+    notify,
+    log: (msg) => dlog(msg),
+  });
+
   // --- Recent-files recording + default open: batching/toast logic lives in
   // ./recent-open (tested); xbel write, xdg-open spawn and the app probe are
-  // injected here ---
+  // injected here. Unreadable files escalate through openAsRoot above — the
+  // open is adaptive, there is no separate elevated row. ---
   const { openFileDefault } = makeRecentOpen({
     inTrashView: core.inTrashView,
     notify,
     upsertRecent: (paths) => upsertRecentXbel(paths),
     spawnOpen: (p) => {
-      spawnSafe("xdg-open", [p], { stdio: "ignore", detached: true }, (err) =>
-        dlog(`open ${p}: ${err.message}`),
-      ).unref?.();
+      spawnSafe("xdg-open", [p], { stdio: "ignore", detached: true }, (err) => {
+        dlog(`open ${p}: ${err.message}`);
+        notify(`Can't open ${path.basename(p)} · ${err.message}`, "open", "error");
+      }).unref?.();
     },
     appForFile,
-  });
-
-  // --- Open as root: password gate (cached timestamp first), then the
-  // default app elevated with the user's env preserved (-E keeps Wayland /
-  // display sockets, so GUI editors work). Editing root files is exactly the
-  // yazi complaint this answers. One gate per wire scope, like wireFileops. ---
-  const ensureSudoChrome = makeEnsureSudo({ getPrompt: deps.getPrompt, notify });
-  const openAsRoot = makeOpenAsRoot({
-    ensureSudo: ensureSudoChrome,
-    spawnOpen: (argv) => {
-      spawnSafe(
-        argv[0]!,
-        argv.slice(1),
-        {
-          stdio: "ignore",
-          detached: true,
-          // xdg-open only honors `--` when this is set (upstream typo included)
-          env: { ...process.env, XDG_UTILS_ENABLE_DOUBLE_HYPEN: "1" },
-        },
-        (err) => dlog(`open-as-root spawn: ${err.message}`),
-      ).unref?.();
-    },
-    notify,
-    log: (msg) => dlog(msg),
+    openAsRoot,
   });
 
   const dialogs = makeDialogs({
@@ -506,7 +497,6 @@ export const wireChrome = async (deps: {
     notify,
     notifySticky,
     openFileDefault,
-    openAsRoot,
     dialogs,
     connectServer,
     disconnectServer,

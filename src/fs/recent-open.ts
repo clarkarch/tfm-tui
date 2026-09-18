@@ -5,6 +5,7 @@
 // via ctx. ---
 
 import path from "node:path";
+import { accessSync, constants } from "node:fs";
 import { debounced } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 
@@ -14,6 +15,13 @@ type RecentOpenCtx = {
   upsertRecent: (paths: string[]) => void | Promise<void>;
   spawnOpen: (p: string) => void;
   appForFile: (p: string) => Promise<string | null>;
+  // readability pre-check (tests fake it; default = R_OK probe). Unreadable
+  // files escalate through openAsRoot instead of erroring — the open is
+  // adaptive, there is no separate elevated row.
+  canRead?: (p: string) => boolean;
+  // escalation primitive (never rejects; gate-cancel stays silent, failures
+  // toast inside). Elevated opens are not recorded to recent.
+  openAsRoot: (p: string) => Promise<void>;
 };
 
 export const makeRecentOpen = (ctx: RecentOpenCtx) => {
@@ -32,6 +40,20 @@ export const makeRecentOpen = (ctx: RecentOpenCtx) => {
   };
 
   const openFileDefault = (p: string): void => {
+    const canRead =
+      ctx.canRead ??
+      ((q: string): boolean => {
+        try {
+          accessSync(q, constants.R_OK);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    if (!canRead(p)) {
+      void ctx.openAsRoot(p);
+      return;
+    }
     recordOpen(p);
     ctx.spawnOpen(p);
     // resolve what xdg-open will pick so the toast can say what launched

@@ -21,7 +21,11 @@ export const sudoRmArgv = (target: string): string[] => ["sudo", "-n", "rm", "-r
 export const sudoCatArgv = (file: string): string[] => ["sudo", "-n", "cat", "--", file];
 export const sudoValidateArgv = (): string[] => ["sudo", "-S", "-v"];
 export const sudoCachedArgv = (): string[] => ["sudo", "-n", "true"];
-export const sudoOpenArgv = (file: string): string[] => ["sudo", "-n", "-E", "xdg-open", "--", file];
+// Elevated default-open. Deliberately NO `--`: tfm only passes absolute
+// paths (leading `/`, never parsed as options), and `--` is only legal when
+// XDG_UTILS_ENABLE_DOUBLE_HYPEN=1 is visible — which sudo's env_reset strips,
+// so with `--` the open always died as `unexpected option '--'`.
+export const sudoOpenArgv = (file: string): string[] => ["sudo", "-n", "-E", "xdg-open", file];
 
 export type SudoAuthDeps = {
   cached: () => Promise<boolean>;

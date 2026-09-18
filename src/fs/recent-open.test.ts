@@ -23,6 +23,10 @@ const mkCtx = (over: Partial<Parameters<typeof makeRecentOpen>[0]> = {}) => {
     spawnOpen: (p: string) => {
       calls.push(`spawn:${p}`);
     },
+    openAsRoot: async (p: string) => {
+      calls.push(`escalate:${p}`);
+    },
+    canRead: (_p: string) => true,
     appForFile: async (_p: string) => "Video Player",
     ...over,
   };
@@ -67,5 +71,24 @@ describe("makeRecentOpen", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(calls.some((c) => c.startsWith("upsert:"))).toBe(false);
     expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true); // still opens
+  });
+
+  test("unreadable file escalates through openAsRoot, never spawns or records", async () => {
+    const { calls, ctx } = mkCtx({ canRead: () => false });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/etc/shadow");
+    await settleUntil(() => calls.some((c) => c.startsWith("escalate:")));
+    expect(calls).toContain("escalate:/etc/shadow");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(false);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls.some((c) => c.startsWith("upsert:"))).toBe(false);
+  });
+
+  test("readable files never touch openAsRoot", async () => {
+    const { calls, ctx } = mkCtx();
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/movie.mp4");
+    await settleUntil(() => calls.some((c) => c.startsWith("notify:")));
+    expect(calls.some((c) => c.startsWith("escalate:"))).toBe(false);
   });
 });

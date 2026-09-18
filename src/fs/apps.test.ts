@@ -93,42 +93,103 @@ describe("appsForFile", () => {
   test("a failed mime probe yields no apps", async () => {
     expect(await appsForFile("/x.txt", async () => "")).toEqual([]);
   });
+
+  test("unreadable file falls back to ext→mime instead of yielding nothing", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-apps-fallback-"));
+    process.env.XDG_DATA_HOME = root;
+    try {
+      const dir = path.join(root, "applications");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "tfm-fb.desktop"), `[Desktop Entry]\nType=Application\nName=Fallback Editor\n`);
+      const run = async (cmd: string[]): Promise<string> =>
+        cmd[0] === "xdg-mime"
+          ? "" // content probe fails (EACCES on a root-owned file)
+          : "Default application for “text/plain”: tfm-fb.desktop\n";
+      const apps = await appsForFile("/root/owned.txt", run, () => "text/plain");
+      expect(apps.map((a) => a.name)).toEqual(["Fallback Editor"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("empty probe with no ext fallback still yields nothing", async () => {
+    expect(
+      await appsForFile(
+        "/root/owned",
+        async () => "",
+        () => undefined,
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("makeOpenAsRoot", () => {
-  const harness = (gate: () => Promise<boolean>) => {
-    const spawns: string[][] = [];
+  const harness = (
+    gate: () => Promise<boolean>,
+    exec?: (argv: string[]) => Promise<{ status: number | null; stderr: string }>,
+  ) => {
+    const execArgv: string[][] = [];
     const notes: string[] = [];
     const logs: string[] = [];
     const open = makeOpenAsRoot({
       ensureSudo: gate,
-      spawnOpen: (argv) => void spawns.push(argv),
+      exec:
+        exec ??
+        (async (argv) => {
+          execArgv.push(argv);
+          return { status: 0, stderr: "" };
+        }),
       notify: (m, t) => void notes.push(`${t}:${m}`),
       log: (m) => void logs.push(m),
     });
-    return { open, spawns, notes, logs };
+    return { open, spawns: execArgv, notes, logs };
   };
 
-  test("gate denial spawns nothing and stays silent", async () => {
+  test("gate denial execs nothing and stays silent", async () => {
     const h = harness(async () => false);
     await h.open("/etc/-hosts");
     expect(h.spawns).toEqual([]);
     expect(h.notes).toEqual([]);
   });
 
-  test("gate success spawns the exact sudo open argv and notifies", async () => {
+  test("gate success execs the exact sudo open argv and notifies", async () => {
     const h = harness(async () => true);
     await h.open("/etc/-hosts");
-    expect(h.spawns).toEqual([["sudo", "-n", "-E", "xdg-open", "--", "/etc/-hosts"]]);
+    expect(h.spawns).toEqual([["sudo", "-n", "-E", "xdg-open", "/etc/-hosts"]]);
     expect(h.notes).toEqual(["open:Opening -hosts as root"]);
   });
 
-  test("gate throw is logged, never spawned, never rejects", async () => {
+  test("gate throw is logged, never execed, never rejects", async () => {
     const h = harness(async () => {
       throw new Error("overlay blew up");
     });
     await h.open("/etc/hosts");
     expect(h.spawns).toEqual([]);
     expect(h.logs.some((l) => l.includes("gate failed"))).toBe(true);
+  });
+
+  test("non-zero exit errors honestly with the tool's reason and a sudoedit hint", async () => {
+    const h = harness(
+      async () => true,
+      async () => ({ status: 4, stderr: "xdg-open: no permission to read file '/etc/shadow'\n" }),
+    );
+    await h.open("/etc/shadow");
+    expect(h.notes.length).toBe(1);
+    expect(h.notes[0]).toContain("open:Can't open shadow as root");
+    expect(h.notes[0]).toContain("no permission to read file");
+    expect(h.notes[0]).toContain("sudoedit");
+  });
+
+  test("exec throw errors instead of the success toast, never rejects", async () => {
+    const h = harness(
+      async () => true,
+      async () => {
+        throw new Error("spawn ENOENT");
+      },
+    );
+    await h.open("/etc/hosts");
+    expect(h.notes.length).toBe(1);
+    expect(h.notes[0]!.startsWith("open:Can't open hosts as root")).toBe(true);
+    expect(h.logs.some((l) => l.includes("exec failed"))).toBe(true);
   });
 });
