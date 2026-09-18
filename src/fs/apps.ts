@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSafe } from "./spawn-safe";
+import { sudoOpenArgv } from "./elevate";
+import type { NotifyLevel } from "../lib/notify-level";
 import { xdgDataHome } from "./uri";
 
 // --- Resolving what xdg-open would launch, so the "open" toast can say what
@@ -99,4 +101,32 @@ export const appsForFile = async (
 // fire-and-forget launch through gio (detached so the app outlives the spawn)
 export const launchApp = (desktopFile: string, file: string, onFail?: (e: Error) => void): void => {
   spawnSafe("gio", ["launch", desktopFile, file], { stdio: "ignore", detached: true }, onFail);
+};
+
+// elevated open: password gate first, then the default app as root. Seams
+// injected so tests capture argv without spawning (the wiring passes a
+// spawnSafe argv with XDG_UTILS_ENABLE_DOUBLE_HYPEN=1, which xdg-open needs
+// to honor `--`).
+export const makeOpenAsRoot = (deps: {
+  ensureSudo: (opLabel: string) => Promise<boolean>;
+  spawnOpen: (argv: string[]) => void;
+  notify: (msg: string, title?: string, level?: NotifyLevel) => void;
+  log: (msg: string) => void;
+}): ((p: string) => Promise<void>) => {
+  return async (p: string): Promise<void> => {
+    let ok = false;
+    try {
+      ok = await deps.ensureSudo(`open ${path.basename(p)} as root`);
+    } catch (err) {
+      deps.log(`open-as-root gate failed: ${err}`);
+    }
+    if (!ok) return;
+    try {
+      deps.spawnOpen(sudoOpenArgv(p));
+    } catch (err) {
+      deps.log(`open-as-root spawn failed: ${err}`);
+      return;
+    }
+    deps.notify(`Opening ${path.basename(p)} as root`, "open", "info");
+  };
 };

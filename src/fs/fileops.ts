@@ -8,8 +8,10 @@
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, rename as fsRename } from "node:fs/promises";
+import { mkdir, readdir, rm, rename as fsRename, writeFile } from "node:fs/promises";
 import {
+  encodeTrashPath,
+  errCode,
   failSuffix,
   fsErrText,
   fsMove,
@@ -18,10 +20,12 @@ import {
   rmTrashInfo,
   safeRestoreMove,
   shouldToast,
+  trashDir,
   uniqueTarget,
   xdgTrashMove,
   crossDevice as fsCrossDevice,
 } from "./fsutil";
+import { isPrivilegeError, sudoCpArgv, sudoMvArgv, sudoRmArgv, sudoExecError, runSudo } from "./elevate";
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
 import {
   commonParent,
@@ -79,6 +83,11 @@ export type FileOpsCtx = {
   // archive engine seam (tests inject; default = src/fs/archive)
   runArchive?: ArchiveRun;
   listArchive?: (fmt: ArchiveFormat, file: string) => Promise<number>;
+  // sudo escalation seams (wiring injects the prompt-backed impl; tests fake):
+  // ensureSudo prompts for the password (cached-timestamp-first) once per op,
+  // sudoExec runs one sudo argv and reports its exit (default = runSudo)
+  ensureSudo?: (opLabel: string) => Promise<boolean>;
+  sudoExec?: (argv: string[]) => Promise<{ status: number | null; stderr: string }>;
   // /tmp/tfm-dnd.log debug sink
   log(msg: string): void;
   // plugin event fan-out (optional; never throws into the transfer).
@@ -259,6 +268,80 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const copyTreeProgressWired = (src: string, dest: string): Promise<void> => copyTreeProgress(src, dest, transferSink);
   const isCrossDevice = (a: string, b: string): boolean => (ctx.crossDevice ?? fsCrossDevice)(a, b);
   const removeTree = ctx.removeTree ?? ((p: string) => rm(p, { recursive: true }));
+  const sudoExec =
+    ctx.sudoExec ?? (async (argv) => runSudo(argv).then((r) => ({ status: r.status, stderr: r.stderr })));
+
+  // sudo retry: one password gate per op (memoized by the caller), then the
+  // same end-state as the normal path via cp -a / mv so undo units below can
+  // be reused untouched. Throws the tool's first stderr line on failure.
+  const sudoCopy = async (src: string, target: string): Promise<void> => {
+    const r = await sudoExec(sudoCpArgv(src, target));
+    if (r.status !== 0) throw sudoExecError(r.stderr);
+  };
+  const sudoMove = async (src: string, target: string): Promise<void> => {
+    const r = await sudoExec(sudoMvArgv(src, target));
+    if (r.status !== 0) throw sudoExecError(r.stderr);
+  };
+  const sudoRemove = async (target: string): Promise<void> => {
+    const r = await sudoExec(sudoRmArgv(target));
+    if (r.status !== 0) throw sudoExecError(r.stderr);
+  };
+  // sudo replace-stash: the normal stashVictim runs unprivileged BEFORE any
+  // sudo retry, so a privileged victim would abort the op as "Replace failed"
+  // without ever reaching the gate. Claim a trash name as the user, sudo-mv
+  // the victim there, finalize the trashinfo — same undo units/journal.
+  const sudoStashVictim = async (victimDest: string, units: UndoUnit[], dUnits: UndoStep[]): Promise<boolean> => {
+    try {
+      const root = trashDir();
+      await mkdir(path.join(root, "files"), { recursive: true });
+      await mkdir(path.join(root, "info"), { recursive: true });
+      const base = path.basename(victimDest);
+      const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+      const encoded = encodeTrashPath(victimDest);
+      let name = base;
+      for (let i = 2; ; i++) {
+        const infoPath = path.join(root, "info", `${name}.trashinfo`);
+        try {
+          await writeFile(infoPath, `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`, { flag: "wx" });
+        } catch (err) {
+          if (errCode(err) === "EEXIST" || existsSync(path.join(root, "files", name))) {
+            name = `${base}.${i}`;
+            continue;
+          }
+          return false;
+        }
+        const trashLoc = path.join(root, "files", name);
+        try {
+          await sudoMove(victimDest, trashLoc);
+        } catch {
+          try {
+            await rm(infoPath, { force: true });
+          } catch {}
+          return false;
+        }
+        try {
+          await writeFile(infoPath, `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`);
+        } catch {
+          try {
+            await sudoMove(trashLoc, victimDest);
+          } catch {}
+          try {
+            await rm(infoPath, { force: true });
+          } catch {}
+          return false;
+        }
+        units.push(async () => {
+          await safeRestoreMove(trashLoc, victimDest);
+          await rmTrashInfo(path.basename(trashLoc), ctx.log);
+        });
+        dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
+        dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  };
 
   // every destructive-but-reversible file op funnels through here so overrides
   // are asked once and undo covers the whole batch. Serialized through the
@@ -322,6 +405,13 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       selfDrop = 0;
     const failWhy = new Set<string>();
     const total = srcs.length;
+    // sudo gate memoized per op: one password prompt per batch, not per file
+    let sudoOk: boolean | null = null;
+    const needSudo = async (): Promise<boolean> => {
+      if (sudoOk !== null) return sudoOk;
+      sudoOk = ctx.ensureSudo ? await ctx.ensureSudo(label) : false;
+      return sudoOk;
+    };
     // moves across a filesystem boundary go through the copy engine too
     // (rename can't cross devices) — those need the same pre-scan + toast
     // copies get, or a big cross-device move sits there silently for minutes.
@@ -389,42 +479,32 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           }
           if (choice === "keepBoth") target = uniqueTarget(destDir, base);
           else {
+            let stashErr: unknown = null;
             const stashed = await stashVictim(target, units, dUnits, (err) => {
-              failWhy.add(fsErrText(err));
+              stashErr = err;
               ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — original kept`);
             });
             // a failed stash must abort the overwrite, not proceed silently
-            // without undo (the victim is then destroyed for good)
+            // without undo (the victim is then destroyed for good) — but a
+            // privileged victim gets one sudo retry first (the normal stash
+            // runs before any gate, so without this the escalated path is
+            // unreachable for replace flows)
             if (!stashed) {
-              failed++;
-              continue;
-            }
-            replaced++;
+              const sudoStashed =
+                isPrivilegeError(stashErr) && (await needSudo()) && (await sudoStashVictim(target, units, dUnits));
+              if (sudoStashed) replaced++;
+              else {
+                failWhy.add(fsErrText(stashErr));
+                failed++;
+                continue;
+              }
+            } else replaced++;
           }
         }
         // per-iteration: did THIS src go through the streaming copy engine?
         // (cross-device moves need the same half-copy cleanup real copies get)
         let copiedHere = false;
-        try {
-          if (op === "copy") {
-            copiedHere = true;
-            await copyTreeProgressWired(src, target);
-          } else if (isCrossDevice(src, destDir)) {
-            copiedHere = true;
-            await copyTreeProgressWired(src, target);
-            // cancel raced the final byte: copy completed but the source must
-            // survive a cancelled move — surface as cancelled, drop the copy
-            if (prog.cancelled) throw new Error("cancelled");
-            try {
-              await removeTree(src);
-            } catch (err) {
-              // source is partially deleted; the copy in `target` is now the
-              // ONLY complete data — clearing it (the half-copy cleanup below)
-              // would lose everything. Keep it and report loudly.
-              copiedHere = false;
-              throw new Error(`source partially removed: ${fsErrText(err)}`);
-            }
-          } else await fsMove(src, target);
+        const recordSuccess = (): void => {
           const t = target,
             s = src;
           if (op === "copy") {
@@ -451,13 +531,74 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             dRedos.push({ op: "rename-if", from: s, to: t });
           }
           ok++;
+        };
+        try {
+          if (op === "copy") {
+            copiedHere = true;
+            await copyTreeProgressWired(src, target);
+          } else if (isCrossDevice(src, destDir)) {
+            copiedHere = true;
+            await copyTreeProgressWired(src, target);
+            // cancel raced the final byte: copy completed but the source must
+            // survive a cancelled move — surface as cancelled, drop the copy
+            if (prog.cancelled) throw new Error("cancelled");
+            try {
+              await removeTree(src);
+            } catch (err) {
+              // source is partially deleted; the copy in `target` is now the
+              // ONLY complete data — clearing it (the half-copy cleanup below)
+              // would lose everything. Keep it and report loudly.
+              copiedHere = false;
+              throw new Error(`source partially removed: ${fsErrText(err)}`);
+            }
+          } else await fsMove(src, target);
+          recordSuccess();
         } catch (err) {
-          // don't leave half-copied files behind (copies AND cross-device moves)
+          // privilege failure → one password gate per batch, then the same
+          // end-state via sudo; undo units stay identical. Moves across a
+          // filesystem boundary retry as sudo cp + sudo rm (rename can't
+          // cross devices), preserving the partial-removal accounting below.
+          let failure: unknown = err;
+          if (!prog.cancelled && isPrivilegeError(err) && (await needSudo())) {
+            // ✕ landed while the password prompt was up: abort, don't exec
+            if (prog.cancelled) failure = new Error("cancelled");
+            else {
+              try {
+                if (op === "copy") await sudoCopy(src, target);
+                else if (isCrossDevice(src, destDir)) {
+                  try {
+                    await sudoRemove(target);
+                  } catch {}
+                  await sudoCopy(src, target);
+                  if (prog.cancelled) throw new Error("cancelled");
+                  try {
+                    await sudoRemove(src);
+                  } catch (rmErr) {
+                    throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
+                  }
+                } else await sudoMove(src, target);
+                recordSuccess();
+                continue;
+              } catch (sudoErr) {
+                failure = sudoErr;
+              }
+            }
+          }
+          // don't leave half-copied files behind (copies AND cross-device moves).
+          // A root-owned partial needs the sudo remover — the gate already
+          // passed if we're here via a sudo attempt (memoized, no re-prompt).
           if (op === "copy" || copiedHere) {
             try {
               await rm(target, { recursive: true });
             } catch (cleanup) {
               ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`);
+              if (isPrivilegeError(cleanup) && (await needSudo())) {
+                try {
+                  await sudoRemove(target);
+                } catch (sudoCleanup) {
+                  ctx.log(`half-copy sudo cleanup failed ${target}: ${fsErrText(sudoCleanup)}`);
+                }
+              }
             }
           }
           if (prog.cancelled) {
@@ -465,7 +606,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             break;
           }
           failed++;
-          failWhy.add(fsErrText(err));
+          failWhy.add(fsErrText(failure));
         }
       }
     } finally {
@@ -523,21 +664,30 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       if (choice === "keepBoth") {
         finalDest = uniqueTarget(path.dirname(finalDest), path.basename(finalDest));
       } else {
+        let renameStashErr: unknown = null;
         const stashed = await stashVictim(finalDest, units, dUnits, (err) => {
+          renameStashErr = err;
           ctx.log(`replace stash failed ${finalDest}: ${fsErrText(err)} — original kept`);
         });
         // a failed stash must not proceed to rename over the victim (that
-        // destroys it with no undo path)
+        // destroys it with no undo path) — but a privileged victim gets one
+        // sudo retry first, same as the transfer replace flow
         if (!stashed) {
-          ctx.notify("Replace failed — existing file kept", "rename failed", "error");
-          ctx.renderAll();
-          return;
+          const sudoStashed =
+            isPrivilegeError(renameStashErr) &&
+            ctx.ensureSudo &&
+            (await ctx.ensureSudo(`rename ${path.basename(p)}`)) &&
+            (await sudoStashVictim(finalDest, units, dUnits));
+          if (!sudoStashed) {
+            ctx.notify("Replace failed — existing file kept", "rename failed", "error");
+            ctx.renderAll();
+            return;
+          }
         }
       }
     }
     let renameFailed: string | null = null;
-    try {
-      await fsRename(p, finalDest);
+    const pushRenameUnits = (): void => {
       units.push(() => safeRestoreMove(finalDest, p).then(() => undefined));
       dUnits.push({ op: "rename", from: finalDest, to: p });
       redos.push(async () => {
@@ -548,9 +698,26 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         }
       });
       dRedos.push({ op: "rename-if", from: p, to: finalDest });
+    };
+    try {
+      await fsRename(p, finalDest);
+      pushRenameUnits();
     } catch (err) {
-      renameFailed = fsErrText(err);
-      ctx.log(`rename failed ${p} → ${finalDest}: ${renameFailed}`);
+      // privilege failure → password gate, then sudo mv; undo shape unchanged
+      let failure: unknown = err;
+      if (isPrivilegeError(err) && ctx.ensureSudo && (await ctx.ensureSudo(`rename ${path.basename(p)}`))) {
+        try {
+          await sudoMove(p, finalDest);
+          pushRenameUnits();
+          failure = null;
+        } catch (sudoErr) {
+          failure = sudoErr;
+        }
+      }
+      if (failure) {
+        renameFailed = fsErrText(failure);
+        ctx.log(`rename failed ${p} → ${finalDest}: ${renameFailed}`);
+      }
     }
     // the stash's restore unit must survive a failed rename too — otherwise the
     // stashed victim sits in the trash with no undo entry (the batch was pushed
@@ -598,14 +765,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let ok = 0;
     let failed = 0;
     const failWhy = new Set<string>();
+    let bulkSudoOk: boolean | null = null;
     for (const { from, to } of pairs) {
-      try {
-        if (!existsSync(from)) {
-          failed++;
-          failWhy.add("source gone");
-          continue;
-        }
-        await fsRename(from, to);
+      const recordBulk = (): void => {
         units.push(() => safeRestoreMove(to, from).then(() => undefined));
         dUnits.push({ op: "rename", from: to, to: from });
         redos.push(async () => {
@@ -617,9 +779,31 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         });
         dRedos.push({ op: "rename-if", from, to });
         ok++;
+      };
+      try {
+        if (!existsSync(from)) {
+          failed++;
+          failWhy.add("source gone");
+          continue;
+        }
+        await fsRename(from, to);
+        recordBulk();
       } catch (err) {
+        let failure: unknown = err;
+        if (isPrivilegeError(err)) {
+          if (bulkSudoOk === null) bulkSudoOk = ctx.ensureSudo ? await ctx.ensureSudo("bulk rename") : false;
+          if (bulkSudoOk) {
+            try {
+              await sudoMove(from, to);
+              recordBulk();
+              continue;
+            } catch (sudoErr) {
+              failure = sudoErr;
+            }
+          }
+        }
         failed++;
-        failWhy.add(fsErrText(err));
+        failWhy.add(fsErrText(failure));
       }
     }
     ctx.pushUndoBatch(`rename ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });

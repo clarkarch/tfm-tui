@@ -5,6 +5,7 @@ import path from "node:path";
 import { clearChildren, debounced, type Scheduler } from "../lib/uiutil";
 import { slotBg, type UiStyle } from "./style";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
+import { isPrivilegeError } from "../fs/elevate";
 import { canThumbVideo } from "./icons";
 import type { ThumbJob } from "./ui-slots";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, syntaxStyleSig } from "./syntax";
@@ -47,6 +48,11 @@ type PreviewCtx = {
   // fall through to core. Throwing never breaks the pane. Stale guarded by
   // the same gen-counter as core file reads.
   pluginPreview?: (path: string) => Promise<string | null>;
+  // root preview: non-interactive `sudo -n cat` only (cached timestamp) — a
+  // preview must never pop a password prompt on every focus move. Null =
+  // keep the blank pane, same as an unreadable file today. Files only:
+  // unreadable directories still show "can't list this folder".
+  sudoCat?: (path: string) => Promise<string | null>;
 };
 
 export const makePreview = (ctx: PreviewCtx) => {
@@ -196,8 +202,19 @@ export const makePreview = (ctx: PreviewCtx) => {
 
     if (!isTextLike(key) || st.size > TEXT_PREVIEW_MAX) return;
 
+    let text: string;
     try {
-      const text = (await readFile(key, "utf8")).slice(0, 65536);
+      text = (await readFile(key, "utf8")).slice(0, 65536);
+    } catch (err) {
+      // privileged file: one quiet non-interactive attempt (never prompts —
+      // focus moves constantly, a password popup per move is unusable)
+      if (!isPrivilegeError(err) || !ctx.sudoCat) return;
+      const elevated = await ctx.sudoCat(key).catch(() => null);
+      if (gen !== previewGen) return;
+      if (!elevated) return;
+      text = elevated.slice(0, 65536);
+    }
+    try {
       if (gen !== previewGen) return;
       // Called BEFORE the cache check on purpose: it nulls previewCodeCache
       // when the theme sig changed, so a stale styled node can't survive a

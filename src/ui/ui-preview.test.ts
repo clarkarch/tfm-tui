@@ -227,3 +227,58 @@ describe("preview theme awareness", () => {
     expect(body.isDestroyed).toBe(true);
   });
 });
+
+// chmod-based permission tests never fail as uid 0 (root bypasses
+// file perms), so the whole block is skipped there with a reason
+const describeNonRoot = process.getuid?.() === 0 ? describe.skip : describe;
+describeNonRoot("sudo preview", () => {
+  test("unreadable file renders via sudoCat without prompting", async () => {
+    const { chmodSync } = await import("node:fs");
+    const file = path.join(tmpDir, "root-only.txt");
+    writeFileSync(file, "secret-bytes");
+    chmodSync(file, 0o000);
+    try {
+      const clock = mkClock();
+      const id = `tfm-preview-${paneSeq++}`;
+      const pane = Box({ id, width: 40, height: 20 });
+      t.renderer.root.add(pane);
+      const seen: string[] = [];
+      const p = makePreview({
+        renderer: t.renderer,
+        byId: () => t.renderer.root.findDescendantById(id),
+        colors: () => ({ ...defaultConfig.theme }) as Theme,
+        uiStyle: () => "solid",
+        previewEnabled: () => true,
+        previewWidth: () => 40,
+        termH: () => 24,
+        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+        focusKey: () => file,
+        tileRefs: new Map(),
+        pushThumbJob: () => {},
+        drainThumbs: () => {},
+        drainIconQueue: () => {},
+        nextIconId: () => "slot",
+        fallbackGlyphFor: () => "?",
+        sched: clock.sched,
+        sudoCat: async (f) => {
+          seen.push(f);
+          return "secret-bytes";
+        },
+      });
+      p.renderPreview();
+      clock.flush();
+      const textOf = (c: any) => (c.content?.chunks ?? c.chunks ?? []).map((ch: any) => ch.text).join("");
+      const ok = await settleUntil(
+        t,
+        () =>
+          (t.renderer.root.findDescendantById(id) as any)
+            .getChildren()
+            .filter((c: any) => c instanceof TextRenderable && textOf(c).includes("secret-bytes")).length > 0,
+      );
+      expect(seen).toEqual([file]);
+      expect(ok).toBe(true);
+    } finally {
+      chmodSync(file, 0o644);
+    }
+  });
+});

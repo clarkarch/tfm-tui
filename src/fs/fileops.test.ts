@@ -1069,3 +1069,265 @@ describe("preScan counting", () => {
     expect(h.calls.some((c) => c.startsWith("notify:copy cancelled"))).toBe(true);
   });
 });
+
+// chmod-based permission tests never fail as uid 0 (root bypasses
+// file perms), so the whole block is skipped there with a reason
+const describeNonRoot = process.getuid?.() === 0 ? describe.skip : describe;
+describeNonRoot("sudo escalation", () => {
+  // fake sudoExec: strip the ["sudo","-n"] prefix and run the rest for real —
+  // exercises the exact argv shape (cp -a -- / mv --) without real sudo.
+  // Models root bypassing perms by lifting the dest parent mode during exec.
+  // Seen argv is recorded so tests pin the exact shape (a builder missing
+  // `--` would still pass for normal filenames without the asserts below).
+  const seenArgv: string[][] = [];
+  const fakeSudoExec = async (argv: string[]): Promise<{ status: number | null; stderr: string }> => {
+    seenArgv.push(argv);
+    const rest = argv.slice(2);
+    const dashIdx = rest.indexOf("--");
+    // root bypasses perms: lift write on every operand parent during exec
+    // (mv needs the SOURCE parent too), restoring exact modes after
+    const { chmodSync, statSync } = await import("node:fs");
+    const lifted: Array<[string, number]> = [];
+    if (dashIdx >= 0) {
+      for (const operand of rest.slice(dashIdx + 1)) {
+        const parent = path.dirname(operand);
+        try {
+          if (!existsSync(parent)) continue;
+          const mode = statSync(parent).mode & 0o777;
+          if (!(mode & 0o200) && !lifted.some(([p]) => p === parent)) {
+            lifted.push([parent, mode]);
+            chmodSync(parent, mode | 0o700);
+          }
+        } catch {}
+      }
+    }
+    try {
+      const proc = Bun.spawn(rest, { stdout: "ignore", stderr: "pipe" });
+      const err = await new Response(proc.stderr).text();
+      await proc.exited;
+      return { status: proc.exitCode, stderr: err };
+    } catch (e) {
+      return { status: 1, stderr: String(e) };
+    } finally {
+      for (const [p, mode] of lifted) {
+        try {
+          if (existsSync(p)) chmodSync(p, mode);
+        } catch {}
+      }
+    }
+  };
+
+  test("copy into unreadable dir fails without sudo, succeeds with sudo fake", async () => {
+    const srcDir = path.join(ROOT, "sudo-copy-src");
+    const destDir = path.join(ROOT, "sudo-copy-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(srcDir, "a.txt"), "aaa");
+    W(path.join(srcDir, "b.txt"), "bbb");
+    W(path.join(srcDir, "-dash.txt"), "dash");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    seenArgv.length = 0;
+    try {
+      const plain = makeHarness();
+      await plain.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
+      expect(plain.calls.some((c) => c.includes("FAILED") && c.includes("permission denied"))).toBe(true);
+      expect(plain.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+
+      let gates = 0;
+      const esc = makeHarness({
+        ensureSudo: async () => {
+          gates++;
+          return true;
+        },
+        sudoExec: fakeSudoExec,
+      });
+      await esc.ops.runTransfer(
+        "copy",
+        destDir,
+        [path.join(srcDir, "a.txt"), path.join(srcDir, "b.txt"), path.join(srcDir, "-dash.txt")],
+        "copy abc",
+      );
+      // one password gate per batch, not per file
+      expect(gates).toBe(1);
+      expect(existsSync(path.join(destDir, "a.txt"))).toBe(true);
+      expect(existsSync(path.join(destDir, "b.txt"))).toBe(true);
+      // dash-leading name only lands when cp gets `--` (else it's a flag)
+      expect(existsSync(path.join(destDir, "-dash.txt"))).toBe(true);
+      const cps = seenArgv.filter((a) => a[2] === "cp");
+      expect(cps.length).toBe(3);
+      expect(cps.every((a) => a.slice(0, 5).join(" ") === "sudo -n cp -a --")).toBe(true);
+      expect(esc.calls.some((c) => c.startsWith("undo:copy abc:3:"))).toBe(true);
+      expect(esc.calls.some((c) => c.includes("FAILED"))).toBe(false);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
+  test("cancelled sudo gate leaves FAILED standing and never execs", async () => {
+    const srcDir = path.join(ROOT, "sudo-cancel-src");
+    const destDir = path.join(ROOT, "sudo-cancel-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(srcDir, "a.txt"), "aaa");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    try {
+      let execs = 0;
+      const h = makeHarness({
+        ensureSudo: async () => false,
+        sudoExec: async () => {
+          execs++;
+          return { status: 0, stderr: "" };
+        },
+      });
+      await h.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
+      expect(execs).toBe(0);
+      expect(h.calls.some((c) => c.includes("FAILED") && c.includes("permission denied"))).toBe(true);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
+  test("rename in read-only dir recovers via sudo mv", async () => {
+    const dir = path.join(ROOT, "sudo-rename");
+    mkdirSync(dir, { recursive: true });
+    W(path.join(dir, "old.txt"), "data");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(dir, 0o555);
+    try {
+      const plain = makeHarness();
+      await plain.ops.performRename(path.join(dir, "old.txt"), "new.txt");
+      expect(plain.calls.some((c) => c.includes("Rename failed (permission denied)"))).toBe(true);
+
+      const esc = makeHarness({ ensureSudo: async () => true, sudoExec: fakeSudoExec });
+      await esc.ops.performRename(path.join(dir, "old.txt"), "new.txt");
+      expect(existsSync(path.join(dir, "new.txt"))).toBe(true);
+      expect(esc.calls.some((c) => c.includes("Renamed old.txt → new.txt"))).toBe(true);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  test("bulk rename in read-only dir recovers with one gate", async () => {
+    const dir = path.join(ROOT, "sudo-bulk");
+    mkdirSync(dir, { recursive: true });
+    W(path.join(dir, "b1.txt"), "1");
+    W(path.join(dir, "b2.txt"), "2");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(dir, 0o555);
+    try {
+      let gates = 0;
+      const esc = makeHarness({
+        ensureSudo: async () => {
+          gates++;
+          return true;
+        },
+        sudoExec: fakeSudoExec,
+      });
+      await esc.ops.performBulkRename([
+        { from: path.join(dir, "b1.txt"), to: path.join(dir, "c1.txt") },
+        { from: path.join(dir, "b2.txt"), to: path.join(dir, "c2.txt") },
+      ]);
+      expect(gates).toBe(1);
+      expect(existsSync(path.join(dir, "c1.txt"))).toBe(true);
+      expect(existsSync(path.join(dir, "c2.txt"))).toBe(true);
+      expect(esc.calls.some((c) => c.startsWith("undo:rename 2 items:2:2"))).toBe(true);
+      expect(esc.calls.some((c) => c.includes("FAILED"))).toBe(false);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  test("copy with replace in read-only dir stashes the victim via sudo", async () => {
+    const srcDir = path.join(ROOT, "sudo-stash-src");
+    const destDir = path.join(ROOT, "sudo-stash-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(srcDir, "victim.txt"), "new");
+    W(path.join(destDir, "victim.txt"), "old");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    const replaceCtx = () => ({
+      conflict: {
+        resetPolicy: () => {},
+        policy: () => null,
+        promptConflict: async () => "replace" as const,
+      },
+    });
+    try {
+      // no sudo: the privileged stash aborts the overwrite, victim preserved
+      const plain = makeHarness(replaceCtx());
+      await plain.ops.runTransfer("copy", destDir, [path.join(srcDir, "victim.txt")], "copy victim");
+      expect(readFileSync(path.join(destDir, "victim.txt"), "utf8")).toBe("old");
+      expect(plain.calls.some((c) => c.includes("FAILED") && c.includes("permission denied"))).toBe(true);
+
+      const esc = makeHarness({
+        ...replaceCtx(),
+        ensureSudo: async () => true,
+        sudoExec: fakeSudoExec,
+      });
+      await esc.ops.runTransfer("copy", destDir, [path.join(srcDir, "victim.txt")], "copy victim");
+      chmodSync(destDir, 0o755);
+      expect(readFileSync(path.join(destDir, "victim.txt"), "utf8")).toBe("new");
+      // victim stashed in trash with info, undo covers copy + restore
+      expect(esc.calls.some((c) => c.includes("1 replaced"))).toBe(true);
+      expect(esc.calls.some((c) => c.startsWith("undo:copy victim:2:"))).toBe(true);
+      expect(esc.calls.some((c) => c.includes("FAILED"))).toBe(false);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
+  test("cancel during the password prompt aborts without execing sudo", async () => {
+    const srcDir = path.join(ROOT, "sudo-precall-src");
+    const destDir = path.join(ROOT, "sudo-precall-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(srcDir, "a.txt"), "aaa");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    try {
+      let execs = 0;
+      const h = makeHarness({
+        // ✕ lands while the prompt is up: gate resolves, then aborts
+        ensureSudo: async () => {
+          h.prog.cancelled = true;
+          return true;
+        },
+        sudoExec: async () => {
+          execs++;
+          return { status: 0, stderr: "" };
+        },
+      });
+      await h.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
+      expect(execs).toBe(0);
+      expect(h.calls.some((c) => c.startsWith("notify:copy cancelled"))).toBe(true);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+});
+
+describeNonRoot("sudo escalation failure surface", () => {
+  test("sudo child failure reports permission denied, not a bare tool name", async () => {
+    const srcDir = path.join(ROOT, "sudo-fail-src");
+    const destDir = path.join(ROOT, "sudo-fail-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(srcDir, "a.txt"), "aaa");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    try {
+      const h = makeHarness({
+        ensureSudo: async () => true,
+        sudoExec: async () => ({ status: 1, stderr: "cp: cannot create regular file: Permission denied\n" }),
+      });
+      await h.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
+      expect(h.calls.some((c) => c.includes("FAILED") && c.includes("permission denied"))).toBe(true);
+      expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+});

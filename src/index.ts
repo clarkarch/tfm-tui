@@ -157,6 +157,7 @@ const fileops = wireFileops({
   chrome,
   gridFoundation,
   finishDrag: () => grid.finishDrag(),
+  getPrompt: () => keymap.prompt,
 });
 
 // --- plugins: user extensions (after fileops — api context needs selection

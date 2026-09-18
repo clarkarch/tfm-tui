@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { desktopAppName, appsForFile, parseGioMime, runOutShort } from "./apps";
+import { desktopAppName, appsForFile, makeOpenAsRoot, parseGioMime, runOutShort } from "./apps";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 afterEach(() => {
@@ -92,5 +92,43 @@ describe("appsForFile", () => {
 
   test("a failed mime probe yields no apps", async () => {
     expect(await appsForFile("/x.txt", async () => "")).toEqual([]);
+  });
+});
+
+describe("makeOpenAsRoot", () => {
+  const harness = (gate: () => Promise<boolean>) => {
+    const spawns: string[][] = [];
+    const notes: string[] = [];
+    const logs: string[] = [];
+    const open = makeOpenAsRoot({
+      ensureSudo: gate,
+      spawnOpen: (argv) => void spawns.push(argv),
+      notify: (m, t) => void notes.push(`${t}:${m}`),
+      log: (m) => void logs.push(m),
+    });
+    return { open, spawns, notes, logs };
+  };
+
+  test("gate denial spawns nothing and stays silent", async () => {
+    const h = harness(async () => false);
+    await h.open("/etc/-hosts");
+    expect(h.spawns).toEqual([]);
+    expect(h.notes).toEqual([]);
+  });
+
+  test("gate success spawns the exact sudo open argv and notifies", async () => {
+    const h = harness(async () => true);
+    await h.open("/etc/-hosts");
+    expect(h.spawns).toEqual([["sudo", "-n", "-E", "xdg-open", "--", "/etc/-hosts"]]);
+    expect(h.notes).toEqual(["open:Opening -hosts as root"]);
+  });
+
+  test("gate throw is logged, never spawned, never rejects", async () => {
+    const h = harness(async () => {
+      throw new Error("overlay blew up");
+    });
+    await h.open("/etc/hosts");
+    expect(h.spawns).toEqual([]);
+    expect(h.logs.some((l) => l.includes("gate failed"))).toBe(true);
   });
 });

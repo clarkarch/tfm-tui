@@ -437,3 +437,156 @@ describe("trashPaths network guard", () => {
     }
   });
 });
+
+// chmod-based permission tests never fail as uid 0 (root bypasses
+// file perms), so the whole block is skipped there with a reason
+const describeNonRoot = process.getuid?.() === 0 ? describe.skip : describe;
+describeNonRoot("sudo escalation", () => {
+  // fake sudoExec: lift write on operand parents during exec (rm needs the
+  // containing dir), restoring exact modes after — models root without sudo
+  const seenArgv: string[][] = [];
+  const fakeSudoExec = async (argv: string[]) => {
+    seenArgv.push(argv);
+    const rest = (argv as string[]).slice(2);
+    const { chmodSync, statSync } = await import("node:fs");
+    const lifted: Array<[string, number]> = [];
+    const dashIdx = rest.indexOf("--");
+    if (dashIdx >= 0) {
+      for (const operand of rest.slice(dashIdx + 1)) {
+        const parent = path.dirname(operand);
+        try {
+          if (!existsSync(parent)) continue;
+          const mode = statSync(parent).mode & 0o777;
+          if (!(mode & 0o200) && !lifted.some(([p]) => p === parent)) {
+            lifted.push([parent, mode]);
+            chmodSync(parent, mode | 0o700);
+          }
+        } catch {}
+      }
+    }
+    try {
+      const proc = Bun.spawn(rest, { stdout: "ignore", stderr: "pipe" });
+      const err = await new Response(proc.stderr).text();
+      await proc.exited;
+      return { status: proc.exitCode, stderr: err };
+    } finally {
+      for (const [p, mode] of lifted) {
+        try {
+          if (existsSync(p)) chmodSync(p, mode);
+        } catch {}
+      }
+    }
+  };
+  test("deleteForever in read-only dir fails plain, succeeds with sudo fake", async () => {
+    const root = sandbox();
+    try {
+      const { chmodSync } = await import("node:fs");
+      const dir = path.join(root, "locked");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "victim.txt"), "x");
+      chmodSync(dir, 0o555);
+
+      const plain = recordingSink();
+      await makeTrashOps(plain).deleteForever([path.join(dir, "victim.txt")]);
+      expect(plain.notes.some((n) => n.includes("FAILED") && n.includes("permission denied"))).toBe(true);
+      expect(existsSync(path.join(dir, "victim.txt"))).toBe(true);
+
+      let gates = 0;
+      const esc = recordingSink();
+      (esc as Record<string, unknown>).ensureSudo = async () => {
+        gates++;
+        return true;
+      };
+      (esc as Record<string, unknown>).sudoExec = fakeSudoExec;
+      await makeTrashOps(esc).deleteForever([path.join(dir, "victim.txt")]);
+      expect(gates).toBe(1);
+      chmodSync(dir, 0o755);
+      expect(existsSync(path.join(dir, "victim.txt"))).toBe(false);
+      expect(esc.notes.some((n) => n.includes("Deleted 1 item") && n.includes("cannot be undone"))).toBe(true);
+      const rms = seenArgv.filter((a) => a[2] === "rm");
+      expect(rms.length).toBe(1);
+      expect(rms[0]!.slice(0, 5).join(" ")).toBe("sudo -n rm -rf --");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("emptyTrash removes privileged entries via sudo with one gate", async () => {
+    const root = sandbox();
+    try {
+      const { chmodSync } = await import("node:fs");
+      // seed the sandboxed trash directly: info/ readable, files/ locked
+      const filesDir = path.join(root, "data", "Trash", "files");
+      const infoDir = path.join(root, "data", "Trash", "info");
+      mkdirSync(filesDir, { recursive: true });
+      mkdirSync(infoDir, { recursive: true });
+      writeFileSync(path.join(filesDir, "stuck.txt"), "x");
+      writeFileSync(
+        path.join(infoDir, "stuck.txt.trashinfo"),
+        `[Trash Info]\nPath=${path.join(root, "stuck.txt")}\nDeletionDate=2026-01-01T00:00:00Z\n`,
+      );
+      chmodSync(filesDir, 0o555);
+
+      const esc = recordingSink();
+      let gates = 0;
+      (esc as Record<string, unknown>).ensureSudo = async () => {
+        gates++;
+        return true;
+      };
+      (esc as Record<string, unknown>).sudoExec = fakeSudoExec;
+      await makeTrashOps(esc).emptyTrash();
+      expect(gates).toBe(1);
+      chmodSync(filesDir, 0o755);
+      expect(existsSync(path.join(filesDir, "stuck.txt"))).toBe(false);
+      expect(esc.notes.some((n) => n.includes("Emptied 1 item"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("trash and restore never escalate: gate stays untouched on permission failure", async () => {
+    const root = sandbox();
+    const { chmodSync } = await import("node:fs");
+    const dir = path.join(root, "locked");
+    try {
+      // trashPaths on a root-owned-style file: lock the containing dir so the
+      // move fails, with a gate that throws if anyone calls it
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "doomed.txt"), "bye");
+      chmodSync(dir, 0o555);
+
+      const sink = recordingSink();
+      (sink as Record<string, unknown>).ensureSudo = async (): Promise<boolean> => {
+        throw new Error("trash must never ask for sudo");
+      };
+      // unhandled rejections surface as test failures; callers use .catch
+      await makeTrashOps(sink).trashPaths([path.join(dir, "doomed.txt")]);
+      expect(sink.notes.some((n) => n.includes("FAILED") && n.includes("permission denied"))).toBe(true);
+      expect(existsSync(path.join(dir, "doomed.txt"))).toBe(true);
+
+      // restore: seed a trash entry whose original dir is locked
+      const filesDir = path.join(root, "data", "Trash", "files");
+      const infoDir = path.join(root, "data", "Trash", "info");
+      mkdirSync(filesDir, { recursive: true });
+      mkdirSync(infoDir, { recursive: true });
+      const target = path.join(dir, "back.txt");
+      writeFileSync(path.join(filesDir, "back.txt"), "data");
+      writeFileSync(
+        path.join(infoDir, "back.txt.trashinfo"),
+        `[Trash Info]\nPath=${target}\nDeletionDate=2026-01-01T00:00:00Z\n`,
+      );
+      const sink2 = recordingSink();
+      (sink2 as Record<string, unknown>).ensureSudo = async (): Promise<boolean> => {
+        throw new Error("restore must never ask for sudo");
+      };
+      await makeTrashOps(sink2).restoreFromTrash([path.join(filesDir, "back.txt")]);
+      expect(sink2.notes.some((n) => n.includes("FAILED") && n.includes("permission denied"))).toBe(true);
+      expect(existsSync(path.join(filesDir, "back.txt"))).toBe(true);
+    } finally {
+      try {
+        chmodSync(dir, 0o755);
+      } catch {}
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

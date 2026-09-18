@@ -23,8 +23,9 @@ import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
 import type { EaseKey, SlideDir } from "../ui/ui-grid-anim";
 import { makeRecentOpen } from "../fs/recent-open";
+import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
-import { appForFile } from "../fs/apps";
+import { appForFile, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
 import { clearChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
@@ -330,6 +331,30 @@ export const wireChrome = async (deps: {
     appForFile,
   });
 
+  // --- Open as root: password gate (cached timestamp first), then the
+  // default app elevated with the user's env preserved (-E keeps Wayland /
+  // display sockets, so GUI editors work). Editing root files is exactly the
+  // yazi complaint this answers. One gate per wire scope, like wireFileops. ---
+  const ensureSudoChrome = makeEnsureSudo({ getPrompt: deps.getPrompt, notify });
+  const openAsRoot = makeOpenAsRoot({
+    ensureSudo: ensureSudoChrome,
+    spawnOpen: (argv) => {
+      spawnSafe(
+        argv[0]!,
+        argv.slice(1),
+        {
+          stdio: "ignore",
+          detached: true,
+          // xdg-open only honors `--` when this is set (upstream typo included)
+          env: { ...process.env, XDG_UTILS_ENABLE_DOUBLE_HYPEN: "1" },
+        },
+        (err) => dlog(`open-as-root spawn: ${err.message}`),
+      ).unref?.();
+    },
+    notify,
+    log: (msg) => dlog(msg),
+  });
+
   const dialogs = makeDialogs({
     byId,
     rootAdd: (node) => renderer.root.add(node),
@@ -481,6 +506,7 @@ export const wireChrome = async (deps: {
     notify,
     notifySticky,
     openFileDefault,
+    openAsRoot,
     dialogs,
     connectServer,
     disconnectServer,

@@ -6,6 +6,7 @@
 
 import { makeUndo } from "../app/undo";
 import { clearUndoJournal, readUndoJournal, saveUndoJournal } from "../fs/undo-journal";
+import { makeEnsureSudo } from "../fs/elevate";
 import { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import { makeProgress } from "../ui/ui-progress";
 import { makeFileOps } from "../fs/fileops";
@@ -24,6 +25,9 @@ export const wireFileops = (deps: {
   gridFoundation: GridFoundationWiring;
   // grid's finishDragCtx (internal drag commit) — grid wiring builds it later
   finishDrag(): void;
+  // password-prompt overlay — keymap wires LAST (TDZ seam, same pattern as
+  // wireChrome's getPrompt above)
+  getPrompt: () => { open(o: { title: string; okLabel?: string; password?: boolean }): Promise<string | null> };
 }) => {
   const { core, nav, chrome, gridFoundation } = deps;
   const { byId, stripSelectable } = core.lookup;
@@ -92,6 +96,9 @@ export const wireFileops = (deps: {
   // --- File operations: runTransfer/performRename/paste/clipboard
   // orchestration lives in ./fileops; the copy engine is ./transfer (pure,
   // sink-injected), the progress toast is ./ui-progress. ---
+  // sudo gate: cached timestamp first, else the password overlay piped to
+  // `sudo -S -v` via stdin — shared by fileops + trash deletes.
+  const ensureSudo = makeEnsureSudo({ getPrompt: deps.getPrompt, notify: chrome.notify });
   const fileops = makeFileOps({
     conflict,
     prog: progress.prog,
@@ -104,6 +111,7 @@ export const wireFileops = (deps: {
     notify: chrome.notify,
     home,
     refreshCutVisuals: gridFoundation.refreshCutVisuals,
+    ensureSudo,
     log: (msg) => dlog(msg),
     onFileOp: (op, paths, dest, outcome) =>
       sharedPluginEvents().emit("file-op", { op, paths, ...(dest ? { dest } : {}), ...(outcome ? { outcome } : {}) }),
@@ -133,6 +141,7 @@ export const wireFileops = (deps: {
     pushUndoBatch: undo.pushUndoBatch,
     notify: chrome.notify,
     renderAll: nav.renderAll,
+    ensureSudo,
     // delete progress: the driver maps trashops' calls onto the SAME prog
     // state + toast transfers use (pause/cancel included). Flags reset at
     // start so a stale cancel from an earlier op can't abort the delete.

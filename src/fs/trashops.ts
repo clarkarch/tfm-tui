@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrashMove, safeRestoreMove } from "./fsutil";
+import { isPrivilegeError, sudoRmArgv, sudoExecError, runSudo } from "./elevate";
 import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
@@ -51,6 +52,12 @@ export type TrashOpsSink = {
   // vocabulary — trash/restore/delete-forever/empty, never method names).
   // Never throws into the op.
   onEvent?(op: TrashOpName, paths: string[]): void;
+  // sudo escalation seams (wiring injects the prompt-backed impl; tests fake).
+  // Only the irreversible deletes escalate: trash/restore stay unprivileged
+  // by design (a sudo-trashed file is root-owned in the user's trash, and the
+  // undo closures have no privilege — the restore would fail with no undo).
+  ensureSudo?: (opLabel: string) => Promise<boolean>;
+  sudoExec?: (argv: string[]) => Promise<{ status: number | null; stderr: string }>;
 };
 
 // XDG trashinfo -> original absolute path. Spec says URL-encoded; nautilus
@@ -73,6 +80,13 @@ export const trashOrigPath = async (name: string): Promise<string | null> => {
 
 export const makeTrashOps = (sink: TrashOpsSink) => {
   const queue = sharedOpQueue();
+  const sudoExec =
+    sink.sudoExec ?? (async (argv) => runSudo(argv).then((r) => ({ status: r.status, stderr: r.stderr })));
+  // one password gate per op (memoized per call below via needSudo closures)
+  const sudoRm = async (p: string): Promise<void> => {
+    const r = await sudoExec(sudoRmArgv(p));
+    if (r.status !== 0) throw sudoExecError(r.stderr);
+  };
   const emit = (op: TrashOpName, paths: string[]): void => {
     try {
       sink.onEvent?.(op, [...paths]);
@@ -239,6 +253,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       let ok = 0;
       let cancelled = false;
       const failWhy = new Set<string>();
+      let sudoOk: boolean | null = null;
       try {
         for (const p of paths) {
           if (dp?.cancelled()) {
@@ -256,7 +271,30 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
               cancelled = true;
               break;
             }
-            failWhy.add(fsErrText(err));
+            // privilege failure → password gate once, then sudo rm -rf
+            // (irreversible op: no undo batch to keep privilege-consistent).
+            // Re-check cancel after the gate: ✕ during the password prompt
+            // must abort, not exec.
+            let failure: unknown = err;
+            if (isPrivilegeError(err)) {
+              if (sudoOk === null)
+                sudoOk = sink.ensureSudo ? await sink.ensureSudo(`delete ${paths.length} items`) : false;
+              if (dp?.cancelled()) {
+                cancelled = true;
+                break;
+              }
+              if (sudoOk) {
+                try {
+                  await sudoRm(p);
+                  await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
+                  ok++;
+                  continue;
+                } catch (sudoErr) {
+                  failure = sudoErr;
+                }
+              }
+            }
+            failWhy.add(fsErrText(failure));
           }
         }
       } finally {
@@ -310,6 +348,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       let n = 0;
       let cancelled = false;
       const failWhy = new Set<string>();
+      let emptySudoOk: boolean | null = null;
       try {
         for (const k of names) {
           if (dp?.cancelled()) {
@@ -326,7 +365,25 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
               cancelled = true;
               break;
             }
-            failWhy.add(fsErrText(err));
+            let failure: unknown = err;
+            if (isPrivilegeError(err)) {
+              if (emptySudoOk === null) emptySudoOk = sink.ensureSudo ? await sink.ensureSudo("empty trash") : false;
+              if (dp?.cancelled()) {
+                cancelled = true;
+                break;
+              }
+              if (emptySudoOk) {
+                try {
+                  await sudoRm(path.join(filesDir, k));
+                  await rmTrashInfo(k, sink.log?.bind(sink));
+                  n++;
+                  continue;
+                } catch (sudoErr) {
+                  failure = sudoErr;
+                }
+              }
+            }
+            failWhy.add(fsErrText(failure));
           }
         }
       } finally {

@@ -7,6 +7,7 @@ import path from "node:path";
 import { registerSyntaxParsers } from "../ui/syntax";
 import { availableCompressionFormats, canExtract, compressionExt, compressionHint } from "../fs/archive";
 import { appsForFile, launchApp } from "../fs/apps";
+import { runSudo, sudoCatArgv } from "../fs/elevate";
 import type { makePick } from "../ui/ui-pick";
 import { makePreview } from "../ui/ui-preview";
 import {
@@ -71,6 +72,16 @@ export const wireGrid = (deps: {
     drainIconQueue: () => core.slots.drainIconQueue(),
     nextIconId: core.slots.nextIconId,
     fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    // root preview: non-interactive `sudo -n cat` only (cached timestamp) —
+    // a preview must never pop a password prompt on every focus move
+    sudoCat: async (p) => {
+      try {
+        const r = await runSudo(sudoCatArgv(p), { timeoutMs: 10_000 });
+        return r.status === 0 ? r.stdout : null;
+      } catch {
+        return null;
+      }
+    },
     pluginPreview: async (filePath) => {
       // path.extname, not split(".").pop(): dotfiles (".bashrc") have no ext,
       // "foo." has none either — the naive split claims "bashrc"/"".
@@ -383,6 +394,7 @@ export const wireGrid = (deps: {
     tileRefs: selection.tileRefs,
     selPaths: selection.selPaths,
     openFileDefault: chrome.openFileDefault,
+    openAsRoot: (p: string) => chrome.openAsRoot(p),
     setClipboard: fileops.fileops.setClipboard,
     duplicate: (paths) => void fileops.fileops.duplicate(paths),
     startInlineRename: rename.startInlineRename,

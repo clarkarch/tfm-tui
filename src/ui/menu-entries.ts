@@ -39,6 +39,9 @@ export type MenuEntriesCtx = {
   tileRefs: Map<string, GridTileRef>;
   selPaths(): ClipItem[];
   openFileDefault(p: string): void;
+  // elevated open (sudo -E xdg-open after the password gate). Optional so
+  // headless fakes stay valid — absent = no "Open as Root" row.
+  openAsRoot?(p: string): Promise<void>;
   setClipboard(mode: "copy" | "cut", items: ClipItem[]): void;
   duplicate(paths: string[]): void;
   startInlineRename(key: string): void;
@@ -386,6 +389,18 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
               ctx.openWith(targetPath);
             },
           },
+          ...(ctx.openAsRoot
+            ? [
+                {
+                  icon: "lock",
+                  label: "Open as Root",
+                  action: () => {
+                    ctx.closeFileMenu();
+                    void ctx.openAsRoot!(targetPath);
+                  },
+                },
+              ]
+            : []),
         ],
       });
     }
