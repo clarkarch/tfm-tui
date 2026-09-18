@@ -27,6 +27,7 @@
 import { createTimeline, engine, type JSAnimation } from "@opentui/core";
 import { easeAt, quantizeDy, staggerLocal, type EaseKey, type SlideDir } from "./ui-grid-anim";
 import type { Scheduler } from "../lib/uiutil";
+import type { MaybeNode } from "../lib/node-like";
 
 export type SidebarAnimStyle = "fade" | "slide" | "stagger" | "stagger-slide";
 
@@ -104,7 +105,7 @@ export type SidebarAnimOpts = {
 
 type SidebarAnimCtx = {
   renderer: any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   opts(): SidebarAnimOpts;
   rootId(): string;
   rowIds(): string[];
@@ -325,7 +326,7 @@ export type TopbarAnimOpts = {
 
 type TopbarAnimCtx = {
   renderer: any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   opts(): TopbarAnimOpts;
   barIds(): string[];
   // virtual-clock seam for the 100ms start fallback (Bun has no fake timers)

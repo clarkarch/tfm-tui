@@ -14,15 +14,8 @@ import {
   type SettingRow,
 } from "./settings";
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
-import {
-  KEY_SCHEMA,
-  UI_SCHEMA,
-  keybindConflict,
-  keySpecEqual,
-  validateKeybindSpec,
-  type KeyAction,
-  type UiSchemaRow,
-} from "../config/config-schema";
+import { KEY_SCHEMA, UI_SCHEMA, keybindConflict, type KeyAction, type UiSchemaRow } from "../config/config-schema";
+import { keySpecEqual, validateKeybindSpec } from "../config/keyspec";
 import { getPluginCommandBinds, setPluginCommandBinds } from "../plugins/plugin-api";
 import {
   KEYMAP_PRESET_NAMES,

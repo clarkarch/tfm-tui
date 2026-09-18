@@ -20,9 +20,10 @@ import type { ListEntry } from "./ui-menu";
 // shared icon-slot types come from ./ui-slots (their queue) — the old
 // byte-identical structural mirrors drifted when ui-slots gained a field
 import type { IconState, IconSpec } from "./ui-slots";
+import type { MaybeNode } from "../lib/node-like";
 
 type ChromeCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture

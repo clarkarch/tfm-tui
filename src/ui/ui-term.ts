@@ -5,6 +5,7 @@ import { applySurface, type UiStyle } from "./style";
 import { gridDrag } from "../input/grid-input";
 import type { Theme } from "../config/config";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- Embedded terminal pane ("Open Terminal Here") ---
 // OpenTUI's EmbeddedTerminalRenderable draws the VT stream; the PTY belongs to
@@ -18,7 +19,7 @@ import type { NotifyLevel } from "../lib/notify-level";
 
 type TermCtx = {
   renderer: any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number;

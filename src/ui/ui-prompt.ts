@@ -13,10 +13,11 @@ import { floatSurface } from "./style";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
 
 type PromptCtx = {
   renderer(): any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   stripSelectable(): void;
   escHintBtn(id: string, onClose: () => void): any;

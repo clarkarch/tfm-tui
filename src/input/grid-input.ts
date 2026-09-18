@@ -4,6 +4,8 @@
 // that the sidebar, OSC 72 bridge and keyboard paths read. No module-level
 // imports from the renderer — everything flows through ctx. ---
 
+import type { MaybeNode } from "../lib/node-like";
+
 export type ClipItem = { path: string; isDir: boolean };
 
 // Mouse-event shape the tile pipeline actually reads (cell coords, button,
@@ -80,7 +82,7 @@ export type GridNavDeps = {
 };
 
 export type GridInputCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   termW(): number;
   termH(): number;
   dblClickMs(): number;
@@ -172,7 +174,7 @@ export const scheduleDragCleanup = (ctx: GridInputCtx): void => {
 // Module-level state mirrors the gridDrag singleton above.
 
 export type BandCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   tileRefs: Map<string, { selected: boolean; tileId: string }>;
   clearTileSelection(): void;
   setTileVisual(key: string, mode: TileVisualMode): void;

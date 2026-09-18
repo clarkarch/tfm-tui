@@ -1005,6 +1005,10 @@ describe("plugin veto keeps caller state intact", () => {
 // preScan arms it mid-scan in counting mode, and a small tree must still never
 // flicker a toast at all.
 describe("preScan counting", () => {
+  // Explicit budgets: these two tests seed 1100/5000 real files, so the default
+  // 5s bun timeout is a coin flip under parallel-suite load (measured >5s while
+  // biome+tsc ran alongside; ~1.1s for the 1100-file walk standalone). The
+  // timeout is the test's own, not a lowered bound — every assertion is intact.
   test("big tree raises the toast while totals are still unknown", async () => {
     const h = makeHarness();
     const src = path.join(ROOT, "prescan-big");
@@ -1028,7 +1032,7 @@ describe("preScan counting", () => {
     // the counting flag is gone by the time the transfer runs
     expect(h.prog.counting).toBeFalsy();
     expect(h.prog.totalFiles).toBe(1100);
-  });
+  }, 20000);
 
   test("small tree never touches counting paint and never arms mid-scan", async () => {
     const h = makeHarness();
@@ -1067,7 +1071,7 @@ describe("preScan counting", () => {
     expect(h.prog.totalFiles).toBe(1);
     expect(readdirSync(destDir).length).toBe(0);
     expect(h.calls.some((c) => c.startsWith("notify:copy cancelled"))).toBe(true);
-  });
+  }, 20000);
 });
 
 // chmod-based permission tests never fail as uid 0 (root bypasses

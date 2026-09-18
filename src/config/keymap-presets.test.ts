@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { KEY_SCHEMA, defaultConfig, keybindConflict, parseKeySpec } from "./config-schema";
+import { KEY_SCHEMA, defaultConfig, keybindConflict } from "./config-schema";
+import { parseKeySpec } from "./keyspec";
 import { PRESET_VIEW_MODE, keymapPresetIdx, presetKeys, yaziKeys } from "./keymap-presets";
 
 describe("keymap presets", () => {

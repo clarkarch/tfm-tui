@@ -16,6 +16,7 @@ import { FLOAT_Z, type Floats } from "./floats";
 import { IconStateIdx, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -27,7 +28,7 @@ import type { NotifyLevel } from "../lib/notify-level";
 type PropsIconState = IconState;
 
 type PropsCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   openDialog(opts: {
     id: string;
     zIndex: number;

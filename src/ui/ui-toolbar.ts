@@ -15,6 +15,7 @@ import type { IconSpec, IconState } from "./ui-slots";
 import { navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
 
 type MakeIconSlotFn = (
   name: string,
@@ -30,7 +31,7 @@ type ToolbarCtx = {
   // instance per pane, so every node id must be unique across the registry
   prefix: string;
   renderer(): any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   clearChildren(node: unknown): void;
   stripSelectable(): void;
   uiStyle(): UiStyle;

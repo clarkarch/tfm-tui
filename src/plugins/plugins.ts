@@ -30,7 +30,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { withTimeout } from "../lib/uiutil";
-import { validateKeybindSpec } from "../config/config-schema";
+import { validateKeybindSpec } from "../config/keyspec";
 import {
   PLUGIN_API_VERSION,
   PLUGIN_NAME_RE,

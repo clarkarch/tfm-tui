@@ -13,13 +13,14 @@ import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { debounced } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
 
 type RethemeCtx = {
   // live object refs — applyConfig mutates them in place
   config: Config;
   colors: Theme;
   setOnId(id: string, fn: (n: any) => void): void;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   renderer(): any;
   // geometry lets — rewritten on every applyConfig, never captured
   getSw(): number;

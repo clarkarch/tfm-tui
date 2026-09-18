@@ -15,7 +15,7 @@ import { floatSurface, type UiStyle } from "./style";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { IconState, IconSpec } from "./ui-slots";
 import type { Theme } from "../config/config";
-import { keySpecFromEvent, validateKeybindSpec } from "../config/config-schema";
+import { keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
 import { FLOAT_Z, type Floats } from "./floats";
 import { pokeGc } from "../app/mem-hygiene";
 import {
@@ -25,10 +25,11 @@ import {
   SETTINGS_W,
   type SettingsPanelState,
 } from "./ui-settings-panel";
+import type { MaybeNode } from "../lib/node-like";
 
 type EscMenuCtx = {
   renderer(): any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   clearChildren(node: any): void;
   stripSelectable(): void;
   escHintBtn(id: string, onClose: () => void): any;

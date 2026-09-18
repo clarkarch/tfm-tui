@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { mimeForExt } from "./filetype";
 import { parseIso, pathToUri, uriToPath, xdgDataHome, xdgStateHome } from "./uri";
+import { swallow } from "../app/log";
 
 // --- Recent files (freedesktop recently-used.xbel) + tfm's starred registry.
 // Persistence only: read/write these two registries, nothing else. Batching
@@ -90,7 +91,10 @@ export const upsertRecentXbel = async (paths: string[]): Promise<void> => {
       .map((k) => k.block)
       .join("\n");
     await writeFile(xbelPath(), `${head}${body}\n</xbel>\n`, "utf8");
-  } catch {}
+  } catch (err) {
+    // silently losing the recents rewrite looks like "tfm forgot my files"
+    swallow("recent xbel write", err);
+  }
 };
 
 // Starred registry: tfm's own list, kept in sync with gvfs metadata so
@@ -112,7 +116,9 @@ export const writeStarredList = async (paths: string[]): Promise<void> => {
   try {
     await mkdir(path.dirname(starredListPath()), { recursive: true });
     await writeFile(starredListPath(), `${[...new Set(paths)].join("\n")}\n`, "utf8");
-  } catch {}
+  } catch (err) {
+    swallow("starred list write", err);
+  }
 };
 
 export const starredRegistryAdd = (p: string): void => {

@@ -3,6 +3,7 @@ import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { clearChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
 // renderer. Ids tfm-filemenu / tfm-filemenu-panel stay byte-identical for
@@ -31,7 +32,7 @@ export type ListEntry = {
 };
 
 type MenuCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   termW(): number;
   termH(): number;

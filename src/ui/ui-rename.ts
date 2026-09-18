@@ -10,12 +10,13 @@ import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "
 import { fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
+import type { MaybeNode } from "../lib/node-like";
 
 type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
 
 export type RenameCtx = {
   renderer(): any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   colors(): Theme;
   tileW(): number;
   tileRefs: Map<string, { tileId: string; labelId: string; baseFg: string }>;

@@ -8,6 +8,7 @@ import { idName, permWords } from "../fs/propsinfo";
 import { fsErrText } from "../fs/fsutil";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
 // class row to pick access (cursor popup via openContextMenu), the checkbox
@@ -17,7 +18,7 @@ import type { NotifyLevel } from "../lib/notify-level";
 // ./ui-props (the dialog shell): this owns the mode-bit state machine. ---
 
 type PermsCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   setTextOnId(nodeId: string, s: string): void;
   setOnId(id: string, fn: (n: any) => void): void;
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;

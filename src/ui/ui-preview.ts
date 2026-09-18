@@ -10,6 +10,7 @@ import { canThumbVideo } from "./icons";
 import type { ThumbJob } from "./ui-slots";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, syntaxStyleSig } from "./syntax";
 import type { Theme } from "../config/config";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- Preview pane (right sidebar): image thumbs go through the shared
 // thumb-job sink, text files render via CodeRenderable + tree-sitter
@@ -22,7 +23,7 @@ type ThumbJobLike = ThumbJob;
 
 type PreviewCtx = {
   renderer: any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   colors(): Theme;
   uiStyle(): UiStyle;
   previewEnabled(): boolean; // config.ui.previewEnabled

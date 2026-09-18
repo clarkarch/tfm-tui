@@ -5,6 +5,7 @@ import { toggleIconState } from "./ui-slots";
 import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
 import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
 // Owns the `prog` state the transfer engine reports into, the throttled
@@ -14,7 +15,7 @@ import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
 // plain notifies tile in one stack and can never share a slot. ---
 
 export type ProgressCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   stripSelectable(): void;
   // live theme — always read through the getter, never captured
   colors(): Theme;

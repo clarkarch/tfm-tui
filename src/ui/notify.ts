@@ -1,5 +1,6 @@
 import { Box, Text } from "@opentui/core";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- Toast notifications (top-right stack, animated slide-in + fade-out).
 // THE single toast stack: plain auto-dismiss toasts AND the sticky transfer
@@ -12,7 +13,7 @@ import type { NotifyLevel } from "../lib/notify-level";
 export type NotifyCtx = {
   rootAdd(node: any): void;
   remove(node: any): void;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   termW(): number;
   accentBg(): string;
   white(): string;

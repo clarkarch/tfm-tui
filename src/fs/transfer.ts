@@ -2,6 +2,7 @@ import { createReadStream, createWriteStream, type ReadStream, type Stats } from
 import { lstat, mkdir, readlink, readdir, rename, rm, rmdir, symlink, open, chmod, utimes } from "node:fs/promises";
 import path from "node:path";
 import { errCode } from "./fsutil";
+import { swallow } from "../app/log";
 
 // --- Copy engine: tree walking, pre-scan and streamed file copy with
 // pause/cancel/progress. UI-agnostic: callers inject a TransferSink wired to
@@ -125,7 +126,11 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
             const cleanupTmp = async (): Promise<void> => {
               try {
                 await rm(tmp, { force: true });
-              } catch {}
+              } catch (err) {
+                // a part file that survives cleanup is real disk garbage (the
+                // .tfm-part sweep only catches it on the next transfer)
+                swallow("transfer part-file cleanup", err);
+              }
             };
             ws.on("finish", () => {
               if (settled) return;

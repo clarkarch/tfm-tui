@@ -9,8 +9,10 @@
 
 import { Box, ImageRenderable, Text } from "@opentui/core";
 import { iconPng, thumbPng } from "./icons";
+import { swallow } from "../app/log";
 import type { IconMode, Theme } from "../config/config";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
+import type { MaybeNode } from "../lib/node-like";
 
 export type IconState = { fg: string; bg: string };
 
@@ -72,7 +74,7 @@ export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible
 
 export type SlotsCtx = {
   renderer(): any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   clearChildren(node: unknown): void;
   // live theme — always read through the getter, never captured
   colors(): Theme;
@@ -267,7 +269,12 @@ export const makeSlots = (ctx: SlotsCtx) => {
         await img.loadPromise!;
         img.visible = si === initial;
         imgs.push(img);
-      } catch {}
+      } catch (err) {
+        // a raster that never lands leaves the small fallback glyph in place
+        // forever (the documented wrong-slot-name failure mode) — this line is
+        // where the actual cause shows up
+        swallow(`icon slot raster ${name}`, err);
+      }
     }
     return imgs;
   };
@@ -367,7 +374,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
 
   const setScrim = (on: boolean) => {
     for (const spec of allSpecs.values()) {
-      const slot: SlotNode | null = ctx.byId(spec.slotId);
+      const slot: SlotNode | null | undefined = ctx.byId(spec.slotId);
       if (!slot) continue;
       if (on && isFloatChild(slot)) continue;
       const kids = [...(slot.getChildren?.() ?? [])];

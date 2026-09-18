@@ -3,6 +3,7 @@ import { accessSync, constants, existsSync, lstatSync, readdirSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import { pathToUri } from "./uri";
+import { swallow } from "../app/log";
 
 // --- Deterministic fs+path operations: the primitives runTransfer, trash and
 // undo sit on. No prompts, no UI, no state — callers own decisions; these own
@@ -303,7 +304,10 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
     } catch (moveErr) {
       try {
         await rm(infoPath, { force: true });
-      } catch {}
+      } catch (cleanupErr) {
+        // a leftover .trashinfo for a file that never moved is an orphan entry
+        swallow("trash info cleanup after failed move", cleanupErr);
+      }
       throw moveErr;
     }
     try {
@@ -317,7 +321,9 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
         } finally {
           await h.close().catch(() => {});
         }
-      } catch {}
+      } catch (syncErr) {
+        swallow("trash info fsync", syncErr);
+      }
     } catch (err) {
       // put the file back — a source-less trash entry is worse than no entry
       try {
@@ -330,7 +336,11 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
       }
       try {
         await rm(infoPath, { force: true });
-      } catch {}
+      } catch (cleanupErr) {
+        // failed rollback of the .trashinfo: the file is back but the entry
+        // would linger without this line in the log
+        swallow("trash info cleanup after failed write", cleanupErr);
+      }
       throw err;
     }
     return finalPath;

@@ -21,6 +21,15 @@ if (process.argv[2] === "paths") {
   l.appendLog("second");
   l.debugLog("dbg line");
   l.dlog("dnd line");
+  // swallow: a real failure, a missing value, and a hostile error whose
+  // toString throws (the caller must survive all three)
+  l.swallow("icon slot raster chat", new Error("rsvg exploded"));
+  l.swallow("expected miss", undefined);
+  l.swallow("poisoned value", {
+    toString() {
+      throw new Error("nope");
+    },
+  });
   process.stdout.write(String(l.isDebug));
 }`,
 );
@@ -88,5 +97,26 @@ describe("with --debug / -d", () => {
     const r = run("d", "write", ["-d"]);
     expect(r.text).toBe("true");
     expect(lines(r.dbg).length).toBeGreaterThan(0);
+  });
+});
+
+// swallow() is the "best-effort failure" reporter the converted `catch {}` sites
+// use: silent unless --debug (hot paths must not flood the log), a line with the
+// reason + detail when it is on, and never able to throw itself.
+describe("swallow", () => {
+  test("without --debug it stays silent (only appendLog lines exist)", () => {
+    const r = run("swallow-plain", "write", []);
+    expect(r.text).toBe("false");
+    expect(lines(r.dbg).length).toBe(2);
+  });
+
+  test("with --debug it records the reason and the detail, tolerating a hostile value", () => {
+    const r = run("swallow-dbg", "write", ["--debug"]);
+    // the poisoned toString must not escape swallow → the probe still prints
+    expect(r.text).toBe("true");
+    const dbg = lines(r.dbg);
+    expect(dbg.some((l) => l.includes("swallowed: icon slot raster chat") && l.includes("rsvg exploded"))).toBe(true);
+    expect(dbg.some((l) => l.includes("swallowed: expected miss"))).toBe(true);
+    expect(dbg.some((l) => l.includes("swallowed: poisoned value") && l.includes("unprintable"))).toBe(true);
   });
 });

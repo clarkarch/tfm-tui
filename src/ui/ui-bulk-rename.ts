@@ -11,10 +11,11 @@ import { bulkRenameNames, planBulkRename, type BulkRenamePair, type BulkRenameSt
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
 
 type BulkRenameCtx = {
   renderer(): any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   clearChildren(node: any): void;
   stripSelectable(): void;

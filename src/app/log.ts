@@ -19,6 +19,33 @@ export const debugLog = (msg: string): void => {
   appendLog(msg);
 };
 
+// --- Best-effort failure reporting. A bare `catch {}` makes an UNEXPECTED
+// failure (rsvg missing, cache dir unwritable, bookmarks unreadable, a
+// mistyped icon slot name) invisible forever: the reported symptom is always
+// one step removed from the cause — a fallback glyph that never swaps, a
+// trash entry with no .trashinfo, a config that silently doesn't save. This
+// keeps the swallow (callers stay best-effort) but leaves a line in the debug
+// log, so `tfm --debug` turns "it just does nothing" into a cause.
+//
+// Deliberately NOT always-on: hot paths (per-file metadata restore, per-slot
+// icon rasters at boot) would flood the log for failures that are already
+// known and harmless. Expected misses ALSO stay bare `catch {}` at the call
+// site — an ENOENT probe for "does this exist" is not an error, and routing
+// them here just adds noise. This is for failures nobody asked for.
+//
+// Lives with the log because that is the one diagnostic sink; log.ts imports
+// only node:fs, so fs/ and ui/ modules may pull it in without a cycle.
+export const swallow = (what: string, err: unknown): void => {
+  if (!isDebug) return;
+  let detail: string;
+  try {
+    detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  } catch {
+    detail = "<unprintable error>";
+  }
+  debugLog(`swallowed: ${what}: ${detail}`);
+};
+
 // --- Drag diagnosis: the whole DnD path (drag offer accept/decline + why,
 // tile mousedown/drop payload counts, moveInto in/out filtering) goes here so
 // a "Moved 0 items" toast can be traced backwards. Always-on (cheap appends),

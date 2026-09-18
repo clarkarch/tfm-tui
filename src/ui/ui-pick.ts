@@ -12,6 +12,7 @@ import { invokeIsolated } from "../lib/uiutil";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
 
 export type PickItem = {
   label: string;
@@ -21,7 +22,7 @@ export type PickItem = {
 
 type PickCtx = {
   renderer(): any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   clearChildren(node: any): void;
   stripSelectable(): void;

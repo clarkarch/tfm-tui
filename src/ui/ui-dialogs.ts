@@ -3,6 +3,7 @@ import path from "node:path";
 import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { FLOAT_Z, type Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
 
 // --- Shared skeleton for the centered floating dialogs (conflict / props /
 // yesno): full-screen dimmed scrim + a chrome panel that swallows clicks,
@@ -11,7 +12,7 @@ import { FLOAT_Z, type Floats } from "./floats";
 // access arrive through ctx. ---
 
 type DialogsCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   stripSelectable(): void;
   termH(): number;
@@ -228,7 +229,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
 type YesNoCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   // false while the renderer hasn't laid out yet (same gate as makeConflict callers)
   canOpen(): boolean;
   // open/close orchestration + the dismiss-others policy live in ./floats

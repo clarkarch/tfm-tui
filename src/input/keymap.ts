@@ -16,12 +16,14 @@ import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { loadSystemPlaces } from "../fs/places";
 import type { KeyAction } from "../config/config-schema";
-import { KEY_SCHEMA, keyMatch, parseKeySpec } from "../config/config-schema";
+import { KEY_SCHEMA } from "../config/config-schema";
+import { keyMatch, parseKeySpec } from "../config/keyspec";
 import type { Command } from "../lib/command";
 import { invokeIsolated } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Selection } from "./selection";
 import { TileVisual } from "./grid-input";
+import type { MaybeNode } from "../lib/node-like";
 
 // Keypress shape the router actually reads. The renderer hands a richer
 // object (scan codes, text, meta); dispatch only touches name + modifiers.
@@ -40,7 +42,7 @@ type KeyState = {
 };
 
 export type KeyRouterCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   state: KeyState;
   // live keybind lookup — reads config.keys so remaps apply without rebuilds
   keybinds(action: KeyAction): string[];

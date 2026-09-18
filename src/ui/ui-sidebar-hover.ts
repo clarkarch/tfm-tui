@@ -12,6 +12,7 @@
 
 import { hoverLiftDelta } from "./ui-grid-anim";
 import type { SidebarHoverOpts } from "../config/config-schema";
+import type { MaybeNode } from "../lib/node-like";
 
 export type { SidebarHoverOpts };
 
@@ -23,7 +24,7 @@ export type SidebarRowRef = {
 };
 
 type SidebarHoverCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   rowRefs(): Map<string, SidebarRowRef>;
   hoverOpts(): SidebarHoverOpts;
 };

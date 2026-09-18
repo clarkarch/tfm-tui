@@ -20,6 +20,7 @@ import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
 import { tileSurface } from "./style";
 import { IconStateIdx } from "./ui-slots";
+import type { MaybeNode } from "../lib/node-like";
 
 export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slide";
 export type EaseKey = "linear" | "ease-out" | "ease-in-out";
@@ -187,7 +188,7 @@ type FileAnimOpts = {
 
 type FileAnimCtx = {
   renderer: any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   opts(): FileAnimOpts;
 };
 
@@ -419,7 +420,7 @@ export const hoverLiftDelta = (direction: string): { dx: number; dy: number } =>
 };
 
 type TileHoverCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   tileRefs(): Map<string, SelTileRef>;
   colors(): Theme;
   uiStyle(): UiStyle;

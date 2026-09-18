@@ -9,6 +9,7 @@ import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, rename as fsRename, writeFile } from "node:fs/promises";
+import { swallow } from "../app/log";
 import {
   encodeTrashPath,
   errCode,
@@ -387,10 +388,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         if (/\.tfm-part-\d+-[0-9a-z]{8}$/.test(k) || /^\.tfm-extract-\d+-[0-9a-z]{8}$/.test(k)) {
           try {
             await rm(path.join(destDir, k), { recursive: true, force: true });
-          } catch {}
+          } catch (err) {
+            swallow("crash orphan sweep", err);
+          }
         }
       }
-    } catch {}
+    } catch (err) {
+      swallow("crash orphan sweep scan", err);
+    }
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
     // journal mirror of units/redos as fs-step data (persisted when
@@ -1078,7 +1083,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       for (const s of staging) {
         try {
           await rm(s, { recursive: true, force: true });
-        } catch {}
+        } catch (err) {
+          // a surviving .tfm-extract-* dir is hidden debris in the user's folder
+          swallow("archive staging cleanup", err);
+        }
       }
     }
     ctx.pushUndoBatch(`extract ${ok} archive${ok === 1 ? "" : "s"}`, units, [], { units: dUnits, redos: [] });
@@ -1179,7 +1187,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       // cancel/fail cleanup otherwise
       try {
         await rm(tmp, { force: true });
-      } catch {}
+      } catch (err) {
+        swallow("compress temp cleanup", err);
+      }
       clearArchiveChild();
       prog.active = false;
     }

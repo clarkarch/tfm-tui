@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import os from "node:os";
 import path from "node:path";
 import { MAX_UNDO_BATCHES, type UndoBatchData, type UndoStep } from "../app/undo";
+import { swallow } from "../app/log";
 
 // --- Undo journal persistence: the journalable tail of the undo stack as
 // JSON, next to session.json. Writes are synchronous + atomic (tmp+rename)
@@ -86,5 +87,9 @@ export const saveUndoJournal = (batches: UndoBatchData[]): void => {
 export const clearUndoJournal = (): void => {
   try {
     rmSync(undoJournalFile(), { force: true });
-  } catch {}
+  } catch (err) {
+    // force:true means ENOENT never throws here, so any failure is real —
+    // a journal that can't be cleared replays stale undo batches next launch
+    swallow("undo journal clear", err);
+  }
 };

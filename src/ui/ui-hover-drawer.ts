@@ -15,6 +15,7 @@
 
 import { createTimeline, engine, type JSAnimation } from "@opentui/core";
 import type { UiConfig } from "../config/config-schema";
+import type { MaybeNode } from "../lib/node-like";
 
 export type DrawerEdge = "left" | "right" | "bottom";
 
@@ -123,7 +124,7 @@ const makeTween = (getNode: () => any, axis: "width" | "height"): Tween => {
 
 export type HoverDrawerCtx = {
   renderer: any;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   ui(): UiConfig;
   terminalOpen(): boolean;
   // keyboard focus inside the embedded shell — a focused terminal never

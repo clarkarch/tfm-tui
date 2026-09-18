@@ -12,6 +12,7 @@ import type { Theme } from "../config/config";
 import type { ClipItem } from "./grid-input";
 import { TileVisual, type TileVisualMode } from "./grid-input";
 import { IconStateIdx } from "../ui/ui-slots";
+import type { MaybeNode } from "../lib/node-like";
 
 export type SelTileRef = {
   iconSpec?: any;
@@ -29,7 +30,7 @@ export type SelTileRef = {
 export type SelectionCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   setText(id: string, s: string): void;
   setIconState(spec: any, mode: number): void;
   isCutKey(key: string): boolean;
