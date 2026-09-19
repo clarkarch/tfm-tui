@@ -42,6 +42,10 @@ type RethemeCtx = {
   escMenu: { isOpen(): boolean; renderMenuContent(): void };
   fileMenuIsOpen(): boolean;
   renderFileMenu(): void;
+  // open floats that persist across a theme switch (pick, conflict/yes-no
+  // confirms, bulk-rename, props, progress toast): each repaints itself by
+  // id — no rebuild, focus-safe. Optional so tests stay light.
+  floatRepaints?: Array<{ isOpen(): boolean; repaint(): void }>;
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   // side-effect hook for non-visual config consumers (undo journal sync).
   // Runs at the end of every applyConfig — optional so tests stay light.
@@ -124,12 +128,23 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       setOnId("tfm-filemenu-sub", (n) => applySurface(n, floatSurface(st, colors, colors.sidebarBg)));
       ctx.renderFileMenu();
     }
+    // floats that outlive the switch repaint themselves — one throwing must
+    // not skip the rest (same isolation as render steps)
+    for (const f of ctx.floatRepaints ?? []) {
+      try {
+        if (f.isOpen()) f.repaint();
+      } catch {}
+    }
   };
 
   // theme-relevant signature of a config snapshot. Diffing against the LAST
   // APPLIED state (not the caller's pre-call `config`) means a settings row
   // can mutate config first and call applyConfig(config) and the flip is
   // still seen — the old self-compare skipped raster invalidation silently.
+  // followTerminal is deliberately NOT here: the flag-only commit rebuilds
+  // through renderSig below, and the resolve lands the derived theme (with
+  // its own invalidation) right after — caching the flag flip would clear
+  // icon rasters twice for one user action
   const themeSig = (c: Config): string => JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons]);
   let lastThemeSig = themeSig(ctx.config);
 

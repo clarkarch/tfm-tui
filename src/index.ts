@@ -237,6 +237,8 @@ wireBoot({
   afterLayout: () => hover.refresh(),
   playSidebarIntro: () => chrome.sidebarIntro.play(),
   playTopbarIntro: () => chrome.topbarIntro.play(),
+  // system theme: terminal colors land before the first layout bakes them in
+  applyBootSystemTheme: () => settings.systemTheme.applyBootSystemTheme(),
 });
 
 const retheme = wireRetheme({
@@ -246,6 +248,10 @@ const retheme = wireRetheme({
   fileops,
   settings,
   getHover: () => hover,
+  // keymap wires last — deferred like every other backward reference
+  getKeymap: () => keymap,
+  getGrid: () => grid,
+  getGridFoundation: () => gridFoundation,
 });
 
 // --- dnd (OSC 72) + resize + keyboard router ---
@@ -275,3 +281,7 @@ const keymap = wireKeymap({
   plugins,
   getRetheme: () => retheme,
 });
+
+// system theme live-follow: terminal palette switches (kitty theme change)
+// re-derive through applyConfig — a no-op unless [ui] follow-terminal is on
+settings.systemTheme.followSystemTheme();

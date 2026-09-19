@@ -58,6 +58,7 @@ const mkPick = (
   floats: ReturnType<typeof makeFloats>,
   commands: () => PickItem[],
   onError?: (err: unknown) => void,
+  getColors: () => Theme = () => colors,
 ) =>
   makePick({
     renderer: () => t.renderer,
@@ -67,7 +68,7 @@ const mkPick = (
       for (const c of [...node.getChildren()]) node.remove(c);
     },
     stripSelectable: () => {},
-    colors: () => colors,
+    colors: getColors,
     uiStyle: () => "solid",
     floats,
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
@@ -75,6 +76,11 @@ const mkPick = (
     commands,
     ...(onError ? { onError } : {}),
   });
+
+const hexInts = (hex: string): [number, number, number, number] => {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+};
 
 describe("pick widget", () => {
   test("open mounts scrim + panel + input; esc closes; empty query lists all", async () => {
@@ -232,6 +238,54 @@ describe("pick widget", () => {
       expect(() => pick.handleKey({ name: "return" })).not.toThrow();
       expect(floats.isOpen("pick")).toBe(false);
       expect(errs.length).toBe(1);
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("repaint() repaints panel + input + rows with live colors, keeps the filter", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let live: Theme = { ...colors };
+      const pick = mkPick(
+        t,
+        floats,
+        () => CMDS,
+        undefined,
+        () => live,
+      );
+      pick.open({ title: "Palette" });
+      await t.renderOnce();
+      pick.setFilter("quit");
+      pick.handleKey({ name: "down" }); // cursor onto row 0 (filter alone leaves idx -1)
+      await t.renderOnce();
+      // theme switch while open: swap the palette behind the widget
+      live = { ...colors, sidebarBg: "#101020", accentBg: "#303040", white: "#f0f0f0", accent: "#ff0000" };
+      pick.repaint();
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-pick-panel") as any;
+      expect([...panel.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const input = t.renderer.root.findDescendantById("tfm-pick-input") as any;
+      expect([...input.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      const row = t.renderer.root.findDescendantById("tfm-pick-row-0") as any;
+      expect([...row.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      // filter + content survive the repaint (no rebuild of the input)
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("quit tfm");
+      expect(frame).not.toContain("new tab");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("repaint() is a no-op when closed", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const pick = mkPick(t, floats, () => CMDS);
+      expect(() => pick.repaint()).not.toThrow();
+      expect(t.renderer.root.findDescendantById("tfm-pick")).toBeFalsy();
     } finally {
       t.renderer.destroy();
     }

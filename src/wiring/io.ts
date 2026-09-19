@@ -88,6 +88,10 @@ export const wireBoot = (deps: {
   // cold-boot-only top bar intro, played right after the sidebar intro (built
   // in wireChrome; a no-op unless [ui] topbar-animation is on)
   playTopbarIntro?: () => void;
+  // system (terminal-adaptive) theme: resolves after the renderer answers
+  // its first queries but before buildLayout bakes colors into the chrome
+  // (built in wireSettings; a no-op unless [ui] follow-terminal is on)
+  applyBootSystemTheme?: () => Promise<boolean>;
   // re-apply the hover drawer's panel states AFTER the boot layout mounts
   // (constructed pre-boot, its collapse writes hit no nodes yet — without
   // this, auto-hidden panels paint expanded while the grid is laid out
@@ -97,6 +101,7 @@ export const wireBoot = (deps: {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
   runBoot({
     waitForResolution: () => waitForResolution(chrome.renderer),
+    applyBootSystemTheme: () => deps.applyBootSystemTheme?.() ?? Promise.resolve(false),
     // restart child only: the waiting parent never destroyed, so its kitty
     // placements are still on screen under ours — delete-all once, first.
     // Fresh boots skip this so other programs' images are never nuked. The

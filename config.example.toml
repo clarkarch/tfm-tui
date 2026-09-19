@@ -32,6 +32,7 @@ double-click-ms                       = 400         # 100..2000
 drag-threshold-cells                  = 1           # cells of movement before a press becomes a drag, 1..5
 toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
 type-to-search                        = true        # true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)
+follow-terminal                       = false       # true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset
 transparent-bg                        = false       # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels

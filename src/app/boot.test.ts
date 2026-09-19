@@ -173,6 +173,26 @@ describe("runBoot", () => {
     expect(calls).not.toContain("clearImages");
   });
 
+  test("system theme resolves after resolution, before layout bakes colors", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        applyBootSystemTheme: async () => {
+          calls.push("systemTheme");
+          return true;
+        },
+      }),
+    );
+    expect(calls.indexOf("resolution")).toBeLessThan(calls.indexOf("systemTheme"));
+    expect(calls.indexOf("systemTheme")).toBeLessThan(calls.indexOf("layout"));
+  });
+
+  test("absent system-theme step changes nothing (preset boots)", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls));
+    expect(calls).not.toContain("systemTheme");
+  });
+
   test("a throwing clearStaleImages is reported but the sequence continues", async () => {
     const calls: string[] = [];
     const reported: string[] = [];

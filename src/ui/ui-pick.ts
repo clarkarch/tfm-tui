@@ -7,7 +7,7 @@
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
 import { Box, Input, RGBA, Text } from "@opentui/core";
-import { floatSurface } from "./style";
+import { applySurface, floatSurface } from "./style";
 import { invokeIsolated } from "../lib/uiutil";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
@@ -189,7 +189,7 @@ export const makePick = (ctx: PickCtx) => {
         },
         Box(
           { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-          Text({ content: title, fg: colors.accent }),
+          Text({ id: "tfm-pick-title", content: title, fg: colors.accent }),
           Box({ flexGrow: 1 }),
           ctx.escHintBtn("tfm-pick-close", () => close()),
         ),
@@ -261,6 +261,33 @@ export const makePick = (ctx: PickCtx) => {
     return true;
   };
 
+  // theme-switch repaint while open: panel + input + title by id plus a
+  // list rebuild (live colors, same query/idx — the Input node itself is
+  // untouched, so focus and typed text survive). No-op when closed.
+  const repaint = (): void => {
+    if (!opened) return;
+    const c = ctx.colors();
+    try {
+      const panel: any = ctx.byId("tfm-pick-panel");
+      if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
+    } catch {}
+    try {
+      const input: any = ctx.byId("tfm-pick-input");
+      if (input) {
+        input.backgroundColor = c.accentBg;
+        input.focusedBackgroundColor = c.accentBg;
+        input.textColor = c.white;
+      }
+    } catch {}
+    try {
+      const title: any = ctx.byId("tfm-pick-title");
+      if (title) title.fg = c.accent;
+    } catch {}
+    try {
+      renderList();
+    } catch {}
+  };
+
   return {
     open,
     close,
@@ -268,6 +295,7 @@ export const makePick = (ctx: PickCtx) => {
     activate,
     handleKey,
     isOpen: (): boolean => opened,
+    repaint,
     // test seam: drive the filter without Input events
     setFilter: (q: string): void => {
       query = q;

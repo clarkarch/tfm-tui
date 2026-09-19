@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
 import { makeFloats, type Floats } from "./floats";
 
@@ -55,7 +56,13 @@ describe("openDialog chokepoint", () => {
     // simulate a menu popup being open
     floats.open("filemenu", () => {});
     const dialogs = makeDialogs(ctx);
-    const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, floats });
+    const conflict = makeConflict(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: () => null,
+      drainIconQueue: () => {},
+      floats,
+    });
     void conflict.promptConflict("/a/b.txt", 0);
     expect(floats.isOpen("filemenu")).toBe(false);
     expect(floats.top()).toBe("conflict");
@@ -70,7 +77,13 @@ describe("openDialog chokepoint", () => {
   test("pending conflict resolves 'skip' when floats dismisses it (policy close)", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);
-    const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, floats });
+    const conflict = makeConflict(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: () => null,
+      drainIconQueue: () => {},
+      floats,
+    });
     void conflict.promptConflict("/a/b.txt", 0);
     // a props dialog opens afterwards — floats clears the desktop, the
     // pending prompt must not hang forever
@@ -164,5 +177,114 @@ describe("openDialog chokepoint", () => {
     expect(typeof scrim.props.onMouseDown).toBe("function");
     scrim.props.onMouseDown({});
     expect(closed).toBe(true);
+  });
+});
+
+// Theme-switch repaints: conflict/yesno persist while open (batch ops), so a
+// palette landing mid-dialog must repaint them — by id, no rebuild (the
+// pending promise + focus state survive).
+const hexInts = (hex: string): [number, number, number, number] => {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+};
+
+// post-mount fg is a parsed RGBA object, never the assigned hex string
+const fgInts = (n: any): [number, number, number, number] =>
+  typeof n.fg === "string" ? hexInts(n.fg) : (n.fg.toInts() as [number, number, number, number]);
+
+const mkLive = (t: TestRendererSetup, floats: Floats, getColors: () => any) => {
+  const ctx = {
+    byId: (id: string) => t.renderer.root.findDescendantById(id),
+    rootAdd: (n: any) => t.renderer.root.add(n),
+    stripSelectable: () => {},
+    termH: () => 24,
+    uiStyle: () => "solid" as const,
+    colors: getColors,
+    closeFileMenu: () => {},
+    floats,
+  };
+  const dialogs = makeDialogs(ctx);
+  return {
+    conflict: makeConflict(dialogs, {
+      colors: getColors,
+      uiStyle: () => "solid" as const,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      drainIconQueue: () => {},
+      floats,
+    }),
+    yesNo: makeYesNo(dialogs, {
+      colors: getColors,
+      uiStyle: () => "solid" as const,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      floats,
+      canOpen: () => true,
+    }),
+  };
+};
+
+describe("dialog repaints", () => {
+  test("conflict repaint() repaints panel + buttons + texts, keeps the pending choice", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let live: any = { ...makeCtx().ctx.colors() };
+      const { conflict } = mkLive(t, floats, () => live);
+      let choice = "";
+      const p = conflict.promptConflict("/a/b.txt", 1).then((c) => (choice = c));
+      await t.renderOnce();
+      expect(floats.isOpen("conflict")).toBe(true);
+      live = { ...live, sidebarBg: "#101020", accentBg: "#303040", accent: "#ff0000", sidebarFg: "#f0f0f0" };
+      conflict.repaint();
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-conflict") as any;
+      expect([...panel.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const btn = t.renderer.root.findDescendantById("tfm-conflict-b0") as any;
+      expect([...btn.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const title = t.renderer.root.findDescendantById("tfm-conflict-title") as any;
+      expect(fgInts(title)).toEqual(hexInts("#ff0000"));
+      // the pending prompt still resolves (no rebuild swallowed it)
+      conflict.closeConflict("keepBoth");
+      await p;
+      expect(choice).toBe("keepBoth");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("yesno repaint() repaints panel + texts + focus, keeps the pending confirm", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let live: any = { ...makeCtx().ctx.colors() };
+      const { yesNo } = mkLive(t, floats, () => live);
+      let confirmed = false;
+      yesNo.confirm("Empty Trash?", "Empty", () => (confirmed = true), true);
+      await t.renderOnce();
+      expect(floats.isOpen("yesno")).toBe(true);
+      live = { ...live, sidebarBg: "#101020", ansi1: "#00ff00" };
+      yesNo.repaint();
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-yesno") as any;
+      expect([...panel.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const msg = t.renderer.root.findDescendantById("tfm-yesno-msg") as any;
+      expect(fgInts(msg)).toEqual(hexInts("#00ff00"));
+      yesNo.moveFocus(1);
+      yesNo.submit();
+      expect(confirmed).toBe(true);
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("dialog repaints no-op when closed", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const { conflict, yesNo } = mkLive(t, floats, makeCtx().ctx.colors);
+      expect(() => conflict.repaint()).not.toThrow();
+      expect(() => yesNo.repaint()).not.toThrow();
+    } finally {
+      t.renderer.destroy();
+    }
   });
 });

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { Box } from "@opentui/core";
+import { createTestRenderer } from "@opentui/core/testing";
 import {
   barLine,
   barLineFiles,
@@ -208,7 +210,59 @@ describe("counting pre-scan paint", () => {
     prog.totalBytes = 20;
     prog.totalFiles = 4;
     paintProgress(true);
-    expect(nodes.get("tfm-prog-title")!.content).not.toContain("counting");
+    expect(nodes.get("tfm-prog-title")!.content).toContain("copying 2/4 (50%)");
     expect(nodes.get("tfm-prog-bar")!.content).toContain("10 B/20 B");
+  });
+});
+
+describe("progress repaint", () => {
+  const hexInts = (hex: string): [number, number, number, number] => {
+    const n = Number.parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+  };
+
+  test("repaint() repaints the live toast shell with live colors", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      let live: any = { white: "#ffffff", accentBg: "#1a1b26", hoverBg: "#2a2b36" };
+      let seq = 0;
+      let slotSeq = 0;
+      const { ctx } = stubCtx({
+        colors: () => live,
+        // real slot boxes — the stub's plain-object el can't mount
+        makeIconSlot: () => ({ el: Box({ width: 2, height: 1 }), slotId: `tfm-slot-${++slotSeq}`, spec: {} }),
+        byId: (id: string) => t.renderer.root.findDescendantById(id),
+        notifySticky: (children: any[]) => {
+          const nodeId = `tfm-toast-${++seq}`;
+          // mirrors ./notify: accentBg shell wrapping the progress rows
+          t.renderer.root.add(Box({ id: nodeId, backgroundColor: live.accentBg }, ...children));
+          const handle: ToastHandle = { id: seq, nodeId, close: () => {} };
+          return handle;
+        },
+      });
+      const { prog, showProgressToast, isOpen, repaint } = makeProgress(ctx);
+      prog.active = true;
+      prog.verb = "copying";
+      showProgressToast();
+      await t.renderOnce();
+      expect(isOpen()).toBe(true);
+      live = { white: "#f0f0f0", accentBg: "#303040", hoverBg: "#404050" };
+      repaint();
+      await t.renderOnce();
+      const shell = t.renderer.root.findDescendantById("tfm-toast-1") as any;
+      expect([...shell.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      const title = t.renderer.root.findDescendantById("tfm-prog-title") as any;
+      expect([...title.fg.toInts()]).toEqual(hexInts("#f0f0f0"));
+      const pause = t.renderer.root.findDescendantById("tfm-prog-pause") as any;
+      expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("repaint() is a no-op with no live toast", () => {
+    const { isOpen, repaint } = makeProgress(stubCtx().ctx);
+    expect(isOpen()).toBe(false);
+    expect(() => repaint()).not.toThrow();
   });
 });

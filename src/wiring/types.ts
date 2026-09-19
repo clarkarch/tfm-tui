@@ -28,6 +28,7 @@ import type { makeBulkRename } from "../ui/ui-bulk-rename";
 import type { makeUndo } from "../app/undo";
 import type { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import type { makeFileOps } from "../fs/fileops";
+import type { makeProgress } from "../ui/ui-progress";
 import type { makeTerminal } from "../ui/ui-term";
 import type { makeTrashConfirms, makeTrashOps } from "../fs/trashops";
 import type { makePreview } from "../ui/ui-preview";
@@ -35,6 +36,7 @@ import type { makeGridRenderer } from "../ui/ui-grid";
 import type { makeProps } from "../ui/ui-props";
 import type { makeMenuEntries } from "../ui/menu-entries";
 import type { makeEscMenu } from "../ui/ui-settings";
+import type { makeSystemTheme } from "../ui/ui-system-theme";
 import type { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 
 export type NavWiring = {
@@ -89,6 +91,7 @@ export type FileopsWiring = {
   terminal: ReturnType<typeof makeTerminal>;
   trash: ReturnType<typeof makeTrashOps>;
   yesNo: ReturnType<typeof makeYesNo>;
+  progress: ReturnType<typeof makeProgress>;
 } & ReturnType<typeof makeTrashConfirms>;
 
 export type GridWiring = {
@@ -106,4 +109,5 @@ export type GridWiring = {
 
 export type SettingsWiring = {
   escMenu: ReturnType<typeof makeEscMenu>;
+  systemTheme: ReturnType<typeof makeSystemTheme>;
 };

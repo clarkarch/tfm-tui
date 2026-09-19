@@ -22,6 +22,7 @@ import type { ListEntry } from "./ui-menu";
 const colors = defaultConfig.theme as Theme & Record<string, any>;
 
 let t: TestRendererSetup;
+let liveColors: Theme & Record<string, any>;
 let sandbox: string;
 let saved: Record<string, string | undefined>;
 let floats: ReturnType<typeof makeFloats>;
@@ -79,6 +80,7 @@ beforeAll(async () => {
   statusMsgs = [];
   renderAllCount = 0;
   floats = makeFloats();
+  liveColors = colors;
 
   const dialogs = makeDialogs({
     byId,
@@ -86,7 +88,7 @@ beforeAll(async () => {
     stripSelectable: () => {},
     termH: () => 24,
     uiStyle: () => "solid",
-    colors: () => colors,
+    colors: () => liveColors,
     closeFileMenu: () => {},
   });
 
@@ -130,7 +132,7 @@ beforeAll(async () => {
       statusMsgs.push(`${title}:${level}:${msg}`);
     },
     uiStyle: () => "solid",
-    colors: () => colors,
+    colors: () => liveColors,
     home: os.homedir(),
     makeIconSlot: (
       name: string,
@@ -370,5 +372,34 @@ describe("image hero centering", () => {
     expect(slot).toBeTruthy();
     expect(heroRow?.yogaNode?.getPadding?.(Yoga.EDGE_RIGHT)?.value ?? 0).toBe(2);
     props.closeProps();
+  });
+
+  test("repaint() rebuilds the open dialog with live colors", async () => {
+    props.openProperties(fileA);
+    await t.renderOnce();
+    expect(props.isOpen()).toBe(true);
+    const prev = liveColors;
+    liveColors = { ...colors, sidebarBg: "#101020" } as Theme & Record<string, any>;
+    try {
+      props.repaint();
+      await t.renderOnce();
+      // still open on the same file, panel carries the new palette
+      expect(props.isOpen()).toBe(true);
+      expect(floats.isOpen("props")).toBe(true);
+      const panel = byId("tfm-props-panel") as any;
+      const bg = panel.backgroundColor;
+      const ints = typeof bg === "string" ? bg : [...bg.toInts()];
+      expect(ints).toEqual([0x10, 0x10, 0x20, 255]);
+      expect(t.captureCharFrame()).toContain("f.txt");
+    } finally {
+      liveColors = prev;
+      props.closeProps();
+    }
+  });
+
+  test("repaint() is a no-op when closed", async () => {
+    props.closeProps();
+    expect(() => props.repaint()).not.toThrow();
+    expect(byId("tfm-props")).toBeFalsy();
   });
 });

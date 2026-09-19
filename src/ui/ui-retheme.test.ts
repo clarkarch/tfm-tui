@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Box } from "@opentui/core";
+import { createTestRenderer } from "@opentui/core/testing";
 import { makeRetheme } from "./ui-retheme";
+import { makePick } from "./ui-pick";
+import { makeFloats } from "./floats";
 import { bumpHex } from "../config/color";
 import { defaultConfig, type Config } from "../config/config-schema";
 import { loadConfig } from "../config/config";
@@ -297,6 +301,99 @@ describe("rethemeChrome", () => {
           expect(node.border, `${id} @ ${style}`).toBe(true);
         }
       }
+    }
+  });
+});
+
+describe("open-float repaints", () => {
+  test("open floats repaint on theme switch; closed ones are skipped", () => {
+    const ctx = mkCtx();
+    const painted: string[] = [];
+    (ctx as any).floatRepaints = [
+      { isOpen: () => true, repaint: () => painted.push("open-float") },
+      { isOpen: () => false, repaint: () => painted.push("closed-float") },
+    ];
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#ff0000";
+    retheme.applyConfig(fresh);
+    expect(painted).toEqual(["open-float"]);
+  });
+
+  test("a throwing float repaint is isolated — the rest still repaint", () => {
+    const ctx = mkCtx();
+    const painted: string[] = [];
+    (ctx as any).floatRepaints = [
+      {
+        isOpen: () => true,
+        repaint: () => {
+          throw new Error("float-boom");
+        },
+      },
+      { isOpen: () => true, repaint: () => painted.push("second") },
+    ];
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#ff0000";
+    expect(() => retheme.applyConfig(fresh)).not.toThrow();
+    expect(painted).toEqual(["second"]);
+  });
+
+  test("no float list, no fan-out (optional dep)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#ff0000";
+    expect(() => retheme.applyConfig(fresh)).not.toThrow();
+    expect(ctx.calls.renderAll).toBe(1);
+  });
+
+  test("end-to-end: an open pick repaints through a real applyConfig theme switch", async () => {
+    // the reported issue, no fakes: pick open in a real renderer, theme flip
+    // through the real retheme path, painted panel carries the new palette
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const live: Record<string, string> = { ...defaultConfig.theme };
+      const pick = makePick({
+        renderer: () => t.renderer,
+        byId: (id) => t.renderer.root.findDescendantById(id),
+        rootAdd: (n) => t.renderer.root.add(n),
+        clearChildren: (node: any) => {
+          for (const c of [...node.getChildren()]) node.remove(c);
+        },
+        stripSelectable: () => {},
+        colors: () => live as any,
+        uiStyle: () => "solid",
+        floats,
+        escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
+        drainIconQueue: () => {},
+        commands: () => [{ label: "quit tfm", run: () => {} }],
+      });
+      pick.open({ title: "Palette" });
+      await t.renderOnce();
+      expect(floats.isOpen("pick")).toBe(true);
+
+      const ctx = mkCtx();
+      // retheme merges into ITS colors ref — point it at the live palette so
+      // the switch actually changes what the pick reads
+      (ctx as any).colors = live;
+      (ctx as any).floatRepaints = [{ isOpen: () => pick.isOpen(), repaint: () => pick.repaint() }];
+      // byId that resolves against the real renderer for the chrome repaints
+      const retheme = makeRetheme(ctx as any);
+      const fresh = clone(defaultConfig);
+      fresh.theme.sidebarBg = "#101020";
+      fresh.theme.accentBg = "#303040";
+      // live palette flips with the commit (what applyConfig's merge does)
+      Object.assign(live, fresh.theme);
+      retheme.applyConfig(fresh);
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-pick-panel") as any;
+      const ints = [...panel.backgroundColor.toInts()];
+      expect(ints).toEqual([0x10, 0x10, 0x20, 255]);
+      expect(floats.isOpen("pick")).toBe(true);
+    } finally {
+      t.renderer.destroy();
     }
   });
 });

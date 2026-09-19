@@ -476,7 +476,11 @@ export const makeProps = (ctx: PropsCtx) => {
     void ctx.drainIconQueue();
   };
 
+  // last target for theme-switch rebuilds (repaint re-opens, below)
+  let lastTarget: string | string[] | null = null;
+
   const openProperties = (target: string | string[]): void => {
+    lastTarget = target;
     if (!Array.isArray(target)) {
       openSingle(target);
       return;
@@ -494,5 +498,19 @@ export const makeProps = (ctx: PropsCtx) => {
     if (stats.length > 1) openMulti(stats);
   };
 
-  return { openProperties, closeProps, isOpen: () => propsOpen };
+  // theme-switch repaint while open: rebuild with the retained target (live
+  // colors throughout — icon slots, rows, perms). No text inputs exist in
+  // the dialog, so close+reopen loses nothing user-typed; the perm-class
+  // cursor popup above it (if any) closes with the rebuild by floats policy.
+  const repaint = (): void => {
+    if (!propsOpen || lastTarget === null) return;
+    try {
+      closeProps();
+    } catch {}
+    try {
+      openProperties(lastTarget);
+    } catch {}
+  };
+
+  return { openProperties, closeProps, isOpen: () => propsOpen, repaint };
 };

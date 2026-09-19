@@ -38,6 +38,10 @@ export type SettingsModelCtx = {
   // model renders one category PER PLUGIN (never inside core groups), each
   // led by a core-built on/off toggle over the plugin's own store.
   plugins?: () => LoadedPlugin[];
+  // system-theme resolve (terminal query → applyConfig): fired when the user
+  // picks the System theme entry. Optional so row SHAPE stays testable
+  // without it; absent = flag commits, derived colors land on next boot.
+  resolveSystemTheme?(): void;
   // git installer orchestration (wired in wiring/settings — prompt, danger
   // confirm, clone/pull/rm, rescan). Optional so row SHAPE stays testable
   // without it; rows no-op when absent. Never throws (fire-and-forget).
@@ -136,27 +140,53 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const uiRowsIn = (group: NonNullable<UiSchemaRow["group"]>): UiSchemaRow[] =>
     UI_SCHEMA.filter((r): r is UiSchemaRow => r.section === "ui" && r.group === group);
 
-  // rows with a presentation a generic schema row can't express (theme presets,
-  // adaptive/on tab bar, live show-hidden state sync) are built by hand and
-  // spliced into their category; the schema row still exists for parsing
-  const SPECIAL_UI_PROPS = new Set(["showHidden", "tabBar"]);
+  // rows with a presentation a generic schema row can't express (theme presets
+  // (+ the System terminal-following entry), adaptive/on tab bar, live
+  // show-hidden state sync) are built by hand and spliced into their category;
+  // the schema row still exists for parsing
+  const SPECIAL_UI_PROPS = new Set(["showHidden", "tabBar", "followTerminal"]);
 
-  const themeRow = (): SettingRow => ({
-    kind: "cycle",
-    label: "theme",
-    repaint: true,
-    names: THEME_PRESETS.map((p) => p.name),
-    getIdx: themePresetIdx,
-    setIdx: (i) => {
-      commit({ ui: { ...ctx.config.ui }, theme: { ...THEME_PRESETS[i]!.theme }, keys: { ...ctx.config.keys } });
-    },
-    // hand-edited themes match no preset: name the nearest one with a ~
-    // prefix (picking any preset returns to an exact match)
-    customLabel: () => {
-      const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
-      return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
-    },
-  });
+  const themeRow = (): SettingRow => {
+    // "System" leads: it owns the [ui] follow-terminal knob (the schema row
+    // is skipped in genericUiRows via SPECIAL_UI_PROPS) and builds the theme
+    // from the terminal's own colors on select; presets sit behind it at +1
+    const names = ["System", ...THEME_PRESETS.map((p) => p.name)];
+    return {
+      kind: "cycle",
+      label: "theme",
+      repaint: true,
+      names,
+      getIdx: () => {
+        if (ctx.config.ui.followTerminal) return 0;
+        const i = themePresetIdx();
+        return i < 0 ? -1 : i + 1;
+      },
+      setIdx: (i) => {
+        if (i === 0) {
+          commit({
+            ui: { ...ctx.config.ui, followTerminal: true },
+            theme: { ...ctx.config.theme },
+            keys: { ...ctx.config.keys },
+          });
+          // fire-and-forget by contract: the wiring wraps the promise with
+          // .catch (a try/catch here could never see an async rejection)
+          ctx.resolveSystemTheme?.();
+          return;
+        }
+        commit({
+          ui: { ...ctx.config.ui, followTerminal: false },
+          theme: { ...THEME_PRESETS[i - 1]!.theme },
+          keys: { ...ctx.config.keys },
+        });
+      },
+      // hand-edited themes match no preset: name the nearest one with a ~
+      // prefix (picking any preset returns to an exact match)
+      customLabel: () => {
+        const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
+        return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
+      },
+    };
+  };
 
   const hiddenFilesRow = (): SettingRow => ({
     kind: "toggle",

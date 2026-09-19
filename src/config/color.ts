@@ -9,6 +9,40 @@ export const bumpHex = (hex: string): string => {
     .padStart(6, "0")}`;
 };
 
+// Mix a #rrggbb color toward black (amt < 0) or white (amt > 0) by amt
+// (-1..1, clamped). Unparseable input comes back unchanged — callers use it
+// for derived surfaces (sidebar/hover/border) that must never be invalid hex.
+export const shadeHex = (hex: string, amt: number): string => {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!m) return hex;
+  const n = Number.parseInt(m[1]!, 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  const t = amt < 0 ? 0 : 255;
+  const p = Math.min(1, Math.max(0, Math.abs(amt)));
+  const mix = (c: number): number => Math.round(c + (t - c) * p);
+  const out = (mix(r) << 16) | (mix(g) << 8) | mix(b);
+  return `#${out.toString(16).padStart(6, "0")}`;
+};
+// Mix two #rrggbb colors by t (0 = a, 1 = b, clamped). Either side
+// unparseable → a unchanged. Used for hue-carrying fills (selection,
+// hover, rings): mixing bg toward the terminal accent keeps the theme's
+// hue instead of shadeHex's neutral grey.
+export const mixHex = (a: string, b: string, t: number): string => {
+  const ma = /^#([0-9a-fA-F]{6})$/.exec(a.trim());
+  const mb = /^#([0-9a-fA-F]{6})$/.exec(b.trim());
+  if (!ma || !mb) return a;
+  const na = Number.parseInt(ma[1]!, 16);
+  const nb = Number.parseInt(mb[1]!, 16);
+  const p = Math.min(1, Math.max(0, t));
+  const mix = (ca: number, cb: number): number => Math.round(ca + (cb - ca) * p);
+  const out =
+    (mix((na >> 16) & 0xff, (nb >> 16) & 0xff) << 16) |
+    (mix((na >> 8) & 0xff, (nb >> 8) & 0xff) << 8) |
+    mix(na & 0xff, nb & 0xff);
+  return `#${out.toString(16).padStart(6, "0")}`;
+};
 // Terminals with background_opacity (kitty etc.) composite only their DEFAULT
 // background; OpenTUI leaves unpainted cells on SGR 49, so those go
 // see-through. transparentBg=false forces an opaque UI by nudging bg one step

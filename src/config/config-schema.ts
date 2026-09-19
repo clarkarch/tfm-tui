@@ -179,6 +179,7 @@ export type UiConfig = {
   hoverAnimMs: number;
   restoreSession: boolean;
   persistUndo: boolean;
+  followTerminal: boolean;
   transparentBg: boolean;
   icons: IconMode;
   sidebarTitle: boolean;
@@ -644,6 +645,17 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)",
     label: "type to search",
     group: "behavior",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "follow-terminal",
+    prop: "followTerminal",
+    def: false,
+    doc: "true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset",
+    label: "follow terminal",
+    group: "appearance",
+    subsection: "style",
   },
   {
     kind: "bool",

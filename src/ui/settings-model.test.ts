@@ -107,9 +107,15 @@ describe("settingGroups shape", () => {
   test("every schema row is reachable in exactly one GUI category", () => {
     const h = mk();
     // label is unique per core row; a row that lost its group would silently
-    // never render (the discoverability invariant this regroup must protect)
+    // never render (the discoverability invariant this regroup must protect).
+    // "follow terminal" is the one exception: it has no row of its own — the
+    // theme cycle's System entry owns the knob (pinned below).
     const labels = h.groups().flatMap((g) => g.rows.map((r) => r.label));
     for (const row of UI_SCHEMA) {
+      if (row.prop === "followTerminal") {
+        expect(labels).not.toContain(row.label);
+        continue;
+      }
       expect(labels.filter((l) => l === row.label)).toHaveLength(1);
     }
   });
@@ -627,17 +633,45 @@ describe("hand-written rows", () => {
     const h = mk();
     const row = h.byLabel("theme");
     expect(row.kind).toBe("cycle");
-    asCycle(row).setIdx(1);
+    // index 0 is the System entry — presets sit behind it at +1
+    asCycle(row).setIdx(2);
     expect(h.config.theme).toEqual(THEME_PRESETS[1]!.theme);
     expect(h.config.theme).not.toBe(THEME_PRESETS[1]!.theme); // fresh copy, not the preset object
+    expect(h.config.ui.followTerminal).toBe(false);
+  });
+
+  test("theme cycle leads with System: select flips follow-terminal + resolves", () => {
+    let resolved = 0;
+    const h = mk();
+    (h.ctx as SettingsModelCtx).resolveSystemTheme = () => {
+      resolved++;
+    };
+    const row = h.byLabel("theme");
+    expect(asCycle(row).names[0]).toBe("System");
+    expect(asCycle(row).names[1]).toBe(THEME_PRESETS[0]!.name);
+    // default config is Tokyo Night at preset 0 → cycle index 1
+    expect(asCycle(row).getIdx()).toBe(1);
+    asCycle(row).setIdx(0);
+    expect(h.config.ui.followTerminal).toBe(true);
+    expect(resolved).toBe(1);
+    expect(asCycle(h.byLabel("theme")).getIdx()).toBe(0);
+    // picking a preset leaves System mode
+    asCycle(h.byLabel("theme")).setIdx(1);
+    expect(h.config.ui.followTerminal).toBe(false);
+    expect(h.config.theme).toEqual(THEME_PRESETS[0]!.theme);
+  });
+
+  test("no standalone follow-terminal row exists (System owns the knob)", () => {
+    const h = mk();
+    expect(h.rows().filter((r) => r.label === "follow terminal")).toHaveLength(0);
   });
 
   test("hand-edited theme reports ~nearest preset, exact match reports none needed", () => {
     const h = mk();
     const row = h.byLabel("theme");
     if (row.kind !== "cycle" || !row.customLabel) throw new Error("theme row must be a cycle with customLabel");
-    // default config IS Tokyo Night (preset 0) — nearest is itself
-    expect(row.getIdx()).toBe(0);
+    // default config IS Tokyo Night (preset 0) — behind the System entry at 1
+    expect(row.getIdx()).toBe(1);
     h.config.theme = { ...THEME_PRESETS[2]!.theme, bg: "#000000" };
     expect(row.getIdx()).toBe(-1);
     expect(row.customLabel()).toBe(`~${THEME_PRESETS[2]!.name}`);

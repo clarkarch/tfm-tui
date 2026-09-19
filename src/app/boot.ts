@@ -17,6 +17,10 @@ export type BootCtx = {
   isRestartChild?: boolean;
   clearStaleImages?(): void;
   buildLayout(): void;
+  // system (terminal-adaptive) theme: resolves AFTER the renderer answers its
+  // first queries but BEFORE buildLayout bakes palette colors into the chrome
+  // (optional — absent without follow-terminal). Guarded like every step.
+  applyBootSystemTheme?(): Promise<boolean>;
   // mount plugin UI slots into the boot layout (after buildLayout, before the
   // first renderAll so contributions paint on the first frame)
   mountSlots?(): void;
@@ -67,6 +71,11 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   // log — free profiling for slow-boot reports, silent in production
   if (ctx.isRestartChild) await guard(ctx, "clearStaleImages", () => ctx.clearStaleImages?.());
   await guard(ctx, "waitResolution", () => ctx.waitForResolution());
+  bootLog("boot: systemTheme");
+  await guard(ctx, "systemTheme", () => {
+    const p = ctx.applyBootSystemTheme?.();
+    return p ? p.then(() => undefined) : undefined;
+  });
   bootLog("boot: buildLayout");
   await guard(ctx, "buildLayout", () => ctx.buildLayout());
   await guard(ctx, "mountSlots", () => ctx.mountSlots?.());

@@ -76,6 +76,8 @@ export const wireFileops = (deps: {
 
   const conflict = makeConflict(chrome.dialogs, {
     colors: themeGet,
+    uiStyle,
+    byId,
     drainIconQueue: () => drainIconQueue(),
     floats: core.floats,
   });
@@ -202,6 +204,7 @@ export const wireFileops = (deps: {
     terminal,
     trash,
     yesNo,
+    progress,
     confirmEmptyTrash,
     confirmDeleteForever,
   };

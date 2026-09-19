@@ -10,6 +10,7 @@ import { truncateToastText, wrapToastText } from "../ui/notify";
 import { THEME_PRESETS } from "../config/themes";
 import { themePresetIdx } from "../ui/settings";
 import { makeSettingModel } from "../ui/settings-model";
+import { makeSystemTheme } from "../ui/ui-system-theme";
 import { MENU_W } from "../ui/ui-menu";
 import { makeEscMenu } from "../ui/ui-settings";
 import { makeRetheme } from "../ui/ui-retheme";
@@ -225,6 +226,26 @@ export const wireSettings = (deps: {
     }
   };
 
+  // --- System (terminal-adaptive) theme: queries the terminal's own colors
+  // through the booted renderer. applyConfig arrives via the retheme TDZ
+  // arrow (same seam as the model below); the settings theme row's System
+  // entry and the boot sequence both drive it from here. ---
+  const systemTheme = makeSystemTheme({
+    renderer: () => chrome.renderer,
+    config: core.config,
+    colors: core.colors,
+    applyConfig: (fresh) => getRetheme().applyConfig(fresh),
+    scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
+    log: (message) => dlog(message),
+    // the boot resolve bypasses applyConfig (nothing mounted yet), so its
+    // plugin `theme` event is emitted here instead of onConfigApplied
+    onBootDerived: (theme) => {
+      try {
+        sharedPluginEvents().emit("theme", { preset: "System", theme });
+      } catch {}
+    },
+  });
+
   // --- Settings model: row type + pure semantics live in ./settings.ts, the
   // row->config wiring in ./settings-model, the panel in ./ui-settings ---
   const { settingGroups, pluginGroups } = makeSettingModel({
@@ -237,6 +258,11 @@ export const wireSettings = (deps: {
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
     plugins: () => plugins.plugins,
     pluginInstall: { addFromUrl, openFolder, update: updateOne, remove: removeOne },
+    // picking the System theme entry resolves the terminal colors now
+    // (fire-and-forget — failures keep the committed flag + current theme)
+    resolveSystemTheme: () => {
+      void systemTheme.resolveSystemTheme().catch(() => {});
+    },
   });
 
   const escMenu = makeEscMenu({
@@ -261,7 +287,7 @@ export const wireSettings = (deps: {
     quit: nav.quitApp,
   });
 
-  return { escMenu };
+  return { escMenu, systemTheme };
 };
 
 export const wireRetheme = (deps: {
@@ -273,12 +299,32 @@ export const wireRetheme = (deps: {
   // hover drawer (wired just before this) — rethemeChrome rewrites the sidebar
   // width by id, so an auto-hidden panel must be resynced after applyConfig
   getHover: () => { refresh(): void };
+  // late clusters owning persistent floats — deferred arrows (TDZ): keymap
+  // wires last, grid/grid-foundation own props/bulk-rename. Only read at
+  // repaint time, long after the wiring settled.
+  getKeymap: () => { pick: { isOpen(): boolean; repaint(): void } };
+  getGrid: () => { props: { isOpen(): boolean; repaint(): void } };
+  getGridFoundation: () => { bulkRename: { isOpen(): boolean; repaint(): void } };
 }) => {
-  const { core, nav, chrome, fileops, settings, getHover } = deps;
+  const { core, nav, chrome, fileops, settings, getHover, getKeymap, getGrid, getGridFoundation } = deps;
 
   // --- Config application & persistence: lives in ./ui-retheme (rethemeChrome,
   // applyConfig, scheduleSaveConfig, live reload). Geometry rewrites go
   // through the core cell's setters — never bake them into consts. ---
+  // floats that persist while open (pick, conflict/yes-no, bulk-rename,
+  // props, progress): rethemeChrome repaints each open one by id when a
+  // theme switch lands underneath it — none of them rebuild on their own.
+  // Getters (never captured handles): keymap wires last, same TDZ seam as
+  // the settings model above.
+  const floatRepaints: Array<{ isOpen(): boolean; repaint(): void }> = [
+    { isOpen: () => getKeymap().pick.isOpen(), repaint: () => getKeymap().pick.repaint() },
+    { isOpen: () => fileops.conflict.isOpen(), repaint: () => fileops.conflict.repaint() },
+    { isOpen: () => fileops.yesNo.isOpen(), repaint: () => fileops.yesNo.repaint() },
+    { isOpen: () => getGridFoundation().bulkRename.isOpen(), repaint: () => getGridFoundation().bulkRename.repaint() },
+    { isOpen: () => getGrid().props.isOpen(), repaint: () => getGrid().props.repaint() },
+    { isOpen: () => fileops.progress.isOpen(), repaint: () => fileops.progress.repaint() },
+  ];
+
   let lastDual = core.config.ui.dualPane;
   const retheme = makeRetheme({
     config: core.config,
@@ -317,6 +363,7 @@ export const wireRetheme = (deps: {
     escMenu: settings.escMenu,
     fileMenuIsOpen: chrome.menu.isFileMenuOpen,
     renderFileMenu: chrome.menu.renderFileMenu,
+    floatRepaints,
     notify: chrome.notify,
     // toggling [ui] persist-undo persists the live stack (or clears the
     // journal file) immediately — not on the next file op
@@ -328,7 +375,7 @@ export const wireRetheme = (deps: {
       try {
         const idx = themePresetIdx(THEME_PRESETS, core.config.theme);
         sharedPluginEvents().emit("theme", {
-          preset: idx >= 0 ? THEME_PRESETS[idx]!.name : "custom",
+          preset: core.config.ui.followTerminal ? "System" : idx >= 0 ? THEME_PRESETS[idx]!.name : "custom",
           theme: core.config.theme,
         });
       } catch {}

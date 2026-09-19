@@ -229,14 +229,14 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
         },
         Box(
           { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-          Text({ content: `Rename ${items.length} items`, fg: c.accent }),
+          Text({ id: "tfm-bulkrename-title", content: `Rename ${items.length} items`, fg: c.accent }),
           Box({ flexGrow: 1 }),
           ctx.escHintBtn("tfm-bulkrename-esc", () => close()),
         ),
         Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
         Box(
           { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
-          Text({ content: "New name", width: LABEL_W, fg: c.sidebarFgMuted }),
+          Text({ id: "tfm-bulkrename-label-name", content: "New name", width: LABEL_W, fg: c.sidebarFgMuted }),
           Input({
             id: "tfm-bulkrename-input",
             width: inputW,
@@ -248,11 +248,14 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
         ),
         Box(
           { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
-          Text({ content: "Number", width: LABEL_W, fg: c.sidebarFgMuted }),
+          Text({ id: "tfm-bulkrename-label-number", content: "Number", width: LABEL_W, fg: c.sidebarFgMuted }),
           ...STYLES.map((s) => chip(s)),
         ),
         Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-        Box({ width: "100%", height: 1, paddingLeft: 2 }, Text({ content: "Preview", fg: c.sidebarFgMuted })),
+        Box(
+          { width: "100%", height: 1, paddingLeft: 2 },
+          Text({ id: "tfm-bulkrename-label-preview", content: "Preview", fg: c.sidebarFgMuted }),
+        ),
         Box({ id: "tfm-bulkrename-preview", width: "100%", flexDirection: "column" }),
         Box(
           { width: "100%", height: 1, paddingLeft: 2, paddingRight: 2 },
@@ -289,12 +292,53 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     }, 10);
   };
 
+  // theme-switch repaint while open: panel + input + title + error by id,
+  // chips + preview through their live renderers. No rebuild — the typed
+  // value + style + focus survive (the Input node itself is untouched).
+  const repaint = (): void => {
+    if (!opened) return;
+    const c = ctx.colors();
+    try {
+      const panel: any = ctx.byId("tfm-bulkrename-panel");
+      if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
+    } catch {}
+    try {
+      const input: any = ctx.byId("tfm-bulkrename-input");
+      if (input) {
+        input.backgroundColor = c.accentBg;
+        input.focusedBackgroundColor = c.accentBg;
+        input.textColor = c.white;
+      }
+    } catch {}
+    try {
+      const title: any = ctx.byId("tfm-bulkrename-title");
+      if (title) title.fg = c.accent;
+    } catch {}
+    for (const id of ["tfm-bulkrename-label-name", "tfm-bulkrename-label-number", "tfm-bulkrename-label-preview"]) {
+      try {
+        const label: any = ctx.byId(id);
+        if (label) label.fg = c.sidebarFgMuted;
+      } catch {}
+    }
+    try {
+      const err: any = ctx.byId("tfm-bulkrename-error");
+      if (err && err.content !== EMPTY_ERROR) err.fg = c.ansi1;
+    } catch {}
+    try {
+      repaintStyles();
+    } catch {}
+    try {
+      renderPreview();
+    } catch {}
+  };
+
   return {
     open,
     close,
     apply,
     handleKey,
     isOpen: (): boolean => opened,
+    repaint,
     // test seam: drive the input without native key events
     setValue: (v: string): void => {
       try {

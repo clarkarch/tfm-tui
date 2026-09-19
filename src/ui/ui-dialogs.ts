@@ -114,6 +114,8 @@ export type ConflictChoice = "replace" | "keepBoth" | "skip";
 
 type ConflictCtx = {
   colors(): Theme;
+  uiStyle(): UiStyle;
+  byId(id: string): MaybeNode;
   drainIconQueue(): void | Promise<void>;
   // open/close orchestration + the dismiss-others policy live in ./floats
   floats: Floats;
@@ -169,15 +171,16 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
       const rows: ReturnType<typeof Box>[] = [
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` Replace "${ellipsize(name, CONFLICT_W - 14)}"?`, fg: c.accent }),
+          Text({ id: "tfm-conflict-title", content: ` Replace "${ellipsize(name, CONFLICT_W - 14)}"?`, fg: c.accent }),
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` ${"~".repeat(CONFLICT_W - 2)}`, fg: c.divider }),
+          Text({ id: "tfm-conflict-div", content: ` ${"~".repeat(CONFLICT_W - 2)}`, fg: c.divider }),
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
           Text({
+            id: "tfm-conflict-loc",
             content: ellipsize(locationLine, CONFLICT_W - 1),
             fg: c.sidebarFgMuted,
           }),
@@ -211,10 +214,42 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
       void ctx.drainIconQueue();
     });
 
+  // theme-switch repaint while open: panel + texts by id, buttons back to
+  // rest (hover repaints live on the next mouse move). No rebuild — the
+  // pending promise + remembered policy survive.
+  const repaintConflict = (): void => {
+    if (!conflictOpen) return;
+    const c = ctx.colors();
+    try {
+      const panel: any = ctx.byId("tfm-conflict");
+      if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
+    } catch {}
+    const setFg = (id: string, fg: string): void => {
+      try {
+        const n: any = ctx.byId(id);
+        if (n) n.fg = fg;
+      } catch {}
+    };
+    setFg("tfm-conflict-title", c.accent);
+    setFg("tfm-conflict-div", c.divider);
+    setFg("tfm-conflict-loc", c.sidebarFgMuted);
+    // 3 buttons, 6 with the …all row — loop the id space, skip the missing
+    for (let i = 0; i < 8; i++) {
+      try {
+        const btn: any = ctx.byId(`tfm-conflict-b${i}`);
+        if (!btn) continue;
+        applySurface(btn, btnSurface(ctx.uiStyle(), c, false, c.sidebarBg));
+        const label = btn.getChildren?.()?.[0];
+        if (label) label.fg = c.sidebarFg;
+      } catch {}
+    }
+  };
+
   return {
     promptConflict,
     closeConflict,
     isOpen: (): boolean => conflictOpen,
+    repaint: repaintConflict,
     policy: (): ConflictChoice | null => conflictPolicy,
     resetPolicy: (): void => {
       conflictPolicy = null;
@@ -242,6 +277,8 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
   const { openDialog, closeDialog, dialogBtn } = dialogs;
 
   let open = false;
+  // danger flag of the pending confirm (drives the message fg on repaint)
+  let lastDanger = false;
   // keyboard cursor over the two buttons (0 = No, 1 = Yes label). Defaults to
   // No so an accidental Enter never confirms a destructive op.
   let focusIdx = 0;
@@ -294,6 +331,7 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     open = true;
     focusIdx = 0;
     pendingYes = onYes;
+    lastDanger = danger;
     const c = ctx.colors();
     const yesFg = danger ? c.ansi1 : c.accent;
     let bseq = 0;
@@ -306,11 +344,11 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
       rows: () => [
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` ${message}`.slice(0, YESNO_W - 2), fg: yesFg }),
+          Text({ id: "tfm-yesno-msg", content: ` ${message}`.slice(0, YESNO_W - 2), fg: yesFg }),
         ),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` ${"~".repeat(YESNO_W - 2)}`, fg: c.divider }),
+          Text({ id: "tfm-yesno-div", content: ` ${"~".repeat(YESNO_W - 2)}`, fg: c.divider }),
         ),
         Box({ height: 1 }),
         Box(
@@ -327,5 +365,27 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     return true;
   };
 
-  return { confirm, close, isOpen: (): boolean => open, moveFocus, submit };
+  // theme-switch repaint while open: panel + texts by id, buttons through
+  // the live focus paint. No rebuild — the pending confirm + cursor survive.
+  const repaintYesNo = (): void => {
+    if (!open) return;
+    const c = ctx.colors();
+    try {
+      const panel: any = ctx.byId("tfm-yesno");
+      if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
+    } catch {}
+    try {
+      const msg: any = ctx.byId("tfm-yesno-msg");
+      if (msg) msg.fg = lastDanger ? c.ansi1 : c.accent;
+    } catch {}
+    try {
+      const div: any = ctx.byId("tfm-yesno-div");
+      if (div) div.fg = c.divider;
+    } catch {}
+    try {
+      paintFocus();
+    } catch {}
+  };
+
+  return { confirm, close, isOpen: (): boolean => open, repaint: repaintYesNo, moveFocus, submit };
 };

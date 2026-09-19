@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bumpHex, deriveColors } from "./color";
+import { bumpHex, deriveColors, mixHex, shadeHex } from "./color";
 
 describe("bumpHex", () => {
   test("bumps blue channel by one", () => {
@@ -37,6 +37,51 @@ describe("bumpHex", () => {
     // "red".slice(1) === "ed" -> parseInt(_,16) === 237. Only ever fed
     // well-formed #rrggbb internally, but the guard is parseFloat-based.
     expect(bumpHex("red")).toBe("#0000ee");
+  });
+});
+
+describe("shadeHex", () => {
+  test("positive amt mixes toward white", () => {
+    expect(shadeHex("#000000", 1)).toBe("#ffffff");
+    expect(shadeHex("#1a1b26", 0.5)).toBe("#8d8d93");
+  });
+
+  test("negative amt mixes toward black", () => {
+    expect(shadeHex("#ffffff", -1)).toBe("#000000");
+    expect(shadeHex("#ffffff", -0.35)).toBe("#a6a6a6");
+  });
+
+  test("zero amt is identity, amt clamps to [-1, 1]", () => {
+    expect(shadeHex("#1a1b26", 0)).toBe("#1a1b26");
+    expect(shadeHex("#123456", 5)).toBe("#ffffff");
+    expect(shadeHex("#123456", -5)).toBe("#000000");
+  });
+
+  test("unparseable input comes back unchanged", () => {
+    expect(shadeHex("junk", 0.5)).toBe("junk");
+    expect(shadeHex("#abc", 0.5)).toBe("#abc");
+  });
+});
+
+describe("mixHex", () => {
+  test("endpoints are identity", () => {
+    expect(mixHex("#1a1b26", "#7aa2f7", 0)).toBe("#1a1b26");
+    expect(mixHex("#1a1b26", "#7aa2f7", 1)).toBe("#7aa2f7");
+  });
+
+  test("midpoint blends per channel", () => {
+    expect(mixHex("#000000", "#ffffff", 0.5)).toBe("#808080");
+    expect(mixHex("#1a1b26", "#7aa2f7", 0.35)).toBe("#3c4a6f");
+  });
+
+  test("t clamps to [0, 1]", () => {
+    expect(mixHex("#000000", "#ffffff", 5)).toBe("#ffffff");
+    expect(mixHex("#000000", "#ffffff", -2)).toBe("#000000");
+  });
+
+  test("unparseable side returns a unchanged", () => {
+    expect(mixHex("junk", "#ffffff", 0.5)).toBe("junk");
+    expect(mixHex("#000000", "junk", 0.5)).toBe("#000000");
   });
 });
 

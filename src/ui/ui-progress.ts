@@ -275,5 +275,37 @@ export const makeProgress = (ctx: ProgressCtx) => {
     while (prog.paused && !prog.cancelled) await sleep(80);
   };
 
-  return { prog, paintProgress, showProgressToast, finishProgressToast, pauseGate };
+  // theme-switch repaint while a transfer toast is up: container + texts +
+  // buttons by id. Ticks only rewrite text content, so without this a
+  // mid-transfer palette landing leaves the toast stale until it finishes.
+  const repaint = (): void => {
+    if (activeHandle === null) return;
+    const c = ctx.colors();
+    try {
+      const shell: any = ctx.byId(activeHandle.nodeId);
+      if (shell) shell.backgroundColor = c.accentBg;
+    } catch {}
+    for (const id of [PROG_T_TITLE, PROG_T_BAR]) {
+      try {
+        const n: any = ctx.byId(id);
+        if (n) n.fg = c.white;
+      } catch {}
+    }
+    for (const id of ["tfm-prog-pause", "tfm-prog-close"]) {
+      try {
+        const n: any = ctx.byId(id);
+        if (n) n.backgroundColor = c.accentBg;
+      } catch {}
+    }
+  };
+
+  return {
+    prog,
+    paintProgress,
+    showProgressToast,
+    finishProgressToast,
+    pauseGate,
+    isOpen: (): boolean => activeHandle !== null,
+    repaint,
+  };
 };
