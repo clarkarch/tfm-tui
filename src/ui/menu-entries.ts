@@ -17,6 +17,8 @@ export type MenuEntriesCtx = {
   closeFileMenu(): void;
   navigate(dir: string): void;
   newTab(dir: string): void;
+  // open a folder in the inactive pane (enables dual-pane when off)
+  openInOtherPane(dir: string): void;
   // open a file with a chosen application (the pick overlay lists handlers)
   openWith(path: string): void;
   renderAll(): void;
@@ -177,21 +179,22 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     const target = place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : place.path;
     const entries: ListEntry[] = [];
     if (target) {
+      // the parent row opens directly; the flyout holds the variants
       const openSub: ListEntry[] = [
-        {
-          icon: "folder",
-          label: "Open",
-          action: () => {
-            ctx.closeFileMenu();
-            ctx.navigate(target);
-          },
-        },
         {
           icon: "plus",
           label: "Open in New Tab",
           action: () => {
             ctx.closeFileMenu();
             ctx.newTab(target);
+          },
+        },
+        {
+          icon: "border-vertical",
+          label: "Open in New Pane",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.openInOtherPane(target);
           },
         },
       ];
@@ -207,7 +210,15 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         });
       }
-      entries.push({ icon: "folder", label: "Open", action: () => {}, submenu: openSub });
+      entries.push({
+        icon: "folder",
+        label: "Open",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.navigate(target);
+        },
+        submenu: openSub,
+      });
       // paste into real places (not virtual views, not the trash)
       if (!place.scheme && target !== trashFiles()) {
         entries.push({
@@ -329,29 +340,31 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       );
       return withPluginSection(entries, targets);
     }
-    // nested Open: dirs can open in a new tab / terminal, files offer the
-    // default app or an "Open With…" chooser. A parent row is a flyout, not
-    // directly actionable.
+    // Open is directly clickable everywhere; the flyout keeps the variants
+    // (dirs: tab/pane/terminal, files: the "Open With…" chooser).
     if (isDir) {
       entries.push({
         icon: "folder",
         label: "Open",
-        action: () => {},
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.navigate(targetPath);
+        },
         submenu: [
-          {
-            icon: "folder",
-            label: "Open",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.navigate(targetPath);
-            },
-          },
           {
             icon: "plus",
             label: "Open in New Tab",
             action: () => {
               ctx.closeFileMenu();
               ctx.newTab(targetPath);
+            },
+          },
+          {
+            icon: "border-vertical",
+            label: "Open in New Pane",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.openInOtherPane(targetPath);
             },
           },
           {
@@ -368,16 +381,11 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       entries.push({
         icon: "eye",
         label: "Open",
-        action: () => {},
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.openFileDefault(targetPath);
+        },
         submenu: [
-          {
-            icon: "eye",
-            label: "Open",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.openFileDefault(targetPath);
-            },
-          },
           {
             icon: "cog",
             label: "Open With…",

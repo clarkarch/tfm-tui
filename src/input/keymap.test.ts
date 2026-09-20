@@ -425,7 +425,7 @@ describe("file menu keys", () => {
     expect(h.calls).not.toContain("fmenu:close");
   });
 
-  test("enter opens a parent row's submenu instead of activating it", () => {
+  test("enter activates a parent row's own action (right opens its submenu)", () => {
     const calls: string[] = [];
     const fmenu = {
       idx: 0,
@@ -434,8 +434,8 @@ describe("file menu keys", () => {
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.key("return");
-    expect(calls).toEqual([]);
-    expect(h.calls).toContain("fmenu:sub-open");
+    expect(calls).toEqual(["parent"]);
+    expect(h.calls).not.toContain("fmenu:sub-open");
   });
 });
 

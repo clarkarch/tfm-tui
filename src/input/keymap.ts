@@ -308,8 +308,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   // File context menu: move*/openSelected navigate it (shared with the grid),
-  // esc closes. A parent row with a submenu opens a flyout on right/enter;
-  // while it is open, left/esc close it and up/down/enter act on the flyout.
+  // esc closes. A parent row's action fires on enter; its flyout opens on
+  // right; while it is open, left/esc close it and up/down/enter act on it.
   // Returns true when the menu is open (it swallows all other keys while open).
   const stepFileMenu = (fmenu: NonNullable<ReturnType<KeyRouterCtx["getFileMenuState"]>>, delta: number): void => {
     const entries = fmenu.entries;
@@ -330,8 +330,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
     if (fmenu.idx < 0) return; // no cursor yet: enter is a no-op
-    if (entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
-    else entries[fmenu.idx]?.action();
+    // parent rows are directly clickable — enter fires the action, → opens
+    // the flyout for the variants
+    entries[fmenu.idx]?.action();
   };
   const handleFileMenuKeys = (ev: KeyPressEvent): boolean => {
     const fmenu = ctx.getFileMenuState();

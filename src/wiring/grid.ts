@@ -32,6 +32,7 @@ import type { ListEntry } from "../ui/ui-menu";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, NavWiring } from "./types";
 import type { PluginsWiring } from "./plugins";
+import type { RethemeWiring } from "./settings";
 
 export const wireGrid = (deps: {
   core: CoreWiring;
@@ -42,8 +43,10 @@ export const wireGrid = (deps: {
   plugins: PluginsWiring;
   // pick overlay wires LAST (wiring/keymap) — lazy getter, action-time only
   getPick(): ReturnType<typeof makePick>;
+  // retheme wires after grid — lazy getter, action-time only (same seam)
+  getRetheme: () => RethemeWiring;
 }) => {
-  const { core, nav, chrome, gridFoundation, fileops, plugins, getPick } = deps;
+  const { core, nav, chrome, gridFoundation, fileops, plugins, getPick, getRetheme } = deps;
   const { selection, selections, rename } = gridFoundation;
   const { byId, stripSelectable } = core.lookup;
   const { themeGet, home, state } = core;
@@ -355,12 +358,29 @@ export const wireGrid = (deps: {
     cellMetrics: core.slots.cellMetrics,
   });
 
+  // open a folder in the inactive pane, enabling dual-pane when off: enable
+  // through the single applyConfig path (normalizePanes points the fresh pane
+  // at the current cwd), then switch + navigate the now-active other pane
+  // through the tested navigate path (tab sync, hooks, renderAll included).
+  const openInOtherPane = (dir: string): void => {
+    if (!core.config.ui.dualPane) {
+      getRetheme().applyConfig({ ...core.config, ui: { ...core.config.ui, dualPane: true } });
+      getRetheme().scheduleSaveConfig();
+    }
+    const other = core.panes.active === 0 ? 1 : 0;
+    // a selection must not survive a pane switch (same rule as switchPane)
+    gridFoundation.selections[core.panes.active]?.clearTileSelection();
+    core.setActivePane(other);
+    nav.navigate(dir);
+  };
+
   // --- Menu entry builders (what the menus contain) live in ./menu-entries;
   // the floating menu widget itself lives in ./ui-menu ---
   const menuEntries = makeMenuEntries({
     closeFileMenu: chrome.menu.closeFileMenu,
     navigate: nav.navigate,
     newTab: nav.newTab,
+    openInOtherPane,
     // "Open With…": enumerate handlers for the file's mime, then let the
     // generic pick overlay choose (same pick instance the compress picker uses).
     // Unreadable files escalate: the chosen app launches elevated after the

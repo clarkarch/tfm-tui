@@ -189,6 +189,9 @@ const grid = wireGrid({
   // getPick closes over `keymap` (wires last) — only called from the
   // "Compress to…" action at interaction time, so the TDZ is long settled
   getPick: () => keymap.pick,
+  // retheme wires after grid — only called from "Open in New Pane" at
+  // interaction time, same settled-TDZ seam
+  getRetheme: () => retheme,
 });
 
 // --- settings: settings model + esc menu ---

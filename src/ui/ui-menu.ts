@@ -27,7 +27,8 @@ export type ListEntry = {
   hintIcon?: string;
   action: () => void;
   sep?: boolean;
-  // nested flyout items; a parent row is not directly actionable
+  // nested flyout items; a parent row stays directly clickable (its action
+  // fires on click/enter, the flyout opens on hover / →)
   submenu?: ListEntry[];
 };
 
@@ -232,13 +233,9 @@ export const makeMenu = (ctx: MenuCtx) => {
           },
           () => {
             if (!state) return;
-            if (e.submenu) {
-              state.idx = i;
-              state.subIdx = -1;
-              renderFileMenu();
-            } else {
-              e.action();
-            }
+            // a parent row's action is directly clickable (hover / → still
+            // open the flyout for the variants) — a click fires it
+            e.action();
           },
         ),
       );

@@ -70,6 +70,7 @@ const ASCII_GLYPHS: Record<string, string> = {
   email: "@",
   magnet: "U",
   android: "R",
+  "border-vertical": "|",
   "arrow-up": "^",
   "arrow-down": "v",
 };

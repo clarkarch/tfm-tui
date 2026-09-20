@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
-import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { createTestRenderer, MouseButtons, type TestRendererSetup } from "@opentui/core/testing";
 import { makeMenu, type ListEntry } from "./ui-menu";
 import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
@@ -198,6 +198,24 @@ describe("flyout submenus", () => {
     await t.renderOnce();
     const sub = t.renderer.root.findDescendantById("tfm-filemenu-sub") as any;
     expect(sub.left).toBe(menu.fileMenuState()!.px - 36);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
+  test("clicking a submenu parent fires its own action (flyout opens on hover)", async () => {
+    const calls: string[] = [];
+    menu.openContextMenu(5, 5, "", [
+      {
+        label: "Open",
+        action: () => calls.push("parent"),
+        submenu: [{ label: "Open in New Tab", action: () => calls.push("sub") }],
+      },
+    ]);
+    await t.renderOnce();
+    // divider paints at py, so row 0 sits at py + 1
+    await t.mockMouse.click(7, 6, MouseButtons.LEFT);
+    await t.renderOnce();
+    expect(calls).toEqual(["parent"]);
     menu.closeFileMenu();
     await t.renderOnce();
   });
