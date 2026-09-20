@@ -255,7 +255,8 @@ export const wireChrome = async (deps: {
     renderer,
     byId,
     opts: () => ({
-      enabled: core.config.ui.sidebarAnimation && !core.compatActive(),
+      // text-cell anims need no graphics protocol — enabled in compat too
+      enabled: core.config.ui.sidebarAnimation,
       style: core.config.ui.sidebarAnimationStyle,
       ms: core.config.ui.sidebarAnimationMs,
       slideCells: core.config.ui.sidebarAnimationSlideCells,
@@ -279,7 +280,7 @@ export const wireChrome = async (deps: {
     renderer,
     byId,
     opts: () => ({
-      enabled: core.config.ui.topbarAnimation && !core.compatActive(),
+      enabled: core.config.ui.topbarAnimation,
       style: core.config.ui.topbarAnimationStyle,
       ms: core.config.ui.topbarAnimationMs,
       slideCells: core.config.ui.topbarAnimationSlideCells,
@@ -301,7 +302,7 @@ export const wireChrome = async (deps: {
       renderer,
       byId,
       opts: () => ({
-        enabled: core.config.ui.directoryBarAnimation && !core.compatActive(),
+        enabled: core.config.ui.directoryBarAnimation,
         style: core.config.ui.directoryBarStyle,
         ms: core.config.ui.directoryBarMs,
         slideCells: core.config.ui.directoryBarSlideCells,

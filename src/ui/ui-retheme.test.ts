@@ -8,6 +8,7 @@ import { makeRetheme } from "./ui-retheme";
 import { makePick } from "./ui-pick";
 import { makeFloats } from "./floats";
 import { bumpHex } from "../config/color";
+import { ANSI16 } from "./compat";
 import { defaultConfig, type Config } from "../config/config-schema";
 import { loadConfig } from "../config/config";
 
@@ -164,6 +165,19 @@ describe("applyConfig", () => {
     expect(ctx.calls.syncTerminalTheme).toBe(1);
     expect(ctx.calls.repaintButtons).toBe(1); // rethemeChrome ran
     expect(ctx.calls.bg).toEqual([bumpHex(defaultConfig.theme.bg)]); // renderer bg reset
+  });
+
+  test("compat-active applyConfig quantizes colors to the 16-color set", () => {
+    // the Linux VT ignores 48;2 truecolor, so compat must emit ANSI16 only —
+    // with bg/hover/selected kept distinct, or fills vanish into each other
+    const ctx = mkCtx();
+    (ctx as Record<string, unknown>).compatActive = () => true;
+    const retheme = makeRetheme(ctx as any);
+    retheme.applyConfig(clone(defaultConfig));
+    for (const v of Object.values(ctx.colors)) expect(ANSI16).toContain(v);
+    expect(ctx.colors.bg).not.toBe(ctx.colors.hoverBg);
+    expect(ctx.colors.bg).not.toBe(ctx.colors.accentBg);
+    expect(ctx.colors.hoverBg).not.toBe(ctx.colors.accentBg);
   });
 
   test("a ui-only knob flip re-renders but never invalidates the raster caches", () => {

@@ -235,8 +235,10 @@ export const wireGrid = (deps: {
       renderer: chrome.renderer,
       byId: core.lookup.byId,
       opts: () => ({
+        // text-cell opacity/translate needs no graphics protocol, so file
+        // anims stay enabled in compat (rasters/thumbs/list-force aside)
         style: fileAnimStyleFrom({
-          enabled: core.config.ui.fileAnimation && !core.compatActive(),
+          enabled: core.config.ui.fileAnimation,
           slide: core.config.ui.fileAnimationSlide,
           stagger: core.config.ui.fileAnimationStagger,
         }),

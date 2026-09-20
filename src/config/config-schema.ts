@@ -160,7 +160,8 @@ export type SidebarHoverOpts = {
 export type IconMode = "opaque" | "transparent" | "transparent-partial";
 
 // compat mode for the Linux console / dumb terminals (no kitty graphics, no
-// Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs/anims.
+// Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs, snaps
+// the palette to ANSI16 (the VT ignores truecolor). Text-cell anims stay on.
 // `auto` follows the TERM prefix (same rule as gpm mouse), `on`/`off` override.
 export type CompatMode = "auto" | "on" | "off";
 

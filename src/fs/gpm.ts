@@ -40,6 +40,11 @@ export const GPM_DRAG = 2;
 export const GPM_DOWN = 4;
 export const GPM_UP = 8;
 
+// gpm.h: "if set in the defaultMask, force an already used event to pass
+// over to another handler" — without it, an event our eventMask claims never
+// reaches the default handler (do_client.c returns 1 = used).
+export const GPM_HARD = 256;
+
 export type GpmEvent = {
   buttons: number;
   modifiers: number;
@@ -119,12 +124,15 @@ export const gpmEventToSgr = (ev: GpmEvent): string | null => {
   return `\x1b[<${base + mods};${x};${y}${final}`;
 };
 
-// Gpm_Connect: take every event for our VC (defaultMask 0 = never fall
-// through to the next client), all modifiers.
+// Gpm_Connect: take every event for our VC, all modifiers — and let bare
+// MOVE fall through to the daemon's default handler (do_selection's pointer
+// highlight = the native gpm pointer). do_client.c only passes an already
+// claimed event on when defaultMask carries GPM_HARD, so the mask is
+// MOVE|HARD; buttons stay client-only, keeping gpm selection/paste out.
 export const gpmConnectFrame = (vc: number, pid: number): Buffer => {
   const b = Buffer.alloc(GPM_CONNECT_SIZE);
   b.writeUInt16LE(0xffff, 0);
-  b.writeUInt16LE(0, 2);
+  b.writeUInt16LE(GPM_MOVE | GPM_HARD, 2);
   b.writeUInt16LE(0, 4);
   b.writeUInt16LE(0xffff, 6);
   b.writeInt32LE(pid, 8);

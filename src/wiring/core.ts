@@ -12,7 +12,7 @@ import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
 import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
-import { asciiGlyphFor, resolveCompat } from "../ui/compat";
+import { asciiGlyphFor, compatTheme, resolveCompat } from "../ui/compat";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
 import { isNetworkPath } from "../fs/network";
@@ -40,11 +40,13 @@ export const wireCore = (deps: {
 
   // --- Color palette (theme from config; transparent-bg nudge lives in ./color).
   // Compat forces opaque: a transparent console bg + explicit SGR cells is
-  // how the whole TUI went see-through (see color.ts).
-  const colors = deriveColors(
-    config.theme,
-    config.ui.transparentBg && !resolveCompat(config.ui.compatMode, process.env.TERM),
-  );
+  // how the whole TUI went see-through (see color.ts). Compat ALSO snaps the
+  // palette to ANSI16: the VT ignores 48;2 truecolor, so unquantized theme
+  // hexes collapse into one cell and bg/hover read dead (see compatTheme).
+  const compat = resolveCompat(config.ui.compatMode, process.env.TERM);
+  const colors = compat
+    ? compatTheme(deriveColors(config.theme, false))
+    : deriveColors(config.theme, config.ui.transparentBg && !compat);
   const themeGet = (): Theme => colors;
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---

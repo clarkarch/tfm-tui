@@ -7,6 +7,7 @@ import {
   GPM_DOWN,
   GPM_DRAG,
   GPM_EVENT_SIZE,
+  GPM_HARD,
   GPM_MOVE,
   GPM_UP,
   gpmConnectFrame,
@@ -159,12 +160,16 @@ describe("vcFromTty", () => {
 });
 
 describe("gpmConnectFrame", () => {
-  test("takes every event for this VC", () => {
+  test("takes every event AND lets MOVE fall through to the native pointer", () => {
+    // defaultMask MOVE|HARD: do_client.c delivers our copy AND returns 0, so
+    // the daemon also runs do_selection (the native pointer). Without HARD a
+    // claimed event never reaches the default handler. Buttons stay
+    // client-only (no selection hijack / middle-click paste).
     const b = gpmConnectFrame(7, 1234);
     expect(b.length).toBe(16);
     const dv = new DataView(b.buffer);
     expect(dv.getUint16(0, true)).toBe(0xffff); // eventMask
-    expect(dv.getUint16(2, true)).toBe(0); // defaultMask
+    expect(dv.getUint16(2, true)).toBe(GPM_MOVE | GPM_HARD); // defaultMask
     expect(dv.getUint16(4, true)).toBe(0); // minMod
     expect(dv.getUint16(6, true)).toBe(0xffff); // maxMod
     expect(dv.getInt32(8, true)).toBe(1234); // pid

@@ -8,6 +8,7 @@
 import { watch } from "node:fs";
 import path from "node:path";
 import { bumpHex } from "../config/color";
+import { compatTheme } from "./compat";
 import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
@@ -244,6 +245,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // a transparent console bg + explicit SGR cells turns the TUI see-through
     const effTransparent = ctx.config.ui.transparentBg && !ctx.compatActive?.();
     if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
+    // compat snaps the palette to ANSI16 (the VT ignores 48;2 truecolor);
+    // idempotent, so repeated applies stay stable
+    if (ctx.compatActive?.()) Object.assign(ctx.colors, compatTheme({ ...ctx.colors }));
     lastThemeSig = themeSig(ctx.config);
     const renderChanged = lastRenderSig !== renderSig(ctx.config);
     lastRenderSig = renderSig(ctx.config);
