@@ -167,6 +167,12 @@ const bgInts = (id: string): number[] => {
   const n: any = t.renderer.root.findDescendantById(id);
   return n?.backgroundColor ? [...n.backgroundColor.toInts()] : [0, 0, 0, 0];
 };
+const fgInts = (id: string): number[] => {
+  const n: any = t.renderer.root.findDescendantById(id);
+  const fg = n?.fg;
+  if (fg && typeof fg.toInts === "function") return [...fg.toInts()];
+  return fg;
+};
 const hexInts = (hex: string): number[] => {
   const h = hex.replace("#", "");
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 255];
@@ -266,6 +272,105 @@ describe("settings view", () => {
     await t.renderOnce();
     expect(bgInts("tfm-set-row-2")).toEqual(hexInts(colors.accentBg));
     expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]); // initial row cleared
+  });
+
+  test("selected toggle reads white (not accent); unselected on-toggle keeps the accent cue", async () => {
+    await openSettings();
+    // row 0 = toggle; flip it while selected — the value must read white
+    // on the highlighted row regardless of on/off
+    menu.menuActivate();
+    await t.renderOnce();
+    const shown = text("tfm-set-rowv-0");
+    expect(["on", "off"]).toContain(shown);
+    expect(fgInts("tfm-set-rowv-0")).toEqual(hexInts(colors.white));
+    // move off: value falls back to the on/accent cue (or muted when off)
+    menu.moveMenu(1);
+    await t.renderOnce();
+    expect(fgInts("tfm-set-rowv-0")).toEqual(shown === "on" ? hexInts(colors.accent) : hexInts(colors.sidebarFgMuted));
+  });
+
+  test("chevrons follow the row highlight; synthetic over never steals the cursor", async () => {
+    await openSettings();
+    const move = (id: string, type: string) =>
+      (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    move("tfm-set-row-1", "move");
+    await t.renderOnce();
+    expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+    expect(fgInts("tfm-chev-1--1")).toEqual(hexInts(colors.white));
+    expect(fgInts("tfm-chev-1-1")).toEqual(hexInts(colors.white));
+    // a stationary-cursor synthetic "over" on the old row must not move anything
+    move("tfm-set-row-0", "over");
+    await t.renderOnce();
+    expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+    expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]);
+  });
+
+  test("header hover-off restores the muted label (not the value-row gray)", async () => {
+    const keep = groups;
+    groups = [
+      {
+        header: "general",
+        rows: [
+          { kind: "toggle", label: "aaa", get: () => false, set: () => {} },
+          { kind: "header", label: "section one" },
+          { kind: "toggle", label: "bbb", get: () => false, set: () => {} },
+        ],
+      },
+    ];
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1);
+      menu.menuActivate();
+      await t.renderOnce();
+      const move = (id: string) =>
+        (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+          type: "move",
+          button: 0,
+          x: 0,
+          y: 0,
+          modifiers: { shift: false, alt: false, ctrl: false },
+        });
+      move("tfm-set-row-1");
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      move("tfm-set-row-2");
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual([0, 0, 0, 0]);
+      expect(fgInts("tfm-set-rowl-1")).toEqual(hexInts(colors.sidebarFgMuted));
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("root-menu hover repaints by id without rebuilding the panel", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    const before = [...panel.getChildren()].length;
+    (t.renderer.root.findDescendantById("tfm-root-row-1") as any)?.processMouseEvent({
+      type: "move",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+    expect(bgInts("tfm-root-row-1")).toEqual(hexInts(colors.accentBg));
+    expect([...(t.renderer.root.findDescendantById("tfm-menu-panel") as any).getChildren()].length).toBe(before);
+    menu.closeMenu();
+    await t.renderOnce();
   });
 
   test("tab toggles panes; category switch repaints the active cat", async () => {

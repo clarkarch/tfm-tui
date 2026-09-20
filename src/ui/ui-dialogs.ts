@@ -96,7 +96,9 @@ export const makeDialogs = (ctx: DialogsCtx) => {
           } catch {}
           onPick();
         },
-        onMouseOver: () => setBg(true),
+        // move, not over: a rebuild under a stationary cursor re-fires
+        // synthetic "over" (same trap as settings rows)
+        onMouseMove: () => setBg(true),
         onMouseOut: () => setBg(false),
       },
       Text({ content: label, fg }),

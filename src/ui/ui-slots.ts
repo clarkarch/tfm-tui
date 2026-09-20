@@ -444,7 +444,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, false, ctx.colors().sidebarBg),
         onMouseDown: () => onClose(),
-        onMouseOver: () => paint(true),
+        // move, not over: a rebuild under a stationary cursor re-fires
+        // synthetic "over" (same trap as settings rows)
+        onMouseMove: () => paint(true),
         onMouseOut: () => paint(false),
       },
       slot.el,

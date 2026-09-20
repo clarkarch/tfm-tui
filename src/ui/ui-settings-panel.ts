@@ -134,21 +134,22 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
   };
 
   // --- left pane: categories ---
-  // hover does NOT rebuild the panel — it paints the category via byId
-  // (full rebuilds on every mouseover churned native Text/icon buffers
-  // hard enough that the panel could fail mid-rebuild and vanish)
+  // hover = selection: moving across categories commits switchCategory (the
+  // rows pane must rebuild for the new category anyway). Rows hover by id
+  // without rebuilds (native alloc churn — see the OOM note in AGENTS.md).
   const catPane = Box({ width: CAT_W, flexDirection: "column" });
   cats.forEach((g, gi) => {
     const active = gi === st.catIdx;
     const icon = g.icon ?? CAT_ICONS[g.header ?? ""] ?? "cog";
-    const paintCat = (hover: boolean) => {
-      h.setOnId(`tfm-set-cat-${gi}`, (n) => {
-        n.backgroundColor = active ? c.accentBg : hover ? c.hoverBg : undefined;
-      });
-      h.setOnId(`tfm-set-catl-${gi}`, (n) => {
-        n.fg = active || hover ? c.white : c.sidebarFg;
-      });
-    };
+    const slot = h.makeIconSlot(
+      icon,
+      [
+        { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
+        { fg: c.white, bg: c.accentBg },
+      ],
+      1,
+      active ? 1 : 0,
+    );
     catPane.add(
       Box(
         {
@@ -170,28 +171,18 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
             if (st.catIdx !== gi) h.switchCategory(gi);
             else h.rebuild();
           },
-          onMouseOver: () => {
-            if (st.hoverCat !== gi) {
-              st.hoverCat = gi;
-              paintCat(true);
-            }
+          // move, not over: a rebuild under a stationary cursor re-fires
+          // synthetic "over" and would snap hover back (same trap as rows)
+          onMouseMove: () => {
+            if (st.capturing !== null || st.catIdx === gi) return;
+            // hover = selection: commit the category like rows commit menuIdx
+            h.switchCategory(gi);
           },
           onMouseOut: () => {
-            if (st.hoverCat === gi) {
-              st.hoverCat = -1;
-              paintCat(false);
-            }
+            if (st.hoverCat === gi) st.hoverCat = -1;
           },
         },
-        h.makeIconSlot(
-          icon,
-          [
-            { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
-            { fg: c.white, bg: c.accentBg },
-          ],
-          1,
-          active ? 1 : 0,
-        ).el,
+        slot.el,
         Text({
           id: `tfm-set-catl-${gi}`,
           content: (g.header ?? "general").slice(0, CAT_W - 3),
@@ -299,6 +290,7 @@ const renderRowPane = (
 
   const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) => {
     const tId = `tfm-chev-${index}-${dir}`;
+    const chevOn = (): boolean => st.pane === "rows" && st.menuIdx === index;
     return Box(
       {
         width: 2,
@@ -322,13 +314,16 @@ const renderRowPane = (
           h.paintDesc(fitDescText(descText(rowSpec)));
           h.afterAdjust(index, rowSpec);
         },
-        onMouseOver: () =>
+        // move, not over (same synthetic-over trap as rows — a rebuild under
+        // a stationary cursor re-fires "over" and the stale `active` capture
+        // would paint the wrong state)
+        onMouseMove: () =>
           h.setOnId(tId, (n) => {
             n.fg = c.white;
           }),
         onMouseOut: () =>
           h.setOnId(tId, (n) => {
-            n.fg = active ? c.white : c.sidebarFgMuted;
+            n.fg = chevOn() ? c.white : c.sidebarFgMuted;
           }),
       },
       Text({ id: tId, content: dirText, fg: active ? c.white : c.sidebarFgMuted }),
@@ -361,7 +356,11 @@ const renderRowPane = (
       } catch {}
       control = Box(
         { width: 6, justifyContent: "flex-end" },
-        Text({ id: `tfm-set-rowv-${index}`, content: on ? "on" : "off", fg: on ? c.accent : c.sidebarFgMuted }),
+        Text({
+          id: `tfm-set-rowv-${index}`,
+          content: on ? "on" : "off",
+          fg: active ? c.white : on ? c.accent : c.sidebarFgMuted,
+        }),
       );
     } else if (rowSpec.kind === "stepper" || rowSpec.kind === "cycle") {
       let value = "";

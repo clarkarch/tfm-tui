@@ -222,17 +222,40 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   // repaint one row's highlight via byId — NO rebuild (rebuild churn under
   // memory pressure trips native allocation failures; see AGENTS.md OOM note)
+  // Single paint truth: bg + label + value + BOTH chevrons, so hover and
+  // keyboard land on identical colors (the old split left chevrons muted on
+  // a highlighted row and headers the wrong gray on hover-off).
   const paintRowAt = (idx: number, on: boolean): void => {
     const c = menuC;
+    const row = rowsOf(st.catIdx)[idx];
+    const isHeader = row?.kind === "header";
     setOnId(`tfm-set-row-${idx}`, (n) => {
       n.backgroundColor = on ? c.accentBg : undefined;
     });
     setOnId(`tfm-set-rowl-${idx}`, (n) => {
-      n.fg = on ? c.white : c.sidebarFg;
+      n.fg = on ? c.white : isHeader ? c.sidebarFgMuted : c.sidebarFg;
     });
     setOnId(`tfm-set-rowv-${idx}`, (n) => {
-      n.fg = on ? c.white : c.sidebarFgMuted;
+      if (on) {
+        n.fg = c.white;
+        return;
+      }
+      // off: toggle keeps its on/accent cue, everything else mutes
+      if (row?.kind === "toggle") {
+        let isOn = false;
+        try {
+          isOn = row.get();
+        } catch {}
+        n.fg = isOn ? c.accent : c.sidebarFgMuted;
+        return;
+      }
+      n.fg = c.sidebarFgMuted;
     });
+    for (const dir of [-1, 1]) {
+      setOnId(`tfm-chev-${idx}-${dir}`, (n) => {
+        n.fg = on ? c.white : c.sidebarFgMuted;
+      });
+    }
   };
 
   // after applyAdjust on a value row: refresh JUST the value text by id.
@@ -257,7 +280,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             })();
     setOnId(`tfm-set-rowv-${index}`, (n) => {
       n.content = value.length > 12 ? value.slice(0, 12) : value;
-      if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
+      // selected rows keep white values; unselected toggles keep the on/accent cue
+      if (st.pane === "rows" && st.menuIdx === index) n.fg = menuC.white;
+      else if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
     });
   };
 
@@ -439,11 +464,20 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     );
 
     if (!panelView) {
+      const paintRootAt = (index: number, on: boolean): void => {
+        setOnId(`tfm-root-row-${index}`, (n) => {
+          n.backgroundColor = on ? c.accentBg : undefined;
+        });
+        setOnId(`tfm-root-rowl-${index}`, (n) => {
+          n.fg = on ? c.white : c.sidebarFg;
+        });
+      };
       const hoverSelect = (index: number) => () => {
-        if (st.menuIdx !== index) {
-          st.menuIdx = index;
-          renderMenuContent();
-        }
+        if (st.menuIdx === index) return;
+        const prev = st.menuIdx;
+        st.menuIdx = index;
+        if (prev >= 0) paintRootAt(prev, false);
+        paintRootAt(index, true);
       };
       const activateRow = (index: number) => (ev: any) => {
         try {
@@ -462,6 +496,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       ) =>
         Box(
           {
+            id: `tfm-root-row-${index}`,
             width: "100%",
             height: 1,
             flexDirection: "row",
@@ -485,7 +520,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
                 ).el,
               ]
             : []),
-          Text({ content: icon ? label : ` ${label}`, fg: active ? c.white : c.sidebarFg }),
+          Text({
+            id: `tfm-root-rowl-${index}`,
+            content: icon ? label : ` ${label}`,
+            fg: active ? c.white : c.sidebarFg,
+          }),
           Box({ flexGrow: 1 }),
           ...(hint ? [Text({ content: `${hint} `, fg: c.sidebarFgMuted })] : []),
         );
