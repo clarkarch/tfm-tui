@@ -97,6 +97,7 @@ export const wireNav = (deps: {
       } catch {}
     },
     closeTerminal: () => getTerm().closeTerminalPane(),
+    stopGpm: () => getChrome().stopGpm(),
     flushSession: () => {
       // no isVirtualCwd() guard: restore deliberately accepts recent:// and
       // starred:// tabs, so quitting from a virtual place must still persist

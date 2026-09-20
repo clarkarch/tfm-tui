@@ -72,6 +72,7 @@ export type ChromeWiring = {
   dialogs: ReturnType<typeof makeDialogs>;
   connectServer: (raw?: string) => void;
   disconnectServer: (mountPath: string) => void;
+  stopGpm: () => void;
 };
 
 export type GridFoundationWiring = {

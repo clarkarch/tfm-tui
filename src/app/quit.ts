@@ -12,6 +12,9 @@ export type QuitCtx = {
   // kill the embedded PTY pane — it would otherwise rely on EIO from the
   // dead master and a shell with a foreground child can linger
   closeTerminal?(): void;
+  // close the gpm client socket (Linux text console only) so the daemon
+  // doesn't re-point it at a default console after we're gone
+  stopGpm?(): void;
   // synchronous final session write — process.exit kills pending async IO,
   // so the debounced 400ms save loses the last navigation
   flushSession?(): void;
@@ -54,6 +57,11 @@ export const runTeardownSteps = (ctx: QuitCtx): boolean => {
   }
   try {
     ctx.closeTerminal?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopGpm?.();
   } catch {
     failed = true;
   }

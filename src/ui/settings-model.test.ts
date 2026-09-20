@@ -219,6 +219,7 @@ describe("settingGroups shape", () => {
       "##mouse",
       "double-click ms",
       "drag threshold",
+      "gpm mouse",
       "toast duration",
     ]);
     // hidden files leads into its listing topic; session persistence is its own section

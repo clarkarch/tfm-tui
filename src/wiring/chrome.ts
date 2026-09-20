@@ -7,6 +7,8 @@
 
 import { createCliRenderer } from "@opentui/core";
 import path from "node:path";
+import { PassThrough } from "node:stream";
+import { startGpmInput } from "../fs/gpm";
 import { readdir } from "node:fs/promises";
 import { spawnSafe } from "../fs/spawn-safe";
 import { loadSystemPlaces } from "../fs/places";
@@ -213,11 +215,28 @@ export const wireChrome = async (deps: {
     toolbarShells: [toolbars[0].makeToolbarShell(), toolbars[1].makeToolbarShell()],
   });
 
-  // --- Renderer boot ---
+  // --- Renderer boot. On a Linux text console, gpm is the only mouse source
+  // (its kernel report path can't carry motion), so we open the /dev/gpmctl
+  // client socket and merge translated SGR bytes into a PassThrough the
+  // renderer reads as stdin. Everywhere else startGpmInput returns null and
+  // the plain process.stdin is used — no behavior change. ---
+  const gpmStream = new PassThrough();
+  const gpmInput = startGpmInput({
+    enabled: core.config.ui.gpmMouse,
+    onBytes: (s) => gpmStream.write(s),
+    log: (m) => dlog(m),
+  });
+  if (gpmInput) {
+    process.stdin.pipe(gpmStream);
+    (gpmStream as { setRawMode?: (v: boolean) => void; isTTY?: boolean }).setRawMode = (v) =>
+      process.stdin.setRawMode?.(v);
+    (gpmStream as { isTTY?: boolean }).isTTY = true;
+  }
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     targetFps: 60,
     maxFps: 120,
+    ...(gpmInput ? { stdin: gpmStream as unknown as NodeJS.ReadStream } : {}),
     ...(core.config.ui.transparentBg ? {} : { backgroundColor: core.colors.bg }),
   });
   renderer.root.add(container);
@@ -509,5 +528,6 @@ export const wireChrome = async (deps: {
     dialogs,
     connectServer,
     disconnectServer,
+    stopGpm: () => gpmInput?.stop(),
   };
 };
