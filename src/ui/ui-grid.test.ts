@@ -76,6 +76,7 @@ let searchSignals: AbortSignal[];
 let searchGate: Promise<void> | null;
 let searchEntries: Entry[];
 let viewMode: "grid" | "list";
+let rasterSig: string;
 let selection: ReturnType<typeof makeSelection>;
 let renderGrid: (force?: boolean) => Promise<void>;
 let syncWindow: () => void;
@@ -113,6 +114,7 @@ beforeAll(async () => {
   searchGate = null;
   searchEntries = [];
   viewMode = "grid";
+  rasterSig = "raster-a";
   availWSet = null;
   hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
@@ -172,6 +174,7 @@ beforeAll(async () => {
     previewEnabled: () => false,
     previewWidth: () => 0,
     viewMode: () => viewMode,
+    rasterSig: () => rasterSig,
     wordWrap: () => wordWrap,
     reservedRight: () => 0,
     // per-pane width: null falls back to termW - sw - reservedRight
@@ -1526,6 +1529,22 @@ describe("renderGrid (windowed grid)", () => {
     } finally {
       scroller.scrollTop = 0;
       gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("flipping the raster mode rebuilds so force-glyph applies live", async () => {
+    // force-glyph/icons/compat change what each tile paints (raster vs glyph)
+    // without touching the listing, and without a signature entry the render
+    // early-outs and the toggle visibly does nothing until restart
+    await renderGrid();
+    const before = iconSlots.length;
+    rasterSig = "raster-b";
+    try {
+      await renderGrid();
+      expect(iconSlots.length).toBeGreaterThan(before);
+    } finally {
+      rasterSig = "raster-a";
       await renderGrid();
     }
   });

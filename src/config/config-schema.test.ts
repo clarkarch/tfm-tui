@@ -71,6 +71,12 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { icons: false } }).ui.icons).toBe("opaque");
   });
 
+  test("force-glyph defaults off, parses a plain bool", () => {
+    expect(parseConfigDoc(undefined).ui.forceGlyph).toBe(false);
+    expect(parseConfigDoc({ ui: { "force-glyph": true } }).ui.forceGlyph).toBe(true);
+    expect(parseConfigDoc({ ui: { "force-glyph": "yes" } }).ui.forceGlyph).toBe(false);
+  });
+
   test("hover lift options parse with fallbacks (no distance knob: fixed 1 cell)", () => {
     const defs = parseConfigDoc(undefined).ui;
     expect(defs.fileHoverIncludeLabel).toBe(false);

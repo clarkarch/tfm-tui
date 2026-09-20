@@ -65,9 +65,11 @@ type PropsCtx = {
   setIconState(spec: any, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };
-  // compat mode (linux console): hero falls back to the icon slot — the thumb
-  // raster could never land. Optional so test fakes keep working.
+  // compat mode (linux console): hero falls back to the icon slot, the thumb
+  // raster could never land. force-glyph does the same for buggy kitty impls.
+  // Optional so test fakes keep working.
   compatActive?(): boolean;
+  forceGlyph?(): boolean;
 };
 
 const execFileP = promisify(execFile);
@@ -219,6 +221,7 @@ export const makeProps = (ctx: PropsCtx) => {
     const isVideo = !isDirTarget && fileIsVideo(targetPath);
     const wantsThumb =
       !ctx.compatActive?.() &&
+      !ctx.forceGlyph?.() &&
       !isDirTarget &&
       (fileIsImage(targetPath) || (isVideo && canThumbVideo())) &&
       st.size > 0 &&

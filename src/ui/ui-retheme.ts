@@ -149,9 +149,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // its own invalidation) right after — caching the flag flip would clear
   // icon rasters twice for one user action
   // compatMode rides along: flipping it changes the effective transparentBg
-  // (opaque on the console), so rasters must invalidate like a theme change
+  // (opaque on the console), so rasters must invalidate like a theme change.
+  // forceGlyph too: drains stopped while on must resume on the way back, or
+  // tiles keep glyphs forever.
   const themeSig = (c: Config): string =>
-    JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.compatMode]);
+    JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.compatMode, c.ui.forceGlyph]);
   let lastThemeSig = themeSig(ctx.config);
 
   // UI keys that a settings adjust can change WITHOUT the heavy renderAll steps
@@ -227,6 +229,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     return JSON.stringify([ui, c.theme]);
   };
   let lastRenderSig = renderSig(ctx.config);
+  // force-glyph pairing nudge: fire once on the off->on edge (held-on applies
+  // stay silent; off->on reminds again). Boot never passes through here, so
+  // a config file with it already on doesn't spam.
+  let lastForceGlyph = ctx.config.ui.forceGlyph;
 
   const applyConfig = (fresh: Config): void => {
     const themeChanged = lastThemeSig !== themeSig(fresh);
@@ -241,6 +247,12 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     lastThemeSig = themeSig(ctx.config);
     const renderChanged = lastRenderSig !== renderSig(ctx.config);
     lastRenderSig = renderSig(ctx.config);
+    if (ctx.config.ui.forceGlyph && !lastForceGlyph) {
+      try {
+        ctx.notify("force glyph is on, list view pairs best with it", "compat", "info");
+      } catch {}
+    }
+    lastForceGlyph = ctx.config.ui.forceGlyph;
 
     ctx.setSw(ctx.config.ui.sidebarWidth);
     ctx.setTileW(ctx.config.ui.tileWidth);

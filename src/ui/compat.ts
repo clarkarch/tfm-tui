@@ -19,8 +19,15 @@ export const resolveCompat = (mode: CompatMode | string, term?: string | null): 
   return isCompatTerm(term ?? process.env.TERM);
 };
 
+// rebuild signature over everything that decides raster vs glyph. Grid AND
+// sidebar key off this through their own `rasterSig` ctx fields, and both
+// wirings must call THIS (never an inline JSON) so the two surfaces cannot
+// drift into disagreeing about what a graphics-mode flip rebuilds.
+export const rasterSigOf = (icons: string, compat: boolean, forceGlyph: boolean): string =>
+  JSON.stringify([icons, compat, forceGlyph]);
+
 // ASCII fallbacks for the icon names glyphs.ts can emit. Console fonts carry
-// the basic Latin set only — every value here is < 0x80 by construction
+// the basic Latin set only, so every value here is < 0x80 by construction
 // (pinned by compat.test.ts). Unknown names degrade to the file marker.
 const ASCII_GLYPHS: Record<string, string> = {
   folder: "D",

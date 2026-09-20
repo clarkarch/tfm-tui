@@ -2,7 +2,7 @@
 // Pure leaf: TERM prefix decides, no fs/renderer. `auto` follows the terminal,
 // `on`/`off` override it for weird ssh terms or patched console fonts.
 import { describe, expect, test } from "bun:test";
-import { asciiGlyphFor, isCompatTerm, resolveCompat } from "./compat";
+import { asciiGlyphFor, isCompatTerm, rasterSigOf, resolveCompat } from "./compat";
 
 describe("isCompatTerm", () => {
   test("linux console terms are compat", () => {
@@ -35,6 +35,16 @@ describe("resolveCompat", () => {
   test("unknown mode strings fall back to auto behavior, never throw", () => {
     expect(resolveCompat("gibberish" as never, "linux")).toBe(true);
     expect(resolveCompat("gibberish" as never, "xterm-kitty")).toBe(false);
+  });
+});
+
+describe("rasterSigOf", () => {
+  test("any raster-affecting knob moves the signature", () => {
+    const base = rasterSigOf("opaque", false, false);
+    expect(rasterSigOf("transparent", false, false)).not.toBe(base);
+    expect(rasterSigOf("opaque", true, false)).not.toBe(base);
+    expect(rasterSigOf("opaque", false, true)).not.toBe(base);
+    expect(rasterSigOf("opaque", false, false)).toBe(base);
   });
 });
 

@@ -46,6 +46,7 @@ let calls: {
   iconStates: Array<{ spec: any; idx: number }>;
 };
 let cwd: string;
+let rasterSig: string;
 let tabBar: boolean;
 let tabModel: { list: Tab[]; active: number };
 let tabModel1: { list: Tab[]; active: number };
@@ -84,6 +85,7 @@ beforeAll(async () => {
     iconStates: [],
   };
   cwd = HOME;
+  rasterSig = "raster-a";
   tabBar = false;
   tabModel = { list: mkTabs(2), active: 1 };
   tabModel1 = { list: mkTabs(3), active: 2 };
@@ -106,6 +108,7 @@ beforeAll(async () => {
     sw: () => 20,
     sideInnerW: () => 20,
     tabBar: () => tabBar,
+    rasterSig: () => rasterSig,
     renderAll: () => {},
     navigate: (target) => {
       calls.navigate.push(target);
@@ -232,6 +235,23 @@ describe("renderSidebar", () => {
     expect(chrome.placesHost[0]!.row).toBe(row0);
     expect(chrome.placesHost[0]!.specs[0]).toBe(spec0);
     expect(chrome.placesHost[0]!.selected).toBe(false);
+  });
+
+  test("a raster-mode flip rebuilds rows so force-glyph applies live", async () => {
+    // same places, different graphics mode: the old rasters must go, so the
+    // rows (and their icon slots) are re-created instead of highlighted
+    cwd = HOME;
+    rasterSig = "raster-a";
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const row0 = chrome.placesHost[0]!.row;
+    rasterSig = "raster-b";
+    chrome.renderSidebar();
+    await t.renderOnce();
+    expect(chrome.placesHost[0]!.row).not.toBe(row0);
+    rasterSig = "raster-a";
+    chrome.renderSidebar();
+    await t.renderOnce();
   });
 });
 

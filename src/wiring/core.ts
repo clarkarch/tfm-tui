@@ -70,6 +70,9 @@ export const wireCore = (deps: {
   const compatActive = (): boolean => resolveCompat(config.ui.compatMode, process.env.TERM);
   // ASCII glyphs on the console (no Nerd PUA there), Nerd glyphs elsewhere
   const compatGlyphFor = (name: string): string => (compatActive() ? asciiGlyphFor(name) : glyphFor(name));
+  // force-glyph: same raster skip as compat, but WITHOUT the console extras
+  // (list view, ASCII glyphs, anim/transparent forcing), live-read like compat
+  const forceGlyph = (): boolean => config.ui.forceGlyph;
 
   // --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY); every category the
   // ./filetype classifier can emit gets a file-glyph fallback ---
@@ -109,6 +112,7 @@ export const wireCore = (deps: {
     modalOpen: () => floats.hasModal(),
     glyphFor: compatGlyphFor,
     compatActive,
+    forceGlyph,
   });
 
   // --- App state & history (type + boot-state factory live in ./nav with the
@@ -176,6 +180,7 @@ export const wireCore = (deps: {
     colors,
     themeGet,
     compatActive,
+    forceGlyph,
     geometry,
     sideInnerW,
     lookup,

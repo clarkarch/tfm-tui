@@ -37,10 +37,11 @@ toast-duration-ms                     = 3000        # how long notifications sta
 follow-terminal                       = false       # true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset
 transparent-bg                        = false       # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
-compat-mode                           = "auto"      # "auto" = list + ASCII glyphs on linux/dumb terms; "on" = force it; "off" = never
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
+compat-mode                           = "auto"      # "auto" = list + ASCII glyphs on linux/dumb terms; "on" = force it; "off" = never
+force-glyph                           = false       # true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)
 file-animation                        = false       # true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)
 file-animation-slide                  = false       # true = files rise up into place (distance = file-animation-slide-pct)
 file-animation-stagger                = false       # true = top-to-bottom cascade instead of one wave

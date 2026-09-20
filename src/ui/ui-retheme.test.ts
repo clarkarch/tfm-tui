@@ -188,6 +188,37 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
+  test("force-glyph flip invalidates the raster caches (drains resume on the way back)", () => {
+    // off->on stops the drains; on->off must re-raster, or tiles keep glyphs
+    // forever, same invalidation contract as the icons-mode flip
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).forceGlyph = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.resetIconQueue).toBe(1);
+  });
+
+  test("force-glyph rising edge nudges toward list view once (no repeat spam)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).forceGlyph = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(1);
+    expect(String(ctx.calls.notify[0]![0])).toMatch(/list/i);
+
+    retheme.applyConfig(clone(ctx.config));
+    expect(ctx.calls.notify.length).toBe(1); // held on: silent
+
+    const off = clone(ctx.config);
+    (off.ui as Record<string, unknown>).forceGlyph = false;
+    retheme.applyConfig(off);
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(2); // off->on again: remind again
+  });
+
   test("a hover-geometry toggle re-renders so tiles gain or lose lift room", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);

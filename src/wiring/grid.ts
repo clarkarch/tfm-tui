@@ -24,6 +24,7 @@ import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { waitForResolution } from "../ui/ui-lookup";
 import { glyph } from "../ui/glyphs";
+import { rasterSigOf } from "../ui/compat";
 import { activeFacade } from "../app/panes";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir, canReadSync } from "../fs/fsutil";
@@ -77,6 +78,7 @@ export const wireGrid = (deps: {
     nextIconId: core.slots.nextIconId,
     fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
     compatActive: core.compatActive,
+    forceGlyph: core.forceGlyph,
     // root preview: non-interactive `sudo -n cat` only (cached timestamp) —
     // a preview must never pop a password prompt on every focus move
     sudoCat: async (p) => {
@@ -294,6 +296,9 @@ export const wireGrid = (deps: {
       previewWidth: () => core.config.ui.previewWidth,
       // compat forces the compact rows: icon tiles need graphics + Nerd glyphs
       viewMode: () => (core.compatActive() ? "list" : core.config.ui.viewMode),
+      // raster-affecting state the grid rebuild keys off (force-glyph/icons/
+      // compat flips must rebuild even though the listing is unchanged)
+      rasterSig: () => rasterSigOf(core.config.ui.icons, core.compatActive(), core.config.ui.forceGlyph),
       wordWrap: () => core.config.ui.wordWrap,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,
@@ -355,6 +360,7 @@ export const wireGrid = (deps: {
     setIconState: core.slots.setIconState,
     fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
     compatActive: core.compatActive,
+    forceGlyph: core.forceGlyph,
     cellMetrics: core.slots.cellMetrics,
   });
 

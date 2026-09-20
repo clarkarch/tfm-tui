@@ -18,6 +18,7 @@ const makeHarness = () => {
   const nodes = new Map<string, any>();
   let modalUp = false;
   let compat = false;
+  let forceGlyph = false;
   const ctx: SlotsCtx = {
     renderer: () => ({ resolution: { width: 800, height: 400 }, terminalWidth: 80, terminalHeight: 20 }),
     byId: (id) => nodes.get(id),
@@ -29,6 +30,7 @@ const makeHarness = () => {
     modalOpen: () => modalUp,
     glyphFor: () => "F",
     compatActive: () => compat,
+    forceGlyph: () => forceGlyph,
   };
   const slots = makeSlots(ctx);
 
@@ -53,6 +55,7 @@ const makeHarness = () => {
     mountFakeSlot,
     setModal: (v: boolean) => (modalUp = v),
     setCompat: (v: boolean) => (compat = v),
+    setForceGlyph: (v: boolean) => (forceGlyph = v),
   };
 };
 
@@ -110,8 +113,8 @@ describe("icon slot scrim", () => {
   });
 
   test("compat mode drains nothing: specs stay pending, thumb jobs are dropped", async () => {
-    // the linux console has no graphics protocol — every raster spawn would
-    // fail, so the drains no-op and the glyph slots stay as built
+    // the linux console has no graphics protocol, so every raster spawn would
+    // fail, and the drains no-op with the glyph slots staying as built
     const h = makeHarness();
     h.setCompat(true);
     const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
@@ -132,6 +135,23 @@ describe("icon slot scrim", () => {
 
     // flipping back off resumes normal draining with the same registry
     h.setCompat(false);
+    await h.slots.drainIconQueue();
+    expect(s.spec.done).toBe(true);
+  });
+
+  test("force glyph drains nothing (buggy kitty impl) without forcing compat", async () => {
+    // same raster skip as compat, but the terminal is modern: view mode,
+    // anims and transparency are untouched, only placements stop
+    const h = makeHarness();
+    h.setForceGlyph(true);
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
+    h.mountFakeSlot(s.spec);
+
+    await h.slots.drainIconQueue();
+    await h.slots.drainThumbs();
+    expect(s.spec.done).toBeFalsy();
+
+    h.setForceGlyph(false);
     await h.slots.drainIconQueue();
     expect(s.spec.done).toBe(true);
   });

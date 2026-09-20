@@ -276,7 +276,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       }
       const built = schemaRow(row);
       // these change the PANEL's own colors (or its icons) — their adjust must re-render it
-      if (row.prop === "uiStyle" || row.prop === "transparentBg" || row.prop === "icons" || row.prop === "compatMode") {
+      if (
+        row.prop === "uiStyle" ||
+        row.prop === "transparentBg" ||
+        row.prop === "icons" ||
+        row.prop === "compatMode" ||
+        row.prop === "forceGlyph"
+      ) {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }
       rows.push(built);
@@ -328,9 +334,19 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         case "keys":
           rows = keyRowsWithHeaders();
           break;
-        case "appearance":
-          rows = [themeRow(), ...genericUiRows("appearance"), tabBarRow()];
+        case "appearance": {
+          // tab bar is chrome-visibility but its row is hand-built and appended
+          // after the generic rows, so splice it ahead of the trailing
+          // compatibility section so it keeps trailing its own ##chrome
+          // header instead of the compatibility pair
+          const uiRows = [themeRow(), ...genericUiRows("appearance")];
+          const compatIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "compatibility");
+          const tabRow = tabBarRow();
+          if (compatIdx >= 0) uiRows.splice(compatIdx, 0, tabRow);
+          else uiRows.push(tabRow);
+          rows = uiRows;
           break;
+        }
         case "files":
           rows = [hiddenFilesRow(), ...genericUiRows("files")];
           break;

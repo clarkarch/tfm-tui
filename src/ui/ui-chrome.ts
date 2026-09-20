@@ -29,6 +29,11 @@ type ChromeCtx = {
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
   sideInnerW(): number; // index keeps this helper (outline insets by 2)
   tabBar(): boolean; // config.ui.tabBar
+  // raster-affecting state ([ui] icons + compat + force-glyph): rows paint a
+  // raster or a bare glyph without the places changing, so without this the
+  // sidebar fast path keeps stale rasters across a graphics-mode toggle.
+  // Optional so test fakes keep working.
+  rasterSig?(): string;
   renderAll(): void;
   navigate(target: string): void;
   blurTerminal(): void;
@@ -231,6 +236,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       ctx.uiStyle(),
       ctx.sideInnerW(),
       ctx.colors(),
+      ctx.rasterSig?.() ?? "",
       groups.map((g) =>
         g.map((p) => [
           p.label,

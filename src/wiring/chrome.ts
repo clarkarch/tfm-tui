@@ -20,6 +20,7 @@ import { makeToolbar, toolbarItemIds, crumbItemIds } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
 import { warmEmbeddedIcons } from "../ui/icons";
 import { makeNotify } from "../ui/notify";
+import { rasterSigOf } from "../ui/compat";
 import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
@@ -103,6 +104,7 @@ export const wireChrome = async (deps: {
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
     tabBar: () => core.config.ui.tabBar,
+    rasterSig: () => rasterSigOf(core.config.ui.icons, core.compatActive(), core.config.ui.forceGlyph),
     renderAll: nav.renderAll,
     navigate: (target) => nav.navigate(target),
     blurTerminal: () => getFileops().terminal.blurTerminal(),

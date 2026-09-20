@@ -62,6 +62,12 @@ type GridRendererCtx = {
   previewEnabled(): boolean;
   previewWidth(): number;
   viewMode(): "grid" | "list";
+  // raster-affecting state ([ui] icons + compat + force-glyph): tiles paint a
+  // raster or a bare glyph without the listing changing, so without this the
+  // rebuild early-outs and a graphics-mode toggle visibly does nothing until
+  // restart. Deliberately OUT of contentSigOf: a mode flip rebuilds silently
+  // instead of replaying the intro cascade. Optional so test fakes keep working.
+  rasterSig?(): string;
   wordWrap(): boolean;
   reservedRight(): number;
   // per-pane content width; when absent falls back to termW - sw - reservedRight
@@ -748,6 +754,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         ctx.windowedGrid?.() ?? false,
         ctx.listRowH(),
         ctx.colors(),
+        ctx.rasterSig?.() ?? "",
         typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
       ]);
     // content-only signature: what the animation keys off (the listed files +

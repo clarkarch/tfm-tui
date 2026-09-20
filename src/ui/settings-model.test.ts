@@ -231,17 +231,20 @@ describe("settingGroups shape", () => {
       "restore session",
       "persistent undo",
     ]);
-    // theme preset leads; style surfaces share a section, chrome visibility another
+    // theme preset leads, then style, chrome (sidebar title with tab bar
+    // trailing it), and the compatibility pair bottoms out the group
     expect(seq("appearance")).toEqual([
       "theme",
       "##style",
       "transparent bg",
       "icons",
-      "compat mode",
       "ui style",
       "##chrome",
       "sidebar title",
       "tab bar",
+      "##compatibility",
+      "compat mode",
+      "force glyph",
     ]);
   });
 

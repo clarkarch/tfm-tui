@@ -192,6 +192,7 @@ export type UiConfig = {
   transparentBg: boolean;
   icons: IconMode;
   compatMode: CompatMode;
+  forceGlyph: boolean;
   sidebarTitle: boolean;
   uiStyle: UiStyle;
   tabBar: boolean;
@@ -745,19 +746,6 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "enum",
     section: "ui",
-    tomlKey: "compat-mode",
-    prop: "compatMode",
-    values: ["auto", "on", "off"],
-    def: "auto",
-    doc: '"auto" = list + ASCII glyphs on linux/dumb terms; "on" = force it; "off" = never',
-    label: "compat mode",
-    blurb: "Plain fallback for the Linux console",
-    group: "appearance",
-    subsection: "style",
-  },
-  {
-    kind: "enum",
-    section: "ui",
     tomlKey: "ui-style",
     prop: "uiStyle",
     values: ["solid", "outline", "outline-partial"],
@@ -790,6 +778,31 @@ const UI_ROWS: SchemaRow[] = [
     label: "tab bar",
     blurb: "Always show the tab strip",
     group: "appearance",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "compat-mode",
+    prop: "compatMode",
+    values: ["auto", "on", "off"],
+    def: "auto",
+    doc: '"auto" = list + ASCII glyphs on linux/dumb terms; "on" = force it; "off" = never',
+    label: "compat mode",
+    blurb: "Plain fallback for the Linux console",
+    group: "appearance",
+    subsection: "compatibility",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "force-glyph",
+    prop: "forceGlyph",
+    def: false,
+    doc: "true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)",
+    label: "force glyph",
+    blurb: "Glyphs instead of image icons",
+    group: "appearance",
+    subsection: "compatibility",
   },
   {
     kind: "bool",

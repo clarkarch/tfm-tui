@@ -45,9 +45,11 @@ type PreviewCtx = {
   drainIconQueue(): void;
   nextIconId(): string; // `tfm-icon-${iconSeq++}`
   fallbackGlyphFor(name: string): string; // glyph[name] ?? glyph.file!
-  // compat mode (linux console): skip the image raster branch — no graphics
-  // protocol, so the slot would sit empty. Optional so test fakes keep working.
+  // compat mode (linux console): skip the image raster branch, no graphics
+  // protocol, so the slot would sit empty. force-glyph does the same for
+  // buggy kitty impls. Optional so test fakes keep working.
   compatActive?(): boolean;
+  forceGlyph?(): boolean;
   // plugin preview text (first matching ext wins in load order). Null/empty =
   // fall through to core. Throwing never breaks the pane. Stale guarded by
   // the same gen-counter as core file reads.
@@ -174,10 +176,11 @@ export const makePreview = (ctx: PreviewCtx) => {
     }
 
     // pictures and videos (ffmpeg present): render the actual content instead
-    // of nothing (skipped in compat mode — no graphics protocol on the console)
+    // of nothing (skipped in compat / force-glyph mode, no working graphics)
     const isVideo = fileIsVideo(key);
     if (
       !ctx.compatActive?.() &&
+      !ctx.forceGlyph?.() &&
       (fileIsImage(key) || (isVideo && canThumbVideo())) &&
       st.size > 0 &&
       st.size <= 26214400
