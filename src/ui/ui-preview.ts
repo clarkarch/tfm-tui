@@ -45,6 +45,9 @@ type PreviewCtx = {
   drainIconQueue(): void;
   nextIconId(): string; // `tfm-icon-${iconSeq++}`
   fallbackGlyphFor(name: string): string; // glyph[name] ?? glyph.file!
+  // compat mode (linux console): skip the image raster branch — no graphics
+  // protocol, so the slot would sit empty. Optional so test fakes keep working.
+  compatActive?(): boolean;
   // plugin preview text (first matching ext wins in load order). Null/empty =
   // fall through to core. Throwing never breaks the pane. Stale guarded by
   // the same gen-counter as core file reads.
@@ -171,9 +174,14 @@ export const makePreview = (ctx: PreviewCtx) => {
     }
 
     // pictures and videos (ffmpeg present): render the actual content instead
-    // of nothing
+    // of nothing (skipped in compat mode — no graphics protocol on the console)
     const isVideo = fileIsVideo(key);
-    if ((fileIsImage(key) || (isVideo && canThumbVideo())) && st.size > 0 && st.size <= 26214400) {
+    if (
+      !ctx.compatActive?.() &&
+      (fileIsImage(key) || (isVideo && canThumbVideo())) &&
+      st.size > 0 &&
+      st.size <= 26214400
+    ) {
       const w = Math.max(4, ctx.previewWidth() - 4);
       const maxH = Math.max(4, ctx.termH() - 8);
       const h = Math.min(maxH, Math.max(3, Math.round(w / ctx.cellMetrics().aspect)));

@@ -237,6 +237,7 @@ describe("settingGroups shape", () => {
       "##style",
       "transparent bg",
       "icons",
+      "compat mode",
       "ui style",
       "##chrome",
       "sidebar title",

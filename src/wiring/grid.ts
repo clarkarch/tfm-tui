@@ -73,6 +73,7 @@ export const wireGrid = (deps: {
     drainIconQueue: () => core.slots.drainIconQueue(),
     nextIconId: core.slots.nextIconId,
     fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    compatActive: core.compatActive,
     // root preview: non-interactive `sudo -n cat` only (cached timestamp) —
     // a preview must never pop a password prompt on every focus move
     sudoCat: async (p) => {
@@ -230,7 +231,7 @@ export const wireGrid = (deps: {
       byId: core.lookup.byId,
       opts: () => ({
         style: fileAnimStyleFrom({
-          enabled: core.config.ui.fileAnimation,
+          enabled: core.config.ui.fileAnimation && !core.compatActive(),
           slide: core.config.ui.fileAnimationSlide,
           stagger: core.config.ui.fileAnimationStagger,
         }),
@@ -288,7 +289,8 @@ export const wireGrid = (deps: {
       colors: themeGet,
       previewEnabled: () => core.config.ui.previewEnabled,
       previewWidth: () => core.config.ui.previewWidth,
-      viewMode: () => core.config.ui.viewMode,
+      // compat forces the compact rows: icon tiles need graphics + Nerd glyphs
+      viewMode: () => (core.compatActive() ? "list" : core.config.ui.viewMode),
       wordWrap: () => core.config.ui.wordWrap,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,
@@ -349,6 +351,7 @@ export const wireGrid = (deps: {
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
     fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    compatActive: core.compatActive,
     cellMetrics: core.slots.cellMetrics,
   });
 

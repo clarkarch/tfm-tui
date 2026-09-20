@@ -159,6 +159,11 @@ export type SidebarHoverOpts = {
 // desktop through.
 export type IconMode = "opaque" | "transparent" | "transparent-partial";
 
+// compat mode for the Linux console / dumb terminals (no kitty graphics, no
+// Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs/anims.
+// `auto` follows the TERM prefix (same rule as gpm mouse), `on`/`off` override.
+export type CompatMode = "auto" | "on" | "off";
+
 export type UiConfig = {
   sidebarWidth: number;
   tileWidth: number;
@@ -186,6 +191,7 @@ export type UiConfig = {
   followTerminal: boolean;
   transparentBg: boolean;
   icons: IconMode;
+  compatMode: CompatMode;
   sidebarTitle: boolean;
   uiStyle: UiStyle;
   tabBar: boolean;
@@ -733,6 +739,19 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs',
     label: "icons",
     blurb: "How icons blend with tile backgrounds",
+    group: "appearance",
+    subsection: "style",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "compat-mode",
+    prop: "compatMode",
+    values: ["auto", "on", "off"],
+    def: "auto",
+    doc: '"auto" = list + ASCII glyphs on linux/dumb terms; "on" = force it; "off" = never',
+    label: "compat mode",
+    blurb: "Plain fallback for the Linux console",
     group: "appearance",
     subsection: "style",
   },

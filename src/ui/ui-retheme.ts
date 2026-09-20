@@ -53,6 +53,9 @@ type RethemeCtx = {
   // dual pane: re-clamp the active pane when dual is disabled (a hidden pane
   // must never own input/status) and repaint the focus cue.
   normalizePanes?(): void;
+  // compat mode (linux console): forces opaque bg + list view. Optional so
+  // tests stay light; absent = modern terminal.
+  compatActive?(): boolean;
 };
 
 export const makeRetheme = (ctx: RethemeCtx) => {
@@ -145,7 +148,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // through renderSig below, and the resolve lands the derived theme (with
   // its own invalidation) right after — caching the flag flip would clear
   // icon rasters twice for one user action
-  const themeSig = (c: Config): string => JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons]);
+  // compatMode rides along: flipping it changes the effective transparentBg
+  // (opaque on the console), so rasters must invalidate like a theme change
+  const themeSig = (c: Config): string =>
+    JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.compatMode]);
   let lastThemeSig = themeSig(ctx.config);
 
   // UI keys that a settings adjust can change WITHOUT the heavy renderAll steps
@@ -228,7 +234,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     Object.assign(ctx.config.theme, fresh.theme);
     Object.assign(ctx.config.keys, fresh.keys);
     Object.assign(ctx.colors, fresh.theme);
-    if (!ctx.config.ui.transparentBg) ctx.colors.bg = bumpHex(ctx.colors.bg);
+    // compat forces opaque (same rule as the boot derive in wiring/core):
+    // a transparent console bg + explicit SGR cells turns the TUI see-through
+    const effTransparent = ctx.config.ui.transparentBg && !ctx.compatActive?.();
+    if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
     lastThemeSig = themeSig(ctx.config);
     const renderChanged = lastRenderSig !== renderSig(ctx.config);
     lastRenderSig = renderSig(ctx.config);
@@ -267,7 +276,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       ctx.clearIconCaches();
       ctx.resetIconQueue();
       try {
-        ctx.renderer().setBackgroundColor(ctx.config.ui.transparentBg ? "transparent" : ctx.colors.bg);
+        ctx
+          .renderer()
+          .setBackgroundColor(ctx.config.ui.transparentBg && !ctx.compatActive?.() ? "transparent" : ctx.colors.bg);
       } catch {}
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();

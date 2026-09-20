@@ -86,6 +86,9 @@ export type SlotsCtx = {
   // true while a modal menu/scrim owns the screen (drain re-applies scrim)
   modalOpen(): boolean;
   glyphFor(name: string): string;
+  // compat mode (linux console): skip every raster/thumb spawn — glyphs only.
+  // Optional so existing test fakes keep working; absent = modern terminal.
+  compatActive?(): boolean;
 };
 
 export const dimHex = (hex: string, f: number): string => {
@@ -188,6 +191,8 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const drainThumbs = async () => {
     const jobs = thumbJobs;
     thumbJobs = [];
+    // drop the backlog (a rebuild re-queues what it needs if compat flips off)
+    if (ctx.compatActive?.()) return;
     if (!ctx.renderer().resolution || jobs.length === 0) return;
     // priority first, then visible tiles, then the off-screen backlog —
     // Array#sort is stable, so each class keeps its push order
@@ -280,6 +285,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
   };
 
   const drainIconQueue = async () => {
+    if (ctx.compatActive?.()) return;
     if (!ctx.renderer().resolution) return;
     const aspect = cellMetrics().aspect;
     const pending = [...allSpecs.values()].filter((s) => !s.done);
@@ -461,6 +467,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       for (const s of allSpecs.values()) s.done = false;
     },
     pushThumbJob: (job: ThumbJob): void => {
+      if (ctx.compatActive?.()) return;
       thumbJobs.push(job);
     },
   };

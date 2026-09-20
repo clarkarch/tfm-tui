@@ -17,6 +17,7 @@ const BG = "#1a1b26";
 const makeHarness = () => {
   const nodes = new Map<string, any>();
   let modalUp = false;
+  let compat = false;
   const ctx: SlotsCtx = {
     renderer: () => ({ resolution: { width: 800, height: 400 }, terminalWidth: 80, terminalHeight: 20 }),
     byId: (id) => nodes.get(id),
@@ -27,6 +28,7 @@ const makeHarness = () => {
     iconCells: () => 3,
     modalOpen: () => modalUp,
     glyphFor: () => "F",
+    compatActive: () => compat,
   };
   const slots = makeSlots(ctx);
 
@@ -45,7 +47,13 @@ const makeHarness = () => {
     return { slot, glyph, img };
   };
 
-  return { slots, nodes, mountFakeSlot, setModal: (v: boolean) => (modalUp = v) };
+  return {
+    slots,
+    nodes,
+    mountFakeSlot,
+    setModal: (v: boolean) => (modalUp = v),
+    setCompat: (v: boolean) => (compat = v),
+  };
 };
 
 describe("icon slot scrim", () => {
@@ -99,6 +107,33 @@ describe("icon slot scrim", () => {
     h.slots.resetIconQueue();
     await h.slots.drainIconQueue();
     expect(s.spec.states[0]!.fg).toBe("#ff0000");
+  });
+
+  test("compat mode drains nothing: specs stay pending, thumb jobs are dropped", async () => {
+    // the linux console has no graphics protocol — every raster spawn would
+    // fail, so the drains no-op and the glyph slots stay as built
+    const h = makeHarness();
+    h.setCompat(true);
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
+    h.mountFakeSlot(s.spec);
+    h.slots.pushThumbJob({
+      slotId: "thumb-1",
+      path: "/nonexistent.png",
+      mtimeMs: 0,
+      size: 10,
+      wCells: 4,
+      vector: false,
+      fallbackGlyph: "F",
+    });
+
+    await h.slots.drainIconQueue();
+    await h.slots.drainThumbs();
+    expect(s.spec.done).toBeFalsy();
+
+    // flipping back off resumes normal draining with the same registry
+    h.setCompat(false);
+    await h.slots.drainIconQueue();
+    expect(s.spec.done).toBe(true);
   });
 });
 

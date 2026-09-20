@@ -237,7 +237,8 @@ export const wireChrome = async (deps: {
     targetFps: 60,
     maxFps: 120,
     ...(gpmInput ? { stdin: gpmStream as unknown as NodeJS.ReadStream } : {}),
-    ...(core.config.ui.transparentBg ? {} : { backgroundColor: core.colors.bg }),
+    // compat forces opaque (same rule as wiring/core + ui-retheme)
+    ...(core.config.ui.transparentBg && !core.compatActive() ? {} : { backgroundColor: core.colors.bg }),
   });
   renderer.root.add(container);
   warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
@@ -252,7 +253,7 @@ export const wireChrome = async (deps: {
     renderer,
     byId,
     opts: () => ({
-      enabled: core.config.ui.sidebarAnimation,
+      enabled: core.config.ui.sidebarAnimation && !core.compatActive(),
       style: core.config.ui.sidebarAnimationStyle,
       ms: core.config.ui.sidebarAnimationMs,
       slideCells: core.config.ui.sidebarAnimationSlideCells,
@@ -276,7 +277,7 @@ export const wireChrome = async (deps: {
     renderer,
     byId,
     opts: () => ({
-      enabled: core.config.ui.topbarAnimation,
+      enabled: core.config.ui.topbarAnimation && !core.compatActive(),
       style: core.config.ui.topbarAnimationStyle,
       ms: core.config.ui.topbarAnimationMs,
       slideCells: core.config.ui.topbarAnimationSlideCells,
@@ -298,7 +299,7 @@ export const wireChrome = async (deps: {
       renderer,
       byId,
       opts: () => ({
-        enabled: core.config.ui.directoryBarAnimation,
+        enabled: core.config.ui.directoryBarAnimation && !core.compatActive(),
         style: core.config.ui.directoryBarStyle,
         ms: core.config.ui.directoryBarMs,
         slideCells: core.config.ui.directoryBarSlideCells,

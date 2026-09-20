@@ -65,6 +65,9 @@ type PropsCtx = {
   setIconState(spec: any, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };
+  // compat mode (linux console): hero falls back to the icon slot — the thumb
+  // raster could never land. Optional so test fakes keep working.
+  compatActive?(): boolean;
 };
 
 const execFileP = promisify(execFile);
@@ -215,7 +218,11 @@ export const makeProps = (ctx: PropsCtx) => {
     const heroW = Math.max(1, Math.round(aspect * ICON_H));
     const isVideo = !isDirTarget && fileIsVideo(targetPath);
     const wantsThumb =
-      !isDirTarget && (fileIsImage(targetPath) || (isVideo && canThumbVideo())) && st.size > 0 && st.size <= 26214400;
+      !ctx.compatActive?.() &&
+      !isDirTarget &&
+      (fileIsImage(targetPath) || (isVideo && canThumbVideo())) &&
+      st.size > 0 &&
+      st.size <= 26214400;
     let heroEl: ReturnType<typeof Box>;
     if (wantsThumb) {
       const slotId = ctx.nextIconId();

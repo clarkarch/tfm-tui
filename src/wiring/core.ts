@@ -12,6 +12,7 @@ import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
 import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
+import { asciiGlyphFor, resolveCompat } from "../ui/compat";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
 import { isNetworkPath } from "../fs/network";
@@ -37,8 +38,13 @@ export const wireCore = (deps: {
   // --- Config (TOML at ~/.config/tfm/config.toml, TFM_CONFIG overrides path) ---
   const config = loadConfig();
 
-  // --- Color palette (theme from config; transparent-bg nudge lives in ./color) ---
-  const colors = deriveColors(config.theme, config.ui.transparentBg);
+  // --- Color palette (theme from config; transparent-bg nudge lives in ./color).
+  // Compat forces opaque: a transparent console bg + explicit SGR cells is
+  // how the whole TUI went see-through (see color.ts).
+  const colors = deriveColors(
+    config.theme,
+    config.ui.transparentBg && !resolveCompat(config.ui.compatMode, process.env.TERM),
+  );
   const themeGet = (): Theme => colors;
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---
@@ -57,6 +63,13 @@ export const wireCore = (deps: {
   // inner width available to children of the sidebar panel (outline border
   // math lives in ./style)
   const sideInnerW = (): number => sideInnerWidth(config.ui.uiStyle, geometry.sw);
+
+  // --- Compat mode (Linux console / dumb terms): single effective switch.
+  // `auto` follows the TERM prefix; `on`/`off` override. Live-read so a
+  // settings flip or live-reload applies without restart.
+  const compatActive = (): boolean => resolveCompat(config.ui.compatMode, process.env.TERM);
+  // ASCII glyphs on the console (no Nerd PUA there), Nerd glyphs elsewhere
+  const compatGlyphFor = (name: string): string => (compatActive() ? asciiGlyphFor(name) : glyphFor(name));
 
   // --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY); every category the
   // ./filetype classifier can emit gets a file-glyph fallback ---
@@ -94,7 +107,8 @@ export const wireCore = (deps: {
     iconsMode: () => config.ui.icons,
     iconCells: () => geometry.iconCells,
     modalOpen: () => floats.hasModal(),
-    glyphFor,
+    glyphFor: compatGlyphFor,
+    compatActive,
   });
 
   // --- App state & history (type + boot-state factory live in ./nav with the
@@ -161,6 +175,7 @@ export const wireCore = (deps: {
     config,
     colors,
     themeGet,
+    compatActive,
     geometry,
     sideInnerW,
     lookup,

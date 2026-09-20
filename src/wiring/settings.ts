@@ -365,6 +365,7 @@ export const wireRetheme = (deps: {
     renderFileMenu: chrome.menu.renderFileMenu,
     floatRepaints,
     notify: chrome.notify,
+    compatActive: core.compatActive,
     // toggling [ui] persist-undo persists the live stack (or clears the
     // journal file) immediately — not on the next file op
     onConfigApplied: () => {
