@@ -89,17 +89,17 @@ const asKeybind = (r: SettingRow): Extract<SettingRow, { kind: "keybind" }> => {
 };
 
 describe("settingGroups shape", () => {
-  test("headers in the documented order", () => {
+  test("headers in the documented order (everyday priority: look first, tuning last)", () => {
     const h = mk();
     expect(h.groups().map((g) => g.header)).toEqual([
       "appearance",
       "layout",
+      "files & session",
+      "behavior",
+      "panes",
+      "keys",
       "animations",
       "optimization",
-      "panes",
-      "behavior",
-      "files & session",
-      "keys",
       "advanced",
     ]);
   });
@@ -117,6 +117,25 @@ describe("settingGroups shape", () => {
         continue;
       }
       expect(labels.filter((l) => l === row.label)).toHaveLength(1);
+    }
+  });
+
+  test("every surfaced row carries a plain-language one-line blurb (description footer)", () => {
+    const h = mk();
+    // the footer shows `blurb`, never the TOML `doc` (ranges, true/false,
+    // units) — a blurb that leaks tech markers regresses to doc-paste.
+    const banned = ["..", "true", "false", "cells", "ms"];
+    const rows = h.groups().flatMap((g) => g.rows);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      if (r.kind === "header") continue;
+      const blurb = (r as { blurb?: unknown }).blurb;
+      expect(typeof blurb).toBe("string");
+      const text = blurb as string;
+      expect(text.length).toBeGreaterThan(0);
+      expect(text.length).toBeLessThanOrEqual(60);
+      expect(/\d/.test(text)).toBe(false);
+      for (const marker of banned) expect(text).not.toContain(marker);
     }
   });
 
@@ -172,6 +191,7 @@ describe("settingGroups shape", () => {
       .find((g) => g.header === "layout")!
       .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
     expect(layout).toEqual([
+      "view mode",
       "##sizes",
       "sidebar width",
       "preview width",
@@ -183,8 +203,6 @@ describe("settingGroups shape", () => {
       "word wrap (grid)",
       "##list",
       "list row height",
-      "##view",
-      "view mode",
     ]);
   });
 
@@ -195,13 +213,13 @@ describe("settingGroups shape", () => {
         .groups()
         .find((g) => g.header === header)!
         .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    // mouse gestures share a section; the lone toast + type-to-search rows trail headerless
+    // type-to-search leads (highest traffic); mouse gestures share a section, the lone toast trails headerless
     expect(seq("behavior")).toEqual([
+      "type to search",
       "##mouse",
       "double-click ms",
       "drag threshold",
       "toast duration",
-      "type to search",
     ]);
     // hidden files leads into its listing topic; session persistence is its own section
     expect(seq("files & session")).toEqual([
@@ -365,12 +383,12 @@ describe("settingGroups shape", () => {
       ).toEqual([
         "appearance",
         "layout",
+        "files & session",
+        "behavior",
+        "panes",
+        "keys",
         "animations",
         "optimization",
-        "panes",
-        "behavior",
-        "files & session",
-        "keys",
         "advanced",
       ]);
       expect(() => mk(plug).byLabel("Say hello")).toThrow();

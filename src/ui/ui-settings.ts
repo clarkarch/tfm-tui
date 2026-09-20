@@ -19,10 +19,15 @@ import { keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
 import { FLOAT_Z, type Floats } from "./floats";
 import { pokeGc } from "../app/mem-hygiene";
 import {
+  descText,
   ensureVisible,
+  fitDescText,
+  flatVisible,
   renderSettingsPanel,
+  sectionKey,
   settingsVisRows,
   SETTINGS_W,
+  visiblePos,
   type SettingsPanelState,
 } from "./ui-settings-panel";
 import type { MaybeNode } from "../lib/node-like";
@@ -77,12 +82,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     scrollOff: 0,
     hoverCat: -1,
     capturing: null,
+    collapsed: new Set<string>(),
   };
 
   // settings and plugins views share the panel renderer; the plugins view
   // only sees plugin groups (a plugin can never inject rows into settings)
   const groups = (): SettingGroup[] => (menuView === "plugins" ? ctx.pluginGroups() : ctx.settingGroups());
   const rowsOf = (gi: number): SettingRow[] => groups()[gi]?.rows ?? [];
+  const headerOf = (gi: number): string => groups()[gi]?.header ?? "";
+  // visible-row projection for a category (collapsible sections; full indices)
+  const visOf = (gi: number): number[] => flatVisible(rowsOf(gi), headerOf(gi), st.collapsed);
   // every keyboard/panel op below branches root vs panel — never on a single view
   const inPanelView = (): boolean => menuView !== "root";
 
@@ -136,13 +145,23 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const switchCategory = (gi: number): void => {
     const n = groups().length;
     st.catIdx = ((gi % n) + n) % n;
-    // land on the first INTERACTIVE row — a leading header never takes the cursor
-    const rows = rowsOf(st.catIdx);
-    let i = 0;
-    for (let k = 0; rows[i]?.kind === "header" && k < rows.length; k++) i++;
-    st.menuIdx = i;
+    // land on the first VISIBLE row — headers take the cursor now (they
+    // collapse/expand), hidden children are never landed on
+    st.menuIdx = visOf(st.catIdx)[0] ?? -1;
     st.pane = "rows";
     st.scrollOff = 0;
+    renderMenuContent();
+  };
+
+  // collapse/expand one section; collapsing under the cursor parks it on the
+  // section's header (the nearest visible row at or above the old cursor)
+  const toggleSection = (key: string): void => {
+    if (st.collapsed.has(key)) st.collapsed.delete(key);
+    else st.collapsed.add(key);
+    const flat = visOf(st.catIdx);
+    if (st.menuIdx >= 0 && !flat.includes(st.menuIdx)) {
+      st.menuIdx = [...flat].reverse().find((i) => i <= st.menuIdx) ?? flat[0] ?? -1;
+    }
     renderMenuContent();
   };
 
@@ -155,7 +174,14 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       return;
     }
     const row = rowsOf(st.catIdx)[st.menuIdx];
-    if (!row || row.kind === "header") return;
+    if (!row) return;
+    // headers collapse/expand: → opens, ← closes (enter toggles via rowActivate)
+    if (row.kind === "header") {
+      const key = sectionKey(headerOf(st.catIdx), row.label);
+      const shut = st.collapsed.has(key);
+      if ((dir > 0 && shut) || (dir < 0 && !shut)) toggleSection(key);
+      return;
+    }
     // keybind/action rows have no left/right value — the arrows switch category
     if (row.kind === "keybind" || row.kind === "action") {
       switchCategory(st.catIdx + dir);
@@ -186,6 +212,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // colors of the current build — targeted updates below paint with them
   // (menu colors can't change while the panel is up without a rebuild)
   let menuC: Theme = ctx.colors();
+
+  // live description-footer repaint via byId — NO rebuild (same OOM rule as paintRowAt)
+  const paintDesc = (text: string): void => {
+    setOnId("tfm-set-desc", (n) => {
+      n.content = text;
+    });
+  };
 
   // repaint one row's highlight via byId — NO rebuild (rebuild churn under
   // memory pressure trips native allocation failures; see AGENTS.md OOM note)
@@ -257,7 +290,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       return;
     }
     const row = rowsOf(st.catIdx)[rowIdx];
-    if (!row || row.kind === "header") return;
+    if (!row) return;
+    // headers collapse/expand in place (enter toggles; ←/→ handled in adjust)
+    if (row.kind === "header") {
+      toggleSection(sectionKey(headerOf(st.catIdx), row.label));
+      return;
+    }
     if (row.kind === "toggle") {
       try {
         applyAdjust(row, 1);
@@ -467,6 +505,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         afterAdjust,
         paintRowAt,
         rebuild: renderMenuContent,
+        isCollapsed: (key) => st.collapsed.has(key),
+        toggleSection,
+        paintDesc,
       });
     }
 
@@ -578,15 +619,19 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       switchCategory(st.catIdx + delta);
       return;
     }
-    const rows = rowsOf(st.catIdx);
-    const count = rows.length;
-    if (!count) return;
-    // idx -1 = no cursor yet: down fills the first row, up the last
-    let i = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
-    // skip headers; bounded so an all-header group can't spin forever
-    for (let k = 0; rows[i]?.kind === "header" && k < count; k++) i = (i + delta + count) % count;
-    st.menuIdx = i;
-    ensureVisible(st, visibleRows());
+    const flat = visOf(st.catIdx);
+    if (!flat.length) return;
+    // idx -1 = no cursor yet: down fills the first VISIBLE row, up the last.
+    // Headers take the cursor (they collapse/expand); hidden children are
+    // stepped over because the walk stays inside the visible projection.
+    if (st.menuIdx < 0 || !flat.includes(st.menuIdx)) {
+      st.menuIdx = delta >= 0 ? flat[0]! : flat[flat.length - 1]!;
+    } else {
+      const pos = visiblePos(flat, st.menuIdx);
+      st.menuIdx = flat[(pos + delta + flat.length) % flat.length]!;
+    }
+    ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, st.menuIdx));
+    paintDesc(fitDescText(descText(rowsOf(st.catIdx)[st.menuIdx])));
     renderMenuContent();
   };
 

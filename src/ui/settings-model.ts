@@ -87,6 +87,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         return {
           kind: "stepper",
           label: row.label,
+          blurb: row.blurb,
           min: row.min,
           max: row.max,
           step: row.step,
@@ -98,6 +99,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         return {
           kind: "toggle",
           label: row.label,
+          blurb: row.blurb,
           get: () => !!ui[row.prop],
           set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
         };
@@ -105,6 +107,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         return {
           kind: "cycle",
           label: row.label,
+          blurb: row.blurb,
           names: [...row.values],
           getIdx: () => row.values.indexOf(String(ui[row.prop] ?? row.def)),
           setIdx: (i) => commitUi({ [row.prop]: row.values[i] } as Partial<UiConfig>),
@@ -115,6 +118,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const keybindRow = (action: KeyAction, label: string): SettingRow => ({
     kind: "keybind",
     label,
+    blurb: "Press enter, then a new key",
     get: () => ctx.config.keys[action] ?? [],
     set: (v) => {
       // conflict check: reject a bind another core action already owns — and
@@ -154,6 +158,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     return {
       kind: "cycle",
       label: "theme",
+      blurb: "Pick a look, or follow your terminal",
       repaint: true,
       names,
       getIdx: () => {
@@ -191,6 +196,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const hiddenFilesRow = (): SettingRow => ({
     kind: "toggle",
     label: "hidden files",
+    blurb: "Show hidden files",
     // state.showHidden is the effective runtime flag (the remap bind writes
     // it without persisting); config is only updated when the GUI commits
     get: () => ctx.state.showHidden,
@@ -204,6 +210,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const tabBarRow = (): SettingRow => ({
     kind: "cycle",
     label: "tab bar",
+    blurb: "Always show the tab strip",
     names: ["adaptive", "on"],
     getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
@@ -215,6 +222,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const keymapPresetRow = (): SettingRow => ({
     kind: "cycle",
     label: "keymap preset",
+    blurb: "tfm or yazi style shortcuts",
     // repaint: one batch rewrites EVERY keybind row's value, so the panel
     // must rebuild (afterAdjust only repaints the adjusted row itself —
     // without this the new binds appear only as rows scroll into view)
@@ -279,24 +287,32 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   // ordered categories: schema `group` id -> GUI label + category icon. Icons
   // are existing assets/icons SVGs; a wrong name silently falls back to the
   // generic cog (AGENTS.md), so keep these byte-identical to filenames.
+  // Order is everyday priority: look first, tuning last.
   const CATEGORIES: { id: NonNullable<UiSchemaRow["group"]>; label: string; icon: string }[] = [
     { id: "appearance", label: "appearance", icon: "pencil" },
     { id: "layout", label: "layout", icon: "select-all" },
+    { id: "files", label: "files & session", icon: "folder" },
+    { id: "behavior", label: "behavior", icon: "clock" },
+    { id: "panes", label: "panes", icon: "desktop-tower" },
+    { id: "keys", label: "keys", icon: "sort" },
     { id: "animations", label: "animations", icon: "play" },
     { id: "optimization", label: "optimization", icon: "power" },
-    { id: "panes", label: "panes", icon: "desktop-tower" },
-    { id: "behavior", label: "behavior", icon: "clock" },
-    { id: "files", label: "files & session", icon: "folder" },
-    { id: "keys", label: "keys", icon: "sort" },
     { id: "advanced", label: "advanced", icon: "cog" },
   ];
 
   const advancedRows = (): SettingRow[] => [
     ...genericUiRows("advanced"),
-    { kind: "action", label: "reset to defaults", keepOpen: true, run: resetToDefaults },
+    {
+      kind: "action",
+      label: "reset to defaults",
+      blurb: "Put every setting back",
+      keepOpen: true,
+      run: resetToDefaults,
+    },
     {
       kind: "action",
       label: "edit config.toml…",
+      blurb: "Open the settings file",
       run: () => {
         spawnSafe("xdg-open", [configPath()], { stdio: "ignore", detached: true }, (err) =>
           ctx.warn(err.message, "config"),
@@ -367,6 +383,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       {
         kind: "action",
         label: "Add from git URL…",
+        blurb: "Install a plugin from a link",
         keepOpen: true,
         run: () => {
           try {
@@ -381,6 +398,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       {
         kind: "action",
         label: "Open plugins folder…",
+        blurb: "Browse installed plugins",
         // not keepOpen: navigating with the menu up strands the user over a
         // changed cwd — close first (rowActivate closes, then runs), landing
         // in the folder
@@ -403,6 +421,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     {
       kind: "action",
       label: "Update from git",
+      blurb: "Pull the newest version",
       keepOpen: true,
       run: () => {
         try {
@@ -417,6 +436,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     {
       kind: "action",
       label: "Remove…",
+      blurb: "Delete this plugin",
       keepOpen: true,
       run: () => {
         try {

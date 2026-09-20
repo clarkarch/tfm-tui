@@ -1,5 +1,7 @@
 // --- THE single source of truth for every config key. One row describes a
-// key's TOML section, type, bounds, default, doc comment and GUI presentation;
+// key's TOML section, type, bounds, default, doc comment, GUI presentation
+// and a one-line plain-language blurb (the settings description footer —
+// never ranges/units/true-false, pinned by settings-model.test.ts);
 // the parser (config.ts), the serializer (which regenerates per-key doc
 // comments), the example TOML and the settings rows (settings-model.ts) all
 // derive from this table. Adding a knob = adding a row here, nothing else.
@@ -15,10 +17,11 @@ import { keySpecEqual, parseKeySpec } from "./keyspec";
 // colors — their adjust re-renders the panel; other value rows update their
 // value text by id (targeted, no rebuild — see the OOM note in AGENTS.md)
 export type SettingRow =
-  | { kind: "toggle"; label: string; repaint?: boolean; get: () => boolean; set: (v: boolean) => void }
+  | { kind: "toggle"; label: string; blurb?: string; repaint?: boolean; get: () => boolean; set: (v: boolean) => void }
   | {
       kind: "stepper";
       label: string;
+      blurb?: string;
       repaint?: boolean;
       min: number;
       max: number;
@@ -30,6 +33,7 @@ export type SettingRow =
   | {
       kind: "cycle";
       label: string;
+      blurb?: string;
       repaint?: boolean;
       names: string[];
       getIdx: () => number;
@@ -40,8 +44,8 @@ export type SettingRow =
       customLabel?: () => string;
     }
   // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
-  | { kind: "keybind"; label: string; get: () => string[]; set: (v: string[]) => void }
-  | { kind: "action"; label: string; keepOpen?: boolean; run: () => void }
+  | { kind: "keybind"; label: string; blurb?: string; get: () => string[]; set: (v: string[]) => void }
+  | { kind: "action"; label: string; blurb?: string; keepOpen?: boolean; run: () => void }
   // divider rows split a long category into labeled sections (animations/panes).
   // Non-interactive: never take the cursor, never adjust/activate — the settings
   // shell + panel skip them the way the file menu skips separators.
@@ -328,9 +332,9 @@ type RowCommon = {
 };
 
 type SchemaRow =
-  | (RowCommon & { kind: "int"; section: "ui"; min: number; max: number; step: number; def: number })
-  | (RowCommon & { kind: "bool"; section: "ui"; def: boolean })
-  | (RowCommon & { kind: "enum"; section: "ui"; values: readonly string[]; def: string })
+  | (RowCommon & { kind: "int"; section: "ui"; min: number; max: number; step: number; def: number; blurb: string })
+  | (RowCommon & { kind: "bool"; section: "ui"; def: boolean; blurb: string })
+  | (RowCommon & { kind: "enum"; section: "ui"; values: readonly string[]; def: string; blurb: string })
   | (RowCommon & { kind: "key"; section: "keys"; action: KeyAction; def: string[] })
   | (RowCommon & { kind: "hex"; section: "theme"; def: string; group?: undefined });
 
@@ -339,6 +343,18 @@ type ThemeRow = Extract<SchemaRow, { kind: "hex" }>;
 export type UiSchemaRow = Extract<SchemaRow, { section: "ui" }>;
 
 const UI_ROWS: SchemaRow[] = [
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "view-mode",
+    prop: "viewMode",
+    values: ["grid", "list"],
+    def: "grid",
+    doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns',
+    label: "view mode",
+    blurb: "Icons grid or compact list",
+    group: "layout",
+  },
   {
     kind: "int",
     section: "ui",
@@ -350,6 +366,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 26,
     doc: "16..60 cells (grid + list)",
     label: "sidebar width",
+    blurb: "How wide the sidebar is",
     group: "layout",
     subsection: "sizes",
   },
@@ -364,6 +381,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 40,
     doc: "20..80 cells",
     label: "preview width",
+    blurb: "How wide the preview pane is",
     group: "layout",
     subsection: "sizes",
   },
@@ -378,6 +396,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 12,
     doc: "embedded terminal pane height in rows, 4..30 (applies live to the open pane)",
     label: "terminal height",
+    blurb: "How tall the terminal pane is",
     group: "layout",
     subsection: "sizes",
   },
@@ -392,6 +411,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 20,
     doc: "10..40 cells (grid view)",
     label: "grid tile width",
+    blurb: "How wide grid tiles are",
     group: "layout",
     subsection: "grid",
   },
@@ -406,6 +426,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 5,
     doc: "3..10 cells (grid view)",
     label: "grid tile height",
+    blurb: "How tall grid tiles are",
     group: "layout",
     subsection: "grid",
   },
@@ -420,6 +441,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 3,
     doc: "grid icon height in rows, 1..5",
     label: "grid icon size",
+    blurb: "How big file icons are",
     group: "layout",
     subsection: "grid",
   },
@@ -431,6 +453,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = wrap long file names onto extra tile rows (grid view); false = single line cut with …",
     label: "word wrap (grid)",
+    blurb: "Wrap long file names instead of cutting them",
     group: "layout",
     subsection: "grid",
   },
@@ -445,6 +468,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 1,
     doc: "list view row height in cells, 1..3 (icon scales with it)",
     label: "list row height",
+    blurb: "How tall list rows are",
     group: "layout",
     subsection: "list",
   },
@@ -456,6 +480,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "right-side preview pane (text files, folder stats)",
     label: "preview pane",
+    blurb: "Show a preview of the selected file",
     group: "panes",
     subsection: "panes",
   },
@@ -467,6 +492,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = two independent file panes side by side (tab switches the active pane); false = single pane",
     label: "dual pane",
+    blurb: "Two file panes side by side",
     group: "panes",
     subsection: "panes",
   },
@@ -478,6 +504,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)",
     label: "sidebar auto-hide",
+    blurb: "Hide the sidebar until the mouse nears it",
     group: "panes",
     subsection: "auto-hide",
   },
@@ -490,6 +517,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "hidden",
     doc: '"rail" = icon-only strip; "hidden" = width 0; "min" = shrink to a sliver',
     label: "sidebar collapse",
+    blurb: "How the sidebar hides itself",
     group: "panes",
     subsection: "auto-hide",
   },
@@ -501,6 +529,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = collapse the preview pane until the mouse nears the right edge",
     label: "preview auto-hide",
+    blurb: "Hide the preview until the mouse nears it",
     group: "panes",
     subsection: "auto-hide",
   },
@@ -513,6 +542,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "hidden",
     doc: '"rail" = narrow strip; "hidden" = width 0; "min" = shrink to a sliver',
     label: "preview collapse",
+    blurb: "How the preview hides itself",
     group: "panes",
     subsection: "auto-hide",
   },
@@ -524,6 +554,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = the open terminal pane collapses to its header until the mouse nears the bottom edge (the shell stays alive)",
     label: "terminal auto-hide",
+    blurb: "Hide the terminal until the mouse nears it",
     group: "panes",
     subsection: "auto-hide",
   },
@@ -536,6 +567,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "hidden",
     doc: '"header" = keep the title row visible; "hidden" = height 0',
     label: "terminal collapse",
+    blurb: "How the terminal hides itself",
     group: "panes",
     subsection: "auto-hide",
   },
@@ -550,6 +582,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 8,
     doc: "cells from the edge that trigger an auto-hide expand, 1..8",
     label: "hover zone",
+    blurb: "How close the mouse gets before panels pop out",
     group: "panes",
     subsection: "hover timing",
   },
@@ -564,6 +597,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 195,
     doc: "delay before an auto-hide panel expands, 0..1000 ms",
     label: "hover open delay",
+    blurb: "Wait before hidden panels slide out",
     group: "panes",
     subsection: "hover timing",
   },
@@ -578,6 +612,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 175,
     doc: "delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms",
     label: "hover close delay",
+    blurb: "Wait before panels hide again",
     group: "panes",
     subsection: "hover timing",
   },
@@ -592,8 +627,20 @@ const UI_ROWS: SchemaRow[] = [
     def: 120,
     doc: "auto-hide slide duration, 0..600 ms (0 = instant)",
     label: "hover animation",
+    blurb: "How fast panels slide in and out",
     group: "panes",
     subsection: "hover timing",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "type-to-search",
+    prop: "typeToSearch",
+    def: true,
+    doc: "true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)",
+    label: "type to search",
+    blurb: "Type to jump to files",
+    group: "behavior",
   },
   {
     kind: "int",
@@ -606,6 +653,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 400,
     doc: "100..2000",
     label: "double-click ms",
+    blurb: "How fast a double-click is",
     group: "behavior",
     subsection: "mouse",
   },
@@ -620,6 +668,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 1,
     doc: "cells of movement before a press becomes a drag, 1..5",
     label: "drag threshold",
+    blurb: "How far you drag before it counts",
     group: "behavior",
     subsection: "mouse",
   },
@@ -634,16 +683,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 3000,
     doc: "how long notifications stay up, 1000..10000",
     label: "toast duration",
-    group: "behavior",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "type-to-search",
-    prop: "typeToSearch",
-    def: true,
-    doc: "true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)",
-    label: "type to search",
+    blurb: "How long notifications stay up",
     group: "behavior",
   },
   {
@@ -654,6 +694,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset",
     label: "follow terminal",
+    blurb: "Match the terminal look",
     group: "appearance",
     subsection: "style",
   },
@@ -665,6 +706,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = follow a transparent terminal bg (kitty background_opacity); false = force opaque",
     label: "transparent bg",
+    blurb: "Let a transparent terminal show through",
     group: "appearance",
     subsection: "style",
   },
@@ -677,6 +719,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "opaque",
     doc: '"opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs',
     label: "icons",
+    blurb: "How icons blend with tile backgrounds",
     group: "appearance",
     subsection: "style",
   },
@@ -689,6 +732,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "solid",
     doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels',
     label: "ui style",
+    blurb: "Filled panels or outlined ones",
     group: "appearance",
     subsection: "style",
   },
@@ -700,6 +744,7 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: 'true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it',
     label: "sidebar title",
+    blurb: "Show the logo above the sidebar",
     group: "appearance",
     subsection: "chrome",
   },
@@ -711,6 +756,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)",
     label: "tab bar",
+    blurb: "Always show the tab strip",
     group: "appearance",
   },
   {
@@ -721,6 +767,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)",
     label: "file animation",
+    blurb: "Files glide in when folders open",
     group: "animations",
     subsection: "files",
   },
@@ -732,6 +779,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = files rise up into place (distance = file-animation-slide-pct)",
     label: "slide",
+    blurb: "Files rise into place",
     group: "animations",
     subsection: "files",
   },
@@ -743,6 +791,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = top-to-bottom cascade instead of one wave",
     label: "stagger",
+    blurb: "Files appear one after another",
     group: "animations",
     subsection: "files",
   },
@@ -757,6 +806,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 180,
     doc: "content-area file animation duration, 0..800 ms (0 = instant)",
     label: "animation ms",
+    blurb: "How long file animations play",
     group: "animations",
     subsection: "files",
   },
@@ -771,6 +821,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 40,
     doc: "how spread the cascade wave is, 0..300% (0 = all tiles at once; over 100 = the wave outlives the duration)",
     label: "stagger spread",
+    blurb: "How spread out the cascade is",
     group: "animations",
     subsection: "files",
   },
@@ -785,6 +836,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 70,
     doc: "how far files slide, 0..150% of the viewport (0 = fade in place; clamped to whole cells)",
     label: "slide distance",
+    blurb: "How far files glide in from",
     group: "animations",
     subsection: "files",
   },
@@ -797,6 +849,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "up",
     doc: '"up"/"down" = files rise/drop vertically; "left"/"right" = files slide in horizontally',
     label: "slide direction",
+    blurb: "Which way files glide in from",
     group: "animations",
     subsection: "files",
   },
@@ -809,6 +862,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "ease-out",
     doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
     label: "easing",
+    blurb: "How the animation speeds up and settles",
     group: "animations",
     subsection: "files",
   },
@@ -820,6 +874,7 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: "true = fade the grid as one layer instead of per tile (same look, one opacity update per frame instead of one per file)",
     label: "container fade",
+    blurb: "Smoother animation on big folders",
     group: "optimization",
     subsection: "performance",
   },
@@ -831,6 +886,7 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: "true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)",
     label: "visible files only",
+    blurb: "Only animate files you can see",
     group: "optimization",
     subsection: "performance",
   },
@@ -842,6 +898,7 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: "true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)",
     label: "row granularity",
+    blurb: "Animate rows instead of single files",
     group: "optimization",
     subsection: "performance",
   },
@@ -856,6 +913,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 2000,
     doc: "skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list, huge folders jank; 0 = never skip)",
     label: "max animated files",
+    blurb: "Skip animation in huge folders",
     group: "optimization",
     subsection: "performance",
   },
@@ -870,6 +928,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 0,
     doc: "wait for scroll to settle this long before playing the scroll-reveal (0 = play every notch; higher = one wave per pause: cheaper on huge folders and the wave actually completes visibly)",
     label: "scroll reveal delay",
+    blurb: "Wait for scrolling to settle first",
     group: "optimization",
     subsection: "performance",
   },
@@ -881,6 +940,7 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: "true = render only the visible rows (plus overscan) of a folder, sliding as you scroll (huge folders stop rebuilding/relaying thousands of off-screen tiles; selection and search still see every file)",
     label: "windowed grid",
+    blurb: "Only draw the rows on screen",
     group: "optimization",
     subsection: "performance",
   },
@@ -892,6 +952,7 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: "true = reuse a folder's file list across repaints until the folder itself changes (back/forward and selection changes skip the disk; some network/fuse mounts freeze the folder timestamp, so entries refresh after ~2s regardless)",
     label: "cache folder listings",
+    blurb: "Remember folder contents between views",
     group: "optimization",
     subsection: "performance",
   },
@@ -903,6 +964,7 @@ const UI_ROWS: SchemaRow[] = [
     def: true,
     doc: "true = keep file sizes/dates inside the cached folder listing too, so size/date sorts stop re-stating every file on every repaint (displayed stats can lag a live edit by up to the cache ttl)",
     label: "cache file stats",
+    blurb: "Remember file sizes too, for faster sorting",
     group: "optimization",
     subsection: "performance",
   },
@@ -917,6 +979,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 2,
     doc: "seconds a cached folder listing may serve possibly-stale sizes/dates (or files at all on mounts whose folder timestamps freeze) before re-reading; 1 = freshest, 300 = best on slow network mounts",
     label: "listing cache ttl",
+    blurb: "How long cached folder info is trusted",
     group: "optimization",
     subsection: "performance",
   },
@@ -928,6 +991,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)",
     label: "tile hover animation",
+    blurb: "Icons lift when hovered",
     group: "animations",
     subsection: "file hover",
   },
@@ -939,6 +1003,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = the filename rides along with the hover lift",
     label: "include filename in lift",
+    blurb: "File names ride along on hover",
     group: "animations",
     subsection: "file hover",
   },
@@ -951,6 +1016,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "up",
     doc: '"up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally',
     label: "hover lift direction",
+    blurb: "Which way icons lift on hover",
     group: "animations",
     subsection: "file hover",
   },
@@ -962,6 +1028,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = animate the places sidebar on boot (style = sidebar-animation-style)",
     label: "sidebar animation",
+    blurb: "Animate the sidebar when the app starts",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -974,6 +1041,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "fade",
     doc: '"fade" = the whole sidebar fades in; "slide" = it slides in from the edge; "stagger" = places rows cascade in; "stagger-slide" = each row slides+fades in, files-style',
     label: "sidebar style",
+    blurb: "How the sidebar arrives on startup",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -988,6 +1056,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 180,
     doc: "sidebar intro duration, 0..800 ms (0 = instant)",
     label: "sidebar ms",
+    blurb: "How long the sidebar intro plays",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -1002,6 +1071,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 8,
     doc: "how far the sidebar slides in, 0..32 cells (0 = fade in place)",
     label: "sidebar slide",
+    blurb: "How far the sidebar slides in from",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -1014,6 +1084,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "left",
     doc: '"left"/"right" = slides in horizontally from the edge; "up"/"down" = slides vertically',
     label: "sidebar direction",
+    blurb: "Which edge the sidebar enters from",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -1028,6 +1099,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 40,
     doc: "how spread the sidebar cascade is, 0..300% (0 = all rows at once)",
     label: "sidebar stagger",
+    blurb: "How spread out the sidebar cascade is",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -1040,6 +1112,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "ease-out",
     doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
     label: "sidebar easing",
+    blurb: "How the sidebar intro speeds and settles",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -1051,6 +1124,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = the sidebar title joins the boot cascade first (stagger/stagger-slide only; fade/slide already move it with the whole panel)",
     label: "include title in intro",
+    blurb: "Include the logo in the intro",
     group: "animations",
     subsection: "sidebar intro",
   },
@@ -1062,6 +1136,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = hovering a sidebar row nudges its icon one cell (rest layout unchanged; the cwd-selected row keeps its paint only)",
     label: "sidebar hover animation",
+    blurb: "Sidebar icons nudge on hover",
     group: "animations",
     subsection: "sidebar hover",
   },
@@ -1073,6 +1148,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = the row label rides along with the hover nudge",
     label: "include label in nudge",
+    blurb: "Row labels ride along on hover",
     group: "animations",
     subsection: "sidebar hover",
   },
@@ -1085,6 +1161,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "left",
     doc: '"left" = the icon nudges into the row padding; "right" = it nudges toward the label',
     label: "hover nudge direction",
+    blurb: "Which way sidebar icons nudge",
     group: "animations",
     subsection: "sidebar hover",
   },
@@ -1096,6 +1173,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = cascade each top bar button + crumb in on boot (style = topbar-animation-style)",
     label: "top bar animation",
+    blurb: "Animate the top bar when the app starts",
     group: "animations",
     subsection: "top bar",
   },
@@ -1108,6 +1186,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "fade",
     doc: '"fade" = all items fade in together; "slide" = they slide in from the edge as one wave; "stagger" = buttons + crumbs cascade left-to-right; "stagger-slide" = each item slides+fades in, files-style',
     label: "top bar style",
+    blurb: "How the top bar arrives on startup",
     group: "animations",
     subsection: "top bar",
   },
@@ -1122,6 +1201,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 180,
     doc: "top bar intro duration, 0..800 ms (0 = instant)",
     label: "top bar ms",
+    blurb: "How long the top bar intro plays",
     group: "animations",
     subsection: "top bar",
   },
@@ -1136,6 +1216,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 8,
     doc: "how far the top bar slides in, 0..32 cells (0 = fade in place)",
     label: "top bar slide",
+    blurb: "How far the top bar slides in from",
     group: "animations",
     subsection: "top bar",
   },
@@ -1148,6 +1229,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "down",
     doc: '"down"/"up" = slides in vertically from the edge; "left"/"right" = slides horizontally',
     label: "top bar direction",
+    blurb: "Which edge the top bar enters from",
     group: "animations",
     subsection: "top bar",
   },
@@ -1162,6 +1244,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 40,
     doc: "how spread the item cascade is, 0..300% (0 = all items at once)",
     label: "top bar stagger",
+    blurb: "How spread out the top bar cascade is",
     group: "animations",
     subsection: "top bar",
   },
@@ -1174,6 +1257,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "ease-out",
     doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
     label: "top bar easing",
+    blurb: "How the top bar intro speeds and settles",
     group: "animations",
     subsection: "top bar",
   },
@@ -1185,6 +1269,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = rebuilt crumbs cascade in on every directory change (not just boot)",
     label: "directory bar animation",
+    blurb: "Animate crumbs when changing folders",
     group: "animations",
     subsection: "directory bar",
   },
@@ -1197,6 +1282,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "stagger",
     doc: '"stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style',
     label: "directory bar style",
+    blurb: "How folder crumbs arrive",
     group: "animations",
     subsection: "directory bar",
   },
@@ -1211,6 +1297,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 180,
     doc: "directory bar animation duration, 0..800 ms (0 = instant)",
     label: "directory bar ms",
+    blurb: "How long the crumb animation plays",
     group: "animations",
     subsection: "directory bar",
   },
@@ -1225,6 +1312,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 8,
     doc: "how far crumbs slide in, 0..32 cells (0 = fade in place)",
     label: "directory bar slide",
+    blurb: "How far crumbs slide in from",
     group: "animations",
     subsection: "directory bar",
   },
@@ -1237,6 +1325,7 @@ const UI_ROWS: SchemaRow[] = [
     def: "right",
     doc: '"right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically',
     label: "directory bar direction",
+    blurb: "Which way crumbs slide in from",
     group: "animations",
     subsection: "directory bar",
   },
@@ -1251,6 +1340,7 @@ const UI_ROWS: SchemaRow[] = [
     def: 40,
     doc: "how spread the crumb cascade is, 0..300% (0 = all crumbs at once)",
     label: "directory bar stagger",
+    blurb: "How spread out the crumb cascade is",
     group: "animations",
     subsection: "directory bar",
   },
@@ -1263,20 +1353,9 @@ const UI_ROWS: SchemaRow[] = [
     def: "ease-out",
     doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
     label: "directory bar easing",
+    blurb: "How the crumb animation speeds and settles",
     group: "animations",
     subsection: "directory bar",
-  },
-  {
-    kind: "enum",
-    section: "ui",
-    tomlKey: "view-mode",
-    prop: "viewMode",
-    values: ["grid", "list"],
-    def: "grid",
-    doc: '"grid" = icon tiles; "list" = compact rows with size + modified columns',
-    label: "view mode",
-    group: "layout",
-    subsection: "view",
   },
   {
     kind: "bool",
@@ -1286,6 +1365,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "start with dotfiles visible (ctrl+h toggles at runtime)",
     label: "hidden files",
+    blurb: "Show hidden files",
     group: "files",
   },
   {
@@ -1296,6 +1376,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)",
     label: "recursive search",
+    blurb: "Search inside subfolders too",
     group: "files",
     subsection: "listing",
   },
@@ -1307,6 +1388,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = reopen the folder from the last quit instead of the launch cwd",
     label: "restore session",
+    blurb: "Reopen the last folder on startup",
     group: "files",
     subsection: "session",
   },
@@ -1318,6 +1400,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)",
     label: "persistent undo",
+    blurb: "Undo still works after a restart",
     group: "files",
     subsection: "session",
   },
@@ -1329,6 +1412,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = show a notification with the app launch time in ms (debug aid); also enabled by --debug",
     label: "show launch time",
+    blurb: "Report how fast the app started",
     group: "advanced",
   },
 ];

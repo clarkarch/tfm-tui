@@ -14,12 +14,15 @@ import type { Theme } from "../config/config";
 
 export type SettingsPanelState = {
   catIdx: number;
-  menuIdx: number; // row cursor within the ACTIVE category
+  menuIdx: number; // row cursor within the ACTIVE category (full-row index, never a hidden one)
   pane: "cats" | "rows";
-  scrollOff: number;
+  scrollOff: number; // offset into the VISIBLE-row projection (see flatVisible), not the full rows array
   hoverCat: number;
   // keybind capture: flat row index within the active category being recorded
   capturing: number | null;
+  // collapsed subsections, keyed by sectionKey(category header, subsection)
+  // — session-only, never persisted to config.toml
+  collapsed: Set<string>;
 };
 
 type SettingsPanelHooks = {
@@ -41,17 +44,23 @@ type SettingsPanelHooks = {
   paintRowAt(idx: number, on: boolean): void;
   // full panel rebuild (wheel scroll, category click) — shell's guarded one
   rebuild(): void;
+  // collapsible sections (shell owns the collapsed set on panel state)
+  isCollapsed(key: string): boolean;
+  toggleSection(key: string): void;
+  // live description-footer repaint (by id, never a rebuild)
+  paintDesc(text: string): void;
 };
 
-// settings panel is wider than the root menu (categories + value columns)
-export const SETTINGS_W = 62;
-const CAT_W = 18;
-const SET_LABEL_W = 19;
+// settings panel is wider than the root menu (categories + value columns +
+// the one-line description footer)
+export const SETTINGS_W = 78;
+const CAT_W = 20;
+const SET_LABEL_W = 22;
 
-// right-pane window size: a COMPACT dialog, not a full-screen sheet — capped
-// at 14 rows (panel ≈ 21 rows total with chrome); shrinks on tiny terminals.
+// right-pane window size: capped at 18 rows on roomy terminals (panel ≈ 25
+// rows total with chrome + description footer); shrinks on tiny terminals.
 // Categories with more rows wheel-scroll/arrow-scroll.
-export const settingsVisRows = (termH: number): number => Math.min(14, Math.max(5, termH - 12));
+export const settingsVisRows = (termH: number): number => Math.min(18, Math.max(8, termH - 14));
 
 const CAT_ICONS: Record<string, string> = {
   // fallback for groups that don't carry an explicit icon (plugins/installs
@@ -59,26 +68,64 @@ const CAT_ICONS: Record<string, string> = {
   "add plugins": "plus",
 };
 
-export const ensureVisible = (st: SettingsPanelState, vis: number): void => {
-  // no cursor yet (freshly opened) — nothing to scroll to
-  if (st.menuIdx < 0) return;
-  if (st.menuIdx < st.scrollOff) st.scrollOff = st.menuIdx;
-  if (st.menuIdx >= st.scrollOff + vis) st.scrollOff = st.menuIdx - vis + 1;
+export const ensureVisible = (st: SettingsPanelState, vis: number, total: number, pos: number): void => {
+  // no cursor yet (freshly opened) or cursor on a now-hidden row — nothing to scroll to
+  if (pos < 0) return;
+  if (pos < st.scrollOff) st.scrollOff = pos;
+  if (pos >= st.scrollOff + vis) st.scrollOff = pos - vis + 1;
+  st.scrollOff = Math.min(Math.max(0, total - vis), Math.max(0, st.scrollOff));
 };
+
+// --- collapsible subsections (pure projection over one category's rows) ---
+// A section = a header row + the rows after it up to the next header (or the
+// end). Collapsing hides the section's children; the header itself (and any
+// headerless leading rows) always stays visible. Returned indices are FULL-row
+// indices so node ids (tfm-set-row-<i>) and shell cursor state keep working.
+
+export const sectionKey = (categoryHeader: string, subsection: string): string => `${categoryHeader}::${subsection}`;
+
+export const flatVisible = (rows: SettingRow[], categoryHeader: string, collapsed: Set<string>): number[] => {
+  const out: number[] = [];
+  let hidden = false;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (row.kind === "header") {
+      hidden = collapsed.has(sectionKey(categoryHeader, row.label));
+      out.push(i);
+    } else if (!hidden) {
+      out.push(i);
+    }
+  }
+  return out;
+};
+
+// visible-space position of a full-row index (-1 when hidden/absent)
+export const visiblePos = (vis: number[], fullIdx: number): number => vis.indexOf(fullIdx);
+
+// one-line description footer text for a row (plain language, never the TOML doc)
+export const descText = (row: SettingRow | undefined): string => {
+  if (!row) return "Choose a setting to see what it does";
+  if (row.kind === "header") return "Expand or collapse this section";
+  return row.blurb ?? row.label;
+};
+
+export const fitDescText = (text: string): string => `ⓘ ${text}`.slice(0, SETTINGS_W - 4);
 
 export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState, h: SettingsPanelHooks) => {
   const cats = h.groups();
-  ensureVisible(st, h.visRows());
   const vis = h.visRows();
+  const header = cats[st.catIdx]?.header ?? "";
   const rows = cats[st.catIdx]?.rows ?? [];
-  const canScroll = rows.length > vis;
+  const flat = flatVisible(rows, header, st.collapsed);
+  ensureVisible(st, vis, flat.length, st.menuIdx < 0 ? -1 : visiblePos(flat, st.menuIdx));
+  const canScroll = flat.length > vis;
   const wheelScroll = (ev: any) => {
     if (!canScroll) return;
     try {
       ev.stopPropagation?.();
     } catch {}
     const d = ev.scroll?.direction === "up" ? -3 : 3;
-    const max = Math.max(0, rows.length - vis);
+    const max = Math.max(0, flat.length - vis);
     const next = Math.min(max, Math.max(0, st.scrollOff + d));
     if (next !== st.scrollOff) {
       st.scrollOff = next;
@@ -163,51 +210,90 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
         onMouseScroll: wheelScroll,
       },
       catPane,
-      // --- right pane: rows (windowed) ---
+      // --- right pane: rows (windowed over the visible projection) ---
       Box({ width: 1, flexDirection: "column" }),
-      renderRowPane(c, rows, vis, st, h),
+      renderRowPane(c, rows, header, vis, st, h),
     ),
   );
 
-  // footer hints — pane- and state-aware
-  const hint =
-    st.capturing !== null
-      ? "press a key…  esc/enter/tab/click = cancel"
-      : st.pane === "cats"
-        ? "click or enter selects · ←→ · tab = rows"
-        : `↑↓ move · ←→ adjust${canScroll ? " · wheel scrolls" : ""} · tab = categories`;
-  panel.add(Box({ width: "100%", height: 1 }));
+  // one-line description footer — the selected row's blurb in plain language.
+  // Painted live by id on cursor/hover moves (paintDesc), never a rebuild.
   panel.add(
     Box(
       { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-      Text({ content: hint.slice(0, SETTINGS_W - 2), fg: c.sidebarFgMuted }),
+      Text({
+        id: "tfm-set-desc",
+        content: fitDescText(
+          st.capturing !== null ? "press a key…" : descText(st.menuIdx < 0 ? undefined : rows[st.menuIdx]),
+        ),
+        fg: c.sidebarFgMuted,
+      }),
     ),
   );
 };
 
-const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPanelState, h: SettingsPanelHooks) => {
-  ensureVisible(st, vis);
-  const canScroll = rows.length > vis;
-  const end = Math.min(rows.length, st.scrollOff + vis);
+const renderRowPane = (
+  c: Theme,
+  rows: SettingRow[],
+  categoryHeader: string,
+  vis: number,
+  st: SettingsPanelState,
+  h: SettingsPanelHooks,
+) => {
+  const flat = flatVisible(rows, categoryHeader, st.collapsed);
+  ensureVisible(st, vis, flat.length, st.menuIdx < 0 ? -1 : visiblePos(flat, st.menuIdx));
+  const canScroll = flat.length > vis;
+  const start = Math.min(st.scrollOff, Math.max(0, flat.length - vis));
+  const end = Math.min(flat.length, start + vis);
+  const collapsedHidden = rows.length - flat.length;
   const pane2 = Box({ flexGrow: 1, flexDirection: "column" });
 
-  // section divider: a muted label over the theme divider color. Deliberately
-  // handler-free (no mousedown/mousemove) so hover can never select it and a
-  // click passes to the panel beneath; its own id series (tfm-set-sep-*)
-  // keeps targeted row paints (tfm-set-row-*) from ever touching it.
+  // section header: a collapsible divider. It TAKES the cursor (keyboard users
+  // collapse without a mouse) and carries the standard row ids so paintRowAt
+  // highlights it like any row.
   const headerNode = (rowSpec: Extract<SettingRow, { kind: "header" }>, index: number) => {
-    const lead = ` ~~ ${rowSpec.label} `;
+    const active = st.pane === "rows" && st.menuIdx === index;
+    const key = sectionKey(categoryHeader, rowSpec.label);
+    const shut = h.isCollapsed(key);
+    const lead = ` ${shut ? "▶" : "▼"} ${rowSpec.label} `;
     return Box(
       {
-        id: `tfm-set-sep-${index}`,
+        id: `tfm-set-row-${index}`,
         width: "100%",
         height: 1,
         flexDirection: "row",
         paddingLeft: 1,
         paddingRight: 1,
+        backgroundColor: active ? c.accentBg : undefined,
+        onMouseDown: (ev: any) => {
+          try {
+            ev.stopPropagation?.();
+          } catch {}
+          if (st.capturing !== null) {
+            h.cancelCapture();
+            return;
+          }
+          st.menuIdx = index;
+          st.pane = "rows";
+          h.toggleSection(key);
+        },
+        // move, not over (same synthetic-over trap as value rows below)
+        onMouseMove: () => {
+          if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
+          const prev = st.pane === "rows" ? st.menuIdx : -1;
+          st.menuIdx = index;
+          st.pane = "rows";
+          if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
+          h.paintRowAt(index, true);
+          h.paintDesc(fitDescText(descText(rowSpec)));
+        },
       },
-      Text({ content: lead.slice(0, 30), fg: c.sidebarFgMuted }),
-      Text({ content: "~".repeat(Math.max(0, 38 - Math.min(lead.length, 30))), fg: c.divider }),
+      Text({
+        id: `tfm-set-rowl-${index}`,
+        content: lead.slice(0, 44),
+        fg: active ? c.white : c.sidebarFgMuted,
+      }),
+      Text({ content: "─".repeat(Math.max(0, 52 - Math.min(lead.length, 44))), fg: c.divider }),
     );
   };
 
@@ -233,6 +319,7 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
             st.pane = "rows";
             h.paintRowAt(index, true);
           }
+          h.paintDesc(fitDescText(descText(rowSpec)));
           h.afterAdjust(index, rowSpec);
         },
         onMouseOver: () =>
@@ -258,6 +345,8 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
         ev?.stopPropagation?.();
       } catch {}
       st.menuIdx = index;
+      st.pane = "rows";
+      h.paintDesc(fitDescText(descText(rowSpec)));
       h.rowActivate(index);
     };
 
@@ -312,6 +401,7 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
           applyAdjust(rowSpec, 1);
           h.afterAdjust(index, rowSpec);
         } catch {} // a throwing plugin row never breaks the click handler
+        h.paintDesc(fitDescText(descText(rowSpec)));
       };
     } else if (rowSpec.kind === "keybind") {
       let binds: string[] = [];
@@ -351,6 +441,7 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
           st.pane = "rows";
           if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
           h.paintRowAt(index, true);
+          h.paintDesc(fitDescText(descText(rowSpec)));
         },
       },
       Text({
@@ -363,16 +454,17 @@ const renderRowPane = (c: Theme, rows: SettingRow[], vis: number, st: SettingsPa
     );
   };
 
-  for (let i = st.scrollOff; i < end; i++) {
+  for (let p = start; p < end; p++) {
+    const i = flat[p]!;
     const rowSpec = rows[i];
     if (rowSpec) pane2.add(rowSpec.kind === "header" ? headerNode(rowSpec, i) : rowNode(rowSpec, i));
   }
-  if (canScroll) {
+  if (canScroll || collapsedHidden > 0) {
     pane2.add(
       Box(
         { width: "100%", height: 1, paddingLeft: 1 },
         Text({
-          content: `${st.scrollOff + 1}-${end} of ${rows.length}`,
+          content: `${start + 1}-${end} of ${flat.length}${collapsedHidden > 0 ? ` · ${collapsedHidden} collapsed` : ""}`,
           fg: c.sidebarFgMuted,
         }),
       ),

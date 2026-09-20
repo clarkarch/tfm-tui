@@ -286,18 +286,18 @@ describe("settings view", () => {
     menu.menuTab();
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-12 of 20"); // vis = 12 at termH 24
+    expect(t.captureCharFrame()).toContain("1-10 of 20"); // vis = 10 at termH 24
     // walk the cursor to the last row: window follows
     for (let i = 0; i < 19; i++) menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("9-20 of 20");
+    expect(t.captureCharFrame()).toContain("11-20 of 20");
     // wrap-around from the end returns to the top window
     menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-12 of 20");
+    expect(t.captureCharFrame()).toContain("1-10 of 20");
   });
 
-  test("header (divider) rows render as labels, never take the cursor, never activate", async () => {
+  test("headers take the cursor and collapse/expand on activate (no more skip)", async () => {
     const keep = groups;
     let ran = 0;
     groups = [
@@ -318,30 +318,43 @@ describe("settings view", () => {
       menu.moveMenu(1); // root: down fills Settings
       menu.menuActivate();
       await t.renderOnce();
-      // the divider label paints in the rows pane...
+      // the section header paints with its chevron and no option count...
       expect(t.captureCharFrame()).toContain("section one");
-      // ...as its own node, not a selectable row
-      expect(t.renderer.root.findDescendantById("tfm-set-sep-1")).toBeTruthy();
-      expect(t.renderer.root.findDescendantById("tfm-set-row-1")).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("▼");
+      expect(t.captureCharFrame()).not.toMatch(/section one\s*\(\d+\)/);
+      expect(t.renderer.root.findDescendantById("tfm-set-row-1")).toBeTruthy();
       // the view opens with no cursor: first arrow fills row 0...
       menu.moveMenu(1);
       await t.renderOnce();
       expect(bgInts("tfm-set-row-0")).toEqual(hexInts(colors.accentBg));
-      // ...second arrow skips the header and lands on row 2
+      // ...second arrow LANDS on the header (it takes the cursor now)
       menu.moveMenu(1);
       await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      // activate collapses the section: bbb vanishes, counter reports it
+      menu.menuActivate();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).not.toContain("bbb");
+      expect(t.captureCharFrame()).toContain("▶");
+      expect(t.captureCharFrame()).toContain("collapsed");
+      // cursor parks on the header, menu stays open
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      expect(floats.isOpen("escmenu")).toBe(true);
+      // activate again re-expands
+      menu.menuActivate();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("bbb");
+      // arrows walk through the header in both directions (no skipping)
+      menu.moveMenu(1); // header -> bbb
+      await t.renderOnce();
       expect(bgInts("tfm-set-row-2")).toEqual(hexInts(colors.accentBg));
-      // up from row 2 skips back over the header to row 0
-      menu.moveMenu(-1);
+      menu.moveMenu(-1); // bbb -> header
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      menu.moveMenu(-1); // header -> aaa
       await t.renderOnce();
       expect(bgInts("tfm-set-row-0")).toEqual(hexInts(colors.accentBg));
-      // hover over the divider never steals the cursor (handler-free node)
-      expect(t.renderer.root.findDescendantById("tfm-set-sep-1")).toBeTruthy();
-      menu.moveMenu(1); // row 0 -> skips to row 2 (toggle bbb)
-      menu.menuActivate(); // toggle adjust, not the ccc action
-      await t.renderOnce();
       expect(ran).toBe(0);
-      expect(floats.isOpen("escmenu")).toBe(true);
     } finally {
       groups = keep;
       menu.closeMenu();
@@ -349,7 +362,52 @@ describe("settings view", () => {
     }
   });
 
-  test("all-header group: cursor parks on a header, activate/adjust stay no-ops", async () => {
+  test("description footer shows the row blurb and follows the cursor; no hint line", async () => {
+    const keep = groups;
+    groups = [
+      {
+        header: "general",
+        rows: [
+          { kind: "toggle", label: "aaa", blurb: "first thing explained", get: () => false, set: () => {} },
+          { kind: "toggle", label: "bbb", blurb: "second thing explained", get: () => false, set: () => {} },
+        ],
+      },
+    ];
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1); // root: down fills Settings
+      menu.menuActivate();
+      await t.renderOnce();
+      // no cursor yet: placeholder, and the old hint line is gone
+      expect(t.captureCharFrame()).toContain("Choose a setting");
+      expect(t.captureCharFrame()).not.toContain("↑↓ move");
+      menu.moveMenu(1); // cursor on aaa
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("first thing explained");
+      menu.moveMenu(1); // cursor on bbb — footer follows live
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("second thing explained");
+      expect(t.captureCharFrame()).not.toContain("first thing explained");
+      // hover moves the footer too (by-id paint, no rebuild)
+      (t.renderer.root.findDescendantById("tfm-set-row-0") as any).processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("first thing explained");
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("collapsing under the cursor parks it on the header (never hidden)", async () => {
     const keep = groups;
     groups = [{ header: "empty", rows: [{ kind: "header", label: "nothing here" }] }];
     try {

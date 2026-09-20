@@ -8,6 +8,7 @@
 # from filtering. The settings capture UI still reserves them.
 
 [ui]
+view-mode                             = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
 sidebar-width                         = 26          # 16..60 cells (grid + list)
 preview-width                         = 40          # 20..80 cells
 terminal-height                       = 12          # embedded terminal pane height in rows, 4..30 (applies live to the open pane)
@@ -28,10 +29,10 @@ hover-zone-cells                      = 8           # cells from the edge that t
 hover-open-delay-ms                   = 195         # delay before an auto-hide panel expands, 0..1000 ms
 hover-close-delay-ms                  = 175         # delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms
 hover-anim-ms                         = 120         # auto-hide slide duration, 0..600 ms (0 = instant)
+type-to-search                        = true        # true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)
 double-click-ms                       = 400         # 100..2000
 drag-threshold-cells                  = 1           # cells of movement before a press becomes a drag, 1..5
 toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
-type-to-search                        = true        # true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)
 follow-terminal                       = false       # true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset
 transparent-bg                        = false       # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
@@ -83,7 +84,6 @@ directory-bar-slide-cells             = 8           # how far crumbs slide in, 0
 directory-bar-dir                     = "right"     # "right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically
 directory-bar-stagger-pct             = 40          # how spread the crumb cascade is, 0..300% (0 = all crumbs at once)
 directory-bar-ease                    = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
-view-mode                             = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
 show-hidden                           = false       # start with dotfiles visible (ctrl+h toggles at runtime)
 recursive-search                      = false       # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
 restore-session                       = false       # true = reopen the folder from the last quit instead of the launch cwd
