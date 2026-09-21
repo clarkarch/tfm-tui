@@ -14,20 +14,27 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 
 ## Features
 
-- Click, rubber-band select, right-click menus, inline rename.
-- Drag files between folders (ctrl+drag), out to other apps, or in from outside.
-  Cross-app drag is kitty-only.
-- Places sidebar, GTK bookmarks, recent files, XDG trash with restore, clipboard.
-- Dual pane: two independent file panes side by side, each with its own top bar
-  (path, sort, search) and its own tabs. `Tab` switches the focused side, `F5`
-  copies the selection to the other pane, `F6` moves it.
-- Network locations: `sftp://`, `smb://`, WebDAV, FTP… via gvfs
-  (sidebar → Connect to Server…), credentials prompted in-app.
-- Embedded terminal (right-click → Open Terminal Here).
-- Auto-hide panes: sidebar/preview/terminal collapse to the edge and slide back (animated) when the mouse nears them.
-- Extract and compress archives (right-click).
-- Image/video thumbnails, text syntax highlighting, folder sizes.
-- Type-to-search, tabs, undo/redo, 30+ themes.
+- Browse files in grid or list view.
+- Sidebar with places, bookmarks, drives, trash, recent, starred.
+- Search as you type + recursive search.
+- Sort by name, size, date.
+- Copy, move, paste, duplicate, rename.
+- Bulk rename multiple files at once.
+- New file / new folder inline.
+- Drag and drop between panes and from other apps.
+- Trash, restore, delete forever, empty trash.
+- Undo / redo file operations.
+- Preview text, code, images, videos, folders.
+- Open files + Open With app picker.
+- Properties dialog with permissions editing.
+- Tabs + dual pane.
+- Connect to network servers.
+- Extract and compress archives.
+- Embedded terminal.
+- Clipboard copy/paste with other apps.
+- Open privileged files with sudo prompt.
+- Customizable themes, settings GUI, keybinds.
+- Plugin support with store + installer.
 
 ## Requirements
 
