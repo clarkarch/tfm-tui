@@ -17,7 +17,6 @@ export type SettingsPanelState = {
   menuIdx: number; // row cursor within the ACTIVE category (full-row index, never a hidden one)
   pane: "cats" | "rows";
   scrollOff: number; // offset into the VISIBLE-row projection (see flatVisible), not the full rows array
-  hoverCat: number;
   // keybind capture: flat row index within the active category being recorded
   capturing: number | null;
   // collapsed subsections, keyed by sectionKey(category header, subsection)
@@ -134,9 +133,6 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
   };
 
   // --- left pane: categories ---
-  // hover = selection: moving across categories commits switchCategory (the
-  // rows pane must rebuild for the new category anyway). Rows hover by id
-  // without rebuilds (native alloc churn — see the OOM note in AGENTS.md).
   const catPane = Box({ width: CAT_W, flexDirection: "column" });
   cats.forEach((g, gi) => {
     const active = gi === st.catIdx;
@@ -170,16 +166,6 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
             }
             if (st.catIdx !== gi) h.switchCategory(gi);
             else h.rebuild();
-          },
-          // move, not over: a rebuild under a stationary cursor re-fires
-          // synthetic "over" and would snap hover back (same trap as rows)
-          onMouseMove: () => {
-            if (st.capturing !== null || st.catIdx === gi) return;
-            // hover = selection: commit the category like rows commit menuIdx
-            h.switchCategory(gi);
-          },
-          onMouseOut: () => {
-            if (st.hoverCat === gi) st.hoverCat = -1;
           },
         },
         slot.el,

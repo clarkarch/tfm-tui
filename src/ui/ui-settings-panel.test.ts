@@ -17,7 +17,6 @@ const panelState = (over: Partial<SettingsPanelState> = {}): SettingsPanelState 
   menuIdx: -1,
   pane: "rows",
   scrollOff: 3,
-  hoverCat: -1,
   capturing: null,
   collapsed: new Set<string>(),
   ...over,

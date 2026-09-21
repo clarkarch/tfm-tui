@@ -240,6 +240,26 @@ describe("settings view", () => {
     expect(frame).toContain("Menu — settings");
   });
 
+  test("hovering a category does not switch categories", async () => {
+    await openSettings();
+    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg));
+    expect(t.captureCharFrame()).toContain("show hidden");
+
+    (t.renderer.root.findDescendantById("tfm-set-cat-1") as any).processMouseEvent({
+      type: "move",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+
+    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg));
+    expect(bgInts("tfm-set-cat-1")).toEqual([0, 0, 0, 0]);
+    expect(t.captureCharFrame()).toContain("show hidden");
+    expect(t.captureCharFrame()).not.toContain("knob-0");
+  });
+
   test("row adjust: toggle flips on/accent, stepper steps within bounds, cycle wraps", async () => {
     // toggle row 0
     menu.menuActivate();

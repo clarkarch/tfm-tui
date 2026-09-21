@@ -80,7 +80,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     menuIdx: 0,
     pane: "rows",
     scrollOff: 0,
-    hoverCat: -1,
     capturing: null,
     collapsed: new Set<string>(),
   };
