@@ -83,21 +83,20 @@ Everything is remappable: `esc` → Settings → keys.
 ## Config
 
 `~/.config/tfm/config.toml`, see [config.example.toml](config.example.toml).
-Override the path with `TFM_CONFIG`. `--debug` writes a log.
+
+```bash
+TFM_CONFIG=/custom/path/config.toml tfm
+```
 
 ## Plugins
 
-TypeScript plugins in `~/.config/tfm/plugins/<name>/<name>.ts` with hot reload,
-commands/keybinds, context menus, previews, and events.
-Install from a git URL in `esc` → Plugins, or:
+`esc` → Plugins, or `tfm plugins add <url|id>`. See [docs/plugins.md](docs/plugins.md).
 
 ```bash
 tfm plugins search
 tfm plugins add <url|id>
 tfm plugins new my-plugin
 ```
-
-See [docs/plugins.md](docs/plugins.md).
 
 ## Limitations
 
