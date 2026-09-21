@@ -33,7 +33,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Extract and compress archives.
 - Embedded terminal.
 - Clipboard copy/paste with other apps.
-- Edit system files with a sudo prompt.
+- Open privileged files with sudo prompt.
 - Customizable themes, settings GUI, keybinds.
 - Plugin support with hot reload.
 - …and many more.
@@ -44,7 +44,6 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Image thumbnails need a terminal with the
   [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html)
   (kitty, ghostty, WezTerm, Konsole…).
-  Without it you see text icons instead of thumbnails.
 - Optional tools (the installer lists what's missing):
   - `rsvg-convert` (icons and SVG thumbnails)
   - `magick` (raster image thumbnails)
@@ -76,6 +75,9 @@ bun run compile && cp dist/tfm ~/.local/bin/
 - `tab` switch focused pane · `f5`/`f6` copy/move to the other pane (dual pane)
 - `ctrl+t/w` new/close tab · `ctrl+tab` switch tab (per pane)
 - `delete` trash · `alt+enter` properties · `ctrl+q` quit
+- `ctrl+a` select all · `space` toggle · `shift+arrows` extend selection
+- `alt+left/right` history back/forward · `ctrl+shift+n` / `ctrl+alt+n` new folder/file
+- `ctrl+shift+d` dual pane · `ctrl+=/-` zoom · `ctrl+r` reload places · `ctrl+alt+r` restart
 - `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f9` preview · `f4` terminal · `ctrl+shift+s` connect to server
 
 Everything is remappable: `esc` → Settings → keys.
