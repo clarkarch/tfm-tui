@@ -16,6 +16,7 @@ import {
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
 import { KEY_SCHEMA, UI_SCHEMA, keybindConflict, type KeyAction, type UiSchemaRow } from "../config/config-schema";
 import { keySpecEqual, validateKeybindSpec } from "../config/keyspec";
+import { isDark } from "./compat";
 import { getPluginCommandBinds, setPluginCommandBinds } from "../plugins/plugin-api";
 import {
   KEYMAP_PRESET_NAMES,
@@ -42,6 +43,9 @@ export type SettingsModelCtx = {
   // picks the System theme entry. Optional so row SHAPE stays testable
   // without it; absent = flag commits, derived colors land on next boot.
   resolveSystemTheme?(): void;
+  // console-mode read: when active the theme row is display-only (one static
+  // console palette paints regardless of presets). Optional so tests stay light.
+  compatActive?(): boolean;
   // git installer orchestration (wired in wiring/settings — prompt, danger
   // confirm, clone/pull/rm, rescan). Optional so row SHAPE stays testable
   // without it; rows no-op when absent. Never throws (fire-and-forget).
@@ -153,7 +157,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const themeRow = (): SettingRow => {
     // "System" leads: it owns the [ui] follow-terminal knob (the schema row
     // is skipped in genericUiRows via SPECIAL_UI_PROPS) and builds the theme
-    // from the terminal's own colors on select; presets sit behind it at +1
+    // from the terminal's own colors on select; presets sit behind it at +1.
+    // On the console the row is display-only: one static palette paints no
+    // matter the preset, so adjusting warns instead of committing (config is
+    // still stored, and applies back on a graphical terminal).
     const names = ["System", ...THEME_PRESETS.map((p) => p.name)];
     return {
       kind: "cycle",
@@ -162,11 +169,16 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       repaint: true,
       names,
       getIdx: () => {
+        if (ctx.compatActive?.()) return -1;
         if (ctx.config.ui.followTerminal) return 0;
         const i = themePresetIdx();
         return i < 0 ? -1 : i + 1;
       },
       setIdx: (i) => {
+        if (ctx.compatActive?.()) {
+          ctx.warn("theme is fixed on the console — presets apply back on a graphical terminal", "theme");
+          return;
+        }
         if (i === 0) {
           commit({
             ui: { ...ctx.config.ui, followTerminal: true },
@@ -185,8 +197,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         });
       },
       // hand-edited themes match no preset: name the nearest one with a ~
-      // prefix (picking any preset returns to an exact match)
+      // prefix (picking any preset returns to an exact match). On the console
+      // the static palette is named instead.
       customLabel: () => {
+        if (ctx.compatActive?.()) return isDark(ctx.config.theme.bg) ? "Console" : "Console Light";
         const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
         return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
       },

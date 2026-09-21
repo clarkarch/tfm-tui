@@ -249,7 +249,7 @@ export const makeProps = (ctx: PropsCtx) => {
     } else {
       heroEl = ctx.makeIconSlot(
         iconName,
-        [{ fg: colors.sidebarFg, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+        [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
         ICON_H,
       ).el;
     }
@@ -299,7 +299,7 @@ export const makeProps = (ctx: PropsCtx) => {
       Box(
         { width: "100%", height: 1, flexDirection: "row", paddingLeft: 1 },
         Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
-        Text({ ...(id ? { id } : {}), content: String(value).slice(0, PROPS_W - 14), fg: colors.sidebarFg }),
+        Text({ ...(id ? { id } : {}), content: String(value).slice(0, PROPS_W - 14), fg: colors.white }),
       );
 
     if (isDirTarget) {
@@ -391,7 +391,7 @@ export const makeProps = (ctx: PropsCtx) => {
     const ICON_H = 6;
     const heroEl = ctx.makeIconSlot(
       "select-all",
-      [{ fg: colors.sidebarFg, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+      [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
       ICON_H,
     ).el;
     panel.add(
@@ -470,7 +470,7 @@ export const makeProps = (ctx: PropsCtx) => {
       panel.add(
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` ${path.basename(it.path)}`.slice(0, PROPS_W - 1), fg: colors.sidebarFg }),
+          Text({ content: ` ${path.basename(it.path)}`.slice(0, PROPS_W - 1), fg: colors.white }),
         ),
       );
     }

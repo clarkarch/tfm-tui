@@ -75,8 +75,16 @@ export const makeSelection = (ctx: SelectionCtx) => {
     const labelReal: any = ctx.byId(refs.labelId);
     if (labelReal) {
       try {
+        // hover lifts the label to white (readable on the blue hover fill);
+        // rest keeps the tile's own baseFg. No-op in presets (white == fg).
         labelReal.fg =
-          mode === TileVisual.Selected ? ctx.colors().accent : cut ? ctx.colors().sidebarFgMuted : refs.baseFg;
+          mode === TileVisual.Selected
+            ? ctx.colors().accent
+            : mode === TileVisual.Hover
+              ? ctx.colors().white
+              : cut
+                ? ctx.colors().sidebarFgMuted
+                : refs.baseFg;
       } catch {}
     }
     const tileReal: any = ctx.byId(refs.tileId);

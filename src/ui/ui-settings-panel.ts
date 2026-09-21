@@ -144,7 +144,7 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
     const slot = h.makeIconSlot(
       icon,
       [
-        { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
+        { fg: c.white, bg: active ? c.accentBg : c.sidebarBg },
         { fg: c.white, bg: c.accentBg },
       ],
       1,
@@ -186,7 +186,7 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
         Text({
           id: `tfm-set-catl-${gi}`,
           content: (g.header ?? "general").slice(0, CAT_W - 3),
-          fg: active ? c.white : c.sidebarFg,
+          fg: c.white,
         }),
       ),
     );
@@ -333,7 +333,7 @@ const renderRowPane = (
   const rowNode = (rowSpec: SettingRow, index: number) => {
     const active = st.pane === "rows" && st.menuIdx === index;
     const capturingThis = st.capturing === index;
-    const labelFg = active ? c.white : c.sidebarFg;
+    const labelFg = c.white;
     let control: any;
     let onClick: (ev?: any) => void = (ev?: any) => {
       try {

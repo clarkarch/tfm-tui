@@ -541,10 +541,10 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
         const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors);
         try {
           ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
-          if (!hovered) {
-            const lab: any = ctx.byId(refs.labelId);
-            if (lab) lab.fg = restLabelFg(refs, key);
-          }
+          // hover-in lifts the label to white (readable on the hover fill);
+          // hover-out restores the rest fg — same contract as setTileVisual
+          const lab: any = ctx.byId(refs.labelId);
+          if (lab) lab.fg = hovered ? offColors.white : restLabelFg(refs, key);
           if (slot) {
             slot.translateX = 0;
             slot.translateY = 0;
@@ -587,10 +587,8 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       // applies at Rest, exactly like setTileVisual)
       try {
         ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
-        if (!hovered) {
-          const lab: any = ctx.byId(refs.labelId);
-          if (lab) lab.fg = restLabelFg(refs, key);
-        }
+        const lab: any = ctx.byId(refs.labelId);
+        if (lab) lab.fg = hovered ? colors.white : restLabelFg(refs, key);
       } catch {}
       writeBg(node, toHex);
 

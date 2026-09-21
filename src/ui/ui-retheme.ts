@@ -8,7 +8,7 @@
 import { watch } from "node:fs";
 import path from "node:path";
 import { bumpHex } from "../config/color";
-import { compatTheme } from "./compat";
+import { compatStaticTheme, isDark, resolveCompat } from "./compat";
 import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
@@ -90,13 +90,13 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       n.backgroundColor = colors.divider;
     });
     setOnId(BAND_ID, (n) => {
-      n.borderColor = colors.accent;
+      n.borderColor = ctx.compatActive?.() ? colors.hoverBg : colors.accent;
     });
     setOnId(DRAG_GHOST_ID, (n) => {
-      n.backgroundColor = colors.accent;
+      n.backgroundColor = ctx.compatActive?.() ? colors.accentBg : colors.accent;
     });
     setOnId(`${DRAG_GHOST_ID}-label`, (n) => {
-      n.fg = colors.bg;
+      n.fg = ctx.compatActive?.() ? colors.white : colors.bg;
     });
     setOnId("tfm-status-label", (n) => {
       n.fg = colors.sidebarFgMuted;
@@ -153,8 +153,21 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // (opaque on the console), so rasters must invalidate like a theme change.
   // forceGlyph too: drains stopped while on must resume on the way back, or
   // tiles keep glyphs forever.
-  const themeSig = (c: Config): string =>
-    JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.compatMode, c.ui.forceGlyph]);
+  // While compat is active the user [theme] is IGNORED (one static console
+  // palette paints instead), so the sig keys off the static dark/light choice
+  // — a [theme] TOML edit on a TTY must not churn rasters or rebuild the grid.
+  const themeSig = (c: Config): string => {
+    if (resolveCompat(c.ui.compatMode, process.env.TERM))
+      return JSON.stringify([
+        "console",
+        isDark(c.theme.bg) ? "dark" : "light",
+        c.ui.uiStyle,
+        c.ui.icons,
+        c.ui.compatMode,
+        c.ui.forceGlyph,
+      ]);
+    return JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.compatMode, c.ui.forceGlyph]);
+  };
   let lastThemeSig = themeSig(ctx.config);
 
   // UI keys that a settings adjust can change WITHOUT the heavy renderAll steps
@@ -221,12 +234,15 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "gpmMouse",
   ]);
 
-  // rebuild-relevant signature: all UI keys except the exempt ones, plus theme
+  // rebuild-relevant signature: all UI keys except the exempt ones, plus theme.
+  // Compat ignores [theme] (static console palette), so it is excluded there
+  // too — a theme-only edit on a TTY is a no-op, not a full repaint.
   const renderSig = (c: Config): string => {
     const ui: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(c.ui)) {
       if (!RENDER_EXEMPT.has(k)) ui[k] = v;
     }
+    if (resolveCompat(c.ui.compatMode, process.env.TERM)) return JSON.stringify([ui, "console"]);
     return JSON.stringify([ui, c.theme]);
   };
   let lastRenderSig = renderSig(ctx.config);
@@ -241,13 +257,15 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     Object.assign(ctx.config.theme, fresh.theme);
     Object.assign(ctx.config.keys, fresh.keys);
     Object.assign(ctx.colors, fresh.theme);
-    // compat forces opaque (same rule as the boot derive in wiring/core):
-    // a transparent console bg + explicit SGR cells turns the TUI see-through
-    const effTransparent = ctx.config.ui.transparentBg && !ctx.compatActive?.();
-    if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
-    // compat snaps the palette to ANSI16 (the VT ignores 48;2 truecolor);
-    // idempotent, so repeated applies stay stable
-    if (ctx.compatActive?.()) Object.assign(ctx.colors, compatTheme({ ...ctx.colors }));
+    // compat ignores the user hues: one static console palette paints instead
+    // (dark/light by the configured bg's brightness) and the kitty-compositing
+    // bumpHex nudge is skipped — meaningless on the console. config.theme is
+    // still STORED above, so leaving the console restores the user theme.
+    if (ctx.compatActive?.()) Object.assign(ctx.colors, compatStaticTheme(ctx.config.theme));
+    else {
+      const effTransparent = ctx.config.ui.transparentBg;
+      if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
+    }
     lastThemeSig = themeSig(ctx.config);
     const renderChanged = lastRenderSig !== renderSig(ctx.config);
     lastRenderSig = renderSig(ctx.config);

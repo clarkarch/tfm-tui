@@ -12,6 +12,7 @@ const COLORS: any = {
   accentBg: "#333333",
   sidebarFg: "#aaaaaa",
   sidebarFgMuted: "#666666",
+  white: "#ffffff",
 };
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {

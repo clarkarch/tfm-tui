@@ -103,7 +103,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
         onMouseOut: () => ctx.setOnId(rowId, (n) => applySurface(n, rowSurface(ctx.uiStyle(), colors, "rest"))),
       },
       Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
-      Text({ id: `${permRowId(cls)}-words`, content: permWords(st.mode, shift, isDirTarget), fg: colors.sidebarFg }),
+      Text({ id: `${permRowId(cls)}-words`, content: permWords(st.mode, shift, isDirTarget), fg: colors.white }),
     );
   };
   panel.add(permRow("you", "owner", 6));
@@ -186,7 +186,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
         onMouseOut: () => ctx.setOnId(execRowId, (n) => applySurface(n, rowSurface(ctx.uiStyle(), colors, "rest"))),
       },
       Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),
-      Text({ content: "execute as program", fg: colors.sidebarFg }),
+      Text({ content: "execute as program", fg: colors.white }),
     );
     panel.add(execRow);
     syncExecCheckbox();

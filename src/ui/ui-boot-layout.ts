@@ -166,6 +166,10 @@ type BootLayoutCtx = {
   clearTileSelection: () => void;
   openContextMenu: (x: number, y: number, title: string, entries: any[]) => void;
   emptyAreaEntries: (x: number, y: number) => any[];
+  // console mode: the drag ghost + rubber band paint the selection-bar idiom
+  // (black bar + white label) instead of the accent chip (white on grey is
+  // invisible). Optional so tests stay light.
+  compatActive?(): boolean;
 };
 
 // returns both scrollers (one per pane) so the wiring can keep its live
@@ -222,7 +226,7 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       zIndex: 2500,
       border: true,
       borderStyle: "rounded",
-      borderColor: ctx.colors.accent,
+      borderColor: ctx.compatActive?.() ? ctx.colors.hoverBg : ctx.colors.accent,
     }),
   );
 
@@ -237,11 +241,15 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
         width: 12,
         height: 1,
         zIndex: 4000,
-        backgroundColor: ctx.colors.accent,
+        backgroundColor: ctx.compatActive?.() ? ctx.colors.accentBg : ctx.colors.accent,
         flexDirection: "row",
         paddingLeft: 1,
       },
-      Text({ id: `${DRAG_GHOST_ID}-label`, content: "moving 0 items", fg: ctx.colors.bg }),
+      Text({
+        id: `${DRAG_GHOST_ID}-label`,
+        content: "moving 0 items",
+        fg: ctx.compatActive?.() ? ctx.colors.white : ctx.colors.bg,
+      }),
     ),
   );
 

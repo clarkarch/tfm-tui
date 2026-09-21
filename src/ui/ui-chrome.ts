@@ -122,7 +122,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const selected = isPlaceSelected(place);
     const colors = ctx.colors();
     const st = ctx.uiStyle();
-    const normFg = colors.sidebarFg;
+    const normFg = colors.white;
     const selFg = colors.accent;
     const rowBg = slotBg(st, colors, colors.sidebarBg);
     const iconStates: IconState[] = [
@@ -426,7 +426,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         ctx.setIconState(s, selectIconState(isSel, isHover));
       });
       try {
-        if (label) label.fg = isSel ? colors.accent : colors.sidebarFg;
+        if (label) label.fg = isSel ? colors.accent : colors.white;
       } catch {}
     });
   };

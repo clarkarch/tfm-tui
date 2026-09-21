@@ -8,7 +8,7 @@ import { makeRetheme } from "./ui-retheme";
 import { makePick } from "./ui-pick";
 import { makeFloats } from "./floats";
 import { bumpHex } from "../config/color";
-import { ANSI16 } from "./compat";
+import { ANSI16, COMPAT_DARK_THEME, COMPAT_LIGHT_THEME } from "./compat";
 import { defaultConfig, type Config } from "../config/config-schema";
 import { loadConfig } from "../config/config";
 
@@ -167,17 +167,51 @@ describe("applyConfig", () => {
     expect(ctx.calls.bg).toEqual([bumpHex(defaultConfig.theme.bg)]); // renderer bg reset
   });
 
-  test("compat-active applyConfig quantizes colors to the 16-color set", () => {
-    // the Linux VT ignores 48;2 truecolor, so compat must emit ANSI16 only —
-    // with bg/hover/selected kept distinct, or fills vanish into each other
+  test("compat-active applyConfig paints the static console palette, ignoring user hues", () => {
+    // the Linux VT ignores 48;2 truecolor, so compat paints one hand-tuned
+    // static palette (dark/light by configured-bg brightness) instead of the
+    // user's theme — two wildly different user themes land byte-identical
     const ctx = mkCtx();
     (ctx as Record<string, unknown>).compatActive = () => true;
     const retheme = makeRetheme(ctx as any);
-    retheme.applyConfig(clone(defaultConfig));
+    const dark = clone(defaultConfig);
+    dark.ui.compatMode = "on";
+    dark.theme.accent = "#ff0000";
+    dark.theme.bg = "#1a1b26";
+    retheme.applyConfig(dark);
+    expect(ctx.colors).toEqual(COMPAT_DARK_THEME);
     for (const v of Object.values(ctx.colors)) expect(ANSI16).toContain(v);
-    expect(ctx.colors.bg).not.toBe(ctx.colors.hoverBg);
-    expect(ctx.colors.bg).not.toBe(ctx.colors.accentBg);
-    expect(ctx.colors.hoverBg).not.toBe(ctx.colors.accentBg);
+
+    const other = clone(defaultConfig);
+    other.ui.compatMode = "on";
+    other.theme.accent = "#00ff00";
+    other.theme.bg = "#101014";
+    retheme.applyConfig(other);
+    expect(ctx.colors).toEqual(COMPAT_DARK_THEME); // hues discarded, same static
+
+    const light = clone(defaultConfig);
+    light.ui.compatMode = "on";
+    light.theme.bg = "#e1e2e7";
+    retheme.applyConfig(light);
+    expect(ctx.colors).toEqual(COMPAT_LIGHT_THEME);
+  });
+
+  test("compat-active user-theme edits invalidate nothing (theme is not painted)", () => {
+    const ctx = mkCtx();
+    (ctx as Record<string, unknown>).compatActive = () => true;
+    const retheme = makeRetheme(ctx as any);
+    const booted = clone(defaultConfig);
+    booted.ui.compatMode = "on";
+    retheme.applyConfig(booted);
+    const baseline = { ...ctx.calls };
+    const fresh = clone(defaultConfig);
+    fresh.ui.compatMode = "on";
+    fresh.theme.accent = "#123456";
+    retheme.applyConfig(fresh);
+    expect(ctx.calls.clearIconCaches).toBe(baseline.clearIconCaches);
+    expect(ctx.calls.resetIconQueue).toBe(baseline.resetIconQueue);
+    expect(ctx.calls.renderAll).toBe(baseline.renderAll);
+    expect(ctx.config.theme.accent).toBe("#123456"); // still STORED for life off-console
   });
 
   test("a ui-only knob flip re-renders but never invalidates the raster caches", () => {

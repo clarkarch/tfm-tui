@@ -699,6 +699,23 @@ describe("hand-written rows", () => {
     expect(row.getIdx()).toBe(-1);
     expect(row.customLabel()).toBe(`~${THEME_PRESETS[2]!.name}`);
   });
+
+  test("console mode: theme row is display-only (adjust warns, commits nothing)", () => {
+    const h = mk();
+    (h.ctx as SettingsModelCtx).compatActive = () => true;
+    const row = h.byLabel("theme");
+    if (row.kind !== "cycle" || !row.customLabel) throw new Error("theme row must be a cycle with customLabel");
+    expect(row.getIdx()).toBe(-1);
+    expect(row.customLabel()).toBe("Console"); // dark default config
+    const before = structuredClone(h.config.theme);
+    asCycle(row).setIdx(2);
+    expect(h.config.theme).toEqual(before); // no commit
+    expect(h.applied).toHaveLength(0);
+    expect(h.warns).toHaveLength(1);
+    expect(h.warns[0]!.title).toBe("theme");
+    h.config.theme = { ...h.config.theme, bg: "#e1e2e7" };
+    expect(row.customLabel()).toBe("Console Light");
+  });
 });
 
 describe("keybind rows", () => {

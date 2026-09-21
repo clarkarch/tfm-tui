@@ -733,7 +733,7 @@ describe("makeTileHoverAnim (engine)", () => {
     const anim = makeTileHoverAnim({
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       tileRefs: () => refs,
-      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89" }) as any,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
       setIconState: (_spec, idx) => void iconCalls.push(idx),
       isCutKey,
@@ -787,7 +787,7 @@ describe("makeTileHoverAnim (engine)", () => {
     const anim = makeTileHoverAnim({
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       tileRefs: () => refs,
-      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89" }) as any,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
       setIconState: () => {},
       hoverLiftOpts: () => ({ enabled: true, direction: "up", includeLabel: false }),
@@ -825,6 +825,7 @@ describe("makeTileHoverAnim (engine)", () => {
     expect((byId("slot-a-in") as any).translateY).toBe(-1);
     expect((byId("lab-a-in") as any).translateY).toBe(0);
     expect((byId("tile-a-in") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+    expect((byId("lab-a-in") as any).fg.toInts()).toEqual([255, 255, 255, 255]); // label lifts to white on the hover fill
   });
 
   test("the lift is always exactly one cell (no distance knob)", async () => {
@@ -937,6 +938,7 @@ describe("makeTileHoverAnim (engine)", () => {
     anim.playHover("/w/a-off", true);
     expect(iconCalls).toEqual([1]);
     expect((byId("tile-a-off") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+    expect((byId("lab-a-off") as any).fg.toInts()).toEqual([255, 255, 255, 255]); // same white-label contract without the lift
     anim.playHover("/w/a-off", false);
     expect(iconCalls).toEqual([1, 0]);
     expect((byId("tile-a-off") as any).backgroundColor.toInts()).toEqual([...REST] as any);
@@ -969,7 +971,7 @@ describe("makeTileHoverAnim (engine)", () => {
     const anim = makeTileHoverAnim({
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       tileRefs: () => refs,
-      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89" }) as any,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
       setIconState: () => {},
       hoverLiftOpts: () => ({ enabled: true, direction: "up", includeLabel: false }),

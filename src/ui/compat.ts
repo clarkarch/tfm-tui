@@ -3,10 +3,10 @@
 // Nerd-Font PUA, so the kitty raster AND the Nerd glyph both miss. Compat
 // forces list view + ASCII glyphs + no rasters/thumbs (wired in wiring/core +
 // wiring/grid + wiring/chrome + ui-retheme); text-cell anims stay enabled
-// (they need no graphics protocol). Palette is snapped to ANSI16 below: the
-// VT ignores 48;2 truecolor, so unquantized theme hexes collapse into one
-// cell. This module decides WHEN (TERM prefix) and renders WHAT (ASCII +
-// palette).
+// (they need no graphics protocol). The palette is a STATIC 16-color console
+// theme (dark/light by configured-bg brightness) — the VT ignores 48;2
+// truecolor, so user hues would collapse into one cell. This module decides
+// WHEN (TERM prefix) and renders WHAT (ASCII + static palette).
 export type CompatMode = "auto" | "on" | "off";
 
 // linux* = the console (gpm.ts uses the same prefix); vt*/dumb = no graphics
@@ -29,12 +29,25 @@ export const resolveCompat = (mode: CompatMode | string, term?: string | null): 
 export const rasterSigOf = (icons: string, compat: boolean, forceGlyph: boolean): string =>
   JSON.stringify([icons, compat, forceGlyph]);
 
-// --- 16-color console palette ---
+// --- 16-color console palettes ---
 // OpenTUI emits 48;2/38;2 truecolor unconditionally (ansi.ts), which the Linux
 // VT ignores — subtle theme shades collapse into one cell and bg/hover look
-// dead. In compat mode every emitted hex is snapped to the classic VGA 16 so
-// fills survive; surface roles are then REPAIRED pairwise distinct (a plain
-// nearest-neighbor maps bg/hoverBg/accentBg all to black on dark themes).
+// dead. So compat mode IGNORES the user's [theme] hues entirely and paints one
+// of two hand-tuned static palettes (dark/light picked by the configured bg's
+// brightness): every value is a classic VGA16 slot, and the surface roles are
+// designed distinct instead of repaired after the fact.
+// Design idiom: grey canvas with DARK-BLUE panels (blue sidebar/preview/menus
+// carrying white text — the classic look), black grid text on grey, black
+// selection bar, bright-blue hover (carries both text colors), red hairlines.
+// Text roles are split by surface: `white` paints panels + selection + hover,
+// `sidebarFg` paints the grid. Dark syntax is green/yellow/cyan/white on blue.
+// Light: white canvas + grey sidebar + cyan selection bar carrying dark text
+// + blue brand accents.
+// Role constraints (verified against the widgets): `white`, `accent` AND
+// `sidebarFg` all paint on `accentBg` (menus / sidebar rows / grid tiles),
+// and `white` also paints on `hoverBg` (tab X, settings hover) and on
+// `sidebarBg` (props titles) — so the selection bar must carry every text
+// role at once.
 export const ANSI16: string[] = [
   "#000000",
   "#aa0000",
@@ -54,6 +67,81 @@ export const ANSI16: string[] = [
   "#ffffff",
 ];
 
+// Full Theme key set (10 chrome + 6 syntax + 16 ansi), kept as plain records
+// so this leaf stays import-free. Selected-label text is `white` on
+// `accentBg` (see ui-menu/ui-settings-panel) and `accent` never paints on top
+// of `accentBg`, so accent==blue is never required — both palettes still keep
+// every fill/text role pairwise distinct.
+export const COMPAT_DARK_THEME: Record<string, string> = {
+  bg: "#aaaaaa",
+  sidebarBg: "#0000aa",
+  sidebarFg: "#000000",
+  sidebarFgMuted: "#555555",
+  accent: "#ffffff",
+  accentBg: "#000000",
+  hoverBg: "#5555ff",
+  border: "#aa0000",
+  divider: "#aa0000",
+  white: "#ffffff",
+  syntaxString: "#55ff55",
+  syntaxNumber: "#ffff55",
+  syntaxType: "#55ffff",
+  syntaxFunction: "#ffffff",
+  syntaxOperator: "#aaaaaa",
+  syntaxProperty: "#55ffff",
+  ansi0: "#000000",
+  ansi1: "#aa0000",
+  ansi2: "#00aa00",
+  ansi3: "#aa5500",
+  ansi4: "#0000aa",
+  ansi5: "#aa00aa",
+  ansi6: "#00aaaa",
+  ansi7: "#aaaaaa",
+  ansi8: "#555555",
+  ansi9: "#ff5555",
+  ansi10: "#55ff55",
+  ansi11: "#ffff55",
+  ansi12: "#5555ff",
+  ansi13: "#ff55ff",
+  ansi14: "#55ffff",
+  ansi15: "#ffffff",
+};
+
+export const COMPAT_LIGHT_THEME: Record<string, string> = {
+  bg: "#ffffff",
+  sidebarBg: "#aaaaaa",
+  sidebarFg: "#000000",
+  sidebarFgMuted: "#555555",
+  accent: "#0000aa",
+  accentBg: "#55ffff",
+  hoverBg: "#555555",
+  border: "#555555",
+  divider: "#555555",
+  white: "#000000",
+  syntaxString: "#00aa00",
+  syntaxNumber: "#aa5500",
+  syntaxType: "#0000aa",
+  syntaxFunction: "#aa0000",
+  syntaxOperator: "#555555",
+  syntaxProperty: "#00aaaa",
+  ansi0: "#000000",
+  ansi1: "#aa0000",
+  ansi2: "#00aa00",
+  ansi3: "#aa5500",
+  ansi4: "#0000aa",
+  ansi5: "#aa00aa",
+  ansi6: "#00aaaa",
+  ansi7: "#aaaaaa",
+  ansi8: "#555555",
+  ansi9: "#ff5555",
+  ansi10: "#55ff55",
+  ansi11: "#ffff55",
+  ansi12: "#5555ff",
+  ansi13: "#ff55ff",
+  ansi14: "#55ffff",
+  ansi15: "#ffffff",
+};
+
 const hexRgb = (hex: string): [number, number, number] | null => {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());
   if (!m) return null;
@@ -61,48 +149,20 @@ const hexRgb = (hex: string): [number, number, number] | null => {
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 };
 
-export const nearestAnsi16 = (hex: string): string => {
-  const rgb = hexRgb(hex);
-  if (!rgb) return hex;
-  let best: string = ANSI16[0]!;
-  let bestD = Number.POSITIVE_INFINITY;
-  for (const slot of ANSI16) {
-    const s = hexRgb(slot)!;
-    const d = (rgb[0] - s[0]) ** 2 + (rgb[1] - s[1]) ** 2 + (rgb[2] - s[2]) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      best = slot;
-    }
-  }
-  return best;
-};
-
-const isDark = (hex: string): boolean => {
+export const isDark = (hex: string): boolean => {
   const rgb = hexRgb(hex);
   if (!rgb) return true;
   return (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255 < 0.5;
 };
 
-// Snap a whole theme to ANSI16 with the surface roles repaired distinct.
-// Generic over Record (not Theme) so this leaf stays import-free; idempotent
-// (slots map to themselves) so repeated applyConfig runs are stable.
-export const compatTheme = <T extends Record<string, string>>(theme: T): T => {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(theme)) out[k] = nearestAnsi16(v);
-  const dark = isDark(theme.bg ?? "#000000");
-  const dim = dark ? "#555555" : "#aaaaaa";
-  if (out.hoverBg === out.bg) out.hoverBg = dim;
-  if (out.sidebarBg === out.bg) out.sidebarBg = dim;
-  if (out.accentBg === out.bg || out.accentBg === out.hoverBg || out.accentBg === out.sidebarBg) {
-    out.accentBg = out.bg === "#0000aa" || out.hoverBg === "#0000aa" ? "#aa00aa" : "#0000aa";
-  }
-  // selected-label fg must read on the (now blue/magenta) accentBg
-  if (out.accent === out.accentBg) out.accent = "#ffff55";
-  if (out.sidebarFgMuted === out.sidebarFg) out.sidebarFgMuted = dim;
-  if (out.border === out.bg) out.border = dim;
-  if (out.divider === out.bg) out.divider = dim;
-  return out as T;
-};
+// Effective console palette: the user's [theme] hues are ignored, only the
+// configured bg's brightness picks dark vs light. Returns a FRESH copy every
+// call — callers Object.assign/spread it into live colors, never mutate the
+// frozen consts. Generic over Record (not Theme) so this leaf stays
+// import-free; idempotent by construction, so repeated applyConfig runs are
+// stable.
+export const compatStaticTheme = <T extends Record<string, string>>(userTheme: { bg?: string }): T =>
+  ({ ...(isDark(userTheme.bg ?? "#000000") ? COMPAT_DARK_THEME : COMPAT_LIGHT_THEME) }) as T;
 
 // ASCII fallbacks for the icon names glyphs.ts can emit. Console fonts carry
 // the basic Latin set only, so every value here is < 0x80 by construction

@@ -160,9 +160,10 @@ export type SidebarHoverOpts = {
 export type IconMode = "opaque" | "transparent" | "transparent-partial";
 
 // compat mode for the Linux console / dumb terminals (no kitty graphics, no
-// Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs, snaps
-// the palette to ANSI16 (the VT ignores truecolor). Text-cell anims stay on.
-// `auto` follows the TERM prefix (same rule as gpm mouse), `on`/`off` override.
+// Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs and
+// paints one STATIC console palette (dark/light by configured-bg brightness —
+// user [theme] hues are ignored, the VT can't show them). Text-cell anims stay
+// on. `auto` follows the TERM prefix (same rule as gpm mouse), `on`/`off` override.
 export type CompatMode = "auto" | "on" | "off";
 
 export type UiConfig = {
@@ -787,7 +788,7 @@ const UI_ROWS: SchemaRow[] = [
     prop: "compatMode",
     values: ["auto", "on", "off"],
     def: "auto",
-    doc: '"auto" = list + ASCII glyphs on linux/dumb terms; "on" = force it; "off" = never',
+    doc: '"auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never',
     label: "compat mode",
     blurb: "Plain fallback for the Linux console",
     group: "appearance",

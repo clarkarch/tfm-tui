@@ -107,7 +107,7 @@ export const makeMenu = (ctx: MenuCtx) => {
             ctx.makeIconSlot(
               entry.icon,
               [
-                { fg: colors.sidebarFg, bg: active ? colors.accentBg : colors.sidebarBg },
+                { fg: colors.white, bg: active ? colors.accentBg : colors.sidebarBg },
                 { fg: colors.white, bg: colors.accentBg },
               ],
               1,
@@ -115,7 +115,7 @@ export const makeMenu = (ctx: MenuCtx) => {
             ).el,
           ]
         : []),
-      Text({ content: entry.label, fg: active ? colors.white : colors.sidebarFg }),
+      Text({ content: entry.label, fg: colors.white }),
       Box({ flexGrow: 1 }),
       ...(entry.submenu
         ? [

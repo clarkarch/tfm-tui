@@ -186,7 +186,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
           setStyle(s);
         },
       },
-      Text({ id: `tfm-bulkrename-style-label-${s}`, content: STYLE_LABELS[s], fg: ctx.colors().sidebarFg }),
+      Text({ id: `tfm-bulkrename-style-label-${s}`, content: STYLE_LABELS[s], fg: ctx.colors().white }),
     );
 
   const open = (paths: string[]): void => {
@@ -264,7 +264,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
         Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
         Box(
           { width: "100%", height: 1, flexDirection: "row", columnGap: 2, paddingLeft: 2, paddingRight: 2 },
-          btn("tfm-bulkrename-cancel", "[ Cancel ]", c.sidebarFg, () => close()),
+          btn("tfm-bulkrename-cancel", "[ Cancel ]", c.white, () => close()),
           btn("tfm-bulkrename-ok", "[ Rename ]", c.accent, () => apply()),
         ),
       ),

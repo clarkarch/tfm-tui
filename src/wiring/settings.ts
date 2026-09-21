@@ -256,6 +256,8 @@ export const wireSettings = (deps: {
     scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
     showRoot: () => escMenu.showRoot(),
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
+    // console mode: the theme row is display-only (static palette paints)
+    compatActive: core.compatActive,
     plugins: () => plugins.plugins,
     pluginInstall: { addFromUrl, openFolder, update: updateOne, remove: removeOne },
     // picking the System theme entry resolves the terminal colors now

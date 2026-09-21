@@ -200,7 +200,7 @@ export const makePrompt = (ctx: PromptCtx) => {
               paddingLeft: 2,
               paddingRight: 2,
             },
-            btn("tfm-prompt-cancel", "[ Cancel ]", c.sidebarFg, () => cancel()),
+            btn("tfm-prompt-cancel", "[ Cancel ]", c.white, () => cancel()),
             btn("tfm-prompt-ok", `[ ${okLabel} ]`, c.accent, () => submit()),
           ),
         ),

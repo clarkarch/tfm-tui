@@ -139,7 +139,7 @@ export const makePick = (ctx: PickCtx) => {
               }
             },
           },
-          Text({ content: item.label, fg: active ? colors.white : colors.sidebarFg }),
+          Text({ content: item.label, fg: colors.white }),
           Box({ flexGrow: 1 }),
           ...(item.hint ? [Text({ content: `${item.hint} `, fg: colors.sidebarFgMuted })] : []),
         ),

@@ -185,7 +185,7 @@ export const buildSyntaxStyle = (t: Theme) =>
     // "default" is what OpenTUI paints every NON-captured region with
     // (tree-sitter-styled-text.ts getStyle("default")) — without it, the
     // bulk of the code text falls back to the TERMINAL's fg, not the theme's.
-    default: { fg: t.sidebarFg },
+    default: { fg: t.white },
     keyword: { fg: t.accent, bold: true },
     string: { fg: t.syntaxString ?? "#9ece6a" },
     comment: { fg: t.sidebarFgMuted, italic: true },
@@ -199,5 +199,5 @@ export const buildSyntaxStyle = (t: Theme) =>
     operator: { fg: t.syntaxOperator ?? t.white },
     punctuation: { fg: t.sidebarFgMuted },
     property: { fg: t.syntaxProperty ?? "#73daca" },
-    variable: { fg: t.sidebarFg },
+    variable: { fg: t.white },
   });

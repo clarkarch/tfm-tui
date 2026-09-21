@@ -119,7 +119,7 @@ export const makePreview = (ctx: PreviewCtx) => {
       });
       if (selCount === 1 && selKey) key = selKey;
       else if (selCount > 1) {
-        pane.add(Text({ content: `${selCount} items selected`, fg: colors.sidebarFg }));
+        pane.add(Text({ content: `${selCount} items selected`, fg: colors.white }));
         return;
       }
     }
@@ -167,7 +167,7 @@ export const makePreview = (ctx: PreviewCtx) => {
         if (typeof text === "string" && text.length) {
           const maxLines = Math.max(4, ctx.termH() - 8);
           for (const line of text.split("\n").slice(0, maxLines)) {
-            pane.add(Text({ content: ` ${line}`.slice(0, Math.max(0, ctx.previewWidth() - 1)), fg: colors.sidebarFg }));
+            pane.add(Text({ content: ` ${line}`.slice(0, Math.max(0, ctx.previewWidth() - 1)), fg: colors.white }));
           }
           return;
         }
@@ -251,11 +251,11 @@ export const makePreview = (ctx: PreviewCtx) => {
         // terminal default fg (it never consults syntaxStyle without a
         // grammar). A real TextRenderable honours the theme instead — and is
         // cached so re-previewing the same .txt doesn't realloc a TextBuffer
-        // every time (theme flips evict it, since the sig carries sidebarFg).
+        // every time (theme flips evict it, since the sig carries white).
         const textNode: any = new TextRenderable(ctx.renderer, {
           id: `tfm-preview-code-${previewCodeSeq++}`,
           content: text,
-          fg: colors.sidebarFg,
+          fg: colors.white,
           width: Math.max(8, ctx.previewWidth() - 2),
           height: Math.max(1, ctx.termH() - 6),
           selectable: false,

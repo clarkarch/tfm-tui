@@ -233,7 +233,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       n.backgroundColor = on ? c.accentBg : undefined;
     });
     setOnId(`tfm-set-rowl-${idx}`, (n) => {
-      n.fg = on ? c.white : isHeader ? c.sidebarFgMuted : c.sidebarFg;
+      n.fg = !on && isHeader ? c.sidebarFgMuted : c.white;
     });
     setOnId(`tfm-set-rowv-${idx}`, (n) => {
       if (on) {
@@ -469,7 +469,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           n.backgroundColor = on ? c.accentBg : undefined;
         });
         setOnId(`tfm-root-rowl-${index}`, (n) => {
-          n.fg = on ? c.white : c.sidebarFg;
+          n.fg = c.white;
         });
       };
       const hoverSelect = (index: number) => () => {
@@ -512,7 +512,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
                 ctx.makeIconSlot(
                   icon,
                   [
-                    { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
+                    { fg: c.white, bg: active ? c.accentBg : c.sidebarBg },
                     { fg: c.white, bg: c.accentBg },
                   ],
                   1,
@@ -523,7 +523,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           Text({
             id: `tfm-root-rowl-${index}`,
             content: icon ? label : ` ${label}`,
-            fg: active ? c.white : c.sidebarFg,
+            fg: c.white,
           }),
           Box({ flexGrow: 1 }),
           ...(hint ? [Text({ content: `${hint} `, fg: c.sidebarFgMuted })] : []),

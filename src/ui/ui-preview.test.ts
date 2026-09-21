@@ -211,15 +211,21 @@ describe("preview theme awareness", () => {
     expect(await settleUntil(t, () => !!findBody())).toBe(true);
     expect(codeNodes().length).toBe(0);
     const body = findBody() as any;
-    expect([...body.fg.toInts()]).toEqual([0xaa, 0xbb, 0xcc, 0xff]); // live sidebarFg
+    const hexInts = (h: string): [number, number, number, number] => [
+      Number.parseInt(h.slice(1, 3), 16),
+      Number.parseInt(h.slice(3, 5), 16),
+      Number.parseInt(h.slice(5, 7), 16),
+      255,
+    ];
+    expect([...body.fg.toInts()]).toEqual(hexInts(live.white)); // panel text role (white)
 
     // re-preview of the same unchanged file must REUSE the cached node
     // (no fresh native TextBuffer per selection) ...
     p.renderPreview();
     clock.flush();
     expect(await settleUntil(t, () => findBody() === body)).toBe(true);
-    // ... and a theme flip must evict it too (sig carries sidebarFg)
-    Object.assign(live, { sidebarFg: "#112233" });
+    // ... and a theme flip must evict it too (sig carries white + sidebarFg)
+    Object.assign(live, { white: "#112233" });
     p.renderPreview();
     clock.flush();
     expect(await settleUntil(t, () => !!findBody() && findBody() !== body)).toBe(true);

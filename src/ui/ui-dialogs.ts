@@ -160,7 +160,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
       const parentName = path.basename(path.dirname(destPath)) || "/";
       let bseq = 0;
       const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> =>
-        dialogBtn(`tfm-conflict-b${bseq++}`, label, c.sidebarFg, onPick);
+        dialogBtn(`tfm-conflict-b${bseq++}`, label, c.white, onPick);
       const pick = (choice: ConflictChoice, all?: ConflictChoice) => {
         if (all) conflictPolicy = all;
         closeConflict(choice);
@@ -242,7 +242,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
         if (!btn) continue;
         applySurface(btn, btnSurface(ctx.uiStyle(), c, false, c.sidebarBg));
         const label = btn.getChildren?.()?.[0];
-        if (label) label.fg = c.sidebarFg;
+        if (label) label.fg = c.white;
       } catch {}
     }
   };
@@ -355,7 +355,7 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
         Box({ height: 1 }),
         Box(
           { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
-          mkBtn("[ No ]", c.sidebarFg, () => close()),
+          mkBtn("[ No ]", c.white, () => close()),
           mkBtn(`[ ${yesLabel} ]`, yesFg, () => {
             close();
             onYes();
