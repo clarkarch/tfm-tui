@@ -14,6 +14,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 
 ## Features
 
+- Mouse-first: click, rubber-band select, right-click menus, drag and drop.
 - Browse files in grid or list view.
 - Sidebar with places, bookmarks, drives, trash, recent, starred.
 - Search as you type + recursive search.
@@ -35,6 +36,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Open privileged files with sudo prompt.
 - Customizable themes, settings GUI, keybinds.
 - Plugin support with store + installer.
+- …and many more.
 
 ## Requirements
 
