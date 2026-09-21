@@ -82,21 +82,23 @@ Everything is remappable: `esc` → Settings → keys.
 
 ## Config
 
-`~/.config/tfm/config.toml`, see [config.example.toml](config.example.toml).
+`esc` → Settings or:
 
 ```bash
 TFM_CONFIG=/custom/path/config.toml tfm
 ```
+See [config.example.toml](config.example.toml).
 
 ## Plugins
 
-`esc` → Plugins, or `tfm plugins add <url|id>`. See [docs/plugins.md](docs/plugins.md).
+`esc` → Plugins or: 
 
 ```bash
 tfm plugins search
 tfm plugins add <url|id>
 tfm plugins new my-plugin
 ```
+See [docs/plugins.md](docs/plugins.md).
 
 ## Limitations
 
