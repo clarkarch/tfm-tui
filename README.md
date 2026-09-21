@@ -100,12 +100,12 @@ tfm plugins new my-plugin
 ```
 See [docs/plugins.md](docs/plugins.md).
 
-## Limitations
+## Notes
 
-- Linux only.
 - Thumbnails need the kitty graphics protocol; tmux hides them unless
   `allow-passthrough` is on.
 - Cross-app drag & drop is kitty-only.
+- Mouse on the Linux console (TTY) needs `gpm` running.
 - Icons can show a black box behind open menus or while rubber-band selecting.
 - Custom kitty themes can misbehave.
 
