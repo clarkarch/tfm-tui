@@ -41,9 +41,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 ## Requirements
 
 - Linux.
-- Image thumbnails need a terminal with the
-  [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html)
-  (kitty, ghostty, WezTerm, Konsole…).
+- Terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty, WezTerm, Konsole…).
 - Optional tools (the installer lists what's missing):
   - `rsvg-convert` (icons and SVG thumbnails)
   - `magick` (raster image thumbnails)
