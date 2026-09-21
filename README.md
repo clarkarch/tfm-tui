@@ -17,7 +17,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Mouse: click, rubber-band select, right-click menus, drag and drop.
 - Browse files in grid or list view.
 - Sidebar with places, bookmarks, drives, trash, recent, starred.
-- Search as you type + recursive search.
+- Search as you type, including inside subfolders.
 - Sort by name, size, date.
 - Copy, move, paste, duplicate, rename.
 - Bulk rename multiple files at once.
@@ -33,7 +33,7 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Extract and compress archives.
 - Embedded terminal.
 - Clipboard copy/paste with other apps.
-- Open privileged files with sudo prompt.
+- Edit system files with a sudo prompt.
 - Customizable themes, settings GUI, keybinds.
 - Plugin support with hot reload.
 - …and many more.
@@ -41,10 +41,10 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 ## Requirements
 
 - Linux.
-- Image thumbnails need the
+- Image thumbnails need a terminal with the
   [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html)
-  (kitty, ghostty, WezTerm, Konsole…). Without it you get Nerd Font glyphs.
-  Cross-app drag needs kitty.
+  (kitty, ghostty, WezTerm, Konsole…).
+  Without it you see text icons instead of thumbnails.
 - Optional tools (the installer lists what's missing):
   - `rsvg-convert` (icons and SVG thumbnails)
   - `magick` (raster image thumbnails)
@@ -83,14 +83,13 @@ Everything is remappable: `esc` → Settings → keys.
 ## Config
 
 `~/.config/tfm/config.toml`, see [config.example.toml](config.example.toml).
-Override the path with `TFM_CONFIG`; XDG homes are honored. `--debug` writes a log.
+Override the path with `TFM_CONFIG`. `--debug` writes a log.
 
 ## Plugins
 
-TypeScript plugins in `~/.config/tfm/plugins/<name>/<name>.ts` with full trust,
-hot reload, commands/keybinds, context menus, previews, events, pre-op veto
-hooks, and **UI slots** (render OpenTUI widgets into the statusbar / sidebar
-footer). Install from a git URL in `esc` → Plugins, or:
+TypeScript plugins in `~/.config/tfm/plugins/<name>/<name>.ts` with hot reload,
+commands/keybinds, context menus, previews, and events.
+Install from a git URL in `esc` → Plugins, or:
 
 ```bash
 tfm plugins search
@@ -106,8 +105,7 @@ See [docs/plugins.md](docs/plugins.md).
 - Thumbnails need the kitty graphics protocol; tmux hides them unless
   `allow-passthrough` is on.
 - Cross-app drag & drop is kitty-only.
-- Rasterized icons can show a black box when a floating UI paints over them
-  (menu scrims, rubber-band selection).
+- Icons can show a black box behind open menus or while rubber-band selecting.
 - Custom kitty themes can misbehave.
 
 ## License
