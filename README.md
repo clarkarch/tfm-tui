@@ -91,7 +91,7 @@ See [config.example.toml](config.example.toml).
 
 ## Plugins
 
-`esc` → Plugins or: 
+`esc` → Plugins or:
 
 ```bash
 tfm plugins search
