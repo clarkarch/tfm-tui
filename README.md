@@ -42,12 +42,13 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 
 - Linux.
 - Terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty, WezTerm, Konsole…).
+- Strongly recommended (the installer flags these):
+  - `rsvg-convert` (theme-tinted icons and SVG thumbnails; without it you get plain glyphs)
+  - `xdg-open` (open files in their default app)
 - Optional tools (the installer lists what's missing):
-  - `rsvg-convert` (icons and SVG thumbnails)
   - `magick` (raster image thumbnails)
   - `ffmpeg` (video thumbnails)
   - `gio` (starred files, network locations)
-  - `xdg-open` (open files in their default app)
   - `udisksctl` (mount/eject drives)
   - `wl-clipboard` / `xclip` (clipboard with GUI apps)
   - `tar` / `unzip` / `zip` / `7z` (archives)

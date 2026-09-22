@@ -353,10 +353,10 @@ if [ "$path_on_path" = 0 ]; then
   fi
 fi
 
-# ── 5/5 finish: optional helpers ────────────────────────────────────────────
+# ── 5/5 finish: helpers ─────────────────────────────────────────────────────
 begin_step 5 "Finishing up"
-# Optional helpers: plain-English "what you miss", no package names (they go
-# stale per distro, the user installs from their software center when ready).
+# Important tools first (icons/open); optional extras listed without package
+# names (they go stale per distro, install from the software center).
 MISSING_NICE=0
 NICE_LINES=""
 add_nice() {
@@ -364,7 +364,6 @@ add_nice() {
   NICE_LINES="${NICE_LINES}      $1
 "
 }
-have rsvg-convert || add_nice "rsvg-convert,  crisp SVG / icon thumbnails"
 have magick       || add_nice "ImageMagick,   photo thumbnails"
 have ffmpeg       || add_nice "ffmpeg,        video thumbnails and previews"
 have gio          || add_nice "gio,           starred files, network places"
@@ -375,6 +374,9 @@ fi
 
 XDG_OK=1
 have xdg-open || XDG_OK=0
+RSVG_OK=1
+have rsvg-convert || RSVG_OK=0
+IMPORTANT_MISSING=$(( (1 - XDG_OK) + (1 - RSVG_OK) ))
 
 if [ "$path_action" = reload ]; then
   end_step "PATH saved for $SHELL_LABEL, reload below"
@@ -384,10 +386,12 @@ elif [ "$path_action" = export ]; then
   else
     end_step "PATH not updated, see below"
   fi
+elif [ "$IMPORTANT_MISSING" -gt 0 ] && [ "$MISSING_NICE" -gt 0 ]; then
+  end_step "$IMPORTANT_MISSING important, $MISSING_NICE optional missing"
+elif [ "$IMPORTANT_MISSING" -gt 0 ]; then
+  end_step "important tool$([ "$IMPORTANT_MISSING" -eq 1 ] || printf 's') missing"
 elif [ "$MISSING_NICE" -gt 0 ]; then
   end_step "$MISSING_NICE optional extra$([ "$MISSING_NICE" -eq 1 ] || printf 's') missing"
-elif [ "$XDG_OK" = 0 ]; then
-  end_step "one required tool missing"
 else
   end_step "all set"
 fi
@@ -447,14 +451,20 @@ else
   plain "then type \"tfm\" (esc = menu, ctrl+q = quit)"
 fi
 
-# ── optional helpers (bottom, after the success box) ────────────────────────
-if [ "$XDG_OK" = 0 ]; then
+# ── important tools + optional helpers (bottom, after the success box) ──────
+if [ "$XDG_OK" = 0 ] || [ "$RSVG_OK" = 0 ]; then
   if [ "$FANCY" = 1 ]; then
-    printf '\n  %sOpening files needs one extra tool%s\n' "$C_RED" "$C_RST"
-    printf '      xdg-open,  launches files in their default app\n'
-    printf '  %sInstall it from your software center or package manager.%s\n' "$C_DIM" "$C_RST"
+    printf '\n  %sImportant tools missing%s\n' "$C_RED" "$C_RST"
+    if [ "$RSVG_OK" = 0 ]; then
+      printf '      rsvg-convert,  icons and SVG thumbnails (falls back to plain glyphs)\n'
+    fi
+    if [ "$XDG_OK" = 0 ]; then
+      printf '      xdg-open,      opens files in their default app\n'
+    fi
+    printf '  %sInstall them from your software center or package manager.%s\n' "$C_DIM" "$C_RST"
   else
-    plain "missing: xdg-open, needed to open files in their default app"
+    [ "$RSVG_OK" = 0 ] && plain "important: rsvg-convert, icons and SVG thumbnails (plain glyphs without it)"
+    [ "$XDG_OK" = 0 ] && plain "important: xdg-open, opens files in their default app"
   fi
 fi
 
