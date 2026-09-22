@@ -476,7 +476,6 @@ if [ "$MISSING_NICE" -gt 0 ]; then
   if [ "$FANCY" = 1 ]; then
     printf '\n  %sNice to have (tfm works without them)%s\n' "$C_DIM" "$C_RST"
     printf '%s' "$NICE_LINES"
-    printf '  %sNo rush, add them any time from your software center.%s\n' "$C_DIM" "$C_RST"
   else
     plain "optional helpers missing (install any time; tfm works without them):"
     printf '%s' "$NICE_LINES"
