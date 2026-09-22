@@ -30,11 +30,48 @@ STEP_OPEN=0
 
 plain() { printf 'tfm: %s\n' "$*"; }
 
-# Box content must be ASCII-only: printf %-Ns pads by bytes in the C locale,
-# so a UTF-8 "·" makes every right border sit one column off.
+# Box content: mostly ASCII. "·" is 2 bytes in the C locale — count it as one
+# column so right borders stay aligned (plain %-42s would shift by 1).
 box_top()    { printf '%s╭──────────────────────────────────────────╮%s\n' "$1" "$C_RST"; }
 box_bottom() { printf '%s╰──────────────────────────────────────────╯%s\n' "$1" "$C_RST"; }
-box_line()   { printf '%s│%s%-42s%s│%s\n' "$1" "$C_RST" "$2" "$1" "$C_RST"; }
+box_line() {
+  local color text rest muls bytes pad i
+  color=$1
+  text=$2
+  rest=$text
+  muls=0
+  while [[ "$rest" == *'·'* ]]; do
+    rest=${rest#*·}
+    muls=$((muls + 1))
+  done
+  # byte length in C locale; each · is 2 bytes but 1 column
+  bytes=$(LC_ALL=C printf '%s' "$text" | wc -c)
+  pad=$((42 - (bytes - muls)))
+  [ "$pad" -lt 0 ] && pad=0
+  printf '%s│%s%s' "$color" "$C_RST" "$text"
+  i=0
+  while [ "$i" -lt "$pad" ]; do printf ' '; i=$((i + 1)); done
+  printf '%s│%s\n' "$color" "$C_RST"
+}
+
+# ~/ form for display (source ~/.bashrc)
+pretty_home() {
+  local p=$1
+  case "$p" in
+    "$HOME") printf '~' ;;
+    "$HOME"/*) printf '~%s' "${p#"$HOME"}" ;;
+    *) printf '%s' "$p" ;;
+  esac
+}
+
+# $HOME form for copy-paste export lines (tilde does not expand in quotes)
+pretty_dollar_home() {
+  local p=$1
+  case "$p" in
+    "$HOME"/*) printf '$HOME%s' "${p#"$HOME"}" ;;
+    *) printf '%s' "$p" ;;
+  esac
+}
 
 # Print "." padding so the mark lands in a fixed column (label already printed).
 print_dots_from() {
@@ -208,10 +245,14 @@ fi
 # make sure 'tfm' resolves — but only with explicit user consent (asked on the
 # tty, since stdin belongs to the curl|bash pipe). No tty = just print instructions.
 # Note: we only ever touch the user's own rc file — never /usr/local/bin.
-path_note=""
+# path_action: ready (live PATH ok) | reload (rc written, shell must source)
+#              | export (not on PATH, user declined / no tty)
+path_action=ready
+reload_cmd=""
+export_hint="export PATH=\"$(pretty_dollar_home "$DEST"):\$PATH\""
 if ! command -v tfm >/dev/null 2>&1; then
   if ! { true </dev/tty; } 2>/dev/null; then
-    path_note="$DEST is not on your PATH yet - open a new terminal, or run: export PATH=\"$DEST:\$PATH\""
+    path_action=export
   else
     if [ "$FANCY" = 1 ]; then
       printf '\n  tfm isn'\''t in your PATH yet. Add %s automatically? [Y/n] ' "$DEST"
@@ -220,9 +261,9 @@ if ! command -v tfm >/dev/null 2>&1; then
     fi
     if ! IFS= read -r REPLY </dev/tty; then
       printf '\n'
-      path_note="open a new terminal, or run: export PATH=\"$DEST:\$PATH\""
+      path_action=export
     elif [ "${REPLY#n}" != "$REPLY" ] || [ "${REPLY#N}" != "$REPLY" ]; then
-      path_note="open a new terminal, or run: export PATH=\"$DEST:\$PATH\""
+      path_action=export
     else
       case "$(basename "${SHELL:-bash}")" in
         fish) RCFILE="$HOME/.config/fish/config.fish"; LINE="fish_add_path $DEST" ;;
@@ -232,8 +273,10 @@ if ! command -v tfm >/dev/null 2>&1; then
       mkdir -p "$(dirname "$RCFILE")"; touch "$RCFILE"
       if ! grep -qF '# tfm PATH' "$RCFILE"; then
         { echo; echo '# tfm PATH'; echo "$LINE"; } >> "$RCFILE"
-        path_note="added to $RCFILE - open a new terminal to use \"tfm\""
       fi
+      # rc has the entry (written now or already) but this shell doesn't
+      path_action=reload
+      reload_cmd="source $(pretty_home "$RCFILE")"
     fi
     if [ "$FANCY" = 1 ]; then printf '\n'; fi
   fi
@@ -262,9 +305,10 @@ fi
 XDG_OK=1
 have xdg-open || XDG_OK=0
 
-# close the step line first, then print helper notes underneath
-if [ -n "$path_note" ]; then
-  end_step "$path_note"
+if [ "$path_action" = reload ]; then
+  end_step "PATH saved - reload your shell below"
+elif [ "$path_action" = export ]; then
+  end_step "PATH not updated - see below"
 elif [ "$MISSING_NICE" -gt 0 ]; then
   end_step "$MISSING_NICE optional extra$([ "$MISSING_NICE" -eq 1 ] || printf 's') missing"
 elif [ "$XDG_OK" = 0 ]; then
@@ -273,6 +317,58 @@ else
   end_step "all set"
 fi
 
+# ── success box (then helpers at the very bottom) ───────────────────────────
+export_in_box=1
+[ $((4 + ${#export_hint})) -gt 42 ] && export_in_box=0
+
+if [ "$FANCY" = 1 ]; then
+  printf '\n'
+  box_top "$C_GREEN"
+  box_line "$C_GREEN" "  tfm is ready!"
+  box_line "$C_GREEN" ""
+  if [ "$path_action" = reload ]; then
+    box_line "$C_GREEN" "  This terminal needs a refresh:"
+    box_line "$C_GREEN" ""
+    box_line "$C_BOLD" "    $reload_cmd"
+    box_line "$C_GREEN" ""
+    box_line "$C_GREEN" "  Then:"
+    box_line "$C_GREEN" ""
+    box_line "$C_BOLD" "    tfm"
+  elif [ "$path_action" = export ]; then
+    box_line "$C_GREEN" "  Put this on PATH first:"
+    box_line "$C_GREEN" ""
+    if [ "$export_in_box" = 1 ]; then
+      box_line "$C_BOLD" "    $export_hint"
+      box_line "$C_GREEN" ""
+      box_line "$C_GREEN" "  Then type:"
+    else
+      box_line "$C_DIM" "    (long path - command below)"
+      box_line "$C_GREEN" ""
+      box_line "$C_GREEN" "  Then type:"
+    fi
+    box_line "$C_GREEN" ""
+    box_line "$C_BOLD" "    tfm"
+  else
+    box_line "$C_GREEN" "  Open a terminal and type:"
+    box_line "$C_GREEN" ""
+    box_line "$C_BOLD" "    tfm"
+  fi
+  box_line "$C_GREEN" ""
+  box_line "$C_DIM" "  Tips: esc = menu · ctrl+q = quit"
+  box_bottom "$C_GREEN"
+  if [ "$path_action" = export ] && [ "$export_in_box" = 0 ]; then
+    printf '\n  %sRun this once:%s\n    %s\n' "$C_DIM" "$C_RST" "$export_hint"
+  fi
+else
+  plain "installed -> $DEST/tfm"
+  case "$path_action" in
+    reload) plain "reload this terminal: $reload_cmd" ;;
+    export) plain "add to PATH: $export_hint" ;;
+  esac
+  plain "then type \"tfm\" (esc = menu, ctrl+q = quit)"
+fi
+
+# ── optional helpers (bottom, after the success box) ────────────────────────
 if [ "$XDG_OK" = 0 ]; then
   if [ "$FANCY" = 1 ]; then
     printf '\n  %sOpening files needs one extra tool%s\n' "$C_RED" "$C_RST"
@@ -292,22 +388,4 @@ if [ "$MISSING_NICE" -gt 0 ]; then
     plain "optional helpers missing (install any time; tfm works without them):"
     printf '%s' "$NICE_LINES"
   fi
-fi
-
-# ── done ────────────────────────────────────────────────────────────────────
-if [ "$FANCY" = 1 ]; then
-  printf '\n'
-  box_top "$C_GREEN"
-  box_line "$C_GREEN" "  tfm is ready!"
-  box_line "$C_GREEN" ""
-  box_line "$C_GREEN" "  Open a terminal and type:"
-  box_line "$C_GREEN" ""
-  box_line "$C_BOLD" "      tfm"
-  box_line "$C_GREEN" ""
-  box_line "$C_DIM" "  Tips: esc = menu / ctrl+q = quit"
-  box_bottom "$C_GREEN"
-  printf '\n'
-else
-  plain "installed -> $DEST/tfm"
-  plain "done - open a new terminal and type \"tfm\" (esc = menu, ctrl+q = quit)"
 fi
