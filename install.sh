@@ -214,7 +214,6 @@ esac
 end_step "$(uname -m) $(uname -s)"
 
 # ── 2/5 download ────────────────────────────────────────────────────────────
-begin_step 2 "Downloading tfm"
 mkdir -p "$DEST"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -225,14 +224,16 @@ else
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 fi
 
-# Fancy TTY: show a live bar (stderr) so a 50MB pull doesn't look hung.
-# Close the partial step line first, then reprint with ✓ when done.
+# Fancy TTY: curl's bar alone, then one completed step line (a partial
+# "Downloading" header left on screen after 100% reads as stuck).
 DL_STATUS=0
 if [ "$FANCY" = 1 ] && [ -t 2 ]; then
-  printf '\n'
+  STEP_N=2
+  STEP_LABEL="Downloading tfm"
   STEP_OPEN=0
   curl -fL --retry 3 --proto '=https' --progress-bar "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz" || DL_STATUS=$?
 else
+  begin_step 2 "Downloading tfm"
   curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz" || DL_STATUS=$?
 fi
 if [ "$DL_STATUS" -ne 0 ] || [ ! -f "$TMP/tfm.gz" ]; then
