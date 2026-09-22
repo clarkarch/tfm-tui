@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# tfm installer: downloads a prebuilt binary for your arch.
+# tfm installer: guided setup that downloads a prebuilt binary for your arch.
 # usage: curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
+#        (any branch works — swap main for dev to try a staged installer)
 # env: TFM_INSTALL_DIR (default ~/.local/bin), TFM_VERSION (default latest),
 #      TFM_NO_VERIFY=1 to skip checksum verification (not recommended).
 set -euo pipefail
@@ -8,13 +9,134 @@ set -euo pipefail
 REPO="clarkarch/tfm-tui"
 DEST="${TFM_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${TFM_VERSION:-latest}"
+TOTAL_STEPS=5
+# step label field width (dots pad to here before the ✓/✗ mark)
+LABEL_W=24
 
+# Fancy = stdout is a real terminal and the user hasn't asked for plain output.
+# Piped/CI runs (curl | bash | something, scripts) get boring one-liners.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  FANCY=1
+  C_DIM=$'\033[2m'; C_GREEN=$'\033[32m'; C_BOLD=$'\033[1m'
+  C_BLUE=$'\033[36m'; C_RED=$'\033[31m'; C_YEL=$'\033[33m'; C_RST=$'\033[0m'
+else
+  FANCY=0
+  C_DIM=""; C_GREEN=""; C_BOLD=""; C_BLUE=""; C_RED=""; C_YEL=""; C_RST=""
+fi
+
+STEP_N=0
+STEP_LABEL=""
+STEP_OPEN=0
+
+plain() { printf 'tfm: %s\n' "$*"; }
+
+# Box content must be ASCII-only: printf %-Ns pads by bytes in the C locale,
+# so a UTF-8 "·" makes every right border sit one column off.
+box_top()    { printf '%s╭──────────────────────────────────────────╮%s\n' "$1" "$C_RST"; }
+box_bottom() { printf '%s╰──────────────────────────────────────────╯%s\n' "$1" "$C_RST"; }
+box_line()   { printf '%s│%s%-42s%s│%s\n' "$1" "$C_RST" "$2" "$1" "$C_RST"; }
+
+# Print "." padding so the mark lands in a fixed column (label already printed).
+print_dots_from() {
+  local i=$1
+  while [ "$i" -lt "$LABEL_W" ]; do printf '.'; i=$((i + 1)); done
+}
+
+begin_step() {
+  STEP_N=$1
+  STEP_LABEL=$2
+  if [ "$FANCY" = 1 ]; then
+    printf '  %d/%d  %s' "$STEP_N" "$TOTAL_STEPS" "$STEP_LABEL"
+    STEP_OPEN=1
+  fi
+}
+
+# Close the current step with a checkmark (fancy) or an ok line (plain).
+end_step() {
+  local detail=${1:-}
+  if [ "$FANCY" = 1 ]; then
+    if [ "$STEP_OPEN" = 1 ]; then
+      print_dots_from "${#STEP_LABEL}"
+      printf ' %s✓%s' "$C_GREEN" "$C_RST"
+      STEP_OPEN=0
+    else
+      printf '  %d/%d  %s' "$STEP_N" "$TOTAL_STEPS" "$STEP_LABEL"
+      print_dots_from "${#STEP_LABEL}"
+      printf ' %s✓%s' "$C_GREEN" "$C_RST"
+    fi
+    if [ -n "$detail" ]; then printf '  %s' "$detail"; fi
+    printf '\n'
+  else
+    if [ -n "$detail" ]; then plain "$STEP_LABEL — $detail"; else plain "$STEP_LABEL — ok"; fi
+  fi
+}
+
+# Abort a step: mark ✗ (fancy) and print plain-English lines, then exit.
+# Usage: fail_step "headline" "what to do" ["extra line" …]
+fail_step() {
+  if [ "$FANCY" = 1 ]; then
+    if [ "$STEP_OPEN" = 1 ]; then
+      print_dots_from "${#STEP_LABEL}"
+      printf ' %s✗%s\n' "$C_RED" "$C_RST"
+      STEP_OPEN=0
+    else
+      printf '  %d/%d  %s' "$STEP_N" "$TOTAL_STEPS" "$STEP_LABEL"
+      print_dots_from "${#STEP_LABEL}"
+      printf ' %s✗%s\n' "$C_RED" "$C_RST"
+    fi
+    printf '\n'
+    local i=0
+    for line in "$@"; do
+      if [ "$i" = 0 ]; then printf '  %s%s%s\n' "$C_BOLD" "$line" "$C_RST"
+      else printf '  %s\n' "$line"; fi
+      i=$((i + 1))
+    done
+    printf '\n'
+  else
+    printf 'tfm: %s\n' "$1" >&2
+    shift
+    for line in "$@"; do printf '  %s\n' "$line" >&2; done
+  fi
+  exit 1
+}
+
+hsize() {
+  local b=$1
+  if [ "$b" -ge 1048576 ]; then
+    printf '%d.%d MB' "$((b / 1048576))" "$(((b % 1048576) * 10 / 1048576))"
+  elif [ "$b" -ge 1024 ]; then
+    printf '%d KB' "$((b / 1024))"
+  else
+    printf '%d B' "$b"
+  fi
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+if [ "$FANCY" = 1 ]; then
+  printf '\n'
+  box_top "$C_BLUE"
+  box_line "$C_BLUE" "  tfm  -  installer"
+  box_line "$C_BLUE" "  a file manager for your terminal"
+  box_bottom "$C_BLUE"
+  printf '\n'
+fi
+
+# ── 1/5 system ──────────────────────────────────────────────────────────────
+begin_step 1 "Checking your system"
 case "$(uname -m)" in
   x86_64) ARCH="x86_64-linux" ;;
   aarch64 | arm64) ARCH="aarch64-linux" ;;
-  *) echo "tfm install: unsupported arch: $(uname -m)" >&2; exit 1 ;;
+  *)
+    fail_step \
+      "Sorry, tfm doesn't have a build for this computer's architecture ($(uname -m))." \
+      "Nothing was installed."
+    ;;
 esac
+end_step "$(uname -m) $(uname -s)"
 
+# ── 2/5 download ────────────────────────────────────────────────────────────
+begin_step 2 "Downloading tfm"
 mkdir -p "$DEST"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -24,9 +146,17 @@ if [ "$VERSION" = "latest" ]; then
 else
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 fi
-echo "tfm: downloading $ARCH ($VERSION)..."
-curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz"
 
+if ! curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz"; then
+  fail_step \
+    "Couldn't download tfm right now." \
+    "Check your internet connection and run the same command again." \
+    "Nothing was installed."
+fi
+end_step "$(hsize "$(wc -c < "$TMP/tfm.gz")")"
+
+# ── 3/5 verify ──────────────────────────────────────────────────────────────
+begin_step 3 "Verifying the download"
 # checksum: fail closed when the release ships one, fail open (with a loud
 # warning) only when the artifact has no published checksum at all.
 # NOTE: compare digests directly, never `sha256sum -c`: the published sidecar
@@ -35,41 +165,64 @@ curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz"
 if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz.sha256" -o "$TMP/tfm.gz.sha256" 2>/dev/null; then
   want=$(cut -d' ' -f1 < "$TMP/tfm.gz.sha256")
   got=$(sha256sum < "$TMP/tfm.gz" | cut -d' ' -f1)
-  [ -n "$want" ] && [ "$want" = "$got" ] \
-    || { echo "tfm install: CHECKSUM MISMATCH, refusing to install $TMP/tfm.gz" >&2; exit 1; }
-  echo "tfm: checksum verified"
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    fail_step \
+      "The download didn't match our security checksum." \
+      "Nothing was installed. Please try again in a moment."
+  fi
+  end_step "intact"
 elif [ "${TFM_NO_VERIFY:-}" = "1" ]; then
-  echo "tfm: WARNING: no checksum published, installing unverified (TFM_NO_VERIFY=1)" >&2
+  if [ "$FANCY" = 1 ]; then
+    print_dots_from "${#STEP_LABEL}"
+    printf ' %s⚠%s  skipped (TFM_NO_VERIFY=1)\n' "$C_YEL" "$C_RST"
+    STEP_OPEN=0
+  else
+    plain "WARNING: no checksum published, installing unverified (TFM_NO_VERIFY=1)"
+  fi
 else
-  echo "tfm install: no checksum published for tfm-$ARCH.gz — refusing to install." >&2
-  echo "  Re-run with TFM_NO_VERIFY=1 to override, or pin TFM_VERSION to a release with checksums." >&2
-  exit 1
+  fail_step \
+    "This release didn't publish a security checksum, so tfm refuses to install it." \
+    "Re-run with TFM_NO_VERIFY=1 to skip the check, or pin TFM_VERSION" \
+    "to a release that includes checksums. Nothing was installed."
 fi
 
+# ── 4/5 install ─────────────────────────────────────────────────────────────
+begin_step 4 "Installing"
 gunzip -f "$TMP/tfm.gz"
 chmod +x "$TMP/tfm"
 # never silently clobber: keep one backup of the previous binary
+SAVED_BAK=0
 if [ -e "$DEST/tfm" ]; then
   mv -f "$DEST/tfm" "$DEST/tfm.bak"
-  echo "tfm: previous binary backed up to $DEST/tfm.bak"
+  SAVED_BAK=1
 fi
 mv "$TMP/tfm" "$DEST/tfm"
 ln -sf "$DEST/tfm" "$DEST/terminal-file-manager"
+if [ "$SAVED_BAK" = 1 ]; then
+  end_step "$DEST/tfm (previous saved as tfm.bak)"
+else
+  end_step "$DEST/tfm"
+fi
 
-echo "tfm: installed -> $DEST/tfm (run it via \"tfm\" or \"terminal-file-manager\")"
+# ── PATH setup (before the last step so the prompt doesn't split a step line)
 # make sure 'tfm' resolves — but only with explicit user consent (asked on the
 # tty, since stdin belongs to the curl|bash pipe). No tty = just print instructions.
 # Note: we only ever touch the user's own rc file — never /usr/local/bin.
+path_note=""
 if ! command -v tfm >/dev/null 2>&1; then
   if ! { true </dev/tty; } 2>/dev/null; then
-    echo "tfm: note: $DEST is not in your PATH — run: export PATH=\"$DEST:\$PATH\""
+    path_note="$DEST is not on your PATH yet - open a new terminal, or run: export PATH=\"$DEST:\$PATH\""
   else
-    printf "tfm: add %s to PATH automatically? [Y/n] " "$DEST"
-    DECLINE="tfm: ok — later: export PATH=\"$DEST:\$PATH\""
+    if [ "$FANCY" = 1 ]; then
+      printf '\n  tfm isn'\''t in your PATH yet. Add %s automatically? [Y/n] ' "$DEST"
+    else
+      printf 'tfm: add %s to PATH automatically? [Y/n] ' "$DEST"
+    fi
     if ! IFS= read -r REPLY </dev/tty; then
-      echo; echo "$DECLINE"
+      printf '\n'
+      path_note="open a new terminal, or run: export PATH=\"$DEST:\$PATH\""
     elif [ "${REPLY#n}" != "$REPLY" ] || [ "${REPLY#N}" != "$REPLY" ]; then
-      echo "$DECLINE"
+      path_note="open a new terminal, or run: export PATH=\"$DEST:\$PATH\""
     else
       case "$(basename "${SHELL:-bash}")" in
         fish) RCFILE="$HOME/.config/fish/config.fish"; LINE="fish_add_path $DEST" ;;
@@ -79,29 +232,82 @@ if ! command -v tfm >/dev/null 2>&1; then
       mkdir -p "$(dirname "$RCFILE")"; touch "$RCFILE"
       if ! grep -qF '# tfm PATH' "$RCFILE"; then
         { echo; echo '# tfm PATH'; echo "$LINE"; } >> "$RCFILE"
-        echo "tfm: PATH entry added to $RCFILE — open a new shell or run: source $RCFILE"
+        path_note="added to $RCFILE - open a new terminal to use \"tfm\""
       fi
     fi
+    if [ "$FANCY" = 1 ]; then printf '\n'; fi
   fi
 fi
 
-# tfm degrades gracefully without these, but each one disables something
-have() { command -v "$1" >/dev/null 2>&1; }
-MISSING=""
-add_missing() { MISSING="${MISSING}  - $1\\n"; }
-have rsvg-convert || add_missing "rsvg-convert — theme-tinted icons and SVG thumbnails"
-have magick       || add_missing "magick — raster image thumbnails (fallback)"
-have ffmpeg       || add_missing "ffmpeg — video thumbnails & previews"
-have gio          || add_missing "gio — starred-file metadata (trash itself needs no gio)"
-have xdg-open     || add_missing "xdg-open — opens files in their default app (required)"
-have udisksctl    || add_missing "udisksctl — mount/eject removable drives"
+# ── 5/5 finish: optional helpers ────────────────────────────────────────────
+begin_step 5 "Finishing up"
+# Optional helpers: plain-English "what you miss", no package names (they go
+# stale per distro — the user installs from their software center when ready).
+MISSING_NICE=0
+NICE_LINES=""
+add_nice() {
+  MISSING_NICE=$((MISSING_NICE + 1))
+  NICE_LINES="${NICE_LINES}      $1
+"
+}
+have rsvg-convert || add_nice "rsvg-convert  -  crisp SVG / icon thumbnails"
+have magick       || add_nice "ImageMagick   -  photo thumbnails"
+have ffmpeg       || add_nice "ffmpeg        -  video thumbnails & previews"
+have gio          || add_nice "gio           -  starred files, network places"
+have udisksctl    || add_nice "udisksctl     -  mount / eject drives"
 if ! have wl-paste && ! have wl-copy && ! have xclip; then
-  add_missing "wl-paste/wl-copy or xclip — copy/paste between tfm and GUI apps"
+  add_nice "wl-clipboard or xclip  -  copy/paste with other apps"
 fi
 
-if [ -n "$MISSING" ]; then
-  RED=""; RST=""
-  [ -t 1 ] && { RED=$'\033[31m'; RST=$'\033[0m'; }
-  printf '%s\n' "${RED}tfm: missing helpers — install these for full functionality:${RST}"
-  printf '%s%b%s' "$RED" "$MISSING" "$RST"
+XDG_OK=1
+have xdg-open || XDG_OK=0
+
+# close the step line first, then print helper notes underneath
+if [ -n "$path_note" ]; then
+  end_step "$path_note"
+elif [ "$MISSING_NICE" -gt 0 ]; then
+  end_step "$MISSING_NICE optional extra$([ "$MISSING_NICE" -eq 1 ] || printf 's') missing"
+elif [ "$XDG_OK" = 0 ]; then
+  end_step "one required tool missing"
+else
+  end_step "all set"
+fi
+
+if [ "$XDG_OK" = 0 ]; then
+  if [ "$FANCY" = 1 ]; then
+    printf '\n  %sOpening files needs one extra tool%s\n' "$C_RED" "$C_RST"
+    printf '      xdg-open  -  launches files in their default app\n'
+    printf '  %sInstall it from your software center or package manager.%s\n' "$C_DIM" "$C_RST"
+  else
+    plain "missing: xdg-open - needed to open files in their default app"
+  fi
+fi
+
+if [ "$MISSING_NICE" -gt 0 ]; then
+  if [ "$FANCY" = 1 ]; then
+    printf '\n  %sNice to have (tfm works without them)%s\n' "$C_DIM" "$C_RST"
+    printf '%s' "$NICE_LINES"
+    printf '  %sNo rush - add them any time from your software center.%s\n' "$C_DIM" "$C_RST"
+  else
+    plain "optional helpers missing (install any time; tfm works without them):"
+    printf '%s' "$NICE_LINES"
+  fi
+fi
+
+# ── done ────────────────────────────────────────────────────────────────────
+if [ "$FANCY" = 1 ]; then
+  printf '\n'
+  box_top "$C_GREEN"
+  box_line "$C_GREEN" "  tfm is ready!"
+  box_line "$C_GREEN" ""
+  box_line "$C_GREEN" "  Open a terminal and type:"
+  box_line "$C_GREEN" ""
+  box_line "$C_BOLD" "      tfm"
+  box_line "$C_GREEN" ""
+  box_line "$C_DIM" "  Tips: esc = menu / ctrl+q = quit"
+  box_bottom "$C_GREEN"
+  printf '\n'
+else
+  plain "installed -> $DEST/tfm"
+  plain "done - open a new terminal and type \"tfm\" (esc = menu, ctrl+q = quit)"
 fi

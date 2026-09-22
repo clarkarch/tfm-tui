@@ -21,6 +21,9 @@ jobs:
       - name: Check (lint + format + strict typecheck)
         run: bun run check
 
+      - name: Installer syntax
+        run: bash -n install.sh
+
       - name: Test
         run: bun run test
 
