@@ -276,7 +276,7 @@ fi
 
 # ── 4/5 install ─────────────────────────────────────────────────────────────
 begin_step 4 "Installing"
-if ! gunzip -f "$TMP/tfm.gz"; then
+if ! gunzip -f "$TMP/tfm.gz" 2>/dev/null; then
   fail_step \
     "Couldn't unpack the download." \
     "Is the disk full? Free some space and try again." \
