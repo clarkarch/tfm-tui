@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tfm installer: guided setup that downloads a prebuilt binary for your arch.
 # usage: curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
-#        (any branch works — swap main for dev to try a staged installer)
+#        (any branch works; swap main for dev to try a staged installer)
 # env: TFM_INSTALL_DIR (default ~/.local/bin), TFM_VERSION (default latest),
 #      TFM_NO_VERIFY=1 to skip checksum verification (not recommended).
 set -euo pipefail
@@ -30,7 +30,7 @@ STEP_OPEN=0
 
 plain() { printf 'tfm: %s\n' "$*"; }
 
-# Box content: mostly ASCII. "·" is 2 bytes in the C locale — count it as one
+# Box content: mostly ASCII. "·" is 2 bytes in the C locale, count it as one
 # column so right borders stay aligned (plain %-42s would shift by 1).
 box_top()    { printf '%s╭──────────────────────────────────────────╮%s\n' "$1" "$C_RST"; }
 box_bottom() { printf '%s╰──────────────────────────────────────────╯%s\n' "$1" "$C_RST"; }
@@ -104,7 +104,7 @@ end_step() {
     if [ -n "$detail" ]; then printf '  %s' "$detail"; fi
     printf '\n'
   else
-    if [ -n "$detail" ]; then plain "$STEP_LABEL — $detail"; else plain "$STEP_LABEL — ok"; fi
+    if [ -n "$detail" ]; then plain "$STEP_LABEL, $detail"; else plain "$STEP_LABEL, ok"; fi
   fi
 }
 
@@ -165,7 +165,7 @@ shell_base() {
 }
 
 # Sets SHELL_KNOWN, SHELL_LABEL, RCFILE, LINE for auto PATH setup.
-# Unknown shells: SHELL_KNOWN=0 — we never write a wrong rc file.
+# Unknown shells: SHELL_KNOWN=0, we never write a wrong rc file.
 setup_shell_profile() {
   SHELL_KNOWN=1
   SHELL_LABEL=$(shell_base)
@@ -194,7 +194,7 @@ setup_shell_profile() {
 if [ "$FANCY" = 1 ]; then
   printf '\n'
   box_top "$C_BLUE"
-  box_line "$C_BLUE" "  tfm  -  installer"
+  box_line "$C_BLUE" "  tfm  ->  installer"
   box_line "$C_BLUE" "  a file manager for your terminal"
   box_bottom "$C_BLUE"
   printf '\n'
@@ -225,7 +225,17 @@ else
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 fi
 
-if ! curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz"; then
+# Fancy TTY: show a live bar (stderr) so a 50MB pull doesn't look hung.
+# Close the partial step line first, then reprint with ✓ when done.
+DL_STATUS=0
+if [ "$FANCY" = 1 ] && [ -t 2 ]; then
+  printf '\n'
+  STEP_OPEN=0
+  curl -fL --retry 3 --proto '=https' --progress-bar "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz" || DL_STATUS=$?
+else
+  curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz" || DL_STATUS=$?
+fi
+if [ "$DL_STATUS" -ne 0 ] || [ ! -f "$TMP/tfm.gz" ]; then
   fail_step \
     "Couldn't download tfm right now." \
     "Check your internet connection and run the same command again." \
@@ -266,35 +276,56 @@ fi
 
 # ── 4/5 install ─────────────────────────────────────────────────────────────
 begin_step 4 "Installing"
-gunzip -f "$TMP/tfm.gz"
-chmod +x "$TMP/tfm"
+if ! gunzip -f "$TMP/tfm.gz"; then
+  fail_step \
+    "Couldn't unpack the download." \
+    "Is the disk full? Free some space and try again." \
+    "Nothing new was installed over your copy."
+fi
+chmod +x "$TMP/tfm" || fail_step \
+  "Couldn't mark the binary executable." \
+  "Nothing new was installed over your copy."
 # never silently clobber: keep one backup of the previous binary
 SAVED_BAK=0
 if [ -e "$DEST/tfm" ]; then
-  mv -f "$DEST/tfm" "$DEST/tfm.bak"
+  if ! mv -f "$DEST/tfm" "$DEST/tfm.bak"; then
+    fail_step \
+      "Couldn't back up the previous tfm in $DEST." \
+      "Check permissions and free space, then try again."
+  fi
   SAVED_BAK=1
 fi
-mv "$TMP/tfm" "$DEST/tfm"
+if ! mv "$TMP/tfm" "$DEST/tfm"; then
+  fail_step \
+    "Couldn't write $DEST/tfm." \
+    "Check permissions and free space, then try again." \
+    "If you had a previous install, it is at $DEST/tfm.bak."
+fi
 ln -sf "$DEST/tfm" "$DEST/terminal-file-manager"
 if [ "$SAVED_BAK" = 1 ]; then
-  end_step "$DEST/tfm (previous saved as tfm.bak)"
+  end_step "Updated -> $DEST/tfm (backup: tfm.bak)"
 else
-  end_step "$DEST/tfm"
+  end_step "Installed -> $DEST/tfm"
 fi
 
 # ── PATH setup (before the last step so the prompt doesn't split a step line)
-# make sure 'tfm' resolves — but only with explicit user consent (asked on the
+# make sure 'tfm' resolves, but only with explicit user consent (asked on the
 # tty, since stdin belongs to the curl|bash pipe). No tty = just print instructions.
-# Note: we only ever touch the user's own rc file — never /usr/local/bin.
+# Note: we only ever touch the user's own rc file, never /usr/local/bin.
 # path_action: ready (live PATH ok) | reload (rc written, shell must source)
 #              | export (declined, no tty, or unknown shell)
 path_action=ready
 reload_cmd=""
 export_hint="export PATH=\"$(pretty_dollar_home "$DEST"):\$PATH\""
-if ! command -v tfm >/dev/null 2>&1; then
+# Only $DEST on PATH counts: a stray older `tfm` elsewhere must not skip setup.
+path_on_path=0
+case ":$PATH:" in
+  *":$DEST:"*) path_on_path=1 ;;
+esac
+if [ "$path_on_path" = 0 ]; then
   setup_shell_profile
   if [ "$SHELL_KNOWN" = 0 ]; then
-    # don't guess an rc file — hand them the portable export instead
+    # don't guess an rc file, hand them the portable export instead
     path_action=export
   elif ! { true </dev/tty; } 2>/dev/null; then
     path_action=export
@@ -325,7 +356,7 @@ fi
 # ── 5/5 finish: optional helpers ────────────────────────────────────────────
 begin_step 5 "Finishing up"
 # Optional helpers: plain-English "what you miss", no package names (they go
-# stale per distro — the user installs from their software center when ready).
+# stale per distro, the user installs from their software center when ready).
 MISSING_NICE=0
 NICE_LINES=""
 add_nice() {
@@ -333,25 +364,25 @@ add_nice() {
   NICE_LINES="${NICE_LINES}      $1
 "
 }
-have rsvg-convert || add_nice "rsvg-convert  -  crisp SVG / icon thumbnails"
-have magick       || add_nice "ImageMagick   -  photo thumbnails"
-have ffmpeg       || add_nice "ffmpeg        -  video thumbnails & previews"
-have gio          || add_nice "gio           -  starred files, network places"
-have udisksctl    || add_nice "udisksctl     -  mount / eject drives"
+have rsvg-convert || add_nice "rsvg-convert,  crisp SVG / icon thumbnails"
+have magick       || add_nice "ImageMagick,   photo thumbnails"
+have ffmpeg       || add_nice "ffmpeg,        video thumbnails and previews"
+have gio          || add_nice "gio,           starred files, network places"
+have udisksctl    || add_nice "udisksctl,     mount / eject drives"
 if ! have wl-paste && ! have wl-copy && ! have xclip; then
-  add_nice "wl-clipboard or xclip  -  copy/paste with other apps"
+  add_nice "wl-clipboard or xclip,  copy/paste with other apps"
 fi
 
 XDG_OK=1
 have xdg-open || XDG_OK=0
 
 if [ "$path_action" = reload ]; then
-  end_step "PATH saved for $SHELL_LABEL - reload below"
+  end_step "PATH saved for $SHELL_LABEL, reload below"
 elif [ "$path_action" = export ]; then
   if [ "${SHELL_KNOWN:-1}" = 0 ]; then
-    end_step "shell not auto-configured - see below"
+    end_step "shell not auto-configured, see below"
   else
-    end_step "PATH not updated - see below"
+    end_step "PATH not updated, see below"
   fi
 elif [ "$MISSING_NICE" -gt 0 ]; then
   end_step "$MISSING_NICE optional extra$([ "$MISSING_NICE" -eq 1 ] || printf 's') missing"
@@ -390,14 +421,14 @@ if [ "$FANCY" = 1 ]; then
       box_line "$C_GREEN" ""
       box_line "$C_GREEN" "  Then type:"
     else
-      box_line "$C_DIM" "    (long path - command below)"
+      box_line "$C_DIM" "    (long path, command below)"
       box_line "$C_GREEN" ""
       box_line "$C_GREEN" "  Then type:"
     fi
     box_line "$C_GREEN" ""
     box_line "$C_BOLD" "    tfm"
   else
-    box_line "$C_GREEN" "  Open a terminal and type:"
+    box_line "$C_GREEN" "  Type now:"
     box_line "$C_GREEN" ""
     box_line "$C_BOLD" "    tfm"
   fi
@@ -420,10 +451,10 @@ fi
 if [ "$XDG_OK" = 0 ]; then
   if [ "$FANCY" = 1 ]; then
     printf '\n  %sOpening files needs one extra tool%s\n' "$C_RED" "$C_RST"
-    printf '      xdg-open  -  launches files in their default app\n'
+    printf '      xdg-open,  launches files in their default app\n'
     printf '  %sInstall it from your software center or package manager.%s\n' "$C_DIM" "$C_RST"
   else
-    plain "missing: xdg-open - needed to open files in their default app"
+    plain "missing: xdg-open, needed to open files in their default app"
   fi
 fi
 
@@ -431,7 +462,7 @@ if [ "$MISSING_NICE" -gt 0 ]; then
   if [ "$FANCY" = 1 ]; then
     printf '\n  %sNice to have (tfm works without them)%s\n' "$C_DIM" "$C_RST"
     printf '%s' "$NICE_LINES"
-    printf '  %sNo rush - add them any time from your software center.%s\n' "$C_DIM" "$C_RST"
+    printf '  %sNo rush, add them any time from your software center.%s\n' "$C_DIM" "$C_RST"
   else
     plain "optional helpers missing (install any time; tfm works without them):"
     printf '%s' "$NICE_LINES"
