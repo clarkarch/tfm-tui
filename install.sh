@@ -150,6 +150,47 @@ hsize() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Login shell for the PATH prompt / rc pick. $SHELL wins; else the parent
+# process (curl|bash from zsh still has PPID=zsh); else bash.
+shell_base() {
+  local b parent
+  b=$(basename "${SHELL:-}" 2>/dev/null || true)
+  if [ -n "$b" ] && [ "$b" != "." ]; then
+    printf '%s' "$b"
+    return
+  fi
+  parent=$(ps -p "${PPID:-1}" -o comm= 2>/dev/null || true)
+  parent=$(basename "${parent:-bash}" 2>/dev/null || echo bash)
+  printf '%s' "$parent"
+}
+
+# Sets SHELL_KNOWN, SHELL_LABEL, RCFILE, LINE for auto PATH setup.
+# Unknown shells: SHELL_KNOWN=0 — we never write a wrong rc file.
+setup_shell_profile() {
+  SHELL_KNOWN=1
+  SHELL_LABEL=$(shell_base)
+  case "$SHELL_LABEL" in
+    bash | sh | dash)
+      SHELL_LABEL=bash
+      RCFILE="${BASHRC:-$HOME/.bashrc}"
+      LINE="export PATH=\"$DEST:\$PATH\""
+      ;;
+    zsh)
+      RCFILE="$HOME/.zshrc"
+      LINE="export PATH=\"$DEST:\$PATH\""
+      ;;
+    fish)
+      RCFILE="$HOME/.config/fish/config.fish"
+      LINE="fish_add_path $DEST"
+      ;;
+    *)
+      SHELL_KNOWN=0
+      RCFILE=""
+      LINE=""
+      ;;
+  esac
+}
+
 if [ "$FANCY" = 1 ]; then
   printf '\n'
   box_top "$C_BLUE"
@@ -246,18 +287,22 @@ fi
 # tty, since stdin belongs to the curl|bash pipe). No tty = just print instructions.
 # Note: we only ever touch the user's own rc file — never /usr/local/bin.
 # path_action: ready (live PATH ok) | reload (rc written, shell must source)
-#              | export (not on PATH, user declined / no tty)
+#              | export (declined, no tty, or unknown shell)
 path_action=ready
 reload_cmd=""
 export_hint="export PATH=\"$(pretty_dollar_home "$DEST"):\$PATH\""
 if ! command -v tfm >/dev/null 2>&1; then
-  if ! { true </dev/tty; } 2>/dev/null; then
+  setup_shell_profile
+  if [ "$SHELL_KNOWN" = 0 ]; then
+    # don't guess an rc file — hand them the portable export instead
+    path_action=export
+  elif ! { true </dev/tty; } 2>/dev/null; then
     path_action=export
   else
     if [ "$FANCY" = 1 ]; then
-      printf '\n  tfm isn'\''t in your PATH yet. Add %s automatically? [Y/n] ' "$DEST"
+      printf '\n  tfm isn'\''t in your PATH yet. Add it for %s? [Y/n] ' "$SHELL_LABEL"
     else
-      printf 'tfm: add %s to PATH automatically? [Y/n] ' "$DEST"
+      printf 'tfm: add to PATH for %s? [Y/n] ' "$SHELL_LABEL"
     fi
     if ! IFS= read -r REPLY </dev/tty; then
       printf '\n'
@@ -265,11 +310,6 @@ if ! command -v tfm >/dev/null 2>&1; then
     elif [ "${REPLY#n}" != "$REPLY" ] || [ "${REPLY#N}" != "$REPLY" ]; then
       path_action=export
     else
-      case "$(basename "${SHELL:-bash}")" in
-        fish) RCFILE="$HOME/.config/fish/config.fish"; LINE="fish_add_path $DEST" ;;
-        zsh)  RCFILE="$HOME/.zshrc";                   LINE="export PATH=\"$DEST:\$PATH\"" ;;
-        *)    RCFILE="${BASHRC:-$HOME/.bashrc}";       LINE="export PATH=\"$DEST:\$PATH\"" ;;
-      esac
       mkdir -p "$(dirname "$RCFILE")"; touch "$RCFILE"
       if ! grep -qF '# tfm PATH' "$RCFILE"; then
         { echo; echo '# tfm PATH'; echo "$LINE"; } >> "$RCFILE"
@@ -306,9 +346,13 @@ XDG_OK=1
 have xdg-open || XDG_OK=0
 
 if [ "$path_action" = reload ]; then
-  end_step "PATH saved - reload your shell below"
+  end_step "PATH saved for $SHELL_LABEL - reload below"
 elif [ "$path_action" = export ]; then
-  end_step "PATH not updated - see below"
+  if [ "${SHELL_KNOWN:-1}" = 0 ]; then
+    end_step "shell not auto-configured - see below"
+  else
+    end_step "PATH not updated - see below"
+  fi
 elif [ "$MISSING_NICE" -gt 0 ]; then
   end_step "$MISSING_NICE optional extra$([ "$MISSING_NICE" -eq 1 ] || printf 's') missing"
 elif [ "$XDG_OK" = 0 ]; then
@@ -335,7 +379,11 @@ if [ "$FANCY" = 1 ]; then
     box_line "$C_GREEN" ""
     box_line "$C_BOLD" "    tfm"
   elif [ "$path_action" = export ]; then
-    box_line "$C_GREEN" "  Put this on PATH first:"
+    if [ "${SHELL_KNOWN:-1}" = 0 ]; then
+      box_line "$C_GREEN" "  Add it to PATH for your shell:"
+    else
+      box_line "$C_GREEN" "  Put this on PATH first:"
+    fi
     box_line "$C_GREEN" ""
     if [ "$export_in_box" = 1 ]; then
       box_line "$C_BOLD" "    $export_hint"
