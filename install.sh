@@ -229,14 +229,17 @@ fi
 DL_STATUS=0
 if [ "$FANCY" = 1 ] && [ -t 2 ]; then
   STEP_N=2
-  STEP_LABEL="Downloading tfm"
+  STEP_LABEL="Downloaded tfm"
   STEP_OPEN=0
   curl -fL --retry 3 --proto '=https' --progress-bar "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz" || DL_STATUS=$?
 else
-  begin_step 2 "Downloading tfm"
+  STEP_N=2
+  STEP_LABEL="Downloaded tfm"
+  STEP_OPEN=0
   curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$TMP/tfm.gz" || DL_STATUS=$?
 fi
 if [ "$DL_STATUS" -ne 0 ] || [ ! -f "$TMP/tfm.gz" ]; then
+  STEP_LABEL="Downloading tfm"
   fail_step \
     "Couldn't download tfm right now." \
     "Check your internet connection and run the same command again." \
