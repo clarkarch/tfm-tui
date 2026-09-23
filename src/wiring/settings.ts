@@ -237,6 +237,7 @@ export const wireSettings = (deps: {
     applyConfig: (fresh) => getRetheme().applyConfig(fresh),
     scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
     log: (message) => dlog(message),
+    compatActive: core.compatActive,
     // the boot resolve bypasses applyConfig (nothing mounted yet), so its
     // plugin `theme` event is emitted here instead of onConfigApplied
     onBootDerived: (theme) => {
@@ -254,11 +255,16 @@ export const wireSettings = (deps: {
     // arrow wrappers: applyConfig/scheduleSaveConfig belong to the retheme wiring (TDZ)
     applyConfig: (fresh) => getRetheme().applyConfig(fresh),
     scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
-    showRoot: () => escMenu.showRoot(),
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
     // console mode: the theme row is display-only (static palette paints)
     compatActive: core.compatActive,
     plugins: () => plugins.plugins,
+    // on/off toggle: register or drop the plugin's slots right away, then
+    // repaint so the change is visible without a navigation
+    onPluginEnabledChanged: (name, enabled) => {
+      plugins.setSlotEnabled(name, enabled);
+      nav.renderAll();
+    },
     pluginInstall: { addFromUrl, openFolder, update: updateOne, remove: removeOne },
     // picking the System theme entry resolves the terminal colors now
     // (fire-and-forget — failures keep the committed flag + current theme)

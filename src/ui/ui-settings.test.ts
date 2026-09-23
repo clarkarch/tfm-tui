@@ -581,6 +581,26 @@ describe("keybind capture", () => {
     expect(t.captureCharFrame()).not.toContain("press a key…");
   });
 
+  test("ctrl+tab is recordable; a plain tab still cancels", async () => {
+    await openSettings();
+    for (let i = 0; i < 3; i++) menu.moveMenu(1);
+    menu.menuActivate(); // arm capture on the keybind row
+    await t.renderOnce();
+
+    // plain tab cancels without committing
+    expect(menu.captureKey({ name: "tab", ctrl: false, shift: false, meta: false })).toBe(true);
+    await t.renderOnce();
+    expect(t.captureCharFrame()).not.toContain("press a key…");
+
+    // ctrl+tab is a real bind (next-tab default) and must commit
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(menu.captureKey({ name: "tab", ctrl: true, shift: false, meta: false })).toBe(true);
+    await t.renderOnce();
+    const keyRow = groups[0]!.rows.find((r) => r.kind === "keybind") as { get(): string[] };
+    expect(keyRow.get()).toEqual(["ctrl+tab"]);
+  });
+
   test("escape cancels capture without committing; while armed every key is swallowed", async () => {
     await openSettings();
     for (let i = 0; i < 3; i++) menu.moveMenu(1);

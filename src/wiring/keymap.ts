@@ -12,7 +12,7 @@ import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
 import { cycleSortMode } from "../lib/sort";
 import { clearChildren } from "../lib/uiutil";
-import { flattenPluginCommands, getPluginCommandBinds } from "../plugins/plugin-api";
+import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled } from "../plugins/plugin-api";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
 import { dlog } from "../app/log";
@@ -55,7 +55,7 @@ export const wireKeymap = (deps: {
     escHintBtn: core.slots.escHintBtn,
     drainIconQueue: () => core.slots.drainIconQueue(),
     commands: () =>
-      [...coreCommands(), ...flattenPluginCommands(plugins.plugins)].map((c) => ({
+      [...coreCommands(), ...flattenPluginCommands(plugins.plugins.filter(isPluginEnabled))].map((c) => ({
         label: c.title,
         hint: c.hint || undefined,
         run: c.run,
@@ -171,7 +171,6 @@ export const wireKeymap = (deps: {
     prevTab: nav.prevTab,
     newTab: nav.newTab,
     closeTab: nav.closeTab,
-    switchTab: nav.switchTab,
     inTrashView: core.inTrashView,
     confirmDeleteForever: fileops.confirmDeleteForever,
     trashPaths: fileops.trash.trashPaths,
@@ -237,9 +236,9 @@ export const wireKeymap = (deps: {
     undoLast: fileops.undo.undoLast,
     redoLast: fileops.undo.redoLast,
     pluginCommands: () =>
-      plugins.plugins.flatMap((p) =>
-        p.commands.map((c) => ({ id: c.id, binds: getPluginCommandBinds(p, c.id), run: c.run })),
-      ),
+      plugins.plugins
+        .filter(isPluginEnabled)
+        .flatMap((p) => p.commands.map((c) => ({ id: c.id, binds: getPluginCommandBinds(p, c.id), run: c.run }))),
     pick: {
       isOpen: () => pick.isOpen(),
       handleKey: (ev) => pick.handleKey(ev),

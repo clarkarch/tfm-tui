@@ -23,6 +23,9 @@ export type SystemThemeCtx = {
   // debounced TOML write after a successful runtime resolve — without it the
   // derived hexes never persist and a fast quit can lose even the flag commit
   scheduleSaveConfig?(): void;
+  // console/compat mode: the static console palette paints, so the boot derive
+  // must not clobber it (applyConfig already honors compat; boot bypasses it)
+  compatActive?(): boolean;
   // boot-path hook so the plugin `theme` event still fires on a System boot
   // (the runtime path emits through applyConfig's onConfigApplied instead)
   onBootDerived?(theme: Theme): void;
@@ -123,6 +126,10 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
   // The renderer bg is set too — chrome read the preset bg at construction.
   const applyBootSystemTheme = async (timeoutMs = 250): Promise<boolean> => {
     if (!ctx.config.ui.followTerminal) return false;
+    // compat/console mode paints the static console palette and applyConfig
+    // skips the truecolor bg; boot must match or the first frame is derived
+    // while themeSig believes the console theme is active
+    if (ctx.compatActive?.()) return false;
     const g = ++gen;
     const theme = await queryAndDerive(timeoutMs);
     if (g !== gen || !ctx.config.ui.followTerminal) return false;

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box, type Renderable } from "@opentui/core";
@@ -85,6 +85,13 @@ let renamingOn: boolean;
 let availWSet: number | null;
 let hoverLiftOpts: HoverLiftOpts;
 let tilePrefix: string;
+let throwOnName: string | null;
+// virtual clock for the play-cooldown gate (plays inside 500ms of the last
+// wave are skipped): tests step it explicitly wherever a new wave is intended
+let testNow: number;
+const stepClock = (ms = 1000): void => {
+  testNow += ms;
+};
 let visibleOnly: boolean;
 let revealDelayMs: number;
 let fileAnimMode: "rows" | "tiles" | "container" | null;
@@ -115,6 +122,11 @@ beforeAll(async () => {
   searchEntries = [];
   viewMode = "grid";
   rasterSig = "raster-a";
+  // initialized here, not mid-file: ctx.now() returning undefined made the
+  // cooldown comparison NaN (silently disabled) for the first tests, so the
+  // clock only worked by declaration order
+  throwOnName = null;
+  testNow = 1_000_000;
   availWSet = null;
   hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
@@ -195,6 +207,12 @@ beforeAll(async () => {
     drainIconQueue: () => {},
     drainThumbs: () => {},
     stripSelectable: () => {},
+    // mirrors makeLookup.setTextOnId (wiring passes the real one): stats-only
+    // ticks repaint size/date cells in place instead of rebuilding rows
+    setTextOnId: (id: string, s: string) => {
+      const n = t.renderer.root.findDescendantById(id) as any;
+      if (n) n.content = s;
+    },
     fileAnim: (target: {
       tiles: string[];
       rows?: string[];
@@ -216,10 +234,12 @@ beforeAll(async () => {
     fileAnimVisibleOnly: () => visibleOnly,
     fileAnimScrollRevealDelayMs: () => revealDelayMs,
     sched: revealClock.sched,
+    now: () => testNow,
     windowedGrid: () => windowedGridOn,
     isRenaming: () => renamingOn,
     selection,
     entryMouseHandlers: (e: any, key: string, idx: number) => {
+      if (throwOnName !== null && e.name === throwOnName) throw new Error("boom");
       mouseHandlers.push({ name: e.name, key, idx });
       return {};
     },
@@ -471,6 +491,7 @@ describe("renderGrid (grid tiles)", () => {
   test("hands built tile ids + the container to the file animation sink, but not on a skipped render", async () => {
     fileAnimCalls = [];
     gridState.sortAsc = false; // force a signature change so a real rebuild runs
+    stepClock(); // a new wave is intended: move past the play cooldown
     await renderGrid();
     const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
     // clearGrid stops the previous animation first, then the rebuild plays
@@ -495,6 +516,7 @@ describe("renderGrid (grid tiles)", () => {
     }));
     visibleOnly = true;
     try {
+      stepClock(); // each build below intends a fresh wave
       await renderGrid();
       const gridPlay = fileAnimCalls.at(-1)!;
       // grid cap = cols * (rows in the terminal + 1 margin) = 5 * 5 = 25
@@ -516,6 +538,7 @@ describe("renderGrid (grid tiles)", () => {
       // same visibleTileCap math the thumb ranking uses)
       searchQuery = "fi";
       viewMode = "list";
+      stepClock();
       await renderGrid();
       const listPlay = fileAnimCalls.at(-1)!;
       expect(listPlay.tiles.length).toBe(13);
@@ -525,6 +548,7 @@ describe("renderGrid (grid tiles)", () => {
       searchQuery = "fil";
       viewMode = "grid";
       visibleOnly = false;
+      stepClock();
       await renderGrid();
       const fullPlay = fileAnimCalls.at(-1)!;
       expect(fullPlay.tiles.length).toBe(30);
@@ -557,6 +581,7 @@ describe("renderGrid (grid tiles)", () => {
       gridState.cwd = big;
       scroller.scrollTop = 12; // two tile-rows down: tiles [10,35), rows [2,7)
       visibleOnly = true;
+      stepClock();
       await renderGrid();
       const play = fileAnimCalls.at(-1)!;
       // 60 files / 5 cols = 12 rows; viewport cap 25 tiles = 5 rows from row 2
@@ -597,6 +622,7 @@ describe("renderGrid (grid tiles)", () => {
 
     // a real content change afterwards still animates
     gridState.sortAsc = false;
+    stepClock();
     await renderGrid();
     const play = fileAnimCalls.at(-1)!;
     expect(play.tiles.length).toBeGreaterThan(0);
@@ -942,6 +968,297 @@ describe("renderGrid (list view)", () => {
     expect(selection.rowHAtBuild()).toBe(2);
     viewMode = "grid";
   });
+
+  test("stats-only tick repaints size/date in place: no rebuild, no fileAnim replay", async () => {
+    // busy-log case: same names, new size/mtime — must not clear+rebuild (the
+    // TTY full-flash loop), just repaint the stat cells; membership changes
+    // still take the full rebuild path with animation
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-statsonly-"));
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "hello"); // 5 B
+      writeFileSync(path.join(dir, "b.txt"), "world!");
+      viewMode = "list";
+      gridState.cwd = dir;
+      fileAnimCalls.length = 0;
+      mouseHandlers.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("5 B");
+      expect(fileAnimCalls.length).toBeGreaterThan(0); // the initial build plays
+      const refsBefore = selection.tileRefs.size;
+      expect(refsBefore).toBe(2);
+
+      // same names, only stats change (an append bumps size + mtime)
+      writeFileSync(path.join(dir, "a.txt"), "hello, much longer content here"); // 31 B
+      fileAnimCalls.length = 0;
+      mouseHandlers.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      // no rebuild: no rows rebuilt, no animation replayed, refs/focus intact
+      expect(mouseHandlers.length).toBe(0);
+      expect(fileAnimCalls.length).toBe(0);
+      expect(selection.tileRefs.size).toBe(refsBefore);
+      // ...but the painted stat cells show the new size
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("31 B");
+      expect(frame).not.toContain("5 B");
+
+      // a membership change still rebuilds + plays a fresh wave
+      writeFileSync(path.join(dir, "c.txt"), "new");
+      fileAnimCalls.length = 0;
+      stepClock();
+      await renderGrid();
+      await t.renderOnce();
+      expect(selection.tileRefs.size).toBe(refsBefore + 1);
+      expect(fileAnimCalls.some((c) => c.tiles.length > 0)).toBe(true);
+      expect(t.captureCharFrame()).toContain("c.txt");
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("stats change to a thumbnailed image still rebuilds (raster keys on stats)", async () => {
+    // the fast path pushes no thumb jobs — an edited photo must take the full
+    // rebuild so its raster re-queues instead of going stale
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-thumbstat-"));
+    try {
+      writeFileSync(path.join(dir, "photo.png"), "fake-png-1");
+      viewMode = "list";
+      gridState.cwd = dir;
+      thumbJobs.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      expect(thumbJobs.length).toBeGreaterThan(0);
+      const jobsAfterBuild = thumbJobs.length;
+
+      writeFileSync(path.join(dir, "photo.png"), "fake-png-1, edited and longer");
+      fileAnimCalls.length = 0;
+      mouseHandlers.length = 0;
+      stepClock();
+      await renderGrid();
+      await t.renderOnce();
+
+      expect(mouseHandlers.length).toBeGreaterThan(0); // rebuilt, not fast-pathed
+      expect(fileAnimCalls.some((c) => c.tiles.length > 0)).toBe(true); // fresh wave, not just the stop
+      expect(thumbJobs.length).toBeGreaterThan(jobsAfterBuild); // raster re-queued
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("a throwing row degrades to a placeholder, siblings still paint", async () => {
+    // buildInner runs AFTER clearGrid — an unguarded throw used to strand an
+    // empty scroller on every tick and every restart for that folder
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-badrow-"));
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "boom.txt"), "boom");
+      writeFileSync(path.join(dir, "c.txt"), "c");
+      viewMode = "list";
+      gridState.cwd = dir;
+      throwOnName = "boom.txt";
+      fileAnimCalls.length = 0;
+      await renderGrid(); // must resolve, not reject
+      await t.renderOnce();
+
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("c.txt");
+      // every entry still registered; the bad row holds a same-id placeholder
+      expect(selection.tileRefs.size).toBe(3);
+      expect(t.renderer.root.findDescendantById("tfm-tile-1")).toBeTruthy();
+    } finally {
+      throwOnName = null;
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+});
+
+test("rapid successive rebuilds coalesce to one wave (storm gate)", async () => {
+  // a rotation burst must repaint every time but restart the wave only once
+  // the cooldown passes — overlapping waves never complete and read as
+  // invisible files on a slow VT
+  const plays = (): number => fileAnimCalls.filter((c) => c.tiles.length > 0).length;
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-storm-"));
+  try {
+    writeFileSync(path.join(dir, "a.txt"), "a");
+    viewMode = "list";
+    gridState.cwd = dir;
+    stepClock();
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+    expect(plays()).toBe(1);
+
+    // two membership changes inside the cooldown: both repaint, neither waves
+    writeFileSync(path.join(dir, "b.txt"), "b");
+    await renderGrid();
+    writeFileSync(path.join(dir, "c.txt"), "c");
+    await renderGrid();
+    await t.renderOnce();
+    expect(selection.tileRefs.size).toBe(3);
+    expect(t.captureCharFrame()).toContain("c.txt");
+    expect(plays()).toBe(1);
+
+    // past the cooldown a new change waves again
+    stepClock();
+    writeFileSync(path.join(dir, "d.txt"), "d");
+    await renderGrid();
+    await t.renderOnce();
+    expect(plays()).toBe(2);
+  } finally {
+    viewMode = "grid";
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("navigating to a different folder within the cooldown still plays its intro", async () => {
+  // the cooldown coalesces a STORM in one listing; a cwd change is a new
+  // folder's intro and must animate (the old global clock swallowed it)
+  const plays = (): number => fileAnimCalls.filter((c) => c.tiles.length > 0).length;
+  const dirA = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-nav-a-"));
+  const dirB = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-nav-b-"));
+  try {
+    writeFileSync(path.join(dirA, "a.txt"), "a");
+    writeFileSync(path.join(dirB, "b.txt"), "b");
+    viewMode = "list";
+    gridState.cwd = dirA;
+    stepClock();
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+    expect(plays()).toBe(1);
+
+    // navigate immediately — no stepClock, still inside the cooldown
+    gridState.cwd = dirB;
+    await renderGrid();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("b.txt");
+    expect(plays()).toBe(2);
+  } finally {
+    viewMode = "grid";
+    rmSync(dirA, { recursive: true, force: true });
+    rmSync(dirB, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("a stats tick on a non-thumbnailable image takes the fast path (no rebuild)", async () => {
+  // thumbStatsChanged must mirror thumbPlanFor: a 0-byte image never rasters,
+  // so its mtime moving must not force the full clear+rebuild
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-thumb0-"));
+  try {
+    const p = path.join(dir, "empty.png");
+    writeFileSync(p, "");
+    viewMode = "list";
+    gridState.cwd = dir;
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    const later = new Date(Date.now() + 5000);
+    utimesSync(p, later, later);
+    fileAnimCalls.length = 0;
+    mouseHandlers.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    expect(mouseHandlers.length).toBe(0); // fast path, no row rebuild
+    expect(fileAnimCalls.length).toBe(0);
+  } finally {
+    viewMode = "grid";
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("a stats tick that crosses OUT of the rasterizable range rebuilds (stale-thumb guard)", async () => {
+  // a thumbnailed image truncated to 0 bytes can no longer raster: the old
+  // guard `continue`d on the NEW size and took the fast path, leaving the
+  // previous thumbnail on screen for a file that has none
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-thumbcross-"));
+  try {
+    const p = path.join(dir, "shrink.png");
+    writeFileSync(p, "x"); // 1 byte: eligible
+    viewMode = "list";
+    gridState.cwd = dir;
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    writeFileSync(p, ""); // 0 bytes: no longer eligible
+    fileAnimCalls.length = 0;
+    mouseHandlers.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    expect(mouseHandlers.length).toBeGreaterThan(0); // rebuilt, not fast-pathed
+  } finally {
+    viewMode = "grid";
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("windowed busy loop: repeated stats ticks keep every mounted row visible", async () => {
+  // production default is windowed-grid ON — the non-windowed stats test
+  // above doesn't cover the window snapshot interplay
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-busywin-"));
+  try {
+    for (let i = 1; i <= 40; i++) writeFileSync(path.join(dir, `f${String(i).padStart(2, "0")}.txt`), "x");
+    viewMode = "list";
+    windowedGridOn = true;
+    gridState.cwd = dir;
+    scroller.scrollTop = 0;
+    await renderGrid();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("f01.txt");
+
+    // several busy ticks: appends move size/mtime, never membership
+    for (let round = 0; round < 3; round++) {
+      writeFileSync(path.join(dir, "f01.txt"), `x${"y".repeat(round + 5)}`);
+      fileAnimCalls.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("f01.txt");
+      expect(frame).toContain("f02.txt");
+      expect(fileAnimCalls.length).toBe(0);
+    }
+    // scroll deep, tick again: the slid window still paints its rows
+    scroller.scrollTop = 20;
+    syncWindow();
+    await t.renderOnce();
+    writeFileSync(path.join(dir, "f12.txt"), "changed!");
+    await renderGrid();
+    await t.renderOnce();
+    const scrolled = t.captureCharFrame();
+    expect(scrolled).toContain("f12.txt");
+    expect(scrolled).toContain("8 B");
+  } finally {
+    viewMode = "grid";
+    windowedGridOn = false;
+    scroller.scrollTop = 0;
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
 });
 
 // --- [ui] windowed-grid: only the visible row window (+overscan) is built;

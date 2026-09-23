@@ -87,8 +87,11 @@ const walkPluginTree = (dir: string, visit: (e: PluginWalkEntry) => void): void 
   }
 };
 
-// state.json is excluded — store writes must not look like code edits
-const skipCodeEntry = (e: PluginWalkEntry): boolean => e.name === "state.json" || e.st.isSymbolicLink();
+// state.json is excluded — store writes must not look like code edits. The
+// `<pid>.tmp` sibling of an interrupted atomic write is excluded too, or a
+// crash would fold it into the folder hash/fingerprint and the staged copy.
+const isStateEntry = (name: string): boolean => name === "state.json" || name.startsWith("state.json.");
+const skipCodeEntry = (e: PluginWalkEntry): boolean => isStateEntry(e.name) || e.st.isSymbolicLink();
 
 // content hash of a plugin folder (all files, sorted, content + name).
 // Bounded: at most 1000 files / 10MB hashed. Beyond-cap files can't be
@@ -156,6 +159,24 @@ const stripStagedSymlinks = (dest: string): void => {
   });
 };
 
+// remove every staged build dir for a plugin (optionally keeping one). Exact
+// `name-<16hex>` match: a startsWith check would delete sibling plugin `a-b`'s
+// builds when pruning `a`. Used on reload (keep current) and on remove/uninstall
+// (keep none) so plugin-build doesn't grow without bound across install cycles.
+const pruneStagedFor = (name: string, except?: string): void => {
+  const root = pluginBuildDir();
+  const stagedRe = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-f]{16}$`);
+  try {
+    for (const entry of readdirSync(root)) {
+      if (stagedRe.test(entry) && (!except || entry !== except)) {
+        try {
+          rmSync(path.join(root, entry), { recursive: true, force: true });
+        } catch {}
+      }
+    }
+  } catch {}
+};
+
 // copy a plugin folder to its hashed staging dir, prune older hashes for the
 // same plugin, return the staged main-file path. Idempotent per hash.
 // Takes a precomputed hash so callers that already hashed (the scan loop)
@@ -169,23 +190,12 @@ export const copyStagedPlugin = (srcFolder: string, name: string, hash: string, 
     try {
       rmSync(dest, { recursive: true, force: true });
     } catch {}
-    cpSync(srcFolder, dest, { recursive: true, filter: (s) => path.basename(s) !== "state.json" });
+    cpSync(srcFolder, dest, { recursive: true, filter: (s) => !isStateEntry(path.basename(s)) });
     stripStagedSymlinks(dest);
   }
   // prune sibling hashes for this plugin (keep current) — the old staged
   // modules stay in Bun's cache but unreferenced; disk stays bounded.
-  // Exact `name-<16hex>` match: a startsWith check would delete sibling
-  // plugin `a-b`'s builds when pruning `a`.
-  const stagedRe = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-f]{16}$`);
-  try {
-    for (const entry of readdirSync(root)) {
-      if (stagedRe.test(entry) && path.join(root, entry) !== dest) {
-        try {
-          rmSync(path.join(root, entry), { recursive: true, force: true });
-        } catch {}
-      }
-    }
-  } catch {}
+  pruneStagedFor(name, `${name}-${hash}`);
   return stagedMain;
 };
 
@@ -282,6 +292,10 @@ type PluginRegistry = {
   // async IO), so the returned promises are NOT awaited — only a deactivate's
   // sync prefix runs. Remove/reload use the awaited path below.
   deactivateAll: () => void;
+  // Plugins-view on/off: register/unregister the named plugin's slots so a
+  // disabled plugin stops contributing UI immediately (store flag is written
+  // by the caller). No-op for unknown names / plugins with no slots.
+  setSlotEnabled: (name: string, enabled: boolean) => void;
 };
 
 // one discoverable plugin: folders are canonical (<name>/<name>.ts), legacy
@@ -407,6 +421,16 @@ export const makePluginRegistry = (deps: {
     // namespaced store: every plugin gets ONLY its own store, whatever name
     // it asks for (cross-plugin state reads warn and return the caller's own).
     const ownStore = storeFor(m.name);
+    // live enabled read for the push/veto channels: a plugin toggled off in
+    // the Plugins view must stop receiving events and stop vetoing file ops
+    // immediately, not next restart. A throwing store read degrades to on.
+    const pluginOn = (): boolean => {
+      try {
+        return ownStore.get("enabled", true);
+      } catch {
+        return true;
+      }
+    };
     const scopedApi: PluginApi = {
       ...api,
       store: (requested: string) => {
@@ -417,149 +441,188 @@ export const makePluginRegistry = (deps: {
         }
         return ownStore;
       },
+      // gate the push/veto channels on the live flag (the unsubscribe stays
+      // the plugin's own; we only drop delivery while disabled)
+      events: {
+        ...api.events,
+        on: (evt, cb) =>
+          api.events.on(evt, (payload) => {
+            if (pluginOn()) cb(payload);
+          }),
+      },
+      hooks: {
+        beforeFileOp: (fn) => api.hooks.beforeFileOp((payload) => (pluginOn() ? fn(payload) : undefined)),
+      },
     };
-    // a hanging activate must not stall the whole rescan (esc-menu reload
-    // would never settle) — 10s cap, timer cleaned up via withTimeout.
-    const result =
-      (await withTimeout(
-        Promise.resolve().then(() => mod.activate(scopedApi)),
-        10000,
-      )) ?? {};
-    const fileMenu = result.fileMenu ?? null;
-    if (fileMenu !== null && typeof fileMenu !== "function") throw new Error(`fileMenu must be a function`);
-    const sidebarMenu = result.sidebarMenu ?? null;
-    if (sidebarMenu !== null && typeof sidebarMenu !== "function") throw new Error(`sidebarMenu must be a function`);
-    const emptyAreaMenu = result.emptyAreaMenu ?? null;
-    if (emptyAreaMenu !== null && typeof emptyAreaMenu !== "function")
-      throw new Error(`emptyAreaMenu must be a function`);
-    const rawPreview = result.preview ?? [];
-    if (!Array.isArray(rawPreview)) throw new Error(`preview must be an array`);
-    // malformed preview entries drop individually — one bad ext list must not
-    // sink the plugin's good ones. exts normalized lowercase without dots.
-    const preview = (rawPreview as unknown[]).flatMap((raw): PluginPreview[] => {
-      if (typeof raw !== "object" || raw === null) return [];
-      const r = raw as { exts?: unknown; render?: unknown };
-      if (!Array.isArray(r.exts) || !r.exts.length || !r.exts.every((e) => typeof e === "string")) return [];
-      if (typeof r.render !== "function") return [];
-      const exts = (r.exts as string[]).map((e) => e.toLowerCase().replace(/^\./, "")).filter(Boolean);
-      if (!exts.length) return [];
-      return [{ exts, render: r.render as (path: string) => string | Promise<string> }];
-    });
-    const rawCommands = result.commands ?? [];
-    if (!Array.isArray(rawCommands)) throw new Error(`commands must be an array`);
-    // malformed command entries drop individually (like fileMenu entries at
-    // use time) — one bad item must not sink the plugin's good ones.
-    // defaultBinds must be string[] of VALID specs when present: an unvalidated
-    // default like ["j"] would dispatch before type-to-search and swallow
-    // plain typing (P0-7). Invalid entries drop the whole command with a log.
-    // Conflicts stay core-wins at dispatch (shadowed until remapped).
-    // Non-namespaced ids warn.
-    const commands = (rawCommands as unknown[]).flatMap((raw): PluginCommand[] => {
-      if (
-        typeof raw !== "object" ||
-        raw === null ||
-        typeof (raw as { id: unknown }).id !== "string" ||
-        typeof (raw as { title: unknown }).title !== "string" ||
-        typeof (raw as { run: unknown }).run !== "function"
-      ) {
-        return [];
-      }
-      const c = raw as PluginCommand;
-      if (!c.id.startsWith(`${m.name}:`)) {
-        try {
-          api.log(`plugin ${m.name}: command id ${JSON.stringify(c.id)} should be namespaced ("${m.name}:verb")`);
-        } catch {}
-      }
-      let defaultBinds: string[] | undefined;
-      if (c.defaultBinds !== undefined) {
-        if (!Array.isArray(c.defaultBinds) || !c.defaultBinds.every((s) => typeof s === "string")) return [];
-        const bad = (c.defaultBinds as string[]).find((s) => validateKeybindSpec(s) !== null);
-        if (bad !== undefined) {
-          try {
-            api.log(
-              `plugin ${m.name}: command ${JSON.stringify(c.id)} defaultBind ${JSON.stringify(bad)} invalid (${validateKeybindSpec(bad)}) — entry dropped`,
-            );
-          } catch {}
+    // teardown is resolved BEFORE the post-activate validation below: any throw
+    // there must still tear down an already-activated plugin. It never reaches
+    // `plugins`, so deactivateAll can't see it — its event/hook listeners,
+    // timers and slots would leak on every rescan forever (the exact failure
+    // class the duplicate check above guards against).
+    let deactivate: (() => void | Promise<void>) | null =
+      typeof (mod as { deactivate?: unknown }).deactivate === "function"
+        ? (mod as { deactivate: () => void | Promise<void> }).deactivate
+        : null;
+    let disposeSlots: (() => void) | null = null;
+    try {
+      // a hanging activate must not stall the whole rescan (esc-menu reload
+      // would never settle) — 10s cap, timer cleaned up via withTimeout.
+      const result =
+        (await withTimeout(
+          Promise.resolve().then(() => mod.activate(scopedApi)),
+          10000,
+        )) ?? {};
+      if (typeof result.deactivate === "function") deactivate = result.deactivate;
+      const fileMenu = result.fileMenu ?? null;
+      if (fileMenu !== null && typeof fileMenu !== "function") throw new Error(`fileMenu must be a function`);
+      const sidebarMenu = result.sidebarMenu ?? null;
+      if (sidebarMenu !== null && typeof sidebarMenu !== "function") throw new Error(`sidebarMenu must be a function`);
+      const emptyAreaMenu = result.emptyAreaMenu ?? null;
+      if (emptyAreaMenu !== null && typeof emptyAreaMenu !== "function")
+        throw new Error(`emptyAreaMenu must be a function`);
+      const rawPreview = result.preview ?? [];
+      if (!Array.isArray(rawPreview)) throw new Error(`preview must be an array`);
+      // malformed preview entries drop individually — one bad ext list must not
+      // sink the plugin's good ones. exts normalized lowercase without dots.
+      const preview = (rawPreview as unknown[]).flatMap((raw): PluginPreview[] => {
+        if (typeof raw !== "object" || raw === null) return [];
+        const r = raw as { exts?: unknown; render?: unknown };
+        if (!Array.isArray(r.exts) || !r.exts.length || !r.exts.every((e) => typeof e === "string")) return [];
+        if (typeof r.render !== "function") return [];
+        const exts = (r.exts as string[]).map((e) => e.toLowerCase().replace(/^\./, "")).filter(Boolean);
+        if (!exts.length) return [];
+        return [{ exts, render: r.render as (path: string) => string | Promise<string> }];
+      });
+      const rawCommands = result.commands ?? [];
+      if (!Array.isArray(rawCommands)) throw new Error(`commands must be an array`);
+      // malformed command entries drop individually (like fileMenu entries at
+      // use time) — one bad item must not sink the plugin's good ones.
+      // defaultBinds must be string[] of VALID specs when present: an unvalidated
+      // default like ["j"] would dispatch before type-to-search and swallow
+      // plain typing (P0-7). Invalid entries drop the whole command with a log.
+      // Conflicts stay core-wins at dispatch (shadowed until remapped).
+      // Non-namespaced ids warn.
+      const commands = (rawCommands as unknown[]).flatMap((raw): PluginCommand[] => {
+        if (
+          typeof raw !== "object" ||
+          raw === null ||
+          typeof (raw as { id: unknown }).id !== "string" ||
+          typeof (raw as { title: unknown }).title !== "string" ||
+          typeof (raw as { run: unknown }).run !== "function"
+        ) {
           return [];
         }
-        defaultBinds = [...c.defaultBinds];
-      }
-      return [
-        {
-          id: c.id,
-          title: c.title,
-          ...(typeof c.hint === "string" ? { hint: c.hint } : {}),
-          run: c.run,
-          ...(defaultBinds ? { defaultBinds } : {}),
-        },
-      ];
-    });
-    const deactivate =
-      typeof result.deactivate === "function"
-        ? result.deactivate
-        : typeof (mod as { deactivate?: unknown }).deactivate === "function"
-          ? ((mod as { deactivate: () => void | Promise<void> }).deactivate as () => void | Promise<void>)
-          : null;
-    const meta = (v: unknown): string => (typeof v === "string" ? v.slice(0, 200) : "");
-    // OpenTUI slot contributions (statusbar / sidebar-footer). Registering is
-    // isolated: a throw drops just the slots, never the plugin.
-    let disposeSlots: (() => void) | null = null;
-    if (result.slots !== undefined) {
-      if (typeof result.slots !== "object" || result.slots === null || Array.isArray(result.slots)) {
-        throw new Error(`slots must be an object`);
-      }
-      // per-entry validation (mirrors preview/commands): a slot value must be
-      // a renderer function or a managed `{ render }` object; bad ones drop.
+        const c = raw as PluginCommand;
+        if (!c.id.startsWith(`${m.name}:`)) {
+          try {
+            api.log(`plugin ${m.name}: command id ${JSON.stringify(c.id)} should be namespaced ("${m.name}:verb")`);
+          } catch {}
+        }
+        let defaultBinds: string[] | undefined;
+        if (c.defaultBinds !== undefined) {
+          if (!Array.isArray(c.defaultBinds) || !c.defaultBinds.every((s) => typeof s === "string")) return [];
+          const bad = (c.defaultBinds as string[]).find((s) => validateKeybindSpec(s) !== null);
+          if (bad !== undefined) {
+            try {
+              api.log(
+                `plugin ${m.name}: command ${JSON.stringify(c.id)} defaultBind ${JSON.stringify(bad)} invalid (${validateKeybindSpec(bad)}) — entry dropped`,
+              );
+            } catch {}
+            return [];
+          }
+          defaultBinds = [...c.defaultBinds];
+        }
+        return [
+          {
+            id: c.id,
+            title: c.title,
+            ...(typeof c.hint === "string" ? { hint: c.hint } : {}),
+            run: c.run,
+            ...(defaultBinds ? { defaultBinds } : {}),
+          },
+        ];
+      });
+      const meta = (v: unknown): string => (typeof v === "string" ? v.slice(0, 200) : "");
+      // OpenTUI slot contributions (statusbar / sidebar-footer). Registering is
+      // isolated: a throw drops just the slots, never the plugin.
       const clean: Record<string, unknown> = {};
-      for (const [key, val] of Object.entries(result.slots as Record<string, unknown>)) {
-        const ok =
-          typeof val === "function" ||
-          (typeof val === "object" && val !== null && typeof (val as { render?: unknown }).render === "function");
-        if (!ok) {
-          try {
-            api.log(`plugin ${m.name}: slot ${JSON.stringify(key)} invalid — dropped`);
-          } catch {}
-          continue;
+      if (result.slots !== undefined) {
+        if (typeof result.slots !== "object" || result.slots === null || Array.isArray(result.slots)) {
+          throw new Error(`slots must be an object`);
         }
-        clean[key] = val;
+        // per-entry validation (mirrors preview/commands): a slot value must be
+        // a renderer function or a managed `{ render }` object; bad ones drop.
+        for (const [key, val] of Object.entries(result.slots as Record<string, unknown>)) {
+          const ok =
+            typeof val === "function" ||
+            (typeof val === "object" && val !== null && typeof (val as { render?: unknown }).render === "function");
+          if (!ok) {
+            try {
+              api.log(`plugin ${m.name}: slot ${JSON.stringify(key)} invalid — dropped`);
+            } catch {}
+            continue;
+          }
+          clean[key] = val;
+        }
+        // register only when enabled; a disabled plugin's slots are retained on
+        // the LoadedPlugin so re-enabling can register without a re-activate
+        if (pluginOn() && registerSlots && Object.keys(clean).length) {
+          try {
+            disposeSlots = registerSlots(m.name, clean);
+          } catch (err) {
+            try {
+              api.log(`plugin ${m.name} slots failed to register: ${err instanceof Error ? err.message : err}`);
+            } catch {}
+          }
+        }
       }
-      if (registerSlots && Object.keys(clean).length) {
+      const rawRows = result.rows ?? [];
+      if (!Array.isArray(rawRows)) throw new Error(`rows must be an array`);
+      const rows = (rawRows as unknown[]).filter((r): r is SettingRow => {
+        if (isValidSettingRow(r)) return true;
         try {
-          disposeSlots = registerSlots(m.name, clean);
-        } catch (err) {
-          try {
-            api.log(`plugin ${m.name} slots failed to register: ${err instanceof Error ? err.message : err}`);
-          } catch {}
-        }
-      }
-    }
-    const rawRows = result.rows ?? [];
-    if (!Array.isArray(rawRows)) throw new Error(`rows must be an array`);
-    const rows = (rawRows as unknown[]).filter((r): r is SettingRow => {
-      if (isValidSettingRow(r)) return true;
+          api.log(
+            `plugin ${m.name}: settings row ${JSON.stringify((r as { label?: unknown })?.label ?? "<unnamed>")} invalid — dropped`,
+          );
+        } catch {}
+        return false;
+      });
+      return {
+        name: mod.name,
+        version: meta(m.version),
+        author: meta(m.author),
+        description: meta(m.description),
+        rows,
+        fileMenu: fileMenu as ((sel: { paths: string[] }) => PluginFileMenuEntry[]) | null,
+        sidebarMenu: sidebarMenu as
+          | ((place: { path?: string | null; scheme?: string }) => PluginFileMenuEntry[])
+          | null,
+        emptyAreaMenu: emptyAreaMenu as ((area: { cwd: string }) => PluginFileMenuEntry[]) | null,
+        commands,
+        preview,
+        store: ownStore,
+        deactivate,
+        disposeSlots,
+        slots: Object.keys(clean).length ? clean : null,
+        file: originalFile,
+      };
+    } catch (err) {
+      // activate already ran (or the post-activate validation threw): tear the
+      // partial instance down or its listeners/timers/slots leak forever — it
+      // is never pushed to `plugins`, so deactivateAll can't reach it.
       try {
-        api.log(
-          `plugin ${m.name}: settings row ${JSON.stringify((r as { label?: unknown })?.label ?? "<unnamed>")} invalid — dropped`,
-        );
+        disposeSlots?.();
       } catch {}
-      return false;
-    });
-    return {
-      name: mod.name,
-      version: meta(m.version),
-      author: meta(m.author),
-      description: meta(m.description),
-      rows,
-      fileMenu: fileMenu as ((sel: { paths: string[] }) => PluginFileMenuEntry[]) | null,
-      sidebarMenu: sidebarMenu as ((place: { path?: string | null; scheme?: string }) => PluginFileMenuEntry[]) | null,
-      emptyAreaMenu: emptyAreaMenu as ((area: { cwd: string }) => PluginFileMenuEntry[]) | null,
-      commands,
-      preview,
-      store: ownStore,
-      deactivate,
-      disposeSlots,
-      file: originalFile,
-    };
+      if (deactivate) {
+        try {
+          await withTimeout(
+            Promise.resolve().then(() => deactivate!()),
+            5000,
+          );
+        } catch {}
+      }
+      throw err;
+    }
   };
 
   // best-effort teardown: never throws, never blocks the scan (5s cap, timer
@@ -602,7 +665,7 @@ export const makePluginRegistry = (deps: {
     }
   };
 
-  const scan = async (): Promise<PluginScanDiff> => {
+  const doScan = async (): Promise<PluginScanDiff> => {
     const diff: PluginScanDiff = { added: [], removed: [], changed: [], errors: [] };
     const found = discoverPlugins(dir, {
       warn: (m) => warnOnce(`discover:${m}`, m),
@@ -628,6 +691,9 @@ export const makePluginRegistry = (deps: {
         const [gone] = plugins.splice(i, 1);
         if (gone) await runDeactivate(gone);
       }
+      // drop every staged build for the removed folder (uninstall/rename) so
+      // $XDG_CACHE_HOME/tfm/plugin-build doesn't grow across install cycles
+      pruneStagedFor(path.basename(path.dirname(file)));
       diff.removed.push(snap.name);
       for (const k of [...warned]) if (k.startsWith(file)) warned.delete(k);
     }
@@ -719,5 +785,43 @@ export const makePluginRegistry = (deps: {
     return diff;
   };
 
-  return { plugins, errors, scan, deactivateAll };
+  // one scan at a time: reloadPlugins() fires from esc-menu open AND from
+  // install/update/remove, so overlapping rescans could both pass the prev
+  // check and double-load (duplicate listeners/slots). Callers share the
+  // in-flight pass; a rejection is delivered to all of them and the slot frees.
+  let scanning: Promise<PluginScanDiff> | null = null;
+  const scan = (): Promise<PluginScanDiff> => {
+    if (scanning) return scanning;
+    scanning = doScan().finally(() => {
+      scanning = null;
+    });
+    return scanning;
+  };
+
+  // Plugins-view enable/disable: register or unregister a plugin's slots so a
+  // toggled-off plugin stops contributing UI immediately (registering only at
+  // load would leave its slot live until restart). Store writes stay with the
+  // caller (settings-model owns the flag).
+  const setSlotEnabled = (name: string, enabled: boolean): void => {
+    const p = plugins.find((x) => x.name === name);
+    if (!p) return;
+    if (!enabled) {
+      try {
+        p.disposeSlots?.();
+      } catch {}
+      p.disposeSlots = null;
+      return;
+    }
+    if (!p.disposeSlots && registerSlots && p.slots && Object.keys(p.slots).length) {
+      try {
+        p.disposeSlots = registerSlots(p.name, p.slots);
+      } catch (err) {
+        try {
+          api.log(`plugin ${p.name} slots failed to register: ${err instanceof Error ? err.message : err}`);
+        } catch {}
+      }
+    }
+  };
+
+  return { plugins, errors, scan, deactivateAll, setSlotEnabled };
 };

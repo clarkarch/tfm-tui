@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
 import { failSuffix, fsErrText, rmTrashInfo, safeRestoreMove, xdgTrashMove } from "../fs/fsutil";
 import { copyTreeProgress, type TransferSink } from "../fs/transfer";
+import { sharedOpQueue } from "../lib/op-queue";
 import type { NotifyLevel } from "../lib/notify-level";
 
 // progress-less sink for journal redo copies (no toast to report into)
@@ -187,15 +188,21 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
       try {
         let failed = 0;
         const failWhy = new Set<string>();
-        for (let i = entry.batch.units.length - 1; i >= 0; i--) {
-          const u = entry.batch.units[i];
-          try {
-            await u?.();
-          } catch (err) {
-            failed++;
-            failWhy.add(fsErrText(err));
+        // serialize with transfers/trash/extract: an undo running concurrently
+        // with a queued op can interleave on the same paths, and a redo copy
+        // writes `.tfm-part-*` temps the concurrent transfer's orphan sweep
+        // deletes mid-copy (data loss)
+        await sharedOpQueue().enqueue(async () => {
+          for (let i = entry.batch.units.length - 1; i >= 0; i--) {
+            const u = entry.batch.units[i];
+            try {
+              await u?.();
+            } catch (err) {
+              failed++;
+              failWhy.add(fsErrText(err));
+            }
           }
-        }
+        });
         // only batches that know how to re-apply themselves stay redoable
         if (entry.batch.redos.length) redoStack.push(entry);
         sink.renderAll();
@@ -227,14 +234,16 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
       try {
         let failed = 0;
         const failWhy = new Set<string>();
-        for (const r of entry.batch.redos) {
-          try {
-            await r?.();
-          } catch (err) {
-            failed++;
-            failWhy.add(fsErrText(err));
+        await sharedOpQueue().enqueue(async () => {
+          for (const r of entry.batch.redos) {
+            try {
+              await r?.();
+            } catch (err) {
+              failed++;
+              failWhy.add(fsErrText(err));
+            }
           }
-        }
+        });
         undoStack.push(entry);
         sink.renderAll();
         const summary = failed

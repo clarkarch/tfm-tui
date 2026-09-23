@@ -98,6 +98,13 @@ describe("with --debug / -d", () => {
     expect(r.text).toBe("true");
     expect(lines(r.dbg).length).toBeGreaterThan(0);
   });
+
+  test("--debug after `--` is a PATH, not the flag (no debug logging)", () => {
+    // tfm -- --debug opens a folder literally named --debug
+    const r = run("endopts", "write", ["--", "--debug"]);
+    expect(r.text).toBe("false");
+    expect(lines(r.dbg).length).toBe(2); // appendLog only, no debug lines
+  });
 });
 
 // swallow() is the "best-effort failure" reporter the converted `catch {}` sites

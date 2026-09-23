@@ -13,13 +13,12 @@ import type { SettingGroup, SettingRow } from "./settings";
 // the fresh object's sections into the live config via Object.assign — rows
 // read through ctx.config on every call, so a fake that ignored the merge
 // would lie about coverage (AGENTS.md fake-guard rule).
-const mk = (plugins?: () => LoadedPlugin[]) => {
+const mk = (plugins?: () => LoadedPlugin[], over: Partial<SettingsModelCtx> = {}) => {
   const config = structuredClone(defaultConfig);
   const state = { showHidden: false };
   const applied: Config[] = [];
   const warns: { message: string; title?: string }[] = [];
   let saves = 0;
-  let roots = 0;
   const ctx: SettingsModelCtx = {
     config,
     state,
@@ -32,13 +31,11 @@ const mk = (plugins?: () => LoadedPlugin[]) => {
     scheduleSaveConfig: () => {
       saves++;
     },
-    showRoot: () => {
-      roots++;
-    },
     warn: (message, title) => {
       warns.push({ message, title });
     },
     ...(plugins ? { plugins } : {}),
+    ...over,
   };
   const model = makeSettingModel(ctx);
   const groups = (): SettingGroup[] => model.settingGroups();
@@ -48,7 +45,7 @@ const mk = (plugins?: () => LoadedPlugin[]) => {
     if (!r) throw new Error(`no row ${label}`);
     return r;
   };
-  return { ctx, config, state, applied, warns, model, groups, rows, byLabel, saves: () => saves, roots: () => roots };
+  return { ctx, config, state, applied, warns, model, groups, rows, byLabel, saves: () => saves };
 };
 
 const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin => ({
@@ -416,12 +413,17 @@ describe("settingGroups shape", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
     try {
       const hello: SettingRow = { kind: "action", label: "Say hello", run: () => {} };
-      const h = mk(() => [mkPlugin({ name: "hello", rows: [hello], store: makePluginStore(dir, "hello") })]);
+      const enabledChanges: Array<[string, boolean]> = [];
+      const h = mk(() => [mkPlugin({ name: "hello", rows: [hello], store: makePluginStore(dir, "hello") })], {
+        onPluginEnabledChanged: (name, enabled) => enabledChanges.push([name, enabled]),
+      });
       const toggle = h.model.pluginGroups().find((g) => g.header === "hello")!.rows[0]!;
       if (toggle.kind !== "toggle") throw new Error("first plugin row must be the enabled toggle");
       // the toggle rebuilds the panel so the rows vanish/appear live
       expect(toggle.repaint).toBe(true);
       toggle.set(false);
+      // the wiring must be told to drop the plugin's slots/action surfaces
+      expect(enabledChanges).toEqual([["hello", false]]);
       expect(
         h.model
           .pluginGroups()
@@ -435,6 +437,10 @@ describe("settingGroups shape", () => {
           .find((g) => g.header === "hello")!
           .rows.map((r) => r.label),
       ).toEqual(["enabled", "Say hello", "Update from git", "Remove…"]);
+      expect(enabledChanges).toEqual([
+        ["hello", false],
+        ["hello", true],
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

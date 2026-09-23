@@ -204,7 +204,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const worker = async () => {
       while (idx < jobs.length) {
         const j = jobs[idx++]!;
-        const slot: any = ctx.byId(j.slotId);
+        let slot: any = ctx.byId(j.slotId);
         if (!slot) continue;
         const hCells = j.hCells ?? ctx.iconCells();
         const jobBg = j.bg ?? ctx.colors().bg;
@@ -222,6 +222,16 @@ export const makeSlots = (ctx: SlotsCtx) => {
             protocol: "auto",
           });
           await img.loadPromise!;
+          // RE-RESOLVE: a rebuild during the raster detached the captured node;
+          // writing into it leaked a native image buffer and painted nowhere.
+          // A same-id replacement is the live slot, so use the fresh lookup.
+          slot = ctx.byId(j.slotId);
+          if (!slot) {
+            try {
+              img.destroy?.();
+            } catch {}
+            continue;
+          }
           ctx.clearChildren(slot);
           slot.add(img);
         } catch {

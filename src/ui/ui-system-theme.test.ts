@@ -211,6 +211,23 @@ describe("applyBootSystemTheme", () => {
     expect(await sys.applyBootSystemTheme(200)).toBe(false);
   });
 
+  test("compat/console mode skips the boot derive (static console palette wins)", async () => {
+    const h = mkCtx(true);
+    const sys = makeSystemTheme({
+      renderer: () => h.renderer,
+      config: h.config,
+      colors: h.colors,
+      applyConfig: () => {},
+      compatActive: () => true,
+    });
+    const before = h.config.theme.bg;
+    expect(await sys.applyBootSystemTheme(200)).toBe(false);
+    // never queried, never painted, config theme untouched
+    expect(h.renderer.paletteCalls).toBe(0);
+    expect(h.renderer.bgCalls).toEqual([]);
+    expect(h.config.theme.bg).toBe(before);
+  });
+
   test("boot success fires onBootDerived once; silence/off never fire", async () => {
     const h = mkCtx(true);
     const fired: unknown[] = [];

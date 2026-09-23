@@ -8,6 +8,15 @@ set -euo pipefail
 
 REPO="clarkarch/tfm-tui"
 DEST="${TFM_INSTALL_DIR:-$HOME/.local/bin}"
+# a whitespace/quote-bearing DEST breaks both the `export PATH="..."` line and
+# the `case ":$PATH:"` probe below, silently skipping PATH setup — reject it
+# before any download
+case "$DEST" in
+  *[[:space:]]* | *\"* | *\'*)
+    printf '%s\n' "tfm: TFM_INSTALL_DIR must not contain whitespace or quotes: $DEST" >&2
+    exit 2
+    ;;
+esac
 VERSION="${TFM_VERSION:-latest}"
 TOTAL_STEPS=5
 # step label field width (dots pad to here before the ✓/✗ mark)
@@ -305,7 +314,9 @@ if ! mv "$TMP/tfm" "$DEST/tfm"; then
     "Check permissions and free space, then try again." \
     "If you had a previous install, it is at $DEST/tfm.bak."
 fi
-ln -sf "$DEST/tfm" "$DEST/terminal-file-manager"
+# convenience alias: non-fatal (the binary itself is already installed)
+ln -sf "$DEST/tfm" "$DEST/terminal-file-manager" ||
+  printf '%s\n' "tfm: could not create terminal-file-manager alias (non-fatal)" >&2
 if [ "$SAVED_BAK" = 1 ]; then
   end_step "Updated -> $DEST/tfm (backup: tfm.bak)"
 else

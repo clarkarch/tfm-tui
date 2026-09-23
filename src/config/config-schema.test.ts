@@ -46,10 +46,14 @@ describe("parseConfigDoc", () => {
     expect(cfg.theme.accent).toBe("#7aa2f7");
   });
 
-  test("[keys]: filters unparseable specs, dedupes, falls back when none left", () => {
+  test("[keys]: filters unparseable specs, dedupes; an empty array is a real unbind", () => {
     const cfg = parseConfigDoc({ keys: { "new-tab": ["ctrl+n", "ctrl+n", "bogus+keys+x"], quit: [] } });
     expect(cfg.keys.newTab).toEqual(["ctrl+n"]);
-    expect(cfg.keys.quit).toEqual(["ctrl+q"]);
+    // explicit [] must NOT fall back to the default — presets emit [] to
+    // disable a bind, and the default coming back silently duplicated ctrl+r
+    expect(cfg.keys.quit).toEqual([]);
+    // a NON-empty array that parses to nothing still falls back (typo safety)
+    expect(parseConfigDoc({ keys: { quit: ["bogus+keys+x"] } }).keys.quit).toEqual(["ctrl+q"]);
   });
 
   test("[keys]: bare letters load from file (presets bind j/k…; capture UI still reserves them)", () => {

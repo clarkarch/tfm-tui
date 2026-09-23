@@ -6,7 +6,8 @@
 // chrome ↔ grid ↔ grid-foundation and style → config → config-schema → style
 // type cycles behind. ---
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
 const SRC_ROOT = resolve(import.meta.dir);
@@ -25,8 +26,13 @@ const collectTsFiles = (dir: string): string[] => {
 // splitting survives multi-line import lists and ignores relative-looking
 // string literals inside function bodies. Dynamic `import("./x")` calls are
 // matched separately (the lazy app graph + plugins-cli route through them).
-const relativeSpecifiersOf = (file: string): string[] => {
-  const content = readFileSync(file, "utf8");
+// Comments are STRIPPED first: a file-header `// ---` block sits in the same
+// `;`-chunk as the first import, so the anchor `^\s*(import|export)` failed and
+// the edge was silently dropped (21 real edges were invisible to this guard).
+export const relativeSpecifiersOf = (file: string): string[] => {
+  const content = readFileSync(file, "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "");
   const specs: string[] = [];
   for (const stmt of content.split(";")) {
     if (!/^\s*(import|export)\b/.test(stmt)) continue;
@@ -50,7 +56,9 @@ const depsOf = new Map<string, string[]>(
   tsFiles.map((file) => [
     file,
     relativeSpecifiersOf(file)
-      .map((spec) => join(dirname(file), `${spec}.ts`))
+      // normalize an explicit extension before appending `.ts` (a spec of
+      // "./helper.ts" used to become "helper.ts.ts" and vanish)
+      .map((spec) => join(dirname(file), `${spec.replace(/\.tsx?$/, "")}.ts`))
       .filter((target) => tsFiles.includes(target)),
   ]),
 );
@@ -81,6 +89,27 @@ const findCycle = (): string[] | null => {
 };
 
 describe("import graph", () => {
+  test("a header comment before the first import does not hide the edge", () => {
+    // regression: splitting on ';' left the comment glued to the first import,
+    // so `^\s*(import|export)` never matched and the edge was dropped
+    const tmp = join(mkdtempSync(join(os.tmpdir(), "tfm-imports-")), "x.ts");
+    writeFileSync(
+      tmp,
+      [
+        "// --- a header block ---",
+        "// more header",
+        'import { a } from "./alpha";',
+        'export { b } from "./beta";',
+        `const s = "import fake from './nope'";`,
+      ].join("\n"),
+    );
+    try {
+      expect(relativeSpecifiersOf(tmp)).toEqual(["./alpha", "./beta"]);
+    } finally {
+      rmSync(dirname(tmp), { recursive: true, force: true });
+    }
+  });
+
   test("src/ modules have no import cycles (shared types live in leaf modules)", () => {
     const cycle = findCycle();
     const rendered = cycle ? `import cycle: ${cycle.map((f) => relative(SRC_ROOT, f)).join(" -> ")}` : undefined;

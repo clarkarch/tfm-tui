@@ -15,7 +15,13 @@ import { installPluginRuntimeSupport } from "../ui/ui-plugin-runtime";
 import { makePluginSlots } from "../ui/ui-plugin-slots";
 import { KEY_SCHEMA } from "../config/config-schema";
 import { keySpecEqual } from "../config/keyspec";
-import { flattenPluginCommands, getPluginCommandBinds, type PluginApi } from "../plugins/plugin-api";
+import {
+  flattenPluginCommands,
+  getPluginCommandBinds,
+  isPluginEnabled,
+  type PluginApi,
+  type PluginStore,
+} from "../plugins/plugin-api";
 import { makePluginRegistry, makePluginStore, pluginsDir } from "../plugins/plugins";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
@@ -81,7 +87,10 @@ export const wirePlugins = async (deps: {
     selection: () => gridFoundation.selection.selPaths().map((s) => s.path),
   };
   const slotRegistry = makePluginSlots({ renderer: chrome.renderer, context: slotContext, log: (m) => dlog(m) });
-  let loaded: Array<{ commands: Array<{ id: string; title: string; hint?: string; run: () => void }> }> = [];
+  let loaded: Array<{
+    commands: Array<{ id: string; title: string; hint?: string; run: () => void }>;
+    store: PluginStore;
+  }> = [];
   const api: PluginApi = {
     notify: (message, title) => chrome.notify(message, title ?? "tfm"),
     setStatusMsg: nav.setStatusMsg,
@@ -118,7 +127,10 @@ export const wirePlugins = async (deps: {
     // core table first, then plugin contributions in load order (hints fall
     // back to "" — most plugin commands carry no bind). Both late getters go
     // through tdzSafe: they close over wirings that initialize after scan.
-    commands: () => [...tdzSafe(() => getKeymap().commands(), [] as Command[])(), ...flattenPluginCommands(loaded)],
+    commands: () => [
+      ...tdzSafe(() => getKeymap().commands(), [] as Command[])(),
+      ...flattenPluginCommands(loaded.filter(isPluginEnabled)),
+    ],
     ui: {
       pick: (opts) => {
         const noop: () => {
@@ -268,6 +280,8 @@ export const wirePlugins = async (deps: {
     reloadPlugins: () => registry.scan(),
     confirm: api.ui.confirm,
     deactivateAll: registry.deactivateAll,
+    // Plugins-view on/off: register/unregister that plugin's slots immediately
+    setSlotEnabled: registry.setSlotEnabled,
     // UI slots: mount after the boot layout exists; refresh with renderAll so
     // contributions see fresh cwd/selection
     slotRegistry,

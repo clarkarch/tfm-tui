@@ -123,6 +123,22 @@ afterAll(() => {
 });
 
 describe("applyConfig", () => {
+  test("live-reload watcher creates a missing config dir (fresh profile)", () => {
+    // fs.watch throws ENOENT synchronously on a missing dir; without the
+    // mkdir the watcher never installed and external edits never reloaded
+    const missingParent = path.join(cfgSandbox, "fresh-profile");
+    const saved = process.env.TFM_CONFIG;
+    process.env.TFM_CONFIG = path.join(missingParent, "config.toml");
+    try {
+      expect(existsSync(missingParent)).toBe(false);
+      makeRetheme(mkCtx() as any);
+      expect(existsSync(missingParent)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.TFM_CONFIG;
+      else process.env.TFM_CONFIG = saved;
+    }
+  });
+
   test("merges the fresh config into the live one and rewrites geometry through the setters", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);

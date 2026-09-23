@@ -32,22 +32,20 @@ export type RestartCheck = (path: string) => void;
 // re-sets it explicitly, so nested restarts keep working)
 export const RESTART_ENV = "TFM_RESTART";
 
-// Spawn args for the restart child: process.argv minus argv[0] minus the
-// script token. The compiled binary's runtime injects argv=["bun",
-// "/$bunfs/root/tfm", ...userArgs] (probed 2026-09), so a naive slice(1)
-// re-passes the virtual entry as a PATH and the child exits 1 ("no such
-// file or directory"). Same strip rule as parseArgs in ./cli (runner +
-// script-token shape), so dev (`bun src/index.ts …`) keeps working and a
-// real user path is never swallowed.
-export const restartArgs = (argv: string[]): string[] => {
-  const args = argv.slice(1);
-  const runner = (argv[0] ?? "").replace(/\\/g, "/").split("/").pop() ?? "";
-  const script = args[0] ?? "";
+// Spawn args for the restart child, for a spawn of `execPath`.
+// The compiled binary's runtime injects argv=["bun", "/$bunfs/root/tfm",
+// ...userArgs] (probed 2026-09): the virtual entry must be stripped or the
+// child treats it as a PATH (exit 1). The dev runner (`bun src/index.ts …`)
+// is the SAME process as execPath but DOES need its script re-passed — strip
+// it and the child runs `bun <first-user-arg>` (Module not found). So strip
+// the script token ONLY when the entry differs from the executable we spawn.
+export const restartArgs = (argv: string[], execPath = ""): string[] => {
+  const rest = argv.slice(1);
+  const script = rest[0] ?? "";
   const isScriptToken = /index\.[tj]s$/.test(script) || script.startsWith("/$bunfs/");
-  if (/^(bun|node|deno)(\.exe)?$/.test(runner) && args.length && isScriptToken) {
-    return args.slice(1);
-  }
-  return args;
+  if (!isScriptToken || !rest.length) return rest;
+  // argv[0] === execPath means we re-spawn the interpreter (dev): keep the script
+  return argv[0] === execPath ? rest : rest.slice(1);
 };
 
 // read-and-clear the restart-generation marker. UNCONDITIONAL by design: a

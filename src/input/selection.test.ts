@@ -155,6 +155,26 @@ describe("moveFocus", () => {
     const h = makeHarness();
     expect(h.sel.moveFocus(0, 1)).toBe(false);
   });
+
+  test("plain moves re-anchor so a later extend starts at the focus", () => {
+    const h = makeHarness();
+    const keys = ["a", "b", "c", "d"];
+    h.sel.setFocusKeys(keys);
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(1);
+    expect(h.sel.selAnchor()).toBe(1);
+    h.sel.moveFocus(0, 1); // plain nav 1 -> 2
+    expect(h.sel.focusIdx()).toBe(2);
+    // extend now measures from the moved focus (was 1, jumping to 2..3)
+    expect(h.sel.selAnchor()).toBe(2);
+    h.sel.selectRange(h.sel.selAnchor()!, 3);
+    expect(h.sel.selPaths().map((p) => p.path)).toEqual(["c", "d"]);
+    // range-extend keeps its own anchor across the focus jump
+    h.sel.selectTileAt(0, true);
+    expect(h.sel.selAnchor()).toBe(2);
+  });
 });
 
 describe("selectRange / selectAll / clearTileSelection", () => {

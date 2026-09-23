@@ -121,8 +121,8 @@ export const wireNav = (deps: {
     execPath: process.execPath,
     // NOT slice(1): the compiled binary's argv carries the /$bunfs/ virtual
     // entry at [1] — re-passing it makes the child treat it as a PATH (exit
-    // 1). restartArgs strips it (same rule as cli parseArgs).
-    argv: restartArgs(process.argv),
+    // 1). The dev runner (argv[0] === execPath) keeps its script instead.
+    argv: restartArgs(process.argv, process.execPath),
     // the shared serial queue: a live op would race the child's orphan sweep
     // while the parent loop is frozen inside spawnSync (see app/restart)
     isBusy: () => !sharedOpQueue().isIdle(),

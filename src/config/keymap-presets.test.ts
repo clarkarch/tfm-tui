@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { KEY_SCHEMA, defaultConfig, keybindConflict } from "./config-schema";
+import { parse } from "smol-toml";
+import { KEY_SCHEMA, defaultConfig, keybindConflict, parseConfigDoc, serializeConfig } from "./config-schema";
 import { parseKeySpec } from "./keyspec";
 import { PRESET_VIEW_MODE, keymapPresetIdx, presetKeys, yaziKeys } from "./keymap-presets";
 
@@ -51,5 +52,15 @@ describe("keymap presets", () => {
     expect(keymapPresetIdx(presetKeys("tfm"))).toBe(0);
     expect(keymapPresetIdx(presetKeys("yazi"))).toBe(1);
     expect(keymapPresetIdx({ ...presetKeys("tfm"), quit: ["ctrl+q", "q"] })).toBe(-1);
+  });
+
+  test("yazi preset round-trips a save+load: explicit unbinds survive", () => {
+    // the preset persists [] for duplicate/reloadPlaces; if parsing reverts an
+    // empty array to the default, the reloaded preset re-binds ctrl+d and
+    // lands ctrl+r on two actions while reading as "custom"
+    const cfg = { ...structuredClone(defaultConfig), keys: presetKeys("yazi") };
+    const reloaded = parseConfigDoc(parse(serializeConfig(cfg)));
+    expect(reloaded.keys).toEqual(cfg.keys);
+    expect(keymapPresetIdx(reloaded.keys)).toBe(1);
   });
 });

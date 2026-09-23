@@ -199,7 +199,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
 
   // arrows and clicks drive the SAME single selection; there is no separate
   // focus highlight
-  const selectTileAt = (idx: number): boolean => {
+  const selectTileAt = (idx: number, keepAnchor = false): boolean => {
     if (idx < 0 || idx >= focusKeys.length) return false;
     clearTileSelection();
     const key = focusKeys[idx]!;
@@ -209,6 +209,9 @@ export const makeSelection = (ctx: SelectionCtx) => {
       setTileVisual(key, TileVisual.Selected);
     }
     focusIdx = idx;
+    // a plain move re-anchors (the mouse press does too); range-extend passes
+    // keepAnchor so its own anchor survives the focus jump
+    if (!keepAnchor) selAnchor = idx;
     void ctx.renderPreview();
     const scroller = ctx.scroller();
     if (scroller) {
@@ -248,6 +251,9 @@ export const makeSelection = (ctx: SelectionCtx) => {
       r.selected = true;
       setTileVisual(k, TileVisual.Selected);
     });
+    // re-anchor to the focus: a later shift+arrow must extend from here, not
+    // from a stale pre-selectAll anchor
+    selAnchor = focusIdx >= 0 ? focusIdx : null;
     updateSelectionStatusReal();
   };
 
@@ -257,6 +263,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
       r.selected = !r.selected;
       setTileVisual(k, r.selected ? TileVisual.Selected : TileVisual.Rest);
     });
+    selAnchor = focusIdx >= 0 ? focusIdx : null;
     updateSelectionStatusReal();
   };
 

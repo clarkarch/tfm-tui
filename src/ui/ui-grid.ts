@@ -89,6 +89,16 @@ type GridRendererCtx = {
   drainIconQueue(): void | Promise<void>;
   drainThumbs(): void | Promise<void>;
   stripSelectable(): void;
+  // in-place stat-cell repaint for stats-only ticks (list view size/date Text
+  // nodes carry `${rowId}-size` / `${rowId}-date` ids); absent in old fakes, so
+  // the fast path stays off there and behavior is unchanged
+  setTextOnId?(id: string, s: string): void;
+  // row-build failure sink (a throwing row degrades to a placeholder, never a
+  // blank grid); optional so test fakes keep working, wiring passes dlog
+  log?(msg: string): void;
+  // clock for the play-cooldown gate (tests drive a virtual one); production
+  // reads wall time. Optional so existing fakes keep working.
+  now?(): number;
   // animate the freshly built tiles/rows in ([ui] file-animation); no-op on
   // "off". `inner` is the single container node slide animates; passing an
   // empty target stops any in-flight animation (called before clearGrid).
@@ -155,6 +165,46 @@ export const visibleBottomRow = (scrollTop: number, visH: number, rowHgt: number
   if (!(rowHgt > 0)) return rows - 1;
   if (!(visH > 0)) return Math.max(0, Math.min(rows - 1, Math.floor(Math.max(0, scrollTop) / rowHgt)));
   return Math.max(0, Math.min(rows - 1, Math.floor((Math.max(0, scrollTop) + visH - 1) / rowHgt)));
+};
+
+// minimum gap between two entry-animation waves in the SAME listing context;
+// a faster rebuild still repaints, it just doesn't restart the wave (see
+// lastPlayAt). Keyed on cwd/query/sort/view — navigating to a different folder
+// is a new intro, not a storm, and must animate immediately.
+export const PLAY_COOLDOWN_MS = 500;
+
+// thumbnail raster cap: files over this keep their icon (thumbPlanFor).
+// Module scope so thumbStatsChanged can mirror the same predicate.
+const THUMB_MAX_BYTES = 26214400;
+
+// does this entry currently raster a thumbnail (mirrors thumbPlanFor's
+// useThumb)? 0-byte / oversize files and videos without ffmpeg never do.
+const thumbEligible = (e: Entry): boolean => {
+  if (e.isDir) return false;
+  const wants = fileIsImage(e.name) || (fileIsVideo(e.name) && canThumbVideo());
+  if (!wants) return false;
+  const size = e.size;
+  return size !== undefined && size > 0 && size <= THUMB_MAX_BYTES;
+};
+
+// stats-only fast-path guard: an in-place edit to a thumbnailed image/video
+// must still take the full rebuild — its raster cache keys on mtime/size and
+// the fast path pushes no thumb jobs (stale photo until the next rebuild).
+// Compares eligibility too: a file crossing INTO or OUT OF the rasterizable
+// range (truncated to 0, grown past the cap) changed which raster belongs on
+// screen, so it must rebuild in BOTH directions. Order/length drift is the
+// structural signature's job, not this one's.
+export const thumbStatsChanged = (prev: Entry[] | null, next: Entry[]): boolean => {
+  if (!prev || prev.length !== next.length) return false;
+  for (let i = 0; i < next.length; i++) {
+    const n = next[i]!;
+    const p = prev[i]!;
+    const nEligible = thumbEligible(n);
+    if (nEligible !== thumbEligible(p)) return true;
+    if (!nEligible) continue;
+    if (p.size !== n.size || p.mtimeMs !== n.mtimeMs) return true;
+  }
+  return false;
 };
 
 // rows of built-but-unseen slack above/below the viewport in windowed mode —
@@ -240,6 +290,19 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // the entry animation — the tiles rebuilt for the same files, they didn't
   // appear. Only a content change (cwd/list/query/sort/view) animates.
   let lastContentSig: string | null = null;
+  // Stats-only fast path (busy-log dirs): membership+order without size/mtime,
+  // plus a stats snapshot for the thumb guard. A tick that moves only stats
+  // repaints the list stat cells in place — no clear+rebuild, no anim replay.
+  let lastStructuralSig: string | null = null;
+  let lastEntries: Entry[] | null = null;
+  // storm coalescing: a rebuild storm (rotation bursts on a slow VT) must not
+  // restart the entry wave per rebuild — a wave that never completes reads as
+  // invisible files. Plays inside the cooldown after the previous play are
+  // skipped (the grid still rebuilds; only the animation is dropped). Keyed on
+  // the listing CONTEXT (cwd/query/sort/view): navigating within the cooldown
+  // is a new folder intro, not a storm, and must animate.
+  let lastPlayAt: number | null = null;
+  let lastPlayKey: string | null = null;
   // in-flight recursive search; a newer render aborts it so stale keystroke
   // walks don't keep eating disk while a fresh query runs
   let searchAbort: AbortController | null = null;
@@ -370,7 +433,6 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // async raster lands (no icon->photo swap). Videos need ffmpeg for the
   // frame extract — without it they keep their icon. Files over the byte
   // cap keep their icon too (25 MiB of pixels is never worth the spawn). ---
-  const THUMB_MAX_BYTES = 26214400;
   const thumbPlanFor = (entry: Entry, key: string): { isVideo: boolean; stat: any; useThumb: boolean } => {
     const isVideo = !entry.isDir && fileIsVideo(entry.name);
     const wantsThumb = !entry.isDir && (fileIsImage(entry.name) || (isVideo && canThumbVideo()));
@@ -592,8 +654,16 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const label = entry.name.length > nameMax ? `${entry.name.slice(0, nameMax - 1)}…` : entry.name;
     row.add(Text({ id: labelId, content: label, fg: baseFg }));
     row.add(Box({ flexGrow: 1 }));
-    row.add(Text({ content: entry.isDir ? "" : fmtBytes(entry.size ?? 0).padStart(9), fg: colors.sidebarFgMuted }));
-    row.add(Text({ content: fmtDateShort(entry.mtimeMs), fg: colors.sidebarFgMuted }));
+    // ids live on the TEXT nodes (boxes have no .content): stats-only ticks
+    // repaint these two cells in place via ctx.setTextOnId, no row rebuild
+    row.add(
+      Text({
+        id: `${rowId}-size`,
+        content: entry.isDir ? "" : fmtBytes(entry.size ?? 0).padStart(9),
+        fg: colors.sidebarFgMuted,
+      }),
+    );
+    row.add(Text({ id: `${rowId}-date`, content: fmtDateShort(entry.mtimeMs), fg: colors.sidebarFgMuted }));
     selection.tileRefs.set(key, {
       iconSpec,
       iconSlotId: slotId,
@@ -623,8 +693,28 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // ONE window-row unit: a grid row Box (holding up to `cols` tiles) or, in
   // list view, the row-tile itself. Indices are ALWAYS absolute so ids,
   // mouse-handler idx and the thumb-ranking viewport stay aligned with the
-  // full tileRefs order across slides.
+  // full tileRefs order across slides. A throwing row (adversarial name, bad
+  // stat) degrades to an empty placeholder — never a blank grid: buildInner
+  // runs AFTER clearGrid, so a throw here used to strand an empty scroller
+  // on every tick and every restart for that folder.
   const buildRow = (
+    entries: Entry[],
+    isList: boolean,
+    cols: number,
+    rowHgt: number,
+    visFirst: number,
+    r: number,
+  ): any => {
+    try {
+      return buildRowInner(entries, isList, cols, rowHgt, visFirst, r);
+    } catch (err) {
+      ctx.log?.(`grid: row ${r} skipped: ${err instanceof Error ? err.message : err}`);
+      // same id + height as the real row so the windowed child-index contract
+      // ([pad-top, r0..r1, pad-bottom]) and content height stay exact
+      return Box({ id: isList ? `${tilePrefix()}${r}` : `${tilePrefix()}row-${r}`, height: rowHgt });
+    }
+  };
+  const buildRowInner = (
     entries: Entry[],
     isList: boolean,
     cols: number,
@@ -724,38 +814,50 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // BOTH panes on any navigation, so without this a move in one pane visibly
     // rebuilds the other (and churns native buffers). Empty/error states sign
     // separately; theme/geometry/search changes move the signature too.
+    const baseSigParts = (): unknown[] => [
+      state.cwd,
+      state.showHidden,
+      state.sortBy,
+      state.sortAsc,
+      ctx.viewMode(),
+      ctx.wordWrap(),
+      ctx.tileW(),
+      ctx.tileH(),
+      ctx.iconCells(),
+      (() => {
+        const o = ctx.hoverLiftOpts?.();
+        // includeLabel rides live in the animator — no rebuild needed
+        return JSON.stringify([o?.enabled ?? false, o?.direction ?? "up"]);
+      })(),
+      ctx.termW(),
+      ctx.termH(),
+      ctx.availW?.() ?? 0,
+      q,
+      recursive,
+      ctx.pathEditMode(),
+      ctx.tileIdPrefix ?? "",
+      state.pendingSelect ?? "",
+      // a windowed-grid flip changes which nodes exist — must rebuild; so
+      // does list-row-height (the list builders read rowH() live, and the
+      // win cache/anim window math must not lag it)
+      ctx.windowedGrid?.() ?? false,
+      ctx.listRowH(),
+      ctx.colors(),
+      ctx.rasterSig?.() ?? "",
+    ];
     const sigOf = (list: Entry[] | string): string =>
       JSON.stringify([
-        state.cwd,
-        state.showHidden,
-        state.sortBy,
-        state.sortAsc,
-        ctx.viewMode(),
-        ctx.wordWrap(),
-        ctx.tileW(),
-        ctx.tileH(),
-        ctx.iconCells(),
-        (() => {
-          const o = ctx.hoverLiftOpts?.();
-          // includeLabel rides live in the animator — no rebuild needed
-          return JSON.stringify([o?.enabled ?? false, o?.direction ?? "up"]);
-        })(),
-        ctx.termW(),
-        ctx.termH(),
-        ctx.availW?.() ?? 0,
-        q,
-        recursive,
-        ctx.pathEditMode(),
-        ctx.tileIdPrefix ?? "",
-        state.pendingSelect ?? "",
-        // a windowed-grid flip changes which nodes exist — must rebuild; so
-        // does list-row-height (the list builders read rowH() live, and the
-        // win cache/anim window math must not lag it)
-        ctx.windowedGrid?.() ?? false,
-        ctx.listRowH(),
-        ctx.colors(),
-        ctx.rasterSig?.() ?? "",
+        ...baseSigParts(),
         typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
+      ]);
+    // membership + order WITHOUT size/mtime — and WITH isDir, which the full
+    // signature never carried (a symlink retarget dir↔file with identical
+    // stats wrongly skipped the rebuild before). A tick that moves this
+    // rebuilds; one that moves only stats takes the in-place fast path.
+    const structOf = (list: Entry[] | string): string =>
+      JSON.stringify([
+        ...baseSigParts(),
+        typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.isDir ? 1 : 0}`),
       ]);
     // content-only signature: what the animation keys off (the listed files +
     // how they're shown), WITHOUT geometry/theme — layout-only rebuilds keep it
@@ -799,6 +901,8 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       const sig = sigOf(`err:${fsErrText(err)}`);
       if (!force && sig === lastSig) return;
       lastSig = sig;
+      lastStructuralSig = structOf(`err:${fsErrText(err)}`);
+      lastEntries = null;
       ctx.clearRenameEdit();
       clearGrid();
       await ctx.waitForResolution();
@@ -826,6 +930,8 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       const sig = sigOf("empty");
       if (!force && sig === lastSig) return;
       lastSig = sig;
+      lastStructuralSig = structOf("empty");
+      lastEntries = null;
       ctx.clearRenameEdit();
       clearGrid();
       await ctx.waitForResolution();
@@ -864,7 +970,38 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
 
     const sig = sigOf(entries);
     if (!force && sig === lastSig) return;
+    // stats-only tick (busy-log dirs): same membership + order, only size/mtime
+    // moved — repaint the list stat cells in place instead of clear+rebuild
+    // (the TTY full-flash loop). No animation: nothing appeared. Skipped when
+    // the seam is absent (old fakes keep the rebuild), when a thumbnailed
+    // image/video changed stats (its raster keys on them — rebuild re-queues),
+    // and under force (cut-clipboard dimming needs the rebuild).
+    if (!force && ctx.setTextOnId && lastStructuralSig !== null) {
+      const structural = structOf(entries);
+      if (structural === lastStructuralSig && !thumbStatsChanged(lastEntries, entries)) {
+        lastSig = sig;
+        lastContentSig = contentSigOf(entries);
+        lastEntries = entries.map((e) => ({ ...e }));
+        // later window slides build rows from this snapshot — carry the stats
+        if (win) {
+          for (let i = 0; i < win.entries.length && i < entries.length; i++) {
+            win.entries[i]!.size = entries[i]!.size;
+            win.entries[i]!.mtimeMs = entries[i]!.mtimeMs;
+          }
+        }
+        if (isList) {
+          for (let i = 0; i < entries.length; i++) {
+            const e = entries[i]!;
+            ctx.setTextOnId(`${tilePrefix()}${i}-size`, e.isDir ? "" : fmtBytes(e.size ?? 0).padStart(9));
+            ctx.setTextOnId(`${tilePrefix()}${i}-date`, fmtDateShort(e.mtimeMs));
+          }
+        }
+        return;
+      }
+    }
     lastSig = sig;
+    lastStructuralSig = structOf(entries);
+    lastEntries = entries.map((e) => ({ ...e }));
     ctx.clearRenameEdit();
     clearGrid();
     await ctx.waitForResolution();
@@ -958,6 +1095,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       const contentChanged = lastContentSig === null || contentSig !== lastContentSig;
       lastContentSig = contentSig;
       if (contentChanged) {
+        // storm gate: a rebuild inside the cooldown after the previous wave
+        // repaints but doesn't restart it — overlapping waves on a slow VT
+        // never complete and read as invisible files. The stop call in
+        // clearGrid above already ran, so nothing in-flight is stranded.
+        // A DIFFERENT listing context (navigation/query/sort/view) is a new
+        // intro, not a storm: it plays regardless of the cooldown.
+        const playKey = `${state.cwd}\u0000${q}\u0000${state.sortBy}\u0000${state.sortAsc}\u0000${state.showHidden ? 1 : 0}\u0000${ctx.viewMode()}\u0000${recursive ? 1 : 0}`;
+        const t = ctx.now ? ctx.now() : Date.now();
+        if (playKey === lastPlayKey && lastPlayAt !== null && t - lastPlayAt < PLAY_COOLDOWN_MS) return;
+        lastPlayAt = t;
+        lastPlayKey = playKey;
         try {
           const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
           // visible-only: off-screen tiles are never seen animating but each

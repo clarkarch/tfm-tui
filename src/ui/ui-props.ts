@@ -25,7 +25,6 @@ import type { MaybeNode } from "../lib/node-like";
 
 // shared slot/thumb types live in ./ui-slots (the queue they feed) — the old
 // byte-identical local mirrors drifted when ui-slots gained a field
-type PropsIconState = IconState;
 
 type PropsCtx = {
   byId(id: string): MaybeNode;
@@ -56,11 +55,11 @@ type PropsCtx = {
   home: string;
   makeIconSlot(
     name: string,
-    states: PropsIconState[],
+    states: IconState[],
     heightCells?: number,
     initialState?: number,
     onMouseDown?: (ev: any) => void,
-    statesFactory?: () => PropsIconState[],
+    statesFactory?: () => IconState[],
   ): { el: any; slotId: string; spec: any };
   setIconState(spec: any, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
@@ -78,6 +77,7 @@ export const makeProps = (ctx: PropsCtx) => {
   // --- Properties dialog (floating, right-click -> Properties…) ---
   const PROPS_W = 46;
   let propsOpen = false;
+  let dirWalkGen = 0;
 
   // raw teardown — registered with floats at open time; the public closeProps
   // is floats.close("props"), which also takes any popup spawned on top of
@@ -118,7 +118,7 @@ export const makeProps = (ctx: PropsCtx) => {
 
     // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
     // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps
-    const propsToggleStates = (): PropsIconState[] => [
+    const propsToggleStates = (): IconState[] => [
       { fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) },
       { fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) },
       { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
@@ -303,7 +303,11 @@ export const makeProps = (ctx: PropsCtx) => {
       );
 
     if (isDirTarget) {
+      // generation guard: closing and reopening Properties on another target
+      // must not paint this walk's stats into the new dialog
+      const walkGen = ++dirWalkGen;
       void dirWalkStats(targetPath).then((s) => {
+        if (walkGen !== dirWalkGen) return;
         if (!propsOpen || !s) {
           if (propsOpen) {
             const n: any = ctx.byId("tfm-props-size");

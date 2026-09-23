@@ -124,7 +124,6 @@ export type KeyRouterCtx = {
   prevTab(): void;
   newTab(): void;
   closeTab(): void;
-  switchTab(i: number): void;
   // --- file ops ---
   inTrashView(): boolean;
   confirmDeleteForever(paths: string[]): void;
@@ -221,7 +220,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
     }
     if (next === selection.focusIdx() || next < 0 || next >= selection.focusKeys().length) return;
-    selection.selectTileAt(next);
+    selection.selectTileAt(next, true);
     selection.selectRange(selection.selAnchor()!, next);
     selection.updateSelectionStatusReal();
     void ctx.renderPreview();
@@ -909,11 +908,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // handleGridNavKeys consumes bare arrows/return regardless of modifiers,
     // so alt+arrows and alt+enter must dispatch BEFORE it (plain arrows and
     // return are unaffected — they match no bind unless remapped onto one) ---
-    if (hit(ev, "histBack")) {
+    if (hit(ev, "histBack") && ev.repeated !== true) {
       doHistBack();
       return;
     }
-    if (hit(ev, "histForward")) {
+    if (hit(ev, "histForward") && ev.repeated !== true) {
       doHistForward();
       return;
     }
@@ -937,7 +936,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       doPathEdit();
       return;
     }
-    if (hit(ev, "togglePreview")) {
+    if (hit(ev, "togglePreview") && ev.repeated !== true) {
       doTogglePreview();
       return;
     }
@@ -953,7 +952,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       doToggleView();
       return;
     }
-    if (hit(ev, "cycleSort")) {
+    if (hit(ev, "cycleSort") && ev.repeated !== true) {
       doCycleSort();
       return;
     }
@@ -1017,11 +1016,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       doOpenMenu();
       return;
     }
-    if (hit(ev, "toggleHidden")) {
+    if (hit(ev, "toggleHidden") && ev.repeated !== true) {
       doToggleHidden();
       return;
     }
-    if (hit(ev, "reloadPlaces")) {
+    if (hit(ev, "reloadPlaces") && ev.repeated !== true) {
       doReloadPlaces();
       return;
     }

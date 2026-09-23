@@ -169,6 +169,18 @@ export const setPluginCommandBinds = (plugin: LoadedPlugin, cmdId: string, binds
   plugin.store.set(`keys:${cmdId}`, [...binds]);
 };
 
+// the Plugins-view on/off toggle is a REAL disable, not just row hiding: the
+// action surfaces (keybinds, menus, previews, slots) and the push/veto channels
+// all consult this. A store read that throws degrades to enabled (a broken
+// state file must not silently kill a plugin).
+export const isPluginEnabled = (plugin: { store: PluginStore }): boolean => {
+  try {
+    return plugin.store.get("enabled", true);
+  } catch {
+    return true;
+  }
+};
+
 // plugin-contributed commands as dispatchable Command[] (hint falls back to
 // "" — most plugin commands carry no bind); core table comes first at callers
 export const flattenPluginCommands = (plugins: Array<{ commands: PluginCommand[] }>): Command[] =>
@@ -195,5 +207,8 @@ export type LoadedPlugin = {
   // slot contributions' unregister (set when the plugin returned `slots`);
   // called on reload/remove/quit so registry entries never leak
   disposeSlots?: (() => void) | null;
+  // the accepted slot contributions (retained so a re-enabled plugin can
+  // re-register without re-running activate)
+  slots?: Record<string, unknown> | null;
   file: string;
 };

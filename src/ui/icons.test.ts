@@ -203,30 +203,36 @@ describe("icons", () => {
     }
   });
 
-  test.skipIf(!hasFfmpeg)("video thumbs extract a frame at the requested size", async () => {
-    clearIconCaches();
-    const tmp = path.join(os.tmpdir(), `tfm-thumb-video-${process.pid}.mp4`);
-    const gen = Bun.spawnSync([
-      "ffmpeg",
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-f",
-      "lavfi",
-      "-i",
-      "testsrc=duration=3:size=256x256:rate=10",
-      "-pix_fmt",
-      "yuv420p",
-      "-y",
-      tmp,
-    ]);
-    expect(gen.exitCode).toBe(0);
-    const bytes = await thumbPng(tmp, 4, 1, 48, 64, "#1a1b26", false, true);
-    expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
-    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    expect(dv.getUint32(16)).toBe(48); // IHDR width
-    expect(dv.getUint32(20)).toBe(64); // IHDR height
-  });
+  // ffmpeg frame generation + raster is slow under parallel-suite load — the
+  // 5s bun default is a coin flip here (AGENTS: heavy tests pin their own)
+  test.skipIf(!hasFfmpeg)(
+    "video thumbs extract a frame at the requested size",
+    async () => {
+      clearIconCaches();
+      const tmp = path.join(os.tmpdir(), `tfm-thumb-video-${process.pid}.mp4`);
+      const gen = Bun.spawnSync([
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=3:size=256x256:rate=10",
+        "-pix_fmt",
+        "yuv420p",
+        "-y",
+        tmp,
+      ]);
+      expect(gen.exitCode).toBe(0);
+      const bytes = await thumbPng(tmp, 4, 1, 48, 64, "#1a1b26", false, true);
+      expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      expect(dv.getUint32(16)).toBe(48); // IHDR width
+      expect(dv.getUint32(20)).toBe(64); // IHDR height
+    },
+    20000,
+  );
 });
 
 // The in-memory layers are the only unbounded ones — every raster ever served

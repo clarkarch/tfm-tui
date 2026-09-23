@@ -509,6 +509,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         // per-iteration: did THIS src go through the streaming copy engine?
         // (cross-device moves need the same half-copy cleanup real copies get)
         let copiedHere = false;
+        // cross-device move whose COPY landed but whose source removal failed:
+        // `target` is the only complete data — the sudo retry must only retry
+        // the removal, never rm/recopy the complete copy (total data loss).
+        let sourceRemovalFailed = false;
         const recordSuccess = (): void => {
           const t = target,
             s = src;
@@ -552,8 +556,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             } catch (err) {
               // source is partially deleted; the copy in `target` is now the
               // ONLY complete data — clearing it (the half-copy cleanup below)
-              // would lose everything. Keep it and report loudly.
+              // would lose everything. Keep it and report loudly. The sudo
+              // retry is told to retry ONLY the removal (sourceRemovalFailed).
               copiedHere = false;
+              sourceRemovalFailed = true;
               throw new Error(`source partially removed: ${fsErrText(err)}`);
             }
           } else await fsMove(src, target);
@@ -569,8 +575,26 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             if (prog.cancelled) failure = new Error("cancelled");
             else {
               try {
-                if (op === "copy") await sudoCopy(src, target);
-                else if (isCrossDevice(src, destDir)) {
+                if (sourceRemovalFailed) {
+                  // the copy already landed — only the source needs privilege.
+                  // NEVER touch `target` here: the source is partially deleted
+                  // and `target` is the only complete copy (an rm+recopy of it
+                  // destroys the files the failed rm already removed).
+                  try {
+                    await sudoRemove(src);
+                  } catch (rmErr) {
+                    throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
+                  }
+                } else if (op === "copy") {
+                  // clear a partial target first: `cp -a src target` with an
+                  // existing directory target nests src inside it
+                  if (existsSync(target)) {
+                    try {
+                      await sudoRemove(target);
+                    } catch {}
+                  }
+                  await sudoCopy(src, target);
+                } else if (isCrossDevice(src, destDir)) {
                   try {
                     await sudoRemove(target);
                   } catch {}
@@ -1171,7 +1195,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       });
       if (prog.cancelled) {
         cancelled = true;
-      } else if (res.code !== 0) {
+      } else if (res.code !== 0 && res.code !== 1) {
+        // exit 1 is a warning (some inputs skipped/changed) — the produced
+        // archive is usable, same rule the extract path already applies; only
+        // >=2 is a real failure. Discarding a warning-level archive was the
+        // asymmetry (extract tolerated 1, compress did not).
         failed++;
         failWhy.add(firstErrLine(res.stderr) || "compress failed");
       } else {

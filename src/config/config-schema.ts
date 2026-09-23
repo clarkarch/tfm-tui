@@ -1636,6 +1636,11 @@ const coerceRow = (row: SchemaRow, raw: unknown): { ok: boolean; value: unknown 
       const specs = raw
         .filter((s): s is string => typeof s === "string" && parseKeySpec(s) !== null)
         .filter((s, i, a) => a.indexOf(s) === i);
+      // an explicit empty array is a real UNBIND, not a typo: the yazi preset
+      // ships [] for duplicate/reloadPlaces and it round-trips through TOML —
+      // falling back to row.def here silently re-enabled those binds on the
+      // next load (ctrl+r ended up on two actions, preset read as "custom")
+      if (raw.length === 0) return { ok: true, value: [] };
       return { ok: true, value: specs.length ? specs : row.def };
     }
   }

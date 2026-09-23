@@ -32,13 +32,16 @@ export type SettingsModelCtx = {
   state: { showHidden: boolean };
   applyConfig(fresh: Config): void;
   scheduleSaveConfig(): void;
-  showRoot(): void;
   // conflict toasts for remapping (wired to notify in the settings wiring)
   warn(message: string, title?: string): void;
   // installed plugins (loader aggregates them; absent = no plugins). The
   // model renders one category PER PLUGIN (never inside core groups), each
   // led by a core-built on/off toggle over the plugin's own store.
   plugins?: () => LoadedPlugin[];
+  // fired after the on/off toggle writes the store: the wiring re-registers or
+  // drops the plugin's UI slots and repaints (the store flag alone only feeds
+  // the action-surface filters, which read it lazily). Optional for tests.
+  onPluginEnabledChanged?(name: string, enabled: boolean): void;
   // system-theme resolve (terminal query → applyConfig): fired when the user
   // picks the System theme entry. Optional so row SHAPE stays testable
   // without it; absent = flag commits, derived colors land on next boot.
@@ -491,6 +494,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         set: (v) => {
           try {
             p.store.set("enabled", v);
+            ctx.onPluginEnabledChanged?.(p.name, v);
           } catch (err) {
             try {
               ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");

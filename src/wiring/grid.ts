@@ -33,6 +33,7 @@ import type { ListEntry } from "../ui/ui-menu";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, NavWiring } from "./types";
 import type { PluginsWiring } from "./plugins";
+import { isPluginEnabled } from "../plugins/plugin-api";
 import type { RethemeWiring } from "./settings";
 
 export const wireGrid = (deps: {
@@ -96,7 +97,7 @@ export const wireGrid = (deps: {
       if (!ext) return null;
       // first matching ext in load order wins; a throwing/empty render falls
       // through to the next plugin, then to core — never a blank pane.
-      for (const p of plugins.plugins) {
+      for (const p of plugins.plugins.filter(isPluginEnabled)) {
         for (const pv of p.preview) {
           if (!pv.exts.includes(ext)) continue;
           try {
@@ -312,6 +313,8 @@ export const wireGrid = (deps: {
       drainIconQueue: () => core.slots.drainIconQueue(),
       drainThumbs: () => core.slots.drainThumbs(),
       stripSelectable,
+      setTextOnId: core.lookup.setTextOnId,
+      log: (msg) => dlog(msg),
       fileAnim: (target) => fileAnims[pane].play(target),
       fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
       fileAnimScrollRevealDelayMs: () => core.config.ui.fileAnimationScrollRevealDelayMs,
@@ -465,7 +468,7 @@ export const wireGrid = (deps: {
       });
     },
     sortState: state,
-    plugins: () => plugins.plugins,
+    plugins: () => plugins.plugins.filter(isPluginEnabled),
     onPluginError: (name, err) => {
       const msg = `plugin ${name} failed: ${err instanceof Error ? err.message : err}`;
       dlog(msg);

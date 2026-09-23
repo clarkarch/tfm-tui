@@ -5,7 +5,7 @@
 // rewritten through ctx setters, and raster caches are invalidated only when
 // colors actually changed. No module-level renderer imports — the widget
 // repaint fns arrive via ctx (same seam as ui-dialogs). ---
-import { watch } from "node:fs";
+import { mkdirSync, watch } from "node:fs";
 import path from "node:path";
 import { bumpHex } from "../config/color";
 import { compatStaticTheme, isDark, resolveCompat } from "./compat";
@@ -361,6 +361,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // --- live config reload ---
   try {
     const cfgPath = configPath();
+    // fs.watch throws ENOENT SYNCHRONOUSLY when the dir is missing, and nothing
+    // creates ~/.config/tfm at boot (session/undo live under $XDG_STATE_HOME,
+    // saveConfig only mkdirs on first save) — on a fresh profile the watcher
+    // silently never installed, so external config edits never live-reloaded.
+    mkdirSync(path.dirname(cfgPath), { recursive: true });
     const applyFreshConfig = debounced(250, () => {
       try {
         const fresh = loadConfig();

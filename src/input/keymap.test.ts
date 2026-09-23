@@ -142,9 +142,6 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     prevTab: rec("tab:prev"),
     newTab: rec("tab:new"),
     closeTab: rec("tab:close"),
-    switchTab: (i) => {
-      calls.push(`tab:switch:${i}`);
-    },
     inTrashView: () => false,
     confirmDeleteForever: (ps) => calls.push(`deleteForever:${ps.join(",")}`),
     trashPaths: (ps) => {
@@ -1236,6 +1233,32 @@ describe("dual-pane actions", () => {
     h.calls.length = 0;
     h.key("d", { ctrl: true, shift: true, repeated: true });
     expect(h.calls).toEqual([]);
+  });
+
+  test("autorepeat never re-runs cycleSort/togglePreview/toggleHidden/history", () => {
+    const h = makeHarness();
+    // cycleSort/histBack default to [] (or non-ctrl) — remap onto ctrl chords
+    h.binds.cycleSort = ["ctrl+s"];
+    h.binds.histBack = ["ctrl+b"];
+    const before = [...h.calls];
+    h.key("s", { ctrl: true, repeated: true });
+    h.key("f9", { repeated: true });
+    h.key("h", { ctrl: true, repeated: true });
+    h.key("b", { ctrl: true, repeated: true });
+    expect(h.calls).toEqual(before);
+    expect(h.state.showHidden).toBe(false);
+    // a non-repeat still fires (proves each bind itself works)
+    h.key("s", { ctrl: true });
+    h.key("f9");
+    h.key("h", { ctrl: true });
+    h.key("b", { ctrl: true });
+    expect(h.calls).toContain("sort:cycle");
+    expect(h.calls).toContain("preview:toggle");
+    expect(h.calls).toContain("renderGrid");
+    expect(h.calls).toContain("back");
+    // NOTE: reloadPlaces (ctrl+r) carries the same guard but isn't unit-
+    // observable — doReloadPlaces is async real-fs (loadSystemPlaces), so a
+    // synchronous calls assertion can't see it either way.
   });
 
   test("autorepeat never starts cross-pane work (op-flood guard)", () => {

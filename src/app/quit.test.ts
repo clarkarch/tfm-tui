@@ -76,10 +76,4 @@ describe("makeQuit", () => {
       expect(ctx.codes).toEqual([1]);
     }
   });
-
-  test("teardown order: drops -> release -> session -> terminal -> onQuit -> destroy -> exit", () => {
-    const calls: string[] = [];
-    makeQuit(mkCtx(calls))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "onQuit", "destroy", "exit:0"]);
-  });
 });

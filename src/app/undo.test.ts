@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeUndo, MAX_UNDO_BATCHES, type UndoBatchData, type UndoSink } from "./undo";
+import { sharedOpQueue } from "../lib/op-queue";
 
 const recordingSink = (): UndoSink & { notes: string[] } => {
   const notes: string[] = [];
@@ -27,6 +28,46 @@ describe("makeUndo", () => {
     const undo = makeUndo(sink);
     undo.pushUndoBatch("nothing", []);
     expect(undo.undoDepth()).toBe(0);
+  });
+
+  test("undo/redo units run behind the shared serial queue (no interleave with a live op)", async () => {
+    const sink = recordingSink();
+    const undo = makeUndo(sink);
+    const ran: string[] = [];
+    undo.pushUndoBatch(
+      "op",
+      [
+        () => {
+          ran.push("undo-unit");
+        },
+      ],
+      [
+        () => {
+          ran.push("redo-unit");
+        },
+      ],
+    );
+    // hold the queue: the undo must not run until the live op releases
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const held = sharedOpQueue().enqueue(() => gate);
+    undo.undoLast();
+    // microtasks drain but the unit stays parked on the queue's tail. Release
+    // in a finally: the queue is a process-global singleton, so a failing
+    // assertion here must not leave it blocked and hang every later test.
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(ran).toEqual([]);
+    } finally {
+      release();
+    }
+    await held;
+    await settleUntil(() => ran.includes("undo-unit"));
+    undo.redoLast();
+    await settleUntil(() => ran.includes("redo-unit"));
   });
 
   test("onEvent fires with the batch label on pop, silent on empty stacks", async () => {

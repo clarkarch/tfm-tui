@@ -289,7 +289,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // recording, every key is swallowed. enter/click-away also cancel.
   const captureKey = (e: any): boolean => {
     if (st.capturing === null) return false;
-    if (e.name === "escape" || e.name === "return" || e.name === "tab") {
+    // only an UNMODIFIED escape/return/tab cancels: ctrl+tab / ctrl+shift+tab
+    // are next/prev-tab binds and must be recordable (they were unbindable
+    // through the GUI — every tab chord cancelled capture)
+    const unmodified = !e.ctrl && !e.shift && !e.meta && !e.option;
+    if (unmodified && (e.name === "escape" || e.name === "return" || e.name === "tab")) {
       st.capturing = null;
       renderMenuContent();
       return true;
@@ -546,6 +550,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         isCollapsed: (key) => st.collapsed.has(key),
         toggleSection,
         paintDesc,
+        log: (message) => ctx.log?.(message),
       });
     }
 
@@ -673,14 +678,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     renderMenuContent();
   };
 
-  // the "back" action row returns to the root view
-  const showRoot = (): void => {
-    menuView = "root";
-    st.menuIdx = -1;
-    st.pane = "rows";
-    st.capturing = null;
-  };
-
   return {
     openMenu,
     closeMenu,
@@ -691,6 +688,5 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     adjustSelectedSetting,
     captureKey,
     renderMenuContent,
-    showRoot,
   };
 };

@@ -280,7 +280,12 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       return true;
     };
 
-    const handleDoubleClick = (): boolean => {
+    const handleDoubleClick = (ev: TileMouseEvent): boolean => {
+      // a modifier means toggle (ctrl) / range (shift/alt), never open: two
+      // fast ctrl-clicks must not launch the file. Don't touch lastClick, so
+      // the modified press leaves the double-click clock as it was.
+      const mods = ev.modifiers ?? {};
+      if (mods.ctrl || mods.shift || mods.alt) return false;
       const now = Date.now();
       if (now - lastClick >= ctx.dblClickMs()) {
         lastClick = now;
@@ -351,7 +356,6 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       ctx.updateSelectionStatusReal();
       void ctx.renderPreview();
       armDragPayload(ev, wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: entry.isDir }], false);
-      gridDrag.ctrl = !!ev.modifiers?.ctrl;
       ctx.log(
         `tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${gridDrag.keys?.length ?? 0} ctrl=${gridDrag.ctrl}`,
       );
@@ -396,7 +400,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         if (handleRightClick(ev)) return;
         // the ctrl modifier decides internal vs external for drags
         // (see the OSC 72 offer handler)
-        if (handleDoubleClick()) return;
+        if (handleDoubleClick(ev)) return;
         if (handleCtrlPress(ev)) return;
         if (handleRangePress(ev)) return;
         handlePlainPress(ev);
@@ -418,7 +422,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         // gridDrag.dropTarget: over fires before the drag trips and doesn't
         // re-fire while the pointer stays on one tile, so the hover-set proxy
         // is frequently null at release (this is what broke cross-pane drops).
-        const dest = entry.isDir ? key : gridDrag.dropTarget;
+        const dest = entry.isDir ? key : null;
         ctx.log(
           `tile drop keys=${keys?.length ?? -1}[${keys?.map((item) => item.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${entry.isDir}`,
         );

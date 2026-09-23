@@ -3,7 +3,18 @@
 
 import { appendFileSync } from "node:fs";
 
-export const isDebug = process.argv.includes("--debug") || process.argv.includes("-d");
+// Honor `--` the same way cli.parseArgs does: `tfm -- --debug` opens a folder
+// literally named "--debug" and must NOT turn on debug logging.
+const debugFlagIn = (argv: string[]): boolean => {
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--") break;
+    if (a === "--debug" || a === "-d") return true;
+  }
+  return false;
+};
+
+export const isDebug = debugFlagIn(process.argv);
 // env overrides exist so tests (and sandboxes) can redirect the logs off the
 // real /tmp files; defaults are the documented tester-paste paths
 export const DEBUG_LOG = process.env.TFM_DEBUG_LOG ?? "/tmp/tfm-debug.log";

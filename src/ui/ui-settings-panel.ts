@@ -48,6 +48,9 @@ type SettingsPanelHooks = {
   toggleSection(key: string): void;
   // live description-footer repaint (by id, never a rebuild)
   paintDesc(text: string): void;
+  // debug sink for a throwing plugin row reached from a panel handler (the
+  // shell wires dlog); optional so panel tests stay sink-free
+  log?(message: string): void;
 };
 
 // settings panel is wider than the root menu (categories + value columns +
@@ -289,16 +292,22 @@ const renderRowPane = (
             h.cancelCapture();
             return;
           }
-          const changed = applyAdjust(rowSpec, dir);
-          if (!changed && st.menuIdx === index) return;
-          if (st.menuIdx !== index) {
-            if (st.pane === "rows") h.paintRowAt(st.menuIdx, false);
-            st.menuIdx = index;
-            st.pane = "rows";
-            h.paintRowAt(index, true);
+          // a throwing plugin row set()/getIdx() must not escape this mouse
+          // handler (every other row path — keypress, click, stepper — guards)
+          try {
+            const changed = applyAdjust(rowSpec, dir);
+            if (!changed && st.menuIdx === index) return;
+            if (st.menuIdx !== index) {
+              if (st.pane === "rows") h.paintRowAt(st.menuIdx, false);
+              st.menuIdx = index;
+              st.pane = "rows";
+              h.paintRowAt(index, true);
+            }
+            h.paintDesc(fitDescText(descText(rowSpec)));
+            h.afterAdjust(index, rowSpec);
+          } catch (err) {
+            h.log?.(`settings chevron: row threw: ${err instanceof Error ? err.message : err}`);
           }
-          h.paintDesc(fitDescText(descText(rowSpec)));
-          h.afterAdjust(index, rowSpec);
         },
         // move, not over (same synthetic-over trap as rows — a rebuild under
         // a stationary cursor re-fires "over" and the stale `active` capture

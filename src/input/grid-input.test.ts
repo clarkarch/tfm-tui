@@ -286,6 +286,21 @@ describe("selection model", () => {
     press(h, { x: 1, y: 1 });
     expect(navigated).toEqual(["/w/sub"]);
   });
+  test("a modified double-press never opens (ctrl stays toggle)", () => {
+    // regression: two fast ctrl+clicks on a tile toggled it on then off and
+    // launched the file (the double-click check ignored modifiers)
+    const ctx = makeCtx();
+    const opened: string[] = [];
+    ctx.openFileDefault = (p) => opened.push(p);
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, { modifiers: { ctrl: true }, x: 1, y: 1 });
+    press(h, { modifiers: { ctrl: true }, x: 1, y: 1 });
+    expect(opened).toEqual([]);
+    // an unmodified double press still opens
+    press(h, { x: 1, y: 1 });
+    press(h, { x: 1, y: 1 });
+    expect(opened).toEqual(["/w/a.txt"]);
+  });
 });
 
 describe("commitPendingCtrlToggle / finishDragState", () => {

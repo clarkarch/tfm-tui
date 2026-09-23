@@ -224,6 +224,9 @@ const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promis
   new Promise<Uint8Array>((resolve, reject) => {
     const chunks: Buffer[] = [];
     proc.stdout.on("data", (c: Buffer) => chunks.push(c));
+    // drain stderr: a chatty failing renderer filling its pipe would block the
+    // process and 'close' would never fire (the thumb job would hang)
+    proc.stderr.resume();
     proc.on("error", reject);
     proc.on("close", (code) =>
       code === 0 && chunks.length > 0

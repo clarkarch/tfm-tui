@@ -187,19 +187,24 @@ describe("makeRestart", () => {
 
 describe("restartArgs", () => {
   test("compiled binary strips the /$bunfs/ virtual entry (else the child treats it as a PATH)", () => {
-    expect(restartArgs(["bun", "/$bunfs/root/tfm", "--debug", "/tmp"])).toEqual(["--debug", "/tmp"]);
+    expect(restartArgs(["bun", "/$bunfs/root/tfm", "--debug", "/tmp"], "/usr/bin/tfm")).toEqual(["--debug", "/tmp"]);
   });
 
   test("compiled binary with no user args spawns bare", () => {
-    expect(restartArgs(["bun", "/$bunfs/root/tfm"])).toEqual([]);
+    expect(restartArgs(["bun", "/$bunfs/root/tfm"], "/usr/bin/tfm")).toEqual([]);
   });
 
-  test("dev runner strips the script token", () => {
-    expect(restartArgs(["/home/u/.bun/bin/bun", "/repo/src/index.ts", "/tmp"])).toEqual(["/tmp"]);
+  test("dev runner keeps the script token (spawning the interpreter again)", () => {
+    // argv[0] === execPath (both the bun binary): the child needs its script
+    // or `bun /tmp` dies with "Module not found"
+    expect(restartArgs(["/home/u/.bun/bin/bun", "/repo/src/index.ts", "/tmp"], "/home/u/.bun/bin/bun")).toEqual([
+      "/repo/src/index.ts",
+      "/tmp",
+    ]);
   });
 
-  test("a real user path is never stripped (non-runner argv[0])", () => {
-    expect(restartArgs(["/usr/bin/tfm", "index.ts"])).toEqual(["index.ts"]);
+  test("no script token: user args pass through untouched", () => {
+    expect(restartArgs(["/usr/bin/tfm", "/home/u/docs"], "/usr/bin/tfm")).toEqual(["/home/u/docs"]);
   });
 });
 

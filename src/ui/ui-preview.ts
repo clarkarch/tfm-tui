@@ -19,8 +19,6 @@ import type { MaybeNode } from "../lib/node-like";
 // gen-counter guards stale async file reads so a slow preview can't paint
 // over a newer one. tfm-preview-* ids stay byte-identical. ---
 
-type ThumbJobLike = ThumbJob;
-
 type PreviewCtx = {
   renderer: any;
   byId(id: string): MaybeNode;
@@ -40,7 +38,7 @@ type PreviewCtx = {
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
   focusKey(): string | null; // focused tile's key, else null
   tileRefs: Map<string, { selected: boolean; [k: string]: any }>; // tileRefsByKey — shared by ref; only .forEach read here
-  pushThumbJob(job: ThumbJobLike): void; // thumbJobs is SWAPPED (reassigned) by drainThumbs — never capture the array
+  pushThumbJob(job: ThumbJob): void; // thumbJobs is SWAPPED (reassigned) by drainThumbs — never capture the array
   drainThumbs(): void;
   drainIconQueue(): void;
   nextIconId(): string; // `tfm-icon-${iconSeq++}`
