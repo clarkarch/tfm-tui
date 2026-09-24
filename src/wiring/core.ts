@@ -130,13 +130,18 @@ export const wireCore = (deps: {
   // --- Grid scroll containers — assigned during boot (buildLayout step), one
   // per pane. `scrollerRef` stays the active pane's live ref for the same
   // facade reason as `state`. ---
-  const scrollerRefs: Array<{ current: ScrollBoxRenderable | null }> = [{ current: null }, { current: null }];
+  // a TUPLE, not Array<T>: `panes.active` is PaneIndex (0|1), and tuple
+  // indexing by it needs no non-null assertion — the length is part of the type
+  const scrollerRefs: [{ current: ScrollBoxRenderable | null }, { current: ScrollBoxRenderable | null }] = [
+    { current: null },
+    { current: null },
+  ];
   const scrollerRef = {
     get current(): ScrollBoxRenderable | null {
-      return scrollerRefs[panes.active]!.current;
+      return scrollerRefs[panes.active].current;
     },
     set current(v: ScrollBoxRenderable | null) {
-      scrollerRefs[panes.active]!.current = v;
+      scrollerRefs[panes.active].current = v;
     },
   };
 

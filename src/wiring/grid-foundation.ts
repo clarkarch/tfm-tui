@@ -30,7 +30,7 @@ export const wireGridFoundation = (deps: {
       setText: core.lookup.setTextOnId,
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
-      scroller: () => core.scrollerRefs[pane]!.current,
+      scroller: () => core.scrollerRefs[pane].current,
       viewH: () => chrome.renderer.terminalHeight - 3,
       rowHInit: () => core.geometry.tileH,
       renderPreview: () => getGrid().renderPreview(),
@@ -43,8 +43,8 @@ export const wireGridFoundation = (deps: {
   // tileRefs is overridden with a live map facade because ui-rename/preview and
   // the menu capture it ONCE at construction.
   const selections: [Selection, Selection] = [selectionFor(0), selectionFor(1)];
-  const activeTileRefs = activeMapFacade(() => selections[core.panes.active]!.tileRefs as Map<string, SelTileRef>);
-  const selection = activeFacade(() => selections[core.panes.active]!, {
+  const activeTileRefs = activeMapFacade(() => selections[core.panes.active].tileRefs as Map<string, SelTileRef>);
+  const selection = activeFacade(() => selections[core.panes.active], {
     tileRefs: activeTileRefs as unknown,
   });
 

@@ -222,7 +222,7 @@ export const wireKeymap = (deps: {
     switchPane: () => {
       if (!core.config.ui.dualPane) return;
       // a selection must not survive a pane switch
-      gridFoundation.selections[core.panes.active]!.clearTileSelection();
+      gridFoundation.selections[core.panes.active].clearTileSelection();
       core.togglePane();
       nav.renderAll();
     },

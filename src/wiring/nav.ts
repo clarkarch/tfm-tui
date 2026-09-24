@@ -164,7 +164,7 @@ export const wireNav = (deps: {
     makeTabs(core.panes.states[0], { onChanged: renderAll, status: setStatusMsg, quit: quitApp }),
     makeTabs(core.panes.states[1], { onChanged: renderAll, status: setStatusMsg, quit: quitApp }),
   ];
-  const activeTabModel = () => tabModels[core.panes.active]!;
+  const activeTabModel = () => tabModels[core.panes.active];
   const syncTabsFromState = (): void => {
     tabModels[0].syncTabFromState();
     tabModels[1].syncTabFromState();
@@ -183,7 +183,7 @@ export const wireNav = (deps: {
   const { scheduleSaveSession, restoreSession } = makeSessionSync({
     paneTabs,
     syncTabsFromState,
-    adoptPaneTabs: (pane, tabs, activeTab) => tabModels[pane]!.adoptTabs(tabs, activeTab),
+    adoptPaneTabs: (pane, tabs, activeTab) => tabModels[pane].adoptTabs(tabs, activeTab),
     adoptDefaultTabs: () => {
       tabModels[0].adoptTab();
       tabModels[1].adoptTab();
@@ -206,7 +206,7 @@ export const wireNav = (deps: {
       renderGrid: () => getGrid().renderPane(pane),
     });
   const searches: [ReturnType<typeof makeSearch>, ReturnType<typeof makeSearch>] = [mkSearch(0), mkSearch(1)];
-  const activeSearch = () => searches[core.panes.active]!;
+  const activeSearch = () => searches[core.panes.active];
   const clearSearch = (): void => activeSearch().clearSearch();
   const beginTypeToSearch = (ch: string): void => activeSearch().beginTypeToSearch(ch);
   const wireSearchInput = (): void => {

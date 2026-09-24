@@ -384,8 +384,10 @@ export const wireRetheme = (deps: {
       } catch {}
       try {
         const idx = themePresetIdx(THEME_PRESETS, core.config.theme);
+        // `?.` rather than an `idx >= 0` guard + assertion: a stale idx past
+        // the preset list falls back to custom exactly like a miss
         sharedPluginEvents().emit("theme", {
-          preset: core.config.ui.followTerminal ? "System" : idx >= 0 ? THEME_PRESETS[idx]!.name : "custom",
+          preset: core.config.ui.followTerminal ? "System" : (THEME_PRESETS[idx]?.name ?? "custom"),
           theme: core.config.theme,
         });
       } catch {}
@@ -399,7 +401,7 @@ export const wireRetheme = (deps: {
       // dual pane just turned on: the hidden pane's cwd is stale from boot —
       // open it at the active pane's current directory (both the keybind and
       // the settings GUI row funnel through applyConfig, so one hook covers all)
-      else if (dual && !lastDual) pointPaneAt(core.panes.states[1]!, core.state.cwd);
+      else if (dual && !lastDual) pointPaneAt(core.panes.states[1], core.state.cwd);
       lastDual = dual;
     },
   });

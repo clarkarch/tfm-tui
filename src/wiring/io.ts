@@ -58,10 +58,11 @@ export const wireWatcher = (deps: {
       // full-rebuild the grid 200ms later (visible flash after every select)
       ignorePaths: () => [DND_LOG, DEBUG_LOG],
     });
-  const watchers = [makeFor(0), makeFor(1)];
+  // `as const` keeps the pair a TUPLE so indexing needs no non-null assertion
+  const watchers = [makeFor(0), makeFor(1)] as const;
   const syncCwdWatcher = (): void => {
-    watchers[0]!.syncCwdWatcher();
-    watchers[1]!.syncCwdWatcher();
+    watchers[0].syncCwdWatcher();
+    watchers[1].syncCwdWatcher();
   };
   return { syncCwdWatcher };
 };
@@ -137,8 +138,8 @@ export const wireBoot = (deps: {
         emptyAreaEntries: grid.menuEntries.emptyAreaEntries,
         compatActive: core.compatActive,
       });
-      core.scrollerRefs[0]!.current = scrollers[0];
-      core.scrollerRefs[1]!.current = scrollers[1];
+      core.scrollerRefs[0].current = scrollers[0];
+      core.scrollerRefs[1].current = scrollers[1];
       // [ui] windowed-grid: the hook wraps the scrollTop setter (wheel, drag
       // auto-scroll, programmatic scrollTo) AND chains the scrollbar's
       // _onChange — a thumb drag writes the position field raw, never the
@@ -227,7 +228,7 @@ export const wireDnd = (deps: {
       byNumber: (num) => Renderable.renderablesByNumber.get(num),
       placesHost: () => chrome.chrome.placesHost,
       tileRefs: allTileRefs,
-      panesCwd: () => [core.panes.states[0]!.cwd, core.panes.states[1]!.cwd],
+      panesCwd: () => [core.panes.states[0].cwd, core.panes.states[1].cwd],
     }),
     tileRefs: allTileRefs,
     setTileVisual: gridFoundation.selection.setTileVisual,

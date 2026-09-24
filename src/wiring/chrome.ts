@@ -117,13 +117,13 @@ export const wireChrome = async (deps: {
     moveInto: (dest, items) => getFileops().fileops.moveInto(dest, items),
     kbActive: () => getKeyRouter().sidebarActive(),
     kbIdx: () => getKeyRouter().placeIdx(),
-    tabs: (pane) => nav.tabModels[pane]!,
+    tabs: (pane) => nav.tabModels[pane],
     focusPane: (pane) => getGrid().focusPane(pane),
-    closeTab: (pane, i) => nav.tabModels[pane]!.closeTab(i),
-    switchTab: (pane, i) => nav.tabModels[pane]!.switchTab(i),
-    newTab: (pane, dir) => nav.tabModels[pane]!.newTab(dir),
+    closeTab: (pane, i) => nav.tabModels[pane].closeTab(i),
+    switchTab: (pane, i) => nav.tabModels[pane].switchTab(i),
+    newTab: (pane, dir) => nav.tabModels[pane].newTab(dir),
     // toolbars are built after the chrome ctx (TDZ seam) — keep the arrow
-    hoverBtn: (pane, id, icon, onMouseDown) => toolbars[pane]!.hoverBtn(id, icon, onMouseDown),
+    hoverBtn: (pane, id, icon, onMouseDown) => toolbars[pane].hoverBtn(id, icon, onMouseDown),
     stripSelectable,
     drainIconQueue,
     makeIconSlot,
@@ -181,17 +181,17 @@ export const wireChrome = async (deps: {
       notify: (m, t, l) => notify(m, t, l),
       // the toolbar shows ITS pane's history, not the focused pane's: `state`
       // is the active-pane facade, so read the real per-pane state here
-      canBack: () => core.panes.states[pane]!.histIdx > 0,
-      canFwd: () => core.panes.states[pane]!.histIdx < core.panes.states[pane]!.history.length - 1,
+      canBack: () => core.panes.states[pane].histIdx > 0,
+      canFwd: () => core.panes.states[pane].histIdx < core.panes.states[pane].history.length - 1,
       goBack: nav.goBack,
       goFwd: nav.goFwd,
       openContextMenu: menu.openContextMenu,
       sortEntries: () => getGrid().menuEntries.sortEntries(),
-      cwd: () => core.panes.states[pane]!.cwd,
+      cwd: () => core.panes.states[pane].cwd,
       // per-navigate new-crumbs cascade (see renderCrumbs' lastCrumbTargets
       // guard): arrow-deferred, dirBarAnims is built post-renderer below
       // (TDZ seam)
-      animateCrumbs: (ids: string[]) => dirBarAnims[pane]!.playIds(ids),
+      animateCrumbs: (ids: string[]) => dirBarAnims[pane].playIds(ids),
       home,
     });
   const toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>] = [
@@ -524,7 +524,7 @@ export const wireChrome = async (deps: {
     sidebarIntro,
     topbarIntro,
     toolbars,
-    activeToolbar: () => toolbars[core.panes.active]!,
+    activeToolbar: () => toolbars[core.panes.active],
     notify,
     notifySticky,
     openFileDefault,

@@ -136,7 +136,7 @@ export const wireGrid = (deps: {
     const prev = core.panes.active;
     if (prev === pane) return;
     // a selection must not survive a pane switch: drop the pane we're leaving
-    selections[prev]!.clearTileSelection();
+    selections[prev].clearTileSelection();
     core.setActivePane(pane);
     core.refreshPaneFocus();
     try {
@@ -207,7 +207,7 @@ export const wireGrid = (deps: {
   const dropIntoPane = (pane: 0 | 1): void => {
     const keys = gridDrag.keys;
     if (!keys?.length) return;
-    const dest = core.panes.states[pane]!.cwd;
+    const dest = core.panes.states[pane].cwd;
     finishDragCtx();
     if (isVirtualUri(dest) || isTrashFilesDir(dest)) return;
     if (dest === core.state.cwd) {
@@ -275,11 +275,11 @@ export const wireGrid = (deps: {
     makeGridRenderer({
       termW: () => chrome.renderer.terminalWidth,
       termH: () => chrome.renderer.terminalHeight,
-      scroller: () => core.scrollerRefs[pane]!.current,
+      scroller: () => core.scrollerRefs[pane].current,
       state: core.panes.states[pane],
-      searchQuery: () => nav.searches[pane]!.getQuery(),
+      searchQuery: () => nav.searches[pane].getQuery(),
       recursiveSearch: () => core.config.ui.recursiveSearch,
-      pathEditMode: () => chrome.toolbars[pane]!.pathEditMode(),
+      pathEditMode: () => chrome.toolbars[pane].pathEditMode(),
       // column math reads the EFFECTIVE sidebar width (hover drawer rewrites it
       // as the sidebar collapses); core.geometry.sw is the config width used for
       // sidebar content, which stays baked at full size and clips
