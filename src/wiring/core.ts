@@ -7,7 +7,7 @@
 // both are only read at runtime, post-boot). ---
 
 import os from "node:os";
-import type { ScrollBoxRenderable } from "@opentui/core";
+import type { CliRenderer, ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
@@ -28,7 +28,7 @@ export type CoreWiring = ReturnType<typeof wireCore>;
 
 export const wireCore = (deps: {
   // () => renderer — TDZ: the chrome wiring creates it later
-  renderer(): any;
+  renderer(): CliRenderer;
   // live fileops clipboard read (isCutKey tile dimming)
   clipboard(): { mode: "copy" | "cut"; items: { path: string }[] } | null;
   // a launch FILE path (`tfm some/file.txt`) to highlight after the first build

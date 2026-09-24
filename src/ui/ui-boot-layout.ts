@@ -6,8 +6,9 @@
 // straight from ./grid-input so the wiring can't drift from the gesture
 // state machine. ---
 
-import { ASCIIFont, Box, ScrollBoxRenderable, Text } from "@opentui/core";
+import { ASCIIFont, Box, type CliRenderer, ScrollBoxRenderable, Text } from "@opentui/core";
 import { chromeSurface, type UiStyle } from "./style";
+import type { MaybeNode } from "../lib/node-like";
 import type { Theme } from "../config/config";
 import {
   BAND_ID,
@@ -149,8 +150,8 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
   );
 
 type BootLayoutCtx = {
-  renderer: any;
-  byId: (id: string) => any;
+  renderer: CliRenderer;
+  byId: (id: string) => MaybeNode;
   colors: Theme; // eager object — see buildTitle
   bandCtx: BandCtx;
   focusPane: (index: number) => void;
@@ -215,8 +216,8 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
 
   const scroller0 = makeScroller("tfm-scroll", 0);
   const scroller1 = makeScroller("tfm-scroll-2", 1);
-  ctx.byId("tfm-pane-0")?.add(scroller0);
-  ctx.byId("tfm-pane-1")?.add(scroller1);
+  ctx.byId("tfm-pane-0")?.add?.(scroller0);
+  ctx.byId("tfm-pane-1")?.add?.(scroller1);
 
   ctx.renderer.root.add(
     Box({

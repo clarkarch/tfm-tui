@@ -10,14 +10,14 @@
 // MOUSE-FIRST: every control is clickable, rows hover-select, click-away
 // cancels capture.
 
-import { Box, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, RGBA, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { IconState, IconSpec } from "./ui-slots";
 import type { Theme } from "../config/config";
 import { keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
 import { FLOAT_Z, type Floats } from "./floats";
-import { pokeGc } from "../app/mem-hygiene";
+import { pokeGc, type NativeStatsReach } from "../app/mem-hygiene";
 import {
   descText,
   ensureVisible,
@@ -33,7 +33,7 @@ import {
 import type { MaybeNode } from "../lib/node-like";
 
 type EscMenuCtx = {
-  renderer(): any;
+  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   clearChildren(node: any): void;
   stripSelectable(): void;
@@ -405,7 +405,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const setOnId = (id: string, fn: (n: any) => void): void => {
-    const n: any = ctx.byId(id);
+    const n = ctx.byId(id);
     if (n) {
       try {
         fn(n);
@@ -421,7 +421,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   let retryArmed = false;
   const renderMenuContent = () => {
     const c = ctx.colors();
-    const panel: any = ctx.byId("tfm-menu-panel");
+    const panel = ctx.byId("tfm-menu-panel");
     if (!panel) return;
     ctx.clearChildren(panel);
     try {
@@ -440,8 +440,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // best-effort native allocator stats (renderer.lib is private — this is
     // diagnostics only); tells a tfm-side leak apart from system OOM
     try {
-      const lib = ctx.renderer().lib;
-      const s = lib?.getAllocatorStats?.();
+      const s = (ctx.renderer() as unknown as NativeStatsReach).lib?.getAllocatorStats?.();
       if (s) {
         ctx.log?.(
           `esc-menu render failed: ${err} | native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`,
@@ -582,7 +581,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const nativeMemTrace = (tag: string): void => {
     if (!ctx.log) return;
     try {
-      const s = ctx.renderer().lib?.getAllocatorStats?.();
+      const s = (ctx.renderer() as unknown as NativeStatsReach).lib?.getAllocatorStats?.();
       if (s)
         ctx.log?.(`${tag} native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`);
     } catch {}
@@ -595,7 +594,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.capturing = null;
     ctx.log?.("esc-menu close");
     nativeMemTrace("esc-menu close");
-    const scrim: any = ctx.byId("tfm-menu");
+    const scrim = ctx.byId("tfm-menu");
     scrim?.parent?.remove(scrim);
     ctx.setScrim(false);
     // esc-menu open/close churns native allocations (documented leak vector);

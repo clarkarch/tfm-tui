@@ -151,8 +151,8 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
     );
     syncExecCheckbox = (): void => {
       const on = !!(st.mode & 0o100);
-      const a: any = ctx.byId(cbOnSpec.slotId);
-      const b: any = ctx.byId(cbOffSpec.slotId);
+      const a = ctx.byId(cbOnSpec.slotId);
+      const b = ctx.byId(cbOffSpec.slotId);
       try {
         if (a) a.visible = on;
       } catch {}

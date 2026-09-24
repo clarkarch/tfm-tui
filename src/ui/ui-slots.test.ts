@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box } from "@opentui/core";
+import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { dimHex, makeSlots, thumbImageFit, thumbJobRank, type SlotsCtx, type ThumbJob } from "./ui-slots";
 import type { Theme } from "../config/config";
@@ -25,7 +25,8 @@ const makeHarness = () => {
   let compat = false;
   let forceGlyph = false;
   const ctx: SlotsCtx = {
-    renderer: () => ({ resolution: { width: 800, height: 400 }, terminalWidth: 80, terminalHeight: 20 }),
+    renderer: () =>
+      ({ resolution: { width: 800, height: 400 }, terminalWidth: 80, terminalHeight: 20 }) as unknown as CliRenderer,
     byId: (id) => nodes.get(id),
     clearChildren: () => {},
     colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,

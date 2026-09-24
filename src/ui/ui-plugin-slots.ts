@@ -11,6 +11,7 @@
 // their nodes wouldn't integrate. ---
 
 import {
+  type CliRenderer,
   createCoreSlotRegistry,
   registerCorePlugin,
   SlotRenderable,
@@ -18,6 +19,7 @@ import {
   type CoreSlotRegistry,
 } from "@opentui/core";
 import type { Theme } from "../config/config";
+import type { MaybeNode } from "../lib/node-like";
 
 export type TfmSlotName = "statusbar" | "sidebar-footer";
 
@@ -27,7 +29,7 @@ export type TfmSlotContext = {
   app: string;
   version: string;
   // host renderer — construct your renderables with ctx.renderer()
-  renderer: () => any;
+  renderer: () => CliRenderer;
   // live theme colors — read inside the contribution so a theme flip repaints
   colors: () => Theme;
   cwd: () => string;
@@ -41,14 +43,14 @@ export type TfmSlotContribution = CorePlugin<TfmSlotName, TfmSlotContext, TfmSlo
 
 export type PluginSlots = {
   register(plugin: { id: string; order?: number; slots: TfmSlotContribution }): () => void;
-  mount(byId: (id: string) => any): void;
+  mount(byId: (id: string) => MaybeNode): void;
   refresh(): void;
   dispose(): void;
   isMounted(): boolean;
 };
 
 export const makePluginSlots = (opts: {
-  renderer: any;
+  renderer: CliRenderer;
   context: TfmSlotContext;
   log?: (message: string) => void;
 }): PluginSlots => {

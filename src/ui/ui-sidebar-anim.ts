@@ -24,7 +24,7 @@
 // The curves reuse the shared file-animation helpers (`easeAt`,
 // `staggerLocal`, `quantizeDy`); only the frame assembly + the gate are new. ---
 
-import { createTimeline, engine, type JSAnimation } from "@opentui/core";
+import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
 import { easeAt, quantizeDy, staggerLocal, type EaseKey, type SlideDir } from "./ui-grid-anim";
 import type { Scheduler } from "../lib/uiutil";
 import type { MaybeNode } from "../lib/node-like";
@@ -104,7 +104,7 @@ export type SidebarAnimOpts = {
 };
 
 type SidebarAnimCtx = {
-  renderer: any;
+  renderer: CliRenderer;
   byId(id: string): MaybeNode;
   opts(): SidebarAnimOpts;
   rootId(): string;
@@ -325,7 +325,7 @@ export type TopbarAnimOpts = {
 };
 
 type TopbarAnimCtx = {
-  renderer: any;
+  renderer: CliRenderer;
   byId(id: string): MaybeNode;
   opts(): TopbarAnimOpts;
   barIds(): string[];

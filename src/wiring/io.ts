@@ -19,15 +19,12 @@ import { mergedMapFacade } from "../app/panes";
 import { waitForResolution } from "../ui/ui-lookup";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces } from "../fs/places";
-import { startMemHygiene, type AllocatorStats } from "../app/mem-hygiene";
+import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { configPath } from "../config/config";
 import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
-
-// narrowed shape of CliRenderer's private native binding — diagnostics only
-type NativeStatsReach = { lib?: { getAllocatorStats?: () => AllocatorStats | null } };
 
 // --- Live directory watching: external changes refresh the grid.
 // Watch lifecycle lives in ./watcher (tested); the wiring supplies the live

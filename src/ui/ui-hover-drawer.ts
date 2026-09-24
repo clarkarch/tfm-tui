@@ -13,7 +13,7 @@
 //   not pop the drawer.
 // - Terminal auto-hide must NOT touch the PTY: it clips the host box height.
 
-import { createTimeline, engine, type JSAnimation } from "@opentui/core";
+import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
 import type { UiConfig } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 
@@ -123,7 +123,7 @@ const makeTween = (getNode: () => any, axis: "width" | "height"): Tween => {
 };
 
 export type HoverDrawerCtx = {
-  renderer: any;
+  renderer: CliRenderer;
   byId(id: string): MaybeNode;
   ui(): UiConfig;
   terminalOpen(): boolean;

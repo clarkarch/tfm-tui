@@ -6,7 +6,7 @@
 // any future plugin gets fuzzy lists over arbitrary items for free.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, Input, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, RGBA, Text } from "@opentui/core";
 import { applySurface, floatSurface } from "./style";
 import { invokeIsolated } from "../lib/uiutil";
 import type { Theme } from "../config/config";
@@ -21,7 +21,7 @@ export type PickItem = {
 };
 
 type PickCtx = {
-  renderer(): any;
+  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   clearChildren(node: any): void;
@@ -87,10 +87,10 @@ export const makePick = (ctx: PickCtx) => {
     idx = -1;
     results = [];
     try {
-      const input: any = ctx.byId("tfm-pick-input");
+      const input = ctx.byId("tfm-pick-input");
       input?.blur?.();
     } catch {}
-    const scrim: any = ctx.byId("tfm-pick");
+    const scrim = ctx.byId("tfm-pick");
     scrim?.parent?.remove(scrim);
   };
 
@@ -99,7 +99,7 @@ export const makePick = (ctx: PickCtx) => {
   };
 
   const renderList = (): void => {
-    const list: any = ctx.byId("tfm-pick-list");
+    const list = ctx.byId("tfm-pick-list");
     if (!list) return;
     const colors = ctx.colors();
     results = filterItems(items, query).slice(0, MAX_ROWS);
@@ -211,7 +211,7 @@ export const makePick = (ctx: PickCtx) => {
     ctx.rootAdd(scrim);
     ctx.stripSelectable();
     void ctx.drainIconQueue();
-    const input: any = ctx.byId("tfm-pick-input");
+    const input = ctx.byId("tfm-pick-input");
     if (input?.on) {
       input.on("input", () => {
         try {
@@ -268,11 +268,11 @@ export const makePick = (ctx: PickCtx) => {
     if (!opened) return;
     const c = ctx.colors();
     try {
-      const panel: any = ctx.byId("tfm-pick-panel");
+      const panel = ctx.byId("tfm-pick-panel");
       if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
     } catch {}
     try {
-      const input: any = ctx.byId("tfm-pick-input");
+      const input = ctx.byId("tfm-pick-input");
       if (input) {
         input.backgroundColor = c.accentBg;
         input.focusedBackgroundColor = c.accentBg;
@@ -280,7 +280,7 @@ export const makePick = (ctx: PickCtx) => {
       }
     } catch {}
     try {
-      const title: any = ctx.byId("tfm-pick-title");
+      const title = ctx.byId("tfm-pick-title");
       if (title) title.fg = c.accent;
     } catch {}
     try {

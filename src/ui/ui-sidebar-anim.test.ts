@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box } from "@opentui/core";
+import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeSidebarAnim, sidebarFrameAt, sidebarStyleFrom, type SidebarAnimOpts } from "./ui-sidebar-anim";
 
@@ -38,7 +38,7 @@ const fakeCtx = (o: SidebarAnimOpts, ids: { root: string; rows: string[]; title?
   const titleId = ids.title ?? `${ids.root}-title`;
   if (ids.title) nodes.add(ids.title);
   const anim = makeSidebarAnim({
-    renderer: {},
+    renderer: {} as unknown as CliRenderer,
     byId: nodes.byId,
     opts: () => o,
     rootId: () => ids.root,

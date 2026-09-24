@@ -1,4 +1,11 @@
-import { Box, CodeRenderable, Text, TextRenderable, type SyntaxStyle } from "@opentui/core";
+import {
+  Box,
+  type CliRenderer,
+  CodeRenderable,
+  Text,
+  TextRenderable,
+  type SyntaxStyle,
+} from "@opentui/core";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -20,7 +27,7 @@ import type { MaybeNode } from "../lib/node-like";
 // over a newer one. tfm-preview-* ids stay byte-identical. ---
 
 type PreviewCtx = {
-  renderer: any;
+  renderer: CliRenderer;
   byId(id: string): MaybeNode;
   colors(): Theme;
   uiStyle(): UiStyle;
@@ -98,7 +105,7 @@ export const makePreview = (ctx: PreviewCtx) => {
     if (ctx.visible && !ctx.visible()) return;
     const colors = ctx.colors();
     const gen = ++previewGen;
-    const pane: any = ctx.byId("tfm-preview");
+    const pane = ctx.byId("tfm-preview");
     if (!pane) return;
     clearChildren(pane);
 

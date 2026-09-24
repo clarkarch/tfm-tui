@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box } from "@opentui/core";
+import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeTopbarAnim, type TopbarAnimOpts } from "./ui-sidebar-anim";
 
@@ -32,7 +32,7 @@ const fakeCtx = (o: TopbarAnimOpts, entries: string[]) => {
   const nodes = fakeNodes();
   for (const b of entries) nodes.add(b);
   const anim = makeTopbarAnim({
-    renderer: {},
+    renderer: {} as unknown as CliRenderer,
     byId: nodes.byId,
     opts: () => o,
     barIds: () => entries,
@@ -94,7 +94,7 @@ describe("makeTopbarAnim (synchronous paths)", () => {
     const nodes = fakeNodes();
     nodes.add("tb-one");
     const anim = makeTopbarAnim({
-      renderer: {},
+      renderer: {} as unknown as CliRenderer,
       byId: nodes.byId,
       opts: () => opts({ style: "fade" }),
       barIds: () => ["tb-one", "tb-absent"],
@@ -111,7 +111,7 @@ describe("makeTopbarAnim (synchronous paths)", () => {
     nodes.add("tb-c1");
     nodes.add("tb-c2");
     const anim = makeTopbarAnim({
-      renderer: {},
+      renderer: {} as unknown as CliRenderer,
       byId: nodes.byId,
       opts: () => opts({ style: "stagger" }),
       barIds: () => ["tb-c0", "tb-c1", "tb-c2"],
@@ -128,7 +128,7 @@ describe("makeTopbarAnim (synchronous paths)", () => {
     const nodes = fakeNodes();
     nodes.add("tb-n0");
     const anim = makeTopbarAnim({
-      renderer: {},
+      renderer: {} as unknown as CliRenderer,
       byId: nodes.byId,
       opts: () => opts({ style: "stagger" }),
       barIds: () => ["tb-n0"],
@@ -142,7 +142,7 @@ describe("makeTopbarAnim (synchronous paths)", () => {
     const nodes = fakeNodes();
     nodes.add("tb-d0");
     const anim = makeTopbarAnim({
-      renderer: {},
+      renderer: {} as unknown as CliRenderer,
       byId: nodes.byId,
       opts: () => opts({ enabled: false }),
       barIds: () => ["tb-d0"],

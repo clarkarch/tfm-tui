@@ -8,7 +8,7 @@
 // pick via the floats modal policy (depth stays 1).
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, Input, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, RGBA, Text } from "@opentui/core";
 import { floatSurface } from "./style";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
@@ -16,7 +16,7 @@ import type { Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 
 type PromptCtx = {
-  renderer(): any;
+  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   stripSelectable(): void;
@@ -40,7 +40,7 @@ export const makePrompt = (ctx: PromptCtx) => {
 
   const paintMask = (): void => {
     try {
-      const node: any = ctx.byId("tfm-prompt-mask");
+      const node = ctx.byId("tfm-prompt-mask");
       if (!node) return;
       node.content = secret ? "•".repeat(secret.length) : "Password";
       node.fg = secret ? ctx.colors().white : ctx.colors().sidebarFgMuted;
@@ -67,7 +67,7 @@ export const makePrompt = (ctx: PromptCtx) => {
     try {
       ctx.byId("tfm-prompt-input")?.blur?.();
     } catch {}
-    const scrim: any = ctx.byId("tfm-prompt");
+    const scrim = ctx.byId("tfm-prompt");
     scrim?.parent?.remove(scrim);
     // floats-initiated teardown (policy dismissal / replace) settles a
     // pending open as cancel — never leave the awaiter hanging
@@ -264,7 +264,7 @@ export const makePrompt = (ctx: PromptCtx) => {
         return;
       }
       try {
-        const input: any = ctx.byId("tfm-prompt-input");
+        const input = ctx.byId("tfm-prompt-input");
         if (input) input.value = v;
       } catch {}
     },

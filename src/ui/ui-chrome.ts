@@ -228,7 +228,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
   };
 
   const renderSidebar = () => {
-    const hostBox: any = ctx.byId("tfm-places");
+    const hostBox = ctx.byId("tfm-places");
     if (!hostBox) return;
     const groups = buildSections();
     const sig = JSON.stringify([
@@ -273,7 +273,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
   const renderTabbar = (pane: 0 | 1): void => {
     const colors = ctx.colors();
     const prefix = `tfm-p${pane}-`;
-    const bar: any = ctx.byId(`${prefix}tabbar`);
+    const bar = ctx.byId(`${prefix}tabbar`);
     if (!bar) return;
     const tabs = ctx.tabs(pane);
     // a chip is a valid drop target only for a single dragged folder — dropping
@@ -296,7 +296,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       const tabId = `${prefix}tab-${i}`;
       const active = i === tabs.active;
       const paint = () => {
-        const n: any = ctx.byId(tabId);
+        const n = ctx.byId(tabId);
         if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, active ? "selected" : "rest"));
       };
       // ✕ flatten target must match the chip's own fill, or the raster shows as
@@ -367,12 +367,12 @@ export const makeChrome = (ctx: ChromeCtx) => {
               // drop-target cue: light the chip like the selected tab while a
               // single-folder drag hovers it
               if (dragTabDir() !== null) {
-                const n: any = ctx.byId(tabId);
+                const n = ctx.byId(tabId);
                 if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected"));
                 return;
               }
               if (!active) {
-                const n: any = ctx.byId(tabId);
+                const n = ctx.byId(tabId);
                 if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "hover"));
               }
             },
@@ -418,8 +418,8 @@ export const makeChrome = (ctx: ChromeCtx) => {
       // safe no-op unless the animator actually owns this exact row.
       if (isSel) ctx.hoverRow(rec.rowId, false);
       const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
-      const row: any = ctx.byId(rec.rowId);
-      const label: any = ctx.byId(rec.labelId);
+      const row = ctx.byId(rec.rowId);
+      const label = ctx.byId(rec.labelId);
       if (row) applySurface(row, rowSurface(ctx.uiStyle(), colors, isSel ? "selected" : isHover ? "hover" : "rest"));
       rec.specs.forEach((s) => {
         ctx.setIconState(s, selectIconState(isSel, isHover));

@@ -122,12 +122,12 @@ export const commitPendingCtrlToggle = (ctx: GridInputCtx): void => {
 };
 
 const updateDragGhost = (ctx: GridInputCtx, x: number, y: number): void => {
-  const g: any = ctx.byId(DRAG_GHOST_ID);
+  const g = ctx.byId(DRAG_GHOST_ID);
   if (!g) return;
   try {
     const n = gridDrag.keys?.length ?? 0;
     const label = `moving ${n} item${n === 1 ? "" : "s"}`;
-    const t: any = ctx.byId(`${DRAG_GHOST_ID}-label`);
+    const t = ctx.byId(`${DRAG_GHOST_ID}-label`);
     if (t && t.content !== label) t.content = label;
     g.width = label.length + 2;
     g.left = Math.max(0, Math.min(x + 1, ctx.termW() - label.length - 2));
@@ -137,7 +137,7 @@ const updateDragGhost = (ctx: GridInputCtx, x: number, y: number): void => {
 };
 
 const hideDragGhost = (ctx: GridInputCtx): void => {
-  const g: any = ctx.byId(DRAG_GHOST_ID);
+  const g = ctx.byId(DRAG_GHOST_ID);
   if (g) {
     try {
       g.visible = false;
@@ -196,7 +196,7 @@ export const beginBand = (ev: { x: number; y: number; button: number }): void =>
 
 export const updateBandRect = (ctx: BandCtx, ev: { x: number; y: number }): void => {
   if (!bandStart) return;
-  const b: any = ctx.byId(BAND_ID);
+  const b = ctx.byId(BAND_ID);
   if (!b) return;
   try {
     b.x = Math.min(bandStart.x, ev.x);
@@ -211,7 +211,7 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
   const start = bandStart;
   bandStart = null;
   ctx.setSelAnchor(null);
-  const b: any = ctx.byId(BAND_ID);
+  const b = ctx.byId(BAND_ID);
   if (b) {
     try {
       b.visible = false;
@@ -224,12 +224,14 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
     y1 = Math.max(start.y, ev.y);
   ctx.clearTileSelection();
   ctx.tileRefs.forEach((refs, key) => {
-    const t: any = ctx.byId(refs.tileId);
+    const t = ctx.byId(refs.tileId);
     if (!t) return;
+    // width/height carry OpenTUI's CssLike union; a mounted tile is always a
+    // resolved number, so a percentage/auto miss means it never laid out
     const tx = t.screenX,
       ty = t.screenY,
-      tw = t.width,
-      th = t.height;
+      tw = typeof t.width === "number" ? t.width : 0,
+      th = typeof t.height === "number" ? t.height : 0;
     if (tx < x1 + 1 && tx + tw > x0 && ty < y1 + 1 && ty + th > y0) {
       refs.selected = true;
       ctx.setTileVisual(key, TileVisual.Selected);
@@ -242,7 +244,7 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
 // modal menus kill any in-flight band so a stale rect can't commit later
 export const cancelBand = (ctx: BandCtx): void => {
   bandStart = null;
-  const b: any = ctx.byId(BAND_ID);
+  const b = ctx.byId(BAND_ID);
   if (b) {
     try {
       b.visible = false;

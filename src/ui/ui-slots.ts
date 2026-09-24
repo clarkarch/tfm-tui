@@ -7,7 +7,7 @@
 // back to a pre-darkened glyph (setScrim); rasters come back on close.
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
-import { Box, type ColorInput, ImageRenderable, Text } from "@opentui/core";
+import { Box, type CliRenderer, type ColorInput, ImageRenderable, Text } from "@opentui/core";
 import { iconPng, thumbPng } from "./icons";
 import { swallow } from "../app/log";
 import type { IconMode, Theme } from "../config/config";
@@ -81,7 +81,7 @@ export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible
 export const thumbImageFit = (vector: boolean): "fit" | "cover" => (vector ? "fit" : "cover");
 
 export type SlotsCtx = {
-  renderer(): any;
+  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   clearChildren(node: unknown): void;
   // live theme — always read through the getter, never captured
@@ -170,7 +170,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const setIconState = (spec: IconSpec | undefined, stateIdx: number): boolean => {
     if (!spec) return false;
     spec.initialState = stateIdx;
-    const slot: any = ctx.byId(spec.slotId);
+    const slot = ctx.byId(spec.slotId);
     if (!slot) return false;
     const kids = slot.getChildren?.() ?? [];
     const stateImgs = kids.filter(
@@ -213,7 +213,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       while (idx < jobs.length) {
         const j = jobs[idx++];
         if (!j) continue;
-        let slot: any = ctx.byId(j.slotId);
+        let slot = ctx.byId(j.slotId);
         if (!slot) continue;
         const hCells = j.hCells ?? ctx.iconCells();
         const jobBg = j.bg ?? ctx.colors().bg;
@@ -246,7 +246,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
           ctx.clearChildren(slot);
           slot.add(img);
         } catch {
-          if (slot.getChildren().length === 0) {
+          // `slot` is re-assigned inside the try above, so the catch sees the
+          // unnarrowed type again — the optional chain re-establishes it
+          if (slot?.getChildren().length === 0) {
             try {
               slot.add(Text({ content: j.fallbackGlyph, fg: ctx.colors().sidebarFgMuted }));
             } catch {}
@@ -316,7 +318,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     await Promise.all(
       pending.map(async (spec) => {
         spec.done = true;
-        const slot: any = ctx.byId(spec.slotId);
+        const slot = ctx.byId(spec.slotId);
         if (!slot) return;
         if (spec.statesFactory) {
           try {
@@ -456,7 +458,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const paint = (on: boolean) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {
-        const n: any = ctx.byId(id);
+        const n = ctx.byId(id);
         if (n) applySurface(n, btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, on, ctx.colors().sidebarBg));
       } catch {}
     };

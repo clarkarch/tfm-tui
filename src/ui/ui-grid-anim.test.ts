@@ -14,8 +14,14 @@ import {
   revealStyleMap,
   slideTravel,
 } from "./ui-grid-anim";
+import type { MaybeNode } from "../lib/node-like";
 
 const CFG = { dist: 6, span: 0.4, ease: "ease-out", dir: "up" } as const;
+
+// byId answers a node view; these fakes implement only the members the animator
+// writes (opacity / translateX / translateY), so they cross the seam by cast
+// rather than by growing a fake Renderable's whole surface.
+const asNode = (n: object | null | undefined): MaybeNode => n as unknown as MaybeNode;
 
 describe("quantizeDy", () => {
   test("keeps translateY on whole cells (fractional coords crash image draw)", () => {
@@ -452,7 +458,7 @@ describe("makeFileAnim (engine)", () => {
       translateY: 0,
     }));
     const inner = { opacity: 1, translateX: 0, translateY: 0 };
-    const byId = (id: string) => (id === "bigd-inner" ? inner : (fakes[Number(id.slice(1))] ?? null));
+    const byId = (id: string) => asNode(id === "bigd-inner" ? inner : (fakes[Number(id.slice(1))] ?? null));
     const anim = makeFileAnim({
       renderer: t.renderer,
       byId,
@@ -473,7 +479,7 @@ describe("makeFileAnim (engine)", () => {
       translateX: 0,
       translateY: 0,
     }));
-    const byId = (id: string) => fakes[Number(id.slice(1))] ?? null;
+    const byId = (id: string) => asNode(fakes[Number(id.slice(1))] ?? null);
     const anim = makeFileAnim({
       renderer: t.renderer,
       byId,
@@ -491,7 +497,7 @@ describe("makeFileAnim (engine)", () => {
   test("over file-animation-max-files the animation is skipped entirely", () => {
     const inner = { opacity: 1, translateX: 0, translateY: 0 };
     const tiles = Array.from({ length: 30 }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
-    const byId = (id: string) => (id === "maxf-inner" ? inner : (tiles[Number(id.slice(1))] ?? null));
+    const byId = (id: string) => asNode(id === "maxf-inner" ? inner : (tiles[Number(id.slice(1))] ?? null));
     let maxFiles = 25;
     const anim = makeFileAnim({
       renderer: t.renderer,
@@ -526,7 +532,7 @@ describe("makeFileAnim (engine)", () => {
     const rows = Array.from({ length: 5 }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
     const tiles = Array.from({ length: 25 }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
     const byId = (id: string) =>
-      id === "rows-inner" ? inner : id.startsWith("r") ? rows[Number(id.slice(1))] : tiles[Number(id.slice(1))];
+      asNode(id === "rows-inner" ? inner : id.startsWith("r") ? rows[Number(id.slice(1))] : tiles[Number(id.slice(1))]);
     const anim = makeFileAnim({
       renderer: t.renderer,
       byId,
@@ -550,7 +556,7 @@ describe("makeFileAnim (engine)", () => {
 
   test("at-cap per-node list still animates", () => {
     const fakes = Array.from({ length: MAX_PER_NODE_ANIM }, () => ({ opacity: 1, translateX: 0, translateY: 0 }));
-    const byId = (id: string) => fakes[Number(id.slice(1))] ?? null;
+    const byId = (id: string) => asNode(fakes[Number(id.slice(1))] ?? null);
     const anim = makeFileAnim({
       renderer: t.renderer,
       byId,
@@ -565,7 +571,7 @@ describe("makeFileAnim (engine)", () => {
 
   test("the container path is exempt from the per-node ceiling", () => {
     const inner = { opacity: 1, translateX: 0, translateY: 0 };
-    const byId = (id: string) => (id === "big-inner" ? inner : { opacity: 1 });
+    const byId = (id: string) => asNode(id === "big-inner" ? inner : { opacity: 1 });
     const anim = makeFileAnim({
       renderer: t.renderer,
       byId,

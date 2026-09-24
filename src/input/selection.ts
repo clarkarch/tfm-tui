@@ -68,11 +68,11 @@ export const makeSelection = (ctx: SelectionCtx) => {
     if (!refs.iconSpec) {
       // thumbnail slots have no state rasters — fade the whole slot instead
       try {
-        const slot: any = ctx.byId(refs.iconSlotId ?? "");
+        const slot = ctx.byId(refs.iconSlotId ?? "");
         if (slot) slot.opacity = cut ? 0.45 : 1;
       } catch {}
     }
-    const labelReal: any = ctx.byId(refs.labelId);
+    const labelReal = ctx.byId(refs.labelId);
     if (labelReal) {
       try {
         // hover lifts the label to white (readable on the blue hover fill);
@@ -87,7 +87,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
                 : refs.baseFg;
       } catch {}
     }
-    const tileReal: any = ctx.byId(refs.tileId);
+    const tileReal = ctx.byId(refs.tileId);
     if (tileReal) {
       const state =
         mode === TileVisual.Selected ? "selected" : mode === TileVisual.Hover ? "hover" : cut ? "cut" : "rest";

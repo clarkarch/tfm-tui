@@ -28,11 +28,7 @@
 // declarations), which is what lets a real Renderable — whose `add` takes a
 // concrete `Renderable` — satisfy this structural view.
 
-import type { ColorInput, MouseEvent } from "@opentui/core";
-
-// The key shape the widgets read off a keypress (OpenTUI's ParsedKey `name`).
-// Structural, so real ParsedKey values and test fakes both satisfy it.
-export type KeyLike = { name?: string };
+import type { ColorInput, KeyEvent, MouseEvent } from "@opentui/core";
 
 export type NodeLike = {
   id?: string;
@@ -50,20 +46,42 @@ export type NodeLike = {
   left?: number | "auto" | `${number}%`;
   top?: number | "auto" | `${number}%`;
   scrollTop?: number;
-  // colors: hex string in, RGBA out — parsed by OpenTUI on assignment
+  // screen-space geometry, read by the drag ghost/band positioning. Required:
+  // Renderable declares all four as plain number getters.
+  x: number;
+  y: number;
+  screenX: number;
+  screenY: number;
+  // colors: hex string in, RGBA out — parsed by OpenTUI on assignment.
+  // `textColor`/`focusedBackgroundColor` are runtime-assigned through OpenTUI's
+  // options bag and carry no .d.ts declaration, which is exactly why they need
+  // naming here: a theme repaint of the wrong node is otherwise invisible.
   fg?: ColorInput;
   bg?: ColorInput;
   backgroundColor?: ColorInput;
-  // tree + lifecycle
+  color?: ColorInput | ColorInput[]; // ASCIIFont wordmark
+  borderColor?: ColorInput;
+  textColor?: ColorInput;
+  focusedTextColor?: ColorInput;
+  focusedBackgroundColor?: ColorInput;
+  // text-selection opt-out: every rebuilt Text node defaults selectable, and
+  // the renderer's selection drag hijacks the file-drag flows (stripSelectable)
+  selectable?: boolean;
+  // teardown guard — a node reaped by an async rebuild answers true here
+  isDestroyed?: boolean;
+  // tree + lifecycle — REQUIRED because Renderable declares every one of them
+  // (`abstract getChildren()`, `add`, `remove`, `insertBefore`, `destroy`,
+  // `focus`, `blur`), so the widgets may call them unguarded. Only the ones a
+  // real Renderable genuinely lacks stay optional.
   parent?: NodeLike | null;
-  add?(child: unknown, index?: number): unknown;
-  remove?(child: unknown): void;
-  getChildren?(): NodeLike[];
-  destroy?(): void;
-  insertBefore?(child: unknown, anchor?: unknown): unknown;
-  focus?(): void;
-  blur?(): void;
-  handleKeyPress?(key: KeyLike): boolean;
+  add(child: unknown, index?: number): unknown;
+  remove(child: unknown): void;
+  getChildren(): NodeLike[];
+  destroy(): void;
+  insertBefore(child: unknown, anchor?: unknown): unknown;
+  focus(): void;
+  blur(): void;
+  handleKeyPress?(key: KeyEvent): boolean;
   // `unknown[]` rather than `never[]`: a real Renderable.on takes `any[]`, and
   // `any` is NOT assignable to `never`, so `never[]` failed assignability in
   // both bivariance directions (measured). `unknown[]` accepts it, and a
@@ -86,3 +104,7 @@ export type NodeLike = {
 // caller to pretend resolution succeeded, and test fakes that mirror the real
 // contract (`map.get(id)`, i.e. possibly-undefined) wouldn't typecheck.
 export type MaybeNode = NodeLike | null | undefined;
+
+// The renderer root, as the lookup helpers see it: a node that can resolve ids
+// (`renderer.root`). Widening NodeLike, so stripSelectable can walk from it.
+export type NodeRoot = NodeLike & { findDescendantById(id: string): MaybeNode };

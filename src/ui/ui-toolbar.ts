@@ -7,7 +7,7 @@
 import path from "node:path";
 import os from "node:os";
 import { statSync } from "node:fs";
-import { Box, Input, InputRenderable, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, InputRenderable, type KeyEvent, Text } from "@opentui/core";
 import { applySurface, btnSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
@@ -30,7 +30,7 @@ type ToolbarCtx = {
   // per-pane id prefix ("tfm-p0-"/"tfm-p1-") — dual pane builds one toolbar
   // instance per pane, so every node id must be unique across the registry
   prefix: string;
-  renderer(): any;
+  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   clearChildren(node: unknown): void;
   stripSelectable(): void;
@@ -126,7 +126,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
 
   const navBtnBg = (btnId: string) => {
     try {
-      const n: any = ctx.byId(btnId);
+      const n = ctx.byId(btnId);
       if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
     } catch {}
   };
@@ -182,7 +182,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     for (const key of ["nav-back", "nav-fwd", "search-btn", "sort-btn"]) {
       const btnId = id(key);
       try {
-        const n: any = ctx.byId(btnId);
+        const n = ctx.byId(btnId);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
       } catch {}
     }
@@ -215,16 +215,17 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   };
 
   const renderCrumbs = () => {
-    const box: any = ctx.byId(id("crumbs"));
+    const box = ctx.byId(id("crumbs"));
     if (!box) return;
 
     if (pathEditMode) {
       ctx.clearChildren(box);
-      let input: any = ctx.byId(id("path-input"));
-      if (!input) {
-        // real class instance: proxied composition nodes don't mount under an
-        // already-mounted parent
-        input = new InputRenderable(ctx.renderer(), {
+      // resolve once and construct only on a miss: both branches share this
+      // binding, and a `let` would lose its narrowing inside the enter handler
+      const existing = ctx.byId(id("path-input"));
+      const input =
+        existing ??
+        new InputRenderable(ctx.renderer(), {
           id: id("path-input"),
           flexGrow: 1,
           value: isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()),
@@ -232,6 +233,9 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           focusedBackgroundColor: ctx.colors().accentBg,
           textColor: ctx.colors().white,
         });
+      if (!existing) {
+        // real class instance: proxied composition nodes don't mount under an
+        // already-mounted parent
         box.add(input);
         input.on?.("enter", () => {
           const target = String(input.value ?? "").replace(/^~(?=\/|$)/, ctx.home);
@@ -249,7 +253,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         // focused editors can consume keys before the global handler; intercept
         // escape at the source so it always cancels
         const prevHandler = input.handleKeyPress?.bind(input);
-        input.handleKeyPress = (key: any) => {
+        input.handleKeyPress = (key: KeyEvent) => {
           if (key?.name === "escape") {
             exitPathEdit();
             return true;
@@ -313,7 +317,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       const paintHover = (on: boolean) => {
         if (iconSlot && !current) setIconState(iconSlot.spec, toggleIconState(on, false));
         try {
-          const n: any = ctx.byId(id(`crumb-${i}`));
+          const n = ctx.byId(id(`crumb-${i}`));
           if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on && !current));
         } catch {}
       };
@@ -374,7 +378,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     const paint = (on: boolean) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {
-        const n: any = ctx.byId(id);
+        const n = ctx.byId(id);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on));
       } catch {}
     };
@@ -415,7 +419,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       hoverBtn(id("search-btn"), "search", () => {
         ctx.closeFileMenu();
         ctx.blurTerminal();
-        const el: any = ctx.byId(id("search"));
+        const el = ctx.byId(id("search"));
         if (!el) return;
         el.visible = !el.visible;
         if (el.visible) el.focus();

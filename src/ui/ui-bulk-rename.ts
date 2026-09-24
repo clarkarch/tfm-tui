@@ -4,7 +4,7 @@
 // cancels, validation errors render in the footer and keep the modal open.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, Input, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, RGBA, Text } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface } from "./style";
 import { bulkRenameNames, planBulkRename, type BulkRenamePair, type BulkRenameStyle } from "../fs/bulk-rename";
@@ -14,7 +14,7 @@ import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 
 type BulkRenameCtx = {
-  renderer(): any;
+  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: any): void;
   clearChildren(node: any): void;
@@ -44,12 +44,12 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
   let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const setError = (msg: string): void => {
-    const el: any = ctx.byId("tfm-bulkrename-error");
+    const el = ctx.byId("tfm-bulkrename-error");
     if (el) el.content = msg || EMPTY_ERROR;
   };
 
   const renderPreview = (): void => {
-    const box: any = ctx.byId("tfm-bulkrename-preview");
+    const box = ctx.byId("tfm-bulkrename-preview");
     if (!box) return;
     const c = ctx.colors();
     ctx.clearChildren(box);
@@ -98,9 +98,9 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     const c = ctx.colors();
     for (const s of STYLES) {
       const active = s === style;
-      const chip: any = ctx.byId(`tfm-bulkrename-style-${s}`);
+      const chip = ctx.byId(`tfm-bulkrename-style-${s}`);
       if (chip) applySurface(chip, btnSurface(ctx.uiStyle(), c, active, c.sidebarBg));
-      const label: any = ctx.byId(`tfm-bulkrename-style-label-${s}`);
+      const label = ctx.byId(`tfm-bulkrename-style-label-${s}`);
       if (label) label.fg = active ? c.accent : c.sidebarFgMuted;
     }
   };
@@ -127,7 +127,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     try {
       ctx.byId("tfm-bulkrename-input")?.blur?.();
     } catch {}
-    const scrim: any = ctx.byId("tfm-bulkrename");
+    const scrim = ctx.byId("tfm-bulkrename");
     scrim?.parent?.remove(scrim);
   };
 
@@ -270,7 +270,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
       ),
     );
     ctx.rootAdd(scrim);
-    const input: any = ctx.byId("tfm-bulkrename-input");
+    const input = ctx.byId("tfm-bulkrename-input");
     if (input?.on) {
       input.on("input", () => {
         try {
@@ -299,11 +299,11 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     if (!opened) return;
     const c = ctx.colors();
     try {
-      const panel: any = ctx.byId("tfm-bulkrename-panel");
+      const panel = ctx.byId("tfm-bulkrename-panel");
       if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
     } catch {}
     try {
-      const input: any = ctx.byId("tfm-bulkrename-input");
+      const input = ctx.byId("tfm-bulkrename-input");
       if (input) {
         input.backgroundColor = c.accentBg;
         input.focusedBackgroundColor = c.accentBg;
@@ -311,17 +311,17 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
       }
     } catch {}
     try {
-      const title: any = ctx.byId("tfm-bulkrename-title");
+      const title = ctx.byId("tfm-bulkrename-title");
       if (title) title.fg = c.accent;
     } catch {}
     for (const id of ["tfm-bulkrename-label-name", "tfm-bulkrename-label-number", "tfm-bulkrename-label-preview"]) {
       try {
-        const label: any = ctx.byId(id);
+        const label = ctx.byId(id);
         if (label) label.fg = c.sidebarFgMuted;
       } catch {}
     }
     try {
-      const err: any = ctx.byId("tfm-bulkrename-error");
+      const err = ctx.byId("tfm-bulkrename-error");
       if (err && err.content !== EMPTY_ERROR) err.fg = c.ansi1;
     } catch {}
     try {
@@ -342,7 +342,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     // test seam: drive the input without native key events
     setValue: (v: string): void => {
       try {
-        const input: any = ctx.byId("tfm-bulkrename-input");
+        const input = ctx.byId("tfm-bulkrename-input");
         if (input) input.value = v;
       } catch {}
       value = v;

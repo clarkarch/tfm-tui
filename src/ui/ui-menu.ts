@@ -68,12 +68,12 @@ export const makeMenu = (ctx: MenuCtx) => {
   // raw teardown — registered with floats at open time, invoked by floats
   // (public closeFileMenu is floats.close("filemenu"))
   const removeSub = (): void => {
-    const sub: any = ctx.byId("tfm-filemenu-sub");
+    const sub = ctx.byId("tfm-filemenu-sub");
     sub?.parent?.remove(sub);
   };
   const rawCloseMenu = () => {
     removeSub();
-    const scrim: any = ctx.byId("tfm-filemenu");
+    const scrim = ctx.byId("tfm-filemenu");
     scrim?.parent?.remove(scrim);
     state = null;
   };
@@ -176,7 +176,7 @@ export const makeMenu = (ctx: MenuCtx) => {
     );
     ctx.rootAdd(sub);
     // add rows to the MOUNTED panel (the local VNode proxy no-ops post-add)
-    const livePanel: any = ctx.byId("tfm-filemenu-sub-panel");
+    const livePanel = ctx.byId("tfm-filemenu-sub-panel");
     if (!livePanel) return;
     livePanel.add(
       Box(
@@ -207,7 +207,7 @@ export const makeMenu = (ctx: MenuCtx) => {
   };
 
   const renderFileMenu = () => {
-    const panel: any = ctx.byId("tfm-filemenu-panel");
+    const panel = ctx.byId("tfm-filemenu-panel");
     if (!panel || !state) return;
     const colors = ctx.colors();
     clearChildren(panel);

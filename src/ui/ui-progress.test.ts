@@ -12,6 +12,7 @@ import {
   type ProgressCtx,
 } from "./ui-progress";
 import type { ToastHandle } from "./notify";
+import type { MaybeNode } from "../lib/node-like";
 
 const MB = 1024 * 1024;
 
@@ -182,7 +183,7 @@ describe("counting pre-scan paint", () => {
   test("paintProgress writes the counting line and blanks the bar", () => {
     const nodes = new Map<string, { content: string }>();
     for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
-    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) });
+    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
     const { prog, paintProgress } = makeProgress(ctx);
     prog.active = true;
     prog.toastUp = true;
@@ -196,7 +197,7 @@ describe("counting pre-scan paint", () => {
   test("clearing counting hands the paint back to the byte bar", () => {
     const nodes = new Map<string, { content: string }>();
     for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
-    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) });
+    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
     const { prog, paintProgress } = makeProgress(ctx);
     prog.active = true;
     prog.toastUp = true;

@@ -113,7 +113,7 @@ export const makeProps = (ctx: PropsCtx) => {
       onClose: () => closeProps(),
     });
 
-    const panel: any = ctx.byId("tfm-props-panel");
+    const panel = ctx.byId("tfm-props-panel");
     if (!panel) return;
 
     // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
@@ -127,7 +127,7 @@ export const makeProps = (ctx: PropsCtx) => {
     const propsTogglePaint = (btnId: string, spec: any, on: boolean, hover: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, hover));
       try {
-        const n: any = ctx.byId(btnId);
+        const n = ctx.byId(btnId);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), colors, hover, colors.sidebarBg));
       } catch {}
     };
@@ -310,7 +310,7 @@ export const makeProps = (ctx: PropsCtx) => {
         if (walkGen !== dirWalkGen) return;
         if (!propsOpen || !s) {
           if (propsOpen) {
-            const n: any = ctx.byId("tfm-props-size");
+            const n = ctx.byId("tfm-props-size");
             if (n) {
               try {
                 // dirWalkStats gives up past 200k entries (null) — say that
@@ -321,7 +321,7 @@ export const makeProps = (ctx: PropsCtx) => {
           }
           return;
         }
-        const n: any = ctx.byId("tfm-props-size");
+        const n = ctx.byId("tfm-props-size");
         if (n) {
           try {
             n.content = `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`;
@@ -381,7 +381,7 @@ export const makeProps = (ctx: PropsCtx) => {
       onClose: () => closeProps(),
     });
 
-    const panel: any = ctx.byId("tfm-props-panel");
+    const panel = ctx.byId("tfm-props-panel");
     if (!panel) return;
 
     panel.add(
@@ -446,7 +446,7 @@ export const makeProps = (ctx: PropsCtx) => {
     }
     const settle = (): void => {
       if (!propsOpen) return;
-      const n: any = ctx.byId("tfm-props-size");
+      const n = ctx.byId("tfm-props-size");
       if (n) {
         const counts = dirPaths.length ? ` · ${nFiles} files · ${nFolders} folders` : ` · ${nFiles} files`;
         try {

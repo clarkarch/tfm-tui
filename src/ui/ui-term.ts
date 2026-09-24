@@ -1,4 +1,4 @@
-import { Box, EmbeddedTerminalRenderable, Text } from "@opentui/core";
+import { Box, type CliRenderer, EmbeddedTerminalRenderable, Text } from "@opentui/core";
 import { clearChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
 import { applySurface, type UiStyle } from "./style";
@@ -18,7 +18,7 @@ import type { MaybeNode } from "../lib/node-like";
 // bubbles up to the host).
 
 type TermCtx = {
-  renderer: any;
+  renderer: CliRenderer;
   byId(id: string): MaybeNode;
   uiStyle(): UiStyle;
   colors(): Theme;

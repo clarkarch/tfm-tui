@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box, CodeRenderable, TextRenderable } from "@opentui/core";
+import { Box, type CliRenderer, CodeRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import type { MaybeNode } from "../lib/node-like";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -53,8 +54,8 @@ const COLORS: any = { sidebarFg: "#aaa", sidebarFgMuted: "#666", divider: "#333"
 
 const mkPreview = (opts: { visible: boolean; clock: ReturnType<typeof mkClock>; pane: ReturnType<typeof mkPane> }) =>
   makePreview({
-    renderer: null,
-    byId: () => opts.pane.node,
+    renderer: null as unknown as CliRenderer,
+    byId: () => opts.pane.node as unknown as MaybeNode,
     colors: () => COLORS,
     uiStyle: () => "solid",
     previewEnabled: () => true,

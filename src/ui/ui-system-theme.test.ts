@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import type { CliRenderer } from "@opentui/core";
 import { defaultConfig, type Config } from "../config/config-schema";
 import { makeSystemTheme } from "./ui-system-theme";
 
@@ -25,6 +26,11 @@ const PALETTE = [
   "#7dcfff",
   "#c0caf5",
 ];
+
+// The ctx seam is a real CliRenderer; this suite drives only the terminal-query
+// surface makeSystemTheme probes (getPalette / themeMode / waitForThemeMode /
+// on), so the stand-in crosses the seam through one explicit cast.
+const asRenderer = (r: FakeRenderer | null): CliRenderer => r as unknown as CliRenderer;
 
 class FakeRenderer extends EventEmitter {
   themeMode: "dark" | "light" | null = "dark";
@@ -90,7 +96,7 @@ const mkCtx = (
   const renderer = new FakeRenderer();
   const calls = { apply: 0, saves: 0, log: [] as string[] };
   const sys = makeSystemTheme({
-    renderer: () => renderer,
+    renderer: () => asRenderer(renderer),
     config,
     colors,
     applyConfig: (fresh: Config) => {
@@ -165,7 +171,7 @@ describe("resolveSystemTheme", () => {
     const config = clone(defaultConfig);
     config.ui.followTerminal = true;
     const sys = makeSystemTheme({
-      renderer: () => null,
+      renderer: () => asRenderer(null),
       config,
       colors: { ...config.theme },
       applyConfig: () => {
@@ -188,7 +194,7 @@ describe("applyBootSystemTheme", () => {
     const { sys, config, colors } = mkCtx(true);
     let applied = false;
     const sysNoApply = makeSystemTheme({
-      renderer: () => new FakeRenderer(),
+      renderer: () => asRenderer(new FakeRenderer()),
       config,
       colors,
       applyConfig: () => {
@@ -214,7 +220,7 @@ describe("applyBootSystemTheme", () => {
   test("compat/console mode skips the boot derive (static console palette wins)", async () => {
     const h = mkCtx(true);
     const sys = makeSystemTheme({
-      renderer: () => h.renderer,
+      renderer: () => asRenderer(h.renderer),
       config: h.config,
       colors: h.colors,
       applyConfig: () => {},
@@ -232,7 +238,7 @@ describe("applyBootSystemTheme", () => {
     const h = mkCtx(true);
     const fired: unknown[] = [];
     const sys = makeSystemTheme({
-      renderer: () => h.renderer,
+      renderer: () => asRenderer(h.renderer),
       config: h.config,
       colors: h.colors,
       applyConfig: () => {},
@@ -244,7 +250,7 @@ describe("applyBootSystemTheme", () => {
     silent.renderer.failPalette = true;
     let silentFired = 0;
     const sysSilent = makeSystemTheme({
-      renderer: () => silent.renderer,
+      renderer: () => asRenderer(silent.renderer),
       config: silent.config,
       colors: silent.colors,
       applyConfig: () => {},
@@ -337,7 +343,7 @@ describe("stale landings (B2)", () => {
     (renderer as unknown as { getPalette: () => Promise<unknown> }).getPalette = () => gate;
     let applied = 0;
     const sys = makeSystemTheme({
-      renderer: () => renderer,
+      renderer: () => asRenderer(renderer),
       config,
       colors: { ...config.theme },
       applyConfig: () => {

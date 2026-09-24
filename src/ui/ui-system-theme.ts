@@ -1,4 +1,4 @@
-import { CliRenderEvents } from "@opentui/core";
+import { type CliRenderer, CliRenderEvents } from "@opentui/core";
 import { bumpHex } from "../config/color";
 import { deriveSystemTheme, type TerminalPaletteInput, type TerminalThemeMode } from "../config/system-theme";
 import type { Config, Theme } from "../config/config-schema";
@@ -14,7 +14,7 @@ import { debounced, withTimeout, type Scheduler } from "../lib/uiutil";
 // THEME_MODE live-follow go through applyConfig (full retheme path).
 
 export type SystemThemeCtx = {
-  renderer(): any;
+  renderer(): CliRenderer;
   // live refs — boot assigns them in place, runtime merges via applyConfig
   config: Config;
   colors: Theme;

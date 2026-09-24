@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { CliRenderer } from "@opentui/core";
 import { makeLookup, waitForResolution } from "./ui-lookup";
 
 // fake renderable tree: nodes expose getChildren() like the real renderer
@@ -38,7 +39,7 @@ describe("makeLookup", () => {
   test("byId finds nested nodes post-mount", () => {
     const tree = branch(undefined, branch("tfm-panel", leaf("tfm-label")));
     const { byId } = makeLookup({ root: () => mkRoot(tree) });
-    expect(byId("tfm-label").id).toBe("tfm-label");
+    expect(byId("tfm-label")?.id).toBe("tfm-label");
   });
 
   test("byId tolerates a miss (nodes die on every rebuild)", () => {
@@ -113,7 +114,7 @@ describe("makeLookup", () => {
 
 describe("waitForResolution", () => {
   test("returns immediately when resolution is already set", async () => {
-    await waitForResolution({ resolution: { width: 80 } });
+    await waitForResolution({ resolution: { width: 80, height: 24 } } as unknown as CliRenderer);
   });
 
   test("gives up after the poll budget when resolution never lands", async () => {
@@ -126,7 +127,7 @@ describe("waitForResolution", () => {
         polls++;
         return null;
       },
-    });
+    } as unknown as CliRenderer);
     expect(polls).toBe(40);
     expect(Date.now() - start).toBeGreaterThanOrEqual(1900);
   });

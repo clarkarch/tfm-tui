@@ -29,7 +29,7 @@ export const makeSearch = (ctx: SearchCtx) => {
       focusTimer = null;
     }
     try {
-      const el: any = ctx.byId(ctx.inputId);
+      const el = ctx.byId(ctx.inputId);
       if (el) {
         el.value = "";
         el.visible = false;
@@ -49,7 +49,7 @@ export const makeSearch = (ctx: SearchCtx) => {
   // that char instead of doing legacy jump-ahead
   const beginTypeToSearch = (ch: string): void => {
     if (ctx.termHasFocus()) return;
-    const el: any = ctx.byId(ctx.inputId);
+    const el = ctx.byId(ctx.inputId);
     if (!el) return;
     el.visible = true;
     el.value = ch;
@@ -68,7 +68,7 @@ export const makeSearch = (ctx: SearchCtx) => {
   // live in the global key handler (enter commits into the first match,
   // escape cancels) — no listeners for those here by design
   const wireSearchInput = (): void => {
-    const inputEl: any = ctx.byId(ctx.inputId);
+    const inputEl = ctx.byId(ctx.inputId);
     if (!inputEl?.on) return;
     const renderSearchResults = debounced(150, () => void ctx.renderGrid(), sched);
     inputEl.on("input", () => {

@@ -72,14 +72,14 @@ export const makeDialogs = (ctx: DialogsCtx) => {
   };
 
   const closeDialog = (id: string): void => {
-    const scrim: any = ctx.byId(id);
+    const scrim = ctx.byId(id);
     scrim?.parent?.remove(scrim);
   };
 
   // hover button used by the conflict + yes/no dialogs (identical builders)
   const dialogBtn = (id: string, label: string, fg: string, onPick: () => void): ReturnType<typeof Box> => {
     const setBg = (on: boolean) => {
-      const n: any = ctx.byId(id);
+      const n = ctx.byId(id);
       if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on, ctx.colors().sidebarBg));
     };
     return Box(
@@ -223,12 +223,12 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
     if (!conflictOpen) return;
     const c = ctx.colors();
     try {
-      const panel: any = ctx.byId("tfm-conflict");
+      const panel = ctx.byId("tfm-conflict");
       if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
     } catch {}
     const setFg = (id: string, fg: string): void => {
       try {
-        const n: any = ctx.byId(id);
+        const n = ctx.byId(id);
         if (n) n.fg = fg;
       } catch {}
     };
@@ -238,7 +238,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
     // 3 buttons, 6 with the …all row — loop the id space, skip the missing
     for (let i = 0; i < 8; i++) {
       try {
-        const btn: any = ctx.byId(`tfm-conflict-b${i}`);
+        const btn = ctx.byId(`tfm-conflict-b${i}`);
         if (!btn) continue;
         applySurface(btn, btnSurface(ctx.uiStyle(), c, false, c.sidebarBg));
         const label = btn.getChildren?.()?.[0];
@@ -302,7 +302,7 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     const c = ctx.colors();
     for (let i = 0; i < 2; i++) {
       try {
-        const node: any = ctx.byId(`tfm-yesno-b${i}`);
+        const node = ctx.byId(`tfm-yesno-b${i}`);
         if (node) applySurface(node, btnSurface(ctx.uiStyle(), c, i === focusIdx, c.sidebarBg));
       } catch {}
     }
@@ -373,15 +373,15 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     if (!open) return;
     const c = ctx.colors();
     try {
-      const panel: any = ctx.byId("tfm-yesno");
+      const panel = ctx.byId("tfm-yesno");
       if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
     } catch {}
     try {
-      const msg: any = ctx.byId("tfm-yesno-msg");
+      const msg = ctx.byId("tfm-yesno-msg");
       if (msg) msg.fg = lastDanger ? c.ansi1 : c.accent;
     } catch {}
     try {
-      const div: any = ctx.byId("tfm-yesno-div");
+      const div = ctx.byId("tfm-yesno-div");
       if (div) div.fg = c.divider;
     } catch {}
     try {

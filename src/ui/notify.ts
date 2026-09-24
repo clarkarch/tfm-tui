@@ -146,7 +146,7 @@ export const makeNotify = (
         clearTimeout(entry.timer);
       } catch {}
     }
-    const node: any = ctx.byId(entry.nodeId);
+    const node = ctx.byId(entry.nodeId);
     try {
       if (node) ctx.remove(node);
     } catch {}
@@ -158,7 +158,10 @@ export const makeNotify = (
   // from live array order, never from show-time counts, so they can't stale
   const restack = (): void => {
     toasts.forEach((t, i) => {
-      const n: any = ctx.byId(t.nodeId);
+      const n = ctx.byId(t.nodeId);
+      // a toast reaped by a rebuild is simply not restacked (this used to rely
+      // on a property write on null throwing inside the try)
+      if (!n) return;
       try {
         n.top = slotTop(i);
       } catch {}
@@ -177,7 +180,7 @@ export const makeNotify = (
       } catch {}
       entry.timer = null;
     }
-    const real: any = ctx.byId(entry.nodeId);
+    const real = ctx.byId(entry.nodeId);
     if (!real) {
       removeEntry(id);
       return;
@@ -225,7 +228,7 @@ export const makeNotify = (
       );
       ctx.rootAdd(node);
       // the proxy is dead weight post-mount — animate/dismiss via the real renderable
-      const real: any = ctx.byId(nodeId);
+      const real = ctx.byId(nodeId);
       if (!real) {
         // lookup miss (the memory-pressure scenario the guard anticipates):
         // the node is mounted but untracked — no timer, no removal path. It

@@ -5,6 +5,7 @@
 // rewritten through ctx setters, and raster caches are invalidated only when
 // colors actually changed. No module-level renderer imports — the widget
 // repaint fns arrive via ctx (same seam as ui-dialogs). ---
+import type { CliRenderer } from "@opentui/core";
 import { mkdirSync, watch } from "node:fs";
 import path from "node:path";
 import { bumpHex } from "../config/color";
@@ -14,15 +15,15 @@ import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { debounced } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { MaybeNode } from "../lib/node-like";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 type RethemeCtx = {
   // live object refs — applyConfig mutates them in place
   config: Config;
   colors: Theme;
-  setOnId(id: string, fn: (n: any) => void): void;
+  setOnId(id: string, fn: (n: NodeLike) => void): void;
   byId(id: string): MaybeNode;
-  renderer(): any;
+  renderer(): CliRenderer;
   // geometry lets — rewritten on every applyConfig, never captured
   getSw(): number;
   setSw(v: number): void;
@@ -285,7 +286,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         n.width = id === "tfm-sidebar-root" ? ctx.getSw() : ctx.sideInnerW();
       });
     }
-    const pane: any = ctx.byId("tfm-preview");
+    const pane = ctx.byId("tfm-preview");
     if (pane) {
       try {
         pane.visible = ctx.config.ui.previewEnabled;
@@ -295,7 +296,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // dual-pane visibility: pane 1 + divider show only while enabled. renderAll
     // (below, via renderSig) rebuilds both grids through the new pane width.
     for (const id of ["tfm-pane-col-1", "tfm-pane-divider"]) {
-      const node: any = ctx.byId(id);
+      const node = ctx.byId(id);
       if (node) {
         try {
           node.visible = ctx.config.ui.dualPane;

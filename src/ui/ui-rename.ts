@@ -2,7 +2,7 @@
 // Factory with injected ctx (renderer/colors/refs are live getters); the
 // renameEdit state lives HERE behind getters so the keyboard router and
 // renderGrid read it without a module-level import from index. ---
-import { InputRenderable, Text } from "@opentui/core";
+import { type CliRenderer, InputRenderable, type KeyEvent, Text } from "@opentui/core";
 import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,7 +15,7 @@ import type { MaybeNode } from "../lib/node-like";
 type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
 
 export type RenameCtx = {
-  renderer(): any;
+  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   colors(): Theme;
   tileW(): number;
@@ -68,7 +68,7 @@ export const makeRename = (ctx: RenameCtx) => {
     const edit = renameEdit;
     if (!edit) return;
     renameEdit = null;
-    const input: any = ctx.byId(edit.inputId);
+    const input = ctx.byId(edit.inputId);
     const value = String(input?.value ?? "").trim();
     if (input) {
       try {
@@ -162,8 +162,8 @@ export const makeRename = (ctx: RenameCtx) => {
       ctx.notify("Can't rename here", "rename", "error");
       return;
     }
-    const tile: any = ctx.byId(refs.tileId);
-    const label: any = ctx.byId(refs.labelId);
+    const tile = ctx.byId(refs.tileId);
+    const label = ctx.byId(refs.labelId);
     if (!tile || !label || !existsSync(key)) {
       ctx.notify("Can't rename here (source gone)", "rename", "error");
       return;
@@ -184,7 +184,7 @@ export const makeRename = (ctx: RenameCtx) => {
         stale.parent?.remove?.(stale);
       } catch {}
     }
-    const input: any = new InputRenderable(ctx.renderer(), {
+    const input = new InputRenderable(ctx.renderer(), {
       id: inputId,
       width: ctx.tileW() - 2,
       value: path.basename(key),
@@ -203,7 +203,7 @@ export const makeRename = (ctx: RenameCtx) => {
     renameEdit = { key, inputId, labelIdx, ...(createKind ? { createKind } : {}) };
     input.on?.("enter", () => finishInlineRename(true));
     const prevHandler = input.handleKeyPress?.bind(input);
-    input.handleKeyPress = (k: any) => {
+    input.handleKeyPress = (k: KeyEvent) => {
       if (k?.name === "escape") {
         finishInlineRename(false);
         return true;

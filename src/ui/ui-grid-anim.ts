@@ -14,7 +14,7 @@
 // file-animation (master) + slide/stagger toggles (fileAnimStyleFrom); the
 // curves read easing, slide distance/direction and stagger spread live at play
 
-import { createTimeline, engine, type JSAnimation } from "@opentui/core";
+import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
 import type { HoverLiftOpts, Theme, UiStyle } from "../config/config-schema";
 import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
@@ -187,7 +187,7 @@ type FileAnimOpts = {
 };
 
 type FileAnimCtx = {
-  renderer: any;
+  renderer: CliRenderer;
   byId(id: string): MaybeNode;
   opts(): FileAnimOpts;
 };
@@ -515,7 +515,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       if (!node) return;
       if (!cur.refs.selected) {
         ctx.setIconState(cur.refs.iconSpec, restIconIdx(cur.refs, cur.key));
-        const lab: any = ctx.byId(cur.refs.labelId);
+        const lab = ctx.byId(cur.refs.labelId);
         if (lab) lab.fg = restLabelFg(cur.refs, cur.key);
         writeBg(node, restTileBg(ctx.uiStyle(), ctx.colors()));
       }
@@ -546,7 +546,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
           ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
           // hover-in lifts the label to white (readable on the hover fill);
           // hover-out restores the rest fg — same contract as setTileVisual
-          const lab: any = ctx.byId(refs.labelId);
+          const lab = ctx.byId(refs.labelId);
           if (lab) lab.fg = hovered ? offColors.white : restLabelFg(refs, key);
           if (slot) {
             slot.translateX = 0;
@@ -590,7 +590,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       // applies at Rest, exactly like setTileVisual)
       try {
         ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
-        const lab: any = ctx.byId(refs.labelId);
+        const lab = ctx.byId(refs.labelId);
         if (lab) lab.fg = hovered ? colors.white : restLabelFg(refs, key);
       } catch {}
       writeBg(node, toHex);

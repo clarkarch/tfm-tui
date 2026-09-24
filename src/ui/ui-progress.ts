@@ -111,7 +111,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
   let progSpinTimer: any = null;
 
   const progSetText = (nodeId: string, s: string): void => {
-    const n: any = ctx.byId(nodeId);
+    const n = ctx.byId(nodeId);
     if (n) {
       try {
         n.content = s;
@@ -152,8 +152,8 @@ export const makeProgress = (ctx: ProgressCtx) => {
     activeHandle?.close();
     activeHandle = null;
     const setPauseVisual = (): void => {
-      const p: any = ctx.byId(progPauseSpec.slotId);
-      const l: any = ctx.byId(progPlaySpec.slotId);
+      const p = ctx.byId(progPauseSpec.slotId);
+      const l = ctx.byId(progPlaySpec.slotId);
       try {
         if (p) p.visible = !prog.paused;
       } catch {}
@@ -170,7 +170,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
     const progPaint = (spec: any, btnId: string, on: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, false));
       try {
-        const n: any = ctx.byId(btnId);
+        const n = ctx.byId(btnId);
         if (n) n.backgroundColor = on ? ctx.colors().hoverBg : ctx.colors().accentBg;
       } catch {}
     };
@@ -256,7 +256,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
     progSetText(PROG_T_TITLE, truncateToastText(title, TOAST_W - 2));
     progSetText(PROG_T_BAR, "");
     // done means the controls go away — nothing left to pause or cancel
-    const btns: any = ctx.byId(PROG_T_BTNS);
+    const btns = ctx.byId(PROG_T_BTNS);
     if (btns) {
       try {
         btns.visible = false;
@@ -282,18 +282,18 @@ export const makeProgress = (ctx: ProgressCtx) => {
     if (activeHandle === null) return;
     const c = ctx.colors();
     try {
-      const shell: any = ctx.byId(activeHandle.nodeId);
+      const shell = ctx.byId(activeHandle.nodeId);
       if (shell) shell.backgroundColor = c.accentBg;
     } catch {}
     for (const id of [PROG_T_TITLE, PROG_T_BAR]) {
       try {
-        const n: any = ctx.byId(id);
+        const n = ctx.byId(id);
         if (n) n.fg = c.white;
       } catch {}
     }
     for (const id of ["tfm-prog-pause", "tfm-prog-close"]) {
       try {
-        const n: any = ctx.byId(id);
+        const n = ctx.byId(id);
         if (n) n.backgroundColor = c.accentBg;
       } catch {}
     }
