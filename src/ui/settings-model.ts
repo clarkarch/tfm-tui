@@ -315,15 +315,16 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   // ordered categories: schema `group` id -> GUI label + category icon. Icons
   // are existing assets/icons SVGs; a wrong name silently falls back to the
   // generic cog (AGENTS.md), so keep these byte-identical to filenames.
-  // Order is everyday priority: look first, tuning last.
+  // Order is everyday priority: look first, tuning last. panes and animations
+  // sit directly under layout: they answer "how does the UI look and move?".
   const CATEGORIES: { id: NonNullable<UiSchemaRow["group"]>; label: string; icon: string }[] = [
     { id: "appearance", label: "appearance", icon: "pencil" },
     { id: "layout", label: "layout", icon: "select-all" },
+    { id: "panes", label: "panes", icon: "desktop-tower" },
+    { id: "animations", label: "animations", icon: "play" },
     { id: "files", label: "files & session", icon: "folder" },
     { id: "behavior", label: "behavior", icon: "clock" },
-    { id: "panes", label: "panes", icon: "desktop-tower" },
     { id: "keys", label: "keys", icon: "sort" },
-    { id: "animations", label: "animations", icon: "play" },
     { id: "optimization", label: "optimization", icon: "power" },
     { id: "advanced", label: "advanced", icon: "cog" },
   ];

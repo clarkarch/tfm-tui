@@ -91,11 +91,11 @@ describe("settingGroups shape", () => {
     expect(h.groups().map((g) => g.header)).toEqual([
       "appearance",
       "layout",
+      "panes",
+      "animations",
       "files & session",
       "behavior",
-      "panes",
       "keys",
-      "animations",
       "optimization",
       "advanced",
     ]);
@@ -384,11 +384,11 @@ describe("settingGroups shape", () => {
       ).toEqual([
         "appearance",
         "layout",
+        "panes",
+        "animations",
         "files & session",
         "behavior",
-        "panes",
         "keys",
-        "animations",
         "optimization",
         "advanced",
       ]);
