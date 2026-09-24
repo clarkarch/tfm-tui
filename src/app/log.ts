@@ -31,7 +31,7 @@ export const debugLog = (msg: string): void => {
 };
 
 // --- Best-effort failure reporting. A bare `catch {}` makes an UNEXPECTED
-// failure (rsvg missing, cache dir unwritable, bookmarks unreadable, a
+// failure (SVG rasterizer missing, cache dir unwritable, bookmarks unreadable, a
 // mistyped icon slot name) invisible forever: the reported symptom is always
 // one step removed from the cause — a fallback glyph that never swaps, a
 // trash entry with no .trashinfo, a config that silently doesn't save. This

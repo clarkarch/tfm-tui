@@ -11,17 +11,22 @@ import {
   loadEmbeddedIcons,
   lruGet,
   lruSet,
+  pickSvgRenderer,
   svgSourceMtime,
   thumbCooloffMs,
   thumbPng,
 } from "./icons";
 
-// exercises the real rsvg-convert/magick pipeline (both are dev-machine deps);
+// exercises the real resvg/rsvg-convert/magick pipeline (dev-machine deps);
 // failures here mean the raster pipeline or its cache keys broke.
-// The raster tests skip when the binaries are absent (CI runners, containers) —
-// "missing icon rejects" stays live everywhere: it rejects at the asset read,
-// before any binary is spawned.
-const hasRsvg = Bun.which("rsvg-convert") !== null;
+// Icon and vector-thumb tests need an SVG rasterizer (resvg preferred, else
+// rsvg-convert — one at a time, see icons.ts); raster tests need magick.
+// They skip when the binaries are absent (CI runners, containers) — "missing
+// icon rejects" stays live everywhere: with no renderer installed rasterizeSvg
+// throws at the renderer check before reading the asset, and the missing asset
+// throws at the read on a machine that has one.
+const hasResvg = Bun.which("resvg") !== null;
+const hasSvgRenderer = hasResvg || Bun.which("rsvg-convert") !== null;
 const hasMagick = Bun.which("magick") !== null;
 const hasFfmpeg = Bun.which("ffmpeg") !== null;
 
@@ -42,7 +47,7 @@ afterAll(() => {
 });
 
 describe("icons", () => {
-  test.skipIf(!hasRsvg)("iconPng renders a PNG and serves the second request from cache", async () => {
+  test.skipIf(!hasSvgRenderer)("iconPng renders a PNG and serves the second request from cache", async () => {
     clearIconCaches();
     const a = await iconPng("folder", "#c0caf5", "#1a1b26", 16, 16);
     expect(a.length).toBeGreaterThan(0);
@@ -53,14 +58,14 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test.skipIf(!hasRsvg)("power-plug asset rasterizes (esc-menu Plugins entry icon)", async () => {
+  test.skipIf(!hasSvgRenderer)("power-plug asset rasterizes (esc-menu Plugins entry icon)", async () => {
     clearIconCaches();
     const bytes = await iconPng("power-plug", "#c0caf5", "#1a1b26", 16, 16);
     expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
     clearIconCaches();
   });
 
-  test.skipIf(!hasRsvg)("different tints/size produce distinct renders", async () => {
+  test.skipIf(!hasSvgRenderer)("different tints/size produce distinct renders", async () => {
     clearIconCaches();
     const a = await iconPng("folder", "#c0caf5", "#1a1b26", 16, 16);
     const b = await iconPng("folder", "#f7768e", "#1a1b26", 16, 16);
@@ -68,6 +73,25 @@ describe("icons", () => {
     const c = await iconPng("folder", "#c0caf5", "#1a1b26", 32, 32);
     expect(c).not.toBe(a);
     clearIconCaches();
+  });
+
+  test.skipIf(!hasResvg)("prefers resvg: non-square requests keep aspect (fit-inside)", async () => {
+    clearIconCaches();
+    // resvg CLI `-w`+`-h` fits inside (aspect-preserving): the square 24x24
+    // folder glyph in an 18x16 box shrinks to 16x16. rsvg-convert instead
+    // stretches to exactly 18x16, so this pins that resvg is the one running.
+    const bytes = await iconPng("folder", "#c0caf5", "#1a1b26", 18, 16);
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    expect(dv.getUint32(16)).toBe(16); // IHDR width
+    expect(dv.getUint32(20)).toBe(16); // IHDR height
+    clearIconCaches();
+  });
+
+  test("renderer precedence: resvg wins, rsvg-convert is the fallback, none is null", () => {
+    expect(pickSvgRenderer(true, true)).toBe("resvg");
+    expect(pickSvgRenderer(true, false)).toBe("resvg");
+    expect(pickSvgRenderer(false, true)).toBe("rsvg-convert");
+    expect(pickSvgRenderer(false, false)).toBe(null);
   });
 
   test("missing icon rejects", async () => {
@@ -82,7 +106,7 @@ describe("icons", () => {
     expect(t1).not.toBe(iconCacheKey("folder", "#fff", "#111111", 16, 16, 1000, false));
   });
 
-  test.skipIf(!hasRsvg)("transparent iconPng keeps alpha; flattened iconPng is fully opaque", async () => {
+  test.skipIf(!hasSvgRenderer)("transparent iconPng keeps alpha; flattened iconPng is fully opaque", async () => {
     clearIconCaches();
     // the folder glyph never fills the whole canvas: skipping the bg flatten
     // must leave transparent pixels, flattening must leave none
@@ -94,7 +118,7 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test.skipIf(!hasRsvg)("transparent iconPng serves every bg from one raster", async () => {
+  test.skipIf(!hasSvgRenderer)("transparent iconPng serves every bg from one raster", async () => {
     clearIconCaches();
     const a = await iconPng("folder", "#c0caf5", "#111111", 16, 16, { transparent: true });
     const b = await iconPng("folder", "#c0caf5", "#222222", 16, 16, { transparent: true });
@@ -145,7 +169,7 @@ describe("icons", () => {
     expect(map.has("disc")).toBe(false);
   });
 
-  test.skipIf(!hasMagick)("thumbPng rasterizes a file onto a bg", async () => {
+  test.skipIf(!hasMagick && !hasSvgRenderer)("thumbPng rasterizes a file onto a bg", async () => {
     clearIconCaches();
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
@@ -159,7 +183,7 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test.skipIf(!hasRsvg)("vector thumbs render at the exact requested pixel size (rsvg path)", async () => {
+  test.skipIf(!hasSvgRenderer)("vector thumbs use the shared SVG renderer (exact dims per renderer)", async () => {
     clearIconCaches();
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
@@ -168,40 +192,53 @@ describe("icons", () => {
     const bytes = await thumbPng(tmp, 2, 1, 64, 48, "#1a1b26", true);
     expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    expect(dv.getUint32(16)).toBe(64); // IHDR width
-    expect(dv.getUint32(20)).toBe(48); // IHDR height
-  });
-
-  test.skipIf(!hasMagick && !hasRsvg)("thumb disk cache serves revisits after the memory layer drops", async () => {
-    const prevCache = process.env.XDG_CACHE_HOME;
-    const sandbox = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-cache-"));
-    process.env.XDG_CACHE_HOME = sandbox;
-    try {
-      clearIconCaches();
-      const svg =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
-      const tmp = path.join(os.tmpdir(), `tfm-thumb-disk-${process.pid}.svg`);
-      await Bun.write(tmp, svg);
-      const a = await thumbPng(tmp, 3, 1, 32, 32, "#1a1b26", true);
-      // write-behind — poll the sandbox for the cache file
-      const thumbDir = path.join(sandbox, "tfm", "thumbs");
-      let files: string[] = [];
-      for (let i = 0; i < 100; i++) {
-        files = existsSync(thumbDir) ? readdirSync(thumbDir) : [];
-        if (files.length > 0) break;
-        await Bun.sleep(5);
-      }
-      expect(files.length).toBe(1);
-      clearIconCaches(); // drop the memory layer only
-      const b = await thumbPng(tmp, 3, 1, 32, 32, "#1a1b26", true);
-      expect(b).toEqual(a); // served from disk, byte-identical
-    } finally {
-      if (prevCache === undefined) delete process.env.XDG_CACHE_HOME;
-      else process.env.XDG_CACHE_HOME = prevCache;
-      rmSync(sandbox, { recursive: true, force: true });
-      clearIconCaches();
+    const w = dv.getUint32(16); // IHDR width
+    const h = dv.getUint32(20); // IHDR height
+    // Exact dims pin WHICH renderer ran: resvg fits inside (square 24x24 at
+    // 64x48 → 48x48); rsvg-convert keeps the exact letterboxed 64x48 canvas.
+    // A `<= requested` assertion would pass for both and prove nothing.
+    if (hasResvg) {
+      expect(w).toBe(48);
+      expect(h).toBe(48);
+    } else {
+      expect(w).toBe(64);
+      expect(h).toBe(48);
     }
   });
+
+  test.skipIf(!hasMagick && !hasSvgRenderer)(
+    "thumb disk cache serves revisits after the memory layer drops",
+    async () => {
+      const prevCache = process.env.XDG_CACHE_HOME;
+      const sandbox = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-cache-"));
+      process.env.XDG_CACHE_HOME = sandbox;
+      try {
+        clearIconCaches();
+        const svg =
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#123456"/></svg>';
+        const tmp = path.join(os.tmpdir(), `tfm-thumb-disk-${process.pid}.svg`);
+        await Bun.write(tmp, svg);
+        const a = await thumbPng(tmp, 3, 1, 32, 32, "#1a1b26", true);
+        // write-behind — poll the sandbox for the cache file
+        const thumbDir = path.join(sandbox, "tfm", "thumbs");
+        let files: string[] = [];
+        for (let i = 0; i < 100; i++) {
+          files = existsSync(thumbDir) ? readdirSync(thumbDir) : [];
+          if (files.length > 0) break;
+          await Bun.sleep(5);
+        }
+        expect(files.length).toBe(1);
+        clearIconCaches(); // drop the memory layer only
+        const b = await thumbPng(tmp, 3, 1, 32, 32, "#1a1b26", true);
+        expect(b).toEqual(a); // served from disk, byte-identical
+      } finally {
+        if (prevCache === undefined) delete process.env.XDG_CACHE_HOME;
+        else process.env.XDG_CACHE_HOME = prevCache;
+        rmSync(sandbox, { recursive: true, force: true });
+        clearIconCaches();
+      }
+    },
+  );
 
   // ffmpeg frame generation + raster is slow under parallel-suite load — the
   // 5s bun default is a coin flip here (AGENTS: heavy tests pin their own)
@@ -293,38 +330,44 @@ describe("thumbCooloffMs", () => {
   });
 });
 
-// magick/rsvg missing (CI) can't prove the sentinel end to end — thumbPng
-// rejects at the spawn before the failure is recorded either way, so the
-// "second call rejects fast" contract is only asserted with a real binary.
+// magick/SVG renderer missing (CI) can't prove the sentinel end to end —
+// thumbPng rejects at the spawn before the failure is recorded either way, so
+// the "second call rejects fast" contract is only asserted with a real binary.
 describe("thumb failure sentinel", () => {
-  test.skipIf(!hasMagick && !hasRsvg)("a doomed file is not re-rendered per request", async () => {
-    clearIconCaches();
-    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-fail-"));
-    // not a PNG: the raster/vector pipeline must choke on it
-    const bad = path.join(dir, "broken.svg");
-    writeFileSync(bad, "this is not an image");
-    const errOf = async (p: Promise<Uint8Array>): Promise<string> =>
-      p.then(
-        () => "",
-        (e: unknown) => String(e),
-      );
-    const first = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
-    expect(first).toContain("exited");
-    // second request must reject from the sentinel, NOT by spawning again —
-    // the distinct message is the whole proof (no wall-clock bound needed)
-    const second = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
-    expect(second).toContain("previously failed");
-    // a different version of the same path is a different key: it must get a
-    // REAL render attempt again (the renderer's own error, not the sentinel's)
-    const edited = await errOf(thumbPng(bad, 6, 1, 32, 32, "#1a1b26", true));
-    expect(edited).toContain("exited");
-    // and clearIconCaches wipes the sentinel (theme flip = honest retry)
-    clearIconCaches();
-    const afterClear = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
-    expect(afterClear).toContain("exited");
-    rmSync(dir, { recursive: true, force: true });
-    clearIconCaches();
-  });
+  test.skipIf(!hasMagick && !hasSvgRenderer)(
+    "a doomed file is not re-rendered per request",
+    async () => {
+      clearIconCaches();
+      const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-fail-"));
+      // not a PNG: the raster/vector pipeline must choke on it
+      const bad = path.join(dir, "broken.svg");
+      writeFileSync(bad, "this is not an image");
+      const errOf = async (p: Promise<Uint8Array>): Promise<string> =>
+        p.then(
+          () => "",
+          (e: unknown) => String(e),
+        );
+      const first = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
+      expect(first).toContain("exited");
+      // second request must reject from the sentinel, NOT by spawning again —
+      // the distinct message is the whole proof (no wall-clock bound needed)
+      const second = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
+      expect(second).toContain("previously failed");
+      // a different version of the same path is a different key: it must get a
+      // REAL render attempt again (the renderer's own error, not the sentinel's)
+      const edited = await errOf(thumbPng(bad, 6, 1, 32, 32, "#1a1b26", true));
+      expect(edited).toContain("exited");
+      // and clearIconCaches wipes the sentinel (theme flip = honest retry)
+      clearIconCaches();
+      const afterClear = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
+      expect(afterClear).toContain("exited");
+      rmSync(dir, { recursive: true, force: true });
+      clearIconCaches();
+      // four real spawns (2 rsvg + magick fallbacks) — the 5s bun default flakes
+      // under parallel-suite load (AGENTS: heavy tests pin their own timeout)
+    },
+    20000,
+  );
 });
 
 // minimum alpha over a PNG's pixels (0 = some pixel fully transparent,

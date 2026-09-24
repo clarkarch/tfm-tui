@@ -1,7 +1,7 @@
 // --- Icon slots / thumbnails / modal scrim ---
 // Widget-extraction seam (see ui-dialogs.ts for the template): build time
 // queues a small glyph box via makeIconSlot; the async drain swaps in
-// theme-tinted kitty rasters at exact cell pixels (rsvg-convert via
+// theme-tinted kitty rasters at exact cell pixels (resvg/rsvg-convert via
 // ./icons). Thumbnail jobs share the same drain model. Kitty placements
 // float above all cells, so while a modal is up every background slot falls
 // back to a pre-darkened glyph (setScrim); rasters come back on close.
@@ -185,7 +185,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return true;
   };
 
-  // magick/rsvg spawns are the bottleneck (~100ms each, SVGs worse); 3 workers
+  // magick/renderer spawns are the bottleneck (~100ms each, SVGs worse); 3 workers
   // made big folders drip in one-by-one — match the icon raster cap's spirit
   // and keep the UI thread yielding between jobs
   const THUMB_WORKERS = 8;

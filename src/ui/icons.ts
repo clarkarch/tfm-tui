@@ -81,6 +81,26 @@ export const iconCacheKey = (
       `${name}:${fg}:${pxW}x${pxH}|src${srcMtimeMs}|t`
     : `${name}:${fg}:${bg}:${pxW}x${pxH}|src${srcMtimeMs}`;
 
+// Which SVG rasterizer to spawn. resvg is ~5-7x faster per invocation than
+// rsvg-convert — process startup (cairo/pango/librsvg init) dominates the
+// raster by an order of magnitude, not the drawing, so the lighter dep-free
+// binary wins outright (measured in scripts/bench-raster.ts). Prefer it when
+// installed; fall back to rsvg-convert. Pure selector so the precedence is
+// pinned without either binary on the machine; `svgRenderer` memoizes the
+// Bun.which probe (a PATH scan).
+export const pickSvgRenderer = (hasResvg: boolean, hasRsvg: boolean): "resvg" | "rsvg-convert" | null =>
+  hasResvg ? "resvg" : hasRsvg ? "rsvg-convert" : null;
+let svgRendererCache: "resvg" | "rsvg-convert" | null | undefined;
+const svgRenderer = (): "resvg" | "rsvg-convert" | null => {
+  if (svgRendererCache === undefined) {
+    svgRendererCache = pickSvgRenderer(Bun.which("resvg") !== null, Bun.which("rsvg-convert") !== null);
+  }
+  return svgRendererCache;
+};
+
+// resvg reads stdin as `-` and writes stdout with `-c`; rsvg-convert does both
+// implicitly. resvg fit-inside (`-w`+`-h`) preserves aspect where rsvg stretches
+// — the slot's ImageRenderable `fit` absorbs the difference.
 const rasterizeSvg = async (
   name: string,
   fg: string,
@@ -89,28 +109,43 @@ const rasterizeSvg = async (
   pxH: number,
   transparent = false,
 ): Promise<Uint8Array> => {
+  const renderer = svgRenderer();
+  if (!renderer) throw new Error("no SVG rasterizer available (install resvg or rsvg-convert)");
   const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
   const tinted = /#[0-9a-fA-F]{6}/.test(svg)
     ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
     : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
 
-  // transparent mode omits --background-color entirely (its default is none =
-  // keep alpha); the flattened path bakes bg in because kitty alpha on icon
-  // rasters proved unreliable (tint/fringe) — see [ui] icons
-  const args = transparent
-    ? ["-w", String(pxW), "-h", String(pxH)]
-    : ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)];
-  const proc = spawn("rsvg-convert", args);
+  // transparent mode omits the background entirely (keep alpha); the flattened
+  // path bakes bg in because kitty alpha on icon rasters proved unreliable
+  // (tint/fringe) — see [ui] icons
+  const size = ["-w", String(pxW), "-h", String(pxH)];
+  const args =
+    renderer === "resvg"
+      ? // --quiet mutes resvg's logger, but the stdin "set --resources-dir"
+        // notice is a bare eprintln that bypasses it (verified), so stderr is
+        // drained below rather than trusted to stay empty
+        transparent
+        ? ["--quiet", ...size, "-", "-c"]
+        : ["--quiet", "--background", bg, ...size, "-", "-c"]
+      : transparent
+        ? size
+        : ["--background-color", bg, ...size];
+  const proc = spawn(renderer, args);
   const chunks: Buffer[] = [];
   proc.stdout.on("data", (c: Buffer) => {
     chunks.push(c);
   });
+  // drain stderr: an undrained pipe blocks the child once it fills and 'close'
+  // never fires (the icon job then holds its raster slot forever) — same reason
+  // pngFromProc resumes it
+  proc.stderr.resume();
   const done = new Promise<Uint8Array>((resolve, reject) => {
     proc.on("error", reject);
     proc.on("close", (code) =>
       code === 0 && chunks.length > 0
         ? resolve(new Uint8Array(Buffer.concat(chunks)))
-        : reject(new Error(`rsvg-convert exited ${code}`)),
+        : reject(new Error(`${renderer} exited ${code}`)),
     );
   });
   proc.stdin.end(tinted);
@@ -153,18 +188,24 @@ const THUMB_CACHE_MAX = 200;
 // (name, tint, bg, pixel size, SVG source version, transparency mode) plus a
 // pipeline-version salt. Theme switches naturally miss because fg/bg are part
 // of the key.
-const ICON_DISK_VER = "v3";
+// v4: SVG icons rasterize via resvg when installed (pixels differ from the
+// librsvg path), so v3 entries must regenerate.
+const ICON_DISK_VER = "v4";
+// renderer identity is part of the salt: installing/switching the rasterizer
+// must invalidate whatever the OTHER one cached (a flat version bump only
+// covers the upgrade itself, not a later install)
+const iconSalt = (): string => `${ICON_DISK_VER}:${svgRenderer() ?? "none"}`;
 const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
-  path.join(iconDiskDir(), `${createHash("sha1").update(`${ICON_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
+  path.join(iconDiskDir(), `${createHash("sha1").update(`${iconSalt()}:${key}`).digest("hex").slice(0, 20)}.png`);
 let iconDirReady: Promise<void> | null = null;
 const ensureIconDir = (): Promise<void> =>
   (iconDirReady ??= mkdir(iconDiskDir(), { recursive: true })
     .then(() => undefined)
     .catch(() => {}));
 
-// Cap concurrent rsvg forks — boot fans out dozens of slots at once and a
-// thundering herd of librsvg processes is slower than a capped pipeline.
+// Cap concurrent renderer forks — boot fans out dozens of slots at once and a
+// thundering herd of rasterizer processes is slower than a capped pipeline.
 const RASTER_CONCURRENCY = 12;
 let rasterActive = 0;
 const rasterWaiters: (() => void)[] = [];
@@ -216,9 +257,9 @@ export const iconPng = async (
   return job;
 };
 
-// --- Image thumbnails (vector-crisp via rsvg-convert, magick fallback;
-// cached per file version in memory AND on disk so folder revisits are
-// instant instead of re-spawning a renderer per file) ---
+// --- Image thumbnails (vector-crisp via the shared svgRenderer, magick
+// fallback; cached per file version in memory AND on disk so folder revisits
+// are instant instead of re-spawning a renderer per file) ---
 
 const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promise<Uint8Array> =>
   new Promise<Uint8Array>((resolve, reject) => {
@@ -235,11 +276,11 @@ const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promis
     );
   });
 
-// SVGs render vector-crisp at the exact target size (contain-fit, letterboxed
-// onto bg) — the old magick -density dance rasterized a small intrinsic bitmap
-// first and then upscaled it: slow AND mushy for icon-sized viewBoxes.
-// rsvg-convert missing (CI, IM6 distros) or ancient librsvg (< 2.54, no
-// --page-*): fall back to the magick -density path.
+// SVG files render vector-crisp through the SAME single renderer icons use
+// (svgRenderer: resvg preferred, else rsvg-convert) — one selection, one SVG
+// dependency in play at a time, never both. resvg fits inside (dims <= target);
+// rsvg keeps the exact letterboxed canvas. magick is the last resort when no
+// SVG renderer is installed (and the photo/video paths' renderer anyway).
 const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): string[] => [
   "-density",
   "192",
@@ -256,7 +297,17 @@ const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): stri
   "png:-",
 ];
 const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
-  if (Bun.which("rsvg-convert")) {
+  const magick = () => pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
+  const renderer = svgRenderer();
+  if (renderer === "resvg") {
+    return pngFromProc(
+      spawn("resvg", ["--quiet", "--background", bg, "-w", String(pxW), "-h", String(pxH), p, "-c"]),
+      "resvg",
+    ).catch(magick);
+  }
+  if (renderer === "rsvg-convert") {
+    // exact canvas, contain-fit, letterboxed onto bg; librsvg < 2.54 lacks
+    // --page-* and is caught by the magick fallback
     return pngFromProc(
       spawn("rsvg-convert", [
         "-w",
@@ -273,9 +324,9 @@ const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promi
         p,
       ]),
       "rsvg-convert",
-    ).catch(() => pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick"));
+    ).catch(magick);
   }
-  return pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
+  return magick();
 };
 
 const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> =>
@@ -370,6 +421,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // memory layer above now is LRU-capped).
 // v2: raster path decodes JPEGs at ~2x target (jpeg:size hint) — pixels differ
 // slightly from v1 full-decode thumbs, so old entries must regenerate.
+// SVG thumbs carry the rasterizer identity in their key (see `mode` in thumbPng)
+// instead of a flat bump here, so changing the SVG renderer regenerates only
+// SVG thumbs and never re-rasterizes a whole photo library.
 const THUMB_DISK_VER = "v2";
 const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
@@ -396,7 +450,10 @@ export const thumbPng = (
   video = false,
 ): Promise<Uint8Array> => {
   // bg in the key: thumbnails are flattened onto it, so a theme swap must miss
-  const mode = video ? "video" : vector ? "vec" : "raster";
+  // SVG thumbs are keyed by the rasterizer too: resvg vs rsvg produce different
+  // pixels, and switching must not serve the other renderer's cache. Raster/
+  // video keys stay renderer-free so a photo library is never needlessly redone.
+  const mode = video ? "video" : vector ? `vec:${svgRenderer() ?? "none"}` : "raster";
   const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`;
   if (failedThumbs.has(key)) return Promise.reject(new Error(`thumb previously failed: ${path}`));
   let p = lruGet(thumbCache, key);

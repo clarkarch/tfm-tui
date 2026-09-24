@@ -1,5 +1,6 @@
 // --- Nerd Font glyphs: FALLBACK ONLY ---
-// Used when rsvg-convert is missing or a raster hasn't drained yet.
+// Used when no SVG rasterizer is installed (resvg/rsvg-convert) or a raster
+// hasn't drained yet.
 // Codepoints verified against the MesloLGLDZ Nerd Font Mono cmap — never
 // paste guessed ones (see AGENTS.md "Icons").
 

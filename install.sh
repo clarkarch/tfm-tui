@@ -389,9 +389,11 @@ fi
 
 XDG_OK=1
 have xdg-open || XDG_OK=0
-RSVG_OK=1
-have rsvg-convert || RSVG_OK=0
-IMPORTANT_MISSING=$(( (1 - XDG_OK) + (1 - RSVG_OK) ))
+# icons/SVG thumbnails: resvg is the requirement now (several times faster per
+# render); rsvg-convert still works as a fallback at runtime if it's installed
+SVG_OK=1
+have resvg || SVG_OK=0
+IMPORTANT_MISSING=$(( (1 - XDG_OK) + (1 - SVG_OK) ))
 
 if [ "$path_action" = reload ]; then
   end_step "PATH saved for $SHELL_LABEL, reload below"
@@ -467,18 +469,18 @@ else
 fi
 
 # ── important tools + optional helpers (bottom, after the success box) ──────
-if [ "$XDG_OK" = 0 ] || [ "$RSVG_OK" = 0 ]; then
+if [ "$XDG_OK" = 0 ] || [ "$SVG_OK" = 0 ]; then
   if [ "$FANCY" = 1 ]; then
     printf '\n  %sImportant tools missing%s\n' "$C_RED" "$C_RST"
-    if [ "$RSVG_OK" = 0 ]; then
-      printf '      rsvg-convert,  icons and SVG thumbnails (falls back to plain glyphs)\n'
+    if [ "$SVG_OK" = 0 ]; then
+      printf '      resvg,         icons and SVG thumbnails (rsvg-convert also works)\n'
     fi
     if [ "$XDG_OK" = 0 ]; then
       printf '      xdg-open,      opens files in their default app\n'
     fi
     printf '  %sInstall them from your software center or package manager.%s\n' "$C_DIM" "$C_RST"
   else
-    [ "$RSVG_OK" = 0 ] && plain "important: rsvg-convert, icons and SVG thumbnails (plain glyphs without it)"
+    [ "$SVG_OK" = 0 ] && plain "important: resvg, icons and SVG thumbnails (rsvg-convert also works)"
     [ "$XDG_OK" = 0 ] && plain "important: xdg-open, opens files in their default app"
   fi
 fi
