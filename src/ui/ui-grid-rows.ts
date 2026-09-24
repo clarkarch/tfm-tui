@@ -19,7 +19,7 @@ import { FILE_GLYPH, glyph } from "./glyphs";
 import { canThumbVideo } from "./icons";
 import { sidePadDelta } from "./style";
 import type { GridRendererCtx } from "./ui-grid-types";
-import type { IconSpec } from "./ui-slots";
+import type { IconSpec, SlotElement } from "./ui-slots";
 import { visibleTileCap } from "./ui-grid-window";
 
 // thumbnail raster cap: files over this keep their icon (thumbPlanFor).
@@ -61,10 +61,13 @@ export const thumbStatsChanged = (prev: Entry[] | null, next: Entry[]): boolean 
 // async raster lands (no icon->photo swap). Videos need ffmpeg for the
 // frame extract — without it they keep their icon. Files over the byte
 // cap keep their icon too (25 MiB of pixels is never worth the spawn). ---
-const thumbPlanFor = (entry: Entry, key: string): { isVideo: boolean; stat: any; useThumb: boolean } => {
+const thumbPlanFor = (
+  entry: Entry,
+  key: string,
+): { isVideo: boolean; stat: { size: number; mtimeMs: number } | null; useThumb: boolean } => {
   const isVideo = !entry.isDir && fileIsVideo(entry.name);
   const wantsThumb = !entry.isDir && (fileIsImage(entry.name) || (isVideo && canThumbVideo()));
-  let stat: any = null;
+  let stat: { size?: number; mtimeMs?: number } | null = null;
   if (wantsThumb) {
     // recursive-search entries (and sort-filled listDir rows) already carry
     // size/mtime — reuse them instead of a second stat per thumbnail
@@ -75,8 +78,13 @@ const thumbPlanFor = (entry: Entry, key: string): { isVideo: boolean; stat: any;
       } catch {}
     }
   }
-  const useThumb = wantsThumb && stat && typeof stat.size === "number" && stat.size > 0 && stat.size <= THUMB_MAX_BYTES;
-  return { isVideo, stat, useThumb };
+  const size = stat?.size;
+  const useThumb = wantsThumb && typeof size === "number" && size > 0 && size <= THUMB_MAX_BYTES;
+  // the plan reports a stat ONLY when it is rasterable: the raster keys on
+  // size/mtime, so a 0-byte or oversize file must not look like a job, and
+  // callers then get a size they can pass straight to pushThumbJob
+  if (!useThumb || typeof size !== "number") return { isVideo, stat: null, useThumb };
+  return { isVideo, stat: { size, mtimeMs: stat?.mtimeMs ?? 0 }, useThumb: true };
 };
 
 // short modified-date for the list view's date column (and the stats-only
@@ -120,7 +128,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     });
   };
 
-  const buildEmptyPane = (icon: string, lines: string[]): any => {
+  const buildEmptyPane = (icon: string, lines: string[]): void => {
     const { aspect } = ctx.cellMetrics();
     const iconCells = 8;
     const slotW = Math.max(1, Math.round(aspect * iconCells));
@@ -140,10 +148,11 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       ...lines.map((content, i) => Text({ content, fg: i === 0 ? ctx.colors().sidebarFgMuted : ctx.colors().divider })),
       Box({ width: slotW, height: 0 }),
     );
-    scroller.content.add(pane);
+    // pre-boot (or a fake without a scroller) leaves the pane unmounted
+    scroller?.content.add(pane);
   };
 
-  const buildTile = (aspect: number, entry: Entry, idx: number, inViewport: boolean): any => {
+  const buildTile = (aspect: number, entry: Entry, idx: number, inViewport: boolean): SlotElement => {
     // --- grid tile: icon/thumbnail slot + name label, regs in tileRefs ---
     const TILE_W = ctx.tileW();
     const TILE_H = ctx.tileH();
@@ -171,7 +180,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
 
     let slotId: string;
     let iconSpec: IconSpec | undefined;
-    let iconSlotEl: ReturnType<typeof Box>;
+    let iconSlotEl: SlotElement;
     if (useThumb) {
       slotId = ctx.nextIconId();
       iconSlotEl = Box({
@@ -226,7 +235,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     // space under the icon) via the native char-wrap buffer — filenames are
     // single runs, per-character wrap fills every line edge-to-edge; overflow
     // lines clip, too-long runs ellipsize. Off = today's single cut line.
-    const labelText: any = Text({
+    const labelText = Text({
       id: labelId,
       content: wrapOn ? entry.name : label,
       fg: baseFg,
@@ -247,11 +256,11 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       hoverLift,
     });
 
-    if (useThumb && stat) {
+    if (stat) {
       ctx.pushThumbJob({
         slotId,
         path: key,
-        mtimeMs: stat.mtimeMs ?? 0,
+        mtimeMs: stat.mtimeMs,
         size: stat.size,
         wCells: slotW,
         vector: entry.name.toLowerCase().endsWith(".svg"),
@@ -267,7 +276,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
   // --- list view rows: icon | name | size | modified, all sharing tile mouse
   // behavior via entryMouseHandlers; ids reuse the tfm-tile- prefix so
   // setTileVisual / band select / rename-in-place work unchanged ---
-  const buildListRow = (entry: Entry, idx: number, inViewport: boolean): any => {
+  const buildListRow = (entry: Entry, idx: number, inViewport: boolean): SlotElement => {
     const colors = ctx.colors();
     // density knob [ui] list-row-height: 1 = compact, icon scales with height
     const h = rowH();
@@ -299,7 +308,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
 
     let slotId: string;
     let iconSpec: IconSpec | undefined;
-    let slotEl: ReturnType<typeof Box>;
+    let slotEl: SlotElement;
     if (useThumb) {
       slotId = ctx.nextIconId();
       slotEl = Box({ id: slotId, width: iconW, height: h, flexDirection: "row", justifyContent: "center" });
@@ -334,11 +343,11 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       labelId,
       isDir: entry.isDir,
     });
-    if (useThumb && stat) {
+    if (stat) {
       ctx.pushThumbJob({
         slotId,
         path: key,
-        mtimeMs: stat.mtimeMs ?? 0,
+        mtimeMs: stat.mtimeMs,
         size: stat.size,
         wCells: iconW,
         hCells: h,
@@ -365,7 +374,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     rowHgt: number,
     visFirst: number,
     r: number,
-  ): any => {
+  ): SlotElement => {
     try {
       return buildRowInner(entries, isList, cols, rowHgt, visFirst, r);
     } catch (err) {
@@ -382,7 +391,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     rowHgt: number,
     visFirst: number,
     r: number,
-  ): any => {
+  ): SlotElement => {
     const { aspect } = ctx.cellMetrics();
     const visWin = visibleTileCap(ctx.termH(), rowHgt, cols);
     const inViewport = (i: number): boolean => i >= visFirst && i < visFirst + visWin;
@@ -418,7 +427,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     r1: number,
     visFirst: number,
     pads: boolean,
-  ): any => {
+  ): SlotElement => {
     const inner = Box({ id: `${tilePrefix()}inner`, width: "100%", flexDirection: "column" });
     if (pads) inner.add(Box({ id: `${tilePrefix()}pad-top`, height: r0 * rowHgt }));
     for (let r = r0; r <= r1; r++) inner.add(buildRow(entries, isList, cols, rowHgt, visFirst, r));

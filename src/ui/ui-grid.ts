@@ -11,6 +11,7 @@ import path from "node:path";
 import { compareEntries, listDir, type Entry } from "../fs/listing";
 import { searchTree } from "../fs/search";
 import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
+import type { Renderable } from "@opentui/core";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { fmtBytes } from "../fs/propsinfo";
 import { clearChildren } from "../lib/uiutil";
@@ -18,6 +19,7 @@ import type { Scheduler } from "../lib/uiutil";
 import { TileVisual } from "../input/grid-input";
 import type { FileAnimMode } from "./ui-grid-anim";
 import { fmtDateShort, makeGridBuilders, thumbStatsChanged } from "./ui-grid-rows";
+import type { ScrollerLike } from "../lib/node-like";
 import type { GridRendererCtx } from "./ui-grid-types";
 import { visibleBottomRow, visibleTileCap, windowRange } from "./ui-grid-window";
 
@@ -83,7 +85,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // flushed) on clearGrid/fallback, so a stale play can never stop() the new
   // folder's intro wave after a navigate or a fling landing.
   let revealTimer: unknown = null;
-  let pendingReveal: { rows: string[]; tiles: string[]; from: "top" | "bottom"; staged: any[] } | null = null;
+  let pendingReveal: {
+    rows: string[];
+    tiles: string[];
+    from: "top" | "bottom";
+    staged: Renderable[];
+  } | null = null;
   const cancelPendingReveal = (): void => {
     const sched: Scheduler = ctx.sched ?? globalThis;
     if (revealTimer) {
@@ -163,7 +170,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // overstates how many grid rows are on screen (the bottom reveal fired a
   // row early, off-screen — the "only the top animates" bug). The ScrollBox
   // clamps scroll against this same number (updateStickyState).
-  const visH = (scroller: any): number => {
+  const visH = (scroller: ScrollerLike): number => {
     const vh = scroller?.viewport?.height;
     return typeof vh === "number" && vh > 0 ? vh : ctx.termH();
   };
@@ -458,7 +465,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const rowIds: string[] = isList ? [] : Array.from({ length: totalRows }, (_, r) => `${tilePrefix()}row-${r}`);
 
     // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
-    selection.tileRefs.forEach((_: any, key: string) => {
+    selection.tileRefs.forEach((_ref, key) => {
       if (ctx.isCutKey(key)) selection.setTileVisual(key, TileVisual.Rest);
     });
 
@@ -568,8 +575,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const visFirst = isList ? firstRow : firstRow * cols;
     // operate on the MOUNTED nodes (VNode proxies no-op post-mount): content
     // holds exactly [inner], inner exactly [pad-top, old.r0..old.r1, pad-bottom]
-    const inner: any = scroller.content.getChildren()[0];
-    const kids: any[] | null = inner && r0 <= old.r1 + 1 && r1 >= old.r0 - 1 ? inner.getChildren() : null;
+    const mounted = scroller.content.getChildren()[0];
+    const kids: Renderable[] | null =
+      mounted && r0 <= old.r1 + 1 && r1 >= old.r0 - 1 ? mounted.getChildren() : null;
     const slideable = !!kids && kids.length === old.r1 - old.r0 + 3;
     const paint = (a: number, b: number): void => {
       if (a > b) return;
@@ -603,19 +611,28 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
         paint(r0, r1);
       }
-    } else {
+    } else if (mounted && kids) {
       if (windowMoved) {
-        const kidAt = (r: number): any => kids[1 + r - old.r0];
-        for (let r = old.r0; r < r0; r++) inner.remove(kidAt(r));
-        for (let r = old.r1; r > r1; r--) inner.remove(kidAt(r));
-        for (let r = r0; r < old.r0; r++) inner.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
+        const kidAt = (r: number): Renderable | undefined => kids[1 + r - old.r0];
+        for (let r = old.r0; r < r0; r++) {
+          const k = kidAt(r);
+          if (k) mounted.remove(k);
+        }
+        for (let r = old.r1; r > r1; r--) {
+          const k = kidAt(r);
+          if (k) mounted.remove(k);
+        }
+        for (let r = r0; r < old.r0; r++)
+          mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
         for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
-          inner.add(buildRow(entries, isList, cols, rh, visFirst, r), inner.getChildren().length - 1);
+          mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), mounted.getChildren().length - 1);
         // pads absorb the shift so the total content height never moves (the
         // offsets above come from the pre-mutation snapshot — node identity,
         // stable across the adds/removes)
-        kids[0].height = r0 * rh;
-        kids[kids.length - 1].height = (rows - 1 - r1) * rh;
+        const topPad = kids[0];
+        const botPad = kids[kids.length - 1];
+        if (topPad) topPad.height = r0 * rh;
+        if (botPad) botPad.height = (rows - 1 - r1) * rh;
         paint(r0, Math.min(old.r0 - 1, r1));
         paint(Math.max(old.r1 + 1, r0), r1);
       }
@@ -633,7 +650,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const visTop = firstRow;
     const visBottom = visibleBottomRow(scrollTop, visH(scroller), rh, rows);
     const oldVis = win.vis;
-    if (slideable) {
+    if (slideable && mounted) {
       const crossing: number[] = [];
       let from: "top" | "bottom" | null = null;
       if (visBottom > oldVis.bottom) {
@@ -693,7 +710,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           // contract the slide itself relies on. try/catch: a row missing
           // here simply joins the wave unstaged (one-frame pop, not stuck).
           try {
-            const kidsNow: any[] = inner.getChildren();
+            const kidsNow = mounted.getChildren();
             for (const r of crossing) {
               const node = kidsNow[1 + (r - r0)];
               if (!node || pendingReveal.staged.includes(node)) continue;

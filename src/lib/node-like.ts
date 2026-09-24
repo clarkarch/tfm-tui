@@ -28,7 +28,7 @@
 // declarations), which is what lets a real Renderable — whose `add` takes a
 // concrete `Renderable` — satisfy this structural view.
 
-import type { ColorInput, KeyEvent, MouseEvent } from "@opentui/core";
+import type { ColorInput, KeyEvent, MouseEvent, Renderable } from "@opentui/core";
 
 export type NodeLike = {
   id?: string;
@@ -108,3 +108,22 @@ export type MaybeNode = NodeLike | null | undefined;
 // The renderer root, as the lookup helpers see it: a node that can resolve ids
 // (`renderer.root`). Widening NodeLike, so stripSelectable can walk from it.
 export type NodeRoot = NodeLike & { findDescendantById(id: string): MaybeNode };
+
+// The scroll container the grid paints into and the selection module scrolls,
+// as they actually use it: a live scroll offset, the content host rows mount
+// into, and the ScrollBox's resolved viewport height. Structural on purpose —
+// the scroll hook reaches into the scrollbar's private change callback and the
+// tests dial `viewport` directly, neither of which a concrete ScrollBoxRenderable
+// (whose viewport is readonly) can express. Lives here, in the leaf module, so
+// ui/ and input/ can both name it without an import cycle.
+export type ScrollerLike = {
+  scrollTop: number;
+  // present on a real ScrollBox; test literals omit it
+  scrollTo?(position: number | { x?: number; y?: number }): void;
+  viewport?: { height: number | "auto" | `${number}%` } | null;
+  content: {
+    getChildren(): Renderable[];
+    add(child: unknown, index?: number): unknown;
+    remove(child: unknown): void;
+  };
+};

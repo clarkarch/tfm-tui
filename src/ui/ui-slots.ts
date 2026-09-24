@@ -7,7 +7,7 @@
 // back to a pre-darkened glyph (setScrim); rasters come back on close.
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
-import { Box, type CliRenderer, type ColorInput, ImageRenderable, Text } from "@opentui/core";
+import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
 import { iconPng, thumbPng } from "./icons";
 import { swallow } from "../app/log";
 import type { IconMode, Theme } from "../config/config";
@@ -47,6 +47,16 @@ export type IconSpec = {
   initialState: number;
   done?: boolean;
 };
+
+// Whatever the widgets nest inside their Box()/Text() calls — which is exactly
+// the row/slot builders' return type. Derived from Box()'s own children param
+// instead of a hand-written union of the VNode instantiations in use, so a new
+// construct (or a bare string child) keeps typechecking.
+export type SlotElement = Parameters<typeof Box>[1];
+
+// makeIconSlot's contract: the mountable element, the id the theme/scrim paths
+// look it up by, and the spec setIconState later mutates.
+export type IconSlotHandle = { el: SlotElement; slotId: string; spec: IconSpec };
 
 export type ThumbJob = {
   slotId: string;
@@ -138,9 +148,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
     states: IconState[],
     heightCells = 1,
     initialState = 0,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
-  ): { el: ReturnType<typeof Box>; slotId: string; spec: IconSpec } => {
+  ): IconSlotHandle => {
     const slotId = `tfm-icon-${iconSeq++}`;
     const g = ctx.glyphFor(name);
     const spec: IconSpec = {
@@ -172,12 +182,12 @@ export const makeSlots = (ctx: SlotsCtx) => {
     spec.initialState = stateIdx;
     const slot = ctx.byId(spec.slotId);
     if (!slot) return false;
-    const kids = slot.getChildren?.() ?? [];
+    const kids = slot.getChildren();
     const stateImgs = kids.filter(
-      (k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`,
+      (k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`,
     );
     if (stateImgs.length === 0) {
-      const glyphNode: any = kids.find((k: any) => k.id === `${spec.slotId}-g`);
+      const glyphNode = kids.find((k) => k.id === `${spec.slotId}-g`);
       if (glyphNode) {
         try {
           glyphNode.fg = spec.states[stateIdx]?.fg;
@@ -185,7 +195,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       }
       return false;
     }
-    stateImgs.forEach((k: any, i: number) => {
+    stateImgs.forEach((k, i) => {
       try {
         k.visible = i === stateIdx;
       } catch {}
@@ -274,7 +284,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // `transparent` = raster keeps alpha; strip it inside floating layers in
     // partial mode so an opaque island can't blend the desktop through.
     const transparent = iconTransparent(ctx.iconsMode(), isFloatChild(ctx.byId(slotId)));
-    const imgs: any[] = [];
+    const imgs: ImageRenderable[] = [];
     for (let si = 0; si < states.length; si++) {
       const st = states[si];
       if (st === undefined) continue;
@@ -336,16 +346,16 @@ export const makeSlots = (ctx: SlotsCtx) => {
         );
         if (imgs.length === 0) return;
         slot.width = wCells;
-        const kids = slot.getChildren?.() ?? [];
+        const kids = slot.getChildren();
         // drop previous rasters (e.g. after a resize re-raster at new cell pixels)
         kids
-          .filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
-          .forEach((k: any) => {
+          .filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
+          .forEach((k) => {
             try {
               slot.remove(k);
             } catch {}
           });
-        const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
+        const glyphNode = kids.find((k) => typeof k.id === "string" && k.id.endsWith("-g"));
         // glyph stays in the slot (hidden) so the scrim can fall back to it
         if (glyphNode) {
           try {
@@ -446,7 +456,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
 
   // clickable "esc"/close hint shared by floating UIs (prompt/props/menu) —
   // an icon-slot widget, so it lives with the slot machinery
-  const escHintBtn = (id: string, onClose: () => void): any => {
+  const escHintBtn = (id: string, onClose: () => void): SlotElement => {
     const states = (): IconState[] => [
       {
         fg: ctx.colors().sidebarFgMuted,

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { makeSelection, type SelTileRef, type SelectionCtx } from "./selection";
 import { TileVisual } from "./grid-input";
+import type { IconSpec } from "../ui/ui-slots";
 
 const COLORS: any = {
   bg: "#111111",
@@ -62,7 +63,10 @@ const makeHarness = () => {
       tileId,
       labelId,
       isDir,
-      ...(withIconSpec ? { iconSpec: { __key: key } } : { iconSlotId: `slot:${key}` }),
+      ...(withIconSpec
+        ? // a marker spec: the test only asserts identity, not the icon surface
+          { iconSpec: { __key: key } as unknown as IconSpec }
+        : { iconSlotId: `slot:${key}` }),
     };
     if (!withIconSpec) nodes.set(`slot:${key}`, { id: `slot:${key}`, opacity: 1 });
     sel.tileRefs.set(key, ref);

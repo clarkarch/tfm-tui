@@ -11,11 +11,11 @@ import { fmtBytes } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ClipItem } from "./grid-input";
 import { TileVisual, type TileVisualMode } from "./grid-input";
-import { IconStateIdx } from "../ui/ui-slots";
-import type { MaybeNode } from "../lib/node-like";
+import { IconStateIdx, type IconSpec } from "../ui/ui-slots";
+import type { MaybeNode, ScrollerLike } from "../lib/node-like";
 
 export type SelTileRef = {
-  iconSpec?: any;
+  iconSpec?: IconSpec;
   iconSlotId?: string;
   selected: boolean;
   baseFg: string;
@@ -32,9 +32,9 @@ export type SelectionCtx = {
   uiStyle(): UiStyle;
   byId(id: string): MaybeNode;
   setText(id: string, s: string): void;
-  setIconState(spec: any, mode: number): void;
+  setIconState(spec: IconSpec | undefined, mode: number): void;
   isCutKey(key: string): boolean;
-  scroller(): any | null;
+  scroller(): ScrollerLike | null;
   viewH(): number;
   rowHInit(): number;
   renderPreview(): void | Promise<void>;
@@ -221,8 +221,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
         const row = Math.floor(idx / colsAtBuild);
         const vh = ctx.viewH();
         const top = scroller.scrollTop;
-        if (row * rowHAtBuild < top) scroller.scrollTo({ x: 0, y: row * rowHAtBuild });
-        else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * rowHAtBuild - vh });
+        if (row * rowHAtBuild < top) scroller.scrollTo?.({ x: 0, y: row * rowHAtBuild });
+        else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo?.({ x: 0, y: (row + 1) * rowHAtBuild - vh });
       } catch {}
     }
     return true;
@@ -318,8 +318,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
           const row = Math.floor(firstIdx / colsAtBuild);
           const vh = ctx.viewH();
           const top = scroller.scrollTop;
-          if (row * rowHAtBuild < top) scroller.scrollTo({ x: 0, y: row * rowHAtBuild });
-          else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * rowHAtBuild - vh });
+          if (row * rowHAtBuild < top) scroller.scrollTo?.({ x: 0, y: row * rowHAtBuild });
+          else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo?.({ x: 0, y: (row + 1) * rowHAtBuild - vh });
         } catch {}
       }
     }

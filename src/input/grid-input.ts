@@ -8,9 +8,19 @@ import type { MaybeNode } from "../lib/node-like";
 
 export type ClipItem = { path: string; isDir: boolean };
 
+// What makeEntryMouseHandlers hands the grid to spread onto a tile: the tile
+// mouse pipeline, typed so a misspelled handler name is a compile error.
+export type TileMouseHandlers = {
+  onMouseDown: (ev: TileMouseEvent) => void;
+  onMouseUp: () => void;
+  onMouseDragEnd: () => void;
+  onMouseDrag: (ev: TileMouseEvent) => void;
+  onMouseDrop: () => void;
+};
+
 // Mouse-event shape the tile pipeline actually reads (cell coords, button,
 // modifiers). The renderer hands a richer object; handlers only touch these.
-type TileMouseEvent = {
+export type TileMouseEvent = {
   x: number;
   y: number;
   button?: number;

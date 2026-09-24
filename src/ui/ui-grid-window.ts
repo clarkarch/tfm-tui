@@ -3,6 +3,11 @@
 // the geometry can be read (and tested) without the renderable builders: this
 // module imports nothing, touches no renderer, and holds no state. ---
 
+// ScrollBox's scrollbar holds its change callback privately; the thumb drag
+// writes the position field raw and then calls it, bypassing scrollTop's setter.
+type ScrollBarHookable = { _onChange?: (position: number) => void };
+type ScrollBarHost = { verticalScrollBar?: ScrollBarHookable };
+
 // ONE viewport window for both the thumbnail drain ranking and the file
 // animation cap — they must agree, or a tile the animator skipped is also
 // (worse) not the one the thumb worker treats as urgent. `+1` row of slack
@@ -61,7 +66,9 @@ export const windowRange = (
 // (setter + the slider re-entrancy in updateSliderFromScrollState + the
 // slide's own offset-restore write) — the callback MUST be idempotent;
 // syncWindow's range-equality guard makes the repeats free.
-export const hookScrollerScroll = (scroller: any, onScroll: () => void): boolean => {
+// `object` (not GridScroller): the hook probes for a scrollTop accessor and
+// rejects anything else, so a bare object is a legitimate argument.
+export const hookScrollerScroll = (scroller: object, onScroll: () => void): boolean => {
   let hooked = false;
   try {
     const proto = Object.getPrototypeOf(scroller);
@@ -84,7 +91,7 @@ export const hookScrollerScroll = (scroller: any, onScroll: () => void): boolean
     }
   } catch {}
   try {
-    const bar = scroller?.verticalScrollBar;
+    const bar = (scroller as ScrollBarHost).verticalScrollBar;
     if (bar && typeof bar._onChange === "function") {
       const orig = bar._onChange.bind(bar);
       bar._onChange = (position: number) => {

@@ -5,9 +5,12 @@ import path from "node:path";
 import { Box, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeGridRenderer, hookScrollerScroll, type GridState } from "./ui-grid";
+import type { ScrollerLike } from "../lib/node-like";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { makeSelection } from "../input/selection";
 import type { Entry } from "../fs/listing";
+import type { TileMouseHandlers } from "../input/grid-input";
+import type { IconSlotHandle } from "./ui-slots";
 import { defaultConfig } from "../config/config-schema";
 import type { HoverLiftOpts } from "../config/config-schema";
 import type { Theme } from "../config/config";
@@ -61,7 +64,8 @@ const ASPECT = 0.5;
 let t: TestRendererSetup;
 let tmp: string;
 let content: Renderable;
-let scroller: { content: Renderable; scrollTop: number; viewport?: { height: number } };
+// stand-in for the ScrollBox: the grid only reads content/scrollTop/viewport
+let scroller: ScrollerLike;
 let gridState: GridState;
 let cutKeys: Set<string>;
 let iconStateCalls: Array<{ spec: any; idx: number }>;
@@ -238,10 +242,10 @@ beforeAll(async () => {
     windowedGrid: () => windowedGridOn,
     isRenaming: () => renamingOn,
     selection,
-    entryMouseHandlers: (e: any, key: string, idx: number) => {
+    entryMouseHandlers: (e, key, idx) => {
       if (throwOnName !== null && e.name === throwOnName) throw new Error("boom");
       mouseHandlers.push({ name: e.name, key, idx });
-      return {};
+      return {} as unknown as TileMouseHandlers;
     },
     isCutKey: (key) => cutKeys.has(key),
     waitForResolution: () => Promise.resolve(),
@@ -437,7 +441,8 @@ describe("renderGrid (grid tiles)", () => {
     const { renderGrid: bootRender } = makeGridRenderer({
       termW: () => TERM_W,
       termH: () => TERM_H,
-      scroller: () => ({ content: bootContent }),
+      // the boot path only needs a content host; the VNode stands in for it
+      scroller: () => ({ content: bootContent }) as unknown as ScrollerLike,
       state: gridState,
       searchQuery: () => "",
       recursiveSearch: () => false,
@@ -460,7 +465,8 @@ describe("renderGrid (grid tiles)", () => {
       cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: ASPECT }),
       makeIconSlot: (name: string) => {
         const slotId = `boot-slot-${bootSeq++}`;
-        return { el: null, slotId, spec: { slotId, name } };
+        // the boot path only reads slotId; el/spec are placeholders
+        return { el: null, slotId, spec: { slotId, name } } as unknown as IconSlotHandle;
       },
       pushThumbJob: () => {},
       nextIconId: () => `boot-icon-${bootSeq++}`,
@@ -477,7 +483,7 @@ describe("renderGrid (grid tiles)", () => {
       },
       fileAnimVisibleOnly: () => visibleOnly,
       selection: bootSelection,
-      entryMouseHandlers: () => ({}),
+      entryMouseHandlers: () => ({}) as unknown as TileMouseHandlers,
       isCutKey: (key) => cutKeys.has(key),
       waitForResolution: () => Promise.resolve(),
       clearRenameEdit: () => {},

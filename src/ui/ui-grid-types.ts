@@ -4,12 +4,15 @@
 // those three can import it without a cycle back into ui-grid. ---
 
 import type { Theme } from "../config/config";
+import type { ScrollerLike } from "../lib/node-like";
 import type { HoverLiftOpts } from "../config/config-schema";
 import type { Entry } from "../fs/listing";
+import type { TileMouseHandlers } from "../input/grid-input";
 import type { Selection } from "../input/selection";
 import type { SortMode } from "../lib/sort";
 import type { Scheduler } from "../lib/uiutil";
 import type { FileAnimMode } from "./ui-grid-anim";
+import type { IconSlotHandle, IconState, ThumbJob } from "./ui-slots";
 import type { UiStyle } from "./style";
 
 export type GridState = {
@@ -25,7 +28,7 @@ export type GridState = {
 export type GridRendererCtx = {
   termW(): number;
   termH(): number;
-  scroller(): any | null;
+  scroller(): ScrollerLike | null;
   state: GridState;
   searchQuery(): string;
   // [ui] recursive-search: type-to-search walks the subtree (fd/walk) instead
@@ -66,11 +69,11 @@ export type GridRendererCtx = {
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
   makeIconSlot(
     name: string,
-    states: any[],
+    states: IconState[],
     heightCells?: number,
     initialState?: number,
-  ): { el: any; slotId: string; spec: any };
-  pushThumbJob(job: any): void;
+  ): IconSlotHandle;
+  pushThumbJob(job: ThumbJob): void;
   nextIconId(): string;
   drainIconQueue(): void | Promise<void>;
   drainThumbs(): void | Promise<void>;
@@ -126,7 +129,7 @@ export type GridRendererCtx = {
   listingsCacheTtlMs?(): number;
   // selection module + mouse handlers
   selection: Selection;
-  entryMouseHandlers(entry: Entry, key: string, idx: number): any;
+  entryMouseHandlers(entry: Entry, key: string, idx: number): TileMouseHandlers;
   isCutKey(key: string): boolean;
   // misc hooks
   waitForResolution(): Promise<void>;
