@@ -329,28 +329,51 @@ const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promi
   return magick();
 };
 
-const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> =>
-  pngFromProc(
-    spawn("magick", [
-      // decode at ~2x target size: full-res JPEG decode dominates thumb time
-      // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
-      // 2x keeps downscale quality while skipping most of the decode (~5x).
-      "-define",
-      `jpeg:size=${pxW * 2}x${pxH * 2}`,
-      p,
-      "-auto-orient",
-      "-background",
-      bg,
-      "-thumbnail",
-      `${pxW}x${pxH}^`,
-      "-gravity",
-      "center",
-      "-extent",
-      `${pxW}x${pxH}`,
-      "png:-",
-    ]),
-    "magick",
-  );
+// Raster stills go through Bun's built-in image pipeline (Bun >= 1.3.14): it
+// runs in-process on the work pool (no spawn) and already uses the JPEG IDCT
+// scale-down magick needed the `jpeg:size` hint for. Output is aspect-preserving
+// (fit:"inside", never letterboxed) — the tile's ImageRenderable uses
+// fit:"cover" to center-crop it into the cell box, replacing magick's
+// raster-time `-thumbnail ^` + `-extent` cover-crop. The 2x box mirrors the old
+// decode hint so the cover-crop downsamples.
+// Alpha: Bun.Image preserves the source alpha channel where magick's `-extent`
+// FLATTENED onto bg. Deliberate: flattening can't be done in-process, and the
+// flatten only changes genuinely translucent pixels (an opaque-alpha PNG like a
+// screenshot renders identically) — so we accept it and keep the perf win. The
+// magick fallback below still flattens, so exotic formats stay opaque.
+const renderRasterBunImage = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> =>
+  new Bun.Image(p, { autoOrient: true })
+    .resize(pxW * 2, pxH * 2, { fit: "inside" })
+    .png()
+    .bytes();
+
+const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
+  // magick stays the fallback: formats Bun.Image can't decode here (ICO always;
+  // TIFF/HEIC/AVIF on Linux; XCF/KRA) — and a runtime older than 1.3.14, where
+  // `new Bun.Image` throws inside the async fn and the catch routes here.
+  const magick = (): Promise<Uint8Array> =>
+    pngFromProc(
+      spawn("magick", [
+        // decode at ~2x target size: full-res JPEG decode dominates thumb time
+        // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
+        "-define",
+        `jpeg:size=${pxW * 2}x${pxH * 2}`,
+        p,
+        "-auto-orient",
+        "-background",
+        bg,
+        "-thumbnail",
+        `${pxW}x${pxH}^`,
+        "-gravity",
+        "center",
+        "-extent",
+        `${pxW}x${pxH}`,
+        "png:-",
+      ]),
+      "magick",
+    );
+  return renderRasterBunImage(p, pxW, pxH).catch(magick);
+};
 
 // video thumbs: one representative frame via ffmpeg, cover-cropped like the
 // raster path so tiles keep a uniform look. Input-seek ~1s in to skip the
@@ -421,10 +444,12 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // memory layer above now is LRU-capped).
 // v2: raster path decodes JPEGs at ~2x target (jpeg:size hint) — pixels differ
 // slightly from v1 full-decode thumbs, so old entries must regenerate.
+// v3: raster stills moved to Bun.Image (aspect-preserving, cover-cropped at
+// draw) — different pixels/dims from magick's v2 cover-crop, so regenerate.
 // SVG thumbs carry the rasterizer identity in their key (see `mode` in thumbPng)
 // instead of a flat bump here, so changing the SVG renderer regenerates only
 // SVG thumbs and never re-rasterizes a whole photo library.
-const THUMB_DISK_VER = "v2";
+const THUMB_DISK_VER = "v3";
 const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
   path.join(thumbDiskDir(), `${createHash("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
@@ -449,7 +474,10 @@ export const thumbPng = (
   vector = false,
   video = false,
 ): Promise<Uint8Array> => {
-  // bg in the key: thumbnails are flattened onto it, so a theme swap must miss
+  // bg in the key: SVG thumbs (and the magick raster fallback for exotic
+  // formats) are still flattened onto it, so a theme swap must miss. Bun.Image
+  // raster output ignores bg (it keeps alpha) and so re-rasters on a theme flip
+  // for nothing — rare, and the safety of the flattening paths outweighs it.
   // SVG thumbs are keyed by the rasterizer too: resvg vs rsvg produce different
   // pixels, and switching must not serve the other renderer's cache. Raster/
   // video keys stay renderer-free so a photo library is never needlessly redone.

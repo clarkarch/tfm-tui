@@ -72,6 +72,14 @@ export type ThumbJob = {
 // top-to-bottom before anything further down the folder is even spawned.
 export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible === false ? 2 : 1);
 
+// How the mounted raster is fitted into its cell box. Raster/video rasters are
+// either aspect-preserving (Bun.Image `fit:"inside"`) or exact-box (ffmpeg
+// cover-crop; magick `^`+extent), so cover-crop them to fill the tile. SVG
+// thumbs via resvg are ALSO aspect-preserving but must be CONTAINED (contain
+// letterboxes; cover would crop the drawing's edges) — that was the old
+// `fit:"fit"` behavior, restored here for vectors only.
+export const thumbImageFit = (vector: boolean): "fit" | "cover" => (vector ? "fit" : "cover");
+
 export type SlotsCtx = {
   renderer(): any;
   byId(id: string): MaybeNode;
@@ -218,7 +226,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
             source: bytes,
             width: j.wCells,
             height: hCells,
-            fit: "fit",
+            // rasters/video cover-crop into the tile; SVG vectors contain (see
+            // thumbImageFit) — icons keep fit:"fit" at their own site
+            fit: thumbImageFit(j.vector),
             protocol: "auto",
           });
           await img.loadPromise!;

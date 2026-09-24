@@ -1,5 +1,10 @@
-import { describe, expect, test } from "bun:test";
-import { dimHex, makeSlots, thumbJobRank, type SlotsCtx, type ThumbJob } from "./ui-slots";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Box } from "@opentui/core";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { dimHex, makeSlots, thumbImageFit, thumbJobRank, type SlotsCtx, type ThumbJob } from "./ui-slots";
 import type { Theme } from "../config/config";
 
 // The scrim (setScrim) must cover every RASTERED slot, including ones whose
@@ -182,5 +187,82 @@ describe("thumbJobRank", () => {
   // their old position — an absent flag must never demote them to last
   test("missing visible flag ranks as visible", () => {
     expect(thumbJobRank(job({}))).toBe(thumbJobRank(job({ visible: true })));
+  });
+});
+
+// The fit mapping is a pure decision, tested here so it guards CI too (the
+// mounted tests below skip when the SVG/magick renderers are absent): rasters
+// and video cover-crop into the tile, SVG vectors contain. Getting this wrong
+// crops SVG drawings — the exact regression this pins.
+describe("thumbImageFit", () => {
+  test("rasters/video cover-crop; SVG vectors contain", () => {
+    expect(thumbImageFit(false)).toBe("cover");
+    expect(thumbImageFit(true)).toBe("fit");
+  });
+});
+
+// Renderer-backed (createTestRenderer pilot: ui-menu.test.ts): drainThumbs
+// mounts a REAL ImageRenderable, pinning the raster→renderable coupling that
+// fake-ctx tests can't see — a raster thumb is aspect-preserving (Bun.Image
+// fit:"inside", see icons.test.ts) and must be cover-cropped into the cell box;
+// a `fit:"fit"` revert would letterbox/contain it instead of filling the tile.
+describe("thumbnail mount", () => {
+  // 6x2 PNG — same fixture as icons.test.ts
+  const PNG_6x2 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAYAAAACAQMAAABBkz8dAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAADUExURRI0VoH6TfIAAAAHdElNRQfqCRgBEh8XiJhUAAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA5LTI0VDAxOjE4OjMxKzAwOjAwhxQ3CQAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wOS0yNFQwMToxODozMSswMDowMPZJj7UAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDktMjRUMDE6MTg6MzErMDA6MDChXK5qAAAADElEQVQI12NgYGAAAAAEAAEnNCcKAAAAAElFTkSuQmCC";
+  let t: TestRendererSetup;
+  const REAL_CACHE_HOME = process.env.XDG_CACHE_HOME;
+  let cacheSandbox = "";
+
+  beforeAll(async () => {
+    // box the disk cache for this file, like icons.test.ts — drainThumbs →
+    // thumbPng would otherwise write into (or be served a disk hit from) the
+    // real ~/.cache/tfm/thumbs
+    cacheSandbox = mkdtempSync(path.join(os.tmpdir(), "tfm-slots-cache-"));
+    process.env.XDG_CACHE_HOME = cacheSandbox;
+    t = await createTestRenderer({ width: 80, height: 24 });
+  });
+  afterAll(() => {
+    t.renderer.destroy();
+    if (REAL_CACHE_HOME === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = REAL_CACHE_HOME;
+    rmSync(cacheSandbox, { recursive: true, force: true });
+  });
+
+  test('a drained raster thumb mounts with fit:"cover"', async () => {
+    const slotId = "tfm-tile-0-thumb";
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+    await t.renderOnce();
+
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-slots-thumb-"));
+    const p = path.join(dir, "wide.png");
+    writeFileSync(p, Buffer.from(PNG_6x2, "base64"));
+
+    const ctx: SlotsCtx = {
+      renderer: () => t.renderer,
+      byId: (id) => t.renderer.root.findDescendantById(id),
+      clearChildren: () => {},
+      colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
+      uiStyle: () => "solid",
+      iconsMode: () => "opaque",
+      iconCells: () => 4,
+      modalOpen: () => false,
+      glyphFor: () => "F",
+      compatActive: () => false,
+      forceGlyph: () => false,
+    };
+    const slots = makeSlots(ctx);
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+    // the headless renderer's resolution getter is readonly and null (real
+    // pixels come from the live terminal); shadow it so drainThumbs'
+    // cell-metrics gate opens
+    Object.defineProperty(t.renderer, "resolution", { value: { width: 800, height: 480 }, configurable: true });
+    await slots.drainThumbs();
+    await t.renderOnce();
+
+    const img = t.renderer.root.findDescendantById(`${slotId}-t`) as any;
+    expect(img).toBeTruthy();
+    expect(img.fit).toBe("cover");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
