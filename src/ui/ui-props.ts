@@ -1,13 +1,13 @@
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import { execFile } from "node:child_process";
-import { statSync } from "node:fs";
+import { statSync, type Stats } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
-import type { IconState, ThumbJob } from "./ui-slots";
+import type { IconSlotHandle, IconSpec, IconState, SlotElement, ThumbJob } from "./ui-slots";
 import { dirWalkStats, fmtBytes, fmtDate, mimeLabelFor } from "../fs/propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
@@ -16,7 +16,7 @@ import { FLOAT_Z, type Floats } from "./floats";
 import { IconStateIdx, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { MaybeNode } from "../lib/node-like";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -33,18 +33,18 @@ type PropsCtx = {
     zIndex: number;
     width: number;
     paddingDiv?: number;
-    rows: () => any[];
+    rows: () => SlotElement[];
     onClose: () => void;
   }): void;
   closeDialog(id: string): void;
   setTextOnId(nodeId: string, s: string): void;
-  setOnId(id: string, fn: (n: any) => void): void;
+  setOnId(id: string, fn: (n: NodeLike) => void): void;
   stripSelectable(): void;
   drainIconQueue(): void;
   drainThumbs(): void;
   pushThumbJob(job: ThumbJob): void;
   nextIconId(): string;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   closeFileMenu(): void;
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   floats: Floats;
@@ -58,10 +58,10 @@ type PropsCtx = {
     states: IconState[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
-  ): { el: any; slotId: string; spec: any };
-  setIconState(spec: any, stateIdx: number): boolean;
+  ): IconSlotHandle;
+  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };
   // compat mode (linux console): hero falls back to the icon slot, the thumb
@@ -92,7 +92,7 @@ export const makeProps = (ctx: PropsCtx) => {
 
   const openSingle = (targetPath: string): void => {
     const colors = ctx.colors();
-    let st: any = null;
+    let st: Stats | null = null;
     try {
       st = statSync(targetPath);
     } catch {
@@ -124,7 +124,7 @@ export const makeProps = (ctx: PropsCtx) => {
       { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
       { fg: colors.accent, bg: colors.hoverBg },
     ];
-    const propsTogglePaint = (btnId: string, spec: any, on: boolean, hover: boolean) => {
+    const propsTogglePaint = (btnId: string, spec: IconSpec | undefined, on: boolean, hover: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, hover));
       try {
         const n = ctx.byId(btnId);
@@ -226,7 +226,7 @@ export const makeProps = (ctx: PropsCtx) => {
       (fileIsImage(targetPath) || (isVideo && canThumbVideo())) &&
       st.size > 0 &&
       st.size <= 26214400;
-    let heroEl: ReturnType<typeof Box>;
+    let heroEl: SlotElement;
     if (wantsThumb) {
       const slotId = ctx.nextIconId();
       // flex row + center, exactly like the grid/list thumb slots: the raster
@@ -367,7 +367,7 @@ export const makeProps = (ctx: PropsCtx) => {
   // list; no star/bookmark/perms (those are per-file semantics) ---
   const PROPS_LIST_MAX = 6;
 
-  const openMulti = (items: { path: string; st: any }[]): void => {
+  const openMulti = (items: { path: string; st: Stats }[]): void => {
     const colors = ctx.colors();
     ctx.floats.open("props", rawCloseProps);
     propsOpen = true;
@@ -499,7 +499,7 @@ export const makeProps = (ctx: PropsCtx) => {
       openSingle(target);
       return;
     }
-    const stats: { path: string; st: any }[] = [];
+    const stats: { path: string; st: Stats }[] = [];
     for (const p of target) {
       try {
         stats.push({ path: p, st: statSync(p) });

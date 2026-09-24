@@ -10,12 +10,13 @@
 // MOUSE-FIRST: every control is clickable, rows hover-select, click-away
 // cancels capture.
 
-import { Box, type CliRenderer, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, type MouseEvent, RGBA, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
-import type { IconState, IconSpec } from "./ui-slots";
+import type { IconSlotHandle, IconState, IconSpec, SlotElement } from "./ui-slots";
 import type { Theme } from "../config/config";
-import { keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
+import { type KeyEventLike, keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
+import type { NodeLike } from "../lib/node-like";
 import { FLOAT_Z, type Floats } from "./floats";
 import { pokeGc, type NativeStatsReach } from "../app/mem-hygiene";
 import {
@@ -35,17 +36,17 @@ import type { MaybeNode } from "../lib/node-like";
 type EscMenuCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
-  clearChildren(node: any): void;
+  clearChildren(node: unknown): void;
   stripSelectable(): void;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   makeIconSlot(
     name: string,
     states: IconState[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
-  ): { el: any; slotId: string; spec: IconSpec };
+  ): IconSlotHandle;
   setIconState(spec: IconSpec, stateIdx: number): void;
   drainIconQueue(): void | Promise<void>;
   setScrim(on: boolean): void;
@@ -299,7 +300,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   // called from the keyboard router BEFORE the esc-menu nav branch: while
   // recording, every key is swallowed. enter/click-away also cancel.
-  const captureKey = (e: any): boolean => {
+  const captureKey = (e: KeyEventLike): boolean => {
     if (st.capturing === null) return false;
     // only an UNMODIFIED escape/return/tab cancels: ctrl+tab / ctrl+shift+tab
     // are next/prev-tab binds and must be recordable (they were unbindable
@@ -404,7 +405,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     renderMenuContent();
   };
 
-  const setOnId = (id: string, fn: (n: any) => void): void => {
+  const setOnId = (id: string, fn: (n: NodeLike) => void): void => {
     const n = ctx.byId(id);
     if (n) {
       try {
@@ -451,7 +452,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.log?.(`esc-menu render failed: ${err}`);
   };
 
-  const buildMenuContent = (c: Theme, panel: any, view: "root" | "settings" | "plugins") => {
+  const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins") => {
     menuC = c;
     const panelView = view !== "root";
     const panelW = panelView ? SETTINGS_W : ctx.menuW();
@@ -493,9 +494,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         if (prev >= 0) paintRootAt(prev, false);
         paintRootAt(index, true);
       };
-      const activateRow = (index: number) => (ev: any) => {
+      const activateRow = (index: number) => (ev?: MouseEvent) => {
         try {
-          ev.stopPropagation?.();
+          ev?.stopPropagation?.();
         } catch {}
         st.menuIdx = index;
         menuActivate();
@@ -506,7 +507,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         hint: string | undefined,
         active: boolean,
         index: number,
-        onClick: (ev?: any) => void,
+        onClick: (ev?: MouseEvent) => void,
       ) =>
         Box(
           {
@@ -641,7 +642,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         ...floatSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
         paddingTop: 1,
         paddingBottom: 1,
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}

@@ -1,6 +1,7 @@
 import { Box, Text } from "@opentui/core";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { MaybeNode } from "../lib/node-like";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
+import type { IconSlotHandle, SlotElement } from "./ui-slots";
 
 // --- Toast notifications (top-right stack, animated slide-in + fade-out).
 // THE single toast stack: plain auto-dismiss toasts AND the sticky transfer
@@ -11,8 +12,8 @@ import type { MaybeNode } from "../lib/node-like";
 // without importing from ui/). ---
 
 export type NotifyCtx = {
-  rootAdd(node: any): void;
-  remove(node: any): void;
+  rootAdd(node: unknown): void;
+  remove(node: unknown): void;
   byId(id: string): MaybeNode;
   termW(): number;
   accentBg(): string;
@@ -28,7 +29,7 @@ export type NotifyCtx = {
     name: string,
     states: { fg: string; bg: string }[],
     heightCells?: number,
-  ): { el: any; slotId: string; spec: any };
+  ): IconSlotHandle;
   drainIconQueue(): unknown;
   stripSelectable(): void;
   // config knob [ui] toast-duration-ms (default 3000)
@@ -104,10 +105,17 @@ export const wrapToastText = (s: string, budget: number, maxLines: number = MAX_
   return kept;
 };
 
-type ToastEntry = { id: number; nodeId: string; height: number; sticky: boolean; timer: any };
+type ToastEntry = {
+  id: number;
+  nodeId: string;
+  height: number;
+  sticky: boolean;
+  // auto-dismiss handle; null while a sticky toast waits for an explicit close
+  timer: ReturnType<typeof setTimeout> | null;
+};
 
 // shared slide-in animation (slide-out is just the reverse direction)
-const animateLeft = (node: any, from: number, to: number, ms: number): void => {
+const animateLeft = (node: NodeLike, from: number, to: number, ms: number): void => {
   const steps = 8;
   let i = 0;
   const tick = () => {
@@ -124,7 +132,7 @@ export const makeNotify = (
   ctx: NotifyCtx,
 ): {
   notify: (message: string, title?: string, level?: NotifyLevel) => void;
-  notifySticky: (children: any[], opts?: { width?: number; height?: number }) => ToastHandle | null;
+  notifySticky: (children: SlotElement[], opts?: { width?: number; height?: number }) => ToastHandle | null;
 } => {
   let toasts: ToastEntry[] = [];
   let toastSeq = 0;
@@ -200,7 +208,7 @@ export const makeNotify = (
   const pushToast = (
     width: number,
     height: number,
-    children: any[],
+    children: SlotElement[],
     sticky: boolean,
     duration?: number,
   ): ToastHandle | null => {
@@ -211,7 +219,7 @@ export const makeNotify = (
       const id = ++toastSeq;
       const nodeId = `tfm-toast-${id}`;
       const y = slotTop(toasts.length);
-      const node: any = Box(
+      const node = Box(
         {
           id: nodeId,
           position: "absolute",

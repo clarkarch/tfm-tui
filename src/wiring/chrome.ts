@@ -19,6 +19,7 @@ import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar, toolbarItemIds, crumbItemIds } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
 import { warmEmbeddedIcons } from "../ui/icons";
+import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/compat";
 import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
@@ -323,8 +324,10 @@ export const wireChrome = async (deps: {
   const { notify, notifySticky } = makeNotify({
     rootAdd: (node) => renderer.root.add(node),
     remove: (node) => {
-      const p: any = node.parent ?? renderer.root;
-      p.remove(node);
+      const n = node as NodeLike;
+      // the toast's own parent, or the root when it was never re-parented
+      const p = (n.parent ?? renderer.root) as NodeLike;
+      p.remove(n);
     },
     byId,
     termW: () => renderer.terminalWidth,

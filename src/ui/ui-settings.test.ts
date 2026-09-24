@@ -6,6 +6,7 @@ import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SettingGroup, SettingRow } from "./settings";
+import type { NodeLike } from "../lib/node-like";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // esc-menu + settings panel through the PUBLIC makeEscMenu surface only, so
@@ -110,7 +111,9 @@ beforeAll(async () => {
     renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
     clearChildren: (node) => {
-      for (const c of [...node.getChildren()]) node.remove(c);
+      // the ctx hands over a real node; this fake only touches the tree API
+      const n = node as NodeLike;
+      for (const c of [...n.getChildren()]) n.remove(c);
     },
     stripSelectable: () => {},
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),

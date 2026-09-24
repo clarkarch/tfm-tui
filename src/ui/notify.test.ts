@@ -10,6 +10,7 @@ import {
   type NotifyCtx,
 } from "./notify";
 import { makeProgress } from "./ui-progress";
+import type { IconSlotHandle, SlotElement } from "./ui-slots";
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {
   const deadline = Date.now() + 3000;
@@ -30,7 +31,8 @@ const makeFake = (opts?: { durationMs?: number }) => {
     },
     makeIconSlot: (name: string, states: Array<{ fg: string; bg: string }>) => {
       icons.push({ name, fg: states[0]?.fg ?? "" });
-      return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} };
+      // the notify path only reads slotId; the slot's icon surface is untested here
+      return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} } as unknown as IconSlotHandle;
     },
     drainIconQueue: () => {},
     stripSelectable: () => {},
@@ -157,7 +159,7 @@ describe("notify stacking", () => {
     // leave no hole when closed
     const { ctx, nodes, removed } = makeFake({ durationMs: 10000 });
     const { notify, notifySticky } = makeNotify(ctx);
-    const sticky = notifySticky([{ kind: "progress" }], { width: 36, height: 4 });
+    const sticky = notifySticky([{ kind: "progress" } as unknown as SlotElement], { width: 36, height: 4 });
     expect(sticky).not.toBeNull();
     notify("below");
     expect(nodes.get(sticky!.nodeId).top).toBe(1);
@@ -197,11 +199,12 @@ describe("notify stacking (real renderer)", () => {
         accentBg: () => "#1a1b26",
         white: () => "#ffffff",
         sidebarFgMuted: () => "#666666",
-        makeIconSlot: (name: string) => ({
-          el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
-          slotId: `tfm-icon-test-${name}`,
-          spec: {},
-        }),
+        makeIconSlot: (name: string) =>
+          ({
+            el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
+            slotId: `tfm-icon-test-${name}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,
@@ -258,11 +261,12 @@ describe("notify stacking (real renderer)", () => {
         accentBg: () => "#1a1b26",
         white: () => "#ffffff",
         sidebarFgMuted: () => "#666666",
-        makeIconSlot: (name: string) => ({
-          el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
-          slotId: `tfm-icon-test-${name}`,
-          spec: {},
-        }),
+        makeIconSlot: (name: string) =>
+          ({
+            el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
+            slotId: `tfm-icon-test-${name}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,

@@ -6,9 +6,11 @@
 // straight from ./grid-input so the wiring can't drift from the gesture
 // state machine. ---
 
-import { ASCIIFont, Box, type CliRenderer, ScrollBoxRenderable, Text } from "@opentui/core";
+import { ASCIIFont, Box, type CliRenderer, type MouseEvent, ScrollBoxRenderable, Text } from "@opentui/core";
 import { chromeSurface, type UiStyle } from "./style";
 import type { MaybeNode } from "../lib/node-like";
+import type { SlotElement } from "./ui-slots";
+import type { ListEntry } from "./ui-menu";
 import type { Theme } from "../config/config";
 import {
   BAND_ID,
@@ -27,7 +29,7 @@ import {
 // eager object, NOT a getter — these three ctxs read fields directly, so the
 // type must reject the themeGet function (a bare Record<string, any> would
 // silently accept it and every field read would be undefined at boot)
-export const buildTitle = (opts: { width: number; colors: Theme; visible?: boolean }): any =>
+export const buildTitle = (opts: { width: number; colors: Theme; visible?: boolean }): SlotElement =>
   Box(
     {
       id: "tfm-title-box",
@@ -53,12 +55,12 @@ type AppContainerOpts = {
   previewWidth: number;
   previewEnabled: boolean;
   dualPane: boolean;
-  title: any;
+  title: SlotElement;
   // one toolbar shell per pane (ids already prefixed by the toolbar factory)
-  toolbarShells: [any, any];
+  toolbarShells: [SlotElement, SlotElement];
 };
 
-export const buildAppContainer = (o: AppContainerOpts): any =>
+export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
   Box(
     { width: "100%", height: "100%", flexDirection: "row" },
     Box(
@@ -165,8 +167,8 @@ type BootLayoutCtx = {
   isRenaming: () => boolean;
   finishInlineRename: (commit: boolean) => void;
   clearTileSelection: () => void;
-  openContextMenu: (x: number, y: number, title: string, entries: any[]) => void;
-  emptyAreaEntries: (x: number, y: number) => any[];
+  openContextMenu: (x: number, y: number, title: string, entries: ListEntry[]) => void;
+  emptyAreaEntries: (x: number, y: number) => ListEntry[];
   // console mode: the drag ghost + rubber band paint the selection-bar idiom
   // (black bar + white label) instead of the accent chip (white on grey is
   // invisible). Optional so tests stay light.
@@ -184,7 +186,7 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       scrollY: true,
       viewportCulling: true,
       contentOptions: { flexDirection: "column" },
-      onMouseDown: (ev: any) => {
+      onMouseDown: (ev: MouseEvent) => {
         // clicking a pane focuses it before any selection/band work, so the
         // facade selection + status target the right pane
         ctx.focusPane(pane);
@@ -203,9 +205,9 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
         beginBand(ev);
         if (ev.button === 2) ctx.openContextMenu(ev.x, ev.y, "", ctx.emptyAreaEntries(ev.x, ev.y));
       },
-      onMouseDrag: (ev: any) => updateBandRect(ctx.bandCtx, ev),
-      onMouseDragEnd: (ev: any) => finalizeBand(ctx.bandCtx, ev),
-      onMouseUp: (ev: any) => {
+      onMouseDrag: (ev: MouseEvent) => updateBandRect(ctx.bandCtx, ev),
+      onMouseDragEnd: (ev: MouseEvent) => finalizeBand(ctx.bandCtx, ev),
+      onMouseUp: (ev: MouseEvent) => {
         if (bandActive()) finalizeBand(ctx.bandCtx, ev);
       },
       // dropping onto the pane's background (no tile under the cursor) targets

@@ -17,7 +17,7 @@ import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { loadSystemPlaces } from "../fs/places";
 import type { KeyAction } from "../config/config-schema";
 import { KEY_SCHEMA } from "../config/config-schema";
-import { keyMatch, parseKeySpec } from "../config/keyspec";
+import { type KeyEventLike, keyMatch, parseKeySpec } from "../config/keyspec";
 import type { Command } from "../lib/command";
 import { invokeIsolated } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -27,11 +27,12 @@ import type { MaybeNode } from "../lib/node-like";
 
 // Keypress shape the router actually reads. The renderer hands a richer
 // object (scan codes, text, meta); dispatch only touches name + modifiers.
-type KeyPressEvent = {
-  name?: string;
-  shift?: boolean;
-  ctrl?: boolean;
+// Built on KeyEventLike so the same event can be handed to the config
+// matcher and the settings keybind capture without a cast; `control` is
+// kitty's alias for ctrl, and the index signature keeps the rest opaque.
+type KeyPressEvent = KeyEventLike & {
   control?: boolean;
+  repeated?: boolean;
   [extra: string]: unknown;
 };
 
@@ -80,7 +81,7 @@ export type KeyRouterCtx = {
     menuTab(): void;
     openMenu(): void;
     // keybind capture (settings panel): consume the event while recording
-    captureKey(e: any): boolean;
+    captureKey(e: KeyEventLike): boolean;
   };
   termOwnsKeyboard(): boolean;
   pathEditMode(): boolean;

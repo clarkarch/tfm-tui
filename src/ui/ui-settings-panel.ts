@@ -7,10 +7,11 @@
 // hover must NEVER rebuild the panel (native alloc churn; see the OOM note in
 // AGENTS.md). ---
 
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
-import { IconStateIdx, type IconState, type IconSpec } from "./ui-slots";
+import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
 import type { Theme } from "../config/config";
+import type { NodeLike } from "../lib/node-like";
 
 export type SettingsPanelState = {
   catIdx: number;
@@ -31,13 +32,13 @@ type SettingsPanelHooks = {
   groups(): SettingGroup[];
   // visible row count for the right pane (panel chrome takes ~6 rows)
   visRows(): number;
-  setOnId(id: string, fn: (n: any) => void): void;
+  setOnId(id: string, fn: (n: NodeLike) => void): void;
   makeIconSlot(
     name: string,
     states: IconState[],
     heightCells?: number,
     initialState?: number,
-  ): { el: any; slotId: string; spec: IconSpec };
+  ): IconSlotHandle;
   // flip a slot's pre-rastered state (visibility only, no rebuild) — used by
   // the category hover highlight
   setIconState(spec: IconSpec, stateIdx: number): void;
@@ -122,7 +123,7 @@ export const descText = (row: SettingRow | undefined): string => {
 
 export const fitDescText = (text: string): string => `ⓘ ${text}`.slice(0, SETTINGS_W - 4);
 
-export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState, h: SettingsPanelHooks) => {
+export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanelState, h: SettingsPanelHooks) => {
   const cats = h.groups();
   const vis = h.visRows();
   const header = cats[st.catIdx]?.header ?? "";
@@ -130,7 +131,7 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
   const flat = flatVisible(rows, header, st.collapsed);
   ensureVisible(st, vis, flat.length, st.menuIdx < 0 ? -1 : visiblePos(flat, st.menuIdx));
   const canScroll = flat.length > vis;
-  const wheelScroll = (ev: any) => {
+  const wheelScroll = (ev: MouseEvent) => {
     if (!canScroll) return;
     try {
       ev.stopPropagation?.();
@@ -176,7 +177,7 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
           columnGap: 1,
           paddingLeft: 1,
           backgroundColor: hot ? c.accentBg : undefined,
-          onMouseDown: (ev: any) => {
+          onMouseDown: (ev: MouseEvent) => {
             try {
               ev.stopPropagation?.();
             } catch {}
@@ -282,7 +283,7 @@ const renderRowPane = (
         paddingLeft: 1,
         paddingRight: 1,
         backgroundColor: active ? c.accentBg : undefined,
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}
@@ -321,7 +322,7 @@ const renderRowPane = (
       {
         width: 2,
         justifyContent: "center",
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}
@@ -366,8 +367,8 @@ const renderRowPane = (
     const active = st.pane === "rows" && st.menuIdx === index;
     const capturingThis = st.capturing === index;
     const labelFg = c.white;
-    let control: any;
-    let onClick: (ev?: any) => void = (ev?: any) => {
+    let control: SlotElement;
+    let onClick: (ev?: MouseEvent) => void = (ev?: MouseEvent) => {
       try {
         ev?.stopPropagation?.();
       } catch {}
@@ -418,7 +419,7 @@ const renderRowPane = (
         ),
         chevron("›", active, index, rowSpec, 1),
       );
-      onClick = (ev?: any) => {
+      onClick = (ev?: MouseEvent) => {
         try {
           ev?.stopPropagation?.();
         } catch {}
