@@ -23,6 +23,10 @@ const colors = defaultConfig.theme as Theme & Record<string, any>;
 
 let t: TestRendererSetup;
 let liveColors: Theme & Record<string, any>;
+let liveStyle: "solid" | "outline" | "outline-partial";
+// every makeIconSlot call's states, in order — the ONLY way to see what bg a
+// raster will flatten onto (the handle's spec is not mounted)
+let slotStates: Array<{ name: string; states: any[] }>;
 let sandbox: string;
 let saved: Record<string, string | undefined>;
 let floats: ReturnType<typeof makeFloats>;
@@ -45,6 +49,22 @@ const text = (id: string): string => {
   if (Array.isArray(c?.chunks)) return c.chunks.map((x: any) => x?.text ?? "").join("");
   return c?.text ?? "";
 };
+const hexInts = (hex: string): number[] => {
+  const h = hex.replace("#", "");
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 255];
+};
+const bgInts = (id: string): number[] => {
+  const n: any = byId(id);
+  return n?.backgroundColor ? [...n.backgroundColor.toInts()] : [0, 0, 0, 0];
+};
+const fire = (id: string, type: string) =>
+  (byId(id) as any).processMouseEvent({
+    type,
+    button: 0,
+    x: 0,
+    y: 0,
+    modifiers: { shift: false, alt: false, ctrl: false },
+  });
 const settle = async (cond: () => boolean, ms = 3000): Promise<void> => {
   const deadline = Date.now() + ms;
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
@@ -78,16 +98,18 @@ beforeAll(async () => {
   iconStates = [];
   contextMenus = [];
   statusMsgs = [];
+  slotStates = [];
   renderAllCount = 0;
   floats = makeFloats();
   liveColors = colors;
+  liveStyle = "solid";
 
   const dialogs = makeDialogs({
     byId,
     rootAdd: (node) => t.renderer.root.add(node),
     stripSelectable: () => {},
     termH: () => 24,
-    uiStyle: () => "solid",
+    uiStyle: () => liveStyle,
     colors: () => liveColors,
     closeFileMenu: () => {},
   });
@@ -131,7 +153,7 @@ beforeAll(async () => {
     notify: (msg, title, level) => {
       statusMsgs.push(`${title}:${level}:${msg}`);
     },
-    uiStyle: () => "solid",
+    uiStyle: () => liveStyle,
     colors: () => liveColors,
     home: os.homedir(),
     makeIconSlot: (
@@ -140,12 +162,17 @@ beforeAll(async () => {
       heightCells?: number,
       initialState?: number,
       onMouseDown?: (ev: any) => void,
-    ) => ({
+    ) => {
+      // recorded before the fake handle: `states` is exactly what a real drain
+      // flattens each raster onto (bg included)
+      slotStates.push({ name, states });
       // mirrors ui-slots: a fixed-size Box hit area carrying the id + handler
-      el: Box({ id: `slot-${name}`, width: 2, height: heightCells ?? 1, onMouseDown }),
-      slotId: `slot-${name}`,
-      spec: { slotId: `slot-${name}`, name, heightCells: heightCells ?? 1, states, initialState: initialState ?? 0 },
-    }),
+      return {
+        el: Box({ id: `slot-${name}`, width: 2, height: heightCells ?? 1, onMouseDown }),
+        slotId: `slot-${name}`,
+        spec: { slotId: `slot-${name}`, name, heightCells: heightCells ?? 1, states, initialState: initialState ?? 0 },
+      };
+    },
     setIconState: (spec, idx) => {
       iconStates.push({ spec, idx });
       return true;
@@ -284,6 +311,76 @@ describe("single-file properties", () => {
     await settle(() => renderAllCount > 0);
     props.closeProps();
     await t.renderOnce();
+  });
+
+  test("hovering star/bookmark flips the raster state AND the wrapper surface", async () => {
+    props.openProperties(dirD);
+    await t.renderOnce();
+    // the raster bakes its bg, so a wrapper that only swapped the raster would
+    // leave a stale square; the hover bit is the top half of the toggle index
+    // (idx = on*1 + hover*2 — see ui-slots.toggleIconState)
+    const hoverIdx = () => iconStates.filter((s) => s.spec?.slotId === "slot-star").at(-1)?.idx;
+    const bmHoverIdx = () => iconStates.filter((s) => s.spec?.slotId === "slot-bookmark").at(-1)?.idx;
+    iconStates.length = 0;
+    expect(bgInts("tfm-props-star")).toEqual(hexInts(colors.sidebarBg));
+    fire("tfm-props-star", "move");
+    expect(bgInts("tfm-props-star")).toEqual(hexInts(colors.hoverBg));
+    expect(hoverIdx()).toBeGreaterThanOrEqual(2);
+    fire("tfm-props-star", "out");
+    expect(bgInts("tfm-props-star")).toEqual(hexInts(colors.sidebarBg));
+    expect(hoverIdx()).toBeLessThan(2);
+
+    // dirs also get the bookmark toggle, wired through the same helper
+    iconStates.length = 0;
+    fire("tfm-props-bm", "move");
+    expect(bgInts("tfm-props-bm")).toEqual(hexInts(colors.hoverBg));
+    expect(bmHoverIdx()).toBeGreaterThanOrEqual(2);
+    fire("tfm-props-bm", "out");
+    expect(bgInts("tfm-props-bm")).toEqual(hexInts(colors.sidebarBg));
+    props.closeProps();
+    await t.renderOnce();
+  });
+
+  test("dialog rasters flatten onto the dialog fill, never the canvas (outline-partial)", async () => {
+    // The dialog is FILLED in outline-partial (floatSurface), while chrome has
+    // no rest fill there — so the chrome flatten target (canvas bg) baked a
+    // visible square behind every icon in this dialog. Role "float" is the fix;
+    // the check is that no dialog raster targets the canvas bg.
+    liveStyle = "outline-partial";
+    try {
+      const restBg = (name: string) =>
+        slotStates.filter((s) => s.name === name).at(-1)?.states[0]?.bg as string | undefined;
+      const lastStates = (name: string) => slotStates.filter((s) => s.name === name).at(-1)?.states ?? [];
+      const noCanvasRasters = () => {
+        for (const { name, states } of slotStates) {
+          for (const st of states) expect([name, st.bg]).not.toEqual([name, colors.bg]);
+        }
+      };
+
+      slotStates.length = 0;
+      props.openProperties(dirD);
+      await t.renderOnce();
+      expect(restBg("star")).toBe(colors.sidebarBg);
+      expect(restBg("bookmark")).toBe(colors.sidebarBg);
+      expect(restBg("folder")).toBe(colors.sidebarBg); // the big hero raster
+      noCanvasRasters();
+      // hover states keep the shared cue in every style
+      expect(lastStates("star")[2]?.bg).toBe(colors.hoverBg);
+      props.closeProps();
+      await t.renderOnce();
+
+      // the perms editor's raster checkboxes (exec-capable file only) too
+      slotStates.length = 0;
+      props.openProperties(fileSh);
+      await t.renderOnce();
+      expect(restBg("checkbox-blank")).toBe(colors.sidebarBg);
+      expect(restBg("checkbox-marked")).toBe(colors.sidebarBg);
+      noCanvasRasters();
+      props.closeProps();
+      await t.renderOnce();
+    } finally {
+      liveStyle = "solid";
+    }
   });
 
   test("directory size resolves async from the dir walk", async () => {

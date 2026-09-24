@@ -92,11 +92,33 @@ export const btnSurface = (style: UiStyle, c: Theme, hovered: boolean, restBg?: 
   return { backgroundColor: hovered ? c.hoverBg : (restBg ?? c.bg) };
 };
 
-// raster slots flatten icons onto a bg hex; outline-variant rest states sit on
-// the canvas, so the flatten target must be canvas bg instead of panel bg.
+// The surface a raster slot flattens onto. Flattening is what makes an icon
+// raster's own square disappear; when the target disagrees with the surface the
+// icon is actually drawn over, the square is visible — that was the props/notify
+// "icon bg" bug. So the ROLE is part of the call, not an afterthought:
+//
+// "chrome" (default): panels/tiles/toolbar. Outline variants paint NO rest fill
+//   for chrome, so the rest raster must flatten onto the canvas bg.
+// "float": a slot inside a floating layer — menus, dialogs, toasts. Floats are
+//   filled in solid AND outline-partial (floatSurface), and the toast island is
+//   filled in every style, so the float's own fill is the target in every style.
+//   Passing the chrome role here punches a canvas-colored square into the
+//   dialog (visible over the float fill, most obviously in outline-partial).
+//   Under pure outline a float is a border ring over the dimmed desktop: nothing
+//   matches, and the float fill is what every float row (menu/settings) bakes.
 // Ignored when [ui] icons is "transparent" (raster keeps alpha, key drops bg) —
 // kept in IconState for call-site compat.
-export const slotBg = (style: UiStyle, c: Theme, panelBg: string): string => (isOutlineVariant(style) ? c.bg : panelBg);
+export type SlotFillRole = "chrome" | "float";
+export const slotBg = (style: UiStyle, c: Theme, panelBg: string, role: SlotFillRole = "chrome"): string =>
+  role === "float" || !isOutlineVariant(style) ? panelBg : c.bg;
+
+// buttons/hover targets that live INSIDE an always-filled floating island (the
+// toast stack keeps its accentBg fill in EVERY style — there is no border-ring
+// mode to clear it for). btnSurface can't express this: its outline branch
+// deliberately clears the rest fill for chrome, which would be wrong here.
+export const islandSurface = (c: Theme, hovered: boolean, islandBg: string): SurfaceOpts => ({
+  backgroundColor: hovered ? c.hoverBg : islandBg,
+});
 
 // post-mutation of real renderables (findDescendantById results). "transparent"
 // clears a fill — parseColor maps it to alpha-0, which emits terminal-default

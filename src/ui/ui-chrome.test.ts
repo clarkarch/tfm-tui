@@ -374,6 +374,32 @@ describe("renderTabbar", () => {
     expect(calls.closeTab).toContain(0);
   });
 
+  test("the tab ✕ highlights its raster state AND its wrapper surface together", async () => {
+    tabModel = { list: mkTabs(2), active: 1 }; // tab 0 is the inactive chip
+    calls.iconStates.length = 0;
+    chrome.renderTabbar(0);
+    await t.renderOnce();
+    const closeId = "tfm-p0-tab-0-close";
+    // an inactive chip's ✕ rests on the canvas fill and flattens onto it
+    expect(bgInts(closeId)).toEqual(hexInts(colors.bg));
+    const fire = (type: string) =>
+      (byId(closeId) as any).processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    fire("move");
+    // 1 = Active (the hover raster) — swapping only this left a flat square on
+    // the wrapper in glyph/transparent modes, which is the bug class this pins
+    expect(calls.iconStates.at(-1)?.idx).toBe(1);
+    expect(bgInts(closeId)).toEqual(hexInts(colors.hoverBg));
+    fire("out");
+    expect(calls.iconStates.at(-1)?.idx).toBe(0);
+    expect(bgInts(closeId)).toEqual(hexInts(colors.bg));
+  });
+
   test("dropping a single dragged folder on a chip navigates that tab to it", async () => {
     tabModel = { list: mkTabs(2), active: 1 }; // previous test rendered a 1-tab bar
     chrome.renderTabbar(0);
@@ -427,11 +453,13 @@ describe("normalizePlaces (hover/kb focus)", () => {
     chrome.clearMousePlace();
   });
 
-  test("mouse over/out routes the row key to hoverRow (per-row nudge)", async () => {
+  test("mouse move/out routes the row key to hoverRow (per-row nudge)", async () => {
     cwd = HOME;
     chrome.renderSidebar();
     await t.renderOnce();
-    const over = (id: string, type: string) =>
+    // hover-on rides on MOVE, never on OVER (see ui-slots.hoverEvents): OpenTUI
+    // re-fires a synthetic "over" on a rebuild under a stationary cursor
+    const fire = (id: string, type: string) =>
       (byId(id) as any).processMouseEvent({
         type,
         button: 0,
@@ -440,13 +468,18 @@ describe("normalizePlaces (hover/kb focus)", () => {
         modifiers: { shift: false, alt: false, ctrl: false },
       });
     const nOver = calls.hoverRow.length;
-    over("tfm-place-2", "over");
-    // exclusivity: the only emission for THIS row on an over is the lift
+    fire("tfm-place-2", "move");
+    // exclusivity: the only emission for THIS row on a move is the lift
     expect(calls.hoverRow.slice(nOver).filter(([k]) => k === "tfm-place-2")).toEqual([["tfm-place-2", true]]);
     // paint still normalizes alongside the nudge
     expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.hoverBg));
+    // a repeated move over the same row is a no-op (the wiring is idempotent,
+    // so per-pixel moves can't repaint every row in the sidebar)
+    const nRepeat = calls.hoverRow.length;
+    fire("tfm-place-2", "move");
+    expect(calls.hoverRow.length).toBe(nRepeat);
     const nOut = calls.hoverRow.length;
-    over("tfm-place-2", "out");
+    fire("tfm-place-2", "out");
     expect(calls.hoverRow.slice(nOut).filter(([k]) => k === "tfm-place-2")).toEqual([["tfm-place-2", false]]);
     expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.sidebarBg));
   });
@@ -462,7 +495,7 @@ describe("normalizePlaces (hover/kb focus)", () => {
     const target = chrome.placesHost.find((r) => !r.selected && r.place.path);
     expect(target).toBeTruthy();
     (byId(target!.rowId) as any).processMouseEvent({
-      type: "over",
+      type: "move",
       button: 0,
       x: 0,
       y: 0,

@@ -2,13 +2,13 @@ import { Box, type MouseEvent, Text } from "@opentui/core";
 import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
 import { clearChildren } from "../lib/uiutil";
-import { applySurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
+import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
 import { buildSections, loadSystemPlaces, type Place } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { tabTitle, type Tab } from "../app/tabs";
 import { gridDrag, type ClipItem } from "../input/grid-input";
-import { IconStateIdx, selectIconState } from "./ui-slots";
+import { hoverEvents, selectIconState, toggleIconState } from "./ui-slots";
 import type { Theme } from "../config/config";
 import type { ListEntry } from "./ui-menu";
 
@@ -187,18 +187,15 @@ export const makeChrome = (ctx: ChromeCtx) => {
             void ctx.moveInto(target, rest);
           }
         },
-        onMouseOver: () => {
-          mousePlaceIdx = idx;
+        // hover paint + icon lift for THIS row; normalizePlaces is the single
+        // paint truth (it recomputes every row), and the shared wiring keeps a
+        // per-pixel move from re-running it — that would be O(rows) per cell
+        ...hoverEvents((on) => {
+          ctx.hoverRow(`tfm-place-${idx}`, on);
+          if (on) mousePlaceIdx = idx;
+          else if (mousePlaceIdx === idx) mousePlaceIdx = -1;
           normalizePlaces();
-          ctx.hoverRow(`tfm-place-${idx}`, true);
-        },
-        onMouseOut: () => {
-          ctx.hoverRow(`tfm-place-${idx}`, false);
-          if (mousePlaceIdx === idx) {
-            mousePlaceIdx = -1;
-            normalizePlaces();
-          }
-        },
+        }),
       },
       iconSlot.el,
     );
@@ -295,10 +292,6 @@ export const makeChrome = (ctx: ChromeCtx) => {
     tabs.list.forEach((t, i) => {
       const tabId = `${prefix}tab-${i}`;
       const active = i === tabs.active;
-      const paint = () => {
-        const n = ctx.byId(tabId);
-        if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, active ? "selected" : "rest"));
-      };
       // ✕ flatten target must match the chip's own fill, or the raster shows as
       // a square patch on the active tab (accentBg) vs the canvas (rest states)
       const closeStates = (): IconState[] => [
@@ -321,15 +314,23 @@ export const makeChrome = (ctx: ChromeCtx) => {
         },
         closeStates,
       );
-      // makeIconSlot only takes onMouseDown — hover swap goes on a wrapper
+      // makeIconSlot only takes onMouseDown — the hover swap goes on a wrapper.
+      // Both halves must flip together (raster state AND the wrapper surface):
+      // opaque rasters bake their bg, so a wrapper that only swaps the raster
+      // shows a stale/flat square, and in glyph mode the raster is absent and
+      // the wrapper surface is the ONLY thing that can highlight.
+      const closeWrapId = `${prefix}tab-${i}-close`;
+      const closeRestBg = active ? colors.accentBg : slotBg(ctx.uiStyle(), colors, colors.bg);
+      const paintClose = (on: boolean) => {
+        ctx.setIconState(closeSlot.spec, toggleIconState(on, false));
+        const n = ctx.byId(closeWrapId);
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), colors, on, closeRestBg));
+      };
       const closeWrap = Box(
         {
-          onMouseOver: () => {
-            ctx.setIconState(closeSlot.spec, IconStateIdx.Active);
-          },
-          onMouseOut: () => {
-            ctx.setIconState(closeSlot.spec, IconStateIdx.Rest);
-          },
+          id: closeWrapId,
+          ...btnSurface(ctx.uiStyle(), colors, false, closeRestBg),
+          ...hoverEvents(paintClose),
         },
         closeSlot.el,
       );
@@ -363,20 +364,17 @@ export const makeChrome = (ctx: ChromeCtx) => {
               ctx.switchTab(pane, i);
               ctx.navigate(first.path);
             },
-            onMouseOver: () => {
-              // drop-target cue: light the chip like the selected tab while a
-              // single-folder drag hovers it
-              if (dragTabDir() !== null) {
-                const n = ctx.byId(tabId);
-                if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected"));
+            // drop-target cue: light the chip like the selected tab while a
+            // single-folder drag hovers it, else the usual hover fill
+            ...hoverEvents((on) => {
+              const n = ctx.byId(tabId);
+              if (!n) return;
+              if (on && dragTabDir() !== null) {
+                applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected"));
                 return;
               }
-              if (!active) {
-                const n = ctx.byId(tabId);
-                if (n) applySurface(n, tileSurface(ctx.uiStyle(), colors, "hover"));
-              }
-            },
-            onMouseOut: paint,
+              if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest"));
+            }),
           },
           Text({ content: tabTitle(t), fg: active ? colors.white : colors.sidebarFg }),
           closeWrap,

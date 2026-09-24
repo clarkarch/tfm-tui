@@ -13,7 +13,7 @@
 import { Box, type CliRenderer, type MouseEvent, RGBA, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
-import type { IconSlotHandle, IconState, IconSpec, SlotElement } from "./ui-slots";
+import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
 import type { Theme } from "../config/config";
 import { type KeyEventLike, keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
 import type { NodeLike } from "../lib/node-like";
@@ -479,6 +479,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     );
 
     if (!panelView) {
+      // root-row icon specs, by index — the hover repaint flips them in lockstep
+      // with the row bg. A baked raster carries its own bg, so highlighting only
+      // the row left the icon showing a stale sidebarBg square; the settings
+      // categories have always flipped both, this brings the root view in line.
+      const rootSpecs: (IconSpec | undefined)[] = [];
       const paintRootAt = (index: number, on: boolean): void => {
         setOnId(`tfm-root-row-${index}`, (n) => {
           n.backgroundColor = on ? c.accentBg : undefined;
@@ -486,6 +491,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         setOnId(`tfm-root-rowl-${index}`, (n) => {
           n.fg = c.white;
         });
+        const spec = rootSpecs[index];
+        if (spec) ctx.setIconState(spec, on ? IconStateIdx.Active : IconStateIdx.Rest);
       };
       const hoverSelect = (index: number) => () => {
         if (st.menuIdx === index) return;
@@ -524,15 +531,19 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           },
           ...(icon
             ? [
-                ctx.makeIconSlot(
-                  icon,
-                  [
-                    { fg: c.white, bg: active ? c.accentBg : c.sidebarBg },
-                    { fg: c.white, bg: c.accentBg },
-                  ],
-                  1,
-                  active ? 1 : 0,
-                ).el,
+                (() => {
+                  const slot = ctx.makeIconSlot(
+                    icon,
+                    [
+                      { fg: c.white, bg: active ? c.accentBg : c.sidebarBg },
+                      { fg: c.white, bg: c.accentBg },
+                    ],
+                    1,
+                    active ? IconStateIdx.Active : IconStateIdx.Rest,
+                  );
+                  rootSpecs[index] = slot.spec;
+                  return slot.el;
+                })(),
               ]
             : []),
           Text({

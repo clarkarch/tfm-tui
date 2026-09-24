@@ -235,6 +235,34 @@ describe("esc-menu root view", () => {
     menu.closeMenu();
     await t.renderOnce();
   });
+
+  test("hovering a root row flips its icon raster in lockstep with the row bg", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const fire = (id: string) =>
+      (t.renderer.root.findDescendantById(id) as any).processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    iconStateCalls.length = 0;
+    fire("tfm-root-row-1");
+    expect(bgInts("tfm-root-row-1")).toEqual(hexInts(colors.accentBg));
+    // Active = the accent raster. A baked raster carries its own bg, so a
+    // row-only repaint left the icon on a stale sidebarBg square.
+    expect(iconStateCalls.some(([, idx]) => idx === 1)).toBe(true);
+    // sweeping to another row restores the abandoned row's icon to Rest
+    iconStateCalls.length = 0;
+    fire("tfm-root-row-0");
+    expect(bgInts("tfm-root-row-1")).toEqual([0, 0, 0, 0]);
+    expect(iconStateCalls.some(([, idx]) => idx === 0)).toBe(true);
+    menu.closeMenu();
+    await t.renderOnce();
+  });
 });
 
 describe("settings view", () => {

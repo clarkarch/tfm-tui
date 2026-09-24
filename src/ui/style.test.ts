@@ -6,6 +6,7 @@ import {
   chromeSurface,
   floatSurface,
   iconTransparent,
+  islandSurface,
   rowSurface,
   sideInnerWidth,
   slotBg,
@@ -62,9 +63,29 @@ describe("surface builders", () => {
     expect(btnSurface("solid", theme, false)).toEqual({ backgroundColor: "#1a1b26" });
   });
 
-  test("slotBg: outline rasters flatten onto the canvas bg, not the panel bg", () => {
+  test("slotBg: chrome rasters flatten onto the canvas bg under outline styles", () => {
     expect(slotBg("outline", theme, theme.sidebarBg)).toBe("#1a1b26");
     expect(slotBg("solid", theme, theme.sidebarBg)).toBe("#16161e");
+  });
+
+  test("slotBg: the float role keeps the float's own fill in every style", () => {
+    // floats are painted in solid AND outline-partial (floatSurface), so the
+    // chrome rule would bake a canvas-colored square into the dialog — the
+    // props/notify icon-bg regression this role exists to prevent
+    for (const style of ["solid", "outline", "outline-partial"] as const) {
+      expect(slotBg(style, theme, theme.sidebarBg, "float")).toBe("#16161e");
+      expect(slotBg(style, theme, theme.accentBg, "float")).toBe("#29a37a");
+    }
+    // the chrome role is untouched by the float branch
+    expect(slotBg("outline-partial", theme, theme.sidebarBg, "chrome")).toBe("#1a1b26");
+  });
+
+  test("islandSurface: an always-filled float island never clears its rest fill", () => {
+    // toasts keep accentBg in every ui-style, so their buttons stay filled at
+    // rest unlike btnSurface's outline branch
+    expect(islandSurface(theme, false, theme.accentBg)).toEqual({ backgroundColor: "#29a37a" });
+    expect(islandSurface(theme, true, theme.accentBg)).toEqual({ backgroundColor: "#292e42" });
+    expect(btnSurface("outline", theme, false, theme.accentBg)).toEqual({});
   });
 
   test("floatSurface: only pure outline floats border-only; solid + outline-partial fill", () => {

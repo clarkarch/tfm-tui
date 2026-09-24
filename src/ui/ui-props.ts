@@ -13,7 +13,7 @@ import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../f
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
 import type { ListEntry } from "./ui-menu";
 import { FLOAT_Z, type Floats } from "./floats";
-import { IconStateIdx, toggleIconState } from "./ui-slots";
+import { hoverEvents, IconStateIdx, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
@@ -117,10 +117,13 @@ export const makeProps = (ctx: PropsCtx) => {
     if (!panel) return;
 
     // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
-    // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps
+    // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps. The rasters
+    // flatten onto the DIALOG's fill (role "float"): the dialog is filled in
+    // solid + outline-partial, so the chrome role would bake a canvas-colored
+    // square into the panel.
     const propsToggleStates = (): IconState[] => [
-      { fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) },
-      { fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) },
+      { fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") },
+      { fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") },
       { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
       { fg: colors.accent, bg: colors.hoverBg },
     ];
@@ -175,14 +178,10 @@ export const makeProps = (ctx: PropsCtx) => {
               id: "tfm-props-star",
               paddingLeft: 1,
               ...btnSurface(ctx.uiStyle(), colors, false, colors.sidebarBg),
-              onMouseOver: () => {
-                starHover = true;
-                propsTogglePaint("tfm-props-star", starSlot.spec, starred, true);
-              },
-              onMouseOut: () => {
-                starHover = false;
-                propsTogglePaint("tfm-props-star", starSlot.spec, starred, false);
-              },
+              ...hoverEvents((on) => {
+                starHover = on;
+                propsTogglePaint("tfm-props-star", starSlot.spec, starred, on);
+              }),
             },
             starSlot.el,
           );
@@ -195,14 +194,10 @@ export const makeProps = (ctx: PropsCtx) => {
                   id: "tfm-props-bm",
                   paddingLeft: 1,
                   ...btnSurface(ctx.uiStyle(), colors, false, colors.sidebarBg),
-                  onMouseOver: () => {
-                    bmHover = true;
-                    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, true);
-                  },
-                  onMouseOut: () => {
-                    bmHover = false;
-                    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, false);
-                  },
+                  ...hoverEvents((on) => {
+                    bmHover = on;
+                    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, on);
+                  }),
                 },
                 bmSlot.el,
               ),
@@ -240,7 +235,7 @@ export const makeProps = (ctx: PropsCtx) => {
         size: st.size,
         wCells: heroW,
         hCells: ICON_H,
-        bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg),
+        bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float"),
         vector: targetPath.toLowerCase().endsWith(".svg"),
         video: isVideo,
         fallbackGlyph: ctx.fallbackGlyphFor(iconName),
@@ -249,7 +244,7 @@ export const makeProps = (ctx: PropsCtx) => {
     } else {
       heroEl = ctx.makeIconSlot(
         iconName,
-        [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+        [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
         ICON_H,
       ).el;
     }
@@ -395,7 +390,7 @@ export const makeProps = (ctx: PropsCtx) => {
     const ICON_H = 6;
     const heroEl = ctx.makeIconSlot(
       "select-all",
-      [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+      [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       ICON_H,
     ).el;
     panel.add(

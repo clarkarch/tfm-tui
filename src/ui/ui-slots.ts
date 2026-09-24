@@ -36,6 +36,43 @@ export const navIconState = (enabled: boolean, hover: boolean): number =>
 export const selectIconState = (selected: boolean, hover: boolean): number =>
   selected ? IconStateIdx.Selected : hover ? IconStateIdx.Active : IconStateIdx.Rest;
 
+// --- THE hover wiring for every mouse-driven button/row in the UI ---
+// One implementation, because drift here is invisible until a user reports it:
+// pages of widgets each hand-rolled their own pair and they disagreed.
+//
+// * Light up on `move`, clear on `out` — never `over`. OpenTUI fires
+//   over/out only when the DEEPEST hit node changes, so (a) moving between a
+//   button's own icon and its padding fires out→over, and (b) a rebuild under a
+//   stationary cursor re-fires a synthetic "over" on the new node. Wiring the
+//   highlight to "over" therefore desyncs from the real pointer; `move` bails
+//   only on an actual pointer move and is the source of truth. The callbacks
+//   still fire in the same event turn, so the out→move pair nets out to a
+//   correctly-lit button before the frame renders — no flicker.
+// * Guarded: the first move paints, the rest are no-ops. A bare
+//   `onMouseMove: () => paint(true)` repaints every row in a list on every
+//   pointer cell (an O(rows) full repaint per pixel).
+// * Paint MUST cover both halves of a button: the baked raster state AND the
+//   wrapper box surface. Opaque rasters bake their bg into the png, so a wrapper
+//   that swaps only the raster leaves a stale square around it, while a wrapper
+//   that swaps only the bg leaves the raster's own square on top; in glyph mode
+//   the raster doesn't exist at all and only the wrapper bg can highlight.
+//   See escHintBtn (ui-slots) for the reference implementation.
+export const hoverEvents = (paint: (hover: boolean) => void) => {
+  let on = false;
+  return {
+    onMouseMove: (): void => {
+      if (on) return;
+      on = true;
+      paint(true);
+    },
+    onMouseOut: (): void => {
+      if (!on) return;
+      on = false;
+      paint(false);
+    },
+  };
+};
+
 export type IconSpec = {
   slotId: string;
   name: string;
@@ -89,6 +126,30 @@ export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible
 // letterboxes; cover would crop the drawing's edges) — that was the old
 // `fit:"fit"` behavior, restored here for vectors only.
 export const thumbImageFit = (vector: boolean): "fit" | "cover" => (vector ? "fit" : "cover");
+
+// --- Floating-layer roots ---
+// A slot inside one of these is a FLOAT child. Two decisions hang off it: the
+// raster keeps its alpha only OUTSIDE floats in `transparent-partial` (an opaque
+// island must never blend the desktop through), and its flatten bg is the
+// float's own fill rather than the canvas (see style.slotBg's role arg). The
+// toast shell is per-instance (`tfm-toast-<n>`) — every other root id is a
+// singleton, so those are exact matches and the toast is a prefix.
+export const FLOAT_ROOT_IDS: ReadonlySet<string> = new Set([
+  "tfm-menu",
+  "tfm-filemenu",
+  "tfm-filemenu-sub",
+  "tfm-prompt",
+  "tfm-props",
+  "tfm-conflict",
+  "tfm-yesno",
+  "tfm-pick",
+  "tfm-bulkrename",
+]);
+export const FLOAT_TOAST_PREFIX = "tfm-toast-";
+
+/** is `id` (or a toast's `tfm-toast-<n>`) a floating-layer root? */
+export const isFloatRootId = (id: unknown): boolean =>
+  typeof id === "string" && (FLOAT_ROOT_IDS.has(id) || id.startsWith(FLOAT_TOAST_PREFIX));
 
 export type SlotsCtx = {
   renderer(): CliRenderer;
@@ -379,22 +440,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // must fall back to dimmed glyphs or they float over the menu
     if (ctx.modalOpen()) setScrim(true);
   };
-
-  // Slots INSIDE a floating layer (menu rows, dialogs, prompts) sit above the
-  // scrim and keep their crisp rasters; `transparent-partial` also uses this to
-  // keep their rasters opaque over the float's solid fill.
-  const FLOAT_ROOT_IDS = new Set([
-    "tfm-menu",
-    "tfm-filemenu",
-    "tfm-filemenu-sub",
-    "tfm-prompt",
-    "tfm-props",
-    "tfm-conflict",
-    "tfm-yesno",
-    "tfm-pick",
-    "tfm-bulkrename",
-  ]);
-
   // narrowed view of the byId seam (see ../lib/node-like): only the members
   // the scrim touches. `fg` is a ColorInput because the seam hands back the
   // real renderable, whose fg IS a parsed RGBA once assigned a theme hex.
@@ -406,10 +451,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
     getChildren?: () => Iterable<SlotNode>;
   };
 
+  // walk up to the nearest floating-layer root (see isFloatRootId)
   const isFloatChild = (slot: SlotNode | null | undefined): boolean => {
     let cur: SlotNode | null | undefined = slot?.parent;
     while (cur) {
-      if (typeof cur.id === "string" && FLOAT_ROOT_IDS.has(cur.id)) return true;
+      if (isFloatRootId(cur.id)) return true;
       cur = cur.parent;
     }
     return false;
@@ -455,12 +501,21 @@ export const makeSlots = (ctx: SlotsCtx) => {
   };
 
   // clickable "esc"/close hint shared by floating UIs (prompt/props/menu) —
-  // an icon-slot widget, so it lives with the slot machinery
-  const escHintBtn = (id: string, onClose: () => void): SlotElement => {
+  // an icon-slot widget, so it lives with the slot machinery. It is a FLOAT
+  // child by default: its rest raster flattens onto the floating layer's fill
+  // (style.slotBg role "float"), never onto the canvas, which would punch a
+  // canvas-colored square into the panel. `chrome` opts out for the one caller
+  // that is NOT a float (the terminal pane header).
+  const escHintBtn = (id: string, onClose: () => void, opts?: { chrome?: boolean }): SlotElement => {
     const states = (): IconState[] => [
       {
         fg: ctx.colors().sidebarFgMuted,
-        bg: slotBg(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
+        bg: slotBg(
+          ctx.uiStyle() as UiStyle,
+          ctx.colors() as Theme,
+          ctx.colors().sidebarBg,
+          opts?.chrome ? "chrome" : "float",
+        ),
       },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
@@ -481,10 +536,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, false, ctx.colors().sidebarBg),
         onMouseDown: () => onClose(),
-        // move, not over: a rebuild under a stationary cursor re-fires
-        // synthetic "over" (same trap as settings rows)
-        onMouseMove: () => paint(true),
-        onMouseOut: () => paint(false),
+        ...hoverEvents(paint),
       },
       slot.el,
     );

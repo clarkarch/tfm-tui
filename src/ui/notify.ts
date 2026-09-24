@@ -285,7 +285,11 @@ export const makeNotify = (
         );
         // the level icon is a fixed 2-cell raster slot beside the title (same
         // shape as the progress toast's button slots); the drain swaps the
-        // fallback glyph for the tinted raster async
+        // fallback glyph for the tinted raster async. The toast shell is a
+        // floating layer whose island keeps its accentBg fill in EVERY ui-style
+        // (see FLOAT_TOAST_PREFIX in ui-slots), so this is the raster's flatten
+        // target and the icon is opaque under `transparent-partial` like every
+        // other float icon — it is decoration, so it has no hover state.
         const slot = ctx.makeIconSlot(meta.icon, [{ fg: meta.titleFg, bg: ctx.accentBg() }], 1);
         pushToast(
           w,

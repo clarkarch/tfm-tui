@@ -23,14 +23,14 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
 const makeFake = (opts?: { durationMs?: number }) => {
   const nodes = new Map<string, any>();
   const removed: string[] = [];
-  const icons: Array<{ name: string; fg: string }> = [];
+  const icons: Array<{ name: string; fg: string; bg: string }> = [];
   const ctx: NotifyCtx = {
     rootAdd: (_node: any) => {},
     remove: (node: any) => {
       removed.push(node.id);
     },
     makeIconSlot: (name: string, states: Array<{ fg: string; bg: string }>) => {
-      icons.push({ name, fg: states[0]?.fg ?? "" });
+      icons.push({ name, fg: states[0]?.fg ?? "", bg: states[0]?.bg ?? "" });
       // the notify path only reads slotId; the slot's icon surface is untested here
       return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} } as unknown as IconSlotHandle;
     },
@@ -145,11 +145,14 @@ describe("notify stacking", () => {
     notify("a", "t", "info");
     notify("b", "t", "success");
     notify("c", "t", "error");
-    // white info, green check, red close — the meta→slot wiring, not just names
+    // white info, green check, red close — the meta→slot wiring, not just names.
+    // bg is the toast island's accentBg: the raster flattens onto the island
+    // (the toast shell is a floating layer — see FLOAT_TOAST_PREFIX), so its
+    // icon stays opaque under `transparent-partial` like every menu/dialog icon.
     expect(icons).toEqual([
-      { name: "information", fg: "#ffffff" },
-      { name: "check", fg: "#7fd88f" },
-      { name: "close", fg: "#e06c75" },
+      { name: "information", fg: "#ffffff", bg: "#1a1b26" },
+      { name: "check", fg: "#7fd88f", bg: "#1a1b26" },
+      { name: "close", fg: "#e06c75", bg: "#1a1b26" },
     ]);
   });
 

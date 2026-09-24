@@ -6,7 +6,7 @@ import { gridDrag } from "../input/grid-input";
 import type { Theme } from "../config/config";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
-import type { SlotElement } from "./ui-slots";
+import { hoverEvents, type SlotElement } from "./ui-slots";
 
 // --- Embedded terminal pane ("Open Terminal Here") ---
 // OpenTUI's EmbeddedTerminalRenderable draws the VT stream; the PTY belongs to
@@ -25,7 +25,9 @@ type TermCtx = {
   colors(): Theme;
   sw(): number;
   termH(): number; // live [ui] terminal-height (rows of VT, +1 for the header)
-  escHintBtn(id: string, onClose: () => void): SlotElement;
+  // `chrome` opts the hint's raster out of the float flatten target (this is
+  // the one non-floating esc hint: the pane header, not a dialog)
+  escHintBtn(id: string, onClose: () => void, opts?: { chrome?: boolean }): SlotElement;
   stripSelectable(): void;
   drainIconQueue(): void;
   notify(message: string, title?: string, level?: NotifyLevel): void;
@@ -329,7 +331,7 @@ export const makeTerminal = (ctx: TermCtx) => {
       host.height = 0;
       // the pane is gone — the host must stop acting as a drop target
       try {
-        host.onMouseOver = undefined;
+        host.onMouseMove = undefined;
       } catch {}
       try {
         host.onMouseOut = undefined;
@@ -365,14 +367,19 @@ export const makeTerminal = (ctx: TermCtx) => {
     }
     const host = ctx.byId("tfm-term-host");
     if (!host) return;
-    // the host box is the pane's drop target: over/out give the drag-hover cue,
-    // drop pastes the payload into the PTY (see handleTermDrop)
-    host.onMouseOver = () => {
+    // the host box is the pane's drop target: the shared hover wiring gives the
+    // drag-hover cue, drop pastes the payload into the PTY (see handleTermDrop).
+    // The host handlers are assigned imperatively (it's a pre-built node, not a
+    // factory), so the pair is spread from the one implementation.
+    const hostHover = hoverEvents((on) => {
+      if (!on) {
+        paintHeaderCue(false);
+        return;
+      }
       if (gridDrag.active) paintHeaderCue(true);
-    };
-    host.onMouseOut = () => {
-      paintHeaderCue(false);
-    };
+    });
+    host.onMouseMove = hostHover.onMouseMove;
+    host.onMouseOut = hostHover.onMouseOut;
     host.onMouseDrop = handleTermDrop;
     const colors = ctx.colors();
     const cwd = dir ?? (ctx.virtualCwd() ? ctx.home : ctx.cwd());
@@ -389,7 +396,7 @@ export const makeTerminal = (ctx: TermCtx) => {
       },
       Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
       Box({ flexGrow: 1 }),
-      ctx.escHintBtn("tfm-esc-term", closeTerminalPane),
+      ctx.escHintBtn("tfm-esc-term", closeTerminalPane, { chrome: true }),
     );
     term = new EmbeddedTerminalRenderable(ctx.renderer, {
       id: "tfm-term",

@@ -4,7 +4,7 @@ import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
-import type { SlotElement } from "./ui-slots";
+import { hoverEvents, type SlotElement } from "./ui-slots";
 
 // --- Shared skeleton for the centered floating dialogs (conflict / props /
 // yesno): full-screen dimmed scrim + a chrome panel that swallows clicks,
@@ -97,10 +97,8 @@ export const makeDialogs = (ctx: DialogsCtx) => {
           } catch {}
           onPick();
         },
-        // move, not over: a rebuild under a stationary cursor re-fires
-        // synthetic "over" (same trap as settings rows)
-        onMouseMove: () => setBg(true),
-        onMouseOut: () => setBg(false),
+        // the one hover wiring (see ui-slots.hoverEvents) — move, not over
+        ...hoverEvents(setBg),
       },
       Text({ content: label, fg }),
     );

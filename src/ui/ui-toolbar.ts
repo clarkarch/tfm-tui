@@ -12,7 +12,7 @@ import { applySurface, btnSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import type { IconSlotHandle, IconSpec, IconState, SlotElement } from "./ui-slots";
-import { navIconState, toggleIconState } from "./ui-slots";
+import { hoverEvents, navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
@@ -153,14 +153,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           ctx.closeFileMenu();
           onActivate();
         },
-        onMouseOver: () => {
-          navHover[btnId] = true;
+        ...hoverEvents((on) => {
+          navHover[btnId] = on;
           refreshNav();
-        },
-        onMouseOut: () => {
-          navHover[btnId] = false;
-          refreshNav();
-        },
+        }),
       },
       slot.el,
     );
@@ -336,8 +332,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
                   ctx.focusPane?.();
                   ctx.navigate(c.target);
                 },
-                onMouseOver: () => paintHover(true),
-                onMouseOut: () => paintHover(false),
+                ...hoverEvents(paintHover),
               }),
         },
         ...(iconSlot ? [iconSlot.el] : []),
@@ -393,8 +388,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           ctx.focusPane?.();
           onMouseDown(ev);
         },
-        onMouseOver: () => paint(true),
-        onMouseOut: () => paint(false),
+        ...hoverEvents(paint),
       },
       slot.el,
     );

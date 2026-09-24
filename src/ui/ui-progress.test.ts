@@ -268,6 +268,45 @@ describe("progress repaint", () => {
     }
   });
 
+  test("toast buttons hover from the island fill to the shared cue (islandSurface)", async () => {
+    // the toast keeps its accentBg island in EVERY ui-style, so the buttons'
+    // rest fill must never clear the way btnSurface's outline branch does —
+    // a style-independent rest fill is the whole point of islandSurface
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      let seq = 0;
+      const { ctx } = stubCtx({
+        colors: () => ({ white: "#ffffff", accentBg: "#303040", hoverBg: "#404050" }) as any,
+        makeIconSlot: () =>
+          ({
+            el: Box({ width: 2, height: 1 }),
+            slotId: `tfm-slot-${++seq}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
+        byId: (id: string) => t.renderer.root.findDescendantById(id) as unknown as MaybeNode,
+        notifySticky: (children: any[]) => {
+          const nodeId = `tfm-toast-${++seq}`;
+          t.renderer.root.add(Box({ id: nodeId, backgroundColor: "#303040" }, ...children));
+          return { id: seq, nodeId, close: () => {} } as ToastHandle;
+        },
+      });
+      const { prog, showProgressToast } = makeProgress(ctx);
+      prog.active = true;
+      showProgressToast();
+      await t.renderOnce();
+      const pause = t.renderer.root.findDescendantById("tfm-prog-pause") as any;
+      const closer = t.renderer.root.findDescendantById("tfm-prog-close") as any;
+      expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      expect([...closer.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      pause.processMouseEvent({ type: "move", button: 0, x: 0, y: 0, modifiers: {} });
+      expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#404050"));
+      pause.processMouseEvent({ type: "out", button: 0, x: 0, y: 0, modifiers: {} });
+      expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   test("repaint() is a no-op with no live toast", () => {
     const { isOpen, repaint } = makeProgress(stubCtx().ctx);
     expect(isOpen()).toBe(false);

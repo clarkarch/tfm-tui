@@ -4,7 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { dimHex, makeSlots, thumbImageFit, thumbJobRank, type SlotsCtx, type ThumbJob } from "./ui-slots";
+import {
+  dimHex,
+  hoverEvents,
+  isFloatRootId,
+  makeSlots,
+  thumbImageFit,
+  thumbJobRank,
+  type SlotsCtx,
+  type ThumbJob,
+} from "./ui-slots";
 import type { Theme } from "../config/config";
 
 // The scrim (setScrim) must cover every RASTERED slot, including ones whose
@@ -163,6 +172,42 @@ describe("icon slot scrim", () => {
   });
 });
 
+// Two decisions hang off "is this slot inside a floating layer": the raster
+// keeps its alpha only OUTSIDE floats under `transparent-partial`, and its
+// flatten bg is the float's own fill (style.slotBg role "float"). The toast
+// shell was missing from the set, so toast icons were the ONE floating-layer
+// icon rendered transparent while every menu/dialog icon stayed opaque.
+describe("isFloatRootId", () => {
+  test("every floating layer root counts", () => {
+    for (const id of [
+      "tfm-menu",
+      "tfm-filemenu",
+      "tfm-filemenu-sub",
+      "tfm-prompt",
+      "tfm-props",
+      "tfm-conflict",
+      "tfm-yesno",
+      "tfm-pick",
+      "tfm-bulkrename",
+    ]) {
+      expect(isFloatRootId(id)).toBe(true);
+    }
+  });
+
+  test("toast shells are per-instance, so the prefix matches", () => {
+    expect(isFloatRootId("tfm-toast-1")).toBe(true);
+    expect(isFloatRootId("tfm-toast-42")).toBe(true);
+  });
+
+  test("chrome and non-string ids never count as floats", () => {
+    expect(isFloatRootId("tfm-status")).toBe(false);
+    expect(isFloatRootId("tfm-term-host")).toBe(false);
+    expect(isFloatRootId("tfm-toast")).toBe(false);
+    expect(isFloatRootId(undefined)).toBe(false);
+    expect(isFloatRootId(7)).toBe(false);
+  });
+});
+
 describe("thumbJobRank", () => {
   const job = (over: Partial<ThumbJob>): ThumbJob =>
     ({
@@ -265,5 +310,41 @@ describe("thumbnail mount", () => {
     expect(img).toBeTruthy();
     expect(img.fit).toBe("cover");
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// The ONE hover wiring every button/row uses. It is deliberately not
+// onMouseOver: OpenTUI only emits over/out when the deepest hit node changes,
+// so a rebuild under a stationary cursor re-fires a synthetic "over" on the new
+// node and the highlight desyncs from the real pointer. It is also guarded, so
+// per-pixel moves over a list row can't repaint the whole list.
+describe("hoverEvents", () => {
+  test("lights up on the first move, clears on out", () => {
+    const calls: boolean[] = [];
+    const h = hoverEvents((on) => calls.push(on));
+    h.onMouseMove();
+    h.onMouseOut();
+    expect(calls).toEqual([true, false]);
+  });
+
+  test("repeated moves are no-ops (an out is required to re-light)", () => {
+    const calls: boolean[] = [];
+    const h = hoverEvents((on) => calls.push(on));
+    h.onMouseMove();
+    h.onMouseMove();
+    h.onMouseMove();
+    expect(calls).toEqual([true]);
+    h.onMouseOut();
+    h.onMouseOut();
+    expect(calls).toEqual([true, false]);
+    h.onMouseMove();
+    expect(calls).toEqual([true, false, true]);
+  });
+
+  test("an out before any move never paints", () => {
+    const calls: boolean[] = [];
+    const h = hoverEvents((on) => calls.push(on));
+    h.onMouseOut();
+    expect(calls).toEqual([]);
   });
 });

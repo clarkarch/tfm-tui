@@ -9,7 +9,7 @@ import { fsErrText } from "../fs/fsutil";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
-import type { IconSlotHandle, SlotElement } from "./ui-slots";
+import { hoverEvents, type IconSlotHandle, type SlotElement } from "./ui-slots";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
 // class row to pick access (cursor popup via openContextMenu), the checkbox
@@ -100,8 +100,11 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
         paddingLeft: 1,
         ...rowSurface(ctx.uiStyle(), colors, "rest"),
         onMouseDown: (ev: MouseEvent) => ctx.openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
-        onMouseOver: () => ctx.setOnId(rowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
-        onMouseOut: () => ctx.setOnId(rowId, (n) => applySurface(n, rowSurface(ctx.uiStyle(), colors, "rest"))),
+        ...hoverEvents((on) =>
+          ctx.setOnId(rowId, (n) =>
+            applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
+          ),
+        ),
       },
       Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
       Text({ id: `${permRowId(cls)}-words`, content: permWords(st.mode, shift, isDirTarget), fg: colors.white }),
@@ -138,15 +141,17 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
   if (execCapable) {
     // raster checkbox: two slots (marked/blank) stacked in one hit area,
     // visibility flips with the exec bit
+    // role "float": the checkboxes sit on the properties dialog's fill (see
+    // style.slotBg) — the chrome role would bake a canvas-colored square
     const cbOnSpec = ctx.makeIconSlot(
       "checkbox-marked",
-      [{ fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+      [{ fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       1,
       0,
     );
     const cbOffSpec = ctx.makeIconSlot(
       "checkbox-blank",
-      [{ fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+      [{ fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       1,
       0,
     );
@@ -183,8 +188,11 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
           }
           void applyMode(nm);
         },
-        onMouseOver: () => ctx.setOnId(execRowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
-        onMouseOut: () => ctx.setOnId(execRowId, (n) => applySurface(n, rowSurface(ctx.uiStyle(), colors, "rest"))),
+        ...hoverEvents((on) =>
+          ctx.setOnId(execRowId, (n) =>
+            applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
+          ),
+        ),
       },
       Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),
       Text({ content: "execute as program", fg: colors.white }),

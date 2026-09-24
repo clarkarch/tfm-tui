@@ -1,11 +1,12 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import type { ReadStream } from "node:fs";
 import { fmtBytes } from "../fs/propsinfo";
-import { toggleIconState, type IconSlotHandle, type IconSpec, type SlotElement } from "./ui-slots";
+import { hoverEvents, toggleIconState, type IconSlotHandle, type IconSpec, type SlotElement } from "./ui-slots";
 import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
 import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
 import type { MaybeNode } from "../lib/node-like";
+import { applySurface, islandSurface } from "./style";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
 // Owns the `prog` state the transfer engine reports into, the throttled
@@ -161,8 +162,11 @@ export const makeProgress = (ctx: ProgressCtx) => {
         if (l) l.visible = !!prog.paused;
       } catch {}
     };
-    // pause/play are different shapes → two slots stacked in one hit area
-    // toast icons carry a hover state baked for the toast bg
+    // pause/play are different shapes → two slots stacked in one hit area.
+    // toast icons carry a hover state baked for the toast bg (the island fill);
+    // the wrapper flips through islandSurface — the toast keeps its accentBg
+    // island in every ui-style, so the buttons' rest fill must never clear
+    // (btnSurface's outline branch would).
     const progBtnStates = (): { fg: string; bg: string }[] => [
       { fg: ctx.colors().white, bg: ctx.colors().accentBg },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
@@ -171,7 +175,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
       ctx.setIconState(spec, toggleIconState(on, false));
       try {
         const n = ctx.byId(btnId);
-        if (n) n.backgroundColor = on ? ctx.colors().hoverBg : ctx.colors().accentBg;
+        if (n) applySurface(n, islandSurface(ctx.colors(), on, ctx.colors().accentBg));
       } catch {}
     };
     const progPauseSpec = ctx.makeIconSlot("pause", progBtnStates(), 1, 0, undefined, progBtnStates);
@@ -192,7 +196,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
           width: 2,
           height: 1,
           flexDirection: "row",
-          backgroundColor: ctx.colors().accentBg,
+          ...islandSurface(ctx.colors(), false, ctx.colors().accentBg),
           onMouseDown: () => {
             prog.paused = !prog.paused;
             if (!prog.paused) {
@@ -207,8 +211,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
             prog.processPause?.();
             setPauseVisual();
           },
-          onMouseOver: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", true),
-          onMouseOut: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", false),
+          ...hoverEvents((on) => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", on)),
         },
         progPauseSpec.el,
         progPlaySpec.el,
@@ -219,7 +222,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
           width: 2,
           height: 1,
           flexDirection: "row",
-          backgroundColor: ctx.colors().accentBg,
+          ...islandSurface(ctx.colors(), false, ctx.colors().accentBg),
           onMouseDown: () => {
             prog.cancelled = true;
             try {
@@ -227,8 +230,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
             } catch {}
             prog.processCancel?.();
           },
-          onMouseOver: () => progPaint(progCloseSpec.spec, "tfm-prog-close", true),
-          onMouseOut: () => progPaint(progCloseSpec.spec, "tfm-prog-close", false),
+          ...hoverEvents((on) => progPaint(progCloseSpec.spec, "tfm-prog-close", on)),
         },
         progCloseSpec.el,
       ),
@@ -294,7 +296,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
     for (const id of ["tfm-prog-pause", "tfm-prog-close"]) {
       try {
         const n = ctx.byId(id);
-        if (n) n.backgroundColor = c.accentBg;
+        if (n) applySurface(n, islandSurface(c, false, c.accentBg));
       } catch {}
     }
   };
