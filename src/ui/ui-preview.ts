@@ -1,5 +1,5 @@
 import { Box, type CliRenderer, CodeRenderable, Text, TextRenderable, type SyntaxStyle } from "@opentui/core";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync, type Stats } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { clearChildren, debounced, type Scheduler } from "../lib/uiutil";
@@ -37,7 +37,7 @@ type PreviewCtx = {
   termH(): number; // renderer.terminalHeight — LIVE read
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
   focusKey(): string | null; // focused tile's key, else null
-  tileRefs: Map<string, { selected: boolean; [k: string]: any }>; // tileRefsByKey — shared by ref; only .forEach read here
+  tileRefs: Map<string, { selected: boolean }>; // tileRefsByKey — shared by ref; only .forEach read here
   pushThumbJob(job: ThumbJob): void; // thumbJobs is SWAPPED (reassigned) by drainThumbs — never capture the array
   drainThumbs(): void;
   drainIconQueue(): void;
@@ -91,7 +91,13 @@ export const makePreview = (ctx: PreviewCtx) => {
   };
   let previewCodeSeq = 0;
   // reuse the (already-parsed/highlighted) node when the same file is previewed again
-  let previewCodeCache: { key: string; mtimeMs: number; size: number; node: any } | null = null;
+  let previewCodeCache: {
+    key: string;
+    mtimeMs: number;
+    size: number;
+    // whichever renderable the last preview mounted (plain text or highlighted)
+    node: TextRenderable | CodeRenderable;
+  } | null = null;
 
   const renderPreviewNow = async () => {
     if (!ctx.previewEnabled()) return;
@@ -128,7 +134,7 @@ export const makePreview = (ctx: PreviewCtx) => {
       return;
     }
 
-    let st: any = null;
+    let st: Stats | null = null;
     try {
       st = statSync(key);
     } catch {
@@ -251,7 +257,7 @@ export const makePreview = (ctx: PreviewCtx) => {
         // grammar). A real TextRenderable honours the theme instead — and is
         // cached so re-previewing the same .txt doesn't realloc a TextBuffer
         // every time (theme flips evict it, since the sig carries white).
-        const textNode: any = new TextRenderable(ctx.renderer, {
+        const textNode = new TextRenderable(ctx.renderer, {
           id: `tfm-preview-code-${previewCodeSeq++}`,
           content: text,
           fg: colors.white,
@@ -265,7 +271,7 @@ export const makePreview = (ctx: PreviewCtx) => {
         return;
       }
       // real class instance (not a proxied helper) so it mounts into the live pane
-      const codeNode: any = new CodeRenderable(ctx.renderer, {
+      const codeNode = new CodeRenderable(ctx.renderer, {
         id: `tfm-preview-code-${previewCodeSeq++}`,
         content: text,
         filetype,

@@ -5,9 +5,10 @@
 // arrive as getters so the factory can exist pre-boot (TDZ seam rule). ---
 
 import { debounced, type Scheduler } from "../lib/uiutil";
+import type { MaybeNode } from "../lib/node-like";
 
 type SearchCtx = {
-  byId: (id: string) => any;
+  byId: (id: string) => MaybeNode;
   // this pane's search input id (toolbar nodes are per-pane now)
   inputId: string;
   renderGrid: () => void | Promise<void>;

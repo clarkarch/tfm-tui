@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeSearch } from "./search";
+import type { MaybeNode } from "../lib/node-like";
 
 // virtual scheduler: no wall-clock sleeps — the focus timer and the debounced
 // render both fire when the test advances the clock
@@ -61,7 +62,7 @@ const makeHarness = () => {
   const clock = makeClock();
   let renders = 0;
   const search = makeSearch({
-    byId: (id) => (id === "tfm-search" ? el : null),
+    byId: (id) => (id === "tfm-search" ? (el as unknown as MaybeNode) : null),
     inputId: "tfm-search",
     renderGrid: () => {
       renders++;
@@ -88,7 +89,7 @@ describe("makeSearch", () => {
     const el = stubInput();
     let renders = 0;
     const search = makeSearch({
-      byId: (id) => (id === "tfm-search" ? el : null),
+      byId: (id) => (id === "tfm-search" ? (el as unknown as MaybeNode) : null),
       inputId: "tfm-search",
       renderGrid: () => {
         renders++;

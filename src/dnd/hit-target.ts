@@ -7,11 +7,15 @@
 import type { DropTarget } from "./dnd72";
 import type { SelTileRef } from "../input/selection";
 
+// The walk only reads an id and climbs `parent`, so a two-field view is enough
+// for a real renderable chain and a fake chain alike.
+type ChainNode = { id?: unknown; parent?: ChainNode | null };
+
 type HitTargetCtx = {
   // terminal cell -> renderable number (renderer.hitTest in the app)
   hitTest: (x: number, y: number) => number | null | undefined;
   // renderable number -> node (Renderable.renderablesByNumber in the app)
-  byNumber: (num: number) => { id?: unknown; parent?: any } | null | undefined;
+  byNumber: (num: number) => ChainNode | null | undefined;
   // sidebar place records, index-aligned with the tfm-place-N ids
   placesHost: () => Array<{ place?: { path?: string | null } }>;
   tileRefs: Map<string, SelTileRef>;
@@ -26,7 +30,7 @@ export const makeHitTargetAt =
     try {
       const num = ctx.hitTest(x, y);
       if (!num) return null;
-      let cur: any = ctx.byNumber(num);
+      let cur: ChainNode | null | undefined = ctx.byNumber(num);
       while (cur) {
         const id: unknown = cur.id;
         if (typeof id === "string") {

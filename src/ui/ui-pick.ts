@@ -6,13 +6,14 @@
 // any future plugin gets fuzzy lists over arbitrary items for free.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, type MouseEvent, RGBA, Text } from "@opentui/core";
 import { applySurface, floatSurface } from "./style";
 import { invokeIsolated } from "../lib/uiutil";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { SlotElement } from "./ui-slots";
 
 export type PickItem = {
   label: string;
@@ -23,14 +24,14 @@ export type PickItem = {
 type PickCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
-  rootAdd(node: any): void;
-  clearChildren(node: any): void;
+  rootAdd(node: unknown): void;
+  clearChildren(node: unknown): void;
   stripSelectable(): void;
   colors(): Theme;
   uiStyle(): UiStyle;
   floats: Floats;
   // shared close-X widget (icon slot); mirrors prompt/props
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   drainIconQueue(): unknown;
   // live item source — read fresh on every open so remaps and plugin
   // contributions apply without rebuilds
@@ -181,7 +182,7 @@ export const makePick = (ctx: PickCtx) => {
           paddingTop: 1,
           paddingBottom: 1,
           flexDirection: "column",
-          onMouseDown: (ev: any) => {
+          onMouseDown: (ev: MouseEvent) => {
             try {
               ev.stopPropagation?.();
             } catch {}

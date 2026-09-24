@@ -120,7 +120,7 @@ export const makePluginSlots = (opts: {
     return { cwd, selection };
   };
 
-  const mountInto = (parent: any, name: TfmSlotName, layout: Record<string, unknown>): void => {
+  const mountInto = (parent: MaybeNode, name: TfmSlotName, layout: Record<string, unknown>): void => {
     if (!parent) return;
     try {
       const slot = new SlotRenderable<TfmSlotName, TfmSlotContext, TfmSlotData>(opts.renderer, {

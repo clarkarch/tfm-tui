@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { filterItems, fuzzyScore, makePick, type PickItem } from "./ui-pick";
+import type { NodeLike } from "../lib/node-like";
 import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
@@ -65,7 +66,9 @@ const mkPick = (
     byId: (id) => t.renderer.root.findDescendantById(id),
     rootAdd: (n) => t.renderer.root.add(n),
     clearChildren: (node) => {
-      for (const c of [...node.getChildren()]) node.remove(c);
+      // the ctx hands over a real node; this fake only touches the tree API
+      const n = node as NodeLike;
+      for (const c of [...n.getChildren()]) n.remove(c);
     },
     stripSelectable: () => {},
     colors: getColors,

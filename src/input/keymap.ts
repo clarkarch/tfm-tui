@@ -33,7 +33,6 @@ import type { MaybeNode } from "../lib/node-like";
 type KeyPressEvent = KeyEventLike & {
   control?: boolean;
   repeated?: boolean;
-  [extra: string]: unknown;
 };
 
 // structural subset of index's AppState — the router only touches these

@@ -6,6 +6,7 @@
 // prompt overlay (plugin git-URL entry). Last wiring step — everything it
 // reads exists by now. ---
 
+import type { KeyEvent } from "@opentui/core";
 import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
@@ -251,7 +252,7 @@ export const wireKeymap = (deps: {
 
   coreCommands = () => keyRouter.commands();
 
-  chrome.renderer.keyInput.on("keypress", (e: any) => keyRouter.handleKey(e));
+  chrome.renderer.keyInput.on("keypress", (e: KeyEvent) => keyRouter.handleKey(e));
 
   return { keyRouter, pick, prompt };
 };

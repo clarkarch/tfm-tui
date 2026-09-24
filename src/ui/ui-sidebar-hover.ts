@@ -29,14 +29,14 @@ type SidebarHoverCtx = {
   hoverOpts(): SidebarHoverOpts;
 };
 
-type HoverCur = { key: string; refs: SidebarRowRef; node: any };
+type HoverCur = { key: string; refs: SidebarRowRef; node: MaybeNode };
 
 export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
   let current: HoverCur | null = null;
 
   // A row copied from a previous build may have been destroyed by a sidebar
   // rebuild, so only touch the node refs when byId still resolves to them.
-  const ownedNode = (cur: HoverCur | null): any => {
+  const ownedNode = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       const node = ctx.byId(cur.refs.rowId);

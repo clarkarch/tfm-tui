@@ -8,19 +8,20 @@
 // pick via the floats modal policy (depth stays 1).
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, type MouseEvent, RGBA, Text } from "@opentui/core";
 import { floatSurface } from "./style";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { SlotElement } from "./ui-slots";
 
 type PromptCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
-  rootAdd(node: any): void;
+  rootAdd(node: unknown): void;
   stripSelectable(): void;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   drainIconQueue(): void | Promise<void>;
   colors(): Theme;
   uiStyle(): UiStyle;
@@ -124,7 +125,7 @@ export const makePrompt = (ctx: PromptCtx) => {
             flexGrow: 1,
             flexDirection: "row",
             justifyContent: "center",
-            onMouseDown: (ev: any) => {
+            onMouseDown: (ev: MouseEvent) => {
               try {
                 ev.stopPropagation?.();
               } catch {}
@@ -155,7 +156,7 @@ export const makePrompt = (ctx: PromptCtx) => {
             paddingTop: 1,
             paddingBottom: 1,
             flexDirection: "column",
-            onMouseDown: (ev: any) => {
+            onMouseDown: (ev: MouseEvent) => {
               try {
                 ev.stopPropagation?.();
               } catch {}

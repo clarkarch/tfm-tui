@@ -22,6 +22,7 @@ import { loadSystemPlaces } from "../fs/places";
 import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { configPath } from "../config/config";
+import type { ListEntry } from "../ui/ui-menu";
 import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
@@ -131,7 +132,7 @@ export const wireBoot = (deps: {
         isRenaming: gridFoundation.rename.isRenaming,
         finishInlineRename: gridFoundation.rename.finishInlineRename,
         clearTileSelection: gridFoundation.selection.clearTileSelection,
-        openContextMenu: (x: number, y: number, t: string, e: any[]) => chrome.menu.openContextMenu(x, y, t, e),
+        openContextMenu: (x: number, y: number, t: string, e: ListEntry[]) => chrome.menu.openContextMenu(x, y, t, e),
         emptyAreaEntries: grid.menuEntries.emptyAreaEntries,
         compatActive: core.compatActive,
       });

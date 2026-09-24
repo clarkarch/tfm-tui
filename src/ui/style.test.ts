@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { MaybeNode } from "../lib/node-like";
 import {
   applySurface,
   btnSurface,
@@ -107,7 +108,7 @@ describe("iconTransparent", () => {
 describe("applySurface", () => {
   test("paints every provided option onto the node", () => {
     const node: Record<string, any> = {};
-    applySurface(node, chromeSurface("outline", theme, theme.sidebarBg));
+    applySurface(node as unknown as MaybeNode, chromeSurface("outline", theme, theme.sidebarBg));
     expect(node.backgroundColor).toBe("transparent");
     expect(node.border).toBe(true);
     expect(node.borderStyle).toBe("rounded");
@@ -116,7 +117,7 @@ describe("applySurface", () => {
 
   test("a missing fill clears to transparent", () => {
     const node: Record<string, any> = { backgroundColor: "#ff0000" };
-    applySurface(node, tileSurface("outline", theme, "rest"));
+    applySurface(node as unknown as MaybeNode, tileSurface("outline", theme, "rest"));
     expect(node.backgroundColor).toBe("transparent");
   });
 

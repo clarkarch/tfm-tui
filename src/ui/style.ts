@@ -14,6 +14,7 @@
 //   - input fields keep their fill in all modes (InputRenderable extends
 //     TextareaRenderable and has no border support)
 import type { IconMode, Theme, UiStyle } from "../config/config-schema";
+import type { MaybeNode } from "../lib/node-like";
 
 export type { UiStyle };
 
@@ -100,7 +101,9 @@ export const slotBg = (style: UiStyle, c: Theme, panelBg: string): string => (is
 // post-mutation of real renderables (findDescendantById results). "transparent"
 // clears a fill — parseColor maps it to alpha-0, which emits terminal-default
 // bg for that cell.
-export const applySurface = (node: any, opts: SurfaceOpts): void => {
+export const applySurface = (node: MaybeNode, opts: SurfaceOpts): void => {
+  // the id lookups that feed this hand back MaybeNode; a miss is a no-op
+
   if (!node) return;
   try {
     node.backgroundColor = opts.backgroundColor ?? "transparent";

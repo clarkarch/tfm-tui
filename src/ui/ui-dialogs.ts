@@ -1,9 +1,10 @@
-import { Box, RGBA, Text } from "@opentui/core";
+import { Box, type MouseEvent, RGBA, Text } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { SlotElement } from "./ui-slots";
 
 // --- Shared skeleton for the centered floating dialogs (conflict / props /
 // yesno): full-screen dimmed scrim + a chrome panel that swallows clicks,
@@ -13,7 +14,7 @@ import type { MaybeNode } from "../lib/node-like";
 
 type DialogsCtx = {
   byId(id: string): MaybeNode;
-  rootAdd(node: any): void;
+  rootAdd(node: unknown): void;
   stripSelectable(): void;
   termH(): number;
   uiStyle(): UiStyle;
@@ -32,7 +33,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
     zIndex: number;
     width: number;
     paddingDiv?: number; // vertical centering divisor: terminalHeight / this (3, props uses 4)
-    rows: () => any[];
+    rows: () => SlotElement[];
     onClose: () => void;
   }): void => {
     ctx.closeFileMenu();
@@ -58,7 +59,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
           paddingTop: 1,
           paddingBottom: 1,
           flexDirection: "column",
-          onMouseDown: (ev: any) => {
+          onMouseDown: (ev: MouseEvent) => {
             try {
               ev.stopPropagation?.();
             } catch {}
@@ -90,7 +91,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
         flexDirection: "row",
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle(), ctx.colors(), false, ctx.colors().sidebarBg),
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}

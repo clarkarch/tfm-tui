@@ -13,7 +13,7 @@
 //   not pop the drawer.
 // - Terminal auto-hide must NOT touch the PTY: it clips the host box height.
 
-import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
+import { type CliRenderer, createTimeline, engine, type JSAnimation, type MouseEvent } from "@opentui/core";
 import type { UiConfig } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 
@@ -54,7 +54,7 @@ export const collapsedHeight = (style: string): number => (style === "header" ? 
 
 type Tween = { run(target: number, ms: number, onDone?: () => void): void };
 
-const makeTween = (getNode: () => any, axis: "width" | "height"): Tween => {
+const makeTween = (getNode: () => MaybeNode, axis: "width" | "height"): Tween => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   let from = 0;
@@ -170,7 +170,7 @@ type Panel = {
 };
 
 export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
-  const getNode = (id: string): any => {
+  const getNode = (id: string): MaybeNode => {
     try {
       return ctx.byId(id);
     } catch {
@@ -378,7 +378,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     }, delay);
   };
 
-  const onMove = (ev: any): void => {
+  const onMove = (ev: MouseEvent): void => {
     if (ctx.blocked()) return;
     const ui = ctx.ui();
     for (const p of panels) {

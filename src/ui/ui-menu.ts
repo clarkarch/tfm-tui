@@ -1,9 +1,10 @@
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { clearChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { IconSlotHandle } from "./ui-slots";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
 // renderer. Ids tfm-filemenu / tfm-filemenu-panel stay byte-identical for
@@ -34,7 +35,7 @@ export type ListEntry = {
 
 type MenuCtx = {
   byId(id: string): MaybeNode;
-  rootAdd(node: any): void;
+  rootAdd(node: unknown): void;
   termW(): number;
   termH(): number;
   stripSelectable(): void;
@@ -48,8 +49,8 @@ type MenuCtx = {
     states: { fg: string; bg: string }[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
-  ): { el: any; slotId: string; spec: any };
+    onMouseDown?: (ev: MouseEvent) => void,
+  ): IconSlotHandle;
 };
 
 type MenuState = {
@@ -94,7 +95,7 @@ export const makeMenu = (ctx: MenuCtx) => {
         paddingLeft: 1,
         paddingRight: 1,
         backgroundColor: active ? colors.accentBg : undefined,
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}

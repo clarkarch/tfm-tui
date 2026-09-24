@@ -61,6 +61,9 @@ export type NodeLike = {
   backgroundColor?: ColorInput;
   color?: ColorInput | ColorInput[]; // ASCIIFont wordmark
   borderColor?: ColorInput;
+  // surface chrome written by style.ts's applySurface
+  border?: boolean;
+  borderStyle?: string;
   textColor?: ColorInput;
   focusedTextColor?: ColorInput;
   focusedBackgroundColor?: ColorInput;

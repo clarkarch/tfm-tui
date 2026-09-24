@@ -76,9 +76,9 @@ export const makeRename = (ctx: RenameCtx) => {
       } catch {}
     }
     const refs = ctx.tileRefs.get(edit.key);
-    const tile: any = refs ? ctx.byId(refs.tileId) : null;
+    const tile = refs ? ctx.byId(refs.tileId) : null;
     if (refs && tile && !ctx.byId(refs.labelId)) {
-      const labelText: any = Text({
+      const labelText = Text({
         id: refs.labelId,
         content: tileLabelFor(path.basename(edit.key), ctx.tileW()),
         fg: refs.baseFg,
@@ -86,7 +86,8 @@ export const makeRename = (ctx: RenameCtx) => {
       // restore at the label's ORIGINAL index, not via add(): in list rows
       // (icon | name | … | size | date) an append drops the name after the
       // date — the same-name create path never rebuilds, so it stayed there
-      const kids: any[] = typeof tile.getChildren === "function" ? [...tile.getChildren()] : [];
+      // the tile is a mounted renderable, so its children are readable
+      const kids = [...tile.getChildren()];
       const at = edit.labelIdx !== undefined && edit.labelIdx <= kids.length ? edit.labelIdx : kids.length;
       const before = kids[at];
       if (before) {

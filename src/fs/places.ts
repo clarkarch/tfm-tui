@@ -169,21 +169,39 @@ const PSEUDO_FSTYPES = new Set([
 ]);
 const SYSTEM_MOUNTS = new Set(["/", "/boot", "/boot/efi", "/efi", "/swap"]);
 
-export function parseLsblk(json: any): MountEntry[] {
+// lsblk's `-J` payload: only these fields are read, and any of them may be
+// missing (or mistyped) on an odd util-linux build — so they are typed to what
+// the code assumes rather than to what the JSON is guaranteed to carry.
+type LsblkNode = {
+  name?: string;
+  label?: string;
+  path?: string;
+  rm?: boolean;
+  fstype?: string | null;
+  mountpoint?: string;
+  mountpoints?: Array<string | { mountpoint?: string }>;
+  children?: LsblkNode[];
+  blockdevices?: LsblkNode[];
+};
+
+export function parseLsblk(json: unknown): MountEntry[] {
   const out: MountEntry[] = [];
-  const visit = (nodes: any[], parentRm: boolean) => {
+  const visit = (nodes: unknown, parentRm: boolean): void => {
     if (!Array.isArray(nodes)) return;
-    for (const n of nodes) {
+    for (const raw of nodes) {
+      const n = raw as LsblkNode;
       const name: string = n?.name ?? "";
       const rm = !!n?.rm || parentRm;
       if (/^(loop|zram|ram\d+)/.test(name)) {
-        if (Array.isArray(n?.children)) visit(n.children, rm);
+        const kids = n?.children;
+        if (Array.isArray(kids)) visit(kids, rm);
         continue;
       }
       const fstype: string | null | undefined = n?.fstype;
       let mps: string[] = [];
-      if (Array.isArray(n?.mountpoints)) {
-        mps = n.mountpoints.map((m: any) => (typeof m === "string" ? m : m?.mountpoint)).filter(Boolean);
+      const rawMps = n?.mountpoints;
+      if (Array.isArray(rawMps)) {
+        mps = rawMps.map((m) => (typeof m === "string" ? m : m?.mountpoint)).filter((m): m is string => !!m);
       } else if (typeof n?.mountpoint === "string") {
         mps = [n.mountpoint];
       }
@@ -204,7 +222,7 @@ export function parseLsblk(json: any): MountEntry[] {
       if (Array.isArray(n?.children)) visit(n.children, rm);
     }
   };
-  visit(json?.blockdevices ?? [], false);
+  visit((json as LsblkNode | null | undefined)?.blockdevices ?? [], false);
   return out;
 }
 
