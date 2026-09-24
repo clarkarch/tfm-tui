@@ -13,6 +13,7 @@ import {
 } from "./ui-progress";
 import type { ToastHandle } from "./notify";
 import type { MaybeNode } from "../lib/node-like";
+import type { IconSlotHandle } from "./ui-slots";
 
 const MB = 1024 * 1024;
 
@@ -23,7 +24,8 @@ const stubCtx = (over: Partial<ProgressCtx> = {}): { ctx: ProgressCtx; calls: st
     stripSelectable: () => {},
     // partial theme is fine — only white/accentBg/hoverBg are read
     colors: () => ({ white: "#ffffff", accentBg: "#1a1b26", hoverBg: "#2a2b36" }) as any,
-    makeIconSlot: () => ({ el: {}, slotId: "tfm-icon-test", spec: {} }),
+    // the progress path only reads slotId; el/spec are placeholders
+    makeIconSlot: () => ({ el: {}, slotId: "tfm-icon-test", spec: {} }) as unknown as IconSlotHandle,
     setIconState: () => false,
     drainIconQueue: () => {},
     // shell belongs to ./notify — the stub hands out closable handles
@@ -231,7 +233,12 @@ describe("progress repaint", () => {
       const { ctx } = stubCtx({
         colors: () => live,
         // real slot boxes — the stub's plain-object el can't mount
-        makeIconSlot: () => ({ el: Box({ width: 2, height: 1 }), slotId: `tfm-slot-${++slotSeq}`, spec: {} }),
+        makeIconSlot: () =>
+          ({
+            el: Box({ width: 2, height: 1 }),
+            slotId: `tfm-slot-${++slotSeq}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
         byId: (id: string) => t.renderer.root.findDescendantById(id),
         notifySticky: (children: any[]) => {
           const nodeId = `tfm-toast-${++seq}`;

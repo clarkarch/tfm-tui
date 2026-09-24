@@ -1,4 +1,4 @@
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
 import { clearChildren } from "../lib/uiutil";
@@ -19,7 +19,7 @@ import type { ListEntry } from "./ui-menu";
 
 // shared icon-slot types come from ./ui-slots (their queue) — the old
 // byte-identical structural mirrors drifted when ui-slots gained a field
-import type { IconState, IconSpec } from "./ui-slots";
+import type { IconSlotHandle, IconState, IconSpec, SlotElement } from "./ui-slots";
 import type { MaybeNode } from "../lib/node-like";
 
 type ChromeCtx = {
@@ -58,7 +58,7 @@ type ChromeCtx = {
   closeTab(pane: 0 | 1, i: number): void;
   switchTab(pane: 0 | 1, i: number): void;
   newTab(pane: 0 | 1, dir?: string): void;
-  hoverBtn(pane: 0 | 1, id: string, iconName: string, onMouseDown: (ev: any) => void): any;
+  hoverBtn(pane: 0 | 1, id: string, iconName: string, onMouseDown: (ev: MouseEvent) => void): SlotElement;
   stripSelectable(): void;
   drainIconQueue(): void;
   makeIconSlot(
@@ -66,10 +66,10 @@ type ChromeCtx = {
     states: IconState[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
-  ): { el: any; slotId: string; spec: IconSpec };
-  setIconState(spec: any, stateIdx: number): boolean;
+  ): IconSlotHandle;
+  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   stateCwd(): string; // live state.cwd
 };
 
@@ -148,7 +148,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         columnGap: 1,
         paddingLeft: 1,
         ...rowSurface(st, colors, selected ? "selected" : "rest"),
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           if (ev.button === 2) {
             ctx.closeFileMenu();
             ctx.openContextMenu(ev.x, ev.y, place.label, ctx.sidebarEntriesFor(place, ev.x, ev.y));
@@ -313,7 +313,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         closeStates(),
         1,
         0,
-        (ev: any) => {
+        (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {} // ✕ must not also activate the chip
@@ -344,7 +344,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
             paddingLeft: 1,
             paddingRight: 1,
             ...tileSurface(ctx.uiStyle(), colors, active ? "selected" : "rest"),
-            onMouseDown: (ev: any) => {
+            onMouseDown: (ev: MouseEvent) => {
               try {
                 ev.stopPropagation?.();
               } catch {}

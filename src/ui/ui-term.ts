@@ -1,4 +1,4 @@
-import { Box, type CliRenderer, EmbeddedTerminalRenderable, Text } from "@opentui/core";
+import { Box, type CliRenderer, EmbeddedTerminalRenderable, type MouseEvent, Text } from "@opentui/core";
 import { clearChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
 import { applySurface, type UiStyle } from "./style";
@@ -6,6 +6,7 @@ import { gridDrag } from "../input/grid-input";
 import type { Theme } from "../config/config";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
+import type { SlotElement } from "./ui-slots";
 
 // --- Embedded terminal pane ("Open Terminal Here") ---
 // OpenTUI's EmbeddedTerminalRenderable draws the VT stream; the PTY belongs to
@@ -24,7 +25,7 @@ type TermCtx = {
   colors(): Theme;
   sw(): number;
   termH(): number; // live [ui] terminal-height (rows of VT, +1 for the header)
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   stripSelectable(): void;
   drainIconQueue(): void;
   notify(message: string, title?: string, level?: NotifyLevel): void;
@@ -185,7 +186,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   const paintHeaderCue = (hot: boolean): void => {
     if (hot === headerHot) return;
     headerHot = hot;
-    const header: any = ctx.byId("tfm-term-header");
+    const header = ctx.byId("tfm-term-header");
     if (!header) return;
     try {
       const colors = ctx.colors();
@@ -228,7 +229,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   // at the prompt reaches no one. Translate same-row clicks into char-movement
   // arrows (what kitty's OSC 133 click_events does for fish). Skipped while a
   // mouse-aware program owns the input — those get real mouse bytes from the VT.
-  const bridgePromptClick = (ev: any): void => {
+  const bridgePromptClick = (ev: MouseEvent): void => {
     if (!term || !termChild || ev.button !== 0) return;
     if (ptyScreen.mouse || ptyScreen.alt) return;
     const screen = term.screen();
@@ -284,7 +285,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   // host from live config on refresh. The layout change flows into
   // onTerminalResize, which resizes the PTY. No-op while closed.
   const syncTerminalHeight = (): void => {
-    let node: any = term;
+    let node: MaybeNode = term;
     if (!node) {
       try {
         node = ctx.byId("tfm-term");
@@ -322,7 +323,7 @@ export const makeTerminal = (ctx: TermCtx) => {
     // DA/DSR reply of the next session
     termProbeTail = "";
     downCell = null;
-    const host: any = ctx.byId("tfm-term-host");
+    const host = ctx.byId("tfm-term-host");
     if (host) {
       clearChildren(host);
       host.height = 0;
@@ -362,7 +363,7 @@ export const makeTerminal = (ctx: TermCtx) => {
       termFocused = true;
       return;
     }
-    const host: any = ctx.byId("tfm-term-host");
+    const host = ctx.byId("tfm-term-host");
     if (!host) return;
     // the host box is the pane's drop target: over/out give the drag-hover cue,
     // drop pastes the payload into the PTY (see handleTermDrop)
@@ -412,10 +413,10 @@ export const makeTerminal = (ctx: TermCtx) => {
       },
       // the bridge tracks press→release movement itself (a plain click still
       // reports isDragging on up — Selection defaults it to true)
-      onMouseDown: (ev: any) => {
+      onMouseDown: (ev: MouseEvent) => {
         downCell = { x: ev.x, y: ev.y };
       },
-      onMouseUp: (ev: any) => {
+      onMouseUp: (ev: MouseEvent) => {
         const wasClick = !!downCell && downCell.x === ev.x && downCell.y === ev.y;
         downCell = null;
         if (wasClick) bridgePromptClick(ev);

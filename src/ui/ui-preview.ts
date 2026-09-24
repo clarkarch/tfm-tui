@@ -1,11 +1,4 @@
-import {
-  Box,
-  type CliRenderer,
-  CodeRenderable,
-  Text,
-  TextRenderable,
-  type SyntaxStyle,
-} from "@opentui/core";
+import { Box, type CliRenderer, CodeRenderable, Text, TextRenderable, type SyntaxStyle } from "@opentui/core";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

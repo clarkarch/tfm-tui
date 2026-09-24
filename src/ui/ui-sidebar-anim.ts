@@ -27,7 +27,7 @@
 import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
 import { easeAt, quantizeDy, staggerLocal, type EaseKey, type SlideDir } from "./ui-grid-anim";
 import type { Scheduler } from "../lib/uiutil";
-import type { MaybeNode } from "../lib/node-like";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 export type SidebarAnimStyle = "fade" | "slide" | "stagger" | "stagger-slide";
 
@@ -120,7 +120,7 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   const holder = { p: 0 };
-  let entries: Array<{ node: any; i: number; n: number }> = [];
+  let entries: Array<{ node: NodeLike; i: number; n: number }> = [];
   let cfg: SidebarAnimCfg = {};
   let style: SidebarAnimStyle = "fade";
   const sched: Scheduler = ctx.sched ?? globalThis;
@@ -145,7 +145,7 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
     }
   };
 
-  const write = (node: any, f: SidebarAnimFrame): void => {
+  const write = (node: NodeLike, f: SidebarAnimFrame): void => {
     try {
       node.opacity = Number.isFinite(f.opacity) ? f.opacity : 1;
       // whole cells only: a fractional translate propagates to child image
@@ -213,16 +213,17 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
         return;
       }
       const st = sidebarStyleFrom(o.style);
-      const lookup = (id: string): any => {
+      const lookup = (id: string): MaybeNode => {
         try {
           return ctx.byId(id);
         } catch {
           return null;
         }
       };
-      const deduped = (ids: string[]): any[] => {
+      // only resolvable ids come back: an unresolvable one has nothing to animate
+      const deduped = (ids: string[]): NodeLike[] => {
         const seen = new Set<unknown>();
-        const out: any[] = [];
+        const out: NodeLike[] = [];
         for (const id of ids) {
           const n = lookup(id);
           if (n && !seen.has(n)) {
@@ -251,7 +252,12 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
           stop();
           return;
         }
-        entries = [{ node: animated[0], i: 0, n: 1 }];
+        const only = animated[0];
+        if (!only) {
+          stop();
+          return;
+        }
+        entries = [{ node: only, i: 0, n: 1 }];
       }
       style = st;
       cfg = {
@@ -337,7 +343,7 @@ export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   const holder = { p: 0 };
-  let entries: Array<{ node: any; i: number; n: number }> = [];
+  let entries: Array<{ node: NodeLike; i: number; n: number }> = [];
   let cfg: SidebarAnimCfg = {};
   let style: SidebarAnimStyle = "fade";
   const sched: Scheduler = ctx.sched ?? globalThis;
@@ -362,7 +368,7 @@ export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
     }
   };
 
-  const write = (node: any, f: SidebarAnimFrame): void => {
+  const write = (node: NodeLike, f: SidebarAnimFrame): void => {
     try {
       node.opacity = Number.isFinite(f.opacity) ? f.opacity : 1;
       // whole cells only: a fractional translate propagates to child image
@@ -433,9 +439,9 @@ export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
       }
       const st = sidebarStyleFrom(o.style);
       const seen = new Set<unknown>();
-      const bars: any[] = [];
+      const bars: NodeLike[] = [];
       for (const id of rawIds) {
-        let n: any = null;
+        let n: MaybeNode = null;
         try {
           n = ctx.byId(id);
         } catch {

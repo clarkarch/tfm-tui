@@ -4,7 +4,7 @@
 // cancels, validation errors render in the footer and keep the modal open.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, type MouseEvent, RGBA, Text } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface } from "./style";
 import { bulkRenameNames, planBulkRename, type BulkRenamePair, type BulkRenameStyle } from "../fs/bulk-rename";
@@ -12,14 +12,15 @@ import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { SlotElement } from "./ui-slots";
 
 type BulkRenameCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
-  rootAdd(node: any): void;
-  clearChildren(node: any): void;
+  rootAdd(node: unknown): void;
+  clearChildren(node: unknown): void;
   stripSelectable(): void;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   drainIconQueue(): void | Promise<void>;
   colors(): Theme;
   uiStyle(): UiStyle;
@@ -154,7 +155,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     return true;
   };
 
-  const btn = (id: string, label: string, fg: string, onPick: () => void): any =>
+  const btn = (id: string, label: string, fg: string, onPick: () => void): SlotElement =>
     Box(
       {
         id,
@@ -162,7 +163,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
         flexGrow: 1,
         flexDirection: "row",
         justifyContent: "center",
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}
@@ -172,14 +173,14 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
       Text({ content: label, fg }),
     );
 
-  const chip = (s: BulkRenameStyle): any =>
+  const chip = (s: BulkRenameStyle): SlotElement =>
     Box(
       {
         id: `tfm-bulkrename-style-${s}`,
         height: 1,
         paddingLeft: 1,
         paddingRight: 1,
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}
@@ -221,7 +222,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
           paddingTop: 1,
           paddingBottom: 1,
           flexDirection: "column",
-          onMouseDown: (ev: any) => {
+          onMouseDown: (ev: MouseEvent) => {
             try {
               ev.stopPropagation?.();
             } catch {}

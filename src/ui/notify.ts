@@ -25,11 +25,7 @@ export type NotifyCtx = {
   ansi2?(): string;
   // raster level icon: single-state slot (fg = level color on the toast bg);
   // the async drain swaps the fallback glyph for the tinted raster
-  makeIconSlot(
-    name: string,
-    states: { fg: string; bg: string }[],
-    heightCells?: number,
-  ): IconSlotHandle;
+  makeIconSlot(name: string, states: { fg: string; bg: string }[], heightCells?: number): IconSlotHandle;
   drainIconQueue(): unknown;
   stripSelectable(): void;
   // config knob [ui] toast-duration-ms (default 3000)

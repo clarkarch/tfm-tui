@@ -67,12 +67,7 @@ export type GridRendererCtx = {
   tileIdPrefix?: string;
   // ui-slots
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
-  makeIconSlot(
-    name: string,
-    states: IconState[],
-    heightCells?: number,
-    initialState?: number,
-  ): IconSlotHandle;
+  makeIconSlot(name: string, states: IconState[], heightCells?: number, initialState?: number): IconSlotHandle;
   pushThumbJob(job: ThumbJob): void;
   nextIconId(): string;
   drainIconQueue(): void | Promise<void>;

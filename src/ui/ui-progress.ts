@@ -1,7 +1,7 @@
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import type { ReadStream } from "node:fs";
 import { fmtBytes } from "../fs/propsinfo";
-import { toggleIconState } from "./ui-slots";
+import { toggleIconState, type IconSlotHandle, type IconSpec, type SlotElement } from "./ui-slots";
 import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
 import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
@@ -24,13 +24,13 @@ export type ProgressCtx = {
     states: { fg: string; bg: string }[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => { fg: string; bg: string }[],
-  ): { el: any; slotId: string; spec: any };
-  setIconState(spec: any, stateIdx: number): boolean;
+  ): IconSlotHandle;
+  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   drainIconQueue(): unknown;
   // toast shell — owned by ./notify (single stack)
-  notifySticky(children: any[], opts?: { width?: number; height?: number }): ToastHandle | null;
+  notifySticky(children: SlotElement[], opts?: { width?: number; height?: number }): ToastHandle | null;
 };
 
 export type ProgressState = {
@@ -108,7 +108,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
   let activeHandle: ToastHandle | null = null;
   let progLastPaint = 0;
   let progSpinIdx = 0;
-  let progSpinTimer: any = null;
+  let progSpinTimer: ReturnType<typeof setTimeout> | null = null;
 
   const progSetText = (nodeId: string, s: string): void => {
     const n = ctx.byId(nodeId);
@@ -167,7 +167,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
       { fg: ctx.colors().white, bg: ctx.colors().accentBg },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
-    const progPaint = (spec: any, btnId: string, on: boolean) => {
+    const progPaint = (spec: IconSpec | undefined, btnId: string, on: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, false));
       try {
         const n = ctx.byId(btnId);

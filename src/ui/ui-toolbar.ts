@@ -7,11 +7,11 @@
 import path from "node:path";
 import os from "node:os";
 import { statSync } from "node:fs";
-import { Box, type CliRenderer, Input, InputRenderable, type KeyEvent, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, InputRenderable, type KeyEvent, type MouseEvent, Text } from "@opentui/core";
 import { applySurface, btnSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
-import type { IconSpec, IconState } from "./ui-slots";
+import type { IconSlotHandle, IconSpec, IconState, SlotElement } from "./ui-slots";
 import { navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -22,9 +22,9 @@ type MakeIconSlotFn = (
   states: IconState[],
   heightCells?: number,
   initialState?: number,
-  onMouseDown?: (ev: any) => void,
+  onMouseDown?: (ev: MouseEvent) => void,
   statesFactory?: () => IconState[],
-) => { spec: IconSpec; el: any };
+) => IconSlotHandle;
 
 type ToolbarCtx = {
   // per-pane id prefix ("tfm-p0-"/"tfm-p1-") — dual pane builds one toolbar
@@ -77,10 +77,10 @@ export const isNavigableTarget = (target: string): boolean => {
 // the cap keeps a never-missing registry from looping forever. Only existing
 // nodes are returned — the animator skips the rest anyway, but callers
 // (startup cascade order asserts) want the resolved list.
-export const crumbItemIds = (byId: (id: string) => any, prefix: string, cap = 128): string[] => {
+export const crumbItemIds = (byId: (id: string) => MaybeNode, prefix: string, cap = 128): string[] => {
   const ids: string[] = [];
   for (let i = 0; i < cap; i++) {
-    let n: any = null;
+    let n: MaybeNode = null;
     try {
       n = byId(`${prefix}crumb-${i}`);
     } catch {
@@ -93,7 +93,7 @@ export const crumbItemIds = (byId: (id: string) => any, prefix: string, cap = 12
 };
 
 // left-to-right cascade order: nav buttons, crumbs, sort + search buttons
-export const toolbarItemIds = (byId: (id: string) => any, prefix: string, cap = 128): string[] => {
+export const toolbarItemIds = (byId: (id: string) => MaybeNode, prefix: string, cap = 128): string[] => {
   const live = (id: string): boolean => {
     try {
       return !!byId(id);
@@ -369,7 +369,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
 
   // --- generic hover button: two baked rasters (normal/hover bg), wrapper box
   // bg matches so the padding cells track the raster ---
-  const hoverBtn = (id: string, iconName: string, onMouseDown: (ev: any) => void): ReturnType<typeof Box> => {
+  const hoverBtn = (id: string, iconName: string, onMouseDown: (ev: MouseEvent) => void): SlotElement => {
     const states = (): IconState[] => [
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().bg },
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().hoverBg },
@@ -389,7 +389,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         width: 3,
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           ctx.focusPane?.();
           onMouseDown(ev);
         },
@@ -429,8 +429,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     return wrap;
   };
 
-  const makeSortButton = (): ReturnType<typeof Box> =>
-    hoverBtn(id("sort-btn"), "sort", (ev: any) => {
+  const makeSortButton = (): SlotElement =>
+    hoverBtn(id("sort-btn"), "sort", (ev: MouseEvent) => {
       ctx.closeFileMenu();
       ctx.openContextMenu(ev.x, ev.y, "", ctx.sortEntries());
     });

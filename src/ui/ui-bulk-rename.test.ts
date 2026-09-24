@@ -5,6 +5,7 @@ import { makeFloats } from "./floats";
 import { makeBulkRename } from "./ui-bulk-rename";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
+import type { NodeLike } from "../lib/node-like";
 
 // Headless tests for the bulk-rename modal: one stem input + numbering-style
 // chips + a live read-only preview. The apply sink is injected; everything
@@ -23,7 +24,9 @@ const mkBulk = (
     byId: (id) => t.renderer.root.findDescendantById(id),
     rootAdd: (n) => t.renderer.root.add(n),
     clearChildren: (node) => {
-      for (const c of [...node.getChildren()]) node.remove(c);
+      // the ctx hands over a real node; this fake only touches the tree API
+      const n = node as NodeLike;
+      for (const c of [...n.getChildren()]) n.remove(c);
     },
     stripSelectable: () => {},
     escHintBtn: (id, onClose) => {

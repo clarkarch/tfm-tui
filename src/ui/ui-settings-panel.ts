@@ -33,12 +33,7 @@ type SettingsPanelHooks = {
   // visible row count for the right pane (panel chrome takes ~6 rows)
   visRows(): number;
   setOnId(id: string, fn: (n: NodeLike) => void): void;
-  makeIconSlot(
-    name: string,
-    states: IconState[],
-    heightCells?: number,
-    initialState?: number,
-  ): IconSlotHandle;
+  makeIconSlot(name: string, states: IconState[], heightCells?: number, initialState?: number): IconSlotHandle;
   // flip a slot's pre-rastered state (visibility only, no rebuild) — used by
   // the category hover highlight
   setIconState(spec: IconSpec, stateIdx: number): void;

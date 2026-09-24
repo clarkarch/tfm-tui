@@ -276,7 +276,8 @@ describe("notify stacking (real renderer)", () => {
         byId: (id: string) => r.renderer.root.findDescendantById(id),
         stripSelectable: () => {},
         colors,
-        makeIconSlot: () => ({ el: Text({ content: "i" }), slotId: "tfm-icon-test", spec: {} }),
+        makeIconSlot: () =>
+          ({ el: Text({ content: "i" }), slotId: "tfm-icon-test", spec: {} }) as unknown as IconSlotHandle,
         setIconState: () => false,
         drainIconQueue: () => {},
         notifySticky: (children: any[], opts?: { width?: number; height?: number }) => notifySticky(children, opts),

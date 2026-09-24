@@ -19,8 +19,8 @@ import type { HoverLiftOpts, Theme, UiStyle } from "../config/config-schema";
 import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
 import { tileSurface } from "./style";
-import { IconStateIdx } from "./ui-slots";
-import type { MaybeNode } from "../lib/node-like";
+import { IconStateIdx, type IconSpec } from "./ui-slots";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slide";
 export type EaseKey = "linear" | "ease-out" | "ease-in-out";
@@ -196,13 +196,13 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   const holder = { p: 0 };
-  let nodes: any[] = [];
+  let nodes: NodeLike[] = [];
   let cfg: FileAnimCfg = {};
   let style: FileAnimStyle = "fade";
   // full file count when `nodes` is a viewport-capped subset (0 = use nodes.length)
   let total = 0;
 
-  const write = (node: any, f: { opacity: number; dx: number; dy: number }): void => {
+  const write = (node: NodeLike, f: { opacity: number; dx: number; dy: number }): void => {
     try {
       node.opacity = Number.isFinite(f.opacity) ? f.opacity : 1;
       // renderable screen coords must be whole cells: a fractional translate
@@ -324,7 +324,8 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
           return null;
         }
       }
-      const resolved = ids.map((id) => ctx.byId(id)).filter(Boolean);
+      // only resolvable ids: an unresolved one has nothing to animate
+      const resolved = ids.map((id) => ctx.byId(id)).filter((n): n is NodeLike => !!n);
       if (resolved.length === 0) {
         stop();
         return null;
@@ -427,7 +428,7 @@ type TileHoverCtx = {
   tileRefs(): Map<string, SelTileRef>;
   colors(): Theme;
   uiStyle(): UiStyle;
-  setIconState(spec: any, idx: number): void;
+  setIconState(spec: IconSpec | undefined, idx: number): void;
   // clipboard cut-dim resolution (mirrors selection.setTileVisual)
   isCutKey?(key: string): boolean;
   hoverLiftOpts(): HoverLiftOpts;
@@ -436,9 +437,9 @@ type TileHoverCtx = {
 type HoverCur = {
   key: string;
   refs: SelTileRef;
-  node: any;
-  slot: any;
-  label: any;
+  node: MaybeNode;
+  slot: MaybeNode;
+  label: MaybeNode;
 };
 
 export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
@@ -453,7 +454,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
   const restLabelFg = (refs: SelTileRef, key: string): string =>
     !refs.selected && ctx.isCutKey?.(key) === true ? ctx.colors().sidebarFgMuted : refs.baseFg;
 
-  const writeBg = (node: any, hex: string): void => {
+  const writeBg = (node: NodeLike, hex: string): void => {
     try {
       node.backgroundColor = hex === "transparent" ? "transparent" : hex;
     } catch {}
@@ -461,7 +462,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
 
   // A tile copied from a previous build may have been destroyed by a grid
   // rebuild, so only repaint the node refs when byId still resolves to them.
-  const ownedNode = (cur: HoverCur | null): any => {
+  const ownedNode = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       const node = ctx.byId(cur.refs.tileId);
@@ -470,7 +471,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       return null;
     }
   };
-  const ownedSlot = (cur: HoverCur | null): any => {
+  const ownedSlot = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       return cur.refs.iconSlotId ? ctx.byId(cur.refs.iconSlotId) : null;
@@ -478,7 +479,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       return null;
     }
   };
-  const ownedLabel = (cur: HoverCur | null): any => {
+  const ownedLabel = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       return cur.refs.labelId ? ctx.byId(cur.refs.labelId) : null;

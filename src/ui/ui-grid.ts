@@ -576,8 +576,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // operate on the MOUNTED nodes (VNode proxies no-op post-mount): content
     // holds exactly [inner], inner exactly [pad-top, old.r0..old.r1, pad-bottom]
     const mounted = scroller.content.getChildren()[0];
-    const kids: Renderable[] | null =
-      mounted && r0 <= old.r1 + 1 && r1 >= old.r0 - 1 ? mounted.getChildren() : null;
+    const kids: Renderable[] | null = mounted && r0 <= old.r1 + 1 && r1 >= old.r0 - 1 ? mounted.getChildren() : null;
     const slideable = !!kids && kids.length === old.r1 - old.r0 + 3;
     const paint = (a: number, b: number): void => {
       if (a > b) return;
@@ -622,8 +621,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           const k = kidAt(r);
           if (k) mounted.remove(k);
         }
-        for (let r = r0; r < old.r0; r++)
-          mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
+        for (let r = r0; r < old.r0; r++) mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
         for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
           mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), mounted.getChildren().length - 1);
         // pads absorb the shift so the total content height never moves (the
