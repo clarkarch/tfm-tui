@@ -7,7 +7,7 @@
 // back to a pre-darkened glyph (setScrim); rasters come back on close.
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
-import { Box, ImageRenderable, Text } from "@opentui/core";
+import { Box, type ColorInput, ImageRenderable, Text } from "@opentui/core";
 import { iconPng, thumbPng } from "./icons";
 import { swallow } from "../app/log";
 import type { IconMode, Theme } from "../config/config";
@@ -383,13 +383,14 @@ export const makeSlots = (ctx: SlotsCtx) => {
     "tfm-bulkrename",
   ]);
 
-  // mounted icon-slot nodes: heterogeneous OpenTUI renderables (byId
-  // returns any by design — see ./ui-lookup), narrowed structurally here
+  // narrowed view of the byId seam (see ../lib/node-like): only the members
+  // the scrim touches. `fg` is a ColorInput because the seam hands back the
+  // real renderable, whose fg IS a parsed RGBA once assigned a theme hex.
   type SlotNode = {
     id?: unknown;
     parent?: SlotNode | null;
     visible?: boolean;
-    fg?: string;
+    fg?: ColorInput;
     getChildren?: () => Iterable<SlotNode>;
   };
 

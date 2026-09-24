@@ -16,13 +16,24 @@
 // `number` would make a real Renderable unassignable to this view (measured —
 // that was the first tsc error).
 //
-// Deliberately `any`: the COLOR members and the tree/event methods. OpenTUI
-// parses colors on assignment (widgets legitimately assign theme hex strings
-// and read back RGBA objects), and the mutation methods' declared return types
-// (`add() → number`, `handleKeyPress() → boolean`) are values the widgets
-// ignore — pinning them would force fake nodes and no-op handlers to fabricate
-// returns, and for handleKeyPress it would invite a behavior change (returning
-// true "consumes" the key differently than the current void handlers do).
+// Colors use OpenTUI's own `ColorInput` (`string | RGBA`), which is exactly the
+// contract the widgets rely on: assign a theme hex, read back an RGBA.
+//
+// `unknown` (not `any`) where the value is genuinely opaque to this module —
+// the tree/event methods. `unknown` still accepts every real argument, but a
+// caller must narrow before use, so it cannot silently launder a typo.
+//
+// Parameter positions are declared with METHOD syntax on purpose: TS checks
+// method parameters bivariantly (strictFunctionTypes exempts method
+// declarations), which is what lets a real Renderable — whose `add` takes a
+// concrete `Renderable` — satisfy this structural view.
+
+import type { ColorInput, MouseEvent } from "@opentui/core";
+
+// The key shape the widgets read off a keypress (OpenTUI's ParsedKey `name`).
+// Structural, so real ParsedKey values and test fakes both satisfy it.
+export type KeyLike = { name?: string };
+
 export type NodeLike = {
   id?: string;
   // text / input state (TextRenderable, InputRenderable, TextareaRenderable)
@@ -40,28 +51,33 @@ export type NodeLike = {
   top?: number | "auto" | `${number}%`;
   scrollTop?: number;
   // colors: hex string in, RGBA out — parsed by OpenTUI on assignment
-  fg?: any;
-  bg?: any;
-  backgroundColor?: any;
+  fg?: ColorInput;
+  bg?: ColorInput;
+  backgroundColor?: ColorInput;
   // tree + lifecycle
-  parent?: any;
-  add?(child: any, index?: number): any;
-  remove?(child: any): void;
-  getChildren?(): any[];
+  parent?: NodeLike | null;
+  add?(child: unknown, index?: number): unknown;
+  remove?(child: unknown): void;
+  getChildren?(): NodeLike[];
   destroy?(): void;
-  insertBefore?(child: any, anchor?: any): any;
+  insertBefore?(child: unknown, anchor?: unknown): unknown;
   focus?(): void;
   blur?(): void;
-  handleKeyPress?(key: any): any;
-  on?(event: string, cb: (...args: any[]) => any): any;
-  // mouse handlers (bivariant method syntax, see the note above)
-  onMouseDown?(ev: any): void;
-  onMouseUp?(ev: any): void;
-  onMouseMove?(ev: any): void;
-  onMouseOver?(ev: any): void;
-  onMouseOut?(ev: any): void;
-  onMouseDrop?(ev: any): void;
-  onMouseDrag?(ev: any): void;
+  handleKeyPress?(key: KeyLike): boolean;
+  // `unknown[]` rather than `never[]`: a real Renderable.on takes `any[]`, and
+  // `any` is NOT assignable to `never`, so `never[]` failed assignability in
+  // both bivariance directions (measured). `unknown[]` accepts it, and a
+  // listener declared with narrower params still satisfies it.
+  on?(event: string, cb: (...args: unknown[]) => unknown): unknown;
+  // mouse handlers — the real OpenTUI event, so `ev.x`/`ev.modifiers` are typed
+  onMouseDown?(ev: MouseEvent): void;
+  onMouseUp?(ev: MouseEvent): void;
+  onMouseMove?(ev: MouseEvent): void;
+  onMouseOver?(ev: MouseEvent): void;
+  onMouseOut?(ev: MouseEvent): void;
+  onMouseDrop?(ev: MouseEvent): void;
+  onMouseDrag?(ev: MouseEvent): void;
+  onMouseScroll?(ev: MouseEvent): void;
 };
 
 // What the lookup seam actually hands back: `undefined` when no node owns the

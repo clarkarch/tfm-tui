@@ -181,7 +181,7 @@ export const makeRename = (ctx: RenameCtx) => {
     const stale = ctx.byId(inputId);
     if (stale) {
       try {
-        stale.parent?.remove(stale);
+        stale.parent?.remove?.(stale);
       } catch {}
     }
     const input: any = new InputRenderable(ctx.renderer(), {
