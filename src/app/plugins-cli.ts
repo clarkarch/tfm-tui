@@ -164,7 +164,12 @@ export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): 
         return 0;
       }
       case "add": {
-        let raw = parsed.target!;
+        let raw = parsed.target;
+        // falsy covers both null (no target parsed) and ""
+        if (!raw) {
+          err("tfm: add needs a git URL or an index id");
+          return 1;
+        }
         if (!isGitUrl(raw)) {
           // treat as an index id
           const entry = findIndexEntry(await loadIndex(), raw);
@@ -188,8 +193,13 @@ export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): 
         return 0;
       }
       case "remove": {
-        const dest = removePluginDir(dir, parsed.target!);
-        out(`removed ${parsed.target} (${dest})`);
+        const target = parsed.target;
+        if (!target) {
+          err("tfm: remove needs a plugin name");
+          return 1;
+        }
+        const dest = removePluginDir(dir, target);
+        out(`removed ${target} (${dest})`);
         return 0;
       }
       case "update": {
@@ -211,7 +221,11 @@ export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): 
         return failed ? 1 : 0;
       }
       case "new": {
-        const name = parsed.target!;
+        const name = parsed.target;
+        if (!name) {
+          err("tfm: new needs a plugin name");
+          return 1;
+        }
         if (!PLUGIN_NAME_RE.test(name)) {
           err(`tfm: unsafe plugin name: ${JSON.stringify(name)}`);
           return 2;

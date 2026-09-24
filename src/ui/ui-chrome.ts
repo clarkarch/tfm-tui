@@ -135,10 +135,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
 
     const iconSlot = ctx.makeIconSlot(place.icon, iconStates, 1, selectIconState(selected, false));
     let ejectSlot: ReturnType<typeof ctx.makeIconSlot> | undefined;
-    if (place.ejectable && place.device) {
-      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), () =>
-        ejectDevice(place.device!),
-      );
+    const device = place.device;
+    if (place.ejectable && device) {
+      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), () => ejectDevice(device));
     }
     const rowNode = Box(
       {

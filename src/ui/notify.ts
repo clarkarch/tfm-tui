@@ -95,8 +95,12 @@ export const wrapToastText = (s: string, budget: number, maxLines: number = MAX_
   if (cur) lines.push(cur);
   if (lines.length <= maxLines) return lines;
   const kept = lines.slice(0, maxLines);
-  const tail = `${kept[maxLines - 1]!}…`;
-  kept[maxLines - 1] = tail.length > budget ? truncateToastText(tail, budget) : tail;
+  // lines.length > maxLines is guaranteed here, so the last kept row exists
+  const lastIdx = maxLines - 1;
+  const last = kept[lastIdx];
+  if (last === undefined) return kept;
+  const tail = `${last}…`;
+  kept[lastIdx] = tail.length > budget ? truncateToastText(tail, budget) : tail;
   return kept;
 };
 

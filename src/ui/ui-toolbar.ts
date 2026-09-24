@@ -285,7 +285,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           : null;
     const inHome = !virtCrumb && (cwdAbs === ctx.home || cwdAbs.startsWith(ctx.home + path.sep));
     const baseLabel = virtCrumb ? virtCrumb.label : inHome ? "Home" : os.hostname();
-    const baseIcon = virtCrumb ? virtCrumb.icon! : inHome ? "home" : "desktop-tower";
+    const baseIcon = virtCrumb ? (virtCrumb.icon ?? "file") : inHome ? "home" : "desktop-tower";
     const basePath = virtCrumb ? ctx.cwd() : inHome ? ctx.home : "/";
     const rest = virtCrumb
       ? []

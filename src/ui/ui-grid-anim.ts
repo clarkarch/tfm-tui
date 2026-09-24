@@ -285,8 +285,9 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       // row-granularity knob is on: same cascade look, cols-times fewer nodes
       // A reveal play is the exception: container moves are wrong per notch,
       // and plain "slide" maps to the edge-following stagger-slide curve.
-      const reveal = !!target?.enterFrom;
-      const rm = reveal ? revealStyleMap(o.style, o.dir, target!.enterFrom!) : { style: o.style, dir: o.dir };
+      const enterFrom = target?.enterFrom ?? null;
+      const reveal = enterFrom !== null;
+      const rm = reveal ? revealStyleMap(o.style, o.dir, enterFrom) : { style: o.style, dir: o.dir };
       const useRows =
         (target?.rows?.length ?? 0) > 0 &&
         o.rowsGranularity &&
@@ -297,7 +298,9 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       // (a row at opacity 0 would hide per-file children regardless — the
       // tiles self-stage via play's frame-0 pass, same as the delay-0 path).
       let container = !reveal && (rm.style === "slide" || (rm.style === "fade" && o.containerFade));
-      let ids = container && target?.inner ? [target.inner] : useRows ? target.rows! : (target?.tiles ?? []);
+      // useRows already implies rows is non-empty (see useRows above), so the
+      // empty fallback is unreachable-but-total rather than an assertion
+      let ids = container && target?.inner ? [target.inner] : useRows ? (target?.rows ?? []) : (target?.tiles ?? []);
       if (rm.style === "off" || !(o.ms > 0) || ids.length === 0) {
         stop();
         return null;

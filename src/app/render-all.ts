@@ -27,10 +27,12 @@ export const makeRenderAll = (ctx: RenderAllCtx): (() => void) => {
     ctx.state.cwd = ctx.state.history[ctx.state.histIdx] ?? ctx.state.cwd;
     ctx.syncPaneCwds?.();
     for (const name of names) {
+      const step = ctx.steps[name];
+      if (!step) continue;
       // per-step timings feed slow-boot reports; measured always (ns-cheap),
       // logged only under --debug so hot-path renders stay quiet
       const t0 = isDebug ? performance.now() : 0;
-      safeRenderStep(name, () => ctx.steps[name]!(), ctx.log);
+      safeRenderStep(name, step, ctx.log);
       if (isDebug) debugLog(`render: ${name} ${Math.round(performance.now() - t0)}ms`);
     }
     ctx.scheduleSaveSession();

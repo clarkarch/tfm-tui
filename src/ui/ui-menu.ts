@@ -188,7 +188,7 @@ export const makeMenu = (ctx: MenuCtx) => {
       livePanel.add(
         rowNode(
           e,
-          i === state!.subIdx,
+          i === state?.subIdx,
           () => {
             if (state && state.subIdx !== i) {
               state.subIdx = i;
@@ -221,7 +221,7 @@ export const makeMenu = (ctx: MenuCtx) => {
       panel.add(
         rowNode(
           e,
-          i === state!.idx,
+          i === state?.idx,
           () => {
             // hovering another row swaps/closes the flyout; a freshly opened
             // flyout has NO cursor until the next move/hover

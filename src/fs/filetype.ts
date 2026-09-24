@@ -281,7 +281,11 @@ export const extOf = (name: string): string => path.extname(name).slice(1).toLow
 
 export const fileIconFor = (name: string): string => {
   const ext = extOf(name);
-  return FILE_ICON_BY_EXT[ext] ?? (globs2ByExt?.get(ext) ? mimeCategory(globs2ByExt.get(ext)!) : undefined) ?? "file";
+  const direct = FILE_ICON_BY_EXT[ext];
+  if (direct) return direct;
+  // the mime table is loaded at boot and may be absent in tests
+  const mime = globs2ByExt?.get(ext);
+  return (mime ? mimeCategory(mime) : undefined) ?? "file";
 };
 
 export const fileIsImage = (name: string): boolean => {

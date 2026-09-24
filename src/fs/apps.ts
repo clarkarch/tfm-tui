@@ -66,7 +66,8 @@ export const parseGioMime = (out: string): string[] => {
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const m of out.matchAll(/([A-Za-z0-9_.+-]+\.desktop)/g)) {
-    const id = m[1]!;
+    const id = m[1];
+    if (id === undefined) continue;
     if (!seen.has(id)) {
       seen.add(id);
       ids.push(id);

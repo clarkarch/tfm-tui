@@ -53,7 +53,8 @@ export const relLum = (hex: string): number => {
 export const contrastRatio = (a: string, b: string): number => {
   if (!HEX_RE.test(a.trim()) || !HEX_RE.test(b.trim())) return 1;
   const [hi, lo] = [relLum(a.trim()), relLum(b.trim())].sort((x, y) => y - x);
-  return (hi! + 0.05) / (lo! + 0.05);
+  if (hi === undefined || lo === undefined) return 1;
+  return (hi + 0.05) / (lo + 0.05);
 };
 
 // first candidate readable on EVERY bg (>= minRatio), else the one with the

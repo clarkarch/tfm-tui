@@ -84,7 +84,8 @@ export const dirWalkStats = async (root: string): Promise<{ bytes: number; files
     count = 0;
   const stack: string[] = [root];
   while (stack.length) {
-    const dir = stack.pop()!;
+    const dir = stack.pop();
+    if (dir === undefined) break;
     let dirents: Dirent[];
     try {
       dirents = await readdir(dir, { withFileTypes: true });

@@ -73,6 +73,15 @@ const COMPRESSIONS: CompressionDef[] = [
 
 const DEF = new Map<ArchiveFormat, CompressionDef>(COMPRESSIONS.map((d) => [d.fmt, d]));
 
+// COMPRESSIONS is the single source of truth and DEF is built from it, so a
+// miss means the two drifted — a programming error, never a caller's input.
+// Named accessor so every read is one call instead of an assertion.
+const defOf = (fmt: ArchiveFormat): CompressionDef => {
+  const d = DEF.get(fmt);
+  if (!d) throw new Error(`archive: no definition for format ${fmt}`);
+  return d;
+};
+
 // longest suffixes first: `.tar.lzma` must beat `.tar.lz`, `.tar.zst` beat
 // `.tar.z`; the bare single-stream extensions are intentionally absent
 const SUFFIXES: Array<[string, ArchiveFormat]> = [
@@ -116,7 +125,7 @@ const canExtractFmt = (def: CompressionDef, which: WhichFn): boolean =>
   def.kind === "zip" ? !!which("unzip") || !!which("7z") : def.need.every((b) => !!which(b));
 
 const listTool = (fmt: ArchiveFormat, which: WhichFn): string => {
-  const def = DEF.get(fmt)!;
+  const def = defOf(fmt);
   if (def.kind === "tar") return "tar";
   if (def.kind === "7z") return "7z";
   return zipExtractTool(which);
@@ -128,7 +137,7 @@ export const extractPlan = (
   destDir: string,
   which: WhichFn = Bun.which,
 ): ToolSpec => {
-  const def = DEF.get(fmt)!;
+  const def = defOf(fmt);
   if (def.kind === "tar")
     // -v: emit entry names so the file-count progress bar advances
     // --no-same-owner: extracting as non-root otherwise warns/fails on ownership
@@ -145,14 +154,14 @@ export const extractPlan = (
 };
 
 export const listArgs = (fmt: ArchiveFormat, file: string, which: WhichFn = Bun.which): string[] => {
-  const def = DEF.get(fmt)!;
+  const def = defOf(fmt);
   if (def.kind === "tar") return ["-t", ...def.filter, "-f", file];
   if (def.kind === "7z") return ["l", "-ba", file];
   return zipExtractTool(which) === "unzip" ? ["-Z1", file] : ["l", "-ba", file];
 };
 
-export const compressionExt = (fmt: CompressionFormat): string => DEF.get(fmt)!.ext;
-export const compressionHint = (fmt: CompressionFormat): string => DEF.get(fmt)!.hint;
+export const compressionExt = (fmt: CompressionFormat): string => defOf(fmt).ext;
+export const compressionHint = (fmt: CompressionFormat): string => defOf(fmt).hint;
 
 // -C <parent> + basenames: the archive stores the selected entries relative to
 // their common parent, never absolute paths (tar strips leading / with a warning)
@@ -163,7 +172,7 @@ export const compressPlan = (
   parent: string,
   which: WhichFn = Bun.which,
 ): ToolSpec => {
-  const def = DEF.get(fmt)!;
+  const def = defOf(fmt);
   // a name starting with "-" would otherwise be parsed as an option (tar -v,
   // --files-from=…): tar/7z get an explicit `--`, zip an escaped "./" operand
   if (def.kind === "tar")
@@ -183,7 +192,7 @@ export const availableCompressionFormats = (which: WhichFn = Bun.which): Compres
 export const canExtract = (file: string, which: WhichFn = Bun.which): boolean => {
   const fmt = detectArchiveFormat(file);
   if (!fmt) return false;
-  return canExtractFmt(DEF.get(fmt)!, which);
+  return canExtractFmt(defOf(fmt), which);
 };
 
 // basename + ext-aware "(copy)" naming: uniqueTarget would split "foo.tar.gz"

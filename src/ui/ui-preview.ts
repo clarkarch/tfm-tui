@@ -231,7 +231,8 @@ export const makePreview = (ctx: PreviewCtx) => {
       // re-preview of the same unchanged file (the cache-hit return below
       // would otherwise keep painting the OLD theme until some OTHER file
       // was previewed).
-      const syntaxStyle = getPreviewSyntaxStyle()!;
+      const syntaxStyle = getPreviewSyntaxStyle();
+      if (!syntaxStyle) return;
       const mtimeMs = st.mtimeMs ?? 0;
       const size = st.size ?? 0;
       if (

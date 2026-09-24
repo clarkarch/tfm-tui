@@ -237,9 +237,9 @@ export const installPlugin = async (opts: {
       throw new Error(`subdir not found in repo: ${JSON.stringify(parsed.subdir)}`);
     }
     const mains = findPluginMains(source);
-    if (!mains.length) throw new Error("no plugin found (need <name>/<name>.ts or <name>.ts)");
+    const [main] = mains;
+    if (main === undefined) throw new Error("no plugin found (need <name>/<name>.ts or <name>.ts)");
     if (mains.length > 1) throw new AmbiguousPluginError(mains);
-    const main = mains[0]!;
     // folder main: install just that folder; flat file: install the whole
     // source root (helpers ride along) under the file's own name
     const srcFolder = main.includes("/") ? path.join(source, path.dirname(main)) : source;

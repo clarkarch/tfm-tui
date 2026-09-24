@@ -321,8 +321,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
     const handleRangePress = (ev: TileMouseEvent): boolean => {
       const mods = ev.modifiers ?? {};
       if (!(mods.shift || mods.alt)) return false;
-      if (ctx.getSelAnchor() === null) ctx.setSelAnchor(ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
-      ctx.selectRange(ctx.getSelAnchor()!, idx);
+      const anchor = ctx.getSelAnchor() ?? (ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
+      ctx.setSelAnchor(anchor);
+      ctx.selectRange(anchor, idx);
       // the keyboard extend endpoint must follow the clicked tile, or the next
       // shift+arrow extends from a stale focusIdx and collapses the range
       ctx.setFocusIdx(idx);

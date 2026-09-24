@@ -143,9 +143,9 @@ export const COMPAT_LIGHT_THEME: Record<string, string> = {
 };
 
 const hexRgb = (hex: string): [number, number, number] | null => {
-  const m = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());
-  if (!m) return null;
-  const n = Number.parseInt(m[1]!, 16);
+  const group = /^#([0-9a-fA-F]{6})$/.exec(hex.trim())?.[1];
+  if (group === undefined) return null;
+  const n = Number.parseInt(group, 16);
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 };
 

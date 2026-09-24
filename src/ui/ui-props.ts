@@ -505,8 +505,9 @@ export const makeProps = (ctx: PropsCtx) => {
         stats.push({ path: p, st: statSync(p) });
       } catch {}
     }
-    if (stats.length === 1) {
-      openSingle(stats[0]!.path);
+    const only = stats[0];
+    if (stats.length === 1 && only) {
+      openSingle(only.path);
       return;
     }
     if (stats.length > 1) openMulti(stats);

@@ -23,7 +23,7 @@ import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type 
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { waitForResolution } from "../ui/ui-lookup";
-import { glyph } from "../ui/glyphs";
+import { FILE_GLYPH, glyph } from "../ui/glyphs";
 import { rasterSigOf } from "../ui/compat";
 import { activeFacade } from "../app/panes";
 import { isVirtualUri } from "../fs/uri";
@@ -68,16 +68,19 @@ export const wireGrid = (deps: {
     visible: () => core.geometry.previewEff > 0 && core.config.ui.previewEnabled,
     termH: () => chrome.renderer.terminalHeight,
     cellMetrics: core.slots.cellMetrics,
-    focusKey: () =>
-      selection.focusIdx() >= 0 && selection.focusKeys()[selection.focusIdx()]
-        ? selection.focusKeys()[selection.focusIdx()]!
-        : null,
+    focusKey: () => {
+      // resolve the index once and read through `?? null` — the original read
+      // the key twice and asserted the second read non-null
+      const idx = selection.focusIdx();
+      if (idx < 0) return null;
+      return selection.focusKeys()[idx] ?? null;
+    },
     tileRefs: selection.tileRefs,
     pushThumbJob: core.slots.pushThumbJob,
     drainThumbs: () => core.slots.drainThumbs(),
     drainIconQueue: () => core.slots.drainIconQueue(),
     nextIconId: core.slots.nextIconId,
-    fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    fallbackGlyphFor: (name) => glyph[name] ?? FILE_GLYPH,
     compatActive: core.compatActive,
     forceGlyph: core.forceGlyph,
     // root preview: non-interactive `sudo -n cat` only (cached timestamp) —
@@ -363,7 +366,7 @@ export const wireGrid = (deps: {
     home,
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
-    fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    fallbackGlyphFor: (name) => glyph[name] ?? FILE_GLYPH,
     compatActive: core.compatActive,
     forceGlyph: core.forceGlyph,
     cellMetrics: core.slots.cellMetrics,

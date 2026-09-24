@@ -211,7 +211,8 @@ export const makeSlots = (ctx: SlotsCtx) => {
     let idx = 0;
     const worker = async () => {
       while (idx < jobs.length) {
-        const j = jobs[idx++]!;
+        const j = jobs[idx++];
+        if (!j) continue;
         let slot: any = ctx.byId(j.slotId);
         if (!slot) continue;
         const hCells = j.hCells ?? ctx.iconCells();
@@ -231,7 +232,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
             fit: thumbImageFit(j.vector),
             protocol: "auto",
           });
-          await img.loadPromise!;
+          if (img.loadPromise) await img.loadPromise;
           // RE-RESOLVE: a rebuild during the raster detached the captured node;
           // writing into it leaked a native image buffer and painted nowhere.
           // A same-id replacement is the live slot, so use the fresh lookup.
@@ -294,7 +295,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
           fit: "fit",
           protocol: "auto",
         });
-        await img.loadPromise!;
+        if (img.loadPromise) await img.loadPromise;
         img.visible = si === initial;
         imgs.push(img);
       } catch (err) {

@@ -81,10 +81,12 @@ async function readUserDirs(): Promise<UserDir[]> {
     const out: UserDir[] = [];
     for (const line of text.split("\n")) {
       const m = line.match(/^(XDG_[A-Z_]+_DIR)\s*=\s*(.+)$/);
-      if (!m?.[1] || !m[2]) continue;
-      const label = XDG_LABELS[m[1]];
+      const key = m?.[1];
+      const value = m?.[2];
+      if (!key || !value) continue;
+      const label = XDG_LABELS[key];
       if (!label) continue;
-      const p = expandXdgValue(m[2]!);
+      const p = expandXdgValue(value);
       // XDG rule (and nautilus): pointing at $HOME disables the entry
       if (!p || p === home) continue;
       try {
@@ -92,7 +94,7 @@ async function readUserDirs(): Promise<UserDir[]> {
       } catch {
         continue;
       }
-      out.push({ key: m[1], label, p });
+      out.push({ key, label, p });
     }
     return out.sort((a, b) => (a.key < b.key ? -1 : 1));
   } catch {

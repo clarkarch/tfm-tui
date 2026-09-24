@@ -216,12 +216,13 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   const extendFromAnchor = (next: number): void => {
-    if (selection.selAnchor() === null) {
-      selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-    }
+    // resolve once: the anchor is seeded when unset, then reused for the range
+    // (the original re-read it here and asserted non-null)
+    const anchor = selection.selAnchor() ?? (selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+    selection.setSelAnchor(anchor);
     if (next === selection.focusIdx() || next < 0 || next >= selection.focusKeys().length) return;
     selection.selectTileAt(next, true);
-    selection.selectRange(selection.selAnchor()!, next);
+    selection.selectRange(anchor, next);
     selection.updateSelectionStatusReal();
     void ctx.renderPreview();
   };

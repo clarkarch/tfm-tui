@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import type { Entry } from "../fs/listing";
 import { fmtBytes, pad2 } from "../fs/propsinfo";
-import { glyph } from "./glyphs";
+import { FILE_GLYPH, glyph } from "./glyphs";
 import { canThumbVideo } from "./icons";
 import { sidePadDelta } from "./style";
 import type { GridRendererCtx } from "./ui-grid-types";
@@ -257,7 +257,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
         vector: entry.name.toLowerCase().endsWith(".svg"),
         video: isVideo,
         visible: inViewport,
-        fallbackGlyph: glyph[fileIconFor(entry.name)] ?? glyph.file!,
+        fallbackGlyph: glyph[fileIconFor(entry.name)] ?? FILE_GLYPH,
       });
     }
 
@@ -345,7 +345,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
         vector: entry.name.toLowerCase().endsWith(".svg"),
         video: isVideo,
         visible: inViewport,
-        fallbackGlyph: glyph[fileIconFor(entry.name)] ?? glyph.file!,
+        fallbackGlyph: glyph[fileIconFor(entry.name)] ?? FILE_GLYPH,
       });
     }
     return row;

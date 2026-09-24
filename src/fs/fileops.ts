@@ -1156,7 +1156,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // outside-cwd selections (two `foo`s in different dirs collapse to one)
     const names = srcs.map((p) => path.relative(parent, p));
     const ext = compressionExt(format);
-    const base = srcs.length === 1 ? path.basename(srcs[0]!) : "archive";
+    const onlySrc = srcs[0];
+    const base = srcs.length === 1 && onlySrc !== undefined ? path.basename(onlySrc) : "archive";
     let out = path.join(destDir, `${base}${ext}`);
     if (existsSync(out)) {
       const choice = conflict.policy() ?? (await conflict.promptConflict(out, 0));

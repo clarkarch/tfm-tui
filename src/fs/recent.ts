@@ -25,7 +25,9 @@ export const readRecentXbel = (): XbelItem[] => {
   let m: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: classic exec-loop idiom
   while ((m = bmRe.exec(xml))) {
-    const p = uriToPath(m[1]!);
+    const href = m[1];
+    if (href === undefined) continue;
+    const p = uriToPath(href);
     if (!p) continue;
     // modified attr lives on the same tag; fall back to the application entry
     const tag = m[0];

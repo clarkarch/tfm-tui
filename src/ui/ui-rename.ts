@@ -127,9 +127,11 @@ export const makeRename = (ctx: RenameCtx) => {
         // "name 2" dedupe the initial Untitled naming used. existsSync guard
         // right before the rename — Linux rename would silently overwrite.
         if (existsSync(target)) target = uniqueTarget(dir, value);
+        // captured for the .then closure, where the edit's narrowing is gone
+        const createKind = edit.createKind;
         void fsRename(k, target)
           .then(() => {
-            pushCreateBatch(edit.createKind!, target);
+            if (createKind) pushCreateBatch(createKind, target);
             const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
             ctx.notify(msg, "create", "success");
             void ctx.renderAll();

@@ -69,14 +69,14 @@ const pngSize = (buf: Buffer): { w: number; h: number } | null =>
     : null;
 
 const percentile = (sorted: number[], p: number): number =>
-  sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))]!;
+  sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0;
 
 const fmt = (ms: number): string => `${ms.toFixed(2)}ms`;
 
 const stats = (samples: number[]) => {
   const s = [...samples].sort((a, b) => a - b);
   const sum = s.reduce((a, b) => a + b, 0);
-  return { total: sum, mean: sum / s.length, median: percentile(s, 50), p95: percentile(s, 95), min: s[0]! };
+  return { total: sum, mean: sum / s.length, median: percentile(s, 50), p95: percentile(s, 95), min: s[0] ?? 0 };
 };
 
 const magick = Bun.which("magick");
@@ -160,21 +160,27 @@ const main = async () => {
 
     // Cross-check dims + optional pixel diff against the first renderer.
     const names = Object.keys(RENDERERS);
-    const ref = results[names[0]!]!;
+    const refName = names[0];
+    const ref = refName === undefined ? undefined : results[refName];
+    if (!ref) continue;
     for (const name of names.slice(1)) {
-      const other = results[name]!;
+      const other = results[name];
+      if (!other) continue;
       let differing = 0;
       let maxPx = 0;
       if (args.pixels) {
         for (let i = 0; i < corpus.length; i++) {
-          const d = await pixelDiff(ref.baseline![i]!, other.baseline![i]!, `${pname}-${i}`);
+          const baseA = ref.baseline?.[i];
+          const baseB = other.baseline?.[i];
+          if (baseA === undefined || baseB === undefined) break;
+          const d = await pixelDiff(baseA, baseB, `${pname}-${i}`);
           if (d === null) break;
           if (d > 0) differing++;
           maxPx = Math.max(maxPx, d);
         }
       }
       console.log(
-        `${name.padEnd(14)} vs ${names[0]}: ${other.wrong} wrong dims${args.pixels ? `, ${differing} icons differ (max ${maxPx} px)` : ""}`,
+        `${name.padEnd(14)} vs ${refName}: ${other.wrong} wrong dims${args.pixels ? `, ${differing} icons differ (max ${maxPx} px)` : ""}`,
       );
       if (other.wrong > 0)
         console.log(
@@ -190,11 +196,16 @@ const main = async () => {
       );
     }
     const names2 = Object.keys(RENDERERS);
-    const a = stats(results[names2[0]!]!.samples);
-    const b = stats(results[names2[1]!]!.samples);
-    console.log(
-      `→ ${names2[1]} is ${(a.median / b.median).toFixed(2)}x faster per icon (median), ${(a.total / b.total).toFixed(2)}x on the full corpus\n`,
-    );
+    const [n0, n1] = names2;
+    const r0 = n0 === undefined ? undefined : results[n0];
+    const r1 = n1 === undefined ? undefined : results[n1];
+    if (r0 && r1 && n1 !== undefined) {
+      const a = stats(r0.samples);
+      const b = stats(r1.samples);
+      console.log(
+        `→ ${n1} is ${(a.median / b.median).toFixed(2)}x faster per icon (median), ${(a.total / b.total).toFixed(2)}x on the full corpus\n`,
+      );
+    }
 
     // resvg's internal breakdown (Reading / XML / SVG parse / Render). Render to
     // a file here: --perf prints to stdout, so -c would interleave PNG bytes.

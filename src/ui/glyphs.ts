@@ -4,6 +4,11 @@
 // Codepoints verified against the MesloLGLDZ Nerd Font Mono cmap — never
 // paste guessed ones (see AGENTS.md "Icons").
 
+// The generic file glyph, NAMED rather than looked up: every file-type category
+// falls back to it (and ensureGlyphFallbacks fills the table from it), so it
+// needs to be a value the type system knows is present, not a Record lookup.
+export const FILE_GLYPH = "\u{F0214}";
+
 export const glyph: Record<string, string> = {
   home: "\u{F02DC}",
   star: "\u{F04CE}",
@@ -16,7 +21,7 @@ export const glyph: Record<string, string> = {
   network: "\u{F059F}",
   eject: "\u{F01EA}",
   search: "\u{F002}",
-  file: "\u{F0214}",
+  file: FILE_GLYPH,
   "chevron-left": "\u{F0141}",
   "chevron-right": "\u{F0142}",
   "desktop-tower": "\u{F01C5}",
@@ -67,5 +72,5 @@ export const glyphFor = (name: string): string => glyph[name] ?? "\u{FFFD}";
 // every file-type category the classifier can emit must have a glyph: fill
 // unknown ones with the generic file glyph so a new filetype never renders □
 export const ensureGlyphFallbacks = (names: Iterable<string>): void => {
-  for (const n of names) if (!(n in glyph)) glyph[n] = glyph.file!;
+  for (const n of names) if (!(n in glyph)) glyph[n] = FILE_GLYPH;
 };

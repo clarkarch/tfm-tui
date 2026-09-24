@@ -613,10 +613,11 @@ export const makePluginRegistry = (deps: {
       try {
         disposeSlots?.();
       } catch {}
-      if (deactivate) {
+      const fn = deactivate;
+      if (fn) {
         try {
           await withTimeout(
-            Promise.resolve().then(() => deactivate!()),
+            Promise.resolve().then(() => fn()),
             5000,
           );
         } catch {}
@@ -632,10 +633,11 @@ export const makePluginRegistry = (deps: {
     try {
       p.disposeSlots?.();
     } catch {}
-    if (!p.deactivate) return;
+    const fn = p.deactivate;
+    if (!fn) return;
     try {
       await withTimeout(
-        Promise.resolve().then(() => p.deactivate!()),
+        Promise.resolve().then(() => fn()),
         5000,
       );
     } catch (err) {

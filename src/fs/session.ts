@@ -75,8 +75,8 @@ export const readRestoredSession = (): RestoredSession | null => {
     if (Array.isArray(doc?.panes)) {
       const a = sanitizePaneTabs(doc.panes[0]);
       const b = sanitizePaneTabs(doc.panes[1]);
-      if (!a && !b) return null;
-      const base = a ?? b!;
+      const base = a ?? b;
+      if (!base) return null;
       return {
         panes: [
           a ?? { tabs: base.tabs.map((t) => ({ history: [...t.history], histIdx: t.histIdx })), activeTab: 0 },

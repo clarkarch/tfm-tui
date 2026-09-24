@@ -38,10 +38,13 @@ export const makePluginEvents = (): PluginEvents => {
         set = new Set();
         listeners.set(evt, set);
       }
+      // bind the narrowed set: the returned unsub closes over it, where the
+      // original `set` binding would widen back to possibly-undefined
+      const target = set;
       const fn = cb as (payload: never) => void;
-      set.add(fn);
+      target.add(fn);
       return () => {
-        set!.delete(fn);
+        target.delete(fn);
       };
     },
     emit: (evt, payload) => {

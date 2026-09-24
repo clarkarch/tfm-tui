@@ -66,12 +66,15 @@ export const hookScrollerScroll = (scroller: any, onScroll: () => void): boolean
   try {
     const proto = Object.getPrototypeOf(scroller);
     const d = proto && Object.getOwnPropertyDescriptor(proto, "scrollTop");
-    if (d && typeof d.set === "function" && !Object.getOwnPropertyDescriptor(scroller, "scrollTop")) {
+    // bind the setter once: the descriptor's own `set` widens back to optional
+    // inside the closure below
+    const setter = d && typeof d.set === "function" ? d.set : undefined;
+    if (d && setter && !Object.getOwnPropertyDescriptor(scroller, "scrollTop")) {
       Object.defineProperty(scroller, "scrollTop", {
         configurable: true,
         get: d.get,
         set(value: number) {
-          d.set!.call(this, value);
+          setter.call(this, value);
           try {
             onScroll();
           } catch {}
