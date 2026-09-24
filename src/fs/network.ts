@@ -54,15 +54,16 @@ export const parseServerInput = (raw: string): ServerInput | null => {
   }
   const schemeMatch = s.match(/^([a-z][a-z0-9+.-]*):\/\//i);
   if (schemeMatch) {
-    const scheme = schemeMatch[1]!.toLowerCase();
-    if (!(NETWORK_SCHEMES as readonly string[]).includes(scheme)) return null;
+    const scheme = schemeMatch[1]?.toLowerCase();
+    if (scheme === undefined || !(NETWORK_SCHEMES as readonly string[]).includes(scheme)) return null;
     return { uri: s, label: prettify(s) };
   }
   // scp-like `[user@]host:/path` — assume ssh/sftp
   const scp = s.match(/^([^@/]+@)?([^:/]+):(.*)$/);
   if (!scp) return null;
   const user = scp[1] ? scp[1].slice(0, -1) : "";
-  const host = scp[2]!;
+  const host = scp[2];
+  if (host === undefined) return null;
   let rest = scp[3] ?? "";
   if (rest && !rest.startsWith("/")) rest = `/${rest}`;
   return { uri: `sftp://${user ? `${user}@` : ""}${host}${rest || "/"}`, label: host };
@@ -129,7 +130,8 @@ export const takeGioPrompt = (buf: string): GioPrompt | null => {
   const tail = buf.slice(nl + 1);
   const m = GIO_PROMPT_RE.exec(tail);
   if (!m) return null;
-  const raw = m[1]!;
+  const raw = m[1];
+  if (raw === undefined) return null;
   const kind = raw.toLowerCase() as GioPrompt["kind"];
   const message = buf.slice(0, nl + 1).trim();
   return {

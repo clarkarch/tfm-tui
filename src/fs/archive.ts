@@ -198,8 +198,9 @@ export const uniqueArchiveTarget = (dir: string, base: string, ext: string): str
 // deepest directory that contains every path; a single entry returns its
 // parent, so the archive holds the entry itself rather than its contents
 export const commonParent = (paths: string[]): string => {
-  if (!paths.length) return "/";
-  let p = path.dirname(paths[0]!);
+  const firstPath = paths[0];
+  if (firstPath === undefined) return "/";
+  let p = path.dirname(firstPath);
   for (const q of paths.slice(1)) {
     while (p !== path.sep && q !== p && !q.startsWith(p + path.sep)) {
       const up = path.dirname(p);

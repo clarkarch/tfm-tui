@@ -11,6 +11,8 @@ const SORT_ORDER: SortMode[] = ["name", "size", "mtime", "type"];
 const SORT_NATURAL_ASC: Record<SortMode, boolean> = { name: true, size: false, mtime: true, type: true };
 
 export const cycleSortMode = (current: SortMode): { sortBy: SortMode; sortAsc: boolean } => {
-  const next = SORT_ORDER[(SORT_ORDER.indexOf(current) + 1) % SORT_ORDER.length]!;
+  // the modulo keeps the index in range for the non-empty table, so `current`
+  // is an unreachable-but-total fallback rather than a non-null assertion
+  const next = SORT_ORDER[(SORT_ORDER.indexOf(current) + 1) % SORT_ORDER.length] ?? current;
   return { sortBy: next, sortAsc: SORT_NATURAL_ASC[next] };
 };

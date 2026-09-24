@@ -61,11 +61,14 @@ export const contrastRatio = (a: string, b: string): number => {
 // values and only failing pairs move
 export const pickReadable = (candidates: string[], bgs: string[], minRatio = 3): string => {
   const valid = candidates.filter((c) => HEX_RE.test(c.trim())).map((c) => c.trim());
+  // destructure once so the empties are handled by real guards (the tail below
+  // always has a value to fall back to) instead of non-null assertions
+  const [firstValid] = valid;
+  if (firstValid === undefined) return candidates[0] ?? "#ffffff";
   const targets = bgs.filter((b) => HEX_RE.test(b.trim())).map((b) => b.trim());
-  if (!valid.length) return candidates[0] ?? "#ffffff";
-  if (!targets.length) return valid[0]!;
+  if (!targets.length) return firstValid;
   const worst = (c: string): number => Math.min(...targets.map((b) => contrastRatio(c, b)));
-  return valid.find((c) => worst(c) >= minRatio) ?? valid.slice().sort((x, y) => worst(y) - worst(x))[0]!;
+  return valid.find((c) => worst(c) >= minRatio) ?? valid.slice().sort((x, y) => worst(y) - worst(x))[0] ?? firstValid;
 };
 
 // push a bg-shade outward until fg reads on it (>= minRatio): preferred dir

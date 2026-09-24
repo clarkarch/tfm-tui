@@ -92,8 +92,9 @@ const sameBinds = (a: string[], b: string[]): boolean => {
 // 0 = tfm, 1 = yazi, -1 = hand-edited (settings row shows "custom")
 export const keymapPresetIdx = (keys: Partial<Record<KeyAction, string[]>>): number => {
   const names: KeymapPreset[] = [...KEYMAP_PRESET_NAMES];
-  for (let i = 0; i < names.length; i++) {
-    const table = presetKeys(names[i]!);
+  // index + value from one iteration: no indexed read to assert
+  for (const [i, name] of names.entries()) {
+    const table = presetKeys(name);
     if ((Object.keys(table) as KeyAction[]).every((a) => sameBinds(keys[a] ?? [], table[a]))) return i;
   }
   return -1;

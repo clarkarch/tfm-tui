@@ -98,7 +98,8 @@ export const flatVisible = (rows: SettingRow[], categoryHeader: string, collapse
   const out: number[] = [];
   let hidden = false;
   for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]!;
+    const row = rows[i];
+    if (row === undefined) continue;
     if (row.kind === "header") {
       hidden = collapsed.has(sectionKey(categoryHeader, row.label));
       out.push(i);
@@ -194,7 +195,8 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
             st.hoverCat = gi;
             if (prev >= 0) {
               h.paintCatAt(prev, false);
-              h.setIconState(catSpecs[prev]!, IconStateIdx.Rest);
+              const prevSpec = catSpecs[prev];
+              if (prevSpec) h.setIconState(prevSpec, IconStateIdx.Rest);
             }
             h.paintCatAt(gi, true);
             h.setIconState(slot.spec, IconStateIdx.Active);
@@ -484,7 +486,8 @@ const renderRowPane = (
   };
 
   for (let p = start; p < end; p++) {
-    const i = flat[p]!;
+    const i = flat[p];
+    if (i === undefined) continue;
     const rowSpec = rows[i];
     if (rowSpec) pane2.add(rowSpec.kind === "header" ? headerNode(rowSpec, i) : rowNode(rowSpec, i));
   }

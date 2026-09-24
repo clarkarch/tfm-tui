@@ -193,9 +193,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           ctx.resolveSystemTheme?.();
           return;
         }
+        // i - 1 indexes the preset list; a stale index leaves the theme alone
+        const preset = THEME_PRESETS[i - 1];
+        if (!preset) return;
         commit({
           ui: { ...ctx.config.ui, followTerminal: false },
-          theme: { ...THEME_PRESETS[i - 1]!.theme },
+          theme: { ...preset.theme },
           keys: { ...ctx.config.keys },
         });
       },
@@ -205,7 +208,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       customLabel: () => {
         if (ctx.compatActive?.()) return isDark(ctx.config.theme.bg) ? "Console" : "Console Light";
         const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
-        return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
+        const near = n >= 0 ? THEME_PRESETS[n] : undefined;
+        return near ? `~${near.name}` : "custom";
       },
     };
   };
@@ -247,7 +251,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     names: [...KEYMAP_PRESET_NAMES],
     getIdx: () => keymapPresetIdx(ctx.config.keys),
     setIdx: (i) => {
-      const name = KEYMAP_PRESET_NAMES[i]!;
+      const name = KEYMAP_PRESET_NAMES[i];
+      if (name === undefined) return;
       commit({
         ui: { ...ctx.config.ui, typeToSearch: PRESET_TYPE_TO_SEARCH[name], viewMode: PRESET_VIEW_MODE[name] },
         theme: { ...ctx.config.theme },

@@ -273,8 +273,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const transparent = iconTransparent(ctx.iconsMode(), isFloatChild(ctx.byId(slotId)));
     const imgs: any[] = [];
     for (let si = 0; si < states.length; si++) {
+      const st = states[si];
+      if (st === undefined) continue;
       try {
-        const st = states[si]!;
         const bytes = await iconPng(
           name,
           dimHex(st.fg, dimFactor),

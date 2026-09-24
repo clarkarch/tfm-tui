@@ -13,9 +13,11 @@ export const bumpHex = (hex: string): string => {
 // (-1..1, clamped). Unparseable input comes back unchanged — callers use it
 // for derived surfaces (sidebar/hover/border) that must never be invalid hex.
 export const shadeHex = (hex: string, amt: number): string => {
-  const m = /^#([0-9a-fA-F]{6})$/.exec(hex.trim());
-  if (!m) return hex;
-  const n = Number.parseInt(m[1]!, 16);
+  // the capture is read through `?.[1]` and guarded rather than asserted: a
+  // failed match and a missing group are the same "not a color" outcome
+  const group = /^#([0-9a-fA-F]{6})$/.exec(hex.trim())?.[1];
+  if (group === undefined) return hex;
+  const n = Number.parseInt(group, 16);
   const r = (n >> 16) & 0xff;
   const g = (n >> 8) & 0xff;
   const b = n & 0xff;
@@ -30,11 +32,11 @@ export const shadeHex = (hex: string, amt: number): string => {
 // hover, rings): mixing bg toward the terminal accent keeps the theme's
 // hue instead of shadeHex's neutral grey.
 export const mixHex = (a: string, b: string, t: number): string => {
-  const ma = /^#([0-9a-fA-F]{6})$/.exec(a.trim());
-  const mb = /^#([0-9a-fA-F]{6})$/.exec(b.trim());
-  if (!ma || !mb) return a;
-  const na = Number.parseInt(ma[1]!, 16);
-  const nb = Number.parseInt(mb[1]!, 16);
+  const ga = /^#([0-9a-fA-F]{6})$/.exec(a.trim())?.[1];
+  const gb = /^#([0-9a-fA-F]{6})$/.exec(b.trim())?.[1];
+  if (ga === undefined || gb === undefined) return a;
+  const na = Number.parseInt(ga, 16);
+  const nb = Number.parseInt(gb, 16);
   const p = Math.min(1, Math.max(0, t));
   const mix = (ca: number, cb: number): number => Math.round(ca + (cb - ca) * p);
   const out =

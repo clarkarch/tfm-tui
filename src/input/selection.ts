@@ -188,7 +188,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
     const lo = Math.max(0, Math.min(from, to));
     const hi = Math.min(focusKeys.length - 1, Math.max(from, to));
     for (let i = lo; i <= hi; i++) {
-      const k = focusKeys[i]!;
+      const k = focusKeys[i];
+      if (k === undefined) continue;
       const r = tileRefs.get(k);
       if (r) {
         r.selected = true;
@@ -202,7 +203,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
   const selectTileAt = (idx: number, keepAnchor = false): boolean => {
     if (idx < 0 || idx >= focusKeys.length) return false;
     clearTileSelection();
-    const key = focusKeys[idx]!;
+    const key = focusKeys[idx];
+    if (key === undefined) return false;
     const refs = tileRefs.get(key);
     if (refs) {
       refs.selected = true;
@@ -271,7 +273,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
   // yazi there is no auto-advance — repeat space walks with arrows)
   const toggleFocused = (): boolean => {
     if (focusIdx < 0 || focusIdx >= focusKeys.length) return false;
-    const key = focusKeys[focusIdx]!;
+    const key = focusKeys[focusIdx];
+    if (key === undefined) return false;
     const refs = tileRefs.get(key);
     if (!refs) return false;
     refs.selected = !refs.selected;
@@ -296,8 +299,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
     const want = new Set(paths);
     let firstIdx = -1;
     for (let i = 0; i < focusKeys.length; i++) {
-      const k = focusKeys[i]!;
-      if (!want.has(k)) continue;
+      const k = focusKeys[i];
+      if (k === undefined || !want.has(k)) continue;
       const r = tileRefs.get(k);
       if (!r) continue;
       r.selected = true;

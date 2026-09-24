@@ -46,8 +46,9 @@ const thumbEligible = (e: Entry): boolean => {
 export const thumbStatsChanged = (prev: Entry[] | null, next: Entry[]): boolean => {
   if (!prev || prev.length !== next.length) return false;
   for (let i = 0; i < next.length; i++) {
-    const n = next[i]!;
-    const p = prev[i]!;
+    const n = next[i];
+    const p = prev[i];
+    if (n === undefined || p === undefined) continue;
     const nEligible = thumbEligible(n);
     if (nEligible !== thumbEligible(p)) return true;
     if (!nEligible) continue;
@@ -385,10 +386,18 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     const { aspect } = ctx.cellMetrics();
     const visWin = visibleTileCap(ctx.termH(), rowHgt, cols);
     const inViewport = (i: number): boolean => i >= visFirst && i < visFirst + visWin;
-    if (isList) return buildListRow(entries[r]!, r, inViewport(r));
+    if (isList) {
+      // missing entry throws so buildRow degrades the row to its placeholder
+      // (same outcome as before, without asserting non-null)
+      const e = entries[r];
+      if (e === undefined) throw new Error(`grid: row ${r} has no entry`);
+      return buildListRow(e, r, inViewport(r));
+    }
     const row = Box({ id: `${tilePrefix()}row-${r}`, height: rowHgt, flexDirection: "row" });
     for (let i = r * cols; i < Math.min((r + 1) * cols, entries.length); i++) {
-      row.add(buildTile(aspect, entries[i]!, i, inViewport(i)));
+      const e = entries[i];
+      if (e === undefined) continue;
+      row.add(buildTile(aspect, e, i, inViewport(i)));
     }
     return row;
   };

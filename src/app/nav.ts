@@ -62,7 +62,8 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
     if (delta < 0 ? !canBack() : !canFwd()) return;
     state.histIdx += delta;
     hooks.renderAll();
-    emitNavigate(state.history[state.histIdx]!);
+    const dir = state.history[state.histIdx];
+    if (dir !== undefined) emitNavigate(dir);
   };
   const goBack = (): void => step(-1);
   const goFwd = (): void => step(1);

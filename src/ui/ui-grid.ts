@@ -386,13 +386,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         // later window slides build rows from this snapshot — carry the stats
         if (win) {
           for (let i = 0; i < win.entries.length && i < entries.length; i++) {
-            win.entries[i]!.size = entries[i]!.size;
-            win.entries[i]!.mtimeMs = entries[i]!.mtimeMs;
+            const we = win.entries[i];
+            const e = entries[i];
+            if (!we || !e) continue;
+            we.size = e.size;
+            we.mtimeMs = e.mtimeMs;
           }
         }
         if (isList) {
           for (let i = 0; i < entries.length; i++) {
-            const e = entries[i]!;
+            const e = entries[i];
+            if (!e) continue;
             ctx.setTextOnId(`${tilePrefix()}${i}-size`, e.isDir ? "" : fmtBytes(e.size ?? 0).padStart(9));
             ctx.setTextOnId(`${tilePrefix()}${i}-date`, fmtDateShort(e.mtimeMs));
           }
@@ -427,7 +431,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const visFirst = isList ? firstRow : firstRow * cols;
     // register EVERY entry first — the full tileRefs/focusKeys list is the
     // selection's contract; built rows overwrite their minimal ref in place.
-    for (let i = 0; i < entries.length; i++) registerRef(entries[i]!, i);
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (e) registerRef(e, i);
+    }
 
     // the container `slide` animates (and holds the row window + pads) — its
     // id is absolute so it resolves across slides
@@ -569,7 +576,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       const lo = isList ? a : a * cols;
       const hi = Math.min(entries.length - 1, isList ? b : (b + 1) * cols - 1);
       for (let i = lo; i <= hi; i++) {
-        const key = entryKey(entries[i]!);
+        const e = entries[i];
+        if (!e) continue;
+        const key = entryKey(e);
         const ref = selection.tileRefs.get(key);
         if (ref?.selected) selection.setTileVisual(key, TileVisual.Selected);
         else if (ctx.isCutKey(key)) selection.setTileVisual(key, TileVisual.Rest);

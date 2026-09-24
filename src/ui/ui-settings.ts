@@ -681,11 +681,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // idx -1 = no cursor yet: down fills the first VISIBLE row, up the last.
     // Headers take the cursor (they collapse/expand); hidden children are
     // stepped over because the walk stays inside the visible projection.
+    // flat is non-empty (checked above); bind head/tail once so the walk needs
+    // no assertions, and an impossible empty projection simply no-ops
+    const first = flat[0];
+    const last = flat[flat.length - 1];
+    if (first === undefined || last === undefined) return;
     if (st.menuIdx < 0 || !flat.includes(st.menuIdx)) {
-      st.menuIdx = delta >= 0 ? flat[0]! : flat[flat.length - 1]!;
+      st.menuIdx = delta >= 0 ? first : last;
     } else {
       const pos = visiblePos(flat, st.menuIdx);
-      st.menuIdx = flat[(pos + delta + flat.length) % flat.length]!;
+      st.menuIdx = flat[(pos + delta + flat.length) % flat.length] ?? first;
     }
     ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, st.menuIdx));
     paintDesc(fitDescText(descText(rowsOf(st.catIdx)[st.menuIdx])));
