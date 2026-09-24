@@ -31,7 +31,7 @@ const BG = "#1a1b26";
 const makeHarness = () => {
   const nodes = new Map<string, any>();
   let modalUp = false;
-  let compat = false;
+  let ttyMode = false;
   let forceGlyph = false;
   const ctx: SlotsCtx = {
     renderer: () =>
@@ -44,7 +44,7 @@ const makeHarness = () => {
     iconCells: () => 3,
     modalOpen: () => modalUp,
     glyphFor: () => "F",
-    compatActive: () => compat,
+    isTtyMode: () => ttyMode,
     forceGlyph: () => forceGlyph,
   };
   const slots = makeSlots(ctx);
@@ -69,7 +69,7 @@ const makeHarness = () => {
     nodes,
     mountFakeSlot,
     setModal: (v: boolean) => (modalUp = v),
-    setCompat: (v: boolean) => (compat = v),
+    setTtyMode: (v: boolean) => (ttyMode = v),
     setForceGlyph: (v: boolean) => (forceGlyph = v),
   };
 };
@@ -127,11 +127,11 @@ describe("icon slot scrim", () => {
     expect(s.spec.states[0]!.fg).toBe("#ff0000");
   });
 
-  test("compat mode drains nothing: specs stay pending, thumb jobs are dropped", async () => {
+  test("tty mode drains nothing: specs stay pending, thumb jobs are dropped", async () => {
     // the linux console has no graphics protocol, so every raster spawn would
     // fail, and the drains no-op with the glyph slots staying as built
     const h = makeHarness();
-    h.setCompat(true);
+    h.setTtyMode(true);
     const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
     h.mountFakeSlot(s.spec);
     h.slots.pushThumbJob({
@@ -149,13 +149,13 @@ describe("icon slot scrim", () => {
     expect(s.spec.done).toBeFalsy();
 
     // flipping back off resumes normal draining with the same registry
-    h.setCompat(false);
+    h.setTtyMode(false);
     await h.slots.drainIconQueue();
     expect(s.spec.done).toBe(true);
   });
 
-  test("force glyph drains nothing (buggy kitty impl) without forcing compat", async () => {
-    // same raster skip as compat, but the terminal is modern: view mode,
+  test("force glyph drains nothing (buggy kitty impl) without forcing tty mode", async () => {
+    // same raster skip as tty mode, but the terminal is modern: view mode,
     // anims and transparency are untouched, only placements stop
     const h = makeHarness();
     h.setForceGlyph(true);
@@ -294,7 +294,7 @@ describe("thumbnail mount", () => {
       iconCells: () => 4,
       modalOpen: () => false,
       glyphFor: () => "F",
-      compatActive: () => false,
+      isTtyMode: () => false,
       forceGlyph: () => false,
     };
     const slots = makeSlots(ctx);

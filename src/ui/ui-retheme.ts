@@ -9,7 +9,7 @@ import type { CliRenderer } from "@opentui/core";
 import { mkdirSync, watch } from "node:fs";
 import path from "node:path";
 import { bumpHex } from "../config/color";
-import { compatStaticTheme, isDark, resolveCompat } from "./compat";
+import { isDark, resolveTtyMode, ttyStaticTheme } from "./tty";
 import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
@@ -55,9 +55,9 @@ type RethemeCtx = {
   // dual pane: re-clamp the active pane when dual is disabled (a hidden pane
   // must never own input/status) and repaint the focus cue.
   normalizePanes?(): void;
-  // compat mode (linux console): forces opaque bg + list view. Optional so
+  // tty mode (linux console): forces opaque bg + list view. Optional so
   // tests stay light; absent = modern terminal.
-  compatActive?(): boolean;
+  isTtyMode?(): boolean;
 };
 
 export const makeRetheme = (ctx: RethemeCtx) => {
@@ -91,13 +91,13 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       n.backgroundColor = colors.divider;
     });
     setOnId(BAND_ID, (n) => {
-      n.borderColor = ctx.compatActive?.() ? colors.hoverBg : colors.accent;
+      n.borderColor = ctx.isTtyMode?.() ? colors.hoverBg : colors.accent;
     });
     setOnId(DRAG_GHOST_ID, (n) => {
-      n.backgroundColor = ctx.compatActive?.() ? colors.accentBg : colors.accent;
+      n.backgroundColor = ctx.isTtyMode?.() ? colors.accentBg : colors.accent;
     });
     setOnId(`${DRAG_GHOST_ID}-label`, (n) => {
-      n.fg = ctx.compatActive?.() ? colors.white : colors.bg;
+      n.fg = ctx.isTtyMode?.() ? colors.white : colors.bg;
     });
     setOnId("tfm-status-label", (n) => {
       n.fg = colors.sidebarFgMuted;
@@ -150,24 +150,24 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // through renderSig below, and the resolve lands the derived theme (with
   // its own invalidation) right after — caching the flag flip would clear
   // icon rasters twice for one user action
-  // compatMode rides along: flipping it changes the effective transparentBg
+  // ttyMode rides along: flipping it changes the effective transparentBg
   // (opaque on the console), so rasters must invalidate like a theme change.
   // forceGlyph too: drains stopped while on must resume on the way back, or
   // tiles keep glyphs forever.
-  // While compat is active the user [theme] is IGNORED (one static console
+  // While tty mode is active the user [theme] is IGNORED (one static console
   // palette paints instead), so the sig keys off the static dark/light choice
   // — a [theme] TOML edit on a TTY must not churn rasters or rebuild the grid.
   const themeSig = (c: Config): string => {
-    if (resolveCompat(c.ui.compatMode, process.env.TERM))
+    if (resolveTtyMode(c.ui.ttyMode, process.env.TERM))
       return JSON.stringify([
         "console",
         isDark(c.theme.bg) ? "dark" : "light",
         c.ui.uiStyle,
         c.ui.icons,
-        c.ui.compatMode,
+        c.ui.ttyMode,
         c.ui.forceGlyph,
       ]);
-    return JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.compatMode, c.ui.forceGlyph]);
+    return JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.ttyMode, c.ui.forceGlyph]);
   };
   let lastThemeSig = themeSig(ctx.config);
 
@@ -236,14 +236,14 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   ]);
 
   // rebuild-relevant signature: all UI keys except the exempt ones, plus theme.
-  // Compat ignores [theme] (static console palette), so it is excluded there
+  // Tty mode ignores [theme] (static console palette), so it is excluded there
   // too — a theme-only edit on a TTY is a no-op, not a full repaint.
   const renderSig = (c: Config): string => {
     const ui: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(c.ui)) {
       if (!RENDER_EXEMPT.has(k)) ui[k] = v;
     }
-    if (resolveCompat(c.ui.compatMode, process.env.TERM)) return JSON.stringify([ui, "console"]);
+    if (resolveTtyMode(c.ui.ttyMode, process.env.TERM)) return JSON.stringify([ui, "console"]);
     return JSON.stringify([ui, c.theme]);
   };
   let lastRenderSig = renderSig(ctx.config);
@@ -258,11 +258,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     Object.assign(ctx.config.theme, fresh.theme);
     Object.assign(ctx.config.keys, fresh.keys);
     Object.assign(ctx.colors, fresh.theme);
-    // compat ignores the user hues: one static console palette paints instead
+    // tty mode ignores the user hues: one static console palette paints instead
     // (dark/light by the configured bg's brightness) and the kitty-compositing
     // bumpHex nudge is skipped — meaningless on the console. config.theme is
     // still STORED above, so leaving the console restores the user theme.
-    if (ctx.compatActive?.()) Object.assign(ctx.colors, compatStaticTheme(ctx.config.theme));
+    if (ctx.isTtyMode?.()) Object.assign(ctx.colors, ttyStaticTheme(ctx.config.theme));
     else {
       const effTransparent = ctx.config.ui.transparentBg;
       if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
@@ -272,7 +272,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     lastRenderSig = renderSig(ctx.config);
     if (ctx.config.ui.forceGlyph && !lastForceGlyph) {
       try {
-        ctx.notify("force glyph is on, list view pairs best with it", "compat", "info");
+        ctx.notify("force glyph is on, list view pairs best with it", "tty", "info");
       } catch {}
     }
     lastForceGlyph = ctx.config.ui.forceGlyph;
@@ -313,7 +313,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       try {
         ctx
           .renderer()
-          .setBackgroundColor(ctx.config.ui.transparentBg && !ctx.compatActive?.() ? "transparent" : ctx.colors.bg);
+          .setBackgroundColor(ctx.config.ui.transparentBg && !ctx.isTtyMode?.() ? "transparent" : ctx.colors.bg);
       } catch {}
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();

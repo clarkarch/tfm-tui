@@ -237,7 +237,7 @@ export const wireSettings = (deps: {
     applyConfig: (fresh) => getRetheme().applyConfig(fresh),
     scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
     log: (message) => dlog(message),
-    compatActive: core.compatActive,
+    isTtyMode: core.isTtyMode,
     // the boot resolve bypasses applyConfig (nothing mounted yet), so its
     // plugin `theme` event is emitted here instead of onConfigApplied
     onBootDerived: (theme) => {
@@ -257,7 +257,7 @@ export const wireSettings = (deps: {
     scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
     // console mode: the theme row is display-only (static palette paints)
-    compatActive: core.compatActive,
+    isTtyMode: core.isTtyMode,
     plugins: () => plugins.plugins,
     // on/off toggle: register or drop the plugin's slots right away, then
     // repaint so the change is visible without a navigation
@@ -374,7 +374,7 @@ export const wireRetheme = (deps: {
     renderFileMenu: chrome.menu.renderFileMenu,
     floatRepaints,
     notify: chrome.notify,
-    compatActive: core.compatActive,
+    isTtyMode: core.isTtyMode,
     // toggling [ui] persist-undo persists the live stack (or clears the
     // journal file) immediately — not on the next file op
     onConfigApplied: () => {

@@ -8,7 +8,7 @@ import { makeRetheme } from "./ui-retheme";
 import { makePick } from "./ui-pick";
 import { makeFloats } from "./floats";
 import { bumpHex } from "../config/color";
-import { ANSI16, COMPAT_DARK_THEME, COMPAT_LIGHT_THEME } from "./compat";
+import { ANSI16, TTY_DARK_THEME, TTY_LIGHT_THEME } from "./tty";
 import { defaultConfig, type Config } from "../config/config-schema";
 import { loadConfig } from "../config/config";
 
@@ -183,45 +183,45 @@ describe("applyConfig", () => {
     expect(ctx.calls.bg).toEqual([bumpHex(defaultConfig.theme.bg)]); // renderer bg reset
   });
 
-  test("compat-active applyConfig paints the static console palette, ignoring user hues", () => {
-    // the Linux VT ignores 48;2 truecolor, so compat paints one hand-tuned
+  test("tty-active applyConfig paints the static console palette, ignoring user hues", () => {
+    // the Linux VT ignores 48;2 truecolor, so tty mode paints one hand-tuned
     // static palette (dark/light by configured-bg brightness) instead of the
     // user's theme — two wildly different user themes land byte-identical
     const ctx = mkCtx();
-    (ctx as Record<string, unknown>).compatActive = () => true;
+    (ctx as Record<string, unknown>).isTtyMode = () => true;
     const retheme = makeRetheme(ctx as any);
     const dark = clone(defaultConfig);
-    dark.ui.compatMode = "on";
+    dark.ui.ttyMode = "on";
     dark.theme.accent = "#ff0000";
     dark.theme.bg = "#1a1b26";
     retheme.applyConfig(dark);
-    expect(ctx.colors).toEqual(COMPAT_DARK_THEME);
+    expect(ctx.colors).toEqual(TTY_DARK_THEME);
     for (const v of Object.values(ctx.colors)) expect(ANSI16).toContain(v);
 
     const other = clone(defaultConfig);
-    other.ui.compatMode = "on";
+    other.ui.ttyMode = "on";
     other.theme.accent = "#00ff00";
     other.theme.bg = "#101014";
     retheme.applyConfig(other);
-    expect(ctx.colors).toEqual(COMPAT_DARK_THEME); // hues discarded, same static
+    expect(ctx.colors).toEqual(TTY_DARK_THEME); // hues discarded, same static
 
     const light = clone(defaultConfig);
-    light.ui.compatMode = "on";
+    light.ui.ttyMode = "on";
     light.theme.bg = "#e1e2e7";
     retheme.applyConfig(light);
-    expect(ctx.colors).toEqual(COMPAT_LIGHT_THEME);
+    expect(ctx.colors).toEqual(TTY_LIGHT_THEME);
   });
 
-  test("compat-active user-theme edits invalidate nothing (theme is not painted)", () => {
+  test("tty-active user-theme edits invalidate nothing (theme is not painted)", () => {
     const ctx = mkCtx();
-    (ctx as Record<string, unknown>).compatActive = () => true;
+    (ctx as Record<string, unknown>).isTtyMode = () => true;
     const retheme = makeRetheme(ctx as any);
     const booted = clone(defaultConfig);
-    booted.ui.compatMode = "on";
+    booted.ui.ttyMode = "on";
     retheme.applyConfig(booted);
     const baseline = { ...ctx.calls };
     const fresh = clone(defaultConfig);
-    fresh.ui.compatMode = "on";
+    fresh.ui.ttyMode = "on";
     fresh.theme.accent = "#123456";
     retheme.applyConfig(fresh);
     expect(ctx.calls.clearIconCaches).toBe(baseline.clearIconCaches);

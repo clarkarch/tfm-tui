@@ -229,7 +229,7 @@ describe("settingGroups shape", () => {
       "persistent undo",
     ]);
     // theme preset leads, then style, chrome (sidebar title with tab bar
-    // trailing it), and the compatibility pair bottoms out the group
+    // trailing it), and the terminal pair bottoms out the group
     expect(seq("appearance")).toEqual([
       "theme",
       "##style",
@@ -239,8 +239,8 @@ describe("settingGroups shape", () => {
       "##chrome",
       "sidebar title",
       "tab bar",
-      "##compatibility",
-      "compat mode",
+      "##terminal",
+      "tty mode",
       "force glyph",
     ]);
   });
@@ -708,7 +708,7 @@ describe("hand-written rows", () => {
 
   test("console mode: theme row is display-only (adjust warns, commits nothing)", () => {
     const h = mk();
-    (h.ctx as SettingsModelCtx).compatActive = () => true;
+    (h.ctx as SettingsModelCtx).isTtyMode = () => true;
     const row = h.byLabel("theme");
     if (row.kind !== "cycle" || !row.customLabel) throw new Error("theme row must be a cycle with customLabel");
     expect(row.getIdx()).toBe(-1);

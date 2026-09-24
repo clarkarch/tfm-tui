@@ -51,7 +51,7 @@ export type GridRendererCtx = {
   previewEnabled(): boolean;
   previewWidth(): number;
   viewMode(): "grid" | "list";
-  // raster-affecting state ([ui] icons + compat + force-glyph): tiles paint a
+  // raster-affecting state ([ui] icons + tty mode + force-glyph): tiles paint a
   // raster or a bare glyph without the listing changing, so without this the
   // rebuild early-outs and a graphics-mode toggle visibly does nothing until
   // restart. Deliberately OUT of contentSigOf: a mode flip rebuilds silently

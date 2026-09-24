@@ -159,12 +159,12 @@ export type SidebarHoverOpts = {
 // desktop through.
 export type IconMode = "opaque" | "transparent" | "transparent-partial";
 
-// compat mode for the Linux console / dumb terminals (no kitty graphics, no
+// tty mode for the Linux console / dumb terminals (no kitty graphics, no
 // Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs and
 // paints one STATIC console palette (dark/light by configured-bg brightness —
 // user [theme] hues are ignored, the VT can't show them). Text-cell anims stay
 // on. `auto` follows the TERM prefix (same rule as gpm mouse), `on`/`off` override.
-export type CompatMode = "auto" | "on" | "off";
+export type TtyMode = "auto" | "on" | "off";
 
 export type UiConfig = {
   sidebarWidth: number;
@@ -193,7 +193,7 @@ export type UiConfig = {
   followTerminal: boolean;
   transparentBg: boolean;
   icons: IconMode;
-  compatMode: CompatMode;
+  ttyMode: TtyMode;
   forceGlyph: boolean;
   sidebarTitle: boolean;
   uiStyle: UiStyle;
@@ -784,15 +784,15 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "enum",
     section: "ui",
-    tomlKey: "compat-mode",
-    prop: "compatMode",
+    tomlKey: "tty-mode",
+    prop: "ttyMode",
     values: ["auto", "on", "off"],
     def: "auto",
     doc: '"auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never',
-    label: "compat mode",
+    label: "tty mode",
     blurb: "Plain fallback for the Linux console",
     group: "appearance",
-    subsection: "compatibility",
+    subsection: "terminal",
   },
   {
     kind: "bool",
@@ -804,7 +804,7 @@ const UI_ROWS: SchemaRow[] = [
     label: "force glyph",
     blurb: "Glyphs instead of image icons",
     group: "appearance",
-    subsection: "compatibility",
+    subsection: "terminal",
   },
   {
     kind: "bool",

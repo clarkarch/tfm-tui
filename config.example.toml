@@ -40,7 +40,7 @@ icons                                 = "opaque"    # "opaque" = icons flattened
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
-compat-mode                           = "auto"      # "auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never
+tty-mode                              = "auto"      # "auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never
 force-glyph                           = false       # true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)
 file-animation                        = false       # true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)
 file-animation-slide                  = false       # true = files rise up into place (distance = file-animation-slide-pct)

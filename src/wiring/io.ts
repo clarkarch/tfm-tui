@@ -134,7 +134,7 @@ export const wireBoot = (deps: {
         clearTileSelection: gridFoundation.selection.clearTileSelection,
         openContextMenu: (x: number, y: number, t: string, e: ListEntry[]) => chrome.menu.openContextMenu(x, y, t, e),
         emptyAreaEntries: grid.menuEntries.emptyAreaEntries,
-        compatActive: core.compatActive,
+        isTtyMode: core.isTtyMode,
       });
       core.scrollerRefs[0].current = scrollers[0];
       core.scrollerRefs[1].current = scrollers[1];

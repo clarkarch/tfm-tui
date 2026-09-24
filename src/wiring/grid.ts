@@ -24,7 +24,7 @@ import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { waitForResolution } from "../ui/ui-lookup";
 import { FILE_GLYPH, glyph } from "../ui/glyphs";
-import { rasterSigOf } from "../ui/compat";
+import { rasterSigOf } from "../ui/tty";
 import { activeFacade } from "../app/panes";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir, canReadSync } from "../fs/fsutil";
@@ -81,7 +81,7 @@ export const wireGrid = (deps: {
     drainIconQueue: () => core.slots.drainIconQueue(),
     nextIconId: core.slots.nextIconId,
     fallbackGlyphFor: (name) => glyph[name] ?? FILE_GLYPH,
-    compatActive: core.compatActive,
+    isTtyMode: core.isTtyMode,
     forceGlyph: core.forceGlyph,
     // root preview: non-interactive `sudo -n cat` only (cached timestamp) —
     // a preview must never pop a password prompt on every focus move
@@ -240,7 +240,7 @@ export const wireGrid = (deps: {
       byId: core.lookup.byId,
       opts: () => ({
         // text-cell opacity/translate needs no graphics protocol, so file
-        // anims stay enabled in compat (rasters/thumbs/list-force aside)
+        // anims stay enabled in tty mode (rasters/thumbs/list-force aside)
         style: fileAnimStyleFrom({
           enabled: core.config.ui.fileAnimation,
           slide: core.config.ui.fileAnimationSlide,
@@ -300,11 +300,11 @@ export const wireGrid = (deps: {
       colors: themeGet,
       previewEnabled: () => core.config.ui.previewEnabled,
       previewWidth: () => core.config.ui.previewWidth,
-      // compat forces the compact rows: icon tiles need graphics + Nerd glyphs
-      viewMode: () => (core.compatActive() ? "list" : core.config.ui.viewMode),
+      // tty mode forces the compact rows: icon tiles need graphics + Nerd glyphs
+      viewMode: () => (core.isTtyMode() ? "list" : core.config.ui.viewMode),
       // raster-affecting state the grid rebuild keys off (force-glyph/icons/
-      // compat flips must rebuild even though the listing is unchanged)
-      rasterSig: () => rasterSigOf(core.config.ui.icons, core.compatActive(), core.config.ui.forceGlyph),
+      // tty mode flips must rebuild even though the listing is unchanged)
+      rasterSig: () => rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph),
       wordWrap: () => core.config.ui.wordWrap,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,
@@ -367,7 +367,7 @@ export const wireGrid = (deps: {
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
     fallbackGlyphFor: (name) => glyph[name] ?? FILE_GLYPH,
-    compatActive: core.compatActive,
+    isTtyMode: core.isTtyMode,
     forceGlyph: core.forceGlyph,
     cellMetrics: core.slots.cellMetrics,
   });

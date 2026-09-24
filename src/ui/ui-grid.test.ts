@@ -1857,7 +1857,7 @@ describe("renderGrid (windowed grid)", () => {
   });
 
   test("flipping the raster mode rebuilds so force-glyph applies live", async () => {
-    // force-glyph/icons/compat change what each tile paints (raster vs glyph)
+    // force-glyph/icons/tty-mode change what each tile paints (raster vs glyph)
     // without touching the listing, and without a signature entry the render
     // early-outs and the toggle visibly does nothing until restart
     await renderGrid();

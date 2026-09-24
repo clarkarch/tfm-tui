@@ -21,7 +21,7 @@ import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
 import { warmEmbeddedIcons } from "../ui/icons";
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
-import { rasterSigOf } from "../ui/compat";
+import { rasterSigOf } from "../ui/tty";
 import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
@@ -105,7 +105,7 @@ export const wireChrome = async (deps: {
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
     tabBar: () => core.config.ui.tabBar,
-    rasterSig: () => rasterSigOf(core.config.ui.icons, core.compatActive(), core.config.ui.forceGlyph),
+    rasterSig: () => rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph),
     renderAll: nav.renderAll,
     navigate: (target) => nav.navigate(target),
     blurTerminal: () => getFileops().terminal.blurTerminal(),
@@ -240,8 +240,8 @@ export const wireChrome = async (deps: {
     targetFps: 60,
     maxFps: 120,
     ...(gpmInput ? { stdin: gpmStream as unknown as NodeJS.ReadStream } : {}),
-    // compat forces opaque (same rule as wiring/core + ui-retheme)
-    ...(core.config.ui.transparentBg && !core.compatActive() ? {} : { backgroundColor: core.colors.bg }),
+    // tty mode forces opaque (same rule as wiring/core + ui-retheme)
+    ...(core.config.ui.transparentBg && !core.isTtyMode() ? {} : { backgroundColor: core.colors.bg }),
   });
   renderer.root.add(container);
   warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
@@ -256,7 +256,7 @@ export const wireChrome = async (deps: {
     renderer,
     byId,
     opts: () => ({
-      // text-cell anims need no graphics protocol — enabled in compat too
+      // text-cell anims need no graphics protocol — enabled in tty mode too
       enabled: core.config.ui.sidebarAnimation,
       style: core.config.ui.sidebarAnimationStyle,
       ms: core.config.ui.sidebarAnimationMs,

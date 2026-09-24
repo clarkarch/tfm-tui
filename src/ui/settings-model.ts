@@ -16,7 +16,7 @@ import {
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
 import { KEY_SCHEMA, UI_SCHEMA, keybindConflict, type KeyAction, type UiSchemaRow } from "../config/config-schema";
 import { keySpecEqual, validateKeybindSpec } from "../config/keyspec";
-import { isDark } from "./compat";
+import { isDark } from "./tty";
 import { getPluginCommandBinds, setPluginCommandBinds } from "../plugins/plugin-api";
 import {
   KEYMAP_PRESET_NAMES,
@@ -48,7 +48,7 @@ export type SettingsModelCtx = {
   resolveSystemTheme?(): void;
   // console-mode read: when active the theme row is display-only (one static
   // console palette paints regardless of presets). Optional so tests stay light.
-  compatActive?(): boolean;
+  isTtyMode?(): boolean;
   // git installer orchestration (wired in wiring/settings — prompt, danger
   // confirm, clone/pull/rm, rescan). Optional so row SHAPE stays testable
   // without it; rows no-op when absent. Never throws (fire-and-forget).
@@ -172,13 +172,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       repaint: true,
       names,
       getIdx: () => {
-        if (ctx.compatActive?.()) return -1;
+        if (ctx.isTtyMode?.()) return -1;
         if (ctx.config.ui.followTerminal) return 0;
         const i = themePresetIdx();
         return i < 0 ? -1 : i + 1;
       },
       setIdx: (i) => {
-        if (ctx.compatActive?.()) {
+        if (ctx.isTtyMode?.()) {
           ctx.warn("theme is fixed on the console — presets apply back on a graphical terminal", "theme");
           return;
         }
@@ -206,7 +206,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       // prefix (picking any preset returns to an exact match). On the console
       // the static palette is named instead.
       customLabel: () => {
-        if (ctx.compatActive?.()) return isDark(ctx.config.theme.bg) ? "Console" : "Console Light";
+        if (ctx.isTtyMode?.()) return isDark(ctx.config.theme.bg) ? "Console" : "Console Light";
         const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
         const near = n >= 0 ? THEME_PRESETS[n] : undefined;
         return near ? `~${near.name}` : "custom";
@@ -302,7 +302,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         row.prop === "uiStyle" ||
         row.prop === "transparentBg" ||
         row.prop === "icons" ||
-        row.prop === "compatMode" ||
+        row.prop === "ttyMode" ||
         row.prop === "forceGlyph"
       ) {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
@@ -359,12 +359,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         case "appearance": {
           // tab bar is chrome-visibility but its row is hand-built and appended
           // after the generic rows, so splice it ahead of the trailing
-          // compatibility section so it keeps trailing its own ##chrome
-          // header instead of the compatibility pair
+          // terminal section so it keeps trailing its own ##chrome
+          // header instead of the terminal pair
           const uiRows = [themeRow(), ...genericUiRows("appearance")];
-          const compatIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "compatibility");
+          const terminalIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "terminal");
           const tabRow = tabBarRow();
-          if (compatIdx >= 0) uiRows.splice(compatIdx, 0, tabRow);
+          if (terminalIdx >= 0) uiRows.splice(terminalIdx, 0, tabRow);
           else uiRows.push(tabRow);
           rows = uiRows;
           break;

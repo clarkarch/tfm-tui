@@ -1,38 +1,38 @@
-// --- compat mode: Linux console / dumb-terminal fallback ---
+// --- tty mode: Linux console / dumb-terminal fallback ---
 // Leaf (no imports from src): the console has neither kitty graphics nor the
-// Nerd-Font PUA, so the kitty raster AND the Nerd glyph both miss. Compat
+// Nerd-Font PUA, so the kitty raster AND the Nerd glyph both miss. Tty mode
 // forces list view + ASCII glyphs + no rasters/thumbs (wired in wiring/core +
 // wiring/grid + wiring/chrome + ui-retheme); text-cell anims stay enabled
 // (they need no graphics protocol). The palette is a STATIC 16-color console
 // theme (dark/light by configured-bg brightness) — the VT ignores 48;2
 // truecolor, so user hues would collapse into one cell. This module decides
 // WHEN (TERM prefix) and renders WHAT (ASCII + static palette).
-export type CompatMode = "auto" | "on" | "off";
+export type TtyMode = "auto" | "on" | "off";
 
 // linux* = the console (gpm.ts uses the same prefix); vt*/dumb = no graphics
 // either. Everything else (xterm*, kitty, tmux, ghostty, wezterm…) is modern.
-export const isCompatTerm = (term?: string | null): boolean => {
+export const isTtyTerm = (term?: string | null): boolean => {
   if (!term) return false;
   return term === "dumb" || term.startsWith("linux") || term.startsWith("vt");
 };
 
-export const resolveCompat = (mode: CompatMode | string, term?: string | null): boolean => {
+export const resolveTtyMode = (mode: TtyMode | string, term?: string | null): boolean => {
   if (mode === "on") return true;
   if (mode === "off") return false;
-  return isCompatTerm(term ?? process.env.TERM);
+  return isTtyTerm(term ?? process.env.TERM);
 };
 
 // rebuild signature over everything that decides raster vs glyph. Grid AND
 // sidebar key off this through their own `rasterSig` ctx fields, and both
 // wirings must call THIS (never an inline JSON) so the two surfaces cannot
 // drift into disagreeing about what a graphics-mode flip rebuilds.
-export const rasterSigOf = (icons: string, compat: boolean, forceGlyph: boolean): string =>
-  JSON.stringify([icons, compat, forceGlyph]);
+export const rasterSigOf = (icons: string, ttyMode: boolean, forceGlyph: boolean): string =>
+  JSON.stringify([icons, ttyMode, forceGlyph]);
 
 // --- 16-color console palettes ---
 // OpenTUI emits 48;2/38;2 truecolor unconditionally (ansi.ts), which the Linux
 // VT ignores — subtle theme shades collapse into one cell and bg/hover look
-// dead. So compat mode IGNORES the user's [theme] hues entirely and paints one
+// dead. So tty mode IGNORES the user's [theme] hues entirely and paints one
 // of two hand-tuned static palettes (dark/light picked by the configured bg's
 // brightness): every value is a classic VGA16 slot, and the surface roles are
 // designed distinct instead of repaired after the fact.
@@ -72,7 +72,7 @@ export const ANSI16: string[] = [
 // `accentBg` (see ui-menu/ui-settings-panel) and `accent` never paints on top
 // of `accentBg`, so accent==blue is never required — both palettes still keep
 // every fill/text role pairwise distinct.
-export const COMPAT_DARK_THEME: Record<string, string> = {
+export const TTY_DARK_THEME: Record<string, string> = {
   bg: "#aaaaaa",
   sidebarBg: "#0000aa",
   sidebarFg: "#000000",
@@ -107,7 +107,7 @@ export const COMPAT_DARK_THEME: Record<string, string> = {
   ansi15: "#ffffff",
 };
 
-export const COMPAT_LIGHT_THEME: Record<string, string> = {
+export const TTY_LIGHT_THEME: Record<string, string> = {
   bg: "#ffffff",
   sidebarBg: "#aaaaaa",
   sidebarFg: "#000000",
@@ -161,12 +161,12 @@ export const isDark = (hex: string): boolean => {
 // frozen consts. Generic over Record (not Theme) so this leaf stays
 // import-free; idempotent by construction, so repeated applyConfig runs are
 // stable.
-export const compatStaticTheme = <T extends Record<string, string>>(userTheme: { bg?: string }): T =>
-  ({ ...(isDark(userTheme.bg ?? "#000000") ? COMPAT_DARK_THEME : COMPAT_LIGHT_THEME) }) as T;
+export const ttyStaticTheme = <T extends Record<string, string>>(userTheme: { bg?: string }): T =>
+  ({ ...(isDark(userTheme.bg ?? "#000000") ? TTY_DARK_THEME : TTY_LIGHT_THEME) }) as T;
 
 // ASCII fallbacks for the icon names glyphs.ts can emit. Console fonts carry
 // the basic Latin set only, so every value here is < 0x80 by construction
-// (pinned by compat.test.ts). Unknown names degrade to the file marker.
+// (pinned by tty.test.ts). Unknown names degrade to the file marker.
 const ASCII_GLYPHS: Record<string, string> = {
   folder: "D",
   home: "H",

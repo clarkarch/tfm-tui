@@ -64,10 +64,10 @@ type PropsCtx = {
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };
-  // compat mode (linux console): hero falls back to the icon slot, the thumb
+  // tty mode (linux console): hero falls back to the icon slot, the thumb
   // raster could never land. force-glyph does the same for buggy kitty impls.
   // Optional so test fakes keep working.
-  compatActive?(): boolean;
+  isTtyMode?(): boolean;
   forceGlyph?(): boolean;
 };
 
@@ -215,7 +215,7 @@ export const makeProps = (ctx: PropsCtx) => {
     const heroW = Math.max(1, Math.round(aspect * ICON_H));
     const isVideo = !isDirTarget && fileIsVideo(targetPath);
     const wantsThumb =
-      !ctx.compatActive?.() &&
+      !ctx.isTtyMode?.() &&
       !ctx.forceGlyph?.() &&
       !isDirTarget &&
       (fileIsImage(targetPath) || (isVideo && canThumbVideo())) &&

@@ -12,7 +12,7 @@ import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
 import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
-import { asciiGlyphFor, compatStaticTheme, resolveCompat } from "../ui/compat";
+import { asciiGlyphFor, resolveTtyMode, ttyStaticTheme } from "../ui/tty";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
@@ -38,14 +38,14 @@ export const wireCore = (deps: {
   const config = loadConfig();
 
   // --- Color palette (theme from config; transparent-bg nudge lives in ./color).
-  // Compat forces opaque AND ignores the user's [theme] hues: the VT ignores
+  // Tty mode forces opaque AND ignores the user's [theme] hues: the VT ignores
   // 48;2 truecolor, so a snapped custom theme always went muddy — one static
   // console palette (dark/light by configured-bg brightness) paints instead.
   // config.theme is still STORED untouched, so leaving the console restores it.
-  const compat = resolveCompat(config.ui.compatMode, process.env.TERM);
-  const colors = compat
-    ? compatStaticTheme<Theme>(config.theme)
-    : deriveColors(config.theme, config.ui.transparentBg && !compat);
+  const ttyMode = resolveTtyMode(config.ui.ttyMode, process.env.TERM);
+  const colors = ttyMode
+    ? ttyStaticTheme<Theme>(config.theme)
+    : deriveColors(config.theme, config.ui.transparentBg && !ttyMode);
   const themeGet = (): Theme => colors;
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---
@@ -65,14 +65,14 @@ export const wireCore = (deps: {
   // math lives in ./style)
   const sideInnerW = (): number => sideInnerWidth(config.ui.uiStyle, geometry.sw);
 
-  // --- Compat mode (Linux console / dumb terms): single effective switch.
+  // --- Tty mode (Linux console / dumb terms): single effective switch.
   // `auto` follows the TERM prefix; `on`/`off` override. Live-read so a
   // settings flip or live-reload applies without restart.
-  const compatActive = (): boolean => resolveCompat(config.ui.compatMode, process.env.TERM);
+  const isTtyMode = (): boolean => resolveTtyMode(config.ui.ttyMode, process.env.TERM);
   // ASCII glyphs on the console (no Nerd PUA there), Nerd glyphs elsewhere
-  const compatGlyphFor = (name: string): string => (compatActive() ? asciiGlyphFor(name) : glyphFor(name));
-  // force-glyph: same raster skip as compat, but WITHOUT the console extras
-  // (list view, ASCII glyphs, anim/transparent forcing), live-read like compat
+  const ttyGlyphFor = (name: string): string => (isTtyMode() ? asciiGlyphFor(name) : glyphFor(name));
+  // force-glyph: same raster skip as tty mode, but WITHOUT the console extras
+  // (list view, ASCII glyphs, anim/transparent forcing), live-read like tty mode
   const forceGlyph = (): boolean => config.ui.forceGlyph;
 
   // --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY); every category the
@@ -111,8 +111,8 @@ export const wireCore = (deps: {
     iconsMode: () => config.ui.icons,
     iconCells: () => geometry.iconCells,
     modalOpen: () => floats.hasModal(),
-    glyphFor: compatGlyphFor,
-    compatActive,
+    glyphFor: ttyGlyphFor,
+    isTtyMode,
     forceGlyph,
   });
 
@@ -179,7 +179,7 @@ export const wireCore = (deps: {
     config,
     colors,
     themeGet,
-    compatActive,
+    isTtyMode,
     forceGlyph,
     geometry,
     sideInnerW,

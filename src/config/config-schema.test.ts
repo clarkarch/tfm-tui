@@ -75,6 +75,15 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { icons: false } }).ui.icons).toBe("opaque");
   });
 
+  test("tty-mode parses the enum; the old compat-mode spelling is not read", () => {
+    expect(parseConfigDoc(undefined).ui.ttyMode).toBe("auto");
+    expect(parseConfigDoc({ ui: { "tty-mode": "on" } }).ui.ttyMode).toBe("on");
+    expect(parseConfigDoc({ ui: { "tty-mode": "nonsense" } }).ui.ttyMode).toBe("auto");
+    // pre-release rename: the old spelling is deliberately dead, NOT aliased —
+    // an unknown key falls back to the default like any other typo
+    expect(parseConfigDoc({ ui: { "compat-mode": "on" } }).ui.ttyMode).toBe("auto");
+  });
+
   test("force-glyph defaults off, parses a plain bool", () => {
     expect(parseConfigDoc(undefined).ui.forceGlyph).toBe(false);
     expect(parseConfigDoc({ ui: { "force-glyph": true } }).ui.forceGlyph).toBe(true);
