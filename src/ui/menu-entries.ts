@@ -252,23 +252,27 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         });
       }
     }
-    if (place.ejectable && place.device) {
+    // capture the optional fields once: the rows' action closures read them
+    // long after the guard, where narrowing no longer applies
+    const device = place.device;
+    const mountDevice = place.mountDevice;
+    if (place.ejectable && device) {
       entries.push({
         icon: "eject",
         label: "Eject",
         action: () => {
           ctx.closeFileMenu();
-          ctx.ejectDevice(place.device!);
+          ctx.ejectDevice(device);
         },
       });
     }
-    if (!target && place.mountDevice) {
+    if (!target && mountDevice) {
       entries.push({
         icon: "usb",
         label: "Mount",
         action: () => {
           ctx.closeFileMenu();
-          ctx.mountDevice(place.mountDevice!);
+          ctx.mountDevice(mountDevice);
         },
       });
     }
@@ -284,21 +288,23 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       });
     } else if (place.network && place.path) {
+      const mountPath = place.path;
       entries.push({
         icon: "network",
         label: "Disconnect",
         action: () => {
           ctx.closeFileMenu();
-          ctx.disconnectServer(place.path!);
+          ctx.disconnectServer(mountPath);
         },
       });
     } else if (place.network && place.networkUri) {
+      const networkUri = place.networkUri;
       entries.push({
         icon: "network",
         label: "Connect",
         action: () => {
           ctx.closeFileMenu();
-          ctx.connectServer(place.networkUri!);
+          ctx.connectServer(networkUri);
         },
       });
     }
