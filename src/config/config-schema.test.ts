@@ -70,8 +70,11 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { icons: "yes" } }).ui.icons).toBe("opaque");
   });
 
-  test("icons accepts the legacy boolean form", () => {
-    expect(parseConfigDoc({ ui: { icons: true } }).ui.icons).toBe("transparent");
+  test("icons ignores the impossible legacy boolean form", () => {
+    // the pre-enum key was transparent-icons (renamed, never aliased), so an
+    // `icons = true` line never existed in any release — it falls back to the
+    // default like any other bad value instead of being promoted to a setting
+    expect(parseConfigDoc({ ui: { icons: true } }).ui.icons).toBe("opaque");
     expect(parseConfigDoc({ ui: { icons: false } }).ui.icons).toBe("opaque");
   });
 

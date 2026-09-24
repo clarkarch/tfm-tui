@@ -207,7 +207,6 @@ const startReader = (over: Partial<Parameters<typeof startGpmInput>[0]> = {}) =>
 describe("startGpmInput", () => {
   test("is inert off a Linux console or without the gpm socket", () => {
     expect(startReader({ term: "xterm-kitty" }).input).toBeNull();
-    expect(startReader({ enabled: false }).input).toBeNull();
     expect(startReader({ envExists: () => false }).input).toBeNull();
     expect(startReader({ ttyName: () => "/dev/pts/2" }).input).toBeNull();
   });

@@ -166,7 +166,6 @@ const procTtyName = (): string | null => {
 };
 
 export type GpmInputOptions = {
-  enabled?: boolean;
   term?: string | undefined;
   /** probe for /dev/gpmctl — injectable so tests stay fs-free */
   envExists?: (p: string) => boolean;
@@ -183,7 +182,6 @@ export type GpmInputOptions = {
 // untouched. Never throws: a gpm hiccup must not take the TUI down.
 export const startGpmInput = (opts: GpmInputOptions): { stop(): void } | null => {
   const log = opts.log ?? (() => {});
-  if (opts.enabled === false) return null;
   const term = opts.term ?? process.env.TERM ?? "";
   if (!term.startsWith("linux")) return null;
   const exists = opts.envExists ?? existsSync;

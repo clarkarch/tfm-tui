@@ -232,7 +232,6 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "restoreSession",
     "showLaunchTime",
     "typeToSearch",
-    "gpmMouse",
   ]);
 
   // rebuild-relevant signature: all UI keys except the exempt ones, plus theme.

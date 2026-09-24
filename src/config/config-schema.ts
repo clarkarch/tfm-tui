@@ -201,7 +201,6 @@ export type UiConfig = {
   viewMode: ViewMode;
   toastDurationMs: number;
   typeToSearch: boolean;
-  gpmMouse: boolean;
   dragThresholdCells: number;
   listRowHeight: number;
   wordWrap: boolean;
@@ -679,18 +678,6 @@ const UI_ROWS: SchemaRow[] = [
     doc: "cells of movement before a press becomes a drag, 1..5",
     label: "drag threshold",
     blurb: "How far you drag before it counts",
-    group: "behavior",
-    subsection: "mouse",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "gpm-mouse",
-    prop: "gpmMouse",
-    def: true,
-    doc: "true = read mouse events from the gpm daemon on a Linux text console (no-op off a console or without gpm)",
-    label: "gpm mouse",
-    blurb: "Mouse support on the Linux text console",
     group: "behavior",
     subsection: "mouse",
   },
@@ -1620,8 +1607,6 @@ const coerceRow = (row: SchemaRow, raw: unknown): { ok: boolean; value: unknown 
     case "bool":
       return typeof raw === "boolean" ? { ok: true, value: raw } : { ok: false, value: row.def };
     case "enum":
-      // legacy boolean form: `icons = true` meant the old `transparent`
-      if (row.prop === "icons" && typeof raw === "boolean") return { ok: true, value: raw ? "transparent" : "opaque" };
       return typeof raw === "string" && (row.values as readonly string[]).includes(raw)
         ? { ok: true, value: raw }
         : { ok: false, value: row.def };

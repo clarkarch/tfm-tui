@@ -225,7 +225,6 @@ export const wireChrome = async (deps: {
   // the plain process.stdin is used — no behavior change. ---
   const gpmStream = new PassThrough();
   const gpmInput = startGpmInput({
-    enabled: core.config.ui.gpmMouse,
     onBytes: (s) => gpmStream.write(s),
     log: (m) => dlog(m),
   });
