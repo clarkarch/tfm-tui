@@ -9,7 +9,7 @@
 
 import { Box, Text } from "@opentui/core";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
-import type { IconState, IconSpec } from "./ui-slots";
+import { IconStateIdx, type IconState, type IconSpec } from "./ui-slots";
 import type { Theme } from "../config/config";
 
 export type SettingsPanelState = {
@@ -17,6 +17,9 @@ export type SettingsPanelState = {
   menuIdx: number; // row cursor within the ACTIVE category (full-row index, never a hidden one)
   pane: "cats" | "rows";
   scrollOff: number; // offset into the VISIBLE-row projection (see flatVisible), not the full rows array
+  // category currently under the mouse (highlight only — hovering never
+  // switches categories, that auto-nav was removed); -1 = none
+  hoverCat: number;
   // keybind capture: flat row index within the active category being recorded
   capturing: number | null;
   // collapsed subsections, keyed by sectionKey(category header, subsection)
@@ -35,6 +38,11 @@ type SettingsPanelHooks = {
     heightCells?: number,
     initialState?: number,
   ): { el: any; slotId: string; spec: IconSpec };
+  // flip a slot's pre-rastered state (visibility only, no rebuild) — used by
+  // the category hover highlight
+  setIconState(spec: IconSpec, stateIdx: number): void;
+  // repaint ONE category's highlight by id (bg only) — never a rebuild
+  paintCatAt(gi: number, on: boolean): void;
   // shell ops — the panel's handlers route back through the state machine
   switchCategory(gi: number): void;
   cancelCapture(): boolean;
@@ -137,18 +145,26 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
 
   // --- left pane: categories ---
   const catPane = Box({ width: CAT_W, flexDirection: "column" });
+  const catSpecs: IconSpec[] = [];
   cats.forEach((g, gi) => {
     const active = gi === st.catIdx;
+    // hover is a pure highlight: it paints by id and flips the icon's
+    // pre-rastered state — it NEVER switches category (the old auto-nav was
+    // removed on purpose) and never rebuilds the panel.
+    const hot = active || st.hoverCat === gi;
     const icon = g.icon ?? CAT_ICONS[g.header ?? ""] ?? "cog";
     const slot = h.makeIconSlot(
       icon,
+      // state 0 is ALWAYS the resting palette (hovering must not bake
+      // accentBg into it — an unhover would then have nothing to restore)
       [
-        { fg: c.white, bg: active ? c.accentBg : c.sidebarBg },
+        { fg: c.white, bg: c.sidebarBg },
         { fg: c.white, bg: c.accentBg },
       ],
       1,
-      active ? 1 : 0,
+      hot ? IconStateIdx.Active : IconStateIdx.Rest,
     );
+    catSpecs.push(slot.spec);
     catPane.add(
       Box(
         {
@@ -158,7 +174,7 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
           flexDirection: "row",
           columnGap: 1,
           paddingLeft: 1,
-          backgroundColor: active ? c.accentBg : undefined,
+          backgroundColor: hot ? c.accentBg : undefined,
           onMouseDown: (ev: any) => {
             try {
               ev.stopPropagation?.();
@@ -169,6 +185,25 @@ export const renderSettingsPanel = (c: Theme, panel: any, st: SettingsPanelState
             }
             if (st.catIdx !== gi) h.switchCategory(gi);
             else h.rebuild();
+          },
+          // move, not over (a rebuild re-fires synthetic "over" on a
+          // stationary cursor and would snap the highlight back)
+          onMouseMove: () => {
+            if (st.capturing !== null || st.hoverCat === gi) return;
+            const prev = st.hoverCat;
+            st.hoverCat = gi;
+            if (prev >= 0) {
+              h.paintCatAt(prev, false);
+              h.setIconState(catSpecs[prev]!, IconStateIdx.Rest);
+            }
+            h.paintCatAt(gi, true);
+            h.setIconState(slot.spec, IconStateIdx.Active);
+          },
+          onMouseOut: () => {
+            if (st.hoverCat !== gi) return;
+            st.hoverCat = -1;
+            h.paintCatAt(gi, false);
+            h.setIconState(slot.spec, active ? IconStateIdx.Active : IconStateIdx.Rest);
           },
         },
         slot.el,

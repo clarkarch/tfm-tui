@@ -86,6 +86,8 @@ let requestedIcons: string[];
 // reflect without a restart (code edits still need one — Bun module cache)
 let reloadImpl: () => Promise<unknown>;
 let reloadCalls: number;
+// category hover flips a slot's pre-rastered state by id (no rebuild)
+let iconStateCalls: Array<[string, number]>;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: 90, height: TERM_H });
@@ -97,6 +99,7 @@ beforeAll(async () => {
   plugGroups = [];
   quitCalls = 0;
   requestedIcons = [];
+  iconStateCalls = [];
   reloadCalls = 0;
   reloadImpl = async () => {
     reloadCalls++;
@@ -121,6 +124,9 @@ beforeAll(async () => {
       };
     },
     drainIconQueue: () => {},
+    setIconState: (spec, stateIdx) => {
+      iconStateCalls.push([spec.slotId, stateIdx]);
+    },
     setScrim: (on) => {
       scrim = on;
     },
@@ -240,9 +246,10 @@ describe("settings view", () => {
     expect(frame).toContain("Menu — settings");
   });
 
-  test("hovering a category does not switch categories", async () => {
+  test("hovering a category highlights it by id WITHOUT switching (no auto-nav)", async () => {
     await openSettings();
-    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg));
+    iconStateCalls.length = 0;
+    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg)); // active
     expect(t.captureCharFrame()).toContain("show hidden");
 
     (t.renderer.root.findDescendantById("tfm-set-cat-1") as any).processMouseEvent({
@@ -254,10 +261,26 @@ describe("settings view", () => {
     });
     await t.renderOnce();
 
+    // hovered category lights up, the active one keeps its highlight, and the
+    // right pane did NOT change (hover is visual only, never switchCategory)
+    expect(bgInts("tfm-set-cat-1")).toEqual(hexInts(colors.accentBg));
     expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg));
-    expect(bgInts("tfm-set-cat-1")).toEqual([0, 0, 0, 0]);
     expect(t.captureCharFrame()).toContain("show hidden");
     expect(t.captureCharFrame()).not.toContain("knob-0");
+    // the icon slot flipped to its pre-rastered active state (no rebuild)
+    expect(iconStateCalls.some(([, idx]) => idx === 1)).toBe(true);
+
+    // leaving clears the hover highlight; the active category stays lit
+    (t.renderer.root.findDescendantById("tfm-set-cat-1") as any).processMouseEvent({
+      type: "out",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+    expect(bgInts("tfm-set-cat-1")).toEqual([0, 0, 0, 0]);
+    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg));
   });
 
   test("row adjust: toggle flips on/accent, stepper steps within bounds, cycle wraps", async () => {

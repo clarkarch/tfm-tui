@@ -46,6 +46,7 @@ type EscMenuCtx = {
     onMouseDown?: (ev: any) => void,
     statesFactory?: () => IconState[],
   ): { el: any; slotId: string; spec: IconSpec };
+  setIconState(spec: IconSpec, stateIdx: number): void;
   drainIconQueue(): void | Promise<void>;
   setScrim(on: boolean): void;
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)
@@ -80,6 +81,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     menuIdx: 0,
     pane: "rows",
     scrollOff: 0,
+    hoverCat: -1,
     capturing: null,
     collapsed: new Set<string>(),
   };
@@ -255,6 +257,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         n.fg = on ? c.white : c.sidebarFgMuted;
       });
     }
+  };
+
+  // repaint ONE category's hover/active highlight by id — no rebuild, and it
+  // never switches the active category (hover is visual feedback only)
+  const paintCatAt = (gi: number, on: boolean): void => {
+    const c = menuC;
+    const isActive = gi === st.catIdx;
+    setOnId(`tfm-set-cat-${gi}`, (n) => {
+      n.backgroundColor = on || isActive ? c.accentBg : undefined;
+    });
   };
 
   // after applyAdjust on a value row: refresh JUST the value text by id.
@@ -541,6 +553,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         visRows: visibleRows,
         setOnId,
         makeIconSlot: ctx.makeIconSlot,
+        setIconState: (spec, stateIdx) => ctx.setIconState(spec, stateIdx),
+        paintCatAt,
         switchCategory,
         cancelCapture,
         rowActivate,

@@ -281,6 +281,7 @@ export const wireSettings = (deps: {
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
     makeIconSlot: core.slots.makeIconSlot,
+    setIconState: core.slots.setIconState,
     drainIconQueue: () => core.slots.drainIconQueue(),
     setScrim: core.slots.setScrim,
     cancelBand: () => cancelBand(grid.bandCtx),
