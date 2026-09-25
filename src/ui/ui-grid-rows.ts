@@ -97,6 +97,11 @@ export const fmtDateShort = (ms?: number): string => {
     : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 };
 
+// The loading placeholder's single TEXT node (see buildLoadingPane). Per-pane
+// because dual pane can hold two placeholders at once and findDescendantById
+// returns the FIRST match — a shared id would tick the wrong pane's spinner.
+export const loadingNodeId = (tilePrefix: string): string => `${tilePrefix}loading`;
+
 export const makeGridBuilders = (ctx: GridRendererCtx) => {
   const { selection } = ctx;
   const tilePrefix = (): string => ctx.tileIdPrefix ?? "tfm-tile-";
@@ -149,6 +154,30 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       Box({ width: slotW, height: 0 }),
     );
     // pre-boot (or a fake without a scroller) leaves the pane unmounted
+    scroller?.content.add(pane);
+  };
+
+  // [ui] loading-delay-ms placeholder: shown when a listing takes longer than
+  // the delay instead of leaving the PREVIOUS folder's tiles on screen (which
+  // reads as a frozen app). Deliberately the cheapest possible pane — one Box +
+  // one Text, NO icon slot (no raster spawn, no asset, no dependency on the
+  // graphics protocol) — because it paints exactly while we wait on IO. The id
+  // lives on the TEXT node (boxes have no .content) so the spinner tick can
+  // rewrite it in place via setTextOnId.
+  const buildLoadingPane = (line: string): void => {
+    const paneH = Math.max(8, ctx.termH() - 3);
+    const scroller = ctx.scroller();
+    const pane = Box(
+      {
+        width: "100%",
+        height: paneH,
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: ctx.colors().bg,
+      },
+      Text({ id: loadingNodeId(tilePrefix()), content: line, fg: ctx.colors().sidebarFgMuted }),
+    );
     scroller?.content.add(pane);
   };
 
@@ -442,6 +471,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     entryKey,
     registerRef,
     buildEmptyPane,
+    buildLoadingPane,
     buildTile,
     buildListRow,
     buildRow,

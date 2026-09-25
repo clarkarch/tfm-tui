@@ -122,6 +122,15 @@ export type GridRendererCtx = {
   // [ui] listings-cache-stats / listings-cache-ttl (ms; config stores seconds)
   listingsCacheStats?(): boolean;
   listingsCacheTtlMs?(): number;
+  // [ui] loading-delay-ms: how long a listing may take before the pane swaps
+  // to a "loading…" placeholder instead of keeping the PREVIOUS folder's tiles
+  // on screen (0 = swap immediately, large = never). Absent = feature off, so
+  // existing test fakes keep the old "old tiles stay until the new listing
+  // lands" behavior.
+  loadingDelayMs?(): number;
+  // linux console: ASCII spinner frames instead of braille (the console font
+  // has no braille block). Optional so test fakes keep working.
+  isTtyMode?(): boolean;
   // selection module + mouse handlers
   selection: Selection;
   entryMouseHandlers(entry: Entry, key: string, idx: number): TileMouseHandlers;

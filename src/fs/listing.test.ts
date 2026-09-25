@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { compareEntries, listDir, type Entry } from "./listing";
+import { compareEntries, fillStatsInto, listDir, type Entry } from "./listing";
 import { extOf } from "./filetype";
 import { RECENT_URI, STARRED_URI } from "./uri";
 
@@ -323,6 +323,73 @@ describe("listings cache", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // fillStatsInto: the grid's list view needs sizes/dates whatever the sort
+  // is. It used to run a blocking statSync loop, which froze the whole app
+  // (render, frame loop, toast spinner) on a big folder — and tty mode forces
+  // list view. Same data, same freshness (nothing cached), but it yields.
+  test("fills missing rows through the injected stat and skips complete ones", async () => {
+    const entries: Entry[] = [
+      { name: "a", isDir: false, size: 1, mtimeMs: 2 },
+      { name: "b", isDir: false },
+      { name: "c", isDir: false },
+    ];
+    const asked: string[] = [];
+    await fillStatsInto(entries, "/base", {
+      stat: async (p) => {
+        asked.push(p);
+        return { size: p.endsWith("/b") ? 10 : 20, mtimeMs: 7 };
+      },
+    });
+    expect(asked).toEqual(["/base/b", "/base/c"]); // already-complete row untouched
+    expect(entries[0]!.size).toBe(1);
+    expect(entries[1]!.size).toBe(10);
+    expect(entries[2]!.size).toBe(20);
+    expect(entries[1]!.mtimeMs).toBe(7);
+  });
+
+  test("awaits every stat under a concurrency cap (the frame loop keeps running)", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    let resolved = 0;
+    const releasers: Array<() => void> = [];
+    const entries: Entry[] = Array.from({ length: 40 }, (_, i) => ({ name: `f${i}`, isDir: false }));
+    const fill = fillStatsInto(entries, "/x", {
+      concurrency: 4,
+      stat: () =>
+        new Promise<{ size: number; mtimeMs: number }>((res) => {
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          releasers.push(() => {
+            inFlight--;
+            resolved++;
+            res({ size: 1, mtimeMs: 1 });
+          });
+        }),
+    });
+    await Bun.sleep(0);
+    // nothing has landed: the fill really owes its progress to the stat
+    // promises, so the caller keeps painting while it walks the rows
+    expect(resolved).toBe(0);
+    expect(peak).toBeLessThanOrEqual(4);
+    for (let i = 0; i < 40; i++) {
+      releasers.shift()?.();
+      await Bun.sleep(0);
+    }
+    await fill;
+    expect(entries.every((e) => e.size === 1 && e.mtimeMs === 1)).toBe(true);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  test("a vanished row stays statless instead of throwing", async () => {
+    const entries: Entry[] = [{ name: "gone", isDir: false }];
+    await fillStatsInto(entries, "/x", {
+      stat: async () => {
+        throw new Error("ENOENT");
+      },
+    });
+    expect(entries[0]!.size).toBeUndefined();
   });
 
   test("real mtime bump re-scans within the TTL", async () => {

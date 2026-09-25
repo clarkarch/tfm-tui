@@ -6,9 +6,8 @@
 // preserved by path across rebuilds (vanished files drop, surviving keys keep
 // their state). No module-level renderer imports — everything arrives via ctx
 // (live getters for geometry). ---
-import { statSync } from "node:fs";
 import path from "node:path";
-import { compareEntries, listDir, type Entry } from "../fs/listing";
+import { compareEntries, fillStatsInto, listDir, type Entry } from "../fs/listing";
 import { searchTree } from "../fs/search";
 import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
 import type { Renderable } from "@opentui/core";
@@ -18,7 +17,7 @@ import { clearChildren } from "../lib/uiutil";
 import type { Scheduler } from "../lib/uiutil";
 import { TileVisual } from "../input/grid-input";
 import type { FileAnimMode } from "./ui-grid-anim";
-import { fmtDateShort, makeGridBuilders, thumbStatsChanged } from "./ui-grid-rows";
+import { fmtDateShort, loadingNodeId, makeGridBuilders, thumbStatsChanged } from "./ui-grid-rows";
 import type { ScrollerLike } from "../lib/node-like";
 import type { GridRendererCtx } from "./ui-grid-types";
 import { visibleBottomRow, visibleTileCap, windowRange } from "./ui-grid-window";
@@ -34,6 +33,45 @@ export { hookScrollerScroll, visibleBottomRow, visibleTileCap } from "./ui-grid-
 // lastPlayAt). Keyed on cwd/query/sort/view — navigating to a different folder
 // is a new intro, not a storm, and must animate immediately.
 export const PLAY_COOLDOWN_MS = 500;
+
+// [ui] loading-delay-ms: how long a listing may take before the pane swaps its
+// stale tiles for the spinner placeholder. The pane deliberately does NOT blank
+// on a rebuild (clearing before the paint stranded it — the pane-claim
+// invariant below), which left a slow folder showing the PREVIOUS folder's
+// files with no feedback: it reads as a frozen app. 0 = clear immediately.
+// A navigation that costs more than this logs one line to the debug log with
+// its three real components (list / park / build). The console's old 2s park
+// was invisible in a report until a raw asciinema cast was measured by hand.
+export const SLOW_NAV_MS = 80;
+
+export const SPIN_MS = 110;
+// braille on a graphics terminal; the VT console font has no braille block, so
+// tty mode gets the same 4-frame ASCII idiom install.sh uses
+export const SPIN_FRAMES_BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+export const SPIN_FRAMES_ASCII = ["|", "/", "-", "\\"];
+
+// the placeholder's caption: WHICH folder is being opened (or that a recursive
+// search is walking, which has no listing to show until it finishes)
+export const loadingLabel = (cwd: string, q: string, recursive: boolean): string => {
+  if (q.length > 0 && recursive) return "searching…";
+  const name =
+    cwd === RECENT_URI
+      ? "recent files"
+      : cwd === STARRED_URI
+        ? "starred"
+        : isTrashFilesDir(cwd)
+          ? "trash"
+          : path.basename(cwd) || cwd;
+  return `loading ${name}…`;
+};
+
+// pure: the painted spinner line, clamped to the pane so a long folder name
+// can't overflow into the neighbouring pane
+export const loadingLine = (frame: string, msg: string, width: number): string => {
+  const max = Math.max(8, width);
+  const text = msg.length > max - 2 ? `${msg.slice(0, Math.max(1, max - 3))}…` : msg;
+  return `${frame} ${text}`;
+};
 
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
@@ -145,13 +183,65 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   const { selection } = ctx;
   // the builders own the tile/list-row/row constructors and the id + geometry
   // helpers derived from ctx; the state machine below drives them
-  const { tilePrefix, availW, rowH, entryKey, registerRef, buildEmptyPane, buildRow, buildInner } =
+  const { tilePrefix, availW, rowH, entryKey, registerRef, buildEmptyPane, buildLoadingPane, buildRow, buildInner } =
     makeGridBuilders(ctx);
+
+  // The pane is NOT showing the listing the signatures describe (it was cleared
+  // by a render whose build then threw, or that never got to build). Drop the
+  // claim: the next render must rebuild instead of early-outing on a signature
+  // that no longer matches the screen — otherwise the pane stays empty until
+  // the cwd/geometry moves the signature (the console's blank-list bug).
+  const dropPaintClaim = (): void => {
+    lastSig = "";
+    lastStructuralSig = null;
+    lastEntries = null;
+    lastContentSig = null;
+    // the screen is NOT the claimed listing either — force the next render to
+    // re-decide, placeholder included (a blank pane plus a slow listing must
+    // arm the placeholder again)
+    lastPaintedCtx = null;
+    showingLoading = false;
+    cancelLoadingTimers();
+  };
+
+  // --- [ui] loading-delay-ms placeholder ------------------------------------
+  // `showingLoading` is the ONE piece of state that says the screen is not
+  // what lastSig describes: every early-out must honour it or the placeholder
+  // survives until the cwd moves (the blank-pane class, in a new shape).
+  let showingLoading = false;
+  // listing context of the pane the signatures describe (arm the placeholder
+  // exactly when the on-screen context stops matching the requested one)
+  let lastPaintedCtx: string | null = null;
+  let loadingTimer: unknown = null;
+  let spinTimer: unknown = null;
+
+  // The armed timer and the spinner tick belong to the render that started
+  // them: any real paint, any superseding render that ends without painting,
+  // and clearGrid all drop them — a stranded tick would repaint "loading…"
+  // over a fresh listing.
+  function cancelLoadingTimers(): void {
+    const sched: Scheduler = ctx.sched ?? globalThis;
+    if (loadingTimer !== null) {
+      try {
+        sched.clearTimeout(loadingTimer);
+      } catch {}
+      loadingTimer = null;
+    }
+    if (spinTimer !== null) {
+      try {
+        sched.clearTimeout(spinTimer);
+      } catch {}
+      spinTimer = null;
+    }
+  }
 
   const clearGrid = (): void => {
     // a pending deferred reveal belongs to the OLD listing — drop it before
     // anything else, or its late fire stops the new folder's intro wave
     cancelPendingReveal();
+    // same for the loading placeholder this pane may be showing: the screen is
+    // about to be repainted for real
+    cancelLoadingTimers();
     const scroller = ctx.scroller();
     if (!scroller) return;
     win = null;
@@ -163,6 +253,70 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     } catch {}
     clearChildren(scroller.content);
     selection.tileRefs.clear();
+  };
+
+  // Paint the placeholder. It writes NO claim (see claimPaint): the render that
+  // eventually lands must still rebuild, and a render whose signature happens
+  // to match the OLD listing must not early-out onto this screen.
+  const paintLoading = (gen: number, msg: string): void => {
+    if (gen !== gridGen || showingLoading) return;
+    // never yank a live inline rename/create edit for a placeholder
+    if (ctx.isRenaming?.()) return;
+    ctx.clearRenameEdit();
+    clearGrid();
+    showingLoading = true;
+    const frames = ctx.isTtyMode?.() ? SPIN_FRAMES_ASCII : SPIN_FRAMES_BRAILLE;
+    const width = (ctx.availW ? ctx.availW() : ctx.termW() - ctx.sw()) - 4;
+    const first = frames[0] ?? "";
+    buildLoadingPane(loadingLine(first, msg, width));
+    // no tiles to navigate: drop the old listing's nav geometry or arrows move
+    // against phantom refs (same contract as the empty-pane path)
+    selection.setFocusKeys([]);
+    selection.setCols(1);
+    selection.setRowH(ctx.viewMode() === "list" ? rowH() : ctx.tileH());
+    // one text node rewritten in place per tick — no rebuild, no native churn
+    const sched: Scheduler = ctx.sched ?? globalThis;
+    const nodeId = loadingNodeId(tilePrefix());
+    let i = 0;
+    const tick = (): void => {
+      spinTimer = null;
+      if (!showingLoading || gen !== gridGen) return;
+      i = (i + 1) % frames.length;
+      ctx.setTextOnId?.(nodeId, loadingLine(frames[i] ?? first, msg, width));
+      try {
+        spinTimer = sched.setTimeout(tick, SPIN_MS);
+      } catch {
+        spinTimer = null;
+      }
+    };
+    try {
+      spinTimer = sched.setTimeout(tick, SPIN_MS);
+    } catch {
+      spinTimer = null;
+    }
+  };
+
+  // Arm (or, at delay 0, paint) the placeholder for a render whose listing
+  // context no longer matches the screen. Absent seam = feature off (test fakes
+  // keep the old "old tiles stay put" behavior).
+  const armLoading = (gen: number, cwd: string, q: string, recursive: boolean): void => {
+    const delay = ctx.loadingDelayMs?.();
+    if (delay === undefined || !Number.isFinite(delay) || delay > 60_000) return;
+    const msg = loadingLabel(cwd, q, recursive);
+    if (delay <= 0) {
+      paintLoading(gen, msg);
+      return;
+    }
+    cancelLoadingTimers();
+    const sched: Scheduler = ctx.sched ?? globalThis;
+    try {
+      loadingTimer = sched.setTimeout(() => {
+        loadingTimer = null;
+        paintLoading(gen, msg);
+      }, delay);
+    } catch {
+      loadingTimer = null;
+    }
   };
 
   // the scroller's LIVE viewport in cell rows — NOT ctx.termH(): chrome
@@ -193,6 +347,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // `force` skips the unchanged-signature fast path (out-of-band state changes
   // like the cut clipboard; navigation does not force). ---
   const renderGrid = async (force = false): Promise<void> => {
+    const tStart = performance.now();
     const scroller = ctx.scroller();
     if (!scroller) return;
     const gen = ++gridGen;
@@ -212,6 +367,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const prevFocusKey = selection.focusKeys()[selection.focusIdx()] ?? null;
     const anchorIdx = selection.selAnchor();
     const prevAnchorKey = anchorIdx === null ? null : (selection.focusKeys()[anchorIdx] ?? null);
+    const isList = ctx.viewMode() === "list";
     // a rebuild destroys the edit input; dropped once we actually rebuild (a
     // skipped render leaves an in-progress rename/edit alone)
     const q = ctx.searchQuery().trim().toLowerCase();
@@ -253,11 +409,33 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       ctx.colors(),
       ctx.rasterSig?.() ?? "",
     ];
+    // listing CONTEXT of this render, no entry list: the placeholder is armed
+    // exactly when the screen stops describing this request (cwd/query/sort/
+    // geometry/raster mode — anything that makes the painted tiles wrong)
+    const ctxKey = JSON.stringify(baseSigParts());
     const sigOf = (list: Entry[] | string): string =>
       JSON.stringify([
         ...baseSigParts(),
         typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
       ]);
+    // The pane is showing THIS listing now — claim it. NEVER call before the
+    // paint (see dropPaintClaim) and never from the placeholder: a claim for a
+    // screen the pane isn't showing strands it until the cwd moves. NOTE: the
+    // main path must NOT write lastContentSig here — the intro-wave gate below
+    // compares it against the previous build.
+    const claimPaint = (s: string, structural: string, list: Entry[] | null): void => {
+      lastSig = s;
+      lastStructuralSig = structural;
+      lastEntries = list ? list.map((e) => ({ ...e })) : null;
+      lastPaintedCtx = ctxKey;
+      showingLoading = false;
+      cancelLoadingTimers();
+    };
+    // a render that ends without painting: its armed placeholder must not fire
+    // over the screen that is already correct
+    const abandonPaint = (): void => {
+      cancelLoadingTimers();
+    };
     // membership + order WITHOUT size/mtime — and WITH isDir, which the full
     // signature never carried (a symlink retarget dir↔file with identical
     // stats wrongly skipped the rebuild before). A tick that moves this
@@ -281,6 +459,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         recursive,
         typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
       ]);
+    // [ui] loading-delay-ms: the screen no longer matches this request. Give
+    // the listing the delay to arrive, then swap the stale tiles for the
+    // spinner placeholder. A same-context rebuild (watcher tick, hover-drawer
+    // settle) needs none of this — the painted folder is already the right one.
+    if (!showingLoading && ctxKey !== lastPaintedCtx) armLoading(gen, state.cwd, q, recursive);
     let allEntries: Entry[];
     try {
       if (recursive) {
@@ -307,89 +490,109 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
       if (gen !== gridGen) return;
       const sig = sigOf(`err:${fsErrText(err)}`);
-      if (!force && sig === lastSig) return;
-      lastSig = sig;
-      lastStructuralSig = structOf(`err:${fsErrText(err)}`);
-      lastEntries = null;
-      ctx.clearRenameEdit();
-      clearGrid();
+      // `showingLoading` gate: the pane is the PLACEHOLDER, not the claimed
+      // listing, so a matching signature must still rebuild the screen
+      if (!force && sig === lastSig && !showingLoading) {
+        abandonPaint();
+        return;
+      }
+      // park BEFORE destroying the pane (see the main path): a render that gets
+      // superseded inside this wait must bail with the old screen intact
       await ctx.waitForResolution();
       if (gen !== gridGen) return;
-      buildEmptyPane("close", [
-        `can't open this folder (${fsErrText(err)})`,
-        ctx.pathEditMode() ? "" : "edit the path above to go elsewhere",
-      ]);
-      lastContentSig = contentSigOf(`err:${fsErrText(err)}`);
-      ctx.stripSelectable();
-      // no tiles to navigate: clear the old listing's nav geometry or arrows
-      // consume keys against a phantom list (focusKeys still holds the previous
-      // folder's paths with emptied tileRefs)
-      selection.setFocusKeys([]);
-      selection.setCols(1);
-      selection.setRowH(ctx.viewMode() === "list" ? rowH() : ctx.tileH());
+      ctx.clearRenameEdit();
+      clearGrid();
+      try {
+        buildEmptyPane("close", [
+          `can't open this folder (${fsErrText(err)})`,
+          ctx.pathEditMode() ? "" : "edit the path above to go elsewhere",
+        ]);
+        // the claim is written only now that the pane actually shows it
+        claimPaint(sig, structOf(`err:${fsErrText(err)}`), null);
+        lastContentSig = contentSigOf(`err:${fsErrText(err)}`);
+        ctx.stripSelectable();
+        // no tiles to navigate: clear the old listing's nav geometry or arrows
+        // consume keys against a phantom list (focusKeys still holds the previous
+        // folder's paths with emptied tileRefs)
+        selection.setFocusKeys([]);
+        selection.setCols(1);
+        selection.setRowH(ctx.viewMode() === "list" ? rowH() : ctx.tileH());
+      } catch (buildErr) {
+        dropPaintClaim();
+        ctx.log?.(`grid: rebuild failed: ${buildErr instanceof Error ? buildErr.message : buildErr}`);
+      }
       void ctx.drainIconQueue();
       return;
     }
-    const isList = ctx.viewMode() === "list";
     const entries = q && !recursive ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
+    const listMs = performance.now() - tStart;
     if (gen !== gridGen) return;
 
     if (entries.length === 0) {
       const sig = sigOf("empty");
-      if (!force && sig === lastSig) return;
-      lastSig = sig;
-      lastStructuralSig = structOf("empty");
-      lastEntries = null;
-      ctx.clearRenameEdit();
-      clearGrid();
+      if (!force && sig === lastSig && !showingLoading) {
+        abandonPaint();
+        return;
+      }
+      // park BEFORE destroying the pane (see the main path)
       await ctx.waitForResolution();
       if (gen !== gridGen) return;
-      buildEmptyPane(emptyPaneIcon(state.cwd, q.length > 0), [
-        q
-          ? "no matches"
-          : state.cwd === RECENT_URI
-            ? "no recent files"
-            : state.cwd === STARRED_URI
-              ? "nothing starred yet"
-              : "this folder is empty",
-      ]);
-      lastContentSig = contentSigOf("empty");
-      // no tiles to navigate: drop the previous listing's focusKeys/cols/rowH
-      selection.setFocusKeys([]);
-      selection.setCols(1);
-      selection.setRowH(isList ? rowH() : ctx.tileH());
+      ctx.clearRenameEdit();
+      clearGrid();
+      try {
+        buildEmptyPane(emptyPaneIcon(state.cwd, q.length > 0), [
+          q
+            ? "no matches"
+            : state.cwd === RECENT_URI
+              ? "no recent files"
+              : state.cwd === STARRED_URI
+                ? "nothing starred yet"
+                : "this folder is empty",
+        ]);
+        // the claim is written only now that the pane actually shows it
+        claimPaint(sig, structOf("empty"), null);
+        lastContentSig = contentSigOf("empty");
+        // no tiles to navigate: drop the previous listing's focusKeys/cols/rowH
+        selection.setFocusKeys([]);
+        selection.setCols(1);
+        selection.setRowH(isList ? rowH() : ctx.tileH());
+      } catch (buildErr) {
+        dropPaintClaim();
+        ctx.log?.(`grid: rebuild failed: ${buildErr instanceof Error ? buildErr.message : buildErr}`);
+      }
       void ctx.drainIconQueue();
       return;
     }
 
     // list view always shows size + modified columns, so fetch whatever stats
     // the active sort mode didn't already populate BEFORE signing (a size/mtime
-    // change must move the signature)
-    if (isList) {
-      for (const en of entries) {
-        if (en.size !== undefined && en.mtimeMs !== undefined) continue;
-        try {
-          const st = statSync(en.abs ?? path.join(state.cwd, en.name));
-          en.size = st.size;
-          en.mtimeMs = st.mtimeMs ?? 0;
-        } catch {}
-      }
-    }
+    // change must move the signature). Batched + awaited (./listing
+    // fillStatsInto): the old blocking statSync loop froze the frame loop, and
+    // tty mode forces list view — the console felt dead on big folders.
+    if (isList) await fillStatsInto(entries, state.cwd);
+    // the fill is the one await between the listing and the signature: a newer
+    // render inside it owns the refs and the pane (same rule as the entry
+    // computation above and the park below)
+    if (gen !== gridGen) return;
 
     const sig = sigOf(entries);
-    if (!force && sig === lastSig) return;
+    if (!force && sig === lastSig && !showingLoading) {
+      abandonPaint();
+      return;
+    }
     // stats-only tick (busy-log dirs): same membership + order, only size/mtime
     // moved — repaint the list stat cells in place instead of clear+rebuild
     // (the TTY full-flash loop). No animation: nothing appeared. Skipped when
     // the seam is absent (old fakes keep the rebuild), when a thumbnailed
     // image/video changed stats (its raster keys on them — rebuild re-queues),
     // and under force (cut-clipboard dimming needs the rebuild).
-    if (!force && ctx.setTextOnId && lastStructuralSig !== null) {
+    // ... and never while the pane shows the placeholder: the stat cells it
+    // would rewrite don't exist (no claim is written for a placeholder)
+    if (!force && !showingLoading && ctx.setTextOnId && lastStructuralSig !== null) {
       const structural = structOf(entries);
       if (structural === lastStructuralSig && !thumbStatsChanged(lastEntries, entries)) {
-        lastSig = sig;
+        claimPaint(sig, structural, entries);
         lastContentSig = contentSigOf(entries);
-        lastEntries = entries.map((e) => ({ ...e }));
         // later window slides build rows from this snapshot — carry the stats
         if (win) {
           for (let i = 0; i < win.entries.length && i < entries.length; i++) {
@@ -411,145 +614,178 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         return;
       }
     }
-    lastSig = sig;
-    lastStructuralSig = structOf(entries);
-    lastEntries = entries.map((e) => ({ ...e }));
+    // Park for real cell pixels BEFORE destroying the pane: the console's null
+    // renderer.resolution parks for seconds per poll, and a render superseded
+    // inside this wait must bail with the PREVIOUS listing still on screen.
+    // Clearing first while the paint claim was already written left the pane
+    // blank until the cwd changed — every later render early-outed on a
+    // signature describing a screen that no longer existed.
+    const tPark = performance.now();
+    await ctx.waitForResolution();
+    const parkMs = performance.now() - tPark;
+    if (gen !== gridGen) return;
     ctx.clearRenameEdit();
     clearGrid();
-    await ctx.waitForResolution();
-    if (gen !== gridGen) return;
-    const TILE_H = ctx.tileH();
-    const cols = isList ? 1 : Math.max(1, Math.floor((availW() - 3) / ctx.tileW()));
-    const rowHgt = isList ? rowH() : TILE_H;
-    const totalRows = isList ? entries.length : Math.ceil(entries.length / cols);
+    const tBuild = performance.now();
+    // Past this point the build is SYNCHRONOUS (the drains are fire-and-forget),
+    // so no newer render can start between the clear and the paint: the pane can
+    // never be left empty, and the claim written at the END describes exactly
+    // what is on screen. The guard is for a THROWING build (native allocation
+    // failures are real on a loaded box) — the pane is cleared and unbuilt then,
+    // so the claim must be dropped or the next render early-outs for good.
+    let painted = false;
+    try {
+      const TILE_H = ctx.tileH();
+      const cols = isList ? 1 : Math.max(1, Math.floor((availW() - 3) / ctx.tileW()));
+      const rowHgt = isList ? rowH() : TILE_H;
+      const totalRows = isList ? entries.length : Math.ceil(entries.length / cols);
 
-    // [ui] windowed-grid: build only the visible row window (+overscan); the
-    // scroller scroll hook slides it. A windowed build costs O(screen) nodes
-    // no matter the folder size; a plain build stays byte-identical to before.
-    const windowed = ctx.windowedGrid?.() ?? false;
-    const scrollTop = Math.max(0, scroller.scrollTop ?? 0);
-    const { firstRow, r0: wr0, r1: wr1 } = windowRange(scrollTop, rowHgt, totalRows, ctx.termH());
-    const r0 = windowed ? wr0 : 0;
-    const r1 = windowed ? wr1 : totalRows - 1;
-    // viewport window for thumb-job ranking: `visibleTileCap` tiles starting
-    // wherever the scroller sits (a hover-drawer settle rebuilds mid-scroll;
-    // a folder change always starts at 0) — visible thumbs raster FIRST,
-    // off-screen backlog last, so the first screenful lands before the tail
-    const visFirst = isList ? firstRow : firstRow * cols;
-    // register EVERY entry first — the full tileRefs/focusKeys list is the
-    // selection's contract; built rows overwrite their minimal ref in place.
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
-      if (e) registerRef(e, i);
-    }
+      // [ui] windowed-grid: build only the visible row window (+overscan); the
+      // scroller scroll hook slides it. A windowed build costs O(screen) nodes
+      // no matter the folder size; a plain build stays byte-identical to before.
+      const windowed = ctx.windowedGrid?.() ?? false;
+      const scrollTop = Math.max(0, scroller.scrollTop ?? 0);
+      const { firstRow, r0: wr0, r1: wr1 } = windowRange(scrollTop, rowHgt, totalRows, ctx.termH());
+      const r0 = windowed ? wr0 : 0;
+      const r1 = windowed ? wr1 : totalRows - 1;
+      // viewport window for thumb-job ranking: `visibleTileCap` tiles starting
+      // wherever the scroller sits (a hover-drawer settle rebuilds mid-scroll;
+      // a folder change always starts at 0) — visible thumbs raster FIRST,
+      // off-screen backlog last, so the first screenful lands before the tail
+      const visFirst = isList ? firstRow : firstRow * cols;
+      // register EVERY entry first — the full tileRefs/focusKeys list is the
+      // selection's contract; built rows overwrite their minimal ref in place.
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        if (e) registerRef(e, i);
+      }
 
-    // the container `slide` animates (and holds the row window + pads) — its
-    // id is absolute so it resolves across slides
-    const innerId = `${tilePrefix()}inner`;
-    scroller.content.add(buildInner(entries, isList, cols, rowHgt, totalRows, r0, r1, visFirst, windowed));
-    win = windowed
-      ? {
-          entries,
-          isList,
-          cols,
-          rowH: rowHgt,
-          rows: totalRows,
-          r0,
-          r1,
-          vis: { top: firstRow, bottom: visibleBottomRow(scrollTop, visH(scroller), rowHgt, totalRows) },
+      // the container `slide` animates (and holds the row window + pads) — its
+      // id is absolute so it resolves across slides
+      const innerId = `${tilePrefix()}inner`;
+      scroller.content.add(buildInner(entries, isList, cols, rowHgt, totalRows, r0, r1, visFirst, windowed));
+      win = windowed
+        ? {
+            entries,
+            isList,
+            cols,
+            rowH: rowHgt,
+            rows: totalRows,
+            r0,
+            r1,
+            vis: { top: firstRow, bottom: visibleBottomRow(scrollTop, visH(scroller), rowHgt, totalRows) },
+          }
+        : null;
+      // grid-view ROW ids for the row-granularity cascade (see the handoff
+      // below): the FULL absolute list — un-built windowed rows resolve to
+      // nothing in the animator but keep the cascade timing aligned by index.
+      const rowIds: string[] = isList ? [] : Array.from({ length: totalRows }, (_, r) => `${tilePrefix()}row-${r}`);
+
+      // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
+      selection.tileRefs.forEach((_ref, key) => {
+        if (ctx.isCutKey(key)) selection.setTileVisual(key, TileVisual.Rest);
+      });
+
+      // fresh Text nodes default selectable=true; strip AFTER the async rebuild or
+      // the renderer's text-selection drag hijacks file-drag events
+      ctx.stripSelectable();
+      void ctx.drainIconQueue();
+      void ctx.drainThumbs();
+      selection.setFocusKeys([...selection.tileRefs.keys()]);
+      // restore the pre-rebuild selection/focus by path (stale gen = newer
+      // render owns the refs — never restore into it; unreachable while the block
+      // above stays synchronous, but a claim for an unbuilt pane must not survive)
+      if (gen !== gridGen) {
+        dropPaintClaim();
+        return;
+      }
+      selection.tileRefs.forEach((ref, key) => {
+        if (prevSel.has(key)) {
+          ref.selected = true;
+          selection.setTileVisual(key, TileVisual.Selected);
         }
-      : null;
-    // grid-view ROW ids for the row-granularity cascade (see the handoff
-    // below): the FULL absolute list — un-built windowed rows resolve to
-    // nothing in the animator but keep the cascade timing aligned by index.
-    const rowIds: string[] = isList ? [] : Array.from({ length: totalRows }, (_, r) => `${tilePrefix()}row-${r}`);
-
-    // cut (pending-move) tiles render dimmed; apply after mount so id lookups work
-    selection.tileRefs.forEach((_ref, key) => {
-      if (ctx.isCutKey(key)) selection.setTileVisual(key, TileVisual.Rest);
-    });
-
-    // fresh Text nodes default selectable=true; strip AFTER the async rebuild or
-    // the renderer's text-selection drag hijacks file-drag events
-    ctx.stripSelectable();
-    void ctx.drainIconQueue();
-    void ctx.drainThumbs();
-    selection.setFocusKeys([...selection.tileRefs.keys()]);
-    // restore the pre-rebuild selection/focus by path (stale gen = newer
-    // render owns the refs — never restore into it)
-    if (gen !== gridGen) return;
-    selection.tileRefs.forEach((ref, key) => {
-      if (prevSel.has(key)) {
-        ref.selected = true;
-        selection.setTileVisual(key, TileVisual.Selected);
+      });
+      const focusKeyIdx = prevFocusKey ? selection.focusKeys().indexOf(prevFocusKey) : -1;
+      selection.setFocusIdx(focusKeyIdx);
+      const anchorNewIdx = prevAnchorKey === null ? -1 : selection.focusKeys().indexOf(prevAnchorKey);
+      selection.setSelAnchor(anchorNewIdx < 0 ? null : anchorNewIdx);
+      selection.setCols(cols);
+      selection.setRowH(isList ? rowH() : TILE_H);
+      // one-shot launch-file highlight (`tfm some/file.txt`): after the first
+      // build, select the tile whose key is that path, then clear the request
+      if (state.pendingSelect) {
+        const pending = state.pendingSelect;
+        state.pendingSelect = null;
+        const idx = selection.focusKeys().indexOf(pending);
+        if (idx >= 0) selection.selectTileAt(idx);
       }
-    });
-    const focusKeyIdx = prevFocusKey ? selection.focusKeys().indexOf(prevFocusKey) : -1;
-    selection.setFocusIdx(focusKeyIdx);
-    const anchorNewIdx = prevAnchorKey === null ? -1 : selection.focusKeys().indexOf(prevAnchorKey);
-    selection.setSelAnchor(anchorNewIdx < 0 ? null : anchorNewIdx);
-    selection.setCols(cols);
-    selection.setRowH(isList ? rowH() : TILE_H);
-    // one-shot launch-file highlight (`tfm some/file.txt`): after the first
-    // build, select the tile whose key is that path, then clear the request
-    if (state.pendingSelect) {
-      const pending = state.pendingSelect;
-      state.pendingSelect = null;
-      const idx = selection.focusKeys().indexOf(pending);
-      if (idx >= 0) selection.selectTileAt(idx);
-    }
-    selection.updateSelectionStatusReal();
-    // animate the new tiles in (tileRefs is in display order); the animator
-    // reads [ui] file-animation live and snaps everything to rest when off.
-    // Only a CONTENT change animates — a layout-only rebuild (hover drawer,
-    // dual-pane toggle, resize, theme flip) rebuilt the same files and must
-    // not replay it. The very first build (lastContentSig null) IS content
-    // appearing, so it animates — that's the boot intro.
-    if (gen === gridGen) {
-      const contentSig = contentSigOf(entries);
-      const contentChanged = lastContentSig === null || contentSig !== lastContentSig;
-      lastContentSig = contentSig;
-      if (contentChanged) {
-        // storm gate: a rebuild inside the cooldown after the previous wave
-        // repaints but doesn't restart it — overlapping waves on a slow VT
-        // never complete and read as invisible files. The stop call in
-        // clearGrid above already ran, so nothing in-flight is stranded.
-        // A DIFFERENT listing context (navigation/query/sort/view) is a new
-        // intro, not a storm: it plays regardless of the cooldown.
-        const playKey = `${state.cwd}\u0000${q}\u0000${state.sortBy}\u0000${state.sortAsc}\u0000${state.showHidden ? 1 : 0}\u0000${ctx.viewMode()}\u0000${recursive ? 1 : 0}`;
-        const t = ctx.now ? ctx.now() : Date.now();
-        if (playKey === lastPlayKey && lastPlayAt !== null && t - lastPlayAt < PLAY_COOLDOWN_MS) return;
-        lastPlayAt = t;
-        lastPlayKey = playKey;
-        try {
-          const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
-          // visible-only: off-screen tiles are never seen animating but each
-          // per-frame opacity change costs a native push — cap the list to the
-          // viewport (same window math as the thumb ranking) and keep the full
-          // count for the cascade timing (the animator normalizes by `total`).
-          // The slice starts at the SCROLL position (visFirst), not 0 — the old
-          // head-slice animated off-screen top tiles while the visible ones
-          // (scrolled deep into a big folder) never animated at all. With the
-          // knob off, everything animates (both tiles and rows) — a mid-scroll
-          // content change then animates the whole grid.
-          const visibleOnly = ctx.fileAnimVisibleOnly();
-          const cap = visibleOnly ? visibleTileCap(ctx.termH(), isList ? rowH() : TILE_H, cols) : ids.length;
-          // list view: rows ARE tiles, hand none (the animator uses tiles);
-          // grid view: slice rows with the same scroll-aligned window
-          const rows = isList
-            ? []
-            : visibleOnly
-              ? rowIds.slice(Math.floor(visFirst / cols), Math.floor(visFirst / cols) + Math.ceil(cap / cols))
-              : rowIds;
-          ctx.fileAnim({
-            tiles: ids.slice(visibleOnly ? visFirst : 0, (visibleOnly ? visFirst : 0) + cap),
-            rows,
-            rowsTotal: rowIds.length,
-            inner: innerId,
-            total: ids.length,
-          });
-        } catch {}
+      selection.updateSelectionStatusReal();
+      // the pane now shows this listing — claim it (never before the paint)
+      claimPaint(sig, structOf(entries), entries);
+      painted = true;
+      // slow-navigation breadcrumb (always on, one line, only when slow): a
+      // report of "it feels stuck" names its own culprit without --debug
+      const buildMs = performance.now() - tBuild;
+      if (listMs + parkMs + buildMs > SLOW_NAV_MS) {
+        ctx.log?.(
+          `grid: ${isList ? "list" : "grid"} n=${entries.length} list=${Math.round(listMs)}ms park=${Math.round(parkMs)}ms build=${Math.round(buildMs)}ms`,
+        );
       }
+      // animate the new tiles in (tileRefs is in display order); the animator
+      // reads [ui] file-animation live and snaps everything to rest when off.
+      // Only a CONTENT change animates — a layout-only rebuild (hover drawer,
+      // dual-pane toggle, resize, theme flip) rebuilt the same files and must
+      // not replay it. The very first build (lastContentSig null) IS content
+      // appearing, so it animates — that's the boot intro.
+      if (gen === gridGen) {
+        const contentSig = contentSigOf(entries);
+        const contentChanged = lastContentSig === null || contentSig !== lastContentSig;
+        lastContentSig = contentSig;
+        if (contentChanged) {
+          // storm gate: a rebuild inside the cooldown after the previous wave
+          // repaints but doesn't restart it — overlapping waves on a slow VT
+          // never complete and read as invisible files. The stop call in
+          // clearGrid above already ran, so nothing in-flight is stranded.
+          // A DIFFERENT listing context (navigation/query/sort/view) is a new
+          // intro, not a storm: it plays regardless of the cooldown.
+          const playKey = `${state.cwd}\u0000${q}\u0000${state.sortBy}\u0000${state.sortAsc}\u0000${state.showHidden ? 1 : 0}\u0000${ctx.viewMode()}\u0000${recursive ? 1 : 0}`;
+          const t = ctx.now ? ctx.now() : Date.now();
+          if (playKey === lastPlayKey && lastPlayAt !== null && t - lastPlayAt < PLAY_COOLDOWN_MS) return;
+          lastPlayAt = t;
+          lastPlayKey = playKey;
+          try {
+            const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
+            // visible-only: off-screen tiles are never seen animating but each
+            // per-frame opacity change costs a native push — cap the list to the
+            // viewport (same window math as the thumb ranking) and keep the full
+            // count for the cascade timing (the animator normalizes by `total`).
+            // The slice starts at the SCROLL position (visFirst), not 0 — the old
+            // head-slice animated off-screen top tiles while the visible ones
+            // (scrolled deep into a big folder) never animated at all. With the
+            // knob off, everything animates (both tiles and rows) — a mid-scroll
+            // content change then animates the whole grid.
+            const visibleOnly = ctx.fileAnimVisibleOnly();
+            const cap = visibleOnly ? visibleTileCap(ctx.termH(), isList ? rowH() : TILE_H, cols) : ids.length;
+            // list view: rows ARE tiles, hand none (the animator uses tiles);
+            // grid view: slice rows with the same scroll-aligned window
+            const rows = isList
+              ? []
+              : visibleOnly
+                ? rowIds.slice(Math.floor(visFirst / cols), Math.floor(visFirst / cols) + Math.ceil(cap / cols))
+                : rowIds;
+            ctx.fileAnim({
+              tiles: ids.slice(visibleOnly ? visFirst : 0, (visibleOnly ? visFirst : 0) + cap),
+              rows,
+              rowsTotal: rowIds.length,
+              inner: innerId,
+              total: ids.length,
+            });
+          } catch {}
+        }
+      }
+    } catch (err) {
+      if (!painted) dropPaintClaim();
+      ctx.log?.(`grid: rebuild failed${painted ? " after paint" : ""}: ${err instanceof Error ? err.message : err}`);
     }
   };
 

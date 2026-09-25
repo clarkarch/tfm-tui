@@ -135,6 +135,36 @@ const fillInto = (entries: Entry[], dir: string): void => {
   }
 };
 
+// Async, bounded-concurrency stat fill for the GRID's list view: it paints
+// size + date columns whatever the sort is, and the blocking statSync loop it
+// used to run froze the whole app (this render, the frame loop, the toast
+// spinner) for tens to hundreds of ms on a big folder — exactly the console,
+// where tty mode FORCES list view. Same data and the same freshness as before
+// (nothing is cached: a growing log keeps growing in the column), but the loop
+// yields between batches so input and feedback stay alive.
+export const fillStatsInto = async (
+  entries: Entry[],
+  dir: string,
+  deps?: { stat?: (p: string) => Promise<{ size: number; mtimeMs: number }>; concurrency?: number },
+): Promise<void> => {
+  const statFn = deps?.stat ?? ((p: string) => stat(p));
+  const workers = Math.max(1, Math.min(deps?.concurrency ?? 32, entries.length));
+  let i = 0;
+  const worker = async (): Promise<void> => {
+    while (i < entries.length) {
+      const e = entries[i++];
+      // already complete (a size/mtime sort filled it, or a retry landed)
+      if (!e || (e.size !== undefined && e.mtimeMs !== undefined)) continue;
+      try {
+        const st = await statFn(e.abs ?? path.join(dir, e.name));
+        e.size = st.size;
+        e.mtimeMs = st.mtimeMs ?? 0;
+      } catch {}
+    }
+  };
+  await Promise.all(Array.from({ length: workers }, worker));
+};
+
 // raw scan (hidden INCLUDED — listDir filters per call so the showHidden
 // toggle never re-reads the disk). Entries are returned as a fresh array of
 // copies: the caller's sort must never mutate the cache.

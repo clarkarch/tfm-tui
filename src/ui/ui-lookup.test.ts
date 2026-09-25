@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { CliRenderer } from "@opentui/core";
-import { makeLookup, waitForResolution } from "./ui-lookup";
+import {
+  makeLookup,
+  makeResolutionGate,
+  RESOLUTION_POLL_MS,
+  RESOLUTION_RENDER_MS,
+  RESOLUTION_SETTLE_MS,
+} from "./ui-lookup";
 
 // fake renderable tree: nodes expose getChildren() like the real renderer
 const leaf = (id: string, extra: any = {}): any => ({
@@ -112,23 +118,115 @@ describe("makeLookup", () => {
   });
 });
 
-describe("waitForResolution", () => {
-  test("returns immediately when resolution is already set", async () => {
-    await waitForResolution({ resolution: { width: 80, height: 24 } } as unknown as CliRenderer);
+// virtual clock: the gate's whole point is that it must NOT hard-sleep real
+// milliseconds on the render path, so its budget is observed through this
+// (bun:test has no fake timers — same injected-clock rule as uiutil.debounced)
+const mkClock = () => {
+  let t = 1_000_000;
+  const slept: number[] = [];
+  return {
+    slept,
+    now: (): number => t,
+    sleep: async (ms: number): Promise<void> => {
+      slept.push(ms);
+      t += ms;
+    },
+  };
+};
+
+// a resolution the test can flip mid-park, like a late terminal reply
+const mkRenderer = (get: () => { width: number; height: number } | null): CliRenderer =>
+  ({
+    get resolution() {
+      return get();
+    },
+  }) as unknown as CliRenderer;
+
+describe("makeResolutionGate", () => {
+  test("settle returns without sleeping when the terminal already reported pixels", async () => {
+    const clock = mkClock();
+    const logs: string[] = [];
+    const gate = makeResolutionGate(() => mkRenderer(() => ({ width: 800, height: 480 })), {
+      sleep: clock.sleep,
+      now: clock.now,
+      log: (m) => logs.push(m),
+    });
+    await gate.settle();
+    expect(clock.slept).toEqual([]);
+    expect(logs).toEqual([]);
   });
 
-  test("gives up after the poll budget when resolution never lands", async () => {
+  test("settle latches after the full budget and logs why", async () => {
+    // the console/tmux case: no reply ever comes. The 2s boot budget is spent
+    // ONCE, then the render path must never park again.
+    const clock = mkClock();
+    const logs: string[] = [];
+    const gate = makeResolutionGate(() => mkRenderer(() => null), {
+      sleep: clock.sleep,
+      now: clock.now,
+      log: (m) => logs.push(m),
+    });
+    await gate.settle();
+    expect(clock.slept.length).toBe(RESOLUTION_SETTLE_MS / RESOLUTION_POLL_MS);
+    expect(logs.length).toBe(1);
+    expect(logs[0]).toContain(`none after ${RESOLUTION_SETTLE_MS}ms`);
+
+    // latched: the render path is free, and a second settle is a no-op
+    const before = clock.slept.length;
+    await gate.wait();
+    await gate.settle();
+    expect(clock.slept.length).toBe(before);
+  });
+
+  test("a rasterless terminal (tty mode / force-glyph) never parks at all", async () => {
+    // no rasters means cell pixels are never read: waiting on them is pure
+    // startup/navigation delay for data nothing consumes (the console's
+    // leftover 2s boot stall)
+    const clock = mkClock();
+    const logs: string[] = [];
+    const gate = makeResolutionGate(() => mkRenderer(() => null), {
+      sleep: clock.sleep,
+      now: clock.now,
+      log: (m) => logs.push(m),
+      rasterless: () => true,
+    });
+    await gate.settle();
+    await gate.wait();
+    expect(clock.slept).toEqual([]);
+    expect(logs.length).toBe(1);
+    expect(logs[0]).toContain("skipped");
+  });
+
+  test("the render-path wait parks its short budget without latching", async () => {
+    // a terminal that DOES report pixels: a resize nulls the resolution for
+    // its requery, so the rebuild that follows waits — bounded, and it must not
+    // latch (the next resize would then never be waited for)
+    const clock = mkClock();
+    const gate = makeResolutionGate(() => mkRenderer(() => null), { sleep: clock.sleep, now: clock.now });
+    await gate.wait();
+    expect(clock.slept.length).toBe(RESOLUTION_RENDER_MS / RESOLUTION_POLL_MS);
+    await gate.wait();
+    expect(clock.slept.length).toBe((2 * RESOLUTION_RENDER_MS) / RESOLUTION_POLL_MS);
+    // not latched: the boot settle still spends its own full budget
+    await gate.settle();
+    expect(clock.slept.length).toBe((2 * RESOLUTION_RENDER_MS + RESOLUTION_SETTLE_MS) / RESOLUTION_POLL_MS);
+  });
+
+  test("wait returns as soon as a late reply lands mid-park", async () => {
+    const clock = mkClock();
     let polls = 0;
-    // 40 polls x 50ms real sleep is 2s — shrink by observing the loop bounds
-    // indirectly: resolution never set -> resolves (not hangs) after ~2s
-    const start = Date.now();
-    await waitForResolution({
-      get resolution() {
-        polls++;
-        return null;
-      },
-    } as unknown as CliRenderer);
-    expect(polls).toBe(40);
-    expect(Date.now() - start).toBeGreaterThanOrEqual(1900);
+    const gate = makeResolutionGate(
+      () =>
+        mkRenderer(() => {
+          polls++;
+          return polls <= 3 ? null : { width: 640, height: 400 };
+        }),
+      { sleep: clock.sleep, now: clock.now },
+    );
+    await gate.wait();
+    // the first read is wait()'s own early-out check, then one sleep per
+    // unanswered park read — the reply lands on the third read and ends it
+    expect(clock.slept.length).toBe(2);
+    expect(clock.slept.length).toBeLessThan(RESOLUTION_RENDER_MS / RESOLUTION_POLL_MS);
   });
 });

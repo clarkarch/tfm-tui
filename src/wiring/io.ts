@@ -16,7 +16,6 @@ import { debounced } from "../lib/uiutil";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { gridDrag } from "../input/grid-input";
 import { mergedMapFacade } from "../app/panes";
-import { waitForResolution } from "../ui/ui-lookup";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces } from "../fs/places";
 import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
@@ -99,7 +98,10 @@ export const wireBoot = (deps: {
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
   runBoot({
-    waitForResolution: () => waitForResolution(chrome.renderer),
+    // boot: ONE full-budget wait — a terminal that answered nothing by then
+    // never reports pixels (linux console/tmux), and the gate latches so no
+    // later rebuild parks on it again (see makeResolutionGate)
+    waitForResolution: () => core.resolutionGate.settle(),
     applyBootSystemTheme: () => deps.applyBootSystemTheme?.() ?? Promise.resolve(false),
     // restart child only: the waiting parent never destroyed, so its kitty
     // placements are still on screen under ours — delete-all once, first.

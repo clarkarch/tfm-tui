@@ -22,7 +22,6 @@ import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
-import { waitForResolution } from "../ui/ui-lookup";
 import { FILE_GLYPH, glyph } from "../ui/glyphs";
 import { rasterSigOf } from "../ui/tty";
 import { activeFacade } from "../app/panes";
@@ -326,10 +325,15 @@ export const wireGrid = (deps: {
       listingsCache: () => core.config.ui.listingsCache,
       listingsCacheStats: () => core.config.ui.listingsCacheStats,
       listingsCacheTtlMs: () => core.config.ui.listingsCacheTtl * 1000,
+      loadingDelayMs: () => core.config.ui.loadingDelayMs,
+      isTtyMode: core.isTtyMode,
       selection: selections[pane],
       entryMouseHandlers: entryMouseHandlers[pane],
       isCutKey: core.isCutKey,
-      waitForResolution: () => waitForResolution(chrome.renderer),
+      // render path: the gate's cheap wait. Once boot latched "this terminal
+      // never reports pixels" this is an instant no-op — the old unbounded
+      // 2s park here stalled EVERY navigation on the console.
+      waitForResolution: () => core.resolutionGate.wait(),
       clearRenameEdit: rename.clearRenameEdit,
     });
   const renderers = [makeRenderer(0), makeRenderer(1)] as const;

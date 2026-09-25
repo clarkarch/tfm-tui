@@ -218,6 +218,7 @@ export type UiConfig = {
   fileAnimationRowGranularity: boolean;
   fileAnimationMaxFiles: number;
   windowedGrid: boolean;
+  loadingDelayMs: number;
   listingsCache: boolean;
   listingsCacheStats: boolean;
   listingsCacheTtl: number;
@@ -975,6 +976,21 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = render only the visible rows (plus overscan) of a folder, sliding as you scroll (huge folders stop rebuilding/relaying thousands of off-screen tiles; selection and search still see every file)",
     label: "windowed grid",
     blurb: "Only draw the rows on screen",
+    group: "optimization",
+    subsection: "performance",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "loading-delay-ms",
+    prop: "loadingDelayMs",
+    min: 0,
+    max: 5000,
+    step: 50,
+    def: 150,
+    doc: "how long a folder listing may take before the pane swaps to a loading placeholder instead of keeping the previous folder's files on screen (0 = clear and show it immediately, 5000 = effectively never)",
+    label: "loading delay",
+    blurb: "Show a loading placeholder when a folder is slow",
     group: "optimization",
     subsection: "performance",
   },

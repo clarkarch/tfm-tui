@@ -4,7 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { Box, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { makeGridRenderer, hookScrollerScroll, type GridState } from "./ui-grid";
+import {
+  hookScrollerScroll,
+  loadingLabel,
+  loadingLine,
+  makeGridRenderer,
+  SPIN_FRAMES_ASCII,
+  SPIN_FRAMES_BRAILLE,
+  type GridState,
+} from "./ui-grid";
+import { loadingNodeId } from "./ui-grid-rows";
 import type { ScrollerLike } from "../lib/node-like";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { makeSelection } from "../input/selection";
@@ -98,7 +107,16 @@ const stepClock = (ms = 1000): void => {
 };
 let visibleOnly: boolean;
 let revealDelayMs: number;
+// [ui] loading-delay-ms seam: undefined = ABSENT (the feature is off, which is
+// what every pre-existing test in this file runs against)
+let loadingDelayMs: number | undefined;
+let ttyModeOn: boolean;
 let fileAnimMode: "rows" | "tiles" | "container" | null;
+// the park between "decide to rebuild" and "build" — the console's null
+// renderer.resolution makes the real one a 50ms-per-poll sleep, so tests swap
+// in a controllable one to interleave two renders inside that window
+let waitForResolutionImpl: () => Promise<void>;
+let gridLogs: string[];
 let fileAnimCalls: Array<{
   tiles: string[];
   rows: string[] | null;
@@ -141,6 +159,10 @@ beforeAll(async () => {
   fileAnimMode = "rows";
   revealClock = mkRevealClock();
   fileAnimCalls = [];
+  waitForResolutionImpl = () => Promise.resolve();
+  loadingDelayMs = undefined;
+  ttyModeOn = false;
+  gridLogs = [];
   let iconSeq = 0;
 
   t.renderer.root.add(Box({ id: "tfm-scroll-test", flexDirection: "column", flexGrow: 1 }));
@@ -248,7 +270,16 @@ beforeAll(async () => {
       return {} as unknown as TileMouseHandlers;
     },
     isCutKey: (key) => cutKeys.has(key),
-    waitForResolution: () => Promise.resolve(),
+    log: (m: string) => gridLogs.push(m),
+    waitForResolution: () => waitForResolutionImpl(),
+    // dynamic seams: a test flips the placeholder on/off per case
+    get loadingDelayMs() {
+      return loadingDelayMs === undefined ? undefined : () => loadingDelayMs as number;
+    },
+
+    get isTtyMode() {
+      return () => ttyModeOn;
+    },
     clearRenameEdit: () => {},
   });
   renderGrid = rg;
@@ -1267,6 +1298,173 @@ test("windowed busy loop: repeated stats ticks keep every mounted row visible", 
   }
 });
 
+// --- superseded renders: the pane-claim invariant. renderGrid clears the
+// scroller and rebuilds, and a second render (a file op's renderAll burst, the
+// watcher) can start inside the first one's await. That first render must then
+// neither destroy the painted pane nor leave a "painted as of listing X" claim
+// behind: the combination blanked the pane on the console (null
+// renderer.resolution parks for seconds) until the cwd changed.
+describe("renderGrid (superseded renders)", () => {
+  const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+    const deadline = Date.now() + ms;
+    while (!cond() && Date.now() < deadline) await Bun.sleep(5);
+  };
+  // controllable waitForResolution: every call parks until open(), which
+  // releases the parked ones AND lets later calls through — no release-vs-park
+  // ordering deadlock when a test interleaves renders
+  const parkWaits = () => {
+    const waiters: Array<() => void> = [];
+    let open = false;
+    return {
+      count: (): number => waiters.length,
+      open: (): void => {
+        open = true;
+        for (const r of waiters.splice(0)) r();
+      },
+      impl: (): Promise<void> => {
+        if (open) return Promise.resolve();
+        return new Promise<void>((r) => {
+          waiters.push(r);
+        });
+      },
+    };
+  };
+
+  test("a superseded render never strands a cleared pane (file-op render storm)", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-superseded-"));
+    const waits = parkWaits();
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "b.txt"), "b");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      // only the rebuild under test parks
+      waitForResolutionImpl = waits.impl;
+
+      // the op's write lands, then its render burst fires a second render while
+      // the first is still parked mid-rebuild
+      writeFileSync(path.join(dir, "c.txt"), "c");
+      const first = renderGrid(); // deliberately not awaited — it parks
+      await settleUntil(() => waits.count() >= 1);
+      const second = renderGrid();
+      waits.open();
+      await Promise.all([first, second]);
+      await t.renderOnce();
+
+      // the NEWEST render owns the pane: every file is on screen and the
+      // selection contract is intact. A cleared pane plus a committed paint
+      // claim left it blank until a cwd change (the VT-only regression).
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("b.txt");
+      expect(frame).toContain("c.txt");
+      expect(selection.tileRefs.size).toBe(3);
+      expect(selection.focusKeys().length).toBe(3);
+    } finally {
+      waits.open();
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a parked rebuild keeps the previous rows on screen", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-parked-"));
+    const waits = parkWaits();
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "b.txt"), "b");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      // only the rebuild under test parks
+      waitForResolutionImpl = waits.impl;
+
+      writeFileSync(path.join(dir, "c.txt"), "c");
+      const parked = renderGrid();
+      await settleUntil(() => waits.count() >= 1);
+      await t.renderOnce();
+      // the park happens BEFORE the grid is cleared: on the console the null
+      // resolution parks for seconds and the old rows must survive it
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("b.txt");
+      expect(frame).not.toContain("c.txt");
+
+      waits.open();
+      await parked;
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("c.txt");
+    } finally {
+      waits.open();
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a failed build invalidates the paint claim so the next render rebuilds", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-buildfail-"));
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "b.txt"), "b");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+
+      // native allocation failures (Failed to create TextBuffer under memory
+      // pressure) throw INSIDE the build, after the grid is already cleared
+      const realAdd = content.add.bind(content);
+      let boom = true;
+      (content as any).add = (child: Renderable) => {
+        if (boom) {
+          boom = false;
+          throw new Error("native allocator refused");
+        }
+        return realAdd(child);
+      };
+      gridLogs.length = 0;
+      try {
+        writeFileSync(path.join(dir, "c.txt"), "c");
+        await renderGrid().catch(() => {}); // the old code rejected here
+      } finally {
+        (content as any).add = realAdd;
+      }
+
+      // a claim committed before the build would make this render skip the
+      // rebuild and leave the pane blank for good — the failure must invalidate
+      await renderGrid();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("c.txt");
+      expect(selection.tileRefs.size).toBe(3);
+      // and the failure is surfaced instead of swallowed
+      expect(gridLogs.some((m) => m.includes("rebuild failed"))).toBe(true);
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+});
+
 // --- [ui] windowed-grid: only the visible row window (+overscan) is built;
 // the full tileRefs/focusKeys list stays the selection's contract, spacers
 // keep the content height honest, and syncWindow slides on scroll ---
@@ -1975,5 +2173,337 @@ describe("hookScrollerScroll", () => {
     expect(hookScrollerScroll(sc, () => seen.push("notify"))).toBe(true);
     sc.verticalScrollBar._onChange(42);
     expect(seen).toEqual(["orig:42", "notify"]);
+  });
+});
+
+// --- [ui] loading-delay-ms ---------------------------------------------------
+// The pane must never blank on a rebuild (clearing before the paint stranded
+// it — see the pane-claim invariant), so before this the only thing a slow
+// listing showed was the PREVIOUS folder's tiles: an app that looks frozen.
+// The placeholder replaces that after the configured delay and writes NO paint
+// claim, so the render that finally lands still owns the pane.
+describe("loadingLabel / loadingLine", () => {
+  test("names the folder being opened, or the recursive walk that has no listing yet", () => {
+    expect(loadingLabel("/home/clark/Pictures", "", false)).toBe("loading Pictures…");
+    expect(loadingLabel(RECENT_URI, "", false)).toBe("loading recent files…");
+    expect(loadingLabel(STARRED_URI, "", false)).toBe("loading starred…");
+    expect(loadingLabel("/x", "foo", true)).toBe("searching…");
+    // an in-dir filter still has the folder to show — not a search
+    expect(loadingLabel("/x", "foo", false)).toBe("loading x…");
+  });
+
+  test("clamps the painted line to the pane so it can't overflow into a neighbour", () => {
+    expect(loadingLine("⠋", "loading Pictures…", 40)).toBe("⠋ loading Pictures…");
+    const long = loadingLine("⠋", "loading a-really-long-folder-name…", 10);
+    expect(long.length).toBeLessThanOrEqual(10);
+    expect(long.endsWith("…")).toBe(true);
+    // a pane narrower than the sprite still gets the 8-cell floor
+    expect(loadingLine("⠋", "loading some-folder…", 1).length).toBe(8);
+  });
+});
+
+describe("renderGrid (loading placeholder)", () => {
+  const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+    const deadline = Date.now() + ms;
+    while (!cond() && Date.now() < deadline) await Bun.sleep(5);
+  };
+  // holds renders inside the resolution park — the seam the console's slow path
+  // used to be (and still is, right after a resize requery)
+  const parkWait = () => {
+    const waiters: Array<() => void> = [];
+    let open = false;
+    return {
+      count: (): number => waiters.length,
+      open: (): void => {
+        open = true;
+        for (const r of waiters.splice(0)) r();
+      },
+      impl: (): Promise<void> =>
+        open
+          ? Promise.resolve()
+          : new Promise<void>((r) => {
+              waiters.push(r);
+            }),
+    };
+  };
+  const loadingId = (): string => loadingNodeId(tilePrefix);
+  const loadingNode = (): any => t.renderer.root.findDescendantById(loadingId()) as any;
+  // one root with two SIBLING folders of known names: the placeholder names
+  // the folder it is opening, so the painted label must be predictable (and a
+  // fresh root per test keeps the listings cache out of the way)
+  const mkPair = (): { root: string; a: string; b: string } => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-loading-"));
+    const a = path.join(root, "alpha");
+    const b = path.join(root, "beta");
+    mkdirSync(a);
+    mkdirSync(b);
+    writeFileSync(path.join(a, "a.txt"), "x");
+    writeFileSync(path.join(b, "b.txt"), "x");
+    return { root, a, b };
+  };
+
+  test("a slow listing swaps the stale tiles for the placeholder, then paints", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 150;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      await settleUntil(() => park.count() >= 1);
+      // the listing is in hand and the pane is parked before the clear: the
+      // armed delay fires now, so the OLD folder's tiles are replaced by the
+      // placeholder instead of sitting there looking frozen
+      revealClock.flush();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("loading beta");
+      expect(frame).not.toContain("a.txt");
+
+      park.open();
+      await parked;
+      await t.renderOnce();
+      const after = t.captureCharFrame();
+      expect(after).toContain("b.txt");
+      expect(after).not.toContain("loading");
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a listing inside the delay never flashes one (and a stray timer can't paint later)", async () => {
+    const { root, a } = mkPair();
+    loadingDelayMs = 150;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      expect(loadingNode()).toBeFalsy();
+      // the render cancelled its own armed timer — flushing finds nothing
+      revealClock.flush();
+      await t.renderOnce();
+      expect(loadingNode()).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("a.txt");
+    } finally {
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("the placeholder writes no paint claim: navigating back still repaints", async () => {
+    // the regression this pins: the claim describes listing A, the screen shows
+    // the placeholder, and the user comes back to A — its signature MATCHES the
+    // claim, so without the showingLoading gate the render would early-out and
+    // leave "loading…" on screen until the cwd moved
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 150;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parkedB = renderGrid();
+      await settleUntil(() => park.count() >= 1);
+      revealClock.flush();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).not.toContain("a.txt");
+
+      gridState.cwd = a;
+      const again = renderGrid();
+      park.open();
+      await Promise.all([parkedB, again]);
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).not.toContain("loading");
+      expect(selection.tileRefs.size).toBe(1);
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("delay 0 clears the pane synchronously (the always-show mode)", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 0;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      // no clock to advance: the placeholder is painted in the render's own
+      // synchronous prefix, before it ever touches the disk
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("loading beta");
+      expect(t.captureCharFrame()).not.toContain("a.txt");
+
+      park.open();
+      await parked;
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("b.txt");
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("spins per frame — braille on a graphics terminal, ASCII on the console", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 0;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      await t.renderOnce();
+      const braille = SPIN_FRAMES_BRAILLE[0] as string;
+      expect(t.captureCharFrame()).toContain(`${braille} loading beta`);
+      revealClock.flush(); // one tick
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain(`${SPIN_FRAMES_BRAILLE[1]} loading beta`);
+      park.open();
+      await parked;
+      await t.renderOnce();
+
+      // the tick died with the placeholder: flushing can't repaint "loading…"
+      // over the fresh listing
+      revealClock.flush();
+      await t.renderOnce();
+      expect(loadingNode()).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("b.txt");
+
+      // console: the VT font has no braille block. Back to alpha first — a
+      // render for the folder already on screen is not a context change and
+      // arms nothing (the placeholder only ever covers a STALE pane)
+      ttyModeOn = true;
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      const park2 = parkWait();
+      waitForResolutionImpl = park2.impl;
+      gridState.cwd = b;
+      const parked2 = renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain(`${SPIN_FRAMES_ASCII[0]} loading beta`);
+      park2.open();
+      await parked2;
+      await t.renderOnce();
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      ttyModeOn = false;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a slow navigation logs its own components; a layout-only render stays quiet", async () => {
+    const { root, a } = mkPair();
+    try {
+      viewMode = "list";
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+
+      gridLogs.length = 0;
+      // the parked rebuild IS the console's old 2s stall (now bounded to the
+      // render path's short wait) — whatever a report calls "stuck", the
+      // breadcrumb names list/park/build
+      waitForResolutionImpl = async () => {
+        await Bun.sleep(100);
+      };
+      writeFileSync(path.join(a, "later.txt"), "x");
+      await renderGrid();
+      const line = gridLogs.find((m) => m.startsWith("grid: "));
+      expect(line).toBeTruthy();
+      expect(line).toContain("n=2");
+      expect(line).toContain("list=");
+      expect(line).toContain("build=");
+      expect(Number(/park=(\d+)ms/.exec(line ?? "")?.[1])).toBeGreaterThanOrEqual(90);
+
+      // a same-listing render (the pane is already correct) ends without work
+      // and without a line
+      waitForResolutionImpl = () => Promise.resolve();
+      gridLogs.length = 0;
+      await renderGrid();
+      expect(gridLogs.filter((m) => m.startsWith("grid: "))).toEqual([]);
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridLogs.length = 0;
+      gridState.cwd = tmp;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("never yanks a live inline rename", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 0;
+    renamingOn = true;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      await t.renderOnce();
+      expect(loadingNode()).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      park.open();
+      await parked;
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      renamingOn = false;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
   });
 });

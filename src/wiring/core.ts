@@ -17,11 +17,12 @@ import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
-import { makeLookup } from "../ui/ui-lookup";
+import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makeSlots } from "../ui/ui-slots";
 import { makeFloats } from "../ui/floats";
 import { clearChildren } from "../lib/uiutil";
 import { initialAppState } from "../app/nav";
+import { appendLog } from "../app/log";
 import { activeFacade, activeState, makePanePair, otherState, setActivePane, togglePane } from "../app/panes";
 
 export type CoreWiring = ReturnType<typeof wireCore>;
@@ -78,6 +79,19 @@ export const wireCore = (deps: {
   // --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY); every category the
   // ./filetype classifier can emit gets a file-glyph fallback ---
   ensureGlyphFallbacks(new Set(Object.values(FILE_ICON_BY_EXT)));
+
+  // --- Pixel-resolution gate (./ui-lookup, tested): ONE per process, shared by
+  // the boot wait (settle: full budget, then latch "this terminal never
+  // reports pixels") and the grid's render path (wait: instant on the console
+  // and tmux, short-bounded parking only after a resize requery). Owning it
+  // here is what keeps the two from disagreeing — a per-call-site gate could
+  // never latch across the whole app. Lazy renderer getter (TDZ seam rule).
+  const resolutionGate = makeResolutionGate(() => deps.renderer(), {
+    log: (msg) => appendLog(msg),
+    // no rasters here (the console, or a terminal with broken kitty graphics) —
+    // cell pixels would never be read, so the boot wait is skipped entirely
+    rasterless: () => isTtyMode() || config.ui.forceGlyph,
+  });
 
   // --- Post-mount node lookup seam — lives in ./ui-lookup (tested). Created
   // before the widget factories that capture byId/stripSelectable in ctx; the
@@ -184,6 +198,7 @@ export const wireCore = (deps: {
     geometry,
     sideInnerW,
     lookup,
+    resolutionGate,
     floats,
     slots,
     home,
