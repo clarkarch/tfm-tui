@@ -12,8 +12,10 @@ import {
   GPM_UP,
   gpmConnectFrame,
   gpmEventToSgr,
+  makeGpmTranslator,
   parseGpmEvent,
   startGpmInput,
+  vcFromActiveConsole,
   vcFromTty,
   type GpmEvent,
   type GpmSocket,
@@ -58,6 +60,14 @@ const frame = (over: Partial<GpmEvent> = {}): Uint8Array => {
 const sgrFor = (over: Partial<GpmEvent>): string | null => {
   const parsed = parseGpmEvent(frame(over));
   return parsed && gpmEventToSgr(parsed);
+};
+
+// A parsed press event (tests spread buttons/type over it); throws instead of
+// a non-null assertion if the fixture itself fails to parse.
+const parsedDown = (): GpmEvent => {
+  const ev = parseGpmEvent(frame({ type: GPM_DOWN, buttons: GPM_B_LEFT }));
+  if (!ev) throw new Error("press fixture failed to parse");
+  return ev;
 };
 
 describe("parseGpmEvent", () => {
@@ -159,6 +169,16 @@ describe("vcFromTty", () => {
   });
 });
 
+describe("vcFromActiveConsole", () => {
+  test("parses the sysfs active console and rejects the rest", () => {
+    expect(vcFromActiveConsole("tty3\n")).toBe(3);
+    expect(vcFromActiveConsole("tty12")).toBe(12);
+    expect(vcFromActiveConsole("")).toBeNull();
+    expect(vcFromActiveConsole(null)).toBeNull();
+    expect(vcFromActiveConsole("pts/2\n")).toBeNull();
+  });
+});
+
 describe("gpmConnectFrame", () => {
   test("takes every event AND lets MOVE fall through to the native pointer", () => {
     // defaultMask MOVE|HARD: do_client.c delivers our copy AND returns 0, so
@@ -193,15 +213,19 @@ class FakeSocket extends EventEmitter implements GpmSocket {
 const startReader = (over: Partial<Parameters<typeof startGpmInput>[0]> = {}) => {
   const sock = new FakeSocket();
   const bytes: string[] = [];
+  const logs: string[] = [];
   const input = startGpmInput({
     term: "linux",
+    env: {},
     envExists: () => true,
     ttyName: () => "/dev/tty1",
+    activeVc: () => null,
     connect: () => sock,
     onBytes: (s) => bytes.push(s),
+    log: (m) => logs.push(m),
     ...over,
   });
-  return { sock, bytes, input };
+  return { sock, bytes, input, logs };
 };
 
 describe("startGpmInput", () => {
@@ -209,6 +233,28 @@ describe("startGpmInput", () => {
     expect(startReader({ term: "xterm-kitty" }).input).toBeNull();
     expect(startReader({ envExists: () => false }).input).toBeNull();
     expect(startReader({ ttyName: () => "/dev/pts/2" }).input).toBeNull();
+  });
+
+  test("logs the gates on every boot so a silent null is diagnosable", () => {
+    expect(startReader({ term: "xterm-kitty" }).logs).toEqual([
+      "gpm: term=xterm-kitty gpmctl=yes tty=/dev/tty1",
+      "gpm: inert (not a linux console)",
+    ]);
+    expect(startReader({ envExists: () => false }).logs).toEqual([
+      "gpm: term=linux gpmctl=no tty=/dev/tty1",
+      "gpm: inert (no /dev/gpmctl)",
+    ]);
+    expect(startReader({ ttyName: () => "/dev/pts/2" }).logs).toEqual([
+      "gpm: term=linux gpmctl=yes tty=/dev/pts/2",
+      "gpm: pty fallback: active=none (console behind pty /dev/pts/2)",
+      "gpm: inert (no console vc)",
+    ]);
+    const ok = startReader({ ttyName: () => "/dev/pts/2", activeVc: () => 3 });
+    expect(ok.logs).toEqual([
+      "gpm: term=linux gpmctl=yes tty=/dev/pts/2",
+      "gpm: pty fallback: active=vc 3 (console behind pty /dev/pts/2)",
+      "gpm: attached on vc 3",
+    ]);
   });
 
   test("sends the connect frame and translates incoming events", () => {
@@ -241,5 +287,55 @@ describe("startGpmInput", () => {
     expect(sock.destroyed).toBe(true);
     sock.emit("data", Buffer.from(frame({ type: GPM_MOVE })));
     expect(bytes).toEqual([]);
+  });
+
+  test("falls back to the active console behind a pty (asciinema rec)", () => {
+    const { sock, bytes, input } = startReader({
+      ttyName: () => "/dev/pts/2",
+      activeVc: () => 3,
+    });
+    expect(input).not.toBeNull();
+    expect(sock.written[0]!.length).toBe(16);
+    expect(sock.written[0]!.readUInt16LE(12)).toBe(3);
+    // connect frame targets vc 3, frames for other vcs are dropped
+    sock.emit("data", Buffer.from(frame({ type: GPM_DOWN, buttons: GPM_B_LEFT, vc: 3 })));
+    sock.emit("data", Buffer.from(frame({ type: GPM_DOWN, buttons: GPM_B_LEFT, vc: 4 })));
+    expect(bytes).toEqual(["\x1b[<0;5;3M"]);
+  });
+
+  test("pty fallback stays inert on ssh, serial and unreadable consoles", () => {
+    expect(
+      startReader({ ttyName: () => "/dev/pts/2", activeVc: () => 3, env: { SSH_CONNECTION: "x" } }).input,
+    ).toBeNull();
+    expect(
+      startReader({ ttyName: () => "/dev/pts/2", activeVc: () => 3, env: { SSH_TTY: "/dev/pts/0" } }).input,
+    ).toBeNull();
+    expect(startReader({ ttyName: () => "/dev/ttyS0", activeVc: () => 3 }).input).toBeNull();
+    expect(startReader({ ttyName: () => null, activeVc: () => 3 }).input).toBeNull();
+    expect(startReader({ ttyName: () => "/dev/pts/2", activeVc: () => null }).input).toBeNull();
+  });
+});
+
+describe("makeGpmTranslator", () => {
+  test("synthesizes the release from the last press when the daemon reports buttons=0", () => {
+    const t = makeGpmTranslator();
+    expect(t({ ...parsedDown(), buttons: GPM_B_LEFT })).toBe("\x1b[<0;5;3M");
+    // lone release: buttons=0 carries no identity, falls back to last press
+    expect(t({ ...parsedDown(), buttons: 0, type: GPM_UP })).toBe("\x1b[<0;5;3m");
+  });
+
+  test("a reported button always wins and releases clear the slot", () => {
+    const t = makeGpmTranslator();
+    expect(t({ ...parsedDown(), buttons: GPM_B_LEFT })).toBe("\x1b[<0;5;3M");
+    // middle reported on release: honored, slot cleared
+    expect(t({ ...parsedDown(), buttons: GPM_B_MIDDLE, type: GPM_UP })).toBe("\x1b[<1;5;3m");
+    // stale release with nothing held: dropped like before
+    expect(t({ ...parsedDown(), buttons: 0, type: GPM_UP })).toBeNull();
+  });
+
+  test("right press and release round-trip", () => {
+    const t = makeGpmTranslator();
+    expect(t({ ...parsedDown(), buttons: GPM_B_RIGHT })).toBe("\x1b[<2;5;3M");
+    expect(t({ ...parsedDown(), buttons: 0, type: GPM_UP })).toBe("\x1b[<2;5;3m");
   });
 });

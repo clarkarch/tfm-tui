@@ -16,7 +16,7 @@
 // re-points the connection at the vc-0 default console. ---
 
 import { connect as netConnect, type Socket } from "node:net";
-import { existsSync, readlinkSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
 
 export const GPM_EVENT_SIZE = 28;
 export const GPM_CONNECT_SIZE = 16;
@@ -124,6 +124,35 @@ export const gpmEventToSgr = (ev: GpmEvent): string | null => {
   return `\x1b[<${base + mods};${x};${y}${final}`;
 };
 
+// Button releases need state: on GPM_UP the daemon reports currently-held
+// buttons, so a lone release arrives with buttons=0 (unidentifiable) and a
+// pure function would drop every mouseup — leaving tfm's press armed forever
+// (no drag cleanup, no deferred ctrl-toggle). The translator remembers the
+// last pressed button and synthesizes the release from it; a reported button
+// always wins. One slot is enough (single pointer); an interleaved second
+// DOWN overwrites it and any release clears it.
+export const makeGpmTranslator = (): ((ev: GpmEvent) => string | null) => {
+  let lastDown: number | null = null;
+  return (ev: GpmEvent): string | null => {
+    if (ev.type & GPM_DOWN) {
+      const b = primaryButton(ev.buttons);
+      if (b === 3) return null;
+      lastDown = b;
+      return gpmEventToSgr(ev);
+    }
+    if (ev.type & GPM_UP) {
+      const b = primaryButton(ev.buttons);
+      const release = b === 3 ? lastDown : b;
+      lastDown = null;
+      if (release === null) return null;
+      const mask = [GPM_B_LEFT, GPM_B_MIDDLE, GPM_B_RIGHT][release];
+      if (mask === undefined) return null;
+      return gpmEventToSgr({ ...ev, buttons: mask });
+    }
+    return gpmEventToSgr(ev);
+  };
+};
+
 // Gpm_Connect: take every event for our VC, all modifiers — and let bare
 // MOVE fall through to the daemon's default handler (do_selection's pointer
 // highlight = the native gpm pointer). do_client.c only passes an already
@@ -147,6 +176,19 @@ export const vcFromTty = (tty: string | null | undefined): number | null => {
   return m ? Number(m[1]) : null;
 };
 
+// Kernel's currently active console (e.g. "tty1\n" from
+// /sys/class/tty/tty0/active) → 1. Used when the app sits behind a pty
+// (asciinema rec, script(1)) on a Linux console: gpm still tags frames with
+// the physical console's vc. Missing/unparsable (containers, remote hosts
+// without a console) keeps gpm inert.
+const SYSFS_ACTIVE_CONSOLE = "/sys/class/tty/tty0/active";
+
+export const vcFromActiveConsole = (content: string | null | undefined): number | null => {
+  if (!content) return null;
+  const m = /^tty(\d+)\s*$/.exec(content);
+  return m ? Number(m[1]) : null;
+};
+
 export type GpmSocket = {
   write(b: Uint8Array): unknown;
   destroy(): unknown;
@@ -154,12 +196,15 @@ export type GpmSocket = {
 };
 
 // node:tty has no ttyname; /proc/self/fd/N resolves it everywhere Linux gpm
-// exists. Falls back null so a non-console stdin is a clean no-op.
+// exists. Returns console (/dev/ttyN) or pty (/dev/pts/N) paths — callers
+// decide which is usable (vcFromTty for the direct path, pty pattern for the
+// recorder fallback). Falls back null when no fd is a tty at all, so piped
+// non-console stdio stays a clean no-op.
 const procTtyName = (): string | null => {
   for (const fd of [0, 1, 2]) {
     try {
       const p = readlinkSync(`/proc/self/fd/${fd}`);
-      if (/^\/dev\/tty\d+$/.test(p)) return p;
+      if (/^\/dev\/(tty\d+|pts\/\d+)$/.test(p)) return p;
     } catch {}
   }
   return null;
@@ -167,10 +212,14 @@ const procTtyName = (): string | null => {
 
 export type GpmInputOptions = {
   term?: string | undefined;
+  /** environment — injectable so tests control SSH/asciinema markers */
+  env?: Record<string, string | undefined>;
   /** probe for /dev/gpmctl — injectable so tests stay fs-free */
   envExists?: (p: string) => boolean;
   /** resolve the controlling console tty — injectable (node:tty in prod) */
   ttyName?: () => string | null;
+  /** resolve the kernel's active console vc (pty fallback) — injectable */
+  activeVc?: () => number | null;
   /** AF_UNIX connect — injectable so tests use a fake socket */
   connect?: (path: string) => GpmSocket;
   onBytes: (sgr: string) => void;
@@ -180,15 +229,51 @@ export type GpmInputOptions = {
 // Attach to gpm. Returns null (feature inert) everywhere but a Linux console
 // with a live gpm daemon — kittty/ghostty/X/tmux and no-gpm machines are
 // untouched. Never throws: a gpm hiccup must not take the TUI down.
+// Every boot logs the gate values so a silent null is diagnosable from the
+// log alone (TERM, socket, tty resolution, fallback outcome).
 export const startGpmInput = (opts: GpmInputOptions): { stop(): void } | null => {
   const log = opts.log ?? (() => {});
   const term = opts.term ?? process.env.TERM ?? "";
-  if (!term.startsWith("linux")) return null;
   const exists = opts.envExists ?? existsSync;
-  if (!exists(GPM_NODE_CTL)) return null;
+  const hasCtl = exists(GPM_NODE_CTL);
   const ttyName = opts.ttyName ?? procTtyName;
-  const vc = vcFromTty(ttyName());
-  if (vc === null) return null;
+  const ownTty = ttyName();
+  log(`gpm: term=${term} gpmctl=${hasCtl ? "yes" : "no"} tty=${ownTty ?? "none"}`);
+  if (!term.startsWith("linux")) {
+    log("gpm: inert (not a linux console)");
+    return null;
+  }
+  if (!hasCtl) {
+    log("gpm: inert (no /dev/gpmctl)");
+    return null;
+  }
+  let vc = vcFromTty(ownTty);
+  if (vc === null && ownTty !== null && /^\/dev\/pts\/\d+$/.test(ownTty)) {
+    // Pty-fronted session on a Linux console (asciinema rec, script(1)):
+    // gpm still serves the physical console behind the pty. Never over ssh
+    // (that would inject the *server's* console mouse) and never off a real
+    // serial/null tty — those stay inert exactly as before.
+    const env = opts.env ?? process.env;
+    if (env.SSH_CLIENT || env.SSH_CONNECTION || env.SSH_TTY) {
+      log(`gpm: inert (pty ${ownTty} in ssh session; fallback skipped)`);
+      return null;
+    }
+    const activeVc =
+      opts.activeVc ??
+      ((): number | null => {
+        try {
+          return vcFromActiveConsole(readFileSync(SYSFS_ACTIVE_CONSOLE, "utf8"));
+        } catch {
+          return null;
+        }
+      });
+    vc = activeVc();
+    log(`gpm: pty fallback: active=${vc === null ? "none" : `vc ${vc}`} (console behind pty ${ownTty})`);
+  }
+  if (vc === null) {
+    log("gpm: inert (no console vc)");
+    return null;
+  }
 
   let sock: GpmSocket;
   try {
@@ -202,6 +287,7 @@ export const startGpmInput = (opts: GpmInputOptions): { stop(): void } | null =>
   let pending: Buffer = Buffer.alloc(0);
   let last = "";
   let stopped = false;
+  const translate = makeGpmTranslator();
 
   const onData = (chunk: Buffer | Uint8Array): void => {
     if (stopped) return;
@@ -216,10 +302,13 @@ export const startGpmInput = (opts: GpmInputOptions): { stop(): void } | null =>
       // repaint under a stationary cursor, so collapse exact duplicates.
       // ponytail: drops a genuine double-click's identical reposition too;
       // harmless for hover, add a timestamp window if that proves wrong.
-      const sgr = gpmEventToSgr(ev);
+      const sgr = translate(ev);
       if (!sgr) continue;
       if (sgr === last) continue;
       last = sgr;
+      // button traffic is rare (motion stays quiet): log it so --debug shows
+      // exactly what the daemon delivered vs what tfm consumed.
+      if (ev.type & (GPM_DOWN | GPM_UP)) log(`gpm: ${sgr}`);
       try {
         opts.onBytes(sgr);
       } catch (err) {
