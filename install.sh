@@ -11,6 +11,10 @@
 #   TFM_SOURCE=dev ... | bash              build a ref from source
 #   TFM_LOCAL=./dist/tfm ... | bash        install a binary you already built
 #
+# One binary, two command names: `tfm` and `terminal-file-manager` (a symlink,
+# or a copy where the filesystem has no symlinks). There is no backup copy of a
+# previous install — the new build is tested BEFORE it replaces anything.
+#
 # env:
 #   TFM_INSTALL_DIR   where tfm goes (default ~/.local/bin)
 #   TFM_VERSION       release tag to install (default latest)
@@ -19,7 +23,7 @@
 #   TFM_REMOTE        git remote to clone (default the GitHub repo)
 #   TFM_LOCAL         install this binary instead of downloading or building
 #   TFM_NO_VERIFY=1   skip the checksum check (not recommended)
-#   TFM_NO_SMOKE=1    skip the post-install `tfm --version` check
+#   TFM_NO_SMOKE=1    install without testing the build first (not recommended)
 #   TFM_VERBOSE=1     stream child output instead of capturing it
 #   TFM_WIDTH=N       force the render width (testing)
 #   TFM_INSTALL_LIB_ONLY=1  define the helpers and stop (testing)
@@ -101,8 +105,9 @@ SHELL_LABEL=""
 RCFILE=""
 LINE=""
 SMOKE_VER=""
-SMOKE_ERR=""
-SAVED_BAK=0
+SMOKE_LINE=""
+BAK_REMOVED=0
+NEW_FILE=""
 MODE=release
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -391,6 +396,9 @@ show_log_tail() {
 cleanup() {
   local code=$?
   if [ "$STEP_PENDING" = 1 ] && [ "$FANCY" = 1 ]; then printf '\n'; fi
+  # a half-copied binary must never outlive us (only SIGKILL skips this trap,
+  # which is why install_binary sweeps the pattern too)
+  if [ -n "${NEW_FILE:-}" ]; then rm -f "$NEW_FILE" 2>/dev/null; fi
   if [ -n "${WORK:-}" ] && [ -d "$WORK" ] && [ "${KEEP_WORK:-0}" = 0 ]; then
     rm -rf "$WORK"
   fi
@@ -863,33 +871,90 @@ step_build() {
   step_ok "$took · bun install + bun run compile → dist/tfm"
 }
 
-# ── steps: install + smoke test ─────────────────────────────────────────────
-# Never silently clobber: one backup of the previous binary is kept, so a bad
-# build is one `mv` away from a rollback.
+# ── steps: install ──────────────────────────────────────────────────────────
+# No backup copy is kept: the STAGED build is tested before anything in $DEST is
+# touched, so a build that doesn't run leaves the installed one exactly where it
+# is. The old flow moved the previous binary to tfm.bak first and only warned
+# afterwards — a 100 MB file nobody ever cleaned up.
+#
+# Run `<file> --version` (what the old `check` step did, moved in front of the
+# swap). Sets SMOKE_VER on success, SMOKE_LINE to whatever it printed.
+smoke_version() { # smoke_version FILE
+  local file=$1 out="" first="" ok=1
+  SMOKE_VER=""
+  SMOKE_LINE=""
+  if have timeout; then
+    out=$(timeout -k 2 15 "$file" --version 2>&1) || ok=0
+  else
+    out=$("$file" --version 2>&1) || ok=0
+  fi
+  first="${out%%$'\n'*}"
+  SMOKE_LINE=$first
+  [ "$ok" = 1 ] || return 1
+  case "$first" in
+    'tfm '*) SMOKE_VER="${first#tfm }"; return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# One binary, two commands. Created BEFORE the swap, so the two names can never
+# disagree: if the name can't be installed, the install fails while your tfm is
+# still untouched.
+link_second_name() { # link_second_name SRC_FILE
+  local src=$1
+  local link="$DEST/terminal-file-manager"
+  if [ -d "$link" ] && [ ! -L "$link" ]; then
+    fail_at install "terminal-file-manager is a directory" \
+      "$link is a directory, so tfm can't install the command there." \
+      "Move it aside and run the same command again." \
+      "Nothing was installed over your copy."
+  fi
+  ln -sfn "$DEST/tfm" "$link" 2>>"$RUN_LOG" && return 0
+  # no symlinks on this filesystem (exFAT/vfat): install a copy instead — of the
+  # STAGED file, so it works on a fresh install too, and never through a symlink
+  # we just failed to replace (cp would write into its target)
+  rm -f "$link" 2>/dev/null || true
+  cp -f "$src" "$link" 2>>"$RUN_LOG" && return 0
+  fail_at install "can't install terminal-file-manager" \
+    "Couldn't create $link." \
+    "Check permissions and free space, then try again." \
+    "Nothing was installed over your copy."
+}
+
 install_binary() { # install_binary SRC_FILE
   local src=$1
   chmod +x "$src" || fail_at install "chmod failed" \
     "Couldn't mark the new build executable." \
     "Nothing was installed over your copy."
-  if [ -e "$DEST/tfm" ]; then
-    if ! mv -f "$DEST/tfm" "$DEST/tfm.bak" 2>>"$RUN_LOG"; then
-      fail_at install "backup failed" \
-        "Couldn't back up the previous tfm in $DEST." \
-        "Check permissions and free space, then try again."
-    fi
-    SAVED_BAK=1
-  else
-    SAVED_BAK=0
+  if [ -z "$NO_SMOKE" ]; then
+    smoke_version "$src" || fail_at install "the build didn't run" \
+      "The new build didn't report its version (${SMOKE_LINE:-no output})." \
+      "Nothing was installed over your copy."
   fi
-  if ! mv "$src" "$DEST/tfm" 2>>"$RUN_LOG"; then
+  link_second_name "$src"
+  # copy into the install dir + rename = one atomic swap. `mv "$src" "$DEST/tfm"`
+  # would be a cross-device copy whenever $WORK sits on another filesystem (tmpfs
+  # /tmp), and a failure halfway through it truncates the installed binary.
+  rm -f "$DEST"/.tfm-new.* 2>/dev/null || true
+  NEW_FILE="$DEST/.tfm-new.$$"
+  if ! cp -f "$src" "$NEW_FILE" 2>>"$RUN_LOG" || ! chmod +x "$NEW_FILE" 2>>"$RUN_LOG" ||
+    ! mv -f "$NEW_FILE" "$DEST/tfm" 2>>"$RUN_LOG"; then
+    rm -f "$NEW_FILE" 2>/dev/null || true
+    NEW_FILE=""
+    # a dangling second name is only possible when there was no previous binary
+    if [ ! -e "$DEST/tfm" ]; then rm -f "$DEST/terminal-file-manager" 2>/dev/null || true; fi
     fail_at install "move failed" \
       "Couldn't write $DEST/tfm." \
       "Check permissions and free space, then try again." \
-      "Your previous build is at $DEST/tfm.bak."
+      "Your existing tfm (if any) is untouched."
   fi
-  # convenience alias: non-fatal, the binary itself is already installed
-  ln -sf "$DEST/tfm" "$DEST/terminal-file-manager" 2>/dev/null ||
-    printf '%s\n' "tfm: could not create the terminal-file-manager alias (non-fatal)" >&2
+  NEW_FILE=""
+  # a tfm.bak an older installer left behind is swept only now — never before the
+  # swap, when it is still the only copy of a working binary
+  BAK_REMOVED=0
+  if [ -f "$DEST/tfm.bak" ] && [ ! -L "$DEST/tfm.bak" ]; then
+    if rm -f "$DEST/tfm.bak" 2>>"$RUN_LOG"; then BAK_REMOVED=1; fi
+  fi
 }
 
 step_install() {
@@ -924,40 +989,13 @@ step_install() {
       "Rebuild it and try again. Nothing was installed."
   fi
   install_binary "$src"
-  if [ "$SAVED_BAK" = 1 ]; then
-    detail="$(pretty_home "$DEST")/tfm · previous saved as tfm.bak"
-  else
-    detail="$(pretty_home "$DEST")/tfm · new install"
-  fi
-  step_ok "$detail"
-}
-
-step_check() {
-  step_begin "check"
-  SMOKE_VER=""
-  SMOKE_ERR=""
   if [ -n "$NO_SMOKE" ]; then
-    step_warn "skipped (TFM_NO_SMOKE=1)"
-    return 0
-  fi
-  local out="" first="" ok=1
-  if have timeout; then
-    out=$(timeout -k 2 15 "$DEST/tfm" --version 2>&1) || ok=0
+    detail="$(pretty_home "$DEST")/tfm · test skipped (TFM_NO_SMOKE=1)"
   else
-    out=$("$DEST/tfm" --version 2>&1) || ok=0
+    detail="$(pretty_home "$DEST")/tfm · tfm $SMOKE_VER runs"
   fi
-  first="${out%%$'\n'*}"
-  if [ "$ok" = 0 ]; then
-    SMOKE_ERR="$first"
-    step_warn "installed, but it didn't run: $first"
-    return 0
-  fi
-  case "$first" in
-    tfm\ *) SMOKE_VER="${first#tfm }" ;;
-    *) step_warn "installed, unexpected output: $first"; return 0 ;;
-  esac
-  step_ok "$first runs"
-  return 0
+  if [ "$BAK_REMOVED" = 1 ]; then detail="$detail · removed old tfm.bak"; fi
+  step_ok "$detail"
 }
 
 # ── PATH setup + result ─────────────────────────────────────────────────────
@@ -1022,7 +1060,7 @@ print_result() {
   local lines=("$title" "installed to $(pretty_home "$DEST")/tfm" "")
   case "$path_action" in
     reload)
-      lines+=("this terminal needs a refresh:" "> $reload_cmd" "" "then start it:" "> tfm")
+      lines+=("this terminal needs a refresh:" "> $reload_cmd" "" "then start it:" "> tfm or terminal-file-manager")
       ;;
     export)
       if [ "$SHELL_KNOWN" = 0 ]; then
@@ -1031,10 +1069,10 @@ print_result() {
         lines+=("put it on your PATH first:")
       fi
       [ "$long_export" = 0 ] && lines+=("> $export_hint")
-      lines+=("" "then start it:" "> tfm")
+      lines+=("" "then start it:" "> tfm or terminal-file-manager")
       ;;
     *)
-      lines+=("start it:" "> tfm")
+      lines+=("start it:" "> tfm or terminal-file-manager")
       ;;
   esac
   if [ "$FANCY" = 1 ]; then
@@ -1054,10 +1092,6 @@ print_result() {
     printf '\n'
     note "$C_DIM" "run this once:"
     if [ "$FANCY" = 1 ]; then printf '    %s%s%s\n' "$C_BOLD" "$export_hint" "$C_RST"; else plain "$export_hint"; fi
-  fi
-  if [ -n "$SMOKE_ERR" ]; then
-    note "$C_WARN" "the new build didn't start: $SMOKE_ERR"
-    note "$C_DIM" "your previous build is at $(pretty_home "$DEST")/tfm.bak"
   fi
 }
 
@@ -1096,7 +1130,6 @@ elif [ "$MODE" = "source" ]; then
   step_build
 fi
 step_install
-step_check
 if [ "$MODE" = "source" ]; then
   rule
   note "$C_DIM" "unreleased dev build · re-run the same command to update"

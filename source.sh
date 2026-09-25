@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
 #
 # The build itself lives in install.sh (TFM_SOURCE=<ref>), so there is one
-# installer, one output style, and one place where PATH/backup/checksum policy
+# installer, one output style, and one place where PATH/replace/checksum policy
 # is decided. This file only pins the branch and fetches the real script.
 #
 # env:
