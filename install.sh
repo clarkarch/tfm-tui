@@ -42,6 +42,10 @@ NO_SMOKE="${TFM_NO_SMOKE:-}"
 # step label column, panel width bounds, and the narrowest terminal that can
 # hold a step line + a panel (below it everything falls back to plain lines)
 LABEL_W=10
+# the download bar: never narrower than BAR_MIN, and capped at BAR_MAX so a
+# 120-column terminal gets a bar, not an 88-cell ribbon
+BAR_MIN=8
+BAR_MAX=40
 PANEL_MIN=36
 PANEL_MAX=74
 MIN_FANCY_COLS=60
@@ -108,6 +112,7 @@ SMOKE_VER=""
 SMOKE_LINE=""
 BAK_REMOVED=0
 NEW_FILE=""
+FETCH_PID=""
 MODE=release
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -273,6 +278,107 @@ panel() {
   printf '  %s╰%s%s╯%s\n' "$color" "$bar" "$color" "$C_RST"
 }
 
+# ── progress bar (download) ──────────────────────────────────────────────────
+# curl's own `--progress-bar` draws a `####…100.0%` line in ITS style, outside the
+# step list, and the next step line erases it a moment later. This paints the
+# download row instead: the same 17-column prefix every step uses, a bar that
+# takes the leftover width, and the same `\r\033[K` repaint idiom — nothing
+# scrolls and the finished `✓ download …` line lands in its place.
+fmt_speed() { # fmt_speed BYTES_PER_SEC — "12.4 MB/s", "—" while unknown
+  local b=${1:-}
+  # never hand garbage to hsize: its arithmetic would abort the install
+  case "$b" in '' | *[!0-9]*) printf '—' ; return 0 ;; esac
+  if [ "$b" -gt 0 ]; then printf '%s/s' "$(hsize "$b")"; else printf '—'; fi
+}
+
+fmt_eta() { # fmt_eta MILLISECONDS — "0:02", "1:01:40", "—" while unknown
+  local ms=${1:-} s
+  case "$ms" in '' | *[!0-9]*) printf '—' ; return 0 ;; esac
+  # round up: the last tick must not claim 0:00 while bytes are still coming
+  s=$(((ms + 999) / 1000))
+  if [ "$s" -ge 3600 ]; then
+    printf '%d:%02d:%02d' "$((s / 3600))" "$(((s % 3600) / 60))" "$((s % 60))"
+  else
+    printf '%d:%02d' "$((s / 60))" "$((s % 60))"
+  fi
+}
+
+bar_for() { # bar_for WIDTH PCT — exactly WIDTH columns, rounded fill
+  local w=$1 pct=${2:-0} f
+  case "$pct" in '' | *[!0-9]*) pct=0 ;; esac
+  [ "$pct" -gt 100 ] && pct=100
+  f=$(((w * pct + 50) / 100))
+  [ "$f" -gt "$w" ] && f=$w
+  printf '%s%s' "$(repeat_char '█' "$f")" "$(repeat_char '░' "$((w - f))")"
+}
+
+sweep_for() { # sweep_for WIDTH POS [WINDOW] — no honest percentage to show
+  local w=$1 pos=${2:-0} win=${3:-10}
+  [ "$win" -gt "$w" ] && win=$w
+  [ "$pos" -gt "$((w - win))" ] && pos=$((w - win))
+  [ "$pos" -lt 0 ] && pos=0
+  printf '%s%s%s' "$(repeat_char '░' "$pos")" "$(repeat_char '█' "$win")" \
+    "$(repeat_char '░' "$((w - pos - win))")"
+}
+
+# Pick the widest stats string that still leaves a usable bar, plus the bar width
+# that goes with it. Candidates degrade in the order given (full → short → min),
+# so the percentage is the last thing to survive. Sets STATS_TEXT and STATS_W;
+# the 17 is the step prefix and the 2 the gap before the bar.
+progress_stats() { # progress_stats FULL SHORT MIN
+  local cand
+  STATS_TEXT=$3
+  for cand in "$1" "$2" "$3"; do
+    [ -z "$cand" ] && continue
+    if [ "$((17 + 2 + $(disp_w "$cand") + BAR_MIN))" -le "$COLS" ]; then
+      STATS_TEXT=$cand
+      break
+    fi
+  done
+  STATS_W=$((COLS - 17 - 2 - $(disp_w "$STATS_TEXT")))
+  if [ "$STATS_W" -gt "$BAR_MAX" ]; then STATS_W=$BAR_MAX; fi
+  if [ "$STATS_W" -lt "$BAR_MIN" ]; then STATS_W=$BAR_MIN; fi
+  # explicit: the last test above may legitimately be false, and a function that
+  # "fails" here would take the whole install down under `set -e`
+  return 0
+}
+
+# One repaint of the CURRENT step's row, WITHOUT a newline (the pending-line
+# idiom): the next tick, step_ok or fail_at erases it with `\r\033[K`.
+progress_paint() { # progress_paint BAR STATS
+  [ "$FANCY" = 1 ] || return 0
+  printf '\r\033[K  %s·%s  %s%-*s%s  %s%s%s  %s%s%s' \
+    "$C_DIM" "$C_RST" "$C_DIM" "$LABEL_W" "$STEP_LABEL" "$C_RST" \
+    "$C_BRAND" "$1" "$C_RST" "$C_DIM" "$2" "$C_RST"
+}
+
+# Milliseconds since the epoch. $EPOCHREALTIME is a bash builtin: the bar
+# repaints ~10x/s, and a `date` fork per tick would be 10 processes a second.
+now_ms() {
+  local t=${EPOCHREALTIME:-}
+  if [ -n "$t" ]; then
+    t=${t//./}
+    printf '%s' "${t:0:13}"
+  else
+    printf '%s' "$(( $(date +%s) * 1000 ))"
+  fi
+}
+
+file_size() { # file_size FILE — bytes, 0 while the file doesn't exist yet
+  local n=""
+  if [ -e "$1" ]; then n=$(stat -c%s "$1" 2>/dev/null || wc -c <"$1" 2>/dev/null || true); fi
+  case "$n" in '' | *[!0-9]*) printf '0' ;; *) printf '%s' "$n" ;; esac
+}
+
+# The LAST Content-Length in a headers dump: a redirect chain repeats it and the
+# final hop is the object we actually get. Empty for a chunked answer — which is
+# what sends the row into sweep mode instead of inventing a percentage.
+hdr_length() { # hdr_length < headers
+  local len
+  len=$(tr -d '\r' | sed -n 's/^[Cc]ontent-[Ll]ength:[[:space:]]*\([0-9][0-9]*\).*$/\1/p' | tail -n1 || true)
+  case "$len" in '' | *[!0-9]*) printf '' ;; *) printf '%s' "$len" ;; esac
+}
+
 # ── steps ───────────────────────────────────────────────────────────────────
 # One line per step, printed once, when its outcome is known. While a step runs
 # we draw a dim pending line WITHOUT a newline and replace it in place, so a
@@ -399,6 +505,8 @@ cleanup() {
   # a half-copied binary must never outlive us (only SIGKILL skips this trap,
   # which is why install_binary sweeps the pattern too)
   if [ -n "${NEW_FILE:-}" ]; then rm -f "$NEW_FILE" 2>/dev/null; fi
+  # a download in flight dies with the process group anyway; be explicit
+  if [ -n "${FETCH_PID:-}" ]; then kill "$FETCH_PID" 2>/dev/null || true; fi
   if [ -n "${WORK:-}" ] && [ -d "$WORK" ] && [ "${KEEP_WORK:-0}" = 0 ]; then
     rm -rf "$WORK"
   fi
@@ -663,25 +771,72 @@ else
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 fi
 
-step_download() {
-  local ok=1
-  if [ "$FANCY" = 1 ] && [ -t 2 ]; then
-    # curl's own bar (it sizes itself to the terminal). No pending line here:
-    # the bar would start mid-line after the label — the step's finished line
-    # erases the bar and takes its place instead.
-    STEP_LABEL="download"
-    STEP_DETAIL=""
-    STEP_PENDING=0
-    if ! curl -fL --retry 3 --proto '=https' --progress-bar "$BASE/tfm-$ARCH.gz" -o "$WORK/tfm.gz"; then
-      ok=0
-    fi
-  else
-    step_begin "download"
-    if ! run_child curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-$ARCH.gz" -o "$WORK/tfm.gz"; then
-      ok=0
-    fi
+# Content-Length for URL, from a HEAD request: "" when the server won't say. The
+# `|| true` sits inside the group on purpose — a refused HEAD under `pipefail`
+# must not abort an install over a cosmetic feature.
+fetch_length() {
+  { curl -fsSIL --retry 3 --proto '=https' "$1" 2>>"$RUN_LOG" || true; } | hdr_length
+}
+
+# Download URL into FILE while painting our own progress row on the step line.
+# Returns curl's status (the caller keeps deciding what a failure means).
+# TFM_VERBOSE=1 streams curl's output instead: raw mode stays raw, no bar.
+fetch_with_bar() { # fetch_with_bar URL FILE HEADER_FILE
+  local url=$1 file=$2 hdr=$3
+  local pid rc=0 total cur=0 prev=0 last tnow ms inst speed=0 pct=0 eta="" stats
+  local pos=0 win=10
+  : >"$hdr"
+  if [ -n "$VERBOSE" ]; then
+    curl -fSL --retry 3 --proto '=https' -D "$hdr" -o "$file" "$url" 2>&1 | tee -a "$RUN_LOG"
+    return $?
   fi
-  if [ "$ok" = 0 ]; then
+  # ask first, so the bar is determinate from its first frame ("" → sweep)
+  total=$(fetch_length "$url")
+  curl -fSL --retry 3 --proto '=https' -D "$hdr" -o "$file" "$url" >>"$RUN_LOG" 2>&1 &
+  pid=$!
+  FETCH_PID=$pid
+  last=$(now_ms)
+  while kill -0 "$pid" 2>/dev/null; do
+    tnow=$(now_ms)
+    ms=$((tnow - last))
+    last=$tnow
+    cur=$(file_size "$file")
+    # a server that ignored our HEAD still says so in its response headers
+    [ -z "$total" ] && total=$(hdr_length <"$hdr")
+    if [ "$ms" -gt 0 ]; then
+      inst=$(((cur - prev) * 1000 / ms))
+      [ "$inst" -lt 0 ] && inst=0
+      prev=$cur
+      # one 100 ms window is far too jittery to print: smooth it
+      speed=$(((speed * 3 + inst) / 4))
+    fi
+    if [ -n "$total" ] && [ "$total" -gt 0 ]; then
+      pct=$((cur * 100 / total))
+      [ "$pct" -gt 100 ] && pct=100
+      eta=""
+      if [ "$speed" -gt 0 ] && [ "$pct" -lt 100 ]; then
+        eta=$(fmt_eta "$(((total - cur) * 1000 / speed))")
+      fi
+      progress_stats "$pct% · $(fmt_speed "$speed") · ${eta:-—}" \
+        "$pct% · $(fmt_speed "$speed")" "$pct%"
+      progress_paint "$(bar_for "$STATS_W" "$pct")" "$STATS_TEXT"
+    else
+      stats=$(hsize "$cur")
+      progress_stats "$stats · $(fmt_speed "$speed")" "$stats" "$stats"
+      pos=$(((pos + 1) % (STATS_W + win)))
+      progress_paint "$(sweep_for "$STATS_W" "$pos" "$win")" "$STATS_TEXT"
+    fi
+    sleep 0.1 2>/dev/null || sleep 1
+  done
+  if wait "$pid"; then rc=0; else rc=$?; fi
+  FETCH_PID=""
+  return "$rc"
+}
+
+step_download() {
+  step_begin "download"
+  # the bar paints this step's own row while curl runs in the background
+  if ! fetch_with_bar "$BASE/tfm-$ARCH.gz" "$WORK/tfm.gz" "$WORK/tfm.hdr"; then
     fail_at download "download failed" \
       "Couldn't download tfm right now." \
       "Check your internet connection and run the same command again." \

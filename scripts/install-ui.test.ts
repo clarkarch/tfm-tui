@@ -119,6 +119,7 @@ const osRelease = (id: string, like = "") => {
 type Sandbox = {
   dest: string;
   work: string;
+  stubs: string;
   run: (body: string, opts?: Opts) => ReturnType<typeof runLib>;
 };
 
@@ -126,11 +127,13 @@ const sandbox = (): Sandbox => {
   const dir = mkdtempSync(join(tmpdir(), "tfm-install-"));
   const dest = join(dir, "bin");
   const work = join(dir, "work");
+  const stubs = join(dir, "stubs");
   mkdirSync(dest);
   mkdirSync(work);
+  mkdirSync(stubs);
   const run = (body: string, opts: Opts = {}) =>
     runLib(`DEST='${dest}'\nWORK='${work}'\nRUN_LOG=$WORK/install.log\n${body}\n`, opts);
-  return { dest, work, run };
+  return { dest, work, stubs, run };
 };
 
 // A stand-in for a compiled tfm: install_binary only needs it to answer
@@ -390,5 +393,187 @@ describe("installer packager hint", () => {
     // resvg is not reliably packaged anywhere: no `sudo apt install resvg` lies
     expect(runLib(`pm_pkg apt resvg\n`).out).toBe("");
     expect(runLib(`pm_cmd zypper\n`).out).toBe("sudo zypper install");
+  });
+});
+
+describe("installer download bar", () => {
+  // A stub curl with just the flag surface fetch_with_bar uses: a combined
+  // short-flag token containing I answers a HEAD, -D dumps response headers, -o
+  // writes the body — in two pieces when hold is set, so the poll loop sees the
+  // file grow. The child holding the loop open is the point: no test-side sleep
+  // waits for anything.
+  const stubCurl = (
+    dir: string,
+    o: { bytes: number; hold?: boolean; status?: number; noLength?: boolean; headFails?: boolean },
+  ) => {
+    const half = Math.floor(o.bytes / 2);
+    const header = o.noLength
+      ? "printf 'HTTP/2 200\\r\\ntransfer-encoding: chunked\\r\\n'"
+      : `printf 'HTTP/2 200\\r\\nContent-Length: ${o.bytes}\\r\\n'`;
+    const script = [
+      "#!/bin/sh",
+      'out=""; hdr=""; head=0',
+      "while [ $# -gt 0 ]; do",
+      '  case "$1" in',
+      "    -o) out=$2; shift 2 ;;",
+      "    -D) hdr=$2; shift 2 ;;",
+      '    -*) case "$1" in *I*) head=1 ;; esac; shift ;;',
+      "    *) shift ;;",
+      "  esac",
+      "done",
+      o.headFails ? 'if [ "$head" = 1 ]; then exit 8; fi' : `if [ "$head" = 1 ]; then ${header}; exit 0; fi`,
+      `[ -n "$hdr" ] && ${header} >"$hdr"`,
+      ...(o.hold
+        ? [`head -c ${half} /dev/zero >"$out"`, "sleep 0.6", `head -c ${o.bytes - half} /dev/zero >>"$out"`]
+        : [`head -c ${o.bytes} /dev/zero >"$out"`]),
+      `exit ${o.status ?? 0}`,
+      "",
+    ].join("\n");
+    writeFileSync(join(dir, "curl"), script);
+    chmodSync(join(dir, "curl"), 0o755);
+  };
+  const withStub = (dir: string) => ({ PATH: `${dir}:${process.env.PATH ?? ""}` });
+
+  test("a bar is exactly as wide as its budget, at every percentage", () => {
+    for (const [w, pct] of [
+      [10, 0],
+      [10, 54],
+      [10, 100],
+      [10, 200],
+      [7, 33],
+      [1, 50],
+    ] as const) {
+      const out = runLib(`bar_for ${w} ${pct}`).out;
+      // columns, not code points: each block glyph is three bytes
+      expect(runLib(`disp_w "$(bar_for ${w} ${pct})"`).out).toBe(String(w));
+      expect([...out].filter((c) => c === "█").length).toBe(Math.round((w * Math.min(pct, 100)) / 100));
+    }
+  });
+
+  test("the indeterminate sweep stays inside its track", () => {
+    for (const pos of [0, 5, 12, 20, -4]) {
+      const out = runLib(`sweep_for 20 ${pos}`).out;
+      expect([...out].length).toBe(20);
+      expect(out.match(/█+/g)).toHaveLength(1); // one window, never a second run
+      expect([...out].filter((c) => c === "█").length).toBe(10);
+    }
+  });
+
+  test("stats degrade before the bar becomes unusable", () => {
+    const at = (width: number) =>
+      runLib(
+        `progress_stats '54% · 12.4 MB/s · 0:02' '54% · 12.4 MB/s' '54%'\nprintf '%s|%s' "$STATS_TEXT" "$STATS_W"`,
+        { width },
+      ).out;
+    expect(at(80)).toBe("54% · 12.4 MB/s · 0:02|39");
+    expect(at(120)).toBe("54% · 12.4 MB/s · 0:02|40"); // BAR_MAX caps a ribbon
+    expect(at(60)).toBe("54% · 12.4 MB/s · 0:02|19");
+    expect(at(44)).toBe("54% · 12.4 MB/s|10"); // ETA is the first to go
+    expect(at(30)).toBe("54%|8"); // then speed, and the bar sits at BAR_MIN
+    // below BAR_MIN's floor the raw math would go negative: the bar holds its
+    // minimum because a bar that can't be drawn is worse than a short one
+    expect(at(24)).toBe("54%|8");
+    for (const width of [60, 80, 120]) {
+      const [text, w] = at(width).split("|") as [string, string];
+      expect(17 + 2 + cols(text) + Number(w)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  test("speed and ETA read like the rest of the installer", () => {
+    // hsize's own whole/decimal rule does the formatting: 12.5 MB exactly
+    expect(runLib(`fmt_speed 13107200`).out).toBe("12.5 MB/s");
+    expect(runLib(`fmt_speed 421888`).out).toBe("412 KB/s");
+    expect(runLib(`fmt_speed 0`).out).toBe("—");
+    expect(runLib(`fmt_speed ''`).out).toBe("—");
+    // garbage must never reach hsize's arithmetic: that would abort mid-download
+    expect(runLib(`fmt_speed nope`).out).toBe("—");
+    expect(runLib(`fmt_eta 1500`).out).toBe("0:02"); // rounded up, never 0:00
+    expect(runLib(`fmt_eta 65000`).out).toBe("1:05");
+    expect(runLib(`fmt_eta 3700000`).out).toBe("1:01:40");
+    expect(runLib(`fmt_eta ''`).out).toBe("—");
+  });
+
+  test("the size comes from the last hop of a redirect chain", () => {
+    const hop = "HTTP/2 302\\r\\ncontent-length: 0\\r\\nlocation: https://objects.example/x\\r\\n\\r\\n";
+    const last = "HTTP/2 200\\r\\nContent-Length: 41440128\\r\\ncontent-type: application/octet-stream\\r\\n";
+    expect(runLib(`printf '${hop}${last}' | hdr_length`).out).toBe("41440128");
+    // chunked: no honest total, so the row must sweep instead of inventing one
+    expect(runLib(`printf 'HTTP/2 200\\r\\ntransfer-encoding: chunked\\r\\n' | hdr_length`).out).toBe("");
+  });
+
+  test("a repaint overwrites the pending row and stops at the terminal edge", () => {
+    for (const width of [60, 80, 120]) {
+      const { raw } = runLib(
+        `STEP_LABEL=download\nprogress_stats '54% · 12.4 MB/s · 0:02' '54% · 12.4 MB/s' '54%'\nprogress_paint "$(bar_for $STATS_W 54)" "$STATS_TEXT"`,
+        { width },
+      );
+      const [row] = paint(raw);
+      expect(row).toBeDefined();
+      expect(cols(row as string)).toBeLessThanOrEqual(width);
+      expect(row).toStartWith("  ·  download  ");
+      expect(row).toContain("█");
+      expect(row).toContain("54%");
+      expect(raw).toStartWith("\r\u001b[K"); // the pending-line idiom
+      expect(raw).not.toContain("\n"); // no newline: step_ok replaces the row
+    }
+    // plain mode (pipes, CI, NO_COLOR, narrow terminals) draws nothing at all
+    expect(runLib(`STEP_LABEL=download\nprogress_paint bar stats`, { fancy: false }).raw).toBe("");
+  });
+
+  test("a live download drives the bar and lands on the step row", () => {
+    const { stubs, work, run } = sandbox();
+    stubCurl(stubs, { bytes: 8192, hold: true });
+    const { raw, code } = run(`fetch_with_bar https://example.invalid/x "$WORK/out" "$WORK/hdr"`, {
+      env: withStub(stubs),
+    });
+    expect(code).toBe(0);
+    expect(readFileSync(join(work, "out")).length).toBe(8192);
+    expect(raw).toContain("50%"); // painted while the child held it half-written
+    // the stats ride along on the same frames: a speed and an ETA, not blanks
+    expect(raw).toMatch(/\d+(\.\d+)? (B|KB|MB)\/s/);
+    expect(raw).toMatch(/\d:\d\d/);
+    expect(raw).toContain("\r\u001b[K");
+    expect(raw.endsWith("\n")).toBe(false);
+  });
+
+  test("fetch_length reads the size out of a HEAD request", () => {
+    const { stubs, run } = sandbox();
+    stubCurl(stubs, { bytes: 41440128 });
+    const { out, code } = run("fetch_length https://example.invalid/x", { env: withStub(stubs) });
+    expect(code).toBe(0);
+    expect(out).toBe("41440128");
+  });
+
+  // The HEAD is an optimisation, not a requirement: plenty of CDNs refuse it,
+  // and the download's own response headers then supply the total.
+  test("a server that refuses HEAD still gets a percentage from the download", () => {
+    const { stubs, work, run } = sandbox();
+    stubCurl(stubs, { bytes: 8192, hold: true, headFails: true });
+    const { raw, code } = run(`fetch_with_bar https://example.invalid/x "$WORK/out" "$WORK/hdr"`, {
+      env: withStub(stubs),
+    });
+    expect(code).toBe(0);
+    expect(raw).toContain("50%");
+    expect(readFileSync(join(work, "out")).length).toBe(8192);
+  });
+
+  test("a server that never names the size gets the sweep, not a fake percentage", () => {
+    const { stubs, run } = sandbox();
+    stubCurl(stubs, { bytes: 8192, hold: true, noLength: true });
+    const { raw, code } = run(`fetch_with_bar https://example.invalid/x "$WORK/out" "$WORK/hdr"`, {
+      env: withStub(stubs),
+    });
+    expect(code).toBe(0);
+    expect(raw).toContain("░");
+    expect(raw).not.toContain("%");
+  });
+
+  test("a failing download returns curl's status instead of a success row", () => {
+    const { stubs, run } = sandbox();
+    stubCurl(stubs, { bytes: 4096, status: 22 });
+    const { code } = run(`fetch_with_bar https://example.invalid/x "$WORK/out" "$WORK/hdr"`, {
+      env: withStub(stubs),
+    });
+    expect(code).toBe(22);
   });
 });
