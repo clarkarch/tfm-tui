@@ -194,11 +194,14 @@ print_result
     expect(lines.join("")).not.toContain("> tfm"); // the marker itself is never printed
   });
 
-  // The fancy/plain decision is made once, at load, from the real terminal
-  // (a tty, no NO_COLOR/CI, and >= 60 columns) — so this one needs a pty.
+  // The fancy/plain decision is made once, at load, from the real terminal (a
+  // tty, no NO_COLOR/CI, a capable TERM and >= 60 columns) — so this one needs a
+  // pty, and it must set TERM itself: GitHub Actions exports TERM=dumb, which
+  // the installer correctly reads as "draw nothing", and then this test would
+  // pass by accident instead of testing the width gate it is about.
   test.skipIf(!Bun.which("script"))("a terminal narrower than 60 columns gets plain lines", () => {
     const render = (width: number) => {
-      const inner = `env -u NO_COLOR -u CI TFM_INSTALL_LIB_ONLY=1 TFM_WIDTH=${width} bash -c 'source install.sh; SMOKE_VER=0.1.1-beta.0; path_action=ready; print_result'`;
+      const inner = `env -u NO_COLOR -u CI TERM=xterm-256color TFM_INSTALL_LIB_ONLY=1 TFM_WIDTH=${width} bash -c 'source install.sh; SMOKE_VER=0.1.1-beta.0; path_action=ready; print_result'`;
       const res = Bun.spawnSync({
         cmd: ["script", "-qec", inner, "/dev/null"],
         cwd: ROOT,
