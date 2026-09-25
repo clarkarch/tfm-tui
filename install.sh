@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 #       the latest release (any branch works; the branch only chooses this script)
 #
-#   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/install-from-source.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
 #       the dev branch, built from source on your machine (needs git + bun)
 #
 #   TFM_VERSION=v0.1.0-beta.0 ... | bash   pin a release

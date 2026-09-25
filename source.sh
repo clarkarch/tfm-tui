@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tfm dev kit — build a branch from source and install it exactly like a release.
 #
-#   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/install-from-source.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
 #
 # The build itself lives in install.sh (TFM_SOURCE=<ref>), so there is one
 # installer, one output style, and one place where PATH/backup/checksum policy

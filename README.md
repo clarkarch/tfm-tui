@@ -71,7 +71,7 @@ Builds the branch on your machine and installs it the same way — needs `git` a
 Bun 1.4 or newer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/install-from-source.sh | bash
+curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
 ```
 
 It keeps a checkout in `~/.local/share/tfm/src`, rebuilds it, and only installs
