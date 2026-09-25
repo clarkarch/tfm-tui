@@ -22,7 +22,7 @@ jobs:
         run: bun run check
 
       - name: Installer syntax
-        run: bash -n install.sh
+        run: bash -n install.sh install-from-source.sh
 
       - name: Test
         run: bun run test

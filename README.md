@@ -59,7 +59,26 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 ```
 
-Or build from source:
+The installer downloads the latest release, verifies its checksum, installs to
+`~/.local/bin/tfm` (keeping your previous build as `tfm.bak`), offers to add that
+directory to your `PATH`, and then starts the binary once to be sure it runs.
+Pin a specific release with `TFM_VERSION=v0.1.0-beta.0` in front of the command,
+or install a binary you built yourself with `TFM_LOCAL=./dist/tfm`.
+
+### dev branch
+
+Builds the branch on your machine and installs it the same way — needs `git` and
+Bun 1.4 or newer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/install-from-source.sh | bash
+```
+
+It keeps a checkout in `~/.local/share/tfm/src`, rebuilds it, and only installs
+if the build succeeds. Re-run the same command to update; `TFM_BRANCH=main`
+builds another branch instead.
+
+### build by hand
 
 ```bash
 bun install --frozen-lockfile
