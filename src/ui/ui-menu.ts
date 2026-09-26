@@ -1,7 +1,7 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { IconSlotHandle } from "./ui-slots";
@@ -211,7 +211,7 @@ export const makeMenu = (ctx: MenuCtx) => {
     const panel = ctx.byId("tfm-filemenu-panel");
     if (!panel || !state) return;
     const colors = ctx.colors();
-    clearChildren(panel);
+    destroyChildren(panel);
     panel.add(
       Box(
         { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },

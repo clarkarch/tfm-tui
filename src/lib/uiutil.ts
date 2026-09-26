@@ -26,6 +26,31 @@ export const clearChildren = (node: unknown): void => {
   } catch {}
 };
 
+// Teardown that also DESTROYS the removed children. OpenTUI renderables own
+// native memory (TextBuffers, images) freed by a bun finalizer, and bun only
+// GCs on JS-heap pressure — never on native pressure (see app/mem-hygiene).
+// Detaching without destroy() therefore defers the free to the next 10s poke;
+// a rebuild/resize/theme-flip storm outruns it and the native allocator grows
+// until small allocations fail (the documented "Failed to create TextBuffer" /
+// vanishing floating-UI crash). `keep` (when given) is removed but NOT
+// destroyed — the preview pane re-adds its cached node, so destroying it here
+// would be a use-after-destroy.
+export const destroyChildren = (node: unknown, keep?: unknown): void => {
+  if (!isChildHost(node)) return;
+  try {
+    const kids = [...node.getChildren()];
+    for (const c of kids) {
+      try {
+        node.remove(c);
+      } catch {}
+      if (keep !== undefined && c === keep) continue;
+      try {
+        (c as { destroy?: () => void } | null | undefined)?.destroy?.();
+      } catch {}
+    }
+  } catch {}
+};
+
 // trailing debounce: every call pushes the run `ms` back; the body sees the
 // latest closure state when it finally fires
 // injectable timer pair: tests pass a virtual clock (Bun has no fake

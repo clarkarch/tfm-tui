@@ -2,7 +2,7 @@ import { Box, type CliRenderer, CodeRenderable, Text, TextRenderable, type Synta
 import { existsSync, readdirSync, statSync, type Stats } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { clearChildren, debounced, type Scheduler } from "../lib/uiutil";
+import { destroyChildren, debounced, type Scheduler } from "../lib/uiutil";
 import { slotBg, type UiStyle } from "./style";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { isPrivilegeError } from "../fs/elevate";
@@ -106,7 +106,10 @@ export const makePreview = (ctx: PreviewCtx) => {
     const gen = ++previewGen;
     const pane = ctx.byId("tfm-preview");
     if (!pane) return;
-    clearChildren(pane);
+    // destroy the previous pane's nodes (each owns a native TextBuffer) — but
+    // keep the cached code node, which the cache-hit path below re-adds;
+    // destroying that here would be a use-after-destroy
+    destroyChildren(pane, previewCodeCache?.node);
 
     // target = focused tile, else single selected, else folder summary
     let key: string | null = null;
@@ -250,6 +253,13 @@ export const makePreview = (ctx: PreviewCtx) => {
         pane.add(previewCodeCache.node);
         return;
       }
+      // cache miss on a DIFFERENT file: the old cached node was detached above
+      // (kept, not destroyed) and is about to be replaced — destroy it now so
+      // its native buffer frees here, not at the next GC poke
+      try {
+        previewCodeCache?.node.destroy();
+      } catch {}
+      previewCodeCache = null;
       const filetype = PREVIEW_FT_BY_EXT[path.extname(key).slice(1).toLowerCase()];
       if (!filetype) {
         // No tree-sitter filetype → CodeRenderable paints everything with the

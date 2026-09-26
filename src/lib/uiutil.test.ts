@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { clearChildren, debounced, invokeIsolated, safeRenderStep, withTimeout, type Scheduler } from "./uiutil";
+import {
+  clearChildren,
+  debounced,
+  destroyChildren,
+  invokeIsolated,
+  safeRenderStep,
+  withTimeout,
+  type Scheduler,
+} from "./uiutil";
 
 // Bun 1.3.14 has no fake timers, so debounced takes an injected Scheduler:
 // these tests advance a virtual clock and never race the wall clock (a
@@ -51,6 +59,50 @@ describe("clearChildren", () => {
         getChildren: () => {
           throw new Error("dead");
         },
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("destroyChildren", () => {
+  test("removes AND destroys every child (native buffers freed now, not at the GC poke)", () => {
+    const removed: any[] = [];
+    const destroyed: any[] = [];
+    const mkKid = (id: string) => ({ id, destroy: () => destroyed.push(id) });
+    const kids = [mkKid("a"), mkKid("b")];
+    const node = {
+      getChildren: () => [...kids],
+      remove: (c: any) => removed.push(c),
+    };
+    destroyChildren(node);
+    expect(removed).toEqual(kids);
+    expect(destroyed).toEqual(["a", "b"]);
+  });
+
+  test("a `keep` child is removed but NOT destroyed (the preview pane re-adds it)", () => {
+    const destroyed: any[] = [];
+    const keep = { id: "cached", destroy: () => destroyed.push("cached") };
+    const other = { id: "header", destroy: () => destroyed.push("header") };
+    const removed: any[] = [];
+    destroyChildren({ getChildren: () => [other, keep], remove: (c: any) => removed.push(c) }, keep);
+    expect(removed).toEqual([other, keep]); // both detached
+    expect(destroyed).toEqual(["header"]); // only the non-keep one freed
+  });
+
+  test("tolerates null nodes, children without destroy, and throwing destroy", () => {
+    expect(() => destroyChildren(null)).not.toThrow();
+    expect(() => destroyChildren(undefined)).not.toThrow();
+    expect(() => destroyChildren({ getChildren: () => [{}, {}], remove: () => {} })).not.toThrow();
+    expect(() =>
+      destroyChildren({
+        getChildren: () => [
+          {
+            destroy: () => {
+              throw new Error("already dead");
+            },
+          },
+        ],
+        remove: () => {},
       }),
     ).not.toThrow();
   });

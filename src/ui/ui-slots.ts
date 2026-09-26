@@ -13,6 +13,7 @@ import { swallow } from "../app/log";
 import type { IconMode, Theme } from "../config/config";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
 import type { MaybeNode } from "../lib/node-like";
+import { destroyChildren } from "../lib/uiutil";
 
 export type IconState = { fg: string; bg: string };
 
@@ -195,6 +196,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
   let thumbJobs: ThumbJob[] = [];
+  // supersession tokens: overlapping drains (a watcher rebuild mid-raster, a
+  // resetIconQueue during a drain) must not double-attach an image and leak the
+  // one they detach — see the guards in drainThumbs / drainIconQueue
+  let thumbGen = 0;
+  let iconGen = 0;
 
   const cellMetrics = () => {
     const r = ctx.renderer();
@@ -268,8 +274,13 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // made big folders drip in one-by-one — match the icon raster cap's spirit
   // and keep the UI thread yielding between jobs
   const THUMB_WORKERS = 8;
+  // icon rasters are the same class of job as thumbs (one spawned renderer each)
+  // — bound them too, so a full re-raster cannot launch hundreds of concurrent
+  // jobs all at once (the process gate in icons.ts caps spawns, not native churn)
+  const ICON_WORKERS = 8;
 
   const drainThumbs = async () => {
+    const gen = ++thumbGen;
     const jobs = thumbJobs;
     thumbJobs = [];
     // drop the backlog (a rebuild re-queues what it needs if tty mode flips off)
@@ -282,6 +293,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     let idx = 0;
     const worker = async () => {
       while (idx < jobs.length) {
+        if (gen !== thumbGen) return; // superseded by a newer drain
         const j = jobs[idx++];
         if (!j) continue;
         let slot = ctx.byId(j.slotId);
@@ -293,6 +305,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
         const pxH = Math.max(1, Math.round(hCells * cellH) - 2);
         try {
           const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector, j.video);
+          if (gen !== thumbGen) return; // a newer drain owns this slot now
           const img = new ImageRenderable(ctx.renderer(), {
             id: `${j.slotId}-t`,
             source: bytes,
@@ -314,7 +327,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
             } catch {}
             continue;
           }
-          ctx.clearChildren(slot);
+          // destroy, not detach: the replaced node (fallback glyph or a stale
+          // raster) owns native memory that would otherwise wait for the GC poke
+          destroyChildren(slot);
           slot.add(img);
         } catch {
           // `slot` is re-assigned inside the try above, so the catch sees the
@@ -384,13 +399,20 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const drainIconQueue = async () => {
     if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
     if (!ctx.renderer().resolution) return;
+    const gen = ++iconGen;
     const aspect = cellMetrics().aspect;
     const pending = [...allSpecs.values()].filter((s) => !s.done);
-    await Promise.all(
-      pending.map(async (spec) => {
+    // bounded pool (like drainThumbs): a resize/theme flip re-rasters EVERY
+    // registered slot, and an unbounded Promise.all launched one job per slot
+    let idx = 0;
+    const worker = async (): Promise<void> => {
+      while (idx < pending.length) {
+        if (gen !== iconGen) return; // superseded by a newer drain
+        const spec = pending[idx++];
+        if (!spec) continue;
         spec.done = true;
         const slot = ctx.byId(spec.slotId);
-        if (!slot) return;
+        if (!slot) continue;
         if (spec.statesFactory) {
           try {
             spec.states = spec.statesFactory();
@@ -405,15 +427,29 @@ export const makeSlots = (ctx: SlotsCtx) => {
           wCells,
           spec.initialState,
         );
-        if (imgs.length === 0) return;
+        if (gen !== iconGen) {
+          // a newer drain owns the slot now: free what this one built instead
+          // of attaching it under the winner (which would leak the loser)
+          for (const im of imgs) {
+            try {
+              im.destroy();
+            } catch {}
+          }
+          return;
+        }
+        if (imgs.length === 0) continue;
         slot.width = wCells;
         const kids = slot.getChildren();
-        // drop previous rasters (e.g. after a resize re-raster at new cell pixels)
+        // drop previous rasters (e.g. after a resize re-raster at new cell
+        // pixels) — DESTROY them, or each re-raster leaks their native buffers
         kids
           .filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
           .forEach((k) => {
             try {
               slot.remove(k);
+            } catch {}
+            try {
+              k.destroy();
             } catch {}
           });
         const glyphNode = kids.find((k) => typeof k.id === "string" && k.id.endsWith("-g"));
@@ -426,8 +462,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
         imgs.forEach((im) => {
           slot.add(im);
         });
-      }),
-    );
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(ICON_WORKERS, pending.length) }, () => worker()));
     // drop specs whose slot node is gone from the tree (tiles/sidebars
     // rebuilt by renderAll): their spec objects are dead weight and the
     // tile refs that kept them alive are gone too. Everything still

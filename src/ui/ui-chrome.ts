@@ -1,7 +1,7 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
 import { buildSections, loadSystemPlaces, type Place } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
@@ -253,7 +253,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       return;
     }
     lastPlacesSig = sig;
-    clearChildren(hostBox);
+    destroyChildren(hostBox);
     placesHost.length = 0;
 
     groups.forEach((group, gi) => {
@@ -288,7 +288,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     try {
       bar.visible = ctx.tabBar() || tabs.list.length > 1;
     } catch {}
-    clearChildren(bar);
+    destroyChildren(bar);
     tabs.list.forEach((t, i) => {
       const tabId = `${prefix}tab-${i}`;
       const active = i === tabs.active;

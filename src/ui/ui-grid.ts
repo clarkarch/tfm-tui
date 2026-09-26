@@ -13,7 +13,7 @@ import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
 import type { Renderable } from "@opentui/core";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { fmtBytes } from "../fs/propsinfo";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import type { Scheduler } from "../lib/uiutil";
 import { TileVisual } from "../input/grid-input";
 import type { FileAnimMode } from "./ui-grid-anim";
@@ -251,7 +251,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     try {
       ctx.fileAnim({ tiles: [], inner: null });
     } catch {}
-    clearChildren(scroller.content);
+    // destroy, not just detach: every tile owns a native TextBuffer (and often
+    // an image), and relying on the 10s GC poke leaks whole folders' worth of
+    // native memory under rebuild churn (see destroyChildren in lib/uiutil)
+    destroyChildren(scroller.content);
     selection.tileRefs.clear();
   };
 
@@ -842,21 +845,26 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         try {
           ctx.fileAnim({ tiles: [], inner: null });
         } catch {}
-        clearChildren(scroller.content);
+        destroyChildren(scroller.content);
         scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
         paint(r0, r1);
       }
     } else if (mounted && kids) {
       if (windowMoved) {
         const kidAt = (r: number): Renderable | undefined => kids[1 + r - old.r0];
-        for (let r = old.r0; r < r0; r++) {
-          const k = kidAt(r);
-          if (k) mounted.remove(k);
-        }
-        for (let r = old.r1; r > r1; r--) {
-          const k = kidAt(r);
-          if (k) mounted.remove(k);
-        }
+        // rows slid out of the window are discarded, not recycled — reap them
+        // (remove + destroy) so their native buffers free now, not at the poke
+        const reapRow = (k: Renderable | undefined): void => {
+          if (!k) return;
+          try {
+            mounted.remove(k);
+          } catch {}
+          try {
+            k.destroy();
+          } catch {}
+        };
+        for (let r = old.r0; r < r0; r++) reapRow(kidAt(r));
+        for (let r = old.r1; r > r1; r--) reapRow(kidAt(r));
         for (let r = r0; r < old.r0; r++) mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
         for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
           mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), mounted.getChildren().length - 1);

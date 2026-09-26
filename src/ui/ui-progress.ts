@@ -152,6 +152,13 @@ export const makeProgress = (ctx: ProgressCtx) => {
     // first so two progress toasts never share the stack
     activeHandle?.close();
     activeHandle = null;
+    // ...and stop its spinner: that close path does not go through
+    // finishProgressToast, so without this a re-show left a second 100ms
+    // interval repainting a detached node forever
+    if (progSpinTimer) {
+      clearInterval(progSpinTimer);
+      progSpinTimer = null;
+    }
     const setPauseVisual = (): void => {
       const p = ctx.byId(progPauseSpec.slotId);
       const l = ctx.byId(progPlaySpec.slotId);

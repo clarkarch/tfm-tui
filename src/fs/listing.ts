@@ -122,26 +122,16 @@ const scanDir = async (dir: string): Promise<Entry[]> => {
   return out;
 };
 
-// stats written INTO the cached entries ([ui] listings-cache-stats): ONE
-// stat fills size AND mtimeMs, so switching sorts later finds them present.
-// Failed stats stay missing and are retried next call — never fake a zero.
-const fillInto = (entries: Entry[], dir: string): void => {
-  for (const e of entries) {
-    if (e.size !== undefined && e.mtimeMs !== undefined) continue;
-    const got = statEntry(e.abs ?? path.join(dir, e.name));
-    if (got.size === undefined) continue;
-    e.size = got.size;
-    e.mtimeMs = got.mtimeMs;
-  }
-};
-
-// Async, bounded-concurrency stat fill for the GRID's list view: it paints
-// size + date columns whatever the sort is, and the blocking statSync loop it
-// used to run froze the whole app (this render, the frame loop, the toast
-// spinner) for tens to hundreds of ms on a big folder — exactly the console,
-// where tty mode FORCES list view. Same data and the same freshness as before
-// (nothing is cached: a growing log keeps growing in the column), but the loop
-// yields between batches so input and feedback stay alive.
+// Stats written INTO entries, asynchronously and with bounded concurrency.
+// ONE stat fills size AND mtimeMs, so switching sorts later finds them present;
+// failed stats stay missing and are retried next call — never fake a zero.
+//
+// Used by BOTH the GRID's list view and the listings cache's stat fill. It must
+// stay async: the old synchronous statSync loop it replaced froze the whole app
+// (this render, the frame loop, the toast spinner) for tens to hundreds of ms on
+// a big folder — exactly the console, where tty mode FORCES list view. The
+// cache path used to call a sync `fillInto` and re-introduced that freeze, so it
+// now routes here too. The loop yields between batches so input stays alive.
 export const fillStatsInto = async (
   entries: Entry[],
   dir: string,
@@ -182,11 +172,11 @@ const loadEntries = async (
     // deliberately NOT refreshed (absolute staleness cap, not idle expiry)
     listings.delete(key);
     listings.set(key, hit);
-    if (o.fillStats) fillInto(hit.entries, dir);
+    if (o.fillStats) await fillStatsInto(hit.entries, dir);
     return hit.entries.map((e) => ({ ...e }));
   }
   const entries = await scanDir(dir);
-  if (o.fillStats) fillInto(entries, dir);
+  if (o.fillStats) await fillStatsInto(entries, dir);
   listings.delete(key);
   listings.set(key, { sig, entries, t: o.now() });
   while (listings.size > LISTINGS_CAP) {
