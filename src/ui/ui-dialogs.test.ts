@@ -92,6 +92,32 @@ describe("openDialog chokepoint", () => {
     expect(floats.top()).toBe("props");
   });
 
+  // Contract this pins: confirm() has NO readiness gate. Its old wiring keyed
+  // off `renderer.resolution`, which never lands on the Linux console or tmux
+  // (no pixel-size reply), so Empty Trash / Delete Forever silently no-op'd
+  // there. makeConflict already opens ungated; re-adding any gate defaulting
+  // closed breaks this test (and the floats/traversal tests above).
+  test("confirm opens with no readiness gate and the pending Yes still fires", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
+    let confirmed = false;
+    expect(
+      yesNo.confirm("Empty Trash?", "Empty", () => {
+        confirmed = true;
+      }),
+    ).toBe(true);
+    expect(floats.top()).toBe("yesno");
+    yesNo.moveFocus(1); // → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
+  });
+
   test("yesno opens through floats; No routes back through floats", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);
@@ -99,7 +125,6 @@ describe("openDialog chokepoint", () => {
       colors: ctx.colors,
       uiStyle: ctx.uiStyle,
       byId: ctx.byId,
-      canOpen: () => true,
       floats,
     });
     let confirmed = false;
@@ -119,7 +144,6 @@ describe("openDialog chokepoint", () => {
       colors: ctx.colors,
       uiStyle: ctx.uiStyle,
       byId: ctx.byId,
-      canOpen: () => true,
       floats,
     });
     let confirmed = false;
@@ -146,7 +170,6 @@ describe("openDialog chokepoint", () => {
       colors: ctx.colors,
       uiStyle: ctx.uiStyle,
       byId: ctx.byId,
-      canOpen: () => true,
       floats,
     });
     expect(() => yesNo.moveFocus(1)).not.toThrow();
@@ -217,7 +240,6 @@ const mkLive = (t: TestRendererSetup, floats: Floats, getColors: () => any) => {
       uiStyle: () => "solid" as const,
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       floats,
-      canOpen: () => true,
     }),
   };
 };

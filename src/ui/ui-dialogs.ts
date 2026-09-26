@@ -266,8 +266,13 @@ type YesNoCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
   byId(id: string): MaybeNode;
-  // false while the renderer hasn't laid out yet (same gate as makeConflict callers)
-  canOpen(): boolean;
+  // NO readiness gate: a dialog mounts on the renderer root, which exists for
+  // the renderer's whole life. The old `canOpen: () => !!renderer.resolution`
+  // wiring only became true once the terminal answered OpenTUI's pixel-size
+  // query — never on the Linux console or tmux, where Empty Trash / Delete
+  // Forever then silently no-op'd. makeConflict opens ungated for the same
+  // reason; callers reach confirm() only after boot (keymap/menu).
+  //
   // open/close orchestration + the dismiss-others policy live in ./floats
   floats: Floats;
 };
@@ -327,7 +332,7 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
   };
 
   const confirm = (message: string, yesLabel: string, onYes: () => void, danger = false): boolean => {
-    if (open || !ctx.canOpen()) return false;
+    if (open) return false;
     ctx.floats.open("yesno", rawClose);
     open = true;
     focusIdx = 0;

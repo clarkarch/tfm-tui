@@ -18,6 +18,30 @@ import { hoverEvents, type SlotElement } from "./ui-slots";
 // into the PTY (the VT never registers a "drop" mouse listener, so the event
 // bubbles up to the host).
 
+// The PTY child shape the pane actually consumes (a structural subset of
+// Bun.spawn's terminal child: write/resize/close, kill, exited). Extracted so
+// the spawnPty seam below can be faked in tests without forking a shell.
+export type TermChild = {
+  readonly terminal?: {
+    write(data: Uint8Array): void;
+    resize(cols: number, rows: number): void;
+    close(): void;
+  };
+  kill(): void;
+  exited: Promise<unknown>;
+};
+
+export type TermSpawnOpts = {
+  argv: string[];
+  cwd: string;
+  env: Record<string, string | undefined>;
+  cols: number;
+  rows: number;
+  // every PTY chunk: probe replies + DECSET sniffing + the VT write all run
+  // through this one callback in the widget
+  onData(data: Uint8Array): void;
+};
+
 type TermCtx = {
   renderer: CliRenderer;
   byId(id: string): MaybeNode;
@@ -37,6 +61,9 @@ type TermCtx = {
   home: string;
   finishDrag(): void; // ends an internal drag (finishDragState)
   dlog(msg: string): void;
+  // injectable PTY spawn (default = Bun.spawn). Tests open the pane headlessly
+  // through this seam instead of forking a real shell.
+  spawnPty?(o: TermSpawnOpts): TermChild;
 };
 
 // Theme's 16 ANSI slots as const keys — the OSC 4 palette maps over them
@@ -172,12 +199,29 @@ export const promptClickArrows = (
 
 export const makeTerminal = (ctx: TermCtx) => {
   let term: EmbeddedTerminalRenderable | null = null;
-  let termChild: ReturnType<typeof Bun.spawn> | null = null;
+  let termChild: TermChild | null = null;
   let termFocused = false;
   let headerHot = false; // drag-hover cue latched — avoids redundant repaints
   let ptyScreen: PtyScreenState = { mouse: false, alt: false };
   let ptyScanTail = ""; // DECSET sequences can split across PTY chunks
   let downCell: { x: number; y: number } | null = null; // click vs drag for the prompt bridge
+
+  // PTY spawn seam — default is the real Bun.spawn PTY; tests inject a fake
+  // child so the open path can be driven without a shell process.
+  const spawnPty =
+    ctx.spawnPty ??
+    ((o: TermSpawnOpts): TermChild =>
+      Bun.spawn(o.argv, {
+        cwd: o.cwd,
+        env: o.env,
+        terminal: {
+          cols: o.cols,
+          rows: o.rows,
+          data(_pty, data) {
+            o.onData(data);
+          },
+        },
+      }));
 
   // the flag can lag reality (click-refocus inside the pane bypasses our focus()
   // call) — ask the renderer who owns the keyboard before acting on keys
@@ -358,8 +402,27 @@ export const makeTerminal = (ctx: TermCtx) => {
     } catch {}
   };
 
+  // every PTY chunk in one place (probe replies, DECSET sniffing, VT write) so
+  // the spawnPty seam above only has to forward bytes
+  const handlePtyData = (data: Uint8Array): void => {
+    answerTerminalProbes(data);
+    // sniff mouse-mode/alt-screen DECSETs (split-safe) for the bridge
+    const scan = ptyScreenState(ptyScanTail + new TextDecoder().decode(data), ptyScreen);
+    ptyScreen = scan.state;
+    ptyScanTail = scan.tail;
+    try {
+      term?.write(data);
+    } catch {}
+  };
+
   const openTerminalHere = (dir?: string): void => {
-    if (!ctx.renderer.resolution) return;
+    // NOT gated on renderer.resolution: that is only ever set from the
+    // terminal's reply to OpenTUI's pixel-size query, and the Linux console,
+    // tmux and dumb frontends never answer it — the old `!resolution` guard
+    // made this a silent no-op there (tty.cast only highlights the menu row,
+    // no `terminal ·` header ever paints). The pane is pure text; the mounted
+    // host node is the real post-boot readiness signal (findDescendantById
+    // resolves post-mount only).
     if (term) {
       try {
         term.focus();
@@ -436,23 +499,13 @@ export const makeTerminal = (ctx: TermCtx) => {
     ctx.stripSelectable();
     const shell = process.env.SHELL || "/bin/bash";
     try {
-      termChild = Bun.spawn([shell], {
+      termChild = spawnPty({
+        argv: [shell],
         cwd,
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
-        terminal: {
-          cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
-          rows: termH,
-          data(_pty, data) {
-            answerTerminalProbes(data);
-            // sniff mouse-mode/alt-screen DECSETs (split-safe) for the bridge
-            const scan = ptyScreenState(ptyScanTail + new TextDecoder().decode(data), ptyScreen);
-            ptyScreen = scan.state;
-            ptyScanTail = scan.tail;
-            try {
-              term?.write(data);
-            } catch {}
-          },
-        },
+        cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
+        rows: termH,
+        onData: handlePtyData,
       });
     } catch (err) {
       ctx.notify(`terminal failed (${fsErrText(err)})`, "terminal", "error");

@@ -185,7 +185,11 @@ export const wireFileops = (deps: {
     colors: themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     byId: core.lookup.byId,
-    canOpen: () => !!chrome.renderer.resolution,
+    // NO readiness gate: the old `!!renderer.resolution` predicate only became
+    // true when the terminal answered OpenTUI's pixel-size query, so on the
+    // Linux console / tmux Empty Trash and Delete Forever silently no-op'd.
+    // makeConflict opens ungated for the same reason — dialogs mount on the
+    // always-present renderer root.
     floats: core.floats,
   });
 

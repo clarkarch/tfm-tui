@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
@@ -11,7 +11,9 @@ import {
   shellQuotePaths,
   terminalProbeReply,
   xtShiftEscapeFrame,
+  type TermChild,
   type TermDropSink,
+  type TermSpawnOpts,
 } from "./ui-term";
 
 const makeSink = () => {
@@ -268,5 +270,113 @@ describe("syncTerminalHeight", () => {
       dlog: () => {},
     } as any);
     expect(() => fac.syncTerminalHeight()).not.toThrow();
+  });
+});
+
+// The pane must open on terminals that never answer OpenTUI's pixel-size query
+// (the Linux console, tmux, dumb frontends): renderer.resolution stays null
+// there forever, and the old `if (!resolution) return` guard made "Open
+// Terminal Here" a silent no-op (tty.cast shows the menu row highlight with no
+// `terminal ·` header ever painting). These tests drive the real open path
+// headlessly through the spawnPty seam — no shell is forked.
+describe("openTerminalHere", () => {
+  let t: TestRendererSetup;
+  let spawnCalls: TermSpawnOpts[];
+  let child: TermChild;
+
+  const mkChild = (): TermChild => ({
+    terminal: { write: () => {}, resize: () => {}, close: () => {} },
+    kill: () => {},
+    // never resolves: the pane must not auto-close under the test
+    exited: new Promise<void>(() => {}),
+  });
+
+  const mkTerm = (overrides: Record<string, unknown> = {}) =>
+    makeTerminal({
+      renderer: t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      uiStyle: () => "solid",
+      colors: () => ({
+        sidebarBg: "#0000aa",
+        sidebarFgMuted: "#555555",
+        bg: "#aaaaaa",
+        white: "#ffffff",
+        accent: "#ffffff",
+      }),
+      sw: () => 26,
+      termH: () => 9,
+      escHintBtn: () => Box({ width: 3, height: 1 }),
+      stripSelectable: () => {},
+      drainIconQueue: () => {},
+      notify: () => {},
+      renderAll: () => {},
+      cwd: () => "/tmp",
+      virtualCwd: () => false,
+      home: "/tmp",
+      finishDrag: () => {},
+      dlog: () => {},
+      spawnPty: (o: TermSpawnOpts) => {
+        spawnCalls.push(o);
+        return child;
+      },
+      ...overrides,
+    } as any);
+
+  beforeAll(async () => {
+    t = await createTestRenderer({ width: 80, height: 24 });
+    t.renderer.root.add(Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }));
+    await t.renderOnce();
+  });
+
+  afterAll(() => t.renderer.destroy());
+
+  beforeEach(() => {
+    spawnCalls = [];
+    child = mkChild();
+  });
+
+  test("opens with the shell in the cwd even though renderer.resolution is null", () => {
+    // precondition: the console/tmux case — no pixel reply ever lands
+    expect(t.renderer.resolution).toBeNull();
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    expect(fac.isOpen()).toBe(true);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]!.cwd).toBe("/tmp");
+    expect(spawnCalls[0]!.argv).toHaveLength(1);
+    const host = t.renderer.root.findDescendantById("tfm-term-host") as any;
+    // header + VT pane
+    expect(host.getChildren().length).toBe(2);
+    fac.closeTerminalPane();
+  });
+
+  test("no-ops when the host node is missing (not laid out yet)", () => {
+    const fac = mkTerm({ byId: () => null });
+    fac.openTerminalHere("/tmp");
+    expect(fac.isOpen()).toBe(false);
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  test("re-invoking focus re-focuses the open pane instead of spawning again", () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    fac.openTerminalHere("/other");
+    expect(spawnCalls).toHaveLength(1);
+    const host = t.renderer.root.findDescendantById("tfm-term-host") as any;
+    expect(host.getChildren().length).toBe(2);
+    fac.closeTerminalPane();
+  });
+
+  test("forwards PTY bytes through the seam into the VT (probes still answered)", () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    // the seam's onData is the real handler: a DA1 probe triggers a reply write
+    let reply = "";
+    child.terminal!.write = (d: Uint8Array) => {
+      reply += new TextDecoder().decode(d);
+    };
+    spawnCalls[0]!.onData(new TextEncoder().encode("\x1b[0c"));
+    expect(reply).toContain("\x1b[?62;1;2;6;9;15;22c");
+    fac.closeTerminalPane();
   });
 });
