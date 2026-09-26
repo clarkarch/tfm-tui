@@ -16,6 +16,9 @@ import {
 } from "./ui-slots";
 import type { Theme } from "../config/config";
 
+// icon rasters need one of the SVG renderers (same gate as icons.test.ts)
+const hasSvgRenderer = Bun.which("resvg") !== null || Bun.which("rsvg-convert") !== null;
+
 // The scrim (setScrim) must cover every RASTERED slot, including ones whose
 // raster finished before the modal opened. The old queue pruned drained
 // specs at the end of each drain, so setScrim iterated an (almost) empty
@@ -37,7 +40,6 @@ const makeHarness = () => {
     renderer: () =>
       ({ resolution: { width: 800, height: 400 }, terminalWidth: 80, terminalHeight: 20 }) as unknown as CliRenderer,
     byId: (id) => nodes.get(id),
-    clearChildren: () => {},
     colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
     uiStyle: () => "solid",
     iconsMode: () => "opaque",
@@ -275,19 +277,10 @@ describe("thumbnail mount", () => {
     rmSync(cacheSandbox, { recursive: true, force: true });
   });
 
-  test('a drained raster thumb mounts with fit:"cover"', async () => {
-    const slotId = "tfm-tile-0-thumb";
-    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
-    await t.renderOnce();
-
-    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-slots-thumb-"));
-    const p = path.join(dir, "wide.png");
-    writeFileSync(p, Buffer.from(PNG_6x2, "base64"));
-
-    const ctx: SlotsCtx = {
+  const mkSlots = () =>
+    makeSlots({
       renderer: () => t.renderer,
       byId: (id) => t.renderer.root.findDescendantById(id),
-      clearChildren: () => {},
       colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
       uiStyle: () => "solid",
       iconsMode: () => "opaque",
@@ -296,13 +289,34 @@ describe("thumbnail mount", () => {
       glyphFor: () => "F",
       isTtyMode: () => false,
       forceGlyph: () => false,
-    };
-    const slots = makeSlots(ctx);
-    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
-    // the headless renderer's resolution getter is readonly and null (real
-    // pixels come from the live terminal); shadow it so drainThumbs'
-    // cell-metrics gate opens
+    });
+  // the headless renderer's resolution getter is readonly and null (real pixels
+  // come from the live terminal); shadow it so the drains' pixel gate opens
+  const openResolution = (): void => {
     Object.defineProperty(t.renderer, "resolution", { value: { width: 800, height: 480 }, configurable: true });
+  };
+  const writePng = (name = "wide.png"): { dir: string; p: string } => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-slots-thumb-"));
+    const p = path.join(dir, name);
+    writeFileSync(p, Buffer.from(PNG_6x2, "base64"));
+    return { dir, p };
+  };
+  const SVG_DOT = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><circle cx="16" cy="16" r="14" fill="#f00"/></svg>`;
+  const writeSvg = (name = "dot.svg"): { dir: string; p: string } => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-slots-svg-"));
+    const p = path.join(dir, name);
+    writeFileSync(p, SVG_DOT);
+    return { dir, p };
+  };
+
+  test('a drained raster thumb mounts with fit:"cover"', async () => {
+    const slotId = "tfm-tile-0-thumb";
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+    await t.renderOnce();
+    const { dir, p } = writePng();
+    const slots = mkSlots();
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+    openResolution();
     await slots.drainThumbs();
     await t.renderOnce();
 
@@ -310,6 +324,81 @@ describe("thumbnail mount", () => {
     expect(img).toBeTruthy();
     expect(img.fit).toBe("cover");
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  // A superseded drain must still DELIVER: renderAll fires drainThumbs from
+  // several steps back-to-back (grid, preview, props), so overlap is the norm.
+  // The old generation bail dropped the losing drain's jobs outright, and
+  // renderGrid early-outs on an unchanged listing, so those thumbnails stayed
+  // blank until the cwd changed. (Replaces the old "superseded drain drops its
+  // job" case — that behaviour WAS the regression.)
+  test("a superseded drain still delivers its thumbnail", async () => {
+    const slotId = "tfm-tile-live-thumb";
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+    await t.renderOnce();
+    const { dir, p } = writePng("live.png");
+    const slots = mkSlots();
+    openResolution();
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+
+    const superseded = slots.drainThumbs(); // starts the raster, yields
+    await slots.drainThumbs(); // newer (empty) drain starts mid-raster
+    await superseded;
+    await t.renderOnce();
+
+    expect(t.renderer.root.findDescendantById(`${slotId}-t`)).toBeTruthy();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // A rebuild replaces the tile's file but keeps the slot id and re-pushes a job
+  // for it. The older drain's in-flight raster must NOT paint into the rebuilt
+  // slot: pushThumbJob overwrote the slot's ownership key, so the stale image is
+  // dropped. The SVG job is deliberately slower (spawned renderer) than the PNG
+  // job (Bun.Image, in-process), so without the guard the stale 4-cell raster
+  // lands last and overwrites the fresh 6-cell one.
+  test.skipIf(!hasSvgRenderer)("a stale job cannot overwrite a rebuilt slot", async () => {
+    const slotId = "tfm-tile-stale-thumb";
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+    await t.renderOnce();
+    const { dir, p } = writePng("fresh.png");
+    const svg = writeSvg("stale.svg");
+    const slots = mkSlots();
+    openResolution();
+
+    slots.pushThumbJob({ slotId, path: svg.p, mtimeMs: 1, size: 1, wCells: 4, vector: true, fallbackGlyph: "F" });
+    const staleDrain = slots.drainThumbs(); // slow SVG raster in flight
+    // the rebuild re-pushes the slot's ACTUAL file — this is the ownership flip
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 6, vector: false, fallbackGlyph: "F" });
+    const freshDrain = slots.drainThumbs();
+    await Promise.all([staleDrain, freshDrain]);
+    await t.renderOnce();
+
+    const img = t.renderer.root.findDescendantById(`${slotId}-t`) as any;
+    expect(img).toBeTruthy();
+    expect(img.width).toBe(6);
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(svg.dir, { recursive: true, force: true });
+  });
+
+  // Regression: renderAll fires drainIconQueue from several steps (sidebar, the
+  // iconQueue step, the grid). A per-drain supersession token made the losing
+  // drain mark its specs done and then discard the rasters it had built, while
+  // the winner's pending snapshot (taken before the loser claimed them) never
+  // revisited them — every icon stuck on its fallback glyph until a resize.
+  // Serializing the drain must raster every spec the first pass claimed.
+  test.skipIf(!hasSvgRenderer)("overlapping drains still raster every icon slot", async () => {
+    const slots = mkSlots();
+    const slot = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    t.renderer.root.add(Box({ id: `${slot.slotId}-host`, width: 8, height: 1 }, slot.el));
+    await t.renderOnce();
+    openResolution();
+
+    const first = slots.drainIconQueue();
+    const second = slots.drainIconQueue(); // starts while `first` is mid-raster
+    await Promise.all([first, second]);
+    await t.renderOnce();
+
+    expect(t.renderer.root.findDescendantById(`${slot.slotId}-s0`)).toBeTruthy();
   });
 });
 

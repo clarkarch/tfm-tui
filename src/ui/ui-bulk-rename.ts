@@ -18,7 +18,7 @@ type BulkRenameCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: unknown): void;
-  clearChildren(node: unknown): void;
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
   escHintBtn(id: string, onClose: () => void): SlotElement;
   drainIconQueue(): void | Promise<void>;
@@ -53,7 +53,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     const box = ctx.byId("tfm-bulkrename-preview");
     if (!box) return;
     const c = ctx.colors();
-    ctx.clearChildren(box);
+    ctx.destroyChildren(box);
     const stem = value.trim();
     const names = stem ? bulkRenameNames(items, stem, style) : [];
     const nameW = Math.floor((PANEL_W - 4 - 3 - 2) / 2);

@@ -36,7 +36,7 @@ import type { MaybeNode } from "../lib/node-like";
 type EscMenuCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
-  clearChildren(node: unknown): void;
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
   escHintBtn(id: string, onClose: () => void): SlotElement;
   makeIconSlot(
@@ -414,7 +414,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     }
   };
 
-  // A mid-rebuild throw after clearChildren leaves the panel EMPTY — to the
+  // A mid-rebuild throw after destroyChildren leaves the panel EMPTY — to the
   // user the floating UI just "vanishes". Guard the rebuild: log the failure
   // and retry once (deferred, so a transient native alloc hiccup recovers).
   // A failed retry does NOT reschedule — under sustained memory pressure
@@ -424,7 +424,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const c = ctx.colors();
     const panel = ctx.byId("tfm-menu-panel");
     if (!panel) return;
-    ctx.clearChildren(panel);
+    ctx.destroyChildren(panel);
     try {
       buildMenuContent(c, panel, menuView);
       retryArmed = true; // a successful build re-arms the one-shot retry

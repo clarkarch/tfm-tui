@@ -25,7 +25,7 @@ type PickCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: unknown): void;
-  clearChildren(node: unknown): void;
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
   colors(): Theme;
   uiStyle(): UiStyle;
@@ -105,7 +105,7 @@ export const makePick = (ctx: PickCtx) => {
     const colors = ctx.colors();
     results = filterItems(items, query).slice(0, MAX_ROWS);
     if (idx >= results.length) idx = results.length - 1;
-    ctx.clearChildren(list);
+    ctx.destroyChildren(list);
     if (!results.length) {
       list.add(
         Box(

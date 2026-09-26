@@ -31,7 +31,7 @@ import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
@@ -168,7 +168,7 @@ export const wireChrome = async (deps: {
       prefix: `tfm-p${pane}-`,
       renderer: () => renderer,
       byId,
-      clearChildren,
+      destroyChildren,
       stripSelectable,
       uiStyle,
       colors: themeGet,

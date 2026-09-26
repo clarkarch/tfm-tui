@@ -12,7 +12,7 @@ import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
 import { cycleSortMode } from "../lib/sort";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled } from "../plugins/plugin-api";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
@@ -48,7 +48,7 @@ export const wireKeymap = (deps: {
     renderer: () => chrome.renderer,
     byId,
     rootAdd: (node) => chrome.renderer.root.add(node),
-    clearChildren,
+    destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,

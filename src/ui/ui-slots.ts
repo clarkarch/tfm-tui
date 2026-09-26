@@ -120,6 +120,13 @@ export type ThumbJob = {
 // top-to-bottom before anything further down the folder is even spawned.
 export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible === false ? 2 : 1);
 
+// Identity of the file a thumb job represents for a slot. pushThumbJob stores
+// this per slot; a drain re-checks it after the raster to reject a job whose
+// slot was rebuilt for a different file (the stale-thumbnail guard). Replaces
+// the old generation bail, which dropped live jobs on the floor.
+export const thumbJobKey = (j: ThumbJob): string =>
+  [j.path, j.mtimeMs, j.size, j.wCells, j.hCells ?? "", j.vector ? 1 : 0, j.video ? 1 : 0].join("|");
+
 // How the mounted raster is fitted into its cell box. Raster/video rasters are
 // either aspect-preserving (Bun.Image `fit:"inside"`) or exact-box (ffmpeg
 // cover-crop; magick `^`+extent), so cover-crop them to fill the tile. SVG
@@ -155,7 +162,6 @@ export const isFloatRootId = (id: unknown): boolean =>
 export type SlotsCtx = {
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
-  clearChildren(node: unknown): void;
   // live theme — always read through the getter, never captured
   colors(): Theme;
   uiStyle(): string;
@@ -196,11 +202,27 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
   let thumbJobs: ThumbJob[] = [];
-  // supersession tokens: overlapping drains (a watcher rebuild mid-raster, a
-  // resetIconQueue during a drain) must not double-attach an image and leak the
-  // one they detach — see the guards in drainThumbs / drainIconQueue
-  let thumbGen = 0;
-  let iconGen = 0;
+  // per-slot ownership: pushThumbJob records the key of the job it queued for a
+  // slot, so a drain that resolves the slot later can tell whether ITS job still
+  // owns it. A rebuilt tile (new file, same `tfm-tile-N-thumb` id) re-pushes a
+  // job and overwrites the key, which is how a stale in-flight raster is
+  // rejected. This replaces the old "newer drain wins" generation bail, which
+  // DROPPED the losing drain's jobs outright: a grid folder's thumbnails stayed
+  // blank until the cwd changed, because renderGrid early-outs on an unchanged
+  // listing and never re-pushed them.
+  const thumbOwners = new Map<string, string>();
+  // icon drains are SERIALIZED instead of superseded: several renderAll steps
+  // each fire drainIconQueue (sidebar, the iconQueue step, the grid), and a
+  // supersession token stranded every spec a losing drain had already marked
+  // done — its rasters were destroyed on the way out and the winner's pending
+  // snapshot (taken at its own start) never revisited them, so the whole top
+  // bar stuck on fallback glyphs until a resize/theme reset. One run at a time
+  // with a rerun flag can't lose a spec.
+  let iconDrain: Promise<void> | null = null;
+  let iconDrainAgain = false;
+  // resetIconQueue (theme flip / resize / icon-mode change) marks every spec
+  // for a re-raster even if an in-flight pass already claimed it
+  let iconForceRedrain = false;
 
   const cellMetrics = () => {
     const r = ctx.renderer();
@@ -280,7 +302,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const ICON_WORKERS = 8;
 
   const drainThumbs = async () => {
-    const gen = ++thumbGen;
     const jobs = thumbJobs;
     thumbJobs = [];
     // drop the backlog (a rebuild re-queues what it needs if tty mode flips off)
@@ -293,7 +314,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
     let idx = 0;
     const worker = async () => {
       while (idx < jobs.length) {
-        if (gen !== thumbGen) return; // superseded by a newer drain
         const j = jobs[idx++];
         if (!j) continue;
         let slot = ctx.byId(j.slotId);
@@ -305,7 +325,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
         const pxH = Math.max(1, Math.round(hCells * cellH) - 2);
         try {
           const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector, j.video);
-          if (gen !== thumbGen) return; // a newer drain owns this slot now
           const img = new ImageRenderable(ctx.renderer(), {
             id: `${j.slotId}-t`,
             source: bytes,
@@ -321,7 +340,10 @@ export const makeSlots = (ctx: SlotsCtx) => {
           // writing into it leaked a native image buffer and painted nowhere.
           // A same-id replacement is the live slot, so use the fresh lookup.
           slot = ctx.byId(j.slotId);
-          if (!slot) {
+          // stale guard: if the slot was rebuilt for another file, its re-pushed
+          // job overwrote our ownership key — drop this raster instead of
+          // painting the wrong thumbnail (or, worse, the old file's)
+          if (!slot || thumbOwners.get(j.slotId) !== thumbJobKey(j)) {
             try {
               img.destroy?.();
             } catch {}
@@ -396,18 +418,19 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return imgs;
   };
 
-  const drainIconQueue = async () => {
-    if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
-    if (!ctx.renderer().resolution) return;
-    const gen = ++iconGen;
+  // ONE pass over the specs pending at its start (or every spec after a reset).
+  // Never runs concurrently with itself — drainIconQueue serializes it — so a
+  // spec marked done here always gets its rasters attached (or genuinely fails).
+  const runIconDrain = async (): Promise<void> => {
     const aspect = cellMetrics().aspect;
-    const pending = [...allSpecs.values()].filter((s) => !s.done);
+    const specs = [...allSpecs.values()];
+    const pending = iconForceRedrain ? specs : specs.filter((s) => !s.done);
+    iconForceRedrain = false;
     // bounded pool (like drainThumbs): a resize/theme flip re-rasters EVERY
     // registered slot, and an unbounded Promise.all launched one job per slot
     let idx = 0;
     const worker = async (): Promise<void> => {
       while (idx < pending.length) {
-        if (gen !== iconGen) return; // superseded by a newer drain
         const spec = pending[idx++];
         if (!spec) continue;
         spec.done = true;
@@ -427,16 +450,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
           wCells,
           spec.initialState,
         );
-        if (gen !== iconGen) {
-          // a newer drain owns the slot now: free what this one built instead
-          // of attaching it under the winner (which would leak the loser)
-          for (const im of imgs) {
-            try {
-              im.destroy();
-            } catch {}
-          }
-          return;
-        }
         if (imgs.length === 0) continue;
         slot.width = wCells;
         const kids = slot.getChildren();
@@ -476,6 +489,28 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // re-rasters made fresh images visible; while a modal scrim is up the icons
     // must fall back to dimmed glyphs or they float over the menu
     if (ctx.modalOpen()) setScrim(true);
+  };
+
+  // Serialized entry point: concurrent calls coalesce into the running pass
+  // plus at most one rerun, so a spec is never left done-but-unrastered (the
+  // old per-drain supersession token stranded exactly those).
+  const drainIconQueue = (): Promise<void> => {
+    if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return Promise.resolve();
+    if (!ctx.renderer().resolution) return Promise.resolve();
+    iconDrainAgain = true;
+    if (!iconDrain) {
+      iconDrain = (async () => {
+        try {
+          while (iconDrainAgain) {
+            iconDrainAgain = false;
+            await runIconDrain();
+          }
+        } finally {
+          iconDrain = null;
+        }
+      })();
+    }
+    return iconDrain;
   };
   // narrowed view of the byId seam (see ../lib/node-like): only the members
   // the scrim touches. `fg` is a ColorInput because the seam hands back the
@@ -591,11 +626,16 @@ export const makeSlots = (ctx: SlotsCtx) => {
     resetIconQueue: (): void => {
       // boot-baked slots may have already drained and left the pending set —
       // the registry keeps them reachable for theme/resize re-rasters (the
-      // old second queue grew unbounded; allSpecs prunes by node-liveness)
+      // old second queue grew unbounded; allSpecs prunes by node-liveness).
+      // iconForceRedrain also covers a pass that is mid-flight right now: the
+      // rerun revisits EVERY spec even one the in-flight pass already claimed.
       for (const s of allSpecs.values()) s.done = false;
+      iconForceRedrain = true;
+      if (iconDrain) iconDrainAgain = true;
     },
     pushThumbJob: (job: ThumbJob): void => {
       if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
+      thumbOwners.set(job.slotId, thumbJobKey(job));
       thumbJobs.push(job);
     },
   };

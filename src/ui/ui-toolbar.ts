@@ -32,7 +32,9 @@ type ToolbarCtx = {
   prefix: string;
   renderer(): CliRenderer;
   byId(id: string): MaybeNode;
-  clearChildren(node: unknown): void;
+  // destroys the removed children's native buffers too — never a detach-only
+  // sweep, or every crumb rebuild defers its TextBuffers to the GC poke
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
   uiStyle(): UiStyle;
   // live theme — always read through the getter, never captured
@@ -215,7 +217,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     if (!box) return;
 
     if (pathEditMode) {
-      ctx.clearChildren(box);
+      ctx.destroyChildren(box);
       // resolve once and construct only on a miss: both branches share this
       // binding, and a `let` would lose its narrowing inside the enter handler
       const existing = ctx.byId(id("path-input"));
@@ -274,7 +276,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     }
 
     // rebuild crumbs from scratch — appending would duplicate them every nav
-    ctx.clearChildren(box);
+    ctx.destroyChildren(box);
 
     const cwdAbs = path.resolve(ctx.cwd());
     const virtCrumb =

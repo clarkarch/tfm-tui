@@ -13,7 +13,7 @@ import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
 import type { Renderable } from "@opentui/core";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { fmtBytes } from "../fs/propsinfo";
-import { destroyChildren } from "../lib/uiutil";
+import { destroyChildren, destroyNode } from "../lib/uiutil";
 import type { Scheduler } from "../lib/uiutil";
 import { TileVisual } from "../input/grid-input";
 import type { FileAnimMode } from "./ui-grid-anim";
@@ -253,7 +253,8 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     } catch {}
     // destroy, not just detach: every tile owns a native TextBuffer (and often
     // an image), and relying on the 10s GC poke leaks whole folders' worth of
-    // native memory under rebuild churn (see destroyChildren in lib/uiutil)
+    // native memory under rebuild churn (see destroyChildren in lib/uiutil —
+    // it recurses, or it would free only the inner container box)
     destroyChildren(scroller.content);
     selection.tileRefs.clear();
   };
@@ -853,15 +854,16 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       if (windowMoved) {
         const kidAt = (r: number): Renderable | undefined => kids[1 + r - old.r0];
         // rows slid out of the window are discarded, not recycled — reap them
-        // (remove + destroy) so their native buffers free now, not at the poke
+        // (remove + DESTROY THE SUBTREE) so the tiles' native buffers free now,
+        // not at the poke. A plain destroy() would free only the row Box:
+        // OpenTUI detaches a node's children without destroying them, so the
+        // walk down to the tiles lives in destroyNode (lib/uiutil).
         const reapRow = (k: Renderable | undefined): void => {
           if (!k) return;
           try {
             mounted.remove(k);
           } catch {}
-          try {
-            k.destroy();
-          } catch {}
+          destroyNode(k);
         };
         for (let r = old.r0; r < r0; r++) reapRow(kidAt(r));
         for (let r = old.r1; r > r1; r--) reapRow(kidAt(r));
@@ -887,8 +889,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // grid is windowed (syncWindow only runs on windowed builds) and gated
     // by the file-animation master inside play().
     // NO stop call around the slide: the animator appends to a still-running
-    // wave, and detached-but-alive rows leave it safely (remove() only
-    // detaches; writes are try/catch'd until the GC finalizer reclaims them).
+    // wave, and a reaped (destroyed) row leaves it safely — the wave holds
+    // cached node refs and only writes opacity/translateX/translateY (pure
+    // JS-side setters, try/catch'd), while fresh id lookups (byId) simply miss
+    // a destroyed node. A reaped row was leaving the window anyway, so the
+    // dropped frames cost nothing visible.
     const visTop = firstRow;
     const visBottom = visibleBottomRow(scrollTop, visH(scroller), rh, rows);
     const oldVis = win.vis;

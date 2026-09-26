@@ -454,8 +454,8 @@ describe("open-float repaints", () => {
         renderer: () => t.renderer,
         byId: (id) => t.renderer.root.findDescendantById(id),
         rootAdd: (n) => t.renderer.root.add(n),
-        clearChildren: (node: any) => {
-          for (const c of [...node.getChildren()]) node.remove(c);
+        destroyChildren: (node: any) => {
+          for (const c of [...node.getChildren()]) c.destroy?.();
         },
         stripSelectable: () => {},
         colors: () => live as any,

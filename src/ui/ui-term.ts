@@ -1,5 +1,5 @@
 import { Box, type CliRenderer, EmbeddedTerminalRenderable, type MouseEvent, Text } from "@opentui/core";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
 import { applySurface, type UiStyle } from "./style";
 import { gridDrag } from "../input/grid-input";
@@ -327,7 +327,9 @@ export const makeTerminal = (ctx: TermCtx) => {
     downCell = null;
     const host = ctx.byId("tfm-term-host");
     if (host) {
-      clearChildren(host);
+      // destroy (not detach): the header/hero nodes own TextBuffers, and a
+      // close/open cycle per dir visit would otherwise leak one pane's worth
+      destroyChildren(host);
       host.height = 0;
       // the pane is gone — the host must stop acting as a drop target
       try {

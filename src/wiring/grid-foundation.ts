@@ -7,7 +7,7 @@
 import { makeSelection, type SelTileRef, type Selection } from "../input/selection";
 import { makeRename } from "../ui/ui-rename";
 import { makeBulkRename } from "../ui/ui-bulk-rename";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { activeFacade, activeMapFacade } from "../app/panes";
 import type { CoreWiring } from "./core";
@@ -82,7 +82,7 @@ export const wireGridFoundation = (deps: {
     renderer: () => chrome.renderer,
     byId: core.lookup.byId,
     rootAdd: (node) => chrome.renderer.root.add(node),
-    clearChildren,
+    destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
     drainIconQueue: () => core.slots.drainIconQueue(),

@@ -6,7 +6,7 @@ import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SettingGroup, SettingRow } from "./settings";
-import type { NodeLike } from "../lib/node-like";
+import { destroyChildren } from "../lib/uiutil";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // esc-menu + settings panel through the PUBLIC makeEscMenu surface only, so
@@ -110,11 +110,8 @@ beforeAll(async () => {
   menu = makeEscMenu({
     renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
-    clearChildren: (node) => {
-      // the ctx hands over a real node; this fake only touches the tree API
-      const n = node as NodeLike;
-      for (const c of [...n.getChildren()]) n.remove(c);
-    },
+    // the ctx hands over a real node, so the REAL teardown is the honest fake
+    destroyChildren,
     stripSelectable: () => {},
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
     makeIconSlot: (name: string, states: any, heightCells?: number, initialState?: number) => {

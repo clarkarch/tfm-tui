@@ -17,7 +17,7 @@ import { makeRetheme } from "../ui/ui-retheme";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { clearIconCaches } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import { pointPaneAt } from "../app/panes";
 import {
@@ -277,7 +277,7 @@ export const wireSettings = (deps: {
     renderer: () => chrome.renderer,
     byId: core.lookup.byId,
     floats: core.floats,
-    clearChildren,
+    destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
     makeIconSlot: core.slots.makeIconSlot,

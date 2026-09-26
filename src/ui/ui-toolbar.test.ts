@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { crumbItemIds, isNavigableTarget, makeToolbar, toolbarItemIds } from "./ui-toolbar";
 import { RECENT_URI } from "../fs/uri";
 import type { MaybeNode } from "../lib/node-like";
@@ -54,7 +54,7 @@ const mkToolbar = (
     prefix,
     renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
-    clearChildren,
+    destroyChildren,
     stripSelectable: () => {},
     uiStyle: () => "solid",
     colors: () => COLORS,

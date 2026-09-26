@@ -14,18 +14,6 @@ const isChildHost = (v: unknown): v is ChildHost =>
   typeof v.getChildren === "function" &&
   typeof v.remove === "function";
 
-export const clearChildren = (node: unknown): void => {
-  if (!isChildHost(node)) return;
-  try {
-    const kids = [...node.getChildren()];
-    for (const c of kids) {
-      try {
-        node.remove(c);
-      } catch {}
-    }
-  } catch {}
-};
-
 // Teardown that also DESTROYS the removed children. OpenTUI renderables own
 // native memory (TextBuffers, images) freed by a bun finalizer, and bun only
 // GCs on JS-heap pressure — never on native pressure (see app/mem-hygiene).
@@ -34,21 +22,54 @@ export const clearChildren = (node: unknown): void => {
 // until small allocations fail (the documented "Failed to create TextBuffer" /
 // vanishing floating-UI crash). `keep` (when given) is removed but NOT
 // destroyed — the preview pane re-adds its cached node, so destroying it here
-// would be a use-after-destroy.
+// would be a use-after-destroy (its whole SUBTREE is preserved too).
+//
+// MUST recurse: OpenTUI's `destroy()` only DETACHES its own children (the
+// recursive API is the separate `destroyRecursively()`), so a one-level
+// destroy destroyed just the container and left every nested tile's
+// TextBuffer alive until the GC poke — the exact leak this helper exists to
+// prevent. Verified against opentui/core (Renderable.destroy removes children
+// without destroying them) and pinned by the nested case in uiutil.test.ts.
+type Destroyable = { getChildren?: () => Iterable<unknown>; destroy?: () => void };
+
+// bottom-up: children BEFORE their parent — destroy() clears the child list,
+// so a parent-first walk would have nothing left to recurse into
+const destroySubtree = (node: unknown, keep: unknown): void => {
+  if (node === null || node === undefined) return;
+  if (keep !== undefined && node === keep) return;
+  const n = node as Destroyable;
+  if (typeof n.getChildren === "function") {
+    let kids: unknown[] = [];
+    try {
+      kids = [...n.getChildren()];
+    } catch {}
+    for (const c of kids) destroySubtree(c, keep);
+  }
+  try {
+    n.destroy?.();
+  } catch {}
+};
+
+// one node (already detached, or self-detaching) plus everything under it —
+// the row-reap path in ui-grid needs a single-node walk, not a host sweep.
+export const destroyNode = (node: unknown): void => {
+  destroySubtree(node, undefined);
+};
+
 export const destroyChildren = (node: unknown, keep?: unknown): void => {
   if (!isChildHost(node)) return;
+  let kids: unknown[] = [];
   try {
-    const kids = [...node.getChildren()];
-    for (const c of kids) {
-      try {
-        node.remove(c);
-      } catch {}
-      if (keep !== undefined && c === keep) continue;
-      try {
-        (c as { destroy?: () => void } | null | undefined)?.destroy?.();
-      } catch {}
-    }
-  } catch {}
+    kids = [...node.getChildren()];
+  } catch {
+    return;
+  }
+  for (const c of kids) {
+    try {
+      node.remove(c);
+    } catch {}
+    destroySubtree(c, keep);
+  }
 };
 
 // trailing debounce: every call pushes the run `ms` back; the body sees the

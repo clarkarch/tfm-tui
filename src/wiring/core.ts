@@ -20,7 +20,6 @@ import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makeSlots } from "../ui/ui-slots";
 import { makeFloats } from "../ui/floats";
-import { clearChildren } from "../lib/uiutil";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
 import { activeFacade, activeState, makePanePair, otherState, setActivePane, togglePane } from "../app/panes";
@@ -119,7 +118,6 @@ export const wireCore = (deps: {
   const slots = makeSlots({
     renderer: () => deps.renderer(),
     byId: lookup.byId,
-    clearChildren,
     colors: themeGet,
     uiStyle: () => config.ui.uiStyle,
     iconsMode: () => config.ui.icons,
