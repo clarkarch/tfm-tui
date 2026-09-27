@@ -9,7 +9,6 @@
 import type { KeyEvent } from "@opentui/core";
 import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
-import { makePointerSetter } from "../ui/ui-slots";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
 import { cycleSortMode } from "../lib/sort";
@@ -45,12 +44,9 @@ export const wireKeymap = (deps: {
   // contributions apply without rebuilds). coreCommands is backfilled after
   // the router exists — keypresses can't precede the wiring return. ---
   let coreCommands: () => Command[] = () => [];
-  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for the
-  // pick overlay + the prompt overlay.
-  const setPointer = makePointerSetter({
-    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
-    isTtyMode: () => core.isTtyMode(),
-  });
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
   const pick = makePick({
     renderer: () => chrome.renderer,
     byId,

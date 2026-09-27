@@ -31,7 +31,6 @@ import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
-import { makePointerSetter } from "../ui/ui-slots";
 import { destroyChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
@@ -62,12 +61,10 @@ export const wireChrome = async (deps: {
   const { makeIconSlot, setIconState, drainIconQueue } = core.slots;
   const { themeGet, home, state } = core;
   const uiStyle = () => core.config.ui.uiStyle;
-  // mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for every
-  // ctx built here. Arrows defer renderer access — factories run pre-boot.
-  const setPointer = makePointerSetter({
-    setMousePointer: (s) => renderer.setMousePointer(s),
-    isTtyMode: () => core.isTtyMode(),
-  });
+  // mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore — per-cluster instances diverged and stuck the shape across
+  // widget boundaries, so every ctx here takes core.setPointer.
+  const setPointer = core.setPointer;
 
   // --- File context menu (right-click a tile) — widget lives in ./ui-menu.
   // Hoisted above chrome/toolbar/conflict/grid-ctx, which all consume

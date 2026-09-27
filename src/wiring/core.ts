@@ -18,7 +18,7 @@ import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
-import { makeSlots } from "../ui/ui-slots";
+import { makePointerSetter, makeSlots } from "../ui/ui-slots";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -112,6 +112,17 @@ export const wireCore = (deps: {
     },
   });
 
+  // --- Mouse pointer shapes (OSC 22): ONE tty-guarded, deduping sink for
+  // the whole app, shared by every widget ctx. Per-cluster instances were
+  // tried first and diverged: each kept its own `last`, so cluster A
+  // emitting `default` left cluster B believing `pointer` and skipping the
+  // re-set — the shape stuck wrong across widget boundaries depending on
+  // the approach path. Arrows defer renderer access (pre-boot safe).
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => deps.renderer().setMousePointer(s),
+    isTtyMode,
+  });
+
   // --- Icon slots / thumbs / modal scrim — widget lives in ./ui-slots.
   // Called before the renderer boots: every ctx field the drain path needs is
   // an arrow wrapper (post-boot evaluation), per the widget-seam rules. ---
@@ -126,6 +137,7 @@ export const wireCore = (deps: {
     glyphFor: ttyGlyphFor,
     isTtyMode,
     forceGlyph,
+    setPointer,
   });
 
   // --- App state & history (type + boot-state factory live in ./nav with the
@@ -193,6 +205,7 @@ export const wireCore = (deps: {
     themeGet,
     isTtyMode,
     forceGlyph,
+    setPointer,
     geometry,
     sideInnerW,
     lookup,

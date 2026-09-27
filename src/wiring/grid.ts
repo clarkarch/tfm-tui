@@ -21,7 +21,6 @@ import {
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
-import { makePointerSetter } from "../ui/ui-slots";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { FILE_GLYPH, glyph } from "../ui/glyphs";
 import { rasterSigOf } from "../ui/tty";
@@ -155,12 +154,9 @@ export const wireGrid = (deps: {
   // PER PANE so a tile's handlers always act on their own pane's selection/map
   // regardless of focus timing. All state lives in tileRefs + the drag module
   // vars, keyed by path.
-  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink shared by
-  // both pane ctxs and the props dialog.
-  const setPointer = makePointerSetter({
-    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
-    isTtyMode: () => core.isTtyMode(),
-  });
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
   const makePaneGridCtx = (pane: 0 | 1) => {
     const s = selections[pane];
     return {

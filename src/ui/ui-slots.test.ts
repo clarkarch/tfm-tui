@@ -262,6 +262,8 @@ describe("thumbnail mount", () => {
   let t: TestRendererSetup;
   const REAL_CACHE_HOME = process.env.XDG_CACHE_HOME;
   let cacheSandbox = "";
+  // mouse pointer shapes requested through the slots ctx seam (OSC 22 sink)
+  const slotPointers: string[] = [];
 
   beforeAll(async () => {
     // box the disk cache for this file, like icons.test.ts — drainThumbs →
@@ -290,6 +292,7 @@ describe("thumbnail mount", () => {
       glyphFor: () => "F",
       isTtyMode: () => false,
       forceGlyph: () => false,
+      setPointer: (s) => void slotPointers.push(s),
     });
   // the headless renderer's resolution getter is readonly and null (real pixels
   // come from the live terminal); shadow it so the drains' pixel gate opens
@@ -400,6 +403,27 @@ describe("thumbnail mount", () => {
     await t.renderOnce();
 
     expect(t.renderer.root.findDescendantById(`${slot.slotId}-s0`)).toBeTruthy();
+  });
+
+  test("escHintBtn hover sets pointer, out restores (X buttons are hoverables too)", async () => {
+    // regression: the slots ctx was built without setPointer, so every
+    // close-X silently hovered with no shape change
+    slotPointers.length = 0;
+    const slots = mkSlots();
+    const btn = slots.escHintBtn("test-x", () => {});
+    t.renderer.root.add(btn as never);
+    await t.renderOnce();
+    const fire = (type: string) =>
+      (t.renderer.root.findDescendantById("test-x") as any)?.processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    fire("move");
+    fire("out");
+    expect(slotPointers).toEqual(["pointer", "default"]);
   });
 });
 
@@ -527,5 +551,33 @@ describe("makePointerSetter", () => {
     const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => true });
     set("pointer");
     expect(seen).toEqual([]);
+  });
+
+  test("dedupe state is per-instance (the app must share one sink)", () => {
+    // two widgets on separate instances diverge: B still believes `pointer`
+    // after A emitted `default`, so B's re-set is skipped and the terminal
+    // sticks at default. This pins the trap; wireCore shares one instance.
+    const seen: string[] = [];
+    const a = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    const b = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    a("pointer");
+    b("pointer");
+    a("default");
+    b("pointer");
+    expect(seen).toEqual(["pointer", "pointer", "default"]);
+  });
+
+  test("one shared sink heals cross-widget transitions", () => {
+    // tile -> toolbar button: out restores, the next widget's move re-sets
+    // through the same `last`, so no transition is ever skipped
+    const seen: string[] = [];
+    const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    const tile = hoverEvents(() => {}, set);
+    const button = hoverEvents(() => {}, set);
+    tile.onMouseMove();
+    tile.onMouseOut();
+    button.onMouseMove();
+    button.onMouseOut();
+    expect(seen).toEqual(["pointer", "default", "pointer", "default"]);
   });
 });

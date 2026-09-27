@@ -13,7 +13,6 @@ import { makeSettingModel } from "../ui/settings-model";
 import { makeSystemTheme } from "../ui/ui-system-theme";
 import { MENU_W } from "../ui/ui-menu";
 import { makeEscMenu } from "../ui/ui-settings";
-import { makePointerSetter } from "../ui/ui-slots";
 import { makeRetheme } from "../ui/ui-retheme";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { clearIconCaches } from "../ui/icons";
@@ -274,12 +273,9 @@ export const wireSettings = (deps: {
     },
   });
 
-  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for the
-  // esc menu (root rows + settings panel hooks ride the same field).
-  const setPointer = makePointerSetter({
-    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
-    isTtyMode: () => core.isTtyMode(),
-  });
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
 
   const escMenu = makeEscMenu({
     renderer: () => chrome.renderer,

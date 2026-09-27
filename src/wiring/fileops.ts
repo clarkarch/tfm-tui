@@ -9,7 +9,6 @@ import { clearUndoJournal, readUndoJournal, saveUndoJournal } from "../fs/undo-j
 import { makeEnsureSudo } from "../fs/elevate";
 import { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import { makeProgress } from "../ui/ui-progress";
-import { makePointerSetter } from "../ui/ui-slots";
 import { makeFileOps } from "../fs/fileops";
 import { makeTerminal } from "../ui/ui-term";
 import { makeTrashOps, makeTrashConfirms } from "../fs/trashops";
@@ -75,12 +74,9 @@ export const wireFileops = (deps: {
     clearUndoJournal();
   }
 
-  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for the
-  // conflict/yes-no dialogs, the progress toast + the terminal pane header.
-  const setPointer = makePointerSetter({
-    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
-    isTtyMode: () => core.isTtyMode(),
-  });
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
 
   const conflict = makeConflict(chrome.dialogs, {
     colors: themeGet,
