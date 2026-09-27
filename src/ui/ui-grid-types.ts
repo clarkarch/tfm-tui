@@ -5,7 +5,7 @@
 
 import type { Theme } from "../config/config";
 import type { ScrollerLike } from "../lib/node-like";
-import type { HoverLiftOpts } from "../config/config-schema";
+import type { HoverLiftOpts, WrapMode } from "../config/config-schema";
 import type { Entry } from "../fs/listing";
 import type { TileMouseHandlers } from "../input/grid-input";
 import type { Selection } from "../input/selection";
@@ -57,7 +57,9 @@ export type GridRendererCtx = {
   // restart. Deliberately OUT of contentSigOf: a mode flip rebuilds silently
   // instead of replaying the intro cascade. Optional so test fakes keep working.
   rasterSig?(): string;
-  wordWrap(): boolean;
+  // global line-wrap mode ([ui] wrap-mode): grid tile labels wrap in this
+  // mode, preview bodies follow it for code. Part of the content sig.
+  wrapMode(): WrapMode;
   reservedRight(): number;
   // per-pane content width; when absent falls back to termW - sw - reservedRight
   // (single-pane callers / tests)

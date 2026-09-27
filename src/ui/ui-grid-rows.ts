@@ -231,7 +231,12 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       iconSlotEl = s.el;
     }
     const maxLabelLines = Math.max(1, TILE_H - ICON_CELLS_H);
-    const wrapOn = ctx.wordWrap() && entry.name.length > TILE_W - 2 && maxLabelLines > 1;
+    // global wrap mode ([ui] wrap-mode, also drives preview bodies): labels
+    // wrap in char/word modes, truncate with … in none. Filenames are
+    // single runs, so word mode hard-slices them edge-to-edge like char
+    // (names with spaces break at the spaces instead).
+    const labelWrap = ctx.wrapMode() === "none" ? null : ctx.wrapMode();
+    const wrapOn = labelWrap !== null && entry.name.length > TILE_W - 2 && maxLabelLines > 1;
     // Hover lift moves only the hovered tile, by one cell, and only when it
     // has room: up/down need one vertical spare row (a wrapped label consumes
     // them all, so vertical lifts stay off there), left/right need one
@@ -260,15 +265,12 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     tile.add(tileBox);
 
     const label = entry.name.length > TILE_W - 2 ? `${entry.name.slice(0, TILE_W - 5)}…` : entry.name;
-    // word wrap [ui] word-wrap: long names flow onto extra tile rows (capped at the
-    // space under the icon) via the native char-wrap buffer — filenames are
-    // single runs, per-character wrap fills every line edge-to-edge; overflow
-    // lines clip, too-long runs ellipsize. Off = today's single cut line.
+    // Off (none) = today's single cut line.
     const labelText = Text({
       id: labelId,
       content: wrapOn ? entry.name : label,
       fg: baseFg,
-      ...(wrapOn ? { width: TILE_W - 2, height: maxLabelLines, truncate: true, wrapMode: "char" as const } : {}),
+      ...(wrapOn && labelWrap ? { width: TILE_W - 2, height: maxLabelLines, truncate: true, wrapMode: labelWrap } : {}),
     });
     tile.add(labelText);
 

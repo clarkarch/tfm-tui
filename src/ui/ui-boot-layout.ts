@@ -177,6 +177,15 @@ type BootLayoutCtx = {
 
 // returns both scrollers (one per pane) so the wiring can keep its live
 // scrollerRefs; `tfm-scroll` stays pane 0's byte-identical id
+
+// grid scroller thumb/track in theme colors instead of the upstream gray
+// defaults (#9a9ea3 on #252527): a quiet muted thumb on an invisible bed
+// (track == main bg). Shared with rethemeChrome so a theme flip repaints
+// the live bars without rebuilding the scrollers.
+export const scrollbarTrackColors = (colors: Theme): { backgroundColor: string; foregroundColor: string } => ({
+  backgroundColor: colors.bg,
+  foregroundColor: colors.sidebarFgMuted,
+});
 export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, ScrollBoxRenderable] => {
   const makeScroller = (id: string, pane: number): ScrollBoxRenderable =>
     new ScrollBoxRenderable(ctx.renderer, {
@@ -186,6 +195,9 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       scrollY: true,
       viewportCulling: true,
       contentOptions: { flexDirection: "column" },
+      // theme the built-in bar (trackOptions land on its inner Slider);
+      // visibility still auto-hides when the listing fits the viewport
+      verticalScrollbarOptions: { trackOptions: scrollbarTrackColors(ctx.colors) },
       onMouseDown: (ev: MouseEvent) => {
         // clicking a pane focuses it before any selection/band work, so the
         // facade selection + status target the right pane

@@ -14,6 +14,7 @@ import { makeSystemTheme } from "../ui/ui-system-theme";
 import { MENU_W } from "../ui/ui-menu";
 import { makeEscMenu } from "../ui/ui-settings";
 import { makeRetheme } from "../ui/ui-retheme";
+import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { clearIconCaches } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
@@ -367,6 +368,18 @@ export const wireRetheme = (deps: {
     syncTerminalHeight: () => fileops.terminal.syncTerminalHeight(),
     repaintButtons: () => {
       for (const t of chrome.toolbars) t.repaintButtons();
+    },
+    // grid scrollbar bars bake thumb/track colors at boot — repaint the
+    // live Sliders on a theme flip (a rebuild would drop the scroll pos)
+    restyleScrollbars: () => {
+      const m = scrollbarTrackColors(core.colors);
+      for (const ref of core.scrollerRefs) {
+        const s = ref.current;
+        if (!s) continue;
+        try {
+          s.verticalScrollBar.trackOptions = m;
+        } catch {}
+      }
     },
     renderCrumbs: () => {
       for (const t of chrome.toolbars) t.renderCrumbs();

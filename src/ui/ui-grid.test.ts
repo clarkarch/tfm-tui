@@ -21,7 +21,7 @@ import type { Entry } from "../fs/listing";
 import type { TileMouseHandlers } from "../input/grid-input";
 import type { IconSlotHandle } from "./ui-slots";
 import { defaultConfig } from "../config/config-schema";
-import type { HoverLiftOpts } from "../config/config-schema";
+import type { HoverLiftOpts, WrapMode } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SortMode } from "../lib/sort";
 import type { Scheduler } from "../lib/uiutil";
@@ -82,7 +82,7 @@ let thumbJobs: any[];
 let iconSlots: Array<{ name: string; heightCells: number; initialState: number }>;
 let mouseHandlers: Array<{ name: string; key: string; idx: number }>;
 let searchQuery: string;
-let wordWrap: boolean;
+let wrapMode: WrapMode;
 let recursiveSearch: boolean;
 let searchCalls: string[];
 let searchSignals: AbortSignal[];
@@ -136,7 +136,7 @@ beforeAll(async () => {
   iconSlots = [];
   mouseHandlers = [];
   searchQuery = "";
-  wordWrap = false;
+  wrapMode = "none";
   recursiveSearch = false;
   searchCalls = [];
   searchSignals = [];
@@ -213,7 +213,7 @@ beforeAll(async () => {
     previewWidth: () => 0,
     viewMode: () => viewMode,
     rasterSig: () => rasterSig,
-    wordWrap: () => wordWrap,
+    wrapMode: () => wrapMode,
     reservedRight: () => 0,
     // per-pane width: null falls back to termW - sw - reservedRight
     availW: () => availWSet ?? TERM_W - SW,
@@ -398,7 +398,7 @@ describe("renderGrid (grid tiles)", () => {
 
   test("a wrapped label consumes the vertical spare: no lift, no headroom", async () => {
     writeFileSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), "x");
-    wordWrap = true;
+    wrapMode = "char";
     hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
     try {
       await renderGrid();
@@ -422,10 +422,10 @@ describe("renderGrid (grid tiles)", () => {
       expect(wrapped).toBe(1);
       expect(lifted).toBeGreaterThan(0);
     } finally {
-      // a red run must not leak the long file / wordWrap flag into the next
+      // a red run must not leak the long file / wrapMode flag into the next
       // test (stale grid contents break unrelated counts)
       rmSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), { force: true });
-      wordWrap = false;
+      wrapMode = "none";
       hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
       await renderGrid();
     }
@@ -489,7 +489,7 @@ describe("renderGrid (grid tiles)", () => {
       previewEnabled: () => false,
       previewWidth: () => 0,
       viewMode: () => viewMode,
-      wordWrap: () => false,
+      wrapMode: () => "none" as WrapMode,
       reservedRight: () => 0,
       availW: () => TERM_W - SW,
       tileIdPrefix: "tfm-tile-boot-",

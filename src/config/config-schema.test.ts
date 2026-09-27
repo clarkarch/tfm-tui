@@ -188,3 +188,22 @@ describe("config.example.toml is in sync", () => {
     expect(readFileSync(repoFile, "utf8")).toBe(exampleToml());
   });
 });
+
+describe("wrap-mode", () => {
+  test("defaults to none (clip, the old false behavior)", () => {
+    expect(parseConfigDoc(undefined).ui.wrapMode).toBe("none");
+  });
+
+  test("parses all three modes, rejects garbage to the default", () => {
+    expect(parseConfigDoc({ ui: { "wrap-mode": "char" } }).ui.wrapMode).toBe("char");
+    expect(parseConfigDoc({ ui: { "wrap-mode": "word" } }).ui.wrapMode).toBe("word");
+    expect(parseConfigDoc({ ui: { "wrap-mode": "none" } }).ui.wrapMode).toBe("none");
+    expect(parseConfigDoc({ ui: { "wrap-mode": "ribbon" } }).ui.wrapMode).toBe("none");
+  });
+
+  test("legacy word-wrap bool migrates (true=char, false=none), new key wins", () => {
+    expect(parseConfigDoc({ ui: { "word-wrap": true } }).ui.wrapMode).toBe("char");
+    expect(parseConfigDoc({ ui: { "word-wrap": false } }).ui.wrapMode).toBe("none");
+    expect(parseConfigDoc({ ui: { "wrap-mode": "word", "word-wrap": true } }).ui.wrapMode).toBe("word");
+  });
+});

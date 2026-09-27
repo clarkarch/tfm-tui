@@ -189,6 +189,7 @@ describe("settingGroups shape", () => {
       .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
     expect(layout).toEqual([
       "view mode",
+      "wrap mode",
       "##sizes",
       "sidebar width",
       "preview width",
@@ -197,7 +198,6 @@ describe("settingGroups shape", () => {
       "grid tile width",
       "grid tile height",
       "grid icon size",
-      "word wrap (grid)",
       "##list",
       "list row height",
     ]);
@@ -626,7 +626,7 @@ describe("generic schema rows", () => {
       const row = h.byLabel(label);
       expect("repaint" in row && row.repaint).toBe(true);
     }
-    const plain = h.byLabel("word wrap (grid)");
+    const plain = h.byLabel("wrap mode");
     expect("repaint" in plain && plain.repaint).toBeFalsy();
   });
 });

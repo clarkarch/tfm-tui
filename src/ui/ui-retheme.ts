@@ -58,6 +58,10 @@ type RethemeCtx = {
   // tty mode (linux console): forces opaque bg + list view. Optional so
   // tests stay light; absent = modern terminal.
   isTtyMode?(): boolean;
+  // grid scrollers bake their scrollbar thumb/track colors at boot —
+  // repaints the live bars on a theme flip without rebuilding them.
+  // Optional so tests stay light.
+  restyleScrollbars?(): void;
 };
 
 export const makeRetheme = (ctx: RethemeCtx) => {
@@ -108,6 +112,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
 
     // toolbar hover buttons: box bg must track the new palette between raster swaps
     ctx.repaintButtons();
+    ctx.restyleScrollbars?.();
     ctx.renderCrumbs();
     ctx.refreshNav();
     for (const p of ["tfm-p0-", "tfm-p1-"]) {

@@ -183,6 +183,26 @@ describe("applyConfig", () => {
     expect(ctx.calls.bg).toEqual([bumpHex(defaultConfig.theme.bg)]); // renderer bg reset
   });
 
+  test("theme flip restyles the grid scrollbars via the optional hook (absent = no-op)", () => {
+    // hook present: a theme flip fans out once (thumb/track follow the palette
+    // without rebuilding the scrollers or dropping the scroll pos)
+    const ctx = mkCtx();
+    let restyled = 0;
+    (ctx as any).restyleScrollbars = () => {
+      restyled++;
+    };
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#00ff00";
+    retheme.applyConfig(fresh);
+    expect(restyled).toBe(1);
+    // hook absent (old fakes): the same flip must not throw
+    const bare = makeRetheme(mkCtx() as any);
+    const fresh2 = clone(defaultConfig);
+    fresh2.theme.accent = "#0000ff";
+    expect(() => bare.applyConfig(fresh2)).not.toThrow();
+  });
+
   test("tty-active applyConfig paints the static console palette, ignoring user hues", () => {
     // the Linux VT ignores 48;2 truecolor, so tty mode paints one hand-tuned
     // static palette (dark/light by configured-bg brightness) instead of the

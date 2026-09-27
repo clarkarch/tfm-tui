@@ -62,6 +62,9 @@ export const wireGrid = (deps: {
     uiStyle,
     previewEnabled: () => core.config.ui.previewEnabled,
     previewWidth: () => core.config.ui.previewWidth,
+    // global wrap mode ([ui] wrap-mode) drives preview bodies too —
+    // keymap reads config.keys live, the preview reads this live the same way
+    wrapMode: () => core.config.ui.wrapMode,
     // skip preview rebuilds while the pane is collapsed (auto-hide) — the
     // effective width is 0 then, and the work is invisible native churn
     visible: () => core.geometry.previewEff > 0 && core.config.ui.previewEnabled,
@@ -308,7 +311,7 @@ export const wireGrid = (deps: {
       // raster-affecting state the grid rebuild keys off (force-glyph/icons/
       // tty mode flips must rebuild even though the listing is unchanged)
       rasterSig: () => rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph),
-      wordWrap: () => core.config.ui.wordWrap,
+      wrapMode: () => core.config.ui.wrapMode,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,
       tileIdPrefix: `tfm-tile-p${pane}-`,

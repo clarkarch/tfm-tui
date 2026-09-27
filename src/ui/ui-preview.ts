@@ -1,4 +1,16 @@
-import { Box, type CliRenderer, CodeRenderable, Text, TextRenderable, type SyntaxStyle } from "@opentui/core";
+import {
+  Box,
+  type CliRenderer,
+  CodeRenderable,
+  detectLinks,
+  LineNumberRenderable,
+  MarkdownRenderable,
+  ScrollBoxRenderable,
+  Text,
+  TextRenderable,
+  TextTableRenderable,
+  type SyntaxStyle,
+} from "@opentui/core";
 import { existsSync, readdirSync, statSync, type Stats } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +22,8 @@ import { canThumbVideo } from "./icons";
 import type { ThumbJob } from "./ui-slots";
 import { buildSyntaxStyle, isTextLike, PREVIEW_FT_BY_EXT, syntaxStyleSig } from "./syntax";
 import type { Theme } from "../config/config";
+import type { WrapMode } from "../config/config-schema";
+import { scrollbarTrackColors } from "./ui-boot-layout";
 import type { MaybeNode } from "../lib/node-like";
 
 // --- Preview pane (right sidebar): image thumbs go through the shared
@@ -48,6 +62,10 @@ type PreviewCtx = {
   // buggy kitty impls. Optional so test fakes keep working.
   isTtyMode?(): boolean;
   forceGlyph?(): boolean;
+  // global wrap mode ([ui] wrap-mode): code bodies and markdown fences
+  // render in this mode; prose (.txt bodies, markdown paragraphs) always
+  // word-wraps. Optional so test fakes keep working; absent = none (clip).
+  wrapMode?(): WrapMode;
   // plugin preview text (first matching ext wins in load order). Null/empty =
   // fall through to core. Throwing never breaks the pane. Stale guarded by
   // the same gen-counter as core file reads.
@@ -77,10 +95,7 @@ export const makePreview = (ctx: PreviewCtx) => {
       // getStyle() on the destroyed style (OpenTUI's catch degrades it to a
       // warn + plain repaint) and hold its native buffers until finalizers.
       // destroy() makes its continuations bail on isDestroyed.
-      try {
-        previewCodeCache?.node.destroy();
-      } catch {}
-      previewCodeCache = null;
+      destroyCachedNode();
       try {
         previewSyntaxStyle?.destroy();
       } catch {}
@@ -95,9 +110,53 @@ export const makePreview = (ctx: PreviewCtx) => {
     key: string;
     mtimeMs: number;
     size: number;
-    // whichever renderable the last preview mounted (plain text or highlighted)
-    node: TextRenderable | CodeRenderable;
+    // the wrap mode the node was built with — a toggle must not be served
+    // the stale wrap from the cache (key/mtime/size don't change on toggle)
+    wrap: string;
+    // whichever renderable the last preview mounted. Text/code bodies and
+    // markdown ride in a scrollbox — the cached node is the scroller, so
+    // scroll position survives re-previews of one file.
+    node: TextRenderable | CodeRenderable | LineNumberRenderable | MarkdownRenderable | ScrollBoxRenderable;
   } | null = null;
+  // NOTE: the global mode reaches markdown FENCES only. Fence blocks
+  // carry their info-string filetype (e.g. javascript) while prose blocks
+  // stay filetype markdown, so the two are separable without token
+  // internals. Prose always word-wraps (char-sliced prose is unreadable,
+  // clipped prose breaks mid-word — both reported); tables keep word too
+  // (measured cells). Content is set once at construction here and never
+  // updated, so walk-once covers every node (no reconciliation can
+  // introduce unwalked ones later).
+  const restyleMarkdownWrap = (root: MaybeNode, mode: WrapMode): void => {
+    const kids: unknown[] = (root as { getChildren?: () => unknown[] }).getChildren?.() ?? [];
+    for (const k of kids) {
+      try {
+        if (k instanceof TextTableRenderable) continue;
+        if (k instanceof CodeRenderable && (k as CodeRenderable).filetype !== "markdown") {
+          (k as CodeRenderable).wrapMode = mode;
+        }
+        restyleMarkdownWrap(k as MaybeNode, mode);
+      } catch {}
+    }
+  };
+  // bodies ride in a scrollbox (fixed bodyH viewport over full-height
+  // content): long files scroll under the cursor instead of clipping, and
+  // the line-number gutter — which measures to the full logical line
+  // count — scrolls in sync instead of running past short content. The bar
+  // wears the theme via the shared boot-layout mapping; a theme flip
+  // rebuilds the node anyway (style sig evicts the cache), so no retheme
+  // hook is needed. Scrollers are built inline per branch: widths/colors
+  // are render locals, not factory state.
+  const destroyCachedNode = () => {
+    // destroy() only DETACHES children — a gutter/markdown wrapper would
+    // leak its inner nodes' native buffers (and an in-flight highlight
+    // would keep touching the destroyed style). destroyRecursively is
+    // identical for bare Text/Code nodes (they have no children), so one
+    // helper covers all.
+    try {
+      previewCodeCache?.node.destroyRecursively();
+    } catch {}
+    previewCodeCache = null;
+  };
 
   const renderPreviewNow = async () => {
     if (!ctx.previewEnabled()) return;
@@ -244,11 +303,18 @@ export const makePreview = (ctx: PreviewCtx) => {
       if (!syntaxStyle) return;
       const mtimeMs = st.mtimeMs ?? 0;
       const size = st.size ?? 0;
+      // global wrap mode: code bodies and markdown blocks render in it.
+      // "none" clips instead of wrapping (word mode still hard-slices
+      // spaceless code runs by character, so it can never mean "no wrap"
+      // for code). Prose (.txt bodies, markdown paragraphs) always
+      // word-wraps — the mode governs code, never typography.
+      const wrap: WrapMode = ctx.wrapMode?.() ?? "none";
       if (
         previewCodeCache &&
         previewCodeCache.key === key &&
         previewCodeCache.mtimeMs === mtimeMs &&
-        previewCodeCache.size === size
+        previewCodeCache.size === size &&
+        previewCodeCache.wrap === wrap
       ) {
         pane.add(previewCodeCache.node);
         return;
@@ -256,43 +322,92 @@ export const makePreview = (ctx: PreviewCtx) => {
       // cache miss on a DIFFERENT file: the old cached node was detached above
       // (kept, not destroyed) and is about to be replaced — destroy it now so
       // its native buffer frees here, not at the next GC poke
-      try {
-        previewCodeCache?.node.destroy();
-      } catch {}
-      previewCodeCache = null;
-      const filetype = PREVIEW_FT_BY_EXT[path.extname(key).slice(1).toLowerCase()];
-      if (!filetype) {
-        // No tree-sitter filetype → CodeRenderable paints everything with the
-        // terminal default fg (it never consults syntaxStyle without a
-        // grammar). A real TextRenderable honours the theme instead — and is
-        // cached so re-previewing the same .txt doesn't realloc a TextBuffer
-        // every time (theme flips evict it, since the sig carries white).
-        const textNode = new TextRenderable(ctx.renderer, {
+      destroyCachedNode();
+      const ext = path.extname(key).slice(1).toLowerCase();
+      const bodyW = Math.max(8, ctx.previewWidth() - 2);
+      const bodyH = Math.max(1, ctx.termH() - 6);
+      // markdown gets the rich render (headings/lists/links, OSC-8
+      // hyperlink chunks included) instead of a monochrome code dump.
+      // The whole node — prose and fences — renders in the global mode;
+      // tables keep their own word wrap (measured cells). Auto height: the
+      // scroller below viewports it, so long docs scroll instead of clip.
+      if (ext === "md" || ext === "markdown" || ext === "mdx") {
+        const mdNode = new MarkdownRenderable(ctx.renderer, {
           id: `tfm-preview-code-${previewCodeSeq++}`,
           content: text,
+          syntaxStyle,
           fg: colors.white,
-          width: Math.max(8, ctx.previewWidth() - 2),
-          height: Math.max(1, ctx.termH() - 6),
-          selectable: false,
+          width: bodyW,
+          height: "auto",
         });
-        previewCodeCache = { key, mtimeMs, size, node: textNode };
-        pane.add(textNode);
+        restyleMarkdownWrap(mdNode, wrap);
+        const scroller = new ScrollBoxRenderable(ctx.renderer, {
+          width: bodyW,
+          height: bodyH,
+          scrollY: true,
+          scrollbarOptions: { trackOptions: scrollbarTrackColors(colors) },
+        });
+        scroller.add(mdNode);
+        previewCodeCache = { key, mtimeMs, size, wrap, node: scroller };
+        pane.add(scroller);
         void ctx.drainIconQueue();
         return;
       }
-      // real class instance (not a proxied helper) so it mounts into the live pane
-      const codeNode = new CodeRenderable(ctx.renderer, {
+      // text + code bodies ride inside a line-number gutter (both are
+      // TextBufferRenderables, i.e. LineInfoProviders). Gutter is ~4 cells
+      // (minWidth 3 + padding 1), so the body narrows to stay inside the pane.
+      const gutterW = 4;
+      const filetype = PREVIEW_FT_BY_EXT[ext];
+      const body: TextRenderable | CodeRenderable = !filetype
+        ? // No tree-sitter filetype → CodeRenderable paints everything with the
+          // terminal default fg (it never consults syntaxStyle without a
+          // grammar). A real TextRenderable honours the theme instead — and is
+          // cached so re-previewing the same .txt doesn't realloc a TextBuffer
+          // every time (theme flips evict it, since the sig carries white).
+          // Prose always word-wraps: the mode governs code, never typography.
+          // Auto height: inside the scroller the body paints full-height and
+          // the viewport scrolls it (a fixed height would pin a viewport
+          // that never advances, freezing the body while the gutter moves).
+          new TextRenderable(ctx.renderer, {
+            content: text,
+            fg: colors.white,
+            width: Math.max(8, bodyW - gutterW),
+            height: "auto",
+            selectable: false,
+            wrapMode: "word",
+          })
+        : // real class instance (not a proxied helper) so it mounts into the live pane
+          new CodeRenderable(ctx.renderer, {
+            content: text,
+            filetype,
+            syntaxStyle,
+            baseHighlight: "default",
+            // bare URLs become OSC-8 hyperlink chunks (the terminal opens
+            // them natively, e.g. kitty ctrl+click) — same hook Markdown
+            // uses internally for its own code blocks
+            onChunks: detectLinks,
+            width: Math.max(8, bodyW - gutterW),
+            height: "auto",
+            selectable: false,
+            wrapMode: wrap,
+          });
+      const gutter = new LineNumberRenderable(ctx.renderer, {
         id: `tfm-preview-code-${previewCodeSeq++}`,
-        content: text,
-        filetype,
-        syntaxStyle,
-        baseHighlight: "default",
-        width: Math.max(8, ctx.previewWidth() - 2),
-        height: Math.max(1, ctx.termH() - 6),
-        selectable: false,
+        target: body,
+        fg: colors.sidebarFgMuted,
       });
-      previewCodeCache = { key, mtimeMs, size, node: codeNode };
-      pane.add(codeNode);
+      // The gutter measures to the FULL logical line count (not parent
+      // constraints): in a scrollbox it scrolls in sync with the body
+      // instead of running past short content — its designed use.
+      const scroller = new ScrollBoxRenderable(ctx.renderer, {
+        width: bodyW,
+        height: bodyH,
+        scrollY: true,
+        scrollbarOptions: { trackOptions: scrollbarTrackColors(colors) },
+      });
+      scroller.add(gutter);
+      previewCodeCache = { key, mtimeMs, size, wrap, node: scroller };
+      pane.add(scroller);
       void ctx.drainIconQueue();
     } catch {}
   };

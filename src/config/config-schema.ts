@@ -128,6 +128,11 @@ export type Theme = {
 
 type ViewMode = "grid" | "list";
 
+// line-wrap vocabulary ([ui] wrap-mode): how over-long lines render
+// everywhere (grid tile labels, code preview, markdown). none cuts,
+// char slices mid-token, word breaks at spaces (spaceless runs still slice).
+export type WrapMode = "none" | "char" | "word";
+
 // surface-style vocabulary — the ui-style key's value type. The solid/outline
 // painting decisions live in ./style (the surface seam), which re-exports this.
 export type UiStyle = "solid" | "outline" | "outline-partial";
@@ -203,7 +208,7 @@ export type UiConfig = {
   typeToSearch: boolean;
   dragThresholdCells: number;
   listRowHeight: number;
-  wordWrap: boolean;
+  wrapMode: WrapMode;
   fileAnimation: boolean;
   fileAnimationSlide: boolean;
   fileAnimationStagger: boolean;
@@ -366,6 +371,18 @@ const UI_ROWS: SchemaRow[] = [
     group: "layout",
   },
   {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "wrap-mode",
+    prop: "wrapMode",
+    values: ["none", "char", "word"],
+    def: "none",
+    doc: "none = cut names with … and clip code preview; char = character-wrap tile names and code lines; word = break at spaces (spaceless runs still slice). Prose (.txt, markdown paragraphs) always word-wraps.",
+    label: "wrap mode",
+    blurb: "How long lines wrap: cut, by character, by word",
+    group: "layout",
+  },
+  {
     kind: "int",
     section: "ui",
     tomlKey: "sidebar-width",
@@ -452,18 +469,6 @@ const UI_ROWS: SchemaRow[] = [
     doc: "grid icon height in rows, 1..5",
     label: "grid icon size",
     blurb: "How big file icons are",
-    group: "layout",
-    subsection: "grid",
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "word-wrap",
-    prop: "wordWrap",
-    def: false,
-    doc: "true = wrap long file names onto extra tile rows (grid view); false = single line cut with …",
-    label: "word wrap (grid)",
-    blurb: "Wrap long file names instead of cutting them",
     group: "layout",
     subsection: "grid",
   },
@@ -1660,6 +1665,17 @@ export function parseConfigDoc(doc: unknown): Config {
     if (row.section === "theme") (cfg.theme as Record<string, unknown>)[row.prop] = value;
     else if (row.section === "keys") (cfg.keys as Record<string, unknown>)[row.prop] = value;
     else (cfg.ui as Record<string, unknown>)[row.prop] = value;
+  }
+  // renamed key: the old `word-wrap` bool migrates to `wrap-mode`
+  // (true = char, false = none) and only applies when the new key is
+  // absent, so existing configs keep working through the rename.
+  const uiSection = (doc as Record<string, unknown>).ui;
+  if (typeof uiSection === "object" && uiSection !== null) {
+    const raw = uiSection as Record<string, unknown>;
+    if (raw["wrap-mode"] === undefined) {
+      if (raw["word-wrap"] === true) cfg.ui.wrapMode = "char";
+      else if (raw["word-wrap"] === false) cfg.ui.wrapMode = "none";
+    }
   }
   return cfg;
 }
