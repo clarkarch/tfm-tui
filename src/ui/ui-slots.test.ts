@@ -553,31 +553,72 @@ describe("makePointerSetter", () => {
     expect(seen).toEqual([]);
   });
 
-  test("dedupe state is per-instance (the app must share one sink)", () => {
+  test("dedupe state is per-instance (the app must share one sink)", async () => {
     // two widgets on separate instances diverge: B still believes `pointer`
     // after A emitted `default`, so B's re-set is skipped and the terminal
     // sticks at default. This pins the trap; wireCore shares one instance.
+    // NOTE: `default` leaves flush on a microtask — await before asserting.
     const seen: string[] = [];
     const a = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
     const b = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
     a("pointer");
     b("pointer");
     a("default");
+    await Promise.resolve();
+    expect(seen).toEqual(["pointer", "pointer", "default"]);
     b("pointer");
     expect(seen).toEqual(["pointer", "pointer", "default"]);
   });
 
-  test("one shared sink heals cross-widget transitions", () => {
-    // tile -> toolbar button: out restores, the next widget's move re-sets
-    // through the same `last`, so no transition is ever skipped
+  test("one shared sink heals cross-widget transitions", async () => {
+    // tile -> drag-grab on the next widget: the tile's lazy leave is
+    // cancelled by the grab claim, so the intermediate default is never
+    // emitted (eager would write pointer,default,grabbing,default)
     const seen: string[] = [];
     const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
     const tile = hoverEvents(() => {}, set);
-    const button = hoverEvents(() => {}, set);
     tile.onMouseMove();
     tile.onMouseOut();
-    button.onMouseMove();
-    button.onMouseOut();
-    expect(seen).toEqual(["pointer", "default", "pointer", "default"]);
+    set("grabbing");
+    set("default");
+    await Promise.resolve();
+    expect(seen).toEqual(["pointer", "grabbing", "default"]);
+  });
+
+  test("default leaves are lazy: a same-turn re-enter cancels with zero writes", async () => {
+    // icon-edge crossings run out+move in one synchronous turn (the move
+    // bubbles from the raster child to the hovered wrapper). Emitting the
+    // intermediate default hits the compositor as flicker, so the leave
+    // waits a microtask and any re-enter first cancels it.
+    const seen: string[] = [];
+    const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    set("pointer");
+    set("default"); // out: nothing emitted yet
+    expect(seen).toEqual(["pointer"]);
+    set("pointer"); // bubbled move in the same turn: cancels; dedupe skips
+    await Promise.resolve(); // the re-write (terminal already shows it)
+    expect(seen).toEqual(["pointer"]);
+  });
+
+  test("a genuine leave flushes default before any frame can run", async () => {
+    const seen: string[] = [];
+    const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    set("pointer");
+    set("default");
+    await Promise.resolve();
+    expect(seen).toEqual(["pointer", "default"]);
+  });
+
+  test("redundant default emits nothing (ground truth without a write)", async () => {
+    const seen: string[] = [];
+    const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    set("default");
+    await Promise.resolve();
+    expect(seen).toEqual([]);
+    set("pointer");
+    set("default");
+    set("default");
+    await Promise.resolve();
+    expect(seen).toEqual(["pointer", "default"]);
   });
 });

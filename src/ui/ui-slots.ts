@@ -87,20 +87,51 @@ export const hoverEvents = (
 // tty-guarded OSC 22 sink shared by every widget ctx: delegates exact
 // styles, dedupes repeats (a drag sweep crosses hundreds of tiles — one OSC
 // write, not N), and stays a silent no-op on the console where no shapes
-// exist (gpm draws its own pointer). One instance per wiring cluster keeps
-// a single `last` per sweep domain.
+// exist (gpm draws its own pointer). One instance per process (built in
+// wireCore) keeps a single `last` across widget boundaries.
+// Leaves are LAZY, enters are eager: a `default` restore waits a microtask
+// and any re-enter first cancels it. Icon-edge crossings run out+move in one
+// synchronous turn (the move bubbles from the raster child to the hovered
+// wrapper), so an eager default would hit the compositor as flicker — the
+// deferred leave collapses the pair to zero intermediate writes, while a
+// genuine leave still flushes before any frame/macrotask can run.
 export const makePointerSetter = (deps: {
   setMousePointer: (style: PointerStyle) => void;
   isTtyMode: () => boolean;
 }): ((style: PointerStyle) => void) => {
   let last: PointerStyle | null = null;
-  return (style) => {
-    if (style === last) return;
+  let pendingDefault = false;
+  const emit = (style: PointerStyle): void => {
     last = style;
     try {
-      if (deps.isTtyMode()) return;
-      deps.setMousePointer(style);
+      if (!deps.isTtyMode()) deps.setMousePointer(style);
     } catch {}
+  };
+  return (style) => {
+    if (style === "default") {
+      if (last === "default") return;
+      // a restore is already queued — don't disturb it (recording `default`
+      // here without emitting would leave `last` ahead of the terminal)
+      if (pendingDefault) return;
+      // boot ground truth is default: record it without a write
+      if (last === null) {
+        last = "default";
+        return;
+      }
+      pendingDefault = true;
+      queueMicrotask(() => {
+        // a same-turn re-enter clears pendingDefault first — the flush is
+        // then a no-op instead of emitting a stale restore
+        if (!pendingDefault) return;
+        pendingDefault = false;
+        if (last === "default") return;
+        emit("default");
+      });
+      return;
+    }
+    pendingDefault = false;
+    if (style === last) return;
+    emit(style);
   };
 };
 
