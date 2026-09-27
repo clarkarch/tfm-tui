@@ -499,10 +499,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         if (spec) ctx.setIconState(spec, on ? IconStateIdx.Active : IconStateIdx.Rest);
       };
       const hoverSelect = (index: number) => () => {
+        // position truth (pointer) before change truth (highlight): the
+        // keyboard cursor may already sit here, in which case no repaint
+        // runs but the shape must still set
+        ctx.setPointer?.("pointer");
         if (st.menuIdx === index) return;
         const prev = st.menuIdx;
         st.menuIdx = index;
-        ctx.setPointer?.("pointer");
         if (prev >= 0) paintRootAt(prev, false);
         paintRootAt(index, true);
       };

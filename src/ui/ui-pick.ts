@@ -140,9 +140,10 @@ export const makePick = (ctx: PickCtx) => {
             // the cursor back to the row under a stationary mouse and fight
             // arrow-key nav. Real motion dispatches "move".
             onMouseMove: () => {
+              // position truth (pointer) before change truth (highlight)
+              ctx.setPointer?.("pointer");
               if (idx !== i) {
                 idx = i;
-                ctx.setPointer?.("pointer");
                 renderList();
               }
             },

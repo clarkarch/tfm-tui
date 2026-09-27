@@ -190,10 +190,13 @@ export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanel
           // move, not over (a rebuild re-fires synthetic "over" on a
           // stationary cursor and would snap the highlight back)
           onMouseMove: () => {
+            // position truth (pointer) before change truth (highlight): the
+            // keyboard cursor may already sit here, in which case no repaint
+            // runs but the shape must still set
+            h.setPointer?.("pointer");
             if (st.capturing !== null || st.hoverCat === gi) return;
             const prev = st.hoverCat;
             st.hoverCat = gi;
-            h.setPointer?.("pointer");
             if (prev >= 0) {
               h.paintCatAt(prev, false);
               const prevSpec = catSpecs[prev];
@@ -298,11 +301,12 @@ const renderRowPane = (
         },
         // move, not over (same synthetic-over trap as value rows below)
         onMouseMove: () => {
+          // position truth before change truth (see the category rows)
+          h.setPointer?.("pointer");
           if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
           const prev = st.pane === "rows" ? st.menuIdx : -1;
           st.menuIdx = index;
           st.pane = "rows";
-          h.setPointer?.("pointer");
           if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
           h.paintRowAt(index, true);
           h.paintDesc(fitDescText(descText(rowSpec)));
@@ -478,11 +482,12 @@ const renderRowPane = (
         // synthetic "over" for the row under a stationary mouse, snapping the
         // cursor back. Real motion dispatches "move".
         onMouseMove: () => {
+          // position truth before change truth (see the category rows)
+          h.setPointer?.("pointer");
           if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
           const prev = st.pane === "rows" ? st.menuIdx : -1;
           st.menuIdx = index;
           st.pane = "rows";
-          h.setPointer?.("pointer");
           if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
           h.paintRowAt(index, true);
           h.paintDesc(fitDescText(descText(rowSpec)));

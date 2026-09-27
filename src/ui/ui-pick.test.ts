@@ -48,6 +48,9 @@ describe("fuzzyScore", () => {
 
 const colors = defaultConfig.theme as Theme;
 
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
+
 const CMDS: PickItem[] = [
   { label: "new tab", hint: "ctrl+t", run: () => {} },
   { label: "quit tfm", hint: "ctrl+q", run: () => {} },
@@ -75,6 +78,7 @@ const mkPick = (
     drainIconQueue: () => {},
     commands,
     ...(onError ? { onError } : {}),
+    setPointer: (s) => void pointers.push(s),
   });
 
 const hexInts = (hex: string): [number, number, number, number] => {
@@ -286,6 +290,32 @@ describe("pick widget", () => {
       const pick = mkPick(t, floats, () => CMDS);
       expect(() => pick.repaint()).not.toThrow();
       expect(t.renderer.root.findDescendantById("tfm-pick")).toBeFalsy();
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("row hover sets pointer per motion, even with no cursor change", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      pointers.length = 0;
+      const floats = makeFloats();
+      const pick = mkPick(t, floats, () => CMDS);
+      pick.open({ title: "Command palette" });
+      await t.renderOnce();
+      const move = (id: string) =>
+        (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+          type: "move",
+          button: 0,
+          x: 0,
+          y: 0,
+          modifiers: { shift: false, alt: false, ctrl: false },
+        });
+      move("tfm-pick-row-1");
+      move("tfm-pick-row-1");
+      expect(pointers).toEqual(["pointer", "pointer"]);
+      pick.handleKey({ name: "escape" });
+      expect(pointers).toEqual(["pointer", "pointer", "default"]);
     } finally {
       t.renderer.destroy();
     }

@@ -89,6 +89,8 @@ let reloadImpl: () => Promise<unknown>;
 let reloadCalls: number;
 // category hover flips a slot's pre-rastered state by id (no rebuild)
 let iconStateCalls: Array<[string, number]>;
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: 90, height: TERM_H });
@@ -147,6 +149,7 @@ beforeAll(async () => {
     quit: () => {
       quitCalls++;
     },
+    setPointer: (s) => void pointers.push(s),
   });
 });
 
@@ -345,6 +348,28 @@ describe("settings view", () => {
     expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]); // initial row cleared
   });
 
+  test("settings rows + cats set pointer per motion, even with no cursor change", async () => {
+    await openSettings();
+    // openSettings closes the previous test's menu first (a correct
+    // default-restore) — clear past it, then assert motion behavior only
+    pointers.length = 0;
+    const move = (id: string) =>
+      (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    // value row twice (second motion changes nothing, shape still sets)
+    move("tfm-set-row-2");
+    move("tfm-set-row-2");
+    // category twice (hoverCat guard blocks the repaint, not the shape)
+    move("tfm-set-cat-1");
+    move("tfm-set-cat-1");
+    expect(pointers).toEqual(["pointer", "pointer", "pointer", "pointer"]);
+  });
+
   test("selected toggle reads white (not accent); unselected on-toggle keeps the accent cue", async () => {
     await openSettings();
     // row 0 = toggle; flip it while selected — the value must read white
@@ -442,6 +467,30 @@ describe("settings view", () => {
     expect([...(t.renderer.root.findDescendantById("tfm-menu-panel") as any).getChildren()].length).toBe(before);
     menu.closeMenu();
     await t.renderOnce();
+  });
+
+  test("root-menu hover sets pointer per motion, even on the keyboard-selected row", async () => {
+    // position truth vs change truth: the keyboard cursor may already sit on
+    // the hovered row (no repaint runs), but the shape must still set
+    pointers.length = 0;
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const move = (id: string) =>
+      (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    move("tfm-root-row-1");
+    move("tfm-root-row-1");
+    expect(pointers).toEqual(["pointer", "pointer"]);
+    menu.closeMenu();
+    await t.renderOnce();
+    expect(pointers).toEqual(["pointer", "pointer", "default"]);
   });
 
   test("tab toggles panes; category switch repaints the active cat", async () => {

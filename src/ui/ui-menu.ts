@@ -199,9 +199,12 @@ export const makeMenu = (ctx: MenuCtx) => {
           e,
           i === state?.subIdx,
           () => {
+            // position truth (pointer) before change truth (highlight): the
+            // keyboard cursor may already sit here, in which case no repaint
+            // runs but the shape must still set
+            ctx.setPointer?.("pointer");
             if (state && state.subIdx !== i) {
               state.subIdx = i;
-              ctx.setPointer?.("pointer");
               renderSubMenu();
             }
           },
@@ -233,12 +236,14 @@ export const makeMenu = (ctx: MenuCtx) => {
           e,
           i === state?.idx,
           () => {
-            // hovering another row swaps/closes the flyout; a freshly opened
-            // flyout has NO cursor until the next move/hover
+            // position truth (pointer) before change truth (highlight) —
+            // same rule as the submenu hover above. Hovering another row
+            // swaps/closes the flyout; a freshly opened flyout has NO cursor
+            // until the next move/hover
+            ctx.setPointer?.("pointer");
             if (state && state.idx !== i) {
               state.idx = i;
               state.subIdx = e.submenu ? -1 : null;
-              ctx.setPointer?.("pointer");
               renderFileMenu();
             }
           },

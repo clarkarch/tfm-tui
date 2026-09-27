@@ -252,6 +252,24 @@ describe("mouse pointer shapes (ctx seam sink)", () => {
     await t.renderOnce();
     expect(pointers).toEqual(["pointer", "default"]);
   });
+
+  test("hovering the keyboard-highlighted row still sets pointer (no change, still positioned)", async () => {
+    // the pointer is position truth, the highlight is change truth: moving
+    // onto the row the keyboard cursor already sits on must set the shape
+    // even though no repaint runs
+    pointers.length = 0;
+    menu.openContextMenu(2, 2, "", mkEntries(3));
+    await t.renderOnce();
+    menu.fileMenuState()!.idx = 1; // exactly what the key router does
+    menu.renderFileMenu();
+    await t.renderOnce();
+    await t.mockMouse.moveTo(4, 4);
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.idx).toBe(1);
+    expect(pointers).toEqual(["pointer"]);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
 });
 
 describe("hover vs arrow keys (stationary-mouse regression)", () => {
