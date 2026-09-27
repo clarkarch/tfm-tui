@@ -63,6 +63,7 @@ describe("makeRename (renderer)", () => {
   let t: TestRendererSetup;
   let dir: string;
   let calls: string[];
+  let pointers: string[];
   let ctx: RenameCtx;
   let rename: ReturnType<typeof makeRename>;
   let rowSeq = 0;
@@ -94,6 +95,7 @@ describe("makeRename (renderer)", () => {
     t = await createTestRenderer({ width: 80, height: 12 });
     dir = mkdtempSync(path.join(os.tmpdir(), "tfm-rename-widget-"));
     calls = [];
+    pointers = [];
 
     ctx = {
       renderer: () => t.renderer,
@@ -118,6 +120,7 @@ describe("makeRename (renderer)", () => {
       cwd: () => dir,
       focusKeys: () => [path.join(dir, "Untitled.txt")],
       selectTileAt: () => true,
+      setPointer: (s) => void pointers.push(s),
     };
     rename = makeRename(ctx);
   });
@@ -164,6 +167,15 @@ describe("makeRename (renderer)", () => {
     const ids = row.getChildren().map((c: any) => c.id ?? "?");
     expect(ids.indexOf(ctx.tileRefs.get(key)!.labelId)).toBe(1); // after the icon, before spacer/size/date
     expect(ids[ids.length - 1]).not.toBe(ctx.tileRefs.get(key)!.labelId);
+  });
+  test("start sets the text pointer, finish restores default", async () => {
+    pointers.length = 0;
+    const key = path.join(dir, "ptr.txt");
+    await mountRow(key);
+    rename.startInlineRename(key);
+    expect(pointers).toEqual(["text"]);
+    rename.finishInlineRename(false);
+    expect(pointers).toEqual(["text", "default"]);
   });
 });
 

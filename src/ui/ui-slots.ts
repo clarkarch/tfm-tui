@@ -13,6 +13,7 @@ import { swallow } from "../app/log";
 import type { IconMode, Theme } from "../config/config";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 import { destroyChildren } from "../lib/uiutil";
 
 export type IconState = { fg: string; bg: string };
@@ -58,19 +59,48 @@ export const selectIconState = (selected: boolean, hover: boolean): number =>
 //   that swaps only the bg leaves the raster's own square on top; in glyph mode
 //   the raster doesn't exist at all and only the wrapper bg can highlight.
 //   See escHintBtn (ui-slots) for the reference implementation.
-export const hoverEvents = (paint: (hover: boolean) => void) => {
+export const hoverEvents = (
+  paint: (hover: boolean) => void,
+  // mouse pointer shape alongside the paint: set on the guarded first move,
+  // restored to default on out. Absent = paint only (the guarded flag is
+  // what keeps per-pixel sweeps from spamming OSC 22).
+  setPointer?: (style: PointerStyle) => void,
+  pointer: PointerStyle = "pointer",
+) => {
   let on = false;
   return {
     onMouseMove: (): void => {
       if (on) return;
       on = true;
       paint(true);
+      setPointer?.(pointer);
     },
     onMouseOut: (): void => {
       if (!on) return;
       on = false;
       paint(false);
+      setPointer?.("default");
     },
+  };
+};
+
+// tty-guarded OSC 22 sink shared by every widget ctx: delegates exact
+// styles, dedupes repeats (a drag sweep crosses hundreds of tiles — one OSC
+// write, not N), and stays a silent no-op on the console where no shapes
+// exist (gpm draws its own pointer). One instance per wiring cluster keeps
+// a single `last` per sweep domain.
+export const makePointerSetter = (deps: {
+  setMousePointer: (style: PointerStyle) => void;
+  isTtyMode: () => boolean;
+}): ((style: PointerStyle) => void) => {
+  let last: PointerStyle | null = null;
+  return (style) => {
+    if (style === last) return;
+    last = style;
+    try {
+      if (deps.isTtyMode()) return;
+      deps.setMousePointer(style);
+    } catch {}
   };
 };
 
@@ -177,6 +207,9 @@ export type SlotsCtx = {
   // (view/anims/transparency untouched). Optional so test fakes keep working.
   isTtyMode?(): boolean;
   forceGlyph?(): boolean;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const dimHex = (hex: string, f: number): string => {
@@ -608,7 +641,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
         justifyContent: "center",
         ...btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, false, ctx.colors().sidebarBg),
         onMouseDown: () => onClose(),
-        ...hoverEvents(paint),
+        ...hoverEvents(paint, ctx.setPointer),
       },
       slot.el,
     );

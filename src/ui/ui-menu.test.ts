@@ -15,6 +15,8 @@ import type { Theme } from "../config/config";
 let t: TestRendererSetup;
 let floats: ReturnType<typeof makeFloats>;
 let menu: ReturnType<typeof makeMenu>;
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
 // icon slots requested by the widget (chevron-right for submenu rows, etc.)
 const iconSlots: string[] = [];
 const colors = defaultConfig.theme as Theme & Record<string, any>;
@@ -36,6 +38,7 @@ beforeAll(async () => {
     colors: () => colors,
     menuW: 36,
     floats,
+    setPointer: (s) => void pointers.push(s),
     // real node so painted frames work (the widget wraps the raster in a box)
     makeIconSlot: (name) => {
       iconSlots.push(name);
@@ -232,6 +235,22 @@ describe("flyout submenus", () => {
     await t.renderOnce();
     expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeFalsy();
     expect(t.renderer.root.findDescendantById("tfm-filemenu")).toBeFalsy();
+  });
+});
+
+describe("mouse pointer shapes (ctx seam sink)", () => {
+  test("row hover sets pointer, close restores default", async () => {
+    pointers.length = 0;
+    menu.openContextMenu(2, 2, "", mkEntries(3));
+    await t.renderOnce();
+    // hover row 1: screen y = py(2) + divider(1) + index(1)
+    await t.mockMouse.moveTo(4, 4);
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.idx).toBe(1);
+    expect(pointers).toEqual(["pointer"]);
+    menu.closeFileMenu();
+    await t.renderOnce();
+    expect(pointers).toEqual(["pointer", "default"]);
   });
 });
 

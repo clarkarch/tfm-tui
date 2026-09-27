@@ -12,6 +12,7 @@ import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
 import type { Theme } from "../config/config";
 import type { NodeLike } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 export type SettingsPanelState = {
   catIdx: number;
@@ -52,6 +53,9 @@ type SettingsPanelHooks = {
   toggleSection(key: string): void;
   // live description-footer repaint (by id, never a rebuild)
   paintDesc(text: string): void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes. Repeat-safe: the setter dedupes.
+  setPointer?(style: PointerStyle): void;
   // debug sink for a throwing plugin row reached from a panel handler (the
   // shell wires dlog); optional so panel tests stay sink-free
   log?(message: string): void;
@@ -189,6 +193,7 @@ export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanel
             if (st.capturing !== null || st.hoverCat === gi) return;
             const prev = st.hoverCat;
             st.hoverCat = gi;
+            h.setPointer?.("pointer");
             if (prev >= 0) {
               h.paintCatAt(prev, false);
               const prevSpec = catSpecs[prev];
@@ -200,6 +205,7 @@ export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanel
           onMouseOut: () => {
             if (st.hoverCat !== gi) return;
             st.hoverCat = -1;
+            h.setPointer?.("default");
             h.paintCatAt(gi, false);
             h.setIconState(slot.spec, active ? IconStateIdx.Active : IconStateIdx.Rest);
           },
@@ -296,9 +302,15 @@ const renderRowPane = (
           const prev = st.pane === "rows" ? st.menuIdx : -1;
           st.menuIdx = index;
           st.pane = "rows";
+          h.setPointer?.("pointer");
           if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
           h.paintRowAt(index, true);
           h.paintDesc(fitDescText(descText(rowSpec)));
+        },
+        // leaving the header always drops back to default; the next row's
+        // move re-sets (same stale-until-move rule as the highlight paint)
+        onMouseOut: () => {
+          h.setPointer?.("default");
         },
       },
       Text({
@@ -345,14 +357,18 @@ const renderRowPane = (
         // move, not over (same synthetic-over trap as rows — a rebuild under
         // a stationary cursor re-fires "over" and the stale `active` capture
         // would paint the wrong state)
-        onMouseMove: () =>
+        onMouseMove: () => {
+          h.setPointer?.("pointer");
           h.setOnId(tId, (n) => {
             n.fg = c.white;
-          }),
-        onMouseOut: () =>
+          });
+        },
+        onMouseOut: () => {
+          h.setPointer?.("default");
           h.setOnId(tId, (n) => {
             n.fg = chevOn() ? c.white : c.sidebarFgMuted;
-          }),
+          });
+        },
       },
       Text({ id: tId, content: dirText, fg: active ? c.white : c.sidebarFgMuted }),
     );
@@ -466,9 +482,15 @@ const renderRowPane = (
           const prev = st.pane === "rows" ? st.menuIdx : -1;
           st.menuIdx = index;
           st.pane = "rows";
+          h.setPointer?.("pointer");
           if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
           h.paintRowAt(index, true);
           h.paintDesc(fitDescText(descText(rowSpec)));
+        },
+        // leaving the value row always drops back to default; the next
+        // row's move re-sets (same stale-until-move rule as the paint)
+        onMouseOut: () => {
+          h.setPointer?.("default");
         },
       },
       Text({

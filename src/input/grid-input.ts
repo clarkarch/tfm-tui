@@ -5,6 +5,7 @@
 // imports from the renderer — everything flows through ctx. ---
 
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 export type ClipItem = { path: string; isDir: boolean };
 
@@ -113,6 +114,9 @@ export type GridInputCtx = {
   // animate the tile hover (instant highlight + one-cell lift, [ui] file-
   // hover-animation). Absent = today's instant paint via setTileVisual.
   hoverAnim?(key: string, hovered: boolean): void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 } & GridSelectionDeps &
   GridMenuDeps &
   GridNavDeps;
@@ -168,6 +172,10 @@ export const finishDragState = (ctx: GridInputCtx): void => {
   gridDrag.dropTarget = null;
   gridDrag.active = false;
   gridDrag.keys = null;
+  // central pointer restore: every cleanup path (tile drop, pane-background
+  // drop, sidebar drop, deferred release) heals through here; the tile drop
+  // re-applies its own pointer afterwards
+  ctx.setPointer?.("default");
   // release without a drop: "Dragging N items…" must not linger — restore the
   // selection status (a real drop overwrites it with the move/copy progress)
   if (wasActive) ctx.updateSelectionStatusReal();
@@ -397,6 +405,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         }
       }
       ctx.log(`internal drag start n=${gridDrag.keys?.length ?? 0}`);
+      ctx.setPointer?.("grabbing");
       ctx.setStatusMsg(`Dragging ${gridDrag.keys?.length ?? 0} item${gridDrag.keys?.length === 1 ? "" : "s"}…`);
     };
 
@@ -440,6 +449,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
           `tile drop keys=${keys?.length ?? -1}[${keys?.map((item) => item.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${entry.isDir}`,
         );
         finishDragState(ctx);
+        // the cursor sits on a tile: re-apply its pointer after the central
+        // default restore (a pane-background drop keeps default)
+        ctx.setPointer?.("pointer");
         if (keys && dest && entry.isDir)
           void ctx.moveInto(
             dest,
@@ -453,20 +465,30 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
             ctx.log(`hover target set ${key}`);
             gridDrag.dropTarget = key;
             ctx.setTileVisual(key, TileVisual.Selected);
+            ctx.setPointer?.("grabbing");
+          } else {
+            ctx.setPointer?.("not-allowed");
           }
           return;
         }
+        // the pointer is an affordance (draggable/clickable), not a highlight:
+        // it sets/restores even on selected tiles, which skip the paint below
+        ctx.setPointer?.("pointer");
         const refs = ctx.tileRefs.get(key);
         if (refs?.selected) return;
         if (ctx.hoverAnim) ctx.hoverAnim(key, true);
         else ctx.setTileVisual(key, TileVisual.Hover);
       },
       onMouseOut: () => {
-        if (gridDrag.active && gridDrag.dropTarget === key) {
-          gridDrag.dropTarget = null;
-          ctx.setTileVisual(key, TileVisual.Rest);
+        if (gridDrag.active) {
+          if (gridDrag.dropTarget === key) {
+            gridDrag.dropTarget = null;
+            ctx.setTileVisual(key, TileVisual.Rest);
+          }
+          ctx.setPointer?.("grabbing");
           return;
         }
+        ctx.setPointer?.("default");
         const refs = ctx.tileRefs.get(key);
         if (refs?.selected) return;
         if (ctx.hoverAnim) ctx.hoverAnim(key, false);

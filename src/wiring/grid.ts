@@ -21,6 +21,7 @@ import {
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
+import { makePointerSetter } from "../ui/ui-slots";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { FILE_GLYPH, glyph } from "../ui/glyphs";
 import { rasterSigOf } from "../ui/tty";
@@ -154,6 +155,12 @@ export const wireGrid = (deps: {
   // PER PANE so a tile's handlers always act on their own pane's selection/map
   // regardless of focus timing. All state lives in tileRefs + the drag module
   // vars, keyed by path.
+  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink shared by
+  // both pane ctxs and the props dialog.
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
+    isTtyMode: () => core.isTtyMode(),
+  });
   const makePaneGridCtx = (pane: 0 | 1) => {
     const s = selections[pane];
     return {
@@ -195,6 +202,7 @@ export const wireGrid = (deps: {
       focusPane: () => focusPane(pane),
       blurTerminal: () => fileops.terminal.blurTerminal(),
       hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
+      setPointer,
       log: (msg: string) => dlog(msg),
     };
   };
@@ -374,6 +382,7 @@ export const wireGrid = (deps: {
     isTtyMode: core.isTtyMode,
     forceGlyph: core.forceGlyph,
     cellMetrics: core.slots.cellMetrics,
+    setPointer,
   });
 
   // open a folder in the inactive pane, enabling dual-pane when off: enable

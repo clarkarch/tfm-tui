@@ -9,6 +9,7 @@ import { clearUndoJournal, readUndoJournal, saveUndoJournal } from "../fs/undo-j
 import { makeEnsureSudo } from "../fs/elevate";
 import { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import { makeProgress } from "../ui/ui-progress";
+import { makePointerSetter } from "../ui/ui-slots";
 import { makeFileOps } from "../fs/fileops";
 import { makeTerminal } from "../ui/ui-term";
 import { makeTrashOps, makeTrashConfirms } from "../fs/trashops";
@@ -74,12 +75,20 @@ export const wireFileops = (deps: {
     clearUndoJournal();
   }
 
+  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for the
+  // conflict/yes-no dialogs, the progress toast + the terminal pane header.
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
+    isTtyMode: () => core.isTtyMode(),
+  });
+
   const conflict = makeConflict(chrome.dialogs, {
     colors: themeGet,
     uiStyle,
     byId,
     drainIconQueue: () => drainIconQueue(),
     floats: core.floats,
+    setPointer,
   });
 
   // --- live copy progress: floating toast (top-right) with pause/cancel.
@@ -93,6 +102,7 @@ export const wireFileops = (deps: {
     setIconState,
     drainIconQueue,
     notifySticky: chrome.notifySticky,
+    setPointer,
   });
 
   // --- File operations: runTransfer/performRename/paste/clipboard
@@ -137,6 +147,7 @@ export const wireFileops = (deps: {
     home,
     finishDrag: deps.finishDrag,
     dlog: (msg) => dlog(msg),
+    setPointer,
   });
 
   const trash = makeTrashOps({
@@ -191,6 +202,7 @@ export const wireFileops = (deps: {
     // makeConflict opens ungated for the same reason — dialogs mount on the
     // always-present renderer root.
     floats: core.floats,
+    setPointer,
   });
 
   // --- Trash-bound confirm dialogs: label+verb bindings live in ./trashops ---

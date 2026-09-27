@@ -31,6 +31,7 @@ import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
+import { makePointerSetter } from "../ui/ui-slots";
 import { destroyChildren } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
@@ -61,6 +62,12 @@ export const wireChrome = async (deps: {
   const { makeIconSlot, setIconState, drainIconQueue } = core.slots;
   const { themeGet, home, state } = core;
   const uiStyle = () => core.config.ui.uiStyle;
+  // mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for every
+  // ctx built here. Arrows defer renderer access — factories run pre-boot.
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => renderer.setMousePointer(s),
+    isTtyMode: () => core.isTtyMode(),
+  });
 
   // --- File context menu (right-click a tile) — widget lives in ./ui-menu.
   // Hoisted above chrome/toolbar/conflict/grid-ctx, which all consume
@@ -78,6 +85,7 @@ export const wireChrome = async (deps: {
     menuW: MENU_W,
     floats: core.floats,
     makeIconSlot,
+    setPointer,
   });
 
   // --- Network locations: "+ → connect" calls land here. The impls are
@@ -132,6 +140,7 @@ export const wireChrome = async (deps: {
     stateCwd: () => state.cwd,
     connectServer,
     hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
+    setPointer,
   });
 
   // --- Sidebar hover animator (impl for the deferred wrapper above): row refs
@@ -194,6 +203,7 @@ export const wireChrome = async (deps: {
       // (TDZ seam)
       animateCrumbs: (ids: string[]) => dirBarAnims[pane].playIds(ids),
       home,
+      setPointer,
     });
   const toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>] = [
     makePaneToolbar(0),
@@ -387,6 +397,7 @@ export const wireChrome = async (deps: {
     uiStyle,
     colors: () => core.colors,
     closeFileMenu: menu.closeFileMenu,
+    setPointer,
   });
 
   // --- Network location actions (impls for the deferred wrappers above):

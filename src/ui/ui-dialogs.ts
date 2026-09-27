@@ -4,6 +4,7 @@ import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type SlotElement } from "./ui-slots";
 
 // --- Shared skeleton for the centered floating dialogs (conflict / props /
@@ -25,6 +26,9 @@ type DialogsCtx = {
   // conflict/yesno/props route their opens through floats — this call is the
   // safety net for dialogs that don't.
   closeFileMenu(): void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const makeDialogs = (ctx: DialogsCtx) => {
@@ -98,7 +102,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
           onPick();
         },
         // the one hover wiring (see ui-slots.hoverEvents) — move, not over
-        ...hoverEvents(setBg),
+        ...hoverEvents(setBg, ctx.setPointer),
       },
       Text({ content: label, fg }),
     );
@@ -120,6 +124,9 @@ type ConflictCtx = {
   drainIconQueue(): void | Promise<void>;
   // open/close orchestration + the dismiss-others policy live in ./floats
   floats: Floats;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: ConflictCtx) => {
@@ -137,6 +144,8 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
     conflictResolveFn = null;
     closeDialog("tfm-conflict");
     conflictOpen = false;
+    // hovered buttons have no out (their nodes are gone) — restore here
+    ctx.setPointer?.("default");
     r?.("skip");
   };
 
@@ -275,6 +284,9 @@ type YesNoCtx = {
   //
   // open/close orchestration + the dismiss-others policy live in ./floats
   floats: Floats;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 const YESNO_W = 36;
@@ -295,6 +307,8 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     closeDialog("tfm-yesno");
     open = false;
     pendingYes = null;
+    // hovered buttons have no out (their nodes are gone) — restore here
+    ctx.setPointer?.("default");
   };
 
   const close = (): void => {

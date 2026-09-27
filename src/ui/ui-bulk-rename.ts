@@ -12,7 +12,8 @@ import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
-import type { SlotElement } from "./ui-slots";
+import type { PointerStyle } from "../lib/pointer";
+import { hoverEvents, type SlotElement } from "./ui-slots";
 
 type BulkRenameCtx = {
   renderer(): CliRenderer;
@@ -26,6 +27,9 @@ type BulkRenameCtx = {
   uiStyle(): UiStyle;
   floats: Floats;
   performBulkRename(pairs: BulkRenamePair[]): void | Promise<void>;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 const PANEL_W = 76;
@@ -130,6 +134,8 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     } catch {}
     const scrim = ctx.byId("tfm-bulkrename");
     scrim?.parent?.remove(scrim);
+    // the input is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
   };
 
   const close = (): void => {
@@ -169,6 +175,8 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
           } catch {}
           onPick();
         },
+        // pointer only — the buttons carry no hover paint by design
+        ...hoverEvents(() => {}, ctx.setPointer),
       },
       Text({ content: label, fg }),
     );
@@ -186,6 +194,8 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
           } catch {}
           setStyle(s);
         },
+        // pointer only — the chips repaint through setStyle, not hover
+        ...hoverEvents(() => {}, ctx.setPointer),
       },
       Text({ id: `tfm-bulkrename-style-label-${s}`, content: STYLE_LABELS[s], fg: ctx.colors().white }),
     );
@@ -196,6 +206,8 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     ctx.floats.open("bulkrename", rawClose);
     opened = true;
     items = paths.map((p) => ({ path: p }));
+    // the input owns the keyboard now — text pointer until it settles
+    ctx.setPointer?.("text");
     value = "";
     style = "plain";
     const c = ctx.colors();

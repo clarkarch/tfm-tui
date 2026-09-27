@@ -17,6 +17,7 @@ import { hoverEvents, IconStateIdx, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -69,6 +70,9 @@ type PropsCtx = {
   // Optional so test fakes keep working.
   isTtyMode?(): boolean;
   forceGlyph?(): boolean;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 const execFileP = promisify(execFile);
@@ -85,6 +89,8 @@ export const makeProps = (ctx: PropsCtx) => {
   const rawCloseProps = (): void => {
     ctx.closeDialog("tfm-props");
     propsOpen = false;
+    // hovered toggles/rows have no out (their nodes are gone) — restore here
+    ctx.setPointer?.("default");
   };
   const closeProps = (): void => {
     ctx.floats.close("props");
@@ -181,7 +187,7 @@ export const makeProps = (ctx: PropsCtx) => {
               ...hoverEvents((on) => {
                 starHover = on;
                 propsTogglePaint("tfm-props-star", starSlot.spec, starred, on);
-              }),
+              }, ctx.setPointer),
             },
             starSlot.el,
           );
@@ -197,7 +203,7 @@ export const makeProps = (ctx: PropsCtx) => {
                   ...hoverEvents((on) => {
                     bmHover = on;
                     propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, on);
-                  }),
+                  }, ctx.setPointer),
                 },
                 bmSlot.el,
               ),

@@ -6,6 +6,7 @@ import { gridDrag } from "../input/grid-input";
 import type { Theme } from "../config/config";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type SlotElement } from "./ui-slots";
 
 // --- Embedded terminal pane ("Open Terminal Here") ---
@@ -64,6 +65,9 @@ type TermCtx = {
   // injectable PTY spawn (default = Bun.spawn). Tests open the pane headlessly
   // through this seam instead of forking a real shell.
   spawnPty?(o: TermSpawnOpts): TermChild;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 // Theme's 16 ANSI slots as const keys — the OSC 4 palette maps over them
@@ -350,6 +354,9 @@ export const makeTerminal = (ctx: TermCtx) => {
     try {
       term?.blur();
     } catch {}
+    // the host's out never fires (its nodes are destroyed below) — restore
+    // here or a keyboard-close while hovering sticks the pointer
+    ctx.setPointer?.("default");
     try {
       termChild?.kill();
     } catch {}
@@ -439,9 +446,12 @@ export const makeTerminal = (ctx: TermCtx) => {
     const hostHover = hoverEvents((on) => {
       if (!on) {
         paintHeaderCue(false);
+        ctx.setPointer?.(gridDrag.active ? "grabbing" : "default");
         return;
       }
+      // a drag owns the pointer — same rule as the sidebar rows
       if (gridDrag.active) paintHeaderCue(true);
+      else ctx.setPointer?.("pointer");
     });
     host.onMouseMove = hostHover.onMouseMove;
     host.onMouseOut = hostHover.onMouseOut;

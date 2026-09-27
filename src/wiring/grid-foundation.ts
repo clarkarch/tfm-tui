@@ -7,6 +7,7 @@
 import { makeSelection, type SelTileRef, type Selection } from "../input/selection";
 import { makeRename } from "../ui/ui-rename";
 import { makeBulkRename } from "../ui/ui-bulk-rename";
+import { makePointerSetter } from "../ui/ui-slots";
 import { destroyChildren } from "../lib/uiutil";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { activeFacade, activeMapFacade } from "../app/panes";
@@ -55,6 +56,13 @@ export const wireGridFoundation = (deps: {
     selections[1].refreshCutVisuals();
   };
 
+  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for the
+  // rename + bulk-rename dialogs.
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
+    isTtyMode: () => core.isTtyMode(),
+  });
+
   // --- inline rename/create: widget + state live in ./ui-rename ---
   const rename = makeRename({
     renderer: () => chrome.renderer,
@@ -74,6 +82,7 @@ export const wireGridFoundation = (deps: {
     cwd: () => core.state.cwd,
     focusKeys: () => selection.focusKeys(),
     selectTileAt: selection.selectTileAt,
+    setPointer,
   });
 
   // --- bulk rename: F2 on a multi-selection edits names one-per-line in a
@@ -91,6 +100,7 @@ export const wireGridFoundation = (deps: {
     floats: core.floats,
     // arrow wrapper: performBulkRename belongs to the fileops wiring (TDZ)
     performBulkRename: (pairs) => getFileops().fileops.performBulkRename(pairs),
+    setPointer,
   });
   // rename guard here (both callers — keymap F2 and the context menu — route
   // through it): virtual views span directories, so one-name-per-line is

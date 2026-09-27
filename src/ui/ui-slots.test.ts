@@ -8,6 +8,7 @@ import {
   dimHex,
   hoverEvents,
   isFloatRootId,
+  makePointerSetter,
   makeSlots,
   thumbImageFit,
   thumbJobRank,
@@ -435,5 +436,96 @@ describe("hoverEvents", () => {
     const h = hoverEvents((on) => calls.push(on));
     h.onMouseOut();
     expect(calls).toEqual([]);
+  });
+});
+
+// hoverEvents drives the mouse pointer shape alongside the paint: set on the
+// guarded first move, restored to default on out. The guarded flag is what
+// keeps per-pixel sweeps from spamming OSC 22.
+describe("hoverEvents pointer", () => {
+  test("sets the pointer on move, restores default on out", () => {
+    const paints: boolean[] = [];
+    const pointers: string[] = [];
+    const h = hoverEvents(
+      (on) => paints.push(on),
+      (s) => pointers.push(s),
+      "pointer",
+    );
+    h.onMouseMove();
+    h.onMouseOut();
+    expect(paints).toEqual([true, false]);
+    expect(pointers).toEqual(["pointer", "default"]);
+  });
+
+  test("repeated moves emit one pointer set (guarded like paint)", () => {
+    const pointers: string[] = [];
+    const h = hoverEvents(
+      () => {},
+      (s) => pointers.push(s),
+      "pointer",
+    );
+    h.onMouseMove();
+    h.onMouseMove();
+    h.onMouseMove();
+    expect(pointers).toEqual(["pointer"]);
+  });
+
+  test("supports the text style for inputs", () => {
+    const pointers: string[] = [];
+    const h = hoverEvents(
+      () => {},
+      (s) => pointers.push(s),
+      "text",
+    );
+    h.onMouseMove();
+    h.onMouseOut();
+    expect(pointers).toEqual(["text", "default"]);
+  });
+
+  test("an out before any move sets nothing", () => {
+    const pointers: string[] = [];
+    const h = hoverEvents(
+      () => {},
+      (s) => pointers.push(s),
+    );
+    h.onMouseOut();
+    expect(pointers).toEqual([]);
+  });
+
+  test("absent setter paints exactly like before (old call sites keep working)", () => {
+    const paints: boolean[] = [];
+    const h = hoverEvents((on) => paints.push(on));
+    h.onMouseMove();
+    h.onMouseOut();
+    expect(paints).toEqual([true, false]);
+  });
+});
+
+// the wiring's tty-guarded OSC 22 sink: delegates exact styles, dedupes
+// repeats (a drag sweep crosses hundreds of tiles — one OSC write, not N),
+// and stays silent on the console where no shapes exist (gpm draws its own).
+describe("makePointerSetter", () => {
+  test("delegates exact styles to the renderer", () => {
+    const seen: string[] = [];
+    const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    set("pointer");
+    set("text");
+    expect(seen).toEqual(["pointer", "text"]);
+  });
+
+  test("dedupes repeats (drag sweeps must not spam OSC 22)", () => {
+    const seen: string[] = [];
+    const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => false });
+    set("grabbing");
+    set("grabbing");
+    set("grabbing");
+    expect(seen).toEqual(["grabbing"]);
+  });
+
+  test("tty mode is a silent no-op (gpm console has no shapes)", () => {
+    const seen: string[] = [];
+    const set = makePointerSetter({ setMousePointer: (s) => seen.push(s), isTtyMode: () => true });
+    set("pointer");
+    expect(seen).toEqual([]);
   });
 });

@@ -16,6 +16,7 @@ import { hoverEvents, navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type MakeIconSlotFn = (
   name: string,
@@ -60,6 +61,9 @@ type ToolbarCtx = {
   // (first build + same-target rebuilds pass nothing and stay silent). Wired
   // to the dir-bar animator in wireChrome; absent = instant.
   animateCrumbs?: (ids: string[]) => void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 // path-bar commit check: virtual places always navigate; real paths must be
@@ -158,7 +162,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         ...hoverEvents((on) => {
           navHover[btnId] = on;
           refreshNav();
-        }),
+        }, ctx.setPointer),
       },
       slot.el,
     );
@@ -202,6 +206,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   const exitPathEdit = () => {
     if (!pathEditMode) return;
     pathEditMode = false;
+    // the editor is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
     renderCrumbs();
   };
 
@@ -209,6 +215,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     if (pathEditMode) return;
     ctx.blurTerminal();
     pathEditMode = true;
+    // the editor owns the keyboard now — text pointer until it lands
+    ctx.setPointer?.("text");
     renderCrumbs();
   };
 
@@ -245,6 +253,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
             return;
           }
           pathEditMode = false;
+          ctx.setPointer?.("default");
           renderCrumbs();
           ctx.navigate(target);
         });
@@ -334,7 +343,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
                   ctx.focusPane?.();
                   ctx.navigate(c.target);
                 },
-                ...hoverEvents(paintHover),
+                ...hoverEvents(paintHover, ctx.setPointer),
               }),
         },
         ...(iconSlot ? [iconSlot.el] : []),
@@ -390,7 +399,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           ctx.focusPane?.();
           onMouseDown(ev);
         },
-        ...hoverEvents(paint),
+        ...hoverEvents(paint, ctx.setPointer),
       },
       slot.el,
     );
@@ -418,6 +427,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         const el = ctx.byId(id("search"));
         if (!el) return;
         el.visible = !el.visible;
+        // the input owns the keyboard while visible — text pointer until then
+        ctx.setPointer?.(el.visible ? "text" : "default");
         if (el.visible) el.focus();
       }),
     );

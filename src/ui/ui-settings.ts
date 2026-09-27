@@ -32,6 +32,7 @@ import {
   type SettingsPanelState,
 } from "./ui-settings-panel";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type EscMenuCtx = {
   renderer(): CliRenderer;
@@ -71,6 +72,9 @@ type EscMenuCtx = {
   // debug sink (dlog) — rebuild failures MUST surface somewhere
   log?(message: string): void;
   quit(): void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const makeEscMenu = (ctx: EscMenuCtx) => {
@@ -498,6 +502,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         if (st.menuIdx === index) return;
         const prev = st.menuIdx;
         st.menuIdx = index;
+        ctx.setPointer?.("pointer");
         if (prev >= 0) paintRootAt(prev, false);
         paintRootAt(index, true);
       };
@@ -528,6 +533,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             backgroundColor: active ? c.accentBg : undefined,
             onMouseDown: onClick,
             onMouseMove: hoverSelect(index),
+            // leaving the row always drops back to default; the next row's
+            // move re-sets (rows have no paired guard on the way out)
+            onMouseOut: () => ctx.setPointer?.("default"),
           },
           ...(icon
             ? [
@@ -576,6 +584,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         toggleSection,
         paintDesc,
         log: (message) => ctx.log?.(message),
+        setPointer: ctx.setPointer,
       });
     }
 
@@ -605,6 +614,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     menuOpen = false;
     st.capturing = null;
     ctx.log?.("esc-menu close");
+    // hovered rows have no out (their nodes are gone) — restore here or the
+    // pointer sticks (same stale-until-move rule as the highlight paint)
+    ctx.setPointer?.("default");
     nativeMemTrace("esc-menu close");
     const scrim = ctx.byId("tfm-menu");
     scrim?.parent?.remove(scrim);

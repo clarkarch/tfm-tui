@@ -13,6 +13,7 @@ import { makeNav, makeSessionSync } from "../app/nav";
 import { saveSessionSync, type PaneTabs } from "../fs/session";
 import { makeTabs, nextTab as cycleNextTab, prevTab as cyclePrevTab } from "../app/tabs";
 import { makeSearch } from "../input/search";
+import { makePointerSetter } from "../ui/ui-slots";
 import { appendLog } from "../app/log";
 import { xtShiftEscapeFrame } from "../ui/ui-term";
 import { sharedPluginEvents } from "../lib/plugin-events";
@@ -197,6 +198,11 @@ export const wireNav = (deps: {
   // --- Type-to-search: ONE query + input per pane (each pane's toolbar has
   // its own search box). The keymap drives the focused pane's; its grid reads
   // its own query so a search filters only that side. ---
+  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for both.
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => getChrome().renderer.setMousePointer(s),
+    isTtyMode: () => core.isTtyMode(),
+  });
   const mkSearch = (pane: 0 | 1) =>
     makeSearch({
       byId: core.lookup.byId,
@@ -204,6 +210,7 @@ export const wireNav = (deps: {
       // arrow wrappers: termHasFocus/renderGrid belong to later wirings (TDZ)
       termHasFocus: () => getTermHasFocus(),
       renderGrid: () => getGrid().renderPane(pane),
+      setPointer,
     });
   const searches: [ReturnType<typeof makeSearch>, ReturnType<typeof makeSearch>] = [mkSearch(0), mkSearch(1)];
   const activeSearch = () => searches[core.panes.active];

@@ -9,6 +9,7 @@
 import type { KeyEvent } from "@opentui/core";
 import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
+import { makePointerSetter } from "../ui/ui-slots";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
 import { cycleSortMode } from "../lib/sort";
@@ -44,6 +45,12 @@ export const wireKeymap = (deps: {
   // contributions apply without rebuilds). coreCommands is backfilled after
   // the router exists — keypresses can't precede the wiring return. ---
   let coreCommands: () => Command[] = () => [];
+  // Mouse pointer shapes (OSC 22): one tty-guarded, deduping sink for the
+  // pick overlay + the prompt overlay.
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => chrome.renderer.setMousePointer(s),
+    isTtyMode: () => core.isTtyMode(),
+  });
   const pick = makePick({
     renderer: () => chrome.renderer,
     byId,
@@ -64,6 +71,7 @@ export const wireKeymap = (deps: {
     onError: (err) => {
       dlog(`plugin command failed: ${err instanceof Error ? err.message : err}`);
     },
+    setPointer,
   });
 
   // --- Single-line prompt overlay (plugin git-URL entry): same Input-native
@@ -79,6 +87,7 @@ export const wireKeymap = (deps: {
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     floats,
+    setPointer,
   });
 
   // Copy/move the active selection into the other pane's directory through the

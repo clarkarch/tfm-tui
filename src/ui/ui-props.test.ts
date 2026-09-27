@@ -37,6 +37,8 @@ let statusMsgs: string[];
 let renderAllCount: number;
 let thumbJobs: Array<{ slotId: string; [k: string]: unknown }> = [];
 let iconIdSeq = 0;
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
 let fileA: string;
 let fileSh: string;
 let dirD: string;
@@ -179,6 +181,7 @@ beforeAll(async () => {
     },
     fallbackGlyphFor: () => "file",
     cellMetrics: () => ({ aspect: 0.5 }),
+    setPointer: (s) => void pointers.push(s),
   });
 });
 
@@ -231,6 +234,18 @@ describe("single-file properties", () => {
     expect(byId("tfm-props")).toBeFalsy();
     expect(props.isOpen()).toBe(false);
     expect(floats.isOpen("props")).toBe(false);
+  });
+
+  test("closeProps restores default (hovered toggles have no out)", async () => {
+    pointers.length = 0;
+    props.openProperties(fileA);
+    await t.renderOnce();
+    fire("tfm-props-star", "move");
+    await t.renderOnce();
+    expect(pointers).toEqual(["pointer"]);
+    props.closeProps();
+    await t.renderOnce();
+    expect(pointers).toEqual(["pointer", "default"]);
   });
 
   test("source-gone target toasts instead of blinking", async () => {

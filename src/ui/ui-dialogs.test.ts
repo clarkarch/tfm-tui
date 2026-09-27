@@ -215,6 +215,9 @@ const hexInts = (hex: string): [number, number, number, number] => {
 const fgInts = (n: any): [number, number, number, number] =>
   typeof n.fg === "string" ? hexInts(n.fg) : (n.fg.toInts() as [number, number, number, number]);
 
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
+
 const mkLive = (t: TestRendererSetup, floats: Floats, getColors: () => any) => {
   const ctx = {
     byId: (id: string) => t.renderer.root.findDescendantById(id),
@@ -234,12 +237,14 @@ const mkLive = (t: TestRendererSetup, floats: Floats, getColors: () => any) => {
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       drainIconQueue: () => {},
       floats,
+      setPointer: (s) => void pointers.push(s),
     }),
     yesNo: makeYesNo(dialogs, {
       colors: getColors,
       uiStyle: () => "solid" as const,
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       floats,
+      setPointer: (s) => void pointers.push(s),
     }),
   };
 };
@@ -305,6 +310,35 @@ describe("dialog repaints", () => {
       const { conflict, yesNo } = mkLive(t, floats, makeCtx().ctx.colors);
       expect(() => conflict.repaint()).not.toThrow();
       expect(() => yesNo.repaint()).not.toThrow();
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("teardowns restore default (hovered buttons have no out)", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const { conflict, yesNo } = mkLive(t, floats, makeCtx().ctx.colors);
+      pointers.length = 0;
+      // conflict: policy dismissal routes through the raw teardown
+      void conflict.promptConflict("/a/b.txt", 0);
+      await t.renderOnce();
+      floats.open("props", () => {});
+      expect(conflict.isOpen()).toBe(false);
+      expect(pointers).toEqual(["default"]);
+      // yesno: submit closes through floats the same way
+      pointers.length = 0;
+      let confirmed = false;
+      expect(
+        yesNo.confirm("Empty Trash?", "Empty", () => {
+          confirmed = true;
+        }),
+      ).toBe(true);
+      yesNo.moveFocus(1);
+      yesNo.submit();
+      expect(confirmed).toBe(true);
+      expect(pointers).toEqual(["default"]);
     } finally {
       t.renderer.destroy();
     }

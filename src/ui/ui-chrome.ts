@@ -21,6 +21,7 @@ import type { ListEntry } from "./ui-menu";
 // byte-identical structural mirrors drifted when ui-slots gained a field
 import type { IconSlotHandle, IconState, IconSpec, SlotElement } from "./ui-slots";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type ChromeCtx = {
   byId(id: string): MaybeNode;
@@ -71,6 +72,9 @@ type ChromeCtx = {
   ): IconSlotHandle;
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   stateCwd(): string; // live state.cwd
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const makeChrome = (ctx: ChromeCtx) => {
@@ -195,6 +199,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
           if (on) mousePlaceIdx = idx;
           else if (mousePlaceIdx === idx) mousePlaceIdx = -1;
           normalizePlaces();
+          // a drag owns the pointer (tiles show grabbing/not-allowed) — a
+          // sidebar sweep mid-drag must not clobber it back to pointer
+          if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
         }),
       },
       iconSlot.el,
@@ -330,7 +337,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         {
           id: closeWrapId,
           ...btnSurface(ctx.uiStyle(), colors, false, closeRestBg),
-          ...hoverEvents(paintClose),
+          ...hoverEvents(paintClose, ctx.setPointer),
         },
         closeSlot.el,
       );
@@ -374,6 +381,8 @@ export const makeChrome = (ctx: ChromeCtx) => {
                 return;
               }
               if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest"));
+              // a drag owns the pointer — same rule as the sidebar rows
+              if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
             }),
           },
           Text({ content: tabTitle(t), fg: active ? colors.white : colors.sidebarFg }),

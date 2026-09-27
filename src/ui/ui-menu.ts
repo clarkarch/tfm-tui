@@ -4,6 +4,7 @@ import type { Theme } from "../config/config";
 import { destroyChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 import type { IconSlotHandle } from "./ui-slots";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
@@ -44,6 +45,9 @@ type MenuCtx = {
   colors(): Theme;
   menuW: number;
   floats: Floats;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
   makeIconSlot(
     name: string,
     states: { fg: string; bg: string }[],
@@ -77,6 +81,10 @@ export const makeMenu = (ctx: MenuCtx) => {
     const scrim = ctx.byId("tfm-filemenu");
     scrim?.parent?.remove(scrim);
     state = null;
+    // the hovered row's out never fires (its node is gone) — restore here or
+    // the pointer sticks until the next move (same stale-until-move rule as
+    // the highlight paint)
+    ctx.setPointer?.("default");
   };
 
   const subEntries = (): ListEntry[] | null =>
@@ -193,6 +201,7 @@ export const makeMenu = (ctx: MenuCtx) => {
           () => {
             if (state && state.subIdx !== i) {
               state.subIdx = i;
+              ctx.setPointer?.("pointer");
               renderSubMenu();
             }
           },
@@ -229,6 +238,7 @@ export const makeMenu = (ctx: MenuCtx) => {
             if (state && state.idx !== i) {
               state.idx = i;
               state.subIdx = e.submenu ? -1 : null;
+              ctx.setPointer?.("pointer");
               renderFileMenu();
             }
           },

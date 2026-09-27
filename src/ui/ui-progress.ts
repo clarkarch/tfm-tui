@@ -6,6 +6,7 @@ import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
 import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 import { applySurface, islandSurface } from "./style";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
@@ -32,6 +33,9 @@ export type ProgressCtx = {
   drainIconQueue(): unknown;
   // toast shell — owned by ./notify (single stack)
   notifySticky(children: SlotElement[], opts?: { width?: number; height?: number }): ToastHandle | null;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export type ProgressState = {
@@ -218,7 +222,10 @@ export const makeProgress = (ctx: ProgressCtx) => {
             prog.processPause?.();
             setPauseVisual();
           },
-          ...hoverEvents((on) => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", on)),
+          ...hoverEvents(
+            (on) => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", on),
+            ctx.setPointer,
+          ),
         },
         progPauseSpec.el,
         progPlaySpec.el,
@@ -237,7 +244,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
             } catch {}
             prog.processCancel?.();
           },
-          ...hoverEvents((on) => progPaint(progCloseSpec.spec, "tfm-prog-close", on)),
+          ...hoverEvents((on) => progPaint(progCloseSpec.spec, "tfm-prog-close", on), ctx.setPointer),
         },
         progCloseSpec.el,
       ),
@@ -257,6 +264,8 @@ export const makeProgress = (ctx: ProgressCtx) => {
   const finishProgressToast = (title: string): void => {
     if (!prog.toastUp) return;
     prog.toastUp = false;
+    // the buttons are gone with the toast — their out never fires, restore
+    ctx.setPointer?.("default");
     const doneHandle = activeHandle;
     if (progSpinTimer) {
       clearInterval(progSpinTimer);

@@ -28,6 +28,7 @@ const makeCtx = (): GridInputCtx & {
   focusCalls: { n: number };
   blurCalls: { n: number };
   hoverCalls: [string, boolean][];
+  pointers: string[];
 } => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
@@ -48,6 +49,7 @@ const makeCtx = (): GridInputCtx & {
   const focusCalls = { n: 0 };
   const blurCalls = { n: 0 };
   const hoverCalls: [string, boolean][] = [];
+  const pointers: string[] = [];
   let anchor: number | null = null;
   let focused = 0;
   return {
@@ -60,6 +62,8 @@ const makeCtx = (): GridInputCtx & {
     focusCalls,
     blurCalls,
     hoverCalls,
+    pointers,
+    setPointer: (s) => void pointers.push(s),
     byId: () => null,
     termW: () => 80,
     termH: () => 24,
@@ -401,5 +405,79 @@ describe("hover animation routing", () => {
     expect(ctx.visuals.get("/w/a.txt")).toBe(1); // Hover
     h.onMouseOut();
     expect(ctx.visuals.get("/w/a.txt")).toBe(0); // Rest
+  });
+});
+
+// mouse pointer shapes (OSC 22): over always sets, out always restores —
+// unlike the highlight paint, which skips selected tiles, the pointer is an
+// affordance (draggable/clickable) that must never stick. Drag states own
+// the pointer while gridDrag.active (grabbing over valid targets,
+// not-allowed over files/self); finishDragState restores default centrally
+// so every cleanup path (drop, pane-background drop, deferred release)
+// heals, and the tile drop then re-applies the tile pointer.
+describe("mouse pointer shapes", () => {
+  test("tile hover sets pointer, out restores default", () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    h.onMouseOver();
+    h.onMouseOut();
+    expect(ctx.pointers).toEqual(["pointer", "default"]);
+  });
+
+  test("selected tiles set/restore too (affordance, not highlight)", () => {
+    const ctx = makeCtx();
+    ctx.tileRefs.get("/w/b.txt")!.selected = true;
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/b.txt", 1);
+    h.onMouseOver();
+    h.onMouseOut();
+    expect(ctx.pointers).toEqual(["pointer", "default"]);
+  });
+
+  test("drag trip sets grabbing; finishDragState restores default", () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, {});
+    h.onMouseDrag({ x: 9, y: 9 } as any);
+    expect(gridDrag.active).toBe(true);
+    expect(ctx.pointers).toContain("grabbing");
+    finishDragState(ctx);
+    expect(ctx.pointers.at(-1)).toBe("default");
+  });
+
+  test("dragging over a folder keeps grabbing, over a file shows not-allowed", () => {
+    const ctx = makeCtx();
+    const hSrc = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    const hDir = makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3);
+    const hFile = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/b.txt", 1);
+    press(hSrc, {});
+    hSrc.onMouseDrag({ x: 9, y: 9 } as any);
+    expect(gridDrag.active).toBe(true);
+    hDir.onMouseOver();
+    hFile.onMouseOver();
+    expect(ctx.pointers).toContain("grabbing");
+    expect(ctx.pointers).toContain("not-allowed");
+  });
+
+  test("tile drop re-applies the tile pointer after the central restore", () => {
+    const ctx = makeCtx();
+    const hSrc = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    const hDst = makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3);
+    press(hSrc, {});
+    hSrc.onMouseDrag({ x: 9, y: 9 } as any);
+    hDst.onMouseDrop();
+    expect(ctx.pointers.at(-1)).toBe("pointer");
+  });
+
+  test("absent setPointer changes nothing (old fakes keep working)", () => {
+    const ctx = makeCtx();
+    delete (ctx as any).setPointer;
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    h.onMouseOver();
+    h.onMouseOut();
+    h.onMouseDrop();
+    expect(ctx.hoverCalls).toEqual([
+      ["/w/a.txt", true],
+      ["/w/a.txt", false],
+    ]);
   });
 });

@@ -9,6 +9,7 @@ import { fsErrText } from "../fs/fsutil";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type IconSlotHandle, type SlotElement } from "./ui-slots";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
@@ -33,6 +34,9 @@ type PermsCtx = {
     heightCells?: number,
     initialState?: number,
   ): IconSlotHandle;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 type PermsDeps = {
@@ -100,10 +104,12 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
         paddingLeft: 1,
         ...rowSurface(ctx.uiStyle(), colors, "rest"),
         onMouseDown: (ev: MouseEvent) => ctx.openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
-        ...hoverEvents((on) =>
-          ctx.setOnId(rowId, (n) =>
-            applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
-          ),
+        ...hoverEvents(
+          (on) =>
+            ctx.setOnId(rowId, (n) =>
+              applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
+            ),
+          ctx.setPointer,
         ),
       },
       Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
@@ -188,10 +194,12 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
           }
           void applyMode(nm);
         },
-        ...hoverEvents((on) =>
-          ctx.setOnId(execRowId, (n) =>
-            applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
-          ),
+        ...hoverEvents(
+          (on) =>
+            ctx.setOnId(execRowId, (n) =>
+              applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
+            ),
+          ctx.setPointer,
         ),
       },
       Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),

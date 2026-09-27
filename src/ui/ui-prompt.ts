@@ -14,7 +14,8 @@ import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
-import type { SlotElement } from "./ui-slots";
+import type { PointerStyle } from "../lib/pointer";
+import { hoverEvents, type SlotElement } from "./ui-slots";
 
 type PromptCtx = {
   renderer(): CliRenderer;
@@ -26,6 +27,9 @@ type PromptCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
   floats: Floats;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 const PANEL_W = 62;
@@ -70,6 +74,8 @@ export const makePrompt = (ctx: PromptCtx) => {
     } catch {}
     const scrim = ctx.byId("tfm-prompt");
     scrim?.parent?.remove(scrim);
+    // the input is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
     // floats-initiated teardown (policy dismissal / replace) settles a
     // pending open as cancel — never leave the awaiter hanging
     const r = resolveFn;
@@ -115,6 +121,8 @@ export const makePrompt = (ctx: PromptCtx) => {
       passwordMode = !!opts.password;
       secret = "";
       resolveFn = resolve;
+      // the input owns the keyboard now — text pointer until it settles
+      ctx.setPointer?.("text");
       const c = ctx.colors();
       const okLabel = opts.okLabel ?? "OK";
       const btn = (id: string, label: string, fg: string, onPick: () => void): ReturnType<typeof Box> =>
@@ -131,6 +139,8 @@ export const makePrompt = (ctx: PromptCtx) => {
               } catch {}
               onPick();
             },
+            // pointer only — the buttons carry no hover paint by design
+            ...hoverEvents(() => {}, ctx.setPointer),
           },
           Text({ content: label, fg }),
         );

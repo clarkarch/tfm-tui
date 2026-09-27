@@ -38,10 +38,14 @@ const mkBulk = (
     performBulkRename: (pairs) => {
       performed.push(...pairs);
     },
+    setPointer: (s) => void pointers.push(s),
   });
 
 const TWO = ["/tfm-bulk/IMG_001.jpg", "/tfm-bulk/IMG_002.jpg"];
 const TEN = Array.from({ length: 10 }, (_, i) => `/tfm-bulk/f${i}.txt`);
+
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
 
 describe("bulk rename widget", () => {
   test("open mounts the input; typing shows live generated names", async () => {
@@ -255,6 +259,24 @@ describe("bulk rename widget", () => {
       const bulk = mkBulk(t, floats, []);
       expect(() => bulk.repaint()).not.toThrow();
       expect(t.renderer.root.findDescendantById("tfm-bulkrename")).toBeFalsy();
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("open sets the text pointer, esc restores default", async () => {
+    const t = await createTestRenderer({ width: 100, height: 26 });
+    try {
+      pointers.length = 0;
+      const floats = makeFloats();
+      const bulk = mkBulk(t, floats, []);
+      bulk.open(TWO);
+      await t.renderOnce();
+      expect(pointers).toEqual(["text"]);
+      bulk.handleKey({ name: "escape" });
+      await t.renderOnce();
+      expect(floats.isOpen("bulkrename")).toBe(false);
+      expect(pointers).toEqual(["text", "default"]);
     } finally {
       t.renderer.destroy();
     }

@@ -13,6 +13,7 @@ import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 import type { SlotElement } from "./ui-slots";
 
 export type PickItem = {
@@ -38,6 +39,9 @@ type PickCtx = {
   commands(): PickItem[];
   // runtime isolation for plugin-contributed items (optional; silent when absent)
   onError?: (err: unknown) => void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 // subsequence score, case-insensitive; lower = better. Null when query is
@@ -93,6 +97,8 @@ export const makePick = (ctx: PickCtx) => {
     } catch {}
     const scrim = ctx.byId("tfm-pick");
     scrim?.parent?.remove(scrim);
+    // hovered rows have no out (their nodes are gone) — restore here
+    ctx.setPointer?.("default");
   };
 
   const close = (): void => {
@@ -136,6 +142,7 @@ export const makePick = (ctx: PickCtx) => {
             onMouseMove: () => {
               if (idx !== i) {
                 idx = i;
+                ctx.setPointer?.("pointer");
                 renderList();
               }
             },

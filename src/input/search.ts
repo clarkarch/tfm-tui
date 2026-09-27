@@ -6,6 +6,7 @@
 
 import { debounced, type Scheduler } from "../lib/uiutil";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type SearchCtx = {
   byId: (id: string) => MaybeNode;
@@ -16,6 +17,9 @@ type SearchCtx = {
   termHasFocus: () => boolean;
   // injectable clock (tests use a virtual one); defaults to the real timers
   sched?: Scheduler;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const makeSearch = (ctx: SearchCtx) => {
@@ -25,6 +29,8 @@ export const makeSearch = (ctx: SearchCtx) => {
 
   const clearSearch = (): void => {
     searchQuery = "";
+    // the input is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
     if (focusTimer !== null) {
       sched.clearTimeout(focusTimer);
       focusTimer = null;
@@ -55,6 +61,8 @@ export const makeSearch = (ctx: SearchCtx) => {
     el.visible = true;
     el.value = ch;
     searchQuery = ch;
+    // the input owns the keyboard now — text pointer until it clears
+    ctx.setPointer?.("text");
     void ctx.renderGrid();
     if (focusTimer !== null) sched.clearTimeout(focusTimer);
     focusTimer = sched.setTimeout(() => {

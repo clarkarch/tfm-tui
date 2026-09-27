@@ -11,6 +11,7 @@ import { fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
 
@@ -31,6 +32,9 @@ export type RenameCtx = {
   cwd(): string;
   focusKeys(): string[];
   selectTileAt(idx: number): boolean;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 // nautilus naming for an unused "Untitled …" base: "Untitled 2.txt", "Untitled 3.txt" …
@@ -68,6 +72,10 @@ export const makeRename = (ctx: RenameCtx) => {
     const edit = renameEdit;
     if (!edit) return;
     renameEdit = null;
+    // the editor is gone — the cursor sits over its tile, but the tile's
+    // over won't re-fire under a stationary mouse, so default (stale-
+    // until-move, same rule as the highlight paint)
+    ctx.setPointer?.("default");
     const input = ctx.byId(edit.inputId);
     const value = String(input?.value ?? "").trim();
     if (input) {
@@ -202,6 +210,8 @@ export const makeRename = (ctx: RenameCtx) => {
       tile.remove(label);
     } catch {}
     renameEdit = { key, inputId, labelIdx, ...(createKind ? { createKind } : {}) };
+    // the editor owns the keyboard now — text pointer until it lands
+    ctx.setPointer?.("text");
     input.on?.("enter", () => finishInlineRename(true));
     const prevHandler = input.handleKeyPress?.bind(input);
     input.handleKeyPress = (k: KeyEvent) => {
