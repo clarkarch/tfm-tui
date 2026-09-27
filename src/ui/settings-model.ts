@@ -98,7 +98,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           min: row.min,
           max: row.max,
           step: row.step,
-          fmt: (v) => `${v}`,
+          // the schema row's unit belongs in the VALUE column ("26 cells"),
+          // singularized at 1 ("1 cell") — a plural unit on a 1-cell row reads
+          // as a typo. The blurb stays plain-language and unit-free by design.
+          fmt: (v) => (row.unit ? `${v} ${v === 1 ? row.unit.replace(/s$/, "") : row.unit}` : `${v}`),
           get: () => (ui[row.prop] as number) ?? row.def,
           set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
         };

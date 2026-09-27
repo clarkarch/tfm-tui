@@ -347,7 +347,20 @@ type RowCommon = {
 };
 
 type SchemaRow =
-  | (RowCommon & { kind: "int"; section: "ui"; min: number; max: number; step: number; def: number; blurb: string })
+  | (RowCommon & {
+      kind: "int";
+      section: "ui";
+      min: number;
+      max: number;
+      step: number;
+      def: number;
+      blurb: string;
+      // shown after the number in the settings GUI (never in the TOML comment,
+      // which carries its own range text): "26 cells", "12 rows". The blurb
+      // stays unit-free by design (plain language — pinned by
+      // settings-model.test.ts), so the unit lives HERE.
+      unit?: string;
+    })
   | (RowCommon & { kind: "bool"; section: "ui"; def: boolean; blurb: string })
   | (RowCommon & { kind: "enum"; section: "ui"; values: readonly string[]; def: string; blurb: string })
   | (RowCommon & { kind: "key"; section: "keys"; action: KeyAction; def: string[] })
@@ -392,6 +405,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 1,
     def: 26,
     doc: "16..60 cells (grid + list)",
+    unit: "cells",
     label: "sidebar width",
     blurb: "How wide the sidebar is",
     group: "layout",
@@ -407,6 +421,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 2,
     def: 40,
     doc: "20..80 cells",
+    unit: "cells",
     label: "preview width",
     blurb: "How wide the preview pane is",
     group: "layout",
@@ -422,6 +437,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 1,
     def: 12,
     doc: "embedded terminal pane height in rows, 4..30 (applies live to the open pane)",
+    unit: "rows",
     label: "terminal height",
     blurb: "How tall the terminal pane is",
     group: "layout",
@@ -437,6 +453,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 1,
     def: 20,
     doc: "10..40 cells (grid view)",
+    unit: "cells",
     label: "grid tile width",
     blurb: "How wide grid tiles are",
     group: "layout",
@@ -452,6 +469,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 1,
     def: 5,
     doc: "3..10 cells (grid view)",
+    unit: "cells",
     label: "grid tile height",
     blurb: "How tall grid tiles are",
     group: "layout",
@@ -467,6 +485,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 1,
     def: 3,
     doc: "grid icon height in rows, 1..5",
+    unit: "rows",
     label: "grid icon size",
     blurb: "How big file icons are",
     group: "layout",
@@ -482,6 +501,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 1,
     def: 1,
     doc: "list view row height in cells, 1..3 (icon scales with it)",
+    unit: "cells",
     label: "list row height",
     blurb: "How tall list rows are",
     group: "layout",
@@ -596,6 +616,7 @@ const UI_ROWS: SchemaRow[] = [
     step: 1,
     def: 8,
     doc: "cells from the edge that trigger an auto-hide expand, 1..8",
+    unit: "cells",
     label: "hover zone",
     blurb: "How close the mouse gets before panels pop out",
     group: "panes",
