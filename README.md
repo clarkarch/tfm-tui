@@ -52,9 +52,19 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 ```
 
-Or build from source:
+### dev build
+
+Latest dev branch, needs git and Bun 1.4 or newer:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
+```
+
+Or manually build from source:
+
+```bash
+git clone https://github.com/clarkarch/tfm-tui.git
+cd tfm-tui
 bun install --frozen-lockfile
 bun run check && bun test
 bun run compile && cp dist/tfm ~/.local/bin/
