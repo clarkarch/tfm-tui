@@ -29,7 +29,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { withTimeout } from "../lib/uiutil";
+import { withTimeout, errMessage } from "../lib/uiutil";
 import { validateKeybindSpec } from "../config/keyspec";
 import {
   PLUGIN_API_VERSION,
@@ -355,7 +355,7 @@ const discoverPlugins = (
       sinks.log(`plugin ${name} moved to ${base}/ (folder layout)`);
       out.push({ file: target });
     } catch (err) {
-      sinks.warn(`plugin ${name} could not move to a folder: ${err instanceof Error ? err.message : err}`);
+      sinks.warn(`plugin ${name} could not move to a folder: ${errMessage(err)}`);
     }
   }
   return out.sort((a, b) => (a.file < b.file ? -1 : 1));
@@ -571,7 +571,7 @@ export const makePluginRegistry = (deps: {
             disposeSlots = registerSlots(m.name, clean);
           } catch (err) {
             try {
-              api.log(`plugin ${m.name} slots failed to register: ${err instanceof Error ? err.message : err}`);
+              api.log(`plugin ${m.name} slots failed to register: ${errMessage(err)}`);
             } catch {}
           }
         }
@@ -610,41 +610,40 @@ export const makePluginRegistry = (deps: {
       // activate already ran (or the post-activate validation threw): tear the
       // partial instance down or its listeners/timers/slots leak forever — it
       // is never pushed to `plugins`, so deactivateAll can't reach it.
-      try {
-        disposeSlots?.();
-      } catch {}
-      const fn = deactivate;
-      if (fn) {
-        try {
-          await withTimeout(
-            Promise.resolve().then(() => fn()),
-            5000,
-          );
-        } catch {}
-      }
+      await tearPartial(disposeSlots, deactivate);
       throw err;
     }
   };
 
   // best-effort teardown: never throws, never blocks the scan (5s cap, timer
   // cleaned up on both paths via withTimeout — a bare Promise.race leaks the
-  // timeout handle on success and holds the event loop per unload).
-  const runDeactivate = async (p: LoadedPlugin): Promise<void> => {
+  // timeout handle on success and holds the event loop per unload). Shared by
+  // runDeactivate and loadOne's post-activate-validation catch.
+  const tearPartial = async (
+    disposeSlots: (() => void) | null | undefined,
+    deactivate: (() => unknown) | null | undefined,
+    log?: (err: unknown) => void,
+  ): Promise<void> => {
     try {
-      p.disposeSlots?.();
+      disposeSlots?.();
     } catch {}
-    const fn = p.deactivate;
-    if (!fn) return;
+    if (!deactivate) return;
     try {
       await withTimeout(
-        Promise.resolve().then(() => fn()),
+        Promise.resolve().then(() => deactivate()),
         5000,
       );
     } catch (err) {
-      try {
-        api.log(`plugin ${p.name} deactivate failed: ${err instanceof Error ? err.message : err}`);
-      } catch {}
+      log?.(err);
     }
+  };
+
+  const runDeactivate = async (p: LoadedPlugin): Promise<void> => {
+    await tearPartial(p.disposeSlots, p.deactivate, (err) => {
+      try {
+        api.log(`plugin ${p.name} deactivate failed: ${errMessage(err)}`);
+      } catch {}
+    });
   };
 
   // quit teardown: call every deactivate synchronously (promises ignored) so a
@@ -661,17 +660,25 @@ export const makePluginRegistry = (deps: {
         if (r instanceof Promise) void r.catch(() => {});
       } catch (err) {
         try {
-          api.log(`plugin ${p.name} deactivate failed: ${err instanceof Error ? err.message : err}`);
+          api.log(`plugin ${p.name} deactivate failed: ${errMessage(err)}`);
         } catch {}
       }
     }
   };
 
   const doScan = async (): Promise<PluginScanDiff> => {
+    // one failed-load recorder: prune the staged dir (given), record + warn
+    // once per distinct version key (a repeat failure dedupes silently else)
+    const recordLoadError = (file: string, what: string, key: string, err: unknown, prune?: () => void): void => {
+      prune?.();
+      const message = `plugin ${path.basename(file)} ${what}: ${errMessage(err)}`;
+      diff.errors.push(message);
+      warnOnce(key, message);
+    };
     const diff: PluginScanDiff = { added: [], removed: [], changed: [], errors: [] };
     const found = discoverPlugins(dir, {
       warn: (m) => warnOnce(`discover:${m}`, m),
-      log: (m) => api.log(m),
+      log: api.log,
     });
     const live = new Set(found.map((f) => f.file));
     // rm a staged build dir when no live snap references its hash (failed
@@ -721,9 +728,7 @@ export const makePluginRegistry = (deps: {
       try {
         hash = hashPluginFolder(srcFolder);
       } catch (err) {
-        const message = `plugin ${path.basename(file)} failed to reload: ${err instanceof Error ? err.message : err}`;
-        diff.errors.push(message);
-        warnOnce(`${file}|${fp}|hash`, message);
+        recordLoadError(file, "failed to reload", `${file}|${fp}|hash`, err);
         continue;
       }
       if (prev && hash === prev.hash) {
@@ -740,10 +745,7 @@ export const makePluginRegistry = (deps: {
           snaps.set(file, { fp, hash, name: lp.name });
           diff.added.push(lp.name);
         } catch (err) {
-          pruneUnreferencedStage(folderName, hash);
-          const message = `plugin ${path.basename(file)} failed to load: ${err instanceof Error ? err.message : err}`;
-          diff.errors.push(message);
-          warnOnce(vkey, message);
+          recordLoadError(file, "failed to load", vkey, err, () => pruneUnreferencedStage(folderName, hash));
         }
         continue;
       }
@@ -774,12 +776,9 @@ export const makePluginRegistry = (deps: {
           api.log(`plugin ${lp.name} reloaded`);
         } catch {}
       } catch (err) {
-        pruneUnreferencedStage(folderName, hash);
         // fp intentionally left stale so the next rescan retries (transient
         // errors self-heal); a real content change alters fp anyway.
-        const message = `plugin ${path.basename(file)} failed to reload: ${err instanceof Error ? err.message : err}`;
-        diff.errors.push(message);
-        warnOnce(vkey, message);
+        recordLoadError(file, "failed to reload", vkey, err, () => pruneUnreferencedStage(folderName, hash));
       }
     }
     errors.length = 0;
@@ -819,7 +818,7 @@ export const makePluginRegistry = (deps: {
         p.disposeSlots = registerSlots(p.name, p.slots);
       } catch (err) {
         try {
-          api.log(`plugin ${p.name} slots failed to register: ${err instanceof Error ? err.message : err}`);
+          api.log(`plugin ${p.name} slots failed to register: ${errMessage(err)}`);
         } catch {}
       }
     }

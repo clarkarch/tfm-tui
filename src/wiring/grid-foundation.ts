@@ -90,7 +90,7 @@ export const wireGridFoundation = (deps: {
     destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     floats: core.floats,

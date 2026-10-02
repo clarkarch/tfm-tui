@@ -12,7 +12,7 @@ import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
 import { cycleSortMode } from "../lib/sort";
-import { destroyChildren } from "../lib/uiutil";
+import { destroyChildren, errMessage } from "../lib/uiutil";
 import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled } from "../plugins/plugin-api";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
@@ -57,7 +57,7 @@ export const wireKeymap = (deps: {
     uiStyle: () => core.config.ui.uiStyle,
     floats,
     escHintBtn: core.slots.escHintBtn,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     commands: () =>
       [...coreCommands(), ...flattenPluginCommands(plugins.plugins.filter(isPluginEnabled))].map((c) => ({
         label: c.title,
@@ -65,7 +65,7 @@ export const wireKeymap = (deps: {
         run: c.run,
       })),
     onError: (err) => {
-      dlog(`plugin command failed: ${err instanceof Error ? err.message : err}`);
+      dlog(`plugin command failed: ${errMessage(err)}`);
     },
     setPointer,
   });
@@ -79,7 +79,7 @@ export const wireKeymap = (deps: {
     rootAdd: (node) => chrome.renderer.root.add(node),
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     floats,
@@ -126,9 +126,9 @@ export const wireKeymap = (deps: {
     },
     yesNo: {
       isOpen: () => floats.isOpen("yesno"),
-      close: () => fileops.yesNo.close(),
-      moveFocus: (d) => fileops.yesNo.moveFocus(d),
-      submit: () => fileops.yesNo.submit(),
+      close: fileops.yesNo.close,
+      moveFocus: fileops.yesNo.moveFocus,
+      submit: fileops.yesNo.submit,
     },
     typeToSearchEnabled: () => core.config.ui.typeToSearch,
     // startSearch re-arms the filter (yazi preset leaves it off) through the
@@ -141,7 +141,7 @@ export const wireKeymap = (deps: {
     isRenaming: gridFoundation.rename.isRenaming,
     bulkRename: {
       isOpen: () => floats.isOpen("bulkrename"),
-      handleKey: (ev) => gridFoundation.bulkRename.handleKey(ev),
+      handleKey: gridFoundation.bulkRename.handleKey,
     },
     propsIsOpen: () => floats.isOpen("props"),
     closeProps: grid.props.closeProps,
@@ -247,11 +247,11 @@ export const wireKeymap = (deps: {
         .flatMap((p) => p.commands.map((c) => ({ id: c.id, binds: getPluginCommandBinds(p, c.id), run: c.run }))),
     pick: {
       isOpen: () => pick.isOpen(),
-      handleKey: (ev) => pick.handleKey(ev),
+      handleKey: pick.handleKey,
     },
     prompt: {
       isOpen: () => prompt.isOpen(),
-      handleKey: (ev) => prompt.handleKey(ev),
+      handleKey: prompt.handleKey,
     },
   });
 

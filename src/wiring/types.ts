@@ -28,6 +28,7 @@ import type { makeBulkRename } from "../ui/ui-bulk-rename";
 import type { makeUndo } from "../app/undo";
 import type { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import type { makeFileOps } from "../fs/fileops";
+import type { makeEnsureSudo } from "../fs/elevate";
 import type { makeProgress } from "../ui/ui-progress";
 import type { makeTerminal } from "../ui/ui-term";
 import type { makeTrashConfirms, makeTrashOps } from "../fs/trashops";
@@ -44,12 +45,9 @@ export type NavWiring = {
   quitApp: ReturnType<typeof makeQuit>;
   restartApp: ReturnType<typeof makeRestart>;
   setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
-  tabModel: ReturnType<typeof makeTabs>;
   tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>];
-  activeTabModel: () => ReturnType<typeof makeTabs>;
   nextTab: () => void;
   prevTab: () => void;
-  search: ReturnType<typeof makeSearch>;
   searches: [ReturnType<typeof makeSearch>, ReturnType<typeof makeSearch>];
   activeSearch: () => ReturnType<typeof makeSearch>;
 } & Pick<ReturnType<typeof makeNav>, "canBack" | "canFwd" | "goBack" | "goFwd" | "navigate"> &
@@ -67,6 +65,7 @@ export type ChromeWiring = {
   activeToolbar: () => ReturnType<typeof makeToolbar>;
   notify: ReturnType<typeof makeNotify>["notify"];
   notifySticky: ReturnType<typeof makeNotify>["notifySticky"];
+  ensureSudo: ReturnType<typeof makeEnsureSudo>;
   openFileDefault: ReturnType<typeof makeRecentOpen>["openFileDefault"];
   launchAppAsRoot: (desktopFile: string, appName: string, p: string) => Promise<void>;
   dialogs: ReturnType<typeof makeDialogs>;

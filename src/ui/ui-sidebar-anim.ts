@@ -26,7 +26,7 @@
 
 import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
 import { easeAt, quantizeDy, staggerLocal, type EaseKey, type SlideDir } from "./ui-grid-anim";
-import type { Scheduler } from "../lib/uiutil";
+import { clamp01, type Scheduler } from "../lib/uiutil";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 export type SidebarAnimStyle = "fade" | "slide" | "stagger" | "stagger-slide";
@@ -44,7 +44,6 @@ export type SidebarAnimCfg = {
 
 export type SidebarAnimFrame = { opacity: number; dx: number; dy: number };
 
-const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 // -0 paints like +0 but trips Object.is asserts — normalize at the source
 const noNegZero = (v: number): number => (v === 0 ? 0 : v);
 

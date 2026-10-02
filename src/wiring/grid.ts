@@ -4,6 +4,7 @@
 // AFTER the fileops wiring — gridCtx takes moveInto directly. ---
 
 import path from "node:path";
+import { errMessage } from "../lib/uiutil";
 import { existsSync } from "node:fs";
 import { registerSyntaxParsers } from "../ui/syntax";
 import { availableCompressionFormats, canExtract, compressionExt, compressionHint } from "../fs/archive";
@@ -11,13 +12,7 @@ import { appsForFile, launchApp } from "../fs/apps";
 import { runSudo, sudoCatArgv } from "../fs/elevate";
 import type { makePick } from "../ui/ui-pick";
 import { makePreview } from "../ui/ui-preview";
-import {
-  finishDragState,
-  gridDrag,
-  makeEntryMouseHandlers,
-  type BandCtx,
-  type GridMenuEntry,
-} from "../input/grid-input";
+import { finishDragState, gridDrag, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
@@ -79,8 +74,8 @@ export const wireGrid = (deps: {
     },
     tileRefs: selection.tileRefs,
     pushThumbJob: core.slots.pushThumbJob,
-    drainThumbs: () => core.slots.drainThumbs(),
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainThumbs: core.slots.drainThumbs,
+    drainIconQueue: core.slots.drainIconQueue,
     nextIconId: core.slots.nextIconId,
     fallbackGlyphFor: (name) => glyph[name] ?? FILE_GLYPH,
     isTtyMode: core.isTtyMode,
@@ -189,10 +184,10 @@ export const wireGrid = (deps: {
       openFileDefault: chrome.openFileDefault,
       moveInto: fileops.fileops.moveInto,
       // --- menu deps (GridMenuDeps) ---
-      openContextMenu: (x: number, y: number, title: string, entries: GridMenuEntry[]) =>
-        chrome.menu.openContextMenu(x, y, title, entries as ListEntry[]),
-      fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): GridMenuEntry[] =>
-        menuEntries.fileEntriesFor(key, isDir, x, y) as GridMenuEntry[],
+      openContextMenu: (x: number, y: number, title: string, entries: ListEntry[]) =>
+        chrome.menu.openContextMenu(x, y, title, entries),
+      fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): ListEntry[] =>
+        menuEntries.fileEntriesFor(key, isDir, x, y),
       closeFileMenu: chrome.menu.closeFileMenu,
       renameEditKey: rename.renameEditKey,
       finishInlineRename: rename.finishInlineRename,
@@ -318,9 +313,9 @@ export const wireGrid = (deps: {
       cellMetrics: core.slots.cellMetrics,
       makeIconSlot: core.slots.makeIconSlot,
       pushThumbJob: core.slots.pushThumbJob,
-      nextIconId: () => core.slots.nextIconId(),
-      drainIconQueue: () => core.slots.drainIconQueue(),
-      drainThumbs: () => core.slots.drainThumbs(),
+      nextIconId: core.slots.nextIconId,
+      drainIconQueue: core.slots.drainIconQueue,
+      drainThumbs: core.slots.drainThumbs,
       stripSelectable,
       setTextOnId: core.lookup.setTextOnId,
       log: (msg) => dlog(msg),
@@ -363,8 +358,8 @@ export const wireGrid = (deps: {
     setTextOnId: core.lookup.setTextOnId,
     setOnId: core.lookup.setOnId,
     stripSelectable,
-    drainIconQueue: () => core.slots.drainIconQueue(),
-    drainThumbs: () => core.slots.drainThumbs(),
+    drainIconQueue: core.slots.drainIconQueue,
+    drainThumbs: core.slots.drainThumbs,
     pushThumbJob: core.slots.pushThumbJob,
     nextIconId: core.slots.nextIconId,
     escHintBtn: core.slots.escHintBtn,
@@ -463,7 +458,7 @@ export const wireGrid = (deps: {
     openProperties: props.openProperties,
     selectAll: selection.selectAll,
     cwd: () => state.cwd,
-    canExtract: (p) => canExtract(p),
+    canExtract: canExtract,
     extractArchive: (files, dest) => {
       void fileops.fileops.extractArchive(files, dest);
     },
@@ -485,7 +480,7 @@ export const wireGrid = (deps: {
     sortState: state,
     plugins: () => plugins.plugins.filter(isPluginEnabled),
     onPluginError: (name, err) => {
-      const msg = `plugin ${name} failed: ${err instanceof Error ? err.message : err}`;
+      const msg = `plugin ${name} failed: ${errMessage(err)}`;
       dlog(msg);
       try {
         chrome.notify(msg, "plugins");

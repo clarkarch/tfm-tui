@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readdir } from "node:fs/promises";
+import { errMessage } from "../lib/uiutil";
 import { gvfsRoot, parseGvfsName, parseServerInput } from "./network";
 import type { NotifyLevel } from "../lib/notify-level";
 
@@ -30,8 +31,6 @@ const lastLine = (s: string): string =>
     .map((l) => l.trim())
     .filter(Boolean)
     .pop() ?? "";
-
-const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 // active gvfs mounts under the runtime dir; unreadable/missing root = none
 export const listNetworkMounts = async (

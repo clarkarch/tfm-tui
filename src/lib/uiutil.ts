@@ -165,3 +165,16 @@ export const safeRenderStep = (
     log(`render ${name}: ${errDetail(err)}`);
   }
 };
+
+export const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+// Floating-list cursor advance (context menu / submenu / pick / esc-menu):
+// idx -1 = no cursor yet (down fills first, up fills last); `entries` given
+// means separators are skipped, bounded so an all-separator list can't spin.
+export const advanceCursor = (idx: number, delta: number, count: number, entries?: { sep?: boolean }[]): number => {
+  let i = idx < 0 ? (delta >= 0 ? 0 : count - 1) : (idx + delta + count) % count;
+  for (let n = 0; entries?.[i]?.sep && n < count; n++) i = (i + delta + count) % count;
+  return i;
+};
+
+export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);

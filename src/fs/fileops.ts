@@ -8,11 +8,9 @@
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, rename as fsRename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, rename as fsRename } from "node:fs/promises";
 import { swallow } from "../app/log";
 import {
-  encodeTrashPath,
-  errCode,
   failSuffix,
   fsErrText,
   fsMove,
@@ -23,10 +21,11 @@ import {
   shouldToast,
   trashDir,
   uniqueTarget,
+  xdgTrashMoveToRoot,
   xdgTrashMove,
   crossDevice as fsCrossDevice,
 } from "./fsutil";
-import { isPrivilegeError, sudoCpArgv, sudoMvArgv, sudoRmArgv, sudoExecError, runSudo } from "./elevate";
+import { defaultSudoExec, isPrivilegeError, runSudoTool, sudoCpArgv, sudoMvArgv, sudoRmArgv } from "./elevate";
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
 import {
   commonParent,
@@ -43,7 +42,7 @@ import {
 } from "./archive";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { sharedOpQueue } from "../lib/op-queue";
-import { sharedPluginHooks } from "../lib/plugin-hooks";
+import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { ConflictChoice } from "../ui/ui-dialogs";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { ProgressState } from "../ui/ui-progress";
@@ -126,6 +125,30 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.paintProgress(true);
     }
   };
+  // Shared op-summary tail (transfer/extract/compress — the three tails with
+  // the same shape): joined message + toast finish (noun variants) + leveled
+  // notify + plugin emit. Bulk rename's tail differs (no toast, title/level
+  // co-vary) — it stays inline.
+  const finishOpSummary = (
+    op: string,
+    noun: string,
+    successText: string,
+    msg: string,
+    paths: string[],
+    dest: string | undefined,
+    cancelled: boolean,
+    failed: number,
+  ): void => {
+    if (prog.toastUp) {
+      ctx.finishProgressToast(cancelled ? `✗ ${noun} cancelled` : failed ? `✗ ${noun} failed` : `✓ ${successText}`);
+    }
+    if (cancelled) ctx.notify(msg, `${op} cancelled`, "info");
+    else if (failed > 0) ctx.notify(msg, `${op} failed`, "error");
+    else ctx.notify(msg, op, "success");
+    try {
+      ctx.onFileOp?.(op, paths, dest, { cancelled, failed });
+    } catch {}
+  };
   // Pre-scan in "counting" mode (nautilus' "Preparing…" counter): a huge
   // source tree used to run scanTree in total silence — seconds of dead UI
   // before the first honest total exists. The toast arms mid-scan once the
@@ -206,13 +229,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
 
   // plugin veto channel: a beforeFileOp hook returning { skip: true } blocks the
   // op before any work. Sync + isolated inside the hook bus.
-  const vetoedByPlugin = (op: string, paths: string[], dest?: string): boolean => {
-    const veto = sharedPluginHooks().beforeFileOp({ op, paths, ...(dest ? { dest } : {}) });
-    if (!veto) return false;
-    const msg = `Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`;
-    ctx.notify(msg, "blocked", "info");
-    return true;
-  };
+  const vetoedByPlugin = (op: string, paths: string[], dest?: string): boolean =>
+    checkPluginVeto(sharedPluginHooks(), ctx.notify, op, paths, dest);
 
   // Trash/files (or anything under it) is not a paste/move target: files
   // landing there without .trashinfo are unrestorable. Trashing goes through
@@ -264,81 +282,34 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     clearStream: (rs) => {
       if (prog.currentRs === rs) prog.currentRs = null;
     },
-    repaint: (full) => ctx.paintProgress(full),
+    repaint: ctx.paintProgress,
   };
   const copyTreeProgressWired = (src: string, dest: string): Promise<void> => copyTreeProgress(src, dest, transferSink);
   const isCrossDevice = (a: string, b: string): boolean => (ctx.crossDevice ?? fsCrossDevice)(a, b);
   const removeTree = ctx.removeTree ?? ((p: string) => rm(p, { recursive: true }));
-  const sudoExec =
-    ctx.sudoExec ?? (async (argv) => runSudo(argv).then((r) => ({ status: r.status, stderr: r.stderr })));
+  const sudoExec = ctx.sudoExec ?? defaultSudoExec;
 
   // sudo retry: one password gate per op (memoized by the caller), then the
   // same end-state as the normal path via cp -a / mv so undo units below can
   // be reused untouched. Throws the tool's first stderr line on failure.
-  const sudoCopy = async (src: string, target: string): Promise<void> => {
-    const r = await sudoExec(sudoCpArgv(src, target));
-    if (r.status !== 0) throw sudoExecError(r.stderr);
-  };
-  const sudoMove = async (src: string, target: string): Promise<void> => {
-    const r = await sudoExec(sudoMvArgv(src, target));
-    if (r.status !== 0) throw sudoExecError(r.stderr);
-  };
-  const sudoRemove = async (target: string): Promise<void> => {
-    const r = await sudoExec(sudoRmArgv(target));
-    if (r.status !== 0) throw sudoExecError(r.stderr);
-  };
+  const sudoCopy = (src: string, target: string): Promise<void> => runSudoTool(sudoExec, sudoCpArgv(src, target));
+  const sudoMove = (src: string, target: string): Promise<void> => runSudoTool(sudoExec, sudoMvArgv(src, target));
+  const sudoRemove = (target: string): Promise<void> => runSudoTool(sudoExec, sudoRmArgv(target));
   // sudo replace-stash: the normal stashVictim runs unprivileged BEFORE any
   // sudo retry, so a privileged victim would abort the op as "Replace failed"
-  // without ever reaching the gate. Claim a trash name as the user, sudo-mv
-  // the victim there, finalize the trashinfo — same undo units/journal.
+  // without ever reaching the gate. Same claim/rename/finalize loop as
+  // xdgTrashMoveToRoot with sudo-mv (one loop in fsutil, not a near-clone) —
+  // any failure returns false (the caller aborts that iteration).
   const sudoStashVictim = async (victimDest: string, units: UndoUnit[], dUnits: UndoStep[]): Promise<boolean> => {
     try {
-      const root = trashDir();
-      await mkdir(path.join(root, "files"), { recursive: true });
-      await mkdir(path.join(root, "info"), { recursive: true });
-      const base = path.basename(victimDest);
-      const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-      const encoded = encodeTrashPath(victimDest);
-      let name = base;
-      for (let i = 2; ; i++) {
-        const infoPath = path.join(root, "info", `${name}.trashinfo`);
-        try {
-          await writeFile(infoPath, `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`, { flag: "wx" });
-        } catch (err) {
-          if (errCode(err) === "EEXIST" || existsSync(path.join(root, "files", name))) {
-            name = `${base}.${i}`;
-            continue;
-          }
-          return false;
-        }
-        const trashLoc = path.join(root, "files", name);
-        try {
-          await sudoMove(victimDest, trashLoc);
-        } catch {
-          try {
-            await rm(infoPath, { force: true });
-          } catch {}
-          return false;
-        }
-        try {
-          await writeFile(infoPath, `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`);
-        } catch {
-          try {
-            await sudoMove(trashLoc, victimDest);
-          } catch {}
-          try {
-            await rm(infoPath, { force: true });
-          } catch {}
-          return false;
-        }
-        units.push(async () => {
-          await safeRestoreMove(trashLoc, victimDest);
-          await rmTrashInfo(path.basename(trashLoc), ctx.log);
-        });
-        dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
-        dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
-        return true;
-      }
+      const trashLoc = await xdgTrashMoveToRoot(victimDest, trashDir(), sudoMove);
+      units.push(async () => {
+        await safeRestoreMove(trashLoc, victimDest);
+        await rmTrashInfo(path.basename(trashLoc), ctx.log);
+      });
+      dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
+      dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
+      return true;
     } catch {
       return false;
     }
@@ -659,15 +630,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (ok || replaced) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
     // always surface the outcome — success, failure, or cancel
-    if (prog.toastUp) {
-      ctx.finishProgressToast(cancelled ? `✗ ${opNoun} cancelled` : failed ? `✗ ${opNoun} failed` : `✓ ${verb} ${ok}`);
-    }
-    if (cancelled) ctx.notify(msg, `${op} cancelled`, "info");
-    else if (failed > 0) ctx.notify(msg, `${op} failed`, "error");
-    else ctx.notify(msg, op, "success");
-    try {
-      ctx.onFileOp?.(op, [...srcs], destDir, { cancelled, failed });
-    } catch {}
+    finishOpSummary(op, opNoun, `${verb} ${ok}`, msg, [...srcs], destDir, cancelled, failed);
   };
 
   // rename with nautilus-style collision handling: rename() would otherwise
@@ -975,7 +938,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     }
     ctx.log(
       `moveInto dest=${destDir} in=${items.length} out=${srcs.length} dropped=[${items
-        .filter((it) => it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep)))
+        .filter((it) => it.isDir && isWithinOrEqual(destDir, it.path))
         .map((it) => it.path.split("/").pop())
         .join(",")}]`,
     );
@@ -1120,15 +1083,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (units.length && !cancelled) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
-    if (prog.toastUp) {
-      ctx.finishProgressToast(cancelled ? "✗ Extract cancelled" : failed ? "✗ Extract failed" : `✓ Extracted ${ok}`);
-    }
-    if (cancelled) ctx.notify(msg, "extract cancelled", "info");
-    else if (failed > 0) ctx.notify(msg, "extract failed", "error");
-    else ctx.notify(msg, "extract", "success");
-    try {
-      ctx.onFileOp?.("extract", [...files], destDir, { cancelled, failed });
-    } catch {}
+    finishOpSummary("extract", "Extract", `Extracted ${ok}`, msg, [...files], destDir, cancelled, failed);
   };
 
   const compressPaths = (paths: string[], format: CompressionFormat, destDir: string): Promise<void> =>
@@ -1228,15 +1183,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (!failed && !cancelled) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
-    if (prog.toastUp) {
-      ctx.finishProgressToast(cancelled ? "✗ Compress cancelled" : failed ? "✗ Compress failed" : `✓ ${base}${ext}`);
-    }
-    if (cancelled) ctx.notify(msg, "compress cancelled", "info");
-    else if (failed > 0) ctx.notify(msg, "compress failed", "error");
-    else ctx.notify(msg, "compress", "success");
-    try {
-      ctx.onFileOp?.("compress", srcs, out, { cancelled, failed });
-    } catch {}
+    finishOpSummary("compress", "Compress", `${base}${ext}`, msg, srcs, out, cancelled, failed);
   };
 
   return {

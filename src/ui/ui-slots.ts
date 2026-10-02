@@ -11,6 +11,7 @@ import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEven
 import { iconPng, thumbPng } from "./icons";
 import { swallow } from "../app/log";
 import type { IconMode, Theme } from "../config/config";
+import { intToHex } from "../config/color";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
@@ -251,7 +252,7 @@ export const dimHex = (hex: string, f: number): string => {
   const r = Math.round(((n >> 16) & 255) * f);
   const g = Math.round(((n >> 8) & 255) * f);
   const b = Math.round((n & 255) * f);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+  return intToHex((r << 16) | (g << 8) | b);
 };
 
 export const makeSlots = (ctx: SlotsCtx) => {

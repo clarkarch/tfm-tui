@@ -37,7 +37,8 @@ const SLIDE_MAX = 28;
 // stagger-slide): one native push per tile per frame. See play().
 export const MAX_PER_NODE_ANIM = 1000;
 
-const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+import { clamp01 } from "../lib/uiutil";
+
 const outQuad = (p: number): number => p * (2 - p);
 const smoothstep = (p: number): number => p * p * (3 - 2 * p);
 

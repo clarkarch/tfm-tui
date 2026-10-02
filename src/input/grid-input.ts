@@ -6,6 +6,7 @@
 
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
+import type { ListEntry } from "../ui/ui-menu";
 
 export type ClipItem = { path: string; isDir: boolean };
 
@@ -37,15 +38,6 @@ export type TileVisualMode = (typeof TileVisual)[keyof typeof TileVisual];
 
 // structural view of a tile ref — the full TileRefs in ./selection satisfies this
 export type GridTileRef = { selected: boolean; isDir: boolean };
-
-export type GridMenuEntry = {
-  icon?: string;
-  label: string;
-  hint?: string;
-  hintIcon?: string;
-  action: () => void;
-  sep?: boolean;
-};
 
 // shared drag state: one plain mutable object so the wiring closures and the
 // handlers here see the same fields without getter/setter plumbing
@@ -79,8 +71,8 @@ export type GridSelectionDeps = {
 };
 /** Context menu + inline rename (owned by the menu/rename widgets). */
 export type GridMenuDeps = {
-  openContextMenu(x: number, y: number, title: string, entries: GridMenuEntry[]): void;
-  fileEntriesFor(key: string, isDir: boolean, x: number, y: number): GridMenuEntry[];
+  openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
+  fileEntriesFor(key: string, isDir: boolean, x: number, y: number): ListEntry[];
   closeFileMenu(): void;
   renameEditKey(): string | null;
   finishInlineRename(commit: boolean): void;

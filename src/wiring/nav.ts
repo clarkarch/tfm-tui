@@ -189,7 +189,7 @@ export const wireNav = (deps: {
       tabModels[1].adoptTab();
     },
     activePane: () => core.panes.active,
-    setActivePane: (i) => core.setActivePane(i),
+    setActivePane: core.setActivePane,
     config: core.config,
     isVirtualCwd: core.isVirtualCwd,
   });
@@ -205,7 +205,7 @@ export const wireNav = (deps: {
       byId: core.lookup.byId,
       inputId: `tfm-p${pane}-search`,
       // arrow wrappers: termHasFocus/renderGrid belong to later wirings (TDZ)
-      termHasFocus: () => getTermHasFocus(),
+      termHasFocus: getTermHasFocus,
       renderGrid: () => getGrid().renderPane(pane),
       setPointer,
     });
@@ -228,20 +228,13 @@ export const wireNav = (deps: {
     goBack,
     goFwd,
     navigate,
-    get tabModel() {
-      return activeTabModel();
-    },
     tabModels,
-    activeTabModel,
     switchTab,
     newTab,
     closeTab,
     nextTab,
     prevTab,
     restoreSession,
-    get search() {
-      return activeSearch();
-    },
     searches,
     activeSearch,
     clearSearch,

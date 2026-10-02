@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
+import { errMessage } from "../lib/uiutil";
 import path from "node:path";
 import { spawnSafe } from "./spawn-safe";
 import { runSudo, sudoLaunchArgv, sudoOpenArgv } from "./elevate";
@@ -163,7 +164,7 @@ const runElevated = async (
     r = await exec(argv);
   } catch (err) {
     deps.log(`${tag} exec failed: ${err}`);
-    deps.notify(`${failedPrefix} · ${err instanceof Error ? err.message : err}`, "open", "error");
+    deps.notify(`${failedPrefix} · ${errMessage(err)}`, "open", "error");
     return;
   }
   if (r.status === 0) {

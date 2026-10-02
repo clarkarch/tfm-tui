@@ -1,7 +1,7 @@
 import { createReadStream, createWriteStream, type ReadStream, type Stats } from "node:fs";
-import { lstat, mkdir, readlink, readdir, rename, rm, rmdir, symlink, open, chmod, utimes } from "node:fs/promises";
+import { lstat, mkdir, readlink, readdir, rename, rm, rmdir, symlink, chmod, utimes } from "node:fs/promises";
 import path from "node:path";
-import { errCode } from "./fsutil";
+import { errCode, fsyncPath, tmpName } from "./fsutil";
 import { swallow } from "../app/log";
 
 // --- Copy engine: tree walking, pre-scan and streamed file copy with
@@ -70,22 +70,10 @@ export const scanTree = async (
   return { files, bytes };
 };
 
-const tmpSibling = (dest: string): string =>
-  `${dest}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-
-const fsyncParentDir = async (p: string): Promise<void> => {
-  try {
-    const h = await open(path.dirname(p), "r");
-    try {
-      await h.sync();
-    } finally {
-      await h.close().catch(() => {});
-    }
-  } catch {
-    // best-effort: tmpfs / permissions may not allow dir fsync — the file
-    // fsync + atomic rename already closed the half-copy window
-  }
-};
+const fsyncParentDir = (p: string): Promise<void> =>
+  // best-effort: tmpfs / permissions may not allow dir fsync — the file
+  // fsync + atomic rename already closed the half-copy window
+  fsyncPath(path.dirname(p)).catch(() => {});
 
 export const copyFileProgress = (src: string, dest: string, sink: TransferSink): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -93,7 +81,7 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
     // meta only when src is a regular file — symlinks never reach here)
     lstat(src).then(
       (srcStat) => {
-        const tmp = tmpSibling(dest);
+        const tmp = tmpName(dest);
         mkdir(path.dirname(dest), { recursive: true }).then(
           () => {
             const rs = createReadStream(src);
@@ -140,12 +128,7 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
               // then atomic rename into place
               (async () => {
                 try {
-                  const h = await open(tmp, "r+");
-                  try {
-                    await h.sync();
-                  } finally {
-                    await h.close().catch(() => {});
-                  }
+                  await fsyncPath(tmp, "r+");
                   try {
                     await chmod(tmp, srcStat.mode & 0o7777);
                   } catch {}

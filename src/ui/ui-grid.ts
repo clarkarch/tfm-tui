@@ -13,7 +13,7 @@ import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
 import type { Renderable } from "@opentui/core";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { fmtBytes } from "../fs/propsinfo";
-import { destroyChildren, destroyNode } from "../lib/uiutil";
+import { destroyChildren, destroyNode, errMessage } from "../lib/uiutil";
 import type { Scheduler } from "../lib/uiutil";
 import { TileVisual } from "../input/grid-input";
 import type { FileAnimMode } from "./ui-grid-anim";
@@ -24,9 +24,7 @@ import { visibleBottomRow, visibleTileCap, windowRange } from "./ui-grid-window"
 
 // Re-exported façade: the split moved these out, but they are part of this
 // module's public surface (wiring + the grid test import them from here).
-export type { GridState } from "./ui-grid-types";
-export { thumbStatsChanged } from "./ui-grid-rows";
-export { hookScrollerScroll, visibleBottomRow, visibleTileCap } from "./ui-grid-window";
+export { hookScrollerScroll } from "./ui-grid-window";
 
 // minimum gap between two entry-animation waves in the SAME listing context;
 // a faster rebuild still repaints, it just doesn't restart the wave (see
@@ -789,7 +787,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       }
     } catch (err) {
       if (!painted) dropPaintClaim();
-      ctx.log?.(`grid: rebuild failed${painted ? " after paint" : ""}: ${err instanceof Error ? err.message : err}`);
+      ctx.log?.(`grid: rebuild failed${painted ? " after paint" : ""}: ${errMessage(err)}`);
     }
   };
 

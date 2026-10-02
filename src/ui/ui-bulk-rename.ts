@@ -4,9 +4,10 @@
 // cancels, validation errors render in the footer and keep the modal open.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, type MouseEvent, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, type MouseEvent, Text } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface } from "./style";
+import { makeModalScrim } from "./ui-dialogs";
 import { bulkRenameNames, planBulkRename, type BulkRenamePair, type BulkRenameStyle } from "../fs/bulk-rename";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
@@ -212,74 +213,53 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     style = "plain";
     const c = ctx.colors();
     const inputW = PANEL_W - 2 - 2 - LABEL_W - 1;
-    const scrim = Box(
+    const scrim = makeModalScrim(
+      { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {
         id: "tfm-bulkrename",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: "100%",
-        height: "100%",
-        alignItems: "center",
-        justifyContent: "center",
         zIndex: FLOAT_Z.bulkrename,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-        onMouseDown: () => close(),
+        panelWidth: PANEL_W,
+        onClose: () => close(),
       },
       Box(
-        {
-          id: "tfm-bulkrename-panel",
-          width: PANEL_W,
-          ...floatSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
-          paddingTop: 1,
-          paddingBottom: 1,
-          flexDirection: "column",
-          onMouseDown: (ev: MouseEvent) => {
-            try {
-              ev.stopPropagation?.();
-            } catch {}
-          },
-        },
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-          Text({ id: "tfm-bulkrename-title", content: `Rename ${items.length} items`, fg: c.accent }),
-          Box({ flexGrow: 1 }),
-          ctx.escHintBtn("tfm-bulkrename-esc", () => close()),
-        ),
-        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
-          Text({ id: "tfm-bulkrename-label-name", content: "New name", width: LABEL_W, fg: c.sidebarFgMuted }),
-          Input({
-            id: "tfm-bulkrename-input",
-            width: inputW,
-            placeholder: "New name…",
-            backgroundColor: c.accentBg,
-            focusedBackgroundColor: c.accentBg,
-            textColor: c.white,
-          }),
-        ),
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
-          Text({ id: "tfm-bulkrename-label-number", content: "Number", width: LABEL_W, fg: c.sidebarFgMuted }),
-          ...STYLES.map((s) => chip(s)),
-        ),
-        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-        Box(
-          { width: "100%", height: 1, paddingLeft: 2 },
-          Text({ id: "tfm-bulkrename-label-preview", content: "Preview", fg: c.sidebarFgMuted }),
-        ),
-        Box({ id: "tfm-bulkrename-preview", width: "100%", flexDirection: "column" }),
-        Box(
-          { width: "100%", height: 1, paddingLeft: 2, paddingRight: 2 },
-          Text({ id: "tfm-bulkrename-error", content: EMPTY_ERROR, fg: c.ansi1 }),
-        ),
-        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", columnGap: 2, paddingLeft: 2, paddingRight: 2 },
-          btn("tfm-bulkrename-cancel", "[ Cancel ]", c.white, () => close()),
-          btn("tfm-bulkrename-ok", "[ Rename ]", c.accent, () => apply()),
-        ),
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+        Text({ id: "tfm-bulkrename-title", content: `Rename ${items.length} items`, fg: c.accent }),
+        Box({ flexGrow: 1 }),
+        ctx.escHintBtn("tfm-bulkrename-esc", () => close()),
+      ),
+      Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
+        Text({ id: "tfm-bulkrename-label-name", content: "New name", width: LABEL_W, fg: c.sidebarFgMuted }),
+        Input({
+          id: "tfm-bulkrename-input",
+          width: inputW,
+          placeholder: "New name…",
+          backgroundColor: c.accentBg,
+          focusedBackgroundColor: c.accentBg,
+          textColor: c.white,
+        }),
+      ),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
+        Text({ id: "tfm-bulkrename-label-number", content: "Number", width: LABEL_W, fg: c.sidebarFgMuted }),
+        ...STYLES.map((s) => chip(s)),
+      ),
+      Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 2 },
+        Text({ id: "tfm-bulkrename-label-preview", content: "Preview", fg: c.sidebarFgMuted }),
+      ),
+      Box({ id: "tfm-bulkrename-preview", width: "100%", flexDirection: "column" }),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 2, paddingRight: 2 },
+        Text({ id: "tfm-bulkrename-error", content: EMPTY_ERROR, fg: c.ansi1 }),
+      ),
+      Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", columnGap: 2, paddingLeft: 2, paddingRight: 2 },
+        btn("tfm-bulkrename-cancel", "[ Cancel ]", c.white, () => close()),
+        btn("tfm-bulkrename-ok", "[ Rename ]", c.accent, () => apply()),
       ),
     );
     ctx.rootAdd(scrim);

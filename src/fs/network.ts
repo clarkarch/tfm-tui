@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isWithinOrEqual } from "./fsutil";
 
 // --- Network locations: pure primitives for the gvfs bridge. tfm does not
 // implement a remote VFS — `gio mount` mounts the share through GVFS and the
@@ -28,11 +29,7 @@ export const gvfsRoot = (): string => {
   return `/run/user/${uid}/gvfs`;
 };
 
-export const isNetworkPath = (p: string): boolean => {
-  const root = path.resolve(gvfsRoot());
-  const rp = path.resolve(p);
-  return rp === root || rp.startsWith(root + path.sep);
-};
+export const isNetworkPath = (p: string): boolean => isWithinOrEqual(p, gvfsRoot());
 
 const prettify = (uri: string): string => {
   const withoutScheme = uri.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/\/+$/, "");

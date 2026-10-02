@@ -5,6 +5,7 @@
 // presentations: theme presets, tab-bar adaptive/on, show-hidden state sync.
 // No renderer imports — ctx carries the sinks. ---
 import { spawnSafe } from "../fs/spawn-safe";
+import { errMessage } from "../lib/uiutil";
 import { THEME_PRESETS } from "../config/themes";
 import type { LoadedPlugin } from "../plugins/plugin-api";
 import {
@@ -397,9 +398,21 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       return p.store.get("enabled", true);
     } catch (err) {
       try {
-        ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
+        ctx.warn(`plugin ${p.name} store failed: ${errMessage(err)}`, "plugins");
       } catch {}
       return true;
+    }
+  };
+
+  // guarded-warn: run + warn through ctx.warn; the warn itself is try/catch'd
+  // (a failing sink must never break the row). Shared by the 5 plugin rows.
+  const guardedRun = (msg: string, run: () => void): void => {
+    try {
+      run();
+    } catch (err) {
+      try {
+        ctx.warn(`${msg}: ${errMessage(err)}`, "plugins");
+      } catch {}
     }
   };
   // owner lookup across plugin commands (core coverage lives in
@@ -428,13 +441,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         blurb: "Install a plugin from a link",
         keepOpen: true,
         run: () => {
-          try {
-            ctx.pluginInstall?.addFromUrl();
-          } catch (err) {
-            try {
-              ctx.warn(`add plugin failed: ${err instanceof Error ? err.message : err}`, "plugins");
-            } catch {}
-          }
+          guardedRun("add plugin failed", () => ctx.pluginInstall?.addFromUrl());
         },
       },
       {
@@ -445,13 +452,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         // changed cwd — close first (rowActivate closes, then runs), landing
         // in the folder
         run: () => {
-          try {
-            ctx.pluginInstall?.openFolder();
-          } catch (err) {
-            try {
-              ctx.warn(`open plugins folder failed: ${err instanceof Error ? err.message : err}`, "plugins");
-            } catch {}
-          }
+          guardedRun("open plugins folder failed", () => ctx.pluginInstall?.openFolder());
         },
       },
     ],
@@ -466,13 +467,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       blurb: "Pull the newest version",
       keepOpen: true,
       run: () => {
-        try {
-          ctx.pluginInstall?.update(p.name);
-        } catch (err) {
-          try {
-            ctx.warn(`update ${p.name} failed: ${err instanceof Error ? err.message : err}`, "plugins");
-          } catch {}
-        }
+        guardedRun(`update ${p.name} failed`, () => ctx.pluginInstall?.update(p.name));
       },
     },
     {
@@ -481,13 +476,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       blurb: "Delete this plugin",
       keepOpen: true,
       run: () => {
-        try {
-          ctx.pluginInstall?.remove(p.name);
-        } catch (err) {
-          try {
-            ctx.warn(`remove ${p.name} failed: ${err instanceof Error ? err.message : err}`, "plugins");
-          } catch {}
-        }
+        guardedRun(`remove ${p.name} failed`, () => ctx.pluginInstall?.remove(p.name));
       },
     },
   ];
@@ -501,14 +490,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         repaint: true,
         get: () => safeEnabled(p),
         set: (v) => {
-          try {
+          guardedRun(`plugin ${p.name} store failed`, () => {
             p.store.set("enabled", v);
             ctx.onPluginEnabledChanged?.(p.name, v);
-          } catch (err) {
-            try {
-              ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
-            } catch {}
-          }
+          });
         },
       };
       let rows: SettingRow[];
@@ -557,13 +542,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
                     return;
                   }
                 }
-                try {
-                  setPluginCommandBinds(p, c.id, v);
-                } catch (err) {
-                  try {
-                    ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
-                  } catch {}
-                }
+                guardedRun(`plugin ${p.name} store failed`, () => setPluginCommandBinds(p, c.id, v));
               },
             }),
           );

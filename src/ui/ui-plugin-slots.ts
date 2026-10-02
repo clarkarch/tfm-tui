@@ -10,6 +10,7 @@
 // files importing "@opentui/core" would otherwise get a second instance and
 // their nodes wouldn't integrate. ---
 
+import { errMessage } from "../lib/uiutil";
 import {
   type CliRenderer,
   createCoreSlotRegistry,
@@ -60,7 +61,7 @@ export const makePluginSlots = (opts: {
   } catch (err) {
     // a renderer without a live slot-registry store (tests / headless wiring)
     // degrades to a no-op host — logged so a real failure isn't silent
-    opts.log?.(`plugin slots disabled: ${err instanceof Error ? err.message : err}`);
+    opts.log?.(`plugin slots disabled: ${errMessage(err)}`);
     registry = null;
   }
   if (!registry) {
@@ -136,7 +137,7 @@ export const makePluginSlots = (opts: {
       parent.add(slot);
       mounted.push(slot);
     } catch (err) {
-      opts.log?.(`plugin slot ${name} mount failed: ${err instanceof Error ? err.message : err}`);
+      opts.log?.(`plugin slot ${name} mount failed: ${errMessage(err)}`);
     }
   };
 

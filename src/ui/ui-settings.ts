@@ -10,8 +10,10 @@
 // MOUSE-FIRST: every control is clickable, rows hover-select, click-away
 // cancels capture.
 
-import { Box, type CliRenderer, type MouseEvent, RGBA, Text } from "@opentui/core";
-import { floatSurface, type UiStyle } from "./style";
+import { Box, type CliRenderer, type MouseEvent, Text } from "@opentui/core";
+import { advanceCursor, errMessage, invokeIsolated } from "../lib/uiutil";
+import type { UiStyle } from "../config/config-schema";
+import { makeModalScrim } from "./ui-dialogs";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
 import type { Theme } from "../config/config";
@@ -54,7 +56,7 @@ type EscMenuCtx = {
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)
   cancelBand(): void;
   colors(): Theme;
-  uiStyle(): string;
+  uiStyle(): UiStyle;
   // root-view width — same value the context menu uses (MENU_W in ./ui-menu)
   menuW(): number;
   settingGroups(): SettingGroup[];
@@ -346,7 +348,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         applyAdjust(row, 1);
         afterAdjust(rowIdx, row);
       } catch (err) {
-        ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+        ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`);
       }
       return;
     }
@@ -357,27 +359,27 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (row.kind === "action") {
       // runtime isolation: a throwing plugin row must never break the
       // menu's close path — the menu still closes, the error is logged.
+      // invokeIsolated also catches async run() rejections a bare
+      // try/catch misses.
       if (row.keepOpen) {
-        try {
-          row.run();
-        } catch (err) {
-          ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
-        }
+        invokeIsolated(
+          () => row.run(),
+          (err) => ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`),
+        );
         renderMenuContent();
       } else {
         closeMenu();
-        try {
-          row.run();
-        } catch (err) {
-          ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
-        }
+        invokeIsolated(
+          () => row.run(),
+          (err) => ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`),
+        );
       }
       return;
     }
     try {
       applyAdjust(row, 1);
     } catch (err) {
-      ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+      ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`);
       return;
     }
     afterAdjust(rowIdx, row);
@@ -575,7 +577,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         visRows: visibleRows,
         setOnId,
         makeIconSlot: ctx.makeIconSlot,
-        setIconState: (spec, stateIdx) => ctx.setIconState(spec, stateIdx),
+        setIconState: ctx.setIconState,
         paintCatAt,
         switchCategory,
         cancelCapture,
@@ -644,37 +646,24 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     nativeMemTrace("esc-menu open");
     ctx.cancelBand();
     ctx.setScrim(true);
-    const scrim = Box(
+    const scrim = makeModalScrim(
+      { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {
         id: "tfm-menu",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: "100%",
-        height: "100%",
-        alignItems: "center",
-        justifyContent: "center",
         zIndex: FLOAT_Z.escmenu,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-        // mouse-first: first outside click cancels an in-flight capture,
-        // the next one dismisses the menu
-        onMouseDown: () => {
+        panelWidth: ctx.menuW(),
+        // mouse-first: first outside click cancels an in-flight capture, the
+        // next one dismisses the menu
+        onClose: () => {
           if (!cancelCapture()) closeMenu();
         },
-      },
-      Box({
-        id: "tfm-menu-panel",
-        width: ctx.menuW(),
-        ...floatSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
-        paddingTop: 1,
-        paddingBottom: 1,
-        onMouseDown: (ev: MouseEvent) => {
-          try {
-            ev.stopPropagation?.();
-          } catch {}
+        // empty-panel click (not a row, not the scrim): cancel an in-flight
+        // capture — the scrim handler never sees inside clicks (the panel
+        // stops propagation), so this is the only path for it
+        panelMouseDown: () => {
           if (st.capturing !== null) cancelCapture();
         },
-      }),
+      },
     );
     ctx.renderer().root.add(scrim);
     // rescan the plugins dir on every open (the scan itself never rejects —
@@ -693,8 +682,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const moveMenu = (delta: number) => {
     if (!inPanelView()) {
       const count = rootMenuItems().length;
-      if (!count) return;
-      st.menuIdx = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
+      if (count === 0) return;
+      st.menuIdx = advanceCursor(st.menuIdx, delta, count);
       renderMenuContent();
       return;
     }

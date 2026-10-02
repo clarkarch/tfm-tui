@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { Text } from "@opentui/core";
-import { truncateToastText, wrapToastText } from "../ui/notify";
+import { stickyClose, truncateToastText, wrapToastText } from "../ui/notify";
 import { THEME_PRESETS } from "../config/themes";
 import { themePresetIdx } from "../ui/settings";
 import { makeSettingModel } from "../ui/settings-model";
@@ -18,7 +18,7 @@ import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { clearIconCaches } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
-import { destroyChildren } from "../lib/uiutil";
+import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import { pointPaneAt } from "../app/panes";
 import {
@@ -73,15 +73,7 @@ export const wireSettings = (deps: {
         ],
         { width: 40, height: 1 + lines.length },
       );
-      if (!handle) return () => {};
-      let closed = false;
-      return () => {
-        if (closed) return;
-        closed = true;
-        try {
-          handle.close();
-        } catch {}
-      };
+      return stickyClose(handle);
     } catch {
       return () => {};
     }
@@ -97,7 +89,7 @@ export const wireSettings = (deps: {
         } catch {}
       })
       .catch((err) => {
-        dlog(`plugin rescan failed: ${err instanceof Error ? err.message : err}`);
+        dlog(`plugin rescan failed: ${errMessage(err)}`);
       });
   };
 
@@ -130,7 +122,7 @@ export const wireSettings = (deps: {
         try {
           name = derivePluginName(parseGitUrl(raw));
         } catch (err) {
-          chrome.notify(err instanceof Error ? err.message : String(err), "add plugin");
+          chrome.notify(errMessage(err), "add plugin");
           return;
         }
         // early collision hint on the derived name (the install may still
@@ -163,9 +155,9 @@ export const wireSettings = (deps: {
               "add plugin",
             );
           } else {
-            chrome.notify(err instanceof Error ? err.message : String(err), "add plugin");
+            chrome.notify(errMessage(err), "add plugin");
           }
-          dlog(`plugin install failed: ${err instanceof Error ? err.message : err}`);
+          dlog(`plugin install failed: ${errMessage(err)}`);
           return;
         } finally {
           doneCloning();
@@ -185,7 +177,7 @@ export const wireSettings = (deps: {
         dlog(`plugin updated: ${name}: ${out}`);
         chrome.notify(`${name}: ${out}`, "plugins");
       } catch (err) {
-        chrome.notify(err instanceof Error ? err.message : String(err), "plugins");
+        chrome.notify(errMessage(err), "plugins");
         return;
       } finally {
         doneUpdating();
@@ -205,7 +197,7 @@ export const wireSettings = (deps: {
       try {
         removePluginDir(pluginsDir(), name);
       } catch (err) {
-        chrome.notify(err instanceof Error ? err.message : String(err), "plugins");
+        chrome.notify(errMessage(err), "plugins");
         return;
       }
       dlog(`plugin removed: ${name}`);
@@ -223,7 +215,7 @@ export const wireSettings = (deps: {
       mkdirSync(pluginsDir(), { recursive: true });
       nav.navigate(pluginsDir());
     } catch (err) {
-      chrome.notify(err instanceof Error ? err.message : String(err), "plugins");
+      chrome.notify(errMessage(err), "plugins");
     }
   };
 
@@ -288,7 +280,7 @@ export const wireSettings = (deps: {
     escHintBtn: core.slots.escHintBtn,
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     setScrim: core.slots.setScrim,
     cancelBand: () => cancelBand(grid.bandCtx),
     colors: core.themeGet,
@@ -363,7 +355,7 @@ export const wireRetheme = (deps: {
     sideInnerW: core.sideInnerW,
     renderAll: nav.renderAll,
     clearIconCaches,
-    resetIconQueue: () => core.slots.resetIconQueue(),
+    resetIconQueue: core.slots.resetIconQueue,
     syncTerminalTheme: fileops.terminal.syncTerminalTheme,
     syncTerminalHeight: () => fileops.terminal.syncTerminalHeight(),
     repaintButtons: () => {

@@ -1,5 +1,6 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { existsSync } from "node:fs";
+import { errMessage } from "../lib/uiutil";
 import path from "node:path";
 import { spawnSafe } from "./spawn-safe";
 
@@ -278,7 +279,7 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
         finish(-1);
       });
     } catch (err) {
-      stderr = appendCapped(stderr, err instanceof Error ? err.message : String(err));
+      stderr = appendCapped(stderr, errMessage(err));
       finish(-1);
       return;
     }

@@ -5,6 +5,8 @@
 // wins). Pure module (no renderer/fs imports) so app/fs modules can consult it
 // without an import cycle. Shared singleton mirrors sharedPluginEvents. ---
 
+import type { NotifyLevel } from "./notify-level";
+
 export type FileOpHookPayload = {
   // vocabulary: copy | move | rename | duplicate | trash | delete-forever | empty
   op: string;
@@ -54,4 +56,19 @@ let shared: PluginHooks | null = null;
 export const sharedPluginHooks = (): PluginHooks => {
   if (!shared) shared = makePluginHooks();
   return shared;
+};
+
+// Shared veto check for the two callers (fileops + trashops): consults the
+// bus, notifies on veto — "first skip wins" lives in beforeFileOp above.
+export const checkPluginVeto = (
+  hooks: Pick<PluginHooks, "beforeFileOp">,
+  notify: (msg: string, title?: string, level?: NotifyLevel) => void,
+  op: string,
+  paths: string[],
+  dest?: string,
+): boolean => {
+  const veto = hooks.beforeFileOp({ op, paths, ...(dest ? { dest } : {}) });
+  if (!veto) return false;
+  notify(`Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`, "blocked", "info");
+  return true;
 };

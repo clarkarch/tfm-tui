@@ -1746,16 +1746,16 @@ export function serializeConfig(cfg: Config): string {
   );
 }
 
-export const EXAMPLE_HEADER =
-  "# tfm configuration\n" +
-  "# Location: ~/.config/tfm/config.toml (or $XDG_CONFIG_HOME/tfm/config.toml)\n" +
-  "# Override path with $TFM_CONFIG. Missing file = all defaults.\n" +
-  "# Invalid values are ignored per-key (falls back to default), never fatal.\n" +
-  "# [keys]: every action can carry several binds. Bare letters/numbers are\n" +
-  "# loadable here and in presets (bound bare keys navigate before the\n" +
-  "# type-to-search catch-all); [ui] type-to-search=off stops unbound ones\n" +
-  "# from filtering. The settings capture UI still reserves them.\n";
-
 export function exampleToml(): string {
-  return EXAMPLE_HEADER + serializeBody(defaultConfig);
+  return (
+    "# tfm configuration\n" +
+    "# Location: ~/.config/tfm/config.toml (or $XDG_CONFIG_HOME/tfm/config.toml)\n" +
+    "# Override path with $TFM_CONFIG. Missing file = all defaults.\n" +
+    "# Invalid values are ignored per-key (falls back to default), never fatal.\n" +
+    "# [keys]: every action can carry several binds. Bare letters/numbers are\n" +
+    "# loadable here and in presets (bound bare keys navigate before the\n" +
+    "# type-to-search catch-all); [ui] type-to-search=off stops unbound ones\n" +
+    "# from filtering. The settings capture UI still reserves them.\n" +
+    serializeBody(defaultConfig)
+  );
 }

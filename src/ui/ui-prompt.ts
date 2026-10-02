@@ -8,9 +8,9 @@
 // pick via the floats modal policy (depth stays 1).
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, type MouseEvent, RGBA, Text } from "@opentui/core";
-import { floatSurface } from "./style";
+import { Box, type CliRenderer, Input, type MouseEvent, Text } from "@opentui/core";
 import type { Theme } from "../config/config";
+import { makeModalScrim } from "./ui-dialogs";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
@@ -144,76 +144,55 @@ export const makePrompt = (ctx: PromptCtx) => {
           },
           Text({ content: label, fg }),
         );
-      const scrim = Box(
+      const scrim = makeModalScrim(
+        { uiStyle: ctx.uiStyle, colors: ctx.colors },
         {
           id: "tfm-prompt",
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: "100%",
-          height: "100%",
-          alignItems: "center",
-          justifyContent: "center",
           zIndex: 3750,
-          backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-          onMouseDown: () => cancel(),
+          panelWidth: PANEL_W,
+          onClose: () => cancel(),
         },
         Box(
+          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+          Text({ content: opts.title.slice(0, PANEL_W - 8), fg: c.accent }),
+          Box({ flexGrow: 1 }),
+          ctx.escHintBtn("tfm-prompt-esc", () => cancel()),
+        ),
+        Box(
+          // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
+          // and the input paints underneath the next sibling (invisible
+          // whenever that row paints anything) — auto height fits both
+          { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
+          opts.password
+            ? Text({ id: "tfm-prompt-mask", content: "Password", fg: c.sidebarFgMuted })
+            : Input({
+                id: "tfm-prompt-input",
+                width: PANEL_W - 6,
+                placeholder: opts.placeholder ?? "",
+                backgroundColor: c.accentBg,
+                focusedBackgroundColor: c.accentBg,
+                textColor: c.white,
+                ...(opts.initial ? { value: opts.initial } : {}),
+              }),
+        ),
+        // breathing room above the buttons: fixed height + padding OVERFLOWS
+        // a 1-row box in @opentui/core 0.5.9 (the input painted underneath
+        // the next sibling and vanished whenever that row painted), so the
+        // input wrapper above uses auto height — and a childless spacer box
+        // collapses to zero rows while a plain " " measures empty, so a
+        // non-breaking space forces this row to lay out while painting blank
+        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+        Box(
           {
-            id: "tfm-prompt-panel",
-            width: PANEL_W,
-            ...floatSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
-            paddingTop: 1,
-            paddingBottom: 1,
-            flexDirection: "column",
-            onMouseDown: (ev: MouseEvent) => {
-              try {
-                ev.stopPropagation?.();
-              } catch {}
-            },
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            columnGap: 2,
+            paddingLeft: 2,
+            paddingRight: 2,
           },
-          Box(
-            { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-            Text({ content: opts.title.slice(0, PANEL_W - 8), fg: c.accent }),
-            Box({ flexGrow: 1 }),
-            ctx.escHintBtn("tfm-prompt-esc", () => cancel()),
-          ),
-          Box(
-            // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
-            // and the input paints underneath the next sibling (invisible
-            // whenever that row paints anything) — auto height fits both
-            { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
-            opts.password
-              ? Text({ id: "tfm-prompt-mask", content: "Password", fg: c.sidebarFgMuted })
-              : Input({
-                  id: "tfm-prompt-input",
-                  width: PANEL_W - 6,
-                  placeholder: opts.placeholder ?? "",
-                  backgroundColor: c.accentBg,
-                  focusedBackgroundColor: c.accentBg,
-                  textColor: c.white,
-                  ...(opts.initial ? { value: opts.initial } : {}),
-                }),
-          ),
-          // breathing room above the buttons: fixed height + padding OVERFLOWS
-          // a 1-row box in @opentui/core 0.5.9 (the input painted underneath
-          // the next sibling and vanished whenever that row painted), so the
-          // input wrapper above uses auto height — and a childless spacer box
-          // collapses to zero rows while a plain " " measures empty, so a
-          // non-breaking space forces this row to lay out while painting blank
-          Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-          Box(
-            {
-              width: "100%",
-              height: 1,
-              flexDirection: "row",
-              columnGap: 2,
-              paddingLeft: 2,
-              paddingRight: 2,
-            },
-            btn("tfm-prompt-cancel", "[ Cancel ]", c.white, () => cancel()),
-            btn("tfm-prompt-ok", `[ ${okLabel} ]`, c.accent, () => submit()),
-          ),
+          btn("tfm-prompt-cancel", "[ Cancel ]", c.white, () => cancel()),
+          btn("tfm-prompt-ok", `[ ${okLabel} ]`, c.accent, () => submit()),
         ),
       );
       ctx.rootAdd(scrim);

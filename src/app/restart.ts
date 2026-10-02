@@ -1,5 +1,6 @@
 import { accessSync, constants } from "node:fs";
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import { runTeardownSteps, type QuitCtx } from "./quit";
 
@@ -89,7 +90,7 @@ export const makeRestart =
     try {
       (ctx.preflight ?? defaultPreflight)(ctx.execPath);
     } catch (err) {
-      fail(`restart failed: ${err instanceof Error ? err.message : String(err)}`);
+      fail(`restart failed: ${errMessage(err)}`);
       return;
     }
     // refuse while file ops are in flight: the parent loop freezes inside
@@ -117,7 +118,7 @@ export const makeRestart =
       try {
         ctx.recover?.();
       } catch {}
-      fail(`restart failed: ${err instanceof Error ? err.message : String(err)}`);
+      fail(`restart failed: ${errMessage(err)}`);
       return;
     }
     let failed = preFailed;

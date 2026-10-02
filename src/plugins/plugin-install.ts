@@ -9,6 +9,7 @@
 // leaf with the loader), .tmp staging dirs are dot-prefixed so the rescan
 // skips them. ---
 
+import { errMessage } from "../lib/uiutil";
 import {
   cpSync,
   existsSync,
@@ -170,7 +171,7 @@ const defaultExec: ExecFn = async (cmd, args, opts) => {
       clearTimeout(timer);
     }
   } catch (err) {
-    return { exit: 127, output: err instanceof Error ? err.message : String(err) };
+    return { exit: 127, output: errMessage(err) };
   }
 };
 

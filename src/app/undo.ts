@@ -175,6 +175,26 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     sink.notify(op === "undo" ? "Nothing to undo" : "Nothing to redo", op, "info");
   };
 
+  // shared batch envelope: serialize with transfers/trash/extract (an undo
+  // running concurrently with a queued op can interleave on the same paths,
+  // and a redo copy writes `.tfm-part-*` temps the concurrent transfer's
+  // orphan sweep deletes mid-copy — data loss), tally per-step failures.
+  const runBatch = async (steps: Iterable<UndoUnit>): Promise<{ failed: number; failWhy: Set<string> }> => {
+    let failed = 0;
+    const failWhy = new Set<string>();
+    await sharedOpQueue().enqueue(async () => {
+      for (const u of steps) {
+        try {
+          await u?.();
+        } catch (err) {
+          failed++;
+          failWhy.add(fsErrText(err));
+        }
+      }
+    });
+    return { failed, failWhy };
+  };
+
   const undoLast = (): void => {
     if (running) return; // in-flight fs closures must not interleave
     const entry = undoStack.pop();
@@ -186,23 +206,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     running = true;
     void (async () => {
       try {
-        let failed = 0;
-        const failWhy = new Set<string>();
-        // serialize with transfers/trash/extract: an undo running concurrently
-        // with a queued op can interleave on the same paths, and a redo copy
-        // writes `.tfm-part-*` temps the concurrent transfer's orphan sweep
-        // deletes mid-copy (data loss)
-        await sharedOpQueue().enqueue(async () => {
-          for (let i = entry.batch.units.length - 1; i >= 0; i--) {
-            const u = entry.batch.units[i];
-            try {
-              await u?.();
-            } catch (err) {
-              failed++;
-              failWhy.add(fsErrText(err));
-            }
-          }
-        });
+        const { failed, failWhy } = await runBatch([...entry.batch.units].reverse());
         // only batches that know how to re-apply themselves stay redoable
         if (entry.batch.redos.length) redoStack.push(entry);
         sink.renderAll();
@@ -232,18 +236,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     running = true;
     void (async () => {
       try {
-        let failed = 0;
-        const failWhy = new Set<string>();
-        await sharedOpQueue().enqueue(async () => {
-          for (const r of entry.batch.redos) {
-            try {
-              await r?.();
-            } catch (err) {
-              failed++;
-              failWhy.add(fsErrText(err));
-            }
-          }
-        });
+        const { failed, failWhy } = await runBatch(entry.batch.redos);
         undoStack.push(entry);
         sink.renderAll();
         const summary = failed

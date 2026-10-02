@@ -6,9 +6,10 @@
 // any future plugin gets fuzzy lists over arbitrary items for free.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, type MouseEvent, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, Text } from "@opentui/core";
 import { applySurface, floatSurface } from "./style";
-import { invokeIsolated } from "../lib/uiutil";
+import { makeModalScrim } from "./ui-dialogs";
+import { advanceCursor, invokeIsolated } from "../lib/uiutil";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
@@ -168,54 +169,33 @@ export const makePick = (ctx: PickCtx) => {
     query = "";
     idx = -1;
     const colors = ctx.colors();
-    const scrim = Box(
+    const scrim = makeModalScrim(
+      { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {
         id: "tfm-pick",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: "100%",
-        height: "100%",
-        alignItems: "center",
-        justifyContent: "center",
         zIndex: 3700,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-        onMouseDown: () => close(),
+        panelWidth: PANEL_W,
+        onClose: () => close(),
       },
       Box(
-        {
-          id: "tfm-pick-panel",
-          width: PANEL_W,
-          ...floatSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
-          paddingTop: 1,
-          paddingBottom: 1,
-          flexDirection: "column",
-          onMouseDown: (ev: MouseEvent) => {
-            try {
-              ev.stopPropagation?.();
-            } catch {}
-          },
-        },
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-          Text({ id: "tfm-pick-title", content: title, fg: colors.accent }),
-          Box({ flexGrow: 1 }),
-          ctx.escHintBtn("tfm-pick-close", () => close()),
-        ),
-        Box(
-          // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
-          { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
-          Input({
-            id: "tfm-pick-input",
-            width: PANEL_W - 6,
-            placeholder: opts.placeholder ?? "Type a command…",
-            backgroundColor: colors.accentBg,
-            focusedBackgroundColor: colors.accentBg,
-            textColor: colors.white,
-          }),
-        ),
-        Box({ id: "tfm-pick-list", width: "100%", flexDirection: "column", paddingTop: 1 }),
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+        Text({ id: "tfm-pick-title", content: title, fg: colors.accent }),
+        Box({ flexGrow: 1 }),
+        ctx.escHintBtn("tfm-pick-close", () => close()),
       ),
+      Box(
+        // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
+        { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
+        Input({
+          id: "tfm-pick-input",
+          width: PANEL_W - 6,
+          placeholder: opts.placeholder ?? "Type a command…",
+          backgroundColor: colors.accentBg,
+          focusedBackgroundColor: colors.accentBg,
+          textColor: colors.white,
+        }),
+      ),
+      Box({ id: "tfm-pick-list", width: "100%", flexDirection: "column", paddingTop: 1 }),
     );
     ctx.rootAdd(scrim);
     ctx.stripSelectable();
@@ -243,7 +223,7 @@ export const makePick = (ctx: PickCtx) => {
   const move = (delta: number): void => {
     if (!results.length) return;
     // idx -1 = no cursor yet: down fills the first row, up the last
-    idx = idx < 0 ? (delta >= 0 ? 0 : results.length - 1) : (idx + delta + results.length) % results.length;
+    idx = advanceCursor(idx, delta, results.length);
     renderList();
   };
 

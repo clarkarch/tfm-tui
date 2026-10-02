@@ -199,22 +199,13 @@ export const encodeTrashPath = (p: string): string => pathToUri(path.resolve(p))
 // (removable media — spec §2). Resolved per call for env-redirection tests.
 const trashRootsFor = (target: string): string[] => {
   const home = trashDir();
-  let targetDev: number | null = null;
-  let homeDev: number | null = null;
-  try {
-    targetDev = lstatSync(target).dev;
-  } catch {
-    try {
-      targetDev = lstatSync(path.dirname(path.resolve(target))).dev;
-    } catch {
-      targetDev = null;
-    }
-  }
-  try {
-    homeDev = lstatSync(path.dirname(home)).dev ?? lstatSync(os.homedir()).dev;
-  } catch {
-    homeDev = null;
-  }
+  // unreadable home-parent (the XDG data dir may not exist yet) = home trash
+  // only — the old homedir fallback was unreachable (inside one try, the
+  // first lstat's throw jumped straight to catch), so deviceOf must not make
+  // it live: that walks /tmp targets to /tmp/.Trash-$uid and lands the file
+  // OUTSIDE trashDir() (the trashops test pins the old behavior).
+  const targetDev = deviceOf(target) ?? deviceOf(path.dirname(path.resolve(target)));
+  const homeDev = deviceOf(path.dirname(home));
   if (targetDev === null || homeDev === null || targetDev === homeDev) return [home];
   // different filesystem — walk up to the mount point (dev changes there)
   let cur = path.resolve(target);
@@ -225,17 +216,13 @@ const trashRootsFor = (target: string): string[] => {
       top = cur;
       break;
     }
-    let curDev: number | null = null;
-    let parentDev: number | null = null;
-    try {
-      curDev = lstatSync(cur).dev;
-    } catch {
+    const curDev = deviceOf(cur);
+    if (curDev === null) {
       cur = parent;
       continue;
     }
-    try {
-      parentDev = lstatSync(parent).dev;
-    } catch {
+    const parentDev = deviceOf(parent);
+    if (parentDev === null) {
       top = cur;
       break;
     }
@@ -276,7 +263,13 @@ export const xdgTrashMove = async (p: string): Promise<string> => {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 };
 
-const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string> => {
+export const xdgTrashMoveToRoot = async (
+  absSrc: string,
+  root: string,
+  // injectable move (default fsMove): the sudo replace-stash runs the SAME
+  // claim/rename/finalize loop with sudo-mv — one loop, not a near-clone.
+  move: (src: string, dest: string) => Promise<void> = fsMove,
+): Promise<string> => {
   const filesDir = path.join(root, "files");
   const infoDir = path.join(root, "info");
   await mkdir(filesDir, { recursive: true });
@@ -300,7 +293,7 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
     // claimed — now move, then finalize the info (overwrite placeholder)
     const finalPath = path.join(filesDir, name);
     try {
-      await fsMove(absSrc, finalPath);
+      await move(absSrc, finalPath);
     } catch (moveErr) {
       try {
         await rm(infoPath, { force: true });
@@ -315,19 +308,14 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
       // best-effort durability: info + dir fsync so a crash doesn't lose the
       // restore mapping for a file that already moved
       try {
-        const h = await open(infoPath, "r");
-        try {
-          await h.sync();
-        } finally {
-          await h.close().catch(() => {});
-        }
+        await fsyncPath(infoPath);
       } catch (syncErr) {
         swallow("trash info fsync", syncErr);
       }
     } catch (err) {
       // put the file back — a source-less trash entry is worse than no entry
       try {
-        await fsMove(finalPath, absSrc);
+        await move(finalPath, absSrc);
       } catch (undoErr) {
         if (err instanceof Error) {
           const e: Error & { rollbackFailed?: unknown } = err;
@@ -375,5 +363,24 @@ export const atomicWriteFile = async (p: string, data: Uint8Array | string): Pro
   } catch (err) {
     await rm(tmp, { force: true }).catch(() => {});
     throw err;
+  }
+};
+
+// Crash-orphan temp name — the orphan sweep regex in fileops anchors to this
+// exact shape (`<base>.tfm-part-<pid>-<rand8>` sibling tmp); a substring
+// match there silently deleted real user files (notes.tfm-part-2.md), so the
+// shape contract lives in ONE place. (The `.tfm-extract-<pid>-<rand8>` staging
+// DIR is a separate dot-prefixed shape, anchored by its own regex.)
+export const tmpName = (base: string): string =>
+  `${base}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+
+// fsync a single path (best-effort close; callers own error policy — the
+// trash info fsync logs, the copy finish treats failure as fatal upstream).
+export const fsyncPath = async (p: string, mode: string = "r"): Promise<void> => {
+  const h = await open(p, mode);
+  try {
+    await h.sync();
+  } finally {
+    await h.close().catch(() => {});
   }
 };

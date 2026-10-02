@@ -6,7 +6,6 @@
 
 import { makeUndo } from "../app/undo";
 import { clearUndoJournal, readUndoJournal, saveUndoJournal } from "../fs/undo-journal";
-import { makeEnsureSudo } from "../fs/elevate";
 import { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import { makeProgress } from "../ui/ui-progress";
 import { makeFileOps } from "../fs/fileops";
@@ -82,7 +81,7 @@ export const wireFileops = (deps: {
     colors: themeGet,
     uiStyle,
     byId,
-    drainIconQueue: () => drainIconQueue(),
+    drainIconQueue,
     floats: core.floats,
     setPointer,
   });
@@ -104,9 +103,9 @@ export const wireFileops = (deps: {
   // --- File operations: runTransfer/performRename/paste/clipboard
   // orchestration lives in ./fileops; the copy engine is ./transfer (pure,
   // sink-injected), the progress toast is ./ui-progress. ---
-  // sudo gate: cached timestamp first, else the password overlay piped to
-  // `sudo -S -v` via stdin — shared by fileops + trash deletes.
-  const ensureSudo = makeEnsureSudo({ getPrompt: deps.getPrompt, notify: chrome.notify });
+  // sudo gate: chrome wires it first (same getPrompt dep + notify) — one
+  // shared gate, the factory is stateless.
+  const ensureSudo = chrome.ensureSudo;
   const fileops = makeFileOps({
     conflict,
     prog: progress.prog,
@@ -133,9 +132,9 @@ export const wireFileops = (deps: {
     colors: themeGet,
     sw: () => core.geometry.sw,
     termH: () => core.config.ui.terminalHeight,
-    escHintBtn: (id, onClose) => core.slots.escHintBtn(id, onClose),
+    escHintBtn: core.slots.escHintBtn,
     stripSelectable,
-    drainIconQueue: () => drainIconQueue(),
+    drainIconQueue,
     notify: chrome.notify,
     renderAll: nav.renderAll,
     cwd: () => core.state.cwd,

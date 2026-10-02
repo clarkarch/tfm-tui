@@ -4,6 +4,7 @@
 // side so dispatch is unit-testable without touching the disk. ---
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { errMessage } from "../lib/uiutil";
 import path from "node:path";
 import { installPlugin, removePluginDir, updatePlugin, type ExecFn } from "../plugins/plugin-install";
 import { pluginsDir } from "../plugins/plugins";
@@ -215,7 +216,7 @@ export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): 
             out(`updated ${name}: ${msg}`);
           } catch (e) {
             failed++;
-            err(`update ${name} failed: ${e instanceof Error ? e.message : e}`);
+            err(`update ${name} failed: ${errMessage(e)}`);
           }
         }
         return failed ? 1 : 0;
@@ -243,7 +244,7 @@ export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): 
       }
     }
   } catch (e) {
-    err(`tfm: ${e instanceof Error ? e.message : e}`);
+    err(`tfm: ${errMessage(e)}`);
     return 1;
   }
 };

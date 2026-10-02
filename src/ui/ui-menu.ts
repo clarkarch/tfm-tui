@@ -1,7 +1,7 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
-import { destroyChildren } from "../lib/uiutil";
+import { advanceCursor, destroyChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
@@ -278,11 +278,7 @@ export const makeMenu = (ctx: MenuCtx) => {
   const moveSub = (delta: number): void => {
     const items = subEntries();
     if (!state || state.subIdx === null || !items || !items.length) return;
-    const count = items.length;
-    // from "no cursor" (-1): down fills first, up fills last
-    let i = state.subIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (state.subIdx + delta + count) % count;
-    for (let n = 0; items[i]?.sep && n < count; n++) i = (i + delta + count) % count;
-    state.subIdx = i;
+    state.subIdx = advanceCursor(state.subIdx, delta, items.length, items);
     renderSubMenu();
   };
   const activateSub = (): void => {

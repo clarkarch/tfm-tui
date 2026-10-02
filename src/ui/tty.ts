@@ -48,25 +48,6 @@ export const rasterSigOf = (icons: string, ttyMode: boolean, forceGlyph: boolean
 // and `white` also paints on `hoverBg` (tab X, settings hover) and on
 // `sidebarBg` (props titles) — so the selection bar must carry every text
 // role at once.
-export const ANSI16: string[] = [
-  "#000000",
-  "#aa0000",
-  "#00aa00",
-  "#aa5500",
-  "#0000aa",
-  "#aa00aa",
-  "#00aaaa",
-  "#aaaaaa",
-  "#555555",
-  "#ff5555",
-  "#55ff55",
-  "#ffff55",
-  "#5555ff",
-  "#ff55ff",
-  "#55ffff",
-  "#ffffff",
-];
-
 // Full Theme key set (10 chrome + 6 syntax + 16 ansi), kept as plain records
 // so this leaf stays import-free. Selected-label text is `white` on
 // `accentBg` (see ui-menu/ui-settings-panel) and `accent` never paints on top
@@ -106,6 +87,11 @@ export const TTY_DARK_THEME: Record<string, string> = {
   ansi14: "#55ffff",
   ansi15: "#ffffff",
 };
+
+// VGA16 oracle derived from the dark palette's ansi slots: the tests assert
+// every role value of BOTH palettes is one of these 16 (a non-VGA16 role
+// shade fails it).
+export const ANSI16: string[] = Array.from({ length: 16 }, (_, i) => TTY_DARK_THEME[`ansi${i}`] ?? "");
 
 export const TTY_LIGHT_THEME: Record<string, string> = {
   bg: "#ffffff",

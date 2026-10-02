@@ -46,6 +46,8 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
     }
   };
 
+  // one write, dx/dy per node (the lift path passes the delta, the release
+  // passes 0/0 — includeLabel handled at the lift site)
   const writeLift = (refs: SidebarRowRef, dx: number, dy: number): void => {
     try {
       const slot = refs.iconSlotId ? ctx.byId(refs.iconSlotId) : null;
@@ -53,8 +55,6 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
         slot.translateX = dx;
         slot.translateY = dy;
       }
-    } catch {}
-    try {
       const label = refs.labelId ? ctx.byId(refs.labelId) : null;
       if (label) {
         label.translateX = dx;

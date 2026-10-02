@@ -1,4 +1,5 @@
 import { Box, type MouseEvent, RGBA, Text } from "@opentui/core";
+import type { VChild } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
@@ -30,6 +31,60 @@ type DialogsCtx = {
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
 };
+
+// The modal-scrim skeleton every floating panel opens with (pick/prompt/
+// bulk-rename/esc-menu): absolute scrim + floatSurface panel that stops click
+// propagation so an inside click never dismisses. Deps arrive directly (same
+// seam as the widgets' ctx) — no ctx-type plumbing. ids must stay byte-
+// identical (rethemeChrome repaints them by id).
+export const makeModalScrim = (
+  deps: {
+    uiStyle: () => UiStyle;
+    colors: () => Theme;
+  },
+  opts: {
+    id: string;
+    zIndex: number;
+    panelWidth: number;
+    onClose: () => void;
+    // extra panel mousedown (esc-menu's capture cancel) — runs after the
+    // stopPropagation, so the scrim handler never sees it
+    panelMouseDown?: (ev: MouseEvent) => void;
+  },
+  ...children: VChild[]
+): unknown =>
+  Box(
+    {
+      id: opts.id,
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: opts.zIndex,
+      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      onMouseDown: () => opts.onClose(),
+    },
+    Box(
+      {
+        id: `${opts.id}-panel`,
+        width: opts.panelWidth,
+        ...floatSurface(deps.uiStyle(), deps.colors(), deps.colors().sidebarBg),
+        paddingTop: 1,
+        paddingBottom: 1,
+        flexDirection: "column",
+        onMouseDown: (ev: MouseEvent) => {
+          try {
+            ev.stopPropagation?.();
+          } catch {}
+          opts.panelMouseDown?.(ev);
+        },
+      },
+      ...children,
+    ),
+  );
 
 export const makeDialogs = (ctx: DialogsCtx) => {
   const openDialog = (opts: {

@@ -96,6 +96,22 @@ export const makeProps = (ctx: PropsCtx) => {
     ctx.floats.close("props");
   };
 
+  // shared preamble: floats open + the (empty) dialog skeleton + panel
+  // lookup — single and multi selection open the same shell
+  const openPropsDialog = (): MaybeNode => {
+    ctx.floats.open("props", rawCloseProps);
+    propsOpen = true;
+    ctx.openDialog({
+      id: "tfm-props",
+      zIndex: FLOAT_Z.props,
+      width: PROPS_W,
+      paddingDiv: 4,
+      rows: () => [],
+      onClose: () => closeProps(),
+    });
+    return ctx.byId("tfm-props-panel");
+  };
+
   const openSingle = (targetPath: string): void => {
     const colors = ctx.colors();
     let st: Stats | null = null;
@@ -106,20 +122,9 @@ export const makeProps = (ctx: PropsCtx) => {
       ctx.notify("Can't show properties (source gone)", "properties", "error");
       return;
     }
-    ctx.floats.open("props", rawCloseProps);
-    propsOpen = true;
     const isDirTarget = st.isDirectory();
 
-    ctx.openDialog({
-      id: "tfm-props",
-      zIndex: FLOAT_Z.props,
-      width: PROPS_W,
-      paddingDiv: 4,
-      rows: () => [],
-      onClose: () => closeProps(),
-    });
-
-    const panel = ctx.byId("tfm-props-panel");
+    const panel = openPropsDialog();
     if (!panel) return;
 
     // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
@@ -370,19 +375,7 @@ export const makeProps = (ctx: PropsCtx) => {
 
   const openMulti = (items: { path: string; st: Stats }[]): void => {
     const colors = ctx.colors();
-    ctx.floats.open("props", rawCloseProps);
-    propsOpen = true;
-
-    ctx.openDialog({
-      id: "tfm-props",
-      zIndex: FLOAT_Z.props,
-      width: PROPS_W,
-      paddingDiv: 4,
-      rows: () => [],
-      onClose: () => closeProps(),
-    });
-
-    const panel = ctx.byId("tfm-props-panel");
+    const panel = openPropsDialog();
     if (!panel) return;
 
     panel.add(

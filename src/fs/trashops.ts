@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrashMove, safeRestoreMove } from "./fsutil";
-import { isPrivilegeError, sudoRmArgv, sudoExecError, runSudo } from "./elevate";
+import { defaultSudoExec, isPrivilegeError, runSudoTool, sudoRmArgv } from "./elevate";
 import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
-import { sharedPluginHooks } from "../lib/plugin-hooks";
+import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
 import { isNetworkPath } from "./network";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
@@ -80,26 +80,17 @@ export const trashOrigPath = async (name: string): Promise<string | null> => {
 
 export const makeTrashOps = (sink: TrashOpsSink) => {
   const queue = sharedOpQueue();
-  const sudoExec =
-    sink.sudoExec ?? (async (argv) => runSudo(argv).then((r) => ({ status: r.status, stderr: r.stderr })));
+  const sudoExec = sink.sudoExec ?? defaultSudoExec;
   // one password gate per op (memoized per call below via needSudo closures)
-  const sudoRm = async (p: string): Promise<void> => {
-    const r = await sudoExec(sudoRmArgv(p));
-    if (r.status !== 0) throw sudoExecError(r.stderr);
-  };
+  const sudoRm = (p: string): Promise<void> => runSudoTool(sudoExec, sudoRmArgv(p));
   const emit = (op: TrashOpName, paths: string[]): void => {
     try {
       sink.onEvent?.(op, [...paths]);
     } catch {}
   };
   // plugin veto channel: a beforeFileOp hook can block trash/restore/delete
-  const vetoedByPlugin = (op: TrashOpName, paths: string[]): boolean => {
-    const veto = sharedPluginHooks().beforeFileOp({ op, paths });
-    if (!veto) return false;
-    const msg = `Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`;
-    sink.notify(msg, "blocked", "info");
-    return true;
-  };
+  const vetoedByPlugin = (op: TrashOpName, paths: string[]): boolean =>
+    checkPluginVeto(sharedPluginHooks(), sink.notify, op, paths);
 
   const trashPaths = (paths: string[]): Promise<void> => {
     // network shares have no usable trash: xdgTrashMove would write a LOCAL
@@ -233,73 +224,87 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
     return run;
   };
 
+  // shared delete core (deleteForever + emptyTrash): pre-scan for honest
+  // toast totals, then the per-item loop — cancel checks (including the
+  // post-gate re-check: ✕ during the password prompt must abort, not exec),
+  // one password gate per batch, sudo rm -rf with the same trashinfo
+  // accounting. Irreversible by design — no undo batch either way.
+  const scanTotals = async (items: string[], dp: NonNullable<TrashOpsSink["deleteProgress"]>): Promise<void> => {
+    let files = 0;
+    let bytes = 0;
+    for (const p of items) {
+      try {
+        const r = await scanTree(p);
+        files += r.files;
+        bytes += r.bytes;
+      } catch {}
+    }
+    dp.start(files || Math.max(1, items.length), bytes);
+  };
+  const rmMany = async (
+    items: string[],
+    dp: TrashOpsSink["deleteProgress"],
+    sudoLabel: string,
+  ): Promise<{ ok: number; cancelled: boolean; failWhy: Set<string> }> => {
+    let ok = 0;
+    let cancelled = false;
+    const failWhy = new Set<string>();
+    let sudoOk: boolean | null = null;
+    try {
+      for (const p of items) {
+        if (dp?.cancelled()) {
+          cancelled = true;
+          break;
+        }
+        try {
+          if (dp) await rmTreeProgress(p, dp.sink);
+          else await rm(p, { recursive: true });
+          await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
+          ok++;
+        } catch (err) {
+          // cancel raced the last file: the checkpoint threw, not the fs
+          if (dp?.cancelled()) {
+            cancelled = true;
+            break;
+          }
+          // privilege failure → password gate once, then sudo rm -rf
+          // (irreversible op: no undo batch to keep privilege-consistent).
+          // Re-check cancel after the gate: ✕ during the password prompt
+          // must abort, not exec.
+          let failure: unknown = err;
+          if (isPrivilegeError(err)) {
+            if (sudoOk === null) sudoOk = sink.ensureSudo ? await sink.ensureSudo(sudoLabel) : false;
+            if (dp?.cancelled()) {
+              cancelled = true;
+              break;
+            }
+            if (sudoOk) {
+              try {
+                await sudoRm(p);
+                await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
+                ok++;
+                continue;
+              } catch (sudoErr) {
+                failure = sudoErr;
+              }
+            }
+          }
+          failWhy.add(fsErrText(failure));
+        }
+      }
+    } finally {
+      dp?.stop();
+    }
+    return { ok, cancelled, failWhy };
+  };
+
   const deleteForever = (paths: string[]): Promise<void> => {
     if (vetoedByPlugin("delete-forever", paths)) return Promise.resolve();
     const run = queue.enqueue(async () => {
       const dp = sink.deleteProgress;
       // pre-scan so the toast has honest totals; a vanished path scans as 0
-      if (dp) {
-        let files = 0;
-        let bytes = 0;
-        for (const p of paths) {
-          try {
-            const r = await scanTree(p);
-            files += r.files;
-            bytes += r.bytes;
-          } catch {}
-        }
-        dp.start(files || Math.max(1, paths.length), bytes);
-      }
-      let ok = 0;
-      let cancelled = false;
-      const failWhy = new Set<string>();
-      let sudoOk: boolean | null = null;
-      try {
-        for (const p of paths) {
-          if (dp?.cancelled()) {
-            cancelled = true;
-            break;
-          }
-          try {
-            if (dp) await rmTreeProgress(p, dp.sink);
-            else await rm(p, { recursive: true });
-            await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
-            ok++;
-          } catch (err) {
-            // cancel raced the last file: the checkpoint threw, not the fs
-            if (dp?.cancelled()) {
-              cancelled = true;
-              break;
-            }
-            // privilege failure → password gate once, then sudo rm -rf
-            // (irreversible op: no undo batch to keep privilege-consistent).
-            // Re-check cancel after the gate: ✕ during the password prompt
-            // must abort, not exec.
-            let failure: unknown = err;
-            if (isPrivilegeError(err)) {
-              if (sudoOk === null)
-                sudoOk = sink.ensureSudo ? await sink.ensureSudo(`delete ${paths.length} items`) : false;
-              if (dp?.cancelled()) {
-                cancelled = true;
-                break;
-              }
-              if (sudoOk) {
-                try {
-                  await sudoRm(p);
-                  await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
-                  ok++;
-                  continue;
-                } catch (sudoErr) {
-                  failure = sudoErr;
-                }
-              }
-            }
-            failWhy.add(fsErrText(failure));
-          }
-        }
-      } finally {
-        dp?.stop();
-      }
+      if (dp) await scanTotals(paths, dp);
+      const { ok, cancelled, failWhy } = await rmMany(paths, dp, `delete ${paths.length} items`);
       sink.renderAll();
       const failed = paths.length - ok;
       // irreversible by design — no undo batch; say so explicitly
@@ -333,62 +338,9 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         return;
       }
       const dp = sink.deleteProgress;
-      if (dp) {
-        let files = 0;
-        let bytes = 0;
-        for (const k of names) {
-          try {
-            const r = await scanTree(path.join(filesDir, k));
-            files += r.files;
-            bytes += r.bytes;
-          } catch {}
-        }
-        dp.start(files || Math.max(1, names.length), bytes);
-      }
-      let n = 0;
-      let cancelled = false;
-      const failWhy = new Set<string>();
-      let emptySudoOk: boolean | null = null;
-      try {
-        for (const k of names) {
-          if (dp?.cancelled()) {
-            cancelled = true;
-            break;
-          }
-          try {
-            if (dp) await rmTreeProgress(path.join(filesDir, k), dp.sink);
-            else await rm(path.join(filesDir, k), { recursive: true });
-            await rmTrashInfo(k, sink.log?.bind(sink));
-            n++;
-          } catch (err) {
-            if (dp?.cancelled()) {
-              cancelled = true;
-              break;
-            }
-            let failure: unknown = err;
-            if (isPrivilegeError(err)) {
-              if (emptySudoOk === null) emptySudoOk = sink.ensureSudo ? await sink.ensureSudo("empty trash") : false;
-              if (dp?.cancelled()) {
-                cancelled = true;
-                break;
-              }
-              if (emptySudoOk) {
-                try {
-                  await sudoRm(path.join(filesDir, k));
-                  await rmTrashInfo(k, sink.log?.bind(sink));
-                  n++;
-                  continue;
-                } catch (sudoErr) {
-                  failure = sudoErr;
-                }
-              }
-            }
-            failWhy.add(fsErrText(failure));
-          }
-        }
-      } finally {
-        dp?.stop();
-      }
+      const items = names.map((k) => path.join(filesDir, k));
+      if (dp) await scanTotals(items, dp);
+      const { ok: n, cancelled, failWhy } = await rmMany(items, dp, "empty trash");
       sink.renderAll();
       const failed = names.length - n;
       if (cancelled) {

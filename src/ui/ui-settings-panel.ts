@@ -8,6 +8,7 @@
 // AGENTS.md). ---
 
 import { Box, type MouseEvent, Text } from "@opentui/core";
+import { errMessage } from "../lib/uiutil";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
 import type { Theme } from "../config/config";
@@ -270,6 +271,25 @@ const renderRowPane = (
   const collapsedHidden = rows.length - flat.length;
   const pane2 = Box({ flexGrow: 1, flexDirection: "column" });
 
+  // shared header/value-row hover pair (identical paint block, one factory —
+  // the category rows' paint differs, it stays inline)
+  const rowHover = (index: number, rowSpec: SettingRow) => ({
+    onMouseMove: () => {
+      // position truth before change truth (see the category rows)
+      h.setPointer?.("pointer");
+      if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
+      const prev = st.pane === "rows" ? st.menuIdx : -1;
+      st.menuIdx = index;
+      st.pane = "rows";
+      if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
+      h.paintRowAt(index, true);
+      h.paintDesc(fitDescText(descText(rowSpec)));
+    },
+    onMouseOut: () => {
+      h.setPointer?.("default");
+    },
+  });
+
   // section header: a collapsible divider. It TAKES the cursor (keyboard users
   // collapse without a mouse) and carries the standard row ids so paintRowAt
   // highlights it like any row.
@@ -300,22 +320,7 @@ const renderRowPane = (
           h.toggleSection(key);
         },
         // move, not over (same synthetic-over trap as value rows below)
-        onMouseMove: () => {
-          // position truth before change truth (see the category rows)
-          h.setPointer?.("pointer");
-          if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
-          const prev = st.pane === "rows" ? st.menuIdx : -1;
-          st.menuIdx = index;
-          st.pane = "rows";
-          if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
-          h.paintRowAt(index, true);
-          h.paintDesc(fitDescText(descText(rowSpec)));
-        },
-        // leaving the header always drops back to default; the next row's
-        // move re-sets (same stale-until-move rule as the highlight paint)
-        onMouseOut: () => {
-          h.setPointer?.("default");
-        },
+        ...rowHover(index, rowSpec),
       },
       Text({
         id: `tfm-set-rowl-${index}`,
@@ -355,7 +360,7 @@ const renderRowPane = (
             h.paintDesc(fitDescText(descText(rowSpec)));
             h.afterAdjust(index, rowSpec);
           } catch (err) {
-            h.log?.(`settings chevron: row threw: ${err instanceof Error ? err.message : err}`);
+            h.log?.(`settings chevron: row threw: ${errMessage(err)}`);
           }
         },
         // move, not over (same synthetic-over trap as rows — a rebuild under
@@ -481,22 +486,7 @@ const renderRowPane = (
         // move, not over: a rebuild (arrow-key nav) makes OpenTUI re-fire
         // synthetic "over" for the row under a stationary mouse, snapping the
         // cursor back. Real motion dispatches "move".
-        onMouseMove: () => {
-          // position truth before change truth (see the category rows)
-          h.setPointer?.("pointer");
-          if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
-          const prev = st.pane === "rows" ? st.menuIdx : -1;
-          st.menuIdx = index;
-          st.pane = "rows";
-          if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
-          h.paintRowAt(index, true);
-          h.paintDesc(fitDescText(descText(rowSpec)));
-        },
-        // leaving the value row always drops back to default; the next
-        // row's move re-sets (same stale-until-move rule as the paint)
-        onMouseOut: () => {
-          h.setPointer?.("default");
-        },
+        ...rowHover(index, rowSpec),
       },
       Text({
         id: `tfm-set-rowl-${index}`,

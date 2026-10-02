@@ -77,6 +77,17 @@ export const sudoExecError = (stderr: string): Error => {
   if (/permission denied/i.test(stderr)) err.code = "EACCES";
   return err;
 };
+
+// The sudo-tool runner + default exec, shared by fileops (copy/move/remove)
+// and trashops (rm): run the argv through the injected exec, throw the tool's
+// first stderr line on failure.
+export type SudoExecFn = (argv: string[]) => Promise<{ status: number | null; stderr: string }>;
+export const defaultSudoExec: SudoExecFn = async (argv) =>
+  runSudo(argv).then((r) => ({ status: r.status, stderr: r.stderr }));
+export const runSudoTool = async (sudoExec: SudoExecFn, argv: string[]): Promise<void> => {
+  const r = await sudoExec(argv);
+  if (r.status !== 0) throw sudoExecError(r.stderr);
+};
 export type PromptOpen = (opts: {
   title: string;
   okLabel?: string;

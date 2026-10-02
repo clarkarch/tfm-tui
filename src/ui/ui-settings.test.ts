@@ -681,6 +681,25 @@ describe("keybind capture", () => {
     expect(t.captureCharFrame()).not.toContain("press a key…");
   });
 
+  test("clicking empty panel space during capture cancels it", async () => {
+    await openSettings();
+    for (let i = 0; i < 3; i++) menu.moveMenu(1);
+    menu.menuActivate(); // arm capture on the keybind row
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("press a key…"); // armed
+
+    // click the panel's own padding (empty panel space — not a row, not the
+    // scrim): the panel mousedown must cancel an in-flight capture. The scrim
+    // handler never sees inside clicks (the panel stops propagation), so a
+    // bare stopPropagation here leaves the capture armed.
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    const px = Math.round(panel.yogaNode.getComputedLeft()) + 2;
+    const py = Math.round(panel.yogaNode.getComputedTop()) + Math.round(panel.yogaNode.getComputedHeight()) - 1;
+    await t.mockMouse.click(px, py);
+    await t.renderOnce();
+    expect(t.captureCharFrame()).not.toContain("press a key…"); // cancelled
+  });
+
   test("ctrl+tab is recordable; a plain tab still cancels", async () => {
     await openSettings();
     for (let i = 0; i < 3; i++) menu.moveMenu(1);

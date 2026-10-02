@@ -1,12 +1,15 @@
+// Shared #rrggbb join for every hex-math helper (bump/shade/mix/dim): the
+// parse side deliberately differs per caller (bumpHex's loose parseInt is
+// pinned by tests; the others are strict 6-digit), so only the join is one.
+export const intToHex = (n: number): string => `#${n.toString(16).padStart(6, "0")}`;
+
 // Nudge a #rrggbb color up by one unit of blue so it can never byte-equal
 // another swatch (kitty composites any cell whose bg equals the terminal's
 // default background — an off-by-one avoids SGR 49 see-through gaps).
 export const bumpHex = (hex: string): string => {
   const n = Number.parseInt(hex.slice(1), 16);
   if (!Number.isFinite(n)) return hex;
-  return `#${Math.min(0xffffff, n + 1)
-    .toString(16)
-    .padStart(6, "0")}`;
+  return intToHex(Math.min(0xffffff, n + 1));
 };
 
 // Mix a #rrggbb color toward black (amt < 0) or white (amt > 0) by amt
@@ -25,7 +28,7 @@ export const shadeHex = (hex: string, amt: number): string => {
   const p = Math.min(1, Math.max(0, Math.abs(amt)));
   const mix = (c: number): number => Math.round(c + (t - c) * p);
   const out = (mix(r) << 16) | (mix(g) << 8) | mix(b);
-  return `#${out.toString(16).padStart(6, "0")}`;
+  return intToHex(out);
 };
 // Mix two #rrggbb colors by t (0 = a, 1 = b, clamped). Either side
 // unparseable → a unchanged. Used for hue-carrying fills (selection,
@@ -43,7 +46,7 @@ export const mixHex = (a: string, b: string, t: number): string => {
     (mix((na >> 16) & 0xff, (nb >> 16) & 0xff) << 16) |
     (mix((na >> 8) & 0xff, (nb >> 8) & 0xff) << 8) |
     mix(na & 0xff, nb & 0xff);
-  return `#${out.toString(16).padStart(6, "0")}`;
+  return intToHex(out);
 };
 // Terminals with background_opacity (kitty etc.) composite only their DEFAULT
 // background; OpenTUI leaves unpainted cells on SGR 49, so those go

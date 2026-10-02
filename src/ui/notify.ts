@@ -326,3 +326,18 @@ export const makeNotify = (
     },
   };
 };
+
+// Shared sticky-toast closer for the two notifySticky callers (the transfer
+// toast + plugin api.ui): a null handle = no toast — the closer no-ops;
+// double-close is a no-op.
+export const stickyClose = (handle: ToastHandle | null | undefined): (() => void) => {
+  if (!handle) return () => {};
+  let closed = false;
+  return () => {
+    if (closed) return;
+    closed = true;
+    try {
+      handle.close();
+    } catch {}
+  };
+};

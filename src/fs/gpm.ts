@@ -32,8 +32,6 @@ const ALT = 8;
 export const GPM_B_RIGHT = 1;
 export const GPM_B_MIDDLE = 2;
 export const GPM_B_LEFT = 4;
-export const GPM_B_UP = 16;
-export const GPM_B_DOWN = 32;
 
 export const GPM_MOVE = 1;
 export const GPM_DRAG = 2;

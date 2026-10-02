@@ -5,6 +5,8 @@
 // isolates per plugin. ---
 
 import { Text } from "@opentui/core";
+import { errMessage } from "../lib/uiutil";
+import { stickyClose } from "../ui/notify";
 import path from "node:path";
 import pkg from "../../package.json";
 import { dlog } from "../app/log";
@@ -41,7 +43,7 @@ export const tdzSafe = <T>(get: () => T, fallback: T): (() => T) => {
       // pre-boot eager calls legitimately hit this; a dlog keeps a REAL
       // wiring-order bug honest instead of a silent fallback forever
       try {
-        dlog(`tdzSafe fallback: ${err instanceof Error ? err.message : err}`);
+        dlog(`tdzSafe fallback: ${errMessage(err)}`);
       } catch {}
       return fallback;
     }
@@ -205,15 +207,7 @@ export const wirePlugins = async (deps: {
             [Text({ content: String(title ?? "tfm").slice(0, 60) }), Text({ content: String(message).slice(0, 120) })],
             { width: 40, height: 3 },
           );
-          if (!handle) return () => {};
-          let closed = false;
-          return () => {
-            if (closed) return;
-            closed = true;
-            try {
-              handle.close();
-            } catch {}
-          };
+          return stickyClose(handle);
         } catch {
           return () => {};
         }

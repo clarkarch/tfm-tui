@@ -45,8 +45,6 @@ export type BootCtx = {
   showLaunchTime(): boolean;
 };
 
-const bootLog = (msg: string): void => debugLog(msg);
-
 // one boot step, isolated: a throw is logged/reported and the sequence
 // continues — the first render must still happen even if a later step broke.
 const guard = (ctx: BootCtx, name: string, fn: () => void | Promise<void>): Promise<void> => {
@@ -54,13 +52,13 @@ const guard = (ctx: BootCtx, name: string, fn: () => void | Promise<void>): Prom
     const r = fn();
     if (r instanceof Promise) {
       return r.catch((err) => {
-        bootLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
+        debugLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
         ctx.reportBootError?.(name, err);
       });
     }
     return Promise.resolve();
   } catch (err) {
-    bootLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
+    debugLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
     ctx.reportBootError?.(name, err);
     return Promise.resolve();
   }
@@ -71,29 +69,29 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   // log — free profiling for slow-boot reports, silent in production
   if (ctx.isRestartChild) await guard(ctx, "clearStaleImages", () => ctx.clearStaleImages?.());
   await guard(ctx, "waitResolution", () => ctx.waitForResolution());
-  bootLog("boot: systemTheme");
+  debugLog("boot: systemTheme");
   await guard(ctx, "systemTheme", () => {
     const p = ctx.applyBootSystemTheme?.();
     return p ? p.then(() => undefined) : undefined;
   });
-  bootLog("boot: buildLayout");
+  debugLog("boot: buildLayout");
   await guard(ctx, "buildLayout", () => ctx.buildLayout());
   await guard(ctx, "mountSlots", () => ctx.mountSlots?.());
   // globs2 (mime→icon for the listing) and system places (sidebar content) are
   // independent and both only need to land BEFORE renderAll — overlap them.
   // restoreSession stays ahead of renderAll (the restored tabs drive it).
-  bootLog("boot: loadGlobs2 + loadSystemPlaces");
+  debugLog("boot: loadGlobs2 + loadSystemPlaces");
   await Promise.all([
     guard(ctx, "loadGlobs2", () => ctx.loadGlobs2()),
     guard(ctx, "loadSystemPlaces", () => ctx.loadSystemPlaces()),
   ]);
-  bootLog("boot: restoreSession");
+  debugLog("boot: restoreSession");
   await guard(ctx, "restoreSession", () => ctx.restoreSession());
-  bootLog("boot: renderAll");
+  debugLog("boot: renderAll");
   await guard(ctx, "renderAll", () => ctx.renderAll());
   await guard(ctx, "playSidebarIntro", () => ctx.playSidebarIntro?.());
   await guard(ctx, "playTopbarIntro", () => ctx.playTopbarIntro?.());
-  bootLog("boot: done");
+  debugLog("boot: done");
   if (ctx.isDebug) await guard(ctx, "debugTrace", () => ctx.debugTrace());
   if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());
   await guard(ctx, "startHygiene", () => ctx.startHygiene());

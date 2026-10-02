@@ -10,6 +10,7 @@
 // runtime cycle. ---
 
 import { Box, Text } from "@opentui/core";
+import { errMessage } from "../lib/uiutil";
 import { statSync } from "node:fs";
 import path from "node:path";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
@@ -409,7 +410,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     try {
       return buildRowInner(entries, isList, cols, rowHgt, visFirst, r);
     } catch (err) {
-      ctx.log?.(`grid: row ${r} skipped: ${err instanceof Error ? err.message : err}`);
+      ctx.log?.(`grid: row ${r} skipped: ${errMessage(err)}`);
       // same id + height as the real row so the windowed child-index contract
       // ([pad-top, r0..r1, pad-bottom]) and content height stay exact
       return Box({ id: isList ? `${tilePrefix()}${r}` : `${tilePrefix()}row-${r}`, height: rowHgt });

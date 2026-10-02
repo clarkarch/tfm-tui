@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  EXAMPLE_HEADER,
   KEY_SCHEMA,
   SCHEMA,
   UI_SCHEMA,
@@ -8,7 +7,6 @@ import {
   exampleToml,
   keybindConflict,
   parseConfigDoc,
-  serializeBody,
   serializeConfig,
   type Config,
 } from "./config-schema";
@@ -149,8 +147,7 @@ describe("serializeConfig", () => {
     }
   });
 
-  test("example toml = header + default body", () => {
-    expect(exampleToml()).toBe(EXAMPLE_HEADER + serializeBody(defaultConfig));
+  test("example toml carries the default body", () => {
     expect(exampleToml()).toMatch(/drag-threshold-cells\s+=\s+1/);
   });
 });

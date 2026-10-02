@@ -76,7 +76,7 @@ export const wireChrome = async (deps: {
     termW: () => renderer.terminalWidth,
     termH: () => renderer.terminalHeight,
     stripSelectable,
-    drainIconQueue: () => drainIconQueue(),
+    drainIconQueue,
     uiStyle,
     colors: themeGet,
     menuW: MENU_W,
@@ -112,7 +112,7 @@ export const wireChrome = async (deps: {
     tabBar: () => core.config.ui.tabBar,
     rasterSig: () => rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph),
     renderAll: nav.renderAll,
-    navigate: (target) => nav.navigate(target),
+    navigate: nav.navigate,
     blurTerminal: () => getFileops().terminal.blurTerminal(),
     closeFileMenu: menu.closeFileMenu,
     openContextMenu: menu.openContextMenu,
@@ -343,7 +343,7 @@ export const wireChrome = async (deps: {
     ansi1: () => core.colors.ansi1,
     ansi2: () => core.colors.ansi2,
     makeIconSlot: core.slots.makeIconSlot,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     stripSelectable: core.lookup.stripSelectable,
     durationMs: () => core.config.ui.toastDurationMs,
   });
@@ -374,7 +374,7 @@ export const wireChrome = async (deps: {
   const { openFileDefault } = makeRecentOpen({
     inTrashView: core.inTrashView,
     notify,
-    upsertRecent: (paths) => upsertRecentXbel(paths),
+    upsertRecent: upsertRecentXbel,
     spawnOpen: (p, onFailed) => {
       spawnSafe("xdg-open", [p], { stdio: "ignore", detached: true }, (err) => {
         onFailed();
@@ -489,7 +489,7 @@ export const wireChrome = async (deps: {
     // mount can prompt for credentials; unmount never does
     mount: (uri) => runGio(buildMountArgs(uri), true),
     unmount: (uri) => runGio(buildUnmountArgs(uri), false),
-    readdir: (dir) => readdir(dir),
+    readdir: readdir,
     notify: (m, t, l) => {
       try {
         notify(m, t, l);
@@ -537,6 +537,7 @@ export const wireChrome = async (deps: {
     activeToolbar: () => toolbars[core.panes.active],
     notify,
     notifySticky,
+    ensureSudo: ensureSudoChrome,
     openFileDefault,
     launchAppAsRoot,
     dialogs,
