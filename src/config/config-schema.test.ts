@@ -10,7 +10,7 @@ import {
   serializeConfig,
   type Config,
 } from "./config-schema";
-import { validateKeybindSpec } from "./keyspec";
+import { keySpecEqual, validateKeybindSpec } from "./keyspec";
 import { readFileSync } from "node:fs";
 
 describe("parseConfigDoc", () => {
@@ -176,6 +176,19 @@ describe("schema invariants", () => {
   test("defaultConfig covers every schema prop", () => {
     expect(Object.keys(defaultConfig.ui).length).toBe(UI_SCHEMA.length);
     expect(Object.keys(defaultConfig.keys).length).toBe(KEY_SCHEMA.length);
+  });
+
+  test("no two default actions share a bind (one key = one action)", () => {
+    const rows = KEY_SCHEMA.filter((r) => r.def.length > 0);
+    for (let i = 0; i < rows.length; i++) {
+      for (const bind of rows[i]!.def) {
+        for (let j = i + 1; j < rows.length; j++) {
+          for (const other of rows[j]!.def) {
+            expect(keySpecEqual(bind, other), `"${bind}" is on both ${rows[i]!.prop} and ${rows[j]!.prop}`).toBe(false);
+          }
+        }
+      }
+    }
   });
 });
 

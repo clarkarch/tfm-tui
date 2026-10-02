@@ -889,11 +889,11 @@ describe("remappable action keys", () => {
     expect(h.calls).toEqual(["create:folder", "create:file"]);
   });
 
-  test("ctrl+l enters path edit, f9 toggles preview, f4 opens the terminal", () => {
+  test("ctrl+l enters path edit, f3 toggles preview, ctrl+` opens the terminal", () => {
     const h = makeHarness();
     h.key("l", { ctrl: true });
-    h.key("f9");
-    h.key("f4");
+    h.key("f3");
+    h.key("`", { ctrl: true });
     expect(h.calls).toEqual(["pathedit:enter", "preview:toggle", "term:open"]);
   });
 
@@ -1242,14 +1242,14 @@ describe("dual-pane actions", () => {
     h.binds.histBack = ["ctrl+b"];
     const before = [...h.calls];
     h.key("s", { ctrl: true, repeated: true });
-    h.key("f9", { repeated: true });
+    h.key("f3", { repeated: true });
     h.key("h", { ctrl: true, repeated: true });
     h.key("b", { ctrl: true, repeated: true });
     expect(h.calls).toEqual(before);
     expect(h.state.showHidden).toBe(false);
     // a non-repeat still fires (proves each bind itself works)
     h.key("s", { ctrl: true });
-    h.key("f9");
+    h.key("f3");
     h.key("h", { ctrl: true });
     h.key("b", { ctrl: true });
     expect(h.calls).toContain("sort:cycle");

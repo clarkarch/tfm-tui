@@ -89,7 +89,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 
 ## Keys
 
-- `enter` open · `f2` rename · `backspace` up · `escape` menu
+- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu
 - `ctrl+c/x/v/d` copy/cut/paste/duplicate · `ctrl+z/y` undo/redo
 - `tab` switch focused pane · `f5`/`f6` copy/move to the other pane (dual pane)
 - `ctrl+t/w` new/close tab · `ctrl+tab` switch tab (per pane)
@@ -97,7 +97,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 - `ctrl+a` select all · `space` toggle · `shift+arrows` extend selection
 - `alt+left/right` history back/forward · `ctrl+shift+n` / `ctrl+alt+n` new folder/file
 - `ctrl+shift+d` dual pane · `ctrl+=/-` zoom · `ctrl+r` reload places · `ctrl+alt+r` restart
-- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f9` preview · `f4` terminal · `ctrl+shift+s` connect to server
+- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f3` preview · `ctrl+\`` terminal · `ctrl+shift+s` connect to server
 
 Everything is remappable: `esc` → Settings → keys.
 

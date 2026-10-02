@@ -69,7 +69,7 @@ export type RestartCtx = QuitCtx & {
   isBusy?: () => boolean;
   // re-arm after a failed spawn (renderer is still alive). Restores what has
   // a clean seam (wiring re-enables drops + shift-capture, then re-renders);
-  // one-way steps stay lost: the PTY pane is closed (reopen with F4) and
+  // one-way steps stay lost: the PTY pane is closed (reopen with ctrl+`) and
   // plugin instances stay deactivated until the next boot.
   recover?(): void;
   notify?(msg: string, title?: string, level?: NotifyLevel): void;
