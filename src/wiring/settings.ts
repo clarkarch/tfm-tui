@@ -286,6 +286,8 @@ export const wireSettings = (deps: {
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     menuW: () => MENU_W,
+    // live binds straight from config (remaps show)
+    keybinds: (action) => core.config.keys[action] ?? [],
     settingGroups: () => settingGroups(),
     pluginGroups: () => pluginGroups(),
     reloadPlugins: () => plugins.reloadPlugins(),

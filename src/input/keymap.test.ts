@@ -96,6 +96,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
         escMenuState.open = false;
         calls.push("escmenu:close");
       },
+      toggleHelp: () => {
+        calls.push("escmenu:help");
+      },
       moveMenu: (d) => calls.push(`escmenu:move:${d}`),
       adjustSelectedSetting: (d) => calls.push(`escmenu:adjust:${d}`),
       menuActivate: rec("escmenu:activate"),
@@ -336,6 +339,31 @@ describe("precedence chain", () => {
       "escmenu:close",
     ]);
     expect(h.escMenuState.open).toBe(false);
+  });
+
+  test("f1 toggles help: from the grid and from inside the open menu", () => {
+    const h = makeHarness();
+    h.key("f1");
+    expect(h.calls).toEqual(["escmenu:help"]);
+    h.calls.length = 0;
+    h.escMenuState.open = true;
+    h.key("f1");
+    expect(h.calls).toEqual(["escmenu:help"]);
+  });
+
+  test("toggleHelp dispatches through its binds like every remappable action", () => {
+    const h = makeHarness();
+    h.binds.toggleHelp = ["ctrl+h"];
+    h.key("h", { ctrl: true });
+    expect(h.calls).toEqual(["escmenu:help"]);
+  });
+
+  test("toggleHelp belongs to the command table (palette parity)", () => {
+    const h = makeHarness();
+    const byId = (id: string) => h.router.commands().find((c) => c.id === id)!;
+    expect(byId("toggleHelp").hint).toContain("f1");
+    byId("toggleHelp").run();
+    expect(h.calls).toEqual(["escmenu:help"]);
   });
 
   test("embedded terminal owns the keyboard — hint once, then nothing below it fires", () => {

@@ -138,6 +138,7 @@ beforeAll(async () => {
     colors: () => colors,
     uiStyle: () => "solid",
     menuW: () => 36,
+    keybinds: () => [],
     settingGroups: () => groups,
     pluginGroups: () => plugGroups,
     reloadPlugins: () => reloadImpl(),

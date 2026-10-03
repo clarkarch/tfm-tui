@@ -34,6 +34,8 @@ export const glyph: Record<string, string> = {
   "content-paste": "\u{F0192}",
   "content-cut": "\u{F0190}",
   information: "\u{F02FD}",
+  // md-help_circle_outline (fontTools-verified against the MesloLGLDZ Nerd Font Mono cmap)
+  help: "\u{F0625}",
   pencil: "\u{F03EB}",
   "folder-plus": "\u{F0770}",
   "select-all": "\u{F0478}",

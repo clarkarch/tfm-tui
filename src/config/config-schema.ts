@@ -266,6 +266,7 @@ export type KeyAction =
   | "quit"
   | "restart"
   | "openMenu"
+  | "toggleHelp"
   | "toggleHidden"
   | "reloadPlaces"
   | "newTab"
@@ -1542,6 +1543,7 @@ const KEY_ROWS: KeyRow[] = (
     ["quit", "quit tfm", ["ctrl+q"], "app"],
     ["restart", "restart tfm", ["ctrl+alt+r"], "app"],
     ["openMenu", "open the esc menu", ["escape"], "app"],
+    ["toggleHelp", "toggle help", ["f1"], "app"],
     ["newTab", "new tab", ["ctrl+t"], "tabs"],
     ["closeTab", "close tab", ["ctrl+w"], "tabs"],
     ["nextTab", "next tab (cycle)", ["ctrl+tab"], "tabs"],

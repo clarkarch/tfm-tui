@@ -30,7 +30,9 @@ export const tfmKeys = (): KeysConfig => structuredClone(defaultConfig.keys);
 export const yaziKeys = (): KeysConfig => ({
   ...structuredClone(defaultConfig.keys),
   quit: ["ctrl+q", "q"],
-  openMenu: ["escape", "~", "f1"],
+  // f1 stays on toggleHelp (schema default) — it used to open the menu here,
+  // which would shadow the new help bind under the preset
+  openMenu: ["escape", "~"],
   toggleHidden: ["ctrl+h", "."],
   reloadPlaces: [],
   newTab: ["ctrl+t"],

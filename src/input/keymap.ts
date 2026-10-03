@@ -79,6 +79,7 @@ export type KeyRouterCtx = {
     menuActivate(): void;
     menuTab(): void;
     openMenu(): void;
+    toggleHelp(): void;
     // keybind capture (settings panel): consume the event while recording
     captureKey(e: KeyEventLike): boolean;
   };
@@ -284,6 +285,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       else if (hitDir(ev, "moveLeft", "extendLeft")) ctx.escMenu.adjustSelectedSetting(-1);
       else if (hitDir(ev, "moveRight", "extendRight")) ctx.escMenu.adjustSelectedSetting(1);
       else if (ev.name === "tab") ctx.escMenu.menuTab();
+      else if (hit(ev, "toggleHelp")) ctx.escMenu.toggleHelp();
       else if (hit(ev, "openSelected")) ctx.escMenu.menuActivate();
       return true;
     }
@@ -684,6 +686,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "quit", run: () => ctx.quit() },
     { action: "restart", run: () => ctx.restart() },
     { action: "openMenu", run: () => ctx.escMenu.openMenu() },
+    { action: "toggleHelp", run: () => ctx.escMenu.toggleHelp() },
     {
       action: "toggleHidden",
       run: () => {
@@ -839,6 +842,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
 
     if (hit(ev, "openMenu") && runAction("openMenu")) return;
+    if (hit(ev, "toggleHelp") && runAction("toggleHelp")) return;
     if (hit(ev, "toggleHidden") && ev.repeated !== true && runAction("toggleHidden")) return;
     if (hit(ev, "reloadPlaces") && ev.repeated !== true && runAction("reloadPlaces")) return;
 

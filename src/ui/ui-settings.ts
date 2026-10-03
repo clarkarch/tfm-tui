@@ -33,6 +33,8 @@ import {
   visiblePos,
   type SettingsPanelState,
 } from "./ui-settings-panel";
+import { helpPanelWidth, renderHelpPanel } from "./ui-help";
+import type { KeyAction } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 
@@ -59,6 +61,9 @@ type EscMenuCtx = {
   uiStyle(): UiStyle;
   // root-view width — same value the context menu uses (MENU_W in ./ui-menu)
   menuW(): number;
+  // live keybind lookup for the help view (same getter keymap uses).
+  // Optional so older fakes read as defaults; wiring always sets it.
+  keybinds?(action: KeyAction): string[];
   settingGroups(): SettingGroup[];
   // plugin-contributed groups for the DEDICATED Plugins view (separate from
   // settings — plugins add, never modify core rows). Empty without plugins.
@@ -81,7 +86,7 @@ type EscMenuCtx = {
 
 export const makeEscMenu = (ctx: EscMenuCtx) => {
   let menuOpen = false;
-  let menuView: "root" | "settings" | "plugins" = "root";
+  let menuView: "root" | "settings" | "plugins" | "help" = "root";
   // panel cursor state — rendered by ./ui-settings-panel, mutated by the ops here
   const st: SettingsPanelState = {
     catIdx: 0,
@@ -103,9 +108,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // every keyboard/panel op below branches root vs panel — never on a single view
   const inPanelView = (): boolean => menuView !== "root";
 
+  // the help view is cursorless (a static cheat sheet) — cursor ops no-op there
+  const isHelpView = (): boolean => menuView === "help";
   // root <-> panel-view transitions reset the shared cursor state (same reset
   // Settings always did — the panel is rebuilt fresh for either view)
-  const enterView = (view: "settings" | "plugins"): void => {
+  const enterView = (view: "settings" | "plugins" | "help"): void => {
     menuView = view;
     st.catIdx = 0;
     // no row cursor until the first arrow/hover (category highlight stays)
@@ -142,6 +149,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           },
         ]
       : []),
+    // the help view sits below Plugins: everything above quits the app,
+    // this one just explains it
+    { icon: "help", label: "Help", keepOpen: true, action: () => enterView("help") },
     {
       icon: "power",
       label: "Quit",
@@ -177,6 +187,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const adjustSelectedSetting = (dir: number): void => {
     if (!inPanelView()) return;
+    // the help view is cursorless — ←/→ do nothing there
+    if (isHelpView()) return;
     if (st.pane === "cats") {
       switchCategory(st.catIdx + dir);
       return;
@@ -385,7 +397,19 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     afterAdjust(rowIdx, row);
   };
 
+  // toggles the help view: F1 from anywhere (grid, or inside the menu),
+  // esc on the root row, or the Help row itself
+  const toggleHelp = (): void => {
+    if (menuView === "help") closeMenu();
+    else {
+      if (!menuOpen) openMenu();
+      enterView("help");
+    }
+  };
+
   const menuActivate = () => {
+    // the help view is cursorless — enter is a no-op
+    if (isHelpView()) return;
     if (inPanelView()) {
       if (st.pane === "cats") {
         switchCategory(st.catIdx);
@@ -467,10 +491,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.log?.(`esc-menu render failed: ${err}`);
   };
 
-  const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins") => {
+  const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins" | "help") => {
     menuC = c;
     const panelView = view !== "root";
-    const panelW = panelView ? SETTINGS_W : ctx.menuW();
+    // the help view uses its own wide poster width
+    const panelW =
+      view === "help" ? helpPanelWidth(ctx.renderer().terminalWidth) : panelView ? SETTINGS_W : ctx.menuW();
     try {
       panel.width = panelW;
     } catch {}
@@ -479,7 +505,14 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       Box(
         { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
         Text({
-          content: view === "plugins" ? "Menu — plugins" : view === "settings" ? "Menu — settings" : "Menu",
+          content:
+            view === "plugins"
+              ? "Menu — plugins"
+              : view === "settings"
+                ? "Menu — settings"
+                : view === "help"
+                  ? "Menu — help"
+                  : "Menu",
           fg: c.accent,
         }),
         Box({ flexGrow: 1 }),
@@ -580,6 +613,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       items.forEach((it, i) => {
         panel.add(rootRow(it.icon, it.label, it.hint, i === st.menuIdx, i, activateRow(i)));
       });
+    } else if (view === "help") {
+      // static cheat sheet (no cursor, no settings rows)
+      renderHelpPanel(c, panel, { keybinds: (a) => ctx.keybinds?.(a) ?? [] });
     } else {
       renderSettingsPanel(c, panel, st, {
         groups,
@@ -689,6 +725,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const moveMenu = (delta: number) => {
+    // the help view is cursorless — ↑/↓ do nothing there
+    if (isHelpView()) return;
     if (!inPanelView()) {
       const count = rootMenuItems().length;
       if (count === 0) return;
@@ -724,6 +762,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   return {
     openMenu,
     closeMenu,
+    toggleHelp,
     isOpen: (): boolean => menuOpen,
     moveMenu,
     menuActivate,

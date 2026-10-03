@@ -77,7 +77,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 
 ## Keys
 
-- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu
+- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu · `f1` help
 - `ctrl+c/x/v/d` copy/cut/paste/duplicate · `ctrl+z/y` undo/redo
 - `tab` switch focused pane · `f5`/`f6` copy/move to the other pane (dual pane)
 - `ctrl+t/w` new/close tab · `ctrl+tab` switch tab (per pane)

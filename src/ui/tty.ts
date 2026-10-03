@@ -178,6 +178,7 @@ const ASCII_GLYPHS: Record<string, string> = {
   "content-paste": "p",
   "content-cut": "X",
   information: "i",
+  help: "?",
   pencil: "/",
   "folder-plus": "+",
   "select-all": "A",
