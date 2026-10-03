@@ -390,9 +390,27 @@ describe("installer packager hint", () => {
     expect(runLib(`pm_pkg pacman gio\n`).out).toBe("glib2");
     expect(runLib(`pm_pkg apk gio\n`).out).toBe("glib");
     expect(runLib(`pm_pkg apt ffmpeg\n`).out).toBe("ffmpeg");
-    // resvg is not reliably packaged anywhere: no `sudo apt install resvg` lies
-    expect(runLib(`pm_pkg apt resvg\n`).out).toBe("");
+    // every probed tool maps to a package on at least one family (resvg was
+    // the exception, not reliably packaged anywhere, and is now unprobed)
+    expect(runLib(`pm_pkg apt xdg-open\n`).out).toBe("xdg-utils");
     expect(runLib(`pm_cmd zypper\n`).out).toBe("sudo zypper install");
+  });
+
+  test("missing tools print as one optional list, never recommended/resvg", () => {
+    // probe fails closed: everything missing
+    const { out } = runLib(`tool_present() { return 1; }\nprint_extras\n`);
+    expect(out).toContain("optional");
+    expect(out).not.toContain("recommended");
+    expect(out).not.toContain("resvg");
+    for (const t of ["xdg-open", "magick", "ffmpeg", "gio", "udisksctl", "wl-clipboard"]) {
+      expect(out).toContain(t);
+    }
+  });
+
+  test("no missing tools prints nothing", () => {
+    const { out, code } = runLib(`tool_present() { return 0; }\nprint_extras\n`);
+    expect(code).toBe(0);
+    expect(out).toBe("");
   });
 });
 

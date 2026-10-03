@@ -41,17 +41,17 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 ## Requirements
 
 - Linux.
-- Terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty, WezTerm, Konsole…).
-- Strongly recommended (the installer flags these):
-  - `resvg` (theme-tinted icons and SVG thumbnails; several times faster than `rsvg-convert`, which also works if you have it)
-  - `xdg-open` (open files in their default app)
-- Optional tools (the installer lists what's missing):
-  - `magick` (raster image thumbnails)
+- Terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty, WezTerm, Konsole etc).
+- Everything below is optional.
+  - `xdg-open` (opening files)
+  - `magick` (extra photo thumbnails)
   - `ffmpeg` (video thumbnails)
-  - `gio` (starred files, network locations)
-  - `udisksctl` (mount/eject drives)
-  - `wl-clipboard` / `xclip` (clipboard with GUI apps)
-  - `tar` / `unzip` / `zip` / `7z` (archives)
+  - `gio` (starred files and servers)
+  - `udisksctl` (USB drives)
+  - `wl-clipboard` / `xclip` (copy and paste with other apps)
+  - `tar` / `unzip` / `zip` / `7z` (zip files and archives)
+
+Icons just work, nothing to install.
 
 ## Install
 
@@ -59,29 +59,19 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 ```
 
-The installer downloads the latest release, verifies its checksum, tests that the
-build runs — before it replaces anything — and installs it to `~/.local/bin/tfm`.
-The same binary is also installed as `terminal-file-manager`. It then offers to
-add that directory to your `PATH`. Pin a specific release with
-`TFM_VERSION=v0.1.0-beta.0` in front of the command, or install a binary you built
-yourself with `TFM_LOCAL=./dist/tfm`.
+### dev build
 
-### dev branch
-
-Builds the branch on your machine and installs it the same way — needs `git` and
-Bun 1.4 or newer:
+Latest dev branch, needs git and Bun 1.4 or newer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
 ```
 
-It keeps a checkout in `~/.local/share/tfm/src`, rebuilds it, and only installs
-if the build succeeds. Re-run the same command to update; `TFM_BRANCH=main`
-builds another branch instead.
-
-### build by hand
+Or manually build from source:
 
 ```bash
+git clone https://github.com/clarkarch/tfm-tui.git
+cd tfm-tui
 bun install --frozen-lockfile
 bun run check && bun test
 bun run compile && cp dist/tfm ~/.local/bin/

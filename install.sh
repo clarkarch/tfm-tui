@@ -575,11 +575,11 @@ pretty_dollar_home() { # $HOME form for copy-paste export lines (tilde does not 
 }
 
 # ── optional tools ──────────────────────────────────────────────────────────
-# Two buckets: the two that visibly degrade tfm, then everything else. The
-# packager hint is best-effort — a wrong `apt install` is worse than naming the
-# tool alone, so tools without a reliable package name are called out by name.
-TOOLS_RECOMMENDED="resvg xdg-open"
-TOOLS_OPTIONAL="magick ffmpeg gio udisksctl clip"
+# One bucket: everything degrades gracefully (a missing tool just disables its
+# feature), so there is no recommended/optional split. The packager hint is
+# best-effort: a wrong `apt install` is worse than naming the tool alone, so
+# tools without a reliable package name are called out by name.
+TOOLS_OPTIONAL="xdg-open magick ffmpeg gio udisksctl clip"
 
 tool_present() {
   case "$1" in
@@ -597,13 +597,12 @@ tool_name() { # how the tool is presented (the key is the binary we probe)
 
 tool_desc() {
   case "$1" in
-    resvg) printf 'icons and SVG thumbnails' ;;
-    xdg-open) printf 'opens files in their default app' ;;
-    magick) printf 'photo thumbnails' ;;
-    ffmpeg) printf 'video thumbnails and previews' ;;
-    gio) printf 'starred files and network places' ;;
-    udisksctl) printf 'mount and eject drives' ;;
-    clip) printf 'copy/paste with other apps (wl-clipboard or xclip)' ;;
+    xdg-open) printf 'opening files' ;;
+    magick) printf 'extra photo thumbnails' ;;
+    ffmpeg) printf 'video thumbnails' ;;
+    gio) printf 'starred files and servers' ;;
+    udisksctl) printf 'USB drives' ;;
+    clip) printf 'copy and paste with other apps' ;;
     *) printf '' ;;
   esac
 }
@@ -655,42 +654,34 @@ pm_pkg() { # pm_pkg PM TOOL — "" when we don't know a package for that family
         *) printf 'glib2' ;;
       esac
       ;;
-    resvg) printf '' ;; # not reliably packaged; cargo/software center instead
     *) printf '' ;;
   esac
 }
 
 print_extras() {
-  local t rec="" opt=""
-  for t in $TOOLS_RECOMMENDED; do tool_present "$t" || rec="$rec $t"; done
-  for t in $TOOLS_OPTIONAL; do tool_present "$t" || opt="$opt $t"; done
-  [ -z "${rec# }" ] && [ -z "${opt# }" ] && return 0
+  local t missing=""
+  for t in $TOOLS_OPTIONAL; do tool_present "$t" || missing="$missing $t"; done
+  [ -z "${missing# }" ] && return 0
 
   local pm cmd pkgs="" unpkg="" p
   pm=$(detect_pm)
   if [ -n "$pm" ]; then
     cmd=$(pm_cmd "$pm")
-    for t in $rec $opt; do
+    for t in $missing; do
       p=$(pm_pkg "$pm" "$t")
       if [ -n "$p" ]; then pkgs="$pkgs $p"; else unpkg="$unpkg $t"; fi
     done
   fi
 
-  local bucket
-  for bucket in rec opt; do
-    local list
-    if [ "$bucket" = rec ]; then list="$rec"; else list="$opt"; fi
-    [ -z "${list# }" ] && continue
-    if [ "$FANCY" = 1 ]; then
-      printf '\n  %s%s%s\n' "$C_BOLD" "$([ "$bucket" = rec ] && printf 'recommended' || printf 'optional')" "$C_RST"
-      local name
-      for name in $list; do
-        printf '    %s%-*s%s  %s%s%s\n' "$C_BOLD" 12 "$(tool_name "$name")" "$C_RST" "$C_DIM" "$(tool_desc "$name")" "$C_RST"
-      done
-    else
-      plain "$([ "$bucket" = rec ] && printf 'recommended' || printf 'optional') tools missing:${list}"
-    fi
-  done
+  if [ "$FANCY" = 1 ]; then
+    printf '\n  %s%s%s\n' "$C_BOLD" "optional" "$C_RST"
+    local name
+    for name in $missing; do
+      printf '    %s%-*s%s  %s%s%s\n' "$C_BOLD" 12 "$(tool_name "$name")" "$C_RST" "$C_DIM" "$(tool_desc "$name")" "$C_RST"
+    done
+  else
+    plain "optional tools missing:${missing}"
+  fi
 
   if [ "$FANCY" = 1 ]; then
     printf '\n'
@@ -700,7 +691,7 @@ print_extras() {
     else
       note "$C_DIM" "install them from your software center or package manager."
     fi
-    [ -n "${unpkg# }" ] && note "$C_DIM" "no package mapped:${unpkg} — cargo install resvg also works"
+    [ -n "${unpkg# }" ] && note "$C_DIM" "no package mapped:${unpkg}"
   else
     if [ -n "$cmd" ] && [ -n "${pkgs# }" ]; then plain "install with:  $cmd$pkgs"; fi
   fi
