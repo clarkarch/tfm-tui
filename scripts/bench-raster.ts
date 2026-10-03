@@ -118,26 +118,15 @@ const RENDERERS = {
   ],
 } as const;
 
-// --- In-process candidates: the npm packages tfm would ship when it drops the
-// tool deps (scripts/bench-raster.ts benches them against the CLIs first —
-// measured, not assumed). Native = @resvg/resvg-js (napi addon, zero init);
-// wasm = @resvg/resvg-wasm (one artifact for every platform, initWasm timed
-// below). Both render on the JS thread (sync napi / wasm) — that serialization
-// is part of the per-icon number, the same way the CLI's spawn+startup is.
+// --- In-process candidate: the npm package tfm ships as its only SVG
+// renderer (benched against the CLIs — measured, not assumed). Native =
+// @resvg/resvg-js (napi addon, zero init). Renders on the JS thread (sync
+// napi) — that serialization is part of the per-icon number, the same way the
+// CLI's spawn+startup is.
 let NativeResvg: typeof import("@resvg/resvg-js").Resvg | null = null;
 try {
   NativeResvg = (await import("@resvg/resvg-js")).Resvg;
 } catch {} // addon load failure — reported in the header, spawn benches still run
-
-let wasmInitMs = -1;
-let WasmResvg: typeof import("@resvg/resvg-wasm").Resvg | null = null;
-try {
-  const t0 = performance.now();
-  const wasm = await import("@resvg/resvg-wasm");
-  await wasm.initWasm(readFileSync(new URL("../node_modules/@resvg/resvg-wasm/index_bg.wasm", import.meta.url)));
-  WasmResvg = wasm.Resvg;
-  wasmInitMs = performance.now() - t0;
-} catch {}
 
 // resvg-js lacks the CLI's FitTo::Size (-w+-h): fitTo is original/width/height/
 // zoom only. Fit-inside replicates in two constructions — the parse-only probe
@@ -164,26 +153,12 @@ const inprocNative = async (svg: Buffer, w: number, h: number): Promise<{ ms: nu
   return { ms: performance.now() - t0, out };
 };
 
-const inprocWasm = async (svg: Buffer, w: number, h: number): Promise<{ ms: number; out: Buffer } | null> => {
-  const R = WasmResvg;
-  if (!R) return null;
-  const t0 = performance.now();
-  // explicit for symmetry with the native entry (wasm32 has no fs, so the
-  // default was already fontless — pinned here against a default change)
-  const probe = new R(svg, { font: { loadSystemFonts: false } });
-  const zoom = Math.min(w / probe.width, h / probe.height);
-  const r = new R(svg, { background: BG, font: { loadSystemFonts: false }, fitTo: { mode: "zoom", value: zoom } });
-  const img = r.render();
-  const out = Buffer.from(img.asPng());
-  img.free();
-  r.free();
-  probe.free();
-  return { ms: performance.now() - t0, out };
-};
+// ponytail: @resvg/resvg-wasm was benched here and rejected (p95 spikes 11-49ms
+// from wasm GC/JIT, +200-450ms initWasm, premultiplied pixels) — re-add its
+// entry when a wasm build with SIMD ever lands, see AGENTS.md Icons.
 
 const INPROC: Record<string, (svg: Buffer, w: number, h: number) => Promise<{ ms: number; out: Buffer } | null>> = {
   "resvg-js": inprocNative,
-  "resvg-wasm": inprocWasm,
 };
 
 const main = async () => {
@@ -207,9 +182,7 @@ const main = async () => {
     const v = await spawnOnce(cmd, ["--version"], Buffer.alloc(0)).catch(() => null);
     console.log(`  ${cmd}: ${v ? v.out.toString().split("\n")[0] || v.stderr.split("\n")[0] : "MISSING"}`);
   }
-  console.log(
-    `  in-process: resvg-js ${NativeResvg ? "LOADED" : "MISSING/FAILED"}, resvg-wasm ${WasmResvg ? `LOADED (initWasm ${fmt(wasmInitMs)})` : "MISSING/FAILED"}`,
-  );
+  console.log(`  in-process: resvg-js ${NativeResvg ? "LOADED" : "MISSING/FAILED"}`);
   console.log(
     `runs/icon: ${args.runs}, profiles: ${Object.keys(profiles).join(", ")}${args.only ? `, only: ${args.only}` : ""}${magick ? "" : " (no magick: pixel diff off)"}\n`,
   );
@@ -348,25 +321,18 @@ const main = async () => {
   }
 
   // Pathological-SVG probe (the bun#17414 negative-height crash shape): does
-  // the napi/wasm render panic-crash the PROCESS (resvg-js 2.6.2 lacks
+  // the napi render panic-crash the PROCESS (resvg-js 2.6.2 lacks
   // catch_unwind — that protection only landed in 2.7.0-alpha) or throw a
   // catchable error? Runs LAST so a hard abort can't lose the numbers above.
-  if (NativeResvg || WasmResvg) {
+  if (NativeResvg) {
     const bad = Buffer.from(
       '<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="-180"><path d="M0 0h100v100z"/></svg>',
     );
-    const candidates = [
-      ["resvg-js", NativeResvg],
-      ["resvg-wasm", WasmResvg],
-    ] as const;
-    for (const [name, Ctor] of candidates) {
-      if (!Ctor) continue;
-      try {
-        new Ctor(bad, {}).render();
-        console.log(`malformed-SVG probe ${name}: rendered OK (no panic)`);
-      } catch (e) {
-        console.log(`malformed-SVG probe ${name}: threw (catchable): ${String(e).slice(0, 200)}`);
-      }
+    try {
+      new NativeResvg(bad, {}).render();
+      console.log("malformed-SVG probe resvg-js: rendered OK (no panic)");
+    } catch (e) {
+      console.log(`malformed-SVG probe resvg-js: threw (catchable): ${String(e).slice(0, 200)}`);
     }
   }
 
