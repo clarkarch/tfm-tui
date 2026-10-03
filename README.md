@@ -51,8 +51,6 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
   - `wl-clipboard` / `xclip` (copy and paste with other apps)
   - `tar` / `unzip` / `zip` / `7z` (zip files and archives)
 
-Icons just work, nothing to install.
-
 ## Install
 
 ```bash
@@ -87,7 +85,8 @@ bun run compile && cp dist/tfm ~/.local/bin/
 - `ctrl+a` select all · `space` toggle · `shift+arrows` extend selection
 - `alt+left/right` history back/forward · `ctrl+shift+n` / `ctrl+alt+n` new folder/file
 - `ctrl+shift+d` dual pane · `ctrl+=/-` zoom · `ctrl+r` reload places · `ctrl+alt+r` restart
-- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f3` preview · `ctrl+\`` terminal · `ctrl+shift+s` connect to server
+- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f3` preview · `ctrl+\``/`f4` terminal · `ctrl+shift+s` connect to server
+- `arrows` move · `pageup`/`pagedown` page · `home`/`end` first/last
 
 Everything is remappable: `esc` → Settings → keys.
 
