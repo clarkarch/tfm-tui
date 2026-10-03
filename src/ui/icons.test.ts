@@ -410,9 +410,12 @@ describe("thumbCooloffMs", () => {
   });
 });
 
-// magick/SVG renderer missing (CI) can't prove the sentinel end to end —
-// thumbPng rejects at the spawn before the failure is recorded either way, so
-// the "second call rejects fast" contract is only asserted with a real binary.
+// The sentinel contract holds in every environment with a renderer: the
+// first/editted/cleared calls reject from a REAL render attempt (whatever
+// its error text — "exited N" from a spawn, "Executable not found" without
+// magick, an in-process throw), while the immediate retry rejects from the
+// sentinel. Only the sentinel's own message is pinned; pinning the render
+// error text made this fail on magick-less CI (resvg-js present, spawn absent).
 describe("thumb failure sentinel", () => {
   test.skipIf(!hasMagick && !hasSvgRenderer)(
     "a doomed file is not re-rendered per request",
@@ -427,8 +430,12 @@ describe("thumb failure sentinel", () => {
           () => "",
           (e: unknown) => String(e),
         );
+      const realAttempt = (label: string, err: string) => {
+        expect(`${label}: ${err}`).not.toContain("previously failed");
+        expect(err.length).toBeGreaterThan(0);
+      };
       const first = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
-      expect(first).toContain("exited");
+      realAttempt("first", first);
       // second request must reject from the sentinel, NOT by spawning again —
       // the distinct message is the whole proof (no wall-clock bound needed)
       const second = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
@@ -436,14 +443,14 @@ describe("thumb failure sentinel", () => {
       // a different version of the same path is a different key: it must get a
       // REAL render attempt again (the renderer's own error, not the sentinel's)
       const edited = await errOf(thumbPng(bad, 6, 1, 32, 32, "#1a1b26", true));
-      expect(edited).toContain("exited");
+      realAttempt("edited", edited);
       // and clearIconCaches wipes the sentinel (theme flip = honest retry)
       clearIconCaches();
       const afterClear = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
-      expect(afterClear).toContain("exited");
+      realAttempt("afterClear", afterClear);
       rmSync(dir, { recursive: true, force: true });
       clearIconCaches();
-      // four real spawns (2 rsvg + magick fallbacks) — the 5s bun default flakes
+      // real render attempts per key version — the 5s bun default flakes
       // under parallel-suite load (AGENTS: heavy tests pin their own timeout)
     },
     20000,
