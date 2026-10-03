@@ -17,18 +17,18 @@ import {
   thumbPng,
 } from "./icons";
 
-// exercises the real resvg-js/resvg/rsvg-convert/magick pipeline (dev-machine
-// deps); failures here mean the raster pipeline or its cache keys broke.
-// Icon and vector-thumb tests need an SVG rasterizer (the in-process resvg-js
-// addon preferred, else resvg/rsvg-convert — one at a time, see icons.ts);
-// raster tests need magick. They skip when nothing is available (CI runners,
-// containers) — "missing icon rejects" stays live everywhere: with no renderer
+// exercises the real resvg-js/magick pipeline (dev-machine deps); failures
+// here mean the raster pipeline or its cache keys broke.
+// Icon tests need the in-process resvg-js addon (icons render in-process
+// only, no CLI fallback anymore); vector-thumb tests also pass on magick-only
+// machines via the addon-failure last resort. They skip when nothing is
+// available — "missing icon rejects" stays live everywhere: with no renderer
 // installed rasterizeSvg throws at the renderer check before reading the
 // asset, and the missing asset throws at the read on a machine that has one.
-const hasResvg = Bun.which("resvg") !== null;
 const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => false);
-const hasSvgRenderer = hasInproc || hasResvg || Bun.which("rsvg-convert") !== null;
 const hasMagick = Bun.which("magick") !== null;
+// icons: in-process only; vector thumbs: in-process or the magick last resort
+const hasSvgRenderer = hasInproc || hasMagick;
 const hasFfmpeg = Bun.which("ffmpeg") !== null;
 
 // tiny fixtures, embedded so the raster tests need no external tool to CREATE
@@ -84,13 +84,11 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test.skipIf(!hasResvg && !hasInproc)("non-square requests keep aspect (fit-inside)", async () => {
+  test.skipIf(!hasInproc)("non-square requests keep aspect (fit-inside)", async () => {
     clearIconCaches();
-    // resvg CLI `-w`+`-h` fits inside (aspect-preserving), and the
-    // in-process zoom replication does the same: the square 24x24 folder
-    // glyph in an 18x16 box shrinks to 16x16. rsvg-convert instead
-    // stretches to exactly 18x16, so this pins that the chosen renderer
-    // is NOT rsvg-convert.
+    // the in-process zoom render fit-insides (aspect-preserving): the square
+    // 24x24 folder glyph in an 18x16 box shrinks to 16x16 — an exact-box
+    // stretch would return 18x16, so the dims pin the behavior.
     const bytes = await iconPng("folder", "#c0caf5", "#1a1b26", 18, 16);
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     expect(dv.getUint32(16)).toBe(16); // IHDR width
@@ -98,13 +96,9 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test("renderer precedence: in-process wins, resvg CLI is the fallback, rsvg-convert after, none is null", () => {
-    expect(pickSvgRenderer(true, true, true)).toBe("inproc");
-    expect(pickSvgRenderer(true, false, false)).toBe("inproc");
-    expect(pickSvgRenderer(false, true, true)).toBe("resvg");
-    expect(pickSvgRenderer(false, true, false)).toBe("resvg");
-    expect(pickSvgRenderer(false, false, true)).toBe("rsvg-convert");
-    expect(pickSvgRenderer(false, false, false)).toBe(null);
+  test("renderer precedence: the in-process addon or nothing", () => {
+    expect(pickSvgRenderer(true)).toBe("inproc");
+    expect(pickSvgRenderer(false)).toBe(null);
   });
 
   test("missing icon rejects", async () => {
@@ -207,11 +201,11 @@ describe("icons", () => {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const w = dv.getUint32(16); // IHDR width
     const h = dv.getUint32(20); // IHDR height
-    // Exact dims pin WHICH renderer ran: resvg (CLI or in-process) fits
-    // inside (square 24x24 at 64x48 → 48x48); rsvg-convert keeps the exact
-    // letterboxed 64x48 canvas. A `<= requested` assertion would pass for
-    // both and prove nothing.
-    if (hasResvg || hasInproc) {
+    // Exact dims pin WHICH renderer ran: the in-process addon fit-insides
+    // (square 24x24 at 64x48 → 48x48); the magick last resort keeps the
+    // exact cover box 64x48. A `<= requested` assertion would pass for both
+    // and prove nothing.
+    if (hasInproc) {
       expect(w).toBe(48);
       expect(h).toBe(48);
     } else {
