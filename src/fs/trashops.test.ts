@@ -60,6 +60,9 @@ describe("trashPaths", () => {
       expect(existsSync(hit)).toBe(true);
       expect(existsSync(file)).toBe(false);
       expect(existsSync(path.join(trashDir(), "info", "doomed.txt.trashinfo"))).toBe(true);
+      // the undo batch is pushed by the same fire-and-forget op AFTER the
+      // move lands — settling only on the file races it under suite load
+      await settleUntil(() => sink.batches.length === 1);
       expect(sink.batches.length).toBe(1);
       expect(sink.batches[0]!.label).toBe("trash 1 item");
       expect(sink.batches[0]!.units).toBe(1);
