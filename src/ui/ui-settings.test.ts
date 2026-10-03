@@ -197,6 +197,43 @@ const text = (id: string): string => {
 };
 
 describe("esc-menu root view", () => {
+  test("sustained render failure warns instead of leaving a silent empty panel", async () => {
+    // break the settings-view render twice: first failure schedules the
+    // one-shot retry, the second (retry exhausted) must surface a toast —
+    // otherwise the user stares at an empty panel with no explanation
+    const saved = groups;
+    const savedWarns = warns.length;
+    const savedBand = cancelledBand;
+    (groups as unknown as unknown) = null;
+    try {
+      warns.length = 0;
+      expect(floats.isOpen("escmenu")).toBe(false);
+      menu.openMenu();
+      await t.renderOnce();
+      menu.moveMenu(1);
+      menu.menuActivate();
+      await t.renderOnce();
+      // first failure schedules the deferred retry; poll for the second
+      // attempt's warn (fixed sleeps flake under parallel-suite load)
+      const deadline = Date.now() + 2000;
+      while (warns.length === 0 && Date.now() < deadline) await Bun.sleep(20);
+      await t.renderOnce();
+      expect(warns.some((w) => w[1] === "menu" && w[0].toLowerCase().includes("failed to render"))).toBe(true);
+    } finally {
+      groups = saved;
+      menu.closeMenu();
+      await t.renderOnce();
+      // a successful root render re-arms retry + clears the once-warn burst so
+      // the next test starts from a clean menu state
+      menu.openMenu();
+      await t.renderOnce();
+      menu.closeMenu();
+      await t.renderOnce();
+      warns.length = savedWarns;
+      cancelledBand = savedBand;
+    }
+  });
+
   test("openMenu mounts the scrim + panel and paints the root items", async () => {
     menu.openMenu();
     await t.renderOnce();

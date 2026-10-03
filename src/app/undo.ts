@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
-import { failSuffix, fsErrText, rmTrashInfo, safeRestoreMove, xdgTrashMove } from "../fs/fsutil";
+import { failSuffix, fsErrText, rmTrashInfo, rmTrashInfoForPath, safeRestoreMove, xdgTrashMove } from "../fs/fsutil";
 import { copyTreeProgress, type TransferSink } from "../fs/transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -47,7 +47,7 @@ export type UndoStep =
   | { op: "rm"; path: string }
   | { op: "mkdir-if-missing"; path: string }
   | { op: "write-empty-if-missing"; path: string }
-  | { op: "rm-trashinfo"; name: string };
+  | { op: "rm-trashinfo"; name: string; path?: string };
 
 export type UndoBatchData = {
   label: string;
@@ -121,7 +121,7 @@ export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}
         } catch {}
       };
     case "rm-trashinfo":
-      return () => rmTrashInfo(step.name, log);
+      return () => (step.path ? rmTrashInfoForPath(step.path, log) : rmTrashInfo(step.name, log));
   }
 };
 

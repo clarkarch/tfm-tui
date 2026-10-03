@@ -127,6 +127,29 @@ describe("trashOrigPath", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("restore resolves per-mount sibling trashinfo, not just home trash", async () => {
+    const root = sandbox();
+    try {
+      const topRoot = path.join(root, "mnt-trash");
+      const origDir = path.join(root, "orig2");
+      mkdirSync(path.join(topRoot, "files"), { recursive: true });
+      mkdirSync(path.join(topRoot, "info"), { recursive: true });
+      mkdirSync(origDir, { recursive: true });
+      writeFileSync(path.join(topRoot, "files", "usb.txt"), "data");
+      writeFileSync(path.join(topRoot, "info", "usb.txt.trashinfo"), `[Trash Info]\nPath=${origDir}/usb.txt\n`);
+      const sink = recordingSink();
+      makeTrashOps(sink).restoreFromTrash([path.join(topRoot, "files", "usb.txt")]);
+      await settleUntil(() => existsSync(path.join(origDir, "usb.txt")));
+      expect(existsSync(path.join(origDir, "usb.txt"))).toBe(true);
+      expect(existsSync(path.join(topRoot, "info", "usb.txt.trashinfo"))).toBe(false);
+      await settleUntil(() => sink.batches.length === 1);
+      expect(sink.batches[0]!.label).toBe("restore 1 item");
+      expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item · ctrl+z to undo")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("restoreFromTrash", () => {

@@ -16,7 +16,7 @@ import {
   fsMove,
   isInTrashFiles,
   isWithinOrEqual,
-  rmTrashInfo,
+  rmTrashInfoForPath,
   safeRestoreMove,
   shouldToast,
   trashDir,
@@ -251,10 +251,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         const trashLoc = await xdgTrashMove(victimDest);
         units.push(async () => {
           await safeRestoreMove(trashLoc, victimDest);
-          await rmTrashInfo(path.basename(trashLoc), ctx.log);
+          await rmTrashInfoForPath(trashLoc, ctx.log);
         });
         dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
-        dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
+        dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc), path: trashLoc });
         return true;
       } catch (err) {
         onStashFailed(err);
@@ -305,10 +305,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       const trashLoc = await xdgTrashMoveToRoot(victimDest, trashDir(), sudoMove);
       units.push(async () => {
         await safeRestoreMove(trashLoc, victimDest);
-        await rmTrashInfo(path.basename(trashLoc), ctx.log);
+        await rmTrashInfoForPath(trashLoc, ctx.log);
       });
       dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
-      dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
+      dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc), path: trashLoc });
       return true;
     } catch {
       return false;
@@ -381,8 +381,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       selfDrop = 0;
     const failWhy = new Set<string>();
     const total = srcs.length;
-    // sudo gate memoized per op: one password prompt per batch, not per file
+    // sudo gate memoized per op: one password prompt per batch, not per file.
+    // usedSudo marks the toast hint: set ONLY when a sudo success lands undo
+    // units (gate passes for cleanup-only paths must not qualify later
+    // unprivileged successes).
     let sudoOk: boolean | null = null;
+    let usedSudo = false;
     const needSudo = async (): Promise<boolean> => {
       if (sudoOk !== null) return sudoOk;
       sudoOk = ctx.ensureSudo ? await ctx.ensureSudo(label) : false;
@@ -468,8 +472,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             if (!stashed) {
               const sudoStashed =
                 isPrivilegeError(stashErr) && (await needSudo()) && (await sudoStashVictim(target, units, dUnits));
-              if (sudoStashed) replaced++;
-              else {
+              if (sudoStashed) {
+                usedSudo = true;
+                replaced++;
+              } else {
                 failWhy.add(fsErrText(stashErr));
                 failed++;
                 continue;
@@ -578,6 +584,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                   }
                 } else await sudoMove(src, target);
                 recordSuccess();
+                usedSudo = true;
                 continue;
               } catch (sudoErr) {
                 failure = sudoErr;
@@ -627,7 +634,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (gone) bits.push(`${gone} source gone`);
     if (selfDrop) bits.push(`${selfDrop} folder into itself`);
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (ok || replaced) bits.push("ctrl+z to undo");
+    if (ok || replaced) bits.push(usedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     // always surface the outcome — success, failure, or cancel
     finishOpSummary(op, opNoun, `${verb} ${ok}`, msg, [...srcs], destDir, cancelled, failed);
@@ -648,6 +655,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const redos: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
     const dRedos: UndoStep[] = [];
+    // one password gate per rename (stash + main share it — two prompts for
+    // one rename is the UX bug this memo avoids)
+    let renameSudoOk: boolean | null = null;
+    let renameUsedSudo = false;
+    const needRenameSudo = async (): Promise<boolean> => {
+      if (renameSudoOk !== null) return renameSudoOk;
+      renameSudoOk = ctx.ensureSudo ? await ctx.ensureSudo(`rename ${path.basename(p)}`) : false;
+      return renameSudoOk;
+    };
     if (existsSync(finalDest)) {
       // single target: the bulk policy row never shows (promptConflict only
       // offers "…all" when remaining > 0), so there is no policy to reset
@@ -667,10 +683,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         if (!stashed) {
           const sudoStashed =
             isPrivilegeError(renameStashErr) &&
-            ctx.ensureSudo &&
-            (await ctx.ensureSudo(`rename ${path.basename(p)}`)) &&
+            (await needRenameSudo()) &&
             (await sudoStashVictim(finalDest, units, dUnits));
-          if (!sudoStashed) {
+          if (sudoStashed) renameUsedSudo = true;
+          else {
             ctx.notify("Replace failed — existing file kept", "rename failed", "error");
             ctx.renderAll();
             return;
@@ -696,11 +712,13 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       pushRenameUnits();
     } catch (err) {
       // privilege failure → password gate, then sudo mv; undo shape unchanged
+      // (but still unprivileged — qualify the hint below)
       let failure: unknown = err;
-      if (isPrivilegeError(err) && ctx.ensureSudo && (await ctx.ensureSudo(`rename ${path.basename(p)}`))) {
+      if (isPrivilegeError(err) && (await needRenameSudo())) {
         try {
           await sudoMove(p, finalDest);
           pushRenameUnits();
+          renameUsedSudo = true;
           failure = null;
         } catch (sudoErr) {
           failure = sudoErr;
@@ -728,7 +746,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       } catch {}
     } else {
       // the arrow names both ends so multi-tab renames stay clear
-      ctx.notify(`Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ctrl+z to undo`, "rename", "success");
+      const renameHint = renameUsedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo";
+      ctx.notify(`Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ${renameHint}`, "rename", "success");
       try {
         ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 0 });
       } catch {}
@@ -758,6 +777,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let failed = 0;
     const failWhy = new Set<string>();
     let bulkSudoOk: boolean | null = null;
+    let bulkUsedSudo = false;
     for (const { from, to } of pairs) {
       const recordBulk = (): void => {
         units.push(() => safeRestoreMove(to, from).then(() => undefined));
@@ -787,6 +807,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           if (bulkSudoOk) {
             try {
               await sudoMove(from, to);
+              bulkUsedSudo = true;
               recordBulk();
               continue;
             } catch (sudoErr) {
@@ -802,7 +823,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     ctx.renderAll();
     const bits = [`Renamed ${ok} item${ok === 1 ? "" : "s"}`];
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (ok) bits.push("ctrl+z to undo");
+    if (ok) bits.push(bulkUsedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     ctx.notify(msg, failed ? "rename failed" : "rename", failed ? "error" : "success");
     try {

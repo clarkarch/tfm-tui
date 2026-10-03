@@ -1260,6 +1260,79 @@ describeNonRoot("sudo escalation", () => {
     }
   });
 
+  test("sudo copy advertises permission-qualified undo hint", async () => {
+    const srcDir = path.join(ROOT, "sudo-hint-src");
+    const destDir = path.join(ROOT, "sudo-hint-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(srcDir, "a.txt"), "aaa");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    try {
+      const esc = makeHarness({
+        ensureSudo: async () => true,
+        sudoExec: fakeSudoExec,
+      });
+      await esc.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
+      expect(existsSync(path.join(destDir, "a.txt"))).toBe(true);
+      // undo after sudo is best-effort unprivileged — the toast must not
+      // promise a plain ctrl+z will work
+      const toasts = esc.calls.filter((c) => c.startsWith("notify:"));
+      expect(toasts.some((c) => c.includes("may need permission"))).toBe(true);
+      expect(toasts.some((c) => c.includes(" · ctrl+z to undo") && !c.includes("may need permission"))).toBe(false);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
+  test("sudo rename advertises permission-qualified undo hint", async () => {
+    const dir = path.join(ROOT, "sudo-hint-rename");
+    mkdirSync(dir, { recursive: true });
+    W(path.join(dir, "old.txt"), "data");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(dir, 0o555);
+    try {
+      const esc = makeHarness({ ensureSudo: async () => true, sudoExec: fakeSudoExec });
+      await esc.ops.performRename(path.join(dir, "old.txt"), "new.txt");
+      expect(existsSync(path.join(dir, "new.txt"))).toBe(true);
+      const toasts = esc.calls.filter((c) => c.startsWith("notify:"));
+      expect(toasts.some((c) => c.includes("Renamed old.txt → new.txt") && c.includes("may need permission"))).toBe(
+        true,
+      );
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  test("sudo bulk rename advertises permission-qualified undo hint with one gate", async () => {
+    const dir = path.join(ROOT, "sudo-hint-bulk");
+    mkdirSync(dir, { recursive: true });
+    W(path.join(dir, "b1.txt"), "1");
+    W(path.join(dir, "b2.txt"), "2");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(dir, 0o555);
+    try {
+      let gates = 0;
+      const esc = makeHarness({
+        ensureSudo: async () => {
+          gates++;
+          return true;
+        },
+        sudoExec: fakeSudoExec,
+      });
+      await esc.ops.performBulkRename([
+        { from: path.join(dir, "b1.txt"), to: path.join(dir, "c1.txt") },
+        { from: path.join(dir, "b2.txt"), to: path.join(dir, "c2.txt") },
+      ]);
+      expect(gates).toBe(1);
+      expect(existsSync(path.join(dir, "c1.txt"))).toBe(true);
+      const toasts = esc.calls.filter((c) => c.startsWith("notify:"));
+      expect(toasts.some((c) => c.includes("may need permission"))).toBe(true);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
   test("cancelled sudo gate leaves FAILED standing and never execs", async () => {
     const srcDir = path.join(ROOT, "sudo-cancel-src");
     const destDir = path.join(ROOT, "sudo-cancel-dest");

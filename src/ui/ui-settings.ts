@@ -425,20 +425,29 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // and retry once (deferred, so a transient native alloc hiccup recovers).
   // A failed retry does NOT reschedule — under sustained memory pressure
   // (see the OOM note in AGENTS.md) infinite retries just amplify it.
-  let retryArmed = false;
+  let retryArmed = true;
+  let warnedThisBurst = false;
   const renderMenuContent = () => {
     const c = ctx.colors();
     const panel = ctx.byId("tfm-menu-panel");
     if (!panel) return;
-    ctx.destroyChildren(panel);
     try {
+      ctx.destroyChildren(panel);
       buildMenuContent(c, panel, menuView);
       retryArmed = true; // a successful build re-arms the one-shot retry
+      warnedThisBurst = false;
     } catch (err) {
       logRenderFailure(err);
       if (retryArmed) {
         retryArmed = false;
         setTimeout(() => renderMenuContent(), 120);
+      } else if (!warnedThisBurst) {
+        // retry exhausted: the panel sits empty — say so once instead of a
+        // silent blank menu (neutral wording: only the debug log names OOM)
+        warnedThisBurst = true;
+        try {
+          ctx.warn("Menu failed to render — close and try again", "menu");
+        } catch {}
       }
     }
   };

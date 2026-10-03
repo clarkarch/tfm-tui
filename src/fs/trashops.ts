@@ -1,7 +1,16 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { failSuffix, countTrashItems, fsErrText, rmTrashInfo, trashDir, xdgTrashMove, safeRestoreMove } from "./fsutil";
+import {
+  failSuffix,
+  countTrashItems,
+  fsErrText,
+  rmTrashInfoForPath,
+  trashDir,
+  trashInfoPathForTrashFile,
+  xdgTrashMove,
+  safeRestoreMove,
+} from "./fsutil";
 import { defaultSudoExec, isPrivilegeError, runSudoTool, sudoRmArgv } from "./elevate";
 import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
@@ -65,17 +74,35 @@ export type TrashOpsSink = {
 export const trashOrigPath = async (name: string): Promise<string | null> => {
   try {
     const raw = await readFile(path.join(trashDir(), "info", `${name}.trashinfo`), "utf8");
-    const m = raw.match(/^Path=(.+)$/m);
-    if (!m?.[1]) return null;
-    let p = m[1].trim();
-    if (p.startsWith("file://")) p = p.slice(7);
-    try {
-      p = decodeURIComponent(p);
-    } catch {}
-    return path.resolve(p);
+    return parseTrashOrig(raw);
   } catch {
     return null;
   }
+};
+
+// sibling-aware original-path lookup for per-mount trashes: <root>/files/<name>
+// resolves via <root>/info/<name>.trashinfo first, falling back to home trash
+// (basename lookup) for backwards compat.
+export const trashOrigPathForFile = async (trashFilePath: string): Promise<string | null> => {
+  const sibling = trashInfoPathForTrashFile(trashFilePath);
+  if (sibling) {
+    try {
+      const parsed = parseTrashOrig(await readFile(sibling, "utf8"));
+      if (parsed) return parsed;
+    } catch {}
+  }
+  return trashOrigPath(path.basename(trashFilePath));
+};
+
+const parseTrashOrig = (raw: string): string | null => {
+  const m = raw.match(/^Path=(.+)$/m);
+  if (!m?.[1]) return null;
+  let p = m[1].trim();
+  if (p.startsWith("file://")) p = p.slice(7);
+  try {
+    p = decodeURIComponent(p);
+  } catch {}
+  return path.resolve(p);
 };
 
 export const makeTrashOps = (sink: TrashOpsSink) => {
@@ -118,10 +145,10 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           const from = path.join(path.dirname(loc), hit);
           units.push(async () => {
             await safeRestoreMove(from, p);
-            await rmTrashInfo(hit, sink.log?.bind(sink));
+            await rmTrashInfoForPath(from, sink.log?.bind(sink));
           });
           dUnits.push({ op: "restore-move", from, to: p });
-          dUnits.push({ op: "rm-trashinfo", name: hit });
+          dUnits.push({ op: "rm-trashinfo", name: hit, path: from });
           redos.push(async () => {
             try {
               if (existsSync(p)) await xdgTrashMove(p);
@@ -168,7 +195,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       let ok = 0;
       const failWhy = new Set<string>();
       for (const src of paths) {
-        const orig = await trashOrigPath(path.basename(src));
+        const orig = await trashOrigPathForFile(src);
         if (!orig) {
           failWhy.add("no trashinfo");
           continue;
@@ -177,7 +204,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           // safeRestoreMove owns the occupied-target bump (never clobbers)
           // and returns the final dest for the journal + cleanup below
           const restoredDest = await safeRestoreMove(src, orig);
-          await rmTrashInfo(path.basename(src), sink.log?.bind(sink));
+          await rmTrashInfoForPath(src, sink.log?.bind(sink));
           // undo = send it back to trash; redo = restore again (trashinfo
           // still resolves via Path= after the undo re-trash)
           units.push(async () => {
@@ -193,9 +220,9 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
             try {
               const loc = await xdgTrashMove(restoredDest).catch(() => null);
               if (loc) {
-                const back = await trashOrigPath(path.basename(loc));
+                const back = await trashOrigPathForFile(loc);
                 await safeRestoreMove(loc, back ?? restoredDest);
-                await rmTrashInfo(path.basename(loc));
+                await rmTrashInfoForPath(loc, sink.log?.bind(sink));
               }
             } catch (err) {
               sink.log?.(`redo restore ${restoredDest}: ${fsErrText(err)}`);
@@ -259,7 +286,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         try {
           if (dp) await rmTreeProgress(p, dp.sink);
           else await rm(p, { recursive: true });
-          await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
+          await rmTrashInfoForPath(p, sink.log?.bind(sink));
           ok++;
         } catch (err) {
           // cancel raced the last file: the checkpoint threw, not the fs
@@ -281,7 +308,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
             if (sudoOk) {
               try {
                 await sudoRm(p);
-                await rmTrashInfo(path.basename(p), sink.log?.bind(sink));
+                await rmTrashInfoForPath(p, sink.log?.bind(sink));
                 ok++;
                 continue;
               } catch (sudoErr) {

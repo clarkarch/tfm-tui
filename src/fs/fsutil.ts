@@ -186,6 +186,43 @@ export const rmTrashInfo = async (name: string, log?: (msg: string) => void): Pr
   }
 };
 
+// sibling info path for per-mount trashes ($topdir/.Trash-$uid): a trash
+// location already encodes its root (<root>/files/<name>), so its sidecar is
+// <root>/info/<name>.trashinfo. Null unless the path is absolute and inside a
+// files dir (relative paths fall back to home lookup).
+export const trashInfoPathForTrashFile = (trashFilePath: string): string | null => {
+  try {
+    if (!path.isAbsolute(trashFilePath)) return null;
+    const abs = path.resolve(trashFilePath);
+    if (path.basename(path.dirname(abs)) !== "files") return null;
+    return path.join(path.dirname(path.dirname(abs)), "info", `${path.basename(abs)}.trashinfo`);
+  } catch {
+    return null;
+  }
+};
+
+// sibling-aware cleanup for per-mount trashes ($topdir/.Trash-$uid): the
+// trash location already encodes its root (<root>/files/<name>), so delete
+// <root>/info/<name>.trashinfo instead of assuming home trash. Falls back to
+// home lookup when the path isn't inside a files dir.
+export const rmTrashInfoForPath = async (trashFilePath: string, log?: (msg: string) => void): Promise<void> => {
+  const sibling = trashInfoPathForTrashFile(trashFilePath);
+  if (sibling) {
+    try {
+      await rm(sibling);
+      return;
+    } catch (err) {
+      // missing sibling sidecar: the entry may predate the per-mount move —
+      // fall back to home before giving up
+      if (errCode(err) !== "ENOENT") {
+        log?.(`trashinfo cleanup ${path.basename(trashFilePath)}: ${fsErrText(err)}`);
+        return;
+      }
+    }
+  }
+  await rmTrashInfo(path.basename(trashFilePath), log);
+};
+
 // --- XDG trash spec helpers ---
 
 // Percent-encode an absolute path per the trash spec (Path= must be

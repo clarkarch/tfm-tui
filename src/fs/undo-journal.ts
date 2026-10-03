@@ -34,7 +34,7 @@ const isStep = (v: unknown): v is UndoStep => {
     case "write-empty-if-missing":
       return typeof s.path === "string";
     case "rm-trashinfo":
-      return typeof s.name === "string";
+      return typeof s.name === "string" && (s.path === undefined || typeof s.path === "string");
     default:
       return false;
   }
