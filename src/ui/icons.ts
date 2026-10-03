@@ -9,7 +9,11 @@ import { readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { extractImagesAsPng } from "@humanwhocodes/ico-to-png";
+import { PNG } from "pngjs";
+import * as UTIF from "utif2";
 import { atomicWriteFile } from "../fs/fsutil";
+import { extOf } from "../fs/filetype";
 import { swallow } from "../app/log";
 
 const home = os.homedir();
@@ -326,10 +330,79 @@ const renderRasterBunImage = async (p: string, pxW: number, pxH: number): Promis
     .png()
     .bytes();
 
+// --- Niche raster decoders: in-process fallbacks for formats Bun.Image
+// can't decode on Linux. Measured in scripts/bench-niche-decoders.ts
+// (median per 64px thumb, Linux — spawn times swing wildly with box load,
+// in-process lanes don't):
+//   ICO:  ico-to-png ~40-55ms vs spawn ~35-85ms (parity-or-better) → lane
+//         FIRST for zero-dep + primary-path shape, spawn residual
+//   TIFF: utif2+pngjs ~30-45ms beats spawn ~50-72ms → lane FIRST, spawn residual
+//   HEIC: heic-decode ~780ms ties spawn ~700-800ms → spawn FIRST, wasm covers
+//         the no-magick machine (lazy import: wasm + ~250ms init only on HEIC
+//         files that both faster lanes refused)
+//   AVIF: NO wasm lane — @jsquash/avif 241ms loses to spawn 128ms AND needs
+//         manual wasm init under bun --compile (probed) → spawn, then glyph.
+//   magick-wasm: REJECTED — its Memory64 build aborts at init on Bun 1.4.0
+//         (blocked on oven-sh/bun#35740), 15.8MB for a fallback path.
+// pngjs is the RGBA→PNG bridge for the rgba-returning decoders: Bun.Image
+// cannot construct from raw RGBA (uncaught ERR_IMAGE_UNKNOWN_FORMAT —
+// probed, never do it).
+
+// Pure lane routing (ext → in-process decoder); null rides Bun.Image/spawn.
+export type RasterLane = "ico" | "tiff" | "heic";
+export const rasterLaneFor = (p: string): RasterLane | null => {
+  const ext = extOf(p);
+  if (ext === "ico" || ext === "cur") return "ico";
+  if (ext === "tif" || ext === "tiff") return "tiff";
+  if (ext === "heic" || ext === "heif") return "heic";
+  return null;
+};
+
+// Shared tail: resize PNG bytes through the primary path (same 2x
+// aspect-fit shape as renderRasterBunImage, so lane output matches it).
+const bunResizeBytes = async (pngBytes: Uint8Array, pxW: number, pxH: number): Promise<Uint8Array> =>
+  new Bun.Image(pngBytes, { autoOrient: true })
+    .resize(pxW * 2, pxH * 2, { fit: "inside" })
+    .png()
+    .bytes();
+
+const rgbaToPng = (data: Uint8Array | Uint8ClampedArray, w: number, h: number): Uint8Array => {
+  const png = new PNG({ width: w, height: h });
+  png.data = Buffer.from(data);
+  return PNG.sync.write(png);
+};
+
+// ICOs carry multiple resolutions; the biggest decodes cleanest.
+const renderIcoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const imgs = extractImagesAsPng(new Uint8Array(readFileSync(p)));
+  const best = imgs.sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  if (!best) throw new Error(`no images in ICO: ${p}`);
+  return bunResizeBytes(best.data, pxW, pxH);
+};
+
+const renderTiffPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const buf = readFileSync(p);
+  const ifd = UTIF.decode(buf)[0];
+  if (!ifd) throw new Error(`no IFD in TIFF: ${p}`);
+  UTIF.decodeImage(buf, ifd);
+  return bunResizeBytes(rgbaToPng(UTIF.toRGBA8(ifd), ifd.width, ifd.height), pxW, pxH);
+};
+
+// heic-decode loads its libheif wasm on first import (~300ms) — memoized and
+// never retried, same policy as the resvg-js loader above (an import failure
+// is structural, and failedThumbs already sentinels per key).
+let heicDecodeP: Promise<typeof import("heic-decode")["default"]> | null = null;
+const renderHeicPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  heicDecodeP ??= import("heic-decode").then((m) => m.default);
+  const { width, height, data } = await (await heicDecodeP)({ buffer: readFileSync(p) });
+  return bunResizeBytes(rgbaToPng(data, width, height), pxW, pxH);
+};
+
 const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
-  // magick stays the fallback: formats Bun.Image can't decode here (ICO always;
-  // TIFF/HEIC/AVIF on Linux; XCF/KRA) — and a runtime older than 1.3.14, where
-  // `new Bun.Image` throws inside the async fn and the catch routes here.
+  // magick stays the fallback: formats no in-process lane covers (AVIF on
+  // Linux; XCF/KRA; exotic ICO/TIFF payloads the lanes refuse) — and a
+  // runtime older than 1.3.14, where `new Bun.Image` throws inside the async
+  // fn and the catch routes here.
   const magick = (): Promise<Uint8Array> =>
     pngFromProc(
       spawn("magick", [
@@ -351,7 +424,18 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
       ]),
       "magick",
     );
-  return renderRasterBunImage(p, pxW, pxH).catch(magick);
+  // Faster lane first (measured, see above): a refusing lane falls through to
+  // magick, a missing magick falls through to the lane/glyph.
+  switch (rasterLaneFor(p)) {
+    case "ico":
+      return renderRasterBunImage(p, pxW, pxH).catch(() => renderIcoPng(p, pxW, pxH).catch(magick));
+    case "tiff":
+      return renderRasterBunImage(p, pxW, pxH).catch(() => renderTiffPng(p, pxW, pxH).catch(magick));
+    case "heic":
+      return renderRasterBunImage(p, pxW, pxH).catch(() => magick().catch(() => renderHeicPng(p, pxW, pxH)));
+    default:
+      return renderRasterBunImage(p, pxW, pxH).catch(magick);
+  }
 };
 
 // video thumbs: one representative frame via ffmpeg, cover-cropped like the
@@ -460,7 +544,14 @@ export const thumbPng = (
   // SVG thumbs are keyed by the rasterizer too: resvg vs rsvg produce different
   // pixels, and switching must not serve the other renderer's cache. Raster/
   // video keys stay renderer-free so a photo library is never needlessly redone.
-  const mode = video ? "video" : vector ? `vec:${svgRenderer() ?? "none"}` : "raster";
+  // Niche lanes carry their lane in the mode: in-process pixels (aspect-fit)
+  // differ from spawn pixels (exact cover box), so `raster:ico` etc. must not
+  // serve magick-era `raster` entries. jpg/png/avif keep bare `raster` — their
+  // paths are unchanged, no mass re-raster. (heic's two lanes share one mode:
+  // installing/removing magick flips its lane under the same key — both are
+  // valid thumbs of the same image and any file edit re-keys on mtime.)
+  const lane = rasterLaneFor(path);
+  const mode = video ? "video" : vector ? `vec:${svgRenderer() ?? "none"}` : lane ? `raster:${lane}` : "raster";
   const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`;
   if (failedThumbs.has(key)) return Promise.reject(new Error(`thumb previously failed: ${path}`));
   let p = lruGet(thumbCache, key);

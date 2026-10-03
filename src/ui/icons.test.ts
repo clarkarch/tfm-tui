@@ -12,6 +12,7 @@ import {
   lruGet,
   lruSet,
   pickSvgRenderer,
+  rasterLaneFor,
   svgSourceMtime,
   thumbCooloffMs,
   thumbPng,
@@ -32,12 +33,19 @@ const hasSvgRenderer = hasInproc || hasMagick;
 const hasFfmpeg = Bun.which("ffmpeg") !== null;
 
 // tiny fixtures, embedded so the raster tests need no external tool to CREATE
-// the input: a 6x2 PNG (Bun.Image decodes it; magick would too) and a 4x4 ICO
-// (Bun.Image can't sniff ICO on any platform → forces the magick fallback).
+// the input: a 6x2 PNG (Bun.Image decodes it), a 4x4 ICO (Bun.Image can't
+// sniff ICO on any platform → in-process ico-to-png lane) and a 6x2
+// uncompressed RGB TIFF (Bun.Image rejects TIFF on Linux → utif2 lane).
 const PNG_6x2 =
   "iVBORw0KGgoAAAANSUhEUgAAAAYAAAACAQMAAABBkz8dAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAADUExURRI0VoH6TfIAAAAHdElNRQfqCRgBEh8XiJhUAAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA5LTI0VDAxOjE4OjMxKzAwOjAwhxQ3CQAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wOS0yNFQwMToxODozMSswMDowMPZJj7UAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDktMjRUMDE6MTg6MzErMDA6MDChXK5qAAAADElEQVQI12NgYGAAAAAEAAEnNCcKAAAAAElFTkSuQmCC";
 const ICO_4x4 =
-  "AAABAAEABAQAAAEAIAB4AAAAFgAAACgAAAAEAAAACAAAAAEAIAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAhQ2X/IUNl/yFDZf8hQ2X/IUNl/yFDZf8hQ2X/IUNl/yFDZf8hQ2X/IUNl/yFDZf8hQ2X/IUNl/yFDZf8hQ2X/AAAAAAAAAAAAAAAAAAAAAA==";
+  // well-formed 4x4 INFOHEADER BMP payload (full 16-byte AND mask): the prior
+  // fixture was TRUNCATED (dir entry claimed 120 payload bytes in a 108-byte
+  // tail) — magick tolerates that, ico-to-png bounds-checks and refuses, so
+  // the truncated shape now exercises the spawn residual, not this lane.
+  "AAABAAEABAQAAAEAIAB4AAAAFgAAACgAAAAEAAAACAAAAAEAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAAAAAAAAAAAAAAAAAAAAAAA==";
+const TIFF_6x2 =
+  "SUkqACwAAAD/AAD/AAD/AAD/AAD/AAD/AAAAAP8AAP8AAP8AAP8AAP8AAP8PAAABAwABAAAABgAAAAEBAwABAAAAAgAAAAIBAwADAAAA5gAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAAAoBAwABAAAAAQAAABEBBAABAAAACAAAABIBAwABAAAAAQAAABUBAwABAAAAAwAAABYBAwABAAAAAgAAABcBBAABAAAAJAAAABwBAwABAAAAAQAAACkBAwACAAAAAAABAD4BBQACAAAAHAEAAD8BBQAGAAAA7AAAAAAAAAAIAAgACACF61EAAACAAMP1qAAAAAACzcxMAAAAAAHNzEwAAACAAM3MTAAAAAACj8L1AAAAABA3GqAAAAAAAiuHCgAAACAA";
 
 // sandbox the disk cache for the WHOLE file: iconPng/thumbPng read the real
 // ~/.cache/tfm before rasterizing, so an app-populated disk hit could make
@@ -230,25 +238,53 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test.skipIf(!hasMagick)(
-    "a format Bun.Image can't sniff falls back to magick (exact cover box)",
-    async () => {
-      clearIconCaches();
-      const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-ico-"));
-      const p = path.join(dir, "icon.ico");
-      writeFileSync(p, Buffer.from(ICO_4x4, "base64"));
-      const bytes = await thumbPng(p, 1, 1, 64, 64, "#1a1b26");
-      expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      // magick cover-crops to the exact requested box (Bun.Image's path is
-      // aspect-fit) — 64x64 proves the fallback ran, not Bun.Image.
-      expect(dv.getUint32(16)).toBe(64);
-      expect(dv.getUint32(20)).toBe(64);
-      rmSync(dir, { recursive: true, force: true });
-      clearIconCaches();
-    },
-    20000,
-  );
+  test("ICO thumbs render in-process (aspect-fit, never the magick spawn)", async () => {
+    clearIconCaches();
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-ico-"));
+    const p = path.join(dir, "icon.ico");
+    writeFileSync(p, Buffer.from(ICO_4x4, "base64"));
+    const bytes = await thumbPng(p, 1, 1, 64, 64, "#1a1b26");
+    expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    // ico-to-png + Bun.Image is aspect-fit inside the 2x box (the primary
+    // path's shape): 4x4 square → 128x128. magick's exact cover box would be
+    // 64x64 — that shape now proves the SPAWN ran, not the lane.
+    expect(dv.getUint32(16)).toBe(128);
+    expect(dv.getUint32(20)).toBe(128);
+    rmSync(dir, { recursive: true, force: true });
+    clearIconCaches();
+  });
+
+  test("TIFF thumbs render in-process via utif2 (aspect-fit, no magick needed)", async () => {
+    clearIconCaches();
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-thumb-tiff-"));
+    const p = path.join(dir, "img.tiff");
+    writeFileSync(p, Buffer.from(TIFF_6x2, "base64"));
+    const bytes = await thumbPng(p, 1, 1, 64, 64, "#1a1b26");
+    expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    // 6:2 into a 128x128 inside-box fits to 128x42/43 — same aspect-fit pin
+    // as the Bun.Image primary path, proving the utif2 lane ran.
+    expect(dv.getUint32(16)).toBe(128);
+    expect(dv.getUint32(20)).toBeLessThan(128);
+    rmSync(dir, { recursive: true, force: true });
+    clearIconCaches();
+  });
+
+  test("rasterLaneFor routes niche exts to in-process lanes, rest to spawn", () => {
+    expect(rasterLaneFor("a.ico")).toBe("ico");
+    expect(rasterLaneFor("a.CUR")).toBe("ico");
+    expect(rasterLaneFor("a.tif")).toBe("tiff");
+    expect(rasterLaneFor("a.TIFF")).toBe("tiff");
+    expect(rasterLaneFor("a.heic")).toBe("heic");
+    expect(rasterLaneFor("a.HEIF")).toBe("heic");
+    // AVIF has no wasm lane (jsquash loses to spawn AND needs manual wasm
+    // init under bun --compile) and everything else rides Bun.Image/spawn.
+    expect(rasterLaneFor("a.avif")).toBeNull();
+    expect(rasterLaneFor("a.jpg")).toBeNull();
+    expect(rasterLaneFor("a.png")).toBeNull();
+    expect(rasterLaneFor("a")).toBeNull();
+  });
 
   test.skipIf(!hasMagick && !hasSvgRenderer)(
     "thumb disk cache serves revisits after the memory layer drops",

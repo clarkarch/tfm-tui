@@ -15,12 +15,18 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11",
+    "@jsquash/avif": "^2.1.1",
     "@resvg/resvg-js": "^2.6.2",
     "@types/bun": "^1.3.14",
+    "@types/pngjs": "^6.0.5",
     "typescript": "^5"
   },
   "dependencies": {
+    "@humanwhocodes/ico-to-png": "^1.1.0",
     "@opentui/core": "0.5.14",
-    "smol-toml": "^1.8.0"
+    "heic-decode": "^2.1.0",
+    "pngjs": "^7.0.0",
+    "smol-toml": "^1.8.0",
+    "utif2": "^4.1.0"
   }
 }
