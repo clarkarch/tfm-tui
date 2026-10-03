@@ -25,11 +25,12 @@ const PROFILES: Record<string, { w: number; h: number }> = {
   tile: { w: 54, h: 54 },
 };
 
-type Args = { runs: number; size?: { w: number; h: number }; pixels: boolean };
+type Args = { runs: number; size?: { w: number; h: number }; pixels: boolean; only?: string };
 const parseArgs = (argv: string[]): Args => {
   let runs = 5;
   let size: { w: number; h: number } | undefined;
   let pixels = false;
+  let only: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--runs") runs = Number(argv[++i]);
     else if (argv[i] === "--size") {
@@ -37,8 +38,12 @@ const parseArgs = (argv: string[]): Args => {
       if (!w || !h) throw new Error("--size expects WxH");
       size = { w, h };
     } else if (argv[i] === "--pixels") pixels = true;
+    // comma-separated renderer names — the slow spawn baseline can be skipped
+    // for a focused pass (rsvg-convert at 100-250ms/spawn dominates a 20-run
+    // corpus sweep; its numbers are already recorded)
+    else if (argv[i] === "--only") only = argv[++i];
   }
-  return { runs, size, pixels };
+  return { runs, size, pixels, only };
 };
 
 // Same tint as src/ui/icons.ts (replace hex fills, else inject a fill on <svg>).
@@ -113,8 +118,81 @@ const RENDERERS = {
   ],
 } as const;
 
+// --- In-process candidates: the npm packages tfm would ship when it drops the
+// tool deps (scripts/bench-raster.ts benches them against the CLIs first —
+// measured, not assumed). Native = @resvg/resvg-js (napi addon, zero init);
+// wasm = @resvg/resvg-wasm (one artifact for every platform, initWasm timed
+// below). Both render on the JS thread (sync napi / wasm) — that serialization
+// is part of the per-icon number, the same way the CLI's spawn+startup is.
+let NativeResvg: typeof import("@resvg/resvg-js").Resvg | null = null;
+try {
+  NativeResvg = (await import("@resvg/resvg-js")).Resvg;
+} catch {} // addon load failure — reported in the header, spawn benches still run
+
+let wasmInitMs = -1;
+let WasmResvg: typeof import("@resvg/resvg-wasm").Resvg | null = null;
+try {
+  const t0 = performance.now();
+  const wasm = await import("@resvg/resvg-wasm");
+  await wasm.initWasm(readFileSync(new URL("../node_modules/@resvg/resvg-wasm/index_bg.wasm", import.meta.url)));
+  WasmResvg = wasm.Resvg;
+  wasmInitMs = performance.now() - t0;
+} catch {}
+
+// resvg-js lacks the CLI's FitTo::Size (-w+-h): fitTo is original/width/height/
+// zoom only. Fit-inside replicates in two constructions — the parse-only probe
+// (width/height getters, no raster) gives the natural size, then zoom renders.
+// The double parse is part of the per-icon cost; the raster cache means it only
+// pays on cache misses in tfm.
+const inprocNative = async (svg: Buffer, w: number, h: number): Promise<{ ms: number; out: Buffer } | null> => {
+  const R = NativeResvg;
+  if (!R) return null;
+  const t0 = performance.now();
+  // loadSystemFonts defaults TRUE and the per-construction scan of
+  // /usr/share/fonts was measured at ~1.7s/icon — path-only corpus needs no
+  // fonts; the text-bearing-SVG branch is the implementation's problem, not
+  // the bench's.
+  const probe = new R(svg, { logLevel: "off", font: { loadSystemFonts: false } });
+  const zoom = Math.min(w / probe.width, h / probe.height);
+  const r = new R(svg, {
+    logLevel: "off",
+    background: BG,
+    font: { loadSystemFonts: false },
+    fitTo: { mode: "zoom", value: zoom },
+  });
+  const out = r.render().asPng();
+  return { ms: performance.now() - t0, out };
+};
+
+const inprocWasm = async (svg: Buffer, w: number, h: number): Promise<{ ms: number; out: Buffer } | null> => {
+  const R = WasmResvg;
+  if (!R) return null;
+  const t0 = performance.now();
+  // explicit for symmetry with the native entry (wasm32 has no fs, so the
+  // default was already fontless — pinned here against a default change)
+  const probe = new R(svg, { font: { loadSystemFonts: false } });
+  const zoom = Math.min(w / probe.width, h / probe.height);
+  const r = new R(svg, { background: BG, font: { loadSystemFonts: false }, fitTo: { mode: "zoom", value: zoom } });
+  const img = r.render();
+  const out = Buffer.from(img.asPng());
+  img.free();
+  r.free();
+  probe.free();
+  return { ms: performance.now() - t0, out };
+};
+
+const INPROC: Record<string, (svg: Buffer, w: number, h: number) => Promise<{ ms: number; out: Buffer } | null>> = {
+  "resvg-js": inprocNative,
+  "resvg-wasm": inprocWasm,
+};
+
 const main = async () => {
   const args = parseArgs(process.argv.slice(2));
+  const wanted = args.only
+    ?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const keep = (name: string): boolean => !wanted || wanted.includes(name);
   const icons = readdirSync(ICON_DIR)
     .filter((f) => f.endsWith(".svg"))
     .sort();
@@ -125,18 +203,21 @@ const main = async () => {
   const profiles = args.size ? { custom: args.size } : PROFILES;
 
   console.log(`corpus: ${corpus.length} icons from assets/icons`);
-  for (const cmd of Object.keys(RENDERERS)) {
+  for (const cmd of Object.keys(RENDERERS).filter(keep)) {
     const v = await spawnOnce(cmd, ["--version"], Buffer.alloc(0)).catch(() => null);
     console.log(`  ${cmd}: ${v ? v.out.toString().split("\n")[0] || v.stderr.split("\n")[0] : "MISSING"}`);
   }
   console.log(
-    `runs/icon: ${args.runs}, profiles: ${Object.keys(profiles).join(", ")}${magick ? "" : " (no magick: pixel diff off)"}\n`,
+    `  in-process: resvg-js ${NativeResvg ? "LOADED" : "MISSING/FAILED"}, resvg-wasm ${WasmResvg ? `LOADED (initWasm ${fmt(wasmInitMs)})` : "MISSING/FAILED"}`,
+  );
+  console.log(
+    `runs/icon: ${args.runs}, profiles: ${Object.keys(profiles).join(", ")}${args.only ? `, only: ${args.only}` : ""}${magick ? "" : " (no magick: pixel diff off)"}\n`,
   );
 
   for (const [pname, { w, h }] of Object.entries(profiles)) {
     console.log(`== ${pname} ${w}x${h} ==`);
     const results: Record<string, { samples: number[]; wrong: number; baseline?: Buffer[] }> = {};
-    for (const [cmd, mkArgs] of Object.entries(RENDERERS)) {
+    for (const [cmd, mkArgs] of Object.entries(RENDERERS).filter(([cmd]) => keep(cmd))) {
       const samples: number[] = [];
       const outs: Buffer[] = [];
       let wrong = 0;
@@ -158,8 +239,42 @@ const main = async () => {
       results[cmd] = { samples, wrong, baseline: outs };
     }
 
+    // In-process candidates fill the same results record — one stats table and
+    // cross-check covers spawn + in-process. ADDON MISSING/FAILED is skipped,
+    // never fatal (the spawn numbers above still stand).
+    for (const [name, render] of Object.entries(INPROC).filter(([name]) => keep(name))) {
+      const samples: number[] = [];
+      const outs: Buffer[] = [];
+      let wrong = 0;
+      let missing = false;
+      for (const icon of corpus) {
+        for (let i = 0; i < args.runs; i++) {
+          const r = await render(icon.svg, w, h);
+          if (r === null) {
+            missing = true;
+            break;
+          }
+          if (i > 0) samples.push(r.ms); // run 0 warms the JIT/module caches too
+          if (i === 0) {
+            const dims = pngSize(r.out);
+            if (!dims || dims.w !== w || dims.h !== h) {
+              wrong++;
+              if (wrong <= 3) console.log(`  ! ${name} ${icon.name}: dims=${dims ? `${dims.w}x${dims.h}` : "no-png"}`);
+            }
+            outs.push(r.out);
+          }
+        }
+        if (missing) break;
+      }
+      if (missing) {
+        console.log(`  ${name}: ADDON MISSING/FAILED, skipped`);
+        continue;
+      }
+      results[name] = { samples, wrong, baseline: outs };
+    }
+
     // Cross-check dims + optional pixel diff against the first renderer.
-    const names = Object.keys(RENDERERS);
+    const names = Object.keys(results);
     const refName = names[0];
     const ref = refName === undefined ? undefined : results[refName];
     if (!ref) continue;
@@ -195,16 +310,20 @@ const main = async () => {
         `${cmd.padEnd(15)} ${fmt(s.total).padEnd(19)} ${fmt(s.mean).padEnd(8)} ${fmt(s.median).padEnd(8)} ${fmt(s.p95).padEnd(8)} ${fmt(s.min)}`,
       );
     }
-    const names2 = Object.keys(RENDERERS);
-    const [n0, n1] = names2;
+    const names2 = Object.keys(results);
+    const [n0] = names2;
     const r0 = n0 === undefined ? undefined : results[n0];
-    const r1 = n1 === undefined ? undefined : results[n1];
-    if (r0 && r1 && n1 !== undefined) {
+    if (r0 && n0 !== undefined) {
       const a = stats(r0.samples);
-      const b = stats(r1.samples);
-      console.log(
-        `→ ${n1} is ${(a.median / b.median).toFixed(2)}x faster per icon (median), ${(a.total / b.total).toFixed(2)}x on the full corpus\n`,
-      );
+      for (const n of names2.slice(1)) {
+        const r = results[n];
+        if (!r) continue;
+        const b = stats(r.samples);
+        console.log(
+          `→ ${n} is ${(a.median / b.median).toFixed(2)}x faster per icon (median), ${(a.total / b.total).toFixed(2)}x on the full corpus`,
+        );
+      }
+      console.log("");
     }
 
     // resvg's internal breakdown (Reading / XML / SVG parse / Render). Render to
@@ -225,6 +344,29 @@ const main = async () => {
           .join("\n"),
       );
       console.log("");
+    }
+  }
+
+  // Pathological-SVG probe (the bun#17414 negative-height crash shape): does
+  // the napi/wasm render panic-crash the PROCESS (resvg-js 2.6.2 lacks
+  // catch_unwind — that protection only landed in 2.7.0-alpha) or throw a
+  // catchable error? Runs LAST so a hard abort can't lose the numbers above.
+  if (NativeResvg || WasmResvg) {
+    const bad = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="-180"><path d="M0 0h100v100z"/></svg>',
+    );
+    const candidates = [
+      ["resvg-js", NativeResvg],
+      ["resvg-wasm", WasmResvg],
+    ] as const;
+    for (const [name, Ctor] of candidates) {
+      if (!Ctor) continue;
+      try {
+        new Ctor(bad, {}).render();
+        console.log(`malformed-SVG probe ${name}: rendered OK (no panic)`);
+      } catch (e) {
+        console.log(`malformed-SVG probe ${name}: threw (catchable): ${String(e).slice(0, 200)}`);
+      }
     }
   }
 

@@ -17,16 +17,17 @@ import {
   thumbPng,
 } from "./icons";
 
-// exercises the real resvg/rsvg-convert/magick pipeline (dev-machine deps);
-// failures here mean the raster pipeline or its cache keys broke.
-// Icon and vector-thumb tests need an SVG rasterizer (resvg preferred, else
-// rsvg-convert — one at a time, see icons.ts); raster tests need magick.
-// They skip when the binaries are absent (CI runners, containers) — "missing
-// icon rejects" stays live everywhere: with no renderer installed rasterizeSvg
-// throws at the renderer check before reading the asset, and the missing asset
-// throws at the read on a machine that has one.
+// exercises the real resvg-js/resvg/rsvg-convert/magick pipeline (dev-machine
+// deps); failures here mean the raster pipeline or its cache keys broke.
+// Icon and vector-thumb tests need an SVG rasterizer (the in-process resvg-js
+// addon preferred, else resvg/rsvg-convert — one at a time, see icons.ts);
+// raster tests need magick. They skip when nothing is available (CI runners,
+// containers) — "missing icon rejects" stays live everywhere: with no renderer
+// installed rasterizeSvg throws at the renderer check before reading the
+// asset, and the missing asset throws at the read on a machine that has one.
 const hasResvg = Bun.which("resvg") !== null;
-const hasSvgRenderer = hasResvg || Bun.which("rsvg-convert") !== null;
+const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => false);
+const hasSvgRenderer = hasInproc || hasResvg || Bun.which("rsvg-convert") !== null;
 const hasMagick = Bun.which("magick") !== null;
 const hasFfmpeg = Bun.which("ffmpeg") !== null;
 
@@ -83,11 +84,13 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test.skipIf(!hasResvg)("prefers resvg: non-square requests keep aspect (fit-inside)", async () => {
+  test.skipIf(!hasResvg && !hasInproc)("non-square requests keep aspect (fit-inside)", async () => {
     clearIconCaches();
-    // resvg CLI `-w`+`-h` fits inside (aspect-preserving): the square 24x24
-    // folder glyph in an 18x16 box shrinks to 16x16. rsvg-convert instead
-    // stretches to exactly 18x16, so this pins that resvg is the one running.
+    // resvg CLI `-w`+`-h` fits inside (aspect-preserving), and the
+    // in-process zoom replication does the same: the square 24x24 folder
+    // glyph in an 18x16 box shrinks to 16x16. rsvg-convert instead
+    // stretches to exactly 18x16, so this pins that the chosen renderer
+    // is NOT rsvg-convert.
     const bytes = await iconPng("folder", "#c0caf5", "#1a1b26", 18, 16);
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     expect(dv.getUint32(16)).toBe(16); // IHDR width
@@ -95,11 +98,13 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test("renderer precedence: resvg wins, rsvg-convert is the fallback, none is null", () => {
-    expect(pickSvgRenderer(true, true)).toBe("resvg");
-    expect(pickSvgRenderer(true, false)).toBe("resvg");
-    expect(pickSvgRenderer(false, true)).toBe("rsvg-convert");
-    expect(pickSvgRenderer(false, false)).toBe(null);
+  test("renderer precedence: in-process wins, resvg CLI is the fallback, rsvg-convert after, none is null", () => {
+    expect(pickSvgRenderer(true, true, true)).toBe("inproc");
+    expect(pickSvgRenderer(true, false, false)).toBe("inproc");
+    expect(pickSvgRenderer(false, true, true)).toBe("resvg");
+    expect(pickSvgRenderer(false, true, false)).toBe("resvg");
+    expect(pickSvgRenderer(false, false, true)).toBe("rsvg-convert");
+    expect(pickSvgRenderer(false, false, false)).toBe(null);
   });
 
   test("missing icon rejects", async () => {
@@ -202,10 +207,11 @@ describe("icons", () => {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const w = dv.getUint32(16); // IHDR width
     const h = dv.getUint32(20); // IHDR height
-    // Exact dims pin WHICH renderer ran: resvg fits inside (square 24x24 at
-    // 64x48 → 48x48); rsvg-convert keeps the exact letterboxed 64x48 canvas.
-    // A `<= requested` assertion would pass for both and prove nothing.
-    if (hasResvg) {
+    // Exact dims pin WHICH renderer ran: resvg (CLI or in-process) fits
+    // inside (square 24x24 at 64x48 → 48x48); rsvg-convert keeps the exact
+    // letterboxed 64x48 canvas. A `<= requested` assertion would pass for
+    // both and prove nothing.
+    if (hasResvg || hasInproc) {
       expect(w).toBe(48);
       expect(h).toBe(48);
     } else {

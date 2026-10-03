@@ -81,21 +81,82 @@ export const iconCacheKey = (
       `${name}:${fg}:${pxW}x${pxH}|src${srcMtimeMs}|t`
     : `${name}:${fg}:${bg}:${pxW}x${pxH}|src${srcMtimeMs}`;
 
-// Which SVG rasterizer to spawn. resvg is ~5-7x faster per invocation than
-// rsvg-convert — process startup (cairo/pango/librsvg init) dominates the
-// raster by an order of magnitude, not the drawing, so the lighter dep-free
-// binary wins outright (measured in scripts/bench-raster.ts). Prefer it when
-// installed; fall back to rsvg-convert. Pure selector so the precedence is
-// pinned without either binary on the machine; `svgRenderer` memoizes the
-// Bun.which probe (a PATH scan).
-export const pickSvgRenderer = (hasResvg: boolean, hasRsvg: boolean): "resvg" | "rsvg-convert" | null =>
-  hasResvg ? "resvg" : hasRsvg ? "rsvg-convert" : null;
-let svgRendererCache: "resvg" | "rsvg-convert" | null | undefined;
-const svgRenderer = (): "resvg" | "rsvg-convert" | null => {
+// Which SVG rasterizer to use. The in-process resvg-js addon (napi) is the
+// primary: measured in scripts/bench-raster.ts at ~0.3-0.5ms/icon vs the resvg
+// CLI's ~6-7ms (13-23x — process startup dominates a spawn) and rsvg-convert's
+// ~31-44ms (~60x), with pixel-identical output on path-only icons (0 px diff
+// vs the CLI across the whole asset corpus). `loadSystemFonts: false` is what
+// makes it fast: the per-construction scan of /usr/share/fonts was measured at
+// ~1.8s/icon, and icon assets are path-only by policy. The resvg CLI spawn is
+// the fallback (it resolves fonts per process), rsvg-convert after that.
+// Pure selector so the precedence is pinned without any renderer on the
+// machine; `svgRenderer` memoizes the choice (the addon load + Bun.which are
+// one-time probes).
+export type SvgRendererKind = "inproc" | "resvg" | "rsvg-convert" | null;
+export const pickSvgRenderer = (hasInproc: boolean, hasResvg: boolean, hasRsvg: boolean): SvgRendererKind =>
+  hasInproc ? "inproc" : hasResvg ? "resvg" : hasRsvg ? "rsvg-convert" : null;
+
+// the CLI pick when the in-process path can't take a render (text-bearing SVG,
+// addon hiccup) — the pickSvgRenderer order minus inproc
+const svgRendererFallback = (): "resvg" | "rsvg-convert" | null =>
+  pickSvgRenderer(false, Bun.which("resvg") !== null, Bun.which("rsvg-convert") !== null) as
+    | "resvg"
+    | "rsvg-convert"
+    | null;
+
+// resvg-js loads via a sync require-dlopen: svgRenderer() AND the cache-key
+// salts read it synchronously, so the addon must be resolved by the first
+// call — an async import would let a salt computed before the load resolve
+// name the CLI while later renders use in-process (key/salt mismatch). A
+// failed load (musl/minimal container) is remembered, never retried, and the
+// CLI probes cover.
+type ResvgCtor = typeof import("@resvg/resvg-js").Resvg;
+let inprocResvg: ResvgCtor | null | undefined;
+const loadInprocResvg = (): ResvgCtor | null => {
+  if (inprocResvg === undefined) {
+    try {
+      inprocResvg = require("@resvg/resvg-js").Resvg as ResvgCtor;
+    } catch {
+      inprocResvg = null;
+    }
+  }
+  return inprocResvg;
+};
+
+let svgRendererCache: SvgRendererKind | undefined;
+const svgRenderer = (): SvgRendererKind => {
   if (svgRendererCache === undefined) {
-    svgRendererCache = pickSvgRenderer(Bun.which("resvg") !== null, Bun.which("rsvg-convert") !== null);
+    svgRendererCache = pickSvgRenderer(
+      loadInprocResvg() !== null,
+      Bun.which("resvg") !== null,
+      Bun.which("rsvg-convert") !== null,
+    );
   }
   return svgRendererCache;
+};
+
+// <text>/<tspan> elements need fonts; the in-process render runs with
+// loadSystemFonts:false (probed: the glyphs simply vanish, no crash), so
+// text-bearing SVGs route to the CLI, which resolves fonts per process.
+const hasTextEl = (svg: string): boolean => /<text[\s/>]|<tspan[\s/>]/.test(svg);
+
+// In-process render (resvg-js): fit-inside replicates the CLI's `-w`+`-h` —
+// resvg-js lacks FitTo::Size, so a parse-only probe (width/height getters, no
+// raster) gives the natural size and `zoom` renders. Two constructions per
+// call, both sub-ms; the raster caches mean it only pays on cache misses.
+// `bg === undefined` omits the background (transparent mode, keep alpha).
+const renderInproc = (svg: string, pxW: number, pxH: number, bg?: string): Uint8Array => {
+  const R = loadInprocResvg();
+  if (!R) throw new Error("resvg-js addon unavailable");
+  const probe = new R(svg, { logLevel: "off", font: { loadSystemFonts: false } });
+  const zoom = Math.min(pxW / probe.width, pxH / probe.height);
+  const r = new R(svg, {
+    logLevel: "off",
+    font: { loadSystemFonts: false },
+    ...(bg === undefined ? {} : { background: bg }),
+    fitTo: { mode: "zoom", value: zoom },
+  });
+  return new Uint8Array(r.render().asPng());
 };
 
 // resvg reads stdin as `-` and writes stdout with `-c`; rsvg-convert does both
@@ -110,18 +171,30 @@ const rasterizeSvg = async (
   transparent = false,
 ): Promise<Uint8Array> => {
   const renderer = svgRenderer();
-  if (!renderer) throw new Error("no SVG rasterizer available (install resvg or rsvg-convert)");
+  if (!renderer)
+    throw new Error("no SVG rasterizer available (bun add @resvg/resvg-js, or install resvg/rsvg-convert)");
   const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
   const tinted = /#[0-9a-fA-F]{6}/.test(svg)
     ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
     : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
+
+  // in-process first: sub-ms native render, pixel-identical to the CLI on
+  // path-only assets (measured, scripts/bench-raster.ts)
+  const cliRenderer = renderer === "inproc" ? svgRendererFallback() : renderer;
+  if (renderer === "inproc" && !hasTextEl(tinted)) {
+    return renderInproc(tinted, pxW, pxH, transparent ? undefined : bg);
+  }
+  // a text-bearing asset (policy violation, but an edited asset is possible)
+  // needs fonts → the CLI; with no CLI installed the icon falls back to a
+  // glyph via the throw below
+  if (!cliRenderer) throw new Error("no SVG rasterizer that resolves fonts (install resvg or rsvg-convert)");
 
   // transparent mode omits the background entirely (keep alpha); the flattened
   // path bakes bg in because kitty alpha on icon rasters proved unreliable
   // (tint/fringe) — see [ui] icons
   const size = ["-w", String(pxW), "-h", String(pxH)];
   const args =
-    renderer === "resvg"
+    cliRenderer === "resvg"
       ? // --quiet mutes resvg's logger, but the stdin "set --resources-dir"
         // notice is a bare eprintln that bypasses it (verified), so stderr is
         // drained below rather than trusted to stay empty
@@ -131,7 +204,7 @@ const rasterizeSvg = async (
       : transparent
         ? size
         : ["--background-color", bg, ...size];
-  const proc = spawn(renderer, args);
+  const proc = spawn(cliRenderer, args);
   const chunks: Buffer[] = [];
   proc.stdout.on("data", (c: Buffer) => {
     chunks.push(c);
@@ -145,7 +218,7 @@ const rasterizeSvg = async (
     proc.on("close", (code) =>
       code === 0 && chunks.length > 0
         ? resolve(new Uint8Array(Buffer.concat(chunks)))
-        : reject(new Error(`${renderer} exited ${code}`)),
+        : reject(new Error(`${cliRenderer} exited ${code}`)),
     );
   });
   proc.stdin.end(tinted);
@@ -244,8 +317,12 @@ export const iconPng = async (
     try {
       const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH, transparent);
       lruSet(iconCache, key, bytes, ICON_CACHE_MAX);
+      // path captured NOW: the write-behind must not re-read $XDG_CACHE_HOME
+      // after a sandbox re-pointed it — the late read let the previous test's
+      // write land in the NEXT test's fresh sandbox (fire-and-forget race)
+      const diskPath = iconDiskPath(key);
       void ensureIconDir().then(() =>
-        atomicWriteFile(iconDiskPath(key), bytes).catch((err) => swallow("icon disk cache write", err)),
+        atomicWriteFile(diskPath, bytes).catch((err) => swallow("icon disk cache write", err)),
       );
       return bytes;
     } finally {
@@ -298,17 +375,15 @@ const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): stri
 ];
 const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
   const magick = () => pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
-  const renderer = svgRenderer();
-  if (renderer === "resvg") {
-    return pngFromProc(
+  const resvgCli = () =>
+    pngFromProc(
       spawn("resvg", ["--quiet", "--background", bg, "-w", String(pxW), "-h", String(pxH), p, "-c"]),
       "resvg",
     ).catch(magick);
-  }
-  if (renderer === "rsvg-convert") {
-    // exact canvas, contain-fit, letterboxed onto bg; librsvg < 2.54 lacks
-    // --page-* and is caught by the magick fallback
-    return pngFromProc(
+  // exact canvas, contain-fit, letterboxed onto bg; librsvg < 2.54 lacks
+  // --page-* and is caught by the magick fallback
+  const rsvgCli = () =>
+    pngFromProc(
       spawn("rsvg-convert", [
         "-w",
         String(pxW),
@@ -325,7 +400,27 @@ const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promi
       ]),
       "rsvg-convert",
     ).catch(magick);
+  // the CLI pick when in-process can't take the render — the pickSvgRenderer
+  // order minus inproc
+  const cli = (): Promise<Uint8Array> => {
+    const r = svgRendererFallback();
+    return r === "resvg" ? resvgCli() : r === "rsvg-convert" ? rsvgCli() : magick();
+  };
+  const renderer = svgRenderer();
+  if (renderer === "inproc") {
+    // text-bearing user SVGs need fonts — loadSystemFonts:false renders them
+    // glyphless (probed) — so they fall to the CLI; a vanished file or addon
+    // hiccup does the same
+    try {
+      const svgText = readFileSync(p, "utf8");
+      if (!hasTextEl(svgText)) return Promise.resolve(renderInproc(svgText, pxW, pxH, bg));
+    } catch {
+      // fall through to the CLI
+    }
+    return cli();
   }
+  if (renderer === "resvg") return resvgCli();
+  if (renderer === "rsvg-convert") return rsvgCli();
   return magick();
 };
 
@@ -501,8 +596,10 @@ export const thumbPng = (
           ? renderVectorPng(path, pxW, pxH, bg)
           : renderRasterPng(path, pxW, pxH, bg));
       // write-behind: never block the render on the cache write
+      // path captured NOW — same fire-and-forget race as the icon write above
+      const diskPath = thumbDiskPath(key);
       void ensureThumbDir().then(() =>
-        atomicWriteFile(thumbDiskPath(key), bytes).catch((err) => swallow("thumb disk cache write", err)),
+        atomicWriteFile(diskPath, bytes).catch((err) => swallow("thumb disk cache write", err)),
       );
       return bytes;
     })();
