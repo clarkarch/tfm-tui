@@ -234,6 +234,7 @@ describe("settingGroups shape", () => {
       "##style",
       "transparent bg",
       "icons",
+      "icon style",
       "ui style",
       "##chrome",
       "sidebar title",
@@ -338,6 +339,21 @@ describe("settingGroups shape", () => {
 
   test("every core category carries an icon (silent-fallback guard)", () => {
     for (const g of mk().groups()) expect(typeof g.icon).toBe("string");
+  });
+
+  test("appearance/keys/optimization use the outline category icons", () => {
+    // Outline slots (pure-outlines set): palette/keyboard/lightning-bolt. A
+    // wrong slot name silently falls back to a generic glyph, so pin the
+    // exact names. (pencil/sort/power stay for their own surfaces: rename
+    // row, toolbar sort button, Quit.)
+    const byHeader = new Map(
+      mk()
+        .groups()
+        .map((g) => [g.header, g.icon]),
+    );
+    expect(byHeader.get("appearance")).toBe("palette");
+    expect(byHeader.get("keys")).toBe("keyboard");
+    expect(byHeader.get("optimization")).toBe("lightning-bolt");
   });
 
   test("every keybind action gets a row", () => {

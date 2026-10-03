@@ -322,14 +322,14 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   // Order is everyday priority: look first, tuning last. panes and animations
   // sit directly under layout: they answer "how does the UI look and move?".
   const CATEGORIES: { id: NonNullable<UiSchemaRow["group"]>; label: string; icon: string }[] = [
-    { id: "appearance", label: "appearance", icon: "pencil" },
+    { id: "appearance", label: "appearance", icon: "palette" },
     { id: "layout", label: "layout", icon: "select-all" },
     { id: "panes", label: "panes", icon: "desktop-tower" },
     { id: "animations", label: "animations", icon: "play" },
     { id: "files", label: "files & session", icon: "folder" },
     { id: "behavior", label: "behavior", icon: "clock" },
-    { id: "keys", label: "keys", icon: "sort" },
-    { id: "optimization", label: "optimization", icon: "power" },
+    { id: "keys", label: "keys", icon: "keyboard" },
+    { id: "optimization", label: "optimization", icon: "lightning-bolt" },
     { id: "advanced", label: "advanced", icon: "cog" },
   ];
 

@@ -170,6 +170,80 @@ describe("glyph fallbacks", () => {
     expect(glyphFor("power-plug")).toBe("\u{F06A5}");
   });
 
+  test("settings category icons map to verified filled nerd-font codepoints", () => {
+    // keyboard F030C = md-keyboard, palette F03D8 = md-palette,
+    // lightning-bolt F140B = md-lightning_bolt (all checked via fontTools
+    // getBestCmap against MesloLGLDZ Nerd Font Mono)
+    expect(glyphFor("keyboard")).toBe("\u{F030C}");
+    expect(glyphFor("palette")).toBe("\u{F03D8}");
+    expect(glyphFor("lightning-bolt")).toBe("\u{F140B}");
+    expect(glyphFor("keyboard", "outline")).toBe("\u{F097B}");
+    expect(glyphFor("palette", "outline")).toBe("\u{F0E0C}");
+    expect(glyphFor("lightning-bolt", "outline")).toBe("\u{F140C}");
+  });
+
+  test("information/help/checkbox-blank/search resolve per style", () => {
+    // filled base (fontTools-verified): information F02FC, help F02D7,
+    // checkbox-blank F012E, search F0349 = md-magnify (no outline sibling,
+    // so the outline lookup falls through to filled)
+    expect(glyphFor("information")).toBe("\u{F02FC}");
+    expect(glyphFor("help")).toBe("\u{F02D7}");
+    expect(glyphFor("checkbox-blank")).toBe("\u{F012E}");
+    expect(glyphFor("search")).toBe("\u{F0349}");
+    expect(glyphFor("information", "outline")).toBe("\u{F02FD}");
+    expect(glyphFor("help", "outline")).toBe("\u{F0625}");
+    expect(glyphFor("checkbox-blank", "outline")).toBe("\u{F0131}");
+    expect(glyphFor("search", "outline")).toBe("\u{F0349}");
+  });
+
+  test("outline style resolves every -outline slot, filled stays put", () => {
+    // Each pinned via fontTools getBestCmap; slots with no MDI outline
+    // sibling (power, sort, pause, content-*, chevrons, …) fall back to
+    // filled and are deliberately asserted as such below. close/check stay
+    // filled-only too: their MDI "outline" variants are different busy
+    // icons (multi-X, double-check), while the filled glyphs are single
+    // strokes.
+    const cases: Array<[string, string]> = [
+      ["home", "\u{F06A1}"],
+      ["star", "\u{F04D2}"],
+      ["clock", "\u{F0150}"],
+      ["bookmark", "\u{F00C3}"],
+      ["trash-can", "\u{F0A7A}"],
+      ["folder", "\u{F0256}"],
+      ["eject", "\u{F0B91}"],
+      ["file", "\u{F0224}"],
+      ["cog", "\u{F08BB}"],
+      ["power-plug", "\u{F1425}"],
+      ["eye", "\u{F06D0}"],
+      ["eye-off", "\u{F06D1}"],
+      ["pencil", "\u{F0CB6}"],
+      ["checkbox-marked", "\u{F0135}"],
+      ["play", "\u{F0F1B}"],
+      ["plus", "\u{F0705}"],
+      ["folder-plus", "\u{F0B9D}"],
+      ["book-open", "\u{F0B63}"],
+      ["database", "\u{F1632}"],
+      ["certificate", "\u{F1188}"],
+      ["cube", "\u{F01A7}"],
+      ["email", "\u{F01F0}"],
+      ["file-code", "\u{F102B}"],
+      ["file-document", "\u{F09EE}"],
+      ["file-image", "\u{F0EB0}"],
+      ["file-video", "\u{F0E2C}"],
+      ["file-music", "\u{F0E2A}"],
+      ["zip-box", "\u{F0FFA}"],
+    ];
+    for (const [slot, code] of cases) {
+      expect(glyphFor(slot, "outline")).toBe(code);
+      expect(glyphFor(slot)).not.toBe(code);
+    }
+    // no outline sibling (or deliberately excluded): outline falls through
+    for (const slot of ["power", "sort", "pause", "content-copy", "content-duplicate", "close", "check"]) {
+      expect(glyphFor(slot, "outline")).toBe(glyphFor(slot));
+    }
+    expect(glyphFor("content-duplicate")).toBe("\u{F0191}");
+  });
+
   test("ensureGlyphFallbacks fills unknown categories with the file glyph", () => {
     ensureGlyphFallbacks(["zz-test-category"]);
     expect(glyph["zz-test-category"]).toBe(glyph.file);

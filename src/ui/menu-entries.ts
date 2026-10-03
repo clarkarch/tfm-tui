@@ -426,7 +426,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
-        icon: "content-copy",
+        icon: "content-duplicate",
         label: `Duplicate${nSuffix}`,
         action: () => {
           ctx.closeFileMenu();

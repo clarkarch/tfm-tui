@@ -26,8 +26,8 @@ export const resolveTtyMode = (mode: TtyMode | string, term?: string | null): bo
 // sidebar key off this through their own `rasterSig` ctx fields, and both
 // wirings must call THIS (never an inline JSON) so the two surfaces cannot
 // drift into disagreeing about what a graphics-mode flip rebuilds.
-export const rasterSigOf = (icons: string, ttyMode: boolean, forceGlyph: boolean): string =>
-  JSON.stringify([icons, ttyMode, forceGlyph]);
+export const rasterSigOf = (icons: string, ttyMode: boolean, forceGlyph: boolean, iconStyle = "filled"): string =>
+  JSON.stringify([icons, ttyMode, forceGlyph, iconStyle]);
 
 // --- 16-color console palettes ---
 // OpenTUI emits 48;2/38;2 truecolor unconditionally (ansi.ts), which the Linux
@@ -177,6 +177,7 @@ const ASCII_GLYPHS: Record<string, string> = {
   "content-copy": "C",
   "content-paste": "p",
   "content-cut": "X",
+  "content-duplicate": "C",
   information: "i",
   help: "?",
   pencil: "/",
@@ -205,6 +206,9 @@ const ASCII_GLYPHS: Record<string, string> = {
   "border-vertical": "|",
   "arrow-up": "^",
   "arrow-down": "v",
+  keyboard: "k",
+  palette: "L",
+  "lightning-bolt": "Z",
 };
 
 export const asciiGlyphFor = (name: string): string => ASCII_GLYPHS[name] ?? "-";

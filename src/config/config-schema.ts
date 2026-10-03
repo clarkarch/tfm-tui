@@ -164,6 +164,12 @@ export type SidebarHoverOpts = {
 // desktop through.
 export type IconMode = "opaque" | "transparent" | "transparent-partial";
 
+// icon-raster style. `filled` = solid icon rasters (default); `outline` =
+// hollow icon rasters where the set ships an outline sibling (icons with no
+// outline variant — power, sort, pause, content-*, chevrons, … — stay filled,
+// as do close/check whose MDI "outlines" are different busy icons).
+export type IconStyle = "filled" | "outline";
+
 // tty mode for the Linux console / dumb terminals (no kitty graphics, no
 // Nerd-Font PUA): forces list view + ASCII glyphs + no rasters/thumbs and
 // paints one STATIC console palette (dark/light by configured-bg brightness —
@@ -198,6 +204,7 @@ export type UiConfig = {
   followTerminal: boolean;
   transparentBg: boolean;
   icons: IconMode;
+  iconStyle: IconStyle;
   ttyMode: TtyMode;
   forceGlyph: boolean;
   sidebarTitle: boolean;
@@ -757,6 +764,19 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs',
     label: "icons",
     blurb: "How icons blend with tile backgrounds",
+    group: "appearance",
+    subsection: "style",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "icon-style",
+    prop: "iconStyle",
+    values: ["filled", "outline"],
+    def: "filled",
+    doc: '"filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)',
+    label: "icon style",
+    blurb: "Filled or outline icons",
     group: "appearance",
     subsection: "style",
   },

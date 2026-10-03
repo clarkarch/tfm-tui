@@ -190,6 +190,7 @@ describe("fileEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const dup = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label.startsWith("Duplicate"))!;
     expect(dup.label).toBe("Duplicate 2 items");
+    expect(dup.icon).toBe("content-duplicate");
     dup.action();
     expect(ctx.calls).toContain("duplicate:/a,/b");
   });

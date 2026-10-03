@@ -76,6 +76,14 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { icons: false } }).ui.icons).toBe("opaque");
   });
 
+  test("icon-style defaults to filled, parses the style enum", () => {
+    expect(parseConfigDoc(undefined).ui.iconStyle).toBe("filled");
+    expect(parseConfigDoc({ ui: { "icon-style": "outline" } }).ui.iconStyle).toBe("outline");
+    expect(parseConfigDoc({ ui: { "icon-style": "filled" } }).ui.iconStyle).toBe("filled");
+    expect(parseConfigDoc({ ui: { "icon-style": "yes" } }).ui.iconStyle).toBe("filled");
+    expect(parseConfigDoc({ ui: { "icon-style": true } }).ui.iconStyle).toBe("filled");
+  });
+
   test("tty-mode parses the enum; the old compat-mode spelling is not read", () => {
     expect(parseConfigDoc(undefined).ui.ttyMode).toBe("auto");
     expect(parseConfigDoc({ ui: { "tty-mode": "on" } }).ui.ttyMode).toBe("on");

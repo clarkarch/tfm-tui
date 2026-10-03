@@ -53,13 +53,27 @@ describe("rasterSigOf", () => {
     expect(rasterSigOf("transparent", false, false)).not.toBe(base);
     expect(rasterSigOf("opaque", true, false)).not.toBe(base);
     expect(rasterSigOf("opaque", false, true)).not.toBe(base);
+    expect(rasterSigOf("opaque", false, false, "outline")).not.toBe(base);
     expect(rasterSigOf("opaque", false, false)).toBe(base);
   });
 });
 
 describe("asciiGlyphFor", () => {
   test("every result is plain ASCII (linux console has no Nerd PUA)", () => {
-    for (const name of ["folder", "file", "home", "star", "trash-can", "search", "chevron-left", "no-such-icon"]) {
+    for (const name of [
+      "folder",
+      "file",
+      "home",
+      "star",
+      "trash-can",
+      "search",
+      "chevron-left",
+      "keyboard",
+      "palette",
+      "lightning-bolt",
+      "content-duplicate",
+      "no-such-icon",
+    ]) {
       const g = asciiGlyphFor(name);
       expect(g.length).toBeGreaterThan(0);
       for (const ch of g) expect(ch.charCodeAt(0)).toBeLessThan(128);

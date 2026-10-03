@@ -305,7 +305,8 @@ export const wireGrid = (deps: {
       viewMode: () => (core.isTtyMode() ? "list" : core.config.ui.viewMode),
       // raster-affecting state the grid rebuild keys off (force-glyph/icons/
       // tty mode flips must rebuild even though the listing is unchanged)
-      rasterSig: () => rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph),
+      rasterSig: () =>
+        rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph, core.config.ui.iconStyle),
       wrapMode: () => core.config.ui.wrapMode,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,

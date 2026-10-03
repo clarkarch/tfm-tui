@@ -3,7 +3,9 @@ import { writeFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "nod
 import { inflateSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
+import { glyphFor } from "./glyphs";
 import {
+  OUTLINE_ICONS,
   THUMB_COOL_MS,
   clearIconCaches,
   iconCacheKey,
@@ -13,6 +15,7 @@ import {
   lruSet,
   pickSvgRenderer,
   rasterLaneFor,
+  resolveIconName,
   svgSourceMtime,
   thumbCooloffMs,
   thumbPng,
@@ -80,6 +83,77 @@ describe("icons", () => {
     const bytes = await iconPng("power-plug", "#c0caf5", "#1a1b26", 16, 16);
     expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
     clearIconCaches();
+  });
+
+  test.skipIf(!hasSvgRenderer)("icon-style set rasterizes (filled base + outline variants)", async () => {
+    clearIconCaches();
+    for (const name of [
+      "keyboard",
+      "palette",
+      "lightning-bolt",
+      "information",
+      "help",
+      "checkbox-blank",
+      "content-duplicate",
+      "search",
+      "home",
+      "star",
+      "clock",
+      "bookmark",
+      "trash-can",
+      "folder",
+      "eject",
+      "file",
+      "cog",
+      "power-plug",
+      "eye",
+      "eye-off",
+      "pencil",
+      "checkbox-marked",
+      "play",
+      "plus",
+      "folder-plus",
+      "book-open",
+      "database",
+      "certificate",
+      "cube",
+      "email",
+      "file-code",
+      "file-document",
+      "file-image",
+      "file-video",
+      "file-music",
+      "zip-box",
+    ]) {
+      const bytes = await iconPng(name, "#c0caf5", "#1a1b26", 16, 16);
+      expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+      // style opt resolves to the -outline asset (same bytes as naming it)
+      const viaStyle = await iconPng(name, "#c0caf5", "#1a1b26", 16, 16, { style: "outline" });
+      const direct = await iconPng(resolveIconName(name, "outline"), "#c0caf5", "#1a1b26", 16, 16);
+      expect(viaStyle).toEqual(direct);
+    }
+    clearIconCaches();
+  });
+
+  test("OUTLINE_ICONS matches the -outline assets and glyph entries both ways", () => {
+    // the resolver, the asset dir and the glyph table must agree, or outline
+    // mode silently serves filled (missing file falls back) or tofu
+    // (missing glyph entry)
+    const files = new Set(
+      readdirSync(path.join(import.meta.dir, "..", "..", "assets", "icons"))
+        .filter((f) => f.endsWith("-outline.svg"))
+        .map((f) => f.slice(0, -"-outline.svg".length)),
+    );
+    expect([...files].sort()).toEqual([...OUTLINE_ICONS].sort());
+    for (const name of OUTLINE_ICONS) {
+      expect(glyphFor(`${name}-outline`)).not.toBe("�");
+      expect(resolveIconName(name, "outline")).toBe(`${name}-outline`);
+    }
+    // no outline sibling: filled serves both styles
+    for (const name of ["power", "sort", "search", "content-duplicate", "close", "check"]) {
+      expect(resolveIconName(name, "outline")).toBe(name);
+    }
+    expect(resolveIconName("folder", "filled")).toBe("folder");
   });
 
   test.skipIf(!hasSvgRenderer)("different tints/size produce distinct renders", async () => {

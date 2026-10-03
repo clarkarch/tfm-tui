@@ -70,7 +70,9 @@ export const wireCore = (deps: {
   // settings flip or live-reload applies without restart.
   const isTtyMode = (): boolean => resolveTtyMode(config.ui.ttyMode, process.env.TERM);
   // ASCII glyphs on the console (no Nerd PUA there), Nerd glyphs elsewhere
-  const ttyGlyphFor = (name: string): string => (isTtyMode() ? asciiGlyphFor(name) : glyphFor(name));
+  // (style-aware: an icon-style toggle re-resolves via resetIconQueue)
+  const ttyGlyphFor = (name: string): string =>
+    isTtyMode() ? asciiGlyphFor(name) : glyphFor(name, config.ui.iconStyle);
   // force-glyph: same raster skip as tty mode, but WITHOUT the console extras
   // (list view, ASCII glyphs, anim/transparent forcing), live-read like tty mode
   const forceGlyph = (): boolean => config.ui.forceGlyph;
@@ -132,6 +134,7 @@ export const wireCore = (deps: {
     colors: themeGet,
     uiStyle: () => config.ui.uiStyle,
     iconsMode: () => config.ui.icons,
+    iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
     modalOpen: () => floats.hasModal(),
     glyphFor: ttyGlyphFor,

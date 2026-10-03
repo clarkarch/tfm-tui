@@ -169,10 +169,19 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         isDark(c.theme.bg) ? "dark" : "light",
         c.ui.uiStyle,
         c.ui.icons,
+        c.ui.iconStyle,
         c.ui.ttyMode,
         c.ui.forceGlyph,
       ]);
-    return JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons, c.ui.ttyMode, c.ui.forceGlyph]);
+    return JSON.stringify([
+      c.theme,
+      c.ui.transparentBg,
+      c.ui.uiStyle,
+      c.ui.icons,
+      c.ui.iconStyle,
+      c.ui.ttyMode,
+      c.ui.forceGlyph,
+    ]);
   };
   let lastThemeSig = themeSig(ctx.config);
 

@@ -36,6 +36,7 @@ toast-duration-ms                     = 3000        # how long notifications sta
 follow-terminal                       = false       # true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset
 transparent-bg                        = false       # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
+icon-style                            = "filled"    # "filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)

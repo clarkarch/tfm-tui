@@ -10,7 +10,7 @@
 import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
 import { iconPng, thumbPng } from "./icons";
 import { swallow } from "../app/log";
-import type { IconMode, Theme } from "../config/config";
+import type { IconMode, IconStyle, Theme } from "../config/config";
 import { intToHex } from "../config/color";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
 import type { MaybeNode } from "../lib/node-like";
@@ -229,6 +229,9 @@ export type SlotsCtx = {
   uiStyle(): string;
   // [ui] icons — read live like uiStyle (mode flip re-rasters)
   iconsMode(): IconMode;
+  // [ui] icon-style — read live (toggle re-rasters via resetIconQueue).
+  // Optional so test fakes keep working (absent = filled).
+  iconStyle?(): IconStyle;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
   // true while a modal menu/scrim owns the screen (drain re-applies scrim)
@@ -460,7 +463,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
           Math.max(1, Math.round(heightCells * cellH)),
           // bg arrives ignored in transparent mode (the key drops it, so all
           // states share one raster) — kept in the signature for call-site compat
-          { transparent },
+          { transparent, style: ctx.iconStyle?.() ?? "filled" },
         );
         const img = new ImageRenderable(ctx.renderer(), {
           id: `${slotId}-${idPrefix}${si}`,
@@ -696,6 +699,17 @@ export const makeSlots = (ctx: SlotsCtx) => {
       // rerun revisits EVERY spec even one the in-flight pass already claimed.
       for (const s of allSpecs.values()) s.done = false;
       iconForceRedrain = true;
+      // an icon-style toggle also flips the fallback glyphs (shown pre-raster
+      // and under the scrim): repaint mounted ones now so a failed/slow
+      // raster can't strand the old style's glyph
+      for (const s of allSpecs.values()) {
+        try {
+          const slot = ctx.byId(s.slotId);
+          const kids = slot?.getChildren?.() ?? [];
+          const g = kids.find((k) => typeof k.id === "string" && k.id.endsWith("-g"));
+          if (g) (g as { content?: unknown }).content = ctx.glyphFor(s.name);
+        } catch {}
+      }
       if (iconDrain) iconDrainAgain = true;
     },
     pushThumbJob: (job: ThumbJob): void => {

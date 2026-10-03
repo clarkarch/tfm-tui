@@ -37,6 +37,7 @@ const makeHarness = () => {
   let modalUp = false;
   let ttyMode = false;
   let forceGlyph = false;
+  let iconStyle: "filled" | "outline" = "filled";
   const ctx: SlotsCtx = {
     renderer: () =>
       ({ resolution: { width: 800, height: 400 }, terminalWidth: 80, terminalHeight: 20 }) as unknown as CliRenderer,
@@ -44,9 +45,10 @@ const makeHarness = () => {
     colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
     uiStyle: () => "solid",
     iconsMode: () => "opaque",
+    iconStyle: () => iconStyle,
     iconCells: () => 3,
     modalOpen: () => modalUp,
-    glyphFor: () => "F",
+    glyphFor: (name) => (iconStyle === "outline" ? `O:${name}` : "F"),
     isTtyMode: () => ttyMode,
     forceGlyph: () => forceGlyph,
   };
@@ -74,6 +76,7 @@ const makeHarness = () => {
     setModal: (v: boolean) => (modalUp = v),
     setTtyMode: (v: boolean) => (ttyMode = v),
     setForceGlyph: (v: boolean) => (forceGlyph = v),
+    setIconStyle: (v: "filled" | "outline") => (iconStyle = v),
   };
 };
 
@@ -109,6 +112,24 @@ describe("icon slot scrim", () => {
     expect(s.spec.done).toBe(false);
     await h.slots.drainIconQueue();
     expect(s.spec.done).toBe(true);
+  });
+
+  test("resetIconQueue repaints mounted fallback glyphs for the active style", async () => {
+    // an icon-style toggle must flip the -g texts too (shown pre-raster and
+    // under the scrim) — re-rastering alone would strand the old glyph
+    // behind every slow/failed raster
+    const h = makeHarness();
+    const s = h.slots.makeIconSlot("folder", [{ fg: FG, bg: BG }], 1, 0);
+    const { glyph } = h.mountFakeSlot(s.spec);
+    expect(glyph.content).toBe("F");
+
+    h.setIconStyle("outline");
+    h.slots.resetIconQueue();
+    expect(glyph.content).toBe("O:folder");
+
+    h.setIconStyle("filled");
+    h.slots.resetIconQueue();
+    expect(glyph.content).toBe("F");
   });
 
   test("drain re-raster consults statesFactory so a theme flip paints fresh colors", async () => {

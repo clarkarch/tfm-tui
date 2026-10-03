@@ -15,6 +15,7 @@ import * as UTIF from "utif2";
 import { atomicWriteFile } from "../fs/fsutil";
 import { extOf } from "../fs/filetype";
 import { swallow } from "../app/log";
+import type { IconStyle } from "../config/config-schema";
 
 const home = os.homedir();
 
@@ -57,6 +58,54 @@ export const warmEmbeddedIcons = (): void => {
 };
 
 const svgAssetPath = (name: string): string => `${import.meta.dir}/../../assets/icons/${name}.svg`;
+
+// Slots with an outline sibling (`<name>-outline.svg`, same suffix as the
+// `-outline` glyph entries). Static table, not a directory probe: the
+// compiled binary has no assets dir (Blobs only), and a probe would disagree
+// between dev and compiled runs. icons.test.ts pins both directions
+// (set ⟺ files on disk ⟺ glyph entries).
+export const OUTLINE_ICONS: ReadonlySet<string> = new Set([
+  "home",
+  "star",
+  "clock",
+  "bookmark",
+  "trash-can",
+  "folder",
+  "eject",
+  "file",
+  "cog",
+  "power-plug",
+  "eye",
+  "eye-off",
+  "pencil",
+  "checkbox-marked",
+  "play",
+  "plus",
+  "folder-plus",
+  "keyboard",
+  "palette",
+  "lightning-bolt",
+  "information",
+  "help",
+  "checkbox-blank",
+  "book-open",
+  "database",
+  "certificate",
+  "cube",
+  "email",
+  "file-code",
+  "file-document",
+  "file-image",
+  "file-video",
+  "file-music",
+  "zip-box",
+]);
+
+// Style resolution for [ui] icon-style: outline mode serves the -outline
+// asset where one ships, else the filled base (the key carries the resolved
+// name, so filled/outline rasters never share a cache entry).
+export const resolveIconName = (name: string, style: IconStyle = "filled"): string =>
+  style === "outline" && OUTLINE_ICONS.has(name) ? `${name}-outline` : name;
 
 // SVG source version for the icon cache key: editing an asset must
 // re-raster instead of serving the stale disk entry (the old key only had
@@ -228,10 +277,11 @@ export const iconPng = async (
   bg: string,
   pxW: number,
   pxH: number,
-  opts?: { transparent?: boolean },
+  opts?: { transparent?: boolean; style?: IconStyle },
 ): Promise<Uint8Array> => {
   const transparent = opts?.transparent ?? false;
-  const key = iconCacheKey(name, fg, bg, pxW, pxH, svgSourceMtime(name), transparent);
+  const asset = resolveIconName(name, opts?.style ?? "filled");
+  const key = iconCacheKey(asset, fg, bg, pxW, pxH, svgSourceMtime(asset), transparent);
   const hit = lruGet(iconCache, key);
   if (hit) return hit;
   // identical requests racing (e.g. 15 folder rows) share one render
@@ -246,7 +296,7 @@ export const iconPng = async (
   const job = (async () => {
     await acquireRasterSlot();
     try {
-      const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH, transparent);
+      const bytes = await rasterizeSvg(asset, fg, bg, pxW, pxH, transparent);
       lruSet(iconCache, key, bytes, ICON_CACHE_MAX);
       // path captured NOW: the write-behind must not re-read $XDG_CACHE_HOME
       // after a sandbox re-pointed it — the late read let the previous test's

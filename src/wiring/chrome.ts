@@ -110,7 +110,8 @@ export const wireChrome = async (deps: {
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
     tabBar: () => core.config.ui.tabBar,
-    rasterSig: () => rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph),
+    rasterSig: () =>
+      rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph, core.config.ui.iconStyle),
     renderAll: nav.renderAll,
     navigate: nav.navigate,
     blurTerminal: () => getFileops().terminal.blurTerminal(),
