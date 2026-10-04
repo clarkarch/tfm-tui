@@ -34,6 +34,10 @@ export type SettingsPanelState = {
   collapsed: Set<string>;
 };
 
+// the keybind-conflict swap offer, painted in the footer AND the capturing
+// row's value cell (same string both places, so one helper, not two literals)
+export const swapOfferText = (spec: string, ownerLabel: string): string => `"${spec}" is ${ownerLabel}, swap?`;
+
 type SettingsPanelHooks = {
   groups(): SettingGroup[];
   // visible row count for the right pane (panel chrome takes ~6 rows)
@@ -280,7 +284,7 @@ export const renderSettingsPanel = (
         id: "tfm-set-desc",
         content: fitDescText(
           st.swapOffer
-            ? `"${st.swapOffer.spec}" is ${st.swapOffer.ownerLabel} - enter swaps it, esc types another`
+            ? swapOfferText(st.swapOffer.spec, st.swapOffer.ownerLabel)
             : st.capturing !== null
               ? "press a key…"
               : descText(st.menuIdx < 0 ? undefined : rows[st.menuIdx]),
@@ -445,7 +449,7 @@ const renderRowPane = (
       control = Box(
         { flexGrow: 1 },
         Text({
-          content: offer ? `"${offer.spec}" is ${offer.ownerLabel} - enter swaps` : "press a key…",
+          content: offer ? swapOfferText(offer.spec, offer.ownerLabel) : "press a key…",
           fg: c.accent,
         }),
       );

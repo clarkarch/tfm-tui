@@ -386,7 +386,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const spec = keySpecFromEvent(e);
     if (!spec) {
       // an unrecordable keypress dropped the offer above — repaint so no
-      // stale "enter swaps" stays on screen (capture stays armed for retry)
+      // stale "swap?" offer stays on screen (capture stays armed for retry)
       if (droppedOffer) renderMenuContent();
       return true;
     }

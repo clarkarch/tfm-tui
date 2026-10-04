@@ -832,7 +832,7 @@ describe("keybind swap offer", () => {
       await t.renderOnce();
       // the offer replaces the capture prompt on the row and names the owner
       // in the footer — capture is still armed (esc goes back to "press a key…")
-      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("swap?");
       expect(t.captureCharFrame()).toContain("Undo");
       expect(swapBinds.binds).toEqual(["ctrl+q"]); // nothing committed yet
     } finally {
@@ -846,7 +846,7 @@ describe("keybind swap offer", () => {
     try {
       expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
-      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("swap?");
       // enter commits the steal and ends capture
       expect(menu.captureKey({ name: "return", ctrl: false, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
@@ -857,12 +857,12 @@ describe("keybind swap offer", () => {
       await t.renderOnce();
       expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
-      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("swap?");
       expect(menu.captureKey({ name: "escape", ctrl: false, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
       expect(swapBinds.binds).toEqual(["ctrl+z"]);
       expect(t.captureCharFrame()).toContain("press a key…");
-      expect(t.captureCharFrame()).not.toContain("enter swaps");
+      expect(t.captureCharFrame()).not.toContain("swap?");
     } finally {
       restore();
       await t.renderOnce();
@@ -874,13 +874,13 @@ describe("keybind swap offer", () => {
     try {
       expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
-      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("swap?");
       // bare letter = invalid: the offer must clear AND repaint (no stale
-      // "enter swaps" left on screen), capture stays armed for retry
+      // "swap?" left on screen), capture stays armed for retry
       expect(menu.captureKey({ name: "a", ctrl: false, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
       expect(t.captureCharFrame()).toContain("press a key…");
-      expect(t.captureCharFrame()).not.toContain("enter swaps");
+      expect(t.captureCharFrame()).not.toContain("swap?");
       // retry still works: a free key applies and ends capture
       expect(menu.captureKey({ name: "f", ctrl: true, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
@@ -920,12 +920,12 @@ describe("keybind swap offer", () => {
       await t.renderOnce();
       expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
-      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("swap?");
       // enter with no swap fn: offer stays, capture stays, nothing committed
       expect(menu.captureKey({ name: "return", ctrl: false, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
       expect(noswap.binds).toEqual(["ctrl+q"]);
-      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("swap?");
       expect(t.captureCharFrame()).not.toContain("press a key…");
     } finally {
       groups = keep;
@@ -939,7 +939,7 @@ describe("keybind swap offer", () => {
     try {
       expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
-      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("swap?");
       // a free key applies straight away and ends capture
       expect(menu.captureKey({ name: "f", ctrl: true, shift: false, meta: false })).toBe(true);
       await t.renderOnce();
