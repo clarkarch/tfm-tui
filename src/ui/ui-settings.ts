@@ -28,8 +28,9 @@ import {
   flatVisible,
   renderSettingsPanel,
   sectionKey,
+  settingsPanelWidth,
   settingsVisRows,
-  SETTINGS_W,
+  SET_VAL_W,
   visiblePos,
   type SettingsPanelState,
 } from "./ui-settings-panel";
@@ -313,7 +314,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
               return i >= 0 ? (row.names[i] ?? "?") : (row.customLabel?.() ?? "custom");
             })();
     setOnId(`tfm-set-rowv-${index}`, (n) => {
-      n.content = value.length > 12 ? value.slice(0, 12) : value;
+      n.content = value.length > SET_VAL_W - 1 ? value.slice(0, SET_VAL_W - 1) : value;
       // selected rows keep white values; unselected toggles keep the on/accent cue
       if (st.pane === "rows" && st.menuIdx === index) n.fg = menuC.white;
       else if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
@@ -567,9 +568,14 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins" | "help") => {
     menuC = c;
     const panelView = view !== "root";
-    // the help view uses its own wide poster width
+    // the help view uses its own wide poster width; settings/plugins fill
+    // the terminal the same way (settingsPanelWidth clamps small terminals)
     const panelW =
-      view === "help" ? helpPanelWidth(ctx.renderer().terminalWidth) : panelView ? SETTINGS_W : ctx.menuW();
+      view === "help"
+        ? helpPanelWidth(ctx.renderer().terminalWidth)
+        : panelView
+          ? settingsPanelWidth(ctx.renderer().terminalWidth)
+          : ctx.menuW();
     try {
       panel.width = panelW;
     } catch {}
@@ -690,25 +696,31 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       // static cheat sheet (no cursor, no settings rows)
       renderHelpPanel(c, panel, { keybinds: (a) => ctx.keybinds?.(a) ?? [] });
     } else {
-      renderSettingsPanel(c, panel, st, {
-        groups,
-        visRows: visibleRows,
-        setOnId,
-        makeIconSlot: ctx.makeIconSlot,
-        setIconState: ctx.setIconState,
-        paintCatAt,
-        switchCategory,
-        cancelCapture,
-        rowActivate,
-        afterAdjust,
-        paintRowAt,
-        rebuild: renderMenuContent,
-        isCollapsed: (key) => st.collapsed.has(key),
-        toggleSection,
-        paintDesc,
-        log: (message) => ctx.log?.(message),
-        setPointer: ctx.setPointer,
-      });
+      renderSettingsPanel(
+        c,
+        panel,
+        st,
+        {
+          groups,
+          visRows: visibleRows,
+          setOnId,
+          makeIconSlot: ctx.makeIconSlot,
+          setIconState: ctx.setIconState,
+          paintCatAt,
+          switchCategory,
+          cancelCapture,
+          rowActivate,
+          afterAdjust,
+          paintRowAt,
+          rebuild: renderMenuContent,
+          isCollapsed: (key) => st.collapsed.has(key),
+          toggleSection,
+          paintDesc,
+          log: (message) => ctx.log?.(message),
+          setPointer: ctx.setPointer,
+        },
+        panelW,
+      );
     }
 
     // vertical centering is structural (scrim justifyContent:center) — no
@@ -834,7 +846,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       st.menuIdx = flat[(pos + delta + flat.length) % flat.length] ?? first;
     }
     ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, st.menuIdx));
-    paintDesc(fitDescText(descText(rowsOf(st.catIdx)[st.menuIdx])));
+    paintDesc(fitDescText(descText(rowsOf(st.catIdx)[st.menuIdx]), settingsPanelWidth(ctx.renderer().terminalWidth)));
     renderMenuContent();
   };
 

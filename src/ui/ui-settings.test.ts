@@ -60,7 +60,7 @@ const mkRows = (): SettingRow[] => {
 const mkGroups = (rowCount = 5): SettingGroup[] => {
   const rows = mkRows().slice(0, rowCount) as any[];
   const big: SettingGroup[] = [{ header: "general", rows }];
-  // a scrollable category for the windowing contract (vis = min(14, 24-12) = 12)
+  // a scrollable category for the windowing contract (vis = min(20, 24-12) = 12)
   big.push({
     header: "behavior",
     rows: Array.from({ length: 20 }, (_, i) => ({
@@ -322,6 +322,15 @@ describe("settings view", () => {
     expect(frame).toContain("Menu — settings");
   });
 
+  test("settings panel fills the terminal (adaptive width, not fixed 78)", async () => {
+    // test renderer is 90 wide → panel must be 86 (90 - 4), like the help view
+    await openSettings();
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    expect(panel?.width).toBe(86);
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
   test("hovering a category highlights it by id WITHOUT switching (no auto-nav)", async () => {
     await openSettings();
     iconStateCalls.length = 0;
@@ -556,15 +565,15 @@ describe("settings view", () => {
     menu.menuTab();
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-10 of 20"); // vis = 10 at termH 24
+    expect(t.captureCharFrame()).toContain("1-12 of 20"); // vis = 12 at termH 24
     // walk the cursor to the last row: window follows
     for (let i = 0; i < 19; i++) menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("11-20 of 20");
+    expect(t.captureCharFrame()).toContain("9-20 of 20");
     // wrap-around from the end returns to the top window
     menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-10 of 20");
+    expect(t.captureCharFrame()).toContain("1-12 of 20");
   });
 
   test("headers take the cursor and collapse/expand on activate (no more skip)", async () => {

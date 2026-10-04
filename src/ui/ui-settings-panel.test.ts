@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   ensureVisible,
+  fitDescText,
   flatVisible,
   sectionKey,
-  SETTINGS_W,
+  SETTINGS_MAX_W,
+  settingsPanelWidth,
+  settingsWidths,
   settingsVisRows,
   type SettingsPanelState,
 } from "./ui-settings-panel";
@@ -49,13 +52,32 @@ describe("ensureVisible", () => {
 });
 
 describe("panel geometry (room for the description footer)", () => {
-  test("panel is 78 wide", () => {
-    expect(SETTINGS_W).toBe(78);
+  test("panel width adapts to the terminal like the help view", () => {
+    expect(SETTINGS_MAX_W).toBe(100);
+    expect(settingsPanelWidth(200)).toBe(100);
+    expect(settingsPanelWidth(90)).toBe(86);
+    expect(settingsPanelWidth(80)).toBe(76);
+    expect(settingsPanelWidth(40)).toBe(64);
+  });
+
+  test("columns widen with the panel so labels/values stop truncating", () => {
+    // longest real label is 24 chars ("include filename in lift") — sliced at
+    // the old 22; a wide panel must fit it, the floor keeps the old widths
+    expect(settingsWidths(100).labelW).toBe(30);
+    expect(settingsWidths(78).labelW).toBe(25);
+    expect(settingsWidths(64).labelW).toBe(22);
+    expect(settingsWidths(100).valW).toBe(16);
+    expect(settingsWidths(100).keyW).toBe(24);
+  });
+
+  test("description footer fills the panel width", () => {
+    expect(fitDescText("x".repeat(200), 100).length).toBe(96);
+    expect(fitDescText("x".repeat(200), 64).length).toBe(60);
   });
 
   test("taller window on roomy terminals, still compact on tiny ones", () => {
-    expect(settingsVisRows(40)).toBe(18);
-    expect(settingsVisRows(24)).toBe(10);
+    expect(settingsVisRows(40)).toBe(20);
+    expect(settingsVisRows(24)).toBe(12);
     expect(settingsVisRows(16)).toBe(8);
   });
 });

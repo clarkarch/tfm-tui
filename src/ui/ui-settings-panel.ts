@@ -67,15 +67,36 @@ type SettingsPanelHooks = {
 };
 
 // settings panel is wider than the root menu (categories + value columns +
-// the one-line description footer)
-export const SETTINGS_W = 78;
-const CAT_W = 20;
-const SET_LABEL_W = 22;
+// the one-line description footer) and adapts to the terminal like the help
+// view (HELP_W in ./ui-help)
+export const SETTINGS_MAX_W = 100;
+const SETTINGS_MIN_W = 64;
+export const settingsPanelWidth = (termW: number): number =>
+  Math.min(SETTINGS_MAX_W, Math.max(SETTINGS_MIN_W, termW - 4));
 
-// right-pane window size: capped at 18 rows on roomy terminals (panel ≈ 25
+const CAT_W = 20;
+// value-box widths (text room = box - 1 for the paddingRight); the shell's
+// afterAdjust re-slices to the same text widths, so they live here exported
+export const SET_VAL_W = 16;
+export const SET_KEY_W = 24;
+
+// column widths derived from the live panel width so extra room widens the
+// label column instead of pooling in the middle spacer (the old fixed 22
+// sliced real labels like "include filename in lift")
+export const settingsWidths = (panelW: number): { rightW: number; labelW: number; valW: number; keyW: number } => {
+  const rightW = panelW - CAT_W - 1; // minus the divider column
+  return {
+    rightW,
+    labelW: Math.min(30, Math.max(22, panelW - 53)),
+    valW: SET_VAL_W,
+    keyW: SET_KEY_W,
+  };
+};
+
+// right-pane window size: capped at 20 rows on roomy terminals (panel ≈ 25
 // rows total with chrome + description footer); shrinks on tiny terminals.
 // Categories with more rows wheel-scroll/arrow-scroll.
-export const settingsVisRows = (termH: number): number => Math.min(18, Math.max(8, termH - 14));
+export const settingsVisRows = (termH: number): number => Math.min(20, Math.max(8, termH - 12));
 
 const CAT_ICONS: Record<string, string> = {
   // fallback for groups that don't carry an explicit icon (plugins/installs
@@ -125,11 +146,18 @@ export const descText = (row: SettingRow | undefined): string => {
   return row.blurb ?? row.label;
 };
 
-export const fitDescText = (text: string): string => `ⓘ ${text}`.slice(0, SETTINGS_W - 4);
+export const fitDescText = (text: string, panelW: number = SETTINGS_MAX_W): string => `ⓘ ${text}`.slice(0, panelW - 4);
 
-export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanelState, h: SettingsPanelHooks) => {
+export const renderSettingsPanel = (
+  c: Theme,
+  panel: NodeLike,
+  st: SettingsPanelState,
+  h: SettingsPanelHooks,
+  panelW: number = SETTINGS_MAX_W,
+) => {
   const cats = h.groups();
   const vis = h.visRows();
+  const w = settingsWidths(panelW);
   const header = cats[st.catIdx]?.header ?? "";
   const rows = cats[st.catIdx]?.rows ?? [];
   const flat = flatVisible(rows, header, st.collapsed);
@@ -239,7 +267,7 @@ export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanel
       catPane,
       // --- right pane: rows (windowed over the visible projection) ---
       Box({ width: 1, flexDirection: "column" }),
-      renderRowPane(c, rows, header, vis, st, h),
+      renderRowPane(c, rows, header, vis, st, h, panelW, w),
     ),
   );
 
@@ -256,6 +284,7 @@ export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanel
             : st.capturing !== null
               ? "press a key…"
               : descText(st.menuIdx < 0 ? undefined : rows[st.menuIdx]),
+          panelW,
         ),
         fg: c.sidebarFgMuted,
       }),
@@ -270,6 +299,8 @@ const renderRowPane = (
   vis: number,
   st: SettingsPanelState,
   h: SettingsPanelHooks,
+  panelW: number,
+  w: ReturnType<typeof settingsWidths>,
 ) => {
   const flat = flatVisible(rows, categoryHeader, st.collapsed);
   ensureVisible(st, vis, flat.length, st.menuIdx < 0 ? -1 : visiblePos(flat, st.menuIdx));
@@ -291,7 +322,7 @@ const renderRowPane = (
       st.pane = "rows";
       if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
       h.paintRowAt(index, true);
-      h.paintDesc(fitDescText(descText(rowSpec)));
+      h.paintDesc(fitDescText(descText(rowSpec), panelW));
     },
     onMouseOut: () => {
       h.setPointer?.("default");
@@ -300,12 +331,15 @@ const renderRowPane = (
 
   // section header: a collapsible divider. It TAKES the cursor (keyboard users
   // collapse without a mouse) and carries the standard row ids so paintRowAt
-  // highlights it like any row.
+  // highlights it like any row. The rule fills the live row width (right pane
+  // minus the row's own padding), so a wider panel draws a wider rule.
   const headerNode = (rowSpec: Extract<SettingRow, { kind: "header" }>, index: number) => {
     const active = st.pane === "rows" && st.menuIdx === index;
     const key = sectionKey(categoryHeader, rowSpec.label);
     const shut = h.isCollapsed(key);
     const lead = ` ${shut ? "▶" : "▼"} ${rowSpec.label} `;
+    const leadMax = Math.max(20, w.rightW - 14);
+    const shown = lead.slice(0, leadMax);
     return Box(
       {
         id: `tfm-set-row-${index}`,
@@ -332,10 +366,10 @@ const renderRowPane = (
       },
       Text({
         id: `tfm-set-rowl-${index}`,
-        content: lead.slice(0, 44),
+        content: shown,
         fg: active ? c.white : c.sidebarFgMuted,
       }),
-      Text({ content: "─".repeat(Math.max(0, 52 - Math.min(lead.length, 44))), fg: c.divider }),
+      Text({ content: "─".repeat(Math.max(0, w.rightW - 2 - shown.length)), fg: c.divider }),
     );
   };
 
@@ -365,7 +399,7 @@ const renderRowPane = (
               st.pane = "rows";
               h.paintRowAt(index, true);
             }
-            h.paintDesc(fitDescText(descText(rowSpec)));
+            h.paintDesc(fitDescText(descText(rowSpec), panelW));
             h.afterAdjust(index, rowSpec);
           } catch (err) {
             h.log?.(`settings chevron: row threw: ${errMessage(err)}`);
@@ -402,7 +436,7 @@ const renderRowPane = (
       } catch {}
       st.menuIdx = index;
       st.pane = "rows";
-      h.paintDesc(fitDescText(descText(rowSpec)));
+      h.paintDesc(fitDescText(descText(rowSpec), panelW));
       h.rowActivate(index);
     };
 
@@ -445,10 +479,10 @@ const renderRowPane = (
         { flexDirection: "row", alignItems: "center" },
         chevron("‹", active, index, rowSpec, -1),
         Box(
-          { width: 13, justifyContent: "flex-end", paddingRight: 1 },
+          { width: w.valW, justifyContent: "flex-end", paddingRight: 1 },
           Text({
             id: `tfm-set-rowv-${index}`,
-            content: value.length > 12 ? value.slice(0, 12) : value,
+            content: value.length > w.valW - 1 ? value.slice(0, w.valW - 1) : value,
             fg: active ? c.white : c.sidebarFgMuted,
           }),
         ),
@@ -468,19 +502,19 @@ const renderRowPane = (
           applyAdjust(rowSpec, 1);
           h.afterAdjust(index, rowSpec);
         } catch {} // a throwing plugin row never breaks the click handler
-        h.paintDesc(fitDescText(descText(rowSpec)));
+        h.paintDesc(fitDescText(descText(rowSpec), panelW));
       };
     } else if (rowSpec.kind === "keybind") {
       let binds: string[] = [];
       try {
         binds = rowSpec.get();
       } catch {}
-      const shown = binds.length ? binds.join(" / ") : "unset";
+      const shownBinds = binds.length ? binds.join(" / ") : "unset";
       control = Box(
-        { width: 18, justifyContent: "flex-end", paddingRight: 1 },
+        { width: w.keyW, justifyContent: "flex-end", paddingRight: 1 },
         Text({
           id: `tfm-set-rowv-${index}`,
-          content: shown.length > 17 ? shown.slice(0, 17) : shown,
+          content: shownBinds.length > w.keyW - 1 ? shownBinds.slice(0, w.keyW - 1) : shownBinds,
           fg: active ? c.white : c.sidebarFgMuted,
         }),
       );
@@ -505,7 +539,7 @@ const renderRowPane = (
       },
       Text({
         id: `tfm-set-rowl-${index}`,
-        content: ` ${rowSpec.label.slice(0, SET_LABEL_W).padEnd(SET_LABEL_W)}`,
+        content: ` ${rowSpec.label.slice(0, w.labelW).padEnd(w.labelW)}`,
         fg: labelFg,
       }),
       Box({ flexGrow: 1 }),
