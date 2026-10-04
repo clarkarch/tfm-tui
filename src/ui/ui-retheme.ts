@@ -218,6 +218,8 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "listingsCacheStats",
     "listingsCacheTtl",
     "fileHoverIncludeLabel",
+    "fileHoverAnimation",
+    "fileHoverDirection",
     "sidebarAnimation",
     "sidebarAnimationStyle",
     "sidebarAnimationMs",

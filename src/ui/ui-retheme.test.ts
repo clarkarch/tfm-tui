@@ -303,13 +303,23 @@ describe("applyConfig", () => {
     expect(ctx.calls.notify.length).toBe(2); // off->on again: remind again
   });
 
-  test("a hover-geometry toggle re-renders so tiles gain or lose lift room", () => {
+  test("tile-hover knobs are value-only like sidebar hover (no grid rebuild churn)", () => {
+    // fileHoverAnimation/master+direction were missing from RENDER_EXEMPT
+    // while all three sidebar-hover knobs were exempt — toggling tile hover
+    // rebuilt the whole grid for a knob the grid reads live on next hover.
+    // (This replaces the old "hover-geometry toggle re-renders" test, which
+    // pinned renderAll === 1 for that same flip: a bug in the exempt set,
+    // not in the test's reading of the code.)
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.ui.fileHoverAnimation = true;
+    fresh.ui.fileHoverDirection = "down";
+    fresh.ui.fileHoverIncludeLabel = true;
     retheme.applyConfig(fresh);
-    expect(ctx.calls.renderAll).toBe(1);
+    expect(ctx.calls.renderAll).toBe(0);
+    expect(ctx.config.ui.fileHoverAnimation).toBe(true);
+    expect(ctx.config.ui.fileHoverDirection).toBe("down");
   });
 
   test("a value-only knob skips the heavy renderAll (no grid rebuild churn)", () => {

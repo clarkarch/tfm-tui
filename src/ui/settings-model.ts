@@ -106,10 +106,19 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           min: row.min,
           max: row.max,
           step: row.step,
-          // the schema row's unit belongs in the VALUE column ("26 cells"),
-          // singularized at 1 ("1 cell") — a plural unit on a 1-cell row reads
-          // as a typo. The blurb stays plain-language and unit-free by design.
-          fmt: (v) => (row.unit ? `${v} ${v === 1 ? row.unit.replace(/s$/, "") : row.unit}` : `${v}`),
+          // the schema row's unit belongs in the VALUE column ("26 cells",
+          // "40%", "2 s"), singularized at 1 only for word units ("1 cell") —
+          // a plural unit on a 1-cell row reads as a typo, while "%"/"ms"/"s"
+          // have no singular (the old /s$/ strip printed "1 m"). The blurb
+          // stays plain-language and unit-free by design.
+          fmt: (v) => {
+            if (!row.unit) return `${v}`;
+            if (row.unit === "%") return `${v}%`;
+            if (v === 1 && (row.unit === "cells" || row.unit === "rows" || row.unit === "files")) {
+              return `${v} ${row.unit.replace(/s$/, "")}`;
+            }
+            return `${v} ${row.unit}`;
+          },
           get: () => (ui[row.prop] as number) ?? row.def,
           set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
         };
@@ -382,12 +391,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         case "appearance": {
           // tab bar is chrome-visibility but its row is hand-built and appended
           // after the generic rows, so splice it ahead of the trailing
-          // terminal section so it keeps trailing its own ##chrome
-          // header instead of the terminal pair
+          // compatibility section so it keeps trailing its own ##chrome
+          // header instead of the compatibility pair
           const uiRows = [themeRow(), ...genericUiRows("appearance")];
-          const terminalIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "terminal");
+          const compatibilityIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "compatibility");
           const tabRow = tabBarRow();
-          if (terminalIdx >= 0) uiRows.splice(terminalIdx, 0, tabRow);
+          if (compatibilityIdx >= 0) uiRows.splice(compatibilityIdx, 0, tabRow);
           else uiRows.push(tabRow);
           rows = uiRows;
           break;

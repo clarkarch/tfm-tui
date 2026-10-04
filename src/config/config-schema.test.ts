@@ -103,6 +103,10 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { "force-glyph": "yes" } }).ui.forceGlyph).toBe(false);
   });
 
+  test("row granularity defaults off (per-file cascade; rows opt into the cheaper path)", () => {
+    expect(parseConfigDoc(undefined).ui.fileAnimationRowGranularity).toBe(false);
+  });
+
   test("hover lift options parse with fallbacks (no distance knob: fixed 1 cell)", () => {
     const defs = parseConfigDoc(undefined).ui;
     expect(defs.fileHoverIncludeLabel).toBe(false);

@@ -211,13 +211,7 @@ describe("settingGroups shape", () => {
         .find((g) => g.header === header)!
         .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
     // type-to-search leads (highest traffic); mouse gestures share a section, the lone toast trails headerless
-    expect(seq("behavior")).toEqual([
-      "type to search",
-      "##mouse",
-      "double-click ms",
-      "drag threshold",
-      "toast duration",
-    ]);
+    expect(seq("behavior")).toEqual(["type to search", "##mouse", "double-click", "drag threshold", "toast duration"]);
     // hidden files leads into its listing topic; session persistence is its own section
     expect(seq("files & session")).toEqual([
       "hidden files",
@@ -228,7 +222,7 @@ describe("settingGroups shape", () => {
       "persistent undo",
     ]);
     // theme preset leads, then style, chrome (sidebar title with tab bar
-    // trailing it), and the terminal pair bottoms out the group
+    // trailing it), and the compatibility pair bottoms out the group
     expect(seq("appearance")).toEqual([
       "theme",
       "##style",
@@ -239,7 +233,7 @@ describe("settingGroups shape", () => {
       "##chrome",
       "sidebar title",
       "tab bar",
-      "##terminal",
+      "##compatibility",
       "tty mode",
       "force glyph",
     ]);
@@ -635,6 +629,26 @@ describe("generic schema rows", () => {
     expect(h.config.ui.uiStyle).toBe("outline");
     asCycle(row).setIdx(2);
     expect(h.config.ui.uiStyle).toBe("outline-partial");
+  });
+
+  test("stepper values carry units (ms tight-singular, % tight, cells singular at 1)", () => {
+    const h = mk();
+    // ms must not singularize to "m" (the old /s$/ strip did exactly that)
+    expect(asStepper(h.byLabel("double-click")).fmt(400)).toBe("400 ms");
+    expect(asStepper(h.byLabel("double-click")).fmt(1)).toBe("1 ms");
+    expect(asStepper(h.byLabel("toast duration")).fmt(3000)).toBe("3000 ms");
+    expect(asStepper(h.byLabel("hover animation")).fmt(120)).toBe("120 ms");
+    // percents render tight, no space
+    expect(asStepper(h.byLabel("stagger spread")).fmt(40)).toBe("40%");
+    expect(asStepper(h.byLabel("slide distance")).fmt(70)).toBe("70%");
+    // cells singularize only at 1
+    expect(asStepper(h.byLabel("sidebar width")).fmt(26)).toBe("26 cells");
+    expect(asStepper(h.byLabel("sidebar width")).fmt(1)).toBe("1 cell");
+    expect(asStepper(h.byLabel("sidebar slide")).fmt(8)).toBe("8 cells");
+    // counts + seconds
+    expect(asStepper(h.byLabel("max animated files")).fmt(2000)).toBe("2000 files");
+    expect(asStepper(h.byLabel("max animated files")).fmt(1)).toBe("1 file");
+    expect(asStepper(h.byLabel("listing cache age")).fmt(2)).toBe("2 s");
   });
 
   test("panel-repainting rows are flagged (theme / ui style / transparent bg / icons)", () => {
