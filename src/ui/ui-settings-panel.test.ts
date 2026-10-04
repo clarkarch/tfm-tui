@@ -19,6 +19,7 @@ const panelState = (over: Partial<SettingsPanelState> = {}): SettingsPanelState 
   scrollOff: 3,
   hoverCat: -1,
   capturing: null,
+  swapOffer: null,
   collapsed: new Set<string>(),
   ...over,
 });

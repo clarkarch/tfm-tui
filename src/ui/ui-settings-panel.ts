@@ -25,6 +25,10 @@ export type SettingsPanelState = {
   hoverCat: number;
   // keybind capture: flat row index within the active category being recorded
   capturing: number | null;
+  // swap offer: the captured spec is owned by another action — enter steals
+  // it, esc returns to capture, any other key re-proposes. Always paired with
+  // capturing (the row being recorded); cleared with it.
+  swapOffer: { spec: string; ownerLabel: string } | null;
   // collapsed subsections, keyed by sectionKey(category header, subsection)
   // — session-only, never persisted to config.toml
   collapsed: Set<string>;
@@ -247,7 +251,11 @@ export const renderSettingsPanel = (c: Theme, panel: NodeLike, st: SettingsPanel
       Text({
         id: "tfm-set-desc",
         content: fitDescText(
-          st.capturing !== null ? "press a key…" : descText(st.menuIdx < 0 ? undefined : rows[st.menuIdx]),
+          st.swapOffer
+            ? `"${st.swapOffer.spec}" is ${st.swapOffer.ownerLabel} - enter swaps it, esc types another`
+            : st.capturing !== null
+              ? "press a key…"
+              : descText(st.menuIdx < 0 ? undefined : rows[st.menuIdx]),
         ),
         fg: c.sidebarFgMuted,
       }),
@@ -399,7 +407,14 @@ const renderRowPane = (
     };
 
     if (capturingThis) {
-      control = Box({ flexGrow: 1 }, Text({ content: "press a key…", fg: c.accent }));
+      const offer = st.swapOffer;
+      control = Box(
+        { flexGrow: 1 },
+        Text({
+          content: offer ? `"${offer.spec}" is ${offer.ownerLabel} - enter swaps` : "press a key…",
+          fg: c.accent,
+        }),
+      );
     } else if (rowSpec.kind === "toggle") {
       // plugin rows are validated at load, but a throwing get()/set() must not
       // brick the panel mid-render — treat a throwing row as off

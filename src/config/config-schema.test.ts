@@ -4,12 +4,16 @@ import {
   SCHEMA,
   UI_SCHEMA,
   defaultConfig,
+  describeKeybindConflicts,
   exampleToml,
+  findKeybindConflicts,
   keybindConflict,
   parseConfigDoc,
   serializeConfig,
+  swapKeybind,
   type Config,
 } from "./config-schema";
+import { presetKeys } from "./keymap-presets";
 import { keySpecEqual, validateKeybindSpec } from "./keyspec";
 import { readFileSync } from "node:fs";
 
@@ -170,6 +174,62 @@ describe("keybindConflict", () => {
     expect(keybindConflict(defaultConfig, "quit", "ctrl+n")).toBeNull();
     // redo carries ctrl+shift+z AND ctrl+y — both are taken
     expect(keybindConflict(defaultConfig, "undo", "ctrl+shift+z")).toBe("redo");
+  });
+});
+
+describe("findKeybindConflicts", () => {
+  test("clean defaults and both presets scan empty", () => {
+    expect(findKeybindConflicts(defaultConfig)).toEqual([]);
+    for (const name of ["tfm", "yazi"] as const) {
+      const cfg: Config = { ...structuredClone(defaultConfig), keys: presetKeys(name) };
+      expect(findKeybindConflicts(cfg)).toEqual([]);
+    }
+  });
+
+  test("same spec on two actions groups them (enter/return aliased)", () => {
+    const cfg: Config = structuredClone(defaultConfig);
+    cfg.keys.undo = ["ctrl+q"]; // quit owns it
+    expect(findKeybindConflicts(cfg)).toEqual([{ spec: "ctrl+q", actions: ["quit", "undo"] }]);
+    const aliased: Config = structuredClone(defaultConfig);
+    aliased.keys.paste = ["alt+return"]; // showProps owns alt+enter
+    const found = findKeybindConflicts(aliased);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.actions).toContain("showProps");
+    expect(found[0]!.actions).toContain("paste");
+  });
+
+  test("multi-bind actions and explicit unbinds are not conflicts", () => {
+    const cfg: Config = structuredClone(defaultConfig);
+    cfg.keys.duplicate = []; // yazi-style unbind
+    expect(findKeybindConflicts(cfg)).toEqual([]);
+  });
+});
+
+describe("swapKeybind", () => {
+  test("steals only the clashing spec, target takes it alone", () => {
+    const keys = { ...structuredClone(defaultConfig.keys), quit: ["ctrl+q", "alt+q"] };
+    const next = swapKeybind(keys, "quit", "undo", "ctrl+q");
+    expect(next.quit).toEqual(["alt+q"]);
+    expect(next.undo).toEqual(["ctrl+q"]);
+    expect(keys.quit).toEqual(["ctrl+q", "alt+q"]); // fresh object, input untouched
+  });
+
+  test("stealing an owner's last bind unbinds it (explicit [] is legal)", () => {
+    const next = swapKeybind(structuredClone(defaultConfig.keys), "quit", "undo", "ctrl+q");
+    expect(next.quit).toEqual([]);
+    expect(next.undo).toEqual(["ctrl+q"]);
+  });
+});
+
+describe("describeKeybindConflicts", () => {
+  test("one human line per clash, empty when clean", () => {
+    expect(describeKeybindConflicts(defaultConfig)).toBe("");
+    const cfg: Config = structuredClone(defaultConfig);
+    cfg.keys.undo = ["ctrl+q"];
+    const text = describeKeybindConflicts(cfg);
+    expect(text).toContain('"ctrl+q"');
+    expect(text).toContain("quit tfm");
+    expect(text).toContain("undo last file op");
   });
 });
 

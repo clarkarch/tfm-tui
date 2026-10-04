@@ -44,7 +44,14 @@ const mkRows = (): SettingRow[] => {
       getIdx: () => cycle.i,
       setIdx: (i) => (cycle.i = i),
     },
-    { kind: "keybind", label: "quit", get: () => keybind.binds, set: (v) => (keybind.binds = v) },
+    {
+      kind: "keybind",
+      label: "quit",
+      get: () => keybind.binds,
+      set: (v): undefined => {
+        keybind.binds = v;
+      },
+    },
     { kind: "action", label: "edit config.toml", keepOpen: false, run: () => action.ran++ },
   ];
   return rows;
@@ -774,6 +781,165 @@ describe("keybind capture", () => {
     expect(menu.captureKey({ name: "escape", ctrl: false, shift: false, meta: false })).toBe(true);
     await t.renderOnce();
     expect((groups[0]!.rows.find((r) => r.kind === "keybind") as { get(): string[] }).get()).toEqual(binds);
+  });
+});
+
+describe("keybind swap offer", () => {
+  // fake row mirroring the real settings-model contract: set returns an
+  // outcome (applied/conflict), swap steals the bind. ctrl+z is owned
+  // elsewhere, everything else applies.
+  const swapBinds = { binds: ["ctrl+q"] };
+  const swapRow = {
+    kind: "keybind" as const,
+    label: "quit",
+    get: () => swapBinds.binds,
+    set: (v: string[]) => {
+      if (v[0] === "ctrl+z") return { status: "conflict", spec: "ctrl+z", owner: "undo", ownerLabel: "Undo" } as const;
+      swapBinds.binds = v;
+      return { status: "applied" } as const;
+    },
+    swap: (spec: string) => {
+      swapBinds.binds = [spec];
+    },
+  };
+  const openSwapSettings = async () => {
+    const keep = groups;
+    groups = [{ header: "keys", rows: [swapRow] }];
+    swapBinds.binds = ["ctrl+q"];
+    await openSettings();
+    menu.menuActivate(); // row 0 = keybind -> startCapture
+    await t.renderOnce();
+    return () => {
+      groups = keep;
+      menu.closeMenu();
+    };
+  };
+
+  test("conflicting key offers an inline swap instead of rejecting", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(t.captureCharFrame()).toContain("press a key…");
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      // the offer replaces the capture prompt on the row and names the owner
+      // in the footer — capture is still armed (esc goes back to "press a key…")
+      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).toContain("Undo");
+      expect(swapBinds.binds).toEqual(["ctrl+q"]); // nothing committed yet
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
+  });
+
+  test("enter while the offer is open swaps; esc goes back to capture", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("enter swaps");
+      // enter commits the steal and ends capture
+      expect(menu.captureKey({ name: "return", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+z"]);
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+      // re-arm, offer again, esc returns to capture without committing
+      menu.menuActivate();
+      await t.renderOnce();
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(menu.captureKey({ name: "escape", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+z"]);
+      expect(t.captureCharFrame()).toContain("press a key…");
+      expect(t.captureCharFrame()).not.toContain("enter swaps");
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
+  });
+
+  test("an unrecordable key during the offer drops it and repaints capture", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("enter swaps");
+      // bare letter = invalid: the offer must clear AND repaint (no stale
+      // "enter swaps" left on screen), capture stays armed for retry
+      expect(menu.captureKey({ name: "a", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("press a key…");
+      expect(t.captureCharFrame()).not.toContain("enter swaps");
+      // retry still works: a free key applies and ends capture
+      expect(menu.captureKey({ name: "f", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+f"]);
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
+  });
+
+  test("enter on a swap-less row keeps the offer up (never a silent clear)", async () => {
+    const keep = groups;
+    const noswap = { binds: ["ctrl+q"] };
+    groups = [
+      {
+        header: "keys",
+        rows: [
+          {
+            kind: "keybind" as const,
+            label: "quit",
+            get: () => noswap.binds,
+            // conflict outcome like a core row, but no swap fn (plugin-style)
+            set: (v: string[]) => {
+              if (v[0] === "ctrl+z")
+                return { status: "conflict", spec: "ctrl+z", owner: "undo", ownerLabel: "Undo" } as const;
+              noswap.binds = v;
+              return { status: "applied" } as const;
+            },
+          },
+        ],
+      },
+    ];
+    try {
+      await openSettings();
+      menu.menuActivate(); // row 0 = keybind -> startCapture
+      await t.renderOnce();
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("enter swaps");
+      // enter with no swap fn: offer stays, capture stays, nothing committed
+      expect(menu.captureKey({ name: "return", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(noswap.binds).toEqual(["ctrl+q"]);
+      expect(t.captureCharFrame()).toContain("enter swaps");
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("another key while the offer is open re-proposes", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("enter swaps");
+      // a free key applies straight away and ends capture
+      expect(menu.captureKey({ name: "f", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+f"]);
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
   });
 });
 

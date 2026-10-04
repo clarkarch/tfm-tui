@@ -15,7 +15,14 @@ import {
   type SettingRow,
 } from "./settings";
 import { configPath, defaultConfig, type Config, type UiConfig } from "../config/config";
-import { KEY_SCHEMA, UI_SCHEMA, keybindConflict, type KeyAction, type UiSchemaRow } from "../config/config-schema";
+import {
+  KEY_SCHEMA,
+  UI_SCHEMA,
+  keybindConflict,
+  swapKeybind,
+  type KeyAction,
+  type UiSchemaRow,
+} from "../config/config-schema";
 import { keySpecEqual, validateKeybindSpec } from "../config/keyspec";
 import { isDark } from "./tty";
 import { getPluginCommandBinds, setPluginCommandBinds } from "../plugins/plugin-api";
@@ -132,23 +139,34 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     blurb: "Press enter, then a new key",
     get: () => ctx.config.keys[action] ?? [],
     set: (v) => {
-      // conflict check: reject a bind another core action already owns — and
-      // (P1-2) one a plugin command owns, so core remaps can't silently
-      // shadow plugin binds either direction.
+      // core clash: no commit, no warn — the outcome lets the capture flow
+      // offer an inline Enter-to-swap instead of a dead-end toast
       for (const spec of v) {
         const clash = keybindConflict(ctx.config, action, spec);
         if (clash) {
           const labelOf = KEY_SCHEMA.find((r) => r.action === clash)?.label ?? clash;
-          ctx.warn(`"${spec}" is already used by: ${labelOf}`, "keybind conflict");
-          return;
+          return { status: "conflict", spec, owner: clash, ownerLabel: labelOf };
         }
         const pluginOwner = pluginBindOwner(spec);
         if (pluginOwner) {
           ctx.warn(`"${spec}" is already used by: ${pluginOwner}`, "keybind conflict");
-          return;
+          return { status: "rejected", spec };
         }
       }
       commitKeys(action, v);
+      return { status: "applied" };
+    },
+    swap: (spec) => {
+      // Enter on the swap offer: steal the spec from its current owner in ONE
+      // commit (the owner keeps its other binds). A meanwhile-moved owner
+      // (preset applied under the open panel) degrades to a plain set.
+      const clash = keybindConflict(ctx.config, action, spec);
+      if (!clash) {
+        commitKeys(action, [spec]);
+        return;
+      }
+      const next = swapKeybind(ctx.config.keys, clash, action, spec);
+      commit({ ui: { ...ctx.config.ui }, theme: { ...ctx.config.theme }, keys: next });
     },
   });
 
@@ -512,7 +530,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
               kind: "keybind",
               label: `${c.title} (key)`,
               get: () => getPluginCommandBinds(p, c.id),
-              set: (v) => {
+              set: (v): undefined => {
                 // every rejection warns through the guarded helper (a
                 // throwing warn must never escape a row setter)
                 const reject = (message: string): void => {

@@ -21,6 +21,7 @@ import { loadSystemPlaces } from "../fs/places";
 import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { configPath } from "../config/config";
+import { describeKeybindConflicts } from "../config/config-schema";
 import type { ListEntry } from "../ui/ui-menu";
 import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
@@ -192,7 +193,19 @@ export const wireBoot = (deps: {
     },
     isDebug,
     showLaunchTime: () => core.config.ui.showLaunchTime,
-  }).catch(() => {}); // every step is guarded in ./boot; this catches the tail
+  })
+    .then(() => {
+      // hand-edited [keys] can bind one key twice — dispatch silently shadows
+      // the loser (core order wins), so surface it once instead of never
+      try {
+        const text = describeKeybindConflicts(core.config);
+        if (text) {
+          dlog(`keybind conflicts: ${text}`);
+          chrome.notify(`${text} — Settings → keys`, "keybind conflict");
+        }
+      } catch {}
+    })
+    .catch(() => {}); // every step is guarded in ./boot; this catches the tail
 };
 
 // --- OSC 72 (kitty drag-and-drop): wire format per yazi's reference impl;

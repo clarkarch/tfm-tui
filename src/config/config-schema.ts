@@ -43,8 +43,20 @@ export type SettingRow =
       // so the theme row reports "~<nearest preset>" instead.
       customLabel?: () => string;
     }
-  // key rows are enter/click-driven (capture flow in ui-settings), not adjustable
-  | { kind: "keybind"; label: string; blurb?: string; get: () => string[]; set: (v: string[]) => void }
+  // key rows are enter/click-driven (capture flow in ui-settings), not adjustable.
+  // set reports an outcome: the panel offers Enter-to-swap on conflict and
+  // stays in capture on rejection (both already warned or self-explanatory),
+  // so only "applied" ends the capture. swap steals one spec from its owner
+  // (core rows only — plugin binds live in their own store, no cross-store
+  // steals) and is undefined on rows that never conflict (plugin rows).
+  | {
+      kind: "keybind";
+      label: string;
+      blurb?: string;
+      get: () => string[];
+      set: (v: string[]) => undefined | KeybindSetResult;
+      swap?: (spec: string) => void;
+    }
   | { kind: "action"; label: string; blurb?: string; keepOpen?: boolean; run: () => void }
   // divider rows split a long category into labeled sections (animations/panes).
   // Non-interactive: never take the cursor, never adjust/activate — the settings
@@ -52,6 +64,12 @@ export type SettingRow =
   | { kind: "header"; label: string };
 
 export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] };
+
+// outcome of a keybind capture commit (see the keybind row above)
+export type KeybindSetResult =
+  | { status: "applied" }
+  | { status: "conflict"; spec: string; owner: KeyAction; ownerLabel: string }
+  | { status: "rejected"; spec: string };
 
 // structural validation for plugin settings rows (mirrors per-entry preview/
 // commands validation): a malformed row like {kind:"toggle"} with no get/set
@@ -1652,6 +1670,46 @@ export const keybindConflict = (cfg: Config, action: KeyAction, specStr: string)
   }
   return null;
 };
+
+// every spec owned by more than one action (the whole-table scan behind the
+// boot/live-reload conflict toast — keybindConflict above is the single-spec
+// check behind the settings capture flow)
+export type KeybindConflict = { spec: string; actions: KeyAction[] };
+
+export const findKeybindConflicts = (cfg: Config): KeybindConflict[] => {
+  const groups: KeybindConflict[] = [];
+  for (const row of KEY_ROWS) {
+    for (const s of cfg.keys[row.action] ?? []) {
+      const g = groups.find((g) => keySpecEqual(g.spec, s));
+      if (g) {
+        if (!g.actions.includes(row.action)) g.actions.push(row.action);
+      } else groups.push({ spec: s, actions: [row.action] });
+    }
+  }
+  return groups.filter((g) => g.actions.length > 1);
+};
+
+// steal one spec: the owner loses exactly that bind (possibly unbinding it —
+// an explicit [] is a legal unbind) and the target takes it alone, matching
+// the capture flow's single-bind replace
+export const swapKeybind = (
+  keys: Record<KeyAction, string[]>,
+  from: KeyAction,
+  to: KeyAction,
+  spec: string,
+): Record<KeyAction, string[]> => ({
+  ...keys,
+  [from]: (keys[from] ?? []).filter((s) => !keySpecEqual(s, spec)),
+  [to]: [spec],
+});
+
+// one human line per clash for toasts/logs (empty when clean)
+export const describeKeybindConflicts = (cfg: Config): string =>
+  findKeybindConflicts(cfg)
+    .map(
+      (c) => `"${c.spec}" on ${c.actions.map((a) => KEY_SCHEMA.find((r) => r.action === a)?.label ?? a).join(" + ")}`,
+    )
+    .join("; ");
 
 // --- parse / serialize ---
 

@@ -34,7 +34,7 @@ import {
   type SettingsPanelState,
 } from "./ui-settings-panel";
 import { helpPanelWidth, renderHelpPanel } from "./ui-help";
-import type { KeyAction } from "../config/config-schema";
+import type { KeyAction, KeybindSetResult } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 
@@ -95,6 +95,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     scrollOff: 0,
     hoverCat: -1,
     capturing: null,
+    swapOffer: null,
     collapsed: new Set<string>(),
   };
 
@@ -119,6 +120,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.menuIdx = -1;
     st.pane = "rows";
     st.scrollOff = 0;
+    st.capturing = null;
+    st.swapOffer = null;
     renderMenuContent();
   };
 
@@ -218,6 +221,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const cancelCapture = (): boolean => {
     if (st.capturing === null) return false;
     st.capturing = null;
+    st.swapOffer = null;
     renderMenuContent();
     return true;
   };
@@ -316,29 +320,98 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     });
   };
 
+  // keybind set outcomes (config-schema): legacy void rows (and throwing
+  // ones) fall through to the old clear-capture path; only real outcomes
+  // steer the capture. An array return (older test fakes assigned the binds)
+  // is not an outcome — "status" in [] is false.
+  const isSwapOffer = (r: unknown): r is Extract<KeybindSetResult, { status: "conflict" }> =>
+    typeof r === "object" && r !== null && (r as { status?: unknown }).status === "conflict";
+  const isSetRejection = (r: unknown): r is Extract<KeybindSetResult, { status: "rejected" }> =>
+    typeof r === "object" && r !== null && (r as { status?: unknown }).status === "rejected";
+
   // called from the keyboard router BEFORE the esc-menu nav branch: while
-  // recording, every key is swallowed. enter/click-away also cancel.
+  // recording, every key is swallowed. enter/click-away also cancel. A
+  // conflicting key opens an inline swap offer instead of rejecting: enter
+  // steals the bind, esc returns to capture, any other key re-proposes.
   const captureKey = (e: KeyEventLike): boolean => {
     if (st.capturing === null) return false;
     // only an UNMODIFIED escape/return/tab cancels: ctrl+tab / ctrl+shift+tab
     // are next/prev-tab binds and must be recordable (they were unbindable
     // through the GUI — every tab chord cancelled capture)
     const unmodified = !e.ctrl && !e.shift && !e.meta && !e.option;
+    // whether the key below drops an open offer: the unrecordable/invalid
+    // early returns must repaint then, or a stale offer stays on screen
+    let droppedOffer = false;
+    if (st.swapOffer !== null) {
+      if (unmodified && e.name === "tab") {
+        st.capturing = null;
+        st.swapOffer = null;
+        renderMenuContent();
+        return true;
+      }
+      if (unmodified && e.name === "escape") {
+        st.swapOffer = null;
+        renderMenuContent();
+        return true;
+      }
+      // OpenTUI reports Enter as "return" (see the capture comment below) —
+      // the same spelling the cancel branch matches, so both agree
+      if (unmodified && e.name === "return") {
+        const row = rowsOf(st.catIdx)[st.capturing];
+        const offer = st.swapOffer;
+        if (row?.kind === "keybind" && row.swap) {
+          st.swapOffer = null;
+          st.capturing = null;
+          try {
+            row.swap(offer.spec);
+          } catch {}
+          renderMenuContent();
+          return true;
+        }
+        // swap-less row (only rows whose set reports conflicts define swap,
+        // so this is unreachable in prod): keep the offer up rather than a
+        // silent no-commit clear
+        renderMenuContent();
+        return true;
+      }
+      droppedOffer = true;
+      st.swapOffer = null; // re-propose with the key below
+    }
     if (unmodified && (e.name === "escape" || e.name === "return" || e.name === "tab")) {
       st.capturing = null;
       renderMenuContent();
       return true;
     }
     const spec = keySpecFromEvent(e);
-    if (!spec) return true;
+    if (!spec) {
+      // an unrecordable keypress dropped the offer above — repaint so no
+      // stale "enter swaps" stays on screen (capture stays armed for retry)
+      if (droppedOffer) renderMenuContent();
+      return true;
+    }
     const problem = validateKeybindSpec(spec);
     if (problem) {
       ctx.warn(problem, "invalid keybind");
+      if (droppedOffer) renderMenuContent();
       return true; // stay in capture so the user can retry
     }
     const row = rowsOf(st.catIdx)[st.capturing];
+    let outcome: unknown;
+    try {
+      if (row?.kind === "keybind") outcome = row.set([spec]);
+    } catch {
+      outcome = undefined;
+    }
+    if (isSwapOffer(outcome)) {
+      st.swapOffer = { spec: outcome.spec, ownerLabel: outcome.ownerLabel };
+      renderMenuContent();
+      return true;
+    }
+    if (isSetRejection(outcome)) {
+      renderMenuContent();
+      return true; // already warned — stay in capture so the user can retry
+    }
     st.capturing = null;
-    if (row?.kind === "keybind") row.set([spec]);
     renderMenuContent();
     return true;
   };
@@ -667,6 +740,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // reopening
     menuView = "root";
     st.capturing = null;
+    st.swapOffer = null;
     ctx.log?.("esc-menu close");
     // hovered rows have no out (their nodes are gone) — restore here or the
     // pointer sticks (same stale-until-move rule as the highlight paint)
@@ -691,6 +765,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.pane = "rows";
     st.scrollOff = 0;
     st.capturing = null;
+    st.swapOffer = null;
     ctx.log?.("esc-menu open");
     nativeMemTrace("esc-menu open");
     ctx.cancelBand();

@@ -525,7 +525,8 @@ describe("settingGroups shape", () => {
           store: makePluginStore(dir, "demo"),
         }),
       ]);
-      asKeybind(h.byLabel("undo last file op")).set(["ctrl+j"]); // owned by demo:hi
+      const res = asKeybind(h.byLabel("undo last file op")).set(["ctrl+j"]); // owned by demo:hi
+      expect(res).toEqual({ status: "rejected", spec: "ctrl+j" });
       expect(h.warns.length).toBe(1);
       expect(h.warns[0]!.message).toContain("Say hi");
       expect(h.applied.length).toBe(0);
@@ -740,16 +741,41 @@ describe("hand-written rows", () => {
 });
 
 describe("keybind rows", () => {
-  test("conflicting bind is rejected with a warn toast naming the owner", () => {
+  test("conflicting bind returns a swap offer: no commit, no warn (panel offers Enter-to-swap)", () => {
     const h = mk();
     const undo = h.byLabel("undo last file op");
     expect(undo.kind).toBe("keybind");
-    asKeybind(undo).set(["ctrl+q"]); // owned by quit
-    expect(h.warns.length).toBe(1);
-    expect(h.warns[0]!.message).toContain("ctrl+q");
-    expect(h.warns[0]!.message).toContain("quit tfm");
+    const res = asKeybind(undo).set(["ctrl+q"]); // owned by quit
+    expect(res).toEqual({ status: "conflict", spec: "ctrl+q", owner: "quit", ownerLabel: "quit tfm" });
+    expect(h.warns.length).toBe(0);
     expect(h.applied.length).toBe(0);
     expect(h.config.keys.undo).toEqual(defaultConfig.keys.undo);
+  });
+
+  test("swap() steals the bind in one commit, owner keeps its other binds", () => {
+    const h = mk();
+    h.config.keys.quit = ["ctrl+q", "alt+q"];
+    const undo = asKeybind(h.byLabel("undo last file op"));
+    undo.swap?.("ctrl+q");
+    expect(h.applied.length).toBe(1);
+    expect(h.config.keys.undo).toEqual(["ctrl+q"]);
+    expect(h.config.keys.quit).toEqual(["alt+q"]);
+  });
+
+  test("swap() when the owner moved on just sets the bind", () => {
+    const h = mk();
+    h.config.keys.quit = ["alt+q"]; // ctrl+q now free
+    asKeybind(h.byLabel("undo last file op")).swap?.("ctrl+q");
+    expect(h.applied.length).toBe(1);
+    expect(h.config.keys.undo).toEqual(["ctrl+q"]);
+  });
+
+  test("second core bind onto the same spec re-offers (still no commit)", () => {
+    const h = mk();
+    h.config.keys.undo = ["ctrl+b"];
+    const res = asKeybind(h.byLabel("quit tfm")).set(["ctrl+b"]);
+    expect(res).toEqual({ status: "conflict", spec: "ctrl+b", owner: "undo", ownerLabel: "undo last file op" });
+    expect(h.applied.length).toBe(0);
   });
 
   test("free bind commits through commitKeys, other actions untouched", () => {

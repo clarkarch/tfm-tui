@@ -13,6 +13,7 @@ import { isDark, resolveTtyMode, ttyStaticTheme } from "./tty";
 import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
+import { describeKeybindConflicts, findKeybindConflicts } from "../config/config-schema";
 import { debounced } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
@@ -356,6 +357,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // doesn't re-enter applyConfig and churn the rasters
   let lastSavedSig = "";
   let saveWarned = false;
+  // conflict set of the last scan — the reload toast fires once per CHANGE,
+  // not per reload (a lingering file conflict must not nag on every save)
+  let lastConflictSig = JSON.stringify(findKeybindConflicts(ctx.config));
 
   const scheduleSaveConfig = debounced(500, () => {
     saveConfig(ctx.config)
@@ -386,6 +390,14 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         if (JSON.stringify(fresh) === lastSavedSig) return;
         applyConfig(fresh);
         ctx.notify("config reloaded", "config", "success");
+        // hand-edited dup binds shadow silently at dispatch — toast once per
+        // change (own saves are skipped above, so settings commits never echo)
+        const sig = JSON.stringify(findKeybindConflicts(fresh));
+        if (sig !== lastConflictSig) {
+          lastConflictSig = sig;
+          const text = describeKeybindConflicts(fresh);
+          if (text) ctx.notify(`${text} — Settings → keys`, "keybind conflict");
+        }
       } catch {}
     });
     const watcher = watch(path.dirname(cfgPath), (_event, filename) => {
