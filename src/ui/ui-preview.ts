@@ -198,6 +198,9 @@ export const makePreview = (ctx: PreviewCtx) => {
 
     let st: Stats | null = null;
     try {
+      // follow ON PURPOSE: the gates below read target CONTENT (thumb raster,
+      // text body, cache key) and no size number ships from this st — the
+      // on-disk invariant covers displayed sizes, not content decisions
       st = statSync(key);
     } catch {
       pane.add(Text({ content: "source gone", fg: colors.sidebarFgMuted }));

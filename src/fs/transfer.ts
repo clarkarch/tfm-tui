@@ -46,7 +46,10 @@ export const scanTree = async (
   while (stack.length) {
     const d = stack.pop() as string;
     // lstat: a symlink counts once by its own size and is never followed
-    // (following it would loop forever on cycles and duplicate target trees)
+    // (following it would loop forever on cycles and duplicate target trees).
+    // NOTE: no inode dedupe here on purpose — a copy writes each hardlinked
+    // name out separately (2x bytes land), unlike the status/props on-disk
+    // totals which count the shared body once. Unify them and progress lies.
     let st: Stats;
     try {
       st = await lstat(d);

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box, type Renderable } from "@opentui/core";
@@ -7,7 +7,8 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { loadingLabel, loadingLine, makeGridRenderer, SPIN_FRAMES_ASCII, SPIN_FRAMES_BRAILLE } from "./ui-grid";
 import { hookScrollerScroll } from "./ui-grid-window";
 import type { GridState } from "./ui-grid-types";
-import { loadingNodeId } from "./ui-grid-rows";
+import { fmtBytes } from "../fs/propsinfo";
+import { linkRowLabel, loadingNodeId } from "./ui-grid-rows";
 import type { ScrollerLike } from "../lib/node-like";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { makeSelection } from "../input/selection";
@@ -2470,6 +2471,81 @@ describe("renderGrid (loading placeholder)", () => {
       rmSync(root, { recursive: true, force: true });
       await renderGrid();
     }
+  });
+
+  test("list row badges a symlink as name → target", async () => {
+    // the two-names-one-inode confusion (tfm + terminal-file-manager reading
+    // the same size): the link row must say what it points at
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-linkbadge-"));
+    try {
+      writeFileSync(path.join(dir, "tgt.txt"), "hello");
+      symlinkSync(path.join(dir, "tgt.txt"), path.join(dir, "lnk"));
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("lnk → tgt.txt");
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("list row sizes a symlink by its link bytes, not the target's", async () => {
+    // badge says WHERE it points, the size cell says what the link costs —
+    // the row must never repeat the target's size
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-linksize-"));
+    try {
+      writeFileSync(path.join(dir, "tgt.txt"), "x".repeat(500));
+      const link = path.join(dir, "lnk");
+      symlinkSync(path.join(dir, "tgt.txt"), link);
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("lnk → tgt.txt");
+      const line = frame.split("\n").find((l) => l.includes("lnk → tgt.txt"));
+      expect(line).toContain(fmtBytes(lstatSync(link).size));
+      expect(line).not.toContain(fmtBytes(500));
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("link-to-image thumbnails key on the target's stats, not the link's", async () => {
+    // the raster reads target pixels: an edited target must change the job
+    // key (link bytes never change on target edits — stale photo otherwise)
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-linkthumb-"));
+    try {
+      const target = path.join(dir, "tgt.png");
+      writeFileSync(target, "x".repeat(100));
+      const link = path.join(dir, "lnk.png");
+      symlinkSync(target, link);
+      viewMode = "list";
+      gridState.cwd = dir;
+      thumbJobs.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      const job = thumbJobs.find((j: any) => j.path === link);
+      expect(job).toBeTruthy();
+      expect(job.size).toBe(100);
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("linkRowLabel truncates the combined label to max", () => {
+    expect(linkRowLabel("lnk", "tgt.txt", 30)).toBe("lnk → tgt.txt");
+    expect(linkRowLabel("averylongname.txt", "anotherlongtarget.txt", 20)).toBe("averylongname.txt →…");
   });
 
   test("never yanks a live inline rename", async () => {

@@ -4,7 +4,7 @@
 // cap takes over. Pure fs + process — the UI (ui-grid) owns rendering and
 // gen-counter staleness. ---
 
-import { readdir, stat } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
 import type { Entry } from "./listing";
@@ -125,12 +125,26 @@ export const searchTree = async (root: string, query: string, opts: SearchOpts =
     paths.slice(0, limit).map(async (p): Promise<Entry | null> => {
       try {
         const st = await stat(p);
+        // size/mtime are the link's own (on-disk cost, like the list view);
+        // routing still follows it
+        let size = st.size;
+        let mtimeMs = st.mtimeMs ?? 0;
+        let isLink = false;
+        try {
+          const lst = await lstat(p);
+          isLink = lst.isSymbolicLink();
+          if (isLink) {
+            size = lst.size;
+            mtimeMs = lst.mtimeMs ?? mtimeMs;
+          }
+        } catch {}
         return {
           name: path.relative(root, p) || path.basename(p),
           isDir: st.isDirectory(),
-          size: st.size,
-          mtimeMs: st.mtimeMs ?? 0,
+          size,
+          mtimeMs,
           abs: p,
+          isLink,
         };
       } catch {
         return null;

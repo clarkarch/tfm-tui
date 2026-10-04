@@ -1,5 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box, Yoga } from "@opentui/core";
@@ -423,6 +434,43 @@ describe("multi-selection properties", () => {
     expect(frame).toContain("m5.dat");
     expect(frame).not.toContain("m6.dat");
     expect(frame).toContain("…and 2 more");
+    props.closeProps();
+    await t.renderOnce();
+  });
+
+  test("link+target aggregates on-disk cost (link bytes, not double target)", async () => {
+    const f = path.join(sandbox, "linkdisk.bin");
+    writeFileSync(f, "hello world"); // 11 bytes
+    const link = path.join(sandbox, "linkdisk-link.bin");
+    try {
+      symlinkSync(f, link);
+    } catch {
+      return;
+    }
+    const { fmtBytes } = await import("../fs/propsinfo");
+    const total = lstatSync(f).size + lstatSync(link).size;
+    props.openProperties([f, link]);
+    await t.renderOnce();
+    await settle(() => text("tfm-props-size").includes(fmtBytes(total)));
+    expect(text("tfm-props-size")).toContain(fmtBytes(total));
+    props.closeProps();
+    await t.renderOnce();
+  });
+
+  test("hardlink pair counts shared bytes once (inode dedupe)", async () => {
+    const f = path.join(sandbox, "harddisk.bin");
+    writeFileSync(f, "hello world"); // 11 bytes
+    const g = path.join(sandbox, "harddisk-link.bin");
+    try {
+      linkSync(f, g);
+    } catch {
+      return;
+    }
+    const { fmtBytes } = await import("../fs/propsinfo");
+    props.openProperties([f, g]);
+    await t.renderOnce();
+    await settle(() => text("tfm-props-size").includes(fmtBytes(11)));
+    expect(text("tfm-props-size")).toContain(fmtBytes(11));
     props.closeProps();
     await t.renderOnce();
   });

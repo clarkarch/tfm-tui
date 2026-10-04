@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeSelection, type SelTileRef, type SelectionCtx } from "./selection";
+import { fmtBytes } from "../fs/propsinfo";
 import { TileVisual } from "./grid-input";
 import type { IconSpec } from "../ui/ui-slots";
 
@@ -367,6 +368,52 @@ describe("updateSelectionStatusReal", () => {
     h.sel.selectTileAt(1);
     h.sel.updateSelectionStatusReal();
     expect(seen).toEqual([["/a"], [], ["/b"]]);
+  });
+
+  test("link+target total is on-disk cost (link bytes, not double target)", async () => {
+    const h = makeHarness();
+    h.nodes.set("tfm-status-label", { id: "tfm-status-label", content: "" });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-sel-"));
+    try {
+      const f = path.join(dir, "f.bin");
+      writeFileSync(f, "hello world"); // 11 bytes
+      const link = path.join(dir, "l.bin");
+      symlinkSync(f, link);
+      // on-disk cost: file bytes + the link's own bytes (transfer preserves links)
+      const total = lstatSync(f).size + lstatSync(link).size;
+      h.sel.setFocusKeys([f, link]);
+      h.addTile(f);
+      h.addTile(link);
+      h.sel.selectAll();
+      h.sel.updateSelectionStatusReal();
+      const status = h.nodes.get("tfm-status-label");
+      await settleUntil(() => status.content === `2 selected · ${fmtBytes(total)}`);
+      expect(status.content).toBe(`2 selected · ${fmtBytes(total)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("hardlink pair counts shared bytes once (inode dedupe)", async () => {
+    const h = makeHarness();
+    h.nodes.set("tfm-status-label", { id: "tfm-status-label", content: "" });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-sel-"));
+    try {
+      const f = path.join(dir, "f.bin");
+      writeFileSync(f, "hello world"); // 11 bytes
+      const g = path.join(dir, "g.bin");
+      linkSync(f, g); // same inode, two names
+      h.sel.setFocusKeys([f, g]);
+      h.addTile(f);
+      h.addTile(g);
+      h.sel.selectAll();
+      h.sel.updateSelectionStatusReal();
+      const status = h.nodes.get("tfm-status-label");
+      await settleUntil(() => status.content === `2 selected · ${fmtBytes(lstatSync(f).size)}`);
+      expect(status.content).toBe(`2 selected · ${fmtBytes(lstatSync(f).size)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a newer status request wins over a still-in-flight older one", async () => {

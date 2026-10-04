@@ -1,6 +1,6 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { execFile } from "node:child_process";
-import { statSync, type Stats } from "node:fs";
+import { lstatSync, type Stats } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
@@ -8,7 +8,7 @@ import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
 import type { IconSlotHandle, IconSpec, IconState, SlotElement, ThumbJob } from "./ui-slots";
-import { dirWalkStats, fmtBytes, fmtDate, mimeLabelFor } from "../fs/propsinfo";
+import { dirWalkStats, fmtBytes, fmtDate, inodeKey, mimeLabelFor } from "../fs/propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
 import type { ListEntry } from "./ui-menu";
@@ -116,7 +116,10 @@ export const makeProps = (ctx: PropsCtx) => {
     const colors = ctx.colors();
     let st: Stats | null = null;
     try {
-      st = statSync(targetPath);
+      // on-disk cost: a symlink reports its own bytes, never the target's
+      // (copies preserve links; broken links stay openable instead of
+      // toasting "source gone")
+      st = lstatSync(targetPath);
     } catch {
       // right-click → Properties on a just-deleted file must say so, not blink
       ctx.notify("Can't show properties (source gone)", "properties", "error");
@@ -431,10 +434,17 @@ export const makeProps = (ctx: PropsCtx) => {
     let nFiles = 0;
     let nFolders = 0;
     const dirPaths: string[] = [];
+    // Stats arrive via lstat (openProperties), so links never masquerade as
+    // dirs here; bodies shared by hardlinks count once, like the status bar.
+    const seen = new Set<string>();
     for (const it of items) {
       if (it.st.isDirectory()) dirPaths.push(it.path);
       else {
-        totalBytes += it.st.size ?? 0;
+        const k = inodeKey(it.st);
+        if (!seen.has(k)) {
+          seen.add(k);
+          totalBytes += it.st.size ?? 0;
+        }
         nFiles++;
       }
     }
@@ -496,7 +506,7 @@ export const makeProps = (ctx: PropsCtx) => {
     const stats: { path: string; st: Stats }[] = [];
     for (const p of target) {
       try {
-        stats.push({ path: p, st: statSync(p) });
+        stats.push({ path: p, st: lstatSync(p) });
       } catch {}
     }
     const only = stats[0];

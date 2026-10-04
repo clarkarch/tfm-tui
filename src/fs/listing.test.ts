@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { compareEntries, fillStatsInto, listDir, type Entry } from "./listing";
@@ -134,6 +134,49 @@ describe("listDir", () => {
 
       const withHidden = await listDir(dir, true, "name", true);
       expect(withHidden.map((x) => x.name)).toContain(".hidden");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("scanDir marks symlinks via isLink (broken links included)", async () => {
+    const dir = mktmp("tfm-ld-link-");
+    try {
+      W(path.join(dir, "real.txt"));
+      symlinkSync(path.join(dir, "real.txt"), path.join(dir, "alias"));
+      symlinkSync(path.join(dir, "gone-nowhere"), path.join(dir, "broken"));
+      const shown = await listDir(dir, false, "name", true);
+      expect(shown.find((x) => x.name === "alias")?.isLink).toBe(true);
+      expect(shown.find((x) => x.name === "broken")?.isLink).toBe(true);
+      expect(shown.find((x) => x.name === "real.txt")?.isLink).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("size fill reports link-own bytes, not the target's", async () => {
+    const dir = mktmp("tfm-ld-linksize-");
+    try {
+      W(path.join(dir, "big.txt"), "x".repeat(1000));
+      const link = path.join(dir, "alias");
+      symlinkSync(path.join(dir, "big.txt"), link);
+      const out = await listDir(dir, false, "size", true);
+      // link bytes (a path's length) vs 1000 target bytes — never the same
+      expect(out.find((x) => x.name === "alias")?.size).toBe(lstatSync(link).size);
+      expect(out.find((x) => x.name === "big.txt")?.size).toBe(1000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fill backfills broken links with link bytes instead of leaving them sizeless", async () => {
+    const dir = mktmp("tfm-ld-broken-");
+    try {
+      const link = path.join(dir, "broken");
+      symlinkSync(path.join(dir, "gone-nowhere"), link);
+      const entries: Entry[] = [{ name: "broken", isDir: false, abs: link }];
+      await fillStatsInto(entries, dir);
+      expect(entries[0]!.size).toBe(lstatSync(link).size);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

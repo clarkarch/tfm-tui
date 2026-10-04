@@ -5,9 +5,9 @@
 // keymap reach them through one injected object. Visual painting (surfaces,
 // icon states) still flows through ctx — no renderer imports. ---
 import { readdir } from "node:fs/promises";
-import { statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { applySurface, tileSurface, type UiStyle } from "../ui/style";
-import { fmtBytes } from "../fs/propsinfo";
+import { fmtBytes, inodeKey } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ClipItem } from "./grid-input";
 import { TileVisual, type TileVisualMode } from "./grid-input";
@@ -142,14 +142,22 @@ export const makeSelection = (ctx: SelectionCtx) => {
       setStatus("");
       return;
     }
-    // total size of the selected files (dirs contribute their item count instead)
+    // total size is on-disk cost: links count their own bytes (the copy engine
+    // preserves them via readlink/symlink, never the target), and hardlinked
+    // names sharing one dev:ino count their body once — like du. lstat never
+    // reports a link as a directory, so links-to-dirs land in bytes while real
+    // dirs contribute their item count below instead.
     let bytes = 0;
+    const seen = new Set<string>();
     for (const s of sel) {
-      if (!s.isDir) {
-        try {
-          bytes += statSync(s.key).size;
-        } catch {}
-      }
+      try {
+        const lst = lstatSync(s.key);
+        if (lst.isDirectory()) continue;
+        const k = inodeKey(lst);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        bytes += lst.size;
+      } catch {}
     }
     const dirs = sel.filter((s) => s.isDir);
     if (dirs.length === 0) {

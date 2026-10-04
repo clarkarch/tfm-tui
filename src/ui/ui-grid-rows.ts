@@ -11,7 +11,7 @@
 
 import { Box, Text } from "@opentui/core";
 import { errMessage } from "../lib/uiutil";
-import { statSync } from "node:fs";
+import { readlinkSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import type { Entry } from "../fs/listing";
@@ -71,8 +71,12 @@ const thumbPlanFor = (
   let stat: { size?: number; mtimeMs?: number } | null = null;
   if (wantsThumb) {
     // recursive-search entries (and sort-filled listDir rows) already carry
-    // size/mtime — reuse them instead of a second stat per thumbnail
-    if (entry.size !== undefined && entry.mtimeMs !== undefined) stat = { size: entry.size, mtimeMs: entry.mtimeMs };
+    // size/mtime — reuse them instead of a second stat per thumbnail.
+    // Links NEVER reuse: entry stats are link-own since the on-disk change,
+    // but the raster reads target pixels, so the job key must be the target's
+    // (an edited target photo would otherwise never re-raster)
+    if (!entry.isLink && entry.size !== undefined && entry.mtimeMs !== undefined)
+      stat = { size: entry.size, mtimeMs: entry.mtimeMs };
     else {
       try {
         stat = statSync(key);
@@ -86,6 +90,15 @@ const thumbPlanFor = (
   // callers then get a size they can pass straight to pushThumbJob
   if (!useThumb || typeof size !== "number") return { isVideo, stat: null, useThumb };
   return { isVideo, stat: { size, mtimeMs: stat?.mtimeMs ?? 0 }, useThumb: true };
+};
+
+// list-row link badge: `name → target` with the target's basename (the full
+// readlink rarely fits the name column; `ls -l` stays one shell away for the
+// whole path). Pure for tests; the builder supplies the readlink. Grid tiles
+// keep the bare name by design — one truncated line fits no `→ target`.
+export const linkRowLabel = (name: string, targetBase: string, max: number): string => {
+  const full = `${name} → ${targetBase}`;
+  return full.length > max ? `${full.slice(0, max - 1)}…` : full;
 };
 
 // short modified-date for the list view's date column (and the stats-only
@@ -353,7 +366,15 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     row.add(slotEl);
     const listW = Math.max(20, availW() - sidePadDelta(ctx.uiStyle()));
     const nameMax = Math.max(12, listW - 27 - iconW);
-    const label = entry.name.length > nameMax ? `${entry.name.slice(0, nameMax - 1)}…` : entry.name;
+    let label = entry.name.length > nameMax ? `${entry.name.slice(0, nameMax - 1)}…` : entry.name;
+    if (entry.isLink) {
+      // readlink runs per link row only (links are rare); a vanished link
+      // keeps its bare name instead of throwing the row into a placeholder
+      try {
+        const t = readlinkSync(key);
+        label = linkRowLabel(entry.name, path.basename(t) || t, nameMax);
+      } catch {}
+    }
     row.add(Text({ id: labelId, content: label, fg: baseFg }));
     row.add(Box({ flexGrow: 1 }));
     // ids live on the TEXT nodes (boxes have no .content): stats-only ticks

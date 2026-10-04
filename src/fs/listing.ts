@@ -1,15 +1,25 @@
 // --- Directory listing + sort: pure fs/dir-entry logic. No renderer, no UI
 // state — sort mode arrives as params so callers (grid, tests) own state.
 // Virtual places (Recent/Starred) resolve through the registries in ./recent. ---
-import { readdir, stat } from "node:fs/promises";
-import { statSync } from "node:fs";
+import { lstat, readdir, stat } from "node:fs/promises";
+import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "./uri";
 import { readRecentXbel, readStarredList } from "./recent";
 import type { SortMode } from "../lib/sort";
 import { extOf } from "./filetype";
 
-export type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
+export type Entry = {
+  name: string;
+  isDir: boolean;
+  size?: number;
+  mtimeMs?: number;
+  abs?: string;
+  // set at scan time (free from the dirent; probed for virtual/search rows):
+  // drives the list-row link badge. Not part of the structural sig — a
+  // retargeted link keeps its name, same documented staleness as isDir.
+  isLink?: boolean;
+};
 
 // One collator for the whole process (JSC/Bun rebuilds collation data on every
 // String#localeCompare call, turning an n log n sort into a slow-mode flood —
@@ -48,7 +58,9 @@ export const compareEntries = (sortBy: SortMode, sortAsc: boolean) => {
 
 const statEntry = (abs: string): { size?: number; mtimeMs?: number } => {
   try {
-    const st = statSync(abs);
+    // link-own bytes/mtime (on-disk cost, ls -l semantics); routing stays in
+    // scanDir's target-following isDir
+    const st = lstatSync(abs);
     return { size: st.size, mtimeMs: st.mtimeMs ?? 0 };
   } catch {
     return {};
@@ -66,12 +78,20 @@ const statEntries = (items: Array<{ path: string; mtimeMs?: number }>): Entry[] 
     } catch {
       continue;
     }
+    // size/mtime are the link's own (on-disk cost); routing still follows it.
+    // A second lstat (not the dirent — virtual rows have none) also settles
+    // isLink, so one probe serves both.
+    let link: ReturnType<typeof lstatSync> | null = null;
+    try {
+      link = lstatSync(it.path);
+    } catch {}
     out.push({
       name: path.basename(it.path),
       isDir: st.isDirectory(),
       abs: it.path,
-      size: st.size,
-      mtimeMs: it.mtimeMs ?? st.mtimeMs ?? 0,
+      size: link?.size ?? st.size,
+      mtimeMs: it.mtimeMs ?? link?.mtimeMs ?? st.mtimeMs ?? 0,
+      isLink: link?.isSymbolicLink() ?? false,
     });
   }
   return out;
@@ -117,7 +137,7 @@ const scanDir = async (dir: string): Promise<Entry[]> => {
         isDir = false;
       }
     }
-    out.push({ name: d.name, isDir });
+    out.push({ name: d.name, isDir, isLink: d.isSymbolicLink() });
   }
   return out;
 };
@@ -137,7 +157,10 @@ export const fillStatsInto = async (
   dir: string,
   deps?: { stat?: (p: string) => Promise<{ size: number; mtimeMs: number }>; concurrency?: number },
 ): Promise<void> => {
-  const statFn = deps?.stat ?? ((p: string) => stat(p));
+  // default follows NOTHING (lstat): the Size/mtime columns show link-own
+  // bytes (on-disk cost, ls -l semantics) — a following default is how the
+  // link row ended up repeating its target's size. Injected fakes keep working.
+  const statFn = deps?.stat ?? ((p: string) => lstat(p));
   const workers = Math.max(1, Math.min(deps?.concurrency ?? 32, entries.length));
   let i = 0;
   const worker = async (): Promise<void> => {
