@@ -5,7 +5,7 @@ import path from "node:path";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { MouseButtons } from "@opentui/core/testing";
-import { makeChrome } from "./ui-chrome";
+import { makeChrome, tabChipMaxWidth } from "./ui-chrome";
 import { gridDrag } from "../input/grid-input";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
@@ -48,6 +48,7 @@ let calls: {
 let cwd: string;
 let rasterSig: string;
 let tabBar: boolean;
+let availWVal: number; // 0 = seam absent (roomy 24-wide chips, today's look)
 let tabModel: { list: Tab[]; active: number };
 let tabModel1: { list: Tab[]; active: number };
 let kbActive: boolean;
@@ -87,6 +88,7 @@ beforeAll(async () => {
   cwd = HOME;
   rasterSig = "raster-a";
   tabBar = false;
+  availWVal = 0;
   tabModel = { list: mkTabs(2), active: 1 };
   tabModel1 = { list: mkTabs(3), active: 2 };
   kbActive = false;
@@ -95,8 +97,8 @@ beforeAll(async () => {
   const host = Box(
     { flexDirection: "row" },
     Box({ id: "tfm-places", flexDirection: "column", width: 20 }),
-    Box({ id: "tfm-p0-tabbar", flexDirection: "row", height: 1 }),
-    Box({ id: "tfm-p1-tabbar", flexDirection: "row", height: 1 }),
+    Box({ id: "tfm-p0-tabbar", flexDirection: "row", height: 1, overflow: "hidden" }),
+    Box({ id: "tfm-p1-tabbar", flexDirection: "row", height: 1, overflow: "hidden" }),
   );
   t.renderer.root.add(host);
   await t.renderOnce();
@@ -108,6 +110,7 @@ beforeAll(async () => {
     sw: () => 20,
     sideInnerW: () => 20,
     tabBar: () => tabBar,
+    availW: () => availWVal,
     rasterSig: () => rasterSig,
     renderAll: () => {},
     navigate: (target) => {
@@ -398,6 +401,38 @@ describe("renderTabbar", () => {
     fire("out");
     expect(calls.iconStates.at(-1)?.idx).toBe(0);
     expect(bgInts(closeId)).toEqual(hexInts(colors.bg));
+  });
+
+  test("four tabs in a 32-wide strip fit without overflow (chips shrink, plus stays)", async () => {
+    tabModel = { list: mkTabs(4), active: 0 };
+    tabModel1 = { list: mkTabs(1), active: 0 }; // pane 1 strip hidden, no space fight
+    availWVal = 32;
+    (byId("tfm-p0-tabbar") as any).width = 32;
+    chrome.renderTabbar(0);
+    chrome.renderTabbar(1);
+    await t.renderOnce();
+    const w = (id: string): number => (byId(id) as any)?.yogaNode?.getComputedWidth?.() ?? 99;
+    const chips = [0, 1, 2, 3].map((i) => w(`tfm-p0-tab-${i}`));
+    // 4 chips + 4 gaps + 3-wide plus must fit 32: chips shrink below content width
+    const total = chips.reduce((a, b) => a + b, 0) + 4 + 3;
+    expect(Math.max(...chips)).toBeLessThanOrEqual(8);
+    expect(total).toBeLessThanOrEqual(32);
+    expect(byId("tfm-p0-tab-new")).toBeTruthy();
+    // restore the shared fixtures (later describes reuse tabModel/width)
+    (byId("tfm-p0-tabbar") as any).width = "auto";
+    availWVal = 0;
+    tabModel = { list: mkTabs(2), active: 1 };
+    tabModel1 = { list: mkTabs(3), active: 2 };
+  });
+
+  test("tabChipMaxWidth splits the row: plus + gaps accounted, clamped both ends", () => {
+    expect(tabChipMaxWidth(54, 2)).toBe(24); // roomy strips keep today's look
+    expect(tabChipMaxWidth(54, 1)).toBe(24); // one tab never stretches
+    expect(tabChipMaxWidth(32, 4)).toBe(6); // (32-3-4)/4: the shrink case above
+    expect(tabChipMaxWidth(26, 2)).toBe(10); // narrow dual pane, two tabs
+    expect(tabChipMaxWidth(14, 2)).toBe(6); // minimum wins over the math (4)
+    expect(tabChipMaxWidth(26, 10)).toBe(6); // past the minimum the tail clips
+    expect(tabChipMaxWidth(54, 0)).toBe(24); // no tabs stays roomy, never NaN
   });
 
   test("dropping a single dragged folder on a chip navigates that tab to it", async () => {

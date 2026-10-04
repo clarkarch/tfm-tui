@@ -23,6 +23,21 @@ import type { IconSlotHandle, IconState, IconSpec, SlotElement } from "./ui-slot
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 
+export const TAB_CHIP_MAX_W = 24; // roomy width, kept whenever the strip fits
+export const TAB_CHIP_MIN_W = 6; // pad + 1-2 title cells + close; below this the tail clips
+export const TAB_NEW_BTN_W = 3; // the plus button (toolbar hoverBtn width)
+
+// --- Tab chip shrink: N chips + the plus button share one availW row with a
+// 1-cell gap between items (N+1 items = N gaps). Each chip is capped so the
+// whole strip fits; titles clip inside the shrunken chip (bar and chip both
+// carry overflow:hidden). Past the minimum the tail clips instead of
+// bleeding — same tradeoff as the toolbar crumbs. ---
+export const tabChipMaxWidth = (availW: number, nTabs: number): number => {
+  if (nTabs <= 0) return TAB_CHIP_MAX_W;
+  const per = Math.floor((availW - TAB_NEW_BTN_W - nTabs) / nTabs);
+  return Math.max(TAB_CHIP_MIN_W, Math.min(TAB_CHIP_MAX_W, per));
+};
+
 type ChromeCtx = {
   byId(id: string): MaybeNode;
   uiStyle(): UiStyle;
@@ -30,6 +45,9 @@ type ChromeCtx = {
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
   sideInnerW(): number; // index keeps this helper (outline insets by 2)
   tabBar(): boolean; // config.ui.tabBar
+  // live pane width for chip shrink (100% of the pane column). Optional so old
+  // fakes keep working — absent/<=0 keeps the roomy 24-wide chips.
+  availW?(pane: 0 | 1): number;
   // raster-affecting state ([ui] icons + tty mode + force-glyph): rows paint a
   // raster or a bare glyph without the places changing, so without this the
   // sidebar fast path keeps stale rasters across a graphics-mode toggle.
@@ -296,6 +314,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
       bar.visible = ctx.tabBar() || tabs.list.length > 1;
     } catch {}
     destroyChildren(bar);
+    // shrink the chips to the live pane width so adding tabs never pushes the
+    // strip (or the plus button) past the pane edge
+    const avail = ctx.availW?.(pane) ?? 0;
+    const chipMaxW = avail > 0 ? tabChipMaxWidth(avail, tabs.list.length) : TAB_CHIP_MAX_W;
     tabs.list.forEach((t, i) => {
       const tabId = `${prefix}tab-${i}`;
       const active = i === tabs.active;
@@ -346,7 +368,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
           {
             id: tabId,
             height: 1,
-            maxWidth: 24,
+            maxWidth: chipMaxW,
+            flexShrink: 1,
+            overflow: "hidden",
             flexDirection: "row",
             columnGap: 1,
             paddingLeft: 1,

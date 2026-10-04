@@ -97,6 +97,9 @@ export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
             height: 1,
             flexDirection: "row",
             columnGap: 1,
+            // tab chips shrink to fit, and past the minimum the tail clips
+            // here instead of bleeding over the grid
+            overflow: "hidden",
             visible: o.tabBarVisible,
           }),
           Box({ id: "tfm-pane-0", flexGrow: 1, width: "100%", flexDirection: "column" }),
@@ -117,6 +120,8 @@ export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
             height: 1,
             flexDirection: "row",
             columnGap: 1,
+            // same clip contract as pane 0 (see above)
+            overflow: "hidden",
             visible: o.tabBarVisible,
           }),
           Box({ id: "tfm-pane-1", flexGrow: 1, width: "100%", flexDirection: "column" }),

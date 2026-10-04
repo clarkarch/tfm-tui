@@ -110,6 +110,14 @@ export const wireChrome = async (deps: {
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
     tabBar: () => core.config.ui.tabBar,
+    // tab chip shrink reads the live pane width — same math as grid's
+    // paneAvailW (the strip is 100% of its pane column). Arrow-deferred: the
+    // renderer const below is the TDZ seam, same as menu's termW.
+    // both panes split the main area evenly, so the index carries no width
+    availW: (_pane) =>
+      core.config.ui.dualPane
+        ? Math.floor((renderer.terminalWidth - core.geometry.sidebarEff - core.geometry.previewEff - 1) / 2)
+        : renderer.terminalWidth - core.geometry.sidebarEff - core.geometry.previewEff,
     rasterSig: () =>
       rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph, core.config.ui.iconStyle),
     renderAll: nav.renderAll,
