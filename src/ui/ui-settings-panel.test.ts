@@ -53,9 +53,9 @@ describe("ensureVisible", () => {
 
 describe("panel geometry (room for the description footer)", () => {
   test("panel width adapts to the terminal like the help view", () => {
-    expect(SETTINGS_MAX_W).toBe(100);
-    expect(settingsPanelWidth(200)).toBe(100);
-    expect(settingsPanelWidth(90)).toBe(86);
+    expect(SETTINGS_MAX_W).toBe(80);
+    expect(settingsPanelWidth(200)).toBe(80);
+    expect(settingsPanelWidth(90)).toBe(80);
     expect(settingsPanelWidth(80)).toBe(76);
     expect(settingsPanelWidth(40)).toBe(64);
   });
@@ -63,15 +63,15 @@ describe("panel geometry (room for the description footer)", () => {
   test("columns widen with the panel so labels/values stop truncating", () => {
     // longest real label is 24 chars ("include filename in lift") — sliced at
     // the old 22; a wide panel must fit it, the floor keeps the old widths
-    expect(settingsWidths(100).labelW).toBe(30);
+    expect(settingsWidths(80).labelW).toBe(27);
     expect(settingsWidths(78).labelW).toBe(25);
     expect(settingsWidths(64).labelW).toBe(22);
-    expect(settingsWidths(100).valW).toBe(16);
-    expect(settingsWidths(100).keyW).toBe(24);
+    expect(settingsWidths(80).valW).toBe(16);
+    expect(settingsWidths(80).keyW).toBe(24);
   });
 
   test("description footer fills the panel width", () => {
-    expect(fitDescText("x".repeat(200), 100).length).toBe(96);
+    expect(fitDescText("x".repeat(200), 80).length).toBe(76);
     expect(fitDescText("x".repeat(200), 64).length).toBe(60);
   });
 

@@ -323,10 +323,10 @@ describe("settings view", () => {
   });
 
   test("settings panel fills the terminal (adaptive width, not fixed 78)", async () => {
-    // test renderer is 90 wide → panel must be 86 (90 - 4), like the help view
+    // test renderer is 90 wide → panel caps at 80, not 86 (90 - 4)
     await openSettings();
     const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
-    expect(panel?.width).toBe(86);
+    expect(panel?.width).toBe(80);
     menu.closeMenu();
     await t.renderOnce();
   });

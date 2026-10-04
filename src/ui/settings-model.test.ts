@@ -136,6 +136,18 @@ describe("settingGroups shape", () => {
     }
   });
 
+  test("key labels fit the settings label column (detail lives in the footer blurb)", () => {
+    // the keys view pairs each label with a 24-wide keybind column — a label
+    // past the label column truncates mid-word, so verbose labels shorten and
+    // carry their context in the footer blurb instead
+    const h = mk();
+    const kb = h.groups().find((g) => g.header === "keys")!.rows;
+    for (const r of kb) {
+      if (r.kind === "header") continue;
+      expect(r.label.length).toBeLessThanOrEqual(27);
+    }
+  });
+
   test("auto-hide toggles and their hover timing share the panes category", () => {
     const h = mk();
     const panes = h
@@ -258,19 +270,19 @@ describe("settingGroups shape", () => {
     expect(seq.slice(seq.indexOf("##tabs") + 1, seq.indexOf("##tabs") + 5)).toEqual([
       "new tab",
       "close tab",
-      "next tab (cycle)",
-      "previous tab (cycle)",
+      "next tab",
+      "previous tab",
     ]);
     expect(seq.slice(seq.indexOf("##panes") + 1)).toEqual([
       "toggle dual pane",
-      "switch active pane (dual pane)",
-      "copy selection to the other pane",
-      "move selection to the other pane",
+      "switch pane",
+      "copy to other pane",
+      "move to other pane",
       "open terminal here",
     ]);
-    expect(seq).toContain("connect to a network server (gvfs)");
-    expect(seq.indexOf("connect to a network server (gvfs)")).toBeGreaterThan(seq.indexOf("##navigation"));
-    expect(seq.indexOf("connect to a network server (gvfs)")).toBeLessThan(seq.indexOf("##view"));
+    expect(seq).toContain("connect to server");
+    expect(seq.indexOf("connect to server")).toBeGreaterThan(seq.indexOf("##navigation"));
+    expect(seq.indexOf("connect to server")).toBeLessThan(seq.indexOf("##view"));
   });
 
   test("keymap preset row applies the yazi batch + type-to-search flip + list view", () => {
@@ -803,7 +815,7 @@ describe("keybind rows", () => {
   test("get reads the live config (remaps visible without rebuild)", () => {
     const h = mk();
     h.config.keys.redo = ["ctrl+j"];
-    const row = h.byLabel("redo (ctrl+shift+z works too)");
+    const row = h.byLabel("redo");
     expect(asKeybind(row).get()).toEqual(["ctrl+j"]);
   });
 });

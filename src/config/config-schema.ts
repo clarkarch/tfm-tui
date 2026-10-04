@@ -389,7 +389,7 @@ type SchemaRow =
     })
   | (RowCommon & { kind: "bool"; section: "ui"; def: boolean; blurb: string })
   | (RowCommon & { kind: "enum"; section: "ui"; values: readonly string[]; def: string; blurb: string })
-  | (RowCommon & { kind: "key"; section: "keys"; action: KeyAction; def: string[] })
+  | (RowCommon & { kind: "key"; section: "keys"; action: KeyAction; def: string[]; blurb: string })
   | (RowCommon & { kind: "hex"; section: "theme"; def: string; group?: undefined });
 
 type KeyRow = Extract<SchemaRow, { kind: "key" }>;
@@ -1598,66 +1598,70 @@ const THEME_ROWS: ThemeRow[] = (
 // and search commit. Still structural (not remappable): esc-close, tab inside
 // menus, and the type-to-search catch-all. The 4th tuple element groups binds
 // under a settings-GUI divider (same subsection mechanism as ui rows).
+// Key labels stay short (the keys view pairs them with a 24-wide keybind
+// column — anything past the label column truncates mid-word); the context
+// the old parenthetical labels carried lives in the footer blurb instead
+// (plain language, like every other row's blurb).
 const KEY_ROWS: KeyRow[] = (
   [
-    ["quit", "quit tfm", ["ctrl+q"], "app"],
-    ["restart", "restart tfm", ["ctrl+alt+r"], "app"],
-    ["openMenu", "open the esc menu", ["escape"], "app"],
-    ["toggleHelp", "toggle help", ["f1"], "app"],
-    ["newTab", "new tab", ["ctrl+t"], "tabs"],
-    ["closeTab", "close tab", ["ctrl+w"], "tabs"],
-    ["nextTab", "next tab (cycle)", ["ctrl+tab"], "tabs"],
-    ["prevTab", "previous tab (cycle)", ["ctrl+shift+tab"], "tabs"],
-    ["selectAll", "select all", ["ctrl+a"], "files"],
-    ["trash", "trash selection (delete forever in trash)", ["delete"], "files"],
-    ["renameOrRestore", "rename / bulk rename on multi-selection (restore in trash)", ["f2"], "files"],
-    ["copy", "copy selection", ["ctrl+c"], "files"],
-    ["cut", "cut selection", ["ctrl+x"], "files"],
-    ["duplicate", "duplicate selection (copy in place)", ["ctrl+d"], "files"],
-    ["paste", "paste clipboard", ["ctrl+v"], "files"],
-    ["undo", "undo last file op", ["ctrl+z"], "files"],
-    ["redo", "redo (ctrl+shift+z works too)", ["ctrl+y", "ctrl+shift+z"], "files"],
-    ["showProps", "properties for selection", ["alt+enter"], "files"],
-    ["newFolder", "new folder", ["ctrl+shift+n"], "files"],
-    ["newFile", "new file", ["ctrl+alt+n"], "files"],
-    ["parentDir", "go to parent directory", ["backspace", "alt+up"], "navigation"],
-    ["histBack", "back in history", ["alt+left"], "navigation"],
-    ["histForward", "forward in history", ["alt+right"], "navigation"],
-    ["goHome", "go home", ["alt+home"], "navigation"],
-    ["pathEdit", "edit the path bar", ["ctrl+l"], "navigation"],
-    ["connectServer", "connect to a network server (gvfs)", ["ctrl+shift+s"], "navigation"],
-    ["moveUp", "move up (grid / menus)", ["up"], "navigation"],
-    ["moveDown", "move down (grid / menus)", ["down"], "navigation"],
-    ["moveLeft", "move left (grid / menus)", ["left"], "navigation"],
-    ["moveRight", "move right (grid / menus)", ["right"], "navigation"],
-    ["openSelected", "open / activate (grid / menus / search)", ["return"], "navigation"],
-    ["pageUp", "page up", ["pageup"], "navigation"],
-    ["pageDown", "page down", ["pagedown"], "navigation"],
-    ["firstItem", "first item", ["home"], "navigation"],
-    ["lastItem", "last item", ["end"], "navigation"],
-    ["startSearch", "re-arm type-to-search filter", [], "navigation"],
-    ["extendUp", "extend selection up", ["shift+up"], "selection"],
-    ["extendDown", "extend selection down", ["shift+down"], "selection"],
-    ["extendLeft", "extend selection left", ["shift+left"], "selection"],
-    ["extendRight", "extend selection right", ["shift+right"], "selection"],
-    ["toggleFocused", "toggle focused file", ["space"], "selection"],
+    ["quit", "quit tfm", ["ctrl+q"], "app", "Leave the file manager"],
+    ["restart", "restart tfm", ["ctrl+alt+r"], "app", "Reload the app in place"],
+    ["openMenu", "open the esc menu", ["escape"], "app", "Open settings, plugins and help"],
+    ["toggleHelp", "toggle help", ["f1"], "app", "Show or hide the shortcut sheet"],
+    ["newTab", "new tab", ["ctrl+t"], "tabs", "Open a fresh tab here"],
+    ["closeTab", "close tab", ["ctrl+w"], "tabs", "Close the current tab"],
+    ["nextTab", "next tab", ["ctrl+tab"], "tabs", "Jump to the next tab"],
+    ["prevTab", "previous tab", ["ctrl+shift+tab"], "tabs", "Jump back to the prior tab"],
+    ["selectAll", "select all", ["ctrl+a"], "files", "Select every file shown"],
+    ["trash", "trash selection", ["delete"], "files", "Move to trash, or erase forever inside trash"],
+    ["renameOrRestore", "rename", ["f2"], "files", "Rename files, or restore inside trash"],
+    ["copy", "copy selection", ["ctrl+c"], "files", "Mark files to copy elsewhere"],
+    ["cut", "cut selection", ["ctrl+x"], "files", "Mark files to move elsewhere"],
+    ["duplicate", "duplicate", ["ctrl+d"], "files", "Copy files beside their sources"],
+    ["paste", "paste clipboard", ["ctrl+v"], "files", "Drop copied files here"],
+    ["undo", "undo last file op", ["ctrl+z"], "files", "Walk back the last file change"],
+    ["redo", "redo", ["ctrl+y", "ctrl+shift+z"], "files", "Walk forward after an undo"],
+    ["showProps", "properties for selection", ["alt+enter"], "files", "Show details for the selection"],
+    ["newFolder", "new folder", ["ctrl+shift+n"], "files", "Create a folder here"],
+    ["newFile", "new file", ["ctrl+alt+n"], "files", "Create an empty file here"],
+    ["parentDir", "go to parent directory", ["backspace", "alt+up"], "navigation", "Climb one folder up"],
+    ["histBack", "back in history", ["alt+left"], "navigation", "Step back through visited folders"],
+    ["histForward", "forward in history", ["alt+right"], "navigation", "Step ahead through visited folders"],
+    ["goHome", "go home", ["alt+home"], "navigation", "Jump to your home folder"],
+    ["pathEdit", "edit the path bar", ["ctrl+l"], "navigation", "Type a path to jump to it"],
+    ["connectServer", "connect to server", ["ctrl+shift+s"], "navigation", "Mount a folder shared on the network"],
+    ["moveUp", "move up", ["up"], "navigation", "Step to the row above"],
+    ["moveDown", "move down", ["down"], "navigation", "Step to the row below"],
+    ["moveLeft", "move left", ["left"], "navigation", "Step one column left"],
+    ["moveRight", "move right", ["right"], "navigation", "Step one column right"],
+    ["openSelected", "open", ["return"], "navigation", "Open the focused file or folder"],
+    ["pageUp", "page up", ["pageup"], "navigation", "Scroll one screen up"],
+    ["pageDown", "page down", ["pagedown"], "navigation", "Scroll one screen down"],
+    ["firstItem", "first item", ["home"], "navigation", "Jump to the top of the list"],
+    ["lastItem", "last item", ["end"], "navigation", "Jump to the bottom of the list"],
+    ["startSearch", "search filter", [], "navigation", "Filter the folder while typing"],
+    ["extendUp", "extend selection up", ["shift+up"], "selection", "Grow the selection upward"],
+    ["extendDown", "extend selection down", ["shift+down"], "selection", "Grow the selection downward"],
+    ["extendLeft", "extend selection left", ["shift+left"], "selection", "Stretch the selection left"],
+    ["extendRight", "extend selection right", ["shift+right"], "selection", "Stretch the selection right"],
+    ["toggleFocused", "toggle focused file", ["space"], "selection", "Flip selection on the focused file"],
     // unbound by default: ctrl+r reloads sidebar places (yazi preset flips
     // the pair — reload goes unbound there instead)
-    ["invertSelection", "invert selection", [], "selection"],
-    ["toggleHidden", "toggle hidden files", ["ctrl+h"], "view"],
-    ["reloadPlaces", "reload sidebar places", ["ctrl+r"], "view"],
-    ["togglePreview", "toggle preview pane", ["f3"], "view"],
-    ["toggleView", "toggle grid/list view", ["ctrl+g"], "view"],
-    ["cycleSort", "cycle sort mode (name → size → mtime → type)", [], "view"],
-    ["zoomIn", "bigger tiles", ["ctrl+="], "view"],
-    ["zoomOut", "smaller tiles", ["ctrl+-"], "view"],
-    ["toggleDualPane", "toggle dual pane", ["ctrl+shift+d"], "panes"],
-    ["switchPane", "switch active pane (dual pane)", ["tab"], "panes"],
-    ["copyToOtherPane", "copy selection to the other pane", ["f5"], "panes"],
-    ["moveToOtherPane", "move selection to the other pane", ["f6"], "panes"],
-    ["openTerminal", "open terminal here", ["ctrl+`", "f4"], "panes"],
+    ["invertSelection", "invert selection", [], "selection", "Swap selected with unselected"],
+    ["toggleHidden", "toggle hidden files", ["ctrl+h"], "view", "Show files starting with a dot"],
+    ["reloadPlaces", "reload sidebar places", ["ctrl+r"], "view", "Refresh drives and bookmarks"],
+    ["togglePreview", "toggle preview pane", ["f3"], "view", "Show or hide the file preview"],
+    ["toggleView", "toggle grid/list view", ["ctrl+g"], "view", "Swap between tiles and rows"],
+    ["cycleSort", "sort order", [], "view", "Name, size, date, then type"],
+    ["zoomIn", "bigger tiles", ["ctrl+="], "view", "Grow tiles and icons a step"],
+    ["zoomOut", "smaller tiles", ["ctrl+-"], "view", "Shrink tiles and icons a step"],
+    ["toggleDualPane", "toggle dual pane", ["ctrl+shift+d"], "panes", "Split into side-by-side panes"],
+    ["switchPane", "switch pane", ["tab"], "panes", "Hop between the two panes"],
+    ["copyToOtherPane", "copy to other pane", ["f5"], "panes", "Copy the selection across panes"],
+    ["moveToOtherPane", "move to other pane", ["f6"], "panes", "Move the selection across panes"],
+    ["openTerminal", "open terminal here", ["ctrl+`", "f4"], "panes", "Drop to a shell in this folder"],
   ] as const
-).map(([action, label, def, subsection]) => ({
+).map(([action, label, def, subsection, blurb]) => ({
   kind: "key",
   section: "keys",
   tomlKey: action.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`),
@@ -1668,6 +1672,7 @@ const KEY_ROWS: KeyRow[] = (
   group: "keys" as GuiGroup,
   subsection,
   def: [...def],
+  blurb,
 }));
 
 export const SCHEMA: SchemaRow[] = [...UI_ROWS, ...THEME_ROWS, ...KEY_ROWS];

@@ -142,10 +142,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     }
   };
 
-  const keybindRow = (action: KeyAction, label: string): SettingRow => ({
+  const keybindRow = (action: KeyAction, label: string, blurb: string): SettingRow => ({
     kind: "keybind",
     label,
-    blurb: "Press enter, then a new key",
+    blurb,
     get: () => ctx.config.keys[action] ?? [],
     set: (v) => {
       // core clash: no commit, no warn — the outcome lets the capture flow
@@ -310,7 +310,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         subsection = r.subsection;
         rows.push({ kind: "header", label: r.subsection });
       }
-      rows.push(keybindRow(r.action, r.label));
+      rows.push(keybindRow(r.action, r.label, r.blurb));
     }
     return rows;
   };

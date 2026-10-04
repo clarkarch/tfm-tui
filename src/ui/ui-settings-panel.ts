@@ -72,8 +72,9 @@ type SettingsPanelHooks = {
 
 // settings panel is wider than the root menu (categories + value columns +
 // the one-line description footer) and adapts to the terminal like the help
-// view (HELP_W in ./ui-help)
-export const SETTINGS_MAX_W = 100;
+// view (HELP_W in ./ui-help). Capped at 80: every real label + value fits in
+// that (the old 100 pooled ~20 dead cells in the middle spacer).
+export const SETTINGS_MAX_W = 80;
 const SETTINGS_MIN_W = 64;
 export const settingsPanelWidth = (termW: number): number =>
   Math.min(SETTINGS_MAX_W, Math.max(SETTINGS_MIN_W, termW - 4));
