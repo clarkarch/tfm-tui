@@ -107,6 +107,14 @@ export const wireNav = (deps: {
     },
     destroy: () => getChrome().renderer.destroy(),
     exit: (code: number) => process.exit(code),
+    // refuse quit while file ops are in flight (same guard as restart):
+    // exiting mid-batch strands completed files with no undo batch
+    isBusy: () => !sharedOpQueue().isIdle(),
+    onBusy: () => {
+      try {
+        getChrome().notify("Can't quit during file operations — cancel (✕) or wait for it to finish", "quit", "error");
+      } catch {}
+    },
   };
   const quitApp = makeQuit(quitSteps);
 

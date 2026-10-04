@@ -37,6 +37,7 @@ const mkCtx = (
     releaseShiftCapture: () => calls.push("release"),
     flushSession: () => calls.push("session"),
     closeTerminal: () => calls.push("terminal"),
+    stopGpm: () => calls.push("gpm"),
     onQuit: () => calls.push("onQuit"),
     destroy: () => {
       calls.push("destroy");
@@ -65,6 +66,7 @@ describe("makeRestart", () => {
       "release",
       "session",
       "terminal",
+      "gpm",
       "onQuit",
       expect.stringMatching(/^spawn:\/usr\/bin\/tfm:one,two:\{"stdio":"inherit","env":.*\}$/),
       "destroy",
@@ -115,6 +117,7 @@ describe("makeRestart", () => {
       "release",
       "session",
       "terminal",
+      "gpm",
       "onQuit",
       expect.stringContaining("spawn:"),
       "recover",
@@ -137,7 +140,10 @@ describe("makeRestart", () => {
   test("busy queue refuses before teardown (live transfer keeps its staging temp)", () => {
     const calls: string[] = [];
     makeRestart(mkCtx(calls, { busy: true }))();
-    expect(calls).toEqual(["preflight:/usr/bin/tfm", "notify:Can't restart during file operations"]);
+    expect(calls).toEqual([
+      "preflight:/usr/bin/tfm",
+      "notify:Can't restart during file operations — cancel (✕) or wait for it to finish",
+    ]);
   });
 
   test("teardown failure still spawns, then exits 1", () => {
@@ -150,6 +156,7 @@ describe("makeRestart", () => {
       "release",
       "session",
       "terminal",
+      "gpm",
       "onQuit",
       expect.stringContaining("spawn:"),
       "destroy",
@@ -167,6 +174,7 @@ describe("makeRestart", () => {
       "release",
       "session",
       "terminal",
+      "gpm",
       "onQuit",
       expect.stringContaining("spawn:"),
       "recover",

@@ -21,11 +21,23 @@ export type QuitCtx = {
   destroy(): void;
   exit(code: number): void;
   onQuit?: () => void;
+  // file-op activity probe (wiring: shared queue depth) — refusing while
+  // busy beats exiting mid-transfer (same reason restart refuses: completed
+  // files would strand with no undo batch, .tfm-part-* swept only next run)
+  isBusy?: () => boolean;
+  // busy-refusal feedback (wiring: error toast). Best-effort, never throws.
+  onBusy?: () => void;
 };
 
 export const makeQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
+    if (ctx.isBusy?.()) {
+      try {
+        ctx.onBusy?.();
+      } catch {}
+      return;
+    }
     let failed = runTeardownSteps(ctx);
     try {
       ctx.destroy();

@@ -88,7 +88,7 @@ in `deactivate`, and anything async in an `api.events.on("quit")` listener
 - **Events (observe)**: `events.on(evt, cb) → unsubscribe`. Events: `navigate`,
   `selection`, `file-op`, `trash`, `undo`, `theme`, `quit`, `boot`.
 - **Hooks (intercept)**: `hooks.beforeFileOp(fn) → unsubscribe`. Return
-  `{ skip: true, reason? }` to veto a `copy|move|rename|duplicate|trash|restore|delete-forever|empty`
+  `{ skip: true, reason? }` to veto a `copy|move|rename|duplicate|extract|compress|trash|restore|delete-forever|empty`
   before core starts it. Sync-only, first skip wins.
 
 Subscribe in `activate` and unsubscribe in `deactivate`, or listeners leak

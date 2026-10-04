@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync
 import os from "node:os";
 import path from "node:path";
 import { trashDir } from "./fsutil";
-import { makeTrashConfirms, makeTrashOps, trashOrigPath, type TrashOpsSink } from "./trashops";
+import { makeTrashConfirms, makeTrashOps, trashOrigPath, trashOrigPathForFile, type TrashOpsSink } from "./trashops";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 const oldHome = process.env.HOME;
@@ -146,6 +146,21 @@ describe("trashOrigPath", () => {
       await settleUntil(() => sink.batches.length === 1);
       expect(sink.batches[0]!.label).toBe("restore 1 item");
       expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item · ctrl+z to undo")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a per-mount file with no sibling info never resolves to a home entry of the same name", async () => {
+    const root = sandbox();
+    try {
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      writeFileSync(path.join(trashDir(), "info", "clash.txt.trashinfo"), "[Trash Info]\nPath=/home/user/clash.txt\n");
+      const mnt = path.join(root, "mnt-clash");
+      mkdirSync(path.join(mnt, "files"), { recursive: true });
+      mkdirSync(path.join(mnt, "info"), { recursive: true });
+      writeFileSync(path.join(mnt, "files", "clash.txt"), "usb-data");
+      expect(await trashOrigPathForFile(path.join(mnt, "files", "clash.txt"))).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -612,6 +627,70 @@ describeNonRoot("sudo escalation", () => {
       try {
         chmodSync(dir, 0o755);
       } catch {}
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("emptyTrash per-mount coverage", () => {
+  test("empties mounted per-mount trashes alongside home", async () => {
+    const root = sandbox();
+    try {
+      const homeFiles = path.join(trashDir(), "files");
+      const homeInfo = path.join(trashDir(), "info");
+      mkdirSync(homeFiles, { recursive: true });
+      mkdirSync(homeInfo, { recursive: true });
+      writeFileSync(path.join(homeFiles, "h.txt"), "home");
+      writeFileSync(path.join(homeInfo, "h.txt.trashinfo"), "[Trash Info]\nPath=/x/h.txt\n");
+      const mnt = path.join(root, "mnt");
+      mkdirSync(path.join(mnt, "files"), { recursive: true });
+      mkdirSync(path.join(mnt, "info"), { recursive: true });
+      writeFileSync(path.join(mnt, "files", "u.txt"), "usb");
+      writeFileSync(path.join(mnt, "info", "u.txt.trashinfo"), "[Trash Info]\nPath=/mnt/u.txt\n");
+      const sink = recordingSink();
+      (sink as Record<string, unknown>).trashFilesDirs = () => [homeFiles, path.join(mnt, "files")];
+      await makeTrashOps(sink).emptyTrash();
+      await settleUntil(() => !existsSync(path.join(mnt, "files", "u.txt")));
+      expect(existsSync(path.join(homeFiles, "h.txt"))).toBe(false);
+      expect(existsSync(path.join(mnt, "files", "u.txt"))).toBe(false);
+      expect(existsSync(path.join(mnt, "info", "u.txt.trashinfo"))).toBe(false);
+      expect(sink.notes.some((n) => n === "notify:empty:success:Emptied 2 items · cannot be undone")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable extra root does not block emptying home", async () => {
+    const root = sandbox();
+    try {
+      const homeFiles = path.join(trashDir(), "files");
+      mkdirSync(homeFiles, { recursive: true });
+      writeFileSync(path.join(homeFiles, "h.txt"), "home");
+      const sink = recordingSink();
+      (sink as Record<string, unknown>).trashFilesDirs = () => [homeFiles, path.join(root, "no-such-mount", "files")];
+      await makeTrashOps(sink).emptyTrash();
+      await settleUntil(() => !existsSync(path.join(homeFiles, "h.txt")));
+      expect(sink.notes.some((n) => n === "notify:empty:success:Emptied 1 item · cannot be undone")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("non-rejecting op contract", () => {
+  test("a throwing notify sink never rejects the returned promise", async () => {
+    const root = sandbox();
+    try {
+      const file = path.join(root, "doomed.txt");
+      writeFileSync(file, "bye");
+      const sink = recordingSink();
+      sink.notify = () => {
+        throw new Error("toast gone");
+      };
+      // must resolve (outcomes go to the sink / log, never to the caller)
+      await makeTrashOps(sink).trashPaths([file]);
+      expect(existsSync(path.join(trashDir(), "files", "doomed.txt"))).toBe(true);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });

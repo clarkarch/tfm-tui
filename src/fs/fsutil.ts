@@ -1,5 +1,5 @@
 import { cp, mkdir, rename as fsRename, rm, writeFile, open } from "node:fs/promises";
-import { accessSync, constants, existsSync, lstatSync, readdirSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToUri } from "./uri";
@@ -59,11 +59,96 @@ export const isWithinOrEqual = (inner: string, outer: string): boolean => {
 
 // best-effort count of home-trash entries for the empty-trash confirm
 // prompt. -1 when the trash is unreadable (prompt omits the count then).
-export const countTrashItems = (): number => {
+export const countTrashItems = (mountsText?: string): number => {
+  let home: string[];
   try {
-    return readdirSync(path.join(trashDir(), "files")).length;
+    home = readdirSync(path.join(trashDir(), "files"));
   } catch {
     return -1;
+  }
+  let n = home.length;
+  // per-mount trashes ($topdir/.Trash-$uid) hold real entries too — the
+  // confirm count must not under-report them
+  for (const dir of allTrashFilesDirs(mountsText)) {
+    try {
+      if (path.resolve(dir) === path.resolve(path.join(trashDir(), "files"))) continue;
+    } catch {
+      continue;
+    }
+    try {
+      n += readdirSync(dir).length;
+    } catch {
+      // yanked device mid-count — home count still stands
+    }
+  }
+  return n;
+};
+
+// every trash FILES dir currently mounted: home first, then one
+// `<mountpoint>/.Trash-<uid>/files` per /proc/mounts entry. Unreadable or
+// missing dirs are still listed (callers readdir best-effort) — only the
+// parse itself must never throw. mountsText is an injectable seam (tests pass
+// a fake table; production reads /proc/mounts).
+export const allTrashFilesDirs = (mountsText?: string): string[] => {
+  const home = path.join(trashDir(), "files");
+  const out = [home];
+  const seen = new Set<string>();
+  try {
+    seen.add(path.resolve(home));
+  } catch {}
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  let text: string;
+  if (mountsText !== undefined) {
+    text = mountsText;
+  } else {
+    try {
+      text = readFileSync("/proc/mounts", "utf8");
+    } catch {
+      return out;
+    }
+  }
+  for (const line of text.split("\n")) {
+    const mp = parseProcMountpoint(line);
+    if (!mp) continue;
+    try {
+      const r = path.resolve(path.join(mp, `.Trash-${uid}`, "files"));
+      if (!seen.has(r)) {
+        seen.add(r);
+        out.push(path.join(mp, `.Trash-${uid}`, "files"));
+      }
+    } catch {}
+  }
+  return out;
+};
+
+// network and automount filesystems never hold tfm trash (trashPaths refuses
+// network paths outright) — probing them here would hang on a dead server or
+// trigger an autofs mount for nothing. Deny by fstype, not by path.
+const PROC_MOUNT_SKIP_FSTYPES = new Set([
+  "nfs",
+  "nfs4",
+  "cifs",
+  "smbfs",
+  "smb3",
+  "sshfs",
+  "fuse.sshfs",
+  "fuse.gvfsd-fuse",
+  "autofs",
+]);
+
+// one /proc/mounts line → mountpoint, or null. Fields are
+// `device mountpoint fstype opts …` with octal escapes in the first two
+// (\040 space, \011 tab, \012 newline, \134 backslash).
+const parseProcMountpoint = (line: string): string | null => {
+  const parts = line.split(" ");
+  if (parts.length < 3) return null;
+  const mp = parts[1];
+  const fstype = parts[2];
+  if (!mp || !fstype || PROC_MOUNT_SKIP_FSTYPES.has(fstype)) return null;
+  try {
+    return mp.replace(/\\040/g, " ").replace(/\\011/g, "\t").replace(/\\012/g, "\n").replace(/\\134/g, "\\");
+  } catch {
+    return null;
   }
 };
 
@@ -204,21 +289,19 @@ export const trashInfoPathForTrashFile = (trashFilePath: string): string | null 
 // sibling-aware cleanup for per-mount trashes ($topdir/.Trash-$uid): the
 // trash location already encodes its root (<root>/files/<name>), so delete
 // <root>/info/<name>.trashinfo instead of assuming home trash. Falls back to
-// home lookup when the path isn't inside a files dir.
+// home lookup ONLY when the path isn't inside a files dir (relative callers).
+// A missing sibling sidecar is NOT a home lookup: a home entry with the same
+// basename belongs to a different file, and deleting its .trashinfo would
+// orphan it (restore reads Path= from that sidecar).
 export const rmTrashInfoForPath = async (trashFilePath: string, log?: (msg: string) => void): Promise<void> => {
   const sibling = trashInfoPathForTrashFile(trashFilePath);
   if (sibling) {
     try {
       await rm(sibling);
-      return;
     } catch (err) {
-      // missing sibling sidecar: the entry may predate the per-mount move —
-      // fall back to home before giving up
-      if (errCode(err) !== "ENOENT") {
-        log?.(`trashinfo cleanup ${path.basename(trashFilePath)}: ${fsErrText(err)}`);
-        return;
-      }
+      if (errCode(err) !== "ENOENT") log?.(`trashinfo cleanup ${path.basename(trashFilePath)}: ${fsErrText(err)}`);
     }
+    return;
   }
   await rmTrashInfo(path.basename(trashFilePath), log);
 };
@@ -387,6 +470,41 @@ export const crossDevice = (a: string, b: string): boolean => {
   const da = deviceOf(a),
     db = deviceOf(b);
   return da !== null && db !== null && da !== db;
+};
+
+// identity of a live file for undo guards: undo closures trash/restore by
+// path, but the path may have been reoccupied since the op (user deleted the
+// copy, then made a new file at the same name). dev+ino distinguishes the
+// two — null when the path is gone/unstatable (callers treat null as
+// "unknown, fall back to path semantics", never as a match).
+export type FileId = { dev: number; ino: number };
+
+export const fileIdOf = (p: string): FileId | null => {
+  try {
+    const s = lstatSync(p);
+    return { dev: s.dev, ino: s.ino };
+  } catch {
+    return null;
+  }
+};
+
+export const fileIdMatches = (id: FileId | null, p: string): boolean => {
+  if (id === null) return true;
+  const cur = fileIdOf(p);
+  return cur !== null && cur.dev === id.dev && cur.ino === id.ino;
+};
+
+// trash `p` only if it is still the recorded file: a missing path is already
+// at the desired end-state (success, nothing to do); a reoccupied path is
+// skipped with a log (trashing the stranger would be wrong) — neither throws.
+// A null id falls back to plain path semantics. Real trash errors propagate.
+export const trashIfSameFile = async (p: string, id: FileId | null, log?: (msg: string) => void): Promise<void> => {
+  if (!existsSync(p)) return;
+  if (id && !fileIdMatches(id, p)) {
+    log?.(`undo trash ${p}: file replaced since op, skipped`);
+    return;
+  }
+  await xdgTrashMove(p);
 };
 
 // tmp+rename write: a crash or EDQUOT mid-write never leaves a truncated

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeUndo, MAX_UNDO_BATCHES, type UndoBatchData, type UndoSink } from "./undo";
@@ -386,5 +386,93 @@ describe("journal data (persistent undo)", () => {
     await settleUntil(() => changes === 2);
     undo.redoLast();
     await settleUntil(() => changes === 3);
+  });
+});
+
+describe("journal trash idempotency", () => {
+  test("undoing a trash step for an already-absent path succeeds (already at end-state)", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-undo-trash-"));
+    try {
+      const gone = path.join(dir, "already-gone.txt");
+      const sink = recordingSink();
+      const undo = makeUndo(sink);
+      const data: UndoBatchData = {
+        label: "copy",
+        at: Date.now(),
+        units: [{ op: "trash", path: gone }],
+        redos: [],
+      };
+      expect(undo.adoptBatches([data])).toBe(1);
+      undo.undoLast();
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
+      expect(sink.notes).toContain("notify:undo:success:Undid: copy");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("journal trash identity", () => {
+  test("a rehydrated trash step skips a reoccupied path (dev+ino mismatch)", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-undo-ident-"));
+    try {
+      const p = path.join(dir, "f.txt");
+      writeFileSync(p, "orig");
+      const st = statSync(p);
+      // the recorded file is gone; a stranger took its name
+      rmSync(p);
+      writeFileSync(p, "stranger");
+      const sink = recordingSink();
+      const undo = makeUndo(sink);
+      const data: UndoBatchData = {
+        label: "copy",
+        at: Date.now(),
+        units: [{ op: "trash", path: p, dev: st.dev, ino: st.ino }],
+        redos: [],
+      };
+      expect(undo.adoptBatches([data])).toBe(1);
+      undo.undoLast();
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
+      // the stranger survives and the batch reports success, not FAILED
+      expect(readFileSync(p, "utf8")).toBe("stranger");
+      expect(sink.notes).toContain("notify:undo:success:Undid: copy");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a rehydrated trash step without identity falls back to path semantics", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-undo-noid-"));
+    // sandbox the trash target: the fallback really trashes, and that must
+    // never touch the real ~/.local/share
+    const oldDataHome = process.env.XDG_DATA_HOME;
+    const xdg = mkdtempSync(path.join(os.tmpdir(), "tfm-undo-noid-xdg-"));
+    process.env.XDG_DATA_HOME = xdg;
+    try {
+      const p = path.join(dir, "g.txt");
+      writeFileSync(p, "orig");
+      rmSync(p);
+      writeFileSync(p, "stranger");
+      const sink = recordingSink();
+      const undo = makeUndo(sink);
+      // old journals carry no dev/ino — path semantics trash the occupant
+      // (restorable from the sandboxed trash, not deleted)
+      const data: UndoBatchData = {
+        label: "copy",
+        at: Date.now(),
+        units: [{ op: "trash", path: p }],
+        redos: [],
+      };
+      expect(undo.adoptBatches([data])).toBe(1);
+      undo.undoLast();
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
+      expect(sink.notes).toContain("notify:undo:success:Undid: copy");
+      expect(existsSync(p)).toBe(false);
+    } finally {
+      if (oldDataHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = oldDataHome;
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(xdg, { recursive: true, force: true });
+    }
   });
 });

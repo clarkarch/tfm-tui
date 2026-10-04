@@ -2,11 +2,14 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
+  allTrashFilesDirs,
   failSuffix,
   countTrashItems,
+  fileIdOf,
   fsErrText,
   rmTrashInfoForPath,
   trashDir,
+  trashIfSameFile,
   trashInfoPathForTrashFile,
   xdgTrashMove,
   safeRestoreMove,
@@ -67,6 +70,9 @@ export type TrashOpsSink = {
   // undo closures have no privilege — the restore would fail with no undo).
   ensureSudo?: (opLabel: string) => Promise<boolean>;
   sudoExec?: (argv: string[]) => Promise<{ status: number | null; stderr: string }>;
+  // trash FILES dirs to empty (tests inject fakes; default enumerates home +
+  // every mounted $topdir/.Trash-$uid via /proc/mounts). Wiring passes nothing.
+  trashFilesDirs?: () => string[];
 };
 
 // XDG trashinfo -> original absolute path. Spec says URL-encoded; nautilus
@@ -81,15 +87,18 @@ export const trashOrigPath = async (name: string): Promise<string | null> => {
 };
 
 // sibling-aware original-path lookup for per-mount trashes: <root>/files/<name>
-// resolves via <root>/info/<name>.trashinfo first, falling back to home trash
-// (basename lookup) for backwards compat.
+// resolves via <root>/info/<name>.trashinfo. No home fallback when the sibling
+// exists but is unreadable — a home entry with the same basename belongs to a
+// different file, and restoring the per-mount file to the home file's Path=
+// would misplace it. Home lookup serves bare names (backwards compat) only.
 export const trashOrigPathForFile = async (trashFilePath: string): Promise<string | null> => {
   const sibling = trashInfoPathForTrashFile(trashFilePath);
   if (sibling) {
     try {
-      const parsed = parseTrashOrig(await readFile(sibling, "utf8"));
-      if (parsed) return parsed;
-    } catch {}
+      return await readFile(sibling, "utf8").then(parseTrashOrig);
+    } catch {
+      return null;
+    }
   }
   return trashOrigPath(path.basename(trashFilePath));
 };
@@ -177,9 +186,10 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       else sink.notify(hinted, "trash", "success");
       emit("trash", paths);
     });
-    // fire-and-forget safe: outcomes are reported via sink, never thrown
-    run.catch(() => {});
-    return run;
+    // fire-and-forget safe: outcomes are reported via sink, never thrown —
+    // return the guarded promise (not the raw one) so `void` callers can
+    // never observe an unhandled rejection either
+    return run.catch(() => {});
   };
 
   const restoreFromTrash = (paths: string[]): Promise<void> => {
@@ -205,17 +215,20 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           // and returns the final dest for the journal + cleanup below
           const restoredDest = await safeRestoreMove(src, orig);
           await rmTrashInfoForPath(src, sink.log?.bind(sink));
-          // undo = send it back to trash; redo = restore again (trashinfo
-          // still resolves via Path= after the undo re-trash)
+          // undo = send it back to trash (same-file only: a stranger
+          // reoccupying the restored path is skipped, never trashed);
+          // redo = restore again (trashinfo still resolves via Path= after
+          // the undo re-trash)
+          const rid = fileIdOf(restoredDest);
           units.push(async () => {
             try {
-              await xdgTrashMove(restoredDest);
+              await trashIfSameFile(restoredDest, rid, sink.log?.bind(sink));
             } catch (err) {
               sink.log?.(`undo restore ${restoredDest}: ${fsErrText(err)}`);
               throw err;
             }
           });
-          dUnits.push({ op: "trash", path: restoredDest });
+          dUnits.push({ op: "trash", path: restoredDest, ...(rid ?? {}) });
           redos.push(async () => {
             try {
               const loc = await xdgTrashMove(restoredDest).catch(() => null);
@@ -247,8 +260,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       sink.notify(summary, failed ? "restore failed" : "restore", failed ? "error" : "success");
       emit("restore", paths);
     });
-    run.catch(() => {});
-    return run;
+    return run.catch(() => {});
   };
 
   // shared delete core (deleteForever + emptyTrash): pre-scan for honest
@@ -346,17 +358,16 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       else sink.notify(summary, "delete", "success");
       emit("delete-forever", paths);
     });
-    run.catch(() => {});
-    return run;
+    return run.catch(() => {});
   };
 
   const emptyTrash = (): Promise<void> => {
     if (vetoedByPlugin("empty", [])) return Promise.resolve();
     const run = queue.enqueue(async () => {
-      const filesDir = path.join(trashDir(), "files");
+      const homeFiles = path.join(trashDir(), "files");
       let names: string[];
       try {
-        names = await readdir(filesDir);
+        names = await readdir(homeFiles);
       } catch (err) {
         const reason = fsErrText(err);
         sink.renderAll();
@@ -364,21 +375,47 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         emit("empty", []);
         return;
       }
+      const items = names.map((k) => path.join(homeFiles, k));
+      // per-mount trashes ($topdir/.Trash-$uid) accumulate entries with no
+      // other UI path to empty them — include every mounted one. Extra roots
+      // read best-effort (a device yanked mid-empty just yields per-item
+      // failures below); home stays the source of truth above.
+      const dirs = sink.trashFilesDirs ? sink.trashFilesDirs() : allTrashFilesDirs();
+      for (const dir of new Set(
+        dirs.map((d) => {
+          try {
+            return path.resolve(d);
+          } catch {
+            return d;
+          }
+        }),
+      )) {
+        try {
+          if (path.resolve(dir) === path.resolve(homeFiles)) continue;
+        } catch {
+          continue;
+        }
+        try {
+          for (const k of await readdir(dir)) items.push(path.join(dir, k));
+        } catch {
+          // unreadable extra root — skip it, home items still empty
+        }
+      }
+      const total = items.length;
       const dp = sink.deleteProgress;
-      const items = names.map((k) => path.join(filesDir, k));
       if (dp) await scanTotals(items, dp);
       const { ok: n, cancelled, failWhy } = await rmMany(items, dp, "empty trash");
       sink.renderAll();
-      const failed = names.length - n;
+      const failed = total - n;
       if (cancelled) {
-        const summary = `Empty cancelled · ${n} of ${names.length} removed`;
+        const summary = `Empty cancelled · ${n} of ${total} removed`;
         sink.notify(summary, "empty cancelled", "info");
         dp?.finish("✗ Delete cancelled");
         return;
       }
       if (failed > 0) {
         dp?.finish("✗ Delete failed");
-        sink.notify(`Emptied ${n} of ${names.length} · ${failSuffix(failed, failWhy)}`, "empty failed", "error");
+        sink.notify(`Emptied ${n} of ${total} · ${failSuffix(failed, failWhy)}`, "empty failed", "error");
         return;
       }
       dp?.finish(`✓ Emptied ${n}`);
@@ -387,8 +424,8 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       sink.notify(summary, "empty", "success");
       emit("empty", []);
     });
-    run.catch(() => {});
-    return run;
+    // fire-and-forget safe: outcomes are reported via sink, never thrown
+    return run.catch(() => {});
   };
 
   return { trashPaths, restoreFromTrash, deleteForever, emptyTrash };

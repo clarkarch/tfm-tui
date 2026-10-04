@@ -7,7 +7,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
 #       the dev branch, built from source on your machine (needs git + bun)
 #
-#   TFM_VERSION=v0.1.0-beta.0 ... | bash   pin a release
+#   TFM_VERSION=v1.0.0 ... | bash   pin a release
 #   TFM_SOURCE=dev ... | bash              build a ref from source
 #   TFM_LOCAL=./dist/tfm ... | bash        install a binary you already built
 #

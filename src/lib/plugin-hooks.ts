@@ -3,12 +3,18 @@
 // tiny and sync-only on purpose: hooks run inside file-op orchestration, so a
 // hook that throws or hangs must never block the op (isolation + first-skip
 // wins). Pure module (no renderer/fs imports) so app/fs modules can consult it
-// without an import cycle. Shared singleton mirrors sharedPluginEvents. ---
+// without an import cycle. Shared singleton mirrors sharedPluginEvents.
+//
+// Boundary (deliberate): vetoes gate USER-INITIATED entry points only —
+// copy/move/rename/duplicate/extract/compress in fileops, all four trashops.
+// Undo/redo re-execution and inline create/delete never consult the bus:
+// vetoing an undo would strand half-applied state (the batch already ran),
+// and creates are not file-op vocabulary (no `create` op exists). ---
 
 import type { NotifyLevel } from "./notify-level";
 
 export type FileOpHookPayload = {
-  // vocabulary: copy | move | rename | duplicate | trash | delete-forever | empty
+  // vocabulary: copy | move | rename | duplicate | extract | compress | trash | delete-forever | empty
   op: string;
   paths: string[];
   dest?: string;

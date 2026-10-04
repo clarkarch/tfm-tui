@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, rmSync, 
 import os from "node:os";
 import path from "node:path";
 import { makeFileOps, type FileOpsCtx } from "./fileops";
+import type { UndoJournalData } from "../app/undo";
 import { trashDir } from "./fsutil";
 import type { ArchiveRun, ToolSpec } from "./archive";
 import type { ProgressState } from "../ui/ui-progress";
@@ -61,6 +62,7 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
   // captured so tests can EXECUTE undo (not just assert a recorded label)
   let lastUnits: Array<() => void | Promise<void>> = [];
   let lastRedos: Array<() => void | Promise<void>> = [];
+  let lastData: UndoJournalData | null = null;
   const ctx: FileOpsCtx = {
     conflict: {
       resetPolicy: () => calls.push("policy:reset"),
@@ -81,10 +83,11 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
       calls.push(`toast:finish:${msg}`);
     },
     pauseGate: async () => {},
-    pushUndoBatch: (label, units, redos) => {
+    pushUndoBatch: (label, units, redos, data) => {
       if (!units.length) return;
       lastUnits = units;
       lastRedos = redos;
+      lastData = data ?? null;
       calls.push(`undo:${label}:${units.length}:${redos.length}`);
     },
     renderAll: () => calls.push("renderAll"),
@@ -95,7 +98,7 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
     ...over,
   };
   const ops = makeFileOps(ctx);
-  return { ops, ctx, calls, prog, undoUnits: () => lastUnits, redoUnits: () => lastRedos };
+  return { ops, ctx, calls, prog, undoUnits: () => lastUnits, redoUnits: () => lastRedos, undoData: () => lastData };
 };
 
 // 6 files keeps the transfer past the shouldToast threshold (totalFiles > 4)
@@ -398,6 +401,24 @@ describe("performBulkRename", () => {
     await h.ops.performBulkRename([]);
     expect(h.calls).toContain("notify:rename:info:Nothing to rename");
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("a target created after planning is not overwritten (plan-to-apply race)", async () => {
+    const h = makeHarness();
+    const a = path.join(ROOT, "bulk-race-a.txt");
+    const b = path.join(ROOT, "bulk-race-b.txt");
+    W(a, "A");
+    W(b, "B");
+    // external create lands between planBulkRename and apply
+    W(path.join(ROOT, "bulk-race-B.txt"), "INNOCENT");
+    await h.ops.performBulkRename([
+      { from: a, to: path.join(ROOT, "bulk-race-A.txt") },
+      { from: b, to: path.join(ROOT, "bulk-race-B.txt") },
+    ]);
+    expect(readFileSync(path.join(ROOT, "bulk-race-A.txt"), "utf8")).toBe("A");
+    expect(readFileSync(path.join(ROOT, "bulk-race-B.txt"), "utf8")).toBe("INNOCENT");
+    expect(existsSync(b)).toBe(true);
+    expect(h.calls.some((c) => c.includes("already exists"))).toBe(true);
   });
 });
 
@@ -728,6 +749,45 @@ describe("extractArchive", () => {
     expect(runs[0]!.args).toContain("-x");
     expect(h.calls.some((c) => c.startsWith("undo:extract 1 archive:1:0"))).toBe(true);
     expect(h.calls).toContain("notify:extract:success:Extracted 1 archive · ctrl+z to undo");
+  });
+
+  test("a tool that writes outside staging is refused and the escape is trashed", async () => {
+    // `../` members land in destDir unseen by the stage readdir — the sweep
+    // trashes them recoverably (never rm) and nothing from the archive lands
+    const runArchive: ArchiveRun = async (spec) => {
+      const stage = spec.args[spec.args.indexOf("-C") + 1]!;
+      writeFileSync(path.join(stage, "good.txt"), "good");
+      writeFileSync(path.join(path.dirname(stage), "escape.txt"), "evil");
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const h = makeHarness({ runArchive, listArchive: async () => 1 });
+    const destDir = path.join(ROOT, "x-escape-dest");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-escape.tar.gz");
+    W(archive, "not-really");
+    await h.ops.extractArchive([archive], destDir);
+    expect(existsSync(path.join(destDir, "escape.txt"))).toBe(false);
+    expect(existsSync(path.join(destDir, "good.txt"))).toBe(false);
+    expect(h.calls.some((c) => c.includes("outside staging"))).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("symlinks escaping the stage are removed, legit entries still land", async () => {
+    const { symlinkSync } = await import("node:fs");
+    const runArchive: ArchiveRun = async (spec) => {
+      const stage = spec.args[spec.args.indexOf("-C") + 1]!;
+      writeFileSync(path.join(stage, "good.txt"), "good");
+      symlinkSync(path.join(path.dirname(stage), "outside.txt"), path.join(stage, "link"));
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const h = makeHarness({ runArchive, listArchive: async () => 1 });
+    const destDir = path.join(ROOT, "x-link-dest");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-link.tar.gz");
+    W(archive, "not-really");
+    await h.ops.extractArchive([archive], destDir);
+    expect(existsSync(path.join(destDir, "link"))).toBe(false);
+    expect(readFileSync(path.join(destDir, "good.txt"), "utf8")).toBe("good");
   });
 
   test("collision defaults to skip, leaving the existing entry untouched", async () => {
@@ -1157,6 +1217,41 @@ describe("plugin pre-op veto", () => {
       off();
     }
   });
+
+  test("an extract hook blocks extractArchive before any work", async () => {
+    const h = makeHarness({
+      runArchive: async () => ({ code: 0, stdout: "", stderr: "" }),
+      listArchive: async () => 1,
+    });
+    const off = sharedPluginHooks().onBeforeFileOp((p) => (p.op === "extract" ? { skip: true } : undefined));
+    try {
+      const destDir = path.join(ROOT, "veto-extract-dest");
+      mkdirSync(destDir, { recursive: true });
+      await h.ops.extractArchive([path.join(ROOT, "veto-extract.zip")], destDir);
+      expect(h.calls.some((c) => c.startsWith("notify:blocked:info:Blocked by plugin"))).toBe(true);
+      expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    } finally {
+      off();
+    }
+  });
+
+  test("a compress hook blocks compressPaths before any work", async () => {
+    const h = makeHarness({
+      runArchive: async () => ({ code: 0, stdout: "", stderr: "" }),
+    });
+    const off = sharedPluginHooks().onBeforeFileOp((p) => (p.op === "compress" ? { skip: true } : undefined));
+    try {
+      const src = path.join(ROOT, "veto-compress.txt");
+      const destDir = path.join(ROOT, "veto-compress-dest");
+      W(src, "x");
+      mkdirSync(destDir, { recursive: true });
+      await h.ops.compressPaths([src], "zip", destDir);
+      expect(h.calls.some((c) => c.startsWith("notify:blocked:info:Blocked by plugin"))).toBe(true);
+      expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    } finally {
+      off();
+    }
+  });
 });
 
 describe("plugin veto keeps caller state intact", () => {
@@ -1565,6 +1660,173 @@ describeNonRoot("sudo escalation", () => {
       chmodSync(destDir, 0o755);
     }
   });
+
+  test("sudo copy aborts when the partial-target pre-clear fails (no nested copy)", async () => {
+    const srcDir = path.join(ROOT, "sudo-preclear-src");
+    const destDir = path.join(ROOT, "sudo-preclear-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(path.join(destDir, "a.txt"), { recursive: true }); // stale partial dir
+    W(path.join(srcDir, "a.txt"), "aaa");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    try {
+      const seen: string[][] = [];
+      const h = makeHarness({
+        ensureSudo: async () => true,
+        sudoExec: async (argv: string[]) => {
+          seen.push(argv);
+          if (argv[2] === "rm") return { status: 1, stderr: "rm: cannot remove: Permission denied" };
+          return { status: 0, stderr: "" };
+        },
+        // reach the copy engine (not the conflict skip): replace + a trivial
+        // in-memory stash, so the EACCES below comes from the 555 dest dir
+        conflict: {
+          resetPolicy: () => {},
+          policy: () => null,
+          promptConflict: async () => "replace" as const,
+        },
+        stashVictim: async (_victim, units) => {
+          units.push(async () => {});
+          return true;
+        },
+      });
+      await h.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
+      expect(seen.some((a) => a[2] === "cp")).toBe(false);
+      expect(h.calls.some((c) => c.includes("FAILED") && c.includes("cannot clear partial target"))).toBe(true);
+      // no `cp -a src destDir/a.txt` nesting happened
+      expect(existsSync(path.join(destDir, "a.txt", "a.txt"))).toBe(false);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
+  test("bulk sudo retry refuses a target created after the gate (no silent overwrite)", async () => {
+    const dirA = path.join(ROOT, "sudo-race-a");
+    const dirB = path.join(ROOT, "sudo-race-b");
+    mkdirSync(dirA, { recursive: true });
+    mkdirSync(dirB, { recursive: true });
+    W(path.join(dirA, "a.txt"), "A");
+    W(path.join(dirB, "b2.txt"), "INNOCENT");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(dirB, 0o555);
+    try {
+      const seen: string[][] = [];
+      const h = makeHarness({
+        ensureSudo: async () => true,
+        sudoExec: async (argv: string[]) => {
+          seen.push(argv);
+          return fakeSudoExec(argv);
+        },
+      });
+      await h.ops.performBulkRename([{ from: path.join(dirA, "a.txt"), to: path.join(dirB, "b2.txt") }]);
+      expect(seen.some((a) => a[2] === "mv")).toBe(false);
+      expect(readFileSync(path.join(dirB, "b2.txt"), "utf8")).toBe("INNOCENT");
+      expect(existsSync(path.join(dirA, "a.txt"))).toBe(true);
+      expect(h.calls.some((c) => c.includes("already exists"))).toBe(true);
+    } finally {
+      chmodSync(dirB, 0o755);
+    }
+  });
+
+  test("single rename sudo retry refuses a target created while the gate was up", async () => {
+    const dir = path.join(ROOT, "sudo-race-single");
+    mkdirSync(dir, { recursive: true });
+    W(path.join(dir, "a.txt"), "A");
+    const { chmodSync } = await import("node:fs");
+    chmodSync(dir, 0o555);
+    try {
+      const seen: string[][] = [];
+      const h = makeHarness({
+        // a concurrent create lands while the password prompt is up
+        ensureSudo: async () => {
+          chmodSync(dir, 0o755);
+          W(path.join(dir, "b.txt"), "INNOCENT");
+          chmodSync(dir, 0o555);
+          return true;
+        },
+        sudoExec: async (argv: string[]) => {
+          seen.push(argv);
+          return fakeSudoExec(argv);
+        },
+      });
+      await h.ops.performRename(path.join(dir, "a.txt"), "b.txt");
+      expect(seen.some((a) => a[2] === "mv")).toBe(false);
+      expect(readFileSync(path.join(dir, "b.txt"), "utf8")).toBe("INNOCENT");
+      expect(existsSync(path.join(dir, "a.txt"))).toBe(true);
+      expect(h.calls.some((c) => c.includes("Rename failed") && c.includes("already exists"))).toBe(true);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  test("extract replace escalates a privileged victim via sudo stash (undo restores it)", async () => {
+    const { runArchive } = fakeArchive({ entries: { foo: "new" } });
+    const destDir = path.join(ROOT, "sudo-extract-dest");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "sudo-extract.tar.gz");
+    W(archive, "x");
+    W(path.join(destDir, "foo"), "OLD");
+    const esc = makeHarness({
+      runArchive,
+      listArchive: async () => 1,
+      ensureSudo: async () => true,
+      sudoExec: fakeSudoExec,
+      conflict: {
+        resetPolicy: () => {},
+        policy: () => null,
+        promptConflict: async () => "replace" as const,
+      },
+      // normal stash always fails privileged; the sudo path must take over
+      stashVictim: async (_victim, _units, _d, onFail) => {
+        onFail(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+        return false;
+      },
+    });
+    await esc.ops.extractArchive([archive], destDir);
+    expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("new");
+    expect(esc.calls.some((c) => c.includes("may need permission"))).toBe(true);
+    expect(esc.calls.some((c) => c.includes("FAILED"))).toBe(false);
+
+    // the sudo-stashed victim restores through the privileged undo closure:
+    // lock the dest dir so only the sudo fallback can bring OLD back
+    const { chmodSync } = await import("node:fs");
+    chmodSync(destDir, 0o555);
+    try {
+      const units = esc.undoUnits();
+      expect(units.length).toBe(2);
+      await units[0]!();
+      expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("OLD");
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
+  test("compress replace escalates a privileged victim via sudo stash", async () => {
+    const { runArchive } = fakeArchive();
+    const src = path.join(ROOT, "sudo-compress-src.txt");
+    const destDir = path.join(ROOT, "sudo-compress-dest");
+    mkdirSync(destDir, { recursive: true });
+    W(src, "data");
+    W(path.join(destDir, "sudo-compress-src.txt.zip"), "OLDARCH");
+    const esc = makeHarness({
+      runArchive,
+      ensureSudo: async () => true,
+      sudoExec: fakeSudoExec,
+      conflict: {
+        resetPolicy: () => {},
+        policy: () => null,
+        promptConflict: async () => "replace" as const,
+      },
+      stashVictim: async (_victim, _units, _d, onFail) => {
+        onFail(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+        return false;
+      },
+    });
+    await esc.ops.compressPaths([src], "zip", destDir);
+    expect(readFileSync(path.join(destDir, "sudo-compress-src.txt.zip"), "utf8")).toBe("archive-bytes");
+    expect(esc.calls.some((c) => c.includes("may need permission"))).toBe(true);
+    expect(esc.calls.some((c) => c.includes("FAILED"))).toBe(false);
+  });
 });
 
 describeNonRoot("sudo escalation failure surface", () => {
@@ -1587,5 +1849,101 @@ describeNonRoot("sudo escalation failure surface", () => {
     } finally {
       chmodSync(destDir, 0o755);
     }
+  });
+});
+
+describe("renames serialize behind live ops (busy guard sees them)", () => {
+  test("performRename and performBulkRename wait for the queue to drain", async () => {
+    const { sharedOpQueue } = await import("../lib/op-queue");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const held = sharedOpQueue().enqueue(() => gate);
+    try {
+      const dir = path.join(ROOT, "queued-rename");
+      mkdirSync(dir, { recursive: true });
+      W(path.join(dir, "a.txt"), "A");
+      W(path.join(dir, "b.txt"), "B");
+      const h = makeHarness();
+      const r1 = h.ops.performRename(path.join(dir, "a.txt"), "a2.txt");
+      const r2 = h.ops.performBulkRename([{ from: path.join(dir, "b.txt"), to: path.join(dir, "b2.txt") }]);
+      // microtasks drain but both wait on the held queue — nothing landed yet
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(existsSync(path.join(dir, "a.txt"))).toBe(true);
+      expect(existsSync(path.join(dir, "b.txt"))).toBe(true);
+      release();
+      await r1;
+      await r2;
+      await held;
+      expect(existsSync(path.join(dir, "a2.txt"))).toBe(true);
+      expect(existsSync(path.join(dir, "b2.txt"))).toBe(true);
+    } finally {
+      release();
+    }
+    await held;
+  });
+});
+
+describe("unexpected op failures never reject (fire-and-forget safe)", () => {
+  const throwingConflict = () => ({
+    resetPolicy: () => {},
+    policy: () => null,
+    promptConflict: async (): Promise<"skip"> => {
+      throw new Error("dialog gone");
+    },
+  });
+  test("runTransfer surfaces a throwing conflict dialog as an error toast", async () => {
+    const h = makeHarness({ conflict: throwingConflict() });
+    const src = path.join(ROOT, "guard-src.txt");
+    const destDir = path.join(ROOT, "guard-dest");
+    W(src, "x");
+    W(path.join(destDir, "guard-src.txt"), "y");
+    await h.ops.runTransfer("copy", destDir, [src], "copy x");
+    expect(h.calls.some((c) => c.includes("Copy failed (dialog gone)"))).toBe(true);
+  });
+
+  test("performRename surfaces a throwing conflict dialog as an error toast", async () => {
+    const h = makeHarness({ conflict: throwingConflict() });
+    const a = path.join(ROOT, "guard-ren-a.txt");
+    W(a, "A");
+    W(path.join(ROOT, "guard-ren-b.txt"), "B");
+    await h.ops.performRename(a, "guard-ren-b.txt");
+    expect(existsSync(a)).toBe(true);
+    expect(h.calls.some((c) => c.includes("Rename failed (dialog gone)"))).toBe(true);
+  });
+});
+
+describe("undo identity (replaced paths are never trashed)", () => {
+  test("copy undo skips a stranger reoccupying the target", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "id-copy-src.txt");
+    const destDir = path.join(ROOT, "id-copy-dest");
+    W(src, "orig");
+    mkdirSync(destDir, { recursive: true });
+    await h.ops.runTransfer("copy", destDir, [src], "copy id");
+    const target = path.join(destDir, "id-copy-src.txt");
+    expect(readFileSync(target, "utf8")).toBe("orig");
+    // user deletes the copy, then an unrelated file takes its name
+    rmSync(target);
+    W(target, "STRANGER");
+    await h.undoUnits()[0]!();
+    expect(readFileSync(target, "utf8")).toBe("STRANGER");
+  });
+
+  test("copy journal data carries dev+ino for the trash step", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "id-j-src.txt");
+    const destDir = path.join(ROOT, "id-j-dest");
+    W(src, "x");
+    mkdirSync(destDir, { recursive: true });
+    await h.ops.runTransfer("copy", destDir, [src], "copy idj");
+    const data = h.undoData();
+    expect(data).not.toBeNull();
+    const step = data!.units[0] as { op: string; path: string; dev?: unknown; ino?: unknown };
+    expect(step.op).toBe("trash");
+    expect(typeof step.dev).toBe("number");
+    expect(typeof step.ino).toBe("number");
   });
 });

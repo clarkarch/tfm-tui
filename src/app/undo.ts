@@ -1,6 +1,14 @@
 import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
-import { failSuffix, fsErrText, rmTrashInfo, rmTrashInfoForPath, safeRestoreMove, xdgTrashMove } from "../fs/fsutil";
+import {
+  failSuffix,
+  fsErrText,
+  rmTrashInfo,
+  rmTrashInfoForPath,
+  safeRestoreMove,
+  trashIfSameFile,
+  xdgTrashMove,
+} from "../fs/fsutil";
 import { copyTreeProgress, type TransferSink } from "../fs/transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -38,7 +46,7 @@ type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
 // steps never throw — they encode redo guards (`if (!existsSync(t)) …`).
 // Unconditional steps throw so the outer handler reports them like today. ---
 export type UndoStep =
-  | { op: "trash"; path: string }
+  | { op: "trash"; path: string; dev?: number; ino?: number }
   | { op: "trash-if-exists"; path: string }
   | { op: "restore-move"; from: string; to: string }
   | { op: "rename"; from: string; to: string }
@@ -75,7 +83,17 @@ export const MAX_UNDO_BATCHES = 30;
 export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}): UndoUnit => {
   switch (step.op) {
     case "trash":
-      return () => xdgTrashMove(step.path).then(() => undefined);
+      // idempotent: undoing a copy whose target the user already deleted is
+      // already at the desired end-state (path absent) — report success, not
+      // FAILED. A path reoccupied since the op (dev+ino mismatch) is skipped,
+      // never trashed: the stranger isn't ours. Present paths still trash
+      // loudly on real errors.
+      return () =>
+        trashIfSameFile(
+          step.path,
+          step.dev !== undefined && step.ino !== undefined ? { dev: step.dev, ino: step.ino } : null,
+          log,
+        );
     case "trash-if-exists":
       return async () => {
         try {
