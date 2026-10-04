@@ -579,7 +579,7 @@ pretty_dollar_home() { # $HOME form for copy-paste export lines (tilde does not 
 # feature), so there is no recommended/optional split. The packager hint is
 # best-effort: a wrong `apt install` is worse than naming the tool alone, so
 # tools without a reliable package name are called out by name.
-TOOLS_OPTIONAL="xdg-open magick ffmpeg gio udisksctl clip"
+TOOLS_OPTIONAL="xdg-open magick ffmpeg gio udisksctl clip zip unzip 7z"
 
 tool_present() {
   case "$1" in
@@ -603,6 +603,9 @@ tool_desc() {
     gio) printf 'starred files and servers' ;;
     udisksctl) printf 'USB drives' ;;
     clip) printf 'copy and paste with other apps' ;;
+    zip) printf 'faster zip creation' ;;
+    unzip) printf 'faster zip extraction' ;;
+    7z) printf '7z archives' ;;
     *) printf '' ;;
   esac
 }
@@ -646,6 +649,14 @@ pm_pkg() { # pm_pkg PM TOOL — "" when we don't know a package for that family
     udisksctl) printf 'udisks2' ;;
     clip) printf 'wl-clipboard' ;;
     xdg-open) printf 'xdg-utils' ;;
+    zip) printf 'zip' ;;
+    unzip) printf 'unzip' ;;
+    7z)
+      case "$1" in
+        apt) printf 'p7zip-full' ;;
+        *) printf 'p7zip' ;;
+      esac
+      ;;
     gio)
       case "$1" in
         apt) printf 'libglib2.0-bin' ;;

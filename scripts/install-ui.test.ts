@@ -390,6 +390,10 @@ describe("installer packager hint", () => {
     expect(runLib(`pm_pkg pacman gio\n`).out).toBe("glib2");
     expect(runLib(`pm_pkg apk gio\n`).out).toBe("glib");
     expect(runLib(`pm_pkg apt ffmpeg\n`).out).toBe("ffmpeg");
+    expect(runLib(`pm_pkg apt zip\n`).out).toBe("zip");
+    expect(runLib(`pm_pkg apt unzip\n`).out).toBe("unzip");
+    expect(runLib(`pm_pkg apt 7z\n`).out).toBe("p7zip-full");
+    expect(runLib(`pm_pkg pacman 7z\n`).out).toBe("p7zip");
     // every probed tool maps to a package on at least one family (resvg was
     // the exception, not reliably packaged anywhere, and is now unprobed)
     expect(runLib(`pm_pkg apt xdg-open\n`).out).toBe("xdg-utils");
@@ -402,7 +406,7 @@ describe("installer packager hint", () => {
     expect(out).toContain("optional");
     expect(out).not.toContain("recommended");
     expect(out).not.toContain("resvg");
-    for (const t of ["xdg-open", "magick", "ffmpeg", "gio", "udisksctl", "wl-clipboard"]) {
+    for (const t of ["xdg-open", "magick", "ffmpeg", "gio", "udisksctl", "wl-clipboard", "zip", "unzip", "7z"]) {
       expect(out).toContain(t);
     }
   });

@@ -1033,6 +1033,95 @@ describe("compressPaths", () => {
   });
 });
 
+// --- fallback lanes through fileops: no tools installed (archiveWhich NULL)
+// means the REAL in-process engine runs — no runArchive fake, real files ---
+describe("archive fallback (no tools)", () => {
+  const noTools = () => null;
+
+  test("tool-less tar.gz extract lands staged entries with undo + success toast", async () => {
+    const h = makeHarness({ archiveWhich: noTools });
+    const srcDir = path.join(ROOT, "fb-src");
+    W(path.join(srcDir, "a.txt"), "A");
+    W(path.join(srcDir, "sub", "b.txt"), "B");
+    const destDir = path.join(ROOT, "fb-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    // seed the archive through the fallback itself (proves compress end too)
+    await h.ops.compressPaths([path.join(srcDir, "a.txt"), path.join(srcDir, "sub")], "tar.gz", destDir);
+    const out = path.join(destDir, "archive.tar.gz");
+    expect(existsSync(out)).toBe(true);
+
+    const dest2 = path.join(ROOT, "fb-dest2");
+    mkdirSync(dest2, { recursive: true });
+    await h.ops.extractArchive([out], dest2);
+    expect(readFileSync(path.join(dest2, "a.txt"), "utf8")).toBe("A");
+    expect(readFileSync(path.join(dest2, "sub", "b.txt"), "utf8")).toBe("B");
+    expect(h.calls.some((c) => c.startsWith("undo:extract 1 archive:2:0"))).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("notify:extract:success:Extracted 1 archive"))).toBe(true);
+  });
+
+  test("tool-less zip round-trips through fileops with undo", async () => {
+    const h = makeHarness({ archiveWhich: noTools });
+    const a = path.join(ROOT, "fbz-src", "a.txt");
+    W(a, "A");
+    const destDir = path.join(ROOT, "fbz-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.compressPaths([a], "zip", destDir);
+    const out = path.join(destDir, "a.txt.zip");
+    expect(existsSync(out)).toBe(true);
+
+    const dest2 = path.join(ROOT, "fbz-dest2");
+    mkdirSync(dest2, { recursive: true });
+    await h.ops.extractArchive([out], dest2);
+    expect(readFileSync(path.join(dest2, "a.txt"), "utf8")).toBe("A");
+    expect(h.calls.some((c) => c.startsWith("notify:compress:success:Compressed a.txt.zip"))).toBe(true);
+  });
+
+  test("fallback tar.gz compress warns only when exec files or symlinks are affected", async () => {
+    const plain = path.join(ROOT, "fbw-plain", "a.txt");
+    W(plain, "A");
+    const destDir = path.join(ROOT, "fbw-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    const h1 = makeHarness({ archiveWhich: noTools });
+    await h1.ops.compressPaths([plain], "tar.gz", destDir);
+    // plain tree: silent, same shape as the spawn success toast
+    expect(h1.calls).toContain("notify:compress:success:Compressed a.txt.tar.gz · ctrl+z to undo");
+
+    const exec = path.join(ROOT, "fbw-exec", "run.sh");
+    W(exec, "#!/bin/sh\n");
+    Bun.spawnSync(["chmod", "755", exec]);
+    const h2 = makeHarness({ archiveWhich: noTools });
+    await h2.ops.compressPaths([exec], "tar.gz", destDir);
+    expect(h2.calls.some((c) => c.includes("without exec/symlink (no tar)"))).toBe(true);
+    expect(h2.calls.some((c) => c.startsWith("notify:compress:success"))).toBe(true);
+  });
+
+  test("fallback warns on symlinks too (both loss branches, incl. nested)", async () => {
+    const srcDir = path.join(ROOT, "fbw-link");
+    W(path.join(srcDir, "sub", "a.txt"), "A");
+    Bun.spawnSync(["ln", "-s", "a.txt", path.join(srcDir, "sub", "link1")]);
+    const destDir = path.join(ROOT, "fbw-link-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    const h = makeHarness({ archiveWhich: noTools });
+    await h.ops.compressPaths([path.join(srcDir, "sub")], "tar.gz", destDir);
+    expect(h.calls.some((c) => c.includes("1 stored without exec/symlink (no tar)"))).toBe(true);
+  });
+
+  test("unavailable formats fail through fileops with the tool hint", async () => {
+    const h = makeHarness({ archiveWhich: noTools, listArchive: async () => 1 });
+    const f = path.join(ROOT, "fb-7z", "a.7z");
+    W(f, "fake");
+    const destDir = path.join(ROOT, "fb-7z-dest");
+    mkdirSync(destDir, { recursive: true });
+    await h.ops.extractArchive([f], destDir);
+    expect(h.calls.some((c) => c.includes("missing 7z"))).toBe(true);
+    expect(h.calls.some((c) => c.startsWith("notify:extract failed:error"))).toBe(true);
+  });
+});
+
 describe("plugin pre-op veto", () => {
   test("a beforeFileOp hook blocks the transfer with a status and no undo", async () => {
     const h = makeHarness();

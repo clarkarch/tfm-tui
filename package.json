@@ -24,6 +24,7 @@
   "dependencies": {
     "@humanwhocodes/ico-to-png": "^1.1.0",
     "@opentui/core": "0.5.14",
+    "fflate": "^0.8.3",
     "heic-decode": "^2.1.0",
     "pngjs": "^7.0.0",
     "smol-toml": "^1.8.0",

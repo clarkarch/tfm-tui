@@ -29,16 +29,16 @@ import { defaultSudoExec, isPrivilegeError, runSudoTool, sudoCpArgv, sudoMvArgv,
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
 import {
   commonParent,
-  compressPlan,
   compressionExt,
+  countArchiveEntries,
   detectArchiveFormat,
-  extractPlan,
-  listArchiveEntries,
+  runArchiveTask,
   runArchiveTool,
   uniqueArchiveTarget,
   type ArchiveFormat,
   type ArchiveRun,
   type CompressionFormat,
+  type WhichFn,
 } from "./archive";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { sharedOpQueue } from "../lib/op-queue";
@@ -80,9 +80,14 @@ export type FileOpsCtx = {
     dUnits: UndoStep[],
     onStashFailed: (err: unknown) => void,
   ) => Promise<boolean>;
-  // archive engine seam (tests inject; default = src/fs/archive)
+  // archive engine seam (tests inject; default = src/fs/archive, which spawns
+  // native tools when present and falls back to the in-process engine
+  // otherwise — see selectArchiveLane)
   runArchive?: ArchiveRun;
   listArchive?: (fmt: ArchiveFormat, file: string) => Promise<number>;
+  // tool probe for archive lane selection (tests force the fallback with
+  // () => null); defaults to the real PATH probe
+  archiveWhich?: WhichFn;
   // sudo escalation seams (wiring injects the prompt-backed impl; tests fake):
   // ensureSudo prompts for the password (cached-timestamp-first) once per op,
   // sudoExec runs one sudo argv and reports its exit (default = runSudo)
@@ -100,8 +105,26 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const { prog, conflict } = ctx;
   const queue = sharedOpQueue();
   const runArchive: ArchiveRun = ctx.runArchive ?? runArchiveTool;
+  const archiveWhich = ctx.archiveWhich ?? Bun.which;
   const listArchive =
-    ctx.listArchive ?? ((fmt: ArchiveFormat, file: string) => listArchiveEntries(fmt, file, runArchive));
+    ctx.listArchive ?? ((fmt: ArchiveFormat, file: string) => countArchiveEntries(fmt, file, runArchive, archiveWhich));
+  // one task call per archive op: spawn when tools exist, in-process fallback
+  // otherwise. Cooperative hooks (no child to signal on the js lane — ✕/pause
+  // flow through prog like the spawn path).
+  const runArchiveOp = (
+    task: Parameters<typeof runArchiveTask>[0],
+    opts: { onLine?: (line: string) => void; cwd?: string; onLoss?: (loss: { exec: number; links: number }) => void },
+  ): Promise<{ code: number; stdout: string; stderr: string }> =>
+    runArchiveTask(task, {
+      run: runArchive,
+      which: archiveWhich,
+      cwd: opts.cwd,
+      onLine: opts.onLine,
+      onChild: onArchiveChild,
+      isCancelled: () => prog.cancelled,
+      pauseGate: () => ctx.pauseGate(),
+      onLoss: opts.onLoss,
+    });
 
   // archive progress helpers: reset shared flags per op (stale-cancel lesson),
   // arm the toast only when the total clears shouldToast
@@ -1023,13 +1046,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         const stage = path.join(destDir, `.tfm-extract-${process.pid}-${Math.random().toString(36).slice(2, 10)}`);
         await mkdir(stage, { recursive: true });
         staging.push(stage);
-        const res = await runArchive(extractPlan(fmt, file, stage), {
-          onLine: () => {
-            prog.doneFiles++;
-            ctx.paintProgress();
+        const res = await runArchiveOp(
+          { op: "extract", fmt, file, destDir: stage },
+          {
+            onLine: () => {
+              prog.doneFiles++;
+              ctx.paintProgress();
+            },
           },
-          onChild: onArchiveChild,
-        });
+        );
         if (prog.cancelled) {
           cancelled = true;
           break;
@@ -1125,6 +1150,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const units: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
     const failWhy = new Set<string>();
+    // non-fatal caveats (fallback fidelity loss): surface as their own
+    // summary bit — failWhy only renders when failed > 0
+    const warns: string[] = [];
     let failed = 0;
     let cancelled = false;
     const parent = commonParent(srcs);
@@ -1162,14 +1190,25 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.paintProgress(true);
     } else armProgressToast();
     try {
-      const res = await runArchive(compressPlan(format, tmp, names, parent), {
-        cwd: parent,
-        onLine: () => {
-          prog.doneFiles++;
-          ctx.paintProgress();
+      // tar-family fallback create drops exec bits and follows symlinks
+      // (Bun.Archive's input is content-only) — the lane reports what it saw
+      // via onLoss so the summary can warn without a second lstat walk.
+      // Warn only when affected: plain trees stay silent, and zip needs no
+      // note (the fflate lane preserves both and never fires onLoss).
+      let loss = { exec: 0, links: 0 };
+      const res = await runArchiveOp(
+        { op: "compress", fmt: format, outFile: tmp, names, parent },
+        {
+          cwd: parent,
+          onLine: () => {
+            prog.doneFiles++;
+            ctx.paintProgress();
+          },
+          onLoss: (l) => {
+            loss = l;
+          },
         },
-        onChild: onArchiveChild,
-      });
+      );
       if (prog.cancelled) {
         cancelled = true;
       } else if (res.code !== 0 && res.code !== 1) {
@@ -1183,6 +1222,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         await fsRename(tmp, out);
         units.push(() => xdgTrashMove(out).then(() => undefined));
         dUnits.push({ op: "trash", path: out });
+        const n = loss.exec + loss.links;
+        if (n > 0) warns.push(`${n} stored without exec/symlink (no tar)`);
       }
     } catch (err) {
       failed++;
@@ -1202,6 +1243,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     ctx.renderAll();
     const bits = [cancelled ? "Compress cancelled" : `Compressed ${path.basename(out)}`];
     if (failed) bits.push(failSuffix(failed, failWhy));
+    if (!failed && !cancelled && warns.length) bits.push(...warns);
     if (!failed && !cancelled) bits.push("ctrl+z to undo");
     const msg = bits.join(" · ");
     finishOpSummary("compress", "Compress", `${base}${ext}`, msg, srcs, out, cancelled, failed);
