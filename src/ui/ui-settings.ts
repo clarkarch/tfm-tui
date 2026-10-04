@@ -662,6 +662,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // floats.close("escmenu")
   const rawCloseMenu = () => {
     menuOpen = false;
+    // reset the view or toggleHelp's `menuView === "help"` check sticks after
+    // close and the next F1 takes the close branch (a no-op) instead of
+    // reopening
+    menuView = "root";
     st.capturing = null;
     ctx.log?.("esc-menu close");
     // hovered rows have no out (their nodes are gone) — restore here or the

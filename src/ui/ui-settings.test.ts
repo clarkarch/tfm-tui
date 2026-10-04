@@ -912,6 +912,29 @@ describe("menu placement", () => {
   });
 });
 
+describe("help view", () => {
+  test("toggleHelp reopens after close (closed view must not stick)", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.toggleHelp();
+    await t.renderOnce();
+    expect(menu.isOpen()).toBe(true);
+    expect(t.captureCharFrame()).toContain("Lost? Start here.");
+    menu.toggleHelp();
+    await t.renderOnce();
+    expect(menu.isOpen()).toBe(false);
+    // second reopen is the regression: the closed help view stuck around and
+    // the third F1 took the close branch (a no-op) instead of reopening
+    menu.toggleHelp();
+    await t.renderOnce();
+    expect(menu.isOpen()).toBe(true);
+    expect(floats.isOpen("escmenu")).toBe(true);
+    expect(t.captureCharFrame()).toContain("Lost? Start here.");
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+});
+
 describe("no initial cursor (fresh views)", () => {
   test("a freshly entered settings view highlights nothing until an arrow", async () => {
     menu.closeMenu();
