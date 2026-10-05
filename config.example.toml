@@ -34,7 +34,7 @@ double-click-ms                       = 400         # 100..2000
 drag-threshold-cells                  = 1           # cells of movement before a press becomes a drag, 1..5
 toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
 follow-terminal                       = false       # true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset
-transparent-bg                        = false       # true = follow a transparent terminal bg (kitty background_opacity); false = force opaque
+transparent-bg                        = "off"       # "off" = force opaque (preset bg nudged off the terminal default); "on" = faithful theme hex, renderer transparent (panels still paint); "force" = chrome rest fills cleared too, the terminal bg shows through regardless of the preset
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
 icon-style                            = "filled"    # "filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels

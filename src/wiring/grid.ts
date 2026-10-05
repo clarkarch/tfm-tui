@@ -266,6 +266,7 @@ export const wireGrid = (deps: {
       tileRefs: () => selections[pane].tileRefs,
       colors: themeGet,
       uiStyle,
+      transparentForce: () => core.config.ui.transparentBg === "force",
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
       hoverLiftOpts: () => ({
@@ -299,14 +300,22 @@ export const wireGrid = (deps: {
       listRowH: () => core.config.ui.listRowHeight,
       uiStyle,
       colors: themeGet,
+      transparentForce: () => core.config.ui.transparentBg === "force",
       previewEnabled: () => core.config.ui.previewEnabled,
       previewWidth: () => core.config.ui.previewWidth,
       // tty mode forces the compact rows: icon tiles need graphics + Nerd glyphs
       viewMode: () => (core.isTtyMode() ? "list" : core.config.ui.viewMode),
       // raster-affecting state the grid rebuild keys off (force-glyph/icons/
-      // tty mode flips must rebuild even though the listing is unchanged)
+      // tty mode/transparent-bg flips must rebuild even though the listing
+      // is unchanged)
       rasterSig: () =>
-        rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph, core.config.ui.iconStyle),
+        rasterSigOf(
+          core.config.ui.icons,
+          core.isTtyMode(),
+          core.config.ui.forceGlyph,
+          core.config.ui.iconStyle,
+          core.config.ui.transparentBg,
+        ),
       wrapMode: () => core.config.ui.wrapMode,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,

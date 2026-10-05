@@ -51,6 +51,8 @@ type AppContainerOpts = {
   sideInnerW: number;
   colors: Theme; // eager object — see buildTitle
   uiStyle: UiStyle;
+  // transparent-bg force: chrome rest fills clear so the terminal shows through
+  transparentForce?: boolean;
   tabBarVisible: boolean;
   previewWidth: number;
   previewEnabled: boolean;
@@ -68,7 +70,7 @@ export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
         id: "tfm-sidebar-root",
         width: o.sw,
         height: "100%",
-        ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg),
+        ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg, o.transparentForce ? "force" : undefined),
         flexDirection: "column",
         // auto-hide animation clips the label column instead of rebuilding rows
         overflow: "hidden",
@@ -81,7 +83,7 @@ export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
         id: "tfm-main",
         flexGrow: 1,
         height: "100%",
-        ...chromeSurface(o.uiStyle, o.colors, o.colors.bg),
+        ...chromeSurface(o.uiStyle, o.colors, o.colors.bg, o.transparentForce ? "force" : undefined),
         flexDirection: "column",
       },
       // Each pane is a self-contained column: its own top bar, its own tab
@@ -147,7 +149,7 @@ export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
       width: o.previewWidth,
       height: "100%",
       visible: o.previewEnabled, // display:none in yoga: takes no layout space when hidden
-      ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg),
+      ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg, o.transparentForce ? "force" : undefined),
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,

@@ -56,6 +56,9 @@ type ToolbarCtx = {
   sortEntries(): ListEntry[];
   cwd(): string;
   home: string;
+  // transparent-bg force: toolbar rest fills clear so the terminal shows
+  // through. Optional so test fakes keep working.
+  transparentForce?(): boolean;
   // per-navigate directory-bar animation: renderCrumbs calls this with the ids
   // of ONLY the newly appeared crumbs after rebuilding for a changed cwd
   // (first build + same-target rebuilds pass nothing and stay silent). Wired
@@ -118,6 +121,8 @@ export const toolbarItemIds = (byId: (id: string) => MaybeNode, prefix: string, 
 
 export const makeToolbar = (ctx: ToolbarCtx) => {
   const { makeIconSlot, setIconState } = ctx;
+  // transparent-bg force as a surface-seam value (absent = today's behavior)
+  const tForce = () => (ctx.transparentForce?.() ? "force" : undefined);
   // every node id in this pane's toolbar is namespaced so two instances can
   // coexist in the global renderable registry
   const id = (name: string): string => `${ctx.prefix}${name}`;
@@ -133,7 +138,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   const navBtnBg = (btnId: string) => {
     try {
       const n = ctx.byId(btnId);
-      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
+      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId], undefined, tForce()));
     } catch {}
   };
 
@@ -153,7 +158,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         height: 1,
         width: 3,
         justifyContent: "center",
-        ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
+        ...btnSurface(ctx.uiStyle(), ctx.colors(), false, undefined, tForce()),
         onMouseDown: () => {
           ctx.focusPane?.();
           ctx.closeFileMenu();
@@ -185,7 +190,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       const btnId = id(key);
       try {
         const n = ctx.byId(btnId);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId], undefined, tForce()));
       } catch {}
     }
   };
@@ -325,7 +330,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         if (iconSlot && !current) setIconState(iconSlot.spec, toggleIconState(on, false));
         try {
           const n = ctx.byId(id(`crumb-${i}`));
-          if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on && !current));
+          if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on && !current, undefined, tForce()));
         } catch {}
       };
       const crumb = Box(
@@ -335,7 +340,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           flexDirection: "row",
           alignItems: "center",
           columnGap: 1,
-          ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
+          ...btnSurface(ctx.uiStyle(), ctx.colors(), false, undefined, tForce()),
           ...(current
             ? {}
             : {
@@ -385,7 +390,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {
         const n = ctx.byId(id);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on));
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on, undefined, tForce()));
       } catch {}
     };
     return Box(
@@ -394,7 +399,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         height: 1,
         width: 3,
         justifyContent: "center",
-        ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
+        ...btnSurface(ctx.uiStyle(), ctx.colors(), false, undefined, tForce()),
         onMouseDown: (ev: MouseEvent) => {
           ctx.focusPane?.();
           onMouseDown(ev);

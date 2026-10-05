@@ -26,6 +26,7 @@ export const wireGridFoundation = (deps: {
     makeSelection({
       colors: core.themeGet,
       uiStyle: () => core.config.ui.uiStyle,
+      transparentForce: () => core.config.ui.transparentBg === "force",
       byId: core.lookup.byId,
       setText: core.lookup.setTextOnId,
       setIconState: core.slots.setIconState,

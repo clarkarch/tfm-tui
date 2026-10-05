@@ -15,7 +15,7 @@
 // curves read easing, slide distance/direction and stagger spread live at play
 
 import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
-import type { HoverLiftOpts, Theme, UiStyle } from "../config/config-schema";
+import type { HoverLiftOpts, Theme, TransparentBgMode, UiStyle } from "../config/config-schema";
 import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
 import { tileSurface } from "./style";
@@ -402,9 +402,10 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
 // rebuilds.
 
 // pure: the rest-state tile background per ui-style, sourced from the SAME
-// surface seam setTileVisual paints through
-export const restTileBg = (style: UiStyle, colors: Theme): string =>
-  tileSurface(style, colors, "rest").backgroundColor ?? "transparent";
+// surface seam setTileVisual paints through (force included — a mouse-out
+// under force must release to transparent, not to the theme fill)
+export const restTileBg = (style: UiStyle, colors: Theme, transparentBg?: TransparentBgMode): string =>
+  tileSurface(style, colors, "rest", transparentBg).backgroundColor ?? "transparent";
 
 // pure: whole-cell hover offset for a direction — always exactly one cell,
 // the terminal minimum (fractional offsets crash image draw: "y must be an
@@ -433,6 +434,9 @@ type TileHoverCtx = {
   // clipboard cut-dim resolution (mirrors selection.setTileVisual)
   isCutKey?(key: string): boolean;
   hoverLiftOpts(): HoverLiftOpts;
+  // transparent-bg force: rest repaints release to transparent. Optional so
+  // test fakes keep working.
+  transparentForce?(): boolean;
 };
 
 type HoverCur = {
@@ -507,6 +511,9 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     } catch {}
   };
 
+  // transparent-bg force as a surface-seam value (absent = today's behavior)
+  const tForce = (): TransparentBgMode | undefined => (ctx.transparentForce?.() ? "force" : undefined);
+
   // repaint `cur` to its resting look: cut-dim icon + label when the tile is
   // on the clipboard (unselected), plain rest otherwise, plus the rest bg and a
   // released lift. Skips a selected tile entirely — selection owns its visuals.
@@ -519,7 +526,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
         ctx.setIconState(cur.refs.iconSpec, restIconIdx(cur.refs, cur.key));
         const lab = ctx.byId(cur.refs.labelId);
         if (lab) lab.fg = restLabelFg(cur.refs, cur.key);
-        writeBg(node, restTileBg(ctx.uiStyle(), ctx.colors()));
+        writeBg(node, restTileBg(ctx.uiStyle(), ctx.colors(), tForce()));
       }
     } catch {}
     dropLift(cur);
@@ -543,7 +550,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
         }
         if (refs.selected) return; // selection owns the icon/bg visuals
         const offColors = ctx.colors();
-        const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors);
+        const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors, tForce());
         try {
           ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
           // hover-in lifts the label to white (readable on the hover fill);
@@ -587,7 +594,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       }
 
       const colors = ctx.colors();
-      const toHex = hovered ? colors.hoverBg : restTileBg(ctx.uiStyle(), colors);
+      const toHex = hovered ? colors.hoverBg : restTileBg(ctx.uiStyle(), colors, tForce());
       // icon raster + label flip instantly (hover-in never dims — cut only
       // applies at Rest, exactly like setTileVisual)
       try {

@@ -284,6 +284,17 @@ describe("setTileVisual", () => {
     expect(h.nodes.get("label:a").fg).toBe(COLORS.accent);
     expect(h.nodes.get("tile:a").backgroundColor).toBe(COLORS.accentBg);
   });
+
+  test("transparent-bg force clears the rest fill (terminal shows through)", () => {
+    const h = makeHarness();
+    (h.ctx as SelectionCtx).transparentForce = () => true;
+    h.addTile("a");
+    h.sel.setTileVisual("a", TileVisual.Rest);
+    expect(h.nodes.get("tile:a").backgroundColor).toBe("transparent");
+    // selection keeps its fill under force
+    h.sel.setTileVisual("a", TileVisual.Selected);
+    expect(h.nodes.get("tile:a").backgroundColor).toBe(COLORS.accentBg);
+  });
 });
 
 describe("refreshCutVisuals", () => {

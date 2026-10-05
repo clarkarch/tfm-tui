@@ -53,6 +53,10 @@ type ChromeCtx = {
   // sidebar fast path keeps stale rasters across a graphics-mode toggle.
   // Optional so test fakes keep working.
   rasterSig?(): string;
+  // transparent-bg force: chrome rest fills clear so the terminal shows
+  // through. Optional so test fakes keep working; the render sig carries it
+  // (rasterSig), so a flip rebuilds instead of repainting silently.
+  transparentForce?(): boolean;
   renderAll(): void;
   navigate(target: string): void;
   blurTerminal(): void;
@@ -96,6 +100,8 @@ type ChromeCtx = {
 };
 
 export const makeChrome = (ctx: ChromeCtx) => {
+  // transparent-bg force as a surface-seam value (absent = today's behavior)
+  const tForce = () => (ctx.transparentForce?.() ? "force" : undefined);
   // --- Places sidebar (rebuilt from scratch on every render, selection = cwd) ---
   const placesHost: {
     row: ReturnType<typeof Box>;
@@ -169,7 +175,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         flexDirection: "row",
         columnGap: 1,
         paddingLeft: 1,
-        ...rowSurface(st, colors, selected ? "selected" : "rest"),
+        ...rowSurface(st, colors, selected ? "selected" : "rest", tForce()),
         onMouseDown: (ev: MouseEvent) => {
           if (ev.button === 2) {
             ctx.closeFileMenu();
@@ -375,7 +381,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
             columnGap: 1,
             paddingLeft: 1,
             paddingRight: 1,
-            ...tileSurface(ctx.uiStyle(), colors, active ? "selected" : "rest"),
+            ...tileSurface(ctx.uiStyle(), colors, active ? "selected" : "rest", tForce()),
             onMouseDown: (ev: MouseEvent) => {
               try {
                 ev.stopPropagation?.();
@@ -401,10 +407,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
               const n = ctx.byId(tabId);
               if (!n) return;
               if (on && dragTabDir() !== null) {
-                applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected"));
+                applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected", tForce()));
                 return;
               }
-              if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest"));
+              if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest", tForce()));
               // a drag owns the pointer — same rule as the sidebar rows
               if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
             }),
@@ -451,7 +457,8 @@ export const makeChrome = (ctx: ChromeCtx) => {
       const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
       const row = ctx.byId(rec.rowId);
       const label = ctx.byId(rec.labelId);
-      if (row) applySurface(row, rowSurface(ctx.uiStyle(), colors, isSel ? "selected" : isHover ? "hover" : "rest"));
+      if (row)
+        applySurface(row, rowSurface(ctx.uiStyle(), colors, isSel ? "selected" : isHover ? "hover" : "rest", tForce()));
       rec.specs.forEach((s) => {
         ctx.setIconState(s, selectIconState(isSel, isHover));
       });

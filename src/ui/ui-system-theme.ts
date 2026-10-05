@@ -149,9 +149,9 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
     if (!theme) return false;
     Object.assign(ctx.config.theme, theme);
     Object.assign(ctx.colors, theme);
-    if (!ctx.config.ui.transparentBg) ctx.colors.bg = bumpHex(ctx.colors.bg);
+    if (ctx.config.ui.transparentBg === "off") ctx.colors.bg = bumpHex(ctx.colors.bg);
     try {
-      ctx.renderer()?.setBackgroundColor?.(ctx.config.ui.transparentBg ? "transparent" : ctx.colors.bg);
+      ctx.renderer()?.setBackgroundColor?.(ctx.config.ui.transparentBg !== "off" ? "transparent" : ctx.colors.bg);
     } catch {}
     try {
       ctx.onBootDerived?.(theme);

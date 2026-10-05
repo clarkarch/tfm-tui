@@ -26,8 +26,13 @@ export const resolveTtyMode = (mode: TtyMode | string, term?: string | null): bo
 // sidebar key off this through their own `rasterSig` ctx fields, and both
 // wirings must call THIS (never an inline JSON) so the two surfaces cannot
 // drift into disagreeing about what a graphics-mode flip rebuilds.
-export const rasterSigOf = (icons: string, ttyMode: boolean, forceGlyph: boolean, iconStyle = "filled"): string =>
-  JSON.stringify([icons, ttyMode, forceGlyph, iconStyle]);
+export const rasterSigOf = (
+  icons: string,
+  ttyMode: boolean,
+  forceGlyph: boolean,
+  iconStyle = "filled",
+  transparentBg = "off",
+): string => JSON.stringify([icons, ttyMode, forceGlyph, iconStyle, transparentBg]);
 
 // --- 16-color console palettes ---
 // OpenTUI emits 48;2/38;2 truecolor unconditionally (ansi.ts), which the Linux

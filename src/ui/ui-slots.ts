@@ -242,6 +242,11 @@ export type SlotsCtx = {
   // (view/anims/transparency untouched). Optional so test fakes keep working.
   isTtyMode?(): boolean;
   forceGlyph?(): boolean;
+  // transparent-bg force: chrome rasters keep alpha (they sit on the terminal
+  // bg); float islands stay solid so their rasters keep flattening. Optional
+  // so test fakes keep working; read live like iconsMode (a flip re-rasters
+  // through the theme sig).
+  transparentForce?(): boolean;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
@@ -449,7 +454,13 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const { cellW, cellH } = cellMetrics();
     // `transparent` = raster keeps alpha; strip it inside floating layers in
     // partial mode so an opaque island can't blend the desktop through.
-    const transparent = iconTransparent(ctx.iconsMode(), isFloatChild(ctx.byId(slotId)));
+    // transparent-bg force keeps alpha outside floats too (chrome tiles are
+    // transparent under force); float children keep flattening onto the island.
+    const transparent = iconTransparent(
+      ctx.iconsMode(),
+      isFloatChild(ctx.byId(slotId)),
+      ctx.transparentForce?.() ? "force" : undefined,
+    );
     const imgs: ImageRenderable[] = [];
     for (let si = 0; si < states.length; si++) {
       const st = states[si];

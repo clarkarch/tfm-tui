@@ -1,6 +1,8 @@
 // Shared #rrggbb join for every hex-math helper (bump/shade/mix/dim): the
 // parse side deliberately differs per caller (bumpHex's loose parseInt is
 // pinned by tests; the others are strict 6-digit), so only the join is one.
+import type { TransparentBgMode } from "./config-schema";
+
 export const intToHex = (n: number): string => `#${n.toString(16).padStart(6, "0")}`;
 
 // Nudge a #rrggbb color up by one unit of blue so it can never byte-equal
@@ -50,8 +52,9 @@ export const mixHex = (a: string, b: string, t: number): string => {
 };
 // Terminals with background_opacity (kitty etc.) composite only their DEFAULT
 // background; OpenTUI leaves unpainted cells on SGR 49, so those go
-// see-through. transparentBg=false forces an opaque UI by nudging bg one step
-// so it can never byte-equal the terminal's default color; true keeps the
-// theme faithful. The nudge is runtime-only — config stores RAW hex.
-export const deriveColors = <T extends { bg: string }>(theme: T, transparentBg: boolean): T =>
-  transparentBg ? { ...theme } : { ...theme, bg: bumpHex(theme.bg) };
+// see-through. "off" forces an opaque UI by nudging bg one step
+// so it can never byte-equal the terminal's default color; "on" and
+// "force" keep the theme faithful (force clears the fills at the surface seam
+// instead — see ui/style). The nudge is runtime-only — config stores RAW hex.
+export const deriveColors = <T extends { bg: string }>(theme: T, transparentBg: TransparentBgMode): T =>
+  transparentBg === "off" ? { ...theme, bg: bumpHex(theme.bg) } : { ...theme };

@@ -43,9 +43,7 @@ export const wireCore = (deps: {
   // console palette (dark/light by configured-bg brightness) paints instead.
   // config.theme is still STORED untouched, so leaving the console restores it.
   const ttyMode = resolveTtyMode(config.ui.ttyMode, process.env.TERM);
-  const colors = ttyMode
-    ? ttyStaticTheme<Theme>(config.theme)
-    : deriveColors(config.theme, config.ui.transparentBg && !ttyMode);
+  const colors = ttyMode ? ttyStaticTheme<Theme>(config.theme) : deriveColors(config.theme, config.ui.transparentBg);
   const themeGet = (): Theme => colors;
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---
@@ -134,6 +132,7 @@ export const wireCore = (deps: {
     colors: themeGet,
     uiStyle: () => config.ui.uiStyle,
     iconsMode: () => config.ui.icons,
+    transparentForce: () => config.ui.transparentBg === "force",
     iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
     modalOpen: () => floats.hasModal(),

@@ -124,6 +124,44 @@ describe("iconTransparent", () => {
     expect(iconTransparent("transparent-partial", false)).toBe(true);
     expect(iconTransparent("transparent-partial", true)).toBe(false);
   });
+
+  test("transparent-bg force keeps alpha outside floats, never inside them", () => {
+    // chrome rasters sit on the terminal bg under force, so they must keep
+    // alpha like icons:"transparent"; float islands stay solid, so their
+    // rasters keep flattening
+    expect(iconTransparent("opaque", false, "force")).toBe(true);
+    expect(iconTransparent("opaque", true, "force")).toBe(false);
+    expect(iconTransparent("transparent", true, "force")).toBe(true);
+  });
+});
+
+describe("transparent-bg force", () => {
+  test("force clears chrome rest fills in every ui-style (terminal shows through)", () => {
+    for (const style of ["solid", "outline", "outline-partial"] as const) {
+      expect(chromeSurface(style, theme, theme.sidebarBg, "force")).toEqual({});
+    }
+  });
+
+  test("force clears tile/row rest + cut fills, interaction fills stay", () => {
+    expect(tileSurface("solid", theme, "rest", "force")).toEqual({});
+    expect(tileSurface("solid", theme, "cut", "force")).toEqual({});
+    expect(tileSurface("solid", theme, "hover", "force")).toEqual({ backgroundColor: "#292e42" });
+    expect(tileSurface("solid", theme, "selected", "force")).toEqual({ backgroundColor: "#29a37a" });
+    expect(rowSurface("solid", theme, "rest", "force")).toEqual({});
+    expect(rowSurface("solid", theme, "cut", "force")).toEqual({});
+    expect(rowSurface("solid", theme, "selected", "force")).toEqual({ backgroundColor: "#29a37a" });
+  });
+
+  test("force clears button rest fills (float panels show through, not the theme)", () => {
+    expect(btnSurface("solid", theme, false, undefined, "force")).toEqual({});
+    expect(btnSurface("solid", theme, true, undefined, "force")).toEqual({ backgroundColor: "#292e42" });
+  });
+
+  test("absent force is today's behavior (no silent restyle)", () => {
+    expect(chromeSurface("solid", theme, theme.sidebarBg)).toEqual({ backgroundColor: "#16161e" });
+    expect(tileSurface("solid", theme, "rest")).toEqual({ backgroundColor: "#1a1b26" });
+    expect(btnSurface("solid", theme, false)).toEqual({ backgroundColor: "#1a1b26" });
+  });
 });
 
 describe("applySurface", () => {

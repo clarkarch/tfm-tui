@@ -175,6 +175,13 @@ export type SidebarHoverOpts = {
   includeLabel: boolean;
 };
 
+// terminal-bg vocabulary ([ui] transparent-bg): how the app background relates
+// to the terminal's own bg. `off` forces opaque (bg nudged off the terminal
+// default so kitty background_opacity can't composite through); `on`
+// keeps the faithful theme hex and leaves the renderer transparent (panels
+// still paint their fills); `force` additionally clears every chrome rest
+// fill so the terminal bg shows through regardless of the preset's bg.
+export type TransparentBgMode = "off" | "on" | "force";
 // icon-raster mode. `opaque` flattens every icon onto its surface bg
 // (default); `transparent` keeps alpha everywhere (may fringe on some
 // terminals); `transparent-partial` keeps alpha except inside FLOATING layers
@@ -220,7 +227,7 @@ export type UiConfig = {
   restoreSession: boolean;
   persistUndo: boolean;
   followTerminal: boolean;
-  transparentBg: boolean;
+  transparentBg: TransparentBgMode;
   icons: IconMode;
   iconStyle: IconStyle;
   ttyMode: TtyMode;
@@ -767,12 +774,13 @@ const UI_ROWS: SchemaRow[] = [
     subsection: "style",
   },
   {
-    kind: "bool",
+    kind: "enum",
     section: "ui",
     tomlKey: "transparent-bg",
     prop: "transparentBg",
-    def: false,
-    doc: "true = follow a transparent terminal bg (kitty background_opacity); false = force opaque",
+    values: ["off", "on", "force"],
+    def: "off",
+    doc: '"off" = force opaque (preset bg nudged off the terminal default); "on" = faithful theme hex, renderer transparent (panels still paint); "force" = chrome rest fills cleared too, the terminal bg shows through regardless of the preset',
     label: "transparent bg",
     blurb: "Let a transparent terminal show through",
     group: "appearance",
@@ -1797,6 +1805,8 @@ export function parseConfigDoc(doc: unknown): Config {
   // renamed key: the old `word-wrap` bool migrates to `wrap-mode`
   // (true = char, false = none) and only applies when the new key is
   // absent, so existing configs keep working through the rename.
+  // same-key type change: `transparent-bg` was a bool (true = transparent,
+  // false = opaque); a boolean value migrates to the matching enum member.
   const uiSection = (doc as Record<string, unknown>).ui;
   if (typeof uiSection === "object" && uiSection !== null) {
     const raw = uiSection as Record<string, unknown>;
@@ -1804,6 +1814,12 @@ export function parseConfigDoc(doc: unknown): Config {
       if (raw["word-wrap"] === true) cfg.ui.wrapMode = "char";
       else if (raw["word-wrap"] === false) cfg.ui.wrapMode = "none";
     }
+    if (raw["transparent-bg"] === true) cfg.ui.transparentBg = "on";
+    else if (raw["transparent-bg"] === false) cfg.ui.transparentBg = "off";
+    // the first enum spelling (opaque/transparent) never shipped a release but
+    // may sit in a hand-edited config — alias it instead of dropping to default
+    else if (raw["transparent-bg"] === "opaque") cfg.ui.transparentBg = "off";
+    else if (raw["transparent-bg"] === "transparent") cfg.ui.transparentBg = "on";
   }
   return cfg;
 }

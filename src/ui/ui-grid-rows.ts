@@ -160,7 +160,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: ctx.colors().bg,
+        backgroundColor: ctx.transparentForce?.() ? "transparent" : ctx.colors().bg,
       },
       ctx.makeIconSlot(icon, [{ fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().bg }], iconCells).el,
       Box({ height: 1 }),
@@ -188,7 +188,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: ctx.colors().bg,
+        backgroundColor: ctx.transparentForce?.() ? "transparent" : ctx.colors().bg,
       },
       Text({ id: loadingNodeId(tilePrefix()), content: line, fg: ctx.colors().sidebarFgMuted }),
     );

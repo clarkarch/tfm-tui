@@ -31,6 +31,9 @@ export type SelectionCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
   byId(id: string): MaybeNode;
+  // transparent-bg force: rest fills clear so the terminal shows through.
+  // Optional so test fakes stay light; absent = opaque/transparent behavior.
+  transparentForce?(): boolean;
   setText(id: string, s: string): void;
   setIconState(spec: IconSpec | undefined, mode: number): void;
   isCutKey(key: string): boolean;
@@ -91,7 +94,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
     if (tileReal) {
       const state =
         mode === TileVisual.Selected ? "selected" : mode === TileVisual.Hover ? "hover" : cut ? "cut" : "rest";
-      applySurface(tileReal, tileSurface(ctx.uiStyle(), ctx.colors(), state));
+      applySurface(
+        tileReal,
+        tileSurface(ctx.uiStyle(), ctx.colors(), state, ctx.transparentForce?.() ? "force" : undefined),
+      );
     }
   };
 

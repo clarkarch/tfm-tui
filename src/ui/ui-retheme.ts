@@ -74,11 +74,13 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   const rethemeChrome = (): void => {
     const st = ctx.config.ui.uiStyle;
     const colors = ctx.colors;
+    // transparent-bg force as a surface-seam value (opaque/transparent paint as before)
+    const tForce = ctx.config.ui.transparentBg === "force" ? ("force" as const) : undefined;
     setOnId("tfm-sidebar-root", (n) => {
       n.width = ctx.getSw();
-      applySurface(n, chromeSurface(st, colors, colors.sidebarBg));
+      applySurface(n, chromeSurface(st, colors, colors.sidebarBg, tForce));
     });
-    setOnId("tfm-main", (n) => applySurface(n, chromeSurface(st, colors, colors.bg)));
+    setOnId("tfm-main", (n) => applySurface(n, chromeSurface(st, colors, colors.bg, tForce)));
     setOnId("tfm-title-box", (n) => {
       n.width = ctx.sideInnerW();
     });
@@ -91,7 +93,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     setOnId("tfm-title-sub", (n) => {
       n.fg = colors.sidebarFgMuted;
     });
-    setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
+    setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg, tForce)));
     setOnId("tfm-pane-divider", (n) => {
       n.backgroundColor = colors.divider;
     });
@@ -108,8 +110,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       n.fg = colors.sidebarFgMuted;
     });
     setOnId("tfm-prompt-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-    // 1-row header can't carry a border ring — just drop the fill in outline variants
-    setOnId("tfm-term-header", (n) => applySurface(n, st === "solid" ? { backgroundColor: colors.sidebarBg } : {}));
+    // 1-row header can't carry a border ring — just drop the fill in outline variants (or under force)
+    setOnId("tfm-term-header", (n) =>
+      applySurface(n, st === "solid" && !tForce ? { backgroundColor: colors.sidebarBg } : {}),
+    );
 
     // toolbar hover buttons: box bg must track the new palette between raster swaps
     ctx.repaintButtons();
@@ -281,7 +285,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // still STORED above, so leaving the console restores the user theme.
     if (ctx.isTtyMode?.()) Object.assign(ctx.colors, ttyStaticTheme(ctx.config.theme));
     else {
-      const effTransparent = ctx.config.ui.transparentBg;
+      const effTransparent = ctx.config.ui.transparentBg !== "off";
       if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
     }
     lastThemeSig = themeSig(ctx.config);
@@ -338,7 +342,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       try {
         ctx
           .renderer()
-          .setBackgroundColor(ctx.config.ui.transparentBg && !ctx.isTtyMode?.() ? "transparent" : ctx.colors.bg);
+          .setBackgroundColor(
+            ctx.config.ui.transparentBg !== "off" && !ctx.isTtyMode?.() ? "transparent" : ctx.colors.bg,
+          );
       } catch {}
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();

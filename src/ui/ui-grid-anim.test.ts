@@ -666,6 +666,13 @@ describe("restTileBg", () => {
     expect(restTileBg("outline", colors)).toBe("transparent");
     expect(restTileBg("outline-partial", colors)).toBe("transparent");
   });
+
+  test("transparent-bg force sits bare even in solid (terminal shows through)", () => {
+    const colors = { bg: "#1a1b26" } as any;
+    expect(restTileBg("solid", colors, "force")).toBe("transparent");
+    expect(restTileBg("solid", colors, "on")).toBe("#1a1b26");
+    expect(restTileBg("solid", colors, "off")).toBe("#1a1b26");
+  });
 });
 
 // real renderer glue: the hover highlight repaints instantly, lifts a reserved

@@ -54,6 +54,7 @@ describe("rasterSigOf", () => {
     expect(rasterSigOf("opaque", true, false)).not.toBe(base);
     expect(rasterSigOf("opaque", false, true)).not.toBe(base);
     expect(rasterSigOf("opaque", false, false, "outline")).not.toBe(base);
+    expect(rasterSigOf("opaque", false, false, "filled", "force")).not.toBe(base);
     expect(rasterSigOf("opaque", false, false)).toBe(base);
   });
 });

@@ -153,7 +153,7 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
-  test("colors merge in place; transparent-bg off nudges bg opaque, on keeps the raw hex", () => {
+  test("colors merge in place; off nudges bg, on/force keep the raw hex", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
@@ -163,11 +163,18 @@ describe("applyConfig", () => {
     expect(ctx.colors.accent).toBe(defaultConfig.theme.accent);
 
     const on = clone(defaultConfig);
-    on.ui.transparentBg = true;
+    on.ui.transparentBg = "on";
     on.theme.bg = "#010203";
     retheme.applyConfig(on);
     expect(ctx.colors.bg).toBe("#010203"); // on -> faithful
-    expect(ctx.config.ui.transparentBg).toBe(true);
+    expect(ctx.config.ui.transparentBg).toBe("on");
+
+    const force = clone(defaultConfig);
+    force.ui.transparentBg = "force";
+    force.theme.bg = "#010203";
+    retheme.applyConfig(force);
+    expect(ctx.colors.bg).toBe("#010203"); // force -> faithful (fills clear at the surface seam)
+    expect(ctx.calls.bg.at(-1)).toBe("transparent"); // renderer stays transparent
   });
 
   test("theme change invalidates rasters + repaints chrome + syncs the terminal", () => {

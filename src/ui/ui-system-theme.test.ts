@@ -315,7 +315,14 @@ describe("boot renderer bg (B1)", () => {
 
   test("boot path sets transparent renderer bg when transparentBg is on", async () => {
     const h = mkCtx(true);
-    h.config.ui.transparentBg = true;
+    h.config.ui.transparentBg = "on";
+    expect(await h.sys.applyBootSystemTheme(200)).toBe(true);
+    expect(h.renderer.bgCalls).toEqual(["transparent"]);
+  });
+
+  test("boot path sets transparent renderer bg when transparentBg is force", async () => {
+    const h = mkCtx(true);
+    h.config.ui.transparentBg = "force";
     expect(await h.sys.applyBootSystemTheme(200)).toBe(true);
     expect(h.renderer.bgCalls).toEqual(["transparent"]);
   });

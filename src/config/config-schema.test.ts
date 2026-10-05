@@ -65,6 +65,25 @@ describe("parseConfigDoc", () => {
     expect(validateKeybindSpec(".")).not.toBeNull();
   });
 
+  test("transparent-bg defaults to off, parses the mode enum", () => {
+    expect(parseConfigDoc(undefined).ui.transparentBg).toBe("off");
+    expect(parseConfigDoc({ ui: { "transparent-bg": "on" } }).ui.transparentBg).toBe("on");
+    expect(parseConfigDoc({ ui: { "transparent-bg": "force" } }).ui.transparentBg).toBe("force");
+    expect(parseConfigDoc({ ui: { "transparent-bg": "off" } }).ui.transparentBg).toBe("off");
+    expect(parseConfigDoc({ ui: { "transparent-bg": "yes" } }).ui.transparentBg).toBe("off");
+  });
+
+  test("legacy transparent-bg bool migrates (true=on, false=off), new key wins", () => {
+    expect(parseConfigDoc({ ui: { "transparent-bg": true } }).ui.transparentBg).toBe("on");
+    expect(parseConfigDoc({ ui: { "transparent-bg": false } }).ui.transparentBg).toBe("off");
+  });
+
+  test("first enum spelling (opaque/transparent) aliases to off/on", () => {
+    // never shipped a release, but a hand-edited config may carry it
+    expect(parseConfigDoc({ ui: { "transparent-bg": "opaque" } }).ui.transparentBg).toBe("off");
+    expect(parseConfigDoc({ ui: { "transparent-bg": "transparent" } }).ui.transparentBg).toBe("on");
+  });
+
   test("icons defaults to opaque, parses the mode enum", () => {
     expect(parseConfigDoc(undefined).ui.icons).toBe("opaque");
     expect(parseConfigDoc({ ui: { icons: "transparent" } }).ui.icons).toBe("transparent");

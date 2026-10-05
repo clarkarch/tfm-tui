@@ -57,6 +57,10 @@ export type GridRendererCtx = {
   // restart. Deliberately OUT of contentSigOf: a mode flip rebuilds silently
   // instead of replaying the intro cascade. Optional so test fakes keep working.
   rasterSig?(): string;
+  // transparent-bg force: empty/loading panes clear their fill so the terminal
+  // shows through (tile fills clear via selection.setTileVisual). Optional so
+  // test fakes keep working.
+  transparentForce?(): boolean;
   // global line-wrap mode ([ui] wrap-mode): grid tile labels wrap in this
   // mode, preview bodies follow it for code. Part of the content sig.
   wrapMode(): WrapMode;

@@ -107,6 +107,7 @@ export const wireChrome = async (deps: {
     byId,
     uiStyle,
     colors: themeGet,
+    transparentForce: () => core.config.ui.transparentBg === "force",
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
     tabBar: () => core.config.ui.tabBar,
@@ -119,7 +120,13 @@ export const wireChrome = async (deps: {
         ? Math.floor((renderer.terminalWidth - core.geometry.sidebarEff - core.geometry.previewEff - 1) / 2)
         : renderer.terminalWidth - core.geometry.sidebarEff - core.geometry.previewEff,
     rasterSig: () =>
-      rasterSigOf(core.config.ui.icons, core.isTtyMode(), core.config.ui.forceGlyph, core.config.ui.iconStyle),
+      rasterSigOf(
+        core.config.ui.icons,
+        core.isTtyMode(),
+        core.config.ui.forceGlyph,
+        core.config.ui.iconStyle,
+        core.config.ui.transparentBg,
+      ),
     renderAll: nav.renderAll,
     navigate: nav.navigate,
     blurTerminal: () => getFileops().terminal.blurTerminal(),
@@ -187,6 +194,7 @@ export const wireChrome = async (deps: {
       stripSelectable,
       uiStyle,
       colors: themeGet,
+      transparentForce: () => core.config.ui.transparentBg === "force",
       makeIconSlot,
       setIconState,
       closeFileMenu: menu.closeFileMenu,
@@ -226,6 +234,7 @@ export const wireChrome = async (deps: {
     // directly (typed as Theme in ui-boot-layout so tsc enforces this)
     colors: core.colors,
     uiStyle: core.config.ui.uiStyle,
+    transparentForce: core.config.ui.transparentBg === "force",
     tabBarVisible: core.config.ui.tabBar,
     previewWidth: core.config.ui.previewWidth,
     previewEnabled: core.config.ui.previewEnabled,
@@ -256,11 +265,14 @@ export const wireChrome = async (deps: {
     maxFps: 120,
     ...(gpmInput ? { stdin: gpmStream as unknown as NodeJS.ReadStream } : {}),
     // tty mode forces opaque (same rule as wiring/core + ui-retheme)
-    ...(core.config.ui.transparentBg && !core.isTtyMode() ? {} : { backgroundColor: core.colors.bg }),
+    ...(core.config.ui.transparentBg !== "off" && !core.isTtyMode() ? {} : { backgroundColor: core.colors.bg }),
   });
   renderer.root.add(container);
   warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
-  renderer.setBackgroundColor(core.colors.bg); // opencode-style: global bg lives on the renderer, not per-box
+  // opencode-style: global bg lives on the renderer, not per-box — transparent
+  // modes stay transparent here (the old unconditional reset re-opaqued boot)
+  if (core.config.ui.transparentBg !== "off" && !core.isTtyMode()) renderer.setBackgroundColor("transparent");
+  else renderer.setBackgroundColor(core.colors.bg);
 
   // --- Sidebar startup intro (cold-boot-only): one reused timeline over the
   // places sidebar, played by the playSidebarIntro boot step after the first
