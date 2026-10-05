@@ -49,8 +49,15 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
       () => null,
     );
 
-  // bounded query: silent terminals (dumb term, some tmux/ssh) must fall back
-  // fast instead of stalling boot behind two detector timeouts
+  // bounded query: the budget must cover OpenTUI's own FIXED 300ms OSC-support
+  // probe (not scaled by our timeout), the tmux XTVERSION wait, and 16 OSC 4
+  // relay round-trips — short budgets (250/800) lost that race 100% of the
+  // time: every boot kept the preset (then flipped ~0.7s later via PALETTE)
+  // and truncated answers landed as partial palettes (grey/white/navy
+  // hallucinations in the fallback ladder). withTimeout resolves the moment
+  // the terminal answers, so success adds no latency; silent terminals still
+  // fall back fast — the detector's own 300ms idle window fires when nothing
+  // answers, so the bound here only caps slow trickle replies.
   const queryTerminal = async (timeoutMs: number): Promise<TerminalQuery | null> => {
     const r = ctx.renderer();
     if (!r || typeof r.getPalette !== "function") return null;
@@ -74,6 +81,8 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
             defaultForeground: pal.defaultForeground ?? null,
             defaultBackground: pal.defaultBackground ?? null,
             cursorColor: pal.cursorColor ?? null,
+            highlightBackground: pal.highlightBackground ?? null,
+            highlightForeground: pal.highlightForeground ?? null,
           };
         } catch {
           return null;
@@ -105,8 +114,9 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
     return theme;
   };
 
-  // runtime path (settings toggle, live follow): full retheme via applyConfig
-  const resolveSystemTheme = async (timeoutMs = 800): Promise<boolean> => {
+  // runtime path (settings toggle, live follow): full retheme via applyConfig.
+  // 2000: same race as the boot budget (see queryTerminal).
+  const resolveSystemTheme = async (timeoutMs = 2000): Promise<boolean> => {
     if (!ctx.config.ui.followTerminal) return false;
     const g = ++gen;
     const theme = await queryAndDerive(timeoutMs);
@@ -124,7 +134,10 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
   // boot path (pre-first-render): direct assign, mirroring applyConfig's
   // merge + transparent-bg nudge but without caches/repaint/renderAll.
   // The renderer bg is set too — chrome read the preset bg at construction.
-  const applyBootSystemTheme = async (timeoutMs = 250): Promise<boolean> => {
+  // 2000: the OSC-support probe + tmux XTVERSION + OSC 4 relay all run inside
+  // this window (see queryTerminal) — 250 lost it every single boot, so the
+  // first frame painted the preset and the theme flipped after the intros.
+  const applyBootSystemTheme = async (timeoutMs = 2000): Promise<boolean> => {
     if (!ctx.config.ui.followTerminal) return false;
     // tty/console mode paints the static console palette and applyConfig
     // skips the truecolor bg; boot must match or the first frame is derived

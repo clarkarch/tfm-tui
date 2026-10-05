@@ -1,5 +1,6 @@
 import { SyntaxStyle, addDefaultParsers } from "@opentui/core";
 import type { Theme } from "../config/config";
+import { mixHex } from "../config/color";
 import { FILE_ICON_BY_EXT, mimeForExt } from "../fs/filetype";
 
 // --- Tree-sitter syntax machinery for the preview pane (via @opentui/core).
@@ -195,7 +196,9 @@ export const buildSyntaxStyle = (t: Theme) =>
     "type.builtin": { fg: t.syntaxType ?? "#2ac3de" },
     number: { fg: t.syntaxNumber ?? "#ff9e64" },
     constant: { fg: t.syntaxNumber ?? "#ff9e64" },
-    "constant.builtin": { fg: t.syntaxNumber ?? "#bb9af7" },
+    // builtin constants step lighter than plain ones (presets distinguish
+    // them; with no Theme slot the leaf derives it — number toward white)
+    "constant.builtin": { fg: t.syntaxNumber ? mixHex(t.syntaxNumber, t.white, 0.3) : "#bb9af7" },
     operator: { fg: t.syntaxOperator ?? t.white },
     punctuation: { fg: t.sidebarFgMuted },
     property: { fg: t.syntaxProperty ?? "#73daca" },

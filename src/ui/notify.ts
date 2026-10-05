@@ -37,7 +37,10 @@ export type NotifyCtx = {
 export const ERROR_TOAST_MS = 5000;
 
 // pure level mapping (tested): raster icon + title/body fg + lifetime. Stays
-// on existing Theme keys (white/muted/ansi1/ansi2) — no new theme knobs.
+// on existing Theme keys (white/ansi1/ansi2) — no new theme knobs. Bodies
+// are always white, never muted: muted is only guaranteed on sidebarBg, and
+// no accentBg fill can serve both bright and dim text at once (the dual
+// requirement drove derived fills darker than bg itself).
 // Toasts keep their accentBg fill in every ui-style (a border ring would clip
 // the 3-row shape, same reason tiles stay fill-only).
 export const toastLevelMeta = (
@@ -47,8 +50,8 @@ export const toastLevelMeta = (
 ): { icon: "information" | "check" | "close"; titleFg: string; bodyFg: string; duration: number } => {
   if (level === "error")
     return { icon: "close", titleFg: colors.red, bodyFg: colors.white, duration: Math.max(durationMs, ERROR_TOAST_MS) };
-  if (level === "success") return { icon: "check", titleFg: colors.green, bodyFg: colors.muted, duration: durationMs };
-  return { icon: "information", titleFg: colors.white, bodyFg: colors.muted, duration: durationMs };
+  if (level === "success") return { icon: "check", titleFg: colors.green, bodyFg: colors.white, duration: durationMs };
+  return { icon: "information", titleFg: colors.white, bodyFg: colors.white, duration: durationMs };
 };
 
 export type ToastHandle = { id: number; nodeId: string; close: () => void };

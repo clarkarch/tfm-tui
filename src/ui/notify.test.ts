@@ -57,11 +57,14 @@ const makeFake = (opts?: { durationMs?: number }) => {
 
 describe("toastLevelMeta", () => {
   const colors = { white: "#ffffff", muted: "#666666", red: "#e06c75", green: "#7fd88f" };
-  test("info keeps the classic white title + muted body + base duration", () => {
+  test("info keeps the classic white title + white body + base duration", () => {
+    // body is white, not muted: muted is only guaranteed on sidebarBg, never
+    // on the accentBg island (derived fills kept failing it) — one fill
+    // cannot serve both bright and dim text
     expect(toastLevelMeta("info", colors, 3000)).toEqual({
       icon: "information",
       titleFg: "#ffffff",
-      bodyFg: "#666666",
+      bodyFg: "#ffffff",
       duration: 3000,
     });
   });
@@ -69,7 +72,7 @@ describe("toastLevelMeta", () => {
     expect(toastLevelMeta("success", colors, 3000)).toEqual({
       icon: "check",
       titleFg: "#7fd88f",
-      bodyFg: "#666666",
+      bodyFg: "#ffffff",
       duration: 3000,
     });
   });

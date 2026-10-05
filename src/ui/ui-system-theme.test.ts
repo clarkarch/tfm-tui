@@ -126,9 +126,9 @@ describe("resolveSystemTheme", () => {
     expect(await sys.resolveSystemTheme(200)).toBe(true);
     expect(calls.apply).toBe(1);
     expect(config.theme.bg).toBe("#1a1b26");
-    // orange cursor reads on the blue-tinted selection fill (pinned in
-    // system-theme.test.ts); the bridge asserts the derived value lands
-    expect(config.theme.accent).toBe("#ff9e64");
+    // palette blue is the accent (preset kinship beats cursor convention,
+    // pinned in system-theme.test.ts); the bridge asserts the value lands
+    expect(config.theme.accent).toBe("#7aa2f7");
     expect(config.theme.ansi2).toBe("#9ece6a");
     expect(config.ui.followTerminal).toBe(true);
   });
@@ -374,14 +374,34 @@ describe("independent settle (B3)", () => {
 });
 
 describe("query budgets (B4)", () => {
-  test("boot defaults to a short budget, runtime to the full one", async () => {
+  // OpenTUI's getPalette runs its own FIXED 300ms OSC-support probe before the
+  // queries, and under tmux blocks on the XTVERSION wait first — the old short
+  // budgets (250 boot / 800 runtime) lost that race: every boot kept the preset
+  // and 16-index OSC 4 answers were truncated into partial palettes.
+  test("boot + runtime budgets cover the OSC-support probe and tmux relay", async () => {
     const boot = mkCtx(true);
     boot.renderer.themeMode = null; // force the waitForThemeMode leg
     await boot.sys.applyBootSystemTheme();
-    expect(boot.renderer.palTimeouts[0]).toBeLessThanOrEqual(300);
-    expect(boot.renderer.modeTimeouts[0]).toBeLessThanOrEqual(300);
+    expect(boot.renderer.palTimeouts[0]).toBeGreaterThanOrEqual(1000);
+    expect(boot.renderer.modeTimeouts[0]).toBeGreaterThanOrEqual(1000);
     const run = mkCtx(true);
     await run.sys.resolveSystemTheme();
-    expect(run.renderer.palTimeouts[0]).toBe(800);
+    expect(run.renderer.palTimeouts[0]).toBeGreaterThanOrEqual(1000);
+  });
+
+  test("boot waits out a slow palette answer instead of keeping the preset", async () => {
+    const h = mkCtx(true);
+    // slower than OpenTUI's own 300ms OSC-support probe window
+    h.renderer.getPalette = async () => {
+      await Bun.sleep(300);
+      return {
+        palette: [...PALETTE],
+        defaultForeground: "#c0caf5",
+        defaultBackground: "#1a1b26",
+        cursorColor: "#ff9e64",
+      };
+    };
+    expect(await h.sys.applyBootSystemTheme()).toBe(true);
+    expect(h.config.theme.bg).toBe("#1a1b26");
   });
 });

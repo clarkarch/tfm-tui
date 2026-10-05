@@ -303,6 +303,35 @@ describe("applyConfig", () => {
     expect(ctx.calls.notify.length).toBe(2); // off->on again: remind again
   });
 
+  test("follow-terminal under tty warns once that the console palette wins", () => {
+    const ctx = mkCtx();
+    (ctx as Record<string, unknown>).isTtyMode = () => true;
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).followTerminal = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(1);
+    expect(String(ctx.calls.notify[0]![0])).toMatch(/console/i);
+
+    retheme.applyConfig(clone(ctx.config));
+    expect(ctx.calls.notify.length).toBe(1); // held on: silent
+
+    const off = clone(ctx.config);
+    (off.ui as Record<string, unknown>).followTerminal = false;
+    retheme.applyConfig(off);
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(2); // off->on again: remind again
+  });
+
+  test("follow-terminal off the console stays silent", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).followTerminal = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(0);
+  });
+
   test("tile-hover knobs are value-only like sidebar hover (no grid rebuild churn)", () => {
     // fileHoverAnimation/master+direction were missing from RENDER_EXEMPT
     // while all three sidebar-hover knobs were exempt — toggling tile hover

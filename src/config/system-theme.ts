@@ -1,10 +1,16 @@
-import { defaultConfig, type Theme } from "./config-schema";
+import type { Theme } from "./config-schema";
 import { mixHex, shadeHex } from "./color";
 
 // --- System (terminal-adaptive) theme: build a tfm Theme out of the
-// terminal's OWN colors (OSC 10/11 fg/bg + OSC 4 palette + cursor), so tfm
-// melts into whatever theme the user runs. Pure leaf — the renderer query
-// (getPalette/waitForThemeMode) lives in ui/ui-system-theme; this only maps. ---
+// terminal's OWN colors (OSC 10/11 fg/bg + OSC 4 palette + cursor +
+// highlight selection colors), so tfm melts into whatever theme the user
+// runs. Pure leaf — the renderer query (getPalette/waitForThemeMode) lives
+// in ui/ui-system-theme; this only maps. Terminal-only: every fill is
+// derived from the pulled colors via shadeHex/mixHex math; missing entries
+// are guessed from colors that DID arrive (darkest/lightest palette entry,
+// base<->bright counterpart, most-saturated hue, bg-derived extremes) and
+// the only literals are the absolute #000000/#ffffff last resort when the
+// terminal answered nothing at all. No preset/theme defaults anywhere. ---
 
 export type TerminalThemeMode = "dark" | "light";
 
@@ -15,13 +21,15 @@ export type TerminalPaletteInput = {
   defaultForeground: string | null;
   defaultBackground: string | null;
   cursorColor: string | null;
+  highlightBackground?: string | null;
+  highlightForeground?: string | null;
 };
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 // terminal replies are already #rrggbb or null; anything else is unusable
-const usable = (v: string | null | undefined, fallback: string): string =>
-  typeof v === "string" && HEX_RE.test(v.trim()) ? v.trim() : fallback;
+const valid = (v: string | null | undefined): string | null =>
+  typeof v === "string" && HEX_RE.test(v.trim()) ? v.trim() : null;
 
 const luminance = (hex: string): number => {
   const n = Number.parseInt(hex.slice(1), 16);
@@ -61,15 +69,17 @@ export const contrastRatio = (a: string, b: string): number => {
 // best worst-case ratio — author order wins, so sane palettes keep their
 // values and only failing pairs move
 export const pickReadable = (candidates: string[], bgs: string[], minRatio = 3): string => {
-  const valid = candidates.filter((c) => HEX_RE.test(c.trim())).map((c) => c.trim());
+  const valids = candidates.filter((c) => HEX_RE.test(c.trim())).map((c) => c.trim());
   // destructure once so the empties are handled by real guards (the tail below
   // always has a value to fall back to) instead of non-null assertions
-  const [firstValid] = valid;
-  if (firstValid === undefined) return candidates[0] ?? "#ffffff";
+  const [firstValid] = valids;
+  if (firstValid === undefined) return candidates[0] ?? "";
   const targets = bgs.filter((b) => HEX_RE.test(b.trim())).map((b) => b.trim());
   if (!targets.length) return firstValid;
   const worst = (c: string): number => Math.min(...targets.map((b) => contrastRatio(c, b)));
-  return valid.find((c) => worst(c) >= minRatio) ?? valid.slice().sort((x, y) => worst(y) - worst(x))[0] ?? firstValid;
+  return (
+    valids.find((c) => worst(c) >= minRatio) ?? valids.slice().sort((x, y) => worst(y) - worst(x))[0] ?? firstValid
+  );
 };
 
 // push a bg-shade outward until fg reads on it (>= minRatio): preferred dir
@@ -108,70 +118,176 @@ export const tintUntil = (
   return shadeUntil(bg, fg, dir, minRatio, start);
 };
 
-// outline rings follow the tokyo philosophy: a whisper above bg, not a
-// neon frame. Tokyo's own ring sits ~0.017 luminance over bg, so the floor
-// here is 0.02 — visible against bg, muted everywhere else. The ladder only
-// climbs past the start amount for terminals whose hues can't separate.
+// outline rings sit at the theme weight (tokyo's own ~0.017 band): the
+// smallest mix step off bg reaching it. The floor keeps border≠bg so the
+// divider math can't converge; the ladder only climbs past the start amount
+// for terminals whose hues can't separate.
 const ringUntil = (bg: string, hue: string, dir: 1 | -1, start: number): string => {
   if (!HEX_RE.test(bg.trim()) || !HEX_RE.test(hue.trim())) return shadeHex(bg, dir * 0.55);
   const base = relLum(bg.trim());
-  for (let m = start; m <= 0.95 + 1e-9; m += 0.05) {
+  for (let m = start; m <= 0.95 + 1e-9; m += 0.01) {
     const c = mixHex(bg, hue.trim(), m);
-    if (Math.abs(relLum(c) - base) >= 0.02) return c;
+    if (Math.abs(relLum(c) - base) >= 0.012) return c;
   }
   return mixHex(bg, hue.trim(), 0.95);
 };
 
+// channel spread = cheap saturation: max-min over RGB. Grey/white paint sits
+// near 0, tokyo's own selection #283457 spreads 47 — the gate below (24)
+// admits real hue voices and rejects neutral terminal paint.
+const channelSpread = (hex: string): number => {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const chans = [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+  return Math.max(...chans) - Math.min(...chans);
+};
+
+// most saturated pulled color, or null when the pool is all grey/nothing —
+// saturation needs no color theory beyond max-min channel spread
+const mostSaturated = (colors: string[]): string | null => {
+  let best: string | null = null;
+  let bestSat = 0;
+  for (const c of colors) {
+    const sat = channelSpread(c);
+    if (sat > bestSat) {
+      bestSat = sat;
+      best = c;
+    }
+  }
+  return best;
+};
+
 export const deriveSystemTheme = (input: TerminalPaletteInput, mode: TerminalThemeMode | null): Theme => {
-  const d = defaultConfig.theme;
-  const bg = usable(input.defaultBackground, d.bg);
-  const fg = usable(input.defaultForeground, d.white);
-  const dark = (mode ?? inferModeFromBg(bg)) === "dark";
-  const ansi = (i: number, fallback: string): string => usable(input.palette[i] ?? null, fallback);
-  // sidebar is panel IDENTITY: always a step below bg (like the tokyo
-  // default), never chased across sides for a ratio — pushing it lighter to
-  // satisfy a dark muted produced a glowing grey panel in a dark theme
-  // (verified live: kitty tokyo bg + dark ansi8). The TEXT adapts instead.
-  const sidebarBg = shadeHex(bg, dark ? -0.35 : -0.12);
-  // muted metadata adapts to the panel: ansi8, then terminal fg, then a
-  // guaranteed extreme. Threshold 2.5, not 3 — even tokyo's own muted pair
-  // sits ~2.9, so 3 would swap every sane palette's muted gratuitously.
-  const muted = pickReadable(
-    [ansi(8, ""), fg, dark ? "#ffffff" : "#000000", dark ? "#000000" : "#ffffff", d.sidebarFgMuted].filter(Boolean),
-    [sidebarBg],
-    2.5,
-  );
-  // hue anchor for fills + rings: palette blue first (the selection family
-  // across most themes), then cursor, then the default theme's accent — the
-  // anchor always comes from a theme, never a hardcoded hex, and never grey
-  // by default, or the whole chrome drains to greyscale (verified live)
-  const hue = usable(input.palette[4] ?? null, "") || usable(input.cursorColor, "") || d.accent;
-  // selection/highlight fills step from bg toward the hue in tokyo-like
-  // proportions (small moves: tokyo's accentBg is one step over bg) and grow
-  // only until their text reads — a highlight must be visible, so moving it
-  // (unlike the sidebar) is right
+  const at = (i: number): string | null => valid(input.palette[i] ?? null);
+  const raw: Array<string | null> = Array.from({ length: 16 }, (_, i) => at(i));
+  const pool = raw.filter((c): c is string => c !== null);
+  const byLum = [...pool].sort((a, b) => luminance(a) - luminance(b));
+  const darkest = byLum[0] ?? null;
+  const lightest = byLum[byLum.length - 1] ?? null;
+
+  const bgHit = valid(input.defaultBackground);
+  const fgHit = valid(input.defaultForeground);
+  // mode: explicit > bg brightness > fg inverse (bright fg implies a dark
+  // room) > dark (terminals default dark)
+  let dark = true;
+  if (mode !== null) dark = mode === "dark";
+  else if (bgHit !== null) dark = inferModeFromBg(bgHit) === "dark";
+  else if (fgHit !== null) dark = luminance(fgHit) > 128;
+
   const up = dark ? 1 : -1;
-  const accentBg = tintUntil(bg, hue, fg, up, 3, 0.22);
-  const hoverBg = tintUntil(bg, hue, fg, up, 3, 0.12);
-  // accent must read on bg (titles, links) AND on accentBg (selected tile
-  // text, selected sidebar icons/labels): cursor first, then palette blue,
-  // then terminal fg, then a guaranteed extreme — author order wins
+  // bg: terminal bg verbatim; missing → darkest/lightest pulled entry so the
+  // canvas still belongs to the terminal; nothing pulled → absolute extremes
+  const bg = bgHit ?? (dark ? (darkest ?? "#000000") : (lightest ?? "#ffffff"));
+  // fg: terminal fg verbatim; missing → opposite extreme from the pool (never
+  // bg itself); nothing usable → absolute opposite of bg
+  const otherEnd = dark ? lightest : darkest;
+  const fg = fgHit ?? (otherEnd !== null && otherEnd !== bg ? otherEnd : dark ? "#ffffff" : "#000000");
+  // readable extremes are shadeHex-derived steps around the terminal's own
+  // bg — the guaranteed-readable tail of each chain below
+  const hi = shadeHex(bg, 0.9);
+  const lo = shadeHex(bg, -0.9);
+  const extreme = dark ? hi : lo;
+  const otherExtreme = dark ? lo : hi;
+  // sidebar is panel IDENTITY: the terminal's own panel color (ansi0)
+  // verbatim when it sits a panel-like step off bg in EITHER direction —
+  // terminals run both darker and lighter panels, and the direction comes
+  // from the terminal, never an assumption. Far-off ansi0 falls back to the
+  // shade step; the TEXT adapts to the panel, never the reverse (pushing the
+  // panel across sides for a ratio produced a glowing grey panel in a dark
+  // theme — verified live: kitty tokyo bg + dark ansi8).
+  const panel = at(0);
+  // a shade of an already-extreme bg (black in dark mode) lands back on bg
+  // itself — flip direction so the panel never vanishes into the canvas
+  let sidebarBg =
+    panel !== null && panel !== bg && Math.abs(relLum(panel) - relLum(bg)) <= 0.06
+      ? panel
+      : shadeHex(bg, dark ? -0.35 : -0.12);
+  if (sidebarBg === bg) sidebarBg = shadeHex(bg, dark ? 0.35 : 0.12);
+  // muted metadata: a readable terminal bright-black survives verbatim, else
+  // the dimmed pulled-white ladder, else the bg-derived extremes. The bar is
+  // 2.5 throughout: the codebase's muted standard — primary text keeps 3,
+  // secondary keeps 2.5.
+  const muteWhite = (): string | null => {
+    for (let m = 0.65; m >= 0.25 - 1e-9; m -= 0.05) {
+      const c = mixHex(fg, sidebarBg, m);
+      if (contrastRatio(c, sidebarBg) >= 2.5) return c;
+    }
+    return null;
+  };
+  const raw8 = at(8);
+  const muted =
+    (raw8 !== null && contrastRatio(raw8, sidebarBg) >= 2.5 ? raw8 : null) ??
+    muteWhite() ??
+    pickReadable(
+      [raw8, fg, extreme, otherExtreme].filter((c): c is string => c !== null),
+      [sidebarBg],
+      2.5,
+    );
+  // hue anchor for fills + rings: palette blue first, then bright blue, then
+  // cursor, then the most saturated pulled color, then terminal fg — always a
+  // terminal color, never grey by default, or the whole chrome drains to
+  // greyscale (verified live)
+  const hue = at(4) ?? at(12) ?? valid(input.cursorColor) ?? mostSaturated(pool) ?? fg;
+  // selection fill steps from bg toward the hue and grows only until its text
+  // reads — a highlight must be visible, so moving it (unlike the sidebar) is
+  // right. The terminal's own selection bg wins when it reads as a real step
+  // around bg (never bg itself — invisible) AND carries a hue: a grey/white
+  // selection is neutral terminal paint, not an identity voice, and taking
+  // it verbatim drained selection + title to grey while a palette hue
+  // existed. Saturated selections (tokyo's own #283457) still ride verbatim.
+  // NOTE: only primary text is required here — muted body copy was moved off
+  // the island to white (toastLevelMeta), because one fill cannot serve both
+  // bright and dim text (proved: the dual requirement drove accentBg darker
+  // than bg itself).
+  const hlBg = valid(input.highlightBackground ?? null);
+  const hlBgHue = hlBg !== null && channelSpread(hlBg) >= 24 ? hlBg : null;
+  // hueless terminals (no palette blues, no cursor, all-grey pool) carry no
+  // hue family, so a hue tint would invent one — the selection sits on the
+  // panel instead, provided primary text reads on it
+  const hasTermHue = hue !== fg;
+  const accentBg =
+    hlBgHue !== null && hlBgHue !== bg && contrastRatio(fg, hlBgHue) >= 3
+      ? hlBgHue
+      : !hasTermHue && contrastRatio(fg, sidebarBg) >= 3
+        ? sidebarBg
+        : tintUntil(bg, hue, fg, up, 3, 0.18);
+  // hover is a neutral lift toward fg (every hand-built theme builds it as a
+  // small neutral step off bg), grown only until primary text reads on it
+  const hoverBg = tintUntil(bg, fg, fg, up, 3, 0.1);
+  // accent must read on bg (titles, links), on accentBg (selected tile text,
+  // selected sidebar icons/labels) AND on sidebarBg (the sidebar title paints
+  // accent-on-panel): palette blue first, then bright blue, then cursor, then
+  // the terminal's highlighted text, then terminal fg, then bg-derived
+  // extremes — author order wins. Highlight colors sit behind the palette on
+  // purpose: they describe selection rendering in the terminal, not the
+  // theme's identity, and a grey/white highlight first washed the whole
+  // chrome (incl. the title) to grey while a readable palette blue existed.
   const accent = pickReadable(
     [
-      usable(input.cursorColor, ""),
-      ansi(4, ""),
+      at(4),
+      at(12),
+      valid(input.cursorColor),
+      valid(input.highlightForeground ?? null),
       fg,
-      dark ? "#ffffff" : "#000000",
-      dark ? "#000000" : "#ffffff",
-      d.accent,
-    ].filter(Boolean),
-    [bg, accentBg],
+      extreme,
+      otherExtreme,
+    ].filter((c): c is string => c !== null),
+    [bg, accentBg, sidebarBg],
   );
-  // rings start as the smallest visible tint step, like tokyo's border
-  const border = ringUntil(bg, hue, up, 0.25);
-  // divider sits between ring and bg — structural, can never converge with
-  // the border even when the tint ladder bottoms out (grey-on-grey terms)
-  const divider = mixHex(border, bg, 0.4);
+  // rings start as the smallest theme-weight tint step off bg
+  const border = ringUntil(bg, hue, up, 0.05);
+  // divider equals border — one ring color for all chrome dividers
+  const divider = border;
+  // complete the 16-slot table from pulled colors only: present entries ride
+  // verbatim; a missing slot borrows its base<->bright sibling (same hue
+  // family); ansi0 falls back to the panel, ansi8 to muted, anything left to
+  // the hue anchor or a bg-derived extreme. The embedded terminal (OSC 4)
+  // needs all 16, and every fallback here is terminal math.
+  const ansi: string[] = [];
+  for (let i = 0; i < 16; i++) {
+    const sib = raw[i ^ 8] ?? null;
+    ansi[i] = raw[i] ?? sib ?? (i === 0 ? sidebarBg : i === 8 ? muted : hue !== fg ? hue : extreme);
+  }
+  const slot = (i: number): string => ansi[i] ?? fg;
   return {
     bg,
     sidebarBg,
@@ -183,27 +299,27 @@ export const deriveSystemTheme = (input: TerminalPaletteInput, mode: TerminalThe
     border,
     divider,
     white: fg,
-    syntaxString: ansi(2, d.syntaxString),
-    syntaxNumber: ansi(3, d.syntaxNumber),
-    syntaxType: ansi(6, d.syntaxType),
-    syntaxFunction: ansi(4, d.syntaxFunction),
-    syntaxOperator: ansi(5, d.syntaxOperator),
-    syntaxProperty: ansi(6, d.syntaxProperty),
-    ansi0: ansi(0, d.ansi0),
-    ansi1: ansi(1, d.ansi1),
-    ansi2: ansi(2, d.ansi2),
-    ansi3: ansi(3, d.ansi3),
-    ansi4: ansi(4, d.ansi4),
-    ansi5: ansi(5, d.ansi5),
-    ansi6: ansi(6, d.ansi6),
-    ansi7: ansi(7, d.ansi7),
-    ansi8: ansi(8, d.ansi8),
-    ansi9: ansi(9, d.ansi9),
-    ansi10: ansi(10, d.ansi10),
-    ansi11: ansi(11, d.ansi11),
-    ansi12: ansi(12, d.ansi12),
-    ansi13: ansi(13, d.ansi13),
-    ansi14: ansi(14, d.ansi14),
-    ansi15: ansi(15, d.ansi15),
+    syntaxString: slot(2),
+    syntaxNumber: slot(3),
+    syntaxType: slot(6),
+    syntaxFunction: slot(4),
+    syntaxOperator: slot(5),
+    syntaxProperty: slot(14),
+    ansi0: slot(0),
+    ansi1: slot(1),
+    ansi2: slot(2),
+    ansi3: slot(3),
+    ansi4: slot(4),
+    ansi5: slot(5),
+    ansi6: slot(6),
+    ansi7: slot(7),
+    ansi8: slot(8),
+    ansi9: slot(9),
+    ansi10: slot(10),
+    ansi11: slot(11),
+    ansi12: slot(12),
+    ansi13: slot(13),
+    ansi14: slot(14),
+    ansi15: slot(15),
   };
 };

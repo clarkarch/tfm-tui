@@ -74,6 +74,18 @@ describe("buildSyntaxStyle", () => {
     expect(style).toBeTruthy();
   });
 
+  test("constant.builtin lightens number instead of copying it", () => {
+    // presets distinguish builtin constants; without a Theme slot the leaf
+    // derives it as number-mixed-toward-white — a real visible step, math
+    // on theme colors, never a literal
+    const style = buildSyntaxStyle({ ...defaultConfig.theme });
+    const plain = style.getStyle("constant")?.fg;
+    const builtin = style.getStyle("constant.builtin")?.fg;
+    expect(plain).toBeDefined();
+    expect(builtin).toBeDefined();
+    expect(builtin).not.toEqual(plain);
+  });
+
   test("registers a default style so unhighlighted text uses the theme fg", () => {
     // OpenTUI paints every non-captured region via getStyle("default");
     // without it, code/plain text falls back to the TERMINAL's fg.

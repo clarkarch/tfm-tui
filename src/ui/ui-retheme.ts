@@ -267,6 +267,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // stay silent; off->on reminds again). Boot never passes through here, so
   // a config file with it already on doesn't spam.
   let lastForceGlyph = ctx.config.ui.forceGlyph;
+  let lastFollowTerminalWarned = ctx.config.ui.followTerminal;
 
   const applyConfig = (fresh: Config): void => {
     const themeChanged = lastThemeSig !== themeSig(fresh);
@@ -292,6 +293,14 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       } catch {}
     }
     lastForceGlyph = ctx.config.ui.forceGlyph;
+    // follow-terminal is silently dead on the console (static palette wins) —
+    // say so once per rising edge, same one-shot shape as forceGlyph
+    if (ctx.config.ui.followTerminal && ctx.isTtyMode?.() && !lastFollowTerminalWarned) {
+      try {
+        ctx.notify("follow-terminal can't run on this console, static palette paints instead", "tty", "info");
+      } catch {}
+    }
+    lastFollowTerminalWarned = ctx.config.ui.followTerminal;
 
     ctx.setSw(ctx.config.ui.sidebarWidth);
     ctx.setTileW(ctx.config.ui.tileWidth);
