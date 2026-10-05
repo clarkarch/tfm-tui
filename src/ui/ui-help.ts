@@ -1,15 +1,17 @@
 // --- Help view: the esc menu's "Help" panel. A static,
-// cursorless cheat sheet (hero + 4 titled columns + mouse strip) —
+// cursorless cheat sheet (hero + 4 titled columns + mouse strip + tips) —
 // deliberately NOT the settings two-pane UI: no rows, no cursor, no arrows,
 // no toggles. esc / F1 / X / click-away closes (see the shell + keymap).
 // Widget-extraction seam (see ui-dialogs.ts): renderer/keybinds arrive via deps. ---
-import { ASCIIFont, Box, Text, bold, fg, t } from "@opentui/core";
+import { ASCIIFont, Box, type CliRenderer, ScrollBoxRenderable, Text, bold, fg, t } from "@opentui/core";
 import { defaultConfig, type KeyAction } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { NodeLike } from "../lib/node-like";
 
 export type HelpDeps = {
   keybinds(a: KeyAction): string[];
+  renderer(): CliRenderer;
+  termH(): number;
 };
 
 // wide poster width, clamped to the terminal by the shell
@@ -124,7 +126,31 @@ const MOUSE_COLS: { keys: string; verb: string }[][] = [
   ],
 ];
 
-const FOOTER = "F1 opens or closes this · full list in Settings → keys";
+const FOOTER = "F1 opens or closes this";
+
+// --- quick tips: problem-first diagnostics, never another key list.
+// Pairs (no emdash, arrow or comma only); the problem paints accent-bold
+// exactly like the key column, the fix in white. The whole pool renders —
+// no rotation, the body below scrolls instead of hiding tips.
+export type QuickTip = { problem: string; fix: string };
+export const QUICK_TIPS: QuickTip[] = [
+  { problem: "icons artifacting/buggy?", fix: "turn on force glyph, Settings -> appearance" },
+  { problem: "shift+clicks highlights tui not files?", fix: "do alt+click or edit your terminal config" },
+  { problem: "ghostty eats shift+click?", fix: "set mouse-shift-capture to true" },
+  { problem: "ctrl+tab dead in kitty?", fix: "set ctrl+tab to no_op in kitty.conf" },
+  { problem: "kitty drag escapes?", fix: "ctrl+drag stays inside tfm" },
+  { problem: "icons are boxes?", fix: "install Nerd Font, Meslo works" },
+  { problem: "video has no thumbnail?", fix: "install ffmpeg" },
+  { problem: "scrolling on big folders stutter?", fix: "increase scroll reveal delay (optimization)" },
+  { problem: "no zip or 7z offered?", fix: "install that tool, absent ones hide" },
+  { problem: "network trash refused?", fix: "trash stays local, copy it over instead" },
+  { problem: "mouse doesnt work on tty?", fix: "enable gpm" },
+];
+
+// viewport height for the scrollable body: panel chrome (header 1 +
+// divider 1 + panel padding 2) plus scrim breathing room; min 8 so the
+// scroller never collapses on short terminals
+export const helpBodyHeight = (termH: number): number => Math.max(8, termH - 8);
 
 // --- small builders (no borders, no bg chips — typography groups, not boxes) ---
 
@@ -203,6 +229,18 @@ const mouseStrip = (c: Theme) =>
     ),
   );
 
+const tipsStrip = (c: Theme, tips: QuickTip[]) => {
+  // pad the bulleted problem column to the widest problem so every fix
+  // starts at the same cell (same trick the key cards use for live remaps)
+  const w = Math.max(...tips.map((tip) => tip.problem.length), 0);
+  return Box(
+    { width: "100%", flexDirection: "column", paddingTop: 1 },
+    Text({ content: t`${bold(fg(c.accent)("TIPS"))}`, fg: c.white }),
+    Text({ content: "────────", fg: c.divider }),
+    ...tips.map((tip) => keyVerb(c, `? ${tip.problem}`.padEnd(w + 2), tip.fix)),
+  );
+};
+
 export const renderHelpPanel = (c: Theme, panel: NodeLike, deps: HelpDeps): void => {
   const bindsOf = liveBinds(deps.keybinds);
   const cards = Box(
@@ -219,5 +257,18 @@ export const renderHelpPanel = (c: Theme, panel: NodeLike, deps: HelpDeps): void
       );
     }),
   );
-  panel.add(shell(hero(c), cards, mouseStrip(c), footerNote(c)));
+  // the full pool no longer fits short terminals: the body rides in a
+  // bounded scroller (wheel scrolls natively, arrows drive it from moveMenu)
+  // while the shell header above stays fixed
+  const scroller = new ScrollBoxRenderable(deps.renderer(), {
+    id: "tfm-help-scroll",
+    width: "100%",
+    height: helpBodyHeight(deps.termH()),
+    scrollY: true,
+    viewportCulling: true,
+  });
+  scroller.add(shell(hero(c), cards, mouseStrip(c), tipsStrip(c, QUICK_TIPS)));
+  panel.add(scroller);
+  // pinned below the scroller: always visible, never scrolls away
+  panel.add(footerNote(c));
 };

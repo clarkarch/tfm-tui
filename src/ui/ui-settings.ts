@@ -705,8 +705,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         panel.add(rootRow(it.icon, it.label, it.hint, i === st.menuIdx, i, activateRow(i)));
       });
     } else if (view === "help") {
-      // static cheat sheet (no cursor, no settings rows)
-      renderHelpPanel(c, panel, { keybinds: (a) => ctx.keybinds?.(a) ?? [] });
+      // static cheat sheet (no cursor, no settings rows) in a bounded
+      // scroller — wheel scrolls natively, arrows drive it from moveMenu
+      renderHelpPanel(c, panel, {
+        keybinds: (a) => ctx.keybinds?.(a) ?? [],
+        renderer: ctx.renderer,
+        termH: () => ctx.renderer().terminalHeight,
+      });
     } else {
       renderSettingsPanel(
         c,
@@ -828,9 +833,22 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.floats.close("escmenu");
   };
 
+  // the help view is cursorless but scrollable: arrows move the viewport
+  // (menuIdx stays -1, there is still no cursor), the wheel scrolls natively
+  const scrollHelp = (delta: number): void => {
+    const scroller = ctx.byId("tfm-help-scroll");
+    if (!scroller || scroller.isDestroyed) return;
+    try {
+      scroller.scrollTop = Math.max(0, (scroller.scrollTop ?? 0) + delta);
+    } catch {}
+  };
+
   const moveMenu = (delta: number) => {
-    // the help view is cursorless — ↑/↓ do nothing there
-    if (isHelpView()) return;
+    // the help view is cursorless — ↑/↓ scroll the body instead of a cursor
+    if (isHelpView()) {
+      scrollHelp(delta * 3);
+      return;
+    }
     if (!inPanelView()) {
       const count = rootMenuItems().length;
       if (count === 0) return;

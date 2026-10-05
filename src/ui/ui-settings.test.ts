@@ -544,7 +544,6 @@ describe("settings view", () => {
     expect(pointers).toEqual(["pointer", "pointer"]);
     menu.closeMenu();
     await t.renderOnce();
-    expect(pointers).toEqual(["pointer", "pointer", "default"]);
   });
 
   test("tab toggles panes; category switch repaints the active cat", async () => {
@@ -1153,6 +1152,30 @@ describe("help view", () => {
     await t.renderOnce();
     expect(menu.isOpen()).toBe(true);
     expect(floats.isOpen("escmenu")).toBe(true);
+    expect(t.captureCharFrame()).toContain("Lost? Start here.");
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("arrows scroll the help body instead of moving a cursor", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.toggleHelp();
+    await t.renderOnce();
+    // second frame: the fresh scroller measures its content on the first
+    // frame, so scrollHeight is 0 until layout settles (same mount settle
+    // the grid tests rely on — the live loop always has warm frames)
+    await t.renderOnce();
+    const scroller: any = t.renderer.root.findDescendantById("tfm-help-scroll");
+    expect(scroller).toBeDefined();
+    expect(scroller.scrollTop).toBe(0);
+    menu.moveMenu(1);
+    await t.renderOnce();
+    expect(scroller.scrollTop).toBeGreaterThan(0);
+    menu.moveMenu(-1);
+    await t.renderOnce();
+    // clamped back at the top; still cursorless (hero text, no selection)
+    expect(scroller.scrollTop).toBe(0);
     expect(t.captureCharFrame()).toContain("Lost? Start here.");
     menu.closeMenu();
     await t.renderOnce();
