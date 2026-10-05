@@ -99,6 +99,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     swapOffer: null,
     collapsed: new Set<string>(),
   };
+  // restart-toast dedupe: one "needs restart" toast per row per menu open —
+  // holding ←/→ on a stepper otherwise floods the toast stack
+  const restartWarned = new Set<string>();
 
   // settings and plugins views share the panel renderer; the plugins view
   // only sees plugin groups (a plugin can never inject rows into settings)
@@ -298,6 +301,15 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // panel's own colors and need the full rebuild.
   const afterAdjust = (index: number, row: SettingRow): void => {
     if (row.kind === "action" || row.kind === "keybind" || row.kind === "header") return;
+    // cold-boot-only rows (schema restart flag): say so once per row per menu
+    // open — the footer already badges them persistently, this confirms the
+    // just-committed change specifically
+    if ("restart" in row && row.restart && !restartWarned.has(row.label)) {
+      restartWarned.add(row.label);
+      try {
+        ctx.warn(`${row.label} takes effect after restart`, "restart");
+      } catch {}
+    }
     if (row.repaint) {
       renderMenuContent();
       return;
@@ -778,6 +790,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.scrollOff = 0;
     st.capturing = null;
     st.swapOffer = null;
+    restartWarned.clear();
     ctx.log?.("esc-menu open");
     nativeMemTrace("esc-menu open");
     ctx.cancelBand();

@@ -63,24 +63,24 @@ listings-cache-ttl                    = 2           # seconds a cached folder li
 file-hover-animation                  = false       # true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)
 file-hover-include-label              = false       # true = the filename rides along with the hover lift
 file-hover-direction                  = "up"        # "up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally
-sidebar-animation                     = false       # true = animate the places sidebar on boot (style = sidebar-animation-style)
-sidebar-animation-style               = "fade"      # "fade" = the whole sidebar fades in; "slide" = it slides in from the edge; "stagger" = places rows cascade in; "stagger-slide" = each row slides+fades in, files-style
-sidebar-animation-ms                  = 180         # sidebar intro duration, 0..800 ms (0 = instant)
-sidebar-animation-slide-cells         = 8           # how far the sidebar slides in, 0..32 cells (0 = fade in place)
-sidebar-animation-slide-dir           = "left"      # "left"/"right" = slides in horizontally from the edge; "up"/"down" = slides vertically
-sidebar-animation-stagger-pct         = 40          # how spread the sidebar cascade is, 0..300% (0 = all rows at once)
-sidebar-animation-ease                = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
-sidebar-animation-include-title       = false       # true = the sidebar title joins the boot cascade first (stagger/stagger-slide only; fade/slide already move it with the whole panel)
+sidebar-animation                     = false       # true = animate the places sidebar on boot (style = sidebar-animation-style) (needs restart)
+sidebar-animation-style               = "fade"      # "fade" = the whole sidebar fades in; "slide" = it slides in from the edge; "stagger" = places rows cascade in; "stagger-slide" = each row slides+fades in, files-style (needs restart)
+sidebar-animation-ms                  = 180         # sidebar intro duration, 0..800 ms (0 = instant) (needs restart)
+sidebar-animation-slide-cells         = 8           # how far the sidebar slides in, 0..32 cells (0 = fade in place) (needs restart)
+sidebar-animation-slide-dir           = "left"      # "left"/"right" = slides in horizontally from the edge; "up"/"down" = slides vertically (needs restart)
+sidebar-animation-stagger-pct         = 40          # how spread the sidebar cascade is, 0..300% (0 = all rows at once) (needs restart)
+sidebar-animation-ease                = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends (needs restart)
+sidebar-animation-include-title       = false       # true = the sidebar title joins the boot cascade first (stagger/stagger-slide only; fade/slide already move it with the whole panel) (needs restart)
 sidebar-hover-animation               = false       # true = hovering a sidebar row nudges its icon one cell (rest layout unchanged; the cwd-selected row keeps its paint only)
 sidebar-hover-include-label           = false       # true = the row label rides along with the hover nudge
 sidebar-hover-direction               = "left"      # "left" = the icon nudges into the row padding; "right" = it nudges toward the label
-topbar-animation                      = false       # true = cascade each top bar button + crumb in on boot (style = topbar-animation-style)
-topbar-animation-style                = "fade"      # "fade" = all items fade in together; "slide" = they slide in from the edge as one wave; "stagger" = buttons + crumbs cascade left-to-right; "stagger-slide" = each item slides+fades in, files-style
-topbar-animation-ms                   = 180         # top bar intro duration, 0..800 ms (0 = instant)
-topbar-animation-slide-cells          = 8           # how far the top bar slides in, 0..32 cells (0 = fade in place)
-topbar-animation-slide-dir            = "down"      # "down"/"up" = slides in vertically from the edge; "left"/"right" = slides horizontally
-topbar-animation-stagger-pct          = 40          # how spread the item cascade is, 0..300% (0 = all items at once)
-topbar-animation-ease                 = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
+topbar-animation                      = false       # true = cascade each top bar button + crumb in on boot (style = topbar-animation-style) (needs restart)
+topbar-animation-style                = "fade"      # "fade" = all items fade in together; "slide" = they slide in from the edge as one wave; "stagger" = buttons + crumbs cascade left-to-right; "stagger-slide" = each item slides+fades in, files-style (needs restart)
+topbar-animation-ms                   = 180         # top bar intro duration, 0..800 ms (0 = instant) (needs restart)
+topbar-animation-slide-cells          = 8           # how far the top bar slides in, 0..32 cells (0 = fade in place) (needs restart)
+topbar-animation-slide-dir            = "down"      # "down"/"up" = slides in vertically from the edge; "left"/"right" = slides horizontally (needs restart)
+topbar-animation-stagger-pct          = 40          # how spread the item cascade is, 0..300% (0 = all items at once) (needs restart)
+topbar-animation-ease                 = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends (needs restart)
 directory-bar-animation               = false       # true = rebuilt crumbs cascade in on every directory change (not just boot)
 directory-bar-style                   = "stagger"   # "stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style
 directory-bar-ms                      = 180         # directory bar animation duration, 0..800 ms (0 = instant)
@@ -90,9 +90,9 @@ directory-bar-stagger-pct             = 40          # how spread the crumb casca
 directory-bar-ease                    = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
 show-hidden                           = false       # start with dotfiles visible (ctrl+h toggles at runtime)
 recursive-search                      = false       # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
-restore-session                       = false       # true = reopen the folder from the last quit instead of the launch cwd
+restore-session                       = false       # true = reopen the folder from the last quit instead of the launch cwd (needs restart)
 persist-undo                          = false       # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
-show-launch-time                      = false       # true = show a notification with the app launch time in ms (debug aid); also enabled by --debug
+show-launch-time                      = false       # true = show a notification with the app launch time in ms (debug aid); also enabled by --debug (needs restart)
 
 [theme]
 bg             = "#1a1b26"  # background

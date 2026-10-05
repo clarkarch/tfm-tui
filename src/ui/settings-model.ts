@@ -103,6 +103,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           kind: "stepper",
           label: row.label,
           blurb: row.blurb,
+          ...(row.restart ? { restart: true as const } : {}),
           min: row.min,
           max: row.max,
           step: row.step,
@@ -127,6 +128,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           kind: "toggle",
           label: row.label,
           blurb: row.blurb,
+          ...(row.restart ? { restart: true as const } : {}),
           get: () => !!ui[row.prop],
           set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
         };
@@ -135,6 +137,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           kind: "cycle",
           label: row.label,
           blurb: row.blurb,
+          ...(row.restart ? { restart: true as const } : {}),
           names: [...row.values],
           getIdx: () => row.values.indexOf(String(ui[row.prop] ?? row.def)),
           setIdx: (i) => commitUi({ [row.prop]: row.values[i] } as Partial<UiConfig>),

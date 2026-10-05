@@ -148,7 +148,10 @@ export const visiblePos = (vis: number[], fullIdx: number): number => vis.indexO
 export const descText = (row: SettingRow | undefined): string => {
   if (!row) return "Choose a setting to see what it does";
   if (row.kind === "header") return "Expand or collapse this section";
-  return row.blurb ?? row.label;
+  const base = row.blurb ?? row.label;
+  // cold-boot-only rows carry the schema's restart flag through settings-model:
+  // the footer is the persistent at-a-glance cue (it follows cursor + hover)
+  return "restart" in row && row.restart ? `${base} · needs restart` : base;
 };
 
 export const fitDescText = (text: string, panelW: number = SETTINGS_MAX_W): string => `ⓘ ${text}`.slice(0, panelW - 4);

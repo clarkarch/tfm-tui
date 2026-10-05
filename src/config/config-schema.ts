@@ -17,12 +17,21 @@ import { keySpecEqual, parseKeySpec } from "./keyspec";
 // colors — their adjust re-renders the panel; other value rows update their
 // value text by id (targeted, no rebuild — see the OOM note in AGENTS.md)
 export type SettingRow =
-  | { kind: "toggle"; label: string; blurb?: string; repaint?: boolean; get: () => boolean; set: (v: boolean) => void }
+  | {
+      kind: "toggle";
+      label: string;
+      blurb?: string;
+      repaint?: boolean;
+      restart?: boolean;
+      get: () => boolean;
+      set: (v: boolean) => void;
+    }
   | {
       kind: "stepper";
       label: string;
       blurb?: string;
       repaint?: boolean;
+      restart?: boolean;
       min: number;
       max: number;
       step: number;
@@ -35,6 +44,7 @@ export type SettingRow =
       label: string;
       blurb?: string;
       repaint?: boolean;
+      restart?: boolean;
       names: string[];
       getIdx: () => number;
       setIdx: (i: number) => void;
@@ -377,6 +387,11 @@ type RowCommon = {
   // consecutive rows, settings-model renders one header row where the
   // subsection name changes. Rows without one belong to the group's namesake.
   subsection?: string;
+  // cold-boot-only keys (sidebar/topbar intros, session restore, launch
+  // toast): nothing re-runs them mid-session, so the settings GUI badges
+  // these rows ("needs restart" footer + one toast on adjust) and the
+  // serializer appends "(needs restart)" to their TOML doc comments.
+  restart?: boolean;
 };
 
 type SchemaRow =
@@ -1167,6 +1182,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Animate the sidebar when the app starts",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "enum",
@@ -1180,6 +1196,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the sidebar arrives on startup",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "int",
@@ -1196,6 +1213,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long the sidebar intro plays",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "int",
@@ -1212,6 +1230,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How far the sidebar slides in from",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "enum",
@@ -1225,6 +1244,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Which edge the sidebar enters from",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "int",
@@ -1241,6 +1261,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How spread out the sidebar cascade is",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "enum",
@@ -1254,6 +1275,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the sidebar intro speeds and settles",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "bool",
@@ -1266,6 +1288,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Include the logo in the intro",
     group: "animations",
     subsection: "sidebar intro",
+    restart: true,
   },
   {
     kind: "bool",
@@ -1315,6 +1338,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Animate the top bar when the app starts",
     group: "animations",
     subsection: "top bar",
+    restart: true,
   },
   {
     kind: "enum",
@@ -1328,6 +1352,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the top bar arrives on startup",
     group: "animations",
     subsection: "top bar",
+    restart: true,
   },
   {
     kind: "int",
@@ -1344,6 +1369,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How long the top bar intro plays",
     group: "animations",
     subsection: "top bar",
+    restart: true,
   },
   {
     kind: "int",
@@ -1360,6 +1386,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How far the top bar slides in from",
     group: "animations",
     subsection: "top bar",
+    restart: true,
   },
   {
     kind: "enum",
@@ -1373,6 +1400,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Which edge the top bar enters from",
     group: "animations",
     subsection: "top bar",
+    restart: true,
   },
   {
     kind: "int",
@@ -1389,6 +1417,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How spread out the top bar cascade is",
     group: "animations",
     subsection: "top bar",
+    restart: true,
   },
   {
     kind: "enum",
@@ -1402,6 +1431,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How the top bar intro speeds and settles",
     group: "animations",
     subsection: "top bar",
+    restart: true,
   },
   {
     kind: "bool",
@@ -1536,6 +1566,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "Reopen the last folder on startup",
     group: "files",
     subsection: "session",
+    restart: true,
   },
   {
     kind: "bool",
@@ -1559,6 +1590,7 @@ const UI_ROWS: SchemaRow[] = [
     label: "show launch time",
     blurb: "Report how fast the app started",
     group: "advanced",
+    restart: true,
   },
 ];
 
@@ -1854,7 +1886,8 @@ export function serializeBody(cfg: Config): string {
     const valW = Math.max(...sec.rows.map((r) => tomlValue(valueFor(cfg, r)).length));
     for (const row of sec.rows) {
       const val = tomlValue(valueFor(cfg, row));
-      out += `${row.tomlKey.padEnd(keyW)} = ${val.padEnd(valW)}  # ${row.doc}\n`;
+      const doc = row.restart ? `${row.doc} (needs restart)` : row.doc;
+      out += `${row.tomlKey.padEnd(keyW)} = ${val.padEnd(valW)}  # ${doc}\n`;
     }
   }
   return out;

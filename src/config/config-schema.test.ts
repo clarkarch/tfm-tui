@@ -185,6 +185,42 @@ describe("serializeConfig", () => {
   test("example toml carries the default body", () => {
     expect(exampleToml()).toMatch(/drag-threshold-cells\s+=\s+1/);
   });
+
+  test("restart flag marks exactly the cold-boot-only ui keys", () => {
+    const flagged = UI_SCHEMA.filter((r) => r.restart).map((r) => r.prop);
+    expect(new Set(flagged)).toEqual(
+      new Set([
+        "restoreSession",
+        "showLaunchTime",
+        "sidebarAnimation",
+        "sidebarAnimationStyle",
+        "sidebarAnimationMs",
+        "sidebarAnimationSlideCells",
+        "sidebarAnimationSlideDir",
+        "sidebarAnimationStaggerPct",
+        "sidebarAnimationEase",
+        "sidebarAnimationIncludeTitle",
+        "topbarAnimation",
+        "topbarAnimationStyle",
+        "topbarAnimationMs",
+        "topbarAnimationSlideCells",
+        "topbarAnimationSlideDir",
+        "topbarAnimationStaggerPct",
+        "topbarAnimationEase",
+      ]),
+    );
+  });
+
+  test("restart rows serialize their doc with a (needs restart) marker", () => {
+    const text = serializeConfig(defaultConfig);
+    expect(text).toContain("# true = reopen the folder from the last quit instead of the launch cwd (needs restart)");
+    expect(text).toContain(
+      "# true = animate the places sidebar on boot (style = sidebar-animation-style) (needs restart)",
+    );
+    // live keys carry no marker
+    expect(text).not.toMatch(/single pane \(needs restart\)/);
+    expect(text).not.toMatch(/undo history survives restarts.*\(needs restart\)/);
+  });
 });
 
 // keybindConflict reads the schema's KEY_ROWS (which action already owns a

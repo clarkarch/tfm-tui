@@ -672,6 +672,37 @@ describe("generic schema rows", () => {
     const plain = h.byLabel("wrap mode");
     expect("repaint" in plain && plain.repaint).toBeFalsy();
   });
+
+  test("cold-boot-only rows carry the restart flag (sidebar/topbar intro + session + launch time)", () => {
+    const h = mk();
+    for (const label of [
+      "restore session",
+      "show launch time",
+      "sidebar animation",
+      "sidebar style",
+      "sidebar duration",
+      "sidebar slide",
+      "sidebar direction",
+      "sidebar stagger",
+      "sidebar easing",
+      "include title in intro",
+      "top bar animation",
+      "top bar style",
+      "top bar duration",
+      "top bar slide",
+      "top bar direction",
+      "top bar stagger",
+      "top bar easing",
+    ]) {
+      const row = h.byLabel(label);
+      expect("restart" in row && row.restart, `${label} should need restart`).toBe(true);
+    }
+    // live neighbors stay unflagged
+    for (const label of ["dual pane", "sidebar auto-hide", "persistent undo", "directory bar animation"]) {
+      const row = h.byLabel(label);
+      expect("restart" in row && row.restart, `${label} should be live`).toBeFalsy();
+    }
+  });
 });
 
 describe("hand-written rows", () => {

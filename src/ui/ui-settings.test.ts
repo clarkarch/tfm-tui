@@ -686,6 +686,55 @@ describe("settings view", () => {
     }
   });
 
+  test("restart-flagged rows badge the footer and warn once per menu open", async () => {
+    const keep = groups;
+    groups = [
+      {
+        header: "general",
+        rows: [
+          {
+            kind: "toggle",
+            label: "zzz restartable",
+            blurb: "does a boot thing",
+            restart: true,
+            get: () => false,
+            set: () => {},
+          },
+          { kind: "toggle", label: "plain live", blurb: "does a live thing", get: () => false, set: () => {} },
+        ],
+      },
+    ];
+    try {
+      warns.length = 0;
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1); // root: down fills Settings
+      menu.menuActivate();
+      await t.renderOnce();
+      menu.moveMenu(1); // cursor on the restartable row
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("does a boot thing · needs restart");
+      menu.menuActivate(); // toggle adjust -> one toast
+      expect(warns.length).toBe(1);
+      expect(warns[0]![1]).toBe("restart");
+      expect(warns[0]![0]).toContain("zzz restartable");
+      menu.menuActivate(); // second adjust, same open -> no second toast
+      expect(warns.length).toBe(1);
+      menu.moveMenu(1); // cursor on the live row — badge gone
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("does a live thing");
+      expect(t.captureCharFrame()).not.toContain("needs restart");
+      menu.menuActivate(); // live row adjust -> still no toast
+      expect(warns.length).toBe(1);
+    } finally {
+      groups = keep;
+      warns.length = 0; // later tests (keybind capture) assert exact warn counts
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
   test("collapsing under the cursor parks it on the header (never hidden)", async () => {
     const keep = groups;
     groups = [{ header: "empty", rows: [{ kind: "header", label: "nothing here" }] }];
