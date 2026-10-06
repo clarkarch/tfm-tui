@@ -3,7 +3,7 @@ import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
 import { destroyChildren } from "../lib/uiutil";
 import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
-import { buildSections, loadSystemPlaces, type Place } from "../fs/places";
+import { buildSections, loadSystemPlaces, type Place, type SidebarVisibility } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { tabTitle, type Tab } from "../app/tabs";
@@ -45,6 +45,9 @@ type ChromeCtx = {
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
   sideInnerW(): number; // index keeps this helper (outline insets by 2)
   tabBar(): boolean; // config.ui.tabBar
+  // sidebar section visibility ([ui] sidebar-show-*): renderSidebar filters
+  // through it. Optional so old fakes keep working — absent = all visible.
+  sidebarSections?(): SidebarVisibility;
   // live pane width for chip shrink (100% of the pane column). Optional so old
   // fakes keep working — absent/<=0 keeps the roomy 24-wide chips.
   availW?(pane: 0 | 1): number;
@@ -266,12 +269,13 @@ export const makeChrome = (ctx: ChromeCtx) => {
   const renderSidebar = () => {
     const hostBox = ctx.byId("tfm-places");
     if (!hostBox) return;
-    const groups = buildSections();
+    const groups = buildSections(ctx.sidebarSections?.() ?? {});
     const sig = JSON.stringify([
       ctx.uiStyle(),
       ctx.sideInnerW(),
       ctx.colors(),
       ctx.rasterSig?.() ?? "",
+      ctx.sidebarSections?.() ?? {},
       groups.map((g) =>
         g.map((p) => [
           p.label,

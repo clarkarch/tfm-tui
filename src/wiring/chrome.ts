@@ -112,6 +112,15 @@ export const wireChrome = async (deps: {
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
     tabBar: () => core.config.ui.tabBar,
+    sidebarSections: () => ({
+      showRecent: core.config.ui.sidebarShowRecent,
+      showStarred: core.config.ui.sidebarShowStarred,
+      showTrash: core.config.ui.sidebarShowTrash,
+      showUserDirs: core.config.ui.sidebarShowUserDirs,
+      showBookmarks: core.config.ui.sidebarShowBookmarks,
+      showDevices: core.config.ui.sidebarShowDevices,
+      showNetwork: core.config.ui.sidebarShowNetwork,
+    }),
     // tab chip shrink reads the live pane width — same math as grid's
     // paneAvailW (the strip is 100% of its pane column). Arrow-deferred: the
     // renderer const below is the TDZ seam, same as menu's termW.

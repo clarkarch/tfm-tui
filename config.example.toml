@@ -39,6 +39,13 @@ icons                                 = "opaque"    # "opaque" = icons flattened
 icon-style                            = "filled"    # "filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
+sidebar-show-recent                   = true        # true = show Recent in the places sidebar; false = hide it
+sidebar-show-starred                  = true        # true = show Starred in the places sidebar; false = hide it
+sidebar-show-trash                    = true        # true = show Trash in the places sidebar; false = hide it
+sidebar-show-user-dirs                = true        # true = show home folders (Documents, Downloads, …) in the places sidebar; false = hide them
+sidebar-show-bookmarks                = true        # true = show GTK bookmarks in the places sidebar; false = hide them
+sidebar-show-devices                  = true        # true = show drives in the places sidebar; false = hide them
+sidebar-show-network                  = true        # true = show shared servers in the places sidebar; false = hide them
 tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 tty-mode                              = "auto"      # "auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never
 force-glyph                           = false       # true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)

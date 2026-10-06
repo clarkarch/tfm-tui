@@ -115,6 +115,44 @@ describe("network places", () => {
   });
 });
 
+describe("buildSections visibility toggles", () => {
+  test("hiding recent/starred drops only those rows, Home stays", async () => {
+    const tmp = mkdtempAndDirs();
+    try {
+      process.env.XDG_CONFIG_HOME = tmp.configHome;
+      await loadSystemPlaces();
+      const flat = buildSections({ showRecent: false, showStarred: false }).flat();
+      expect(flat.some((p) => p.label === "Home")).toBe(true);
+      expect(flat.some((p) => p.scheme === "recent")).toBe(false);
+      expect(flat.some((p) => p.scheme === "starred")).toBe(false);
+    } finally {
+      rmSync(tmp.root, { recursive: true, force: true });
+    }
+  });
+
+  test("hiding user dirs/bookmarks/devices/network drops whole groups", async () => {
+    const tmp = mkdtempAndDirs();
+    try {
+      process.env.XDG_CONFIG_HOME = tmp.configHome;
+      await loadSystemPlaces();
+      const flat = buildSections({
+        showUserDirs: false,
+        showBookmarks: false,
+        showDevices: false,
+        showNetwork: false,
+      }).flat();
+      expect(flat.some((p) => p.label === "Documents")).toBe(false);
+      expect(flat.some((p) => p.label === "mydocs")).toBe(false);
+      expect(flat.some((p) => p.label === "This Device")).toBe(false);
+      expect(flat.some((p) => p.action === "connect")).toBe(false);
+      // defaults survive the group hides
+      expect(flat.some((p) => p.label === "Home")).toBe(true);
+    } finally {
+      rmSync(tmp.root, { recursive: true, force: true });
+    }
+  });
+});
+
 function mkdtempAndDirs() {
   const root = path.join(os.tmpdir(), `tfm-places-${process.pid}-${Math.random().toString(36).slice(2)}`);
   const configHome = path.join(root, "config");

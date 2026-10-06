@@ -234,8 +234,9 @@ describe("settingGroups shape", () => {
       "restore session",
       "persistent undo",
     ]);
-    // theme preset leads, then style, chrome (sidebar title with tab bar
-    // trailing it), and the compatibility pair bottoms out the group
+    // theme preset leads, then style, chrome (sidebar title + section
+    // toggles with tab bar trailing them), and the compatibility pair
+    // bottoms out the group
     expect(seq("appearance")).toEqual([
       "theme",
       "##style",
@@ -245,6 +246,13 @@ describe("settingGroups shape", () => {
       "ui style",
       "##chrome",
       "sidebar title",
+      "recent",
+      "starred",
+      "trash",
+      "user folders",
+      "bookmarks",
+      "devices",
+      "network",
       "tab bar",
       "##compatibility",
       "tty mode",

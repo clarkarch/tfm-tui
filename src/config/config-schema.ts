@@ -245,6 +245,13 @@ export type UiConfig = {
   ttyMode: TtyMode;
   forceGlyph: boolean;
   sidebarTitle: boolean;
+  sidebarShowRecent: boolean;
+  sidebarShowStarred: boolean;
+  sidebarShowTrash: boolean;
+  sidebarShowUserDirs: boolean;
+  sidebarShowBookmarks: boolean;
+  sidebarShowDevices: boolean;
+  sidebarShowNetwork: boolean;
   uiStyle: UiStyle;
   tabBar: boolean;
   viewMode: ViewMode;
@@ -851,6 +858,90 @@ const UI_ROWS: SchemaRow[] = [
     doc: 'true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it',
     label: "sidebar title",
     blurb: "Show the logo above the sidebar",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-show-recent",
+    prop: "sidebarShowRecent",
+    def: true,
+    doc: "true = show Recent in the places sidebar; false = hide it",
+    label: "recent",
+    blurb: "Keep recent location handy",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-show-starred",
+    prop: "sidebarShowStarred",
+    def: true,
+    doc: "true = show Starred in the places sidebar; false = hide it",
+    label: "starred",
+    blurb: "Keep starred location handy",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-show-trash",
+    prop: "sidebarShowTrash",
+    def: true,
+    doc: "true = show Trash in the places sidebar; false = hide it",
+    label: "trash",
+    blurb: "Keep trash bin in view",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-show-user-dirs",
+    prop: "sidebarShowUserDirs",
+    def: true,
+    doc: "true = show home folders (Documents, Downloads, …) in the places sidebar; false = hide them",
+    label: "user folders",
+    blurb: "Show personal folders nearby",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-show-bookmarks",
+    prop: "sidebarShowBookmarks",
+    def: true,
+    doc: "true = show GTK bookmarks in the places sidebar; false = hide them",
+    label: "bookmarks",
+    blurb: "Show saved folders nearby",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-show-devices",
+    prop: "sidebarShowDevices",
+    def: true,
+    doc: "true = show drives in the places sidebar; false = hide them",
+    label: "devices",
+    blurb: "Show drives nearby",
+    group: "appearance",
+    subsection: "chrome",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-show-network",
+    prop: "sidebarShowNetwork",
+    def: true,
+    doc: "true = show shared servers in the places sidebar; false = hide them",
+    label: "network",
+    blurb: "Show shared servers nearby",
     group: "appearance",
     subsection: "chrome",
   },

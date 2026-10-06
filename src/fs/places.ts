@@ -238,7 +238,19 @@ async function listMounts(): Promise<MountEntry[]> {
   }
 }
 
-export function buildSections(): Place[][] {
+export type SidebarVisibility = {
+  showRecent?: boolean;
+  showStarred?: boolean;
+  showTrash?: boolean;
+  showUserDirs?: boolean;
+  showBookmarks?: boolean;
+  showDevices?: boolean;
+  showNetwork?: boolean;
+};
+
+export function buildSections(vis: SidebarVisibility = {}): Place[][] {
+  const { showRecent = true, showStarred = true, showTrash = true } = vis;
+  const { showUserDirs = true, showBookmarks = true, showDevices = true, showNetwork = true } = vis;
   const trashFilesDir = path.join(trashDir(), "files");
   const hasTrash = (() => {
     try {
@@ -249,21 +261,26 @@ export function buildSections(): Place[][] {
   })();
 
   const defaults: Place[] = [{ icon: "home", label: "Home", path: home, ejectable: false }];
-  defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false, scheme: "recent" });
-  defaults.push({ icon: "star", label: "Starred", path: null, ejectable: false, scheme: "starred" });
-  if (hasTrash) defaults.push({ icon: "trash-can", label: "Trash", path: trashFilesDir, ejectable: false });
+  if (showRecent) defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false, scheme: "recent" });
+  if (showStarred) defaults.push({ icon: "star", label: "Starred", path: null, ejectable: false, scheme: "starred" });
+  if (showTrash && hasTrash)
+    defaults.push({ icon: "trash-can", label: "Trash", path: trashFilesDir, ejectable: false });
 
-  const dirs: Place[] = sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }));
+  const dirs: Place[] = showUserDirs
+    ? sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }))
+    : [];
 
-  const bookmarks: Place[] = sysBookmarks
-    .filter((b) => !b.remote)
-    .map((b) => ({
-      icon: "bookmark",
-      label: b.label,
-      path: b.p,
-      ejectable: false,
-      bookmarked: true,
-    }));
+  const bookmarks: Place[] = showBookmarks
+    ? sysBookmarks
+        .filter((b) => !b.remote)
+        .map((b) => ({
+          icon: "bookmark",
+          label: b.label,
+          path: b.p,
+          ejectable: false,
+          bookmarked: true,
+        }))
+    : [];
 
   const devices: Place[] = [
     { icon: "harddisk", label: "This Device", path: "/", ejectable: false },
@@ -313,7 +330,7 @@ export function buildSections(): Place[][] {
   const groups = [defaults];
   if (dirs.length) groups.push(dirs);
   if (bookmarks.length) groups.push(bookmarks);
-  groups.push(devices);
-  groups.push(network);
+  if (showDevices) groups.push(devices);
+  if (showNetwork) groups.push(network);
   return groups;
 }
