@@ -166,13 +166,18 @@ export const descText = (row: SettingRow | undefined): string => {
 export const fitDescText = (text: string, panelW: number = SETTINGS_MAX_W): string => `ⓘ ${text}`.slice(0, panelW - 4);
 
 // value-cell text for every row kind (toggle/stepper/cycle/keybind): sliced to
-// the text room then left-padded so the value sits flush right. Box-level
-// justifyContent does NOT right-align Text children (probed: a flex-end Box
-// still paints its Text flush left), so the padding is in the string itself.
-// afterAdjust in ./ui-settings repaints the same cells by id and must use this
-// too, or an adjust snaps the value back left.
-export const fitValueText = (value: string, room: number): string =>
-  value.length > room ? value.slice(0, room) : value.padStart(room, " ");
+// the text room then CENTERED. Box-level justifyContent does NOT move Text
+// children (probed: a flex-end Box still paints its Text flush left), so the
+// alignment is in the string itself. afterAdjust in ./ui-settings repaints the
+// same cells by id and must use this too, or an adjust snaps the value back
+// left. (Right-aligned was tried first and read as off against the chevrons,
+// so the column centers.)
+export const fitValueText = (value: string, room: number): string => {
+  if (value.length >= room) return value.slice(0, room);
+  const total = room - value.length;
+  const left = Math.floor(total / 2);
+  return " ".repeat(left) + value + " ".repeat(total - left);
+};
 
 // toggle value-box width (no padding — the text room IS the box)
 export const SET_TOGGLE_W = 6;

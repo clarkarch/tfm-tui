@@ -115,10 +115,14 @@ describe("collapsible sections (flatVisible projection)", () => {
   });
 });
 
-describe("fitValueText (right-aligned value cells)", () => {
-  test("short values pad left so the text sits flush right", () => {
-    expect(fitValueText("on", 6)).toBe("    on");
-    expect(fitValueText("22", 15)).toBe("             22");
+describe("fitValueText (centered value cells)", () => {
+  test("short values pad both sides so the text sits centered", () => {
+    expect(fitValueText("on", 6)).toBe("  on  ");
+    expect(fitValueText("22", 15)).toBe("      22       ");
+  });
+
+  test("odd leftover puts the extra space on the right", () => {
+    expect(fitValueText("off", 6)).toBe(" off  ");
   });
 
   test("exact-fit values pass through untouched", () => {
