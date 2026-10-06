@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { writeFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { writeFileSync, existsSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
 import { glyphFor } from "./glyphs";
+import { resetVideoBin, videoBin } from "../fs/videobin";
 import {
   OUTLINE_ICONS,
   THUMB_COOL_MS,
@@ -33,7 +34,9 @@ const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => f
 const hasMagick = Bun.which("magick") !== null;
 // icons: in-process only; vector thumbs: in-process or the magick last resort
 const hasSvgRenderer = hasInproc || hasMagick;
-const hasFfmpeg = Bun.which("ffmpeg") !== null;
+// video thumbs ride the bundled sidecar (never the system PATH); the corpus
+// below is generated with that same binary, so CI covers it via postinstall.
+const hasVideoBin = videoBin() !== null;
 
 // tiny fixtures, embedded so the raster tests need no external tool to CREATE
 // the input: a 6x2 PNG (Bun.Image decodes it), a 4x4 ICO (Bun.Image can't
@@ -396,31 +399,90 @@ describe("icons", () => {
 
   // ffmpeg frame generation + raster is slow under parallel-suite load — the
   // 5s bun default is a coin flip here (AGENTS: heavy tests pin their own)
-  test.skipIf(!hasFfmpeg)(
+  test.skipIf(!hasVideoBin)(
     "video thumbs extract a frame at the requested size",
     async () => {
+      const vb = videoBin();
+      if (!vb) throw new Error("video ffmpeg resolved at gate but gone at run");
       clearIconCaches();
       const tmp = path.join(os.tmpdir(), `tfm-thumb-video-${process.pid}.mp4`);
-      const gen = Bun.spawnSync([
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc=duration=3:size=256x256:rate=10",
-        "-pix_fmt",
-        "yuv420p",
-        "-y",
-        tmp,
-      ]);
-      expect(gen.exitCode).toBe(0);
-      const bytes = await thumbPng(tmp, 4, 1, 48, 64, "#1a1b26", false, true);
-      expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      expect(dv.getUint32(16)).toBe(48); // IHDR width
-      expect(dv.getUint32(20)).toBe(64); // IHDR height
+      try {
+        const gen = Bun.spawnSync([
+          vb.bin,
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc=duration=3:size=256x256:rate=10",
+          "-pix_fmt",
+          "yuv420p",
+          "-y",
+          tmp,
+        ]);
+        expect(gen.exitCode).toBe(0);
+        const bytes = await thumbPng(tmp, 4, 1, 48, 64, "#1a1b26", false, true);
+        expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        expect(dv.getUint32(16)).toBe(48); // IHDR width
+        expect(dv.getUint32(20)).toBe(64); // IHDR height
+      } finally {
+        rmSync(tmp, { force: true });
+      }
+    },
+    20000,
+  );
+
+  // Fake stats (not the file's real mtime/size): the point is rejection, and
+  // real stats would park the job in the 3s fresh-file cooloff for nothing.
+  test.skipIf(!hasVideoBin)(
+    "corrupt video rejects and sentinels the key",
+    async () => {
+      clearIconCaches();
+      const bad = path.join(os.tmpdir(), `tfm-thumb-video-bad-${process.pid}.mp4`);
+      try {
+        writeFileSync(bad, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+        const first = await thumbPng(bad, 4, 4, 48, 64, "#1a1b26", false, true).then(
+          () => "resolved",
+          (e: unknown) => (e instanceof Error ? e.message : String(e)),
+        );
+        expect(first).not.toBe("resolved");
+        const second = await thumbPng(bad, 4, 4, 48, 64, "#1a1b26", false, true).then(
+          () => "resolved",
+          (e: unknown) => (e instanceof Error ? e.message : String(e)),
+        );
+        expect(second).toContain("previously failed");
+      } finally {
+        rmSync(bad, { force: true });
+      }
+    },
+    20000,
+  );
+
+  test.skipIf(!hasVideoBin)(
+    "vanished binary rejects instead of hanging",
+    async () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), "tfm-videobin-gone-"));
+      const prevEnv = process.env.TFM_FFMPEG;
+      resetVideoBin();
+      try {
+        const ghost = path.join(tmp, "ffmpeg");
+        writeFileSync(ghost, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        chmodSync(ghost, 0o755);
+        process.env.TFM_FFMPEG = ghost;
+        resetVideoBin();
+        expect(videoBin()?.source).toBe("override");
+        rmSync(ghost);
+        // resolver memo still points at the deleted path: the spawn must
+        // surface as a rejection (async ENOENT), never a stuck drain
+        await expect(thumbPng(path.join(tmp, "x.mp4"), 4, 4, 48, 64, "#1a1b26", false, true)).rejects.toThrow();
+      } finally {
+        if (prevEnv === undefined) delete process.env.TFM_FFMPEG;
+        else process.env.TFM_FFMPEG = prevEnv;
+        resetVideoBin();
+        rmSync(tmp, { recursive: true, force: true });
+      }
     },
     20000,
   );

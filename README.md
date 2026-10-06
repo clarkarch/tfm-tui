@@ -40,7 +40,6 @@ A modern, mouse-first file manager with places sidebar, grid view, drag & drop, 
 - Everything below is optional.
   - `xdg-open` (opening files)
   - `magick` (extra photo thumbnails)
-  - `ffmpeg` (video thumbnails)
   - `gio` (starred files and servers)
   - `udisksctl` (USB drives)
   - `wl-clipboard` / `xclip` (copy and paste with other apps)

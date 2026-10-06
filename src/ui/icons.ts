@@ -14,6 +14,7 @@ import { PNG } from "pngjs";
 import * as UTIF from "utif2";
 import { atomicWriteFile } from "../fs/fsutil";
 import { extOf } from "../fs/filetype";
+import { resetVideoBin, videoBin } from "../fs/videobin";
 import { swallow } from "../app/log";
 import type { IconStyle } from "../config/config-schema";
 
@@ -488,15 +489,18 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
   }
 };
 
-// video thumbs: one representative frame via ffmpeg, cover-cropped like the
-// raster path so tiles keep a uniform look. Input-seek ~1s in to skip the
-// black lead-in (fast keyframe seek); clips shorter than that retry at 0.
-export const canThumbVideo = (): boolean => Bun.which("ffmpeg") !== null;
+// video thumbs: one representative frame via the bundled ffmpeg sidecar
+// (src/fs/videobin — never the system PATH), cover-cropped like the raster
+// path so tiles keep a uniform look. Input-seek ~1s in to skip the black
+// lead-in (fast keyframe seek); clips shorter than that retry at 0.
+export const canThumbVideo = (): boolean => videoBin() !== null;
 const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const vb = videoBin();
+  if (!vb) throw new Error(`no video ffmpeg available: ${p}`);
   const vf = `scale=${pxW}:${pxH}:force_original_aspect_ratio=increase,crop=${pxW}:${pxH}`;
   const attempt = (ss: string) =>
     pngFromProc(
-      spawn("ffmpeg", [
+      spawn(vb.bin, [
         "-hide_banner",
         "-loglevel",
         "error",
@@ -519,7 +523,16 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
   try {
     return await attempt("1");
   } catch {
-    return attempt("0");
+    try {
+      return await attempt("0");
+    } catch (err) {
+      // the binary may have died mid-run (deleted sidecar, broken mount):
+      // drop the memoized resolution so the next job re-resolves instead of
+      // rejecting every video into its own failedThumbs sentinel. Harmless
+      // when the file was simply corrupt — re-resolution is idempotent.
+      resetVideoBin();
+      throw err;
+    }
   }
 };
 
@@ -592,8 +605,10 @@ export const thumbPng = (
   // raster output ignores bg (it keeps alpha) and so re-rasters on a theme flip
   // for nothing — rare, and the safety of the flattening paths outweighs it.
   // SVG thumbs are keyed by the rasterizer too: resvg vs rsvg produce different
-  // pixels, and switching must not serve the other renderer's cache. Raster/
-  // video keys stay renderer-free so a photo library is never needlessly redone.
+  // pixels, and switching must not serve the other renderer's cache. Raster
+  // keys stay renderer-free so a photo library is never needlessly redone;
+  // video keys carry the binary source instead (sidecar/dev/override swaps
+  // must not serve another binary's pixels — same argv, decoders may differ).
   // Niche lanes carry their lane in the mode: in-process pixels (aspect-fit)
   // differ from spawn pixels (exact cover box), so `raster:ico` etc. must not
   // serve magick-era `raster` entries. jpg/png/avif keep bare `raster` — their
@@ -601,7 +616,14 @@ export const thumbPng = (
   // installing/removing magick flips its lane under the same key — both are
   // valid thumbs of the same image and any file edit re-keys on mtime.)
   const lane = rasterLaneFor(path);
-  const mode = video ? "video" : vector ? `vec:${svgRenderer() ?? "none"}` : lane ? `raster:${lane}` : "raster";
+  const vb = video ? videoBin() : null;
+  const mode = video
+    ? `video:${vb?.source ?? "none"}`
+    : vector
+      ? `vec:${svgRenderer() ?? "none"}`
+      : lane
+        ? `raster:${lane}`
+        : "raster";
   const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`;
   if (failedThumbs.has(key)) return Promise.reject(new Error(`thumb previously failed: ${path}`));
   let p = lruGet(thumbCache, key);

@@ -1,8 +1,10 @@
 name: Release
 
 # Produces the artifacts install.sh downloads: tfm-{x86_64,aarch64}-linux.gz
-# plus a .sha256 sidecar each (install.sh verifies when present and refuses
-# to install when absent). Tag a version to ship it:
+# plus a .sha256 sidecar each, AND the bundled video-thumbnail ffmpeg as
+# tfm-ffmpeg-{x86_64,aarch64}-linux.gz plus its own .sha256 (install.sh
+# verifies when present and warns-but-continues when absent). Tag a version
+# to ship it:
 #   git tag v1.0.0 && git push origin v1.0.0
 # Version must match package.json (checked below) so --version never lies.
 
@@ -18,9 +20,11 @@ jobs:
           - runner: ubuntu-latest
             target: bun-linux-x64
             arch: x86_64-linux
+            ffmpeg_asset: ffmpeg-n9.0-latest-linux64-gpl-9.0.tar.xz
           - runner: ubuntu-24.04-arm
             target: bun-linux-arm64
             arch: aarch64-linux
+            ffmpeg_asset: ffmpeg-n9.0-latest-linuxarm64-gpl-9.0.tar.xz
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +52,25 @@ jobs:
           gzip -kf dist/tfm-${{ matrix.arch }}
           (cd dist && sha256sum tfm-${{ matrix.arch }}.gz > tfm-${{ matrix.arch }}.gz.sha256)
 
+      # Sidecar source: BtbN versioned static builds, pinned to the n9.0
+      # series below (bumping series = changing these two matrix lines).
+      # The `latest` tag rolls monthly rebuilds, but our published .sha256
+      # freezes whatever bytes the release actually built — auditable per
+      # release. Upstream checksums are verified before we trust the bytes.
+      # (dev/CI runs use ffmpeg-static's older binary instead; same thumb
+      # argv, and the thumb disk cache is per-machine local so the skew
+      # never cross-serves.)
+      - name: Package ffmpeg sidecar
+        run: |
+          curl -fsSL --retry 3 -o ffmpeg-sidecar.tar.xz "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${{ matrix.ffmpeg_asset }}"
+          curl -fsSL --retry 3 -o ffmpeg-checksums.sha256 "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256"
+          awk -v f="${{ matrix.ffmpeg_asset }}" '$2==f {print $1 "  ffmpeg-sidecar.tar.xz"}' ffmpeg-checksums.sha256 | sha256sum -c -
+          mkdir -p ffmpeg-sidecar && tar -xJf ffmpeg-sidecar.tar.xz -C ffmpeg-sidecar --wildcards "*/bin/ffmpeg"
+          cp ffmpeg-sidecar/*/bin/ffmpeg dist/tfm-ffmpeg-${{ matrix.arch }}
+          dist/tfm-ffmpeg-${{ matrix.arch }} -hide_banner -version
+          gzip -kf dist/tfm-ffmpeg-${{ matrix.arch }}
+          (cd dist && sha256sum tfm-ffmpeg-${{ matrix.arch }}.gz > tfm-ffmpeg-${{ matrix.arch }}.gz.sha256)
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -55,6 +78,8 @@ jobs:
           path: |
             dist/tfm-${{ matrix.arch }}.gz
             dist/tfm-${{ matrix.arch }}.gz.sha256
+            dist/tfm-ffmpeg-${{ matrix.arch }}.gz
+            dist/tfm-ffmpeg-${{ matrix.arch }}.gz.sha256
 
   release:
     needs: build
@@ -78,3 +103,7 @@ jobs:
             dist/tfm-x86_64-linux.gz.sha256
             dist/tfm-aarch64-linux.gz
             dist/tfm-aarch64-linux.gz.sha256
+            dist/tfm-ffmpeg-x86_64-linux.gz
+            dist/tfm-ffmpeg-x86_64-linux.gz.sha256
+            dist/tfm-ffmpeg-aarch64-linux.gz
+            dist/tfm-ffmpeg-aarch64-linux.gz.sha256
