@@ -308,8 +308,9 @@ describeNonRoot("sudo preview", () => {
 });
 
 // --- rich preview: markdown renders through MarkdownRenderable (headings,
-// lists, links — not a monochrome code dump), text/code bodies ride inside a
-// LineNumberRenderable gutter, and code bodies linkify bare URLs via
+// lists, links — not a monochrome code dump), code bodies ride inside a
+// LineNumberRenderable gutter (txt prose renders gutter-free), and code
+// bodies linkify bare URLs via
 // detectLinks (OSC-8, terminal-native ctrl+click). ---
 const mdNodes = (id: string) =>
   walkKids(t.renderer.root.findDescendantById(id)).filter((c: any) => c instanceof MarkdownRenderable);
@@ -539,9 +540,13 @@ describe("preview rich rendering", () => {
       const pv = mkLivePreview(txt, mode);
       pv.p.renderPreview();
       pv.clock.flush();
-      expect(await settleUntil(t, () => gutterNodes(pv.paneId).length === 1)).toBe(true);
-      const body = (gutterNodes(pv.paneId)[0] as any).getChildren().find((c: any) => c instanceof TextRenderable);
-      expect(body).toBeTruthy();
+      // txt bodies render gutter-free (the LineNumber gutter broke on prose)
+      const textOf = (c: any) => (c.content?.chunks ?? c.chunks ?? []).map((ch: any) => ch.text).join("");
+      const bodyOf = () =>
+        walkKids(pv.realPane()).find((c: any) => c instanceof TextRenderable && textOf(c).includes("some long prose"));
+      expect(await settleUntil(t, () => !!bodyOf())).toBe(true);
+      expect(gutterNodes(pv.paneId).length).toBe(0);
+      const body = bodyOf() as any;
       // plain-text bodies never take the toggle: char-sliced prose is
       // unreadable and clipped prose breaks mid-word — both were reported
       expect(body.wrapMode).toBe("word");
