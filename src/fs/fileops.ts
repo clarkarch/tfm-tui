@@ -246,13 +246,19 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     prog.processPause = null;
   };
 
-  // first non-blank line of a tool's stderr — the actionable part of a failure
+  // first actionable stderr line of a failure. 7z -bso2 moved its whole entry
+  // log to stderr, so a 7z failure opens with the version banner — report the
+  // trailing error block (Error:/errno lines, probed) instead. No other tool's
+  // stderr opens with that banner, so they keep the head untouched.
   const firstErrLine = (s: string): string => {
+    const lines: string[] = [];
     for (const line of s.split("\n")) {
       const t = line.trim();
-      if (t) return t;
+      if (t) lines.push(t);
     }
-    return "";
+    const [head] = lines;
+    if (head && /^(7-Zip|p7zip) /.test(head)) return lines.at(-1) ?? "";
+    return head ?? "";
   };
 
   // plugin veto channel: a beforeFileOp hook returning { skip: true } blocks the

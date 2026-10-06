@@ -650,6 +650,10 @@ const fakeArchive = (opts: { entries?: Record<string, string>; stdout?: string; 
       writeFileSync(argAfter("-f"), "archive-bytes");
     } else if (spec.tool === "zip") {
       writeFileSync(spec.args[1]!, "archive-bytes");
+    } else if (spec.tool === "stdbuf") {
+      // unbuffered Info-ZIP lane: ["-o0","-e0","zip","-r",out,...] — the
+      // archive path sits two slots past the real tool name
+      writeFileSync(spec.args[spec.args.indexOf("zip") + 2]!, "archive-bytes");
     } else if (spec.tool === "7z") {
       writeFileSync(argAfter("-y"), "archive-bytes");
     }
@@ -1090,6 +1094,71 @@ describe("compressPaths", () => {
     const h = makeHarness();
     await h.ops.compressPaths([path.join(ROOT, "noop.txt")], "tar.gz", "recent://");
     expect(h.calls).toContain("notify:compress:error:Can't compress here");
+  });
+
+  test("a 7z failure reports the trailing error, not the version banner", async () => {
+    // -bso2 moved 7z's whole entry log to stderr, so its first line is the
+    // banner — the toast must skip it and report the trailing error block
+    const h = makeHarness({
+      archiveWhich: () => "/usr/bin/7z",
+      runArchive: async () => ({
+        code: 2,
+        stdout: "",
+        stderr:
+          "7-Zip 26.03 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-09-03\nScanning the drive:\n\nError:\ncannot open file\nerrno=2 : No such file or directory\n",
+      }),
+    });
+    const a = path.join(ROOT, "c-7zfail-src", "a.txt");
+    W(a, "a");
+    const destDir = path.join(ROOT, "c-7zfail-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.compressPaths([a], "7z", destDir);
+
+    const note = h.calls.find((c) => c.startsWith("notify:compress failed:error:"));
+    expect(note).toBeDefined();
+    expect(note).toContain("errno=2");
+    expect(note).not.toContain("7-Zip");
+  });
+
+  test.skipIf(!Bun.which("7z"))("compress progress counts entries, not tool headers", async () => {
+    // the 7z entry log (-bso2) is wrapped in ~10 header/trailer lines; only
+    // the `+ ` member lines may advance doneFiles or the bar pins at 100%
+    // while files are still being added
+    const { runArchive } = fakeArchive();
+    const h = makeHarness({
+      runArchive: (spec, opts) => {
+        for (const l of [
+          "7-Zip 26.03 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-09-03",
+          "Scanning the drive:",
+          "Add new data to archive: 1 folder, 6 files",
+          "+ p0.txt",
+          "+ p1.txt",
+          "+ p2.txt",
+          "+ p3.txt",
+          "+ p4.txt",
+          "+ p5.txt",
+          "Files read from disk: 6",
+          "Everything is Ok",
+        ])
+          opts?.onLine?.(l);
+        return runArchive(spec, opts);
+      },
+    });
+    const srcDir = path.join(ROOT, "c-prog-src");
+    for (let i = 0; i < 6; i++) W(path.join(srcDir, `p${i}.txt`), "x".repeat(100));
+    const destDir = path.join(ROOT, "c-prog-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.compressPaths(
+      [0, 1, 2, 3, 4, 5].map((i) => path.join(srcDir, `p${i}.txt`)),
+      "7z",
+      destDir,
+    );
+
+    expect(h.prog.doneFiles).toBe(6);
+    expect(h.prog.totalFiles).toBe(6);
+    expect(h.calls).toContain("toast:show");
   });
 });
 

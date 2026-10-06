@@ -27,6 +27,7 @@ import {
   countZipEntries,
   detectArchiveFormat,
   extractPlan,
+  isArchiveEntryLine,
   listArchiveEntries,
   makeLineCounter,
   parseToolLine,
@@ -101,14 +102,14 @@ describe("extractPlan", () => {
     });
     expect(extractPlan("zip", "/x/a.zip", "/stage", which("7z"))).toEqual({
       tool: "7z",
-      args: ["x", "-bb1", "-y", "-o/stage", "/x/a.zip"],
+      args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.zip"],
     });
   });
 
   test("7z extracts via 7z", () => {
     expect(extractPlan("7z", "/x/a.7z", "/stage", which("7z"))).toEqual({
       tool: "7z",
-      args: ["x", "-bb1", "-y", "-o/stage", "/x/a.7z"],
+      args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.7z"],
     });
   });
 
@@ -119,6 +120,34 @@ describe("extractPlan", () => {
     expect(extractPlan("zip", "/x/a.zip", "/stage", which("7z")).args).toContain("-bb1");
     expect(compressPlan("7z", "/out/a.7z", ["foo"], "/src", which("7z")).args).toContain("-bb1");
     expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("7z")).args).toContain("-bb1");
+  });
+
+  test("7z carries -bso2 (entry log to stderr) so lines stream live when piped", () => {
+    // probed: 7z block-buffers stdout when piped — every line (including the
+    // -bb1 per-file lines) arrived at process exit, so the compress bar sat at
+    // 0/N then jumped to done. stderr is unbuffered, and -bso2 moves the entry
+    // log there; tar -v and unzip flush per entry and never needed this.
+    // (tar/zip-tool/unzip plans must NOT carry it — unknown switches break them)
+    expect(compressPlan("7z", "/out/a.7z", ["foo"], "/src", which("7z")).args).toContain("-bso2");
+    expect(extractPlan("7z", "/x/a.7z", "/stage", which("7z")).args).toContain("-bso2");
+    expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("7z")).args).toContain("-bso2");
+    expect(extractPlan("zip", "/x/a.zip", "/stage", which("7z")).args).toContain("-bso2");
+    expect(compressPlan("tar.gz", "/out/a.tar.gz", ["foo"], "/src", which("tar", "gzip")).args).not.toContain("-bso2");
+    expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("zip")).args).not.toContain("-bso2");
+    expect(extractPlan("zip", "/x/a.zip", "/stage", which("unzip")).args).not.toContain("-bso2");
+  });
+
+  test("zip via Info-ZIP is stdbuf-wrapped when available (same piped-stdout freeze class as 7z)", () => {
+    // `zip -r` has no stream switch, so unbuffer with stdbuf when present;
+    // without it the plain spec runs (today's end-batched behavior, not a failure)
+    expect(compressPlan("zip", "/o/a.zip", ["f"], "/src", which("zip", "stdbuf"))).toEqual({
+      tool: "stdbuf",
+      args: ["-o0", "-e0", "zip", "-r", "/o/a.zip", "f"],
+    });
+    expect(compressPlan("zip", "/o/a.zip", ["f"], "/src", which("zip"))).toEqual({
+      tool: "zip",
+      args: ["-r", "/o/a.zip", "f"],
+    });
   });
 });
 
@@ -147,7 +176,7 @@ describe("compressPlan / compressionExt / compressionHint", () => {
     });
     expect(compressPlan("zip", "/o/a.zip", ["-v"], "/src", which("7z"))).toEqual({
       tool: "7z",
-      args: ["a", "-bb1", "-tzip", "-y", "/o/a.zip", "--", "./-v"],
+      args: ["a", "-bb1", "-bso2", "-tzip", "-y", "/o/a.zip", "--", "./-v"],
     });
   });
 
@@ -158,11 +187,11 @@ describe("compressPlan / compressionExt / compressionHint", () => {
     });
     expect(compressPlan("zip", "/out/a.zip", ["foo"], "/src", which("7z"))).toEqual({
       tool: "7z",
-      args: ["a", "-bb1", "-tzip", "-y", "/out/a.zip", "--", "foo"],
+      args: ["a", "-bb1", "-bso2", "-tzip", "-y", "/out/a.zip", "--", "foo"],
     });
     expect(compressPlan("7z", "/out/a.7z", ["foo"], "/src", which("7z"))).toEqual({
       tool: "7z",
-      args: ["a", "-bb1", "-t7z", "-y", "/out/a.7z", "--", "foo"],
+      args: ["a", "-bb1", "-bso2", "-t7z", "-y", "/out/a.7z", "--", "foo"],
     });
   });
 
@@ -249,6 +278,123 @@ describe("parseToolLine / makeLineCounter", () => {
     c.push("\nc\n");
     c.flush();
     expect(got).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("isArchiveEntryLine", () => {
+  // fixtures are verbatim tool output captured with piped stdout/stderr (see
+  // /tmp/opencode/probe-*.ts transcripts): headers must not advance the bar,
+  // only real member lines may
+  test("7z: only + / - entry lines count", () => {
+    expect(isArchiveEntryLine("7z", "+ src/f0.bin")).toBe(true);
+    expect(isArchiveEntryLine("7z", "- src/f0.bin")).toBe(true);
+    for (const h of [
+      "7-Zip 26.03 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-09-03",
+      " 64-bit locale=en_PH.UTF-8 Threads:2 OPEN_MAX:1048576, ASM",
+      "Scanning the drive:",
+      "1 folder, 12 files, 25165824 bytes (24 MiB)",
+      "Creating archive: /tmp/x/s.7z",
+      "Add new data to archive: 1 folder, 12 files, 25165824 bytes (24 MiB)",
+      "Files read from disk: 12",
+      "Archive size: 21866 bytes (22 KiB)",
+      "Everything is Ok",
+      "--",
+      "Path = /tmp/x/s.7z",
+      "Type = 7z",
+      "Folders: 1",
+    ])
+      expect(isArchiveEntryLine("7z", h)).toBe(false);
+  });
+
+  test("zip: adding/updating count on the Info-ZIP lane, + lines on the 7z lane", () => {
+    expect(isArchiveEntryLine("zip", "  adding: src/f0.bin (deflated 99%)")).toBe(true);
+    expect(isArchiveEntryLine("zip", "  updating: src/f0.bin (deflated 99%)")).toBe(true);
+    expect(isArchiveEntryLine("zip", "+ src/f0.bin")).toBe(true);
+    expect(isArchiveEntryLine("zip", "7-Zip 26.03 (x64) : Copyright (c) 1999-2026 Igor Pavlov")).toBe(false);
+    expect(isArchiveEntryLine("zip", "Add new data to archive: 1 folder, 12 files")).toBe(false);
+    expect(isArchiveEntryLine("zip", "Everything is Ok")).toBe(false);
+  });
+
+  test("zip extract: inflating/creating count (unzip lane), Archive: header doesn't", () => {
+    expect(isArchiveEntryLine("zip", "  inflating: /tmp/x/src/f0.bin  ")).toBe(true);
+    expect(isArchiveEntryLine("zip", "   creating: /tmp/x/src/")).toBe(true);
+    expect(isArchiveEntryLine("zip", "  extracting: /tmp/x/src/f0.bin  ")).toBe(true);
+    expect(isArchiveEntryLine("zip", "Archive:  /tmp/x/s.zip")).toBe(false);
+    expect(isArchiveEntryLine("zip", "- src/f0.bin")).toBe(true);
+  });
+
+  test("tar: every line is a member (no headers in -v output)", () => {
+    expect(isArchiveEntryLine("tar.gz", "src/")).toBe(true);
+    expect(isArchiveEntryLine("tar.gz", "src/f0.bin")).toBe(true);
+  });
+});
+
+describe("runArchiveTask progress filtering", () => {
+  test("spawn-lane progress counts entry lines only (headers don't advance the bar)", async () => {
+    const seen: string[] = [];
+    const toolLog = [
+      "7-Zip 26.03 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-09-03",
+      "Scanning the drive:",
+      "Add new data to archive: 1 folder, 2 files",
+      "+ a.txt",
+      "+ sub/b.txt",
+      "Files read from disk: 2",
+      "Everything is Ok",
+    ];
+    const res = await runArchiveTask(
+      { op: "compress", fmt: "7z", outFile: "/o/a.7z", names: ["a.txt"], parent: "/" },
+      {
+        which: which("7z"),
+        run: async (_spec, opts) => {
+          for (const l of toolLog) opts?.onLine?.(l);
+          return { code: 0, stdout: "", stderr: "" };
+        },
+        onLine: (l) => seen.push(l),
+      },
+    );
+    expect(res.code).toBe(0);
+    expect(seen).toEqual(["+ a.txt", "+ sub/b.txt"]);
+  });
+});
+
+describe("runArchiveTask stdbuf fallback", () => {
+  const zipStdbuf = (bin: string): string | null => (bin === "zip" || bin === "stdbuf" ? `/usr/bin/${bin}` : null);
+
+  test("a failed stdbuf shim retries once unwrapped", async () => {
+    const seen: string[] = [];
+    let n = 0;
+    const res = await runArchiveTask(
+      { op: "compress", fmt: "zip", outFile: "/o/a.zip", names: ["f"], parent: "/src" },
+      {
+        which: zipStdbuf,
+        run: async (spec) => {
+          seen.push(spec.tool);
+          // the shim's own spawn failure surfaces as code -1; the plain run lands
+          return n++ === 0
+            ? { code: -1, stdout: "", stderr: "spawn stdbuf ENOENT" }
+            : { code: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    expect(res.code).toBe(0);
+    expect(seen).toEqual(["stdbuf", "zip"]);
+  });
+
+  test("a cancelled op never retries (✕ also surfaces as code -1)", async () => {
+    const seen: string[] = [];
+    const res = await runArchiveTask(
+      { op: "compress", fmt: "zip", outFile: "/o/a.zip", names: ["f"], parent: "/src" },
+      {
+        which: zipStdbuf,
+        isCancelled: () => true,
+        run: async (spec) => {
+          seen.push(spec.tool);
+          return { code: -1, stdout: "", stderr: "" };
+        },
+      },
+    );
+    expect(res.code).toBe(-1);
+    expect(seen).toEqual(["stdbuf"]);
   });
 });
 
@@ -946,6 +1092,54 @@ describe("tar integration", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// flat file lists (no subdirs, so no dir entries): the filtered spawn-lane
+// progress must equal the file count exactly — headers in, entries out
+const expectFlatCompressProgress = async (fmt: Parameters<typeof compressPlan>[0]): Promise<void> => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-archprog-"));
+  try {
+    const N = 12;
+    const src = path.join(dir, "src");
+    mkdirSync(src, { recursive: true });
+    const names: string[] = [];
+    for (let i = 0; i < N; i++) {
+      writeFileSync(path.join(src, `f${i}.txt`), "x".repeat(1000));
+      names.push(`f${i}.txt`);
+    }
+    const out = path.join(dir, `out${compressionExt(fmt)}`);
+    let cm = 0;
+    const c = await runArchiveTask(
+      { op: "compress", fmt, outFile: out, names, parent: src },
+      // cwd: 7z/zip resolve their relative operands against the process cwd
+      // (only tar carries -C), so the caller must pass parent — fileops does
+      { cwd: src, onLine: () => cm++ },
+    );
+    expect(c.code, `${fmt} compress: ${c.stderr}`).toBe(0);
+    expect(cm, `${fmt} compress progress counts entries, not headers`).toBe(N);
+    const stage = path.join(dir, "stage");
+    mkdirSync(stage);
+    let xm = 0;
+    const e = await runArchiveTask({ op: "extract", fmt, file: out, destDir: stage }, { onLine: () => xm++ });
+    expect(e.code, `${fmt} extract: ${e.stderr}`).toBe(0);
+    expect(xm, `${fmt} extract progress counts entries, not headers`).toBe(N);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+describe("compress progress end-to-end (real tools, filtered onLine)", () => {
+  test.skipIf(!Bun.which("tar") || !Bun.which("gzip"))("tar.gz progress equals the file count", async () => {
+    await expectFlatCompressProgress("tar.gz");
+  });
+
+  test.skipIf(!Bun.which("7z"))("7z progress equals the file count", async () => {
+    await expectFlatCompressProgress("7z");
+  });
+
+  test.skipIf(!Bun.which("zip") && !Bun.which("7z"))("zip progress equals the file count", async () => {
+    await expectFlatCompressProgress("zip");
   });
 });
 

@@ -34,8 +34,8 @@ export type ToolSpec = { tool: string; args: string[] };
 export type ArchiveRunResult = { code: number; stdout: string; stderr: string };
 export type ArchiveRunOpts = {
   cwd?: string;
-  // every line of stdout AND stderr, for progress (tar -v writes names to
-  // stderr, unzip writes them to stdout)
+  // every line of stdout AND stderr, for progress (both pipes are streamed;
+  // tar -v and unzip write entry names to stdout, 7z -bso2 to stderr)
   onLine?: (line: string) => void;
   // the live child, so the caller can register cancel (SIGTERM) / pause
   // (SIGSTOP/SIGCONT)
@@ -158,11 +158,14 @@ export const extractPlan = (
       args: ["-x", "-v", ...def.filter, "-f", file, "-C", destDir, "--no-same-owner"],
     };
   // -bb1: one line per entry — plain `7z x` emits a fixed header no matter
-  // the entry count, freezing the file-count bar at 0 (same class as tar -v)
-  if (def.kind === "7z") return { tool: "7z", args: ["x", "-bb1", "-y", `-o${destDir}`, file] };
+  // the entry count, freezing the file-count bar at 0 (same class as tar -v).
+  // -bso2: the entry log goes to stderr (unbuffered) — 7z block-buffers piped
+  // stdout, so without it every line arrives at exit and the bar sits at 0/N
+  // then jumps to done (probed; tar -v and unzip flush per entry and need nothing)
+  if (def.kind === "7z") return { tool: "7z", args: ["x", "-bb1", "-bso2", "-y", `-o${destDir}`, file] };
   return zipExtractTool(which) === "unzip"
     ? { tool: "unzip", args: ["-o", file, "-d", destDir] }
-    : { tool: "7z", args: ["x", "-bb1", "-y", `-o${destDir}`, file] };
+    : { tool: "7z", args: ["x", "-bb1", "-bso2", "-y", `-o${destDir}`, file] };
 };
 
 export const listArgs = (fmt: ArchiveFormat, file: string, which: WhichFn = Bun.which): string[] => {
@@ -190,12 +193,19 @@ export const compressPlan = (
   if (def.kind === "tar")
     return { tool: "tar", args: ["-c", ...def.filter, "-v", "-f", outFile, "-C", parent, "--", ...names] };
   // -bb1: one `+ name` line per added file — `zip -r` is chatty by default
-  // but 7z is not, and without it the file-count bar never advances
-  if (def.kind === "7z") return { tool: "7z", args: ["a", "-bb1", "-t7z", "-y", outFile, "--", ...names] };
+  // but 7z is not, and without it the file-count bar never advances.
+  // -bso2: same piped-stdout freeze as extract (entry log to stderr, live).
+  if (def.kind === "7z") return { tool: "7z", args: ["a", "-bb1", "-bso2", "-t7z", "-y", outFile, "--", ...names] };
   const zipNames = names.map((n) => (n.startsWith("-") ? `./${n}` : n));
-  return zipCreateTool(which) === "zip"
-    ? { tool: "zip", args: ["-r", outFile, ...zipNames] }
-    : { tool: "7z", args: ["a", "-bb1", "-tzip", "-y", outFile, "--", ...zipNames] };
+  if (zipCreateTool(which) === "zip") {
+    const args = ["-r", outFile, ...zipNames];
+    // `zip -r` has no stream switch and block-buffers piped stdout (same
+    // end-batched freeze 7z needed -bso2 for) — unwrap with stdbuf when present
+    // (LD_PRELOAD failure still runs the command, so worst case is today's
+    // behavior). Without stdbuf the plain spec runs: degraded, never failed.
+    return which("stdbuf") ? { tool: "stdbuf", args: ["-o0", "-e0", "zip", ...args] } : { tool: "zip", args };
+  }
+  return { tool: "7z", args: ["a", "-bb1", "-bso2", "-tzip", "-y", outFile, "--", ...zipNames] };
 };
 
 export const availableCompressionFormats = (which: WhichFn = Bun.which): CompressionFormat[] =>
@@ -308,6 +318,19 @@ export const commonParent = (paths: string[]): string => {
 export const parseToolLine = (line: string): string | null => {
   const t = line.replace(/\r$/, "").trim();
   return t ? t : null;
+};
+
+// progress-line filter: tool banners/summaries must not advance the file-count
+// bar (probed: a 12-file 7z run emits ~10 header/trailer lines — unfiltered,
+// the bar pinned at 100% while files were still being added). Keyed on format,
+// not binary: zip arrives via two lanes (Info-ZIP `adding:` lines, 7z `+ `
+// lines) and both shapes are accepted. tar -v/-t emit members only, no headers.
+export const isArchiveEntryLine = (fmt: ArchiveFormat, line: string): boolean => {
+  const def = defOf(fmt);
+  if (def.kind === "tar") return true;
+  if (line.startsWith("+ ") || line.startsWith("- ")) return true; // 7z -bb1 members (a/x)
+  if (def.kind === "zip") return /^\s*(adding|updating|creating|inflating|extracting):\s/.test(line);
+  return false; // 7z banners, scan summaries, totals
 };
 
 // fire a line reader over a stream without pulling in readline: split on \n,
@@ -806,7 +829,26 @@ export const runArchiveTask: ArchiveTaskRun = async (task, opts = {}) => {
       task.op === "extract"
         ? extractPlan(task.fmt, task.file, task.destDir, which)
         : compressPlan(task.fmt, task.outFile, task.names, task.parent, which);
-    return (opts.run ?? runArchiveTool)(spec, opts);
+    // count entry lines only — the raw tool log carries banners/summaries that
+    // would otherwise advance the file-count bar (isArchiveEntryLine)
+    const inner = opts.onLine;
+    const onLine = inner
+      ? (line: string): void => {
+          if (isArchiveEntryLine(task.fmt, line)) inner(line);
+        }
+      : undefined;
+    const run = opts.run ?? runArchiveTool;
+    const res = await run(spec, { ...opts, onLine });
+    // the stdbuf shim is only a buffering wrapper: if its own spawn fails
+    // (removed/broken stdbuf after the which probe — surfaces as code -1),
+    // retry once unwrapped instead of failing a compress plain `zip` would
+    // have completed. Never retries a cancelled op (✕ kills the child, which
+    // also surfaces as code -1).
+    if (spec.tool === "stdbuf" && res.code === -1 && !opts.isCancelled?.()) {
+      const tool = spec.args[2];
+      if (tool) return run({ tool, args: spec.args.slice(3) }, { ...opts, onLine });
+    }
+    return res;
   }
   if (lane === "js") return runJsArchive(task, opts);
   const need =
