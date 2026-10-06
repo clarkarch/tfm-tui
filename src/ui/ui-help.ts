@@ -140,7 +140,7 @@ export const QUICK_TIPS: QuickTip[] = [
   { problem: "ctrl+tab dead in kitty?", fix: "set ctrl+tab to no_op in kitty.conf" },
   { problem: "kitty drag escapes?", fix: "ctrl+drag stays inside tfm" },
   { problem: "icons are boxes?", fix: "install Nerd Font, Meslo works" },
-  { problem: "scrolling on big folders stutter?", fix: "increase scroll reveal delay (optimization)" },
+  { problem: "scrolling on big folders stutter?", fix: "increase reveal delay (animations)" },
   { problem: "no zip or 7z offered?", fix: "install that tool, absent ones hide" },
   { problem: "network trash refused?", fix: "trash stays local, copy it over instead" },
   { problem: "mouse doesnt work on tty?", fix: "enable gpm" },

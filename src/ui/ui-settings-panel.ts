@@ -144,6 +144,15 @@ export const flatVisible = (rows: SettingRow[], categoryHeader: string, collapse
 // visible-space position of a full-row index (-1 when hidden/absent)
 export const visiblePos = (vis: number[], fullIdx: number): number => vis.indexOf(fullIdx);
 
+// park a cursor full-row index on the nearest visible row after a gated
+// rebuild removed rows (a master toggle hides its children): keeps the
+// cursor when still visible, else the nearest visible row at or above (same
+// rule as section-collapse), else the first visible row, else -1 when empty
+export const clampToVisible = (vis: number[], fullIdx: number): number => {
+  if (vis.includes(fullIdx)) return fullIdx;
+  return [...vis].reverse().find((i) => i <= fullIdx) ?? vis[0] ?? -1;
+};
+
 // one-line description footer text for a row (plain language, never the TOML doc)
 export const descText = (row: SettingRow | undefined): string => {
   if (!row) return "Choose a setting to see what it does";

@@ -318,13 +318,34 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     return rows;
   };
 
+  // master toggles that gate dependent rows (schema showWhen): flipping one
+  // must rebuild the panel so children appear/vanish live (afterAdjust only
+  // repaints the adjusted row's own value text without this)
+  const GATING_MASTERS = new Set([
+    "fileAnimation",
+    "fileHoverAnimation",
+    "sidebarAnimation",
+    "sidebarHoverAnimation",
+    "topbarAnimation",
+    "directoryBarAnimation",
+    "previewEnabled",
+    "sidebarAutoHide",
+    "previewAutoHide",
+    "terminalAutoHide",
+    "listingsCache",
+    "windowedGrid",
+  ]);
+
   const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
     const rows: SettingRow[] = [];
     // subsection dividers: one header row where the schema's subsection name
     // changes — including the first section, so every group with dividers is
-    // uniformly labeled (groups without subsections render no headers at all)
+    // uniformly labeled (groups without subsections render no headers at all).
+    // showWhen filters BEFORE header emission, so a fully hidden section
+    // leaves no orphan header behind.
     let subsection = "";
-    for (const row of uiRowsIn(group)) {
+    const live = uiRowsIn(group).filter((row) => row.showWhen?.(ctx.config.ui) ?? true);
+    for (const row of live) {
       if (SPECIAL_UI_PROPS.has(row.prop)) continue;
       if (row.subsection && row.subsection !== subsection) {
         subsection = row.subsection;
@@ -337,7 +358,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         row.prop === "transparentBg" ||
         row.prop === "icons" ||
         row.prop === "ttyMode" ||
-        row.prop === "forceGlyph"
+        row.prop === "forceGlyph" ||
+        GATING_MASTERS.has(row.prop)
       ) {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }
@@ -349,12 +371,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   // ordered categories: schema `group` id -> GUI label + category icon. Icons
   // are existing assets/icons SVGs; a wrong name silently falls back to the
   // generic cog (AGENTS.md), so keep these byte-identical to filenames.
-  // Order is everyday priority: look first, tuning last. panes and animations
-  // sit directly under layout: they answer "how does the UI look and move?".
+  // Order is everyday priority: look first, tuning last. layout (one
+  // surface-ordered category: view/sidebar/preview/terminal/panes/grid/list)
+  // and animations sit directly under appearance: they answer "how does the
+  // UI look and move?".
   const CATEGORIES: { id: NonNullable<UiSchemaRow["group"]>; label: string; icon: string }[] = [
     { id: "appearance", label: "appearance", icon: "palette" },
     { id: "layout", label: "layout", icon: "select-all" },
-    { id: "panes", label: "panes", icon: "desktop-tower" },
     { id: "animations", label: "animations", icon: "play" },
     { id: "files", label: "files & session", icon: "folder" },
     { id: "behavior", label: "behavior", icon: "clock" },
@@ -391,22 +414,32 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         case "keys":
           rows = keyRowsWithHeaders();
           break;
-        case "appearance": {
-          // tab bar is chrome-visibility but its row is hand-built and appended
-          // after the generic rows, so splice it ahead of the trailing
-          // compatibility section so it keeps trailing its own ##chrome
-          // header instead of the compatibility pair
-          const uiRows = [themeRow(), ...genericUiRows("appearance")];
-          const compatibilityIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "compatibility");
+        case "appearance":
+          rows = [themeRow(), ...genericUiRows("appearance")];
+          break;
+        case "layout": {
+          // tab bar is a hand-built cycle (adaptive/on, not the schema's bool
+          // toggle), so splice it after wrap mode where its schema row sits —
+          // the generic builder skips it via SPECIAL_UI_PROPS
+          const uiRows = genericUiRows("layout");
           const tabRow = tabBarRow();
-          if (compatibilityIdx >= 0) uiRows.splice(compatibilityIdx, 0, tabRow);
-          else uiRows.push(tabRow);
+          const wrapIdx = uiRows.findIndex((r) => r.kind !== "header" && r.label === "wrap mode");
+          if (wrapIdx >= 0) uiRows.splice(wrapIdx + 1, 0, tabRow);
+          else uiRows.unshift(tabRow);
           rows = uiRows;
           break;
         }
-        case "files":
-          rows = [hiddenFilesRow(), ...genericUiRows("files")];
+        case "files": {
+          // hidden files splices in under the listing header (same splice
+          // precedent as the layout tab-bar row — the schema row is skipped
+          // via SPECIAL_UI_PROPS while the hand row carries the live-state sync)
+          const uiRows = genericUiRows("files");
+          const listingIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "listing");
+          if (listingIdx >= 0) uiRows.splice(listingIdx + 1, 0, hiddenFilesRow());
+          else uiRows.unshift(hiddenFilesRow());
+          rows = uiRows;
           break;
+        }
         case "advanced":
           rows = advancedRows();
           break;
@@ -467,7 +500,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     rows: [
       {
         kind: "action",
-        label: "Add from git URL…",
+        label: "add from git URL…",
         blurb: "Install a plugin from a link",
         keepOpen: true,
         run: () => {
@@ -476,7 +509,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       },
       {
         kind: "action",
-        label: "Open plugins folder…",
+        label: "open plugins folder…",
         blurb: "Browse installed plugins",
         // not keepOpen: navigating with the menu up strands the user over a
         // changed cwd — close first (rowActivate closes, then runs), landing
@@ -493,7 +526,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const lifecycleRows = (p: LoadedPlugin): SettingRow[] => [
     {
       kind: "action",
-      label: "Update from git",
+      label: "update from git",
       blurb: "Pull the newest version",
       keepOpen: true,
       run: () => {
@@ -502,7 +535,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     },
     {
       kind: "action",
-      label: "Remove…",
+      label: "remove…",
       blurb: "Delete this plugin",
       keepOpen: true,
       run: () => {

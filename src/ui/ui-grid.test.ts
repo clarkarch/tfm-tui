@@ -426,7 +426,7 @@ describe("renderGrid (grid tiles)", () => {
     }
   });
 
-  test("changing the hover lift direction rebuilds the tiles", async () => {
+  test("changing the lift direction rebuilds the tiles", async () => {
     // tile ids are absolute now (the windowed grid needs them stable across
     // slides), so "it actually rebuilt" is pinned on the layout the direction
     // bakes: an up lift reserves a marginTop row, down/none never do.

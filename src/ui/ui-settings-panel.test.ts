@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  clampToVisible,
   ensureVisible,
   fitDescText,
   flatVisible,
@@ -61,7 +62,7 @@ describe("panel geometry (room for the description footer)", () => {
   });
 
   test("columns widen with the panel so labels/values stop truncating", () => {
-    // longest real label is 24 chars ("include filename in lift") — sliced at
+    // longest real label is 23 chars ("directory bar animation") — sliced at
     // the old 22; a wide panel must fit it, the floor keeps the old widths
     expect(settingsWidths(80).labelW).toBe(27);
     expect(settingsWidths(78).labelW).toBe(25);
@@ -110,5 +111,24 @@ describe("collapsible sections (flatVisible projection)", () => {
 
   test("unknown keys collapse nothing", () => {
     expect(flatVisible(rows, "layout", new Set(["other::sizes"]))).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+});
+
+describe("clampToVisible (gated-rebuild cursor parking)", () => {
+  test("keeps a still-visible cursor where it is", () => {
+    expect(clampToVisible([0, 1, 3], 3)).toBe(3);
+  });
+
+  test("parks on the nearest visible row at or above the vanished one", () => {
+    // row 2 hidden by its master toggle: cursor was on it
+    expect(clampToVisible([0, 1, 3], 2)).toBe(1);
+  });
+
+  test("cursor below every visible row parks on the first visible row", () => {
+    expect(clampToVisible([2, 3], 0)).toBe(2);
+  });
+
+  test("empty projection parks on -1 (no cursor)", () => {
+    expect(clampToVisible([], 0)).toBe(-1);
   });
 });

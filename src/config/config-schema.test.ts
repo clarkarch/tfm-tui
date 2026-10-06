@@ -295,8 +295,8 @@ describe("describeKeybindConflicts", () => {
     cfg.keys.undo = ["ctrl+q"];
     const text = describeKeybindConflicts(cfg);
     expect(text).toContain('"ctrl+q"');
-    expect(text).toContain("quit tfm");
-    expect(text).toContain("undo last file op");
+    expect(text).toContain("quit");
+    expect(text).toContain("undo");
   });
 });
 

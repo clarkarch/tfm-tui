@@ -12,7 +12,7 @@
 //
 // Live knobs ([ui] file-animation-*): the style is DERIVED from
 // file-animation (master) + slide/stagger toggles (fileAnimStyleFrom); the
-// curves read easing, slide distance/direction and stagger spread live at play
+// curves read easing, travel/direction and spread live at play
 
 import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
 import type { HoverLiftOpts, Theme, TransparentBgMode, UiStyle } from "../config/config-schema";

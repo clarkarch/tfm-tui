@@ -22,6 +22,7 @@ import type { NodeLike } from "../lib/node-like";
 import { FLOAT_Z, type Floats } from "./floats";
 import { pokeGc, type NativeStatsReach } from "../app/mem-hygiene";
 import {
+  clampToVisible,
   descText,
   ensureVisible,
   fitDescText,
@@ -311,6 +312,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       } catch {}
     }
     if (row.repaint) {
+      // a gating master may have hidden rows at/below the cursor (its own
+      // children): park on the nearest still-visible row BEFORE the rebuild
+      // paints highlights, or the cursor strands on a vanished row
+      if (st.menuIdx >= 0) st.menuIdx = clampToVisible(visOf(st.catIdx), st.menuIdx);
       renderMenuContent();
       return;
     }

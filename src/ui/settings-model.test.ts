@@ -67,6 +67,44 @@ const mkPlugin = (over: Partial<LoadedPlugin> & { name: string }): LoadedPlugin 
   ...over,
 });
 
+type MkHarness = ReturnType<typeof mk>;
+
+// every gating master from the model: turning them all on surfaces the full
+// inventory, turning one off hides exactly its dependents and nothing else
+const MASTERS_ON: Record<string, boolean> = {
+  fileAnimation: true,
+  fileHoverAnimation: true,
+  sidebarAnimation: true,
+  sidebarHoverAnimation: true,
+  topbarAnimation: true,
+  directoryBarAnimation: true,
+  previewEnabled: true,
+  sidebarAutoHide: true,
+  previewAutoHide: true,
+  terminalAutoHide: true,
+  listingsCache: true,
+  windowedGrid: true,
+};
+
+const withMasters = (h: MkHarness, on: boolean): void => {
+  for (const [prop, v] of Object.entries(MASTERS_ON)) {
+    (h.config.ui as unknown as Record<string, unknown>)[prop] = on ? v : false;
+  }
+};
+
+// section-scoped row lookup: knob labels repeat per animation section (the
+// pinned duplicate set), so the section header disambiguates them
+const inSection = (h: MkHarness, groupHeader: string, section: string, label: string): SettingRow => {
+  const rows = h.groups().find((g) => g.header === groupHeader)?.rows ?? [];
+  const start = rows.findIndex((r) => r.kind === "header" && r.label === section);
+  const tail = start < 0 ? rows : rows.slice(start + 1);
+  const end = tail.findIndex((r) => r.kind === "header");
+  const scope = end < 0 ? tail : tail.slice(0, end);
+  const r = scope.find((x) => x.label === label);
+  if (!r) throw new Error(`no row ${label} in ${groupHeader}::${section}`);
+  return r;
+};
+
 const isKeybind = (r: SettingRow): r is Extract<SettingRow, { kind: "keybind" }> => r.kind === "keybind";
 const asToggle = (r: SettingRow): Extract<SettingRow, { kind: "toggle" }> => {
   if (r.kind !== "toggle") throw new Error(`not a toggle: ${r.label}`);
@@ -91,7 +129,6 @@ describe("settingGroups shape", () => {
     expect(h.groups().map((g) => g.header)).toEqual([
       "appearance",
       "layout",
-      "panes",
       "animations",
       "files & session",
       "behavior",
@@ -101,24 +138,53 @@ describe("settingGroups shape", () => {
     ]);
   });
 
-  test("every schema row is reachable in exactly one GUI category", () => {
+  test("every schema prop surfaces a GUI row (reachability, not label-uniqueness)", () => {
     const h = mk();
-    // label is unique per core row; a row that lost its group would silently
-    // never render (the discoverability invariant this regroup must protect).
-    // "follow terminal" is the one exception: it has no row of its own — the
-    // theme cycle's System entry owns the knob (pinned below).
+    withMasters(h, true);
+    // knob labels intentionally repeat per animation section (the section
+    // header supplies context: duration/travel/direction/spread/easing read
+    // under ##files, ##sidebar intro, ##top bar, ##directory bar), so the
+    // invariant keys on props: a row whose group doesn't match the table
+    // would otherwise silently never render. "follow terminal" is the one
+    // exception: it has no row of its own — the theme cycle's System entry
+    // owns the knob (pinned below).
     const labels = h.groups().flatMap((g) => g.rows.map((r) => r.label));
     for (const row of UI_SCHEMA) {
       if (row.prop === "followTerminal") {
         expect(labels).not.toContain(row.label);
         continue;
       }
-      expect(labels.filter((l) => l === row.label)).toHaveLength(1);
+      expect(labels, `${row.prop} never surfaces`).toContain(row.label);
     }
+  });
+
+  test("only the animation knobs share labels (pinned duplicate set)", () => {
+    const h = mk();
+    withMasters(h, true);
+    const counts = new Map<string, number>();
+    for (const g of h.groups()) {
+      for (const r of g.rows) {
+        if (r.kind === "header") continue;
+        counts.set(r.label, (counts.get(r.label) ?? 0) + 1);
+      }
+    }
+    const dups = [...counts.entries()].filter(([, n]) => n > 1).sort(([a], [b]) => (a < b ? -1 : 1));
+    // section header supplies the context (##files vs ##sidebar intro vs
+    // ##top bar vs ##directory bar); a NEW duplicate outside this set is a
+    // naming regression, not progressive disclosure
+    expect(dups).toEqual([
+      ["direction", 4],
+      ["duration", 4],
+      ["easing", 4],
+      ["spread", 4],
+      ["style", 3],
+      ["travel", 4],
+    ]);
   });
 
   test("every surfaced row carries a plain-language one-line blurb (description footer)", () => {
     const h = mk();
+    withMasters(h, true);
     // the footer shows `blurb`, never the TOML `doc` (ranges, true/false,
     // units) — a blurb that leaks tech markers regresses to doc-paste.
     const banned = ["..", "true", "false", "cells", "ms"];
@@ -148,19 +214,21 @@ describe("settingGroups shape", () => {
     }
   });
 
-  test("auto-hide toggles and their hover timing share the panes category", () => {
+  test("auto-hide toggles and their hover timing share the layout category", () => {
     const h = mk();
-    const panes = h
+    withMasters(h, true);
+    const layout = h
       .groups()
-      .find((g) => g.header === "panes")!
+      .find((g) => g.header === "layout")!
       .rows.map((r) => r.label);
-    for (const label of ["sidebar auto-hide", "hover zone", "hover animation", "preview pane"]) {
-      expect(panes).toContain(label);
+    for (const label of ["sidebar auto-hide", "hover zone", "slide duration", "preview pane"]) {
+      expect(layout).toContain(label);
     }
   });
 
   test("long groups carry section headers between topics (dividers)", () => {
     const h = mk();
+    withMasters(h, true);
     const anim = h
       .groups()
       .find((g) => g.header === "animations")!
@@ -171,47 +239,62 @@ describe("settingGroups shape", () => {
     expect(anim).toContain("##sidebar hover");
     expect(anim).toContain("##top bar");
     expect(anim).toContain("##directory bar");
+    expect(anim).toContain("##performance");
     // the FIRST section gets a divider too — headers sit before AND between topics
     expect(anim[0]).toBe("##files");
     expect(anim.indexOf("file animation")).toBeGreaterThan(anim.indexOf("##files"));
     expect(anim.indexOf("file animation")).toBeLessThan(anim.indexOf("##file hover"));
-    expect(anim.indexOf("hover lift direction")).toBeLessThan(anim.indexOf("##sidebar intro"));
-    expect(anim.indexOf("include title in intro")).toBeLessThan(anim.indexOf("##sidebar hover"));
+    expect(anim.indexOf("lift direction")).toBeLessThan(anim.indexOf("##sidebar intro"));
+    expect(anim.indexOf("include logo")).toBeLessThan(anim.indexOf("##sidebar hover"));
+    expect(anim.indexOf("reveal delay")).toBeGreaterThan(anim.indexOf("##performance"));
   });
 
-  test("panes group carries auto-hide / hover-timing section headers", () => {
+  test("layout group is one surface-ordered category: view/sidebar/preview/terminal/panes/grid/list/timing", () => {
     const h = mk();
-    const panes = h
-      .groups()
-      .find((g) => g.header === "panes")!
-      .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    expect(panes[0]).toBe("##panes");
-    expect(panes).toContain("##auto-hide");
-    expect(panes).toContain("##hover timing");
-    expect(panes.indexOf("preview pane")).toBeGreaterThan(panes.indexOf("##panes"));
-    expect(panes.indexOf("dual pane")).toBeLessThan(panes.indexOf("##auto-hide"));
-    expect(panes.indexOf("hover animation")).toBeGreaterThan(panes.indexOf("##hover timing"));
-  });
-
-  test("layout group sections sizes/grid/list/view, terminal height beside the widths", () => {
-    const h = mk();
+    withMasters(h, true);
     const layout = h
       .groups()
       .find((g) => g.header === "layout")!
       .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
     expect(layout).toEqual([
+      "##view",
       "view mode",
       "wrap mode",
-      "##sizes",
+      "tab bar",
+      "##sidebar",
       "sidebar width",
+      "sidebar title",
+      "recent",
+      "starred",
+      "trash",
+      "user folders",
+      "bookmarks",
+      "devices",
+      "network",
+      "sidebar auto-hide",
+      "sidebar collapse",
+      "##preview",
+      "preview pane",
       "preview width",
+      "preview auto-hide",
+      "preview collapse",
+      "##terminal",
       "terminal height",
+      "terminal auto-hide",
+      "terminal collapse",
+      "##panes",
+      "dual pane",
       "##grid",
       "grid tile width",
       "grid tile height",
       "grid icon size",
       "##list",
       "list row height",
+      "##hover timing",
+      "hover zone",
+      "hover open delay",
+      "hover close delay",
+      "slide duration",
     ]);
   });
 
@@ -222,38 +305,38 @@ describe("settingGroups shape", () => {
         .groups()
         .find((g) => g.header === header)!
         .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    // type-to-search leads (highest traffic); mouse gestures share a section, the lone toast trails headerless
-    expect(seq("behavior")).toEqual(["type to search", "##mouse", "double-click", "drag threshold", "toast duration"]);
-    // hidden files leads into its listing topic; session persistence is its own section
+    // every section headed (no trailing headerless rows): general leads,
+    // mouse gestures share a section
+    expect(seq("behavior")).toEqual([
+      "##general",
+      "type to search",
+      "toast duration",
+      "##mouse",
+      "double-click",
+      "drag threshold",
+    ]);
+    // hidden files splices in under the listing header; session persistence
+    // is its own section
     expect(seq("files & session")).toEqual([
-      "hidden files",
       "##listing",
+      "hidden files",
       "recursive search",
       "sort mode",
       "##session",
       "restore session",
       "persistent undo",
     ]);
-    // theme preset leads, then style, chrome (sidebar title + section
-    // toggles with tab bar trailing them), and the compatibility pair
-    // bottoms out the group
+    // theme preset leads (hero, like the keymap preset), then look, then
+    // the compatibility pair — plain words only ("chrome" is jargon, and the
+    // old `style` header would collide with the per-surface animation
+    // `style` knob rows)
     expect(seq("appearance")).toEqual([
       "theme",
-      "##style",
+      "##look",
       "transparent bg",
       "icons",
       "icon style",
       "ui style",
-      "##chrome",
-      "sidebar title",
-      "recent",
-      "starred",
-      "trash",
-      "user folders",
-      "bookmarks",
-      "devices",
-      "network",
-      "tab bar",
       "##compatibility",
       "tty mode",
       "force glyph",
@@ -272,17 +355,17 @@ describe("settingGroups shape", () => {
       "##navigation",
       "##selection",
       "##view",
-      "##panes",
+      "##split panes",
     ]);
     // spot-check section membership across the boundaries (preset leads)
-    expect(seq.slice(0, 5)).toEqual(["keymap preset", "##app", "quit tfm", "restart tfm", "open the esc menu"]);
+    expect(seq.slice(0, 5)).toEqual(["keymap preset", "##app", "quit", "restart", "open menu"]);
     expect(seq.slice(seq.indexOf("##tabs") + 1, seq.indexOf("##tabs") + 5)).toEqual([
       "new tab",
       "close tab",
       "next tab",
       "previous tab",
     ]);
-    expect(seq.slice(seq.indexOf("##panes") + 1)).toEqual([
+    expect(seq.slice(seq.indexOf("##split panes") + 1)).toEqual([
       "toggle dual pane",
       "switch pane",
       "copy to other pane",
@@ -378,12 +461,21 @@ describe("settingGroups shape", () => {
     expect(kb.filter((r) => r.kind !== "header" && r.label !== "keymap preset").every(isKeybind)).toBe(true);
   });
 
-  test("hover lift controls live in animations under sensible labels", () => {
-    const anim = mk()
+  test("hover controls share one vocabulary per mechanism (lift vs nudge)", () => {
+    const h = mk();
+    withMasters(h, true);
+    const anim = h
       .groups()
       .find((g) => g.header === "animations")!
       .rows.map((r) => r.label);
-    for (const label of ["tile hover animation", "include filename in lift", "hover lift direction"]) {
+    for (const label of [
+      "lift icons",
+      "lift labels",
+      "lift direction",
+      "nudge icons",
+      "nudge labels",
+      "nudge direction",
+    ]) {
       expect(anim).toContain(label);
     }
     expect(anim).not.toContain("tile hover pop");
@@ -396,8 +488,16 @@ describe("settingGroups shape", () => {
       .groups()
       .find((g) => g.header === "layout")!
       .rows.map((r) => r.label);
+    // one surface, one home: widths, content toggles and auto-hide share layout
     expect(layout).toContain("sidebar width");
-    expect(layout).not.toContain("preview pane");
+    expect(layout).toContain("preview pane");
+    expect(layout).toContain("dual pane");
+    const appearance = h
+      .groups()
+      .find((g) => g.header === "appearance")!
+      .rows.map((r) => r.label);
+    expect(appearance).not.toContain("sidebar width");
+    expect(appearance).not.toContain("preview pane");
   });
 
   test("each plugin gets its OWN category with an on/off toggle first", () => {
@@ -415,7 +515,6 @@ describe("settingGroups shape", () => {
       ).toEqual([
         "appearance",
         "layout",
-        "panes",
         "animations",
         "files & session",
         "behavior",
@@ -430,7 +529,7 @@ describe("settingGroups shape", () => {
       const h = mk(plug);
       expect(h.model.pluginGroups().map((g) => g.header)).toEqual(["add plugins", "hello"]);
       const rows = h.model.pluginGroups().find((g) => g.header === "hello")!.rows;
-      expect(rows.map((r) => r.label)).toEqual(["enabled", "Say hello", "Update from git", "Remove…"]);
+      expect(rows.map((r) => r.label)).toEqual(["enabled", "Say hello", "update from git", "remove…"]);
       const toggle = rows[0]!;
       if (toggle.kind !== "toggle") throw new Error("first plugin row must be the enabled toggle");
       expect(toggle.get()).toBe(true);
@@ -459,14 +558,14 @@ describe("settingGroups shape", () => {
           .pluginGroups()
           .find((g) => g.header === "hello")!
           .rows.map((r) => r.label),
-      ).toEqual(["enabled", "Update from git", "Remove…"]);
+      ).toEqual(["enabled", "update from git", "remove…"]);
       toggle.set(true);
       expect(
         h.model
           .pluginGroups()
           .find((g) => g.header === "hello")!
           .rows.map((r) => r.label),
-      ).toEqual(["enabled", "Say hello", "Update from git", "Remove…"]);
+      ).toEqual(["enabled", "Say hello", "update from git", "remove…"]);
       expect(enabledChanges).toEqual([
         ["hello", false],
         ["hello", true],
@@ -480,8 +579,8 @@ describe("settingGroups shape", () => {
     for (const h of [mk(), mk(() => [])]) {
       expect(h.model.pluginGroups().map((g) => g.header)).toEqual(["add plugins"]);
       expect(h.model.pluginGroups()[0]!.rows.map((r) => r.label)).toEqual([
-        "Add from git URL…",
-        "Open plugins folder…",
+        "add from git URL…",
+        "open plugins folder…",
       ]);
     }
   });
@@ -540,7 +639,7 @@ describe("settingGroups shape", () => {
           store: makePluginStore(dir, "demo"),
         }),
       ]);
-      const res = asKeybind(h.byLabel("undo last file op")).set(["ctrl+j"]); // owned by demo:hi
+      const res = asKeybind(h.byLabel("undo")).set(["ctrl+j"]); // owned by demo:hi
       expect(res).toEqual({ status: "rejected", spec: "ctrl+j" });
       expect(h.warns.length).toBe(1);
       expect(h.warns[0]!.message).toContain("Say hi");
@@ -611,8 +710,8 @@ describe("settingGroups shape", () => {
       expect(groups.find((g) => g.header === "good")!.rows.map((r) => r.label)).toEqual([
         "enabled",
         "Good row",
-        "Update from git",
-        "Remove…",
+        "update from git",
+        "remove…",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -654,22 +753,27 @@ describe("generic schema rows", () => {
 
   test("stepper values carry units (ms tight-singular, % tight, cells singular at 1)", () => {
     const h = mk();
+    withMasters(h, true);
+    // knob labels repeat per animation section (pinned duplicate set above),
+    // so section-scope the lookups — the section header is the context
+    const files = (label: string): SettingRow => inSection(h, "animations", "files", label);
+    const intro = (label: string): SettingRow => inSection(h, "animations", "sidebar intro", label);
     // ms must not singularize to "m" (the old /s$/ strip did exactly that)
     expect(asStepper(h.byLabel("double-click")).fmt(400)).toBe("400 ms");
     expect(asStepper(h.byLabel("double-click")).fmt(1)).toBe("1 ms");
     expect(asStepper(h.byLabel("toast duration")).fmt(3000)).toBe("3000 ms");
-    expect(asStepper(h.byLabel("hover animation")).fmt(120)).toBe("120 ms");
+    expect(asStepper(h.byLabel("slide duration")).fmt(120)).toBe("120 ms");
     // percents render tight, no space
-    expect(asStepper(h.byLabel("stagger spread")).fmt(40)).toBe("40%");
-    expect(asStepper(h.byLabel("slide distance")).fmt(70)).toBe("70%");
+    expect(asStepper(files("spread")).fmt(40)).toBe("40%");
+    expect(asStepper(files("travel")).fmt(70)).toBe("70%");
     // cells singularize only at 1
     expect(asStepper(h.byLabel("sidebar width")).fmt(26)).toBe("26 cells");
     expect(asStepper(h.byLabel("sidebar width")).fmt(1)).toBe("1 cell");
-    expect(asStepper(h.byLabel("sidebar slide")).fmt(8)).toBe("8 cells");
+    expect(asStepper(intro("travel")).fmt(8)).toBe("8 cells");
     // counts + seconds
     expect(asStepper(h.byLabel("max animated files")).fmt(2000)).toBe("2000 files");
     expect(asStepper(h.byLabel("max animated files")).fmt(1)).toBe("1 file");
-    expect(asStepper(h.byLabel("listing cache age")).fmt(2)).toBe("2 s");
+    expect(asStepper(h.byLabel("cache age")).fmt(2)).toBe("2 s");
   });
 
   test("panel-repainting rows are flagged (theme / ui style / transparent bg / icons)", () => {
@@ -684,27 +788,20 @@ describe("generic schema rows", () => {
 
   test("cold-boot-only rows carry the restart flag (sidebar/topbar intro + session + launch time)", () => {
     const h = mk();
-    for (const label of [
-      "restore session",
-      "show launch time",
-      "sidebar animation",
-      "sidebar style",
-      "sidebar duration",
-      "sidebar slide",
-      "sidebar direction",
-      "sidebar stagger",
-      "sidebar easing",
-      "include title in intro",
-      "top bar animation",
-      "top bar style",
-      "top bar duration",
-      "top bar slide",
-      "top bar direction",
-      "top bar stagger",
-      "top bar easing",
-    ]) {
+    withMasters(h, true);
+    for (const label of ["restore session", "launch time", "sidebar animation", "top bar animation"]) {
       const row = h.byLabel(label);
       expect("restart" in row && row.restart, `${label} should need restart`).toBe(true);
+    }
+    // knob labels repeat per animation section — scope them
+    for (const [section, labels] of [
+      ["sidebar intro", ["style", "duration", "travel", "direction", "spread", "easing", "include logo"]],
+      ["top bar", ["style", "duration", "travel", "direction", "spread", "easing"]],
+    ] as Array<[string, string[]]>) {
+      for (const label of labels) {
+        const row = inSection(h, "animations", section, label);
+        expect("restart" in row && row.restart, `${section}/${label} should need restart`).toBe(true);
+      }
     }
     // live neighbors stay unflagged
     for (const label of ["dual pane", "sidebar auto-hide", "persistent undo", "directory bar animation"]) {
@@ -809,10 +906,10 @@ describe("hand-written rows", () => {
 describe("keybind rows", () => {
   test("conflicting bind returns a swap offer: no commit, no warn (panel offers Enter-to-swap)", () => {
     const h = mk();
-    const undo = h.byLabel("undo last file op");
+    const undo = h.byLabel("undo");
     expect(undo.kind).toBe("keybind");
     const res = asKeybind(undo).set(["ctrl+q"]); // owned by quit
-    expect(res).toEqual({ status: "conflict", spec: "ctrl+q", owner: "quit", ownerLabel: "quit tfm" });
+    expect(res).toEqual({ status: "conflict", spec: "ctrl+q", owner: "quit", ownerLabel: "quit" });
     expect(h.warns.length).toBe(0);
     expect(h.applied.length).toBe(0);
     expect(h.config.keys.undo).toEqual(defaultConfig.keys.undo);
@@ -821,7 +918,7 @@ describe("keybind rows", () => {
   test("swap() steals the bind in one commit, owner keeps its other binds", () => {
     const h = mk();
     h.config.keys.quit = ["ctrl+q", "alt+q"];
-    const undo = asKeybind(h.byLabel("undo last file op"));
+    const undo = asKeybind(h.byLabel("undo"));
     undo.swap?.("ctrl+q");
     expect(h.applied.length).toBe(1);
     expect(h.config.keys.undo).toEqual(["ctrl+q"]);
@@ -831,7 +928,7 @@ describe("keybind rows", () => {
   test("swap() when the owner moved on just sets the bind", () => {
     const h = mk();
     h.config.keys.quit = ["alt+q"]; // ctrl+q now free
-    asKeybind(h.byLabel("undo last file op")).swap?.("ctrl+q");
+    asKeybind(h.byLabel("undo")).swap?.("ctrl+q");
     expect(h.applied.length).toBe(1);
     expect(h.config.keys.undo).toEqual(["ctrl+q"]);
   });
@@ -839,14 +936,14 @@ describe("keybind rows", () => {
   test("second core bind onto the same spec re-offers (still no commit)", () => {
     const h = mk();
     h.config.keys.undo = ["ctrl+b"];
-    const res = asKeybind(h.byLabel("quit tfm")).set(["ctrl+b"]);
-    expect(res).toEqual({ status: "conflict", spec: "ctrl+b", owner: "undo", ownerLabel: "undo last file op" });
+    const res = asKeybind(h.byLabel("quit")).set(["ctrl+b"]);
+    expect(res).toEqual({ status: "conflict", spec: "ctrl+b", owner: "undo", ownerLabel: "undo" });
     expect(h.applied.length).toBe(0);
   });
 
   test("free bind commits through commitKeys, other actions untouched", () => {
     const h = mk();
-    asKeybind(h.byLabel("undo last file op")).set(["ctrl+b"]);
+    asKeybind(h.byLabel("undo")).set(["ctrl+b"]);
     expect(h.applied.length).toBe(1);
     expect(h.config.keys.undo).toEqual(["ctrl+b"]);
     expect(h.config.keys.quit).toEqual(defaultConfig.keys.quit);
@@ -880,7 +977,7 @@ describe("plugin installer rows", () => {
       const install = h.model.pluginGroups().find((g) => g.header === "add plugins")!;
       for (const row of install.rows) asAction(row).run();
       const demo = h.model.pluginGroups().find((g) => g.header === "demo")!;
-      for (const row of demo.rows.filter((r) => r.label === "Update from git" || r.label === "Remove…")) {
+      for (const row of demo.rows.filter((r) => r.label === "update from git" || r.label === "remove…")) {
         asAction(row).run();
       }
       expect(calls).toEqual(["add", "open", "update:demo", "remove:demo"]);
@@ -895,7 +992,7 @@ describe("plugin installer rows", () => {
       const h = mk(() => [mkPlugin({ name: "demo", store: makePluginStore(dir, "demo") })]);
       expect(h.ctx.pluginInstall).toBeUndefined();
       const all = h.model.pluginGroups().flatMap((g) => g.rows);
-      for (const label of ["Add from git URL…", "Open plugins folder…", "Update from git", "Remove…"]) {
+      for (const label of ["add from git URL…", "open plugins folder…", "update from git", "remove…"]) {
         const row = all.find((r) => r.label === label)!;
         expect(() => asAction(row).run()).not.toThrow();
       }
@@ -936,5 +1033,160 @@ describe("plugin manifest header", () => {
     const headers = h.model.pluginGroups().map((g) => g.header);
     expect(headers).toContain("meta · 1.2.3 · someone · does things");
     expect(headers).toContain("plain");
+  });
+});
+
+describe("dependent rows hide behind their master toggle (progressive disclosure)", () => {
+  const labelsOf = (h: MkHarness, header: string): string[] =>
+    h
+      .groups()
+      .find((g) => g.header === header)!
+      .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+
+  test("factory defaults show only masters: dependents hidden, sections pruned", () => {
+    const h = mk();
+    // animations: every intro/hover/files section collapses to its master
+    expect(labelsOf(h, "animations")).toEqual([
+      "##files",
+      "file animation",
+      "##file hover",
+      "lift icons",
+      "##sidebar intro",
+      "sidebar animation",
+      "##sidebar hover",
+      "nudge icons",
+      "##top bar",
+      "top bar animation",
+      "##directory bar",
+      "directory bar animation",
+      "##performance",
+      "reveal delay",
+    ]);
+    // the other perf knobs need file animation (off), but reveal delay
+    // answers to windowed grid alone (on) — so the section keeps one row
+    // layout: collapse styles and gated widths hidden; hover timing gone entirely
+    expect(labelsOf(h, "layout")).toEqual([
+      "##view",
+      "view mode",
+      "wrap mode",
+      "tab bar",
+      "##sidebar",
+      "sidebar width",
+      "sidebar title",
+      "recent",
+      "starred",
+      "trash",
+      "user folders",
+      "bookmarks",
+      "devices",
+      "network",
+      "sidebar auto-hide",
+      "##preview",
+      "preview pane",
+      "##terminal",
+      "terminal height",
+      "terminal auto-hide",
+      "##panes",
+      "dual pane",
+      "##grid",
+      "grid tile width",
+      "grid tile height",
+      "grid icon size",
+      "##list",
+      "list row height",
+    ]);
+    // optimization: the listings cache defaults on, so its stats rows show;
+    // (flipping it off hides them — pinned below)
+    expect(labelsOf(h, "optimization")).toEqual([
+      "##rendering",
+      "windowed grid",
+      "loading delay",
+      "##caching",
+      "cache folder listings",
+      "cache file stats",
+      "cache age",
+    ]);
+  });
+
+  test("flipping one master reveals exactly its dependents", () => {
+    const h = mk();
+    h.config.ui.previewEnabled = true;
+    expect(labelsOf(h, "layout")).toContain("preview width");
+    expect(labelsOf(h, "layout")).toContain("preview auto-hide");
+    expect(labelsOf(h, "layout")).not.toContain("preview collapse");
+    h.config.ui.previewAutoHide = true;
+    expect(labelsOf(h, "layout")).toContain("preview collapse");
+    h.config.ui.previewEnabled = false;
+    expect(labelsOf(h, "layout")).not.toContain("preview width");
+    expect(labelsOf(h, "layout")).not.toContain("preview auto-hide");
+    expect(labelsOf(h, "layout")).not.toContain("preview collapse");
+    // listings cache off hides its stats rows but keeps the master
+    h.config.ui.listingsCache = false;
+    expect(labelsOf(h, "optimization")).toEqual([
+      "##rendering",
+      "windowed grid",
+      "loading delay",
+      "##caching",
+      "cache folder listings",
+    ]);
+  });
+
+  test("reveal delay follows windowed grid alone (the switch users find)", () => {
+    const h = mk();
+    // windowed grid defaults on: the delay shows even with file animation off
+    expect(labelsOf(h, "animations")).toContain("reveal delay");
+    h.config.ui.windowedGrid = false;
+    expect(labelsOf(h, "animations")).not.toContain("reveal delay");
+    h.config.ui.windowedGrid = true;
+    expect(labelsOf(h, "animations")).toContain("reveal delay");
+  });
+
+  test("perf knobs hide with file animation (reveal delay excepted)", () => {
+    const h = mk();
+    withMasters(h, true);
+    expect(labelsOf(h, "animations")).toContain("one-layer fade");
+    expect(labelsOf(h, "animations")).toContain("reveal delay");
+    h.config.ui.fileAnimation = false;
+    expect(labelsOf(h, "animations")).not.toContain("one-layer fade");
+    expect(labelsOf(h, "animations")).not.toContain("max animated files");
+    // reveal delay answers to windowed grid only, so it stays
+    expect(labelsOf(h, "animations")).toContain("reveal delay");
+  });
+
+  test("hover timing appears when any auto-hide turns on, with its header", () => {
+    const h = mk();
+    expect(labelsOf(h, "layout")).not.toContain("##hover timing");
+    h.config.ui.terminalAutoHide = true;
+    const layout = labelsOf(h, "layout");
+    expect(layout).toContain("##hover timing");
+    for (const label of ["hover zone", "hover open delay", "hover close delay", "slide duration"]) {
+      expect(layout).toContain(label);
+    }
+    expect(layout).toContain("terminal collapse");
+  });
+
+  test("gating masters rebuild the panel (repaint) so children appear live", () => {
+    const h = mk();
+    withMasters(h, true);
+    for (const label of [
+      "file animation",
+      "lift icons",
+      "sidebar animation",
+      "nudge icons",
+      "top bar animation",
+      "directory bar animation",
+      "preview pane",
+      "sidebar auto-hide",
+      "preview auto-hide",
+      "terminal auto-hide",
+      "cache folder listings",
+      "windowed grid",
+    ]) {
+      const row = h.byLabel(label);
+      expect("repaint" in row && row.repaint, `${label} should rebuild`).toBe(true);
+    }
+    // dependents themselves paint by id (no rebuild needed)
+    const plain = h.byLabel("toast duration");
+    expect("repaint" in plain && plain.repaint).toBeFalsy();
   });
 });

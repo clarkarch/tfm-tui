@@ -10,34 +10,8 @@
 [ui]
 view-mode                             = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
 wrap-mode                             = "none"      # none = cut names with … and clip code preview; char = character-wrap tile names and code lines; word = break at spaces (spaceless runs still slice). Prose (.txt, markdown paragraphs) always word-wraps.
+tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 sidebar-width                         = 26          # 16..60 cells (grid + list)
-preview-width                         = 40          # 20..80 cells
-terminal-height                       = 12          # embedded terminal pane height in rows, 4..30 (applies live to the open pane)
-tile-width                            = 20          # 10..40 cells (grid view)
-tile-height                           = 5           # 3..10 cells (grid view)
-icon-cells                            = 3           # grid icon height in rows, 1..5
-list-row-height                       = 1           # list view row height in cells, 1..3 (icon scales with it)
-preview-enabled                       = false       # right-side preview pane (text files, folder stats)
-dual-pane                             = false       # true = two independent file panes side by side (tab switches the active pane); false = single pane
-sidebar-auto-hide                     = false       # true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)
-sidebar-collapse-style                = "hidden"    # "rail" = icon-only strip; "hidden" = width 0; "min" = shrink to a sliver
-preview-auto-hide                     = false       # true = collapse the preview pane until the mouse nears the right edge
-preview-collapse-style                = "hidden"    # "rail" = narrow strip; "hidden" = width 0; "min" = shrink to a sliver
-terminal-auto-hide                    = false       # true = the open terminal pane collapses to its header until the mouse nears the bottom edge (the shell stays alive)
-terminal-collapse-style               = "hidden"    # "header" = keep the title row visible; "hidden" = height 0
-hover-zone-cells                      = 8           # cells from the edge that trigger an auto-hide expand, 1..8
-hover-open-delay-ms                   = 195         # delay before an auto-hide panel expands, 0..1000 ms
-hover-close-delay-ms                  = 175         # delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms
-hover-anim-ms                         = 120         # auto-hide slide duration, 0..600 ms (0 = instant)
-type-to-search                        = true        # true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)
-double-click-ms                       = 400         # 100..2000
-drag-threshold-cells                  = 1           # cells of movement before a press becomes a drag, 1..5
-toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
-follow-terminal                       = false       # true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset
-transparent-bg                        = "off"       # "off" = force opaque (preset bg nudged off the terminal default); "on" = faithful theme hex, renderer transparent (panels still paint); "force" = chrome rest fills cleared too, the terminal bg shows through regardless of the preset
-icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
-icon-style                            = "filled"    # "filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)
-ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
 sidebar-show-recent                   = true        # true = show Recent in the places sidebar; false = hide it
 sidebar-show-starred                  = true        # true = show Starred in the places sidebar; false = hide it
@@ -46,7 +20,33 @@ sidebar-show-user-dirs                = true        # true = show home folders (
 sidebar-show-bookmarks                = true        # true = show GTK bookmarks in the places sidebar; false = hide them
 sidebar-show-devices                  = true        # true = show drives in the places sidebar; false = hide them
 sidebar-show-network                  = true        # true = show shared servers in the places sidebar; false = hide them
-tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
+sidebar-auto-hide                     = false       # true = collapse the places sidebar until the mouse nears its edge (see sidebar-collapse-style)
+sidebar-collapse-style                = "hidden"    # "rail" = icon-only strip; "hidden" = width 0; "min" = shrink to a sliver
+preview-enabled                       = false       # right-side preview pane (text files, folder stats)
+preview-width                         = 40          # 20..80 cells
+preview-auto-hide                     = false       # true = collapse the preview pane until the mouse nears the right edge
+preview-collapse-style                = "hidden"    # "rail" = narrow strip; "hidden" = width 0; "min" = shrink to a sliver
+terminal-height                       = 12          # embedded terminal pane height in rows, 4..30 (applies live to the open pane)
+terminal-auto-hide                    = false       # true = the open terminal pane collapses to its header until the mouse nears the bottom edge (the shell stays alive)
+terminal-collapse-style               = "hidden"    # "header" = keep the title row visible; "hidden" = height 0
+dual-pane                             = false       # true = two independent file panes side by side (tab switches the active pane); false = single pane
+tile-width                            = 20          # 10..40 cells (grid view)
+tile-height                           = 5           # 3..10 cells (grid view)
+icon-cells                            = 3           # grid icon height in rows, 1..5
+list-row-height                       = 1           # list view row height in cells, 1..3 (icon scales with it)
+hover-zone-cells                      = 8           # cells from the edge that trigger an auto-hide expand, 1..8
+hover-open-delay-ms                   = 195         # delay before an auto-hide panel expands, 0..1000 ms
+hover-close-delay-ms                  = 175         # delay before an auto-hide panel collapses (anti-flicker), 0..2000 ms
+hover-anim-ms                         = 120         # auto-hide slide duration, 0..600 ms (0 = instant)
+type-to-search                        = true        # true = typing filters the folder (bare keys); false = bare keys never filter (yazi preset flips it off, startSearch re-arms on demand)
+toast-duration-ms                     = 3000        # how long notifications stay up, 1000..10000
+double-click-ms                       = 400         # 100..2000
+drag-threshold-cells                  = 1           # cells of movement before a press becomes a drag, 1..5
+follow-terminal                       = false       # true = build the theme from the terminal's own colors (OSC fg/bg + palette; picked as the System theme row) instead of a fixed preset
+transparent-bg                        = "off"       # "off" = force opaque (preset bg nudged off the terminal default); "on" = faithful theme hex, renderer transparent (panels still paint); "force" = chrome rest fills cleared too, the terminal bg shows through regardless of the preset
+icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
+icon-style                            = "filled"    # "filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)
+ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 tty-mode                              = "auto"      # "auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never
 force-glyph                           = false       # true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)
 file-animation                        = false       # true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)
@@ -57,11 +57,6 @@ file-animation-stagger-pct            = 40          # how spread the cascade wav
 file-animation-slide-pct              = 70          # how far files slide, 0..150% of the viewport (0 = fade in place; clamped to whole cells)
 file-animation-slide-dir              = "up"        # "up"/"down" = files rise/drop vertically; "left"/"right" = files slide in horizontally
 file-animation-ease                   = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
-file-animation-container-fade         = true        # true = fade the grid as one layer instead of per tile (same look, one opacity update per frame instead of one per file)
-file-animation-visible-only           = true        # true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)
-file-animation-row-granularity        = false       # true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)
-file-animation-max-files              = 2000        # skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list, huge folders jank; 0 = never skip)
-file-animation-scroll-reveal-delay-ms = 0           # wait for scroll to settle this long before playing the scroll-reveal (0 = play every notch; higher = one wave per pause: cheaper on huge folders and the wave actually completes visibly)
 windowed-grid                         = true        # true = render only the visible rows (plus overscan) of a folder, sliding as you scroll (huge folders stop rebuilding/relaying thousands of off-screen tiles; selection and search still see every file)
 loading-delay-ms                      = 150         # how long a folder listing may take before the pane swaps to a loading placeholder instead of keeping the previous folder's files on screen (0 = clear and show it immediately, 5000 = effectively never)
 listings-cache                        = true        # true = reuse a folder's file list across repaints until the folder itself changes (back/forward and selection changes skip the disk; some network/fuse mounts freeze the folder timestamp, so entries refresh after ~2s regardless)
@@ -95,6 +90,11 @@ directory-bar-slide-cells             = 8           # how far crumbs slide in, 0
 directory-bar-dir                     = "right"     # "right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically
 directory-bar-stagger-pct             = 40          # how spread the crumb cascade is, 0..300% (0 = all crumbs at once)
 directory-bar-ease                    = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
+file-animation-container-fade         = true        # true = fade the grid as one layer instead of per tile (same look, one opacity update per frame instead of one per file)
+file-animation-visible-only           = true        # true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)
+file-animation-row-granularity        = false       # true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)
+file-animation-max-files              = 2000        # skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list, huge folders jank; 0 = never skip)
+file-animation-scroll-reveal-delay-ms = 0           # wait for scroll to settle this long before playing the scroll-reveal (0 = play every notch; higher = one wave per pause: cheaper on huge folders and the wave actually completes visibly)
 show-hidden                           = false       # start with dotfiles visible (ctrl+h toggles at runtime)
 recursive-search                      = false       # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
 sort-mode                             = "type"      # "name" = A-Z; "size" = largest first; "mtime" = oldest first; "type" = grouped by kind (folders first, always)
