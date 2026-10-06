@@ -26,11 +26,13 @@ import {
   descText,
   ensureVisible,
   fitDescText,
+  fitValueText,
   flatVisible,
   renderSettingsPanel,
   sectionKey,
   settingsPanelWidth,
   settingsVisRows,
+  SET_TOGGLE_W,
   SET_VAL_W,
   visiblePos,
   type SettingsPanelState,
@@ -321,17 +323,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     }
     const value =
       row.kind === "toggle"
-        ? row.get()
-          ? "on"
-          : "off"
+        ? fitValueText(row.get() ? "on" : "off", SET_TOGGLE_W)
         : row.kind === "stepper"
-          ? row.fmt(row.get())
+          ? fitValueText(row.fmt(row.get()), SET_VAL_W - 1)
           : (() => {
               const i = row.getIdx();
-              return i >= 0 ? (row.names[i] ?? "?") : (row.customLabel?.() ?? "custom");
+              const name = i >= 0 ? (row.names[i] ?? "?") : (row.customLabel?.() ?? "custom");
+              return fitValueText(name, SET_VAL_W - 1);
             })();
     setOnId(`tfm-set-rowv-${index}`, (n) => {
-      n.content = value.length > SET_VAL_W - 1 ? value.slice(0, SET_VAL_W - 1) : value;
+      n.content = value;
       // selected rows keep white values; unselected toggles keep the on/accent cue
       if (st.pane === "rows" && st.menuIdx === index) n.fg = menuC.white;
       else if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;

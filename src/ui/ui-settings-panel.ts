@@ -165,6 +165,18 @@ export const descText = (row: SettingRow | undefined): string => {
 
 export const fitDescText = (text: string, panelW: number = SETTINGS_MAX_W): string => `ⓘ ${text}`.slice(0, panelW - 4);
 
+// value-cell text for every row kind (toggle/stepper/cycle/keybind): sliced to
+// the text room then left-padded so the value sits flush right. Box-level
+// justifyContent does NOT right-align Text children (probed: a flex-end Box
+// still paints its Text flush left), so the padding is in the string itself.
+// afterAdjust in ./ui-settings repaints the same cells by id and must use this
+// too, or an adjust snaps the value back left.
+export const fitValueText = (value: string, room: number): string =>
+  value.length > room ? value.slice(0, room) : value.padStart(room, " ");
+
+// toggle value-box width (no padding — the text room IS the box)
+export const SET_TOGGLE_W = 6;
+
 export const renderSettingsPanel = (
   c: Theme,
   panel: NodeLike,
@@ -474,10 +486,10 @@ const renderRowPane = (
         on = rowSpec.get();
       } catch {}
       control = Box(
-        { width: 6, justifyContent: "flex-end" },
+        { width: SET_TOGGLE_W, justifyContent: "flex-end" },
         Text({
           id: `tfm-set-rowv-${index}`,
-          content: on ? "on" : "off",
+          content: fitValueText(on ? "on" : "off", SET_TOGGLE_W),
           fg: active ? c.white : on ? c.accent : c.sidebarFgMuted,
         }),
       );
@@ -499,7 +511,7 @@ const renderRowPane = (
           { width: w.valW, justifyContent: "flex-end", paddingRight: 1 },
           Text({
             id: `tfm-set-rowv-${index}`,
-            content: value.length > w.valW - 1 ? value.slice(0, w.valW - 1) : value,
+            content: fitValueText(value, w.valW - 1),
             fg: active ? c.white : c.sidebarFgMuted,
           }),
         ),
@@ -531,7 +543,7 @@ const renderRowPane = (
         { width: w.keyW, justifyContent: "flex-end", paddingRight: 1 },
         Text({
           id: `tfm-set-rowv-${index}`,
-          content: shownBinds.length > w.keyW - 1 ? shownBinds.slice(0, w.keyW - 1) : shownBinds,
+          content: fitValueText(shownBinds, w.keyW - 1),
           fg: active ? c.white : c.sidebarFgMuted,
         }),
       );

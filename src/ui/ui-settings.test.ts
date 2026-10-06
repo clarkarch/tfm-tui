@@ -369,21 +369,21 @@ describe("settings view", () => {
   });
 
   test("row adjust: toggle flips on/accent, stepper steps within bounds, cycle wraps", async () => {
-    // toggle row 0
+    // toggle row 0 (values right-align inside their boxes — padded, not bare)
     menu.menuActivate();
     await t.renderOnce();
-    expect(text("tfm-set-rowv-0")).toBe("on");
+    expect(text("tfm-set-rowv-0")).toBe("    on");
     // stepper row 1: 20 -> 22 (step 2, in bounds)
     menu.moveMenu(1);
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(text("tfm-set-rowv-1")).toBe("22");
+    expect(text("tfm-set-rowv-1")).toBe("             22");
     // cycle row 2: tokyo-night -> gruvbox -> tokyo-night (wraps)
     menu.moveMenu(1);
     menu.adjustSelectedSetting(1);
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(text("tfm-set-rowv-2")).toBe("tokyo-night");
+    expect(text("tfm-set-rowv-2")).toBe("    tokyo-night");
   });
 
   test("hover paints the hovered row by id WITHOUT a rebuild (prev row restored)", async () => {
@@ -431,12 +431,14 @@ describe("settings view", () => {
     menu.menuActivate();
     await t.renderOnce();
     const shown = text("tfm-set-rowv-0");
-    expect(["on", "off"]).toContain(shown);
+    expect(["    on", "   off"]).toContain(shown);
     expect(fgInts("tfm-set-rowv-0")).toEqual(hexInts(colors.white));
     // move off: value falls back to the on/accent cue (or muted when off)
     menu.moveMenu(1);
     await t.renderOnce();
-    expect(fgInts("tfm-set-rowv-0")).toEqual(shown === "on" ? hexInts(colors.accent) : hexInts(colors.sidebarFgMuted));
+    expect(fgInts("tfm-set-rowv-0")).toEqual(
+      shown.trim() === "on" ? hexInts(colors.accent) : hexInts(colors.sidebarFgMuted),
+    );
   });
 
   test("chevrons follow the row highlight; synthetic over never steals the cursor", async () => {

@@ -3,6 +3,7 @@ import {
   clampToVisible,
   ensureVisible,
   fitDescText,
+  fitValueText,
   flatVisible,
   sectionKey,
   SETTINGS_MAX_W,
@@ -111,6 +112,21 @@ describe("collapsible sections (flatVisible projection)", () => {
 
   test("unknown keys collapse nothing", () => {
     expect(flatVisible(rows, "layout", new Set(["other::sizes"]))).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+});
+
+describe("fitValueText (right-aligned value cells)", () => {
+  test("short values pad left so the text sits flush right", () => {
+    expect(fitValueText("on", 6)).toBe("    on");
+    expect(fitValueText("22", 15)).toBe("             22");
+  });
+
+  test("exact-fit values pass through untouched", () => {
+    expect(fitValueText("123456", 6)).toBe("123456");
+  });
+
+  test("long values truncate like before (no wider than the room)", () => {
+    expect(fitValueText("tokyo-night-extra-long", 15)).toBe("tokyo-night-ext");
   });
 });
 
