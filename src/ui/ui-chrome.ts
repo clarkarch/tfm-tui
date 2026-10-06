@@ -137,9 +137,14 @@ export const makeChrome = (ctx: ChromeCtx) => {
   };
 
   const mountDevice = (device: string) => {
-    spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore" }, (err) =>
+    const child = spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore" }, (err) =>
       ctx.dlog(`mount ${device}: ${err.message}`),
     );
+    // a failing mount (bad device, policy) used to be silent — the reload
+    // below fires either way, so log the exit for the --debug trail
+    child.on("close", (code) => {
+      if (code !== 0) ctx.dlog(`mount ${device} exit ${code}`);
+    });
     scheduleDeviceReload(1200);
   };
 
@@ -249,9 +254,12 @@ export const makeChrome = (ctx: ChromeCtx) => {
   };
 
   const ejectDevice = (device: string) => {
-    spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore" }, (err) =>
+    const child = spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore" }, (err) =>
       ctx.dlog(`eject ${device}: ${err.message}`),
     );
+    child.on("close", (code) => {
+      if (code !== 0) ctx.dlog(`eject ${device} exit ${code}`);
+    });
     scheduleDeviceReload(1500);
   };
 

@@ -220,9 +220,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     }
     return { files, bytes, armed };
   };
-  // register the live child so the toast's ✕ kills it (SIGTERM) and the pause
-  // button stops/resumes it (SIGSTOP/SIGCONT) — archive tools report no bytes,
-  // so the ReadStream path never applies
+  // register the live child so the toast's ✕ kills it (SIGKILL, SIGCONT first
+  // when paused) and the pause button stops/resumes it (SIGSTOP/SIGCONT) —
+  // archive tools report no bytes, so the ReadStream path never applies
   const onArchiveChild = (child: ChildProcess): void => {
     prog.processCancel = () => {
       // SIGCONT first: a paused (SIGSTOPped) child ignores SIGTERM/SIGKILL

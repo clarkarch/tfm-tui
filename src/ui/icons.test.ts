@@ -15,6 +15,7 @@ import {
   lruGet,
   lruSet,
   pickSvgRenderer,
+  pngFromProc,
   rasterLaneFor,
   resolveIconName,
   svgSourceMtime,
@@ -675,3 +676,14 @@ const pngAlphaMin = (bytes: Uint8Array): number => {
   }
   return min;
 };
+
+describe("pngFromProc timeout", () => {
+  test("a hung renderer rejects instead of holding its slot forever", async () => {
+    const { spawn } = await import("node:child_process");
+    const proc = spawn("sleep", ["30"], { stdio: ["pipe", "pipe", "pipe"] });
+    const start = Date.now();
+    await expect(pngFromProc(proc, "sleep-probe", 100)).rejects.toThrow(/timed out/);
+    // well under the child's 30s life: the wrapper killed it, nothing lingers
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+});

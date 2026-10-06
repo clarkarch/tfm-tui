@@ -154,14 +154,14 @@ export const makeProps = (ctx: PropsCtx) => {
       propsTogglePaint("tfm-props-star", starSlot.spec, starred, starHover);
       if (starred) starredRegistryAdd(targetPath);
       else starredRegistryRemove(targetPath);
-      void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""]).catch(
-        () => {},
-      );
+      void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""], {
+        timeout: 10_000,
+      }).catch(() => {});
     });
     let starHover = false;
     let starred = readStarredList().includes(targetPath);
     if (starred) ctx.setIconState(starSlot.spec, IconStateIdx.Active);
-    void execFileP("gio", ["info", "-a", "metadata::starred", targetPath])
+    void execFileP("gio", ["info", "-a", "metadata::starred", targetPath], { timeout: 10_000 })
       .then(({ stdout }) => {
         const m = stdout.match(/metadata::starred:\s*(\S+)/);
         const gioStarred = !!m && m[1] !== "";

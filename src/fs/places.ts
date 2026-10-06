@@ -228,7 +228,10 @@ export function parseLsblk(json: unknown): MountEntry[] {
 
 async function listMounts(): Promise<MountEntry[]> {
   try {
-    const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"]);
+    // timeout: a wedged lsblk must not stall the sidebar load forever
+    const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"], {
+      timeout: 10_000,
+    });
     return parseLsblk(JSON.parse(stdout));
   } catch {
     return [];

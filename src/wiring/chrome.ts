@@ -32,7 +32,7 @@ import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
-import { destroyChildren } from "../lib/uiutil";
+import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
@@ -431,14 +431,27 @@ export const wireChrome = async (deps: {
   const GIO_TIMEOUT_MS = 120_000;
 
   const runGio = async (args: string[], interactive: boolean): Promise<GioResult> => {
-    const proc = Bun.spawn(["gio", ...args], {
-      stdin: interactive ? "pipe" : "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      // LC_ALL=C pins the prompt labels to English (User/Password/Domain) so
-      // takeGioPrompt's matcher is deterministic under any user locale
-      env: { ...process.env, LC_ALL: "C", LANG: "C" },
-    });
+    // separate closure so the narrowed Subprocess subtype survives the
+    // try/catch below (an explicit Bun.Subprocess annotation widens stdout/
+    // stdin back to number|stream unions and nothing typechecks afterwards)
+    const spawnGioProc = (a: string[], i: boolean) =>
+      Bun.spawn(["gio", ...a], {
+        stdin: i ? "pipe" : "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        // LC_ALL=C pins the prompt labels to English (User/Password/Domain) so
+        // takeGioPrompt's matcher is deterministic under any user locale
+        env: { ...process.env, LC_ALL: "C", LANG: "C" },
+      });
+    let proc: ReturnType<typeof spawnGioProc>;
+    try {
+      proc = spawnGioProc(args, interactive);
+    } catch (err) {
+      // missing gio binary: Bun throws ENOENT synchronously — degrade to a
+      // failure result (connect/disconnect already toast GioResult failures)
+      // instead of an unhandled rejection out of the fire-and-forget wrapper
+      return { code: 127, stdout: "", stderr: errMessage(err) };
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     let cancelled = false;
@@ -525,6 +538,12 @@ export const wireChrome = async (deps: {
   });
 
   connectServerImpl = async (raw?: string): Promise<void> => {
+    // fail fast when gio is absent (minimal/container distros) — otherwise
+    // the URL prompt opens first and only the mount spawn fails afterwards
+    if (!Bun.which("gio")) {
+      notify("Can't connect: gio not installed", "network", "error");
+      return;
+    }
     let input = raw ?? "";
     if (!input) {
       const v = await deps.getPrompt().open({
@@ -543,6 +562,10 @@ export const wireChrome = async (deps: {
   };
 
   disconnectServerImpl = async (mountPath: string): Promise<void> => {
+    if (!Bun.which("gio")) {
+      notify("Can't disconnect: gio not installed", "network", "error");
+      return;
+    }
     const cwd = core.state.cwd;
     // leave the share before unmounting it — navigating away first avoids
     // reading a dead FUSE path

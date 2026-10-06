@@ -2,6 +2,7 @@
 // and the cached-timestamp-first auth flow. No ui/renderer/state imports —
 // callers inject prompt/notify/exec seams so tests never touch real sudo. ---
 import { errCode } from "./fsutil";
+import { errMessage } from "../lib/uiutil";
 
 export const isPrivilegeError = (err: unknown): boolean => {
   const code = errCode(err);
@@ -126,18 +127,25 @@ export const runSudo = async (
   argv: string[],
   opts?: { stdin?: string; timeoutMs?: number },
 ): Promise<{ status: number | null; stdout: string; stderr: string }> => {
-  const proc = Bun.spawn(argv, {
-    stdin: opts?.stdin !== undefined ? "pipe" : "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: opts?.timeoutMs ?? 120_000,
-  });
-  if (opts?.stdin !== undefined && proc.stdin && typeof proc.stdin !== "number") {
-    const w = proc.stdin as unknown as { write(s: string): void; end(): void };
-    w.write(opts.stdin.endsWith("\n") ? opts.stdin : `${opts.stdin}\n`);
-    w.end();
+  try {
+    const proc = Bun.spawn(argv, {
+      stdin: opts?.stdin !== undefined ? "pipe" : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: opts?.timeoutMs ?? 120_000,
+    });
+    if (opts?.stdin !== undefined && proc.stdin && typeof proc.stdin !== "number") {
+      const w = proc.stdin as unknown as { write(s: string): void; end(): void };
+      w.write(opts.stdin.endsWith("\n") ? opts.stdin : `${opts.stdin}\n`);
+      w.end();
+    }
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    await proc.exited;
+    return { status: proc.exitCode, stdout: out, stderr: err };
+  } catch (err) {
+    // missing sudo binary: Bun throws ENOENT synchronously (unlike node
+    // spawn's async error event) — degrade to a null-status result so every
+    // caller toasts instead of surfacing an unhandled rejection
+    return { status: null, stdout: "", stderr: errMessage(err) };
   }
-  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  await proc.exited;
-  return { status: proc.exitCode, stdout: out, stderr: err };
 };

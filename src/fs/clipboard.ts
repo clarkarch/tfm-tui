@@ -124,7 +124,8 @@ export const readCopiedFilesFromSystemClipboard = async (log: ClipLog = () => {}
   }
   const read = async (args: string[]): Promise<string | null> => {
     try {
-      const { stdout } = await execFileP(t.get, args);
+      // timeout: a hung wl-paste/xclip must not stall paste forever
+      const { stdout } = await execFileP(t.get, args, { timeout: 10_000 });
       return String(stdout ?? "");
     } catch (err) {
       log(`paste: clipboard read failed (${args.join(" ") || "default"}): ${err}`);

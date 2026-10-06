@@ -154,10 +154,18 @@ const defaultExec: ExecFn = async (cmd, args, opts) => {
       stderr: "pipe",
       stdin: "ignore",
     });
+    let escalateTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       try {
         proc.kill();
       } catch {}
+      // escalation: a SIGTERM-immune hung git must not hold `exited` (and the
+      // install UI) forever — SIGKILL follows after a grace period
+      escalateTimer = setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      }, 5_000);
     }, 120_000);
     try {
       const [out, err, exit] = await Promise.all([
@@ -169,6 +177,7 @@ const defaultExec: ExecFn = async (cmd, args, opts) => {
       return { exit, output };
     } finally {
       clearTimeout(timer);
+      if (escalateTimer) clearTimeout(escalateTimer);
     }
   } catch (err) {
     return { exit: 127, output: errMessage(err) };

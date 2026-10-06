@@ -126,7 +126,7 @@ export const appsForFile = async (
 
 // fire-and-forget launch through gio (detached so the app outlives the spawn)
 export const launchApp = (desktopFile: string, file: string, onFail?: (e: Error) => void): void => {
-  spawnSafe("gio", ["launch", desktopFile, file], { stdio: "ignore", detached: true }, onFail);
+  spawnSafe("gio", ["launch", desktopFile, file], { stdio: "ignore", detached: true }, onFail).unref?.();
 };
 
 // Shared gate+exec core behind both escalation primitives below: one password

@@ -320,18 +320,41 @@ export const iconPng = async (
 // fallback; cached per file version in memory AND on disk so folder revisits
 // are instant instead of re-spawning a renderer per file) ---
 
-const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promise<Uint8Array> =>
+// test seam: the hung-renderer timeout is pinned through a real hanging child
+export const pngFromProc = (
+  proc: ChildProcessWithoutNullStreams,
+  tool: string,
+  timeoutMs = 30_000,
+): Promise<Uint8Array> =>
   new Promise<Uint8Array>((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    // a hung renderer must not occupy a RASTER_CONCURRENCY slot forever (12
+    // simultaneous hangs = the whole icon/thumbnail pipeline stalls with no
+    // sentinel, since failedThumbs only fires on rejection)
+    const timer = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {}
+      settle(() => reject(new Error(`${tool} timed out`)));
+    }, timeoutMs);
     proc.stdout.on("data", (c: Buffer) => chunks.push(c));
     // drain stderr: a chatty failing renderer filling its pipe would block the
     // process and 'close' would never fire (the thumb job would hang)
     proc.stderr.resume();
-    proc.on("error", reject);
+    proc.on("error", (err) => settle(() => reject(err)));
     proc.on("close", (code) =>
-      code === 0 && chunks.length > 0
-        ? resolve(new Uint8Array(Buffer.concat(chunks)))
-        : reject(new Error(`${tool} exited ${code}`)),
+      settle(() =>
+        code === 0 && chunks.length > 0
+          ? resolve(new Uint8Array(Buffer.concat(chunks)))
+          : reject(new Error(`${tool} exited ${code}`)),
+      ),
     );
   });
 

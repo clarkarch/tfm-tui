@@ -3,6 +3,7 @@ import {
   ensureSudoAuth,
   isPrivilegeError,
   makeEnsureSudo,
+  runSudo,
   sudoAvailable,
   sudoCpArgv,
   sudoExecError,
@@ -33,6 +34,13 @@ describe("sudo argv", () => {
   test("sudoAvailable honors injected which", () => {
     expect(sudoAvailable(() => null)).toBe(false);
     expect(sudoAvailable(() => "/usr/bin/sudo")).toBe(true);
+  });
+  test("runSudo degrades to null-status on a missing binary, never rejects", async () => {
+    // Bun throws ENOENT synchronously (unlike node spawn's async error event)
+    // — the runner must convert it so callers toast instead of rejecting
+    const r = await runSudo(["definitely-not-a-binary-tfm-xyz"]);
+    expect(r.status).toBeNull();
+    expect(r.stderr).toMatch(/not found/i);
   });
 });
 
