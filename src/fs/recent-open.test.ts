@@ -123,4 +123,60 @@ describe("makeRecentOpen", () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(calls.some((c) => c.includes("Opening movie.mp4"))).toBe(false);
   });
+
+  test("executable routes to the Run prompt, never xdg-open", async () => {
+    const { calls, ctx } = mkCtx({
+      isExecutable: () => ({ executable: true, needsChmod: false }),
+      askExecutable: (p) => {
+        calls.push(`ask:${p}`);
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/run.sh");
+    expect(calls).toContain("ask:/home/a/run.sh");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(false);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls.some((c) => c.startsWith("upsert:"))).toBe(false);
+  });
+
+  test("non-executable still spawns when the prompt seam is wired", async () => {
+    const { calls, ctx } = mkCtx({
+      isExecutable: () => ({ executable: false, needsChmod: false }),
+      askExecutable: () => {
+        calls.push("ask:unexpected");
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/movie.mp4");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true);
+    expect(calls).not.toContain("ask:unexpected");
+  });
+
+  test("Open anyway re-runs the plain spawn path", async () => {
+    const { calls, ctx } = mkCtx({
+      isExecutable: () => ({ executable: true, needsChmod: true }),
+      askExecutable: (_p, _info, openAnyway) => {
+        calls.push("ask:shown");
+        openAnyway();
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/app.AppImage");
+    expect(calls).toContain("ask:shown");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true);
+  });
+
+  test("trash view never prompts, even for executables", async () => {
+    const { calls, ctx } = mkCtx({
+      inTrashView: () => true,
+      isExecutable: () => ({ executable: true, needsChmod: false }),
+      askExecutable: () => {
+        calls.push("ask:unexpected");
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/run.sh");
+    expect(calls).not.toContain("ask:unexpected");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true);
+  });
 });

@@ -41,6 +41,10 @@ export type MenuEntriesCtx = {
   tileRefs: Map<string, GridTileRef>;
   selPaths(): ClipItem[];
   openFileDefault(p: string): void;
+  // executable launches (the Run prompt's actions, shared with double-click)
+  isExecutable(path: string): boolean;
+  runExecutable(path: string): void;
+  runExecutableInTerminal(path: string): void;
   setClipboard(mode: "copy" | "cut", items: ClipItem[]): void;
   duplicate(paths: string[]): void;
   startInlineRename(key: string): void;
@@ -347,7 +351,10 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       return withPluginSection(entries, targets);
     }
     // Open is directly clickable everywhere; the flyout keeps the variants
-    // (dirs: tab/pane/terminal, files: the "Open With…" chooser).
+    // (dirs: tab/pane/terminal, files: the "Open With…" chooser). Executables
+    // get a single Run row instead of Open (xdg-open would land them in the
+    // browser/editor) — hover reveals Run in Terminal + Open With….
+    const isExec = !isDir && ctx.isExecutable(targetPath);
     if (isDir) {
       entries.push({
         icon: "folder",
@@ -379,6 +386,33 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
             action: () => {
               ctx.closeFileMenu();
               ctx.openTerminalHere(targetPath);
+            },
+          },
+        ],
+      });
+    } else if (isExec) {
+      entries.push({
+        icon: "play",
+        label: "Run",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.runExecutable(targetPath);
+        },
+        submenu: [
+          {
+            icon: "terminal",
+            label: "Run in Terminal",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.runExecutableInTerminal(targetPath);
+            },
+          },
+          {
+            icon: "cog",
+            label: "Open With…",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.openWith(targetPath);
             },
           },
         ],

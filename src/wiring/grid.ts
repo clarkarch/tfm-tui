@@ -5,7 +5,10 @@
 
 import path from "node:path";
 import { errMessage } from "../lib/uiutil";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { chmod } from "node:fs/promises";
+import { spawnSafe } from "../fs/spawn-safe";
+import { addExecBits, classifyPath, executableChoiceLabels, type ExecutableInfo } from "../fs/executable";
 import { registerSyntaxParsers } from "../ui/syntax";
 import { availableCompressionFormats, canExtract, compressionExt, compressionHint } from "../fs/archive";
 import { appsForFile, launchApp } from "../fs/apps";
@@ -407,6 +410,79 @@ export const wireGrid = (deps: {
 
   // --- Menu entry builders (what the menus contain) live in ./menu-entries;
   // the floating menu widget itself lives in ./ui-menu ---
+  // --- Executable launches: a +x file (or ELF/shebang content) runs instead
+  // of landing in the browser/editor via xdg-open. Detached spawn uses the
+  // file's own dir as cwd; terminal runs feed the absolute quoted path into
+  // the embedded pane. needsChmod files gain exec bits (where read exists)
+  // first, with a toast saying so. ---
+  const spawnDetached = (p: string): void => {
+    try {
+      spawnSafe(p, [], { stdio: "ignore", detached: true, cwd: path.dirname(p) }, (err) => {
+        dlog(`run ${p}: ${err.message}`);
+        chrome.notify(`Can't run ${path.basename(p)} · ${err.message}`, "run", "error");
+      }).unref?.();
+    } catch (err) {
+      chrome.notify(`Can't run ${path.basename(p)} · ${errMessage(err)}`, "run", "error");
+      return;
+    }
+    chrome.notify(`Running ${path.basename(p)}`, "run", "info");
+  };
+
+  const ensureExec = async (p: string): Promise<boolean> => {
+    try {
+      await chmod(p, addExecBits(statSync(p).mode));
+      return true;
+    } catch (err) {
+      chrome.notify(`Chmod failed (${errMessage(err)})`, "run", "error");
+      return false;
+    }
+  };
+
+  const runExecutable = (p: string): void => {
+    const info = classifyPath(p);
+    if (!info.executable) {
+      chrome.notify(`Can't run ${path.basename(p)}`, "run", "error");
+      return;
+    }
+    if (!info.needsChmod) {
+      spawnDetached(p);
+      return;
+    }
+    void (async () => {
+      if (await ensureExec(p)) spawnDetached(p);
+    })();
+  };
+
+  const runExecutableInTerminal = (p: string): void => {
+    const info = classifyPath(p);
+    if (!info.executable) {
+      chrome.notify(`Can't run ${path.basename(p)}`, "run", "error");
+      return;
+    }
+    if (!info.needsChmod) {
+      fileops.terminal.execInTerminal(p);
+      return;
+    }
+    void (async () => {
+      if (await ensureExec(p)) fileops.terminal.execInTerminal(p);
+    })();
+  };
+
+  // the Run prompt behind openFileDefault's executable fork (same pick
+  // overlay as Open With…/Compress to… — no new float kind)
+  const askExecutable = (p: string, info: ExecutableInfo, openAnyway: () => void): void => {
+    const [runLabel, termLabel, openLabel] = executableChoiceLabels(info);
+    getPick().open({
+      title: `Run "${path.basename(p)}"?`,
+      placeholder: "Choose how to open…",
+      items: [
+        { label: runLabel, run: () => runExecutable(p) },
+        { label: termLabel, run: () => runExecutableInTerminal(p) },
+        { label: openLabel, run: openAnyway },
+      ],
+    });
+  };
+
   const menuEntries = makeMenuEntries({
     closeFileMenu: chrome.menu.closeFileMenu,
     navigate: nav.navigate,
@@ -458,6 +534,9 @@ export const wireGrid = (deps: {
     tileRefs: selection.tileRefs,
     selPaths: selection.selPaths,
     openFileDefault: chrome.openFileDefault,
+    isExecutable: (p: string): boolean => classifyPath(p).executable,
+    runExecutable,
+    runExecutableInTerminal,
     setClipboard: fileops.fileops.setClipboard,
     duplicate: (paths) => void fileops.fileops.duplicate(paths),
     startInlineRename: rename.startInlineRename,
@@ -509,5 +588,8 @@ export const wireGrid = (deps: {
     bandCtx,
     props,
     menuEntries,
+    runExecutable,
+    runExecutableInTerminal,
+    askExecutable,
   };
 };

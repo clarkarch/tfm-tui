@@ -8,6 +8,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { debounced } from "../lib/uiutil";
 import { canReadSync } from "./fsutil";
+import { classifyPath, type ExecutableInfo } from "./executable";
 import type { NotifyLevel } from "../lib/notify-level";
 
 type RecentOpenCtx = {
@@ -27,6 +28,12 @@ type RecentOpenCtx = {
   // escalation primitive (never rejects; gate-cancel stays silent, failures
   // toast inside). Elevated opens are not recorded to recent.
   openAsRoot: (p: string) => Promise<void>;
+  // executable fork: +x files (and ELF/shebang content without the bit)
+  // prompt Run / Run in Terminal / Open anyway instead of xdg-open, which
+  // would land them in the browser/editor. Absent = old behavior (fakes).
+  isExecutable?: (p: string) => ExecutableInfo;
+  // openAnyway re-runs the plain xdg-open path below (the prompt's fallback).
+  askExecutable?: (p: string, info: ExecutableInfo, openAnyway: () => void) => void;
 };
 
 export const makeRecentOpen = (ctx: RecentOpenCtx) => {
@@ -54,6 +61,21 @@ export const makeRecentOpen = (ctx: RecentOpenCtx) => {
       void ctx.openAsRoot(p).catch(() => {});
       return;
     }
+    // executables never reach xdg-open (browser/editor fallback): prompt for
+    // Run / Run in Terminal / Open anyway. Dirs never classify (statSync on
+    // a dir returns not-executable), so navigation is unaffected. Trash never
+    // prompts — running from the trash is not a thing, it opens like before.
+    const isExec = ctx.isExecutable ?? classifyPath;
+    const info = isExec(p);
+    const openAnyway = (): void => doSpawnOpen(p);
+    if (ctx.askExecutable && info.executable && !ctx.inTrashView()) {
+      ctx.askExecutable(p, info, openAnyway);
+      return;
+    }
+    doSpawnOpen(p);
+  };
+
+  const doSpawnOpen = (p: string): void => {
     recordOpen(p);
     let failed = false;
     ctx.spawnOpen(p, () => {

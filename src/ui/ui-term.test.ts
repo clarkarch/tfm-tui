@@ -379,4 +379,17 @@ describe("openTerminalHere", () => {
     expect(reply).toContain("\x1b[?62;1;2;6;9;15;22c");
     fac.closeTerminalPane();
   });
+
+  test("execInTerminal opens the pane at the file's dir and feeds the quoted path", () => {
+    const fac = mkTerm();
+    const written: string[] = [];
+    child.terminal!.write = (d: Uint8Array) => {
+      written.push(new TextDecoder().decode(d));
+    };
+    fac.execInTerminal("/tmp/my prog/run.sh");
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]!.cwd).toBe("/tmp/my prog");
+    expect(written.join("")).toBe("'/tmp/my prog/run.sh'\n");
+    fac.closeTerminalPane();
+  });
 });

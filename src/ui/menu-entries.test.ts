@@ -66,6 +66,9 @@ const baseCtx = (): MenuEntriesCtx & {
     inTrashView: () => false,
     selPaths: () => [{ path: "/a", isDir: false }],
     openFileDefault: (p) => calls.push(`open:${p}`),
+    isExecutable: () => false,
+    runExecutable: (p) => calls.push(`run:${p}`),
+    runExecutableInTerminal: (p) => calls.push(`runterm:${p}`),
     setClipboard: (m, items) => calls.push(`clip:${m}:${items.length}`),
     duplicate: (ps) => calls.push(`duplicate:${ps.join(",")}`),
     startInlineRename: (k) => calls.push(`rename:${k}`),
@@ -113,6 +116,31 @@ describe("pasteLabel", () => {
 });
 
 describe("fileEntriesFor", () => {
+  test("executables get a single Run row with a Terminal/Open-With flyout", () => {
+    const ctx = baseCtx();
+    ctx.isExecutable = () => true;
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a", false, 0, 0);
+    expect(entries[0]!.label).toBe("Run");
+    expect(entries.some((e) => e.label === "Open")).toBe(false);
+    expect(entries.some((e) => e.label === "Run in Terminal")).toBe(false);
+    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Run in Terminal", "Open With…"]);
+    entries[0]!.action();
+    expect(ctx.calls).toContain("run:/a");
+    entries[0]!.submenu![0]!.action();
+    expect(ctx.calls).toContain("runterm:/a");
+    entries[0]!.submenu![1]!.action();
+    expect(ctx.calls).toContain("openWith:/a");
+  });
+
+  test("non-executables and dirs get no Run rows", () => {
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    expect(m.fileEntriesFor("/a", false, 0, 0).some((e) => e.label === "Run")).toBe(false);
+    ctx.isExecutable = () => true;
+    expect(m.fileEntriesFor("/d", true, 0, 0).some((e) => e.label === "Run")).toBe(false);
+  });
+
   test("file menu opens files, dirs get paste-into + navigate", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);

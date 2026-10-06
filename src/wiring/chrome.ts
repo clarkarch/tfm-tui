@@ -27,6 +27,7 @@ import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
 import type { EaseKey, SlideDir } from "../ui/ui-grid-anim";
 import { makeRecentOpen } from "../fs/recent-open";
+import { classifyPath } from "../fs/executable";
 import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
@@ -391,7 +392,9 @@ export const wireChrome = async (deps: {
   // --- Recent-files recording + default open: batching/toast logic lives in
   // ./recent-open (tested); xbel write, xdg-open spawn and the app probe are
   // injected here. Unreadable files escalate through openAsRoot above — the
-  // open is adaptive, there is no separate elevated row. ---
+  // open is adaptive, there is no separate elevated row. Executables fork to
+  // grid's Run prompt (lazy via getGrid — pick wires last) instead of xdg-open,
+  // which would land them in the browser/editor. ---
   const { openFileDefault } = makeRecentOpen({
     inTrashView: core.inTrashView,
     notify,
@@ -405,6 +408,8 @@ export const wireChrome = async (deps: {
     },
     appForFile,
     openAsRoot,
+    isExecutable: (p) => classifyPath(p),
+    askExecutable: (p, info, openAnyway) => getGrid().askExecutable(p, info, openAnyway),
   });
 
   const dialogs = makeDialogs({

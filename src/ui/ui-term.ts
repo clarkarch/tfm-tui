@@ -1,4 +1,5 @@
 import { Box, type CliRenderer, EmbeddedTerminalRenderable, type MouseEvent, Text } from "@opentui/core";
+import path from "node:path";
 import { destroyChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
 import { applySurface, type UiStyle } from "./style";
@@ -545,6 +546,22 @@ export const makeTerminal = (ctx: TermCtx) => {
   return {
     openTerminalHere,
     closeTerminalPane,
+    // run a file in the embedded shell: open the pane at the file's dir (or
+    // focus it when already open — the path is absolute so the shell's cwd
+    // doesn't matter) and feed the quoted path + newline, i.e. exactly what
+    // the user would type. Absolute quoting keeps spaces/quotes safe.
+    execInTerminal: (targetPath: string): void => {
+      openTerminalHere(path.dirname(targetPath));
+      const pty = termChild?.terminal;
+      if (!pty) return;
+      try {
+        pty.write(new TextEncoder().encode(`${shellQuotePaths([targetPath])}\n`));
+      } catch {}
+      try {
+        term?.focus();
+        termFocused = true;
+      } catch {}
+    },
     syncTerminalHeight,
     syncTerminalTheme,
     termHasFocus,

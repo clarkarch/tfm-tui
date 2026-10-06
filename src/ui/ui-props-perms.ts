@@ -2,6 +2,7 @@ import { Box, type MouseEvent, Text } from "@opentui/core";
 import { statSync, openSync, readSync, closeSync, type Stats } from "node:fs";
 import { chmod } from "node:fs/promises";
 import path from "node:path";
+import { isRunnableHead } from "../fs/executable";
 import { applySurface, rowSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { idName, permWords } from "../fs/propsinfo";
@@ -123,6 +124,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
 
   // "execute as program" only makes sense for things that can actually run:
   // already-executable files, ELF binaries, shebang scripts, known script exts
+  // (content sniff shared with the open-path leaf in fs/executable)
   const execCapable = ((): boolean => {
     if (isDirTarget) return false;
     if (st.mode & 0o111) return true;
@@ -136,10 +138,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
       } finally {
         closeSync(fd);
       }
-      return (
-        (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) ||
-        (head[0] === 0x23 && head[1] === 0x21)
-      );
+      return isRunnableHead(head);
     } catch {
       return false;
     }

@@ -39,6 +39,7 @@ import type { makeMenuEntries } from "../ui/menu-entries";
 import type { makeEscMenu } from "../ui/ui-settings";
 import type { makeSystemTheme } from "../ui/ui-system-theme";
 import type { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
+import type { ExecutableInfo } from "../fs/executable";
 
 export type NavWiring = {
   renderAll: ReturnType<typeof makeRenderAll>;
@@ -105,6 +106,10 @@ export type GridWiring = {
   bandCtx: BandCtx;
   props: ReturnType<typeof makeProps>;
   menuEntries: ReturnType<typeof makeMenuEntries>;
+  // executable launches (the Run prompt behind openFileDefault's fork)
+  runExecutable: (p: string) => void;
+  runExecutableInTerminal: (p: string) => void;
+  askExecutable: (p: string, info: ExecutableInfo, openAnyway: () => void) => void;
 };
 
 export type SettingsWiring = {
