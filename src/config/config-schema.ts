@@ -10,6 +10,7 @@
 // ./keyspec — imported back only for the KEY_ROWS-driven conflict check below.
 
 import { keySpecEqual, parseKeySpec } from "./keyspec";
+import type { SortMode } from "../lib/sort";
 // Settings-row type lives HERE (a leaf, no imports) so the plugin api can
 // reference plugin-provided rows without importing a ui/ module — ui/settings
 // re-exports it, keeping the layering acyclic.
@@ -220,6 +221,7 @@ export type UiConfig = {
   doubleClickMs: number;
   showHidden: boolean;
   recursiveSearch: boolean;
+  sortMode: SortMode;
   previewEnabled: boolean;
   previewWidth: number;
   terminalHeight: number;
@@ -1552,6 +1554,19 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)",
     label: "recursive search",
     blurb: "Search inside subfolders too",
+    group: "files",
+    subsection: "listing",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "sort-mode",
+    prop: "sortMode",
+    values: ["name", "size", "mtime", "type"],
+    def: "type",
+    doc: '"name" = A-Z; "size" = largest first; "mtime" = oldest first; "type" = grouped by kind (folders first, always)',
+    label: "sort mode",
+    blurb: "How files are ordered",
     group: "files",
     subsection: "listing",
   },

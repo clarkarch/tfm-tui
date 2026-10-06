@@ -407,6 +407,24 @@ describe("applyConfig", () => {
     expect(ctx.calls.clearIconCaches).toBe(2); // still detected!
     expect(ctx.colors.accent).toBe("#222222");
   });
+
+  test("applyConfig converges pane sort state through the syncSortMode hook", () => {
+    // the grid reads per-pane AppState.sortBy, not config — a sort-mode
+    // settings change must re-seed state or renderAll repaints the same order
+    const ctx = mkCtx();
+    let hookCalls = 0;
+    const retheme = makeRetheme({
+      ...ctx,
+      syncSortMode: () => {
+        hookCalls++;
+      },
+    } as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.sortMode = "size";
+    retheme.applyConfig(fresh);
+    expect(hookCalls).toBe(1);
+    expect(ctx.calls.renderAll).toBe(1);
+  });
 });
 
 describe("rethemeChrome", () => {

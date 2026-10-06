@@ -309,10 +309,19 @@ describe("initialAppState", () => {
     expect(st.histIdx).toBe(0);
   });
 
-  test("sort defaults to name-ascending", () => {
-    const st = initialAppState({ ui: { showHidden: false } } as any, "/x");
-    expect(st.sortBy).toBe("name");
+  test("sort defaults to type-ascending", () => {
+    const st = initialAppState({ ui: { showHidden: false, sortMode: "type" } } as any, "/x");
+    expect(st.sortBy).toBe("type");
     expect(st.sortAsc).toBe(true);
+  });
+
+  test("sort seeds from config sort-mode with its natural direction", () => {
+    const byName = initialAppState({ ui: { showHidden: false, sortMode: "name" } } as any, "/x");
+    expect(byName.sortBy).toBe("name");
+    expect(byName.sortAsc).toBe(true);
+    const bySize = initialAppState({ ui: { showHidden: false, sortMode: "size" } } as any, "/x");
+    expect(bySize.sortBy).toBe("size");
+    expect(bySize.sortAsc).toBe(false);
   });
 
   test("showHidden seeds from config", () => {

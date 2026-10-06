@@ -90,6 +90,7 @@ directory-bar-stagger-pct             = 40          # how spread the crumb casca
 directory-bar-ease                    = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
 show-hidden                           = false       # start with dotfiles visible (ctrl+h toggles at runtime)
 recursive-search                      = false       # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
+sort-mode                             = "type"      # "name" = A-Z; "size" = largest first; "mtime" = oldest first; "type" = grouped by kind (folders first, always)
 restore-session                       = false       # true = reopen the folder from the last quit instead of the launch cwd (needs restart)
 persist-undo                          = false       # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
 show-launch-time                      = false       # true = show a notification with the app launch time in ms (debug aid); also enabled by --debug (needs restart)

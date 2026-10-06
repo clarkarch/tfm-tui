@@ -351,6 +351,24 @@ describe("listings cache", () => {
     }
   });
 
+  // sort-mode flip on a cached listing: the cache key is the dir, not the
+  // sort — a name→size flip must re-sort the cached rows and fill the stats
+  // the new sort needs (the path the applyConfig syncSortMode hook exercises)
+  test("a sort flip re-sorts cached rows and fills the stats the new sort needs", async () => {
+    const dir = mktmp("tfm-lc6-");
+    try {
+      W(path.join(dir, "a.txt"), "x".repeat(100));
+      W(path.join(dir, "b.txt"), "y");
+      const byName = await listDir(dir, false, "name", true, { now: T0 });
+      expect(byName.map((x) => x.name)).toEqual(["a.txt", "b.txt"]);
+      const bySize = await listDir(dir, false, "size", false, { now: () => 500 });
+      expect(bySize.map((x) => x.name)).toEqual(["a.txt", "b.txt"]); // desc: 100, 1
+      expect(bySize[0]!.size).toBe(100);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("[ui] listings-cache-ttl overrides the default window", async () => {
     const dir = mktmp("tfm-lc5-");
     try {

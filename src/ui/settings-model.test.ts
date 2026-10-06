@@ -229,6 +229,7 @@ describe("settingGroups shape", () => {
       "hidden files",
       "##listing",
       "recursive search",
+      "sort mode",
       "##session",
       "restore session",
       "persistent undo",

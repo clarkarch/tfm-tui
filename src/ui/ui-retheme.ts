@@ -56,6 +56,10 @@ type RethemeCtx = {
   // dual pane: re-clamp the active pane when dual is disabled (a hidden pane
   // must never own input/status) and repaint the focus cue.
   normalizePanes?(): void;
+  // sort mode: [ui] sort-mode seeds per-pane AppState at boot, but the grid
+  // reads state — the wiring hook converges both panes here so a settings /
+  // live-reload change actually re-sorts. Optional so tests stay light.
+  syncSortMode?(): void;
   // tty mode (linux console): forces opaque bg + list view. Optional so
   // tests stay light; absent = modern terminal.
   isTtyMode?(): boolean;
@@ -334,6 +338,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     }
     try {
       ctx.normalizePanes?.();
+    } catch {}
+    // per-pane sort state converges onto the configured mode BEFORE the
+    // renderAll below, so the repaint paints the new order (not the old one)
+    try {
+      ctx.syncSortMode?.();
     } catch {}
 
     if (themeChanged) {

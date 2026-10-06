@@ -16,6 +16,7 @@ import { makeEscMenu } from "../ui/ui-settings";
 import { makeRetheme } from "../ui/ui-retheme";
 import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
+import { syncSortState } from "../lib/sort";
 import { clearIconCaches } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
 import { destroyChildren, errMessage } from "../lib/uiutil";
@@ -415,6 +416,14 @@ export const wireRetheme = (deps: {
       // the settings GUI row funnel through applyConfig, so one hook covers all)
       else if (dual && !lastDual) pointPaneAt(core.panes.states[1], core.state.cwd);
       lastDual = dual;
+    },
+    // the grid reads per-pane AppState.sortBy, not config: converge both panes
+    // onto [ui] sort-mode here so a settings/live-reload change re-sorts (same
+    // hook shape as normalizePanes). Transient cycleSort/menu picks stay
+    // state-only and never rewrite the persisted default.
+    syncSortMode: () => {
+      const mode = core.config.ui.sortMode;
+      for (const s of core.panes.states) syncSortState(s, mode);
     },
   });
 

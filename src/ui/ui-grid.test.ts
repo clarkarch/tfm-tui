@@ -752,6 +752,27 @@ describe("renderGrid (grid tiles)", () => {
     searchEntries = [];
   });
 
+  test("recursive results follow the active sort mode, not hardcoded name order", async () => {
+    searchEntries = [
+      { name: "small.txt", isDir: false, size: 10, abs: path.join(tmp, "small.txt") },
+      { name: "big.txt", isDir: false, size: 9000, abs: path.join(tmp, "big.txt") },
+    ];
+    gridState.sortBy = "size";
+    gridState.sortAsc = false;
+    searchQuery = "txt";
+    recursiveSearch = true;
+    mouseHandlers = [];
+    await renderGrid();
+    await t.renderOnce();
+    // size-descending: the 9000-byte file paints first
+    expect(mouseHandlers.map((m) => m.name)).toEqual(["big.txt", "small.txt"]);
+    gridState.sortBy = "name";
+    gridState.sortAsc = true;
+    recursiveSearch = false;
+    searchQuery = "";
+    searchEntries = [];
+  });
+
   test("a new render aborts the previous in-flight search", async () => {
     searchCalls = [];
     searchSignals = [];

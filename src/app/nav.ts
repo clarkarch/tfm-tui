@@ -8,6 +8,7 @@ import path from "node:path";
 import { statSync } from "node:fs";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import type { SortMode } from "../lib/sort";
+import { naturalAscFor } from "../lib/sort";
 import type { Config } from "../config/config";
 import type { Tab } from "./tabs";
 import { debounced } from "../lib/uiutil";
@@ -26,21 +27,25 @@ export type AppState = {
   pendingSelect?: string | null;
 };
 
-// boot state: the start dir is its own one-entry history; sort defaults to
-// name-ascending (the settings/menu own changes afterwards)
+// boot state: the start dir is its own one-entry history; sort seeds from
+// [ui] sort-mode (default type), direction from its natural (the
+// settings/menu own changes afterwards)
 export const initialAppState = (
   config: Config,
   cwd: string = process.cwd(),
   pendingSelect: string | null = null,
-): AppState => ({
-  cwd,
-  history: [cwd],
-  histIdx: 0,
-  showHidden: config.ui.showHidden,
-  sortBy: "name",
-  sortAsc: true,
-  pendingSelect,
-});
+): AppState => {
+  const sortBy = (config.ui.sortMode ?? "type") as SortMode;
+  return {
+    cwd,
+    history: [cwd],
+    histIdx: 0,
+    showHidden: config.ui.showHidden,
+    sortBy,
+    sortAsc: naturalAscFor(sortBy),
+    pendingSelect,
+  };
+};
 
 type NavHooks = {
   renderAll: () => void;

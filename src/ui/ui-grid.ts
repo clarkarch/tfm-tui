@@ -479,8 +479,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         });
         // release the slot only if a newer render didn't already replace it
         if (searchAbort === ac) searchAbort = null;
-        // stable display: name order, dirs first
-        allEntries.sort(compareEntries("name", true));
+        // subtree matches sort like a listing: the active sort mode, dirs
+        // first (same comparator listDir uses — a hardcoded name order here
+        // silently diverged from [ui] sort-mode)
+        allEntries.sort(compareEntries(state.sortBy, state.sortAsc));
       } else {
         allEntries = await listDir(state.cwd, state.showHidden, state.sortBy, state.sortAsc, {
           cache: ctx.listingsCache?.() ?? true,

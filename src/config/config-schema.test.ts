@@ -107,6 +107,14 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { "icon-style": true } }).ui.iconStyle).toBe("filled");
   });
 
+  test("sort-mode defaults to type, parses the enum, bad values fall back", () => {
+    expect(parseConfigDoc(undefined).ui.sortMode).toBe("type");
+    expect(parseConfigDoc({ ui: { "sort-mode": "name" } }).ui.sortMode).toBe("name");
+    expect(parseConfigDoc({ ui: { "sort-mode": "size" } }).ui.sortMode).toBe("size");
+    expect(parseConfigDoc({ ui: { "sort-mode": "nonsense" } }).ui.sortMode).toBe("type");
+    expect(parseConfigDoc({ ui: { "sort-mode": true } }).ui.sortMode).toBe("type");
+  });
+
   test("tty-mode parses the enum; the old compat-mode spelling is not read", () => {
     expect(parseConfigDoc(undefined).ui.ttyMode).toBe("auto");
     expect(parseConfigDoc({ ui: { "tty-mode": "on" } }).ui.ttyMode).toBe("on");
