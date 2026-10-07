@@ -7,7 +7,6 @@ import {
   MarkdownRenderable,
   ScrollBoxRenderable,
   Text,
-  TextRenderable,
   TextTableRenderable,
   type SyntaxStyle,
 } from "@opentui/core";
@@ -113,10 +112,10 @@ export const makePreview = (ctx: PreviewCtx) => {
     // the wrap mode the node was built with — a toggle must not be served
     // the stale wrap from the cache (key/mtime/size don't change on toggle)
     wrap: string;
-    // whichever renderable the last preview mounted. Text/code bodies and
-    // markdown ride in a scrollbox — the cached node is the scroller, so
+    // whichever renderable the last preview mounted — every body (code and
+    // markdown) rides in a scrollbox, so the cached node is the scroller and
     // scroll position survives re-previews of one file.
-    node: TextRenderable | CodeRenderable | LineNumberRenderable | MarkdownRenderable | ScrollBoxRenderable;
+    node: ScrollBoxRenderable;
   } | null = null;
   // NOTE: the global mode reaches markdown FENCES only. Fence blocks
   // carry their info-string filetype (e.g. javascript) while prose blocks
@@ -309,8 +308,10 @@ export const makePreview = (ctx: PreviewCtx) => {
       // global wrap mode: code bodies and markdown blocks render in it.
       // "none" clips instead of wrapping (word mode still hard-slices
       // spaceless code runs by character, so it can never mean "no wrap"
-      // for code). Prose (.txt bodies, markdown paragraphs) always
-      // word-wraps — the mode governs code, never typography.
+      // for code). Markdown prose/tables keep word wrap — typography, not
+      // code. Files without a tree-sitter filetype render as unstyled code
+      // and follow the mode too (they used to force word wrap as "prose",
+      // which char-sliced long key=value config lines).
       const wrap: WrapMode = ctx.wrapMode?.() ?? "none";
       if (
         previewCodeCache &&
@@ -356,10 +357,13 @@ export const makePreview = (ctx: PreviewCtx) => {
         void ctx.drainIconQueue();
         return;
       }
-      // Code bodies ride inside a line-number gutter (a TextBufferRenderable,
-      // i.e. LineInfoProvider). Gutter is ~4 cells (minWidth 3 + padding 1),
-      // so the code body narrows to stay inside the pane. Plain-text prose
-      // renders gutter-free: the gutter broke on word-wrapped Text bodies.
+      // every text body rides inside a line-number gutter (a
+      // TextBufferRenderable, i.e. LineInfoProvider — the gutter counts
+      // VIRTUAL lines, so it stays aligned in every wrap mode). Gutter is
+      // ~4 cells (minWidth 3 + padding 1), so the body narrows to stay
+      // inside the pane. Files without a tree-sitter filetype get the same
+      // treatment: CodeRenderable renders an unknown/missing filetype as
+      // unstyled theme-colored text — plain code, not prose.
       const gutterW = 4;
       const filetype = PREVIEW_FT_BY_EXT[ext];
       const scroller = new ScrollBoxRenderable(ctx.renderer, {
@@ -368,31 +372,11 @@ export const makePreview = (ctx: PreviewCtx) => {
         scrollY: true,
         scrollbarOptions: { trackOptions: scrollbarTrackColors(colors) },
       });
-      if (!filetype) {
-        // No tree-sitter filetype → CodeRenderable paints everything with the
-        // terminal default fg (it never consults syntaxStyle without a
-        // grammar). A real TextRenderable honours the theme instead — and is
-        // cached so re-previewing the same .txt doesn't realloc a TextBuffer
-        // every time (theme flips evict it, since the sig carries white).
-        // Prose always word-wraps: the mode governs code, never typography.
-        const prose = new TextRenderable(ctx.renderer, {
-          content: text,
-          fg: colors.white,
-          width: bodyW,
-          height: "auto",
-          selectable: false,
-          wrapMode: "word",
-        });
-        scroller.add(prose);
-        previewCodeCache = { key, mtimeMs, size, wrap, node: scroller };
-        pane.add(scroller);
-        void ctx.drainIconQueue();
-        return;
-      }
       // real class instance (not a proxied helper) so it mounts into the live pane
       const body = new CodeRenderable(ctx.renderer, {
         content: text,
         filetype,
+        fg: colors.white,
         syntaxStyle,
         baseHighlight: "default",
         // bare URLs become OSC-8 hyperlink chunks (the terminal opens
@@ -409,7 +393,7 @@ export const makePreview = (ctx: PreviewCtx) => {
         target: body,
         fg: colors.sidebarFgMuted,
       });
-      // The gutter measures to the FULL logical line count (not parent
+      // The gutter measures to the FULL virtual line count (not parent
       // constraints): in a scrollbox it scrolls in sync with the body
       // instead of running past short content — its designed use.
       scroller.add(gutter);

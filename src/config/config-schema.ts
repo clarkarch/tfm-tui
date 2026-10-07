@@ -445,7 +445,7 @@ const UI_ROWS: SchemaRow[] = [
     prop: "wrapMode",
     values: ["none", "char", "word"],
     def: "none",
-    doc: "none = cut names with … and clip code preview; char = character-wrap tile names and code lines; word = break at spaces (spaceless runs still slice). Prose (.txt, markdown paragraphs) always word-wraps.",
+    doc: "none = cut names with … and clip code preview; char = character-wrap tile names and code lines; word = break at spaces (spaceless runs still slice). Markdown prose (paragraphs, tables) always word-wraps.",
     label: "wrap mode",
     blurb: "How long lines wrap: cut, by character, by word",
     group: "layout",

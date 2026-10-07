@@ -9,7 +9,7 @@
 
 [ui]
 view-mode                             = "grid"      # "grid" = icon tiles; "list" = compact rows with size + modified columns
-wrap-mode                             = "none"      # none = cut names with … and clip code preview; char = character-wrap tile names and code lines; word = break at spaces (spaceless runs still slice). Prose (.txt, markdown paragraphs) always word-wraps.
+wrap-mode                             = "none"      # none = cut names with … and clip code preview; char = character-wrap tile names and code lines; word = break at spaces (spaceless runs still slice). Markdown prose (paragraphs, tables) always word-wraps.
 tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 sidebar-width                         = 26          # 16..60 cells (grid + list)
 sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it

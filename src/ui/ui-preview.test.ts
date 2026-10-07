@@ -1,12 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import {
-  Box,
-  type CliRenderer,
-  CodeRenderable,
-  LineNumberRenderable,
-  MarkdownRenderable,
-  TextRenderable,
-} from "@opentui/core";
+import { Box, type CliRenderer, CodeRenderable, LineNumberRenderable, MarkdownRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import type { MaybeNode } from "../lib/node-like";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -212,23 +205,19 @@ describe("preview theme awareness", () => {
     expect((codeNodes()[0] as any).baseHighlight).toBe("default");
   });
 
-  test("a no-filetype text file renders as theme-colored Text, not an unstyled Code node", async () => {
+  test("a no-filetype text file renders as a theme-colored Code node, not a bare Text node", async () => {
     const file = path.join(tmpDir, "c.txt");
     writeFileSync(file, "hello preview\n");
-    const { live, clock, p, codeNodes, realPane } = mkLivePreview(file);
+    const { live, clock, p, codeNodes } = mkLivePreview(file);
     Object.assign(live, { sidebarFg: "#aabbcc" });
     p.renderPreview();
     clock.flush();
     // settle ON the body node itself: the header Textes paint synchronously,
     // the file content only after the async readFile resolves. The body
-    // nests inside gutter/clip wrappers — walk the whole subtree.
-    const textOf = (c: any) => (c.content?.chunks ?? c.chunks ?? []).map((ch: any) => ch.text).join("");
-    const bodies = () => walkKids(realPane());
-    const findBody = () =>
-      bodies().find((c: any) => c instanceof TextRenderable && textOf(c).includes("hello preview"));
-    expect(await settleUntil(t, () => !!findBody())).toBe(true);
-    expect(codeNodes().length).toBe(0);
-    const body = findBody() as any;
+    // nests inside the gutter — codeNodes() walks the whole subtree.
+    const bodyOf = () => codeNodes().find((c: any) => String(c.content).includes("hello preview"));
+    expect(await settleUntil(t, () => !!bodyOf())).toBe(true);
+    const body = bodyOf() as any;
     const hexInts = (h: string): [number, number, number, number] => [
       Number.parseInt(h.slice(1, 3), 16),
       Number.parseInt(h.slice(3, 5), 16),
@@ -241,13 +230,13 @@ describe("preview theme awareness", () => {
     // (no fresh native TextBuffer per selection) ...
     p.renderPreview();
     clock.flush();
-    expect(await settleUntil(t, () => findBody() === body)).toBe(true);
+    expect(await settleUntil(t, () => bodyOf() === body)).toBe(true);
     // ... and a theme flip must evict it too (sig carries white + sidebarFg)
     Object.assign(live, { white: "#112233" });
     p.renderPreview();
     clock.flush();
-    expect(await settleUntil(t, () => !!findBody() && findBody() !== body)).toBe(true);
-    expect([...(findBody() as any).fg.toInts()]).toEqual([0x11, 0x22, 0x33, 0xff]);
+    expect(await settleUntil(t, () => !!bodyOf() && bodyOf() !== body)).toBe(true);
+    expect([...(bodyOf() as any).fg.toInts()]).toEqual([0x11, 0x22, 0x33, 0xff]);
     expect(body.isDestroyed).toBe(true);
   });
 });
@@ -291,12 +280,11 @@ describeNonRoot("sudo preview", () => {
       });
       p.renderPreview();
       clock.flush();
-      const textOf = (c: any) => (c.content?.chunks ?? c.chunks ?? []).map((ch: any) => ch.text).join("");
       const ok = await settleUntil(
         t,
         () =>
           walkKids(t.renderer.root.findDescendantById(id)).filter(
-            (c: any) => c instanceof TextRenderable && textOf(c).includes("secret-bytes"),
+            (c: any) => c instanceof CodeRenderable && String(c.content).includes("secret-bytes"),
           ).length > 0,
       );
       expect(seen).toEqual([file]);
@@ -308,8 +296,8 @@ describeNonRoot("sudo preview", () => {
 });
 
 // --- rich preview: markdown renders through MarkdownRenderable (headings,
-// lists, links — not a monochrome code dump), code bodies ride inside a
-// LineNumberRenderable gutter (txt prose renders gutter-free), and code
+// lists, links — not a monochrome code dump), every text body (code or not)
+// rides inside a LineNumberRenderable gutter, and code
 // bodies linkify bare URLs via
 // detectLinks (OSC-8, terminal-native ctrl+click). ---
 const mdNodes = (id: string) =>
@@ -533,23 +521,21 @@ describe("preview rich rendering", () => {
     }
   });
 
-  test("plain-text prose always word-wraps, the mode governs code only", async () => {
-    const txt = path.join(tmpDir, "prose.txt");
-    writeFileSync(txt, "some long prose line that reads like sentences here\n");
+  test("no-filetype files follow the wrap mode and get the gutter", async () => {
+    // The old "prose" branch forced word wrap on every grammarless file,
+    // which char-sliced long spaceless key=value lines mid-word even with
+    // wrap-mode=none (the reported .conf preview bug). Mode now governs
+    // them like any other code body, gutter included.
+    const conf = path.join(tmpDir, "app.conf");
+    writeFileSync(conf, "averyveryverylongkeyvaluewithoutanyspacesatallhere=1\n");
     for (const mode of ["char", "none", "word"] as WrapMode[]) {
-      const pv = mkLivePreview(txt, mode);
+      const pv = mkLivePreview(conf, mode);
       pv.p.renderPreview();
       pv.clock.flush();
-      // txt bodies render gutter-free (the LineNumber gutter broke on prose)
-      const textOf = (c: any) => (c.content?.chunks ?? c.chunks ?? []).map((ch: any) => ch.text).join("");
-      const bodyOf = () =>
-        walkKids(pv.realPane()).find((c: any) => c instanceof TextRenderable && textOf(c).includes("some long prose"));
-      expect(await settleUntil(t, () => !!bodyOf())).toBe(true);
-      expect(gutterNodes(pv.paneId).length).toBe(0);
-      const body = bodyOf() as any;
-      // plain-text bodies never take the toggle: char-sliced prose is
-      // unreadable and clipped prose breaks mid-word — both were reported
-      expect(body.wrapMode).toBe("word");
+      expect(await settleUntil(t, () => gutterNodes(pv.paneId).length === 1)).toBe(true);
+      const body = (gutterNodes(pv.paneId)[0] as any).getChildren().find((c: any) => c instanceof CodeRenderable);
+      expect(body).toBeTruthy();
+      expect(body.wrapMode).toBe(mode);
     }
   });
 });
