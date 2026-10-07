@@ -126,7 +126,7 @@ const MOUSE_COLS: { keys: string; verb: string }[][] = [
   ],
 ];
 
-const FOOTER = "F1 opens or closes this";
+const FOOTER = "F1 opens or closes this · ↑/↓ or wheel to scroll";
 
 // --- quick tips: problem-first diagnostics, never another key list.
 // Pairs (no emdash, arrow or comma only); the problem paints accent-bold
@@ -193,8 +193,8 @@ const keyVerb = (c: Theme, keys: string, verb: string) =>
 
 const keysTextOf = (bindsOf: (a: KeyAction) => string[], e: HelpEntry): string => {
   if (e.keys === "walk") {
-    // one live "walk" row: first bind of each direction (↑↓←→ by default)
-    const dirs: KeyAction[] = ["moveUp", "moveDown", "moveLeft", "moveRight"];
+    // one live "walk" row: first bind of each direction (←↑↓→ by default)
+    const dirs: KeyAction[] = ["moveLeft", "moveUp", "moveDown", "moveRight"];
     return dirs
       .map((a) => bindsOf(a)[0])
       .filter(Boolean)

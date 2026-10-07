@@ -81,7 +81,9 @@ describe("help panel tips section", () => {
     // the long tail below the fold
     let frame = t.captureCharFrame();
     expect(frame).toContain("Lost? Start here.");
+    expect(frame).toContain("←↑↓→");
     expect(frame).toContain("F1 opens or closes this");
+    expect(frame).toContain("↑/↓ or wheel to scroll");
     expect(frame).not.toContain(QUICK_TIPS[QUICK_TIPS.length - 1]?.problem as string);
     // walk the whole body in steps: every section must surface in some
     // viewport (no hardcoded offsets — the walk follows the clamped top)
