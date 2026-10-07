@@ -11,7 +11,9 @@ import { existsSync } from "node:fs";
 import { mkdir, lstat, readdir, readlink, rm, rename as fsRename } from "node:fs/promises";
 import { swallow } from "../app/log";
 import {
+  errCode,
   failSuffix,
+  type FileId,
   fileIdMatches,
   fileIdOf,
   fsErrText,
@@ -30,7 +32,15 @@ import {
   xdgTrashMove,
   crossDevice as fsCrossDevice,
 } from "./fsutil";
-import { defaultSudoExec, isPrivilegeError, runSudoTool, sudoCpArgv, sudoMvArgv, sudoRmArgv } from "./elevate";
+import {
+  defaultSudoExec,
+  isPrivilegeError,
+  runSudoTool,
+  sudoCpArgv,
+  sudoMvArgv,
+  sudoRmArgv,
+  type SudoExecFn,
+} from "./elevate";
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
 import {
   commonParent,
@@ -97,7 +107,7 @@ export type FileOpsCtx = {
   // ensureSudo prompts for the password (cached-timestamp-first) once per op,
   // sudoExec runs one sudo argv and reports its exit (default = runSudo)
   ensureSudo?: (opLabel: string) => Promise<boolean>;
-  sudoExec?: (argv: string[]) => Promise<{ status: number | null; stderr: string }>;
+  sudoExec?: SudoExecFn;
   // /tmp/tfm-dnd.log debug sink
   log(msg: string): void;
   // plugin event fan-out (optional; never throws into the transfer).
@@ -339,7 +349,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     },
     repaint: ctx.paintProgress,
   };
-  const copyTreeProgressWired = (src: string, dest: string): Promise<void> => copyTreeProgress(src, dest, transferSink);
+  const copyTreeProgressWired = (src: string, dest: string): Promise<FileId | null> =>
+    copyTreeProgress(src, dest, transferSink);
   const isCrossDevice = (a: string, b: string): boolean => (ctx.crossDevice ?? fsCrossDevice)(a, b);
   const removeTree = ctx.removeTree ?? ((p: string) => rm(p, { recursive: true }));
   const sudoExec = ctx.sudoExec ?? defaultSudoExec;
@@ -347,7 +358,47 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // sudo retry: one password gate per op (memoized by the caller), then the
   // same end-state as the normal path via cp -a / mv so undo units below can
   // be reused untouched. Throws the tool's first stderr line on failure.
-  const sudoCopy = (src: string, target: string): Promise<void> => runSudoTool(sudoExec, sudoCpArgv(src, target));
+  const sudoFileIdOf = async (p: string): Promise<FileId | null> => {
+    const r = await sudoExec(["sudo", "-n", "stat", "-c", "%d:%i:%w", "--", p]);
+    if (r.status !== 0) return null;
+    const match = /^(\d+):(\d+):(.+)$/.exec(r.stdout?.trim() ?? "");
+    if (!match) return null;
+    const when = match[3] ?? "";
+    const parsed = Date.parse(when);
+    const fraction = /\.(\d+)/.exec(when)?.[1] ?? "";
+    const born = parsed + (fraction.length > 3 ? Number(`0.${fraction.slice(3)}`) : 0);
+    return {
+      dev: Number(match[1]),
+      ino: Number(match[2]),
+      ...(Number.isFinite(born) ? { born } : {}),
+    };
+  };
+  const sudoCopy = async (src: string, target: string): Promise<FileId> => {
+    const stage = tmpName(target);
+    await runSudoTool(sudoExec, ["sudo", "-n", "mkdir", "--", stage]);
+    try {
+      await runSudoTool(sudoExec, sudoCpArgv(src, stage));
+      const staged = path.join(stage, path.basename(src));
+      const id = fileIdOf(staged) ?? (await sudoFileIdOf(staged));
+      if (!id) throw new Error("cannot identify staged copy");
+      await runSudoTool(sudoExec, ["sudo", "-n", "mv", "-nT", "--", staged, target]);
+      const remains = await sudoExec(["sudo", "-n", "test", "-e", staged]);
+      if (remains.status === 0) throw new Error(`already exists: ${path.basename(target)}`);
+      if (remains.status !== 1 || remains.stderr.trim())
+        throw new Error(remains.stderr || "cannot verify copy destination");
+      const linkRemains = await sudoExec(["sudo", "-n", "test", "-L", staged]);
+      if (linkRemains.status === 0) throw new Error(`already exists: ${path.basename(target)}`);
+      if (linkRemains.status !== 1 || linkRemains.stderr.trim())
+        throw new Error(linkRemains.stderr || "cannot verify copy destination");
+      return id;
+    } finally {
+      try {
+        await runSudoTool(sudoExec, sudoRmArgv(stage));
+      } catch (err) {
+        ctx.log(`sudo copy stage cleanup ${stage}: ${fsErrText(err)}`);
+      }
+    }
+  };
   const sudoMove = (src: string, target: string): Promise<void> => runSudoTool(sudoExec, sudoMvArgv(src, target));
   const sudoRemove = (target: string): Promise<void> => runSudoTool(sudoExec, sudoRmArgv(target));
   // sudo replace-stash: the normal stashVictim runs unprivileged BEFORE any
@@ -576,6 +627,20 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         // per-iteration: did THIS src go through the streaming copy engine?
         // (cross-device moves need the same half-copy cleanup real copies get)
         let copiedHere = false;
+        let copyId: FileId | null = null;
+        const stillOurCopy = async (): Promise<boolean> => {
+          if (!copyId) return false;
+          if (fileIdMatches(copyId, target)) return true;
+          if (sudoOk !== true) return false;
+          const current = await sudoFileIdOf(target).catch(() => null);
+          return (
+            !!current &&
+            current.dev === copyId.dev &&
+            current.ino === copyId.ino &&
+            (copyId.born === undefined || current.born === copyId.born)
+          );
+        };
+
         // cross-device move whose COPY landed but whose source removal failed:
         // `target` is the only complete data — the sudo retry must only retry
         // the removal, never rm/recopy the complete copy (total data loss).
@@ -584,7 +649,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           const t = target,
             s = src;
           if (op === "copy") {
-            const tid = fileIdOf(t);
+            const tid = copyId;
             units.push(() => trashIfSameFile(t, tid, ctx.log));
             dUnits.push({ op: "trash", path: t, ...(tid ?? {}) });
             redos.push(async () => {
@@ -611,11 +676,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         };
         try {
           if (op === "copy") {
+            copyId = await copyTreeProgressWired(src, target);
             copiedHere = true;
-            await copyTreeProgressWired(src, target);
+            if (!copyId || !fileIdMatches(copyId, target)) throw new Error("copy destination changed");
           } else if (isCrossDevice(src, destDir)) {
+            copyId = await copyTreeProgressWired(src, target);
             copiedHere = true;
-            await copyTreeProgressWired(src, target);
+            if (!copyId || !fileIdMatches(copyId, target)) throw new Error("copy destination changed");
+
             // cancel raced the final byte: copy completed but the source must
             // survive a cancelled move — surface as cancelled, drop the copy
             if (prog.cancelled) throw new Error("cancelled");
@@ -648,39 +716,32 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                   // NEVER touch `target` here: the source is partially deleted
                   // and `target` is the only complete copy (an rm+recopy of it
                   // destroys the files the failed rm already removed).
+                  if (!(await stillOurCopy())) throw new Error("source partially removed: copy destination changed");
                   try {
                     await sudoRemove(src);
                   } catch (rmErr) {
                     throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
                   }
-                } else if (op === "copy") {
-                  // clear a partial target first: `cp -a src target` with an
-                  // existing directory target nests src inside it — and a
-                  // failed clear must abort, not proceed: the nested copy
-                  // would report success for the wrong end-state while the
-                  // undo unit trashes the wrong path
-                  if (existsSync(target)) {
+                } else if (op === "copy" || isCrossDevice(src, destDir)) {
+                  const occupied = await lstat(target).then(
+                    () => true,
+                    (statErr: unknown) => {
+                      if (["ENOENT", "EACCES", "EPERM"].includes(String(errCode(statErr)))) return false;
+                      throw statErr;
+                    },
+                  );
+                  if (occupied) throw new Error(`already exists: ${path.basename(target)}`);
+                  copyId = await sudoCopy(src, target);
+                  copiedHere = true;
+                  if (!(await stillOurCopy())) throw new Error("copy destination changed");
+                  if (op === "move") {
+                    if (prog.cancelled) throw new Error("cancelled");
                     try {
-                      await sudoRemove(target);
-                    } catch (preErr) {
-                      throw new Error(`cannot clear partial target: ${fsErrText(preErr)}`);
+                      await sudoRemove(src);
+                    } catch (rmErr) {
+                      copiedHere = false;
+                      throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
                     }
-                  }
-                  await sudoCopy(src, target);
-                } else if (isCrossDevice(src, destDir)) {
-                  try {
-                    await sudoRemove(target);
-                  } catch (preErr) {
-                    // same nesting hazard as the copy branch above (`cp -a`
-                    // into an existing dir) — abort instead of misreporting
-                    if (existsSync(target)) throw new Error(`cannot clear partial target: ${fsErrText(preErr)}`);
-                  }
-                  await sudoCopy(src, target);
-                  if (prog.cancelled) throw new Error("cancelled");
-                  try {
-                    await sudoRemove(src);
-                  } catch (rmErr) {
-                    throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
                   }
                 } else await sudoMove(src, target);
                 recordSuccess();
@@ -691,15 +752,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               }
             }
           }
-          // don't leave half-copied files behind (copies AND cross-device moves).
-          // A root-owned partial needs the sudo remover — the gate already
-          // passed if we're here via a sudo attempt (memoized, no re-prompt).
-          if (op === "copy" || copiedHere) {
+          if (copiedHere && (await stillOurCopy())) {
             try {
               await rm(target, { recursive: true });
             } catch (cleanup) {
               ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`);
-              if (isPrivilegeError(cleanup) && (await needSudo())) {
+              if (isPrivilegeError(cleanup) && (await needSudo()) && (await stillOurCopy())) {
                 try {
                   await sudoRemove(target);
                 } catch (sudoCleanup) {

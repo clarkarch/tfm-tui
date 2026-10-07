@@ -14,7 +14,14 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { copyFileProgress, copyTreeProgress, rmTreeProgress, scanTree, type TransferSink } from "./transfer";
+import {
+  copyFileProgress,
+  copyTreeProgress,
+  landCopiedFile,
+  rmTreeProgress,
+  scanTree,
+  type TransferSink,
+} from "./transfer";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
 // exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
@@ -168,6 +175,80 @@ describe("copyFileProgress", () => {
     expect(Math.floor(st.mtimeMs / 1000)).toBe(Math.floor(mtime.getTime() / 1000));
   });
 
+  test("a filesystem without hardlinks copies only to an unoccupied destination", async () => {
+    const src = path.join(dir, "staged.txt");
+    const dest = path.join(dir, "fallback.txt");
+    W(src, "NEW");
+    const { chmodSync, utimesSync } = await import("node:fs");
+    chmodSync(src, 0o640);
+    utimesSync(src, new Date("2020-01-02T03:04:05Z"), new Date("2021-06-07T08:09:10Z"));
+    const unsupported = async (): Promise<void> => {
+      throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
+    };
+
+    const id = await landCopiedFile(src, dest, unsupported);
+    expect(readFileSync(dest, "utf8")).toBe("NEW");
+    expect(id?.ino).toBe(lstatSync(dest).ino);
+    expect(lstatSync(dest).mode & 0o777).toBe(0o640);
+    expect(Math.floor(lstatSync(dest).mtimeMs / 1000)).toBe(new Date("2021-06-07T08:09:10Z").getTime() / 1000);
+    await expect(landCopiedFile(src, dest, unsupported)).rejects.toThrow("already exists");
+    expect(readFileSync(dest, "utf8")).toBe("NEW");
+  });
+
+  test("a failed no-hardlink stream removes only its partial destination", async () => {
+    const src = path.join(dir, "staged-fail.txt");
+    const dest = path.join(dir, "partial.txt");
+    W(src, "NEW");
+
+    await expect(
+      landCopiedFile(
+        src,
+        dest,
+        async () => {
+          throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
+        },
+        () => rmSync(src),
+      ),
+    ).rejects.toThrow();
+
+    expect(existsSync(dest)).toBe(false);
+  });
+
+  test("failed fallback preserves a replacement that reoccupied its destination", async () => {
+    const src = path.join(dir, "staged-replaced.txt");
+    const dest = path.join(dir, "replaced.txt");
+    W(src, "NEW");
+
+    await expect(
+      landCopiedFile(
+        src,
+        dest,
+        async () => {
+          throw Object.assign(new Error("hardlinks unavailable"), { code: "ENOTSUP" });
+        },
+        () => {
+          rmSync(dest);
+          W(dest, "STRANGER");
+          rmSync(src);
+        },
+      ),
+    ).rejects.toThrow();
+
+    expect(readFileSync(dest, "utf8")).toBe("STRANGER");
+  });
+
+  test("an occupied destination is never replaced", async () => {
+    const src = path.join(dir, "incoming.txt");
+    const dest = path.join(dir, "occupied.txt");
+    W(src, "NEW");
+    W(dest, "STRANGER");
+
+    await expect(copyFileProgress(src, dest, mkSink().sink)).rejects.toThrow("already exists");
+
+    expect(readFileSync(dest, "utf8")).toBe("STRANGER");
+    expect(readdirSync(dir).filter((f) => f.includes(".tfm-part-"))).toEqual([]);
+  });
+
   test("failed copy leaves neither dest nor tmp orphan", async () => {
     const h = mkSink();
     await expect(copyFileProgress(path.join(dir, "missing-src"), path.join(dir, "nope.bin"), h.sink)).rejects.toThrow();
@@ -176,6 +257,15 @@ describe("copyFileProgress", () => {
 });
 
 describe("copyTreeProgress", () => {
+  test("recreates a missing destination parent for directory redo", async () => {
+    W(path.join(dir, "src", "a.txt"), "A");
+    const dest = path.join(dir, "deleted-parent", "dst");
+
+    await copyTreeProgress(path.join(dir, "src"), dest, mkSink().sink);
+
+    expect(readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("A");
+  });
+
   test("copies nested trees with contents intact", async () => {
     W(path.join(dir, "src", "a.txt"), "A");
     W(path.join(dir, "src", "deep", "b.txt"), "B");
@@ -203,7 +293,20 @@ describe("copyTreeProgress", () => {
     expect(readlinkSync(path.join(dir, "dst"))).toBe(path.join(dir, "other.txt"));
   });
 
-  test("checkpoint throw (cancel) aborts the walk with a rejected promise", async () => {
+  test("a symlinked destination directory never writes through the link", async () => {
+    W(path.join(dir, "src", "a.txt"), "NEW");
+    W(path.join(dir, "other", "a.txt"), "STRANGER");
+    symlinkSync(path.join(dir, "other"), path.join(dir, "dst"));
+
+    await expect(copyTreeProgress(path.join(dir, "src"), path.join(dir, "dst"), mkSink().sink)).rejects.toThrow(
+      "already exists",
+    );
+
+    expect(readFileSync(path.join(dir, "other", "a.txt"), "utf8")).toBe("STRANGER");
+    expect(readlinkSync(path.join(dir, "dst"))).toBe(path.join(dir, "other"));
+  });
+
+  test("checkpoint throw (cancel) removes the staged tree without landing it", async () => {
     W(path.join(dir, "src", "a.txt"), "A");
     W(path.join(dir, "src", "b.txt"), "B");
     const h = mkSink({ cancelAfterFiles: 1 });
@@ -215,8 +318,8 @@ describe("copyTreeProgress", () => {
     }
     expect((caught as Error)?.message).toBe("cancelled"); // same contract runTransfer catches per-source
     expect(h.files).toBe(1);
-    // readdir order is fs-dependent, so exactly one file landed — never both
-    expect(readdirSync(path.join(dir, "dst")).filter((f) => f.endsWith(".txt")).length).toBe(1);
+    expect(existsSync(path.join(dir, "dst"))).toBe(false);
+    expect(readdirSync(dir).filter((f) => f.includes(".tfm-part-"))).toEqual([]);
   });
 
   test("pause gate holds mid-walk and resumes", async () => {

@@ -1,6 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeFileOps, type FileOpsCtx } from "./fileops";
@@ -223,6 +234,40 @@ describe("runTransfer: cross-device move", () => {
     expect(h.calls.some((c) => c.includes("source partially removed"))).toBe(true);
   });
 
+  test("failed privileged source removal keeps the only complete copy", async () => {
+    const src = path.join(ROOT, "dev-a", "sudo-partial-src");
+    const destDir = path.join(ROOT, "dev-b-partial-dest");
+    const target = path.join(destDir, "sudo-partial-src");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+    let gates = 0;
+    const h = makeHarness({
+      crossDevice: fakeSplit,
+      pauseGate: async () => {
+        if (++gates === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+      ensureSudo: async () => true,
+      sudoExec: async (argv) => {
+        if (argv[2] === "rm" && argv.at(-1) === src) {
+          rmSync(path.join(src, "f1.txt"));
+          return { status: 1, stderr: "permission denied" };
+        }
+        const result = Bun.spawnSync(argv.slice(2));
+        return {
+          status: result.exitCode,
+          stderr: new TextDecoder().decode(result.stderr),
+          stdout: new TextDecoder().decode(result.stdout),
+        };
+      },
+    });
+
+    await h.ops.runTransfer("move", destDir, [src], "partial sudo move");
+
+    expect(readFileSync(path.join(target, "f1.txt"), "utf8")).toBe("content-1");
+    expect(existsSync(path.join(src, "f1.txt"))).toBe(false);
+    expect(h.calls.some((c) => c.includes("source partially removed"))).toBe(true);
+  });
+
   test("privileged source-removal failure retries ONLY the removal, never touches the complete copy", async () => {
     // cross-device move: copy landed, rm(src) failed with EACCES. The sudo
     // retry must not rm+recopy `target` — the source is partially deleted and
@@ -255,44 +300,38 @@ describe("runTransfer: cross-device move", () => {
     expect(seen.some((argv) => argv.some((arg) => arg.includes(src)))).toBe(true);
   });
 
-  // chmod-based: root bypasses file perms, so this can't fail as uid 0
-  test.skipIf(process.getuid?.() === 0)(
-    "copy with a partial target clears it before the sudo retry (no nested copy)",
-    async () => {
-      // `sudo cp -a -- src target` with an existing directory target copies src
-      // INTO target — the retry must remove the partial target first. Reached by
-      // an unreadable source child (EACCES → privilege retry) with the target
-      // dir already created by the failed unprivileged pass.
-      const seen: string[][] = [];
-      const h = makeHarness({
-        ensureSudo: async () => true,
-        sudoExec: async (argv) => {
-          seen.push(argv);
-          return { status: 0, stderr: "" };
-        },
-      });
-      const src = path.join(ROOT, "sudo-nest-src");
-      const destDir = path.join(ROOT, "sudo-nest-dest");
-      mkdirSync(src, { recursive: true });
-      mkdirSync(destDir, { recursive: true });
-      W(path.join(src, "a.txt"), "aaa");
-      W(path.join(src, "z.txt"), "zzz");
-      const { chmodSync } = await import("node:fs");
-      chmodSync(path.join(src, "z.txt"), 0o000);
-      try {
-        await h.ops.runTransfer("copy", destDir, [src], "copy nest");
-      } finally {
-        chmodSync(path.join(src, "z.txt"), 0o644);
-      }
+  test("sudo retry copies into a claimed stage before landing a directory", async () => {
+    const seen: string[][] = [];
+    let checkpoints = 0;
+    const src = path.join(ROOT, "sudo-nest-src");
+    const destDir = path.join(ROOT, "sudo-nest-dest");
+    const target = path.join(destDir, "sudo-nest-src");
+    W(path.join(src, "a.txt"), "aaa");
+    mkdirSync(destDir, { recursive: true });
+    const h = makeHarness({
+      pauseGate: async () => {
+        if (++checkpoints === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+      ensureSudo: async () => true,
+      sudoExec: async (argv) => {
+        seen.push(argv);
+        const result = Bun.spawnSync(argv.slice(2));
+        return {
+          status: result.exitCode,
+          stderr: new TextDecoder().decode(result.stderr),
+          stdout: new TextDecoder().decode(result.stdout),
+        };
+      },
+    });
 
-      const target = path.join(destDir, "sudo-nest-src");
-      const cpIdx = seen.findIndex((argv) => argv.includes("cp"));
-      const rmIdx = seen.findIndex((argv) => argv.includes("rm"));
-      expect(rmIdx).toBeGreaterThanOrEqual(0);
-      expect(cpIdx).toBeGreaterThan(rmIdx);
-      expect(seen[rmIdx]).toContain(target);
-    },
-  );
+    await h.ops.runTransfer("copy", destDir, [src], "copy nest");
+
+    expect(readFileSync(path.join(target, "a.txt"), "utf8")).toBe("aaa");
+    const cp = seen.find((argv) => argv[2] === "cp");
+    expect(cp?.at(-1)).toContain(".tfm-part-");
+    expect(seen.some((argv) => argv[2] === "rm" && argv.at(-1) === target)).toBe(false);
+    expect(readdirSync(destDir)).toEqual(["sudo-nest-src"]);
+  });
 
   test("copy op unaffected: still streams with the toast (control)", async () => {
     const h = makeHarness();
@@ -306,6 +345,200 @@ describe("runTransfer: cross-device move", () => {
     expect(readFileSync(path.join(destDir, "copy-src", "f1.txt"), "utf8")).toBe("content-1");
     expect(existsSync(path.join(src, "f1.txt"))).toBe(true);
     expect(h.calls).toContain("toast:show");
+  });
+});
+
+describe("runTransfer: raced destinations", () => {
+  test("copy never replaces a file created after the conflict check", async () => {
+    const src = path.join(ROOT, "race-file-src", "a.txt");
+    const destDir = path.join(ROOT, "race-file-dest");
+    const target = path.join(destDir, "a.txt");
+    W(src, "SOURCE");
+    mkdirSync(destDir, { recursive: true });
+    let checkpoints = 0;
+    const h = makeHarness({
+      pauseGate: async () => {
+        if (++checkpoints === 2) W(target, "STRANGER");
+      },
+    });
+
+    await h.ops.runTransfer("copy", destDir, [src], "race file");
+
+    expect(readFileSync(target, "utf8")).toBe("STRANGER");
+    expect(h.calls.some((c) => c.startsWith("notify:copy failed:error:"))).toBe(true);
+  });
+
+  test("cancel after a copy is replaced never deletes the replacement", async () => {
+    const src = path.join(ROOT, "race-after-src", "a.txt");
+    const destDir = path.join(ROOT, "race-after-dest");
+    const target = path.join(destDir, "a.txt");
+    W(src, "SOURCE");
+    mkdirSync(destDir, { recursive: true });
+    let replaced = false;
+    const h = makeHarness({
+      crossDevice: (a) => a === src,
+      paintProgress: (full) => {
+        if (full && !replaced && existsSync(target)) {
+          replaced = true;
+          rmSync(target);
+          W(target, "STRANGER");
+          h.prog.cancelled = true;
+        }
+      },
+    });
+
+    await h.ops.runTransfer("move", destDir, [src], "race after copy");
+
+    expect(replaced).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe("STRANGER");
+    expect(readFileSync(src, "utf8")).toBe("SOURCE");
+  });
+
+  test("sudo retry never removes a destination created during authentication", async () => {
+    const src = path.join(ROOT, "race-sudo-src", "a.txt");
+    const destDir = path.join(ROOT, "race-sudo-dest");
+    const target = path.join(destDir, "a.txt");
+    W(src, "SOURCE");
+    mkdirSync(destDir, { recursive: true });
+    let checkpoints = 0;
+    const seen: string[][] = [];
+    const h = makeHarness({
+      pauseGate: async () => {
+        if (++checkpoints === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+      ensureSudo: async () => {
+        W(target, "STRANGER");
+        return true;
+      },
+      sudoExec: async (argv) => {
+        seen.push(argv);
+        if (argv[2] === "rm") rmSync(target, { force: true });
+        if (argv[2] === "cp") cpSync(src, target);
+        return { status: 0, stderr: "" };
+      },
+    });
+
+    await h.ops.runTransfer("copy", destDir, [src], "race sudo");
+
+    expect(readFileSync(target, "utf8")).toBe("STRANGER");
+    expect(seen).toEqual([]);
+    expect(h.calls.some((c) => c.startsWith("notify:copy failed:error:"))).toBe(true);
+  });
+
+  test("sudo landing detects a destination created while its copy was staged", async () => {
+    const src = path.join(ROOT, "race-sudo-land-src", "a.txt");
+    const destDir = path.join(ROOT, "race-sudo-land-dest");
+    const target = path.join(destDir, "a.txt");
+    W(src, "SOURCE");
+    mkdirSync(destDir, { recursive: true });
+    let checkpoints = 0;
+    const h = makeHarness({
+      pauseGate: async () => {
+        if (++checkpoints === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+      ensureSudo: async () => true,
+      sudoExec: async (argv) => {
+        if (argv[2] === "mv" && argv[3] === "-nT") W(target, "STRANGER");
+        const result = Bun.spawnSync(argv.slice(2));
+        return {
+          status: result.exitCode,
+          stderr: new TextDecoder().decode(result.stderr),
+          stdout: new TextDecoder().decode(result.stdout),
+        };
+      },
+    });
+
+    await h.ops.runTransfer("copy", destDir, [src], "race sudo landing");
+
+    expect(readFileSync(target, "utf8")).toBe("STRANGER");
+    expect(readdirSync(destDir)).toEqual(["a.txt"]);
+    expect(h.calls.some((c) => c.startsWith("notify:copy failed:error:"))).toBe(true);
+  });
+
+  test("sudo move keeps its source when its landed copy is replaced", async () => {
+    const src = path.join(ROOT, "sudo-after-src", "a.txt");
+    const destDir = path.join(ROOT, "sudo-after-dest");
+    const target = path.join(destDir, "a.txt");
+    W(src, "SOURCE");
+    mkdirSync(destDir, { recursive: true });
+    let checkpoints = 0;
+    let changed = false;
+    const h = makeHarness({
+      crossDevice: (p) => p === src,
+      pauseGate: async () => {
+        if (++checkpoints === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+      ensureSudo: async () => true,
+      sudoExec: async (argv) => {
+        const result = Bun.spawnSync(argv.slice(2));
+        if (argv[2] === "test" && argv[3] === "-L" && !changed) {
+          changed = true;
+          rmSync(target);
+          W(target, "STRANGER");
+        }
+        return {
+          status: result.exitCode,
+          stderr: new TextDecoder().decode(result.stderr),
+          stdout: new TextDecoder().decode(result.stdout),
+        };
+      },
+    });
+
+    await h.ops.runTransfer("move", destDir, [src], "replace sudo copy");
+
+    expect(changed).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe("STRANGER");
+    expect(readFileSync(src, "utf8")).toBe("SOURCE");
+  });
+
+  test("expired sudo authentication cannot report a skipped landing as success", async () => {
+    const src = path.join(ROOT, "sudo-expired-src", "a.txt");
+    const destDir = path.join(ROOT, "sudo-expired-dest");
+    const target = path.join(destDir, "a.txt");
+    W(src, "SOURCE");
+    mkdirSync(destDir, { recursive: true });
+    let checkpoints = 0;
+    const h = makeHarness({
+      pauseGate: async () => {
+        if (++checkpoints === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
+      ensureSudo: async () => true,
+      sudoExec: async (argv) => {
+        if (argv[2] === "mv" && argv[3] === "-nT") W(target, "STRANGER");
+        if (argv[2] === "test") return { status: 1, stderr: "sudo: a password is required" };
+        const result = Bun.spawnSync(argv.slice(2));
+        return {
+          status: result.exitCode,
+          stderr: new TextDecoder().decode(result.stderr),
+          stdout: new TextDecoder().decode(result.stdout),
+        };
+      },
+    });
+
+    await h.ops.runTransfer("copy", destDir, [src], "expired sudo");
+
+    expect(readFileSync(target, "utf8")).toBe("STRANGER");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+    expect(h.calls.some((c) => c.startsWith("notify:copy failed:error:"))).toBe(true);
+  });
+
+  test("failed copy never cleans up a raced symlink", async () => {
+    const src = path.join(ROOT, "race-link-src", "a.txt");
+    const destDir = path.join(ROOT, "race-link-dest");
+    const target = path.join(destDir, "a.txt");
+    W(src, "SOURCE");
+    mkdirSync(destDir, { recursive: true });
+    let checkpoints = 0;
+    const h = makeHarness({
+      pauseGate: async () => {
+        if (++checkpoints === 2) symlinkSync("missing", target);
+      },
+    });
+
+    await h.ops.runTransfer("copy", destDir, [src], "race symlink");
+
+    expect(readlinkSync(target)).toBe("missing");
+    expect(h.calls.some((c) => c.startsWith("notify:copy failed:error:"))).toBe(true);
   });
 });
 
@@ -1480,6 +1713,79 @@ describeNonRoot("sudo escalation", () => {
     }
   };
 
+  test("cancelled sudo move removes only its copy from an unsearchable destination", async () => {
+    const { chmodSync } = await import("node:fs");
+    const src = path.join(ROOT, "sudo-cancel-root-src.txt");
+    const destDir = path.join(ROOT, "sudo-cancel-root-dest");
+    W(src, "source");
+    mkdirSync(destDir, { recursive: true });
+    chmodSync(destDir, 0o000);
+    try {
+      let checkpoints = 0;
+      const h = makeHarness({
+        crossDevice: (a) => a === src,
+        pauseGate: async () => {
+          if (++checkpoints === 2) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        },
+        ensureSudo: async () => true,
+        sudoExec: async (argv) => {
+          chmodSync(destDir, 0o700);
+          try {
+            const result = Bun.spawnSync(argv.slice(2));
+            if (argv[2] === "mv" && result.exitCode === 0) h.prog.cancelled = true;
+            return {
+              status: result.exitCode,
+              stderr: new TextDecoder().decode(result.stderr),
+              stdout: new TextDecoder().decode(result.stdout),
+            };
+          } finally {
+            chmodSync(destDir, 0o000);
+          }
+        },
+      });
+      await h.ops.runTransfer("move", destDir, [src], "cancel sudo copy");
+      chmodSync(destDir, 0o700);
+      expect(existsSync(path.join(destDir, path.basename(src)))).toBe(false);
+      expect(readFileSync(src, "utf8")).toBe("source");
+      expect(h.calls.some((c) => c.startsWith("notify:move cancelled:info:"))).toBe(true);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
+  test("sudo copies into an unsearchable destination", async () => {
+    const { chmodSync } = await import("node:fs");
+    const src = path.join(ROOT, "sudo-unsearchable-src.txt");
+    const destDir = path.join(ROOT, "sudo-unsearchable-dest");
+    W(src, "source");
+    mkdirSync(destDir, { recursive: true });
+    chmodSync(destDir, 0o000);
+    try {
+      const h = makeHarness({
+        ensureSudo: async () => true,
+        sudoExec: async (argv) => {
+          chmodSync(destDir, 0o700);
+          try {
+            const result = Bun.spawnSync(argv.slice(2));
+            return {
+              status: result.exitCode,
+              stderr: new TextDecoder().decode(result.stderr),
+              stdout: new TextDecoder().decode(result.stdout),
+            };
+          } finally {
+            chmodSync(destDir, 0o000);
+          }
+        },
+      });
+      await h.ops.runTransfer("copy", destDir, [src], "copy with sudo");
+      chmodSync(destDir, 0o700);
+      expect(readFileSync(path.join(destDir, path.basename(src)), "utf8")).toBe("source");
+      expect(h.calls.some((c) => c.startsWith("notify:copy:success:"))).toBe(true);
+    } finally {
+      chmodSync(destDir, 0o755);
+    }
+  });
+
   test("copy into unreadable dir fails without sudo, succeeds with sudo fake", async () => {
     const srcDir = path.join(ROOT, "sudo-copy-src");
     const destDir = path.join(ROOT, "sudo-copy-dest");
@@ -1744,7 +2050,7 @@ describeNonRoot("sudo escalation", () => {
     }
   });
 
-  test("sudo copy aborts when the partial-target pre-clear fails (no nested copy)", async () => {
+  test("sudo copy refuses a target still occupied after a stale replace stash", async () => {
     const srcDir = path.join(ROOT, "sudo-preclear-src");
     const destDir = path.join(ROOT, "sudo-preclear-dest");
     mkdirSync(srcDir, { recursive: true });
@@ -1761,8 +2067,7 @@ describeNonRoot("sudo escalation", () => {
           if (argv[2] === "rm") return { status: 1, stderr: "rm: cannot remove: Permission denied" };
           return { status: 0, stderr: "" };
         },
-        // reach the copy engine (not the conflict skip): replace + a trivial
-        // in-memory stash, so the EACCES below comes from the 555 dest dir
+
         conflict: {
           resetPolicy: () => {},
           policy: () => null,
@@ -1774,9 +2079,8 @@ describeNonRoot("sudo escalation", () => {
         },
       });
       await h.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
-      expect(seen.some((a) => a[2] === "cp")).toBe(false);
-      expect(h.calls.some((c) => c.includes("FAILED") && c.includes("cannot clear partial target"))).toBe(true);
-      // no `cp -a src destDir/a.txt` nesting happened
+      expect(seen).toEqual([]);
+      expect(h.calls.some((c) => c.includes("FAILED") && c.includes("already exists"))).toBe(true);
       expect(existsSync(path.join(destDir, "a.txt", "a.txt"))).toBe(false);
     } finally {
       chmodSync(destDir, 0o755);

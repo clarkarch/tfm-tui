@@ -1,7 +1,20 @@
 import { createReadStream, createWriteStream, type ReadStream, type Stats } from "node:fs";
-import { lstat, mkdir, readlink, readdir, rename, rm, rmdir, symlink, chmod, utimes } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  lstat,
+  mkdir,
+  open,
+  readlink,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  symlink,
+  utimes,
+} from "node:fs/promises";
 import path from "node:path";
-import { errCode, claimTmp, fsyncPath } from "./fsutil";
+import { errCode, claimTmp, fileIdMatches, fileIdOf, fsyncPath, type FileId } from "./fsutil";
 import { swallow } from "../app/log";
 
 // --- Copy engine: tree walking, pre-scan and streamed file copy with
@@ -11,10 +24,10 @@ import { swallow } from "../app/log";
 // so cycles can't loop.
 //
 // Durability: every file streams to a sibling tmp file (`<dest>.tfm-part-*`)
-// in the SAME directory (same filesystem, so the final rename is atomic),
-// then fsync + chmod/utimes (preserve mode/mtime) + atomic rename + parent
-// dir fsync. A crash can leave a `.tfm-part-*` orphan but never a half-visible
-// dest. Dir modes/mtimes are restored after children land. ---
+// in the SAME directory, then fsync + chmod/utimes (preserve mode/mtime) +
+// exclusive hardlink landing + parent dir fsync. A crash can leave a
+// `.tfm-part-*` orphan but never a half-visible dest. Directories stage the
+// whole tree and claim the destination before renaming it into place. ---
 
 export type TransferSink = {
   // gate between files AND before each entry: waits while paused, throws
@@ -75,10 +88,58 @@ export const scanTree = async (
 
 const fsyncParentDir = (p: string): Promise<void> =>
   // best-effort: tmpfs / permissions may not allow dir fsync — the file
-  // fsync + atomic rename already closed the half-copy window
+  // fsync + exclusive landing already closed the half-copy window
   fsyncPath(path.dirname(p)).catch(() => {});
 
-export const copyFileProgress = (src: string, dest: string, sink: TransferSink): Promise<void> =>
+export const landCopiedFile = async (
+  tmp: string,
+  dest: string,
+  doLink: (src: string, target: string) => Promise<void> = link,
+  afterClaim?: () => void,
+): Promise<FileId | null> => {
+  try {
+    await doLink(tmp, dest);
+    return fileIdOf(tmp);
+  } catch (err) {
+    if (errCode(err) === "EEXIST") throw new Error(`already exists: ${path.basename(dest)}`);
+    if (!["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK"].includes(String(errCode(err)))) throw err;
+    const meta = await lstat(tmp);
+    const out = await open(dest, "wx", meta.mode & 0o7777).catch((openErr: unknown) => {
+      if (errCode(openErr) === "EEXIST") throw new Error(`already exists: ${path.basename(dest)}`);
+      throw openErr;
+    });
+    const st = await out.stat().catch(async (statErr: unknown) => {
+      await out.close().catch(() => {});
+      throw statErr;
+    });
+    const id: FileId =
+      st.birthtimeMs > 0 ? { dev: st.dev, ino: st.ino, born: st.birthtimeMs } : { dev: st.dev, ino: st.ino };
+    try {
+      afterClaim?.();
+      for await (const chunk of createReadStream(tmp)) {
+        let offset = 0;
+        while (offset < chunk.length) {
+          const { bytesWritten } = await out.write(chunk, offset, chunk.length - offset);
+          if (bytesWritten === 0) throw new Error("copy made no progress");
+          offset += bytesWritten;
+        }
+      }
+      await out.chmod(meta.mode & 0o7777).catch(() => {});
+      await out.utimes(meta.atime, meta.mtime).catch(() => {});
+      await out.sync();
+      return id;
+    } catch (copyErr) {
+      await out.close().catch(() => {});
+      if (fileIdMatches(id, dest))
+        await rm(dest, { force: true }).catch((cleanup) => swallow("transfer fallback cleanup", cleanup));
+      throw copyErr;
+    } finally {
+      await out.close().catch(() => {});
+    }
+  }
+};
+
+export const copyFileProgress = (src: string, dest: string, sink: TransferSink): Promise<FileId | null> =>
   new Promise((resolve, reject) => {
     // claim the tmp BEFORE stat/stream setup: a shared .tfm-part-* name would
     // interleave two copies' bytes (EEXIST retry inside claimTmp)
@@ -139,7 +200,7 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
                   settled = true;
                   done();
                   // durability + fidelity: fsync content, restore mode/mtime,
-                  // then atomic rename into place
+                  // then claim the destination without replacing an occupant
                   (async () => {
                     try {
                       await fsyncPath(tmp, "r+");
@@ -149,9 +210,10 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
                       try {
                         await utimes(tmp, srcStat.atime, srcStat.mtime);
                       } catch {}
-                      await rename(tmp, dest);
+                      const id = await landCopiedFile(tmp, dest);
+                      await cleanupTmp();
                       await fsyncParentDir(dest);
-                      resolve();
+                      resolve(id);
                     } catch (e) {
                       await cleanupTmp();
                       reject(e);
@@ -193,7 +255,7 @@ export const copyFileProgress = (src: string, dest: string, sink: TransferSink):
     );
   });
 
-export const copyTreeProgress = async (src: string, dest: string, sink: TransferSink): Promise<void> => {
+export const copyTreeProgress = async (src: string, dest: string, sink: TransferSink): Promise<FileId | null> => {
   const st = await lstat(src);
   if (st.isSymbolicLink()) {
     // recreate the link itself — never stream through to the target's contents
@@ -211,28 +273,43 @@ export const copyTreeProgress = async (src: string, dest: string, sink: Transfer
     }
     sink.fileDone();
     sink.repaint(true);
-    return;
+    return fileIdOf(dest);
   }
   if (st.isDirectory()) {
-    await mkdir(dest, { recursive: true });
-    // best-effort dir mode now; mtime restored after children (mtime would
-    // otherwise reflect the last child creation, not the source)
+    await mkdir(path.dirname(dest), { recursive: true });
+    const tmp = await claimTmp(dest, true);
     try {
-      await chmod(dest, st.mode & 0o7777);
-    } catch {}
-    for (const k of await readdir(src)) {
-      await sink.checkpoint();
-      await copyTreeProgress(path.join(src, k), path.join(dest, k), sink);
+      for (const k of await readdir(src)) {
+        await sink.checkpoint();
+        await copyTreeProgress(path.join(src, k), path.join(tmp, k), sink);
+      }
+      try {
+        await chmod(tmp, st.mode & 0o7777);
+        await utimes(tmp, st.atime, st.mtime);
+      } catch {}
+      const tmpId = fileIdOf(tmp);
+      await mkdir(dest);
+      const claimId = fileIdOf(dest);
+      try {
+        await rename(tmp, dest);
+      } catch (err) {
+        if (claimId && fileIdMatches(claimId, dest)) await rmdir(dest).catch(() => {});
+        throw err;
+      }
+      await fsyncParentDir(dest);
+      return tmpId;
+    } catch (err) {
+      await rm(tmp, { recursive: true, force: true }).catch((cleanup) => swallow("transfer stage cleanup", cleanup));
+      if (errCode(err) === "EEXIST") throw new Error(`already exists: ${path.basename(dest)}`);
+      throw err;
     }
-    try {
-      await utimes(dest, st.atime, st.mtime);
-    } catch {}
   } else {
     await sink.checkpoint();
     await mkdir(path.dirname(dest), { recursive: true });
-    await copyFileProgress(src, dest, sink);
+    const id = await copyFileProgress(src, dest, sink);
     sink.fileDone();
     sink.repaint(true);
+    return id;
   }
 };
 

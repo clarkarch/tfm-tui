@@ -82,9 +82,9 @@ export const sudoExecError = (stderr: string): Error => {
 // The sudo-tool runner + default exec, shared by fileops (copy/move/remove)
 // and trashops (rm): run the argv through the injected exec, throw the tool's
 // first stderr line on failure.
-export type SudoExecFn = (argv: string[]) => Promise<{ status: number | null; stderr: string }>;
+export type SudoExecFn = (argv: string[]) => Promise<{ status: number | null; stderr: string; stdout?: string }>;
 export const defaultSudoExec: SudoExecFn = async (argv) =>
-  runSudo(argv).then((r) => ({ status: r.status, stderr: r.stderr }));
+  runSudo(argv).then((r) => ({ status: r.status, stderr: r.stderr, stdout: r.stdout }));
 export const runSudoTool = async (sudoExec: SudoExecFn, argv: string[]): Promise<void> => {
   const r = await sudoExec(argv);
   if (r.status !== 0) throw sudoExecError(r.stderr);
