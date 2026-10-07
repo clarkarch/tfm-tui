@@ -351,13 +351,13 @@ describe("settingGroups shape", () => {
       "restore session",
       "persistent undo",
     ]);
-    // theme preset leads (hero, like the keymap preset), then look, then
+    // theme rides under the look header (its presets are the look), then
     // the compatibility pair — plain words only ("chrome" is jargon, and the
     // old `style` header would collide with the per-surface animation
     // `style` knob rows)
     expect(seq("appearance")).toEqual([
-      "theme",
       "##look",
+      "theme",
       "transparent bg",
       "icons",
       "icon style",
@@ -1084,11 +1084,7 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "top bar animation",
       "##directory bar",
       "directory bar animation",
-      "##performance",
-      "reveal delay",
     ]);
-    // the other perf knobs need file animation (off), but reveal delay
-    // answers to windowed grid alone (on) — so the section keeps one row
     // layout: collapse styles and gated widths hidden; hover timing gone entirely
     expect(labelsOf(h, "layout")).toEqual([
       "##view",
@@ -1121,7 +1117,9 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "list row height",
     ]);
     // optimization: the listings cache defaults on, so its stats rows show;
-    // (flipping it off hides them — pinned below)
+    // (flipping it off hides them — pinned below). The perf knobs need file
+    // animation (off by default), but reveal delay answers to windowed grid
+    // alone (on) — so ##performance keeps one row at defaults.
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
       "windowed grid",
@@ -1130,6 +1128,8 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "cache folder listings",
       "cache file stats",
       "cache age",
+      "##performance",
+      "reveal delay",
     ]);
   });
 
@@ -1146,6 +1146,7 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
     expect(labelsOf(h, "layout")).not.toContain("preview auto-hide");
     expect(labelsOf(h, "layout")).not.toContain("preview collapse");
     // listings cache off hides its stats rows but keeps the master
+    // (reveal delay rides windowed grid, still on)
     h.config.ui.listingsCache = false;
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
@@ -1153,29 +1154,31 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "loading delay",
       "##caching",
       "cache folder listings",
+      "##performance",
+      "reveal delay",
     ]);
   });
 
   test("reveal delay follows windowed grid alone (the switch users find)", () => {
     const h = mk();
     // windowed grid defaults on: the delay shows even with file animation off
-    expect(labelsOf(h, "animations")).toContain("reveal delay");
+    expect(labelsOf(h, "optimization")).toContain("reveal delay");
     h.config.ui.windowedGrid = false;
-    expect(labelsOf(h, "animations")).not.toContain("reveal delay");
+    expect(labelsOf(h, "optimization")).not.toContain("reveal delay");
     h.config.ui.windowedGrid = true;
-    expect(labelsOf(h, "animations")).toContain("reveal delay");
+    expect(labelsOf(h, "optimization")).toContain("reveal delay");
   });
 
   test("perf knobs hide with file animation (reveal delay excepted)", () => {
     const h = mk();
     withMasters(h, true);
-    expect(labelsOf(h, "animations")).toContain("one-layer fade");
-    expect(labelsOf(h, "animations")).toContain("reveal delay");
+    expect(labelsOf(h, "optimization")).toContain("one-layer fade");
+    expect(labelsOf(h, "optimization")).toContain("reveal delay");
     h.config.ui.fileAnimation = false;
-    expect(labelsOf(h, "animations")).not.toContain("one-layer fade");
-    expect(labelsOf(h, "animations")).not.toContain("max animated files");
+    expect(labelsOf(h, "optimization")).not.toContain("one-layer fade");
+    expect(labelsOf(h, "optimization")).not.toContain("max animated files");
     // reveal delay answers to windowed grid only, so it stays
-    expect(labelsOf(h, "animations")).toContain("reveal delay");
+    expect(labelsOf(h, "optimization")).toContain("reveal delay");
   });
 
   test("hover timing appears when any auto-hide turns on, with its header", () => {

@@ -273,7 +273,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
 
   // keymap preset switch (tfm/yazi): one batch commit over the whole [keys]
   // table + the type-to-search/view flips, like manual remaps (nothing
-  // stashed). Leads the keys category like the theme row leads appearance.
+  // stashed). Leads the keys category outright (theme, appearance's other
+  // hand row, rides that category's look header instead).
   const keymapPresetRow = (): SettingRow => ({
     kind: "cycle",
     label: "keymap preset",
@@ -414,9 +415,18 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         case "keys":
           rows = keyRowsWithHeaders();
           break;
-        case "appearance":
-          rows = [themeRow(), ...genericUiRows("appearance")];
+        case "appearance": {
+          // theme splices in under the look header (same splice precedent as
+          // the files hidden-files row — presets are a presentation generic
+          // schema rows can't express, the schema row is skipped via
+          // SPECIAL_UI_PROPS)
+          const uiRows = genericUiRows("appearance");
+          const lookIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "look");
+          if (lookIdx >= 0) uiRows.splice(lookIdx + 1, 0, themeRow());
+          else uiRows.unshift(themeRow());
+          rows = uiRows;
           break;
+        }
         case "layout": {
           // tab bar is a hand-built cycle (adaptive/on, not the schema's bool
           // toggle), so splice it after wrap mode where its schema row sits —
