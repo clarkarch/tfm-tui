@@ -79,6 +79,20 @@ describe("undo journal file", () => {
     }
   });
 
+  test("trash identity fields must be finite numbers when present", async () => {
+    const root = sandbox();
+    try {
+      saveUndoJournal([
+        { label: "ident", at: Date.now(), units: [{ op: "trash", path: "/x", dev: 1, ino: 2, born: 3.5 }], redos: [] },
+        // @ts-expect-error hostile shape: a string birth time would never match, silently disarming the guard
+        { label: "evil", at: Date.now(), units: [{ op: "trash", path: "/x", dev: 1, ino: 2, born: "3" }], redos: [] },
+      ]);
+      expect(readUndoJournal().map((b) => b.label)).toEqual(["ident"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("expires batches older than 7 days, keeps fresh ones", async () => {
     const root = sandbox();
     try {

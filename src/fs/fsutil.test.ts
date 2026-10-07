@@ -6,6 +6,7 @@ import {
   readdirSync,
   existsSync,
   rmSync,
+  statSync,
   writeFileSync,
   chmodSync,
 } from "node:fs";
@@ -472,6 +473,18 @@ describe("fileIdOf / fileIdMatches / trashIfSameFile", () => {
     expect(fileIdMatches({ dev: -1, ino: -1 }, p)).toBe(false);
     expect(fileIdMatches(id, path.join(SANDBOX, "id-missing.txt"))).toBe(false);
     expect(fileIdOf(path.join(SANDBOX, "id-missing.txt"))).toBeNull();
+  });
+
+  // ext4 hands a freed inode straight to the next create (rm + write → same
+  // dev:ino), so dev+ino alone would match a stranger. Birth time breaks the
+  // tie; the fake id keeps dev+ino and only moves birth, reproducing the reuse
+  // on any fs. Skipped where the fs reports no birth time (fileIdOf omits it).
+  test.skipIf(!(statSync(SANDBOX).birthtimeMs > 0))("reused dev+ino with a different birth time does not match", () => {
+    const p = path.join(SANDBOX, "id-reuse.txt");
+    writeFileSync(p, "v1");
+    const id = fileIdOf(p);
+    expect(id?.born).toBeDefined();
+    expect(fileIdMatches({ ...id!, born: id!.born! - 1 }, p)).toBe(false);
   });
 
   test("trashes the recorded file, skips a stranger, no-ops when gone", async () => {

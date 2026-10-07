@@ -21,6 +21,10 @@ const isStep = (v: unknown): v is UndoStep => {
   const s = v as Record<string, unknown>;
   switch (s.op) {
     case "trash":
+      return (
+        typeof s.path === "string" &&
+        ["dev", "ino", "born"].every((k) => s[k] === undefined || (typeof s[k] === "number" && Number.isFinite(s[k])))
+      );
     case "trash-if-exists":
       return typeof s.path === "string";
     case "restore-move":

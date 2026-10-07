@@ -46,7 +46,7 @@ type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
 // steps never throw — they encode redo guards (`if (!existsSync(t)) …`).
 // Unconditional steps throw so the outer handler reports them like today. ---
 export type UndoStep =
-  | { op: "trash"; path: string; dev?: number; ino?: number }
+  | { op: "trash"; path: string; dev?: number; ino?: number; born?: number }
   | { op: "trash-if-exists"; path: string }
   | { op: "restore-move"; from: string; to: string }
   | { op: "rename"; from: string; to: string }
@@ -91,7 +91,9 @@ export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}
       return () =>
         trashIfSameFile(
           step.path,
-          step.dev !== undefined && step.ino !== undefined ? { dev: step.dev, ino: step.ino } : null,
+          step.dev !== undefined && step.ino !== undefined
+            ? { dev: step.dev, ino: step.ino, ...(step.born !== undefined ? { born: step.born } : {}) }
+            : null,
           log,
         );
     case "trash-if-exists":

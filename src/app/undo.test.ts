@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeUndo, MAX_UNDO_BATCHES, stepToUnit, type UndoBatchData, type UndoSink } from "./undo";
 import { sharedOpQueue } from "../lib/op-queue";
+import { fileIdOf } from "../fs/fsutil";
 
 const recordingSink = (): UndoSink & { notes: string[] } => {
   const notes: string[] = [];
@@ -435,7 +436,10 @@ describe("journal trash identity", () => {
     try {
       const p = path.join(dir, "f.txt");
       writeFileSync(p, "orig");
-      const st = statSync(p);
+      // the id exactly as production records it (fileIdOf: dev+ino+birth) —
+      // on ext4 the stranger below reuses the freed inode, so dev+ino alone
+      // would match it and trash the wrong file
+      const id = fileIdOf(p)!;
       // the recorded file is gone; a stranger took its name
       rmSync(p);
       writeFileSync(p, "stranger");
@@ -444,7 +448,7 @@ describe("journal trash identity", () => {
       const data: UndoBatchData = {
         label: "copy",
         at: Date.now(),
-        units: [{ op: "trash", path: p, dev: st.dev, ino: st.ino }],
+        units: [{ op: "trash", path: p, ...id }],
         redos: [],
       };
       expect(undo.adoptBatches([data])).toBe(1);

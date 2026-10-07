@@ -493,15 +493,18 @@ export const crossDevice = (a: string, b: string): boolean => {
 
 // identity of a live file for undo guards: undo closures trash/restore by
 // path, but the path may have been reoccupied since the op (user deleted the
-// copy, then made a new file at the same name). dev+ino distinguishes the
-// two — null when the path is gone/unstatable (callers treat null as
-// "unknown, fall back to path semantics", never as a match).
-export type FileId = { dev: number; ino: number };
+// copy, then made a new file at the same name). dev+ino alone is NOT enough:
+// ext4 hands a freed inode straight to the next create, so a stranger made
+// right after the delete carries the SAME dev+ino. `born` (birth time, absent
+// on filesystems that don't report one) breaks that tie — null when the path
+// is gone/unstatable (callers treat null as "unknown, fall back to path
+// semantics", never as a match).
+export type FileId = { dev: number; ino: number; born?: number };
 
 export const fileIdOf = (p: string): FileId | null => {
   try {
     const s = lstatSync(p);
-    return { dev: s.dev, ino: s.ino };
+    return s.birthtimeMs > 0 ? { dev: s.dev, ino: s.ino, born: s.birthtimeMs } : { dev: s.dev, ino: s.ino };
   } catch {
     return null;
   }
@@ -510,7 +513,7 @@ export const fileIdOf = (p: string): FileId | null => {
 export const fileIdMatches = (id: FileId | null, p: string): boolean => {
   if (id === null) return true;
   const cur = fileIdOf(p);
-  return cur !== null && cur.dev === id.dev && cur.ino === id.ino;
+  return cur !== null && cur.dev === id.dev && cur.ino === id.ino && (id.born === undefined || cur.born === id.born);
 };
 
 // trash `p` only if it is still the recorded file: a missing path is already
