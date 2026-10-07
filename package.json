@@ -8,10 +8,11 @@
     "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
     "lint": "biome lint .",
     "fmt": "biome format --write .",
-    "check": "biome check . && tsc --noEmit"
+    "check": "biome check . && tsgo --noEmit"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11",
@@ -19,6 +20,7 @@
     "@resvg/resvg-js": "^2.6.2",
     "@types/bun": "^1.3.14",
     "@types/pngjs": "^6.0.5",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "typescript": "^5"
   },
   "dependencies": {
