@@ -15,6 +15,7 @@ import * as UTIF from "utif2";
 import { atomicWriteFile } from "../fs/fsutil";
 import { extOf } from "../fs/filetype";
 import { resetVideoBin, videoBin } from "../fs/videobin";
+import { errMessage } from "../lib/uiutil";
 import { swallow } from "../app/log";
 import type { IconStyle } from "../config/config-schema";
 
@@ -321,6 +322,11 @@ export const iconPng = async (
 // are instant instead of re-spawning a renderer per file) ---
 
 // test seam: the hung-renderer timeout is pinned through a real hanging child
+// cap what pngFromProc retains: a chatty/broken renderer would otherwise OOM
+// the renderer process (same 256KB ceiling as the archive tool capture — a
+// cell-box PNG thumb is bytes, anything past this is pathological and fails
+// downstream decode into the next lane/sentinel instead of growing RAM).
+const MAX_PROC_CAPTURE = 256 * 1024;
 export const pngFromProc = (
   proc: ChildProcessWithoutNullStreams,
   tool: string,
@@ -328,6 +334,7 @@ export const pngFromProc = (
 ): Promise<Uint8Array> =>
   new Promise<Uint8Array>((resolve, reject) => {
     const chunks: Buffer[] = [];
+    let retained = 0;
     let settled = false;
     const settle = (fn: () => void): void => {
       if (settled) return;
@@ -344,7 +351,13 @@ export const pngFromProc = (
       } catch {}
       settle(() => reject(new Error(`${tool} timed out`)));
     }, timeoutMs);
-    proc.stdout.on("data", (c: Buffer) => chunks.push(c));
+    proc.stdout.on("data", (c: Buffer) => {
+      if (retained >= MAX_PROC_CAPTURE) return;
+      const room = MAX_PROC_CAPTURE - retained;
+      const take = c.length > room ? c.subarray(0, room) : c;
+      chunks.push(take);
+      retained += take.length;
+    });
     // drain stderr: a chatty failing renderer filling its pipe would block the
     // process and 'close' would never fire (the thumb job would hang)
     proc.stderr.resume();
@@ -472,6 +485,18 @@ const renderHeicPng = async (p: string, pxW: number, pxH: number): Promise<Uint8
   return bunResizeBytes(rgbaToPng(data, width, height), pxW, pxH);
 };
 
+// In-process decoders hold the whole image in RAM, so files past this skip
+// straight to the out-of-process magick fallback (its 30s pngFromProc timeout
+// bounds even those). 256MB compressed can decode to GBs of pixels.
+export const RASTER_FILE_LIMIT = 256 * 1024 * 1024;
+export const rasterFileTooLarge = (p: string): boolean => {
+  try {
+    return (statSync(p, { throwIfNoEntry: false })?.size ?? 0) > RASTER_FILE_LIMIT;
+  } catch {
+    return false;
+  }
+};
+
 const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
   // magick stays the fallback: formats no in-process lane covers (AVIF on
   // Linux; XCF/KRA; exotic ICO/TIFF payloads the lanes refuse) — and a
@@ -499,7 +524,11 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
       "magick",
     );
   // Faster lane first (measured, see above): a refusing lane falls through to
-  // magick, a missing magick falls through to the lane/glyph.
+  // magick, a missing magick falls through to the lane/glyph. Oversize files
+  // skip every in-process decoder straight to magick: a multi-hundred-MB
+  // panorama/TIFF fully decodes in-process (same OOM class the archive memory
+  // limit guards), while the spawn is out-of-process with its own 30s timeout.
+  if (rasterFileTooLarge(p)) return magick();
   switch (rasterLaneFor(p)) {
     case "ico":
       return renderRasterBunImage(p, pxW, pxH).catch(() => renderIcoPng(p, pxW, pxH).catch(magick));
@@ -545,16 +574,21 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
     );
   try {
     return await attempt("1");
-  } catch {
+  } catch (err) {
+    // a hung ffmpeg must not cost two full timeouts (60s worker stall for one
+    // corrupt video): the 0-seek retry only helps empty-output decode misses,
+    // never a child that never answered
+    if (errMessage(err).includes("timed out")) throw err;
     try {
       return await attempt("0");
-    } catch (err) {
-      // the binary may have died mid-run (deleted sidecar, broken mount):
-      // drop the memoized resolution so the next job re-resolves instead of
-      // rejecting every video into its own failedThumbs sentinel. Harmless
-      // when the file was simply corrupt — re-resolution is idempotent.
-      resetVideoBin();
-      throw err;
+    } catch (err2) {
+      // dead binary (spawn-level failure), not a corrupt file: drop the
+      // memoized resolution so the next job re-resolves instead of failing
+      // every video; decode failures ("exited N") keep the binary and let the
+      // per-file sentinel remember the broken file
+      const msg = errMessage(err2);
+      if (!msg.includes("timed out") && !/exited \d+/.test(msg)) resetVideoBin();
+      throw err2;
     }
   }
 };

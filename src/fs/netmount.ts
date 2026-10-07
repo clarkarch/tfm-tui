@@ -76,8 +76,12 @@ export const makeNetworkActions = (sink: NetworkSink) => {
   };
 
   const resolveName = async (uri: string, before: Set<string>): Promise<string | null> => {
-    // gio returns after the mount exists, but readdir can lag by a beat
+    // gio returns after the mount exists, but readdir can lag by a beat —
+    // poll with a delay (back-to-back readdirs all fire within milliseconds
+    // and a slow FUSE arrival deterministically reads "mount path not found"
+    // after a SUCCESSFUL mount, orphaning it)
     for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 250));
       const names = await readNames();
       const fresh = names.filter((n) => !before.has(n));
       const picked = fresh[0] ?? names.find((n) => nameMatchesUri(n, uri));

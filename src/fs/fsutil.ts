@@ -1,4 +1,4 @@
-import { cp, mkdir, rename as fsRename, rm, writeFile, open } from "node:fs/promises";
+import { chmod, cp, mkdir, rename as fsRename, rm, writeFile, open } from "node:fs/promises";
 import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -234,11 +234,30 @@ export const fsMove = async (src: string, dest: string): Promise<void> => {
   } catch (err: unknown) {
     if (errCode(err) !== "EXDEV") throw err;
     // cross-device: copy+delete (no atomic rename across filesystems).
-    // cp preserves mode/mtime; the caller (runTransfer) routes big moves
-    // through the durable tmp+rename engine with progress + half-copy
-    // cleanup — this fallback is for single renames that unexpectedly hit
-    // EXDEV (bind mounts). Remove source only after the copy succeeded.
-    await cp(src, dest, { recursive: true, preserveTimestamps: true });
+    // Via an EXCLUSIVELY-claimed sibling tmp (same .tfm-part-* shape the
+    // transfer engine sweeps) so a crash can't leave a half-written dest and
+    // a concurrent op can't share our tmp: only a complete tmp is renamed
+    // into place. The caller (runTransfer) routes big moves through the
+    // durable tmp+rename engine with progress + half-copy cleanup — this
+    // fallback is for single renames that unexpectedly hit EXDEV (bind
+    // mounts). Remove source only after the copy succeeded.
+    const srcStat = lstatSync(src);
+    const tmp = await claimTmp(dest, srcStat.isDirectory());
+    try {
+      await cp(src, tmp, { recursive: true, preserveTimestamps: true });
+      // cp merges into the claimed dir instead of creating it, so the root
+      // keeps mkdir-default mode — restore the source's explicitly
+      if (srcStat.isDirectory()) {
+        try {
+          // eslint-disable-next-line no-bitwise
+          await chmod(tmp, srcStat.mode & 0o7777);
+        } catch {}
+      }
+      await fsRename(tmp, dest);
+    } catch (copyErr) {
+      await rm(tmp, { recursive: true, force: true }).catch(() => {});
+      throw copyErr;
+    }
     try {
       await rm(src, { recursive: true });
     } catch (err) {
@@ -528,6 +547,24 @@ export const atomicWriteFile = async (p: string, data: Uint8Array | string): Pro
 // DIR is a separate dot-prefixed shape, anchored by its own regex.)
 export const tmpName = (base: string): string =>
   `${base}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+
+// Exclusive claim of a sibling tmp: the rand name is 64-bit, but two live ops
+// on the same dest (or a planted name) would otherwise share one tmp and
+// clobber each other mid-copy. mkdir/open-wx fail EEXIST atomically, so a won
+// claim is proof of exclusivity; callers retry with a fresh name.
+export const claimTmp = async (dest: string, dir = false): Promise<string> => {
+  for (let i = 0; i < 10; i++) {
+    const cand = tmpName(dest);
+    try {
+      if (dir) await mkdir(cand);
+      else await (await open(cand, "wx")).close();
+      return cand;
+    } catch (err) {
+      if (errCode(err) !== "EEXIST") throw err;
+    }
+  }
+  throw new Error(`cannot claim temp for ${path.basename(dest)}`);
+};
 
 // fsync a single path (best-effort close; callers own error policy — the
 // trash info fsync logs, the copy finish treats failure as fatal upstream).

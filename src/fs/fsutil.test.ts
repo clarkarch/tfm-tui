@@ -24,6 +24,7 @@ import {
   deviceOf,
   crossDevice,
   atomicWriteFile,
+  claimTmp,
   encodeTrashPath,
   rmTrashInfoForPath,
   allTrashFilesDirs,
@@ -151,6 +152,34 @@ describe("fsMove / safeRestoreMove", () => {
       W(path.join(dir, "src.txt"), "deep");
       await safeRestoreMove(path.join(dir, "src.txt"), path.join(dir, "x/y/z/dst.txt"));
       expect(readFileSync(path.join(dir, "x/y/z/dst.txt"), "utf8")).toBe("deep");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("claimTmp hands out distinct exclusive names (no shared part-files)", async () => {
+    const dir = mktmp("tfm-claim-");
+    try {
+      const dest = path.join(dir, "out.bin");
+      const a = await claimTmp(dest);
+      const b = await claimTmp(dest);
+      expect(a).not.toBe(b);
+      // both claims exist and are empty: the second claim did not reuse the first
+      expect(existsSync(a)).toBe(true);
+      expect(existsSync(b)).toBe(true);
+      expect(readFileSync(a, "utf8")).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("claimTmp dir mode claims an exclusive directory", async () => {
+    const dir = mktmp("tfm-claimdir-");
+    try {
+      const a = await claimTmp(path.join(dir, "out"), true);
+      const b = await claimTmp(path.join(dir, "out"), true);
+      expect(a).not.toBe(b);
+      expect(readdirSync(a)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

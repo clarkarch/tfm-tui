@@ -73,6 +73,7 @@ export type ChromeWiring = {
   connectServer: (raw?: string) => void;
   disconnectServer: (mountPath: string) => void;
   stopGpm: () => void;
+  stopChromeTimers: () => void;
 };
 
 export type GridFoundationWiring = {

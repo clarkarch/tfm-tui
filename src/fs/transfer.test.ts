@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -147,6 +148,8 @@ describe("copyFileProgress", () => {
     const leftovers = readdirSync(dir).filter((f) => f.includes(".tfm-part-"));
     expect(leftovers).toEqual([]);
     expect(readFileSync(dest, "utf8")).toBe("0123456789");
+    // finish AND stream-close both clear: exactly one close, not two
+    expect(h.log.filter((l) => l === "close")).toEqual(["close"]);
   });
 
   test("preserves mode and mtime from the source", async () => {
@@ -184,6 +187,20 @@ describe("copyTreeProgress", () => {
     // symlink recreated as a link, not materialized into target content
     expect(lstatSync(path.join(dir, "dst", "lnk")).isSymbolicLink()).toBe(true);
     expect(h.files).toBe(3); // a.txt + b.txt + link all count as done entries
+  });
+
+  test("a raced symlink occupant fails loudly instead of reporting success", async () => {
+    // a concurrent create between conflict resolution and the copy used to be
+    // swallowed (EEXIST → success toast over a link that never landed)
+    symlinkSync(path.join(dir, "real.txt"), path.join(dir, "src"));
+    W(path.join(dir, "real.txt"), "R");
+    symlinkSync(path.join(dir, "other.txt"), path.join(dir, "dst"));
+    const h = mkSink();
+    await expect(copyTreeProgress(path.join(dir, "src"), path.join(dir, "dst"), h.sink)).rejects.toThrow(
+      "already exists",
+    );
+    // the occupant wins: the old link is untouched
+    expect(readlinkSync(path.join(dir, "dst"))).toBe(path.join(dir, "other.txt"));
   });
 
   test("checkpoint throw (cancel) aborts the walk with a rejected promise", async () => {

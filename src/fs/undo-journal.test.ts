@@ -105,6 +105,18 @@ describe("undo journal file", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("saveUndoJournal never throws on an unwritable state dir (ENOSPC/EROFS)", async () => {
+    // the save rides onChange after a SUCCESSFUL op — throwing here would mask
+    // the op as failed, so the journal is best-effort and the next save retries
+    const root = sandbox();
+    try {
+      writeFileSync(process.env.XDG_STATE_HOME as string, "not a dir");
+      expect(() => saveUndoJournal([batch()])).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("persist-undo option", () => {

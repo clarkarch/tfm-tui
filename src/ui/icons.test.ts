@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { writeFileSync, existsSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
+import { truncateSync, writeFileSync, existsSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { glyphFor } from "./glyphs";
 import { resetVideoBin, videoBin } from "../fs/videobin";
 import {
   OUTLINE_ICONS,
+  RASTER_FILE_LIMIT,
   THUMB_COOL_MS,
   clearIconCaches,
   iconCacheKey,
@@ -16,6 +17,7 @@ import {
   lruSet,
   pickSvgRenderer,
   pngFromProc,
+  rasterFileTooLarge,
   rasterLaneFor,
   resolveIconName,
   svgSourceMtime,
@@ -685,5 +687,25 @@ describe("pngFromProc timeout", () => {
     await expect(pngFromProc(proc, "sleep-probe", 100)).rejects.toThrow(/timed out/);
     // well under the child's 30s life: the wrapper killed it, nothing lingers
     expect(Date.now() - start).toBeLessThan(10_000);
+  });
+});
+
+describe("rasterFileTooLarge", () => {
+  test("small and missing files decode in-process; oversize skips to magick", () => {
+    // sparse, not written: truncate extends the size without consuming tmpfs
+    // pages, so the 256MB+1 probe costs ~0 bytes on the small /tmp tmpfs
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-rasterlimit-"));
+    try {
+      const small = path.join(dir, "a.png");
+      writeFileSync(small, Buffer.from(PNG_6x2, "base64"));
+      expect(rasterFileTooLarge(small)).toBe(false);
+      expect(rasterFileTooLarge(path.join(dir, "missing.png"))).toBe(false);
+      const big = path.join(dir, "big.png");
+      writeFileSync(big, Buffer.from(PNG_6x2, "base64"));
+      truncateSync(big, RASTER_FILE_LIMIT + 1);
+      expect(rasterFileTooLarge(big)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

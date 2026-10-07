@@ -14,10 +14,13 @@
 
 import type { Stats } from "node:fs";
 import {
+  closeSync,
   cpSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -235,6 +238,7 @@ export const makePluginStore = (dir: string, name: string): PluginStore => {
   // mtime of the last read; -1 = missing (deleted), -2 = never read
   let cache: Record<string, unknown> | null = null;
   let cacheMtime = -2;
+  let tmpSeq = 0;
   const load = (): Record<string, unknown> => {
     let mtime: number;
     try {
@@ -250,8 +254,18 @@ export const makePluginStore = (dir: string, name: string): PluginStore => {
   };
   const persist = (): void => {
     mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
+    // unique tmp per write (a fixed pid-named tmp lets two tfm instances
+    // interleave bytes into one torn file) + fsync before rename, or a crash
+    // lands the torn tmp as the live state. Still matches state.json.* so the
+    // hash/fingerprint passes skip it.
+    const tmp = `${file}.${process.pid}.${tmpSeq++}.tmp`;
     writeFileSync(tmp, JSON.stringify(cache, null, 2));
+    const fd = openSync(tmp, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(tmp, file);
     try {
       cacheMtime = statSync(file).mtimeMs;

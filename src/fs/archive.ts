@@ -47,8 +47,13 @@ export type ArchiveRunOpts = {
   pauseGate?: () => Promise<void>;
   // fidelity report from the tar-family js create (its input is content-only,
   // so exec bits/symlinks are dropped): fired once on success with what the
-  // walk saw, so fileops can warn without a second lstat walk. The zip lane
+  // walk saw, so fileops can warn without a second walk. The zip lane
   // preserves both and never fires it.
+  // hung-tool backstop: a child that never exits wedges the serial op queue
+  // (quit/restart refuse while busy, and ✕ needs an armed toast). Armed tools
+  // pass a generous budget; expiry SIGKILLs (SIGCONT first — a paused child
+  // ignores SIGKILL until resumed) and resolves code -1 like any spawn failure.
+  timeoutMs?: number;
   onLoss?: (loss: { exec: number; links: number }) => void;
 };
 export type ArchiveRun = (spec: ToolSpec, opts?: ArchiveRunOpts) => Promise<ArchiveRunResult>;
@@ -153,6 +158,8 @@ export const extractPlan = (
   if (def.kind === "tar")
     // -v: emit entry names so the file-count progress bar advances
     // --no-same-owner: extracting as non-root otherwise warns/fails on ownership
+    // (no absolute-path flag: GNU/bsdtar both strip leading / by default, and
+    // the escape snapshot below catches any tool that doesn't)
     return {
       tool: "tar",
       args: ["-x", "-v", ...def.filter, "-f", file, "-C", destDir, "--no-same-owner"],
@@ -368,9 +375,11 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const finish = (code: number): void => {
       if (settled) return;
       settled = true;
+      if (timer !== null) clearTimeout(timer);
       stdoutCounter.flush();
       stderrCounter.flush();
       resolve({ code, stdout, stderr });
@@ -389,6 +398,18 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
       return;
     }
     opts.onChild?.(child);
+    if (opts.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        try {
+          child.kill("SIGCONT");
+        } catch {}
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+        stderr = appendCapped(stderr, `timed out after ${opts.timeoutMs}ms`);
+        finish(-1);
+      }, opts.timeoutMs);
+    }
     child.stdout?.on("data", (c: Buffer | string) => {
       const s = typeof c === "string" ? c : c.toString();
       stdout = appendCapped(stdout, s);
@@ -756,17 +777,20 @@ const jsZipExtract = async (file: string, destDir: string, opts: ArchiveRunOpts)
     if (stopRequested(opts)) return { code: 0, stdout: "", stderr: "" };
     const map = unzipSync(raw);
     const base = path.resolve(destDir);
-    const writeOne = (e: (typeof entries)[number]): void => {
+    // skipped entries are counted, not silent: the spawn lane exits >=1 on
+    // them, and a code-0 success toast over skipped members is a lie
+    let skipped = 0;
+    const writeOne = (e: (typeof entries)[number]): boolean => {
       // empty names and escapes never touch disk: skip, don't fail (spawn
       // unzip has its own rules; a new parser must not add a traversal).
-      if (!e.name) return;
+      if (!e.name) return false;
       const dest = path.resolve(base, e.name);
-      if (dest !== base && !dest.startsWith(`${base}${path.sep}`)) return;
+      if (dest !== base && !dest.startsWith(`${base}${path.sep}`)) return false;
       if (e.dir) {
         mkdirSync(dest, { recursive: true });
       } else if (!e.symlink) {
         const data = map[e.name];
-        if (!data) return; // undecodable entry: skip rather than a 0-byte success file
+        if (!data) return false; // undecodable entry: skip rather than a 0-byte success file
         mkdirSync(path.dirname(dest), { recursive: true });
         writeFileSync(dest, Buffer.from(data));
         // mask to rwx: never restore setuid/setgid/sticky from an archive,
@@ -778,14 +802,17 @@ const jsZipExtract = async (file: string, destDir: string, opts: ArchiveRunOpts)
       }
       // links land DEAD LAST (second pass below): an entry that resolves
       // through an on-disk link would otherwise write outside staging.
+      return true;
     };
     for (const e of entries) {
       if (e.symlink) continue;
       if (stopRequested(opts)) return { code: 0, stdout: "", stderr: "" };
       await opts.pauseGate?.();
       try {
-        writeOne(e);
-      } catch {}
+        if (!writeOne(e)) skipped++;
+      } catch {
+        skipped++;
+      }
       opts.onLine?.(e.name);
     }
     for (const e of entries) {
@@ -793,18 +820,34 @@ const jsZipExtract = async (file: string, destDir: string, opts: ArchiveRunOpts)
       if (stopRequested(opts)) return { code: 0, stdout: "", stderr: "" };
       await opts.pauseGate?.();
       try {
-        if (!e.name) continue;
+        if (!e.name) {
+          skipped++;
+          continue;
+        }
         const dest = path.resolve(base, e.name);
-        if (dest !== base && !dest.startsWith(`${base}${path.sep}`)) continue;
+        if (dest !== base && !dest.startsWith(`${base}${path.sep}`)) {
+          skipped++;
+          continue;
+        }
         const data = map[e.name];
-        if (!data) continue;
+        if (!data) {
+          skipped++;
+          continue;
+        }
         mkdirSync(path.dirname(dest), { recursive: true });
         try {
           symlinkSync(Buffer.from(data).toString("utf8"), dest);
-        } catch {}
-      } catch {}
+        } catch {
+          skipped++;
+        }
+      } catch {
+        skipped++;
+      }
       opts.onLine?.(e.name);
     }
+    // exit 1 is the cross-lane "warning" (some members skipped): fileops keeps
+    // the stage like the spawn path instead of discarding it
+    if (skipped > 0) return { code: 1, stdout: "", stderr: `${skipped} entr${skipped === 1 ? "y" : "ies"} skipped` };
     return { code: 0, stdout: "", stderr: "" };
   } catch (err) {
     return { code: 2, stdout: "", stderr: errMessage(err) };

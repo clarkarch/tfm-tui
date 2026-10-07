@@ -77,11 +77,18 @@ export const readUndoJournal = (now: number = Date.now()): UndoBatchData[] => {
 };
 
 export const saveUndoJournal = (batches: UndoBatchData[]): void => {
-  const file = undoJournalFile();
-  mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(batches.slice(-MAX_UNDO_BATCHES)));
-  renameSync(tmp, file);
+  try {
+    const file = undoJournalFile();
+    mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(batches.slice(-MAX_UNDO_BATCHES)));
+    renameSync(tmp, file);
+  } catch (err) {
+    // ENOSPC/EROFS/unwritable XDG_STATE_HOME must never mask the successful
+    // op that triggered the save (or break a fire-and-forget caller) — the
+    // journal is best-effort, the next save retries
+    swallow("undo journal save", err);
+  }
 };
 
 export const clearUndoJournal = (): void => {

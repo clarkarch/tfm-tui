@@ -135,7 +135,9 @@ export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}
     case "write-empty-if-missing":
       return async () => {
         try {
-          if (!existsSync(step.path)) await writeFile(step.path, "");
+          // O_EXCL create, not check-then-write: a raced occupant between
+          // existsSync and writeFile would be silently truncated otherwise
+          if (!existsSync(step.path)) await writeFile(step.path, "", { flag: "wx" });
         } catch {}
       };
     case "rm-trashinfo":

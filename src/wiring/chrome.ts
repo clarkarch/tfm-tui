@@ -602,5 +602,6 @@ export const wireChrome = async (deps: {
     connectServer,
     disconnectServer,
     stopGpm: () => gpmInput?.stop(),
+    stopChromeTimers: () => chrome.dispose(),
   };
 };

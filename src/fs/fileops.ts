@@ -129,6 +129,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       isCancelled: () => prog.cancelled,
       pauseGate: () => ctx.pauseGate(),
       onLoss: opts.onLoss,
+      // hung-tool backstop (a wedged tar/7z holds the serial queue, and
+      // quit/restart refuse while busy): generous enough for multi-GB
+      // archives, fatal only for a truly stuck child
+      timeoutMs: 15 * 60 * 1000,
     });
 
   // archive progress helpers: reset shared flags per op (stale-cancel lesson),
@@ -715,7 +719,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     } finally {
       prog.active = false;
     }
-    ctx.pushUndoBatch(label, units, redos, { units: dUnits, redos: dRedos });
+    // a fully-failed batch carries no units — pushing it pollutes the undo
+    // stack with a redoable no-op ("Undid: rename 0 items"); stashed victims
+    // still count (their restore unit is in units even when the op failed)
+    if (units.length) ctx.pushUndoBatch(label, units, redos, { units: dUnits, redos: dRedos });
     ctx.renderAll();
     const verb = op === "copy" ? "Copied" : "Moved";
     const opNoun = op === "copy" ? "Copy" : "Move";
@@ -947,7 +954,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         failWhy.add(fsErrText(failure));
       }
     }
-    ctx.pushUndoBatch(`rename ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });
+    if (units.length)
+      ctx.pushUndoBatch(`rename ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });
     ctx.renderAll();
     const bits = [`Renamed ${ok} item${ok === 1 ? "" : "s"}`];
     if (failed) bits.push(failSuffix(failed, failWhy));
@@ -1244,6 +1252,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           failWhy.add(firstErrLine(res.stderr) || "extract failed");
           continue;
         }
+        // warning-level exits (skipped members) still land in the debug trail —
+        // the toast reports success like the spawn path, but the skip is on record
+        if (res.code === 1 && res.stderr)
+          ctx.log(`extract warnings ${path.basename(file)}: ${firstErrLine(res.stderr)}`);
         // escape sweep first: trash anything the tool wrote outside staging,
         // then refuse the archive (its staged content is from the same
         // untrusted member list, so nothing from it lands)
@@ -1346,7 +1358,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         }
       }
     }
-    ctx.pushUndoBatch(`extract ${ok} archive${ok === 1 ? "" : "s"}`, units, [], { units: dUnits, redos: [] });
+    if (units.length)
+      ctx.pushUndoBatch(`extract ${ok} archive${ok === 1 ? "" : "s"}`, units, [], { units: dUnits, redos: [] });
     ctx.renderAll();
     const bits = [cancelled ? `Extract cancelled (${ok} done)` : `Extracted ${ok} archive${ok === 1 ? "" : "s"}`];
     if (skipped) bits.push(`${skipped} skipped`);
@@ -1483,7 +1496,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       clearArchiveChild();
       prog.active = false;
     }
-    ctx.pushUndoBatch(`compress ${path.basename(out)}`, units, [], { units: dUnits, redos: [] });
+    if (units.length) ctx.pushUndoBatch(`compress ${path.basename(out)}`, units, [], { units: dUnits, redos: [] });
     ctx.renderAll();
     const bits = [cancelled ? "Compress cancelled" : `Compressed ${path.basename(out)}`];
     if (failed) bits.push(failSuffix(failed, failWhy));

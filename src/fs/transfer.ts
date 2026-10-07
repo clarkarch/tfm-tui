@@ -1,7 +1,7 @@
 import { createReadStream, createWriteStream, type ReadStream, type Stats } from "node:fs";
 import { lstat, mkdir, readlink, readdir, rename, rm, rmdir, symlink, chmod, utimes } from "node:fs/promises";
 import path from "node:path";
-import { errCode, fsyncPath, tmpName } from "./fsutil";
+import { errCode, claimTmp, fsyncPath } from "./fsutil";
 import { swallow } from "../app/log";
 
 // --- Copy engine: tree walking, pre-scan and streamed file copy with
@@ -80,96 +80,115 @@ const fsyncParentDir = (p: string): Promise<void> =>
 
 export const copyFileProgress = (src: string, dest: string, sink: TransferSink): Promise<void> =>
   new Promise((resolve, reject) => {
-    // stat first for mode/mtime preservation (lstat: copy the link target's
-    // meta only when src is a regular file — symlinks never reach here)
-    lstat(src).then(
-      (srcStat) => {
-        const tmp = tmpName(dest);
-        mkdir(path.dirname(dest), { recursive: true }).then(
-          () => {
-            const rs = createReadStream(src);
-            const ws = createWriteStream(tmp, { mode: 0o600 });
-            sink.setStream(rs);
-            rs.on("data", (c: unknown) => {
-              const n =
-                typeof c === "string"
-                  ? Buffer.byteLength(c)
-                  : c instanceof Uint8Array
-                    ? c.length
-                    : typeof (c as { length?: unknown })?.length === "number"
-                      ? (c as unknown as { length: number }).length
-                      : 0;
-              sink.addBytes(n);
-              if (sink.paused()) {
-                try {
-                  rs.pause();
-                } catch {}
-              }
-              if (sink.cancelled()) {
-                try {
-                  rs.destroy(new Error("cancelled"));
-                } catch {}
-              }
-              sink.repaint();
-            });
-            const done = () => sink.clearStream(rs);
-            let settled = false;
-            const cleanupTmp = async (): Promise<void> => {
-              try {
-                await rm(tmp, { force: true });
-              } catch (err) {
-                // a part file that survives cleanup is real disk garbage (the
-                // .tfm-part sweep only catches it on the next transfer)
-                swallow("transfer part-file cleanup", err);
-              }
-            };
-            ws.on("finish", () => {
-              if (settled) return;
-              settled = true;
-              done();
-              // durability + fidelity: fsync content, restore mode/mtime,
-              // then atomic rename into place
-              (async () => {
-                try {
-                  await fsyncPath(tmp, "r+");
+    // claim the tmp BEFORE stat/stream setup: a shared .tfm-part-* name would
+    // interleave two copies' bytes (EEXIST retry inside claimTmp)
+    claimTmp(dest).then(
+      (tmp) =>
+        // stat first for mode/mtime preservation (lstat: copy the link target's
+        // meta only when src is a regular file — symlinks never reach here)
+        lstat(src).then(
+          (srcStat) => {
+            mkdir(path.dirname(dest), { recursive: true }).then(
+              () => {
+                const rs = createReadStream(src);
+                const ws = createWriteStream(tmp, { mode: 0o600 });
+                sink.setStream(rs);
+                rs.on("data", (c: unknown) => {
+                  const n =
+                    typeof c === "string"
+                      ? Buffer.byteLength(c)
+                      : c instanceof Uint8Array
+                        ? c.length
+                        : typeof (c as { length?: unknown })?.length === "number"
+                          ? (c as unknown as { length: number }).length
+                          : 0;
+                  sink.addBytes(n);
+                  if (sink.paused()) {
+                    try {
+                      rs.pause();
+                    } catch {}
+                  }
+                  if (sink.cancelled()) {
+                    try {
+                      rs.destroy(new Error("cancelled"));
+                    } catch {}
+                  }
+                  sink.repaint();
+                });
+                let cleared = false;
+                const done = () => {
+                  // exactly-once: finish/fail AND stream close all call this, and
+                  // the TransferSink contract doesn't require idempotent
+                  // clearStream (fakes log a double close)
+                  if (cleared) return;
+                  cleared = true;
+                  sink.clearStream(rs);
+                };
+                let settled = false;
+                const cleanupTmp = async (): Promise<void> => {
                   try {
-                    await chmod(tmp, srcStat.mode & 0o7777);
-                  } catch {}
+                    await rm(tmp, { force: true });
+                  } catch (err) {
+                    // a part file that survives cleanup is real disk garbage (the
+                    // .tfm-part sweep only catches it on the next transfer)
+                    swallow("transfer part-file cleanup", err);
+                  }
+                };
+                ws.on("finish", () => {
+                  if (settled) return;
+                  settled = true;
+                  done();
+                  // durability + fidelity: fsync content, restore mode/mtime,
+                  // then atomic rename into place
+                  (async () => {
+                    try {
+                      await fsyncPath(tmp, "r+");
+                      try {
+                        await chmod(tmp, srcStat.mode & 0o7777);
+                      } catch {}
+                      try {
+                        await utimes(tmp, srcStat.atime, srcStat.mtime);
+                      } catch {}
+                      await rename(tmp, dest);
+                      await fsyncParentDir(dest);
+                      resolve();
+                    } catch (e) {
+                      await cleanupTmp();
+                      reject(e);
+                    }
+                  })();
+                });
+                const fail = (e: unknown) => {
+                  // destroy the write stream too: it was left open while the
+                  // tmp/dest cleanup unlinked the partial file — the fd and its
+                  // allocated blocks lingered until a GC finalizer bun may never run
                   try {
-                    await utimes(tmp, srcStat.atime, srcStat.mtime);
+                    ws.destroy();
                   } catch {}
-                  await rename(tmp, dest);
-                  await fsyncParentDir(dest);
-                  resolve();
-                } catch (e) {
-                  await cleanupTmp();
-                  reject(e);
-                }
-              })();
-            });
-            const fail = (e: unknown) => {
-              // destroy the write stream too: it was left open while the
-              // tmp/dest cleanup unlinked the partial file — the fd and its
-              // allocated blocks lingered until a GC finalizer bun may never run
-              try {
-                ws.destroy();
-              } catch {}
-              if (!settled) {
-                settled = true;
-                done();
-                void cleanupTmp().then(() => reject(e));
-              } else {
-                void cleanupTmp();
-              }
-            };
-            ws.on("error", fail);
-            rs.on("error", fail);
-            rs.on("close", done);
-            rs.pipe(ws);
+                  if (!settled) {
+                    settled = true;
+                    done();
+                    void cleanupTmp().then(() => reject(e));
+                  } else {
+                    void cleanupTmp();
+                  }
+                };
+                ws.on("error", fail);
+                rs.on("error", fail);
+                rs.on("close", done);
+                rs.pipe(ws);
+              },
+              (e) => reject(e),
+            );
           },
-          (e) => reject(e),
-        );
-      },
+          (e) => {
+            // stat failed (missing source): the just-claimed tmp is ours and
+            // empty — remove it before rejecting or it orphans (nothing streams)
+            void rm(tmp, { force: true })
+              .catch(() => {})
+              .then(() => reject(e));
+          },
+        ),
       (e) => reject(e),
     );
   });
@@ -184,7 +203,11 @@ export const copyTreeProgress = async (src: string, dest: string, sink: Transfer
     try {
       await symlink(target, dest);
     } catch (err: unknown) {
-      if (errCode(err) !== "EEXIST") throw err;
+      // a raced occupant (conflict resolved, then a concurrent create landed)
+      // must fail loudly like the file branches — swallowing EEXIST keeps the
+      // old link and reports a copy that never happened
+      if (errCode(err) === "EEXIST") throw new Error(`already exists: ${path.basename(dest)}`);
+      throw err;
     }
     sink.fileDone();
     sink.repaint(true);

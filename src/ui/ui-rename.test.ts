@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box, Text } from "@opentui/core";
@@ -153,6 +153,27 @@ describe("makeRename (renderer)", () => {
     // the file landed under the typed name; no placeholder left behind
     expect(existsSync(path.join(dir, "notes.txt"))).toBe(true);
     expect(existsSync(path.join(dir, "Untitled 2.txt"))).toBe(false);
+  });
+
+  test("committing a create onto an occupied name dedupes instead of overwriting", async () => {
+    // the typed name is taken at commit time: the atomic link(2) claim fails
+    // EEXIST and the landing retries past it — the occupant must survive
+    // byte-identical, the creation lands deduped
+    calls.length = 0;
+    writeFileSync(path.join(dir, "taken.txt"), "precious");
+    await mountRow(path.join(dir, "Untitled.txt"));
+    rename.startInlineCreate("file");
+    const deadline = Date.now() + 2000;
+    while (!t.renderer.root.findDescendantById("tfm-rename-input") && Date.now() < deadline) await Bun.sleep(5);
+    await t.renderOnce();
+    const input = t.renderer.root.findDescendantById("tfm-rename-input") as any;
+    input.value = "taken.txt";
+    rename.finishInlineRename(true);
+    const landed = Date.now() + 2000;
+    while (!calls.some((c) => c.startsWith("undo:new file")) && Date.now() < landed) await Bun.sleep(5);
+    expect(readFileSync(path.join(dir, "taken.txt"), "utf8")).toBe("precious");
+    expect(existsSync(path.join(dir, "taken (copy).txt"))).toBe(true);
+    expect(calls).toContain("notify:create:success:Created taken (copy).txt · ctrl+z to undo");
   });
 
   test("cancelling a rename restores the label at its ORIGINAL row index (not the end)", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeUndo, MAX_UNDO_BATCHES, type UndoBatchData, type UndoSink } from "./undo";
+import { makeUndo, MAX_UNDO_BATCHES, stepToUnit, type UndoBatchData, type UndoSink } from "./undo";
 import { sharedOpQueue } from "../lib/op-queue";
 
 const recordingSink = (): UndoSink & { notes: string[] } => {
@@ -374,6 +374,23 @@ describe("journal data (persistent undo)", () => {
     expect(undo.adoptBatches(datas)).toBe(MAX_UNDO_BATCHES);
     expect(undo.undoDepth()).toBe(MAX_UNDO_BATCHES);
     expect(undo.snapshotData()[0]!.label).toBe("op 5");
+  });
+
+  test("write-empty-if-missing redo never truncates a raced occupant", async () => {
+    // a file arriving between undo and redo used to be silently truncated to
+    // ""; the O_EXCL create fails instead and the occupant survives intact
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-undo-wx-"));
+    try {
+      const p = path.join(dir, "n.txt");
+      const redo = stepToUnit({ op: "write-empty-if-missing", path: p });
+      await redo();
+      expect(readFileSync(p, "utf8")).toBe("");
+      writeFileSync(p, "precious");
+      await redo();
+      expect(readFileSync(p, "utf8")).toBe("precious");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("onChange fires on push, undo and redo (wiring persists the journal)", async () => {

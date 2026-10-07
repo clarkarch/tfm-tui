@@ -102,6 +102,13 @@ describe("index.ts smoke boot", () => {
       // stderr rides along in the message: an early exit leaves stdout empty
       // by design, so a bare "" failure would hide where the boot went
       expect(`${out}\n<stderr>${err}`).toContain(LEAVE);
+      // teardown alone is not health: a boot that crashes yet still tears
+      // down must fail here, not ride green into a release (the crash
+      // handler announces `[tfm] crash` on stderr; native OOM surfaces as
+      // `Failed to create …` from the renderer)
+      expect(err).not.toContain("[tfm] crash");
+      expect(err).not.toContain("[tfm] unhandled rejection");
+      expect(err).not.toContain("Failed to create");
     },
     BOOT_BUDGET_MS,
   );

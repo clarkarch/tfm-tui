@@ -114,6 +114,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
   let progLastPaint = 0;
   let progSpinIdx = 0;
   let progSpinTimer: ReturnType<typeof setTimeout> | null = null;
+  let lingerTimer: ReturnType<typeof setTimeout> | null = null;
 
   const progSetText = (nodeId: string, s: string): void => {
     const n = ctx.byId(nodeId);
@@ -162,6 +163,12 @@ export const makeProgress = (ctx: ProgressCtx) => {
     if (progSpinTimer) {
       clearInterval(progSpinTimer);
       progSpinTimer = null;
+    }
+    // same for a pending done-linger: its handle-identity guard would no-op
+    // it anyway, but a cleared timer is proof, not a race won
+    if (lingerTimer) {
+      clearTimeout(lingerTimer);
+      lingerTimer = null;
     }
     const setPauseVisual = (): void => {
       const p = ctx.byId(progPauseSpec.slotId);
@@ -280,11 +287,14 @@ export const makeProgress = (ctx: ProgressCtx) => {
         btns.visible = false;
       } catch {}
     }
-    setTimeout(() => {
+    lingerTimer = setTimeout(() => {
       // superseded by a re-show — the new toast owns the stack now
       if (activeHandle !== doneHandle) return;
       activeHandle = null;
-      doneHandle?.close();
+      lingerTimer = null;
+      try {
+        doneHandle?.close();
+      } catch {}
     }, 1800);
   };
 

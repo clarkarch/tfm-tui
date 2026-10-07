@@ -403,6 +403,20 @@ describe("performBulkRename", () => {
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 
+  test("a fully-failed batch pushes no undo (no redoable no-op on the stack)", async () => {
+    // the harness fake drops empty batches like production does, so a
+    // recording override pins the PRODUCTION call, not the fake's guard
+    const undos: string[] = [];
+    const h = makeHarness({
+      pushUndoBatch: (label) => {
+        undos.push(label);
+      },
+    });
+    await h.ops.performBulkRename([{ from: path.join(ROOT, "bulk-ghost-a"), to: path.join(ROOT, "bulk-ghost-b") }]);
+    expect(undos).toEqual([]);
+    expect(h.calls.some((c) => c.includes("Renamed 0 items"))).toBe(true);
+  });
+
   test("a target created after planning is not overwritten (plan-to-apply race)", async () => {
     const h = makeHarness();
     const a = path.join(ROOT, "bulk-race-a.txt");

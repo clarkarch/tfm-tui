@@ -28,6 +28,9 @@ const mkCtx = (
       calls.push("gpm");
       if (fail === "gpm") throw new Error("gpm close failed");
     },
+    stopChromeTimers: () => {
+      calls.push("chrome");
+    },
     onQuit: () => {
       calls.push("onQuit");
       if (fail === "onQuit") throw new Error("plugin deactivate failed");
@@ -44,28 +47,28 @@ const mkCtx = (
 };
 
 describe("makeQuit", () => {
-  test("teardown order: drops -> release -> session -> terminal -> gpm -> onQuit -> destroy -> exit(0)", () => {
+  test("teardown order: drops -> release -> session -> terminal -> gpm -> chrome -> onQuit -> destroy -> exit(0)", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "onQuit", "destroy", "exit:0"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:0"]);
   });
 
   test("a throwing disableDrops still completes teardown and exits 1", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "drops"))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "onQuit", "destroy", "exit:1"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:1"]);
   });
 
   test("a throwing shift-release still completes teardown and exits 1", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "release"))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "onQuit", "destroy", "exit:1"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:1"]);
   });
 
   test("a throwing renderer destroy still exits 1", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "destroy"))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "onQuit", "destroy", "exit:1"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:1"]);
   });
 
   test("refuses to quit while file ops are in flight (no teardown, no exit)", () => {

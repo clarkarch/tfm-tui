@@ -80,4 +80,10 @@ process.on("uncaughtException", (err) => {
 });
 process.on("unhandledRejection", (reason) => {
   appendLog(`UNHANDLED REJECTION: ${reason instanceof Error ? reason.stack : String(reason)}`);
+  // the app keeps running by design (a rejected fire-and-forget must not
+  // kill the TUI), but staying silent leaves a zombie nobody notices — the
+  // crash path above already announces itself on stderr, mirror that here
+  try {
+    process.stderr.write(`[tfm] unhandled rejection — see ${DEBUG_LOG}\n`);
+  } catch {}
 });

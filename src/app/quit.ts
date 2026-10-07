@@ -15,6 +15,9 @@ export type QuitCtx = {
   // close the gpm client socket (Linux text console only) so the daemon
   // doesn't re-point it at a default console after we're gone
   stopGpm?(): void;
+  // clear pending chrome timers (sidebar device-reload) so they can't fire
+  // loadSystemPlaces+renderAll into a destroyed renderer post-teardown
+  stopChromeTimers?(): void;
   // synchronous final session write — process.exit kills pending async IO,
   // so the debounced 400ms save loses the last navigation
   flushSession?(): void;
@@ -74,6 +77,11 @@ export const runTeardownSteps = (ctx: QuitCtx): boolean => {
   }
   try {
     ctx.stopGpm?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopChromeTimers?.();
   } catch {
     failed = true;
   }

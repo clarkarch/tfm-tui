@@ -14,10 +14,22 @@ type SpawnFail = (err: Error) => void;
 export const spawnSafe = (
   cmd: string,
   args: string[],
-  opts: SpawnOptions = {},
+  opts: SpawnOptions & { timeoutMs?: number } = {},
   onFail: SpawnFail = () => {},
 ): ChildProcess => {
-  const child = spawn(cmd, args, opts);
+  const { timeoutMs, ...spawnOpts } = opts;
+  const child = spawn(cmd, args, spawnOpts);
   child.on("error", (err) => onFail(err));
+  // awaited flows (mount/unmount) need a backstop: a wedged helper otherwise
+  // never resolves, never toasts, never dies
+  if (timeoutMs && timeoutMs > 0) {
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+    }, timeoutMs);
+    child.on("close", () => clearTimeout(timer));
+    child.on("error", () => clearTimeout(timer));
+  }
   return child;
 };

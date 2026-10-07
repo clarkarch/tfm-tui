@@ -444,8 +444,11 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     }
   }
 
+  // same attach guard as the sidebar/grid animators: a renderer without a
+  // frame loop must never reach engine.attach (it overwrites the singleton
+  // before calling setFrameCallback, wedging every later attach process-wide)
   try {
-    engine.attach(ctx.renderer);
+    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
   } catch {}
   ctx.renderer.root.onMouseMove = onMove;
 

@@ -374,8 +374,13 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     }
   };
 
+  // A renderer without a frame loop (unit-test fakes) must never reach
+  // engine.attach: attach overwrites the singleton's renderer BEFORE calling
+  // setFrameCallback, so a fake wedges the shared engine — every later
+  // attach (including other test files in the same process) throws out of
+  // detach and no timeline ever advances again.
   try {
-    engine.attach(ctx.renderer);
+    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
   } catch {}
 
   return { play, stop };

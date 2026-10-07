@@ -450,6 +450,20 @@ describe("runArchiveTool", () => {
     expect(res.code).toBe(-1);
     expect(res.stderr).toContain("ENOENT");
   });
+
+  test("timeoutMs kills a hung child instead of wedging the op queue", async () => {
+    // without the backstop this test hangs forever (red via the suite timeout):
+    // a wedged tar/7z holds the serial queue, and quit/restart refuse while busy
+    const child = fakeChild();
+    const killed: unknown[] = [];
+    child.kill = ((sig: unknown) => {
+      killed.push(sig);
+    }) as never;
+    const res = await runArchiveTool({ tool: "tar", args: [] }, { spawn: (() => child) as never, timeoutMs: 20 });
+    expect(res.code).toBe(-1);
+    expect(res.stderr).toContain("timed out");
+    expect(killed).toContain("SIGKILL");
+  });
 });
 
 describe("listArchiveEntries", () => {
@@ -954,7 +968,9 @@ describe("js zip traversal guards", () => {
       const stage = path.join(dir, "inner", "stage");
       mkdirSync(stage);
       const e = await runArchiveTask({ op: "extract", fmt: "zip", file: arch, destDir: stage }, { which: none });
-      expect(e.code).toBe(0);
+      // skipped members are a warning (code 1), not silent success: the stage
+      // is kept like the spawn lane, but the skip is on record
+      expect(e.code).toBe(1);
       expect(existsSync(evil)).toBe(false);
       expect(existsSync("/abs.txt")).toBe(false);
       expect(readFileSync(path.join(stage, "ok.txt"), "utf8")).toBe("fine");
@@ -997,7 +1013,8 @@ describe("js zip traversal guards", () => {
       const stage = path.join(dir, "stage");
       mkdirSync(stage);
       const e = await runArchiveTask({ op: "extract", fmt: "zip", file: arch, destDir: stage }, { which: none });
-      expect(e.code).toBe(0);
+      // the refused write-through counts as a skipped member (warning, code 1)
+      expect(e.code).toBe(1);
       // readdir, NOT existsSync: the write-through lands as a DANGLING
       // symlink, which existsSync reports as missing (false green)
       expect(readdirSync(dir)).not.toContain("pwn");

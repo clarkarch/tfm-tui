@@ -131,8 +131,14 @@ export const makeChrome = (ctx: ChromeCtx) => {
   // mount/eject reload: one pending reload at a time — rapid clicks used to
   // stack redundant 1200/1500ms loadSystemPlaces+renderAll passes
   let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearReloadTimer = (): void => {
+    if (reloadTimer !== null) {
+      clearTimeout(reloadTimer);
+      reloadTimer = null;
+    }
+  };
   const scheduleDeviceReload = (ms: number): void => {
-    if (reloadTimer !== null) clearTimeout(reloadTimer);
+    clearReloadTimer();
     reloadTimer = setTimeout(() => {
       reloadTimer = null;
       void loadSystemPlaces().then(() => ctx.renderAll());
@@ -140,7 +146,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
   };
 
   const mountDevice = (device: string) => {
-    const child = spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore" }, (err) =>
+    const child = spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore", timeoutMs: 10_000 }, (err) =>
       ctx.dlog(`mount ${device}: ${err.message}`),
     );
     // a failing mount (bad device, policy) used to be silent — the reload
@@ -257,7 +263,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
   };
 
   const ejectDevice = (device: string) => {
-    const child = spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore" }, (err) =>
+    const child = spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore", timeoutMs: 10_000 }, (err) =>
       ctx.dlog(`eject ${device}: ${err.message}`),
     );
     child.on("close", (code) => {
@@ -488,6 +494,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
     placesHost,
     mountDevice,
     ejectDevice,
+    // quit/restart teardown: a mount/eject shortly before teardown would
+    // otherwise fire loadSystemPlaces+renderAll into a destroyed renderer
+    dispose: clearReloadTimer,
     setMousePlace: (idx: number) => {
       mousePlaceIdx = idx;
       normalizePlaces();

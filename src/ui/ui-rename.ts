@@ -4,10 +4,10 @@
 // renderGrid read it without a module-level import from index. ---
 import { type CliRenderer, InputRenderable, type KeyEvent, Text } from "@opentui/core";
 import { existsSync } from "node:fs";
-import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../app/undo";
-import { fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
+import { errCode, fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 import type { MaybeNode } from "../lib/node-like";
@@ -131,15 +131,38 @@ export const makeRename = (ctx: RenameCtx) => {
       const k = edit.key;
       const dir = path.dirname(k);
       if (value !== path.basename(k)) {
-        let target = path.join(dir, value);
-        // create never replaces: a typed name that exists gets the same
-        // "name 2" dedupe the initial Untitled naming used. existsSync guard
-        // right before the rename — Linux rename would silently overwrite.
-        if (existsSync(target)) target = uniqueTarget(dir, value);
         // captured for the .then closure, where the edit's narrowing is gone
         const createKind = edit.createKind;
-        void fsRename(k, target)
-          .then(() => {
+        // atomic landing: Linux rename would silently overwrite a raced
+        // occupant, so the name is claimed with EEXIST-failing link(2)/mkdir(2)
+        // instead of check-then-rename, retrying past collisions with the same
+        // "name 2" dedupe the Untitled naming uses
+        const landCreate = async (): Promise<string> => {
+          let target = path.join(dir, value);
+          for (let i = 0; i < 10; i++) {
+            try {
+              if (createKind === "folder") {
+                await mkdir(target);
+                try {
+                  await rmdir(k); // placeholder is empty and ours
+                } catch (err) {
+                  await rmdir(target).catch(() => {}); // ours, just made, empty
+                  throw err;
+                }
+              } else {
+                await link(k, target); // same inode, placeholder consumed
+                await rm(k);
+              }
+              return target;
+            } catch (err) {
+              if (errCode(err) !== "EEXIST") throw err;
+              target = uniqueTarget(dir, path.basename(target));
+            }
+          }
+          throw new Error(`already exists: ${value}`);
+        };
+        void landCreate()
+          .then((target) => {
             if (createKind) pushCreateBatch(createKind, target);
             const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
             ctx.notify(msg, "create", "success");
