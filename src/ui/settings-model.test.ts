@@ -239,14 +239,39 @@ describe("settingGroups shape", () => {
     expect(anim).toContain("##sidebar hover");
     expect(anim).toContain("##top bar");
     expect(anim).toContain("##directory bar");
-    expect(anim).toContain("##performance");
     // the FIRST section gets a divider too — headers sit before AND between topics
     expect(anim[0]).toBe("##files");
     expect(anim.indexOf("file animation")).toBeGreaterThan(anim.indexOf("##files"));
     expect(anim.indexOf("file animation")).toBeLessThan(anim.indexOf("##file hover"));
     expect(anim.indexOf("lift direction")).toBeLessThan(anim.indexOf("##sidebar intro"));
     expect(anim.indexOf("include logo")).toBeLessThan(anim.indexOf("##sidebar hover"));
-    expect(anim.indexOf("reveal delay")).toBeGreaterThan(anim.indexOf("##performance"));
+    // every performance knob lives in the optimization category, nowhere here
+    expect(anim).not.toContain("##performance");
+    expect(anim).not.toContain("reveal delay");
+  });
+
+  test("optimization holds every performance knob (##rendering/##caching/##performance)", () => {
+    const h = mk();
+    withMasters(h, true);
+    const seq = h
+      .groups()
+      .find((g) => g.header === "optimization")!
+      .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    expect(seq).toEqual([
+      "##rendering",
+      "windowed grid",
+      "loading delay",
+      "##caching",
+      "cache folder listings",
+      "cache file stats",
+      "cache age",
+      "##performance",
+      "one-layer fade",
+      "visible only",
+      "row cascade",
+      "max animated files",
+      "reveal delay",
+    ]);
   });
 
   test("layout group is one surface-ordered category: view/sidebar/preview/terminal/panes/grid/list/timing", () => {

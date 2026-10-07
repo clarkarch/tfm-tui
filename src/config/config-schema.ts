@@ -1609,7 +1609,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = fade the grid as one layer instead of per tile (same look, one opacity update per frame instead of one per file)",
     label: "one-layer fade",
     blurb: "Smoother animation on big folders",
-    group: "animations",
+    group: "optimization",
     subsection: "performance",
     showWhen: (ui) => ui.fileAnimation,
   },
@@ -1622,7 +1622,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)",
     label: "visible only",
     blurb: "Only animate files you can see",
-    group: "animations",
+    group: "optimization",
     subsection: "performance",
     showWhen: (ui) => ui.fileAnimation,
   },
@@ -1635,7 +1635,7 @@ const UI_ROWS: SchemaRow[] = [
     doc: "true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)",
     label: "row cascade",
     blurb: "Animate rows instead of single files",
-    group: "animations",
+    group: "optimization",
     subsection: "performance",
     showWhen: (ui) => ui.fileAnimation,
   },
@@ -1652,7 +1652,7 @@ const UI_ROWS: SchemaRow[] = [
     unit: "files",
     label: "max animated files",
     blurb: "Skip animation in huge folders",
-    group: "animations",
+    group: "optimization",
     subsection: "performance",
     showWhen: (ui) => ui.fileAnimation,
   },
@@ -1669,13 +1669,13 @@ const UI_ROWS: SchemaRow[] = [
     unit: "ms",
     label: "reveal delay",
     blurb: "Wait for scrolling to settle first",
-    group: "animations",
+    group: "optimization",
     subsection: "performance",
     // windowed-grid only (not file animation): the scroll-reveal fires from
     // window slides, so the windowing switch is the knob users find and
-    // toggle — a visible-but-inert delay while the global animation master
-    // is off tells a coherent story ("nothing animates"), while a knob
-    // hidden behind two masters in different categories is undiscoverable
+    // toggle (same optimization category as this row) — a visible-but-inert
+    // delay while the global animation master is off tells a coherent story
+    // ("nothing animates"), while a knob hidden behind two masters is not
     showWhen: (ui) => ui.windowedGrid,
   },
   {
