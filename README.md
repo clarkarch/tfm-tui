@@ -1,11 +1,9 @@
 <h1 align="center">
   <img src="assets/icons/tfm.svg" width="192" alt="tfm logo"><br>
   tfm (terminal file manager)<br>
+  <sub>GUI comfort in terminal speed</sub><br>
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="stable"> <a href="https://clarkarch.github.io/tfm-tui/"><img src="https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white" alt="website"></a>
 </h1>
-
-A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails and more, right inside your terminal.
-
 
 ![tfm](screenshot.png)
 
