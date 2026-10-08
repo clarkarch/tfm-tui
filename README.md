@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/icon.svg" width="128" alt="tfm logo"></p>
+<p align="center"><img src="assets/icon.svg" width="192" alt="tfm logo"></p>
 <h1 align="center">tfm</h1>
 <p align="center">terminal file manager</p>
 
