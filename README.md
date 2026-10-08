@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/icon.svg" width="192" alt="tfm logo"></p>
 <h1 align="center">tfm</h1>
-<p align="center">terminal file manager</p>
+<p align="center">(terminal file manager)</p>
 
 A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails and more, right inside your terminal.
 
