@@ -1,7 +1,7 @@
 <h1 align="center">
   <img src="assets/icons/tfm.svg" width="192" alt="tfm logo"><br>
   tfm (terminal file manager)<br>
-  <img src="https://img.shields.io/badge/status-stable-9ece6a?style=flat-square" alt="stable"> <a href="https://clarkarch.github.io/tfm-tui/"><img src="https://img.shields.io/badge/website-tfm--tui-7aa2f7?style=flat-square&logo=githubpages&logoColor=white" alt="website"></a>
+  <img src="https://img.shields.io/badge/status-stable-brightgreen?style=flat-square" alt="stable"> <a href="https://clarkarch.github.io/tfm-tui/"><img src="https://img.shields.io/badge/website-tfm--tui-blue?style=flat-square&logo=githubpages&logoColor=white" alt="website"></a>
 </h1>
 
 ![tfm](screenshot.png)
