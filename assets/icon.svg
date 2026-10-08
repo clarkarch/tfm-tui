@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 6 19.6 16.4" width="19.6" height="16.4">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="3.9 5.9 18.35 14.95" width="18.35" height="14.95">
   <!-- tfm logo: folder + >_ prompt (terminal file manager) + click pointer (mouse-first). Fixed brand colors, not theme-tinted. -->
   <filter id="pclick" x="-40%" y="-40%" width="180%" height="180%">
-    <feDropShadow dx="0.8" dy="1" stdDeviation="0.5" flood-color="#000000" flood-opacity="0.5"/>
+    <feDropShadow dx="0.8" dy="1" stdDeviation="0.45" flood-color="#000000" flood-opacity="0.35"/>
   </filter>
   <path fill-rule="evenodd" fill="#7aa2f7" d="M4.5 6.5 H10.5 L12.5 8.5 H18.5 Q19.5 8.5 19.5 9.5 V15.5 Q19.5 16.5 18.5 16.5 H5.5 Q4.5 16.5 4.5 15.5 Z M7 10.4 L10.8 12.7 L7 15 L7 13.7 L8.9 12.7 L7 11.7 Z M11.4 12.9 H15.4 V14.8 H11.4 Z"/>
   <g filter="url(#pclick)">
