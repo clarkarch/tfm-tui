@@ -3,7 +3,6 @@
   tfm (terminal file manager)<br>
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="stable"> <a href="https://clarkarch.github.io/tfm-tui/"><img src="https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white" alt="website"></a>
 </h1>
-<p align="center"><sub>GUI comfort in terminal speed</sub></p>
 
 ![tfm](screenshot.png)
 
