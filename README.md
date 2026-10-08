@@ -1,8 +1,8 @@
 <h1 align="center">
   <img src="assets/icons/tfm.svg" width="192" alt="tfm logo"><br>
-  tfm (terminal file manager)
+  tfm (terminal file manager)<br>
+  <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="stable"> <a href="https://clarkarch.github.io/tfm-tui/"><img src="https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white" alt="website"></a>
 </h1>
-<p align="center"><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="stable"> <a href="https://clarkarch.github.io/tfm-tui/"><img src="https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white" alt="website"></a></p>
 
 A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails and more, right inside your terminal.
 
