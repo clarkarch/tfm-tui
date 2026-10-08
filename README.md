@@ -35,7 +35,7 @@
 ## Requirements
 
 - Linux.
-- Terminal with the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html) (kitty, ghostty, WezTerm, Konsole etc).
+- Any terminal (image support for the full experience).
 - Everything below is optional.
   - `xdg-open` (opening files)
   - `magick` (extra photo thumbnails)
@@ -105,8 +105,6 @@ See [docs/plugins.md](docs/plugins.md).
 
 ## Notes
 
-- Thumbnails need the kitty graphics protocol; tmux hides them unless
-  `allow-passthrough` is on.
 - Cross-app drag & drop is kitty-only.
 - Mouse on the Linux console (TTY) needs `gpm` running.
 - Icons can show a black box behind open menus or while rubber-band selecting.
