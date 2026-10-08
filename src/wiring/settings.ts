@@ -433,6 +433,14 @@ export const wireRetheme = (deps: {
       const mode = core.config.ui.sortMode;
       for (const s of core.panes.states) syncSortState(s, mode);
     },
+    // the grid reads per-pane AppState.showHidden, not config: an external
+    // config.toml flip must converge both panes here or the reload repaints
+    // the same filter. The GUI row + remap bind already write live state, so
+    // a settings commit just re-converges to the same value (no clobber).
+    syncShowHidden: () => {
+      const showHidden = core.config.ui.showHidden;
+      for (const s of core.panes.states) s.showHidden = showHidden;
+    },
   });
 
   return retheme;

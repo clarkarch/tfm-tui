@@ -60,6 +60,12 @@ type RethemeCtx = {
   // reads state — the wiring hook converges both panes here so a settings /
   // live-reload change actually re-sorts. Optional so tests stay light.
   syncSortMode?(): void;
+  // show-hidden: same seed-vs-state split as sort (boot seeds it, the grid +
+  // remap bind read state) — an external config.toml edit that flips it must
+  // converge both panes here or the reload repaints the same filter. The GUI
+  // row writes state itself, so it just re-converges to the same value.
+  // Optional so tests stay light.
+  syncShowHidden?(): void;
   // tty mode (linux console): forces opaque bg + list view. Optional so
   // tests stay light; absent = modern terminal.
   isTtyMode?(): boolean;
@@ -226,8 +232,12 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "listingsCacheStats",
     "listingsCacheTtl",
     "fileHoverIncludeLabel",
-    "fileHoverAnimation",
-    "fileHoverDirection",
+    // fileHoverAnimation/direction are NOT exempt: the toggle + direction bake
+    // tile layout at build (marginTop headroom + refs.hoverLift in
+    // ui-grid-rows.ts, both in the grid content sig) — the live per-hover read
+    // only covers the highlight/lift paint. Exempting them left the old tiles
+    // in place until the next natural rebuild. includeLabel stays exempt: it
+    // rides live in the animator with no baked layout behind it.
     "sidebarAnimation",
     "sidebarAnimationStyle",
     "sidebarAnimationMs",
@@ -343,6 +353,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // renderAll below, so the repaint paints the new order (not the old one)
     try {
       ctx.syncSortMode?.();
+    } catch {}
+    // per-pane hidden state converges the same way (external config.toml
+    // edits never touch AppState — only the GUI row and the remap bind do)
+    try {
+      ctx.syncShowHidden?.();
     } catch {}
 
     if (themeChanged) {

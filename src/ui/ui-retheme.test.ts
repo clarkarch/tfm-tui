@@ -339,23 +339,34 @@ describe("applyConfig", () => {
     expect(ctx.calls.notify.length).toBe(0);
   });
 
-  test("tile-hover knobs are value-only like sidebar hover (no grid rebuild churn)", () => {
-    // fileHoverAnimation/master+direction were missing from RENDER_EXEMPT
-    // while all three sidebar-hover knobs were exempt — toggling tile hover
-    // rebuilt the whole grid for a knob the grid reads live on next hover.
-    // (This replaces the old "hover-geometry toggle re-renders" test, which
-    // pinned renderAll === 1 for that same flip: a bug in the exempt set,
-    // not in the test's reading of the code.)
+  test("tile-hover enable/direction re-render (headroom is baked at build)", () => {
+    // fileHoverAnimation/direction BAKE layout at tile build (marginTop
+    // headroom + the refs.hoverLift flag, ui-grid-rows.ts) — the live per-hover
+    // read only covers the highlight/lift paint and includeLabel. Exempting
+    // them skipped renderAll, so toggling the feature on did nothing until the
+    // next natural rebuild (the reported "needs manual reload"). The grid sig
+    // already covers both keys, so un-exempting rebuilds exactly once.
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.ui.fileHoverAnimation = true;
     fresh.ui.fileHoverDirection = "down";
+    retheme.applyConfig(fresh);
+    expect(ctx.calls.renderAll).toBe(1);
+    expect(ctx.config.ui.fileHoverAnimation).toBe(true);
+    expect(ctx.config.ui.fileHoverDirection).toBe("down");
+  });
+
+  test("tile-hover include-label stays value-only (rides live in the animator)", () => {
+    // includeLabel is read per hover at ui-grid-anim.ts playHover — no baked
+    // layout depends on it, so it skips the grid rebuild.
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
     fresh.ui.fileHoverIncludeLabel = true;
     retheme.applyConfig(fresh);
     expect(ctx.calls.renderAll).toBe(0);
-    expect(ctx.config.ui.fileHoverAnimation).toBe(true);
-    expect(ctx.config.ui.fileHoverDirection).toBe("down");
+    expect(ctx.config.ui.fileHoverIncludeLabel).toBe(true);
   });
 
   test("a value-only knob skips the heavy renderAll (no grid rebuild churn)", () => {
@@ -421,6 +432,26 @@ describe("applyConfig", () => {
     } as any);
     const fresh = clone(defaultConfig);
     fresh.ui.sortMode = "size";
+    retheme.applyConfig(fresh);
+    expect(hookCalls).toBe(1);
+    expect(ctx.calls.renderAll).toBe(1);
+  });
+
+  test("applyConfig converges pane hidden state through the syncShowHidden hook", () => {
+    // the grid reads per-pane AppState.showHidden, not config — an external
+    // config.toml edit (live reload) that flips show-hidden must re-seed state
+    // or renderAll repaints the same filter. The GUI row writes state itself,
+    // but the file-reload path never touches it (same hook shape as sort).
+    const ctx = mkCtx();
+    let hookCalls = 0;
+    const retheme = makeRetheme({
+      ...ctx,
+      syncShowHidden: () => {
+        hookCalls++;
+      },
+    } as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.showHidden = true;
     retheme.applyConfig(fresh);
     expect(hookCalls).toBe(1);
     expect(ctx.calls.renderAll).toBe(1);

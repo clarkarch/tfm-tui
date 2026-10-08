@@ -304,6 +304,22 @@ describe("listings cache", () => {
     }
   });
 
+  test("toggling the cache off serves fresh names (no stale serve, no purge needed)", async () => {
+    // the settings-toggle path: loadEntries short-circuits BEFORE the map when
+    // cache is false, so flipping [ui] listings-cache off mid-session never
+    // serves the pre-toggle entries — a purge hook would be dead weight.
+    const dir = await frozenDir();
+    try {
+      await listDir(dir, false, "name", true, { now: T0 }); // prime the cache
+      writeFileSync(path.join(dir, "c.txt"), "new"); // dir mtime moves…
+      utimesSync(dir, FROZEN, FROZEN); // …then rewound: sig frozen, TTL live
+      const off = await listDir(dir, false, "name", true, { cache: false, now: T0 });
+      expect(off.map((x) => x.name)).toEqual(["a.txt", "b.txt", "c.txt"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // listings-cache-stats OFF: the per-call fill loop keeps stats live — the
   // exact mode that justifies shipping WITHOUT yazi's per-file watcher patch
   test("with listings-cache-stats off, a cache hit still re-stats size/mtime", async () => {

@@ -276,6 +276,38 @@ describe("makeHoverDrawer (headless)", () => {
     expect(pane().visible).toBe(true);
     expect(pane().width).toBe(collapsedSize("rail"));
   });
+
+  test("refresh honors a sidebar-title flip even with all auto-hide off", async () => {
+    // applyConfig writes NO title visibility itself — the drawer's refresh()
+    // (via onConfigApplied) is the only live path for the [ui] sidebar-title
+    // knob. With no panel enabled, refresh() must still converge the title
+    // node: a title flip that leaves the old node visible is the "needs
+    // restart" report. (Sidebar auto-hide ON also covers this through its own
+    // restore/applyVisible path — this pins the all-off case.)
+    const ui = {
+      ...defaultConfig.ui,
+      sidebarAutoHide: false,
+      previewAutoHide: false,
+      terminalAutoHide: false,
+      sidebarTitle: true,
+      hoverAnimMs: 0,
+    };
+    const drawer = mkDrawer(ui);
+    const title = () => t.renderer.root.findDescendantById("tfm-title-box") as any;
+    await t.renderOnce();
+    await t.renderOnce();
+    expect(title().visible).toBe(true);
+
+    ui.sidebarTitle = false;
+    drawer.refresh();
+    await t.renderOnce();
+    expect(title().visible).toBe(false);
+
+    ui.sidebarTitle = true;
+    drawer.refresh();
+    await t.renderOnce();
+    expect(title().visible).toBe(true);
+  });
 });
 
 describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
