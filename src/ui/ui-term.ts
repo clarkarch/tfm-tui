@@ -69,6 +69,9 @@ type TermCtx = {
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
+  // transparent-bg force: the VT's default-bg cells compose as the terminal
+  // default instead of the theme bg. Absent = opaque (old fakes keep working).
+  transparentForce?(): boolean;
 };
 
 // Theme's 16 ANSI slots as const keys — the OSC 4 palette maps over them
@@ -233,7 +236,8 @@ export const makeTerminal = (ctx: TermCtx) => {
   const termHasFocus = (): boolean => !!term && ctx.renderer.currentFocusedRenderable === term;
 
   // drop-target cue: light the header while an internal drag hovers the pane
-  // (rest fill follows the ui-style seam — none in outline mode)
+  // (rest fill follows the ui-style seam — none in outline mode — and under
+  // transparent-bg force the rest fill is the terminal bg itself)
   const paintHeaderCue = (hot: boolean): void => {
     if (hot === headerHot) return;
     headerHot = hot;
@@ -245,7 +249,7 @@ export const makeTerminal = (ctx: TermCtx) => {
         header,
         hot
           ? { backgroundColor: colors.hoverBg }
-          : ctx.uiStyle() === "solid"
+          : ctx.uiStyle() === "solid" && !ctx.transparentForce?.()
             ? { backgroundColor: colors.sidebarBg }
             : {},
       );
@@ -310,8 +314,32 @@ export const makeTerminal = (ctx: TermCtx) => {
 
   // make the embedded terminal match the tfm theme: OSC 4 sets the 16-color
   // palette (so ls/vim/prompts stop floating on stock xterm hues) and
-  // OSC 10/11/12 set the default fg/bg/cursor
+  // OSC 10/11/12 set the default fg/bg/cursor. Also the live transparent-bg
+  // force switch: applyConfig calls this on every theme/transparent flip
+  // (both ride themeSig), so the open pane flips without close/reopen.
   const syncTerminalTheme = (): void => {
+    const force = ctx.transparentForce?.() ?? false;
+    if (term) {
+      try {
+        term.transparentBackground = force;
+      } catch {}
+    }
+    const header = ctx.byId("tfm-term-header");
+    if (header) {
+      try {
+        const colors = ctx.colors();
+        applySurface(header, ctx.uiStyle() === "solid" && !force ? { backgroundColor: colors.sidebarBg } : {});
+      } catch {}
+    }
+    // the X is a separate node from the header with its own fill — a live
+    // flip that skips it strands one opaque cell in the transparent bar
+    const escBtn = ctx.byId("tfm-esc-term");
+    if (escBtn) {
+      try {
+        const colors = ctx.colors();
+        applySurface(escBtn, ctx.uiStyle() === "solid" && !force ? { backgroundColor: colors.sidebarBg } : {});
+      } catch {}
+    }
     if (!term) return;
     const colors = ctx.colors();
     try {
@@ -468,7 +496,9 @@ export const makeTerminal = (ctx: TermCtx) => {
         height: 1,
         flexDirection: "row",
         paddingLeft: 1,
-        ...(ctx.uiStyle() === "solid" ? { backgroundColor: colors.sidebarBg } : {}),
+        // same condition as rethemeChrome's tfm-term-header repaint: solid
+        // without transparent-bg force keeps the fill, otherwise bare
+        ...(ctx.uiStyle() === "solid" && !ctx.transparentForce?.() ? { backgroundColor: colors.sidebarBg } : {}),
       },
       Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
       Box({ flexGrow: 1 }),
@@ -481,6 +511,10 @@ export const makeTerminal = (ctx: TermCtx) => {
       cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
       rows: termH,
       maxScrollback: 20_000,
+      // the pane opts into the terminal showing through only under
+      // transparent-bg force (`on` keeps panels painted, so the VT stays
+      // opaque there) — default-bg cells compose as terminal-default.
+      transparentBackground: ctx.transparentForce?.() ?? false,
       onData: (data: Uint8Array) => {
         // the only PTY write without a guard — a keystroke landing between
         // shell death and the exited callback nulling termChild threw

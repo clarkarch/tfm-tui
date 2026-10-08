@@ -676,8 +676,12 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // child by default: its rest raster flattens onto the floating layer's fill
   // (style.slotBg role "float"), never onto the canvas, which would punch a
   // canvas-colored square into the panel. `chrome` opts out for the one caller
-  // that is NOT a float (the terminal pane header).
+  // that is NOT a float (the terminal pane header). Under transparent-bg force
+  // the wrapper clears its rest fill too: the raster covers 2 of the 3 cells,
+  // so without this the padding cell paints one opaque square in a bare bar
+  // (safe for float callers — the island fill shows through).
   const escHintBtn = (id: string, onClose: () => void, opts?: { chrome?: boolean }): SlotElement => {
+    const tForce = ctx.transparentForce?.() ? ("force" as const) : undefined;
     const states = (): IconState[] => [
       {
         fg: ctx.colors().sidebarFgMuted,
@@ -695,7 +699,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {
         const n = ctx.byId(id);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, on, ctx.colors().sidebarBg));
+        if (n)
+          applySurface(
+            n,
+            btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, on, ctx.colors().sidebarBg, tForce),
+          );
       } catch {}
     };
     return Box(
@@ -705,7 +713,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
         width: 3,
         height: 1,
         justifyContent: "center",
-        ...btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, false, ctx.colors().sidebarBg),
+        ...btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, false, ctx.colors().sidebarBg, tForce),
         onMouseDown: () => onClose(),
         ...hoverEvents(paint, ctx.setPointer),
       },

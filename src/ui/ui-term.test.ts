@@ -305,7 +305,7 @@ describe("openTerminalHere", () => {
       }),
       sw: () => 26,
       termH: () => 9,
-      escHintBtn: () => Box({ width: 3, height: 1 }),
+      escHintBtn: (id: string) => Box({ id, width: 3, height: 1 }),
       stripSelectable: () => {},
       drainIconQueue: () => {},
       notify: () => {},
@@ -334,6 +334,9 @@ describe("openTerminalHere", () => {
     spawnCalls = [];
     child = mkChild();
   });
+
+  // mkTerm's sidebarBg is #0000aa
+  const hexSidebarBg = (): [number, number, number, number] => [0, 0, 170, 255];
 
   test("opens with the shell in the cwd even though renderer.resolution is null", () => {
     // precondition: the console/tmux case — no pixel reply ever lands
@@ -390,6 +393,74 @@ describe("openTerminalHere", () => {
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]!.cwd).toBe("/tmp/my prog");
     expect(written.join("")).toBe("'/tmp/my prog/run.sh'\n");
+    fac.closeTerminalPane();
+  });
+
+  test("transparent force opts the VT into a transparent default background", async () => {
+    const fac = mkTerm({ transparentForce: () => true });
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    const vt = t.renderer.root.findDescendantById("tfm-term") as any;
+    expect(vt.transparentBackground).toBe(true);
+    fac.closeTerminalPane();
+  });
+
+  test("without force the VT keeps an opaque default background", async () => {
+    // absent seam (old fakes) and explicit false both mean today's behavior
+    for (const fac of [mkTerm(), mkTerm({ transparentForce: () => false })]) {
+      fac.openTerminalHere("/tmp");
+      await t.renderOnce();
+      const vt = t.renderer.root.findDescendantById("tfm-term") as any;
+      expect(vt.transparentBackground).toBe(false);
+      fac.closeTerminalPane();
+    }
+  });
+
+  test("transparent force clears the header fill so the terminal shows through", async () => {
+    const fac = mkTerm({ transparentForce: () => true });
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    const header = t.renderer.root.findDescendantById("tfm-term-header") as any;
+    expect([...header.backgroundColor.toInts()]).toEqual([0, 0, 0, 0]);
+    fac.closeTerminalPane();
+  });
+
+  test("solid header keeps its fill without force", async () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    const header = t.renderer.root.findDescendantById("tfm-term-header") as any;
+    expect([...header.backgroundColor.toInts()]).toEqual(hexSidebarBg());
+    fac.closeTerminalPane();
+  });
+
+  test("flipping force off re-opaques the open pane without respawning", async () => {
+    let force = true;
+    const fac = mkTerm({ transparentForce: () => force });
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    expect(spawnCalls).toHaveLength(1);
+    expect((t.renderer.root.findDescendantById("tfm-term") as any).transparentBackground).toBe(true);
+    force = false;
+    fac.syncTerminalTheme();
+    await t.renderOnce();
+    // no respawn: the live flip rides the theme sync (applyConfig calls it)
+    expect(spawnCalls).toHaveLength(1);
+    expect((t.renderer.root.findDescendantById("tfm-term") as any).transparentBackground).toBe(false);
+    expect([...(t.renderer.root.findDescendantById("tfm-term-header") as any).backgroundColor.toInts()]).toEqual(
+      hexSidebarBg(),
+    );
+    // the X is a separate node from the header — a live flip that skips it
+    // strands one opaque cell in the transparent bar
+    expect([...(t.renderer.root.findDescendantById("tfm-esc-term") as any).backgroundColor.toInts()]).toEqual(
+      hexSidebarBg(),
+    );
+    force = true;
+    fac.syncTerminalTheme();
+    await t.renderOnce();
+    expect([...(t.renderer.root.findDescendantById("tfm-esc-term") as any).backgroundColor.toInts()]).toEqual([
+      0, 0, 0, 0,
+    ]);
     fac.closeTerminalPane();
   });
 });

@@ -481,6 +481,80 @@ describe("thumbnail mount", () => {
     fire("out");
     expect(slotPointers).toEqual(["pointer", "default"]);
   });
+
+  // The terminal pane's X sits on a transparent header under transparent-bg
+  // force, but its 3-wide wrapper kept a baked sidebarBg fill — the raster
+  // covers only 2 cells, so the padding cell painted one opaque square.
+  test("escHintBtn wrapper clears its fill under transparent-bg force", async () => {
+    const mkForceSlots = (force: boolean) =>
+      makeSlots({
+        renderer: () => t.renderer,
+        byId: (id) => t.renderer.root.findDescendantById(id),
+        colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
+        uiStyle: () => "solid",
+        iconsMode: () => "opaque",
+        transparentForce: () => force,
+        iconCells: () => 4,
+        modalOpen: () => false,
+        glyphFor: () => "F",
+        isTtyMode: () => false,
+        forceGlyph: () => false,
+      });
+    const bgOf = (id: string): number[] => {
+      const n = t.renderer.root.findDescendantById(id) as any;
+      return [...n.backgroundColor.toInts()];
+    };
+    const plain = mkForceSlots(false).escHintBtn("test-x-plain", () => {});
+    t.renderer.root.add(plain as never);
+    const forced = mkForceSlots(true).escHintBtn("test-x-force", () => {});
+    t.renderer.root.add(forced as never);
+    await t.renderOnce();
+    // the raster covers 2 of the 3 wrapper cells — the padding cell paints
+    // the wrapper fill, so under force it must be alpha-0, not sidebarBg
+    expect(bgOf("test-x-plain")).toEqual([26, 27, 38, 255]);
+    expect(bgOf("test-x-force")).toEqual([0, 0, 0, 0]);
+  });
+
+  test("escHintBtn hover still lights under force, out restores to transparent", async () => {
+    const slots = makeSlots({
+      renderer: () => t.renderer,
+      byId: (id) => t.renderer.root.findDescendantById(id),
+      colors: () => ({ bg: BG, sidebarFgMuted: FG, sidebarBg: BG, hoverBg: BG, white: "#fff" }) as unknown as Theme,
+      uiStyle: () => "solid",
+      iconsMode: () => "opaque",
+      transparentForce: () => true,
+      iconCells: () => 4,
+      modalOpen: () => false,
+      glyphFor: () => "F",
+      isTtyMode: () => false,
+      forceGlyph: () => false,
+    });
+    const btn = slots.escHintBtn("test-x-force-hover", () => {});
+    t.renderer.root.add(btn as never);
+    await t.renderOnce();
+    const fire = (type: string) =>
+      (t.renderer.root.findDescendantById("test-x-force-hover") as any)?.processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+        propagationStopped: false,
+        stopPropagation(this: { propagationStopped: boolean }) {
+          this.propagationStopped = true;
+        },
+      });
+    fire("move");
+    await t.renderOnce();
+    expect([...(t.renderer.root.findDescendantById("test-x-force-hover") as any).backgroundColor.toInts()]).toEqual([
+      26, 27, 38, 255,
+    ]);
+    fire("out");
+    await t.renderOnce();
+    expect([...(t.renderer.root.findDescendantById("test-x-force-hover") as any).backgroundColor.toInts()]).toEqual([
+      0, 0, 0, 0,
+    ]);
+  });
 });
 
 // The ONE hover wiring every button/row uses. It is deliberately not

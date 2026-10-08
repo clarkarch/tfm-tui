@@ -132,6 +132,9 @@ export const wireFileops = (deps: {
     colors: themeGet,
     sw: () => core.geometry.sw,
     termH: () => core.config.ui.terminalHeight,
+    // force only (not `on`: panels still paint there): same TTY guard as the
+    // renderer boot in wiring/chrome — no alpha on the Linux console
+    transparentForce: () => core.config.ui.transparentBg === "force" && !core.isTtyMode(),
     escHintBtn: core.slots.escHintBtn,
     stripSelectable,
     drainIconQueue,

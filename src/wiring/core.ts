@@ -132,7 +132,11 @@ export const wireCore = (deps: {
     colors: themeGet,
     uiStyle: () => config.ui.uiStyle,
     iconsMode: () => config.ui.icons,
-    transparentForce: () => config.ui.transparentBg === "force",
+    // TTY-guarded like the terminal pane's own seam (no alpha on the Linux
+    // console — without this a TTY+force run clears the X while its header
+    // keeps its fill). The icon drain early-returns under TTY before ever
+    // reading this, so the guard only affects the new button path.
+    transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
     iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
     modalOpen: () => floats.hasModal(),
