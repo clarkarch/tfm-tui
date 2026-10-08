@@ -19,6 +19,8 @@ import type { Theme } from "../config/config";
 
 // icon rasters need one of the SVG renderers (same gate as icons.test.ts)
 const hasSvgRenderer = Bun.which("resvg") !== null || Bun.which("rsvg-convert") !== null;
+// brand/faithful rasters are in-process only (no CLI fallback, same as iconPng)
+const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => false);
 
 // The scrim (setScrim) must cover every RASTERED slot, including ones whose
 // raster finished before the modal opened. The old queue pruned drained
@@ -424,6 +426,39 @@ describe("thumbnail mount", () => {
     await t.renderOnce();
 
     expect(t.renderer.root.findDescendantById(`${slot.slotId}-s0`)).toBeTruthy();
+  });
+
+  test.skipIf(!hasInproc)("faithful slots drain untinted while plain slots tint", async () => {
+    // the About logo must keep its palette: a drain that ignored `faithful`
+    // would tint it to the slot fg like every other icon (white on white).
+    // heightCells 5 also pins the aspect stretch: the landscape logo fills a
+    // 120x100 box (not the square 100x100 the cell-aspect math gives).
+    const slots = mkSlots();
+    const states = [{ fg: "#9ece6a", bg: BG }];
+    const plain = slots.makeIconSlot("tfm", states, 5, 0);
+    const faithful = slots.makeIconSlot("tfm", states, 5, 0, undefined, undefined, { faithful: true });
+    expect(faithful.spec.faithful).toBe(true);
+    expect(plain.spec.faithful).toBeFalsy();
+    t.renderer.root.add(Box({ id: "faithful-host", width: 16, height: 5 }, plain.el, faithful.el));
+    await t.renderOnce();
+    openResolution();
+
+    await slots.drainIconQueue();
+    await t.renderOnce();
+
+    const srcOf = (slotId: string): Uint8Array => {
+      const img = t.renderer.root.findDescendantById(`${slotId}-s0`) as any;
+      expect(img).toBeTruthy();
+      return new Uint8Array(img.source);
+    };
+    const plainSrc = srcOf(plain.slotId);
+    const faithfulSrc = srcOf(faithful.slotId);
+    expect(Buffer.from(faithfulSrc)).not.toEqual(Buffer.from(plainSrc));
+    // pixel math: shadowed 800x480 over the 80x24 test renderer, heightCells 5
+    // → wCells round(5*2*1.2274)=12 → 120x100 px, flattened onto BG in opaque
+    // mode (no letterbox: the box aspect matches the asset now)
+    const { brandPng } = await import("./icons");
+    expect(Buffer.from(faithfulSrc)).toEqual(Buffer.from(await brandPng("tfm", 120, 100, BG)));
   });
 
   test("escHintBtn hover sets pointer, out restores (X buttons are hoverables too)", async () => {

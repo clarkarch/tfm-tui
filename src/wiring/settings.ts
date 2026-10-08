@@ -21,6 +21,7 @@ import { clearIconCaches } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
 import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../app/log";
+import { makeUrlOpener } from "../fs/open-url";
 import { pointPaneAt } from "../app/panes";
 import {
   AmbiguousPluginError,
@@ -271,6 +272,12 @@ export const wireSettings = (deps: {
   // wireCore (see there for why per-cluster instances diverged).
   const setPointer = core.setPointer;
 
+  // About link rows open in the desktop browser (failure toasts, never throws)
+  const urlOpener = makeUrlOpener({
+    notify: (message, title, level) => chrome.notify(message, title ?? "tfm", level),
+    log: (message) => dlog(message),
+  });
+
   const escMenu = makeEscMenu({
     renderer: () => chrome.renderer,
     setPointer,
@@ -295,6 +302,7 @@ export const wireSettings = (deps: {
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
     log: (message) => dlog(message),
     quit: nav.quitApp,
+    openUrl: (url) => urlOpener.openUrl(url),
   });
 
   return { escMenu, systemTheme };

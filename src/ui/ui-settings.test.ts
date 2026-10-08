@@ -84,12 +84,15 @@ let menu: ReturnType<typeof makeEscMenu>;
 let scrim: boolean;
 let cancelledBand: number;
 let warns: Array<[string, string | undefined]>;
+let dlogs: string[];
 let groups: SettingGroup[];
 let plugGroups: SettingGroup[];
 let quitCalls: number;
 // icon names requested through the slot sink (the entry's icon choice is
 // observable here — the sink IS the seam, not fake bookkeeping)
 let requestedIcons: string[];
+// external URLs requested through the opener seam (About link rows)
+let openedUrls: string[];
 // rescan hook: openMenu re-reads the plugins dir so added/removed plugins
 // reflect without a restart (code edits still need one — Bun module cache)
 let reloadImpl: () => Promise<unknown>;
@@ -105,10 +108,12 @@ beforeAll(async () => {
   scrim = false;
   cancelledBand = 0;
   warns = [];
+  dlogs = [];
   groups = mkGroups();
   plugGroups = [];
   quitCalls = 0;
   requestedIcons = [];
+  openedUrls = [];
   iconStateCalls = [];
   reloadCalls = 0;
   reloadImpl = async () => {
@@ -153,9 +158,14 @@ beforeAll(async () => {
       warns.push([message, title]);
     },
     floats,
-    log: () => {},
+    log: (message: string) => {
+      dlogs.push(message);
+    },
     quit: () => {
       quitCalls++;
+    },
+    openUrl: (url: string) => {
+      openedUrls.push(url);
     },
     setPointer: (s) => void pointers.push(s),
   });
@@ -202,6 +212,25 @@ const text = (id: string): string => {
   if (Array.isArray(c?.chunks)) return c.chunks.map((x: any) => x?.text ?? "").join("");
   if (Array.isArray(c)) return c.map((x: any) => x?.text ?? "").join("");
   return c?.text ?? "";
+};
+// fire a synthetic mouse event at a mounted node (escHintBtn pattern).
+// Carries the real propagation protocol: row handlers call
+// ev.stopPropagation() to hold the click out of the scrim's click-away
+// closer, and the dispatcher honors event.propagationStopped — a bare
+// object without it bubbles and closes the menu, unlike production.
+const fire = (id: string, type: string) => {
+  const ev = {
+    type,
+    button: 0,
+    x: 0,
+    y: 0,
+    modifiers: { shift: false, alt: false, ctrl: false },
+    propagationStopped: false,
+    stopPropagation() {
+      ev.propagationStopped = true;
+    },
+  };
+  return (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent(ev);
 };
 
 describe("esc-menu root view", () => {
@@ -1179,6 +1208,90 @@ describe("help view", () => {
     // clamped back at the top; still cursorless (hero text, no selection)
     expect(scroller.scrollTop).toBe(0);
     expect(t.captureCharFrame()).toContain("Lost? Start here.");
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("about sits below help and opens a cursorless brand view", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    requestedIcons.length = 0;
+    menu.openMenu();
+    await t.renderOnce();
+    // root order without plugins: Settings, Help, About (Quit last)
+    let frame = t.captureCharFrame();
+    expect(frame.indexOf("Help")).toBeLessThan(frame.indexOf("About"));
+    menu.moveMenu(1); // Settings
+    menu.moveMenu(1); // Help
+    menu.moveMenu(1); // About
+    menu.menuActivate();
+    await t.renderOnce();
+    frame = t.captureCharFrame();
+    expect(frame).toContain("Menu — about");
+    expect(frame).toContain("terminal file manager");
+    expect(requestedIcons).toContain("tfm");
+    // cursorless: arrows and enter are no-ops, the view stays put
+    menu.moveMenu(1);
+    menu.moveMenu(-1);
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Menu — about");
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("about credits row drills to detail and back through real mouse events", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    openedUrls.length = 0;
+    menu.openMenu();
+    menu.moveMenu(1); // Settings
+    menu.moveMenu(1); // Help
+    menu.moveMenu(1); // About
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Credits");
+    // link rows reach the opener seam with their exact URL
+    fire("tfm-about-row-website", "down");
+    expect(openedUrls).toEqual(["https://clarkarch.github.io/tfm-tui"]);
+    // the overloaded credits row drills instead of opening
+    fire("tfm-about-row-credits", "down");
+    await t.renderOnce();
+    let frame = t.captureCharFrame();
+    expect(frame).toContain("← Back");
+    expect(frame).toContain("opentui.com");
+    expect(openedUrls.length).toBe(1);
+    // values share one column: an overflowing value must wrap below,
+    // never squeeze its label left (flex shrink stole 2 cells here)
+    {
+      const colOf = (needle: string): number => {
+        const line = t
+          .captureCharFrame()
+          .split("\n")
+          .find((l) => l.includes(needle));
+        return line?.indexOf(needle) ?? -1;
+      };
+      expect(colOf("opentui.com")).toBeGreaterThan(0);
+      expect(colOf("nerdfonts.com")).toBe(colOf("opentui.com"));
+    }
+    // credit links reach the opener seam with their exact project URLs
+    fire("tfm-about-row-d-opentui", "down");
+    fire("tfm-about-row-d-mdi", "down");
+    expect(openedUrls).toEqual([
+      "https://clarkarch.github.io/tfm-tui",
+      "https://opentui.com",
+      "https://pictogrammers.com/library/mdi/",
+    ]);
+    // back returns to main; arrows/enter still no-op there
+    fire("tfm-about-back", "down");
+    await t.renderOnce();
+    frame = t.captureCharFrame();
+    expect(frame).toContain("Credits");
+    expect(frame).not.toContain("← Back");
+    menu.moveMenu(1);
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Credits");
     menu.closeMenu();
     await t.renderOnce();
   });

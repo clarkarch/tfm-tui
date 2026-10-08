@@ -116,6 +116,10 @@ export const glyph: Record<string, string> = {
   "file-video-outline": "\u{F0E2C}",
   "file-music-outline": "\u{F0E2A}",
   "zip-box-outline": "\u{F0FFA}",
+  // brand mark (assets/icons/tfm.svg): alias of the folder codepoint, NOT a
+  // new codepoint — the TUI pipeline tints the logo monochrome like every
+  // icon, so the glyph fallback only needs the same folder shape.
+  tfm: "\u{F024B}",
   // sort-direction arrows (menu hintIcon): standard Unicode arrows, NOT Nerd
   // PUA codepoints — U+2191/2193 ship in Meslo and virtually every monospace
   // font, so they render even where the Nerd patch is incomplete. Without

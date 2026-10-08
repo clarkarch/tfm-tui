@@ -122,6 +122,37 @@ export const svgSourceMtime = (name: string): number => {
   }
 };
 
+// Natural aspect (w/h) of an icon asset for aspect-correct slot sizing:
+// width/height attrs win, viewBox is the fallback, null when unparseable
+// (callers fall back to square). Reads the same embedded-or-disk source the
+// rasterizer uses, opening tag only — icon assets are path-only with
+// unitless dims by policy.
+export const svgAspect = async (name: string): Promise<number | null> => {
+  let svg: string;
+  try {
+    svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
+  } catch {
+    return null;
+  }
+  const tag = svg.slice(0, svg.indexOf(">") + 1);
+  const num = (re: RegExp): number | null => {
+    const v = parseFloat(tag.match(re)?.[1] ?? "");
+    return v > 0 ? v : null;
+  };
+  const w = num(/\bwidth="([\d.]+)/);
+  const h = num(/\bheight="([\d.]+)/);
+  if (w !== null && h !== null) return w / h;
+  const vb = tag
+    .match(/\bviewBox="([^"]*)"/)?.[1]
+    ?.trim()
+    .split(/[\s,]+/)
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  if (vb && vb.length === 4 && (vb[2] as number) > 0 && (vb[3] as number) > 0)
+    return (vb[2] as number) / (vb[3] as number);
+  return null;
+};
+
 export const iconCacheKey = (
   name: string,
   fg: string,
@@ -314,6 +345,50 @@ export const iconPng = async (
   })();
   inflightIcons.set(key, job);
   job.finally(() => inflightIcons.delete(key)).catch(() => {});
+  return job;
+};
+
+// --- Faithful brand raster (the About logo): the icon path above replaces
+// every #hex with the slot fg, which is right for monochrome glyphs but
+// destroys a multi-color mark. This lane renders the asset AS-IS (no tint)
+// through the same in-process renderer, with its own `brand:` cache prefix
+// so faithful and tinted rasters never share an entry. `bg === undefined`
+// keeps alpha (transparent modes); otherwise it flattens onto bg like icons.
+const brandCache = new Map<string, Uint8Array>();
+const inflightBrand = new Map<string, Promise<Uint8Array>>();
+const BRAND_CACHE_MAX = 8; // one logo, a few sizes — never a folder's worth
+
+export const brandPng = async (name: string, pxW: number, pxH: number, bg?: string): Promise<Uint8Array> => {
+  const key = `brand:${name}:${pxW}x${pxH}|src${svgSourceMtime(name)}${bg === undefined ? "|t" : `|${bg}`}`;
+  const hit = lruGet(brandCache, key);
+  if (hit) return hit;
+  const running = inflightBrand.get(key);
+  if (running) return running;
+  try {
+    const cached = readFileSync(iconDiskPath(key));
+    const bytes = new Uint8Array(cached);
+    lruSet(brandCache, key, bytes, BRAND_CACHE_MAX);
+    return bytes;
+  } catch {}
+  const job = (async () => {
+    await acquireRasterSlot();
+    try {
+      if (!svgRenderer()) throw new Error("no SVG rasterizer available (bun add @resvg/resvg-js)");
+      const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
+      const bytes = renderInproc(svg, pxW, pxH, bg);
+      lruSet(brandCache, key, bytes, BRAND_CACHE_MAX);
+      // path captured NOW (same write-behind race as the icon cache above)
+      const diskPath = iconDiskPath(key);
+      void ensureIconDir().then(() =>
+        atomicWriteFile(diskPath, bytes).catch((err) => swallow("brand disk cache write", err)),
+      );
+      return bytes;
+    } finally {
+      releaseRasterSlot();
+    }
+  })();
+  inflightBrand.set(key, job);
+  job.finally(() => inflightBrand.delete(key)).catch(() => {});
   return job;
 };
 
@@ -721,6 +796,7 @@ export const thumbPng = (
 // its keys) — this only drops the in-memory layers
 export const clearIconCaches = (): void => {
   iconCache.clear();
+  brandCache.clear();
   thumbCache.clear();
   failedThumbs.clear();
 };

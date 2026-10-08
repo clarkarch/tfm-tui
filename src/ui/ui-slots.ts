@@ -8,7 +8,7 @@
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
 import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
-import { iconPng, thumbPng } from "./icons";
+import { iconPng, brandPng, svgAspect, thumbPng } from "./icons";
 import { swallow } from "../app/log";
 import type { IconMode, IconStyle, Theme } from "../config/config";
 import { intToHex } from "../config/color";
@@ -146,6 +146,9 @@ export type IconSpec = {
   statesFactory?: () => IconState[];
   initialState: number;
   done?: boolean;
+  // faithful brand art (the About logo): drains through brandPng (no fg tint)
+  // instead of iconPng. States still carry fg/bg for the glyph fallback.
+  faithful?: boolean;
 };
 
 // Whatever the widgets nest inside their Box()/Text() calls — which is exactly
@@ -312,6 +315,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     initialState = 0,
     onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
+    opts?: { faithful?: boolean },
   ): IconSlotHandle => {
     const slotId = `tfm-icon-${iconSeq++}`;
     const g = ctx.glyphFor(name);
@@ -322,6 +326,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       states,
       initialState,
       ...(statesFactory ? { statesFactory } : {}),
+      ...(opts?.faithful ? { faithful: true } : {}),
     };
     allSpecs.set(slotId, spec);
     return {
@@ -450,6 +455,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     initial: number,
     dimFactor = 1,
     idPrefix = "s",
+    faithful = false,
   ) => {
     const { cellW, cellH } = cellMetrics();
     // `transparent` = raster keeps alpha; strip it inside floating layers in
@@ -466,16 +472,22 @@ export const makeSlots = (ctx: SlotsCtx) => {
       const st = states[si];
       if (st === undefined) continue;
       try {
-        const bytes = await iconPng(
-          name,
-          dimHex(st.fg, dimFactor),
-          dimHex(st.bg, dimFactor),
-          Math.max(1, Math.round(wCells * cellW)),
-          Math.max(1, Math.round(heightCells * cellH)),
-          // bg arrives ignored in transparent mode (the key drops it, so all
-          // states share one raster) — kept in the signature for call-site compat
-          { transparent, style: ctx.iconStyle?.() ?? "filled" },
-        );
+        const pxW = Math.max(1, Math.round(wCells * cellW));
+        const pxH = Math.max(1, Math.round(heightCells * cellH));
+        // faithful slots keep the asset palette (brand art); everything else
+        // tints to the slot fg. bg still flattens in opaque mode either way.
+        const bytes = faithful
+          ? await brandPng(name, pxW, pxH, transparent ? undefined : dimHex(st.bg, dimFactor))
+          : await iconPng(
+              name,
+              dimHex(st.fg, dimFactor),
+              dimHex(st.bg, dimFactor),
+              pxW,
+              pxH,
+              // bg arrives ignored in transparent mode (the key drops it, so all
+              // states share one raster) — kept in the signature for call-site compat
+              { transparent, style: ctx.iconStyle?.() ?? "filled" },
+            );
         const img = new ImageRenderable(ctx.renderer(), {
           id: `${slotId}-${idPrefix}${si}`,
           source: bytes,
@@ -520,7 +532,12 @@ export const makeSlots = (ctx: SlotsCtx) => {
             spec.states = spec.statesFactory();
           } catch {}
         }
-        const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
+        // faithful brand art is rarely cell-proportioned (the tfm logo is
+        // landscape in tall cells): stretch the slot to the asset's own
+        // aspect so the raster fills its box instead of letterboxing.
+        // Unparseable dims fall back to the square cell-aspect assumption.
+        const artAspect = spec.faithful ? await svgAspect(spec.name).catch(() => null) : null;
+        const wCells = Math.max(1, Math.round(spec.heightCells * aspect * (artAspect ?? 1)));
         const imgs = await rasterStatesInto(
           spec.slotId,
           spec.name,
@@ -528,6 +545,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
           spec.heightCells,
           wCells,
           spec.initialState,
+          1,
+          "s",
+          spec.faithful ?? false,
         );
         if (imgs.length === 0) continue;
         slot.width = wCells;

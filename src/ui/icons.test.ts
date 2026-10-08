@@ -9,7 +9,9 @@ import {
   OUTLINE_ICONS,
   RASTER_FILE_LIMIT,
   THUMB_COOL_MS,
+  brandPng,
   clearIconCaches,
+  svgAspect,
   iconCacheKey,
   iconPng,
   loadEmbeddedIcons,
@@ -89,6 +91,27 @@ describe("icons", () => {
     const bytes = await iconPng("power-plug", "#c0caf5", "#1a1b26", 16, 16);
     expect([bytes[0], bytes[1], bytes[2], bytes[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
     clearIconCaches();
+  });
+
+  test.skipIf(!hasInproc)("brand raster keeps the asset palette (no fg tint)", async () => {
+    clearIconCaches();
+    const faithful = await brandPng("tfm", 64, 64, "#1a1b26");
+    expect([faithful[0], faithful[1], faithful[2], faithful[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    // the folder body is #7aa2f7 (blue-dominant); a tinted render has none
+    expect(countBluePixels(faithful)).toBeGreaterThan(50);
+    const tinted = await iconPng("tfm", "#9ece6a", "#1a1b26", 64, 64);
+    expect(countBluePixels(tinted)).toBe(0);
+    expect(faithful).not.toBe(tinted);
+    // memory-cache hit serves the same object
+    expect(await brandPng("tfm", 64, 64, "#1a1b26")).toBe(faithful);
+    clearIconCaches();
+  });
+
+  test("svgAspect reads the asset dims (viewBox fallback, null when missing)", async () => {
+    // tfm logo viewBox: 18.35 x 14.95 — the drain sizes faithful slots off
+    // this so the raster fills its box instead of letterboxing
+    expect(await svgAspect("tfm")).toBeCloseTo(18.35 / 14.95, 3);
+    expect(await svgAspect("no-such-icon-xyz")).toBeNull();
   });
 
   test.skipIf(!hasSvgRenderer)("icon-style set rasterizes (filled base + outline variants)", async () => {
@@ -596,11 +619,10 @@ describe("thumb failure sentinel", () => {
   );
 });
 
-// minimum alpha over a PNG's pixels (0 = some pixel fully transparent,
-// 255 = fully opaque). Handles the 8-bit truecolor outputs rsvg-convert
-// produces (color type 2 = no alpha channel, 6 = RGBA); anything else throws
-// so an encoder change fails loudly instead of asserting on garbage.
-const pngAlphaMin = (bytes: Uint8Array): number => {
+// decoded 8-bit RGBA pixels (handles the truecolor outputs resvg produces:
+// color type 2 = no alpha channel, 6 = RGBA); anything else throws so an
+// encoder change fails loudly instead of asserting on garbage.
+const decodePngRgba = (bytes: Uint8Array): { width: number; height: number; px: Buffer } => {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let off = 8; // skip the signature
   let width = 0;
@@ -630,14 +652,66 @@ const pngAlphaMin = (bytes: Uint8Array): number => {
     }
     off += 12 + len;
   }
-  if (colorType === 2) return 255; // truecolor without an alpha channel
+  if (colorType === 2) {
+    // truecolor without an alpha channel: opaque, expand to RGBA
+    const raw = inflateSync(Buffer.concat(idat));
+    const stride = width * 3;
+    const px = Buffer.alloc(width * height * 4);
+    let prev = Buffer.alloc(stride);
+    let p = 0;
+    let q = 0;
+    for (let y = 0; y < height; y++) {
+      const filter = raw[p++]!;
+      const cur = raw.subarray(p, p + stride);
+      p += stride;
+      const recon = Buffer.alloc(stride);
+      for (let i = 0; i < stride; i++) {
+        const a = i >= 3 ? recon[i - 3]! : 0;
+        const b = prev[i]!;
+        const c = i >= 3 ? prev[i - 3]! : 0;
+        let v: number;
+        switch (filter) {
+          case 0:
+            v = cur[i]!;
+            break;
+          case 1:
+            v = (cur[i]! + a) & 255;
+            break;
+          case 2:
+            v = (cur[i]! + b) & 255;
+            break;
+          case 3:
+            v = (cur[i]! + ((a + b) >> 1)) & 255;
+            break;
+          default: {
+            // Paeth
+            const pa = Math.abs(b - c);
+            const pb = Math.abs(a - c);
+            const pc = Math.abs(a + b - 2 * c);
+            v = (cur[i]! + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+            break;
+          }
+        }
+        recon[i] = v;
+      }
+      for (let x = 0; x < width; x++) {
+        px[q++] = recon[x * 3]!;
+        px[q++] = recon[x * 3 + 1]!;
+        px[q++] = recon[x * 3 + 2]!;
+        px[q++] = 255;
+      }
+      prev = recon;
+    }
+    return { width, height, px };
+  }
   if (colorType !== 6 || bitDepth !== 8)
-    throw new Error(`unsupported PNG for alpha scan: colorType=${colorType} bitDepth=${bitDepth}`);
+    throw new Error(`unsupported PNG for pixel scan: colorType=${colorType} bitDepth=${bitDepth}`);
   const raw = inflateSync(Buffer.concat(idat));
   const stride = width * 4;
-  let min = 255;
+  const px = Buffer.alloc(width * height * 4);
   let prev = Buffer.alloc(stride);
   let p = 0;
+  let q = 0;
   for (let y = 0; y < height; y++) {
     const filter = raw[p++]!;
     const cur = raw.subarray(p, p + stride);
@@ -672,11 +746,35 @@ const pngAlphaMin = (bytes: Uint8Array): number => {
       }
       recon[i] = v;
     }
-    for (let i = 3; i < stride; i += 4) if (recon[i]! < min) min = recon[i]!;
-    if (min === 0) break;
+    recon.copy(px, q);
+    q += stride;
     prev = recon;
   }
+  return { width, height, px };
+};
+
+// minimum alpha over a PNG's pixels (0 = some pixel fully transparent,
+// 255 = fully opaque)
+const pngAlphaMin = (bytes: Uint8Array): number => {
+  const { px } = decodePngRgba(bytes);
+  let min = 255;
+  for (let i = 3; i < px.length; i += 4) if (px[i]! < min) min = px[i]!;
   return min;
+};
+
+// count of strongly blue-dominant opaque pixels (brand-asset probe: the tfm
+// folder body is #7aa2f7, B-R ≈ 125; antialiased edges blend toward bg but
+// the body stays well clear of the threshold)
+const countBluePixels = (bytes: Uint8Array): number => {
+  const { px } = decodePngRgba(bytes);
+  let n = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i]!;
+    const b = px[i + 2]!;
+    const a = px[i + 3]!;
+    if (a > 128 && b > 150 && b - r > 60) n++;
+  }
+  return n;
 };
 
 describe("pngFromProc timeout", () => {

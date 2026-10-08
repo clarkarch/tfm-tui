@@ -38,6 +38,7 @@ import {
   type SettingsPanelState,
 } from "./ui-settings-panel";
 import { helpPanelWidth, renderHelpPanel } from "./ui-help";
+import { aboutPanelWidth, renderAboutPanel, type AboutDetail } from "./ui-about";
 import type { KeyAction, KeybindSetResult } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
@@ -55,6 +56,7 @@ type EscMenuCtx = {
     initialState?: number,
     onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
+    opts?: { faithful?: boolean },
   ): IconSlotHandle;
   setIconState(spec: IconSpec, stateIdx: number): void;
   drainIconQueue(): void | Promise<void>;
@@ -83,6 +85,9 @@ type EscMenuCtx = {
   // debug sink (dlog) — rebuild failures MUST surface somewhere
   log?(message: string): void;
   quit(): void;
+  // external URL opener for About link rows (wired to xdg-open). Optional
+  // so older fakes keep working; absent = link clicks no-op.
+  openUrl?(url: string): void;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
@@ -90,7 +95,7 @@ type EscMenuCtx = {
 
 export const makeEscMenu = (ctx: EscMenuCtx) => {
   let menuOpen = false;
-  let menuView: "root" | "settings" | "plugins" | "help" = "root";
+  let menuView: "root" | "settings" | "plugins" | "help" | "about" = "root";
   // panel cursor state — rendered by ./ui-settings-panel, mutated by the ops here
   const st: SettingsPanelState = {
     catIdx: 0,
@@ -116,12 +121,19 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // every keyboard/panel op below branches root vs panel — never on a single view
   const inPanelView = (): boolean => menuView !== "root";
 
-  // the help view is cursorless (a static cheat sheet) — cursor ops no-op there
+  // the help/about views are cursorless (static panels) — cursor ops no-op there
   const isHelpView = (): boolean => menuView === "help";
+  const isAboutView = (): boolean => menuView === "about";
+  const isStaticView = (): boolean => menuView === "help" || menuView === "about";
+  // about detail drill (credits row → full list, ← Back returns). Reset on
+  // every fresh about entry and menu close — never carried across opens.
+  let aboutDetail: AboutDetail = null;
   // root <-> panel-view transitions reset the shared cursor state (same reset
   // Settings always did — the panel is rebuilt fresh for either view)
-  const enterView = (view: "settings" | "plugins" | "help"): void => {
+  const enterView = (view: "settings" | "plugins" | "help" | "about"): void => {
     menuView = view;
+    // a fresh about entry always lands on main (detail never carries over)
+    if (view === "about") aboutDetail = null;
     st.catIdx = 0;
     // no row cursor until the first arrow/hover (category highlight stays)
     st.menuIdx = -1;
@@ -162,6 +174,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // the help view sits below Plugins: everything above quits the app,
     // this one just explains it
     { icon: "help", label: "Help", keepOpen: true, action: () => enterView("help") },
+    // the about view sits below Help: brand + version + links, no controls
+    { icon: "information", label: "About", keepOpen: true, action: () => enterView("about") },
     {
       icon: "power",
       label: "Quit",
@@ -197,8 +211,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const adjustSelectedSetting = (dir: number): void => {
     if (!inPanelView()) return;
-    // the help view is cursorless — ←/→ do nothing there
-    if (isHelpView()) return;
+    // the static views are cursorless — ←/→ do nothing there
+    if (isStaticView()) return;
     if (st.pane === "cats") {
       switchCategory(st.catIdx + dir);
       return;
@@ -500,8 +514,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const menuActivate = () => {
-    // the help view is cursorless — enter is a no-op
-    if (isHelpView()) return;
+    // the static views are cursorless — enter is a no-op
+    if (isStaticView()) return;
     if (inPanelView()) {
       if (st.pane === "cats") {
         switchCategory(st.catIdx);
@@ -583,17 +597,20 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.log?.(`esc-menu render failed: ${err}`);
   };
 
-  const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins" | "help") => {
+  const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins" | "help" | "about") => {
     menuC = c;
     const panelView = view !== "root";
-    // the help view uses its own wide poster width; settings/plugins fill
-    // the terminal the same way (settingsPanelWidth clamps small terminals)
+    // the help view uses its own wide poster width, about its narrow brand
+    // width; settings/plugins fill the terminal the same way
+    // (settingsPanelWidth clamps small terminals)
     const panelW =
       view === "help"
         ? helpPanelWidth(ctx.renderer().terminalWidth)
-        : panelView
-          ? settingsPanelWidth(ctx.renderer().terminalWidth)
-          : ctx.menuW();
+        : view === "about"
+          ? aboutPanelWidth(ctx.renderer().terminalWidth)
+          : panelView
+            ? settingsPanelWidth(ctx.renderer().terminalWidth)
+            : ctx.menuW();
     try {
       panel.width = panelW;
     } catch {}
@@ -609,7 +626,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
                 ? "Menu — settings"
                 : view === "help"
                   ? "Menu — help"
-                  : "Menu",
+                  : view === "about"
+                    ? "Menu — about"
+                    : "Menu",
           fg: c.accent,
         }),
         Box({ flexGrow: 1 }),
@@ -718,6 +737,23 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         renderer: ctx.renderer,
         termH: () => ctx.renderer().terminalHeight,
       });
+    } else if (view === "about") {
+      // drillable brand block (no cursor — rows drive via mouse only)
+      renderAboutPanel(c, panel, {
+        renderer: ctx.renderer,
+        makeIconSlot: ctx.makeIconSlot,
+        onOpenUrl: (url) => ctx.openUrl?.(url),
+        detail: aboutDetail,
+        onOpenDetail: () => {
+          aboutDetail = "credits";
+          renderMenuContent();
+        },
+        onBack: () => {
+          aboutDetail = null;
+          renderMenuContent();
+        },
+        setPointer: ctx.setPointer,
+      });
     } else {
       renderSettingsPanel(
         c,
@@ -776,6 +812,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     menuView = "root";
     st.capturing = null;
     st.swapOffer = null;
+    aboutDetail = null;
     ctx.log?.("esc-menu close");
     // hovered rows have no out (their nodes are gone) — restore here or the
     // pointer sticks (same stale-until-move rule as the highlight paint)
@@ -801,6 +838,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.scrollOff = 0;
     st.capturing = null;
     st.swapOffer = null;
+    aboutDetail = null;
     restartWarned.clear();
     ctx.log?.("esc-menu open");
     nativeMemTrace("esc-menu open");
@@ -850,11 +888,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const moveMenu = (delta: number) => {
-    // the help view is cursorless — ↑/↓ scroll the body instead of a cursor
+    // the help view is cursorless — ↑/↓ scroll the body instead of a cursor;
+    // the about view fits its panel, so arrows are a plain no-op there
     if (isHelpView()) {
       scrollHelp(delta * 3);
       return;
     }
+    if (isAboutView()) return;
     if (!inPanelView()) {
       const count = rootMenuItems().length;
       if (count === 0) return;
