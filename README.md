@@ -35,7 +35,7 @@
 ## Requirements
 
 - Linux.
-- Any terminal (image support for the full experience).
+- Any terminal (need image support for the full experience).
 - Everything below is optional.
   - `xdg-open` (opening files)
   - `magick` (extra photo thumbnails)
