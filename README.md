@@ -8,23 +8,32 @@
 
 ## Showcase
 
-[![showcase](assets/showcase/showcase.png)](https://github.com/clarkarch/tfm-tui/releases/download/demo/showcase.mp4)
-*Main tour (151 s) — click to watch*
+
+
+https://github.com/user-attachments/assets/29c1e441-d871-4008-922f-47d0c1bc554f
+
+
 
 ### Embedded terminal
 
-[![embedded terminal](assets/showcase/embedded-terminal.png)](https://github.com/clarkarch/tfm-tui/releases/download/demo/embedded-terminal.mp4)
-*Click to watch (22 s)*
+
+
+https://github.com/user-attachments/assets/06b395db-8a91-4402-9ad7-158a5f77ccfe
+
+
 
 ### Preview pane
 
-[![preview pane](assets/showcase/preview.png)](https://github.com/clarkarch/tfm-tui/releases/download/demo/preview.mp4)
-*Click to watch (11 s)*
+
+
+https://github.com/user-attachments/assets/f0007e09-c273-4f77-9f9a-d3e7187405c0
+
+
 
 ### Animations
 
-[![animations](assets/showcase/animation.png)](https://github.com/clarkarch/tfm-tui/releases/download/demo/animation.mp4)
-*Click to watch (25 s)*
+
+https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 
 ## Features
 
