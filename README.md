@@ -8,19 +8,19 @@
 
 ## Showcase
 
-<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/showcase.mp4" width="100%" controls muted loop playsinline></video>
+![showcase](https://github.com/clarkarch/tfm-tui/releases/download/demo/showcase.mp4)
 
 ### Embedded terminal
 
-<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/embedded-terminal.mp4" width="100%" controls muted loop playsinline></video>
+![embedded terminal](https://github.com/clarkarch/tfm-tui/releases/download/demo/embedded-terminal.mp4)
 
 ### Preview pane
 
-<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/preview.mp4" width="100%" controls muted loop playsinline></video>
+![preview pane](https://github.com/clarkarch/tfm-tui/releases/download/demo/preview.mp4)
 
 ### Animations
 
-<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/animation.mp4" width="100%" controls muted loop playsinline></video>
+![animations](https://github.com/clarkarch/tfm-tui/releases/download/demo/animation.mp4)
 
 ## Features
 
