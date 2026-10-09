@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 
 // --- File type classification (extension -> icon-name category), shared by
 // grid tiles, preview gating and the properties dialog. Returns icon NAMES
@@ -276,8 +275,19 @@ export const mimeCategory = (mime: string): string => {
   return "file";
 };
 
-// lowercased extension without the dot; dotfiles (".bashrc") have none
-export const extOf = (name: string): string => path.extname(name).slice(1).toLowerCase();
+// lowercased extension without the dot; dotfiles (".bashrc") have none.
+// Manual scan instead of path.extname (same contract, ~2x — path.extname
+// re-scans the string; measured in scripts/bench-ts-vs-zig.ts, equivalent
+// over a 500k-input fuzz incl. trailing dots/slashes and dots in dir segments).
+export const extOf = (name: string): string => {
+  let end = name.length;
+  while (end > 0 && name.charCodeAt(end - 1) === 47) end--;
+  if (end === 0) return "";
+  const dot = name.lastIndexOf(".", end - 1);
+  if (dot < 0) return "";
+  if (dot <= name.lastIndexOf("/", end - 1) + 1) return "";
+  return name.slice(dot + 1, end).toLowerCase();
+};
 
 export const fileIconFor = (name: string): string => {
   const ext = extOf(name);
