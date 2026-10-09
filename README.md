@@ -6,6 +6,22 @@
 
 ![tfm](screenshot.png)
 
+## Showcase
+
+<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/showcase.mp4" width="100%" controls muted loop playsinline></video>
+
+### Embedded terminal
+
+<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/embedded-terminal.mp4" width="100%" controls muted loop playsinline></video>
+
+### Preview pane
+
+<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/preview.mp4" width="100%" controls muted loop playsinline></video>
+
+### Animations
+
+<video src="https://github.com/clarkarch/tfm-tui/releases/download/demo/animation.mp4" width="100%" controls muted loop playsinline></video>
+
 ## Features
 
 - Mouse: click, rubber-band select, right-click menus, drag and drop.
