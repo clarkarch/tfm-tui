@@ -40,8 +40,7 @@
     border-bottom: 1px solid var(--border);
   }
   nav .wrap { display: flex; align-items: center; gap: 18px; height: 52px; }
-  nav .logo { color: var(--accent); font-weight: 700; letter-spacing: .5px; display: inline-flex; align-items: center; gap: 8px; }
-  .logo img { width: 22px; height: 22px; display: block; }
+  nav .logo { color: var(--accent); font-weight: 700; letter-spacing: .5px; }
   nav .logo::before { content: "$ "; color: var(--muted); }
   nav .links { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
   nav .links a { color: var(--muted); }
@@ -60,7 +59,6 @@
   }
   @media (max-width: 900px) { .hero { grid-template-columns: minmax(0, 1fr); } }
   h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 2px; color: var(--fg); }
-  .hero-logo { width: 96px; height: auto; display: block; margin-bottom: 10px; }
   .subtitle { color: var(--accent); font-size: clamp(15px, 2.4vw, 21px); margin: 0 0 14px; }
   .tagline { color: var(--muted); margin: 0 0 24px; }
   .tagline b { color: var(--accent); font-weight: 600; }
@@ -109,8 +107,7 @@
     padding: 20px; transition: border-color .15s, transform .15s;
   }
   .card:hover { border-color: var(--accent); transform: translateY(-2px); }
-  .card .ico { font-size: 20px; color: var(--accent); }
-  .card h3 { margin: 8px 0 6px; font-size: 16px; color: var(--accent); }
+  .card h3 { margin: 0 0 6px; font-size: 16px; color: var(--accent); }
   .card p { margin: 0; font-size: 13px; color: var(--muted); }
 
   kbd {
@@ -181,7 +178,7 @@
 
 <nav>
   <div class="wrap">
-    <span class="logo"><img src="tfm.svg" alt="tfm logo" width="22" height="22">tfm</span>
+    <span class="logo">tfm</span>
     <span class="badge">stable</span>
     <div class="links">
       <a href="#features">features</a>
@@ -195,7 +192,6 @@
 
 <header class="wrap hero">
   <div class="pitch">
-    <img class="hero-logo" src="tfm.svg" alt="tfm logo" width="96" height="78">
     <h1>tfm</h1>
     <p class="subtitle">(terminal file manager)</p>
     <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails <b>right inside your terminal</b>.<br>Built on <a href="https://opentui.com">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
@@ -227,62 +223,50 @@
   <p class="sub">a GUI file manager that lives in your terminal</p>
   <div class="cards">
     <div class="card">
-      <div class="ico">➤</div>
       <h3>Mouse-first</h3>
       <p>Click, rubber-band select, right-click context menus, inline rename, no memorizing a modal keymap to get things done. <kbd>ctrl</kbd>+click toggles, <kbd>shift</kbd>+click ranges.</p>
     </div>
     <div class="card">
-      <div class="ico">⇄</div>
       <h3>Drag &amp; drop</h3>
       <p>Move files between folders with <kbd>ctrl</kbd>+drag. Drag <i>out</i> of the terminal to other apps and drop files <i>in</i>, cross-app DnD via the kitty graphics protocol (OSC 72).</p>
     </div>
     <div class="card">
-      <div class="ico">⌘</div>
       <h3>Desktop integration</h3>
       <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every reversible operation: permanent delete / empty trash cannot be undone.</p>
     </div>
     <div class="card">
-      <div class="ico">&gt;_</div>
       <h3>Embedded terminal</h3>
       <p>Right-click empty space → <i>Open Terminal Here</i> runs your <kbd>$SHELL</kbd> in a pane at the current folder. Drop files onto the prompt to paste their paths.</p>
     </div>
     <div class="card">
-      <div class="ico">❐</div>
       <h3>Previews &amp; thumbnails</h3>
       <p>Image and video thumbnails (kitty graphics), tree-sitter syntax-highlighted text previews, folder stats, with a disk-cached thumbnail pipeline so folder revisits are instant.</p>
     </div>
     <div class="card">
-      <div class="ico">◫</div>
       <h3>Dual pane</h3>
       <p>Two independent file panes side by side, each with its own top bar and tabs. <kbd>tab</kbd> switches sides, <kbd>F5</kbd> / <kbd>F6</kbd> copy or move across.</p>
     </div>
     <div class="card">
-      <div class="ico">☰</div>
       <h3>Tabs</h3>
       <p>Per-pane tab strips with <kbd>ctrl</kbd>+<kbd>t</kbd> / <kbd>w</kbd> and <kbd>ctrl</kbd>+<kbd>tab</kbd> cycling, middle-click to close. Sessions restore them on launch.</p>
     </div>
     <div class="card">
-      <div class="ico">☁</div>
       <h3>Network locations</h3>
       <p>Open <i>sftp://</i>, <i>smb://</i>, WebDAV and FTP shares through gvfs, sidebar → Connect to Server…, credentials prompted in-app.</p>
     </div>
     <div class="card">
-      <div class="ico">▣</div>
       <h3>Archives</h3>
       <p>Right-click → <i>Extract Here</i> (staged, conflict prompt, undoable) or <i>Compress to…</i> across 13 formats, from tar.gz to 7z.</p>
     </div>
     <div class="card">
-      <div class="ico">⚙︎</div>
       <h3>Plugins</h3>
       <p>TypeScript plugins with hot reload: commands, context menus, previews, events, UI slots. Install from a git URL or <i>tfm plugins add</i>.</p>
     </div>
     <div class="card">
-      <div class="ico" style="font-size: 26px; line-height: 1;">✦</div>
       <h3>Animation</h3>
       <p>Staggered file entrances, sidebar and top-bar intros, auto-hide drawer slides — all tunable under Settings → animations, calm by default.</p>
     </div>
     <div class="card">
-      <div class="ico">◑</div>
       <h3>32 themes</h3>
       <p>Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized… live-switchable in the settings menu, fully configurable via <i>config.toml</i>. Try them below.</p>
     </div>
