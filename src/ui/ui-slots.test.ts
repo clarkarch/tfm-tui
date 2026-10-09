@@ -18,9 +18,10 @@ import {
 import type { Theme } from "../config/config";
 
 // icon rasters need one of the SVG renderers (same gate as icons.test.ts)
-const hasSvgRenderer = Bun.which("resvg") !== null || Bun.which("rsvg-convert") !== null;
-// brand/faithful rasters are in-process only (no CLI fallback, same as iconPng)
 const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => false);
+const hasMagick = Bun.which("magick") !== null;
+const hasSvgRenderer = hasInproc || hasMagick;
+// brand/faithful rasters are in-process only (no CLI fallback, same as iconPng)
 
 // The scrim (setScrim) must cover every RASTERED slot, including ones whose
 // raster finished before the modal opened. The old queue pruned drained
@@ -380,7 +381,7 @@ describe("thumbnail mount", () => {
   // A rebuild replaces the tile's file but keeps the slot id and re-pushes a job
   // for it. The older drain's in-flight raster must NOT paint into the rebuilt
   // slot: pushThumbJob overwrote the slot's ownership key, so the stale image is
-  // dropped. The SVG job is deliberately slower (spawned renderer) than the PNG
+  // dropped. The SVG job is deliberately slower (async renderer) than the PNG
   // job (Bun.Image, in-process), so without the guard the stale 4-cell raster
   // lands last and overwrites the fresh 6-cell one.
   test.skipIf(!hasSvgRenderer)("a stale job cannot overwrite a rebuilt slot", async () => {
