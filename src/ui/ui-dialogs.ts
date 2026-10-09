@@ -344,7 +344,51 @@ type YesNoCtx = {
   setPointer?(style: PointerStyle): void;
 };
 
-const YESNO_W = 36;
+const YESNO_W = 48;
+
+// word-wrap a confirm message into at most two panel lines (the old single
+// slice cut "This cannot be undone." off every delete prompt). Pure + exported
+// for tests. Budget = panel minus side padding and the leading-space indent.
+export const wrapYesNoMessage = (message: string, width: number = YESNO_W): string[] => {
+  const budget = width - 3;
+  const words = message.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    if (w.length > budget) {
+      if (cur) lines.push(cur);
+      // hard-slice space-less runs (never a silent cut — ellipsis marks it)
+      let rest = w;
+      while (rest.length > budget) {
+        lines.push(rest.slice(0, budget - 1) + "…");
+        rest = rest.slice(budget - 1);
+        if (lines.length === 2) {
+          lines[1] = `${lines[1]}`.slice(0, budget - 1) + "…";
+          return lines;
+        }
+      }
+      cur = rest;
+      continue;
+    }
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length <= budget) cur = next;
+    else {
+      lines.push(cur);
+      cur = w;
+      if (lines.length === 2) {
+        lines[1] = `${lines[1]}`.slice(0, budget - 1) + "…";
+        return lines;
+      }
+    }
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > 2) {
+    const folded = lines.slice(1).join(" ");
+    const first = lines[0] ?? "";
+    return [first, folded.length > budget ? `${folded.slice(0, budget - 1)}…` : folded];
+  }
+  return lines.length ? lines : [""];
+};
 
 export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx) => {
   const { openDialog, closeDialog, dialogBtn } = dialogs;
@@ -412,6 +456,7 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     let bseq = 0;
     const mkBtn = (label: string, fg: string, onPick: () => void): ReturnType<typeof Box> =>
       dialogBtn(`tfm-yesno-b${bseq++}`, label, fg, onPick);
+    const msgLines = wrapYesNoMessage(message);
     openDialog({
       id: "tfm-yesno",
       zIndex: FLOAT_Z.yesno,
@@ -419,8 +464,16 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
       rows: () => [
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ id: "tfm-yesno-msg", content: ` ${message}`.slice(0, YESNO_W - 2), fg: yesFg }),
+          Text({ id: "tfm-yesno-msg", content: ` ${msgLines[0] ?? ""}`, fg: yesFg }),
         ),
+        ...(msgLines.length > 1
+          ? [
+              Box(
+                { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+                Text({ id: "tfm-yesno-msg2", content: ` ${msgLines[1] ?? ""}`, fg: yesFg }),
+              ),
+            ]
+          : []),
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
           Text({ id: "tfm-yesno-div", content: ` ${"~".repeat(YESNO_W - 2)}`, fg: c.divider }),
@@ -449,10 +502,12 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
       const panel = ctx.byId("tfm-yesno");
       if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
     } catch {}
-    try {
-      const msg = ctx.byId("tfm-yesno-msg");
-      if (msg) msg.fg = lastDanger ? c.ansi1 : c.accent;
-    } catch {}
+    for (const id of ["tfm-yesno-msg", "tfm-yesno-msg2"]) {
+      try {
+        const msg = ctx.byId(id);
+        if (msg) msg.fg = lastDanger ? c.ansi1 : c.accent;
+      } catch {}
+    }
     try {
       const div = ctx.byId("tfm-yesno-div");
       if (div) div.fg = c.divider;

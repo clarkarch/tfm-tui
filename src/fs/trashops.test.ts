@@ -415,6 +415,39 @@ describe("delete progress driver", () => {
     }
   });
 
+  test("deleteForever streams scan counting feedback before totals land", async () => {
+    const root = sandbox();
+    try {
+      const tree = path.join(root, "tree");
+      // 250 files: scanTree onTick fires every 100 files, so a counting
+      // driver must see ticks before start even on a fast disk
+      for (let i = 0; i < 250; i++) W(path.join(tree, `f${i}.txt`), "x");
+      const sink = recordingSink();
+      const p = fakeDriver();
+      const counting: number[] = [];
+      const order: string[] = [];
+      (p.driver as { counting?: (n: number) => void }).counting = (n: number) => {
+        counting.push(n);
+        order.push(`counting:${n}`);
+      };
+      const origStart = p.driver.start;
+      p.driver.start = (files, bytes) => {
+        order.push(`start:${files}`);
+        origStart(files, bytes);
+      };
+      sink.deleteProgress = p.driver;
+      makeTrashOps(sink).deleteForever([tree]);
+      await settleUntil(() => p.calls.includes("stop"));
+      expect(existsSync(tree)).toBe(false);
+      // counting ticks arrive before the honest totals
+      expect(counting.length).toBeGreaterThan(0);
+      expect(order[0]).toMatch(/^counting:/);
+      expect(order).toContain("start:250");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("emptyTrash streams through the same driver", async () => {
     const root = sandbox();
     try {

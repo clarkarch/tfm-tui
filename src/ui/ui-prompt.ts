@@ -154,7 +154,10 @@ export const makePrompt = (ctx: PromptCtx) => {
         },
         Box(
           { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-          Text({ content: opts.title.slice(0, PANEL_W - 8), fg: c.accent }),
+          Text({
+            content: opts.title.length > PANEL_W - 8 ? `${opts.title.slice(0, PANEL_W - 9)}…` : opts.title,
+            fg: c.accent,
+          }),
           Box({ flexGrow: 1 }),
           ctx.escHintBtn("tfm-prompt-esc", () => cancel()),
         ),

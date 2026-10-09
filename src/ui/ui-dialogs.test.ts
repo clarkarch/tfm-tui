@@ -183,6 +183,27 @@ describe("openDialog chokepoint", () => {
     expect(confirmed).toBe(true);
   });
 
+  test("yesno shows the full delete message without slicing (two lines, buttons intact)", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const { yesNo } = mkLive(t, floats, makeCtx().ctx.colors);
+      yesNo.confirm("Permanently delete 3 items? This cannot be undone.", "Delete permanently", () => {}, true);
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      // the irreversibility warning must survive — the old 36-wide slice cut it
+      // (wrapped over two lines, so assert the words, not one contiguous span)
+      expect(frame).toContain("cannot be");
+      expect(frame).toContain("undone");
+      expect(frame).toContain("Permanently delete 3 items?");
+      // both buttons paint in full, not clipped by the panel edge
+      expect(frame).toContain("[ No ]");
+      expect(frame).toContain("[ Delete permanently ]");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
   test("scrim click routes to onClose (dismiss-by-click-away still works)", () => {
     const { ctx, lastAdded } = makeCtx();
     const { openDialog } = makeDialogs(ctx);

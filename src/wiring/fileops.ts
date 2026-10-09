@@ -158,8 +158,23 @@ export const wireFileops = (deps: {
     // start so a stale cancel from an earlier op can't abort the delete.
     deleteProgress: {
       sink: fileops.progressSink,
+      counting: (files) => {
+        const p = progress.prog;
+        p.counting = true;
+        p.verb = "deleting";
+        p.doneFiles = files;
+        if (!p.toastUp) {
+          p.active = true;
+          progress.showProgressToast();
+        }
+        progress.paintProgress(true);
+      },
       start: (totalFiles, totalBytes) => {
         const p = progress.prog;
+        // a counting toast armed mid-scan stays up even when the final
+        // totals look toastless (slow disk + small tree needs liveness most)
+        const armed = p.toastUp;
+        p.counting = false;
         p.paused = false;
         p.cancelled = false;
         p.doneFiles = 0;
@@ -167,7 +182,7 @@ export const wireFileops = (deps: {
         p.totalFiles = totalFiles;
         p.totalBytes = totalBytes;
         p.verb = "deleting";
-        if (shouldToast(totalBytes, totalFiles)) {
+        if (armed || shouldToast(totalBytes, totalFiles)) {
           p.active = true;
           progress.showProgressToast();
           progress.paintProgress(true);
@@ -177,6 +192,7 @@ export const wireFileops = (deps: {
       finish: (msg) => progress.finishProgressToast(msg),
       stop: () => {
         progress.prog.active = false;
+        progress.prog.counting = false;
       },
     },
     log: (msg) => appendLog(`trashops: ${msg}`),

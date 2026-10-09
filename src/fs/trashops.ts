@@ -42,6 +42,8 @@ export type DeleteProgress = {
   sink: TransferSink;
   /** reset counters, set totals, arm the toast when it's worth showing */
   start(totalFiles: number, totalBytes: number): void;
+  /** pre-scan tick (optional): live "counting N files…" before totals exist */
+  counting?: (files: number) => void;
   cancelled(): boolean;
   /** swap the live toast for the final state (no-op when none showed) */
   finish(msg: string): void;
@@ -272,11 +274,19 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
     let files = 0;
     let bytes = 0;
     for (const p of items) {
+      // ✕ during a long pre-scan must stop the scan, not just the later loop
+      if (dp.cancelled()) break;
+      const base = files;
       try {
-        const r = await scanTree(p);
+        const r = await scanTree(p, (f) => {
+          if (dp.cancelled()) throw new Error("cancelled");
+          dp.counting?.(base + f);
+        });
         files += r.files;
         bytes += r.bytes;
-      } catch {}
+      } catch {
+        if (dp.cancelled()) break;
+      }
     }
     dp.start(files || Math.max(1, items.length), bytes);
   };

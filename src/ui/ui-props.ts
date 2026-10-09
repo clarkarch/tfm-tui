@@ -284,7 +284,13 @@ export const makeProps = (ctx: PropsCtx) => {
     panel.add(
       Box(
         { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
-        Text({ content: path.basename(targetPath).slice(0, PROPS_W - 4), fg: colors.white }),
+        Text({
+          content:
+            path.basename(targetPath).length > PROPS_W - 4
+              ? `${path.basename(targetPath).slice(0, PROPS_W - 5)}…`
+              : path.basename(targetPath),
+          fg: colors.white,
+        }),
       ),
     );
     panel.add(
@@ -304,12 +310,18 @@ export const makeProps = (ctx: PropsCtx) => {
       ),
     );
 
-    const row = (label: string, value: string, id?: string) =>
-      Box(
+    const row = (label: string, value: string, id?: string) => {
+      const v = String(value);
+      return Box(
         { width: "100%", height: 1, flexDirection: "row", paddingLeft: 1 },
         Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
-        Text({ ...(id ? { id } : {}), content: String(value).slice(0, PROPS_W - 14), fg: colors.white }),
+        Text({
+          ...(id ? { id } : {}),
+          content: v.length > PROPS_W - 14 ? `${v.slice(0, PROPS_W - 15)}…` : v,
+          fg: colors.white,
+        }),
       );
+    };
 
     if (isDirTarget) {
       // generation guard: closing and reopening Properties on another target
@@ -339,15 +351,7 @@ export const makeProps = (ctx: PropsCtx) => {
       });
     }
     panel.add(row("type", isDirTarget ? "inode/directory" : mimeLabelFor(targetPath)));
-    panel.add(
-      row(
-        "location",
-        path
-          .dirname(targetPath)
-          .replace(ctx.home, "~")
-          .slice(0, PROPS_W - 14),
-      ),
-    );
+    panel.add(row("location", path.dirname(targetPath).replace(ctx.home, "~")));
     panel.add(row("modified", fmtDate(st.mtimeMs)));
     panel.add(row("accessed", fmtDate(st.atimeMs)));
 
@@ -478,7 +482,13 @@ export const makeProps = (ctx: PropsCtx) => {
       panel.add(
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` ${path.basename(it.path)}`.slice(0, PROPS_W - 1), fg: colors.white }),
+          Text({
+            content: (() => {
+              const s = ` ${path.basename(it.path)}`;
+              return s.length > PROPS_W - 1 ? `${s.slice(0, PROPS_W - 2)}…` : s;
+            })(),
+            fg: colors.white,
+          }),
         ),
       );
     }
