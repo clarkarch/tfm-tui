@@ -17,7 +17,7 @@ import { makeRetheme } from "../ui/ui-retheme";
 import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { syncSortState } from "../lib/sort";
-import { clearIconCaches } from "../ui/icons";
+import { clearFailedThumbs } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
 import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../app/log";
@@ -365,7 +365,7 @@ export const wireRetheme = (deps: {
     },
     sideInnerW: core.sideInnerW,
     renderAll: nav.renderAll,
-    clearIconCaches,
+    clearFailedThumbs,
     resetIconQueue: core.slots.resetIconQueue,
     syncTerminalTheme: fileops.terminal.syncTerminalTheme,
     syncTerminalHeight: () => fileops.terminal.syncTerminalHeight(),

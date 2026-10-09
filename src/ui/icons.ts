@@ -722,6 +722,26 @@ const ensureThumbDir = async (): Promise<void> => {
   }
 };
 
+// Pure disk/memory key for one thumbnail. Raster + video lanes ignore bg:
+// Bun.Image keeps alpha (no flatten) and video frames are opaque, so bg in
+// the key re-rendered the whole photo library on every theme switch for
+// byte-identical pixels. Vector (SVG) thumbs DO flatten onto bg and keep it.
+// Niche raster lanes share the bg-free key (aspect-fit, alpha kept); the rare
+// magick-fallback flatten of a translucent exotic then serves the older bg's
+// pixels — accepted, opaque images are unaffected either way.
+export const thumbCacheKey = (
+  path: string,
+  mtimeMs: number,
+  size: number,
+  pxW: number,
+  pxH: number,
+  bg: string,
+  mode: string,
+): string =>
+  mode.startsWith("vec:")
+    ? `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`
+    : `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${mode}`;
+
 export const thumbPng = (
   path: string,
   mtimeMs: number,
@@ -732,10 +752,6 @@ export const thumbPng = (
   vector = false,
   video = false,
 ): Promise<Uint8Array> => {
-  // bg in the key: SVG thumbs (and the magick raster fallback for exotic
-  // formats) are still flattened onto it, so a theme swap must miss. Bun.Image
-  // raster output ignores bg (it keeps alpha) and so re-rasters on a theme flip
-  // for nothing — rare, and the safety of the flattening paths outweighs it.
   // SVG thumbs are keyed by the rasterizer too: resvg vs rsvg produce different
   // pixels, and switching must not serve the other renderer's cache. Raster
   // keys stay renderer-free so a photo library is never needlessly redone;
@@ -756,7 +772,7 @@ export const thumbPng = (
       : lane
         ? `raster:${lane}`
         : "raster";
-  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`;
+  const key = thumbCacheKey(path, mtimeMs, size, pxW, pxH, bg, mode);
   if (failedThumbs.has(key)) return Promise.reject(new Error(`thumb previously failed: ${path}`));
   let p = lruGet(thumbCache, key);
   if (!p) {
@@ -792,11 +808,18 @@ export const thumbPng = (
   return p;
 };
 
-// theme flips re-tint everything; the disk cache still serves (fg/bg are in
-// its keys) — this only drops the in-memory layers
+// theme flips re-tint icons (their keys carry fg/bg, so old-theme entries
+// stay valid for cycling back — never wiped here); the disk cache still
+// serves new-theme misses — this only drops the in-memory layers
 export const clearIconCaches = (): void => {
   iconCache.clear();
   brandCache.clear();
   thumbCache.clear();
+  failedThumbs.clear();
+};
+
+// theme-flip retry: a broken file deserves one fresh attempt per palette
+// without dropping every hot raster (the old full wipe made each flip cold)
+export const clearFailedThumbs = (): void => {
   failedThumbs.clear();
 };

@@ -33,7 +33,11 @@ type RethemeCtx = {
   setIconCells(v: number): void;
   sideInnerW(): number;
   renderAll(): void;
-  clearIconCaches(): void;
+  // theme flips retry doomed thumbs (a broken file gets one fresh attempt per
+  // palette) but keep every hot raster: icon/thumb keys already carry fg/bg,
+  // so a flip misses naturally and a full wipe only guaranteed a cold cache
+  // (rapid A->B->A cycling re-rendered A from scratch)
+  clearFailedThumbs(): void;
   resetIconQueue(): void;
   syncTerminalTheme(): void;
   // live-resize for the RENDER_EXEMPT terminal-height knob (no renderAll):
@@ -381,7 +385,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     } catch {}
 
     if (themeChanged) {
-      ctx.clearIconCaches();
+      ctx.clearFailedThumbs();
       ctx.resetIconQueue();
       try {
         ctx
@@ -396,9 +400,15 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       // a theme flip churns the whole icon raster set + every chrome surface;
       // without a GC poke the destroyed renderables' native buffers sit in
       // finalizer limbo until the next heap-driven GC (see the native-OOM
-      // note in AGENTS.md / ./mem-hygiene)
+      // note in AGENTS.md / ./mem-hygiene). Deferred past the paint so the
+      // flip's own frame lands first — a sync GC here stalled rapid cycling.
       try {
-        Bun.gc(false);
+        const t = setTimeout(() => {
+          try {
+            Bun.gc(false);
+          } catch {}
+        }, 0);
+        (t as unknown as { unref?: () => void }).unref?.();
       } catch {}
     }
     try {

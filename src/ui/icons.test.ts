@@ -10,6 +10,7 @@ import {
   RASTER_FILE_LIMIT,
   THUMB_COOL_MS,
   brandPng,
+  clearFailedThumbs,
   clearIconCaches,
   svgAspect,
   iconCacheKey,
@@ -23,6 +24,7 @@ import {
   rasterLaneFor,
   resolveIconName,
   svgSourceMtime,
+  thumbCacheKey,
   thumbCooloffMs,
   thumbPng,
 } from "./icons";
@@ -389,6 +391,41 @@ describe("icons", () => {
     expect(rasterLaneFor("a")).toBeNull();
   });
 
+  describe("thumbCacheKey", () => {
+    test("raster keys ignore bg: theme flips reuse photo pixels instead of re-rendering", () => {
+      // Bun.Image keeps alpha (no bg flatten), so bg in the key re-rendered
+      // the whole photo library on every theme switch for identical pixels
+      expect(thumbCacheKey("/p/a.jpg", 1, 2, 32, 32, "#1a1b26", "raster")).toBe(
+        thumbCacheKey("/p/a.jpg", 1, 2, 32, 32, "#ff0000", "raster"),
+      );
+    });
+    test("niche raster lanes ignore bg too (aspect-fit, alpha kept like the primary path)", () => {
+      for (const mode of ["raster:ico", "raster:tiff", "raster:heic"]) {
+        expect(thumbCacheKey("/p/a", 1, 2, 32, 32, "#1a1b26", mode)).toBe(
+          thumbCacheKey("/p/a", 1, 2, 32, 32, "#ff0000", mode),
+        );
+      }
+    });
+    test("video keys ignore bg but keep the binary source (sidecar swaps must not share pixels)", () => {
+      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:sidecar")).toBe(
+        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#ff0000", "video:sidecar"),
+      );
+      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:sidecar")).not.toBe(
+        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:dev"),
+      );
+    });
+    test("vector keys keep bg (SVG thumbs flatten onto it)", () => {
+      expect(thumbCacheKey("/p/a.svg", 1, 2, 32, 32, "#1a1b26", "vec:inproc")).not.toBe(
+        thumbCacheKey("/p/a.svg", 1, 2, 32, 32, "#ff0000", "vec:inproc"),
+      );
+    });
+    test("file version still re-keys (edits never serve stale pixels)", () => {
+      expect(thumbCacheKey("/p/a.jpg", 1, 2, 32, 32, "#1a1b26", "raster")).not.toBe(
+        thumbCacheKey("/p/a.jpg", 99, 2, 32, 32, "#1a1b26", "raster"),
+      );
+    });
+  });
+
   test.skipIf(!hasMagick && !hasSvgRenderer)(
     "thumb disk cache serves revisits after the memory layer drops",
     async () => {
@@ -606,8 +643,9 @@ describe("thumb failure sentinel", () => {
       // REAL render attempt again (the renderer's own error, not the sentinel's)
       const edited = await errOf(thumbPng(bad, 6, 1, 32, 32, "#1a1b26", true));
       realAttempt("edited", edited);
-      // and clearIconCaches wipes the sentinel (theme flip = honest retry)
-      clearIconCaches();
+      // and clearFailedThumbs wipes the sentinel (theme flip = honest retry
+      // without dropping hot rasters — the old full wipe made every flip cold)
+      clearFailedThumbs();
       const afterClear = await errOf(thumbPng(bad, 5, 1, 32, 32, "#1a1b26", true));
       realAttempt("afterClear", afterClear);
       rmSync(dir, { recursive: true, force: true });

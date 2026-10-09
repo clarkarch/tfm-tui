@@ -34,6 +34,7 @@ const mkCtx = () => {
     geom: { sw: 0, tileW: 0, tileH: 0, iconCells: 0 },
     renderAll: 0,
     clearIconCaches: 0,
+    clearFailedThumbs: 0,
     resetIconQueue: 0,
     syncTerminalTheme: 0,
     syncTerminalHeight: 0,
@@ -74,6 +75,9 @@ const mkCtx = () => {
     },
     clearIconCaches: () => {
       calls.clearIconCaches++;
+    },
+    clearFailedThumbs: () => {
+      calls.clearFailedThumbs++;
     },
     resetIconQueue: () => {
       calls.resetIconQueue++;
@@ -177,13 +181,18 @@ describe("applyConfig", () => {
     expect(ctx.calls.bg.at(-1)).toBe("transparent"); // renderer stays transparent
   });
 
-  test("theme change invalidates rasters + repaints chrome + syncs the terminal", () => {
+  test("theme change re-rasters via the queue + repaints chrome + syncs the terminal (memory kept)", () => {
+    // WHY the wipe is gone: icon/thumb keys already carry fg/bg/mode, so a
+    // flip misses naturally while the old theme's rasters stay hot for
+    // cycling back — the per-flip wipe made every switch cold (rapid theme
+    // cycling lag). resetIconQueue still re-renders (disk serves the misses).
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.theme.accent = "#ff0000";
     retheme.applyConfig(fresh);
-    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
     expect(ctx.calls.resetIconQueue).toBe(1);
     expect(ctx.calls.syncTerminalTheme).toBe(1);
     expect(ctx.calls.repaintButtons).toBe(1); // rethemeChrome ran
@@ -264,30 +273,36 @@ describe("applyConfig", () => {
     fresh.ui.showHidden = true;
     retheme.applyConfig(fresh);
     expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(0);
     expect(ctx.calls.resetIconQueue).toBe(0);
     expect(ctx.calls.renderAll).toBe(1);
   });
 
-  test("icons mode flip invalidates the raster caches (icons re-raster)", () => {
+  test("icons mode flip re-rasters via the queue (transparent flag is in the key, memory kept)", () => {
+    // same no-wipe contract as the theme flip: the transparency mode rides
+    // the cache key, so old-mode rasters stay valid for flipping back
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.ui.icons = "transparent";
     retheme.applyConfig(fresh);
-    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
     expect(ctx.calls.resetIconQueue).toBe(1);
     expect(ctx.calls.renderAll).toBe(1);
   });
 
-  test("force-glyph flip invalidates the raster caches (drains resume on the way back)", () => {
+  test("force-glyph flip re-rasters via the queue (drains resume on the way back, memory kept)", () => {
     // off->on stops the drains; on->off must re-raster, or tiles keep glyphs
-    // forever, same invalidation contract as the icons-mode flip
+    // forever — same no-wipe contract as the theme flip (resetIconQueue
+    // re-renders, the kept memory serves a flip back)
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const on = clone(defaultConfig);
     (on.ui as Record<string, unknown>).forceGlyph = true;
     retheme.applyConfig(on);
-    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
     expect(ctx.calls.resetIconQueue).toBe(1);
   });
 
@@ -410,12 +425,12 @@ describe("applyConfig", () => {
     const first = clone(defaultConfig);
     first.theme.accent = "#111111";
     retheme.applyConfig(first);
-    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
 
     // settings-row pattern: mutate the LIVE config, then applyConfig(config)
     ctx.config.theme.accent = "#222222";
     retheme.applyConfig(ctx.config);
-    expect(ctx.calls.clearIconCaches).toBe(2); // still detected!
+    expect(ctx.calls.clearFailedThumbs).toBe(2); // still detected!
     expect(ctx.colors.accent).toBe("#222222");
   });
 
