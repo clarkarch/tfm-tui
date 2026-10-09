@@ -950,6 +950,13 @@ step_install_ffmpeg() {
       step_warn "video thumbnails unavailable (unpack failed)"
       return 0
     fi
+    # gunzip inherits the .gz file's mode (curl writes 644), so the unpacked
+    # sidecar is NOT executable until marked — without this the run test below
+    # fails EACCES and refuses a working sidecar (install_binary chmods first).
+    if ! run_child chmod +x "$WORK/ffmpeg"; then
+      step_warn "video thumbnails unavailable (chmod failed)"
+      return 0
+    fi
     # || true: every failure inside warns and returns 0 today, but a future
     # nonzero return must never abort a working tfm install under set -e
     install_ffmpeg_sidecar "$WORK/ffmpeg" || true
