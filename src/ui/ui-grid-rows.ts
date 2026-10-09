@@ -279,11 +279,20 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     tile.add(tileBox);
 
     const label = entry.name.length > TILE_W - 2 ? `${entry.name.slice(0, TILE_W - 5)}…` : entry.name;
+    // No parity padding here: odd lengths floor a half cell left (Yoga, same
+    // as the native floor for wrapped lines) and that uniform lean is the
+    // final state. A leading space was tried — it flips odds to a half cell
+    // right, but only single-line names can take it (wrapped lines break
+    // inside native code), leaving short names leaning right while long
+    // names lean left. Mixed reads worse than uniform.
     // Off (none) = today's single cut line.
     const labelText = Text({
       id: labelId,
       content: wrapOn ? entry.name : label,
       fg: baseFg,
+      // wrapped lines center under the (centered) icon: the label box is
+      // TILE_W-2 wide but flush-left text read as "icon right of the name"
+      textAlign: "center",
       ...(wrapOn && labelWrap ? { width: TILE_W - 2, height: maxLabelLines, truncate: true, wrapMode: labelWrap } : {}),
     });
     tile.add(labelText);

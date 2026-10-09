@@ -426,6 +426,67 @@ describe("renderGrid (grid tiles)", () => {
     }
   });
 
+  test("wrapped label lines center under the icon instead of flush-left", async () => {
+    // a wrapped name's short trailing line must sit centered in the tile, under
+    // the (centered) icon: flush-left text read as "icon right of the name"
+    // (11 chars over the TILE_W-2=8 label box wraps 8 + 3)
+    const name = "abcdefghijk";
+    writeFileSync(path.join(tmp, name), "x");
+    wrapMode = "char";
+    try {
+      await renderGrid();
+      await t.renderOnce();
+      const rows = t.captureCharFrame().split("\n");
+      const first = rows.find((r) => r.includes("abcdefgh"))!;
+      const second = rows.find((r) => r.includes("ijk") && !r.includes("abcdefgh"))!;
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+      // the full first line starts at the label box edge; the 3-char second
+      // line indents by exactly floor((8-3)/2)=2 — native textAlign:center
+      // floors the odd remainder (opentui Text.test.ts: "  world   "), so the
+      // line sits a half cell left of true center. That is the minimum error
+      // on a cell grid (a ceil would sit a half cell right); a leading-space
+      // "fix" only mirrors it, verified by breaking this to +3 and going red.
+      expect(second.indexOf("ijk")).toBe(first.indexOf("abcdefgh") + 2);
+    } finally {
+      rmSync(path.join(tmp, name), { force: true });
+      wrapMode = "none";
+      await renderGrid();
+    }
+  });
+
+  test("odd single-line names sit a half cell left, same as wrapped lines", async () => {
+    // single-line labels take the intrinsic-width path (no label box): Yoga
+    // centers them in the tile and floors the .5 offset, exactly like the
+    // native text floor for wrapped lines — one consistent direction, never
+    // mixed. "abcdef" (6) lands exact, "abcdefg" (7) one column left of it.
+    // A leading-space pad was tried and reverted: it flips singles right
+    // while wrapped lines stay left (mixed reads worse than uniform), and a
+    // zero-width space counts zero cells in layout (probed no-op).
+    const even = "abcdef";
+    const odd = "abcdefg";
+    writeFileSync(path.join(tmp, even), "x");
+    writeFileSync(path.join(tmp, odd), "x");
+    availWSet = 13; // 1 column: every tile starts at x=0, comparable directly
+    try {
+      await renderGrid();
+      await t.renderOnce();
+      const rows = t.captureCharFrame().split("\n");
+      const evenRow = rows.find((r) => r.includes(even) && !r.includes(odd))!;
+      const oddRow = rows.find((r) => r.includes(odd))!;
+      expect(evenRow).toBeTruthy();
+      expect(oddRow).toBeTruthy();
+      // even center = start+3 hits tile center 5; odd center = start+3.5
+      // reads 4.5, i.e. starts exactly one column left of the even name
+      expect(oddRow.indexOf(odd)).toBe(evenRow.indexOf(even) - 1);
+    } finally {
+      rmSync(path.join(tmp, even), { force: true });
+      rmSync(path.join(tmp, odd), { force: true });
+      availWSet = null;
+      await renderGrid();
+    }
+  });
+
   test("changing the lift direction rebuilds the tiles", async () => {
     // tile ids are absolute now (the windowed grid needs them stable across
     // slides), so "it actually rebuilt" is pinned on the layout the direction
