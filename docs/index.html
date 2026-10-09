@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tfm: terminal file manager</title>
 <meta name="description" content="A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails right inside your terminal. Built on OpenTUI + Bun.">
+<link rel="icon" href="tfm.svg" type="image/svg+xml">
 <style>
   :root {
     --bg: #1a1b26;
@@ -39,7 +40,8 @@
     border-bottom: 1px solid var(--border);
   }
   nav .wrap { display: flex; align-items: center; gap: 18px; height: 52px; }
-  nav .logo { color: var(--accent); font-weight: 700; letter-spacing: .5px; }
+  nav .logo { color: var(--accent); font-weight: 700; letter-spacing: .5px; display: inline-flex; align-items: center; gap: 8px; }
+  .logo img { width: 22px; height: 22px; display: block; }
   nav .logo::before { content: "$ "; color: var(--muted); }
   nav .links { margin-left: auto; display: flex; gap: 16px; font-size: 13px; }
   nav .links a { color: var(--muted); }
@@ -58,6 +60,7 @@
   }
   @media (max-width: 900px) { .hero { grid-template-columns: minmax(0, 1fr); } }
   h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 2px; color: var(--fg); }
+  .hero-logo { width: 96px; height: auto; display: block; margin-bottom: 10px; }
   .subtitle { color: var(--accent); font-size: clamp(15px, 2.4vw, 21px); margin: 0 0 14px; }
   .tagline { color: var(--muted); margin: 0 0 24px; }
   .tagline b { color: var(--accent); font-weight: 600; }
@@ -178,7 +181,7 @@
 
 <nav>
   <div class="wrap">
-    <span class="logo">tfm</span>
+    <span class="logo"><img src="tfm.svg" alt="tfm logo" width="22" height="22">tfm</span>
     <span class="badge">stable</span>
     <div class="links">
       <a href="#features">features</a>
@@ -192,6 +195,7 @@
 
 <header class="wrap hero">
   <div class="pitch">
+    <img class="hero-logo" src="tfm.svg" alt="tfm logo" width="96" height="78">
     <h1>tfm</h1>
     <p class="subtitle">(terminal file manager)</p>
     <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails <b>right inside your terminal</b>.<br>Built on <a href="https://opentui.com">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
@@ -303,10 +307,12 @@
       <tr><td><kbd>backspace</kbd> / <kbd>alt</kbd>+<kbd>up</kbd></td><td>parent directory</td></tr>
       <tr><td><kbd>esc</kbd></td><td>menu (settings, view mode, sort, …)</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>q</kbd></td><td>quit</td></tr>
-      <tr><td><kbd>ctrl</kbd>+<kbd>z</kbd> / <kbd>ctrl</kbd>+<kbd>y</kbd></td><td>undo / redo</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>z</kbd> / <kbd>ctrl</kbd>+<kbd>y</kbd></td><td>undo / redo (<kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>z</kbd> also redoes)</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>x</kbd> / <kbd>c</kbd> / <kbd>v</kbd></td><td>cut / copy / paste</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>d</kbd></td><td>duplicate</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>a</kbd></td><td>select all</td></tr>
+      <tr><td><kbd>space</kbd> / <kbd>shift</kbd>+arrows</td><td>toggle / extend selection</td></tr>
+      <tr><td><kbd>f1</kbd></td><td>help</td></tr>
     </table>
     <table>
       <tr><td><kbd>ctrl</kbd>+<kbd>t</kbd> / <kbd>w</kbd></td><td>new tab / close tab</td></tr>
@@ -324,6 +330,11 @@
       <tr><td><kbd>ctrl</kbd>+<kbd>`</kbd> / <kbd>F4</kbd></td><td>terminal</td></tr>
       <tr><td><kbd>F3</kbd></td><td>preview pane</td></tr>
       <tr><td><kbd>alt</kbd>+<kbd>home</kbd></td><td>home folder</td></tr>
+      <tr><td><kbd>alt</kbd>+<kbd>left</kbd> / <kbd>right</kbd></td><td>history back / forward</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>n</kbd> / <kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>n</kbd></td><td>new folder / new file</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>=</kbd> / <kbd>-</kbd></td><td>zoom in / out</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>r</kbd></td><td>reload places</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>r</kbd></td><td>restart</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>g</kbd> / <kbd>l</kbd></td><td>grid-list view / path bar</td></tr>
       <tr><td><kbd>alt</kbd>+<kbd>enter</kbd></td><td>properties</td></tr>
     </table>
@@ -340,10 +351,10 @@ tile-width      <span class="c">=</span> <span class="v">20</span>      <span cl
 tile-height     <span class="c">=</span> <span class="v">5</span>       <span class="c"># 3..10 cells</span>
 preview-enabled <span class="c">=</span> <span class="v">false</span>   <span class="c"># right-side preview pane</span>
 view-mode       <span class="c">=</span> <span class="s">"grid"</span>  <span class="c"># "grid" tiles or "list" rows</span>
-ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># or "outline", rounded borders</span>
+ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># "solid" filled panels; "outline" rounded borders; "outline-partial" outline chrome, solid floats</span>
 restore-session <span class="c">=</span> <span class="v">false</span>   <span class="c"># reopen last folder on launch</span>
 persist-undo    <span class="c">=</span> <span class="v">false</span>   <span class="c"># undo history survives restarts</span>
-transparent-bg  <span class="c">=</span> <span class="v">false</span>   <span class="c"># follow kitty background_opacity</span>
+transparent-bg  <span class="c">=</span> <span class="s">"off"</span>   <span class="c"># "off" opaque; "on" faithful hex; "force" terminal bg shows through</span>
 
 <span class="k">[theme]</span>
 bg     <span class="c">=</span> <span class="s">"#1a1b26"</span>   <span class="c"># or pick a preset: esc → Settings → Theme</span>
@@ -361,14 +372,14 @@ quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="
       <h4>Requirements</h4>
       <ul>
         <li>Linux</li>
-        <li>kitty-graphics terminal for thumbnails (kitty, ghostty, WezTerm, Konsole…); cross-app DnD is kitty-only; others fall back to Nerd Font glyphs</li>
+        <li>image terminal recommended for thumbnails (kitty, ghostty, WezTerm, Konsole, sixel/foot…; tmux falls back to blocks); others fall back to Nerd Font glyphs. Cross-app DnD is kitty-only</li>
       </ul>
     </div>
     <div>
       <h4>Optional helpers</h4>
       <ul>
-        <li><code>rsvg-convert</code>: tinted icons and SVG thumbnails (<code>magick</code> covers rasters as fallback)</li>
-        <li><code>magick</code> / <code>ffmpeg</code>: raster / video thumbnails</li>
+        <li>icons render in-process (no setup); <code>magick</code> covers extra raster formats as fallback</li>
+        <li>video thumbnails use the bundled <code>tfm-ffmpeg</code> sidecar (no system <code>ffmpeg</code> needed)</li>
         <li><code>gio</code>: starred-file metadata and network locations (trash is built-in XDG), <code>xdg-open</code> / <code>udisksctl</code>: default apps / mounts</li>
         <li><code>wl-paste</code> / <code>wl-copy</code> or <code>xclip</code>: clipboard bridge</li>
         <li><code>tar</code> / <code>unzip</code> / <code>zip</code> / <code>7z</code>: archives</li>
