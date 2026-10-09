@@ -245,6 +245,7 @@ export type UiConfig = {
   ttyMode: TtyMode;
   forceGlyph: boolean;
   sidebarTitle: boolean;
+  sidebarSectionTitles: boolean;
   sidebarShowRecent: boolean;
   sidebarShowStarred: boolean;
   sidebarShowTrash: boolean;
@@ -488,6 +489,18 @@ const UI_ROWS: SchemaRow[] = [
     doc: 'true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it',
     label: "sidebar title",
     blurb: "Show the logo above the sidebar",
+    group: "layout",
+    subsection: "sidebar",
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-section-titles",
+    prop: "sidebarSectionTitles",
+    def: false,
+    doc: "true = name each sidebar group (Places, Folders, Bookmarks, Devices, Network) in place of the divider; false = dividers only",
+    label: "section titles",
+    blurb: "Name each sidebar group",
     group: "layout",
     subsection: "sidebar",
   },

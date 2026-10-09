@@ -53,6 +53,8 @@ let tabModel: { list: Tab[]; active: number };
 let tabModel1: { list: Tab[]; active: number };
 let kbActive: boolean;
 let kbIdx: number;
+// [ui] sidebar-section-titles: names each group in place of the dividers
+let sectionTitles: boolean;
 
 const mkTabs = (n: number): Tab[] => Array.from({ length: n }, (_, i) => ({ history: [`/dir${i}`], histIdx: 0 }));
 
@@ -93,6 +95,7 @@ beforeAll(async () => {
   tabModel1 = { list: mkTabs(3), active: 2 };
   kbActive = false;
   kbIdx = -1;
+  sectionTitles = false;
 
   const host = Box(
     { flexDirection: "row" },
@@ -110,6 +113,8 @@ beforeAll(async () => {
     sw: () => 20,
     sideInnerW: () => 20,
     tabBar: () => tabBar,
+    // [ui] sidebar-section-titles (absent in the old fakes = dividers only)
+    sectionTitles: () => sectionTitles,
     availW: () => availWVal,
     rasterSig: () => rasterSig,
     renderAll: () => {},
@@ -238,6 +243,68 @@ describe("renderSidebar", () => {
     expect(chrome.placesHost[0]!.row).toBe(row0);
     expect(chrome.placesHost[0]!.specs[0]).toBe(spec0);
     expect(chrome.placesHost[0]!.selected).toBe(false);
+  });
+
+  test("section titles name every group; dividers give way", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    // deterministic groups: Places (home/recent/starred/trash), Devices, Network
+    expect(t.captureCharFrame()).toContain("Places");
+    expect(t.captureCharFrame()).toContain("Devices");
+    expect(t.captureCharFrame()).toContain("Network");
+  });
+
+  test("a section title centers in the sidebar column", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const line =
+      t
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("Places")) ?? "";
+    // 20-wide inner column: "Places" (6) centers at col 7
+    expect(line.indexOf("Places")).toBe(Math.floor((20 - "Places".length) / 2));
+    sectionTitles = false;
+    chrome.renderSidebar();
+    await t.renderOnce();
+  });
+
+  test("a blank row sits above each section title, no divider", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const lines = t.captureCharFrame().split("\n");
+    const i = lines.findIndex((l) => l.includes("Places"));
+    expect(i).toBeGreaterThan(0);
+    // space above the title; the group's rows follow it directly (no rule)
+    expect(lines[i - 1]!.trim()).toBe("");
+    expect(lines[i + 1]).toContain("Home");
+    // every section repeats it (Devices is deterministic: always rendered)
+    const j = lines.findIndex((l) => l.includes("Devices"));
+    expect(j).toBeGreaterThan(0);
+    expect(lines[j - 1]!.trim()).toBe("");
+    expect(lines[j + 1]).not.toContain("~");
+    sectionTitles = false;
+    chrome.renderSidebar();
+    await t.renderOnce();
+  });
+
+  test("flipping the section-titles switch repaints (the sig carries the flag)", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Devices");
+    sectionTitles = false;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    // off = today's look: the title text is gone (divider only)
+    expect(t.captureCharFrame()).not.toContain("Devices");
   });
 
   test("a raster-mode flip rebuilds rows so force-glyph applies live", async () => {

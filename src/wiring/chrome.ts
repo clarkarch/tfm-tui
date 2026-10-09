@@ -121,6 +121,8 @@ export const wireChrome = async (deps: {
       showDevices: core.config.ui.sidebarShowDevices,
       showNetwork: core.config.ui.sidebarShowNetwork,
     }),
+    // [ui] sidebar-section-titles: name each group in place of the dividers
+    sectionTitles: () => core.config.ui.sidebarSectionTitles,
     // tab chip shrink reads the live pane width — same math as grid's
     // paneAvailW (the strip is 100% of its pane column). Arrow-deferred: the
     // renderer const below is the TDZ seam, same as menu's termW.

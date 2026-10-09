@@ -48,6 +48,9 @@ type ChromeCtx = {
   // sidebar section visibility ([ui] sidebar-show-*): renderSidebar filters
   // through it. Optional so old fakes keep working — absent = all visible.
   sidebarSections?(): SidebarVisibility;
+  // [ui] sidebar-section-titles: name each group in place of its divider.
+  // Optional so old fakes keep working — absent = dividers only.
+  sectionTitles?(): boolean;
   // live pane width for chip shrink (100% of the pane column). Optional so old
   // fakes keep working — absent/<=0 keeps the roomy 24-wide chips.
   availW?(pane: 0 | 1): number;
@@ -276,14 +279,16 @@ export const makeChrome = (ctx: ChromeCtx) => {
     const hostBox = ctx.byId("tfm-places");
     if (!hostBox) return;
     const groups = buildSections(ctx.sidebarSections?.() ?? {});
+    const titles = ctx.sectionTitles?.() === true;
     const sig = JSON.stringify([
       ctx.uiStyle(),
       ctx.sideInnerW(),
       ctx.colors(),
       ctx.rasterSig?.() ?? "",
       ctx.sidebarSections?.() ?? {},
+      titles,
       groups.map((g) =>
-        g.map((p) => [
+        g.places.map((p) => [
           p.label,
           p.path ?? "",
           p.scheme ?? "",
@@ -306,8 +311,11 @@ export const makeChrome = (ctx: ChromeCtx) => {
     placesHost.length = 0;
 
     groups.forEach((group, gi) => {
-      for (const place of group) hostBox.add(makeRow(place));
-      if (gi < groups.length - 1) hostBox.add(makeDivider());
+      // titles mode replaces the divider: the blank row inside the title box
+      // separates sections; the rule read as clutter under a header
+      if (titles) hostBox.add(makeSectionTitle(group.title));
+      for (const place of group.places) hostBox.add(makeRow(place));
+      if (!titles && gi < groups.length - 1) hostBox.add(makeDivider());
     });
     if (ctx.kbActive() && ctx.kbIdx() >= 0) {
       normalizePlaces();
@@ -453,6 +461,24 @@ export const makeChrome = (ctx: ChromeCtx) => {
     return Box(
       { width: ctx.sideInnerW(), height: 1 },
       Text({ content: ` ${"~".repeat(ctx.sw() - 2)}`, fg: colors.divider }),
+    );
+  };
+
+  // [ui] sidebar-section-titles: one title row per group, replacing every
+  // divider. Two rows tall with the label at the bottom and centered (blank row
+  // above, so a section breathes away from the one before it; the rule read as
+  // clutter under a header). Centering is cell padding — OpenTUI's Text takes
+  // no textAlign here. NOT padding on a fixed height, which overflows instead
+  // of growing and paints under the next sibling. Clipped to the inner width —
+  // a wrapped title would push the rows down.
+  const makeSectionTitle = (label: string) => {
+    const colors = ctx.colors();
+    const w = ctx.sideInnerW();
+    const text = label.slice(0, Math.max(1, w - 1));
+    const pad = Math.max(0, Math.floor((w - text.length) / 2));
+    return Box(
+      { width: w, height: 2, justifyContent: "flex-end" },
+      Text({ content: `${" ".repeat(pad)}${text}`, fg: colors.sidebarFgMuted }),
     );
   };
 

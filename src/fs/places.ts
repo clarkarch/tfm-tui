@@ -33,6 +33,11 @@ export type Place = {
   action?: "connect";
 };
 
+// One sidebar group + the title the sidebar paints above it (see
+// [ui] sidebar-section-titles). Title rides with the group so a section hidden
+// by [ui] sidebar-show-* can never leave an orphan header.
+export type SidebarSection = { title: string; places: Place[] };
+
 type UserDir = { key: string; label: string; p: string };
 
 type MountEntry = { label: string; target: string; removable: boolean; device: string };
@@ -248,7 +253,7 @@ export type SidebarVisibility = {
   showNetwork?: boolean;
 };
 
-export function buildSections(vis: SidebarVisibility = {}): Place[][] {
+export function buildSections(vis: SidebarVisibility = {}): SidebarSection[] {
   const { showRecent = true, showStarred = true, showTrash = true } = vis;
   const { showUserDirs = true, showBookmarks = true, showDevices = true, showNetwork = true } = vis;
   const trashFilesDir = path.join(trashDir(), "files");
@@ -327,10 +332,10 @@ export function buildSections(vis: SidebarVisibility = {}): Place[][] {
       ),
   ];
 
-  const groups = [defaults];
-  if (dirs.length) groups.push(dirs);
-  if (bookmarks.length) groups.push(bookmarks);
-  if (showDevices) groups.push(devices);
-  if (showNetwork) groups.push(network);
-  return groups;
+  const sections: SidebarSection[] = [{ title: "Places", places: defaults }];
+  if (dirs.length) sections.push({ title: "Folders", places: dirs });
+  if (bookmarks.length) sections.push({ title: "Bookmarks", places: bookmarks });
+  if (showDevices) sections.push({ title: "Devices", places: devices });
+  if (showNetwork) sections.push({ title: "Network", places: network });
+  return sections;
 }

@@ -61,7 +61,7 @@ describe("loadSystemPlaces + buildSections", () => {
     try {
       process.env.XDG_CONFIG_HOME = tmp.configHome;
       await loadSystemPlaces();
-      const flat = buildSections().flat();
+      const flat = buildSections().flatMap((s) => s.places);
       expect(flat[0]!.label).toBe("Home");
       expect(flat.some((p) => p.label === "Documents" && p.path === tmp.docs)).toBe(true);
       expect(flat.some((p) => p.label === "mydocs" && p.path === tmp.bookmarkDir && p.bookmarked)).toBe(true);
@@ -76,7 +76,7 @@ describe("loadSystemPlaces + buildSections", () => {
   test("missing config dir yields empty groups without throwing", async () => {
     process.env.XDG_CONFIG_HOME = path.join(os.tmpdir(), `tfm-places-nonexistent-${process.pid}`);
     await loadSystemPlaces();
-    const flat = buildSections().flat();
+    const flat = buildSections().flatMap((s) => s.places);
     expect(flat.some((p) => p.label === "Home")).toBe(true);
     expect(flat.some((p) => p.label === "This Device")).toBe(true);
   });
@@ -102,7 +102,7 @@ describe("network places", () => {
       // nonexistent runtime dir -> listNetworkMounts finds no real mounts
       process.env.XDG_RUNTIME_DIR = path.join(root, "runtime");
       await loadSystemPlaces();
-      const flat = buildSections().flat();
+      const flat = buildSections().flatMap((s) => s.places);
       expect(flat.some((p) => p.action === "connect" && p.label === "Connect to Server…")).toBe(true);
       const remote = flat.find((p) => p.network && p.networkUri === "sftp://bob@example.com/pub");
       expect(remote?.label).toBe("remote");
@@ -121,7 +121,7 @@ describe("buildSections visibility toggles", () => {
     try {
       process.env.XDG_CONFIG_HOME = tmp.configHome;
       await loadSystemPlaces();
-      const flat = buildSections({ showRecent: false, showStarred: false }).flat();
+      const flat = buildSections({ showRecent: false, showStarred: false }).flatMap((s) => s.places);
       expect(flat.some((p) => p.label === "Home")).toBe(true);
       expect(flat.some((p) => p.scheme === "recent")).toBe(false);
       expect(flat.some((p) => p.scheme === "starred")).toBe(false);
@@ -140,13 +140,48 @@ describe("buildSections visibility toggles", () => {
         showBookmarks: false,
         showDevices: false,
         showNetwork: false,
-      }).flat();
+      }).flatMap((s) => s.places);
       expect(flat.some((p) => p.label === "Documents")).toBe(false);
       expect(flat.some((p) => p.label === "mydocs")).toBe(false);
       expect(flat.some((p) => p.label === "This Device")).toBe(false);
       expect(flat.some((p) => p.action === "connect")).toBe(false);
       // defaults survive the group hides
       expect(flat.some((p) => p.label === "Home")).toBe(true);
+    } finally {
+      rmSync(tmp.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildSections section titles", () => {
+  test("every section carries the title the sidebar renders it under", async () => {
+    const tmp = mkdtempAndDirs();
+    try {
+      process.env.XDG_CONFIG_HOME = tmp.configHome;
+      await loadSystemPlaces();
+      const titles = buildSections().map((s) => s.title);
+      expect(titles[0]).toBe("Places");
+      expect(titles).toContain("Folders");
+      expect(titles).toContain("Bookmarks");
+      expect(titles).toContain("Devices");
+      expect(titles).toContain("Network");
+    } finally {
+      rmSync(tmp.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a hidden group takes its title with it (no orphan header)", async () => {
+    const tmp = mkdtempAndDirs();
+    try {
+      process.env.XDG_CONFIG_HOME = tmp.configHome;
+      await loadSystemPlaces();
+      const titles = buildSections({
+        showUserDirs: false,
+        showBookmarks: false,
+        showDevices: false,
+        showNetwork: false,
+      }).map((s) => s.title);
+      expect(titles).toEqual(["Places"]);
     } finally {
       rmSync(tmp.root, { recursive: true, force: true });
     }
