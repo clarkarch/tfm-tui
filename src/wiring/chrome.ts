@@ -251,7 +251,7 @@ export const wireChrome = async (deps: {
     previewWidth: core.config.ui.previewWidth,
     previewEnabled: core.config.ui.previewEnabled,
     dualPane: core.config.ui.dualPane,
-    title: buildTitle({ width: core.sideInnerW(), colors: core.colors, visible: core.config.ui.sidebarTitle }),
+    title: buildTitle({ width: core.sideInnerW(), colors: core.colors, mode: core.config.ui.sidebarTitle }),
     toolbarShells: [toolbars[0].makeToolbarShell(), toolbars[1].makeToolbarShell()],
   });
 
@@ -309,7 +309,7 @@ export const wireChrome = async (deps: {
     rowIds: () => chrome.placesHost.map((r) => r.rowId),
     // a hidden title ([ui] sidebar-title off) resolves to nothing, so opting
     // in while it is hidden cascades the rows exactly as before
-    titleId: () => (core.config.ui.sidebarTitle ? "tfm-title-box" : ""),
+    titleId: () => (core.config.ui.sidebarTitle !== "none" ? "tfm-title-box" : ""),
   });
 
   // --- Top bar intro (cold-boot-only): cascades each bar's buttons + crumbs

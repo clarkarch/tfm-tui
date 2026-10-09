@@ -459,6 +459,67 @@ describe("applyConfig", () => {
 });
 
 describe("rethemeChrome", () => {
+  test("a sidebar-title mode change repaints the title block WITHOUT a theme flip", () => {
+    // the title block is boot-baked (renderAll never rebuilds it), so
+    // rethemeChrome alone isn't enough — applyConfig paints the title itself.
+    // Without that, switching modes in Settings only landed after a restart.
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const files = clone(defaultConfig);
+    files.ui.sidebarTitle = "files";
+    retheme.applyConfig(files);
+
+    const painted = new Map(ctx.calls.setOnId);
+    const font: any = {};
+    painted.get("tfm-title-font")!(font);
+    expect(font.text).toBe("Files");
+    expect(font.color).toBe(ctx.colors.white);
+    const sub: any = {};
+    painted.get("tfm-title-sub")!(sub);
+    expect(sub.visible).toBe(false);
+
+    // none hides the whole block; tfm restores the original title
+    const noneMode = clone(defaultConfig);
+    noneMode.ui.sidebarTitle = "none";
+    ctx.calls.setOnId.length = 0;
+    retheme.applyConfig(noneMode);
+    const after = new Map(ctx.calls.setOnId);
+    const font2: any = {};
+    after.get("tfm-title-font")!(font2);
+    expect(font2.visible).toBe(false);
+    const sub2: any = {};
+    after.get("tfm-title-sub")!(sub2);
+    expect(sub2.visible).toBe(false);
+
+    const tfmMode = clone(defaultConfig);
+    tfmMode.ui.sidebarTitle = "tfm";
+    ctx.calls.setOnId.length = 0;
+    retheme.applyConfig(tfmMode);
+    const back = new Map(ctx.calls.setOnId);
+    const font3: any = {};
+    back.get("tfm-title-font")!(font3);
+    expect(font3.text).toBe("tfm");
+    expect(font3.color).toBe(ctx.colors.accent);
+    const sub3: any = {};
+    back.get("tfm-title-sub")!(sub3);
+    expect(sub3.visible).toBe(true);
+  });
+
+  test("a theme flip still repaints the title block (rethemeChrome path)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const first = clone(defaultConfig);
+    first.theme.accent = "#111111";
+    retheme.applyConfig(first);
+    ctx.calls.setOnId.length = 0;
+    retheme.rethemeChrome();
+    const painted = new Map(ctx.calls.setOnId);
+    const font: any = {};
+    painted.get("tfm-title-font")!(font);
+    expect(font.color).toBe("#111111");
+    expect(font.text).toBe("tfm");
+  });
+
   test("paints the boot-baked widgets by id (widths, surfaces, fg colors)", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);

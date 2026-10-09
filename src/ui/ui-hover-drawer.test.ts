@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { collapsedHeight, collapsedSize, drawerWantsOpen, makeHoverDrawer } from "./ui-hover-drawer";
-import { defaultConfig } from "../config/config-schema";
+import { defaultConfig, type UiConfig } from "../config/config-schema";
 
 describe("drawerWantsOpen", () => {
   test("left edge opens only inside the zone (zone = cells from the edge) while closed", () => {
@@ -284,12 +284,12 @@ describe("makeHoverDrawer (headless)", () => {
     // node: a title flip that leaves the old node visible is the "needs
     // restart" report. (Sidebar auto-hide ON also covers this through its own
     // restore/applyVisible path — this pins the all-off case.)
-    const ui = {
+    const ui: UiConfig = {
       ...defaultConfig.ui,
       sidebarAutoHide: false,
       previewAutoHide: false,
       terminalAutoHide: false,
-      sidebarTitle: true,
+      sidebarTitle: "tfm",
       hoverAnimMs: 0,
     };
     const drawer = mkDrawer(ui);
@@ -298,12 +298,12 @@ describe("makeHoverDrawer (headless)", () => {
     await t.renderOnce();
     expect(title().visible).toBe(true);
 
-    ui.sidebarTitle = false;
+    ui.sidebarTitle = "none";
     drawer.refresh();
     await t.renderOnce();
     expect(title().visible).toBe(false);
 
-    ui.sidebarTitle = true;
+    ui.sidebarTitle = "tfm";
     drawer.refresh();
     await t.renderOnce();
     expect(title().visible).toBe(true);

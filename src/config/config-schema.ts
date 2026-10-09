@@ -199,6 +199,12 @@ export type TransparentBgMode = "off" | "on" | "force";
 // (menus/dialogs), whose rasters flatten so an opaque island never blends the
 // desktop through.
 export type IconMode = "opaque" | "transparent" | "transparent-partial";
+// what the block above the places sidebar shows. `tfm` = the original block
+// (accent ASCII wordmark + tagline); `files` = the same wordmark style spelling
+// "Files" in the sidebar white, no tagline; `none` = the block keeps its rows
+// but paints nothing. Was a bool (true = wordmark, false = none) — a boolean
+// value still migrates.
+export type SidebarTitleMode = "tfm" | "files" | "none";
 
 // icon-raster style. `filled` = solid icon rasters (default); `outline` =
 // hollow icon rasters where the set ships an outline sibling (icons with no
@@ -244,7 +250,7 @@ export type UiConfig = {
   iconStyle: IconStyle;
   ttyMode: TtyMode;
   forceGlyph: boolean;
-  sidebarTitle: boolean;
+  sidebarTitle: SidebarTitleMode;
   sidebarSectionTitles: boolean;
   sidebarShowRecent: boolean;
   sidebarShowStarred: boolean;
@@ -481,14 +487,15 @@ const UI_ROWS: SchemaRow[] = [
     subsection: "sidebar",
   },
   {
-    kind: "bool",
+    kind: "enum",
     section: "ui",
     tomlKey: "sidebar-title",
     prop: "sidebarTitle",
-    def: true,
-    doc: 'true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it',
+    values: ["tfm", "files", "none"],
+    def: "tfm",
+    doc: '"tfm" = the accent ASCII "tfm" wordmark + tagline above the places sidebar; "files" = the same style spelling "Files" in the sidebar white; "none" = keep the space, show nothing',
     label: "sidebar title",
-    blurb: "Show the logo above the sidebar",
+    blurb: "What sits above the sidebar",
     group: "layout",
     subsection: "sidebar",
   },
@@ -2020,6 +2027,10 @@ export function parseConfigDoc(doc: unknown): Config {
     }
     if (raw["transparent-bg"] === true) cfg.ui.transparentBg = "on";
     else if (raw["transparent-bg"] === false) cfg.ui.transparentBg = "off";
+    // same-key type change: `sidebar-title` was a bool (true = logo, false =
+    // none); a boolean value migrates to the matching mode.
+    if (raw["sidebar-title"] === true) cfg.ui.sidebarTitle = "tfm";
+    else if (raw["sidebar-title"] === false) cfg.ui.sidebarTitle = "none";
     // the first enum spelling (opaque/transparent) never shipped a release but
     // may sit in a hand-edited config — alias it instead of dropping to default
     else if (raw["transparent-bg"] === "opaque") cfg.ui.transparentBg = "off";

@@ -60,6 +60,8 @@ export type NodeLike = {
   bg?: ColorInput;
   backgroundColor?: ColorInput;
   color?: ColorInput | ColorInput[]; // ASCIIFont wordmark
+  // the ASCII wordmark's literal text ("tfm" / "Files") — [ui] sidebar-title
+  text?: string;
   borderColor?: ColorInput;
   // surface chrome written by style.ts's applySurface
   border?: boolean;

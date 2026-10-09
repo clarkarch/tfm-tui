@@ -12,6 +12,7 @@ import type { MaybeNode } from "../lib/node-like";
 import type { SlotElement } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 import type { Theme } from "../config/config";
+import type { SidebarTitleMode } from "../config/config-schema";
 import {
   BAND_ID,
   DRAG_GHOST_ID,
@@ -28,23 +29,44 @@ import {
 
 // eager object, NOT a getter — these three ctxs read fields directly, so the
 // type must reject the themeGet function (a bare Record<string, any> would
-// silently accept it and every field read would be undefined at boot)
-export const buildTitle = (opts: { width: number; colors: Theme; visible?: boolean }): SlotElement =>
-  Box(
+// silently accept it and every field read would be undefined at boot).
+// [ui] sidebar-title: what sits above the places sidebar.
+//   tfm   = the ORIGINAL title: accent ASCII wordmark + "terminal file manager"
+//   files = the same wordmark style spelling "Files", sidebar white, no tagline
+//   none  = the block keeps its rows but paints nothing
+// Both children are built in EVERY mode and flipped by visibility, so a mode
+// change is a retheme paint (.text/.color/.visible — no node creation).
+
+export const buildTitle = (opts: { width: number; colors: Theme; mode?: SidebarTitleMode }): SlotElement => {
+  const mode = opts.mode ?? "tfm";
+  const files = mode === "files";
+  return Box(
     {
       id: "tfm-title-box",
       width: opts.width,
       height: 5,
-      // [ui] sidebar-title: hidden removes it from layout (the places list
-      // moves up, no blank 5-row gap)
-      visible: opts.visible !== false,
+      visible: mode !== "none",
       flexDirection: "column",
       justifyContent: "center",
       paddingLeft: 1,
     },
-    ASCIIFont({ id: "tfm-title-font", text: "tfm", font: "tiny", color: opts.colors.accent }),
-    Text({ id: "tfm-title-sub", content: " terminal file manager", fg: opts.colors.sidebarFgMuted }),
+    ASCIIFont({
+      id: "tfm-title-font",
+      text: files ? "Files" : "tfm",
+      font: "tiny",
+      // files runs the sidebar white (the accent hue read as a link); tfm keeps
+      // the original accent wordmark
+      color: files ? opts.colors.white : opts.colors.accent,
+      visible: mode === "tfm" || files,
+    }),
+    Text({
+      id: "tfm-title-sub",
+      content: " terminal file manager",
+      fg: opts.colors.sidebarFgMuted,
+      visible: mode === "tfm",
+    }),
   );
+};
 
 type AppContainerOpts = {
   sw: number;

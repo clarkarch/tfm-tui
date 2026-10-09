@@ -78,9 +78,30 @@ type RethemeCtx = {
 export const makeRetheme = (ctx: RethemeCtx) => {
   const { setOnId } = ctx;
 
+  // [ui] sidebar-title: the title block is BOOT-BAKED (renderAll never rebuilds
+  // it), so its paint has to run from applyConfig itself — not only from the
+  // theme-flip path. Without this, switching modes in Settings (a non-theme
+  // knob) showed nothing until a restart, because a mode flip only reached
+  // renderAll. tfm keeps the original accent wordmark + tagline; files is the
+  // white "Files" wordmark with no tagline. Both nodes are built in every
+  // mode, so the paint is a pure flip.
+  const paintTitle = (colors: Theme): void => {
+    const mode = ctx.config.ui.sidebarTitle;
+    const files = mode === "files";
+    setOnId("tfm-title-font", (n) => {
+      n.text = files ? "Files" : "tfm";
+      n.color = files ? colors.white : colors.accent;
+      n.visible = mode === "tfm" || files;
+    });
+    setOnId("tfm-title-sub", (n) => {
+      n.visible = mode === "tfm";
+      n.fg = colors.sidebarFgMuted;
+    });
+  };
+
   // Repaints widgets whose colors were baked at boot and which renderAll's
-  // rebuilds never touch. Without this a runtime theme swap leaves the
-  // sidebar, title, inputs, band, ghost and status bar in the old palette.
+  // steps do not rebuild. Called on every applyConfig AND on theme flips
+  // (see applyConfig below), so a non-theme knob change still lands.
   const rethemeChrome = (): void => {
     const st = ctx.config.ui.uiStyle;
     const colors = ctx.colors;
@@ -97,12 +118,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     setOnId("tfm-places", (n) => {
       n.width = ctx.sideInnerW();
     });
-    setOnId("tfm-title-font", (n) => {
-      n.color = colors.accent;
-    });
-    setOnId("tfm-title-sub", (n) => {
-      n.fg = colors.sidebarFgMuted;
-    });
+    paintTitle(colors);
     setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg, tForce)));
     setOnId("tfm-pane-divider", (n) => {
       n.backgroundColor = colors.divider;
@@ -329,6 +345,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         n.width = id === "tfm-sidebar-root" ? ctx.getSw() : ctx.sideInnerW();
       });
     }
+    // boot-baked title block: a [ui] sidebar-title mode flip is NOT a theme
+    // change, so the theme-flip rethemeChrome below never runs for it — paint
+    // the block here on EVERY apply (idempotent: same writes, same node)
+    paintTitle(ctx.colors);
     const pane = ctx.byId("tfm-preview");
     if (pane) {
       try {

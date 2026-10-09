@@ -757,6 +757,18 @@ describe("generic schema rows", () => {
     expect(h.saves()).toBe(1);
   });
 
+  test("the sidebar-title cycle commits its mode through applyConfig", () => {
+    // the mode only lands if the row reaches applyConfig — the boot-baked
+    // title block then repaints there (see ui-retheme's applyConfig paint)
+    const h = mk();
+    const row = asCycle(h.byLabel("sidebar title"));
+    expect(row.getIdx()).toBe(0); // tfm (default)
+    row.setIdx(1); // files
+    expect(h.applied[0]!.ui.sidebarTitle).toBe("files");
+    expect(h.config.ui.sidebarTitle).toBe("files");
+    expect(h.saves()).toBe(1);
+  });
+
   test("commit always carries ui + theme + keys (never a partial Config)", () => {
     const h = mk();
     asToggle(h.byLabel("preview pane")).set(true);

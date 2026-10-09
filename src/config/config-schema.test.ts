@@ -65,6 +65,18 @@ describe("parseConfigDoc", () => {
     expect(validateKeybindSpec(".")).not.toBeNull();
   });
 
+  test("sidebar-title defaults to the tfm wordmark, parses the mode enum", () => {
+    expect(parseConfigDoc(undefined).ui.sidebarTitle).toBe("tfm");
+    expect(parseConfigDoc({ ui: { "sidebar-title": "files" } }).ui.sidebarTitle).toBe("files");
+    expect(parseConfigDoc({ ui: { "sidebar-title": "none" } }).ui.sidebarTitle).toBe("none");
+    expect(parseConfigDoc({ ui: { "sidebar-title": "banner" } }).ui.sidebarTitle).toBe("tfm");
+  });
+
+  test("legacy sidebar-title bool migrates (true=tfm, false=none)", () => {
+    expect(parseConfigDoc({ ui: { "sidebar-title": true } }).ui.sidebarTitle).toBe("tfm");
+    expect(parseConfigDoc({ ui: { "sidebar-title": false } }).ui.sidebarTitle).toBe("none");
+  });
+
   test("transparent-bg defaults to off, parses the mode enum", () => {
     expect(parseConfigDoc(undefined).ui.transparentBg).toBe("off");
     expect(parseConfigDoc({ ui: { "transparent-bg": "on" } }).ui.transparentBg).toBe("on");

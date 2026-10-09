@@ -21,6 +21,8 @@ const hexInts = (h: string): [number, number, number, number] => [
   255,
 ];
 
+const noop = () => {};
+
 describe("tab strip containers", () => {
   test("both pane tabbars clip instead of bleeding over the grid", async () => {
     const theme = defaultConfig.theme;
@@ -47,6 +49,39 @@ describe("tab strip containers", () => {
   });
 });
 
+describe("sidebar title block", () => {
+  const theme = defaultConfig.theme;
+
+  const mountTitle = async (mode: "tfm" | "files" | "none") => {
+    // one title block per assertion: the ids are fixed, so a previously
+    // mounted block would win findDescendantById
+    node("tfm-title-box")?.destroy?.();
+    t.renderer.root.add(buildTitle({ width: 24, colors: theme, mode }));
+    await t.renderOnce();
+  };
+  const node = (id: string): any => t.renderer.root.findDescendantById(id);
+
+  test("tfm mode keeps the original title: accent wordmark + tagline", async () => {
+    await mountTitle("tfm");
+    expect(node("tfm-title-font").text).toBe("tfm");
+    expect(node("tfm-title-font").color).toBe(theme.accent);
+    expect(node("tfm-title-sub").visible).toBe(true);
+    expect(t.captureCharFrame()).toContain("terminal file manager");
+  });
+
+  test("files mode spells Files in the sidebar white, no tagline", async () => {
+    await mountTitle("files");
+    expect(node("tfm-title-font").text).toBe("Files");
+    expect(node("tfm-title-font").color).toBe(theme.white);
+    expect(node("tfm-title-sub").visible).toBe(false);
+  });
+
+  test("none mode hides the block but keeps it in the layout", async () => {
+    await mountTitle("none");
+    expect(node("tfm-title-box").visible).toBe(false);
+  });
+});
+
 describe("grid scrollbar theming", () => {
   test("scrollbarTrackColors maps the quiet thumb + invisible bed roles", () => {
     const m = scrollbarTrackColors(defaultConfig.theme);
@@ -58,7 +93,6 @@ describe("grid scrollbar theming", () => {
     const theme = { ...defaultConfig.theme };
     t.renderer.root.add(Box({ id: "tfm-pane-0", flexGrow: 1, width: "100%", flexDirection: "column" }));
     t.renderer.root.add(Box({ id: "tfm-pane-1", flexGrow: 1, width: "100%", flexDirection: "column" }));
-    const noop = () => {};
     const [s0, s1] = buildBootLayout({
       renderer: t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id) as any,

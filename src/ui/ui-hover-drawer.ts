@@ -184,7 +184,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     if (t) {
       try {
         // the drawer's open state AND the [ui] sidebar-title preference
-        t.visible = visible && ctx.ui().sidebarTitle;
+        t.visible = visible && ctx.ui().sidebarTitle !== "none";
       } catch {}
     }
   };

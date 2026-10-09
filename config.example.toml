@@ -12,7 +12,7 @@ view-mode                             = "grid"      # "grid" = icon tiles; "list
 wrap-mode                             = "none"      # none = cut names with … and clip code preview; char = character-wrap tile names and code lines; word = break at spaces (spaceless runs still slice). Markdown prose (paragraphs, tables) always word-wraps.
 tab-bar                               = false       # true = strip always visible (even with one tab); false = adaptive (only while 2+ tabs are open)
 sidebar-width                         = 26          # 16..60 cells (grid + list)
-sidebar-title                         = true        # true = show the ASCII "tfm" logo at the top of the places sidebar; false = hide it
+sidebar-title                         = "tfm"       # "tfm" = the accent ASCII "tfm" wordmark + tagline above the places sidebar; "files" = the same style spelling "Files" in the sidebar white; "none" = keep the space, show nothing
 sidebar-section-titles                = false       # true = name each sidebar group (Places, Folders, Bookmarks, Devices, Network) in place of the divider; false = dividers only
 sidebar-show-recent                   = true        # true = show Recent in the places sidebar; false = hide it
 sidebar-show-starred                  = true        # true = show Starred in the places sidebar; false = hide it
