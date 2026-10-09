@@ -746,6 +746,51 @@ describe("file operation keys", () => {
     expect(h.calls).toEqual(["clip:copy:4", "clip:cut:4", "paste:/tmp/tfm-kb/sub"]);
   });
 
+  test("repeated ctrl+c hints at the quit bind once (selection present)", () => {
+    const h = makeHarness();
+    h.key("a", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toEqual([]);
+    h.key("c", { ctrl: true });
+    const hints = h.calls.filter((c) => c.startsWith("notify:quit:"));
+    expect(hints.length).toBe(1);
+    expect(hints[0]).toContain("ctrl+q");
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toHaveLength(1);
+  });
+
+  test("repeated ctrl+c hints at quit with an empty selection too", () => {
+    const h = makeHarness();
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    const hints = h.calls.filter((c) => c.startsWith("notify:quit:"));
+    expect(hints.length).toBe(1);
+    expect(hints[0]).toContain("ctrl+q");
+  });
+
+  test("another key between ctrl+c presses resets the quit-hint streak", () => {
+    const h = makeHarness();
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("a", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toEqual([]);
+  });
+
+  test("quit hint names the remapped quit bind", () => {
+    const h = makeHarness();
+    h.binds.quit = ["ctrl+x", "ctrl+q"];
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    const hints = h.calls.filter((c) => c.startsWith("notify:quit:"));
+    expect(hints.length).toBe(1);
+    expect(hints[0]).toContain("ctrl+x ctrl+q");
+  });
+
   test("ctrl+d duplicates the selection; empty selection is a no-op", () => {
     const h = makeHarness();
     h.key("d", { ctrl: true });

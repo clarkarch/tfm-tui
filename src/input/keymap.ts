@@ -167,6 +167,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // terminal-hint throttle: the "click the grid to leave" status shows once
   // per terminal focus visit, not on every swallowed keypress
   let termHintShown = false;
+  // ctrl+c is copy, never quit (exitOnCtrlC:false) — hammering it is the
+  // SIGINT habit, so the third consecutive copy key hints at the quit bind
+  // once per streak; any other key resets the streak
+  let copyQuitStreak = 0;
+  let quitHintShown = false;
 
   // does this event match any configured bind for the action?
   const enterAlias = (name: string): string | null =>
@@ -773,6 +778,13 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // keybind capture in the settings panel is the ONE state above quit:
     // recording ctrl+q must not quit the app mid-capture
     if (ctx.escMenu.captureKey(ev)) return;
+    // any non-copy key ends the ctrl+c streak (and re-arms the quit hint);
+    // the streak itself only advances at the copy dispatch below, so keys
+    // swallowed by modals/terminal/pick never count toward it
+    if (!hit(ev, "copy")) {
+      copyQuitStreak = 0;
+      quitHintShown = false;
+    }
     if (hit(ev, "quit") && runAction("quit")) return;
     // held restart must not queue overlapping teardown/spawn pairs
     if (hit(ev, "restart") && ev.repeated !== true && runAction("restart")) return;
@@ -866,7 +878,19 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const repeated = ev.repeated === true;
     if (hit(ev, "trash") && selected.length && !repeated && runAction("trash")) return;
     if (hit(ev, "renameOrRestore") && selected.length && runAction("renameOrRestore")) return;
-    if (hit(ev, "copy") && selected.length && runAction("copy")) return;
+    // third consecutive copy key (with or without a selection — an empty
+    // selection is a silent no-op otherwise) hints at the quit bind once per
+    // streak, for the SIGINT habit
+    const isCopyKey = hit(ev, "copy");
+    if (isCopyKey) {
+      copyQuitStreak++;
+      if (copyQuitStreak >= 3 && !quitHintShown) {
+        quitHintShown = true;
+        const quitBinds = ctx.keybinds("quit").join(" ") || "ctrl+q";
+        ctx.notify(`ctrl+c copies · ${quitBinds} to quit`, "quit", "info");
+      }
+    }
+    if (isCopyKey && selected.length && runAction("copy")) return;
     if (hit(ev, "cut") && selected.length && runAction("cut")) return;
     if (hit(ev, "duplicate") && selected.length && !repeated && runAction("duplicate")) return;
     if (hit(ev, "paste") && !repeated && runAction("paste")) return;
