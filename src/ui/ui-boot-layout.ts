@@ -6,9 +6,13 @@
 // straight from ./grid-input so the wiring can't drift from the gesture
 // state machine. ---
 
-import { ASCIIFont, Box, ScrollBoxRenderable, Text } from "@opentui/core";
+import { ASCIIFont, Box, type CliRenderer, type MouseEvent, ScrollBoxRenderable, Text } from "@opentui/core";
 import { chromeSurface, type UiStyle } from "./style";
+import type { MaybeNode } from "../lib/node-like";
+import type { SlotElement } from "./ui-slots";
+import type { ListEntry } from "./ui-menu";
 import type { Theme } from "../config/config";
+import type { SidebarTitleMode } from "../config/config-schema";
 import {
   BAND_ID,
   DRAG_GHOST_ID,
@@ -25,39 +29,62 @@ import {
 
 // eager object, NOT a getter — these three ctxs read fields directly, so the
 // type must reject the themeGet function (a bare Record<string, any> would
-// silently accept it and every field read would be undefined at boot)
-export const buildTitle = (opts: { width: number; colors: Theme; visible?: boolean }): any =>
-  Box(
+// silently accept it and every field read would be undefined at boot).
+// [ui] sidebar-title: what sits above the places sidebar.
+//   tfm   = the ORIGINAL title: accent ASCII wordmark + "terminal file manager"
+//   files = the same wordmark style spelling "Files", sidebar white, no tagline
+//   none  = the block keeps its rows but paints nothing
+// Both children are built in EVERY mode and flipped by visibility, so a mode
+// change is a retheme paint (.text/.color/.visible — no node creation).
+
+export const buildTitle = (opts: { width: number; colors: Theme; mode?: SidebarTitleMode }): SlotElement => {
+  const mode = opts.mode ?? "tfm";
+  const files = mode === "files";
+  return Box(
     {
       id: "tfm-title-box",
       width: opts.width,
       height: 5,
-      // [ui] sidebar-title: hidden removes it from layout (the places list
-      // moves up, no blank 5-row gap)
-      visible: opts.visible !== false,
+      visible: mode !== "none",
       flexDirection: "column",
       justifyContent: "center",
       paddingLeft: 1,
     },
-    ASCIIFont({ id: "tfm-title-font", text: "tfm", font: "tiny", color: opts.colors.accent }),
-    Text({ id: "tfm-title-sub", content: " terminal file manager", fg: opts.colors.sidebarFgMuted }),
+    ASCIIFont({
+      id: "tfm-title-font",
+      text: files ? "Files" : "tfm",
+      font: "tiny",
+      // files runs the sidebar white (the accent hue read as a link); tfm keeps
+      // the original accent wordmark
+      color: files ? opts.colors.white : opts.colors.accent,
+      visible: mode === "tfm" || files,
+    }),
+    Text({
+      id: "tfm-title-sub",
+      content: " terminal file manager",
+      fg: opts.colors.sidebarFgMuted,
+      visible: mode === "tfm",
+    }),
   );
+};
 
 type AppContainerOpts = {
   sw: number;
   sideInnerW: number;
   colors: Theme; // eager object — see buildTitle
   uiStyle: UiStyle;
+  // transparent-bg force: chrome rest fills clear so the terminal shows through
+  transparentForce?: boolean;
   tabBarVisible: boolean;
   previewWidth: number;
   previewEnabled: boolean;
   dualPane: boolean;
-  title: any;
+  title: SlotElement;
   // one toolbar shell per pane (ids already prefixed by the toolbar factory)
-  toolbarShells: [any, any];
+  toolbarShells: [SlotElement, SlotElement];
 };
 
-export const buildAppContainer = (o: AppContainerOpts): any =>
+export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
   Box(
     { width: "100%", height: "100%", flexDirection: "row" },
     Box(
@@ -65,7 +92,7 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
         id: "tfm-sidebar-root",
         width: o.sw,
         height: "100%",
-        ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg),
+        ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg, o.transparentForce ? "force" : undefined),
         flexDirection: "column",
         // auto-hide animation clips the label column instead of rebuilding rows
         overflow: "hidden",
@@ -78,7 +105,7 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
         id: "tfm-main",
         flexGrow: 1,
         height: "100%",
-        ...chromeSurface(o.uiStyle, o.colors, o.colors.bg),
+        ...chromeSurface(o.uiStyle, o.colors, o.colors.bg, o.transparentForce ? "force" : undefined),
         flexDirection: "column",
       },
       // Each pane is a self-contained column: its own top bar, its own tab
@@ -94,6 +121,9 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
             height: 1,
             flexDirection: "row",
             columnGap: 1,
+            // tab chips shrink to fit, and past the minimum the tail clips
+            // here instead of bleeding over the grid
+            overflow: "hidden",
             visible: o.tabBarVisible,
           }),
           Box({ id: "tfm-pane-0", flexGrow: 1, width: "100%", flexDirection: "column" }),
@@ -114,6 +144,8 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
             height: 1,
             flexDirection: "row",
             columnGap: 1,
+            // same clip contract as pane 0 (see above)
+            overflow: "hidden",
             visible: o.tabBarVisible,
           }),
           Box({ id: "tfm-pane-1", flexGrow: 1, width: "100%", flexDirection: "column" }),
@@ -139,7 +171,7 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
       width: o.previewWidth,
       height: "100%",
       visible: o.previewEnabled, // display:none in yoga: takes no layout space when hidden
-      ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg),
+      ...chromeSurface(o.uiStyle, o.colors, o.colors.sidebarBg, o.transparentForce ? "force" : undefined),
       flexDirection: "column",
       paddingLeft: 1,
       paddingRight: 1,
@@ -149,8 +181,8 @@ export const buildAppContainer = (o: AppContainerOpts): any =>
   );
 
 type BootLayoutCtx = {
-  renderer: any;
-  byId: (id: string) => any;
+  renderer: CliRenderer;
+  byId: (id: string) => MaybeNode;
   colors: Theme; // eager object — see buildTitle
   bandCtx: BandCtx;
   focusPane: (index: number) => void;
@@ -164,12 +196,25 @@ type BootLayoutCtx = {
   isRenaming: () => boolean;
   finishInlineRename: (commit: boolean) => void;
   clearTileSelection: () => void;
-  openContextMenu: (x: number, y: number, title: string, entries: any[]) => void;
-  emptyAreaEntries: (x: number, y: number) => any[];
+  openContextMenu: (x: number, y: number, title: string, entries: ListEntry[]) => void;
+  emptyAreaEntries: (x: number, y: number) => ListEntry[];
+  // console mode: the drag ghost + rubber band paint the selection-bar idiom
+  // (black bar + white label) instead of the accent chip (white on grey is
+  // invisible). Optional so tests stay light.
+  isTtyMode?(): boolean;
 };
 
 // returns both scrollers (one per pane) so the wiring can keep its live
 // scrollerRefs; `tfm-scroll` stays pane 0's byte-identical id
+
+// grid scroller thumb/track in theme colors instead of the upstream gray
+// defaults (#9a9ea3 on #252527): a quiet muted thumb on an invisible bed
+// (track == main bg). Shared with rethemeChrome so a theme flip repaints
+// the live bars without rebuilding the scrollers.
+export const scrollbarTrackColors = (colors: Theme): { backgroundColor: string; foregroundColor: string } => ({
+  backgroundColor: colors.bg,
+  foregroundColor: colors.sidebarFgMuted,
+});
 export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, ScrollBoxRenderable] => {
   const makeScroller = (id: string, pane: number): ScrollBoxRenderable =>
     new ScrollBoxRenderable(ctx.renderer, {
@@ -179,7 +224,10 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       scrollY: true,
       viewportCulling: true,
       contentOptions: { flexDirection: "column" },
-      onMouseDown: (ev: any) => {
+      // theme the built-in bar (trackOptions land on its inner Slider);
+      // visibility still auto-hides when the listing fits the viewport
+      verticalScrollbarOptions: { trackOptions: scrollbarTrackColors(ctx.colors) },
+      onMouseDown: (ev: MouseEvent) => {
         // clicking a pane focuses it before any selection/band work, so the
         // facade selection + status target the right pane
         ctx.focusPane(pane);
@@ -198,9 +246,9 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
         beginBand(ev);
         if (ev.button === 2) ctx.openContextMenu(ev.x, ev.y, "", ctx.emptyAreaEntries(ev.x, ev.y));
       },
-      onMouseDrag: (ev: any) => updateBandRect(ctx.bandCtx, ev),
-      onMouseDragEnd: (ev: any) => finalizeBand(ctx.bandCtx, ev),
-      onMouseUp: (ev: any) => {
+      onMouseDrag: (ev: MouseEvent) => updateBandRect(ctx.bandCtx, ev),
+      onMouseDragEnd: (ev: MouseEvent) => finalizeBand(ctx.bandCtx, ev),
+      onMouseUp: (ev: MouseEvent) => {
         if (bandActive()) finalizeBand(ctx.bandCtx, ev);
       },
       // dropping onto the pane's background (no tile under the cursor) targets
@@ -211,8 +259,8 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
 
   const scroller0 = makeScroller("tfm-scroll", 0);
   const scroller1 = makeScroller("tfm-scroll-2", 1);
-  ctx.byId("tfm-pane-0")?.add(scroller0);
-  ctx.byId("tfm-pane-1")?.add(scroller1);
+  ctx.byId("tfm-pane-0")?.add?.(scroller0);
+  ctx.byId("tfm-pane-1")?.add?.(scroller1);
 
   ctx.renderer.root.add(
     Box({
@@ -222,7 +270,7 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       zIndex: 2500,
       border: true,
       borderStyle: "rounded",
-      borderColor: ctx.colors.accent,
+      borderColor: ctx.isTtyMode?.() ? ctx.colors.hoverBg : ctx.colors.accent,
     }),
   );
 
@@ -237,11 +285,15 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
         width: 12,
         height: 1,
         zIndex: 4000,
-        backgroundColor: ctx.colors.accent,
+        backgroundColor: ctx.isTtyMode?.() ? ctx.colors.accentBg : ctx.colors.accent,
         flexDirection: "row",
         paddingLeft: 1,
       },
-      Text({ id: `${DRAG_GHOST_ID}-label`, content: "moving 0 items", fg: ctx.colors.bg }),
+      Text({
+        id: `${DRAG_GHOST_ID}-label`,
+        content: "moving 0 items",
+        fg: ctx.isTtyMode?.() ? ctx.colors.white : ctx.colors.bg,
+      }),
     ),
   );
 

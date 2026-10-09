@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { loadGlobs2 } from "./filetype";
@@ -73,6 +73,20 @@ describe("dirWalkStats", () => {
       expect(s!.files).toBe(3);
       expect(s!.folders).toBe(1);
       expect(s!.bytes).toBe(15 + (await (await import("node:fs/promises")).lstat(path.join(root, "lnk"))).size);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("hardlinked pair counts shared bytes once, both names still counted", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-props-"));
+    try {
+      writeFileSync(path.join(root, "a.txt"), "x".repeat(10));
+      linkSync(path.join(root, "a.txt"), path.join(root, "b.txt")); // same inode
+      const s = await dirWalkStats(root);
+      expect(s).not.toBeNull();
+      expect(s!.files).toBe(2);
+      expect(s!.bytes).toBe(10);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -2,20 +2,22 @@
 // Factory with injected ctx (renderer/colors/refs are live getters); the
 // renameEdit state lives HERE behind getters so the keyboard router and
 // renderGrid read it without a module-level import from index. ---
-import { InputRenderable, Text } from "@opentui/core";
+import { type CliRenderer, InputRenderable, type KeyEvent, Text } from "@opentui/core";
 import { existsSync } from "node:fs";
-import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../app/undo";
-import { fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
+import { errCode, fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
 
 export type RenameCtx = {
-  renderer(): any;
-  byId(id: string): any;
+  renderer(): CliRenderer;
+  byId(id: string): MaybeNode;
   colors(): Theme;
   tileW(): number;
   tileRefs: Map<string, { tileId: string; labelId: string; baseFg: string }>;
@@ -30,6 +32,9 @@ export type RenameCtx = {
   cwd(): string;
   focusKeys(): string[];
   selectTileAt(idx: number): boolean;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 // nautilus naming for an unused "Untitled …" base: "Untitled 2.txt", "Untitled 3.txt" …
@@ -67,7 +72,11 @@ export const makeRename = (ctx: RenameCtx) => {
     const edit = renameEdit;
     if (!edit) return;
     renameEdit = null;
-    const input: any = ctx.byId(edit.inputId);
+    // the editor is gone — the cursor sits over its tile, but the tile's
+    // over won't re-fire under a stationary mouse, so default (stale-
+    // until-move, same rule as the highlight paint)
+    ctx.setPointer?.("default");
+    const input = ctx.byId(edit.inputId);
     const value = String(input?.value ?? "").trim();
     if (input) {
       try {
@@ -75,9 +84,9 @@ export const makeRename = (ctx: RenameCtx) => {
       } catch {}
     }
     const refs = ctx.tileRefs.get(edit.key);
-    const tile: any = refs ? ctx.byId(refs.tileId) : null;
+    const tile = refs ? ctx.byId(refs.tileId) : null;
     if (refs && tile && !ctx.byId(refs.labelId)) {
-      const labelText: any = Text({
+      const labelText = Text({
         id: refs.labelId,
         content: tileLabelFor(path.basename(edit.key), ctx.tileW()),
         fg: refs.baseFg,
@@ -85,7 +94,8 @@ export const makeRename = (ctx: RenameCtx) => {
       // restore at the label's ORIGINAL index, not via add(): in list rows
       // (icon | name | … | size | date) an append drops the name after the
       // date — the same-name create path never rebuilds, so it stayed there
-      const kids: any[] = typeof tile.getChildren === "function" ? [...tile.getChildren()] : [];
+      // the tile is a mounted renderable, so its children are readable
+      const kids = [...tile.getChildren()];
       const at = edit.labelIdx !== undefined && edit.labelIdx <= kids.length ? edit.labelIdx : kids.length;
       const before = kids[at];
       if (before) {
@@ -121,14 +131,39 @@ export const makeRename = (ctx: RenameCtx) => {
       const k = edit.key;
       const dir = path.dirname(k);
       if (value !== path.basename(k)) {
-        let target = path.join(dir, value);
-        // create never replaces: a typed name that exists gets the same
-        // "name 2" dedupe the initial Untitled naming used. existsSync guard
-        // right before the rename — Linux rename would silently overwrite.
-        if (existsSync(target)) target = uniqueTarget(dir, value);
-        void fsRename(k, target)
-          .then(() => {
-            pushCreateBatch(edit.createKind!, target);
+        // captured for the .then closure, where the edit's narrowing is gone
+        const createKind = edit.createKind;
+        // atomic landing: Linux rename would silently overwrite a raced
+        // occupant, so the name is claimed with EEXIST-failing link(2)/mkdir(2)
+        // instead of check-then-rename, retrying past collisions with the same
+        // "name 2" dedupe the Untitled naming uses
+        const landCreate = async (): Promise<string> => {
+          let target = path.join(dir, value);
+          for (let i = 0; i < 10; i++) {
+            try {
+              if (createKind === "folder") {
+                await mkdir(target);
+                try {
+                  await rmdir(k); // placeholder is empty and ours
+                } catch (err) {
+                  await rmdir(target).catch(() => {}); // ours, just made, empty
+                  throw err;
+                }
+              } else {
+                await link(k, target); // same inode, placeholder consumed
+                await rm(k);
+              }
+              return target;
+            } catch (err) {
+              if (errCode(err) !== "EEXIST") throw err;
+              target = uniqueTarget(dir, path.basename(target));
+            }
+          }
+          throw new Error(`already exists: ${value}`);
+        };
+        void landCreate()
+          .then((target) => {
+            if (createKind) pushCreateBatch(createKind, target);
             const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
             ctx.notify(msg, "create", "success");
             void ctx.renderAll();
@@ -159,8 +194,8 @@ export const makeRename = (ctx: RenameCtx) => {
       ctx.notify("Can't rename here", "rename", "error");
       return;
     }
-    const tile: any = ctx.byId(refs.tileId);
-    const label: any = ctx.byId(refs.labelId);
+    const tile = ctx.byId(refs.tileId);
+    const label = ctx.byId(refs.labelId);
     if (!tile || !label || !existsSync(key)) {
       ctx.notify("Can't rename here (source gone)", "rename", "error");
       return;
@@ -178,10 +213,10 @@ export const makeRename = (ctx: RenameCtx) => {
     const stale = ctx.byId(inputId);
     if (stale) {
       try {
-        stale.parent?.remove(stale);
+        stale.parent?.remove?.(stale);
       } catch {}
     }
-    const input: any = new InputRenderable(ctx.renderer(), {
+    const input = new InputRenderable(ctx.renderer(), {
       id: inputId,
       width: ctx.tileW() - 2,
       value: path.basename(key),
@@ -198,9 +233,11 @@ export const makeRename = (ctx: RenameCtx) => {
       tile.remove(label);
     } catch {}
     renameEdit = { key, inputId, labelIdx, ...(createKind ? { createKind } : {}) };
+    // the editor owns the keyboard now — text pointer until it lands
+    ctx.setPointer?.("text");
     input.on?.("enter", () => finishInlineRename(true));
     const prevHandler = input.handleKeyPress?.bind(input);
-    input.handleKeyPress = (k: any) => {
+    input.handleKeyPress = (k: KeyEvent) => {
       if (k?.name === "escape") {
         finishInlineRename(false);
         return true;

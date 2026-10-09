@@ -1,8 +1,11 @@
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
-import { clearChildren } from "../lib/uiutil";
+import { advanceCursor, destroyChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import type { IconSlotHandle } from "./ui-slots";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
 // renderer. Ids tfm-filemenu / tfm-filemenu-panel stay byte-identical for
@@ -26,13 +29,14 @@ export type ListEntry = {
   hintIcon?: string;
   action: () => void;
   sep?: boolean;
-  // nested flyout items; a parent row is not directly actionable
+  // nested flyout items; a parent row stays directly clickable (its action
+  // fires on click/enter, the flyout opens on hover / →)
   submenu?: ListEntry[];
 };
 
 type MenuCtx = {
-  byId(id: string): any;
-  rootAdd(node: any): void;
+  byId(id: string): MaybeNode;
+  rootAdd(node: unknown): void;
   termW(): number;
   termH(): number;
   stripSelectable(): void;
@@ -41,13 +45,16 @@ type MenuCtx = {
   colors(): Theme;
   menuW: number;
   floats: Floats;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
   makeIconSlot(
     name: string,
     states: { fg: string; bg: string }[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
-  ): { el: any; slotId: string; spec: any };
+    onMouseDown?: (ev: MouseEvent) => void,
+  ): IconSlotHandle;
 };
 
 type MenuState = {
@@ -66,14 +73,18 @@ export const makeMenu = (ctx: MenuCtx) => {
   // raw teardown — registered with floats at open time, invoked by floats
   // (public closeFileMenu is floats.close("filemenu"))
   const removeSub = (): void => {
-    const sub: any = ctx.byId("tfm-filemenu-sub");
+    const sub = ctx.byId("tfm-filemenu-sub");
     sub?.parent?.remove(sub);
   };
   const rawCloseMenu = () => {
     removeSub();
-    const scrim: any = ctx.byId("tfm-filemenu");
+    const scrim = ctx.byId("tfm-filemenu");
     scrim?.parent?.remove(scrim);
     state = null;
+    // the hovered row's out never fires (its node is gone) — restore here or
+    // the pointer sticks until the next move (same stale-until-move rule as
+    // the highlight paint)
+    ctx.setPointer?.("default");
   };
 
   const subEntries = (): ListEntry[] | null =>
@@ -92,7 +103,7 @@ export const makeMenu = (ctx: MenuCtx) => {
         paddingLeft: 1,
         paddingRight: 1,
         backgroundColor: active ? colors.accentBg : undefined,
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}
@@ -105,7 +116,7 @@ export const makeMenu = (ctx: MenuCtx) => {
             ctx.makeIconSlot(
               entry.icon,
               [
-                { fg: colors.sidebarFg, bg: active ? colors.accentBg : colors.sidebarBg },
+                { fg: colors.white, bg: active ? colors.accentBg : colors.sidebarBg },
                 { fg: colors.white, bg: colors.accentBg },
               ],
               1,
@@ -113,7 +124,7 @@ export const makeMenu = (ctx: MenuCtx) => {
             ).el,
           ]
         : []),
-      Text({ content: entry.label, fg: active ? colors.white : colors.sidebarFg }),
+      Text({ content: entry.label, fg: colors.white }),
       Box({ flexGrow: 1 }),
       ...(entry.submenu
         ? [
@@ -174,7 +185,7 @@ export const makeMenu = (ctx: MenuCtx) => {
     );
     ctx.rootAdd(sub);
     // add rows to the MOUNTED panel (the local VNode proxy no-ops post-add)
-    const livePanel: any = ctx.byId("tfm-filemenu-sub-panel");
+    const livePanel = ctx.byId("tfm-filemenu-sub-panel");
     if (!livePanel) return;
     livePanel.add(
       Box(
@@ -186,8 +197,12 @@ export const makeMenu = (ctx: MenuCtx) => {
       livePanel.add(
         rowNode(
           e,
-          i === state!.subIdx,
+          i === state?.subIdx,
           () => {
+            // position truth (pointer) before change truth (highlight): the
+            // keyboard cursor may already sit here, in which case no repaint
+            // runs but the shape must still set
+            ctx.setPointer?.("pointer");
             if (state && state.subIdx !== i) {
               state.subIdx = i;
               renderSubMenu();
@@ -205,10 +220,10 @@ export const makeMenu = (ctx: MenuCtx) => {
   };
 
   const renderFileMenu = () => {
-    const panel: any = ctx.byId("tfm-filemenu-panel");
+    const panel = ctx.byId("tfm-filemenu-panel");
     if (!panel || !state) return;
     const colors = ctx.colors();
-    clearChildren(panel);
+    destroyChildren(panel);
     panel.add(
       Box(
         { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
@@ -219,10 +234,13 @@ export const makeMenu = (ctx: MenuCtx) => {
       panel.add(
         rowNode(
           e,
-          i === state!.idx,
+          i === state?.idx,
           () => {
-            // hovering another row swaps/closes the flyout; a freshly opened
-            // flyout has NO cursor until the next move/hover
+            // position truth (pointer) before change truth (highlight) —
+            // same rule as the submenu hover above. Hovering another row
+            // swaps/closes the flyout; a freshly opened flyout has NO cursor
+            // until the next move/hover
+            ctx.setPointer?.("pointer");
             if (state && state.idx !== i) {
               state.idx = i;
               state.subIdx = e.submenu ? -1 : null;
@@ -231,13 +249,9 @@ export const makeMenu = (ctx: MenuCtx) => {
           },
           () => {
             if (!state) return;
-            if (e.submenu) {
-              state.idx = i;
-              state.subIdx = -1;
-              renderFileMenu();
-            } else {
-              e.action();
-            }
+            // a parent row's action is directly clickable (hover / → still
+            // open the flyout for the variants) — a click fires it
+            e.action();
           },
         ),
       );
@@ -264,11 +278,7 @@ export const makeMenu = (ctx: MenuCtx) => {
   const moveSub = (delta: number): void => {
     const items = subEntries();
     if (!state || state.subIdx === null || !items || !items.length) return;
-    const count = items.length;
-    // from "no cursor" (-1): down fills first, up fills last
-    let i = state.subIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (state.subIdx + delta + count) % count;
-    for (let n = 0; items[i]?.sep && n < count; n++) i = (i + delta + count) % count;
-    state.subIdx = i;
+    state.subIdx = advanceCursor(state.subIdx, delta, items.length, items);
     renderSubMenu();
   };
   const activateSub = (): void => {

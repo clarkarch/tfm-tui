@@ -4,26 +4,33 @@
 // cancels, validation errors render in the footer and keep the modal open.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, Input, RGBA, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, type MouseEvent, Text } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface } from "./style";
+import { makeModalScrim } from "./ui-dialogs";
 import { bulkRenameNames, planBulkRename, type BulkRenamePair, type BulkRenameStyle } from "../fs/bulk-rename";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import { hoverEvents, type SlotElement } from "./ui-slots";
 
 type BulkRenameCtx = {
-  renderer(): any;
-  byId(id: string): any;
-  rootAdd(node: any): void;
-  clearChildren(node: any): void;
+  renderer(): CliRenderer;
+  byId(id: string): MaybeNode;
+  rootAdd(node: unknown): void;
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   drainIconQueue(): void | Promise<void>;
   colors(): Theme;
   uiStyle(): UiStyle;
   floats: Floats;
   performBulkRename(pairs: BulkRenamePair[]): void | Promise<void>;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 const PANEL_W = 76;
@@ -43,15 +50,15 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
   let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const setError = (msg: string): void => {
-    const el: any = ctx.byId("tfm-bulkrename-error");
+    const el = ctx.byId("tfm-bulkrename-error");
     if (el) el.content = msg || EMPTY_ERROR;
   };
 
   const renderPreview = (): void => {
-    const box: any = ctx.byId("tfm-bulkrename-preview");
+    const box = ctx.byId("tfm-bulkrename-preview");
     if (!box) return;
     const c = ctx.colors();
-    ctx.clearChildren(box);
+    ctx.destroyChildren(box);
     const stem = value.trim();
     const names = stem ? bulkRenameNames(items, stem, style) : [];
     const nameW = Math.floor((PANEL_W - 4 - 3 - 2) / 2);
@@ -97,9 +104,9 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     const c = ctx.colors();
     for (const s of STYLES) {
       const active = s === style;
-      const chip: any = ctx.byId(`tfm-bulkrename-style-${s}`);
+      const chip = ctx.byId(`tfm-bulkrename-style-${s}`);
       if (chip) applySurface(chip, btnSurface(ctx.uiStyle(), c, active, c.sidebarBg));
-      const label: any = ctx.byId(`tfm-bulkrename-style-label-${s}`);
+      const label = ctx.byId(`tfm-bulkrename-style-label-${s}`);
       if (label) label.fg = active ? c.accent : c.sidebarFgMuted;
     }
   };
@@ -126,8 +133,10 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     try {
       ctx.byId("tfm-bulkrename-input")?.blur?.();
     } catch {}
-    const scrim: any = ctx.byId("tfm-bulkrename");
+    const scrim = ctx.byId("tfm-bulkrename");
     scrim?.parent?.remove(scrim);
+    // the input is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
   };
 
   const close = (): void => {
@@ -153,7 +162,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     return true;
   };
 
-  const btn = (id: string, label: string, fg: string, onPick: () => void): any =>
+  const btn = (id: string, label: string, fg: string, onPick: () => void): SlotElement =>
     Box(
       {
         id,
@@ -161,31 +170,35 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
         flexGrow: 1,
         flexDirection: "row",
         justifyContent: "center",
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}
           onPick();
         },
+        // pointer only — the buttons carry no hover paint by design
+        ...hoverEvents(() => {}, ctx.setPointer),
       },
       Text({ content: label, fg }),
     );
 
-  const chip = (s: BulkRenameStyle): any =>
+  const chip = (s: BulkRenameStyle): SlotElement =>
     Box(
       {
         id: `tfm-bulkrename-style-${s}`,
         height: 1,
         paddingLeft: 1,
         paddingRight: 1,
-        onMouseDown: (ev: any) => {
+        onMouseDown: (ev: MouseEvent) => {
           try {
             ev.stopPropagation?.();
           } catch {}
           setStyle(s);
         },
+        // pointer only — the chips repaint through setStyle, not hover
+        ...hoverEvents(() => {}, ctx.setPointer),
       },
-      Text({ id: `tfm-bulkrename-style-label-${s}`, content: STYLE_LABELS[s], fg: ctx.colors().sidebarFg }),
+      Text({ id: `tfm-bulkrename-style-label-${s}`, content: STYLE_LABELS[s], fg: ctx.colors().white }),
     );
 
   const open = (paths: string[]): void => {
@@ -194,79 +207,63 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     ctx.floats.open("bulkrename", rawClose);
     opened = true;
     items = paths.map((p) => ({ path: p }));
+    // the input owns the keyboard now — text pointer until it settles
+    ctx.setPointer?.("text");
     value = "";
     style = "plain";
     const c = ctx.colors();
     const inputW = PANEL_W - 2 - 2 - LABEL_W - 1;
-    const scrim = Box(
+    const scrim = makeModalScrim(
+      { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {
         id: "tfm-bulkrename",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: "100%",
-        height: "100%",
-        alignItems: "center",
-        justifyContent: "center",
         zIndex: FLOAT_Z.bulkrename,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-        onMouseDown: () => close(),
+        panelWidth: PANEL_W,
+        onClose: () => close(),
       },
       Box(
-        {
-          id: "tfm-bulkrename-panel",
-          width: PANEL_W,
-          ...floatSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
-          paddingTop: 1,
-          paddingBottom: 1,
-          flexDirection: "column",
-          onMouseDown: (ev: any) => {
-            try {
-              ev.stopPropagation?.();
-            } catch {}
-          },
-        },
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-          Text({ content: `Rename ${items.length} items`, fg: c.accent }),
-          Box({ flexGrow: 1 }),
-          ctx.escHintBtn("tfm-bulkrename-esc", () => close()),
-        ),
-        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
-          Text({ content: "New name", width: LABEL_W, fg: c.sidebarFgMuted }),
-          Input({
-            id: "tfm-bulkrename-input",
-            width: inputW,
-            placeholder: "New name…",
-            backgroundColor: c.accentBg,
-            focusedBackgroundColor: c.accentBg,
-            textColor: c.white,
-          }),
-        ),
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
-          Text({ content: "Number", width: LABEL_W, fg: c.sidebarFgMuted }),
-          ...STYLES.map((s) => chip(s)),
-        ),
-        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-        Box({ width: "100%", height: 1, paddingLeft: 2 }, Text({ content: "Preview", fg: c.sidebarFgMuted })),
-        Box({ id: "tfm-bulkrename-preview", width: "100%", flexDirection: "column" }),
-        Box(
-          { width: "100%", height: 1, paddingLeft: 2, paddingRight: 2 },
-          Text({ id: "tfm-bulkrename-error", content: EMPTY_ERROR, fg: c.ansi1 }),
-        ),
-        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", columnGap: 2, paddingLeft: 2, paddingRight: 2 },
-          btn("tfm-bulkrename-cancel", "[ Cancel ]", c.sidebarFg, () => close()),
-          btn("tfm-bulkrename-ok", "[ Rename ]", c.accent, () => apply()),
-        ),
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+        Text({ id: "tfm-bulkrename-title", content: `Rename ${items.length} items`, fg: c.accent }),
+        Box({ flexGrow: 1 }),
+        ctx.escHintBtn("tfm-bulkrename-esc", () => close()),
+      ),
+      Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
+        Text({ id: "tfm-bulkrename-label-name", content: "New name", width: LABEL_W, fg: c.sidebarFgMuted }),
+        Input({
+          id: "tfm-bulkrename-input",
+          width: inputW,
+          placeholder: "New name…",
+          backgroundColor: c.accentBg,
+          focusedBackgroundColor: c.accentBg,
+          textColor: c.white,
+        }),
+      ),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, columnGap: 1 },
+        Text({ id: "tfm-bulkrename-label-number", content: "Number", width: LABEL_W, fg: c.sidebarFgMuted }),
+        ...STYLES.map((s) => chip(s)),
+      ),
+      Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 2 },
+        Text({ id: "tfm-bulkrename-label-preview", content: "Preview", fg: c.sidebarFgMuted }),
+      ),
+      Box({ id: "tfm-bulkrename-preview", width: "100%", flexDirection: "column" }),
+      Box(
+        { width: "100%", height: 1, paddingLeft: 2, paddingRight: 2 },
+        Text({ id: "tfm-bulkrename-error", content: EMPTY_ERROR, fg: c.ansi1 }),
+      ),
+      Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+      Box(
+        { width: "100%", height: 1, flexDirection: "row", columnGap: 2, paddingLeft: 2, paddingRight: 2 },
+        btn("tfm-bulkrename-cancel", "[ Cancel ]", c.white, () => close()),
+        btn("tfm-bulkrename-ok", "[ Rename ]", c.accent, () => apply()),
       ),
     );
     ctx.rootAdd(scrim);
-    const input: any = ctx.byId("tfm-bulkrename-input");
+    const input = ctx.byId("tfm-bulkrename-input");
     if (input?.on) {
       input.on("input", () => {
         try {
@@ -288,16 +285,57 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     }, 10);
   };
 
+  // theme-switch repaint while open: panel + input + title + error by id,
+  // chips + preview through their live renderers. No rebuild — the typed
+  // value + style + focus survive (the Input node itself is untouched).
+  const repaint = (): void => {
+    if (!opened) return;
+    const c = ctx.colors();
+    try {
+      const panel = ctx.byId("tfm-bulkrename-panel");
+      if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
+    } catch {}
+    try {
+      const input = ctx.byId("tfm-bulkrename-input");
+      if (input) {
+        input.backgroundColor = c.accentBg;
+        input.focusedBackgroundColor = c.accentBg;
+        input.textColor = c.white;
+      }
+    } catch {}
+    try {
+      const title = ctx.byId("tfm-bulkrename-title");
+      if (title) title.fg = c.accent;
+    } catch {}
+    for (const id of ["tfm-bulkrename-label-name", "tfm-bulkrename-label-number", "tfm-bulkrename-label-preview"]) {
+      try {
+        const label = ctx.byId(id);
+        if (label) label.fg = c.sidebarFgMuted;
+      } catch {}
+    }
+    try {
+      const err = ctx.byId("tfm-bulkrename-error");
+      if (err && err.content !== EMPTY_ERROR) err.fg = c.ansi1;
+    } catch {}
+    try {
+      repaintStyles();
+    } catch {}
+    try {
+      renderPreview();
+    } catch {}
+  };
+
   return {
     open,
     close,
     apply,
     handleKey,
     isOpen: (): boolean => opened,
+    repaint,
     // test seam: drive the input without native key events
     setValue: (v: string): void => {
       try {
-        const input: any = ctx.byId("tfm-bulkrename-input");
+        const input = ctx.byId("tfm-bulkrename-input");
         if (input) input.value = v;
       } catch {}
       value = v;

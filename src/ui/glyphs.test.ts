@@ -4,7 +4,7 @@ import path from "node:path";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { ensureGlyphFallbacks, glyph, glyphFor } from "./glyphs";
 
-// every raster asset must resolve in glyph mode (no rsvg-convert) — either
+// every raster asset must resolve in glyph mode (no SVG rasterizer) — either
 // statically or via the filetype fallback that maps unknown categories to
 // the generic file glyph. Pinned after the sort arrows shipped as SVGs with
 // no table entry and the active sort column showed U+FFFD tofu.

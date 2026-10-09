@@ -8,37 +8,56 @@
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, rename as fsRename } from "node:fs/promises";
+import { mkdir, lstat, readdir, readlink, rm, rename as fsRename } from "node:fs/promises";
+import { swallow } from "../app/log";
 import {
+  errCode,
   failSuffix,
+  type FileId,
+  fileIdMatches,
+  fileIdOf,
   fsErrText,
   fsMove,
   isInTrashFiles,
   isWithinOrEqual,
-  rmTrashInfo,
+  rmTrashInfoForPath,
   safeRestoreMove,
   shouldToast,
+  tmpName,
+  trashDir,
+  trashIfSameFile,
+  trashInfoPathForTrashFile,
   uniqueTarget,
+  xdgTrashMoveToRoot,
   xdgTrashMove,
   crossDevice as fsCrossDevice,
 } from "./fsutil";
+import {
+  defaultSudoExec,
+  isPrivilegeError,
+  runSudoTool,
+  sudoCpArgv,
+  sudoMvArgv,
+  sudoRmArgv,
+  type SudoExecFn,
+} from "./elevate";
 import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
 import {
   commonParent,
-  compressPlan,
   compressionExt,
+  countArchiveEntries,
   detectArchiveFormat,
-  extractPlan,
-  listArchiveEntries,
+  runArchiveTask,
   runArchiveTool,
   uniqueArchiveTarget,
   type ArchiveFormat,
   type ArchiveRun,
   type CompressionFormat,
+  type WhichFn,
 } from "./archive";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
 import { sharedOpQueue } from "../lib/op-queue";
-import { sharedPluginHooks } from "../lib/plugin-hooks";
+import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { ConflictChoice } from "../ui/ui-dialogs";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { ProgressState } from "../ui/ui-progress";
@@ -76,9 +95,19 @@ export type FileOpsCtx = {
     dUnits: UndoStep[],
     onStashFailed: (err: unknown) => void,
   ) => Promise<boolean>;
-  // archive engine seam (tests inject; default = src/fs/archive)
+  // archive engine seam (tests inject; default = src/fs/archive, which spawns
+  // native tools when present and falls back to the in-process engine
+  // otherwise — see selectArchiveLane)
   runArchive?: ArchiveRun;
   listArchive?: (fmt: ArchiveFormat, file: string) => Promise<number>;
+  // tool probe for archive lane selection (tests force the fallback with
+  // () => null); defaults to the real PATH probe
+  archiveWhich?: WhichFn;
+  // sudo escalation seams (wiring injects the prompt-backed impl; tests fake):
+  // ensureSudo prompts for the password (cached-timestamp-first) once per op,
+  // sudoExec runs one sudo argv and reports its exit (default = runSudo)
+  ensureSudo?: (opLabel: string) => Promise<boolean>;
+  sudoExec?: SudoExecFn;
   // /tmp/tfm-dnd.log debug sink
   log(msg: string): void;
   // plugin event fan-out (optional; never throws into the transfer).
@@ -91,8 +120,30 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const { prog, conflict } = ctx;
   const queue = sharedOpQueue();
   const runArchive: ArchiveRun = ctx.runArchive ?? runArchiveTool;
+  const archiveWhich = ctx.archiveWhich ?? Bun.which;
   const listArchive =
-    ctx.listArchive ?? ((fmt: ArchiveFormat, file: string) => listArchiveEntries(fmt, file, runArchive));
+    ctx.listArchive ?? ((fmt: ArchiveFormat, file: string) => countArchiveEntries(fmt, file, runArchive, archiveWhich));
+  // one task call per archive op: spawn when tools exist, in-process fallback
+  // otherwise. Cooperative hooks (no child to signal on the js lane — ✕/pause
+  // flow through prog like the spawn path).
+  const runArchiveOp = (
+    task: Parameters<typeof runArchiveTask>[0],
+    opts: { onLine?: (line: string) => void; cwd?: string; onLoss?: (loss: { exec: number; links: number }) => void },
+  ): Promise<{ code: number; stdout: string; stderr: string }> =>
+    runArchiveTask(task, {
+      run: runArchive,
+      which: archiveWhich,
+      cwd: opts.cwd,
+      onLine: opts.onLine,
+      onChild: onArchiveChild,
+      isCancelled: () => prog.cancelled,
+      pauseGate: () => ctx.pauseGate(),
+      onLoss: opts.onLoss,
+      // hung-tool backstop (a wedged tar/7z holds the serial queue, and
+      // quit/restart refuse while busy): generous enough for multi-GB
+      // archives, fatal only for a truly stuck child
+      timeoutMs: 15 * 60 * 1000,
+    });
 
   // archive progress helpers: reset shared flags per op (stale-cancel lesson),
   // arm the toast only when the total clears shouldToast
@@ -115,6 +166,30 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.showProgressToast();
       ctx.paintProgress(true);
     }
+  };
+  // Shared op-summary tail (transfer/extract/compress — the three tails with
+  // the same shape): joined message + toast finish (noun variants) + leveled
+  // notify + plugin emit. Bulk rename's tail differs (no toast, title/level
+  // co-vary) — it stays inline.
+  const finishOpSummary = (
+    op: string,
+    noun: string,
+    successText: string,
+    msg: string,
+    paths: string[],
+    dest: string | undefined,
+    cancelled: boolean,
+    failed: number,
+  ): void => {
+    if (prog.toastUp) {
+      ctx.finishProgressToast(cancelled ? `✗ ${noun} cancelled` : failed ? `✗ ${noun} failed` : `✓ ${successText}`);
+    }
+    if (cancelled) ctx.notify(msg, `${op} cancelled`, "info");
+    else if (failed > 0) ctx.notify(msg, `${op} failed`, "error");
+    else ctx.notify(msg, op, "success");
+    try {
+      ctx.onFileOp?.(op, paths, dest, { cancelled, failed });
+    } catch {}
   };
   // Pre-scan in "counting" mode (nautilus' "Preparing…" counter): a huge
   // source tree used to run scanTree in total silence — seconds of dead UI
@@ -159,9 +234,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     }
     return { files, bytes, armed };
   };
-  // register the live child so the toast's ✕ kills it (SIGTERM) and the pause
-  // button stops/resumes it (SIGSTOP/SIGCONT) — archive tools report no bytes,
-  // so the ReadStream path never applies
+  // register the live child so the toast's ✕ kills it (SIGKILL, SIGCONT first
+  // when paused) and the pause button stops/resumes it (SIGSTOP/SIGCONT) —
+  // archive tools report no bytes, so the ReadStream path never applies
   const onArchiveChild = (child: ChildProcess): void => {
     prog.processCancel = () => {
       // SIGCONT first: a paused (SIGSTOPped) child ignores SIGTERM/SIGKILL
@@ -185,23 +260,41 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     prog.processPause = null;
   };
 
-  // first non-blank line of a tool's stderr — the actionable part of a failure
+  // first actionable stderr line of a failure. 7z -bso2 moved its whole entry
+  // log to stderr, so a 7z failure opens with the version banner — report the
+  // trailing error block (Error:/errno lines, probed) instead. No other tool's
+  // stderr opens with that banner, so they keep the head untouched.
   const firstErrLine = (s: string): string => {
+    const lines: string[] = [];
     for (const line of s.split("\n")) {
       const t = line.trim();
-      if (t) return t;
+      if (t) lines.push(t);
     }
-    return "";
+    const [head] = lines;
+    if (head && /^(7-Zip|p7zip) /.test(head)) return lines.at(-1) ?? "";
+    return head ?? "";
   };
 
   // plugin veto channel: a beforeFileOp hook returning { skip: true } blocks the
   // op before any work. Sync + isolated inside the hook bus.
-  const vetoedByPlugin = (op: string, paths: string[], dest?: string): boolean => {
-    const veto = sharedPluginHooks().beforeFileOp({ op, paths, ...(dest ? { dest } : {}) });
-    if (!veto) return false;
-    const msg = `Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`;
-    ctx.notify(msg, "blocked", "info");
-    return true;
+  const vetoedByPlugin = (op: string, paths: string[], dest?: string): boolean =>
+    checkPluginVeto(sharedPluginHooks(), ctx.notify, op, paths, dest);
+
+  // fire-and-forget callers (wiring `void` sites, ui-rename, dnd) must never
+  // see an unhandled rejection: promptConflict/preScan/readdir can all throw
+  // above the per-file handlers, and the crash handler would log them with no
+  // toast — a silent failure. Every queued op funnels through here so the
+  // returned promise never rejects: unexpected throws log + toast + repaint.
+  const guardOp = async (noun: string, fn: () => Promise<void>): Promise<void> => {
+    try {
+      await fn();
+    } catch (err) {
+      ctx.log(`${noun} failed: ${fsErrText(err)}`);
+      ctx.notify(`${noun} failed (${fsErrText(err)})`, noun.toLowerCase(), "error");
+      try {
+        ctx.renderAll();
+      } catch {}
+    }
   };
 
   // Trash/files (or anything under it) is not a paste/move target: files
@@ -223,10 +316,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         const trashLoc = await xdgTrashMove(victimDest);
         units.push(async () => {
           await safeRestoreMove(trashLoc, victimDest);
-          await rmTrashInfo(path.basename(trashLoc), ctx.log);
+          await rmTrashInfoForPath(trashLoc, ctx.log);
         });
         dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
-        dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc) });
+        dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc), path: trashLoc });
         return true;
       } catch (err) {
         onStashFailed(err);
@@ -254,11 +347,112 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     clearStream: (rs) => {
       if (prog.currentRs === rs) prog.currentRs = null;
     },
-    repaint: (full) => ctx.paintProgress(full),
+    repaint: ctx.paintProgress,
   };
-  const copyTreeProgressWired = (src: string, dest: string): Promise<void> => copyTreeProgress(src, dest, transferSink);
+  const copyTreeProgressWired = (src: string, dest: string): Promise<FileId | null> =>
+    copyTreeProgress(src, dest, transferSink);
   const isCrossDevice = (a: string, b: string): boolean => (ctx.crossDevice ?? fsCrossDevice)(a, b);
   const removeTree = ctx.removeTree ?? ((p: string) => rm(p, { recursive: true }));
+  const sudoExec = ctx.sudoExec ?? defaultSudoExec;
+
+  // sudo retry: one password gate per op (memoized by the caller), then the
+  // same end-state as the normal path via cp -a / mv so undo units below can
+  // be reused untouched. Throws the tool's first stderr line on failure.
+  const sudoFileIdOf = async (p: string): Promise<FileId | null> => {
+    const r = await sudoExec(["sudo", "-n", "stat", "-c", "%d:%i:%w", "--", p]);
+    if (r.status !== 0) return null;
+    const match = /^(\d+):(\d+):(.+)$/.exec(r.stdout?.trim() ?? "");
+    if (!match) return null;
+    const when = match[3] ?? "";
+    const parsed = Date.parse(when);
+    const fraction = /\.(\d+)/.exec(when)?.[1] ?? "";
+    const born = parsed + (fraction.length > 3 ? Number(`0.${fraction.slice(3)}`) : 0);
+    return {
+      dev: Number(match[1]),
+      ino: Number(match[2]),
+      ...(Number.isFinite(born) ? { born } : {}),
+    };
+  };
+  const sudoCopy = async (src: string, target: string): Promise<FileId> => {
+    const stage = tmpName(target);
+    await runSudoTool(sudoExec, ["sudo", "-n", "mkdir", "--", stage]);
+    try {
+      await runSudoTool(sudoExec, sudoCpArgv(src, stage));
+      const staged = path.join(stage, path.basename(src));
+      const id = fileIdOf(staged) ?? (await sudoFileIdOf(staged));
+      if (!id) throw new Error("cannot identify staged copy");
+      await runSudoTool(sudoExec, ["sudo", "-n", "mv", "-nT", "--", staged, target]);
+      const remains = await sudoExec(["sudo", "-n", "test", "-e", staged]);
+      if (remains.status === 0) throw new Error(`already exists: ${path.basename(target)}`);
+      if (remains.status !== 1 || remains.stderr.trim())
+        throw new Error(remains.stderr || "cannot verify copy destination");
+      const linkRemains = await sudoExec(["sudo", "-n", "test", "-L", staged]);
+      if (linkRemains.status === 0) throw new Error(`already exists: ${path.basename(target)}`);
+      if (linkRemains.status !== 1 || linkRemains.stderr.trim())
+        throw new Error(linkRemains.stderr || "cannot verify copy destination");
+      return id;
+    } finally {
+      try {
+        await runSudoTool(sudoExec, sudoRmArgv(stage));
+      } catch (err) {
+        ctx.log(`sudo copy stage cleanup ${stage}: ${fsErrText(err)}`);
+      }
+    }
+  };
+  const sudoMove = (src: string, target: string): Promise<void> => runSudoTool(sudoExec, sudoMvArgv(src, target));
+  const sudoRemove = (target: string): Promise<void> => runSudoTool(sudoExec, sudoRmArgv(target));
+  // sudo replace-stash: the normal stashVictim runs unprivileged BEFORE any
+  // sudo retry, so a privileged victim would abort the op as "Replace failed"
+  // without ever reaching the gate. Same claim/rename/finalize loop as
+  // xdgTrashMoveToRoot with sudo-mv (one loop in fsutil, not a near-clone) —
+  // any failure returns false (the caller aborts that iteration).
+  //
+  // The pushed undo unit is sudo-aware: a sudo-moved victim is root-owned in
+  // the user's trash, so the unprivileged restore fails EACCES — retry
+  // privileged behind one gate instead of stranding the victim (the failure
+  // mode trash/restore refuse to create by never escalating). Journal replay
+  // stays best-effort unprivileged (the persisted steps carry no privilege),
+  // covered by the "(may need permission)" hint.
+  const sudoStashVictim = async (victimDest: string, units: UndoUnit[], dUnits: UndoStep[]): Promise<boolean> => {
+    try {
+      const trashLoc = await xdgTrashMoveToRoot(victimDest, trashDir(), sudoMove);
+      const tid = fileIdOf(trashLoc);
+      units.push(async () => {
+        if (!existsSync(trashLoc)) return;
+        if (tid && !fileIdMatches(tid, trashLoc)) {
+          ctx.log(`undo replace ${victimDest}: trashed copy changed, skipped`);
+          return;
+        }
+        let gated: boolean | null = null;
+        const gate = async (): Promise<boolean> => {
+          if (gated === null) gated = ctx.ensureSudo ? await ctx.ensureSudo("undo replace") : false;
+          return gated;
+        };
+        try {
+          await safeRestoreMove(trashLoc, victimDest);
+        } catch (err) {
+          if (!isPrivilegeError(err) || !(await gate())) throw err;
+          await sudoMove(trashLoc, victimDest);
+        }
+        await rmTrashInfoForPath(trashLoc, ctx.log);
+        const infoPath = trashInfoPathForTrashFile(trashLoc);
+        // cosmetic cleanup only: never prompt for a password just for a
+        // sidecar — escalate only when the gate already passed above
+        if (infoPath && existsSync(infoPath) && gated === true) {
+          try {
+            await sudoRemove(infoPath);
+          } catch (infoErr) {
+            ctx.log(`undo replace sidecar cleanup ${infoPath}: ${fsErrText(infoErr)}`);
+          }
+        }
+      });
+      dUnits.push({ op: "restore-move", from: trashLoc, to: victimDest });
+      dUnits.push({ op: "rm-trashinfo", name: path.basename(trashLoc), path: trashLoc });
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   // every destructive-but-reversible file op funnels through here so overrides
   // are asked once and undo covers the whole batch. Serialized through the
@@ -276,7 +470,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // plugin veto BEFORE enqueue (and before any caller side effects — paste
     // clears its clipboard only after this returns false)
     if (veto && vetoedByPlugin(op, srcs, destDir)) return Promise.resolve();
-    return queue.enqueue(() => runTransferInner(op, destDir, srcs, label));
+    return queue.enqueue(() =>
+      guardOp(op === "copy" ? "Copy" : "Move", () => runTransferInner(op, destDir, srcs, label)),
+    );
   };
   const runTransferInner = async (
     op: "copy" | "move",
@@ -304,10 +500,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         if (/\.tfm-part-\d+-[0-9a-z]{8}$/.test(k) || /^\.tfm-extract-\d+-[0-9a-z]{8}$/.test(k)) {
           try {
             await rm(path.join(destDir, k), { recursive: true, force: true });
-          } catch {}
+          } catch (err) {
+            swallow("crash orphan sweep", err);
+          }
         }
       }
-    } catch {}
+    } catch (err) {
+      swallow("crash orphan sweep scan", err);
+    }
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
     // journal mirror of units/redos as fs-step data (persisted when
@@ -322,6 +522,17 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       selfDrop = 0;
     const failWhy = new Set<string>();
     const total = srcs.length;
+    // sudo gate memoized per op: one password prompt per batch, not per file.
+    // usedSudo marks the toast hint: set ONLY when a sudo success lands undo
+    // units (gate passes for cleanup-only paths must not qualify later
+    // unprivileged successes).
+    let sudoOk: boolean | null = null;
+    let usedSudo = false;
+    const needSudo = async (): Promise<boolean> => {
+      if (sudoOk !== null) return sudoOk;
+      sudoOk = ctx.ensureSudo ? await ctx.ensureSudo(label) : false;
+      return sudoOk;
+    };
     // moves across a filesystem boundary go through the copy engine too
     // (rename can't cross devices) — those need the same pre-scan + toast
     // copies get, or a big cross-device move sits there silently for minutes.
@@ -389,47 +600,58 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           }
           if (choice === "keepBoth") target = uniqueTarget(destDir, base);
           else {
+            let stashErr: unknown = null;
             const stashed = await stashVictim(target, units, dUnits, (err) => {
-              failWhy.add(fsErrText(err));
+              stashErr = err;
               ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — original kept`);
             });
             // a failed stash must abort the overwrite, not proceed silently
-            // without undo (the victim is then destroyed for good)
+            // without undo (the victim is then destroyed for good) — but a
+            // privileged victim gets one sudo retry first (the normal stash
+            // runs before any gate, so without this the escalated path is
+            // unreachable for replace flows)
             if (!stashed) {
-              failed++;
-              continue;
-            }
-            replaced++;
+              const sudoStashed =
+                isPrivilegeError(stashErr) && (await needSudo()) && (await sudoStashVictim(target, units, dUnits));
+              if (sudoStashed) {
+                usedSudo = true;
+                replaced++;
+              } else {
+                failWhy.add(fsErrText(stashErr));
+                failed++;
+                continue;
+              }
+            } else replaced++;
           }
         }
         // per-iteration: did THIS src go through the streaming copy engine?
         // (cross-device moves need the same half-copy cleanup real copies get)
         let copiedHere = false;
-        try {
-          if (op === "copy") {
-            copiedHere = true;
-            await copyTreeProgressWired(src, target);
-          } else if (isCrossDevice(src, destDir)) {
-            copiedHere = true;
-            await copyTreeProgressWired(src, target);
-            // cancel raced the final byte: copy completed but the source must
-            // survive a cancelled move — surface as cancelled, drop the copy
-            if (prog.cancelled) throw new Error("cancelled");
-            try {
-              await removeTree(src);
-            } catch (err) {
-              // source is partially deleted; the copy in `target` is now the
-              // ONLY complete data — clearing it (the half-copy cleanup below)
-              // would lose everything. Keep it and report loudly.
-              copiedHere = false;
-              throw new Error(`source partially removed: ${fsErrText(err)}`);
-            }
-          } else await fsMove(src, target);
+        let copyId: FileId | null = null;
+        const stillOurCopy = async (): Promise<boolean> => {
+          if (!copyId) return false;
+          if (fileIdMatches(copyId, target)) return true;
+          if (sudoOk !== true) return false;
+          const current = await sudoFileIdOf(target).catch(() => null);
+          return (
+            !!current &&
+            current.dev === copyId.dev &&
+            current.ino === copyId.ino &&
+            (copyId.born === undefined || current.born === copyId.born)
+          );
+        };
+
+        // cross-device move whose COPY landed but whose source removal failed:
+        // `target` is the only complete data — the sudo retry must only retry
+        // the removal, never rm/recopy the complete copy (total data loss).
+        let sourceRemovalFailed = false;
+        const recordSuccess = (): void => {
           const t = target,
             s = src;
           if (op === "copy") {
-            units.push(() => xdgTrashMove(t).then(() => undefined));
-            dUnits.push({ op: "trash", path: t });
+            const tid = copyId;
+            units.push(() => trashIfSameFile(t, tid, ctx.log));
+            dUnits.push({ op: "trash", path: t, ...(tid ?? {}) });
             redos.push(async () => {
               try {
                 if (!existsSync(t)) await copyTreeProgressWired(src, t);
@@ -451,13 +673,97 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             dRedos.push({ op: "rename-if", from: s, to: t });
           }
           ok++;
+        };
+        try {
+          if (op === "copy") {
+            copyId = await copyTreeProgressWired(src, target);
+            copiedHere = true;
+            if (!copyId || !fileIdMatches(copyId, target)) throw new Error("copy destination changed");
+          } else if (isCrossDevice(src, destDir)) {
+            copyId = await copyTreeProgressWired(src, target);
+            copiedHere = true;
+            if (!copyId || !fileIdMatches(copyId, target)) throw new Error("copy destination changed");
+
+            // cancel raced the final byte: copy completed but the source must
+            // survive a cancelled move — surface as cancelled, drop the copy
+            if (prog.cancelled) throw new Error("cancelled");
+            try {
+              await removeTree(src);
+            } catch (err) {
+              // source is partially deleted; the copy in `target` is now the
+              // ONLY complete data — clearing it (the half-copy cleanup below)
+              // would lose everything. Keep it and report loudly. The sudo
+              // retry is told to retry ONLY the removal (sourceRemovalFailed).
+              copiedHere = false;
+              sourceRemovalFailed = true;
+              throw new Error(`source partially removed: ${fsErrText(err)}`);
+            }
+          } else await fsMove(src, target);
+          recordSuccess();
         } catch (err) {
-          // don't leave half-copied files behind (copies AND cross-device moves)
-          if (op === "copy" || copiedHere) {
+          // privilege failure → one password gate per batch, then the same
+          // end-state via sudo; undo units stay identical. Moves across a
+          // filesystem boundary retry as sudo cp + sudo rm (rename can't
+          // cross devices), preserving the partial-removal accounting below.
+          let failure: unknown = err;
+          if (!prog.cancelled && isPrivilegeError(err) && (await needSudo())) {
+            // ✕ landed while the password prompt was up: abort, don't exec
+            if (prog.cancelled) failure = new Error("cancelled");
+            else {
+              try {
+                if (sourceRemovalFailed) {
+                  // the copy already landed — only the source needs privilege.
+                  // NEVER touch `target` here: the source is partially deleted
+                  // and `target` is the only complete copy (an rm+recopy of it
+                  // destroys the files the failed rm already removed).
+                  if (!(await stillOurCopy())) throw new Error("source partially removed: copy destination changed");
+                  try {
+                    await sudoRemove(src);
+                  } catch (rmErr) {
+                    throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
+                  }
+                } else if (op === "copy" || isCrossDevice(src, destDir)) {
+                  const occupied = await lstat(target).then(
+                    () => true,
+                    (statErr: unknown) => {
+                      if (["ENOENT", "EACCES", "EPERM"].includes(String(errCode(statErr)))) return false;
+                      throw statErr;
+                    },
+                  );
+                  if (occupied) throw new Error(`already exists: ${path.basename(target)}`);
+                  copyId = await sudoCopy(src, target);
+                  copiedHere = true;
+                  if (!(await stillOurCopy())) throw new Error("copy destination changed");
+                  if (op === "move") {
+                    if (prog.cancelled) throw new Error("cancelled");
+                    try {
+                      await sudoRemove(src);
+                    } catch (rmErr) {
+                      copiedHere = false;
+                      throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
+                    }
+                  }
+                } else await sudoMove(src, target);
+                recordSuccess();
+                usedSudo = true;
+                continue;
+              } catch (sudoErr) {
+                failure = sudoErr;
+              }
+            }
+          }
+          if (copiedHere && (await stillOurCopy())) {
             try {
               await rm(target, { recursive: true });
             } catch (cleanup) {
               ctx.log(`half-copy cleanup failed ${target}: ${fsErrText(cleanup)}`);
+              if (isPrivilegeError(cleanup) && (await needSudo()) && (await stillOurCopy())) {
+                try {
+                  await sudoRemove(target);
+                } catch (sudoCleanup) {
+                  ctx.log(`half-copy sudo cleanup failed ${target}: ${fsErrText(sudoCleanup)}`);
+                }
+              }
             }
           }
           if (prog.cancelled) {
@@ -465,13 +771,16 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             break;
           }
           failed++;
-          failWhy.add(fsErrText(err));
+          failWhy.add(fsErrText(failure));
         }
       }
     } finally {
       prog.active = false;
     }
-    ctx.pushUndoBatch(label, units, redos, { units: dUnits, redos: dRedos });
+    // a fully-failed batch carries no units — pushing it pollutes the undo
+    // stack with a redoable no-op ("Undid: rename 0 items"); stashed victims
+    // still count (their restore unit is in units even when the op failed)
+    if (units.length) ctx.pushUndoBatch(label, units, redos, { units: dUnits, redos: dRedos });
     ctx.renderAll();
     const verb = op === "copy" ? "Copied" : "Moved";
     const opNoun = op === "copy" ? "Copy" : "Move";
@@ -486,35 +795,43 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (gone) bits.push(`${gone} source gone`);
     if (selfDrop) bits.push(`${selfDrop} folder into itself`);
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (ok || replaced) bits.push("ctrl+z to undo");
+    if (ok || replaced) bits.push(usedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     // always surface the outcome — success, failure, or cancel
-    if (prog.toastUp) {
-      ctx.finishProgressToast(cancelled ? `✗ ${opNoun} cancelled` : failed ? `✗ ${opNoun} failed` : `✓ ${verb} ${ok}`);
-    }
-    if (cancelled) ctx.notify(msg, `${op} cancelled`, "info");
-    else if (failed > 0) ctx.notify(msg, `${op} failed`, "error");
-    else ctx.notify(msg, op, "success");
-    try {
-      ctx.onFileOp?.(op, [...srcs], destDir, { cancelled, failed });
-    } catch {}
+    finishOpSummary(op, opNoun, `${verb} ${ok}`, msg, [...srcs], destDir, cancelled, failed);
   };
 
   // rename with nautilus-style collision handling: rename() would otherwise
-  // silently overwrite the existing file
-  const performRename = async (p: string, v: string): Promise<void> => {
+  // silently overwrite the existing file. Queued like every other destructive
+  // op: a rename interleaved with a transfer/trash/undo on the same paths
+  // corrupts both, and an unqueued rename is invisible to the quit/restart
+  // busy guard (half a bulk batch with no undo entry on teardown).
+  const performRename = (p: string, v: string): Promise<void> => {
     const dest = path.join(path.dirname(p), v);
     if (path.resolve(dest) === path.resolve(p)) {
       ctx.notify("Name unchanged", "rename", "info");
       ctx.renderAll();
-      return;
+      return Promise.resolve();
     }
-    if (vetoedByPlugin("rename", [p], dest)) return;
+    if (vetoedByPlugin("rename", [p], dest)) return Promise.resolve();
+    return queue.enqueue(() => guardOp("Rename", () => performRenameInner(p, dest)));
+  };
+
+  const performRenameInner = async (p: string, dest: string): Promise<void> => {
     let finalDest = dest;
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
     const dRedos: UndoStep[] = [];
+    // one password gate per rename (stash + main share it — two prompts for
+    // one rename is the UX bug this memo avoids)
+    let renameSudoOk: boolean | null = null;
+    let renameUsedSudo = false;
+    const needRenameSudo = async (): Promise<boolean> => {
+      if (renameSudoOk !== null) return renameSudoOk;
+      renameSudoOk = ctx.ensureSudo ? await ctx.ensureSudo(`rename ${path.basename(p)}`) : false;
+      return renameSudoOk;
+    };
     if (existsSync(finalDest)) {
       // single target: the bulk policy row never shows (promptConflict only
       // offers "…all" when remaining > 0), so there is no policy to reset
@@ -523,21 +840,30 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       if (choice === "keepBoth") {
         finalDest = uniqueTarget(path.dirname(finalDest), path.basename(finalDest));
       } else {
+        let renameStashErr: unknown = null;
         const stashed = await stashVictim(finalDest, units, dUnits, (err) => {
+          renameStashErr = err;
           ctx.log(`replace stash failed ${finalDest}: ${fsErrText(err)} — original kept`);
         });
         // a failed stash must not proceed to rename over the victim (that
-        // destroys it with no undo path)
+        // destroys it with no undo path) — but a privileged victim gets one
+        // sudo retry first, same as the transfer replace flow
         if (!stashed) {
-          ctx.notify("Replace failed — existing file kept", "rename failed", "error");
-          ctx.renderAll();
-          return;
+          const sudoStashed =
+            isPrivilegeError(renameStashErr) &&
+            (await needRenameSudo()) &&
+            (await sudoStashVictim(finalDest, units, dUnits));
+          if (sudoStashed) renameUsedSudo = true;
+          else {
+            ctx.notify("Replace failed — existing file kept", "rename failed", "error");
+            ctx.renderAll();
+            return;
+          }
         }
       }
     }
     let renameFailed: string | null = null;
-    try {
-      await fsRename(p, finalDest);
+    const pushRenameUnits = (): void => {
       units.push(() => safeRestoreMove(finalDest, p).then(() => undefined));
       dUnits.push({ op: "rename", from: finalDest, to: p });
       redos.push(async () => {
@@ -548,9 +874,35 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         }
       });
       dRedos.push({ op: "rename-if", from: p, to: finalDest });
+    };
+    try {
+      await fsRename(p, finalDest);
+      pushRenameUnits();
     } catch (err) {
-      renameFailed = fsErrText(err);
-      ctx.log(`rename failed ${p} → ${finalDest}: ${renameFailed}`);
+      // privilege failure → password gate, then sudo mv; undo shape unchanged
+      // (but still unprivileged — qualify the hint below)
+      let failure: unknown = err;
+      if (isPrivilegeError(err) && (await needRenameSudo())) {
+        // the gate prompts (a concurrent create can land meanwhile) and
+        // sudo mv has no no-clobber flag — re-check so a raced occupant is
+        // never silently overwritten
+        if (existsSync(finalDest)) {
+          failure = new Error(`already exists: ${path.basename(finalDest)}`);
+        } else {
+          try {
+            await sudoMove(p, finalDest);
+            pushRenameUnits();
+            renameUsedSudo = true;
+            failure = null;
+          } catch (sudoErr) {
+            failure = sudoErr;
+          }
+        }
+      }
+      if (failure) {
+        renameFailed = fsErrText(failure);
+        ctx.log(`rename failed ${p} → ${finalDest}: ${renameFailed}`);
+      }
     }
     // the stash's restore unit must survive a failed rename too — otherwise the
     // stashed victim sits in the trash with no undo entry (the batch was pushed
@@ -569,7 +921,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       } catch {}
     } else {
       // the arrow names both ends so multi-tab renames stay clear
-      ctx.notify(`Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ctrl+z to undo`, "rename", "success");
+      const renameHint = renameUsedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo";
+      ctx.notify(`Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ${renameHint}`, "rename", "success");
       try {
         ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 0 });
       } catch {}
@@ -579,10 +932,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // bulk rename: pairs come from the planner in ./bulk-rename (no collisions,
   // no swaps), so plain sequential renames are safe and the whole batch is ONE
   // undo step. A vanished source or fs error counts per pair; the rest land.
-  const performBulkRename = async (pairs: Array<{ from: string; to: string }>): Promise<void> => {
+  // Queued for the same reason as performRename (busy-guard visibility).
+  const performBulkRename = (pairs: Array<{ from: string; to: string }>): Promise<void> => {
     if (!pairs.length) {
       ctx.notify("Nothing to rename", "rename", "info");
-      return;
+      return Promise.resolve();
     }
     if (
       vetoedByPlugin(
@@ -590,7 +944,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         pairs.map((x) => x.from),
       )
     )
-      return;
+      return Promise.resolve();
+    return queue.enqueue(() => guardOp("Rename", () => performBulkRenameInner(pairs)));
+  };
+
+  const performBulkRenameInner = async (pairs: Array<{ from: string; to: string }>): Promise<void> => {
     const units: UndoUnit[] = [];
     const redos: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
@@ -598,14 +956,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let ok = 0;
     let failed = 0;
     const failWhy = new Set<string>();
+    let bulkSudoOk: boolean | null = null;
+    let bulkUsedSudo = false;
     for (const { from, to } of pairs) {
-      try {
-        if (!existsSync(from)) {
-          failed++;
-          failWhy.add("source gone");
-          continue;
-        }
-        await fsRename(from, to);
+      const recordBulk = (): void => {
         units.push(() => safeRestoreMove(to, from).then(() => undefined));
         dUnits.push({ op: "rename", from: to, to: from });
         redos.push(async () => {
@@ -617,16 +971,53 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         });
         dRedos.push({ op: "rename-if", from, to });
         ok++;
+      };
+      try {
+        if (!existsSync(from)) {
+          failed++;
+          failWhy.add("source gone");
+          continue;
+        }
+        // plan-time collision check is inherently racy (TOCTOU: an external
+        // create — or an earlier pair's target — can land between plan and
+        // apply) — re-check here so fsRename never silently overwrites
+        if (existsSync(to)) {
+          failed++;
+          failWhy.add(`already exists: ${path.basename(to)}`);
+          continue;
+        }
+        await fsRename(from, to);
+        recordBulk();
       } catch (err) {
+        let failure: unknown = err;
+        if (isPrivilegeError(err)) {
+          if (bulkSudoOk === null) bulkSudoOk = ctx.ensureSudo ? await ctx.ensureSudo("bulk rename") : false;
+          // sudo mv has no no-clobber flag and the gate prompts (a concurrent
+          // create can land meanwhile) — re-check so a raced occupant is
+          // never silently overwritten
+          if (bulkSudoOk && existsSync(to)) {
+            failure = new Error(`already exists: ${path.basename(to)}`);
+          } else if (bulkSudoOk) {
+            try {
+              await sudoMove(from, to);
+              bulkUsedSudo = true;
+              recordBulk();
+              continue;
+            } catch (sudoErr) {
+              failure = sudoErr;
+            }
+          }
+        }
         failed++;
-        failWhy.add(fsErrText(err));
+        failWhy.add(fsErrText(failure));
       }
     }
-    ctx.pushUndoBatch(`rename ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });
+    if (units.length)
+      ctx.pushUndoBatch(`rename ${ok} item${ok === 1 ? "" : "s"}`, units, redos, { units: dUnits, redos: dRedos });
     ctx.renderAll();
     const bits = [`Renamed ${ok} item${ok === 1 ? "" : "s"}`];
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (ok) bits.push("ctrl+z to undo");
+    if (ok) bits.push(bulkUsedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     ctx.notify(msg, failed ? "rename failed" : "rename", failed ? "error" : "success");
     try {
@@ -762,7 +1153,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     }
     ctx.log(
       `moveInto dest=${destDir} in=${items.length} out=${srcs.length} dropped=[${items
-        .filter((it) => it.isDir && (destDir === it.path || destDir.startsWith(it.path + path.sep)))
+        .filter((it) => it.isDir && isWithinOrEqual(destDir, it.path))
         .map((it) => it.path.split("/").pop())
         .join(",")}]`,
     );
@@ -782,8 +1173,64 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // resurrect a deleted staging dir). Compress writes to a `.tfm-part-*` temp
   // so a cancel/crash can't leave a half-written archive (and the existing
   // orphan sweep in runTransferInner cleans a killed run). ---
-  const extractArchive = (files: string[], destDir: string): Promise<void> =>
-    queue.enqueue(() => extractArchiveInner(files, destDir));
+  // Spawn-lane containment: the js lane skips `..`/absolute members, but
+  // tar/unzip/7z write them relative to the staging dir — `../evil` lands in
+  // destDir (or above) unseen by the stage readdir. Snapshot destDir (+parent
+  // for `../../`) across the tool run; anything new that isn't the stage is an
+  // escape artifact — trash it (recoverable, never rm) and refuse the archive.
+  // Symlinks inside staging that resolve outside it are unlinked for the same
+  // reason (a later write through the link escapes staging).
+  const snapshotNames = async (dir: string): Promise<Set<string>> => {
+    try {
+      return new Set(await readdir(dir));
+    } catch {
+      return new Set();
+    }
+  };
+  const sanitizeStagedLinks = async (stage: string): Promise<number> => {
+    const base = path.resolve(stage);
+    let removed = 0;
+    const stack: string[] = [base];
+    while (stack.length) {
+      const cur = stack.pop() as string;
+      let kids: string[];
+      try {
+        kids = await readdir(cur);
+      } catch {
+        continue;
+      }
+      for (const k of kids) {
+        const abs = path.join(cur, k);
+        let st: { isDirectory(): boolean; isSymbolicLink(): boolean };
+        try {
+          st = await lstat(abs);
+        } catch {
+          continue;
+        }
+        if (st.isSymbolicLink()) {
+          let target: string;
+          try {
+            target = path.resolve(path.dirname(abs), await readlink(abs));
+          } catch {
+            continue;
+          }
+          if (target !== base && !target.startsWith(`${base}${path.sep}`)) {
+            try {
+              await rm(abs, { force: true });
+              removed++;
+            } catch (err) {
+              ctx.log(`staging link cleanup failed ${abs}: ${fsErrText(err)}`);
+            }
+          }
+        } else if (st.isDirectory()) stack.push(abs);
+      }
+    }
+    return removed;
+  };
+  const extractArchive = (files: string[], destDir: string): Promise<void> => {
+    if (vetoedByPlugin("extract", files, destDir)) return Promise.resolve();
+    return queue.enqueue(() => guardOp("Extract", () => extractArchiveInner(files, destDir)));
+  };
 
   const extractArchiveInner = async (files: string[], destDir: string): Promise<void> => {
     if (!files.length) {
@@ -804,6 +1251,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let skipped = 0;
     let failed = 0;
     let cancelled = false;
+    // one password gate per op (same memo pattern as runTransferInner)
+    let archiveSudoOk: boolean | null = null;
+    let usedSudo = false;
+    const needArchiveSudo = async (): Promise<boolean> => {
+      if (archiveSudoOk !== null) return archiveSudoOk;
+      archiveSudoOk = ctx.ensureSudo ? await ctx.ensureSudo("extract") : false;
+      return archiveSudoOk;
+    };
     try {
       // one total across all archives so the bar doesn't reset per file
       let totalFiles = 0;
@@ -824,15 +1279,26 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           continue;
         }
         const stage = path.join(destDir, `.tfm-extract-${process.pid}-${Math.random().toString(36).slice(2, 10)}`);
+        const stageBase = path.basename(stage);
+        // containment snapshots: `../` members escape the stage into destDir
+        // (or its parent for `../../`) — anything new there after the tool ran
+        // is an escape artifact, never user data created through tfm (the
+        // serial queue means no other op runs concurrently; external creates
+        // in the window are trashed recoverably, never rm'd)
+        const parentDir = path.dirname(path.resolve(destDir));
+        const beforeDest = await snapshotNames(destDir);
+        const beforeParent = parentDir === path.resolve(destDir) ? beforeDest : await snapshotNames(parentDir);
         await mkdir(stage, { recursive: true });
         staging.push(stage);
-        const res = await runArchive(extractPlan(fmt, file, stage), {
-          onLine: () => {
-            prog.doneFiles++;
-            ctx.paintProgress();
+        const res = await runArchiveOp(
+          { op: "extract", fmt, file, destDir: stage },
+          {
+            onLine: () => {
+              prog.doneFiles++;
+              ctx.paintProgress();
+            },
           },
-          onChild: onArchiveChild,
-        });
+        );
         if (prog.cancelled) {
           cancelled = true;
           break;
@@ -844,6 +1310,44 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           failWhy.add(firstErrLine(res.stderr) || "extract failed");
           continue;
         }
+        // warning-level exits (skipped members) still land in the debug trail —
+        // the toast reports success like the spawn path, but the skip is on record
+        if (res.code === 1 && res.stderr)
+          ctx.log(`extract warnings ${path.basename(file)}: ${firstErrLine(res.stderr)}`);
+        // escape sweep first: trash anything the tool wrote outside staging,
+        // then refuse the archive (its staged content is from the same
+        // untrusted member list, so nothing from it lands)
+        let escaped = 0;
+        const afterDest = await snapshotNames(destDir);
+        for (const name of afterDest) {
+          if (name === stageBase || beforeDest.has(name)) continue;
+          try {
+            await xdgTrashMove(path.join(destDir, name));
+            escaped++;
+          } catch (err) {
+            ctx.log(`escape cleanup failed ${name}: ${fsErrText(err)}`);
+          }
+        }
+        if (parentDir !== path.resolve(destDir)) {
+          const afterParent = await snapshotNames(parentDir);
+          const destBase = path.basename(path.resolve(destDir));
+          for (const name of afterParent) {
+            if (name === destBase || beforeParent.has(name)) continue;
+            try {
+              await xdgTrashMove(path.join(parentDir, name));
+              escaped++;
+            } catch (err) {
+              ctx.log(`escape cleanup failed ${name}: ${fsErrText(err)}`);
+            }
+          }
+        }
+        if (escaped) {
+          failed++;
+          failWhy.add(`archive wrote outside staging (${escaped} moved to trash)`);
+          continue;
+        }
+        const cutLinks = await sanitizeStagedLinks(stage);
+        if (cutLinks) ctx.log(`staging links removed ${path.basename(file)}: ${cutLinks}`);
         let entries: string[];
         try {
           entries = await readdir(stage);
@@ -862,20 +1366,32 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             }
             if (choice === "keepBoth") target = uniqueTarget(destDir, name);
             else {
+              let stashErr: unknown = null;
               const stashed = await stashVictim(target, units, dUnits, (err) => {
-                failWhy.add(fsErrText(err));
+                stashErr = err;
                 ctx.log(`replace stash failed ${target}: ${fsErrText(err)} — original kept`);
               });
+              // privileged victims get one sudo retry (same as transfer and
+              // rename replace flows) — abort only when that fails too
               if (!stashed) {
-                failed++;
-                continue;
+                const sudoStashed =
+                  isPrivilegeError(stashErr) &&
+                  (await needArchiveSudo()) &&
+                  (await sudoStashVictim(target, units, dUnits));
+                if (sudoStashed) usedSudo = true;
+                else {
+                  failWhy.add(fsErrText(stashErr));
+                  failed++;
+                  continue;
+                }
               }
             }
           }
           try {
             await fsMove(src, target);
-            units.push(() => xdgTrashMove(target).then(() => undefined));
-            dUnits.push({ op: "trash", path: target });
+            const tid = fileIdOf(target);
+            units.push(() => trashIfSameFile(target, tid, ctx.log));
+            dUnits.push({ op: "trash", path: target, ...(tid ?? {}) });
             movedHere++;
           } catch (err) {
             failed++;
@@ -894,29 +1410,27 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       for (const s of staging) {
         try {
           await rm(s, { recursive: true, force: true });
-        } catch {}
+        } catch (err) {
+          // a surviving .tfm-extract-* dir is hidden debris in the user's folder
+          swallow("archive staging cleanup", err);
+        }
       }
     }
-    ctx.pushUndoBatch(`extract ${ok} archive${ok === 1 ? "" : "s"}`, units, [], { units: dUnits, redos: [] });
+    if (units.length)
+      ctx.pushUndoBatch(`extract ${ok} archive${ok === 1 ? "" : "s"}`, units, [], { units: dUnits, redos: [] });
     ctx.renderAll();
     const bits = [cancelled ? `Extract cancelled (${ok} done)` : `Extracted ${ok} archive${ok === 1 ? "" : "s"}`];
     if (skipped) bits.push(`${skipped} skipped`);
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (units.length && !cancelled) bits.push("ctrl+z to undo");
+    if (units.length && !cancelled) bits.push(usedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
-    if (prog.toastUp) {
-      ctx.finishProgressToast(cancelled ? "✗ Extract cancelled" : failed ? "✗ Extract failed" : `✓ Extracted ${ok}`);
-    }
-    if (cancelled) ctx.notify(msg, "extract cancelled", "info");
-    else if (failed > 0) ctx.notify(msg, "extract failed", "error");
-    else ctx.notify(msg, "extract", "success");
-    try {
-      ctx.onFileOp?.("extract", [...files], destDir, { cancelled, failed });
-    } catch {}
+    finishOpSummary("extract", "Extract", `Extracted ${ok}`, msg, [...files], destDir, cancelled, failed);
   };
 
-  const compressPaths = (paths: string[], format: CompressionFormat, destDir: string): Promise<void> =>
-    queue.enqueue(() => compressPathsInner(paths, format, destDir));
+  const compressPaths = (paths: string[], format: CompressionFormat, destDir: string): Promise<void> => {
+    if (vetoedByPlugin("compress", paths, destDir)) return Promise.resolve();
+    return queue.enqueue(() => guardOp("Compress", () => compressPathsInner(paths, format, destDir)));
+  };
 
   const compressPathsInner = async (paths: string[], format: CompressionFormat, destDir: string): Promise<void> => {
     if (destDir.includes("://")) {
@@ -933,14 +1447,26 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const units: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
     const failWhy = new Set<string>();
+    // non-fatal caveats (fallback fidelity loss): surface as their own
+    // summary bit — failWhy only renders when failed > 0
+    const warns: string[] = [];
     let failed = 0;
     let cancelled = false;
+    // one password gate per op (same memo pattern as runTransferInner)
+    let archiveSudoOk: boolean | null = null;
+    let usedSudo = false;
+    const needArchiveSudo = async (): Promise<boolean> => {
+      if (archiveSudoOk !== null) return archiveSudoOk;
+      archiveSudoOk = ctx.ensureSudo ? await ctx.ensureSudo("compress") : false;
+      return archiveSudoOk;
+    };
     const parent = commonParent(srcs);
     // relative to the common parent: a basename-only list silently drops
     // outside-cwd selections (two `foo`s in different dirs collapse to one)
     const names = srcs.map((p) => path.relative(parent, p));
     const ext = compressionExt(format);
-    const base = srcs.length === 1 ? path.basename(srcs[0]!) : "archive";
+    const onlySrc = srcs[0];
+    const base = srcs.length === 1 && onlySrc !== undefined ? path.basename(onlySrc) : "archive";
     let out = path.join(destDir, `${base}${ext}`);
     if (existsSync(out)) {
       const choice = conflict.policy() ?? (await conflict.promptConflict(out, 0));
@@ -950,17 +1476,26 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       }
       if (choice === "keepBoth") out = uniqueArchiveTarget(destDir, base, ext);
       else {
+        let stashErr: unknown = null;
         const stashed = await stashVictim(out, units, dUnits, (err) => {
+          stashErr = err;
           failWhy.add(fsErrText(err));
           ctx.log(`replace stash failed ${out}: ${fsErrText(err)} — original kept`);
         });
+        // privileged victims get one sudo retry (same as transfer and rename
+        // replace flows) — abort only when that fails too
         if (!stashed) {
-          ctx.notify("Replace failed — existing archive kept", "compress failed", "error");
-          return;
+          const sudoStashed =
+            isPrivilegeError(stashErr) && (await needArchiveSudo()) && (await sudoStashVictim(out, units, dUnits));
+          if (sudoStashed) usedSudo = true;
+          else {
+            ctx.notify("Replace failed — existing archive kept", "compress failed", "error");
+            return;
+          }
         }
       }
     }
-    const tmp = `${out}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+    const tmp = tmpName(out);
     const scan = await preScan(srcs, false);
     prog.totalBytes = 0;
     setProgVerb("compressing", scan.files);
@@ -969,23 +1504,41 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.paintProgress(true);
     } else armProgressToast();
     try {
-      const res = await runArchive(compressPlan(format, tmp, names, parent), {
-        cwd: parent,
-        onLine: () => {
-          prog.doneFiles++;
-          ctx.paintProgress();
+      // tar-family fallback create drops exec bits and follows symlinks
+      // (Bun.Archive's input is content-only) — the lane reports what it saw
+      // via onLoss so the summary can warn without a second lstat walk.
+      // Warn only when affected: plain trees stay silent, and zip needs no
+      // note (the fflate lane preserves both and never fires onLoss).
+      let loss = { exec: 0, links: 0 };
+      const res = await runArchiveOp(
+        { op: "compress", fmt: format, outFile: tmp, names, parent },
+        {
+          cwd: parent,
+          onLine: () => {
+            prog.doneFiles++;
+            ctx.paintProgress();
+          },
+          onLoss: (l) => {
+            loss = l;
+          },
         },
-        onChild: onArchiveChild,
-      });
+      );
       if (prog.cancelled) {
         cancelled = true;
-      } else if (res.code !== 0) {
+      } else if (res.code !== 0 && res.code !== 1) {
+        // exit 1 is a warning (some inputs skipped/changed) — the produced
+        // archive is usable, same rule the extract path already applies; only
+        // >=2 is a real failure. Discarding a warning-level archive was the
+        // asymmetry (extract tolerated 1, compress did not).
         failed++;
         failWhy.add(firstErrLine(res.stderr) || "compress failed");
       } else {
         await fsRename(tmp, out);
-        units.push(() => xdgTrashMove(out).then(() => undefined));
-        dUnits.push({ op: "trash", path: out });
+        const oid = fileIdOf(out);
+        units.push(() => trashIfSameFile(out, oid, ctx.log));
+        dUnits.push({ op: "trash", path: out, ...(oid ?? {}) });
+        const n = loss.exec + loss.links;
+        if (n > 0) warns.push(`${n} stored without exec/symlink (no tar)`);
       }
     } catch (err) {
       failed++;
@@ -995,25 +1548,20 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       // cancel/fail cleanup otherwise
       try {
         await rm(tmp, { force: true });
-      } catch {}
+      } catch (err) {
+        swallow("compress temp cleanup", err);
+      }
       clearArchiveChild();
       prog.active = false;
     }
-    ctx.pushUndoBatch(`compress ${path.basename(out)}`, units, [], { units: dUnits, redos: [] });
+    if (units.length) ctx.pushUndoBatch(`compress ${path.basename(out)}`, units, [], { units: dUnits, redos: [] });
     ctx.renderAll();
     const bits = [cancelled ? "Compress cancelled" : `Compressed ${path.basename(out)}`];
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (!failed && !cancelled) bits.push("ctrl+z to undo");
+    if (!failed && !cancelled && warns.length) bits.push(...warns);
+    if (!failed && !cancelled) bits.push(usedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
-    if (prog.toastUp) {
-      ctx.finishProgressToast(cancelled ? "✗ Compress cancelled" : failed ? "✗ Compress failed" : `✓ ${base}${ext}`);
-    }
-    if (cancelled) ctx.notify(msg, "compress cancelled", "info");
-    else if (failed > 0) ctx.notify(msg, "compress failed", "error");
-    else ctx.notify(msg, "compress", "success");
-    try {
-      ctx.onFileOp?.("compress", srcs, out, { cancelled, failed });
-    } catch {}
+    finishOpSummary("compress", "Compress", `${base}${ext}`, msg, srcs, out, cancelled, failed);
   };
 
   return {

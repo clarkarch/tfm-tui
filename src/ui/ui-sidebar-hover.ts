@@ -12,6 +12,7 @@
 
 import { hoverLiftDelta } from "./ui-grid-anim";
 import type { SidebarHoverOpts } from "../config/config-schema";
+import type { MaybeNode } from "../lib/node-like";
 
 export type { SidebarHoverOpts };
 
@@ -23,19 +24,19 @@ export type SidebarRowRef = {
 };
 
 type SidebarHoverCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   rowRefs(): Map<string, SidebarRowRef>;
   hoverOpts(): SidebarHoverOpts;
 };
 
-type HoverCur = { key: string; refs: SidebarRowRef; node: any };
+type HoverCur = { key: string; refs: SidebarRowRef; node: MaybeNode };
 
 export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
   let current: HoverCur | null = null;
 
   // A row copied from a previous build may have been destroyed by a sidebar
   // rebuild, so only touch the node refs when byId still resolves to them.
-  const ownedNode = (cur: HoverCur | null): any => {
+  const ownedNode = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       const node = ctx.byId(cur.refs.rowId);
@@ -45,6 +46,8 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
     }
   };
 
+  // one write, dx/dy per node (the lift path passes the delta, the release
+  // passes 0/0 — includeLabel handled at the lift site)
   const writeLift = (refs: SidebarRowRef, dx: number, dy: number): void => {
     try {
       const slot = refs.iconSlotId ? ctx.byId(refs.iconSlotId) : null;
@@ -52,8 +55,6 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
         slot.translateX = dx;
         slot.translateY = dy;
       }
-    } catch {}
-    try {
       const label = refs.labelId ? ctx.byId(refs.labelId) : null;
       if (label) {
         label.translateX = dx;

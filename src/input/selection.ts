@@ -5,16 +5,17 @@
 // keymap reach them through one injected object. Visual painting (surfaces,
 // icon states) still flows through ctx — no renderer imports. ---
 import { readdir } from "node:fs/promises";
-import { statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { applySurface, tileSurface, type UiStyle } from "../ui/style";
-import { fmtBytes } from "../fs/propsinfo";
+import { fmtBytes, inodeKey } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ClipItem } from "./grid-input";
 import { TileVisual, type TileVisualMode } from "./grid-input";
-import { IconStateIdx } from "../ui/ui-slots";
+import { IconStateIdx, type IconSpec } from "../ui/ui-slots";
+import type { MaybeNode, ScrollerLike } from "../lib/node-like";
 
 export type SelTileRef = {
-  iconSpec?: any;
+  iconSpec?: IconSpec;
   iconSlotId?: string;
   selected: boolean;
   baseFg: string;
@@ -29,11 +30,14 @@ export type SelTileRef = {
 export type SelectionCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
+  // transparent-bg force: rest fills clear so the terminal shows through.
+  // Optional so test fakes stay light; absent = opaque/transparent behavior.
+  transparentForce?(): boolean;
   setText(id: string, s: string): void;
-  setIconState(spec: any, mode: number): void;
+  setIconState(spec: IconSpec | undefined, mode: number): void;
   isCutKey(key: string): boolean;
-  scroller(): any | null;
+  scroller(): ScrollerLike | null;
   viewH(): number;
   rowHInit(): number;
   renderPreview(): void | Promise<void>;
@@ -67,22 +71,33 @@ export const makeSelection = (ctx: SelectionCtx) => {
     if (!refs.iconSpec) {
       // thumbnail slots have no state rasters — fade the whole slot instead
       try {
-        const slot: any = ctx.byId(refs.iconSlotId ?? "");
+        const slot = ctx.byId(refs.iconSlotId ?? "");
         if (slot) slot.opacity = cut ? 0.45 : 1;
       } catch {}
     }
-    const labelReal: any = ctx.byId(refs.labelId);
+    const labelReal = ctx.byId(refs.labelId);
     if (labelReal) {
       try {
+        // hover lifts the label to white (readable on the blue hover fill);
+        // rest keeps the tile's own baseFg. No-op in presets (white == fg).
         labelReal.fg =
-          mode === TileVisual.Selected ? ctx.colors().accent : cut ? ctx.colors().sidebarFgMuted : refs.baseFg;
+          mode === TileVisual.Selected
+            ? ctx.colors().accent
+            : mode === TileVisual.Hover
+              ? ctx.colors().white
+              : cut
+                ? ctx.colors().sidebarFgMuted
+                : refs.baseFg;
       } catch {}
     }
-    const tileReal: any = ctx.byId(refs.tileId);
+    const tileReal = ctx.byId(refs.tileId);
     if (tileReal) {
       const state =
         mode === TileVisual.Selected ? "selected" : mode === TileVisual.Hover ? "hover" : cut ? "cut" : "rest";
-      applySurface(tileReal, tileSurface(ctx.uiStyle(), ctx.colors(), state));
+      applySurface(
+        tileReal,
+        tileSurface(ctx.uiStyle(), ctx.colors(), state, ctx.transparentForce?.() ? "force" : undefined),
+      );
     }
   };
 
@@ -133,14 +148,22 @@ export const makeSelection = (ctx: SelectionCtx) => {
       setStatus("");
       return;
     }
-    // total size of the selected files (dirs contribute their item count instead)
+    // total size is on-disk cost: links count their own bytes (the copy engine
+    // preserves them via readlink/symlink, never the target), and hardlinked
+    // names sharing one dev:ino count their body once — like du. lstat never
+    // reports a link as a directory, so links-to-dirs land in bytes while real
+    // dirs contribute their item count below instead.
     let bytes = 0;
+    const seen = new Set<string>();
     for (const s of sel) {
-      if (!s.isDir) {
-        try {
-          bytes += statSync(s.key).size;
-        } catch {}
-      }
+      try {
+        const lst = lstatSync(s.key);
+        if (lst.isDirectory()) continue;
+        const k = inodeKey(lst);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        bytes += lst.size;
+      } catch {}
     }
     const dirs = sel.filter((s) => s.isDir);
     if (dirs.length === 0) {
@@ -179,7 +202,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
     const lo = Math.max(0, Math.min(from, to));
     const hi = Math.min(focusKeys.length - 1, Math.max(from, to));
     for (let i = lo; i <= hi; i++) {
-      const k = focusKeys[i]!;
+      const k = focusKeys[i];
+      if (k === undefined) continue;
       const r = tileRefs.get(k);
       if (r) {
         r.selected = true;
@@ -190,16 +214,20 @@ export const makeSelection = (ctx: SelectionCtx) => {
 
   // arrows and clicks drive the SAME single selection; there is no separate
   // focus highlight
-  const selectTileAt = (idx: number): boolean => {
+  const selectTileAt = (idx: number, keepAnchor = false): boolean => {
     if (idx < 0 || idx >= focusKeys.length) return false;
     clearTileSelection();
-    const key = focusKeys[idx]!;
+    const key = focusKeys[idx];
+    if (key === undefined) return false;
     const refs = tileRefs.get(key);
     if (refs) {
       refs.selected = true;
       setTileVisual(key, TileVisual.Selected);
     }
     focusIdx = idx;
+    // a plain move re-anchors (the mouse press does too); range-extend passes
+    // keepAnchor so its own anchor survives the focus jump
+    if (!keepAnchor) selAnchor = idx;
     void ctx.renderPreview();
     const scroller = ctx.scroller();
     if (scroller) {
@@ -207,8 +235,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
         const row = Math.floor(idx / colsAtBuild);
         const vh = ctx.viewH();
         const top = scroller.scrollTop;
-        if (row * rowHAtBuild < top) scroller.scrollTo({ x: 0, y: row * rowHAtBuild });
-        else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * rowHAtBuild - vh });
+        if (row * rowHAtBuild < top) scroller.scrollTo?.({ x: 0, y: row * rowHAtBuild });
+        else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo?.({ x: 0, y: (row + 1) * rowHAtBuild - vh });
       } catch {}
     }
     return true;
@@ -222,12 +250,52 @@ export const makeSelection = (ctx: SelectionCtx) => {
     return selectTileAt(next);
   };
 
+  // page jump for the pageUp/pageDown keybinds: visible rows (viewH/rowH
+  // from the build tail) times the column count, clamped to the listing
+  const pageBy = (dir: number): boolean => {
+    if (focusKeys.length === 0) return false;
+    const rows = Math.max(1, Math.floor(ctx.viewH() / Math.max(1, rowHAtBuild)));
+    const step = rows * Math.max(1, colsAtBuild);
+    const base = focusIdx === -1 ? (dir > 0 ? -1 : focusKeys.length) : focusIdx;
+    const next = Math.max(0, Math.min(focusKeys.length - 1, base + dir * step));
+    if (next === focusIdx) return false;
+    return selectTileAt(next);
+  };
+
   const selectAll = (): void => {
     tileRefs.forEach((r, k) => {
       r.selected = true;
       setTileVisual(k, TileVisual.Selected);
     });
+    // re-anchor to the focus: a later shift+arrow must extend from here, not
+    // from a stale pre-selectAll anchor
+    selAnchor = focusIdx >= 0 ? focusIdx : null;
     updateSelectionStatusReal();
+  };
+
+  // flip every tile's membership (yazi ctrl+r)
+  const invertSelection = (): void => {
+    tileRefs.forEach((r, k) => {
+      r.selected = !r.selected;
+      setTileVisual(k, r.selected ? TileVisual.Selected : TileVisual.Rest);
+    });
+    selAnchor = focusIdx >= 0 ? focusIdx : null;
+    updateSelectionStatusReal();
+  };
+
+  // flip the focused tile only, focus stays put (yazi space toggles; unlike
+  // yazi there is no auto-advance — repeat space walks with arrows)
+  const toggleFocused = (): boolean => {
+    if (focusIdx < 0 || focusIdx >= focusKeys.length) return false;
+    const key = focusKeys[focusIdx];
+    if (key === undefined) return false;
+    const refs = tileRefs.get(key);
+    if (!refs) return false;
+    refs.selected = !refs.selected;
+    setTileVisual(key, refs.selected ? TileVisual.Selected : TileVisual.Rest);
+    updateSelectionStatusReal();
+    void ctx.renderPreview();
+    return true;
   };
 
   // select an explicit set of paths (plugin api.select). Paths not currently
@@ -245,8 +313,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
     const want = new Set(paths);
     let firstIdx = -1;
     for (let i = 0; i < focusKeys.length; i++) {
-      const k = focusKeys[i]!;
-      if (!want.has(k)) continue;
+      const k = focusKeys[i];
+      if (k === undefined || !want.has(k)) continue;
       const r = tileRefs.get(k);
       if (!r) continue;
       r.selected = true;
@@ -264,8 +332,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
           const row = Math.floor(firstIdx / colsAtBuild);
           const vh = ctx.viewH();
           const top = scroller.scrollTop;
-          if (row * rowHAtBuild < top) scroller.scrollTo({ x: 0, y: row * rowHAtBuild });
-          else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo({ x: 0, y: (row + 1) * rowHAtBuild - vh });
+          if (row * rowHAtBuild < top) scroller.scrollTo?.({ x: 0, y: row * rowHAtBuild });
+          else if ((row + 1) * rowHAtBuild > top + vh) scroller.scrollTo?.({ x: 0, y: (row + 1) * rowHAtBuild - vh });
         } catch {}
       }
     }
@@ -312,7 +380,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
     selectRange,
     selectTileAt,
     moveFocus,
+    pageBy,
     selectAll,
+    invertSelection,
+    toggleFocused,
     selectPaths,
     refreshCutVisuals,
   };

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
-import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import { createTestRenderer, MouseButtons, type TestRendererSetup } from "@opentui/core/testing";
 import { makeMenu, type ListEntry } from "./ui-menu";
 import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
@@ -15,6 +15,8 @@ import type { Theme } from "../config/config";
 let t: TestRendererSetup;
 let floats: ReturnType<typeof makeFloats>;
 let menu: ReturnType<typeof makeMenu>;
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
 // icon slots requested by the widget (chevron-right for submenu rows, etc.)
 const iconSlots: string[] = [];
 const colors = defaultConfig.theme as Theme & Record<string, any>;
@@ -36,6 +38,7 @@ beforeAll(async () => {
     colors: () => colors,
     menuW: 36,
     floats,
+    setPointer: (s) => void pointers.push(s),
     // real node so painted frames work (the widget wraps the raster in a box)
     makeIconSlot: (name) => {
       iconSlots.push(name);
@@ -202,6 +205,24 @@ describe("flyout submenus", () => {
     await t.renderOnce();
   });
 
+  test("clicking a submenu parent fires its own action (flyout opens on hover)", async () => {
+    const calls: string[] = [];
+    menu.openContextMenu(5, 5, "", [
+      {
+        label: "Open",
+        action: () => calls.push("parent"),
+        submenu: [{ label: "Open in New Tab", action: () => calls.push("sub") }],
+      },
+    ]);
+    await t.renderOnce();
+    // divider paints at py, so row 0 sits at py + 1
+    await t.mockMouse.click(7, 6, MouseButtons.LEFT);
+    await t.renderOnce();
+    expect(calls).toEqual(["parent"]);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
   test("closing the menu tears the flyout down too", async () => {
     const entries: ListEntry[] = [{ label: "Open", action: () => {}, submenu: [{ label: "Open", action: () => {} }] }];
     menu.openContextMenu(3, 3, "", entries);
@@ -214,6 +235,40 @@ describe("flyout submenus", () => {
     await t.renderOnce();
     expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeFalsy();
     expect(t.renderer.root.findDescendantById("tfm-filemenu")).toBeFalsy();
+  });
+});
+
+describe("mouse pointer shapes (ctx seam sink)", () => {
+  test("row hover sets pointer, close restores default", async () => {
+    pointers.length = 0;
+    menu.openContextMenu(2, 2, "", mkEntries(3));
+    await t.renderOnce();
+    // hover row 1: screen y = py(2) + divider(1) + index(1)
+    await t.mockMouse.moveTo(4, 4);
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.idx).toBe(1);
+    expect(pointers).toEqual(["pointer"]);
+    menu.closeFileMenu();
+    await t.renderOnce();
+    expect(pointers).toEqual(["pointer", "default"]);
+  });
+
+  test("hovering the keyboard-highlighted row still sets pointer (no change, still positioned)", async () => {
+    // the pointer is position truth, the highlight is change truth: moving
+    // onto the row the keyboard cursor already sits on must set the shape
+    // even though no repaint runs
+    pointers.length = 0;
+    menu.openContextMenu(2, 2, "", mkEntries(3));
+    await t.renderOnce();
+    menu.fileMenuState()!.idx = 1; // exactly what the key router does
+    menu.renderFileMenu();
+    await t.renderOnce();
+    await t.mockMouse.moveTo(4, 4);
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.idx).toBe(1);
+    expect(pointers).toEqual(["pointer"]);
+    menu.closeFileMenu();
+    await t.renderOnce();
   });
 });
 

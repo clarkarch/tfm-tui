@@ -12,6 +12,9 @@ import type { Theme } from "../config/config";
 
 const colors = defaultConfig.theme as Theme;
 
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
+
 const mkPrompt = (t: TestRendererSetup, floats: ReturnType<typeof makeFloats>) =>
   makePrompt({
     renderer: () => t.renderer,
@@ -23,6 +26,7 @@ const mkPrompt = (t: TestRendererSetup, floats: ReturnType<typeof makeFloats>) =
     colors: () => colors,
     uiStyle: () => "solid",
     floats,
+    setPointer: (s) => void pointers.push(s),
   });
 
 describe("prompt widget", () => {
@@ -52,6 +56,23 @@ describe("prompt widget", () => {
       await expect(pending).resolves.toBeNull();
       expect(floats.isOpen("prompt")).toBe(false);
       expect(t.renderer.root.findDescendantById("tfm-prompt")).toBeFalsy();
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("open sets the text pointer, esc restores default", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      pointers.length = 0;
+      const floats = makeFloats();
+      const prompt = mkPrompt(t, floats);
+      const pending = prompt.open({ title: "Add plugin", okLabel: "Clone" });
+      await t.renderOnce();
+      expect(pointers).toEqual(["text"]);
+      prompt.handleKey({ name: "escape" });
+      await expect(pending).resolves.toBeNull();
+      expect(pointers).toEqual(["text", "default"]);
     } finally {
       t.renderer.destroy();
     }

@@ -59,6 +59,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
 
   const state = { cwd: "/tmp/tfm-kb/sub", showHidden: false };
   const escMenuState = { open: false, capturing: false };
+  let typeToSearchOn = true;
   const places = [
     { selected: false, place: { path: "/home" } as any },
     { selected: false, place: { path: "/media/usb", mountDevice: "sdb1" } as any },
@@ -74,7 +75,18 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     quit: rec("quit"),
     restart: rec("restart"),
     conflict: { isOpen: () => false, closeConflict: (p) => calls.push(`conflict:close:${p}`) },
-    yesNo: { isOpen: () => false, close: rec("yesno:close") },
+    yesNo: {
+      isOpen: () => false,
+      close: rec("yesno:close"),
+      moveFocus: (d) => calls.push(`yesno:move:${d}`),
+      submit: rec("yesno:submit"),
+    },
+    typeToSearchEnabled: () => typeToSearchOn,
+    enableTypeToSearch: () => {
+      typeToSearchOn = true;
+      calls.push("search:enable");
+    },
+    cycleSort: rec("sort:cycle"),
     isRenaming: () => false,
     propsIsOpen: () => false,
     closeProps: rec("props:close"),
@@ -83,6 +95,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
       closeMenu: () => {
         escMenuState.open = false;
         calls.push("escmenu:close");
+      },
+      toggleHelp: () => {
+        calls.push("escmenu:help");
       },
       moveMenu: (d) => calls.push(`escmenu:move:${d}`),
       adjustSelectedSetting: (d) => calls.push(`escmenu:adjust:${d}`),
@@ -130,9 +145,6 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     prevTab: rec("tab:prev"),
     newTab: rec("tab:new"),
     closeTab: rec("tab:close"),
-    switchTab: (i) => {
-      calls.push(`tab:switch:${i}`);
-    },
     inTrashView: () => false,
     confirmDeleteForever: (ps) => calls.push(`deleteForever:${ps.join(",")}`),
     trashPaths: (ps) => {
@@ -201,6 +213,9 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     binds,
     pickState,
     bulkState,
+    setTypeToSearch: (v: boolean) => {
+      typeToSearchOn = v;
+    },
   };
 };
 
@@ -250,7 +265,14 @@ describe("precedence chain", () => {
   });
 
   test("yes/no modal: esc = No, everything else swallowed", () => {
-    const h = makeHarness({ yesNo: { isOpen: () => true, close: () => h.calls.push("yesno:close") } });
+    const h = makeHarness({
+      yesNo: {
+        isOpen: () => true,
+        close: () => h.calls.push("yesno:close"),
+        moveFocus: (d) => h.calls.push(`yesno:move:${d}`),
+        submit: () => h.calls.push("yesno:submit"),
+      },
+    });
     h.key("x");
     expect(h.calls).toEqual([]);
     h.key("escape");
@@ -317,6 +339,31 @@ describe("precedence chain", () => {
       "escmenu:close",
     ]);
     expect(h.escMenuState.open).toBe(false);
+  });
+
+  test("f1 toggles help: from the grid and from inside the open menu", () => {
+    const h = makeHarness();
+    h.key("f1");
+    expect(h.calls).toEqual(["escmenu:help"]);
+    h.calls.length = 0;
+    h.escMenuState.open = true;
+    h.key("f1");
+    expect(h.calls).toEqual(["escmenu:help"]);
+  });
+
+  test("toggleHelp dispatches through its binds like every remappable action", () => {
+    const h = makeHarness();
+    h.binds.toggleHelp = ["ctrl+h"];
+    h.key("h", { ctrl: true });
+    expect(h.calls).toEqual(["escmenu:help"]);
+  });
+
+  test("toggleHelp belongs to the command table (palette parity)", () => {
+    const h = makeHarness();
+    const byId = (id: string) => h.router.commands().find((c) => c.id === id)!;
+    expect(byId("toggleHelp").hint).toContain("f1");
+    byId("toggleHelp").run();
+    expect(h.calls).toEqual(["escmenu:help"]);
   });
 
   test("embedded terminal owns the keyboard — hint once, then nothing below it fires", () => {
@@ -403,7 +450,7 @@ describe("file menu keys", () => {
     expect(h.calls).not.toContain("fmenu:close");
   });
 
-  test("enter opens a parent row's submenu instead of activating it", () => {
+  test("enter activates a parent row's own action (right opens its submenu)", () => {
     const calls: string[] = [];
     const fmenu = {
       idx: 0,
@@ -412,8 +459,8 @@ describe("file menu keys", () => {
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.key("return");
-    expect(calls).toEqual([]);
-    expect(h.calls).toContain("fmenu:sub-open");
+    expect(calls).toEqual(["parent"]);
+    expect(h.calls).not.toContain("fmenu:sub-open");
   });
 });
 
@@ -699,6 +746,51 @@ describe("file operation keys", () => {
     expect(h.calls).toEqual(["clip:copy:4", "clip:cut:4", "paste:/tmp/tfm-kb/sub"]);
   });
 
+  test("repeated ctrl+c hints at the quit bind once (selection present)", () => {
+    const h = makeHarness();
+    h.key("a", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toEqual([]);
+    h.key("c", { ctrl: true });
+    const hints = h.calls.filter((c) => c.startsWith("notify:quit:"));
+    expect(hints.length).toBe(1);
+    expect(hints[0]).toContain("ctrl+q");
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toHaveLength(1);
+  });
+
+  test("repeated ctrl+c hints at quit with an empty selection too", () => {
+    const h = makeHarness();
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    const hints = h.calls.filter((c) => c.startsWith("notify:quit:"));
+    expect(hints.length).toBe(1);
+    expect(hints[0]).toContain("ctrl+q");
+  });
+
+  test("another key between ctrl+c presses resets the quit-hint streak", () => {
+    const h = makeHarness();
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("a", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toEqual([]);
+  });
+
+  test("quit hint names the remapped quit bind", () => {
+    const h = makeHarness();
+    h.binds.quit = ["ctrl+x", "ctrl+q"];
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    const hints = h.calls.filter((c) => c.startsWith("notify:quit:"));
+    expect(hints.length).toBe(1);
+    expect(hints[0]).toContain("ctrl+x ctrl+q");
+  });
+
   test("ctrl+d duplicates the selection; empty selection is a no-op", () => {
     const h = makeHarness();
     h.key("d", { ctrl: true });
@@ -870,11 +962,11 @@ describe("remappable action keys", () => {
     expect(h.calls).toEqual(["create:folder", "create:file"]);
   });
 
-  test("ctrl+l enters path edit, f9 toggles preview, f4 opens the terminal", () => {
+  test("ctrl+l enters path edit, f3 toggles preview, ctrl+` opens the terminal", () => {
     const h = makeHarness();
     h.key("l", { ctrl: true });
-    h.key("f9");
-    h.key("f4");
+    h.key("f3");
+    h.key("`", { ctrl: true });
     expect(h.calls).toEqual(["pathedit:enter", "preview:toggle", "term:open"]);
   });
 
@@ -1037,6 +1129,167 @@ describe("file menu with no initial cursor", () => {
   });
 });
 
+describe("remappable grid + menu nav", () => {
+  test("remapped moveDown fires on the new key, old arrow goes dead", () => {
+    const h = makeHarness();
+    h.binds.moveDown = ["ctrl+n"];
+    h.key("down");
+    expect(h.selection.focusIdx()).toBe(-1);
+    h.key("n", { ctrl: true });
+    expect(h.selection.focusIdx()).toBe(0);
+  });
+
+  test("empty moveDown disables grid down", () => {
+    const h = makeHarness();
+    h.binds.moveDown = [];
+    h.key("down");
+    expect(h.selection.focusIdx()).toBe(-1);
+  });
+
+  test("remapped extendDown extends on the new bind, old shift+down dead", () => {
+    const h = makeHarness();
+    h.binds.extendDown = ["ctrl+e"];
+    h.key("down", { shift: true });
+    expect(h.selection.selPaths()).toEqual([]);
+    h.key("e", { ctrl: true });
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
+  });
+
+  test("file menu follows the remapped move binds", () => {
+    const fmenu = { idx: 0, subIdx: null as number | null, entries: [{ action: () => {} }, { action: () => {} }] };
+    const h = makeHarness({ getFileMenuState: () => fmenu });
+    h.binds.moveDown = ["ctrl+n"];
+    h.key("down");
+    expect(fmenu.idx).toBe(0);
+    h.key("n", { ctrl: true });
+    expect(fmenu.idx).toBe(1);
+  });
+
+  test("esc menu follows the remapped move binds", () => {
+    const h = makeHarness();
+    h.escMenuState.open = true;
+    h.binds.moveDown = ["ctrl+n"];
+    h.key("down");
+    expect(h.calls).toEqual([]);
+    h.key("n", { ctrl: true });
+    expect(h.calls).toEqual(["escmenu:move:1"]);
+  });
+
+  test("remapped openSelected opens the focused file", () => {
+    const h = makeHarness();
+    h.binds.openSelected = ["ctrl+o"];
+    h.key("down");
+    h.key("return");
+    expect(h.calls).toEqual([]);
+    h.key("o", { ctrl: true });
+    expect(h.calls).toEqual(["open:a.txt"]);
+  });
+
+  test("pageDown pages by the viewport, home/end jump to the ends", () => {
+    const h = makeHarness();
+    h.selection.setCols(1);
+    h.key("home");
+    expect(h.selection.focusIdx()).toBe(0);
+    h.key("end");
+    expect(h.selection.focusIdx()).toBe(3);
+    h.key("home");
+    h.key("pagedown");
+    expect(h.selection.focusIdx()).toBeGreaterThan(0);
+    h.key("pageup");
+    expect(h.selection.focusIdx()).toBe(0);
+  });
+
+  test("remapped pageDown fires on the new key", () => {
+    const h = makeHarness();
+    h.selection.setCols(1);
+    h.binds.pageDown = ["ctrl+v"];
+    // ctrl+v is paste by default — free it so the page bind owns the key
+    h.binds.paste = ["ctrl+y"];
+    h.key("pagedown");
+    expect(h.selection.focusIdx()).toBe(-1);
+    h.key("v", { ctrl: true });
+    expect(h.selection.focusIdx()).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("type-to-search toggle + yazi-style bare binds", () => {
+  test("bare j moves when bound to moveDown (preset-style multi-bind)", () => {
+    const h = makeHarness();
+    h.binds.moveDown = ["down", "j"];
+    h.key("j");
+    expect(h.selection.focusIdx()).toBe(0);
+    expect(h.calls).not.toContain("search:begin:j");
+  });
+
+  test("type-to-search off swallows unbound bare keys", () => {
+    const h = makeHarness();
+    h.setTypeToSearch(false);
+    h.key("x");
+    expect(h.calls).toEqual([]);
+  });
+
+  test("space toggles the focused file; ctrl+r inverts", () => {
+    const h = makeHarness();
+    h.binds.reloadPlaces = [];
+    h.binds.invertSelection = ["ctrl+r"];
+    h.key("down");
+    h.key("space");
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual([]);
+    h.key("space");
+    expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
+    h.key("r", { ctrl: true });
+    expect(
+      h.selection
+        .selPaths()
+        .map((p) => p.path)
+        .sort(),
+    ).toEqual(["b.txt", "c.txt", "d.txt"]);
+  });
+
+  test("startSearch re-arms the filter and toasts", () => {
+    const h = makeHarness();
+    h.binds.startSearch = ["s", "/", "f"];
+    h.setTypeToSearch(false);
+    h.key("s");
+    expect(h.calls).toContain("search:enable");
+    expect(h.calls).toContain("notify:search:info:type-to-search on · type to filter, esc clears");
+  });
+
+  test("cycleSort + goHome dispatch through binds", () => {
+    const h = makeHarness();
+    h.binds.toggleHidden = [];
+    h.binds.cycleSort = ["ctrl+s"];
+    h.binds.goHome = ["ctrl+h"];
+    h.key("s", { ctrl: true });
+    h.key("h", { ctrl: true });
+    expect(h.calls).toEqual(["sort:cycle", "navigate:/home/u"]);
+  });
+
+  test("cycleSort/goHome palette runs match their keypresses", () => {
+    const h = makeHarness();
+    const byId = (id: string) => h.router.commands().find((c) => c.id === id)!;
+    byId("cycleSort").run();
+    byId("goHome").run();
+    expect(h.calls).toEqual(["sort:cycle", "navigate:/home/u"]);
+  });
+
+  test("yes/no: arrows move the cursor, return submits, esc closes", () => {
+    const h = makeHarness({
+      yesNo: {
+        isOpen: () => true,
+        close: () => h.calls.push("yesno:close"),
+        moveFocus: (d) => h.calls.push(`yesno:move:${d}`),
+        submit: () => h.calls.push("yesno:submit"),
+      },
+    });
+    h.key("down");
+    h.key("up");
+    h.key("return");
+    h.key("escape");
+    expect(h.calls).toEqual(["yesno:move:1", "yesno:move:-1", "yesno:submit", "yesno:close"]);
+  });
+});
+
 describe("dual-pane actions", () => {
   test("tab/f5/f6 dispatch switchPane/copyToOtherPane/moveToOtherPane", () => {
     const h = makeHarness();
@@ -1053,6 +1306,32 @@ describe("dual-pane actions", () => {
     h.calls.length = 0;
     h.key("d", { ctrl: true, shift: true, repeated: true });
     expect(h.calls).toEqual([]);
+  });
+
+  test("autorepeat never re-runs cycleSort/togglePreview/toggleHidden/history", () => {
+    const h = makeHarness();
+    // cycleSort/histBack default to [] (or non-ctrl) — remap onto ctrl chords
+    h.binds.cycleSort = ["ctrl+s"];
+    h.binds.histBack = ["ctrl+b"];
+    const before = [...h.calls];
+    h.key("s", { ctrl: true, repeated: true });
+    h.key("f3", { repeated: true });
+    h.key("h", { ctrl: true, repeated: true });
+    h.key("b", { ctrl: true, repeated: true });
+    expect(h.calls).toEqual(before);
+    expect(h.state.showHidden).toBe(false);
+    // a non-repeat still fires (proves each bind itself works)
+    h.key("s", { ctrl: true });
+    h.key("f3");
+    h.key("h", { ctrl: true });
+    h.key("b", { ctrl: true });
+    expect(h.calls).toContain("sort:cycle");
+    expect(h.calls).toContain("preview:toggle");
+    expect(h.calls).toContain("renderGrid");
+    expect(h.calls).toContain("back");
+    // NOTE: reloadPlaces (ctrl+r) carries the same guard but isn't unit-
+    // observable — doReloadPlaces is async real-fs (loadSystemPlaces), so a
+    // synchronous calls assertion can't see it either way.
   });
 
   test("autorepeat never starts cross-pane work (op-flood guard)", () => {

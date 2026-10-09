@@ -28,6 +28,8 @@ import type { makeBulkRename } from "../ui/ui-bulk-rename";
 import type { makeUndo } from "../app/undo";
 import type { makeConflict, makeYesNo } from "../ui/ui-dialogs";
 import type { makeFileOps } from "../fs/fileops";
+import type { makeEnsureSudo } from "../fs/elevate";
+import type { makeProgress } from "../ui/ui-progress";
 import type { makeTerminal } from "../ui/ui-term";
 import type { makeTrashConfirms, makeTrashOps } from "../fs/trashops";
 import type { makePreview } from "../ui/ui-preview";
@@ -35,19 +37,18 @@ import type { makeGridRenderer } from "../ui/ui-grid";
 import type { makeProps } from "../ui/ui-props";
 import type { makeMenuEntries } from "../ui/menu-entries";
 import type { makeEscMenu } from "../ui/ui-settings";
+import type { makeSystemTheme } from "../ui/ui-system-theme";
 import type { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
+import type { ExecutableInfo } from "../fs/executable";
 
 export type NavWiring = {
   renderAll: ReturnType<typeof makeRenderAll>;
   quitApp: ReturnType<typeof makeQuit>;
   restartApp: ReturnType<typeof makeRestart>;
   setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
-  tabModel: ReturnType<typeof makeTabs>;
   tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>];
-  activeTabModel: () => ReturnType<typeof makeTabs>;
   nextTab: () => void;
   prevTab: () => void;
-  search: ReturnType<typeof makeSearch>;
   searches: [ReturnType<typeof makeSearch>, ReturnType<typeof makeSearch>];
   activeSearch: () => ReturnType<typeof makeSearch>;
 } & Pick<ReturnType<typeof makeNav>, "canBack" | "canFwd" | "goBack" | "goFwd" | "navigate"> &
@@ -65,10 +66,14 @@ export type ChromeWiring = {
   activeToolbar: () => ReturnType<typeof makeToolbar>;
   notify: ReturnType<typeof makeNotify>["notify"];
   notifySticky: ReturnType<typeof makeNotify>["notifySticky"];
+  ensureSudo: ReturnType<typeof makeEnsureSudo>;
   openFileDefault: ReturnType<typeof makeRecentOpen>["openFileDefault"];
+  launchAppAsRoot: (desktopFile: string, appName: string, p: string) => Promise<void>;
   dialogs: ReturnType<typeof makeDialogs>;
   connectServer: (raw?: string) => void;
   disconnectServer: (mountPath: string) => void;
+  stopGpm: () => void;
+  stopChromeTimers: () => void;
 };
 
 export type GridFoundationWiring = {
@@ -88,6 +93,7 @@ export type FileopsWiring = {
   terminal: ReturnType<typeof makeTerminal>;
   trash: ReturnType<typeof makeTrashOps>;
   yesNo: ReturnType<typeof makeYesNo>;
+  progress: ReturnType<typeof makeProgress>;
 } & ReturnType<typeof makeTrashConfirms>;
 
 export type GridWiring = {
@@ -101,8 +107,13 @@ export type GridWiring = {
   bandCtx: BandCtx;
   props: ReturnType<typeof makeProps>;
   menuEntries: ReturnType<typeof makeMenuEntries>;
+  // executable launches (the Run prompt behind openFileDefault's fork)
+  runExecutable: (p: string) => void;
+  runExecutableInTerminal: (p: string) => void;
+  askExecutable: (p: string, info: ExecutableInfo, openAnyway: () => void) => void;
 };
 
 export type SettingsWiring = {
   escMenu: ReturnType<typeof makeEscMenu>;
+  systemTheme: ReturnType<typeof makeSystemTheme>;
 };

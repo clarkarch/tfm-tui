@@ -1,5 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -7,6 +17,7 @@ import {
   fsErrText,
   failSuffix,
   fsMove,
+  canReadSync,
   isTrashFilesDir,
   safeRestoreMove,
   uniqueTarget,
@@ -14,7 +25,14 @@ import {
   deviceOf,
   crossDevice,
   atomicWriteFile,
+  claimTmp,
   encodeTrashPath,
+  rmTrashInfoForPath,
+  allTrashFilesDirs,
+  countTrashItems,
+  fileIdMatches,
+  fileIdOf,
+  trashIfSameFile,
 } from "./fsutil";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
@@ -43,6 +61,27 @@ const W = (p: string, s = "x") => {
   mkdirSync(path.dirname(p), { recursive: true });
   writeFileSync(p, s);
 };
+
+describe("canReadSync", () => {
+  test("true for a readable file, false for a missing path", () => {
+    const f = path.join(SANDBOX, "readable.txt");
+    writeFileSync(f, "x");
+    expect(canReadSync(f)).toBe(true);
+    expect(canReadSync(path.join(SANDBOX, "no-such-file.txt"))).toBe(false);
+  });
+
+  // root bypasses file modes, so a chmod-000 probe is meaningless as uid 0
+  test.skipIf(process.getuid?.() === 0)("chmod-000 is unreadable", () => {
+    const f = path.join(SANDBOX, "locked.txt");
+    writeFileSync(f, "x");
+    chmodSync(f, 0o000);
+    try {
+      expect(canReadSync(f)).toBe(false);
+    } finally {
+      chmodSync(f, 0o644);
+    }
+  });
+});
 
 describe("uniqueTarget", () => {
   test("contract: callers pass an OCCUPIED name — first suggestion is ' (copy)', never the base", () => {
@@ -114,6 +153,34 @@ describe("fsMove / safeRestoreMove", () => {
       W(path.join(dir, "src.txt"), "deep");
       await safeRestoreMove(path.join(dir, "src.txt"), path.join(dir, "x/y/z/dst.txt"));
       expect(readFileSync(path.join(dir, "x/y/z/dst.txt"), "utf8")).toBe("deep");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("claimTmp hands out distinct exclusive names (no shared part-files)", async () => {
+    const dir = mktmp("tfm-claim-");
+    try {
+      const dest = path.join(dir, "out.bin");
+      const a = await claimTmp(dest);
+      const b = await claimTmp(dest);
+      expect(a).not.toBe(b);
+      // both claims exist and are empty: the second claim did not reuse the first
+      expect(existsSync(a)).toBe(true);
+      expect(existsSync(b)).toBe(true);
+      expect(readFileSync(a, "utf8")).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("claimTmp dir mode claims an exclusive directory", async () => {
+    const dir = mktmp("tfm-claimdir-");
+    try {
+      const a = await claimTmp(path.join(dir, "out"), true);
+      const b = await claimTmp(path.join(dir, "out"), true);
+      expect(a).not.toBe(b);
+      expect(readdirSync(a)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -305,5 +372,146 @@ describe("atomicWriteFile", () => {
     const missing = path.join(SANDBOX, "atomic-gone", "out.png");
     await expect(atomicWriteFile(missing, "x")).rejects.toThrow();
     expect(existsSync(path.join(SANDBOX, "atomic-gone"))).toBe(false);
+  });
+});
+
+describe("rmTrashInfoForPath per-mount isolation", () => {
+  test("a missing per-mount sidecar never touches the home entry of the same name", async () => {
+    // home holds an entry "same.txt" (with its sidecar); a per-mount file of
+    // the same basename has NO sibling sidecar — cleanup must leave home alone
+    const homeFile = path.join(SANDBOX, "home-orig-same.txt");
+    writeFileSync(homeFile, "home-data");
+    await xdgTrashMove(homeFile);
+    expect(existsSync(path.join(trashDir(), "info", "home-orig-same.txt.trashinfo"))).toBe(true);
+    const mnt = path.join(SANDBOX, "mnt");
+    mkdirSync(path.join(mnt, "files"), { recursive: true });
+    writeFileSync(path.join(mnt, "files", "home-orig-same.txt"), "other-disk-data");
+    await rmTrashInfoForPath(path.join(mnt, "files", "home-orig-same.txt"));
+    expect(existsSync(path.join(trashDir(), "info", "home-orig-same.txt.trashinfo"))).toBe(true);
+  });
+
+  test("a present per-mount sidecar is removed without touching home", async () => {
+    const mnt = path.join(SANDBOX, "mnt2");
+    mkdirSync(path.join(mnt, "info"), { recursive: true });
+    mkdirSync(path.join(mnt, "files"), { recursive: true });
+    writeFileSync(path.join(mnt, "files", "u.txt"), "d");
+    writeFileSync(path.join(mnt, "info", "u.txt.trashinfo"), "[Trash Info]\nPath=/x/u.txt\n");
+    await rmTrashInfoForPath(path.join(mnt, "files", "u.txt"));
+    expect(existsSync(path.join(mnt, "info", "u.txt.trashinfo"))).toBe(false);
+  });
+});
+
+describe("allTrashFilesDirs", () => {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  test("home first, one entry per mount, deduped", () => {
+    const mounts = [
+      "dev2 /mnt/usb ext4 rw 0 0",
+      "dev3 /mnt/usb ext4 rw 0 0",
+      "dev4 /mnt/odd\\040name ext4 rw 0 0",
+    ].join("\n");
+    expect(allTrashFilesDirs(mounts)).toEqual([
+      path.join(trashDir(), "files"),
+      path.join("/mnt/usb", `.Trash-${uid}`, "files"),
+      path.join("/mnt/odd name", `.Trash-${uid}`, "files"),
+    ]);
+  });
+
+  test("network and automount filesystems are never probed", () => {
+    const mounts = [
+      "srv:/share /mnt/nfs nfs rw 0 0",
+      "//srv/share /mnt/cifs cifs rw 0 0",
+      "sshfs#x /mnt/ssh fuse.sshfs rw 0 0",
+      "auto /mnt/auto autofs rw 0 0",
+      "gvfs /run/user/1000/gvfs fuse.gvfsd-fuse rw 0 0",
+      "dev5 /mnt/disk ext4 rw 0 0",
+    ].join("\n");
+    expect(allTrashFilesDirs(mounts)).toEqual([
+      path.join(trashDir(), "files"),
+      path.join("/mnt/disk", `.Trash-${uid}`, "files"),
+    ]);
+  });
+
+  test("malformed lines are skipped, never throw", () => {
+    // "garbage" (one field) and blank lines skip; "dev /x ext4" is a
+    // well-formed (if odd) entry and is honored
+    expect(allTrashFilesDirs("garbage\n\n  \ndev /x ext4")).toEqual([
+      path.join(trashDir(), "files"),
+      path.join("/x", `.Trash-${uid}`, "files"),
+    ]);
+    expect(allTrashFilesDirs("")).toEqual([path.join(trashDir(), "files")]);
+  });
+});
+
+describe("countTrashItems", () => {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  test("sums home plus mounted per-mount trashes", () => {
+    const mnt = path.join(SANDBOX, "usb");
+    const files = path.join(mnt, `.Trash-${uid}`, "files");
+    mkdirSync(files, { recursive: true });
+    writeFileSync(path.join(files, "u1"), "x");
+    writeFileSync(path.join(files, "u2"), "x");
+    const before = (() => {
+      try {
+        return readdirSync(path.join(trashDir(), "files")).length;
+      } catch {
+        return -1;
+      }
+    })();
+    if (before < 0) return; // home unreadable — covered by the -1 test below
+    expect(countTrashItems(`dev ${mnt} ext4 rw 0 0`)).toBe(before + 2);
+  });
+});
+
+describe("fileIdOf / fileIdMatches / trashIfSameFile", () => {
+  test("same file matches, replaced file does not", () => {
+    const p = path.join(SANDBOX, "id-target.txt");
+    writeFileSync(p, "v1");
+    const id = fileIdOf(p);
+    expect(id).not.toBeNull();
+    expect(fileIdMatches(id, p)).toBe(true);
+    expect(fileIdMatches(null, p)).toBe(true);
+    expect(fileIdMatches({ dev: -1, ino: -1 }, p)).toBe(false);
+    expect(fileIdMatches(id, path.join(SANDBOX, "id-missing.txt"))).toBe(false);
+    expect(fileIdOf(path.join(SANDBOX, "id-missing.txt"))).toBeNull();
+  });
+
+  // ext4 hands a freed inode straight to the next create (rm + write → same
+  // dev:ino), so dev+ino alone would match a stranger. Birth time breaks the
+  // tie; the fake id keeps dev+ino and only moves birth, reproducing the reuse
+  // on any fs. Skipped where the fs reports no birth time (fileIdOf omits it).
+  test.skipIf(!(statSync(SANDBOX).birthtimeMs > 0))("reused dev+ino with a different birth time does not match", () => {
+    const p = path.join(SANDBOX, "id-reuse.txt");
+    writeFileSync(p, "v1");
+    const id = fileIdOf(p);
+    expect(id?.born).toBeDefined();
+    expect(fileIdMatches({ ...id!, born: id!.born! - 1 }, p)).toBe(false);
+  });
+
+  test("trashes the recorded file, skips a stranger, no-ops when gone", async () => {
+    const logs: string[] = [];
+    const log = (m: string) => logs.push(m);
+    const p = path.join(SANDBOX, "same-trashed.txt");
+    writeFileSync(p, "v1");
+    const id = fileIdOf(p);
+    await trashIfSameFile(p, id, log);
+    expect(existsSync(p)).toBe(false);
+    expect(logs).toEqual([]);
+
+    // reoccupied path: the stranger survives, skip is logged
+    writeFileSync(p, "stranger");
+    await trashIfSameFile(p, id, log);
+    expect(readFileSync(p, "utf8")).toBe("stranger");
+    expect(logs.some((m) => m.includes("replaced since op"))).toBe(true);
+
+    // gone path: silent success
+    rmSync(p);
+    await trashIfSameFile(p, id, log);
+  });
+
+  test("null id falls back to path semantics", async () => {
+    const p = path.join(SANDBOX, "null-id.txt");
+    writeFileSync(p, "x");
+    await trashIfSameFile(p, null);
+    expect(existsSync(p)).toBe(false);
   });
 });

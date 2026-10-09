@@ -13,15 +13,20 @@
 //   a live grid or a transparent terminal bg.
 //   - input fields keep their fill in all modes (InputRenderable extends
 //     TextareaRenderable and has no border support)
-import type { IconMode, Theme, UiStyle } from "../config/config-schema";
+import type { IconMode, Theme, TransparentBgMode, UiStyle } from "../config/config-schema";
+import type { MaybeNode } from "../lib/node-like";
 
 export type { UiStyle };
 
 // icon raster transparency: opaque never keeps alpha, transparent always does,
 // partial only OUTSIDE floating layers (floatChild = slot lives in a
-// menu/dialog, painted over an opaque island).
-export const iconTransparent = (mode: IconMode, floatChild: boolean): boolean =>
-  mode === "transparent" || (mode === "transparent-partial" && !floatChild);
+// menu/dialog, painted over an opaque island). transparent-bg force implies
+// alpha outside floats too (chrome rasters sit on the terminal bg), but float
+// islands stay solid so their rasters keep flattening.
+export const iconTransparent = (mode: IconMode, floatChild: boolean, transparentBg?: TransparentBgMode): boolean =>
+  mode === "transparent" ||
+  (mode === "transparent-partial" && !floatChild) ||
+  (transparentBg === "force" && !floatChild);
 
 // outline-partial shares every BACKGROUND-chrome decision with outline —
 // only floating layers differ (floatSurface below). Branch background-chrome
@@ -47,9 +52,15 @@ type SurfaceOpts = {
 };
 
 // chrome panels: sidebar / main region / preview. Floating layers have their
-// own role below (floatSurface) — they are NOT chrome.
-export const chromeSurface = (style: UiStyle, c: Theme, bg: string): SurfaceOpts =>
-  isOutlineVariant(style) ? { border: true, borderStyle: "rounded", borderColor: c.border } : { backgroundColor: bg };
+// own role below (floatSurface) — they are NOT chrome. transparent-bg force
+// clears the fill in every style (the terminal bg shows through); hover states
+// live on tiles/rows, never on chrome, so nothing else is needed here.
+export const chromeSurface = (style: UiStyle, c: Theme, bg: string, transparentBg?: TransparentBgMode): SurfaceOpts =>
+  transparentBg === "force"
+    ? {}
+    : isOutlineVariant(style)
+      ? { border: true, borderStyle: "rounded", borderColor: c.border }
+      : { backgroundColor: bg };
 
 // floating layers (menus, cursor popup, dialogs): an opaque island over the
 // desktop in every style EXCEPT pure outline, where they stay border-only
@@ -62,7 +73,15 @@ export const floatSurface = (style: UiStyle, c: Theme, bg: string): SurfaceOpts 
 // patchwork in solid mode; focus is shown by the selection and the divider.
 
 // grid tiles: rest goes bare in outline variants, interaction states keep fills
-export const tileSurface = (style: UiStyle, c: Theme, state: SurfaceState): SurfaceOpts => {
+// grid tiles: rest (+cut, which paints the same fill) goes bare in outline
+// variants AND under transparent-bg force; interaction states keep fills
+export const tileSurface = (
+  style: UiStyle,
+  c: Theme,
+  state: SurfaceState,
+  transparentBg?: TransparentBgMode,
+): SurfaceOpts => {
+  if (transparentBg === "force" && (state === "rest" || state === "cut")) return {};
   if (isOutlineVariant(style) && state === "rest") return {};
   return {
     rest: { backgroundColor: c.bg },
@@ -74,7 +93,13 @@ export const tileSurface = (style: UiStyle, c: Theme, state: SurfaceState): Surf
 
 // one-row list rows (places sidebar): can never carry a border, so only the
 // rest fill disappears
-export const rowSurface = (style: UiStyle, c: Theme, state: SurfaceState): SurfaceOpts => {
+export const rowSurface = (
+  style: UiStyle,
+  c: Theme,
+  state: SurfaceState,
+  transparentBg?: TransparentBgMode,
+): SurfaceOpts => {
+  if (transparentBg === "force" && (state === "rest" || state === "cut")) return {};
   if (isOutlineVariant(style) && state === "rest") return {};
   return {
     rest: { backgroundColor: c.sidebarBg },
@@ -85,22 +110,54 @@ export const rowSurface = (style: UiStyle, c: Theme, state: SurfaceState): Surfa
 };
 
 // 1-row buttons / crumbs. restBg = the fill that matches the surrounding
-// panel (canvas bg for toolbar, sidebarBg inside dialogs); outline clears it
-export const btnSurface = (style: UiStyle, c: Theme, hovered: boolean, restBg?: string): SurfaceOpts => {
-  if (isOutlineVariant(style) && !hovered) return {};
+// panel (canvas bg for toolbar, sidebarBg inside dialogs); outline clears it.
+// transparent-bg force clears it too — over a solid float panel the panel fill
+// shows through, over chrome the terminal does.
+export const btnSurface = (
+  style: UiStyle,
+  c: Theme,
+  hovered: boolean,
+  restBg?: string,
+  transparentBg?: TransparentBgMode,
+): SurfaceOpts => {
+  if ((isOutlineVariant(style) || transparentBg === "force") && !hovered) return {};
   return { backgroundColor: hovered ? c.hoverBg : (restBg ?? c.bg) };
 };
 
-// raster slots flatten icons onto a bg hex; outline-variant rest states sit on
-// the canvas, so the flatten target must be canvas bg instead of panel bg.
+// The surface a raster slot flattens onto. Flattening is what makes an icon
+// raster's own square disappear; when the target disagrees with the surface the
+// icon is actually drawn over, the square is visible — that was the props/notify
+// "icon bg" bug. So the ROLE is part of the call, not an afterthought:
+//
+// "chrome" (default): panels/tiles/toolbar. Outline variants paint NO rest fill
+//   for chrome, so the rest raster must flatten onto the canvas bg.
+// "float": a slot inside a floating layer — menus, dialogs, toasts. Floats are
+//   filled in solid AND outline-partial (floatSurface), and the toast island is
+//   filled in every style, so the float's own fill is the target in every style.
+//   Passing the chrome role here punches a canvas-colored square into the
+//   dialog (visible over the float fill, most obviously in outline-partial).
+//   Under pure outline a float is a border ring over the dimmed desktop: nothing
+//   matches, and the float fill is what every float row (menu/settings) bakes.
 // Ignored when [ui] icons is "transparent" (raster keeps alpha, key drops bg) —
 // kept in IconState for call-site compat.
-export const slotBg = (style: UiStyle, c: Theme, panelBg: string): string => (isOutlineVariant(style) ? c.bg : panelBg);
+export type SlotFillRole = "chrome" | "float";
+export const slotBg = (style: UiStyle, c: Theme, panelBg: string, role: SlotFillRole = "chrome"): string =>
+  role === "float" || !isOutlineVariant(style) ? panelBg : c.bg;
+
+// buttons/hover targets that live INSIDE an always-filled floating island (the
+// toast stack keeps its accentBg fill in EVERY style — there is no border-ring
+// mode to clear it for). btnSurface can't express this: its outline branch
+// deliberately clears the rest fill for chrome, which would be wrong here.
+export const islandSurface = (c: Theme, hovered: boolean, islandBg: string): SurfaceOpts => ({
+  backgroundColor: hovered ? c.hoverBg : islandBg,
+});
 
 // post-mutation of real renderables (findDescendantById results). "transparent"
 // clears a fill — parseColor maps it to alpha-0, which emits terminal-default
 // bg for that cell.
-export const applySurface = (node: any, opts: SurfaceOpts): void => {
+export const applySurface = (node: MaybeNode, opts: SurfaceOpts): void => {
+  // the id lookups that feed this hand back MaybeNode; a miss is a no-op
+
   if (!node) return;
   try {
     node.backgroundColor = opts.backgroundColor ?? "transparent";

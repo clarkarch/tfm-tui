@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeSearch } from "./search";
+import type { MaybeNode } from "../lib/node-like";
 
 // virtual scheduler: no wall-clock sleeps — the focus timer and the debounced
 // render both fire when the test advances the clock
@@ -60,16 +61,18 @@ const makeHarness = () => {
   const el = stubInput();
   const clock = makeClock();
   let renders = 0;
+  const pointers: string[] = [];
   const search = makeSearch({
-    byId: (id) => (id === "tfm-search" ? el : null),
+    byId: (id) => (id === "tfm-search" ? (el as unknown as MaybeNode) : null),
     inputId: "tfm-search",
     renderGrid: () => {
       renders++;
     },
     termHasFocus: () => false,
     sched: clock,
+    setPointer: (s) => void pointers.push(s),
   });
-  return { el, clock, search, renders: () => renders };
+  return { el, clock, search, renders: () => renders, pointers };
 };
 
 describe("makeSearch", () => {
@@ -84,11 +87,19 @@ describe("makeSearch", () => {
     expect(h.el.focused).toBe(true);
   });
 
+  test("begin sets the text pointer, clear restores default", () => {
+    const h = makeHarness();
+    h.search.beginTypeToSearch("a");
+    expect(h.pointers).toEqual(["text"]);
+    h.search.clearSearch();
+    expect(h.pointers).toEqual(["text", "default"]);
+  });
+
   test("termHasFocus guard: the shell keeps the keyboard", () => {
     const el = stubInput();
     let renders = 0;
     const search = makeSearch({
-      byId: (id) => (id === "tfm-search" ? el : null),
+      byId: (id) => (id === "tfm-search" ? (el as unknown as MaybeNode) : null),
       inputId: "tfm-search",
       renderGrid: () => {
         renders++;

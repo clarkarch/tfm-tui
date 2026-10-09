@@ -7,28 +7,28 @@
 // both are only read at runtime, post-boot). ---
 
 import os from "node:os";
-import type { ScrollBoxRenderable } from "@opentui/core";
+import type { CliRenderer, ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
 import { ensureGlyphFallbacks, glyphFor } from "../ui/glyphs";
+import { asciiGlyphFor, resolveTtyMode, ttyStaticTheme } from "../ui/tty";
 import { FILE_ICON_BY_EXT } from "../fs/filetype";
 import { isVirtualUri } from "../fs/uri";
-import { isNetworkPath } from "../fs/network";
 import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
-import { makeLookup } from "../ui/ui-lookup";
-import { makeSlots } from "../ui/ui-slots";
+import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
+import { makePointerSetter, makeSlots } from "../ui/ui-slots";
 import { makeFloats } from "../ui/floats";
-import { clearChildren } from "../lib/uiutil";
 import { initialAppState } from "../app/nav";
+import { appendLog } from "../app/log";
 import { activeFacade, activeState, makePanePair, otherState, setActivePane, togglePane } from "../app/panes";
 
 export type CoreWiring = ReturnType<typeof wireCore>;
 
 export const wireCore = (deps: {
   // () => renderer — TDZ: the chrome wiring creates it later
-  renderer(): any;
+  renderer(): CliRenderer;
   // live fileops clipboard read (isCutKey tile dimming)
   clipboard(): { mode: "copy" | "cut"; items: { path: string }[] } | null;
   // a launch FILE path (`tfm some/file.txt`) to highlight after the first build
@@ -37,8 +37,13 @@ export const wireCore = (deps: {
   // --- Config (TOML at ~/.config/tfm/config.toml, TFM_CONFIG overrides path) ---
   const config = loadConfig();
 
-  // --- Color palette (theme from config; transparent-bg nudge lives in ./color) ---
-  const colors = deriveColors(config.theme, config.ui.transparentBg);
+  // --- Color palette (theme from config; transparent-bg nudge lives in ./color).
+  // Tty mode forces opaque AND ignores the user's [theme] hues: the VT ignores
+  // 48;2 truecolor, so a snapped custom theme always went muddy — one static
+  // console palette (dark/light by configured-bg brightness) paints instead.
+  // config.theme is still STORED untouched, so leaving the console restores it.
+  const ttyMode = resolveTtyMode(config.ui.ttyMode, process.env.TERM);
+  const colors = ttyMode ? ttyStaticTheme<Theme>(config.theme) : deriveColors(config.theme, config.ui.transparentBg);
   const themeGet = (): Theme => colors;
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---
@@ -58,9 +63,34 @@ export const wireCore = (deps: {
   // math lives in ./style)
   const sideInnerW = (): number => sideInnerWidth(config.ui.uiStyle, geometry.sw);
 
+  // --- Tty mode (Linux console / dumb terms): single effective switch.
+  // `auto` follows the TERM prefix; `on`/`off` override. Live-read so a
+  // settings flip or live-reload applies without restart.
+  const isTtyMode = (): boolean => resolveTtyMode(config.ui.ttyMode, process.env.TERM);
+  // ASCII glyphs on the console (no Nerd PUA there), Nerd glyphs elsewhere
+  // (style-aware: an icon-style toggle re-resolves via resetIconQueue)
+  const ttyGlyphFor = (name: string): string =>
+    isTtyMode() ? asciiGlyphFor(name) : glyphFor(name, config.ui.iconStyle);
+  // force-glyph: same raster skip as tty mode, but WITHOUT the console extras
+  // (list view, ASCII glyphs, anim/transparent forcing), live-read like tty mode
+  const forceGlyph = (): boolean => config.ui.forceGlyph;
+
   // --- Nerd Font glyphs live in ./glyphs (FALLBACK ONLY); every category the
   // ./filetype classifier can emit gets a file-glyph fallback ---
   ensureGlyphFallbacks(new Set(Object.values(FILE_ICON_BY_EXT)));
+
+  // --- Pixel-resolution gate (./ui-lookup, tested): ONE per process, shared by
+  // the boot wait (settle: full budget, then latch "this terminal never
+  // reports pixels") and the grid's render path (wait: instant on the console
+  // and tmux, short-bounded parking only after a resize requery). Owning it
+  // here is what keeps the two from disagreeing — a per-call-site gate could
+  // never latch across the whole app. Lazy renderer getter (TDZ seam rule).
+  const resolutionGate = makeResolutionGate(() => deps.renderer(), {
+    log: (msg) => appendLog(msg),
+    // no rasters here (the console, or a terminal with broken kitty graphics) —
+    // cell pixels would never be read, so the boot wait is skipped entirely
+    rasterless: () => isTtyMode() || config.ui.forceGlyph,
+  });
 
   // --- Post-mount node lookup seam — lives in ./ui-lookup (tested). Created
   // before the widget factories that capture byId/stripSelectable in ctx; the
@@ -82,19 +112,38 @@ export const wireCore = (deps: {
     },
   });
 
+  // --- Mouse pointer shapes (OSC 22): ONE tty-guarded, deduping sink for
+  // the whole app, shared by every widget ctx. Per-cluster instances were
+  // tried first and diverged: each kept its own `last`, so cluster A
+  // emitting `default` left cluster B believing `pointer` and skipping the
+  // re-set — the shape stuck wrong across widget boundaries depending on
+  // the approach path. Arrows defer renderer access (pre-boot safe).
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => deps.renderer().setMousePointer(s),
+    isTtyMode,
+  });
+
   // --- Icon slots / thumbs / modal scrim — widget lives in ./ui-slots.
   // Called before the renderer boots: every ctx field the drain path needs is
   // an arrow wrapper (post-boot evaluation), per the widget-seam rules. ---
   const slots = makeSlots({
     renderer: () => deps.renderer(),
     byId: lookup.byId,
-    clearChildren,
     colors: themeGet,
     uiStyle: () => config.ui.uiStyle,
     iconsMode: () => config.ui.icons,
+    // TTY-guarded like the terminal pane's own seam (no alpha on the Linux
+    // console — without this a TTY+force run clears the X while its header
+    // keeps its fill). The icon drain early-returns under TTY before ever
+    // reading this, so the guard only affects the new button path.
+    transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
+    iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
     modalOpen: () => floats.hasModal(),
-    glyphFor,
+    glyphFor: ttyGlyphFor,
+    isTtyMode,
+    forceGlyph,
+    setPointer,
   });
 
   // --- App state & history (type + boot-state factory live in ./nav with the
@@ -111,13 +160,18 @@ export const wireCore = (deps: {
   // --- Grid scroll containers — assigned during boot (buildLayout step), one
   // per pane. `scrollerRef` stays the active pane's live ref for the same
   // facade reason as `state`. ---
-  const scrollerRefs: Array<{ current: ScrollBoxRenderable | null }> = [{ current: null }, { current: null }];
+  // a TUPLE, not Array<T>: `panes.active` is PaneIndex (0|1), and tuple
+  // indexing by it needs no non-null assertion — the length is part of the type
+  const scrollerRefs: [{ current: ScrollBoxRenderable | null }, { current: ScrollBoxRenderable | null }] = [
+    { current: null },
+    { current: null },
+  ];
   const scrollerRef = {
     get current(): ScrollBoxRenderable | null {
-      return scrollerRefs[panes.active]!.current;
+      return scrollerRefs[panes.active].current;
     },
     set current(v: ScrollBoxRenderable | null) {
-      scrollerRefs[panes.active]!.current = v;
+      scrollerRefs[panes.active].current = v;
     },
   };
 
@@ -125,12 +179,6 @@ export const wireCore = (deps: {
   // URI/XDG primitives live in ./uri.
   function isVirtualCwd(): boolean {
     return isVirtualUri(state.cwd);
-  }
-
-  // --- Network cwd (gvfs FUSE path): live directory watching is skipped and
-  // the trash refuses — the share is a real dir but not a local one. ---
-  function isNetworkCwd(): boolean {
-    return isNetworkPath(state.cwd);
   }
 
   // --- Trash view detection: the path comparison is pure (./fsutil, honors
@@ -161,9 +209,13 @@ export const wireCore = (deps: {
     config,
     colors,
     themeGet,
+    isTtyMode,
+    forceGlyph,
+    setPointer,
     geometry,
     sideInnerW,
     lookup,
+    resolutionGate,
     floats,
     slots,
     home,
@@ -178,7 +230,6 @@ export const wireCore = (deps: {
     scrollerRefs,
     isVirtualCwd,
     inTrashView,
-    isNetworkCwd,
     isCutKey,
   };
 };

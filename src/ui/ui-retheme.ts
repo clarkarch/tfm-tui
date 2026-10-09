@@ -5,22 +5,26 @@
 // rewritten through ctx setters, and raster caches are invalidated only when
 // colors actually changed. No module-level renderer imports — the widget
 // repaint fns arrive via ctx (same seam as ui-dialogs). ---
-import { watch } from "node:fs";
+import type { CliRenderer } from "@opentui/core";
+import { mkdirSync, watch } from "node:fs";
 import path from "node:path";
 import { bumpHex } from "../config/color";
+import { isDark, resolveTtyMode, ttyStaticTheme } from "./tty";
 import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
+import { describeKeybindConflicts, findKeybindConflicts } from "../config/config-schema";
 import { debounced } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 type RethemeCtx = {
   // live object refs — applyConfig mutates them in place
   config: Config;
   colors: Theme;
-  setOnId(id: string, fn: (n: any) => void): void;
-  byId(id: string): any;
-  renderer(): any;
+  setOnId(id: string, fn: (n: NodeLike) => void): void;
+  byId(id: string): MaybeNode;
+  renderer(): CliRenderer;
   // geometry lets — rewritten on every applyConfig, never captured
   getSw(): number;
   setSw(v: number): void;
@@ -29,7 +33,11 @@ type RethemeCtx = {
   setIconCells(v: number): void;
   sideInnerW(): number;
   renderAll(): void;
-  clearIconCaches(): void;
+  // theme flips retry doomed thumbs (a broken file gets one fresh attempt per
+  // palette) but keep every hot raster: icon/thumb keys already carry fg/bg,
+  // so a flip misses naturally and a full wipe only guaranteed a cold cache
+  // (rapid A->B->A cycling re-rendered A from scratch)
+  clearFailedThumbs(): void;
   resetIconQueue(): void;
   syncTerminalTheme(): void;
   // live-resize for the RENDER_EXEMPT terminal-height knob (no renderAll):
@@ -41,6 +49,10 @@ type RethemeCtx = {
   escMenu: { isOpen(): boolean; renderMenuContent(): void };
   fileMenuIsOpen(): boolean;
   renderFileMenu(): void;
+  // open floats that persist across a theme switch (pick, conflict/yes-no
+  // confirms, bulk-rename, props, progress toast): each repaints itself by
+  // id — no rebuild, focus-safe. Optional so tests stay light.
+  floatRepaints?: Array<{ isOpen(): boolean; repaint(): void }>;
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   // side-effect hook for non-visual config consumers (undo journal sync).
   // Runs at the end of every applyConfig — optional so tests stay light.
@@ -48,56 +60,94 @@ type RethemeCtx = {
   // dual pane: re-clamp the active pane when dual is disabled (a hidden pane
   // must never own input/status) and repaint the focus cue.
   normalizePanes?(): void;
+  // sort mode: [ui] sort-mode seeds per-pane AppState at boot, but the grid
+  // reads state — the wiring hook converges both panes here so a settings /
+  // live-reload change actually re-sorts. Optional so tests stay light.
+  syncSortMode?(): void;
+  // show-hidden: same seed-vs-state split as sort (boot seeds it, the grid +
+  // remap bind read state) — an external config.toml edit that flips it must
+  // converge both panes here or the reload repaints the same filter. The GUI
+  // row writes state itself, so it just re-converges to the same value.
+  // Optional so tests stay light.
+  syncShowHidden?(): void;
+  // tty mode (linux console): forces opaque bg + list view. Optional so
+  // tests stay light; absent = modern terminal.
+  isTtyMode?(): boolean;
+  // grid scrollers bake their scrollbar thumb/track colors at boot —
+  // repaints the live bars on a theme flip without rebuilding them.
+  // Optional so tests stay light.
+  restyleScrollbars?(): void;
 };
 
 export const makeRetheme = (ctx: RethemeCtx) => {
   const { setOnId } = ctx;
 
+  // [ui] sidebar-title: the title block is BOOT-BAKED (renderAll never rebuilds
+  // it), so its paint has to run from applyConfig itself — not only from the
+  // theme-flip path. Without this, switching modes in Settings (a non-theme
+  // knob) showed nothing until a restart, because a mode flip only reached
+  // renderAll. tfm keeps the original accent wordmark + tagline; files is the
+  // white "Files" wordmark with no tagline. Both nodes are built in every
+  // mode, so the paint is a pure flip.
+  const paintTitle = (colors: Theme): void => {
+    const mode = ctx.config.ui.sidebarTitle;
+    const files = mode === "files";
+    setOnId("tfm-title-font", (n) => {
+      n.text = files ? "Files" : "tfm";
+      n.color = files ? colors.white : colors.accent;
+      n.visible = mode === "tfm" || files;
+    });
+    setOnId("tfm-title-sub", (n) => {
+      n.visible = mode === "tfm";
+      n.fg = colors.sidebarFgMuted;
+    });
+  };
+
   // Repaints widgets whose colors were baked at boot and which renderAll's
-  // rebuilds never touch. Without this a runtime theme swap leaves the
-  // sidebar, title, inputs, band, ghost and status bar in the old palette.
+  // steps do not rebuild. Called on every applyConfig AND on theme flips
+  // (see applyConfig below), so a non-theme knob change still lands.
   const rethemeChrome = (): void => {
     const st = ctx.config.ui.uiStyle;
     const colors = ctx.colors;
+    // transparent-bg force as a surface-seam value (opaque/transparent paint as before)
+    const tForce = ctx.config.ui.transparentBg === "force" ? ("force" as const) : undefined;
     setOnId("tfm-sidebar-root", (n) => {
       n.width = ctx.getSw();
-      applySurface(n, chromeSurface(st, colors, colors.sidebarBg));
+      applySurface(n, chromeSurface(st, colors, colors.sidebarBg, tForce));
     });
-    setOnId("tfm-main", (n) => applySurface(n, chromeSurface(st, colors, colors.bg)));
+    setOnId("tfm-main", (n) => applySurface(n, chromeSurface(st, colors, colors.bg, tForce)));
     setOnId("tfm-title-box", (n) => {
       n.width = ctx.sideInnerW();
     });
     setOnId("tfm-places", (n) => {
       n.width = ctx.sideInnerW();
     });
-    setOnId("tfm-title-font", (n) => {
-      n.color = colors.accent;
-    });
-    setOnId("tfm-title-sub", (n) => {
-      n.fg = colors.sidebarFgMuted;
-    });
-    setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
+    paintTitle(colors);
+    setOnId("tfm-preview", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg, tForce)));
     setOnId("tfm-pane-divider", (n) => {
       n.backgroundColor = colors.divider;
     });
     setOnId(BAND_ID, (n) => {
-      n.borderColor = colors.accent;
+      n.borderColor = ctx.isTtyMode?.() ? colors.hoverBg : colors.accent;
     });
     setOnId(DRAG_GHOST_ID, (n) => {
-      n.backgroundColor = colors.accent;
+      n.backgroundColor = ctx.isTtyMode?.() ? colors.accentBg : colors.accent;
     });
     setOnId(`${DRAG_GHOST_ID}-label`, (n) => {
-      n.fg = colors.bg;
+      n.fg = ctx.isTtyMode?.() ? colors.white : colors.bg;
     });
     setOnId("tfm-status-label", (n) => {
       n.fg = colors.sidebarFgMuted;
     });
     setOnId("tfm-prompt-panel", (n) => applySurface(n, chromeSurface(st, colors, colors.sidebarBg)));
-    // 1-row header can't carry a border ring — just drop the fill in outline variants
-    setOnId("tfm-term-header", (n) => applySurface(n, st === "solid" ? { backgroundColor: colors.sidebarBg } : {}));
+    // 1-row header can't carry a border ring — just drop the fill in outline variants (or under force)
+    setOnId("tfm-term-header", (n) =>
+      applySurface(n, st === "solid" && !tForce ? { backgroundColor: colors.sidebarBg } : {}),
+    );
 
     // toolbar hover buttons: box bg must track the new palette between raster swaps
     ctx.repaintButtons();
+    ctx.restyleScrollbars?.();
     ctx.renderCrumbs();
     ctx.refreshNav();
     for (const p of ["tfm-p0-", "tfm-p1-"]) {
@@ -123,13 +173,51 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       setOnId("tfm-filemenu-sub", (n) => applySurface(n, floatSurface(st, colors, colors.sidebarBg)));
       ctx.renderFileMenu();
     }
+    // floats that outlive the switch repaint themselves — one throwing must
+    // not skip the rest (same isolation as render steps)
+    for (const f of ctx.floatRepaints ?? []) {
+      try {
+        if (f.isOpen()) f.repaint();
+      } catch {}
+    }
   };
 
   // theme-relevant signature of a config snapshot. Diffing against the LAST
   // APPLIED state (not the caller's pre-call `config`) means a settings row
   // can mutate config first and call applyConfig(config) and the flip is
   // still seen — the old self-compare skipped raster invalidation silently.
-  const themeSig = (c: Config): string => JSON.stringify([c.theme, c.ui.transparentBg, c.ui.uiStyle, c.ui.icons]);
+  // followTerminal is deliberately NOT here: the flag-only commit rebuilds
+  // through renderSig below, and the resolve lands the derived theme (with
+  // its own invalidation) right after — caching the flag flip would clear
+  // icon rasters twice for one user action
+  // ttyMode rides along: flipping it changes the effective transparentBg
+  // (opaque on the console), so rasters must invalidate like a theme change.
+  // forceGlyph too: drains stopped while on must resume on the way back, or
+  // tiles keep glyphs forever.
+  // While tty mode is active the user [theme] is IGNORED (one static console
+  // palette paints instead), so the sig keys off the static dark/light choice
+  // — a [theme] TOML edit on a TTY must not churn rasters or rebuild the grid.
+  const themeSig = (c: Config): string => {
+    if (resolveTtyMode(c.ui.ttyMode, process.env.TERM))
+      return JSON.stringify([
+        "console",
+        isDark(c.theme.bg) ? "dark" : "light",
+        c.ui.uiStyle,
+        c.ui.icons,
+        c.ui.iconStyle,
+        c.ui.ttyMode,
+        c.ui.forceGlyph,
+      ]);
+    return JSON.stringify([
+      c.theme,
+      c.ui.transparentBg,
+      c.ui.uiStyle,
+      c.ui.icons,
+      c.ui.iconStyle,
+      c.ui.ttyMode,
+      c.ui.forceGlyph,
+    ]);
+  };
   let lastThemeSig = themeSig(ctx.config);
 
   // UI keys that a settings adjust can change WITHOUT the heavy renderAll steps
@@ -164,6 +252,12 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "listingsCacheStats",
     "listingsCacheTtl",
     "fileHoverIncludeLabel",
+    // fileHoverAnimation/direction are NOT exempt: the toggle + direction bake
+    // tile layout at build (marginTop headroom + refs.hoverLift in
+    // ui-grid-rows.ts, both in the grid content sig) — the live per-hover read
+    // only covers the highlight/lift paint. Exempting them left the old tiles
+    // in place until the next natural rebuild. includeLabel stays exempt: it
+    // rides live in the animator with no baked layout behind it.
     "sidebarAnimation",
     "sidebarAnimationStyle",
     "sidebarAnimationMs",
@@ -192,17 +286,26 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "persistUndo",
     "restoreSession",
     "showLaunchTime",
+    "typeToSearch",
   ]);
 
-  // rebuild-relevant signature: all UI keys except the exempt ones, plus theme
+  // rebuild-relevant signature: all UI keys except the exempt ones, plus theme.
+  // Tty mode ignores [theme] (static console palette), so it is excluded there
+  // too — a theme-only edit on a TTY is a no-op, not a full repaint.
   const renderSig = (c: Config): string => {
     const ui: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(c.ui)) {
       if (!RENDER_EXEMPT.has(k)) ui[k] = v;
     }
+    if (resolveTtyMode(c.ui.ttyMode, process.env.TERM)) return JSON.stringify([ui, "console"]);
     return JSON.stringify([ui, c.theme]);
   };
   let lastRenderSig = renderSig(ctx.config);
+  // force-glyph pairing nudge: fire once on the off->on edge (held-on applies
+  // stay silent; off->on reminds again). Boot never passes through here, so
+  // a config file with it already on doesn't spam.
+  let lastForceGlyph = ctx.config.ui.forceGlyph;
+  let lastFollowTerminalWarned = ctx.config.ui.followTerminal;
 
   const applyConfig = (fresh: Config): void => {
     const themeChanged = lastThemeSig !== themeSig(fresh);
@@ -210,10 +313,32 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     Object.assign(ctx.config.theme, fresh.theme);
     Object.assign(ctx.config.keys, fresh.keys);
     Object.assign(ctx.colors, fresh.theme);
-    if (!ctx.config.ui.transparentBg) ctx.colors.bg = bumpHex(ctx.colors.bg);
+    // tty mode ignores the user hues: one static console palette paints instead
+    // (dark/light by the configured bg's brightness) and the kitty-compositing
+    // bumpHex nudge is skipped — meaningless on the console. config.theme is
+    // still STORED above, so leaving the console restores the user theme.
+    if (ctx.isTtyMode?.()) Object.assign(ctx.colors, ttyStaticTheme(ctx.config.theme));
+    else {
+      const effTransparent = ctx.config.ui.transparentBg !== "off";
+      if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
+    }
     lastThemeSig = themeSig(ctx.config);
     const renderChanged = lastRenderSig !== renderSig(ctx.config);
     lastRenderSig = renderSig(ctx.config);
+    if (ctx.config.ui.forceGlyph && !lastForceGlyph) {
+      try {
+        ctx.notify("force glyph is on, list view pairs best with it", "tty", "info");
+      } catch {}
+    }
+    lastForceGlyph = ctx.config.ui.forceGlyph;
+    // follow-terminal is silently dead on the console (static palette wins) —
+    // say so once per rising edge, same one-shot shape as forceGlyph
+    if (ctx.config.ui.followTerminal && ctx.isTtyMode?.() && !lastFollowTerminalWarned) {
+      try {
+        ctx.notify("follow-terminal can't run on this console, static palette paints instead", "tty", "info");
+      } catch {}
+    }
+    lastFollowTerminalWarned = ctx.config.ui.followTerminal;
 
     ctx.setSw(ctx.config.ui.sidebarWidth);
     ctx.setTileW(ctx.config.ui.tileWidth);
@@ -224,7 +349,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
         n.width = id === "tfm-sidebar-root" ? ctx.getSw() : ctx.sideInnerW();
       });
     }
-    const pane: any = ctx.byId("tfm-preview");
+    // boot-baked title block: a [ui] sidebar-title mode flip is NOT a theme
+    // change, so the theme-flip rethemeChrome below never runs for it — paint
+    // the block here on EVERY apply (idempotent: same writes, same node)
+    paintTitle(ctx.colors);
+    const pane = ctx.byId("tfm-preview");
     if (pane) {
       try {
         pane.visible = ctx.config.ui.previewEnabled;
@@ -234,7 +363,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // dual-pane visibility: pane 1 + divider show only while enabled. renderAll
     // (below, via renderSig) rebuilds both grids through the new pane width.
     for (const id of ["tfm-pane-col-1", "tfm-pane-divider"]) {
-      const node: any = ctx.byId(id);
+      const node = ctx.byId(id);
       if (node) {
         try {
           node.visible = ctx.config.ui.dualPane;
@@ -244,12 +373,26 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     try {
       ctx.normalizePanes?.();
     } catch {}
+    // per-pane sort state converges onto the configured mode BEFORE the
+    // renderAll below, so the repaint paints the new order (not the old one)
+    try {
+      ctx.syncSortMode?.();
+    } catch {}
+    // per-pane hidden state converges the same way (external config.toml
+    // edits never touch AppState — only the GUI row and the remap bind do)
+    try {
+      ctx.syncShowHidden?.();
+    } catch {}
 
     if (themeChanged) {
-      ctx.clearIconCaches();
+      ctx.clearFailedThumbs();
       ctx.resetIconQueue();
       try {
-        ctx.renderer().setBackgroundColor(ctx.config.ui.transparentBg ? "transparent" : ctx.colors.bg);
+        ctx
+          .renderer()
+          .setBackgroundColor(
+            ctx.config.ui.transparentBg !== "off" && !ctx.isTtyMode?.() ? "transparent" : ctx.colors.bg,
+          );
       } catch {}
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();
@@ -257,9 +400,15 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       // a theme flip churns the whole icon raster set + every chrome surface;
       // without a GC poke the destroyed renderables' native buffers sit in
       // finalizer limbo until the next heap-driven GC (see the native-OOM
-      // note in AGENTS.md / ./mem-hygiene)
+      // note in AGENTS.md / ./mem-hygiene). Deferred past the paint so the
+      // flip's own frame lands first — a sync GC here stalled rapid cycling.
       try {
-        Bun.gc(false);
+        const t = setTimeout(() => {
+          try {
+            Bun.gc(false);
+          } catch {}
+        }, 0);
+        (t as unknown as { unref?: () => void }).unref?.();
       } catch {}
     }
     try {
@@ -279,6 +428,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // doesn't re-enter applyConfig and churn the rasters
   let lastSavedSig = "";
   let saveWarned = false;
+  // conflict set of the last scan — the reload toast fires once per CHANGE,
+  // not per reload (a lingering file conflict must not nag on every save)
+  let lastConflictSig = JSON.stringify(findKeybindConflicts(ctx.config));
 
   const scheduleSaveConfig = debounced(500, () => {
     saveConfig(ctx.config)
@@ -298,12 +450,25 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   // --- live config reload ---
   try {
     const cfgPath = configPath();
+    // fs.watch throws ENOENT SYNCHRONOUSLY when the dir is missing, and nothing
+    // creates ~/.config/tfm at boot (session/undo live under $XDG_STATE_HOME,
+    // saveConfig only mkdirs on first save) — on a fresh profile the watcher
+    // silently never installed, so external config edits never live-reloaded.
+    mkdirSync(path.dirname(cfgPath), { recursive: true });
     const applyFreshConfig = debounced(250, () => {
       try {
         const fresh = loadConfig();
         if (JSON.stringify(fresh) === lastSavedSig) return;
         applyConfig(fresh);
         ctx.notify("config reloaded", "config", "success");
+        // hand-edited dup binds shadow silently at dispatch — toast once per
+        // change (own saves are skipped above, so settings commits never echo)
+        const sig = JSON.stringify(findKeybindConflicts(fresh));
+        if (sig !== lastConflictSig) {
+          lastConflictSig = sig;
+          const text = describeKeybindConflicts(fresh);
+          if (text) ctx.notify(`${text} — Settings → keys`, "keybind conflict");
+        }
       } catch {}
     });
     const watcher = watch(path.dirname(cfgPath), (_event, filename) => {

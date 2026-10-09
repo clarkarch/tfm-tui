@@ -101,8 +101,11 @@ for (const file of readdirSync(SRC_DIR)
   const muted = slot("textMuted");
   const accent = slot("primary");
   const borderSubtle = slot("borderSubtle");
-  const border = slot("border");
-  if (!bg || !fg || !muted || !accent || !(borderSubtle ?? border)) {
+  const borderFallback = slot("border");
+  // resolved once: the SAME `borderSubtle ?? border` decides both the skip
+  // check and the emitted value, so the two can't drift apart
+  const border = borderSubtle ?? borderFallback;
+  if (!bg || !fg || !muted || !accent || !border) {
     // e.g. lucent-orng is built around a transparent terminal background,
     // which an opaque file-manager grid cannot honor — drop it
     console.warn(`skipping ${slug}: no usable dark background`);
@@ -131,8 +134,8 @@ for (const file of readdirSync(SRC_DIR)
     accent,
     accentBg: element,
     hoverBg: mixHex(bg, fg, 0.1),
-    border: (borderSubtle ?? border)!,
-    divider: (borderSubtle ?? border)!,
+    border,
+    divider: border,
     white: fg,
     // opencode assets carry per-theme syntax palettes; tokyo-night hues as
     // fallback keep old/partial assets working

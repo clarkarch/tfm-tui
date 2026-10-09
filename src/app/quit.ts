@@ -12,17 +12,35 @@ export type QuitCtx = {
   // kill the embedded PTY pane — it would otherwise rely on EIO from the
   // dead master and a shell with a foreground child can linger
   closeTerminal?(): void;
+  // close the gpm client socket (Linux text console only) so the daemon
+  // doesn't re-point it at a default console after we're gone
+  stopGpm?(): void;
+  // clear pending chrome timers (sidebar device-reload) so they can't fire
+  // loadSystemPlaces+renderAll into a destroyed renderer post-teardown
+  stopChromeTimers?(): void;
   // synchronous final session write — process.exit kills pending async IO,
   // so the debounced 400ms save loses the last navigation
   flushSession?(): void;
   destroy(): void;
   exit(code: number): void;
   onQuit?: () => void;
+  // file-op activity probe (wiring: shared queue depth) — refusing while
+  // busy beats exiting mid-transfer (same reason restart refuses: completed
+  // files would strand with no undo batch, .tfm-part-* swept only next run)
+  isBusy?: () => boolean;
+  // busy-refusal feedback (wiring: error toast). Best-effort, never throws.
+  onBusy?: () => void;
 };
 
 export const makeQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
+    if (ctx.isBusy?.()) {
+      try {
+        ctx.onBusy?.();
+      } catch {}
+      return;
+    }
     let failed = runTeardownSteps(ctx);
     try {
       ctx.destroy();
@@ -54,6 +72,16 @@ export const runTeardownSteps = (ctx: QuitCtx): boolean => {
   }
   try {
     ctx.closeTerminal?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopGpm?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopChromeTimers?.();
   } catch {
     failed = true;
   }

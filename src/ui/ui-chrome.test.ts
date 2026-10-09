@@ -5,7 +5,7 @@ import path from "node:path";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { MouseButtons } from "@opentui/core/testing";
-import { makeChrome } from "./ui-chrome";
+import { makeChrome, tabChipMaxWidth } from "./ui-chrome";
 import { gridDrag } from "../input/grid-input";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
@@ -46,11 +46,15 @@ let calls: {
   iconStates: Array<{ spec: any; idx: number }>;
 };
 let cwd: string;
+let rasterSig: string;
 let tabBar: boolean;
+let availWVal: number; // 0 = seam absent (roomy 24-wide chips, today's look)
 let tabModel: { list: Tab[]; active: number };
 let tabModel1: { list: Tab[]; active: number };
 let kbActive: boolean;
 let kbIdx: number;
+// [ui] sidebar-section-titles: names each group in place of the dividers
+let sectionTitles: boolean;
 
 const mkTabs = (n: number): Tab[] => Array.from({ length: n }, (_, i) => ({ history: [`/dir${i}`], histIdx: 0 }));
 
@@ -84,17 +88,20 @@ beforeAll(async () => {
     iconStates: [],
   };
   cwd = HOME;
+  rasterSig = "raster-a";
   tabBar = false;
+  availWVal = 0;
   tabModel = { list: mkTabs(2), active: 1 };
   tabModel1 = { list: mkTabs(3), active: 2 };
   kbActive = false;
   kbIdx = -1;
+  sectionTitles = false;
 
   const host = Box(
     { flexDirection: "row" },
     Box({ id: "tfm-places", flexDirection: "column", width: 20 }),
-    Box({ id: "tfm-p0-tabbar", flexDirection: "row", height: 1 }),
-    Box({ id: "tfm-p1-tabbar", flexDirection: "row", height: 1 }),
+    Box({ id: "tfm-p0-tabbar", flexDirection: "row", height: 1, overflow: "hidden" }),
+    Box({ id: "tfm-p1-tabbar", flexDirection: "row", height: 1, overflow: "hidden" }),
   );
   t.renderer.root.add(host);
   await t.renderOnce();
@@ -106,6 +113,10 @@ beforeAll(async () => {
     sw: () => 20,
     sideInnerW: () => 20,
     tabBar: () => tabBar,
+    // [ui] sidebar-section-titles (absent in the old fakes = dividers only)
+    sectionTitles: () => sectionTitles,
+    availW: () => availWVal,
+    rasterSig: () => rasterSig,
     renderAll: () => {},
     navigate: (target) => {
       calls.navigate.push(target);
@@ -233,6 +244,85 @@ describe("renderSidebar", () => {
     expect(chrome.placesHost[0]!.specs[0]).toBe(spec0);
     expect(chrome.placesHost[0]!.selected).toBe(false);
   });
+
+  test("section titles name every group; dividers give way", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    // deterministic groups: Places (home/recent/starred/trash), Devices, Network
+    expect(t.captureCharFrame()).toContain("Places");
+    expect(t.captureCharFrame()).toContain("Devices");
+    expect(t.captureCharFrame()).toContain("Network");
+  });
+
+  test("a section title centers in the sidebar column", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const line =
+      t
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("Places")) ?? "";
+    // 20-wide inner column: "Places" (6) centers at col 7
+    expect(line.indexOf("Places")).toBe(Math.floor((20 - "Places".length) / 2));
+    sectionTitles = false;
+    chrome.renderSidebar();
+    await t.renderOnce();
+  });
+
+  test("a blank row sits above each section title, no divider", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const lines = t.captureCharFrame().split("\n");
+    const i = lines.findIndex((l) => l.includes("Places"));
+    expect(i).toBeGreaterThan(0);
+    // space above the title; the group's rows follow it directly (no rule)
+    expect(lines[i - 1]!.trim()).toBe("");
+    expect(lines[i + 1]).toContain("Home");
+    // every section repeats it (Devices is deterministic: always rendered)
+    const j = lines.findIndex((l) => l.includes("Devices"));
+    expect(j).toBeGreaterThan(0);
+    expect(lines[j - 1]!.trim()).toBe("");
+    expect(lines[j + 1]).not.toContain("~");
+    sectionTitles = false;
+    chrome.renderSidebar();
+    await t.renderOnce();
+  });
+
+  test("flipping the section-titles switch repaints (the sig carries the flag)", async () => {
+    cwd = HOME;
+    sectionTitles = true;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Devices");
+    sectionTitles = false;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    // off = today's look: the title text is gone (divider only)
+    expect(t.captureCharFrame()).not.toContain("Devices");
+  });
+
+  test("a raster-mode flip rebuilds rows so force-glyph applies live", async () => {
+    // same places, different graphics mode: the old rasters must go, so the
+    // rows (and their icon slots) are re-created instead of highlighted
+    cwd = HOME;
+    rasterSig = "raster-a";
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const row0 = chrome.placesHost[0]!.row;
+    rasterSig = "raster-b";
+    chrome.renderSidebar();
+    await t.renderOnce();
+    expect(chrome.placesHost[0]!.row).not.toBe(row0);
+    rasterSig = "raster-a";
+    chrome.renderSidebar();
+    await t.renderOnce();
+  });
 });
 
 describe("place drops (OSC-72 / internal drag targets)", () => {
@@ -354,6 +444,64 @@ describe("renderTabbar", () => {
     expect(calls.closeTab).toContain(0);
   });
 
+  test("the tab ✕ highlights its raster state AND its wrapper surface together", async () => {
+    tabModel = { list: mkTabs(2), active: 1 }; // tab 0 is the inactive chip
+    calls.iconStates.length = 0;
+    chrome.renderTabbar(0);
+    await t.renderOnce();
+    const closeId = "tfm-p0-tab-0-close";
+    // an inactive chip's ✕ rests on the canvas fill and flattens onto it
+    expect(bgInts(closeId)).toEqual(hexInts(colors.bg));
+    const fire = (type: string) =>
+      (byId(closeId) as any).processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    fire("move");
+    // 1 = Active (the hover raster) — swapping only this left a flat square on
+    // the wrapper in glyph/transparent modes, which is the bug class this pins
+    expect(calls.iconStates.at(-1)?.idx).toBe(1);
+    expect(bgInts(closeId)).toEqual(hexInts(colors.hoverBg));
+    fire("out");
+    expect(calls.iconStates.at(-1)?.idx).toBe(0);
+    expect(bgInts(closeId)).toEqual(hexInts(colors.bg));
+  });
+
+  test("four tabs in a 32-wide strip fit without overflow (chips shrink, plus stays)", async () => {
+    tabModel = { list: mkTabs(4), active: 0 };
+    tabModel1 = { list: mkTabs(1), active: 0 }; // pane 1 strip hidden, no space fight
+    availWVal = 32;
+    (byId("tfm-p0-tabbar") as any).width = 32;
+    chrome.renderTabbar(0);
+    chrome.renderTabbar(1);
+    await t.renderOnce();
+    const w = (id: string): number => (byId(id) as any)?.yogaNode?.getComputedWidth?.() ?? 99;
+    const chips = [0, 1, 2, 3].map((i) => w(`tfm-p0-tab-${i}`));
+    // 4 chips + 4 gaps + 3-wide plus must fit 32: chips shrink below content width
+    const total = chips.reduce((a, b) => a + b, 0) + 4 + 3;
+    expect(Math.max(...chips)).toBeLessThanOrEqual(8);
+    expect(total).toBeLessThanOrEqual(32);
+    expect(byId("tfm-p0-tab-new")).toBeTruthy();
+    // restore the shared fixtures (later describes reuse tabModel/width)
+    (byId("tfm-p0-tabbar") as any).width = "auto";
+    availWVal = 0;
+    tabModel = { list: mkTabs(2), active: 1 };
+    tabModel1 = { list: mkTabs(3), active: 2 };
+  });
+
+  test("tabChipMaxWidth splits the row: plus + gaps accounted, clamped both ends", () => {
+    expect(tabChipMaxWidth(54, 2)).toBe(24); // roomy strips keep today's look
+    expect(tabChipMaxWidth(54, 1)).toBe(24); // one tab never stretches
+    expect(tabChipMaxWidth(32, 4)).toBe(6); // (32-3-4)/4: the shrink case above
+    expect(tabChipMaxWidth(26, 2)).toBe(10); // narrow dual pane, two tabs
+    expect(tabChipMaxWidth(14, 2)).toBe(6); // minimum wins over the math (4)
+    expect(tabChipMaxWidth(26, 10)).toBe(6); // past the minimum the tail clips
+    expect(tabChipMaxWidth(54, 0)).toBe(24); // no tabs stays roomy, never NaN
+  });
+
   test("dropping a single dragged folder on a chip navigates that tab to it", async () => {
     tabModel = { list: mkTabs(2), active: 1 }; // previous test rendered a 1-tab bar
     chrome.renderTabbar(0);
@@ -407,11 +555,13 @@ describe("normalizePlaces (hover/kb focus)", () => {
     chrome.clearMousePlace();
   });
 
-  test("mouse over/out routes the row key to hoverRow (per-row nudge)", async () => {
+  test("mouse move/out routes the row key to hoverRow (per-row nudge)", async () => {
     cwd = HOME;
     chrome.renderSidebar();
     await t.renderOnce();
-    const over = (id: string, type: string) =>
+    // hover-on rides on MOVE, never on OVER (see ui-slots.hoverEvents): OpenTUI
+    // re-fires a synthetic "over" on a rebuild under a stationary cursor
+    const fire = (id: string, type: string) =>
       (byId(id) as any).processMouseEvent({
         type,
         button: 0,
@@ -420,13 +570,18 @@ describe("normalizePlaces (hover/kb focus)", () => {
         modifiers: { shift: false, alt: false, ctrl: false },
       });
     const nOver = calls.hoverRow.length;
-    over("tfm-place-2", "over");
-    // exclusivity: the only emission for THIS row on an over is the lift
+    fire("tfm-place-2", "move");
+    // exclusivity: the only emission for THIS row on a move is the lift
     expect(calls.hoverRow.slice(nOver).filter(([k]) => k === "tfm-place-2")).toEqual([["tfm-place-2", true]]);
     // paint still normalizes alongside the nudge
     expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.hoverBg));
+    // a repeated move over the same row is a no-op (the wiring is idempotent,
+    // so per-pixel moves can't repaint every row in the sidebar)
+    const nRepeat = calls.hoverRow.length;
+    fire("tfm-place-2", "move");
+    expect(calls.hoverRow.length).toBe(nRepeat);
     const nOut = calls.hoverRow.length;
-    over("tfm-place-2", "out");
+    fire("tfm-place-2", "out");
     expect(calls.hoverRow.slice(nOut).filter(([k]) => k === "tfm-place-2")).toEqual([["tfm-place-2", false]]);
     expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.sidebarBg));
   });
@@ -442,7 +597,7 @@ describe("normalizePlaces (hover/kb focus)", () => {
     const target = chrome.placesHost.find((r) => !r.selected && r.place.path);
     expect(target).toBeTruthy();
     (byId(target!.rowId) as any).processMouseEvent({
-      type: "over",
+      type: "move",
       button: 0,
       x: 0,
       y: 0,

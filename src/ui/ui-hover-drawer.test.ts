@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { collapsedHeight, collapsedSize, drawerWantsOpen, makeHoverDrawer } from "./ui-hover-drawer";
-import { defaultConfig } from "../config/config-schema";
+import { defaultConfig, type UiConfig } from "../config/config-schema";
 
 describe("drawerWantsOpen", () => {
   test("left edge opens only inside the zone (zone = cells from the edge) while closed", () => {
@@ -275,6 +275,38 @@ describe("makeHoverDrawer (headless)", () => {
     await t.renderOnce();
     expect(pane().visible).toBe(true);
     expect(pane().width).toBe(collapsedSize("rail"));
+  });
+
+  test("refresh honors a sidebar-title flip even with all auto-hide off", async () => {
+    // applyConfig writes NO title visibility itself — the drawer's refresh()
+    // (via onConfigApplied) is the only live path for the [ui] sidebar-title
+    // knob. With no panel enabled, refresh() must still converge the title
+    // node: a title flip that leaves the old node visible is the "needs
+    // restart" report. (Sidebar auto-hide ON also covers this through its own
+    // restore/applyVisible path — this pins the all-off case.)
+    const ui: UiConfig = {
+      ...defaultConfig.ui,
+      sidebarAutoHide: false,
+      previewAutoHide: false,
+      terminalAutoHide: false,
+      sidebarTitle: "tfm",
+      hoverAnimMs: 0,
+    };
+    const drawer = mkDrawer(ui);
+    const title = () => t.renderer.root.findDescendantById("tfm-title-box") as any;
+    await t.renderOnce();
+    await t.renderOnce();
+    expect(title().visible).toBe(true);
+
+    ui.sidebarTitle = "none";
+    drawer.refresh();
+    await t.renderOnce();
+    expect(title().visible).toBe(false);
+
+    ui.sidebarTitle = "tfm";
+    drawer.refresh();
+    await t.renderOnce();
+    expect(title().visible).toBe(true);
   });
 });
 

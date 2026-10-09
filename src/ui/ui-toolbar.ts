@@ -7,31 +7,35 @@
 import path from "node:path";
 import os from "node:os";
 import { statSync } from "node:fs";
-import { Box, Input, InputRenderable, Text } from "@opentui/core";
+import { Box, type CliRenderer, Input, InputRenderable, type KeyEvent, type MouseEvent, Text } from "@opentui/core";
 import { applySurface, btnSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
-import type { IconSpec, IconState } from "./ui-slots";
-import { navIconState, toggleIconState } from "./ui-slots";
+import type { IconSlotHandle, IconSpec, IconState, SlotElement } from "./ui-slots";
+import { hoverEvents, navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type MakeIconSlotFn = (
   name: string,
   states: IconState[],
   heightCells?: number,
   initialState?: number,
-  onMouseDown?: (ev: any) => void,
+  onMouseDown?: (ev: MouseEvent) => void,
   statesFactory?: () => IconState[],
-) => { spec: IconSpec; el: any };
+) => IconSlotHandle;
 
 type ToolbarCtx = {
   // per-pane id prefix ("tfm-p0-"/"tfm-p1-") — dual pane builds one toolbar
   // instance per pane, so every node id must be unique across the registry
   prefix: string;
-  renderer(): any;
-  byId(id: string): any;
-  clearChildren(node: unknown): void;
+  renderer(): CliRenderer;
+  byId(id: string): MaybeNode;
+  // destroys the removed children's native buffers too — never a detach-only
+  // sweep, or every crumb rebuild defers its TextBuffers to the GC poke
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
   uiStyle(): UiStyle;
   // live theme — always read through the getter, never captured
@@ -52,11 +56,17 @@ type ToolbarCtx = {
   sortEntries(): ListEntry[];
   cwd(): string;
   home: string;
+  // transparent-bg force: toolbar rest fills clear so the terminal shows
+  // through. Optional so test fakes keep working.
+  transparentForce?(): boolean;
   // per-navigate directory-bar animation: renderCrumbs calls this with the ids
   // of ONLY the newly appeared crumbs after rebuilding for a changed cwd
   // (first build + same-target rebuilds pass nothing and stay silent). Wired
   // to the dir-bar animator in wireChrome; absent = instant.
   animateCrumbs?: (ids: string[]) => void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 // path-bar commit check: virtual places always navigate; real paths must be
@@ -76,10 +86,10 @@ export const isNavigableTarget = (target: string): boolean => {
 // the cap keeps a never-missing registry from looping forever. Only existing
 // nodes are returned — the animator skips the rest anyway, but callers
 // (startup cascade order asserts) want the resolved list.
-export const crumbItemIds = (byId: (id: string) => any, prefix: string, cap = 128): string[] => {
+export const crumbItemIds = (byId: (id: string) => MaybeNode, prefix: string, cap = 128): string[] => {
   const ids: string[] = [];
   for (let i = 0; i < cap; i++) {
-    let n: any = null;
+    let n: MaybeNode = null;
     try {
       n = byId(`${prefix}crumb-${i}`);
     } catch {
@@ -92,7 +102,7 @@ export const crumbItemIds = (byId: (id: string) => any, prefix: string, cap = 12
 };
 
 // left-to-right cascade order: nav buttons, crumbs, sort + search buttons
-export const toolbarItemIds = (byId: (id: string) => any, prefix: string, cap = 128): string[] => {
+export const toolbarItemIds = (byId: (id: string) => MaybeNode, prefix: string, cap = 128): string[] => {
   const live = (id: string): boolean => {
     try {
       return !!byId(id);
@@ -111,6 +121,8 @@ export const toolbarItemIds = (byId: (id: string) => any, prefix: string, cap = 
 
 export const makeToolbar = (ctx: ToolbarCtx) => {
   const { makeIconSlot, setIconState } = ctx;
+  // transparent-bg force as a surface-seam value (absent = today's behavior)
+  const tForce = () => (ctx.transparentForce?.() ? "force" : undefined);
   // every node id in this pane's toolbar is namespaced so two instances can
   // coexist in the global renderable registry
   const id = (name: string): string => `${ctx.prefix}${name}`;
@@ -125,8 +137,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
 
   const navBtnBg = (btnId: string) => {
     try {
-      const n: any = ctx.byId(btnId);
-      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
+      const n = ctx.byId(btnId);
+      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId], undefined, tForce()));
     } catch {}
   };
 
@@ -146,20 +158,16 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         height: 1,
         width: 3,
         justifyContent: "center",
-        ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
+        ...btnSurface(ctx.uiStyle(), ctx.colors(), false, undefined, tForce()),
         onMouseDown: () => {
           ctx.focusPane?.();
           ctx.closeFileMenu();
           onActivate();
         },
-        onMouseOver: () => {
-          navHover[btnId] = true;
+        ...hoverEvents((on) => {
+          navHover[btnId] = on;
           refreshNav();
-        },
-        onMouseOut: () => {
-          navHover[btnId] = false;
-          refreshNav();
-        },
+        }, ctx.setPointer),
       },
       slot.el,
     );
@@ -181,8 +189,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     for (const key of ["nav-back", "nav-fwd", "search-btn", "sort-btn"]) {
       const btnId = id(key);
       try {
-        const n: any = ctx.byId(btnId);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId]));
+        const n = ctx.byId(btnId);
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId], undefined, tForce()));
       } catch {}
     }
   };
@@ -203,6 +211,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   const exitPathEdit = () => {
     if (!pathEditMode) return;
     pathEditMode = false;
+    // the editor is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
     renderCrumbs();
   };
 
@@ -210,20 +220,23 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     if (pathEditMode) return;
     ctx.blurTerminal();
     pathEditMode = true;
+    // the editor owns the keyboard now — text pointer until it lands
+    ctx.setPointer?.("text");
     renderCrumbs();
   };
 
   const renderCrumbs = () => {
-    const box: any = ctx.byId(id("crumbs"));
+    const box = ctx.byId(id("crumbs"));
     if (!box) return;
 
     if (pathEditMode) {
-      ctx.clearChildren(box);
-      let input: any = ctx.byId(id("path-input"));
-      if (!input) {
-        // real class instance: proxied composition nodes don't mount under an
-        // already-mounted parent
-        input = new InputRenderable(ctx.renderer(), {
+      ctx.destroyChildren(box);
+      // resolve once and construct only on a miss: both branches share this
+      // binding, and a `let` would lose its narrowing inside the enter handler
+      const existing = ctx.byId(id("path-input"));
+      const input =
+        existing ??
+        new InputRenderable(ctx.renderer(), {
           id: id("path-input"),
           flexGrow: 1,
           value: isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()),
@@ -231,6 +244,9 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           focusedBackgroundColor: ctx.colors().accentBg,
           textColor: ctx.colors().white,
         });
+      if (!existing) {
+        // real class instance: proxied composition nodes don't mount under an
+        // already-mounted parent
         box.add(input);
         input.on?.("enter", () => {
           const target = String(input.value ?? "").replace(/^~(?=\/|$)/, ctx.home);
@@ -242,13 +258,14 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
             return;
           }
           pathEditMode = false;
+          ctx.setPointer?.("default");
           renderCrumbs();
           ctx.navigate(target);
         });
         // focused editors can consume keys before the global handler; intercept
         // escape at the source so it always cancels
         const prevHandler = input.handleKeyPress?.bind(input);
-        input.handleKeyPress = (key: any) => {
+        input.handleKeyPress = (key: KeyEvent) => {
           if (key?.name === "escape") {
             exitPathEdit();
             return true;
@@ -273,7 +290,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     }
 
     // rebuild crumbs from scratch — appending would duplicate them every nav
-    ctx.clearChildren(box);
+    ctx.destroyChildren(box);
 
     const cwdAbs = path.resolve(ctx.cwd());
     const virtCrumb =
@@ -284,7 +301,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           : null;
     const inHome = !virtCrumb && (cwdAbs === ctx.home || cwdAbs.startsWith(ctx.home + path.sep));
     const baseLabel = virtCrumb ? virtCrumb.label : inHome ? "Home" : os.hostname();
-    const baseIcon = virtCrumb ? virtCrumb.icon! : inHome ? "home" : "desktop-tower";
+    const baseIcon = virtCrumb ? (virtCrumb.icon ?? "file") : inHome ? "home" : "desktop-tower";
     const basePath = virtCrumb ? ctx.cwd() : inHome ? ctx.home : "/";
     const rest = virtCrumb
       ? []
@@ -312,8 +329,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       const paintHover = (on: boolean) => {
         if (iconSlot && !current) setIconState(iconSlot.spec, toggleIconState(on, false));
         try {
-          const n: any = ctx.byId(id(`crumb-${i}`));
-          if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on && !current));
+          const n = ctx.byId(id(`crumb-${i}`));
+          if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on && !current, undefined, tForce()));
         } catch {}
       };
       const crumb = Box(
@@ -323,7 +340,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           flexDirection: "row",
           alignItems: "center",
           columnGap: 1,
-          ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
+          ...btnSurface(ctx.uiStyle(), ctx.colors(), false, undefined, tForce()),
           ...(current
             ? {}
             : {
@@ -331,8 +348,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
                   ctx.focusPane?.();
                   ctx.navigate(c.target);
                 },
-                onMouseOver: () => paintHover(true),
-                onMouseOut: () => paintHover(false),
+                ...hoverEvents(paintHover, ctx.setPointer),
               }),
         },
         ...(iconSlot ? [iconSlot.el] : []),
@@ -364,7 +380,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
 
   // --- generic hover button: two baked rasters (normal/hover bg), wrapper box
   // bg matches so the padding cells track the raster ---
-  const hoverBtn = (id: string, iconName: string, onMouseDown: (ev: any) => void): ReturnType<typeof Box> => {
+  const hoverBtn = (id: string, iconName: string, onMouseDown: (ev: MouseEvent) => void): SlotElement => {
     const states = (): IconState[] => [
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().bg },
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().hoverBg },
@@ -373,8 +389,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     const paint = (on: boolean) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {
-        const n: any = ctx.byId(id);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on));
+        const n = ctx.byId(id);
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), on, undefined, tForce()));
       } catch {}
     };
     return Box(
@@ -383,13 +399,12 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         height: 1,
         width: 3,
         justifyContent: "center",
-        ...btnSurface(ctx.uiStyle(), ctx.colors(), false),
-        onMouseDown: (ev: any) => {
+        ...btnSurface(ctx.uiStyle(), ctx.colors(), false, undefined, tForce()),
+        onMouseDown: (ev: MouseEvent) => {
           ctx.focusPane?.();
           onMouseDown(ev);
         },
-        onMouseOver: () => paint(true),
-        onMouseOut: () => paint(false),
+        ...hoverEvents(paint, ctx.setPointer),
       },
       slot.el,
     );
@@ -414,9 +429,11 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       hoverBtn(id("search-btn"), "search", () => {
         ctx.closeFileMenu();
         ctx.blurTerminal();
-        const el: any = ctx.byId(id("search"));
+        const el = ctx.byId(id("search"));
         if (!el) return;
         el.visible = !el.visible;
+        // the input owns the keyboard while visible — text pointer until then
+        ctx.setPointer?.(el.visible ? "text" : "default");
         if (el.visible) el.focus();
       }),
     );
@@ -424,8 +441,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     return wrap;
   };
 
-  const makeSortButton = (): ReturnType<typeof Box> =>
-    hoverBtn(id("sort-btn"), "sort", (ev: any) => {
+  const makeSortButton = (): SlotElement =>
+    hoverBtn(id("sort-btn"), "sort", (ev: MouseEvent) => {
       ctx.closeFileMenu();
       ctx.openContextMenu(ev.x, ev.y, "", ctx.sortEntries());
     });

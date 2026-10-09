@@ -14,16 +14,62 @@ const isChildHost = (v: unknown): v is ChildHost =>
   typeof v.getChildren === "function" &&
   typeof v.remove === "function";
 
-export const clearChildren = (node: unknown): void => {
-  if (!isChildHost(node)) return;
+// Teardown that also DESTROYS the removed children. OpenTUI renderables own
+// native memory (TextBuffers, images) freed by a bun finalizer, and bun only
+// GCs on JS-heap pressure — never on native pressure (see app/mem-hygiene).
+// Detaching without destroy() therefore defers the free to the next 10s poke;
+// a rebuild/resize/theme-flip storm outruns it and the native allocator grows
+// until small allocations fail (the documented "Failed to create TextBuffer" /
+// vanishing floating-UI crash). `keep` (when given) is removed but NOT
+// destroyed — the preview pane re-adds its cached node, so destroying it here
+// would be a use-after-destroy (its whole SUBTREE is preserved too).
+//
+// MUST recurse: OpenTUI's `destroy()` only DETACHES its own children (the
+// recursive API is the separate `destroyRecursively()`), so a one-level
+// destroy destroyed just the container and left every nested tile's
+// TextBuffer alive until the GC poke — the exact leak this helper exists to
+// prevent. Verified against opentui/core (Renderable.destroy removes children
+// without destroying them) and pinned by the nested case in uiutil.test.ts.
+type Destroyable = { getChildren?: () => Iterable<unknown>; destroy?: () => void };
+
+// bottom-up: children BEFORE their parent — destroy() clears the child list,
+// so a parent-first walk would have nothing left to recurse into
+const destroySubtree = (node: unknown, keep: unknown): void => {
+  if (node === null || node === undefined) return;
+  if (keep !== undefined && node === keep) return;
+  const n = node as Destroyable;
+  if (typeof n.getChildren === "function") {
+    let kids: unknown[] = [];
+    try {
+      kids = [...n.getChildren()];
+    } catch {}
+    for (const c of kids) destroySubtree(c, keep);
+  }
   try {
-    const kids = [...node.getChildren()];
-    for (const c of kids) {
-      try {
-        node.remove(c);
-      } catch {}
-    }
+    n.destroy?.();
   } catch {}
+};
+
+// one node (already detached, or self-detaching) plus everything under it —
+// the row-reap path in ui-grid needs a single-node walk, not a host sweep.
+export const destroyNode = (node: unknown): void => {
+  destroySubtree(node, undefined);
+};
+
+export const destroyChildren = (node: unknown, keep?: unknown): void => {
+  if (!isChildHost(node)) return;
+  let kids: unknown[] = [];
+  try {
+    kids = [...node.getChildren()];
+  } catch {
+    return;
+  }
+  for (const c of kids) {
+    try {
+      node.remove(c);
+    } catch {}
+    destroySubtree(c, keep);
+  }
 };
 
 // trailing debounce: every call pushes the run `ms` back; the body sees the
@@ -119,3 +165,16 @@ export const safeRenderStep = (
     log(`render ${name}: ${errDetail(err)}`);
   }
 };
+
+export const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+// Floating-list cursor advance (context menu / submenu / pick / esc-menu):
+// idx -1 = no cursor yet (down fills first, up fills last); `entries` given
+// means separators are skipped, bounded so an all-separator list can't spin.
+export const advanceCursor = (idx: number, delta: number, count: number, entries?: { sep?: boolean }[]): number => {
+  let i = idx < 0 ? (delta >= 0 ? 0 : count - 1) : (idx + delta + count) % count;
+  for (let n = 0; entries?.[i]?.sep && n < count; n++) i = (i + delta + count) % count;
+  return i;
+};
+
+export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);

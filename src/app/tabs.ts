@@ -37,7 +37,9 @@ export const makeTabs = (state: TabStateRef, hooks: TabsHooks) => {
   };
 
   const adoptTab = (): void => {
-    const t = list[active]!;
+    // same shape as syncTabFromState: a missing entry leaves the state alone
+    const t = list[active];
+    if (!t) return;
     state.history = t.history;
     state.histIdx = t.histIdx;
   };

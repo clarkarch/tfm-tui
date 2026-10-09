@@ -24,6 +24,9 @@ export const wireFileops = (deps: {
   gridFoundation: GridFoundationWiring;
   // grid's finishDragCtx (internal drag commit) — grid wiring builds it later
   finishDrag(): void;
+  // password-prompt overlay — keymap wires LAST (TDZ seam, same pattern as
+  // wireChrome's getPrompt above)
+  getPrompt: () => { open(o: { title: string; okLabel?: string; password?: boolean }): Promise<string | null> };
 }) => {
   const { core, nav, chrome, gridFoundation } = deps;
   const { byId, stripSelectable } = core.lookup;
@@ -70,10 +73,17 @@ export const wireFileops = (deps: {
     clearUndoJournal();
   }
 
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
+
   const conflict = makeConflict(chrome.dialogs, {
     colors: themeGet,
-    drainIconQueue: () => drainIconQueue(),
+    uiStyle,
+    byId,
+    drainIconQueue,
     floats: core.floats,
+    setPointer,
   });
 
   // --- live copy progress: floating toast (top-right) with pause/cancel.
@@ -87,11 +97,15 @@ export const wireFileops = (deps: {
     setIconState,
     drainIconQueue,
     notifySticky: chrome.notifySticky,
+    setPointer,
   });
 
   // --- File operations: runTransfer/performRename/paste/clipboard
   // orchestration lives in ./fileops; the copy engine is ./transfer (pure,
   // sink-injected), the progress toast is ./ui-progress. ---
+  // sudo gate: chrome wires it first (same getPrompt dep + notify) — one
+  // shared gate, the factory is stateless.
+  const ensureSudo = chrome.ensureSudo;
   const fileops = makeFileOps({
     conflict,
     prog: progress.prog,
@@ -104,6 +118,7 @@ export const wireFileops = (deps: {
     notify: chrome.notify,
     home,
     refreshCutVisuals: gridFoundation.refreshCutVisuals,
+    ensureSudo,
     log: (msg) => dlog(msg),
     onFileOp: (op, paths, dest, outcome) =>
       sharedPluginEvents().emit("file-op", { op, paths, ...(dest ? { dest } : {}), ...(outcome ? { outcome } : {}) }),
@@ -117,9 +132,12 @@ export const wireFileops = (deps: {
     colors: themeGet,
     sw: () => core.geometry.sw,
     termH: () => core.config.ui.terminalHeight,
-    escHintBtn: (id, onClose) => core.slots.escHintBtn(id, onClose),
+    // force only (not `on`: panels still paint there): same TTY guard as the
+    // renderer boot in wiring/chrome — no alpha on the Linux console
+    transparentForce: () => core.config.ui.transparentBg === "force" && !core.isTtyMode(),
+    escHintBtn: core.slots.escHintBtn,
     stripSelectable,
-    drainIconQueue: () => drainIconQueue(),
+    drainIconQueue,
     notify: chrome.notify,
     renderAll: nav.renderAll,
     cwd: () => core.state.cwd,
@@ -127,19 +145,36 @@ export const wireFileops = (deps: {
     home,
     finishDrag: deps.finishDrag,
     dlog: (msg) => dlog(msg),
+    setPointer,
   });
 
   const trash = makeTrashOps({
     pushUndoBatch: undo.pushUndoBatch,
     notify: chrome.notify,
     renderAll: nav.renderAll,
+    ensureSudo,
     // delete progress: the driver maps trashops' calls onto the SAME prog
     // state + toast transfers use (pause/cancel included). Flags reset at
     // start so a stale cancel from an earlier op can't abort the delete.
     deleteProgress: {
       sink: fileops.progressSink,
+      counting: (files) => {
+        const p = progress.prog;
+        p.counting = true;
+        p.verb = "deleting";
+        p.doneFiles = files;
+        if (!p.toastUp) {
+          p.active = true;
+          progress.showProgressToast();
+        }
+        progress.paintProgress(true);
+      },
       start: (totalFiles, totalBytes) => {
         const p = progress.prog;
+        // a counting toast armed mid-scan stays up even when the final
+        // totals look toastless (slow disk + small tree needs liveness most)
+        const armed = p.toastUp;
+        p.counting = false;
         p.paused = false;
         p.cancelled = false;
         p.doneFiles = 0;
@@ -147,7 +182,7 @@ export const wireFileops = (deps: {
         p.totalFiles = totalFiles;
         p.totalBytes = totalBytes;
         p.verb = "deleting";
-        if (shouldToast(totalBytes, totalFiles)) {
+        if (armed || shouldToast(totalBytes, totalFiles)) {
           p.active = true;
           progress.showProgressToast();
           progress.paintProgress(true);
@@ -157,6 +192,7 @@ export const wireFileops = (deps: {
       finish: (msg) => progress.finishProgressToast(msg),
       stop: () => {
         progress.prog.active = false;
+        progress.prog.counting = false;
       },
     },
     log: (msg) => appendLog(`trashops: ${msg}`),
@@ -172,8 +208,15 @@ export const wireFileops = (deps: {
   // floating Yes/No confirmation — widget lives in ./ui-dialogs
   const yesNo = makeYesNo(chrome.dialogs, {
     colors: themeGet,
-    canOpen: () => !!chrome.renderer.resolution,
+    uiStyle: () => core.config.ui.uiStyle,
+    byId: core.lookup.byId,
+    // NO readiness gate: the old `!!renderer.resolution` predicate only became
+    // true when the terminal answered OpenTUI's pixel-size query, so on the
+    // Linux console / tmux Empty Trash and Delete Forever silently no-op'd.
+    // makeConflict opens ungated for the same reason — dialogs mount on the
+    // always-present renderer root.
     floats: core.floats,
+    setPointer,
   });
 
   // --- Trash-bound confirm dialogs: label+verb bindings live in ./trashops ---
@@ -191,6 +234,7 @@ export const wireFileops = (deps: {
     terminal,
     trash,
     yesNo,
+    progress,
     confirmEmptyTrash,
     confirmDeleteForever,
   };

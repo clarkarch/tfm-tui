@@ -1,10 +1,13 @@
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import type { ReadStream } from "node:fs";
 import { fmtBytes } from "../fs/propsinfo";
-import { toggleIconState } from "./ui-slots";
+import { hoverEvents, toggleIconState, type IconSlotHandle, type IconSpec, type SlotElement } from "./ui-slots";
 import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
 import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import { applySurface, islandSurface } from "./style";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
 // Owns the `prog` state the transfer engine reports into, the throttled
@@ -14,7 +17,7 @@ import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
 // plain notifies tile in one stack and can never share a slot. ---
 
 export type ProgressCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   stripSelectable(): void;
   // live theme — always read through the getter, never captured
   colors(): Theme;
@@ -23,13 +26,16 @@ export type ProgressCtx = {
     states: { fg: string; bg: string }[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => { fg: string; bg: string }[],
-  ): { el: any; slotId: string; spec: any };
-  setIconState(spec: any, stateIdx: number): boolean;
+  ): IconSlotHandle;
+  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   drainIconQueue(): unknown;
   // toast shell — owned by ./notify (single stack)
-  notifySticky(children: any[], opts?: { width?: number; height?: number }): ToastHandle | null;
+  notifySticky(children: SlotElement[], opts?: { width?: number; height?: number }): ToastHandle | null;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export type ProgressState = {
@@ -107,10 +113,11 @@ export const makeProgress = (ctx: ProgressCtx) => {
   let activeHandle: ToastHandle | null = null;
   let progLastPaint = 0;
   let progSpinIdx = 0;
-  let progSpinTimer: any = null;
+  let progSpinTimer: ReturnType<typeof setTimeout> | null = null;
+  let lingerTimer: ReturnType<typeof setTimeout> | null = null;
 
   const progSetText = (nodeId: string, s: string): void => {
-    const n: any = ctx.byId(nodeId);
+    const n = ctx.byId(nodeId);
     if (n) {
       try {
         n.content = s;
@@ -150,9 +157,22 @@ export const makeProgress = (ctx: ProgressCtx) => {
     // first so two progress toasts never share the stack
     activeHandle?.close();
     activeHandle = null;
+    // ...and stop its spinner: that close path does not go through
+    // finishProgressToast, so without this a re-show left a second 100ms
+    // interval repainting a detached node forever
+    if (progSpinTimer) {
+      clearInterval(progSpinTimer);
+      progSpinTimer = null;
+    }
+    // same for a pending done-linger: its handle-identity guard would no-op
+    // it anyway, but a cleared timer is proof, not a race won
+    if (lingerTimer) {
+      clearTimeout(lingerTimer);
+      lingerTimer = null;
+    }
     const setPauseVisual = (): void => {
-      const p: any = ctx.byId(progPauseSpec.slotId);
-      const l: any = ctx.byId(progPlaySpec.slotId);
+      const p = ctx.byId(progPauseSpec.slotId);
+      const l = ctx.byId(progPlaySpec.slotId);
       try {
         if (p) p.visible = !prog.paused;
       } catch {}
@@ -160,17 +180,20 @@ export const makeProgress = (ctx: ProgressCtx) => {
         if (l) l.visible = !!prog.paused;
       } catch {}
     };
-    // pause/play are different shapes → two slots stacked in one hit area
-    // toast icons carry a hover state baked for the toast bg
+    // pause/play are different shapes → two slots stacked in one hit area.
+    // toast icons carry a hover state baked for the toast bg (the island fill);
+    // the wrapper flips through islandSurface — the toast keeps its accentBg
+    // island in every ui-style, so the buttons' rest fill must never clear
+    // (btnSurface's outline branch would).
     const progBtnStates = (): { fg: string; bg: string }[] => [
       { fg: ctx.colors().white, bg: ctx.colors().accentBg },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
-    const progPaint = (spec: any, btnId: string, on: boolean) => {
+    const progPaint = (spec: IconSpec | undefined, btnId: string, on: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, false));
       try {
-        const n: any = ctx.byId(btnId);
-        if (n) n.backgroundColor = on ? ctx.colors().hoverBg : ctx.colors().accentBg;
+        const n = ctx.byId(btnId);
+        if (n) applySurface(n, islandSurface(ctx.colors(), on, ctx.colors().accentBg));
       } catch {}
     };
     const progPauseSpec = ctx.makeIconSlot("pause", progBtnStates(), 1, 0, undefined, progBtnStates);
@@ -191,7 +214,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
           width: 2,
           height: 1,
           flexDirection: "row",
-          backgroundColor: ctx.colors().accentBg,
+          ...islandSurface(ctx.colors(), false, ctx.colors().accentBg),
           onMouseDown: () => {
             prog.paused = !prog.paused;
             if (!prog.paused) {
@@ -206,8 +229,10 @@ export const makeProgress = (ctx: ProgressCtx) => {
             prog.processPause?.();
             setPauseVisual();
           },
-          onMouseOver: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", true),
-          onMouseOut: () => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", false),
+          ...hoverEvents(
+            (on) => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", on),
+            ctx.setPointer,
+          ),
         },
         progPauseSpec.el,
         progPlaySpec.el,
@@ -218,7 +243,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
           width: 2,
           height: 1,
           flexDirection: "row",
-          backgroundColor: ctx.colors().accentBg,
+          ...islandSurface(ctx.colors(), false, ctx.colors().accentBg),
           onMouseDown: () => {
             prog.cancelled = true;
             try {
@@ -226,8 +251,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
             } catch {}
             prog.processCancel?.();
           },
-          onMouseOver: () => progPaint(progCloseSpec.spec, "tfm-prog-close", true),
-          onMouseOut: () => progPaint(progCloseSpec.spec, "tfm-prog-close", false),
+          ...hoverEvents((on) => progPaint(progCloseSpec.spec, "tfm-prog-close", on), ctx.setPointer),
         },
         progCloseSpec.el,
       ),
@@ -247,6 +271,8 @@ export const makeProgress = (ctx: ProgressCtx) => {
   const finishProgressToast = (title: string): void => {
     if (!prog.toastUp) return;
     prog.toastUp = false;
+    // the buttons are gone with the toast — their out never fires, restore
+    ctx.setPointer?.("default");
     const doneHandle = activeHandle;
     if (progSpinTimer) {
       clearInterval(progSpinTimer);
@@ -255,17 +281,20 @@ export const makeProgress = (ctx: ProgressCtx) => {
     progSetText(PROG_T_TITLE, truncateToastText(title, TOAST_W - 2));
     progSetText(PROG_T_BAR, "");
     // done means the controls go away — nothing left to pause or cancel
-    const btns: any = ctx.byId(PROG_T_BTNS);
+    const btns = ctx.byId(PROG_T_BTNS);
     if (btns) {
       try {
         btns.visible = false;
       } catch {}
     }
-    setTimeout(() => {
+    lingerTimer = setTimeout(() => {
       // superseded by a re-show — the new toast owns the stack now
       if (activeHandle !== doneHandle) return;
       activeHandle = null;
-      doneHandle?.close();
+      lingerTimer = null;
+      try {
+        doneHandle?.close();
+      } catch {}
     }, 1800);
   };
 
@@ -274,5 +303,37 @@ export const makeProgress = (ctx: ProgressCtx) => {
     while (prog.paused && !prog.cancelled) await sleep(80);
   };
 
-  return { prog, paintProgress, showProgressToast, finishProgressToast, pauseGate };
+  // theme-switch repaint while a transfer toast is up: container + texts +
+  // buttons by id. Ticks only rewrite text content, so without this a
+  // mid-transfer palette landing leaves the toast stale until it finishes.
+  const repaint = (): void => {
+    if (activeHandle === null) return;
+    const c = ctx.colors();
+    try {
+      const shell = ctx.byId(activeHandle.nodeId);
+      if (shell) shell.backgroundColor = c.accentBg;
+    } catch {}
+    for (const id of [PROG_T_TITLE, PROG_T_BAR]) {
+      try {
+        const n = ctx.byId(id);
+        if (n) n.fg = c.white;
+      } catch {}
+    }
+    for (const id of ["tfm-prog-pause", "tfm-prog-close"]) {
+      try {
+        const n = ctx.byId(id);
+        if (n) applySurface(n, islandSurface(c, false, c.accentBg));
+      } catch {}
+    }
+  };
+
+  return {
+    prog,
+    paintProgress,
+    showProgressToast,
+    finishProgressToast,
+    pauseGate,
+    isOpen: (): boolean => activeHandle !== null,
+    repaint,
+  };
 };

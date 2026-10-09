@@ -5,9 +5,11 @@
 // arrive as getters so the factory can exist pre-boot (TDZ seam rule). ---
 
 import { debounced, type Scheduler } from "../lib/uiutil";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type SearchCtx = {
-  byId: (id: string) => any;
+  byId: (id: string) => MaybeNode;
   // this pane's search input id (toolbar nodes are per-pane now)
   inputId: string;
   renderGrid: () => void | Promise<void>;
@@ -15,6 +17,9 @@ type SearchCtx = {
   termHasFocus: () => boolean;
   // injectable clock (tests use a virtual one); defaults to the real timers
   sched?: Scheduler;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const makeSearch = (ctx: SearchCtx) => {
@@ -24,12 +29,14 @@ export const makeSearch = (ctx: SearchCtx) => {
 
   const clearSearch = (): void => {
     searchQuery = "";
+    // the input is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
     if (focusTimer !== null) {
       sched.clearTimeout(focusTimer);
       focusTimer = null;
     }
     try {
-      const el: any = ctx.byId(ctx.inputId);
+      const el = ctx.byId(ctx.inputId);
       if (el) {
         el.value = "";
         el.visible = false;
@@ -49,11 +56,13 @@ export const makeSearch = (ctx: SearchCtx) => {
   // that char instead of doing legacy jump-ahead
   const beginTypeToSearch = (ch: string): void => {
     if (ctx.termHasFocus()) return;
-    const el: any = ctx.byId(ctx.inputId);
+    const el = ctx.byId(ctx.inputId);
     if (!el) return;
     el.visible = true;
     el.value = ch;
     searchQuery = ch;
+    // the input owns the keyboard now — text pointer until it clears
+    ctx.setPointer?.("text");
     void ctx.renderGrid();
     if (focusTimer !== null) sched.clearTimeout(focusTimer);
     focusTimer = sched.setTimeout(() => {
@@ -68,7 +77,7 @@ export const makeSearch = (ctx: SearchCtx) => {
   // live in the global key handler (enter commits into the first match,
   // escape cancels) — no listeners for those here by design
   const wireSearchInput = (): void => {
-    const inputEl: any = ctx.byId(ctx.inputId);
+    const inputEl = ctx.byId(ctx.inputId);
     if (!inputEl?.on) return;
     const renderSearchResults = debounced(150, () => void ctx.renderGrid(), sched);
     inputEl.on("input", () => {

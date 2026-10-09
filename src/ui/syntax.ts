@@ -1,5 +1,6 @@
 import { SyntaxStyle, addDefaultParsers } from "@opentui/core";
 import type { Theme } from "../config/config";
+import { mixHex } from "../config/color";
 import { FILE_ICON_BY_EXT, mimeForExt } from "../fs/filetype";
 
 // --- Tree-sitter syntax machinery for the preview pane (via @opentui/core).
@@ -185,7 +186,7 @@ export const buildSyntaxStyle = (t: Theme) =>
     // "default" is what OpenTUI paints every NON-captured region with
     // (tree-sitter-styled-text.ts getStyle("default")) — without it, the
     // bulk of the code text falls back to the TERMINAL's fg, not the theme's.
-    default: { fg: t.sidebarFg },
+    default: { fg: t.white },
     keyword: { fg: t.accent, bold: true },
     string: { fg: t.syntaxString ?? "#9ece6a" },
     comment: { fg: t.sidebarFgMuted, italic: true },
@@ -195,9 +196,11 @@ export const buildSyntaxStyle = (t: Theme) =>
     "type.builtin": { fg: t.syntaxType ?? "#2ac3de" },
     number: { fg: t.syntaxNumber ?? "#ff9e64" },
     constant: { fg: t.syntaxNumber ?? "#ff9e64" },
-    "constant.builtin": { fg: t.syntaxNumber ?? "#bb9af7" },
+    // builtin constants step lighter than plain ones (presets distinguish
+    // them; with no Theme slot the leaf derives it — number toward white)
+    "constant.builtin": { fg: t.syntaxNumber ? mixHex(t.syntaxNumber, t.white, 0.3) : "#bb9af7" },
     operator: { fg: t.syntaxOperator ?? t.white },
     punctuation: { fg: t.sidebarFgMuted },
     property: { fg: t.syntaxProperty ?? "#73daca" },
-    variable: { fg: t.sidebarFg },
+    variable: { fg: t.white },
   });

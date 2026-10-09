@@ -17,6 +17,8 @@ export type MenuEntriesCtx = {
   closeFileMenu(): void;
   navigate(dir: string): void;
   newTab(dir: string): void;
+  // open a folder in the inactive pane (enables dual-pane when off)
+  openInOtherPane(dir: string): void;
   // open a file with a chosen application (the pick overlay lists handlers)
   openWith(path: string): void;
   renderAll(): void;
@@ -39,6 +41,10 @@ export type MenuEntriesCtx = {
   tileRefs: Map<string, GridTileRef>;
   selPaths(): ClipItem[];
   openFileDefault(p: string): void;
+  // executable launches (the Run prompt's actions, shared with double-click)
+  isExecutable(path: string): boolean;
+  runExecutable(path: string): void;
+  runExecutableInTerminal(path: string): void;
   setClipboard(mode: "copy" | "cut", items: ClipItem[]): void;
   duplicate(paths: string[]): void;
   startInlineRename(key: string): void;
@@ -177,21 +183,22 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     const target = place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : place.path;
     const entries: ListEntry[] = [];
     if (target) {
+      // the parent row opens directly; the flyout holds the variants
       const openSub: ListEntry[] = [
-        {
-          icon: "folder",
-          label: "Open",
-          action: () => {
-            ctx.closeFileMenu();
-            ctx.navigate(target);
-          },
-        },
         {
           icon: "plus",
           label: "Open in New Tab",
           action: () => {
             ctx.closeFileMenu();
             ctx.newTab(target);
+          },
+        },
+        {
+          icon: "border-vertical",
+          label: "Open in New Pane",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.openInOtherPane(target);
           },
         },
       ];
@@ -207,7 +214,15 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         });
       }
-      entries.push({ icon: "folder", label: "Open", action: () => {}, submenu: openSub });
+      entries.push({
+        icon: "folder",
+        label: "Open",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.navigate(target);
+        },
+        submenu: openSub,
+      });
       // paste into real places (not virtual views, not the trash)
       if (!place.scheme && target !== trashFiles()) {
         entries.push({
@@ -241,23 +256,27 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         });
       }
     }
-    if (place.ejectable && place.device) {
+    // capture the optional fields once: the rows' action closures read them
+    // long after the guard, where narrowing no longer applies
+    const device = place.device;
+    const mountDevice = place.mountDevice;
+    if (place.ejectable && device) {
       entries.push({
         icon: "eject",
         label: "Eject",
         action: () => {
           ctx.closeFileMenu();
-          ctx.ejectDevice(place.device!);
+          ctx.ejectDevice(device);
         },
       });
     }
-    if (!target && place.mountDevice) {
+    if (!target && mountDevice) {
       entries.push({
         icon: "usb",
         label: "Mount",
         action: () => {
           ctx.closeFileMenu();
-          ctx.mountDevice(place.mountDevice!);
+          ctx.mountDevice(mountDevice);
         },
       });
     }
@@ -273,21 +292,23 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       });
     } else if (place.network && place.path) {
+      const mountPath = place.path;
       entries.push({
         icon: "network",
         label: "Disconnect",
         action: () => {
           ctx.closeFileMenu();
-          ctx.disconnectServer(place.path!);
+          ctx.disconnectServer(mountPath);
         },
       });
     } else if (place.network && place.networkUri) {
+      const networkUri = place.networkUri;
       entries.push({
         icon: "network",
         label: "Connect",
         action: () => {
           ctx.closeFileMenu();
-          ctx.connectServer(place.networkUri!);
+          ctx.connectServer(networkUri);
         },
       });
     }
@@ -329,29 +350,34 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       );
       return withPluginSection(entries, targets);
     }
-    // nested Open: dirs can open in a new tab / terminal, files offer the
-    // default app or an "Open With…" chooser. A parent row is a flyout, not
-    // directly actionable.
+    // Open is directly clickable everywhere; the flyout keeps the variants
+    // (dirs: tab/pane/terminal, files: the "Open With…" chooser). Executables
+    // get a single Run row instead of Open (xdg-open would land them in the
+    // browser/editor) — hover reveals Run in Terminal + Open With….
+    const isExec = !isDir && ctx.isExecutable(targetPath);
     if (isDir) {
       entries.push({
         icon: "folder",
         label: "Open",
-        action: () => {},
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.navigate(targetPath);
+        },
         submenu: [
-          {
-            icon: "folder",
-            label: "Open",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.navigate(targetPath);
-            },
-          },
           {
             icon: "plus",
             label: "Open in New Tab",
             action: () => {
               ctx.closeFileMenu();
               ctx.newTab(targetPath);
+            },
+          },
+          {
+            icon: "border-vertical",
+            label: "Open in New Pane",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.openInOtherPane(targetPath);
             },
           },
           {
@@ -364,20 +390,42 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         ],
       });
+    } else if (isExec) {
+      entries.push({
+        icon: "play",
+        label: "Run",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.runExecutable(targetPath);
+        },
+        submenu: [
+          {
+            icon: "terminal",
+            label: "Run in Terminal",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.runExecutableInTerminal(targetPath);
+            },
+          },
+          {
+            icon: "cog",
+            label: "Open With…",
+            action: () => {
+              ctx.closeFileMenu();
+              ctx.openWith(targetPath);
+            },
+          },
+        ],
+      });
     } else {
       entries.push({
         icon: "eye",
         label: "Open",
-        action: () => {},
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.openFileDefault(targetPath);
+        },
         submenu: [
-          {
-            icon: "eye",
-            label: "Open",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.openFileDefault(targetPath);
-            },
-          },
           {
             icon: "cog",
             label: "Open With…",
@@ -412,7 +460,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         },
       },
       {
-        icon: "content-copy",
+        icon: "content-duplicate",
         label: `Duplicate${nSuffix}`,
         action: () => {
           ctx.closeFileMenu();

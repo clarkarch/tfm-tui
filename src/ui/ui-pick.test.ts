@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { filterItems, fuzzyScore, makePick, type PickItem } from "./ui-pick";
+import { destroyChildren } from "../lib/uiutil";
 import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
@@ -47,6 +48,9 @@ describe("fuzzyScore", () => {
 
 const colors = defaultConfig.theme as Theme;
 
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
+
 const CMDS: PickItem[] = [
   { label: "new tab", hint: "ctrl+t", run: () => {} },
   { label: "quit tfm", hint: "ctrl+q", run: () => {} },
@@ -58,23 +62,29 @@ const mkPick = (
   floats: ReturnType<typeof makeFloats>,
   commands: () => PickItem[],
   onError?: (err: unknown) => void,
+  getColors: () => Theme = () => colors,
 ) =>
   makePick({
     renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
     rootAdd: (n) => t.renderer.root.add(n),
-    clearChildren: (node) => {
-      for (const c of [...node.getChildren()]) node.remove(c);
-    },
+    // the ctx hands over a real node, so the REAL teardown is the honest fake
+    destroyChildren,
     stripSelectable: () => {},
-    colors: () => colors,
+    colors: getColors,
     uiStyle: () => "solid",
     floats,
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
     drainIconQueue: () => {},
     commands,
     ...(onError ? { onError } : {}),
+    setPointer: (s) => void pointers.push(s),
   });
+
+const hexInts = (hex: string): [number, number, number, number] => {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+};
 
 describe("pick widget", () => {
   test("open mounts scrim + panel + input; esc closes; empty query lists all", async () => {
@@ -232,6 +242,80 @@ describe("pick widget", () => {
       expect(() => pick.handleKey({ name: "return" })).not.toThrow();
       expect(floats.isOpen("pick")).toBe(false);
       expect(errs.length).toBe(1);
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("repaint() repaints panel + input + rows with live colors, keeps the filter", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let live: Theme = { ...colors };
+      const pick = mkPick(
+        t,
+        floats,
+        () => CMDS,
+        undefined,
+        () => live,
+      );
+      pick.open({ title: "Palette" });
+      await t.renderOnce();
+      pick.setFilter("quit");
+      pick.handleKey({ name: "down" }); // cursor onto row 0 (filter alone leaves idx -1)
+      await t.renderOnce();
+      // theme switch while open: swap the palette behind the widget
+      live = { ...colors, sidebarBg: "#101020", accentBg: "#303040", white: "#f0f0f0", accent: "#ff0000" };
+      pick.repaint();
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-pick-panel") as any;
+      expect([...panel.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const input = t.renderer.root.findDescendantById("tfm-pick-input") as any;
+      expect([...input.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      const row = t.renderer.root.findDescendantById("tfm-pick-row-0") as any;
+      expect([...row.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      // filter + content survive the repaint (no rebuild of the input)
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("quit tfm");
+      expect(frame).not.toContain("new tab");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("repaint() is a no-op when closed", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const pick = mkPick(t, floats, () => CMDS);
+      expect(() => pick.repaint()).not.toThrow();
+      expect(t.renderer.root.findDescendantById("tfm-pick")).toBeFalsy();
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("row hover sets pointer per motion, even with no cursor change", async () => {
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      pointers.length = 0;
+      const floats = makeFloats();
+      const pick = mkPick(t, floats, () => CMDS);
+      pick.open({ title: "Command palette" });
+      await t.renderOnce();
+      const move = (id: string) =>
+        (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+          type: "move",
+          button: 0,
+          x: 0,
+          y: 0,
+          modifiers: { shift: false, alt: false, ctrl: false },
+        });
+      move("tfm-pick-row-1");
+      move("tfm-pick-row-1");
+      expect(pointers).toEqual(["pointer", "pointer"]);
+      pick.handleKey({ name: "escape" });
+      expect(pointers).toEqual(["pointer", "pointer", "default"]);
     } finally {
       t.renderer.destroy();
     }

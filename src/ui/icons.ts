@@ -9,7 +9,15 @@ import { readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { extractImagesAsPng } from "@humanwhocodes/ico-to-png";
+import { PNG } from "pngjs";
+import * as UTIF from "utif2";
 import { atomicWriteFile } from "../fs/fsutil";
+import { extOf } from "../fs/filetype";
+import { resetVideoBin, videoBin } from "../fs/videobin";
+import { errMessage } from "../lib/uiutil";
+import { swallow } from "../app/log";
+import type { IconStyle } from "../config/config-schema";
 
 const home = os.homedir();
 
@@ -34,7 +42,11 @@ export const loadEmbeddedIcons = (files: readonly EmbeddedFile[]): Promise<Map<s
         const raw = typeof f === "object" && f !== null && "name" in f ? f.name : undefined;
         const iconName = typeof raw === "string" ? raw.match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1] : undefined;
         if (iconName) map.set(iconName, await f.text());
-      } catch {}
+      } catch (err) {
+        // one unreadable blob used to vanish silently; the symptom is every
+        // later icon falling back to a glyph with no hint of the cause
+        swallow("embedded icon blob unreadable", err);
+      }
     }
     return map;
   })();
@@ -49,6 +61,54 @@ export const warmEmbeddedIcons = (): void => {
 
 const svgAssetPath = (name: string): string => `${import.meta.dir}/../../assets/icons/${name}.svg`;
 
+// Slots with an outline sibling (`<name>-outline.svg`, same suffix as the
+// `-outline` glyph entries). Static table, not a directory probe: the
+// compiled binary has no assets dir (Blobs only), and a probe would disagree
+// between dev and compiled runs. icons.test.ts pins both directions
+// (set ⟺ files on disk ⟺ glyph entries).
+export const OUTLINE_ICONS: ReadonlySet<string> = new Set([
+  "home",
+  "star",
+  "clock",
+  "bookmark",
+  "trash-can",
+  "folder",
+  "eject",
+  "file",
+  "cog",
+  "power-plug",
+  "eye",
+  "eye-off",
+  "pencil",
+  "checkbox-marked",
+  "play",
+  "plus",
+  "folder-plus",
+  "keyboard",
+  "palette",
+  "lightning-bolt",
+  "information",
+  "help",
+  "checkbox-blank",
+  "book-open",
+  "database",
+  "certificate",
+  "cube",
+  "email",
+  "file-code",
+  "file-document",
+  "file-image",
+  "file-video",
+  "file-music",
+  "zip-box",
+]);
+
+// Style resolution for [ui] icon-style: outline mode serves the -outline
+// asset where one ships, else the filled base (the key carries the resolved
+// name, so filled/outline rasters never share a cache entry).
+export const resolveIconName = (name: string, style: IconStyle = "filled"): string =>
+  style === "outline" && OUTLINE_ICONS.has(name) ? `${name}-outline` : name;
+
 // SVG source version for the icon cache key: editing an asset must
 // re-raster instead of serving the stale disk entry (the old key only had
 // name/tint/bg/size, so asset edits were invisible until the cache dir was
@@ -60,6 +120,37 @@ export const svgSourceMtime = (name: string): number => {
   } catch {
     return 0;
   }
+};
+
+// Natural aspect (w/h) of an icon asset for aspect-correct slot sizing:
+// width/height attrs win, viewBox is the fallback, null when unparseable
+// (callers fall back to square). Reads the same embedded-or-disk source the
+// rasterizer uses, opening tag only — icon assets are path-only with
+// unitless dims by policy.
+export const svgAspect = async (name: string): Promise<number | null> => {
+  let svg: string;
+  try {
+    svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
+  } catch {
+    return null;
+  }
+  const tag = svg.slice(0, svg.indexOf(">") + 1);
+  const num = (re: RegExp): number | null => {
+    const v = parseFloat(tag.match(re)?.[1] ?? "");
+    return v > 0 ? v : null;
+  };
+  const w = num(/\bwidth="([\d.]+)/);
+  const h = num(/\bheight="([\d.]+)/);
+  if (w !== null && h !== null) return w / h;
+  const vb = tag
+    .match(/\bviewBox="([^"]*)"/)?.[1]
+    ?.trim()
+    .split(/[\s,]+/)
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  if (vb && vb.length === 4 && (vb[2] as number) > 0 && (vb[3] as number) > 0)
+    return (vb[2] as number) / (vb[3] as number);
+  return null;
 };
 
 export const iconCacheKey = (
@@ -76,6 +167,61 @@ export const iconCacheKey = (
       `${name}:${fg}:${pxW}x${pxH}|src${srcMtimeMs}|t`
     : `${name}:${fg}:${bg}:${pxW}x${pxH}|src${srcMtimeMs}`;
 
+// The ONLY SVG rasterizer is the in-process resvg-js addon (napi): measured
+// in scripts/bench-raster.ts at ~0.3-0.5ms/icon vs the resvg CLI's ~6-7ms
+// (13-23x — process startup dominates a spawn) and rsvg-convert's ~31-44ms
+// (~60x), pixel-identical on path-only assets (0 px diff vs the CLI across
+// the whole asset corpus). `loadSystemFonts: false` is what makes it fast:
+// the default `true` rescans /usr/share/fonts per construction (~1.8s/icon
+// measured); icon assets are path-only by policy, so fonts are never needed.
+// Pure selector so the precedence is pinned without any renderer on the
+// machine.
+export type SvgRendererKind = "inproc" | null;
+export const pickSvgRenderer = (hasInproc: boolean): SvgRendererKind => (hasInproc ? "inproc" : null);
+
+// resvg-js loads via a sync require-dlopen: svgRenderer() AND the cache-key
+// salts read it synchronously, so the addon must be resolved by the first
+// call — an async import would let a salt computed before the load resolve
+// name something else while later renders use in-process (key/salt mismatch).
+// A failed load (musl/minimal container) is remembered, never retried.
+type ResvgCtor = typeof import("@resvg/resvg-js").Resvg;
+let inprocResvg: ResvgCtor | null | undefined;
+const loadInprocResvg = (): ResvgCtor | null => {
+  if (inprocResvg === undefined) {
+    try {
+      inprocResvg = require("@resvg/resvg-js").Resvg as ResvgCtor;
+    } catch {
+      inprocResvg = null;
+    }
+  }
+  return inprocResvg;
+};
+
+const svgRenderer = (): SvgRendererKind => (loadInprocResvg() === null ? null : "inproc");
+
+// In-process render (resvg-js): fit-inside replicates the CLI's `-w`+`-h` —
+// resvg-js lacks FitTo::Size, so a parse-only probe (width/height getters, no
+// raster) gives the natural size and `zoom` renders. Two constructions per
+// call, both sub-ms; the raster caches mean it only pays on cache misses.
+// `bg === undefined` omits the background (transparent mode, keep alpha).
+const renderInproc = (svg: string, pxW: number, pxH: number, bg?: string): Uint8Array => {
+  const R = loadInprocResvg();
+  if (!R) throw new Error("resvg-js addon unavailable");
+  const probe = new R(svg, { logLevel: "off", font: { loadSystemFonts: false } });
+  const zoom = Math.min(pxW / probe.width, pxH / probe.height);
+  const r = new R(svg, {
+    logLevel: "off",
+    font: { loadSystemFonts: false },
+    ...(bg === undefined ? {} : { background: bg }),
+    fitTo: { mode: "zoom", value: zoom },
+  });
+  return new Uint8Array(r.render().asPng());
+};
+
+// Fit-inside (aspect-preserving ≤ the cell box) — the slot's ImageRenderable
+// `fit` absorbs the rest. Transparent mode omits the background (keep alpha);
+// the flattened path bakes bg in because kitty alpha on icon rasters proved
+// unreliable (tint/fringe) — see [ui] icons.
 const rasterizeSvg = async (
   name: string,
   fg: string,
@@ -84,32 +230,12 @@ const rasterizeSvg = async (
   pxH: number,
   transparent = false,
 ): Promise<Uint8Array> => {
+  if (!svgRenderer()) throw new Error("no SVG rasterizer available (bun add @resvg/resvg-js)");
   const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
   const tinted = /#[0-9a-fA-F]{6}/.test(svg)
     ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
     : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
-
-  // transparent mode omits --background-color entirely (its default is none =
-  // keep alpha); the flattened path bakes bg in because kitty alpha on icon
-  // rasters proved unreliable (tint/fringe) — see [ui] icons
-  const args = transparent
-    ? ["-w", String(pxW), "-h", String(pxH)]
-    : ["--background-color", bg, "-w", String(pxW), "-h", String(pxH)];
-  const proc = spawn("rsvg-convert", args);
-  const chunks: Buffer[] = [];
-  proc.stdout.on("data", (c: Buffer) => {
-    chunks.push(c);
-  });
-  const done = new Promise<Uint8Array>((resolve, reject) => {
-    proc.on("error", reject);
-    proc.on("close", (code) =>
-      code === 0 && chunks.length > 0
-        ? resolve(new Uint8Array(Buffer.concat(chunks)))
-        : reject(new Error(`rsvg-convert exited ${code}`)),
-    );
-  });
-  proc.stdin.end(tinted);
-  return done;
+  return renderInproc(tinted, pxW, pxH, transparent ? undefined : bg);
 };
 
 const iconCache = new Map<string, Uint8Array>();
@@ -148,18 +274,24 @@ const THUMB_CACHE_MAX = 200;
 // (name, tint, bg, pixel size, SVG source version, transparency mode) plus a
 // pipeline-version salt. Theme switches naturally miss because fg/bg are part
 // of the key.
-const ICON_DISK_VER = "v3";
+// v4: SVG icons rasterize via resvg when installed (pixels differ from the
+// librsvg path), so v3 entries must regenerate.
+const ICON_DISK_VER = "v4";
+// renderer identity is part of the salt: installing/switching the rasterizer
+// must invalidate whatever the OTHER one cached (a flat version bump only
+// covers the upgrade itself, not a later install)
+const iconSalt = (): string => `${ICON_DISK_VER}:${svgRenderer() ?? "none"}`;
 const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
-  path.join(iconDiskDir(), `${createHash("sha1").update(`${ICON_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
+  path.join(iconDiskDir(), `${createHash("sha1").update(`${iconSalt()}:${key}`).digest("hex").slice(0, 20)}.png`);
 let iconDirReady: Promise<void> | null = null;
 const ensureIconDir = (): Promise<void> =>
   (iconDirReady ??= mkdir(iconDiskDir(), { recursive: true })
     .then(() => undefined)
     .catch(() => {}));
 
-// Cap concurrent rsvg forks — boot fans out dozens of slots at once and a
-// thundering herd of librsvg processes is slower than a capped pipeline.
+// Cap concurrent renderer forks — boot fans out dozens of slots at once and a
+// thundering herd of rasterizer processes is slower than a capped pipeline.
 const RASTER_CONCURRENCY = 12;
 let rasterActive = 0;
 const rasterWaiters: (() => void)[] = [];
@@ -178,10 +310,11 @@ export const iconPng = async (
   bg: string,
   pxW: number,
   pxH: number,
-  opts?: { transparent?: boolean },
+  opts?: { transparent?: boolean; style?: IconStyle },
 ): Promise<Uint8Array> => {
   const transparent = opts?.transparent ?? false;
-  const key = iconCacheKey(name, fg, bg, pxW, pxH, svgSourceMtime(name), transparent);
+  const asset = resolveIconName(name, opts?.style ?? "filled");
+  const key = iconCacheKey(asset, fg, bg, pxW, pxH, svgSourceMtime(asset), transparent);
   const hit = lruGet(iconCache, key);
   if (hit) return hit;
   // identical requests racing (e.g. 15 folder rows) share one render
@@ -196,9 +329,15 @@ export const iconPng = async (
   const job = (async () => {
     await acquireRasterSlot();
     try {
-      const bytes = await rasterizeSvg(name, fg, bg, pxW, pxH, transparent);
+      const bytes = await rasterizeSvg(asset, fg, bg, pxW, pxH, transparent);
       lruSet(iconCache, key, bytes, ICON_CACHE_MAX);
-      void ensureIconDir().then(() => atomicWriteFile(iconDiskPath(key), bytes).catch(() => {}));
+      // path captured NOW: the write-behind must not re-read $XDG_CACHE_HOME
+      // after a sandbox re-pointed it — the late read let the previous test's
+      // write land in the NEXT test's fresh sandbox (fire-and-forget race)
+      const diskPath = iconDiskPath(key);
+      void ensureIconDir().then(() =>
+        atomicWriteFile(diskPath, bytes).catch((err) => swallow("icon disk cache write", err)),
+      );
       return bytes;
     } finally {
       releaseRasterSlot();
@@ -209,27 +348,108 @@ export const iconPng = async (
   return job;
 };
 
-// --- Image thumbnails (vector-crisp via rsvg-convert, magick fallback;
-// cached per file version in memory AND on disk so folder revisits are
-// instant instead of re-spawning a renderer per file) ---
+// --- Faithful brand raster (the About logo): the icon path above replaces
+// every #hex with the slot fg, which is right for monochrome glyphs but
+// destroys a multi-color mark. This lane renders the asset AS-IS (no tint)
+// through the same in-process renderer, with its own `brand:` cache prefix
+// so faithful and tinted rasters never share an entry. `bg === undefined`
+// keeps alpha (transparent modes); otherwise it flattens onto bg like icons.
+const brandCache = new Map<string, Uint8Array>();
+const inflightBrand = new Map<string, Promise<Uint8Array>>();
+const BRAND_CACHE_MAX = 8; // one logo, a few sizes — never a folder's worth
 
-const pngFromProc = (proc: ChildProcessWithoutNullStreams, tool: string): Promise<Uint8Array> =>
+export const brandPng = async (name: string, pxW: number, pxH: number, bg?: string): Promise<Uint8Array> => {
+  const key = `brand:${name}:${pxW}x${pxH}|src${svgSourceMtime(name)}${bg === undefined ? "|t" : `|${bg}`}`;
+  const hit = lruGet(brandCache, key);
+  if (hit) return hit;
+  const running = inflightBrand.get(key);
+  if (running) return running;
+  try {
+    const cached = readFileSync(iconDiskPath(key));
+    const bytes = new Uint8Array(cached);
+    lruSet(brandCache, key, bytes, BRAND_CACHE_MAX);
+    return bytes;
+  } catch {}
+  const job = (async () => {
+    await acquireRasterSlot();
+    try {
+      if (!svgRenderer()) throw new Error("no SVG rasterizer available (bun add @resvg/resvg-js)");
+      const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
+      const bytes = renderInproc(svg, pxW, pxH, bg);
+      lruSet(brandCache, key, bytes, BRAND_CACHE_MAX);
+      // path captured NOW (same write-behind race as the icon cache above)
+      const diskPath = iconDiskPath(key);
+      void ensureIconDir().then(() =>
+        atomicWriteFile(diskPath, bytes).catch((err) => swallow("brand disk cache write", err)),
+      );
+      return bytes;
+    } finally {
+      releaseRasterSlot();
+    }
+  })();
+  inflightBrand.set(key, job);
+  job.finally(() => inflightBrand.delete(key)).catch(() => {});
+  return job;
+};
+
+// --- Image thumbnails (vector-crisp via the shared svgRenderer, magick
+// fallback; cached per file version in memory AND on disk so folder revisits
+// are instant instead of re-spawning a renderer per file) ---
+
+// test seam: the hung-renderer timeout is pinned through a real hanging child
+// cap what pngFromProc retains: a chatty/broken renderer would otherwise OOM
+// the renderer process (same 256KB ceiling as the archive tool capture — a
+// cell-box PNG thumb is bytes, anything past this is pathological and fails
+// downstream decode into the next lane/sentinel instead of growing RAM).
+const MAX_PROC_CAPTURE = 256 * 1024;
+export const pngFromProc = (
+  proc: ChildProcessWithoutNullStreams,
+  tool: string,
+  timeoutMs = 30_000,
+): Promise<Uint8Array> =>
   new Promise<Uint8Array>((resolve, reject) => {
     const chunks: Buffer[] = [];
-    proc.stdout.on("data", (c: Buffer) => chunks.push(c));
-    proc.on("error", reject);
+    let retained = 0;
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    // a hung renderer must not occupy a RASTER_CONCURRENCY slot forever (12
+    // simultaneous hangs = the whole icon/thumbnail pipeline stalls with no
+    // sentinel, since failedThumbs only fires on rejection)
+    const timer = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {}
+      settle(() => reject(new Error(`${tool} timed out`)));
+    }, timeoutMs);
+    proc.stdout.on("data", (c: Buffer) => {
+      if (retained >= MAX_PROC_CAPTURE) return;
+      const room = MAX_PROC_CAPTURE - retained;
+      const take = c.length > room ? c.subarray(0, room) : c;
+      chunks.push(take);
+      retained += take.length;
+    });
+    // drain stderr: a chatty failing renderer filling its pipe would block the
+    // process and 'close' would never fire (the thumb job would hang)
+    proc.stderr.resume();
+    proc.on("error", (err) => settle(() => reject(err)));
     proc.on("close", (code) =>
-      code === 0 && chunks.length > 0
-        ? resolve(new Uint8Array(Buffer.concat(chunks)))
-        : reject(new Error(`${tool} exited ${code}`)),
+      settle(() =>
+        code === 0 && chunks.length > 0
+          ? resolve(new Uint8Array(Buffer.concat(chunks)))
+          : reject(new Error(`${tool} exited ${code}`)),
+      ),
     );
   });
 
-// SVGs render vector-crisp at the exact target size (contain-fit, letterboxed
-// onto bg) — the old magick -density dance rasterized a small intrinsic bitmap
-// first and then upscaled it: slow AND mushy for icon-sized viewBoxes.
-// rsvg-convert missing (CI, IM6 distros) or ancient librsvg (< 2.54, no
-// --page-*): fall back to the magick -density path.
+// SVG files render vector-crisp through the SAME single renderer icons use
+// (the in-process resvg-js addon; magick is the addon-failure last resort —
+// and the photo/video paths' renderer anyway). In-process fit-inside
+// (dims <= target), same as the icon path.
 const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): string[] => [
   "-density",
   "192",
@@ -246,60 +466,168 @@ const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): stri
   "png:-",
 ];
 const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
-  if (Bun.which("rsvg-convert")) {
-    return pngFromProc(
-      spawn("rsvg-convert", [
-        "-w",
-        String(pxW),
-        "-h",
-        String(pxH),
-        "--page-width",
-        String(pxW),
-        "--page-height",
-        String(pxH),
-        "--keep-aspect-ratio",
-        "--background-color",
-        bg,
-        p,
-      ]),
-      "rsvg-convert",
-    ).catch(() => pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick"));
-  }
-  return pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
+  // Text-bearing SVGs render glyphless in-process (fonts-off, probed: the
+  // glyphs vanish, no crash) — no renderer is re-spawned for fonts.
+  const magick = () => pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
+  return Promise.resolve()
+    .then(() => renderInproc(readFileSync(p, "utf8"), pxW, pxH, bg))
+    .catch(magick);
 };
 
-const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> =>
-  pngFromProc(
-    spawn("magick", [
-      // decode at ~2x target size: full-res JPEG decode dominates thumb time
-      // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
-      // 2x keeps downscale quality while skipping most of the decode (~5x).
-      "-define",
-      `jpeg:size=${pxW * 2}x${pxH * 2}`,
-      p,
-      "-auto-orient",
-      "-background",
-      bg,
-      "-thumbnail",
-      `${pxW}x${pxH}^`,
-      "-gravity",
-      "center",
-      "-extent",
-      `${pxW}x${pxH}`,
-      "png:-",
-    ]),
-    "magick",
-  );
+// Raster stills go through Bun's built-in image pipeline (Bun >= 1.3.14): it
+// runs in-process on the work pool (no spawn) and already uses the JPEG IDCT
+// scale-down magick needed the `jpeg:size` hint for. Output is aspect-preserving
+// (fit:"inside", never letterboxed) — the tile's ImageRenderable uses
+// fit:"cover" to center-crop it into the cell box, replacing magick's
+// raster-time `-thumbnail ^` + `-extent` cover-crop. The 2x box mirrors the old
+// decode hint so the cover-crop downsamples.
+// Alpha: Bun.Image preserves the source alpha channel where magick's `-extent`
+// FLATTENED onto bg. Deliberate: flattening can't be done in-process, and the
+// flatten only changes genuinely translucent pixels (an opaque-alpha PNG like a
+// screenshot renders identically) — so we accept it and keep the perf win. The
+// magick fallback below still flattens, so exotic formats stay opaque.
+const renderRasterBunImage = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> =>
+  new Bun.Image(p, { autoOrient: true })
+    .resize(pxW * 2, pxH * 2, { fit: "inside" })
+    .png()
+    .bytes();
 
-// video thumbs: one representative frame via ffmpeg, cover-cropped like the
-// raster path so tiles keep a uniform look. Input-seek ~1s in to skip the
-// black lead-in (fast keyframe seek); clips shorter than that retry at 0.
-export const canThumbVideo = (): boolean => Bun.which("ffmpeg") !== null;
+// --- Niche raster decoders: in-process fallbacks for formats Bun.Image
+// can't decode on Linux. Measured in scripts/bench-niche-decoders.ts
+// (median per 64px thumb, Linux — spawn times swing wildly with box load,
+// in-process lanes don't):
+//   ICO:  ico-to-png ~40-55ms vs spawn ~35-85ms (parity-or-better) → lane
+//         FIRST for zero-dep + primary-path shape, spawn residual
+//   TIFF: utif2+pngjs ~30-45ms beats spawn ~50-72ms → lane FIRST, spawn residual
+//   HEIC: heic-decode ~780ms ties spawn ~700-800ms → spawn FIRST, wasm covers
+//         the no-magick machine (lazy import: wasm + ~250ms init only on HEIC
+//         files that both faster lanes refused)
+//   AVIF: NO wasm lane — @jsquash/avif 241ms loses to spawn 128ms AND needs
+//         manual wasm init under bun --compile (probed) → spawn, then glyph.
+//   magick-wasm: REJECTED — its Memory64 build aborts at init on Bun 1.4.0
+//         (blocked on oven-sh/bun#35740), 15.8MB for a fallback path.
+// pngjs is the RGBA→PNG bridge for the rgba-returning decoders: Bun.Image
+// cannot construct from raw RGBA (uncaught ERR_IMAGE_UNKNOWN_FORMAT —
+// probed, never do it).
+
+// Pure lane routing (ext → in-process decoder); null rides Bun.Image/spawn.
+export type RasterLane = "ico" | "tiff" | "heic";
+export const rasterLaneFor = (p: string): RasterLane | null => {
+  const ext = extOf(p);
+  if (ext === "ico" || ext === "cur") return "ico";
+  if (ext === "tif" || ext === "tiff") return "tiff";
+  if (ext === "heic" || ext === "heif") return "heic";
+  return null;
+};
+
+// Shared tail: resize PNG bytes through the primary path (same 2x
+// aspect-fit shape as renderRasterBunImage, so lane output matches it).
+const bunResizeBytes = async (pngBytes: Uint8Array, pxW: number, pxH: number): Promise<Uint8Array> =>
+  new Bun.Image(pngBytes, { autoOrient: true })
+    .resize(pxW * 2, pxH * 2, { fit: "inside" })
+    .png()
+    .bytes();
+
+const rgbaToPng = (data: Uint8Array | Uint8ClampedArray, w: number, h: number): Uint8Array => {
+  const png = new PNG({ width: w, height: h });
+  png.data = Buffer.from(data);
+  return PNG.sync.write(png);
+};
+
+// ICOs carry multiple resolutions; the biggest decodes cleanest.
+const renderIcoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const imgs = extractImagesAsPng(new Uint8Array(readFileSync(p)));
+  const best = imgs.sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  if (!best) throw new Error(`no images in ICO: ${p}`);
+  return bunResizeBytes(best.data, pxW, pxH);
+};
+
+const renderTiffPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const buf = readFileSync(p);
+  const ifd = UTIF.decode(buf)[0];
+  if (!ifd) throw new Error(`no IFD in TIFF: ${p}`);
+  UTIF.decodeImage(buf, ifd);
+  return bunResizeBytes(rgbaToPng(UTIF.toRGBA8(ifd), ifd.width, ifd.height), pxW, pxH);
+};
+
+// heic-decode loads its libheif wasm on first import (~300ms) — memoized and
+// never retried, same policy as the resvg-js loader above (an import failure
+// is structural, and failedThumbs already sentinels per key).
+let heicDecodeP: Promise<typeof import("heic-decode")["default"]> | null = null;
+const renderHeicPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  heicDecodeP ??= import("heic-decode").then((m) => m.default);
+  const { width, height, data } = await (await heicDecodeP)({ buffer: readFileSync(p) });
+  return bunResizeBytes(rgbaToPng(data, width, height), pxW, pxH);
+};
+
+// In-process decoders hold the whole image in RAM, so files past this skip
+// straight to the out-of-process magick fallback (its 30s pngFromProc timeout
+// bounds even those). 256MB compressed can decode to GBs of pixels.
+export const RASTER_FILE_LIMIT = 256 * 1024 * 1024;
+export const rasterFileTooLarge = (p: string): boolean => {
+  try {
+    return (statSync(p, { throwIfNoEntry: false })?.size ?? 0) > RASTER_FILE_LIMIT;
+  } catch {
+    return false;
+  }
+};
+
+const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
+  // magick stays the fallback: formats no in-process lane covers (AVIF on
+  // Linux; XCF/KRA; exotic ICO/TIFF payloads the lanes refuse) — and a
+  // runtime older than 1.3.14, where `new Bun.Image` throws inside the async
+  // fn and the catch routes here.
+  const magick = (): Promise<Uint8Array> =>
+    pngFromProc(
+      spawn("magick", [
+        // decode at ~2x target size: full-res JPEG decode dominates thumb time
+        // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
+        "-define",
+        `jpeg:size=${pxW * 2}x${pxH * 2}`,
+        p,
+        "-auto-orient",
+        "-background",
+        bg,
+        "-thumbnail",
+        `${pxW}x${pxH}^`,
+        "-gravity",
+        "center",
+        "-extent",
+        `${pxW}x${pxH}`,
+        "png:-",
+      ]),
+      "magick",
+    );
+  // Faster lane first (measured, see above): a refusing lane falls through to
+  // magick, a missing magick falls through to the lane/glyph. Oversize files
+  // skip every in-process decoder straight to magick: a multi-hundred-MB
+  // panorama/TIFF fully decodes in-process (same OOM class the archive memory
+  // limit guards), while the spawn is out-of-process with its own 30s timeout.
+  if (rasterFileTooLarge(p)) return magick();
+  switch (rasterLaneFor(p)) {
+    case "ico":
+      return renderRasterBunImage(p, pxW, pxH).catch(() => renderIcoPng(p, pxW, pxH).catch(magick));
+    case "tiff":
+      return renderRasterBunImage(p, pxW, pxH).catch(() => renderTiffPng(p, pxW, pxH).catch(magick));
+    case "heic":
+      return renderRasterBunImage(p, pxW, pxH).catch(() => magick().catch(() => renderHeicPng(p, pxW, pxH)));
+    default:
+      return renderRasterBunImage(p, pxW, pxH).catch(magick);
+  }
+};
+
+// video thumbs: one representative frame via the bundled ffmpeg sidecar
+// (src/fs/videobin — never the system PATH), cover-cropped like the raster
+// path so tiles keep a uniform look. Input-seek ~1s in to skip the black
+// lead-in (fast keyframe seek); clips shorter than that retry at 0.
+export const canThumbVideo = (): boolean => videoBin() !== null;
 const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const vb = videoBin();
+  if (!vb) throw new Error(`no video ffmpeg available: ${p}`);
   const vf = `scale=${pxW}:${pxH}:force_original_aspect_ratio=increase,crop=${pxW}:${pxH}`;
   const attempt = (ss: string) =>
     pngFromProc(
-      spawn("ffmpeg", [
+      spawn(vb.bin, [
         "-hide_banner",
         "-loglevel",
         "error",
@@ -321,8 +649,22 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
     );
   try {
     return await attempt("1");
-  } catch {
-    return attempt("0");
+  } catch (err) {
+    // a hung ffmpeg must not cost two full timeouts (60s worker stall for one
+    // corrupt video): the 0-seek retry only helps empty-output decode misses,
+    // never a child that never answered
+    if (errMessage(err).includes("timed out")) throw err;
+    try {
+      return await attempt("0");
+    } catch (err2) {
+      // dead binary (spawn-level failure), not a corrupt file: drop the
+      // memoized resolution so the next job re-resolves instead of failing
+      // every video; decode failures ("exited N") keep the binary and let the
+      // per-file sentinel remember the broken file
+      const msg = errMessage(err2);
+      if (!msg.includes("timed out") && !/exited \d+/.test(msg)) resetVideoBin();
+      throw err2;
+    }
   }
 };
 
@@ -360,7 +702,12 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // memory layer above now is LRU-capped).
 // v2: raster path decodes JPEGs at ~2x target (jpeg:size hint) — pixels differ
 // slightly from v1 full-decode thumbs, so old entries must regenerate.
-const THUMB_DISK_VER = "v2";
+// v3: raster stills moved to Bun.Image (aspect-preserving, cover-cropped at
+// draw) — different pixels/dims from magick's v2 cover-crop, so regenerate.
+// SVG thumbs carry the rasterizer identity in their key (see `mode` in thumbPng)
+// instead of a flat bump here, so changing the SVG renderer regenerates only
+// SVG thumbs and never re-rasterizes a whole photo library.
+const THUMB_DISK_VER = "v3";
 const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
   path.join(thumbDiskDir(), `${createHash("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
@@ -369,8 +716,31 @@ const thumbDiskPath = (key: string): string =>
 const ensureThumbDir = async (): Promise<void> => {
   try {
     await mkdir(thumbDiskDir(), { recursive: true });
-  } catch {}
+  } catch (err) {
+    // a failed mkdir means no disk tier at all: every revisit re-rasterizes
+    swallow("thumb disk cache dir", err);
+  }
 };
+
+// Pure disk/memory key for one thumbnail. Raster + video lanes ignore bg:
+// Bun.Image keeps alpha (no flatten) and video frames are opaque, so bg in
+// the key re-rendered the whole photo library on every theme switch for
+// byte-identical pixels. Vector (SVG) thumbs DO flatten onto bg and keep it.
+// Niche raster lanes share the bg-free key (aspect-fit, alpha kept); the rare
+// magick-fallback flatten of a translucent exotic then serves the older bg's
+// pixels — accepted, opaque images are unaffected either way.
+export const thumbCacheKey = (
+  path: string,
+  mtimeMs: number,
+  size: number,
+  pxW: number,
+  pxH: number,
+  bg: string,
+  mode: string,
+): string =>
+  mode.startsWith("vec:")
+    ? `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`
+    : `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${mode}`;
 
 export const thumbPng = (
   path: string,
@@ -382,9 +752,27 @@ export const thumbPng = (
   vector = false,
   video = false,
 ): Promise<Uint8Array> => {
-  // bg in the key: thumbnails are flattened onto it, so a theme swap must miss
-  const mode = video ? "video" : vector ? "vec" : "raster";
-  const key = `${path}|${mtimeMs}|${size}|${pxW}x${pxH}|${bg}|${mode}`;
+  // SVG thumbs are keyed by the rasterizer too: resvg vs rsvg produce different
+  // pixels, and switching must not serve the other renderer's cache. Raster
+  // keys stay renderer-free so a photo library is never needlessly redone;
+  // video keys carry the binary source instead (sidecar/dev/override swaps
+  // must not serve another binary's pixels — same argv, decoders may differ).
+  // Niche lanes carry their lane in the mode: in-process pixels (aspect-fit)
+  // differ from spawn pixels (exact cover box), so `raster:ico` etc. must not
+  // serve magick-era `raster` entries. jpg/png/avif keep bare `raster` — their
+  // paths are unchanged, no mass re-raster. (heic's two lanes share one mode:
+  // installing/removing magick flips its lane under the same key — both are
+  // valid thumbs of the same image and any file edit re-keys on mtime.)
+  const lane = rasterLaneFor(path);
+  const vb = video ? videoBin() : null;
+  const mode = video
+    ? `video:${vb?.source ?? "none"}`
+    : vector
+      ? `vec:${svgRenderer() ?? "none"}`
+      : lane
+        ? `raster:${lane}`
+        : "raster";
+  const key = thumbCacheKey(path, mtimeMs, size, pxW, pxH, bg, mode);
   if (failedThumbs.has(key)) return Promise.reject(new Error(`thumb previously failed: ${path}`));
   let p = lruGet(thumbCache, key);
   if (!p) {
@@ -403,7 +791,11 @@ export const thumbPng = (
           ? renderVectorPng(path, pxW, pxH, bg)
           : renderRasterPng(path, pxW, pxH, bg));
       // write-behind: never block the render on the cache write
-      void ensureThumbDir().then(() => atomicWriteFile(thumbDiskPath(key), bytes).catch(() => {}));
+      // path captured NOW — same fire-and-forget race as the icon write above
+      const diskPath = thumbDiskPath(key);
+      void ensureThumbDir().then(() =>
+        atomicWriteFile(diskPath, bytes).catch((err) => swallow("thumb disk cache write", err)),
+      );
       return bytes;
     })();
     p.catch(() => {
@@ -416,10 +808,18 @@ export const thumbPng = (
   return p;
 };
 
-// theme flips re-tint everything; the disk cache still serves (fg/bg are in
-// its keys) — this only drops the in-memory layers
+// theme flips re-tint icons (their keys carry fg/bg, so old-theme entries
+// stay valid for cycling back — never wiped here); the disk cache still
+// serves new-theme misses — this only drops the in-memory layers
 export const clearIconCaches = (): void => {
   iconCache.clear();
+  brandCache.clear();
   thumbCache.clear();
+  failedThumbs.clear();
+};
+
+// theme-flip retry: a broken file deserves one fresh attempt per palette
+// without dropping every hot raster (the old full wipe made each flip cold)
+export const clearFailedThumbs = (): void => {
   failedThumbs.clear();
 };

@@ -1,8 +1,9 @@
-import { cp, mkdir, rename as fsRename, rm, writeFile, open } from "node:fs/promises";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { chmod, cp, mkdir, rename as fsRename, rm, writeFile, open } from "node:fs/promises";
+import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToUri } from "./uri";
+import { swallow } from "../app/log";
 
 // --- Deterministic fs+path operations: the primitives runTransfer, trash and
 // undo sit on. No prompts, no UI, no state — callers own decisions; these own
@@ -58,11 +59,96 @@ export const isWithinOrEqual = (inner: string, outer: string): boolean => {
 
 // best-effort count of home-trash entries for the empty-trash confirm
 // prompt. -1 when the trash is unreadable (prompt omits the count then).
-export const countTrashItems = (): number => {
+export const countTrashItems = (mountsText?: string): number => {
+  let home: string[];
   try {
-    return readdirSync(path.join(trashDir(), "files")).length;
+    home = readdirSync(path.join(trashDir(), "files"));
   } catch {
     return -1;
+  }
+  let n = home.length;
+  // per-mount trashes ($topdir/.Trash-$uid) hold real entries too — the
+  // confirm count must not under-report them
+  for (const dir of allTrashFilesDirs(mountsText)) {
+    try {
+      if (path.resolve(dir) === path.resolve(path.join(trashDir(), "files"))) continue;
+    } catch {
+      continue;
+    }
+    try {
+      n += readdirSync(dir).length;
+    } catch {
+      // yanked device mid-count — home count still stands
+    }
+  }
+  return n;
+};
+
+// every trash FILES dir currently mounted: home first, then one
+// `<mountpoint>/.Trash-<uid>/files` per /proc/mounts entry. Unreadable or
+// missing dirs are still listed (callers readdir best-effort) — only the
+// parse itself must never throw. mountsText is an injectable seam (tests pass
+// a fake table; production reads /proc/mounts).
+export const allTrashFilesDirs = (mountsText?: string): string[] => {
+  const home = path.join(trashDir(), "files");
+  const out = [home];
+  const seen = new Set<string>();
+  try {
+    seen.add(path.resolve(home));
+  } catch {}
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  let text: string;
+  if (mountsText !== undefined) {
+    text = mountsText;
+  } else {
+    try {
+      text = readFileSync("/proc/mounts", "utf8");
+    } catch {
+      return out;
+    }
+  }
+  for (const line of text.split("\n")) {
+    const mp = parseProcMountpoint(line);
+    if (!mp) continue;
+    try {
+      const r = path.resolve(path.join(mp, `.Trash-${uid}`, "files"));
+      if (!seen.has(r)) {
+        seen.add(r);
+        out.push(path.join(mp, `.Trash-${uid}`, "files"));
+      }
+    } catch {}
+  }
+  return out;
+};
+
+// network and automount filesystems never hold tfm trash (trashPaths refuses
+// network paths outright) — probing them here would hang on a dead server or
+// trigger an autofs mount for nothing. Deny by fstype, not by path.
+const PROC_MOUNT_SKIP_FSTYPES = new Set([
+  "nfs",
+  "nfs4",
+  "cifs",
+  "smbfs",
+  "smb3",
+  "sshfs",
+  "fuse.sshfs",
+  "fuse.gvfsd-fuse",
+  "autofs",
+]);
+
+// one /proc/mounts line → mountpoint, or null. Fields are
+// `device mountpoint fstype opts …` with octal escapes in the first two
+// (\040 space, \011 tab, \012 newline, \134 backslash).
+const parseProcMountpoint = (line: string): string | null => {
+  const parts = line.split(" ");
+  if (parts.length < 3) return null;
+  const mp = parts[1];
+  const fstype = parts[2];
+  if (!mp || !fstype || PROC_MOUNT_SKIP_FSTYPES.has(fstype)) return null;
+  try {
+    return mp.replace(/\\040/g, " ").replace(/\\011/g, "\t").replace(/\\012/g, "\n").replace(/\\134/g, "\\");
+  } catch {
+    return null;
   }
 };
 
@@ -103,6 +189,18 @@ export const failSuffix = (failed: number, failWhy: Set<string>): string => {
   return `${failed} FAILED${why ? ` (${why})` : ""}`;
 };
 
+// sync readability probe behind the adaptive opens (default open + Open
+// With… route unreadable files through the sudo gate instead of spawning a
+// doomed unprivileged child). One syscall; callers, not this, decide.
+export const canReadSync = (p: string): boolean => {
+  try {
+    accessSync(p, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // errno-style .code off an unknown caught value (fs renames, child-proc
 // failures) — structural narrowing instead of `any`
 export const errCode = (err: unknown): unknown => {
@@ -136,11 +234,30 @@ export const fsMove = async (src: string, dest: string): Promise<void> => {
   } catch (err: unknown) {
     if (errCode(err) !== "EXDEV") throw err;
     // cross-device: copy+delete (no atomic rename across filesystems).
-    // cp preserves mode/mtime; the caller (runTransfer) routes big moves
-    // through the durable tmp+rename engine with progress + half-copy
-    // cleanup — this fallback is for single renames that unexpectedly hit
-    // EXDEV (bind mounts). Remove source only after the copy succeeded.
-    await cp(src, dest, { recursive: true, preserveTimestamps: true });
+    // Via an EXCLUSIVELY-claimed sibling tmp (same .tfm-part-* shape the
+    // transfer engine sweeps) so a crash can't leave a half-written dest and
+    // a concurrent op can't share our tmp: only a complete tmp is renamed
+    // into place. The caller (runTransfer) routes big moves through the
+    // durable tmp+rename engine with progress + half-copy cleanup — this
+    // fallback is for single renames that unexpectedly hit EXDEV (bind
+    // mounts). Remove source only after the copy succeeded.
+    const srcStat = lstatSync(src);
+    const tmp = await claimTmp(dest, srcStat.isDirectory());
+    try {
+      await cp(src, tmp, { recursive: true, preserveTimestamps: true });
+      // cp merges into the claimed dir instead of creating it, so the root
+      // keeps mkdir-default mode — restore the source's explicitly
+      if (srcStat.isDirectory()) {
+        try {
+          // eslint-disable-next-line no-bitwise
+          await chmod(tmp, srcStat.mode & 0o7777);
+        } catch {}
+      }
+      await fsRename(tmp, dest);
+    } catch (copyErr) {
+      await rm(tmp, { recursive: true, force: true }).catch(() => {});
+      throw copyErr;
+    }
     try {
       await rm(src, { recursive: true });
     } catch (err) {
@@ -173,6 +290,41 @@ export const rmTrashInfo = async (name: string, log?: (msg: string) => void): Pr
   }
 };
 
+// sibling info path for per-mount trashes ($topdir/.Trash-$uid): a trash
+// location already encodes its root (<root>/files/<name>), so its sidecar is
+// <root>/info/<name>.trashinfo. Null unless the path is absolute and inside a
+// files dir (relative paths fall back to home lookup).
+export const trashInfoPathForTrashFile = (trashFilePath: string): string | null => {
+  try {
+    if (!path.isAbsolute(trashFilePath)) return null;
+    const abs = path.resolve(trashFilePath);
+    if (path.basename(path.dirname(abs)) !== "files") return null;
+    return path.join(path.dirname(path.dirname(abs)), "info", `${path.basename(abs)}.trashinfo`);
+  } catch {
+    return null;
+  }
+};
+
+// sibling-aware cleanup for per-mount trashes ($topdir/.Trash-$uid): the
+// trash location already encodes its root (<root>/files/<name>), so delete
+// <root>/info/<name>.trashinfo instead of assuming home trash. Falls back to
+// home lookup ONLY when the path isn't inside a files dir (relative callers).
+// A missing sibling sidecar is NOT a home lookup: a home entry with the same
+// basename belongs to a different file, and deleting its .trashinfo would
+// orphan it (restore reads Path= from that sidecar).
+export const rmTrashInfoForPath = async (trashFilePath: string, log?: (msg: string) => void): Promise<void> => {
+  const sibling = trashInfoPathForTrashFile(trashFilePath);
+  if (sibling) {
+    try {
+      await rm(sibling);
+    } catch (err) {
+      if (errCode(err) !== "ENOENT") log?.(`trashinfo cleanup ${path.basename(trashFilePath)}: ${fsErrText(err)}`);
+    }
+    return;
+  }
+  await rmTrashInfo(path.basename(trashFilePath), log);
+};
+
 // --- XDG trash spec helpers ---
 
 // Percent-encode an absolute path per the trash spec (Path= must be
@@ -186,22 +338,13 @@ export const encodeTrashPath = (p: string): string => pathToUri(path.resolve(p))
 // (removable media — spec §2). Resolved per call for env-redirection tests.
 const trashRootsFor = (target: string): string[] => {
   const home = trashDir();
-  let targetDev: number | null = null;
-  let homeDev: number | null = null;
-  try {
-    targetDev = lstatSync(target).dev;
-  } catch {
-    try {
-      targetDev = lstatSync(path.dirname(path.resolve(target))).dev;
-    } catch {
-      targetDev = null;
-    }
-  }
-  try {
-    homeDev = lstatSync(path.dirname(home)).dev ?? lstatSync(os.homedir()).dev;
-  } catch {
-    homeDev = null;
-  }
+  // unreadable home-parent (the XDG data dir may not exist yet) = home trash
+  // only — the old homedir fallback was unreachable (inside one try, the
+  // first lstat's throw jumped straight to catch), so deviceOf must not make
+  // it live: that walks /tmp targets to /tmp/.Trash-$uid and lands the file
+  // OUTSIDE trashDir() (the trashops test pins the old behavior).
+  const targetDev = deviceOf(target) ?? deviceOf(path.dirname(path.resolve(target)));
+  const homeDev = deviceOf(path.dirname(home));
   if (targetDev === null || homeDev === null || targetDev === homeDev) return [home];
   // different filesystem — walk up to the mount point (dev changes there)
   let cur = path.resolve(target);
@@ -212,17 +355,13 @@ const trashRootsFor = (target: string): string[] => {
       top = cur;
       break;
     }
-    let curDev: number | null = null;
-    let parentDev: number | null = null;
-    try {
-      curDev = lstatSync(cur).dev;
-    } catch {
+    const curDev = deviceOf(cur);
+    if (curDev === null) {
       cur = parent;
       continue;
     }
-    try {
-      parentDev = lstatSync(parent).dev;
-    } catch {
+    const parentDev = deviceOf(parent);
+    if (parentDev === null) {
       top = cur;
       break;
     }
@@ -263,7 +402,13 @@ export const xdgTrashMove = async (p: string): Promise<string> => {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 };
 
-const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string> => {
+export const xdgTrashMoveToRoot = async (
+  absSrc: string,
+  root: string,
+  // injectable move (default fsMove): the sudo replace-stash runs the SAME
+  // claim/rename/finalize loop with sudo-mv — one loop, not a near-clone.
+  move: (src: string, dest: string) => Promise<void> = fsMove,
+): Promise<string> => {
   const filesDir = path.join(root, "files");
   const infoDir = path.join(root, "info");
   await mkdir(filesDir, { recursive: true });
@@ -287,11 +432,14 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
     // claimed — now move, then finalize the info (overwrite placeholder)
     const finalPath = path.join(filesDir, name);
     try {
-      await fsMove(absSrc, finalPath);
+      await move(absSrc, finalPath);
     } catch (moveErr) {
       try {
         await rm(infoPath, { force: true });
-      } catch {}
+      } catch (cleanupErr) {
+        // a leftover .trashinfo for a file that never moved is an orphan entry
+        swallow("trash info cleanup after failed move", cleanupErr);
+      }
       throw moveErr;
     }
     try {
@@ -299,17 +447,14 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
       // best-effort durability: info + dir fsync so a crash doesn't lose the
       // restore mapping for a file that already moved
       try {
-        const h = await open(infoPath, "r");
-        try {
-          await h.sync();
-        } finally {
-          await h.close().catch(() => {});
-        }
-      } catch {}
+        await fsyncPath(infoPath);
+      } catch (syncErr) {
+        swallow("trash info fsync", syncErr);
+      }
     } catch (err) {
       // put the file back — a source-less trash entry is worse than no entry
       try {
-        await fsMove(finalPath, absSrc);
+        await move(finalPath, absSrc);
       } catch (undoErr) {
         if (err instanceof Error) {
           const e: Error & { rollbackFailed?: unknown } = err;
@@ -318,7 +463,11 @@ const xdgTrashMoveToRoot = async (absSrc: string, root: string): Promise<string>
       }
       try {
         await rm(infoPath, { force: true });
-      } catch {}
+      } catch (cleanupErr) {
+        // failed rollback of the .trashinfo: the file is back but the entry
+        // would linger without this line in the log
+        swallow("trash info cleanup after failed write", cleanupErr);
+      }
       throw err;
     }
     return finalPath;
@@ -342,6 +491,44 @@ export const crossDevice = (a: string, b: string): boolean => {
   return da !== null && db !== null && da !== db;
 };
 
+// identity of a live file for undo guards: undo closures trash/restore by
+// path, but the path may have been reoccupied since the op (user deleted the
+// copy, then made a new file at the same name). dev+ino alone is NOT enough:
+// ext4 hands a freed inode straight to the next create, so a stranger made
+// right after the delete carries the SAME dev+ino. `born` (birth time, absent
+// on filesystems that don't report one) breaks that tie — null when the path
+// is gone/unstatable (callers treat null as "unknown, fall back to path
+// semantics", never as a match).
+export type FileId = { dev: number; ino: number; born?: number };
+
+export const fileIdOf = (p: string): FileId | null => {
+  try {
+    const s = lstatSync(p);
+    return s.birthtimeMs > 0 ? { dev: s.dev, ino: s.ino, born: s.birthtimeMs } : { dev: s.dev, ino: s.ino };
+  } catch {
+    return null;
+  }
+};
+
+export const fileIdMatches = (id: FileId | null, p: string): boolean => {
+  if (id === null) return true;
+  const cur = fileIdOf(p);
+  return cur !== null && cur.dev === id.dev && cur.ino === id.ino && (id.born === undefined || cur.born === id.born);
+};
+
+// trash `p` only if it is still the recorded file: a missing path is already
+// at the desired end-state (success, nothing to do); a reoccupied path is
+// skipped with a log (trashing the stranger would be wrong) — neither throws.
+// A null id falls back to plain path semantics. Real trash errors propagate.
+export const trashIfSameFile = async (p: string, id: FileId | null, log?: (msg: string) => void): Promise<void> => {
+  if (!existsSync(p)) return;
+  if (id && !fileIdMatches(id, p)) {
+    log?.(`undo trash ${p}: file replaced since op, skipped`);
+    return;
+  }
+  await xdgTrashMove(p);
+};
+
 // tmp+rename write: a crash or EDQUOT mid-write never leaves a truncated
 // file at the target path. Used for caches keyed by content version — a
 // partial write there would be served as a valid hit forever.
@@ -353,5 +540,42 @@ export const atomicWriteFile = async (p: string, data: Uint8Array | string): Pro
   } catch (err) {
     await rm(tmp, { force: true }).catch(() => {});
     throw err;
+  }
+};
+
+// Crash-orphan temp name — the orphan sweep regex in fileops anchors to this
+// exact shape (`<base>.tfm-part-<pid>-<rand8>` sibling tmp); a substring
+// match there silently deleted real user files (notes.tfm-part-2.md), so the
+// shape contract lives in ONE place. (The `.tfm-extract-<pid>-<rand8>` staging
+// DIR is a separate dot-prefixed shape, anchored by its own regex.)
+export const tmpName = (base: string): string =>
+  `${base}.tfm-part-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+
+// Exclusive claim of a sibling tmp: the rand name is 64-bit, but two live ops
+// on the same dest (or a planted name) would otherwise share one tmp and
+// clobber each other mid-copy. mkdir/open-wx fail EEXIST atomically, so a won
+// claim is proof of exclusivity; callers retry with a fresh name.
+export const claimTmp = async (dest: string, dir = false): Promise<string> => {
+  for (let i = 0; i < 10; i++) {
+    const cand = tmpName(dest);
+    try {
+      if (dir) await mkdir(cand);
+      else await (await open(cand, "wx")).close();
+      return cand;
+    } catch (err) {
+      if (errCode(err) !== "EEXIST") throw err;
+    }
+  }
+  throw new Error(`cannot claim temp for ${path.basename(dest)}`);
+};
+
+// fsync a single path (best-effort close; callers own error policy — the
+// trash info fsync logs, the copy finish treats failure as fatal upstream).
+export const fsyncPath = async (p: string, mode: string = "r"): Promise<void> => {
+  const h = await open(p, mode);
+  try {
+    await h.sync();
+  } finally {
+    await h.close().catch(() => {});
   }
 };

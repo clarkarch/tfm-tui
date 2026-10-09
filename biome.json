@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/assets", "!**/src/config/themes.ts"]
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/assets", "!**/docs/tfm.svg", "!**/src/config/themes.ts"]
   },
   "formatter": {
     "enabled": true,
@@ -26,14 +26,29 @@
     "rules": {
       "preset": "recommended",
       "suspicious": {
-        "noExplicitAny": "off"
+        "noExplicitAny": "error"
       },
       "style": {
-        "noNonNullAssertion": "off"
+        "noNonNullAssertion": "error"
       },
       "complexity": {
         "noExcessiveNestedTestSuites": "off"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          },
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    }
+  ]
 }

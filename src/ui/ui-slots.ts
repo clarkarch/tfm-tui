@@ -1,16 +1,21 @@
 // --- Icon slots / thumbnails / modal scrim ---
 // Widget-extraction seam (see ui-dialogs.ts for the template): build time
 // queues a small glyph box via makeIconSlot; the async drain swaps in
-// theme-tinted kitty rasters at exact cell pixels (rsvg-convert via
+// theme-tinted kitty rasters at exact cell pixels (resvg/rsvg-convert via
 // ./icons). Thumbnail jobs share the same drain model. Kitty placements
 // float above all cells, so while a modal is up every background slot falls
 // back to a pre-darkened glyph (setScrim); rasters come back on close.
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
-import { Box, ImageRenderable, Text } from "@opentui/core";
-import { iconPng, thumbPng } from "./icons";
-import type { IconMode, Theme } from "../config/config";
+import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
+import { iconPng, brandPng, svgAspect, thumbPng } from "./icons";
+import { swallow } from "../app/log";
+import type { IconMode, IconStyle, Theme } from "../config/config";
+import { intToHex } from "../config/color";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import { destroyChildren } from "../lib/uiutil";
 
 export type IconState = { fg: string; bg: string };
 
@@ -34,6 +39,103 @@ export const navIconState = (enabled: boolean, hover: boolean): number =>
 export const selectIconState = (selected: boolean, hover: boolean): number =>
   selected ? IconStateIdx.Selected : hover ? IconStateIdx.Active : IconStateIdx.Rest;
 
+// --- THE hover wiring for every mouse-driven button/row in the UI ---
+// One implementation, because drift here is invisible until a user reports it:
+// pages of widgets each hand-rolled their own pair and they disagreed.
+//
+// * Light up on `move`, clear on `out` — never `over`. OpenTUI fires
+//   over/out only when the DEEPEST hit node changes, so (a) moving between a
+//   button's own icon and its padding fires out→over, and (b) a rebuild under a
+//   stationary cursor re-fires a synthetic "over" on the new node. Wiring the
+//   highlight to "over" therefore desyncs from the real pointer; `move` bails
+//   only on an actual pointer move and is the source of truth. The callbacks
+//   still fire in the same event turn, so the out→move pair nets out to a
+//   correctly-lit button before the frame renders — no flicker.
+// * Guarded: the first move paints, the rest are no-ops. A bare
+//   `onMouseMove: () => paint(true)` repaints every row in a list on every
+//   pointer cell (an O(rows) full repaint per pixel).
+// * Paint MUST cover both halves of a button: the baked raster state AND the
+//   wrapper box surface. Opaque rasters bake their bg into the png, so a wrapper
+//   that swaps only the raster leaves a stale square around it, while a wrapper
+//   that swaps only the bg leaves the raster's own square on top; in glyph mode
+//   the raster doesn't exist at all and only the wrapper bg can highlight.
+//   See escHintBtn (ui-slots) for the reference implementation.
+export const hoverEvents = (
+  paint: (hover: boolean) => void,
+  // mouse pointer shape alongside the paint: set on the guarded first move,
+  // restored to default on out. Absent = paint only (the guarded flag is
+  // what keeps per-pixel sweeps from spamming OSC 22).
+  setPointer?: (style: PointerStyle) => void,
+  pointer: PointerStyle = "pointer",
+) => {
+  let on = false;
+  return {
+    onMouseMove: (): void => {
+      if (on) return;
+      on = true;
+      paint(true);
+      setPointer?.(pointer);
+    },
+    onMouseOut: (): void => {
+      if (!on) return;
+      on = false;
+      paint(false);
+      setPointer?.("default");
+    },
+  };
+};
+
+// tty-guarded OSC 22 sink shared by every widget ctx: delegates exact
+// styles, dedupes repeats (a drag sweep crosses hundreds of tiles — one OSC
+// write, not N), and stays a silent no-op on the console where no shapes
+// exist (gpm draws its own pointer). One instance per process (built in
+// wireCore) keeps a single `last` across widget boundaries.
+// Leaves are LAZY, enters are eager: a `default` restore waits a microtask
+// and any re-enter first cancels it. Icon-edge crossings run out+move in one
+// synchronous turn (the move bubbles from the raster child to the hovered
+// wrapper), so an eager default would hit the compositor as flicker — the
+// deferred leave collapses the pair to zero intermediate writes, while a
+// genuine leave still flushes before any frame/macrotask can run.
+export const makePointerSetter = (deps: {
+  setMousePointer: (style: PointerStyle) => void;
+  isTtyMode: () => boolean;
+}): ((style: PointerStyle) => void) => {
+  let last: PointerStyle | null = null;
+  let pendingDefault = false;
+  const emit = (style: PointerStyle): void => {
+    last = style;
+    try {
+      if (!deps.isTtyMode()) deps.setMousePointer(style);
+    } catch {}
+  };
+  return (style) => {
+    if (style === "default") {
+      if (last === "default") return;
+      // a restore is already queued — don't disturb it (recording `default`
+      // here without emitting would leave `last` ahead of the terminal)
+      if (pendingDefault) return;
+      // boot ground truth is default: record it without a write
+      if (last === null) {
+        last = "default";
+        return;
+      }
+      pendingDefault = true;
+      queueMicrotask(() => {
+        // a same-turn re-enter clears pendingDefault first — the flush is
+        // then a no-op instead of emitting a stale restore
+        if (!pendingDefault) return;
+        pendingDefault = false;
+        if (last === "default") return;
+        emit("default");
+      });
+      return;
+    }
+    pendingDefault = false;
+    if (style === last) return;
+    emit(style);
+  };
+};
+
 export type IconSpec = {
   slotId: string;
   name: string;
@@ -44,7 +146,20 @@ export type IconSpec = {
   statesFactory?: () => IconState[];
   initialState: number;
   done?: boolean;
+  // faithful brand art (the About logo): drains through brandPng (no fg tint)
+  // instead of iconPng. States still carry fg/bg for the glyph fallback.
+  faithful?: boolean;
 };
+
+// Whatever the widgets nest inside their Box()/Text() calls — which is exactly
+// the row/slot builders' return type. Derived from Box()'s own children param
+// instead of a hand-written union of the VNode instantiations in use, so a new
+// construct (or a bare string child) keeps typechecking.
+export type SlotElement = Parameters<typeof Box>[1];
+
+// makeIconSlot's contract: the mountable element, the id the theme/scrim paths
+// look it up by, and the spec setIconState later mutates.
+export type IconSlotHandle = { el: SlotElement; slotId: string; spec: IconSpec };
 
 export type ThumbJob = {
   slotId: string;
@@ -70,20 +185,74 @@ export type ThumbJob = {
 // top-to-bottom before anything further down the folder is even spawned.
 export const thumbJobRank = (j: ThumbJob): number => (j.priority ? 0 : j.visible === false ? 2 : 1);
 
+// Identity of the file a thumb job represents for a slot. pushThumbJob stores
+// this per slot; a drain re-checks it after the raster to reject a job whose
+// slot was rebuilt for a different file (the stale-thumbnail guard). Replaces
+// the old generation bail, which dropped live jobs on the floor.
+export const thumbJobKey = (j: ThumbJob): string =>
+  [j.path, j.mtimeMs, j.size, j.wCells, j.hCells ?? "", j.vector ? 1 : 0, j.video ? 1 : 0].join("|");
+
+// How the mounted raster is fitted into its cell box. Raster/video rasters are
+// either aspect-preserving (Bun.Image `fit:"inside"`) or exact-box (ffmpeg
+// cover-crop; magick `^`+extent), so cover-crop them to fill the tile. SVG
+// thumbs via resvg are ALSO aspect-preserving but must be CONTAINED (contain
+// letterboxes; cover would crop the drawing's edges) — that was the old
+// `fit:"fit"` behavior, restored here for vectors only.
+export const thumbImageFit = (vector: boolean): "fit" | "cover" => (vector ? "fit" : "cover");
+
+// --- Floating-layer roots ---
+// A slot inside one of these is a FLOAT child. Two decisions hang off it: the
+// raster keeps its alpha only OUTSIDE floats in `transparent-partial` (an opaque
+// island must never blend the desktop through), and its flatten bg is the
+// float's own fill rather than the canvas (see style.slotBg's role arg). The
+// toast shell is per-instance (`tfm-toast-<n>`) — every other root id is a
+// singleton, so those are exact matches and the toast is a prefix.
+export const FLOAT_ROOT_IDS: ReadonlySet<string> = new Set([
+  "tfm-menu",
+  "tfm-filemenu",
+  "tfm-filemenu-sub",
+  "tfm-prompt",
+  "tfm-props",
+  "tfm-conflict",
+  "tfm-yesno",
+  "tfm-pick",
+  "tfm-bulkrename",
+]);
+export const FLOAT_TOAST_PREFIX = "tfm-toast-";
+
+/** is `id` (or a toast's `tfm-toast-<n>`) a floating-layer root? */
+export const isFloatRootId = (id: unknown): boolean =>
+  typeof id === "string" && (FLOAT_ROOT_IDS.has(id) || id.startsWith(FLOAT_TOAST_PREFIX));
+
 export type SlotsCtx = {
-  renderer(): any;
-  byId(id: string): any;
-  clearChildren(node: unknown): void;
+  renderer(): CliRenderer;
+  byId(id: string): MaybeNode;
   // live theme — always read through the getter, never captured
   colors(): Theme;
   uiStyle(): string;
   // [ui] icons — read live like uiStyle (mode flip re-rasters)
   iconsMode(): IconMode;
+  // [ui] icon-style — read live (toggle re-rasters via resetIconQueue).
+  // Optional so test fakes keep working (absent = filled).
+  iconStyle?(): IconStyle;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
   // true while a modal menu/scrim owns the screen (drain re-applies scrim)
   modalOpen(): boolean;
   glyphFor(name: string): string;
+  // tty mode (linux console): skip every raster/thumb spawn, glyphs only.
+  // force-glyph does the same on modern terminals with buggy kitty graphics
+  // (view/anims/transparency untouched). Optional so test fakes keep working.
+  isTtyMode?(): boolean;
+  forceGlyph?(): boolean;
+  // transparent-bg force: chrome rasters keep alpha (they sit on the terminal
+  // bg); float islands stay solid so their rasters keep flattening. Optional
+  // so test fakes keep working; read live like iconsMode (a flip re-rasters
+  // through the theme sig).
+  transparentForce?(): boolean;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const dimHex = (hex: string, f: number): string => {
@@ -94,7 +263,7 @@ export const dimHex = (hex: string, f: number): string => {
   const r = Math.round(((n >> 16) & 255) * f);
   const g = Math.round(((n >> 8) & 255) * f);
   const b = Math.round((n & 255) * f);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+  return intToHex((r << 16) | (g << 8) | b);
 };
 
 export const makeSlots = (ctx: SlotsCtx) => {
@@ -109,6 +278,27 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
   let thumbJobs: ThumbJob[] = [];
+  // per-slot ownership: pushThumbJob records the key of the job it queued for a
+  // slot, so a drain that resolves the slot later can tell whether ITS job still
+  // owns it. A rebuilt tile (new file, same `tfm-tile-N-thumb` id) re-pushes a
+  // job and overwrites the key, which is how a stale in-flight raster is
+  // rejected. This replaces the old "newer drain wins" generation bail, which
+  // DROPPED the losing drain's jobs outright: a grid folder's thumbnails stayed
+  // blank until the cwd changed, because renderGrid early-outs on an unchanged
+  // listing and never re-pushed them.
+  const thumbOwners = new Map<string, string>();
+  // icon drains are SERIALIZED instead of superseded: several renderAll steps
+  // each fire drainIconQueue (sidebar, the iconQueue step, the grid), and a
+  // supersession token stranded every spec a losing drain had already marked
+  // done — its rasters were destroyed on the way out and the winner's pending
+  // snapshot (taken at its own start) never revisited them, so the whole top
+  // bar stuck on fallback glyphs until a resize/theme reset. One run at a time
+  // with a rerun flag can't lose a spec.
+  let iconDrain: Promise<void> | null = null;
+  let iconDrainAgain = false;
+  // resetIconQueue (theme flip / resize / icon-mode change) marks every spec
+  // for a re-raster even if an in-flight pass already claimed it
+  let iconForceRedrain = false;
 
   const cellMetrics = () => {
     const r = ctx.renderer();
@@ -123,9 +313,10 @@ export const makeSlots = (ctx: SlotsCtx) => {
     states: IconState[],
     heightCells = 1,
     initialState = 0,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
-  ): { el: ReturnType<typeof Box>; slotId: string; spec: IconSpec } => {
+    opts?: { faithful?: boolean },
+  ): IconSlotHandle => {
     const slotId = `tfm-icon-${iconSeq++}`;
     const g = ctx.glyphFor(name);
     const spec: IconSpec = {
@@ -135,6 +326,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       states,
       initialState,
       ...(statesFactory ? { statesFactory } : {}),
+      ...(opts?.faithful ? { faithful: true } : {}),
     };
     allSpecs.set(slotId, spec);
     return {
@@ -155,14 +347,14 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const setIconState = (spec: IconSpec | undefined, stateIdx: number): boolean => {
     if (!spec) return false;
     spec.initialState = stateIdx;
-    const slot: any = ctx.byId(spec.slotId);
+    const slot = ctx.byId(spec.slotId);
     if (!slot) return false;
-    const kids = slot.getChildren?.() ?? [];
+    const kids = slot.getChildren();
     const stateImgs = kids.filter(
-      (k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`,
+      (k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`) && k.id !== `${spec.slotId}-g`,
     );
     if (stateImgs.length === 0) {
-      const glyphNode: any = kids.find((k: any) => k.id === `${spec.slotId}-g`);
+      const glyphNode = kids.find((k) => k.id === `${spec.slotId}-g`);
       if (glyphNode) {
         try {
           glyphNode.fg = spec.states[stateIdx]?.fg;
@@ -170,7 +362,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
       }
       return false;
     }
-    stateImgs.forEach((k: any, i: number) => {
+    stateImgs.forEach((k, i) => {
       try {
         k.visible = i === stateIdx;
       } catch {}
@@ -178,14 +370,20 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return true;
   };
 
-  // magick/rsvg spawns are the bottleneck (~100ms each, SVGs worse); 3 workers
+  // magick/renderer spawns are the bottleneck (~100ms each, SVGs worse); 3 workers
   // made big folders drip in one-by-one — match the icon raster cap's spirit
   // and keep the UI thread yielding between jobs
   const THUMB_WORKERS = 8;
+  // icon rasters are the same class of job as thumbs (one spawned renderer each)
+  // — bound them too, so a full re-raster cannot launch hundreds of concurrent
+  // jobs all at once (the process gate in icons.ts caps spawns, not native churn)
+  const ICON_WORKERS = 8;
 
   const drainThumbs = async () => {
     const jobs = thumbJobs;
     thumbJobs = [];
+    // drop the backlog (a rebuild re-queues what it needs if tty mode flips off)
+    if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
     if (!ctx.renderer().resolution || jobs.length === 0) return;
     // priority first, then visible tiles, then the off-screen backlog —
     // Array#sort is stable, so each class keeps its push order
@@ -194,8 +392,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
     let idx = 0;
     const worker = async () => {
       while (idx < jobs.length) {
-        const j = jobs[idx++]!;
-        const slot: any = ctx.byId(j.slotId);
+        const j = jobs[idx++];
+        if (!j) continue;
+        let slot = ctx.byId(j.slotId);
         if (!slot) continue;
         const hCells = j.hCells ?? ctx.iconCells();
         const jobBg = j.bg ?? ctx.colors().bg;
@@ -209,14 +408,33 @@ export const makeSlots = (ctx: SlotsCtx) => {
             source: bytes,
             width: j.wCells,
             height: hCells,
-            fit: "fit",
+            // rasters/video cover-crop into the tile; SVG vectors contain (see
+            // thumbImageFit) — icons keep fit:"fit" at their own site
+            fit: thumbImageFit(j.vector),
             protocol: "auto",
           });
-          await img.loadPromise!;
-          ctx.clearChildren(slot);
+          if (img.loadPromise) await img.loadPromise;
+          // RE-RESOLVE: a rebuild during the raster detached the captured node;
+          // writing into it leaked a native image buffer and painted nowhere.
+          // A same-id replacement is the live slot, so use the fresh lookup.
+          slot = ctx.byId(j.slotId);
+          // stale guard: if the slot was rebuilt for another file, its re-pushed
+          // job overwrote our ownership key — drop this raster instead of
+          // painting the wrong thumbnail (or, worse, the old file's)
+          if (!slot || thumbOwners.get(j.slotId) !== thumbJobKey(j)) {
+            try {
+              img.destroy?.();
+            } catch {}
+            continue;
+          }
+          // destroy, not detach: the replaced node (fallback glyph or a stale
+          // raster) owns native memory that would otherwise wait for the GC poke
+          destroyChildren(slot);
           slot.add(img);
         } catch {
-          if (slot.getChildren().length === 0) {
+          // `slot` is re-assigned inside the try above, so the catch sees the
+          // unnarrowed type again — the optional chain re-establishes it
+          if (slot?.getChildren().length === 0) {
             try {
               slot.add(Text({ content: j.fallbackGlyph, fg: ctx.colors().sidebarFgMuted }));
             } catch {}
@@ -237,25 +455,39 @@ export const makeSlots = (ctx: SlotsCtx) => {
     initial: number,
     dimFactor = 1,
     idPrefix = "s",
+    faithful = false,
   ) => {
     const { cellW, cellH } = cellMetrics();
     // `transparent` = raster keeps alpha; strip it inside floating layers in
     // partial mode so an opaque island can't blend the desktop through.
-    const transparent = iconTransparent(ctx.iconsMode(), isFloatChild(ctx.byId(slotId)));
-    const imgs: any[] = [];
+    // transparent-bg force keeps alpha outside floats too (chrome tiles are
+    // transparent under force); float children keep flattening onto the island.
+    const transparent = iconTransparent(
+      ctx.iconsMode(),
+      isFloatChild(ctx.byId(slotId)),
+      ctx.transparentForce?.() ? "force" : undefined,
+    );
+    const imgs: ImageRenderable[] = [];
     for (let si = 0; si < states.length; si++) {
+      const st = states[si];
+      if (st === undefined) continue;
       try {
-        const st = states[si]!;
-        const bytes = await iconPng(
-          name,
-          dimHex(st.fg, dimFactor),
-          dimHex(st.bg, dimFactor),
-          Math.max(1, Math.round(wCells * cellW)),
-          Math.max(1, Math.round(heightCells * cellH)),
-          // bg arrives ignored in transparent mode (the key drops it, so all
-          // states share one raster) — kept in the signature for call-site compat
-          { transparent },
-        );
+        const pxW = Math.max(1, Math.round(wCells * cellW));
+        const pxH = Math.max(1, Math.round(heightCells * cellH));
+        // faithful slots keep the asset palette (brand art); everything else
+        // tints to the slot fg. bg still flattens in opaque mode either way.
+        const bytes = faithful
+          ? await brandPng(name, pxW, pxH, transparent ? undefined : dimHex(st.bg, dimFactor))
+          : await iconPng(
+              name,
+              dimHex(st.fg, dimFactor),
+              dimHex(st.bg, dimFactor),
+              pxW,
+              pxH,
+              // bg arrives ignored in transparent mode (the key drops it, so all
+              // states share one raster) — kept in the signature for call-site compat
+              { transparent, style: ctx.iconStyle?.() ?? "filled" },
+            );
         const img = new ImageRenderable(ctx.renderer(), {
           id: `${slotId}-${idPrefix}${si}`,
           source: bytes,
@@ -264,29 +496,48 @@ export const makeSlots = (ctx: SlotsCtx) => {
           fit: "fit",
           protocol: "auto",
         });
-        await img.loadPromise!;
+        if (img.loadPromise) await img.loadPromise;
         img.visible = si === initial;
         imgs.push(img);
-      } catch {}
+      } catch (err) {
+        // a raster that never lands leaves the small fallback glyph in place
+        // forever (the documented wrong-slot-name failure mode) — this line is
+        // where the actual cause shows up
+        swallow(`icon slot raster ${name}`, err);
+      }
     }
     return imgs;
   };
 
-  const drainIconQueue = async () => {
-    if (!ctx.renderer().resolution) return;
+  // ONE pass over the specs pending at its start (or every spec after a reset).
+  // Never runs concurrently with itself — drainIconQueue serializes it — so a
+  // spec marked done here always gets its rasters attached (or genuinely fails).
+  const runIconDrain = async (): Promise<void> => {
     const aspect = cellMetrics().aspect;
-    const pending = [...allSpecs.values()].filter((s) => !s.done);
-    await Promise.all(
-      pending.map(async (spec) => {
+    const specs = [...allSpecs.values()];
+    const pending = iconForceRedrain ? specs : specs.filter((s) => !s.done);
+    iconForceRedrain = false;
+    // bounded pool (like drainThumbs): a resize/theme flip re-rasters EVERY
+    // registered slot, and an unbounded Promise.all launched one job per slot
+    let idx = 0;
+    const worker = async (): Promise<void> => {
+      while (idx < pending.length) {
+        const spec = pending[idx++];
+        if (!spec) continue;
         spec.done = true;
-        const slot: any = ctx.byId(spec.slotId);
-        if (!slot) return;
+        const slot = ctx.byId(spec.slotId);
+        if (!slot) continue;
         if (spec.statesFactory) {
           try {
             spec.states = spec.statesFactory();
           } catch {}
         }
-        const wCells = Math.max(1, Math.round(spec.heightCells * aspect));
+        // faithful brand art is rarely cell-proportioned (the tfm logo is
+        // landscape in tall cells): stretch the slot to the asset's own
+        // aspect so the raster fills its box instead of letterboxing.
+        // Unparseable dims fall back to the square cell-aspect assumption.
+        const artAspect = spec.faithful ? await svgAspect(spec.name).catch(() => null) : null;
+        const wCells = Math.max(1, Math.round(spec.heightCells * aspect * (artAspect ?? 1)));
         const imgs = await rasterStatesInto(
           spec.slotId,
           spec.name,
@@ -294,19 +545,26 @@ export const makeSlots = (ctx: SlotsCtx) => {
           spec.heightCells,
           wCells,
           spec.initialState,
+          1,
+          "s",
+          spec.faithful ?? false,
         );
-        if (imgs.length === 0) return;
+        if (imgs.length === 0) continue;
         slot.width = wCells;
-        const kids = slot.getChildren?.() ?? [];
-        // drop previous rasters (e.g. after a resize re-raster at new cell pixels)
+        const kids = slot.getChildren();
+        // drop previous rasters (e.g. after a resize re-raster at new cell
+        // pixels) — DESTROY them, or each re-raster leaks their native buffers
         kids
-          .filter((k: any) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
-          .forEach((k: any) => {
+          .filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`))
+          .forEach((k) => {
             try {
               slot.remove(k);
             } catch {}
+            try {
+              k.destroy();
+            } catch {}
           });
-        const glyphNode: any = kids.find((k: any) => typeof k.id === "string" && k.id.endsWith("-g"));
+        const glyphNode = kids.find((k) => typeof k.id === "string" && k.id.endsWith("-g"));
         // glyph stays in the slot (hidden) so the scrim can fall back to it
         if (glyphNode) {
           try {
@@ -316,8 +574,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
         imgs.forEach((im) => {
           slot.add(im);
         });
-      }),
-    );
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(ICON_WORKERS, pending.length) }, () => worker()));
     // drop specs whose slot node is gone from the tree (tiles/sidebars
     // rebuilt by renderAll): their spec objects are dead weight and the
     // tile refs that kept them alive are gone too. Everything still
@@ -331,35 +590,43 @@ export const makeSlots = (ctx: SlotsCtx) => {
     if (ctx.modalOpen()) setScrim(true);
   };
 
-  // Slots INSIDE a floating layer (menu rows, dialogs, prompts) sit above the
-  // scrim and keep their crisp rasters; `transparent-partial` also uses this to
-  // keep their rasters opaque over the float's solid fill.
-  const FLOAT_ROOT_IDS = new Set([
-    "tfm-menu",
-    "tfm-filemenu",
-    "tfm-filemenu-sub",
-    "tfm-prompt",
-    "tfm-props",
-    "tfm-conflict",
-    "tfm-yesno",
-    "tfm-pick",
-    "tfm-bulkrename",
-  ]);
-
-  // mounted icon-slot nodes: heterogeneous OpenTUI renderables (byId
-  // returns any by design — see ./ui-lookup), narrowed structurally here
+  // Serialized entry point: concurrent calls coalesce into the running pass
+  // plus at most one rerun, so a spec is never left done-but-unrastered (the
+  // old per-drain supersession token stranded exactly those).
+  const drainIconQueue = (): Promise<void> => {
+    if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return Promise.resolve();
+    if (!ctx.renderer().resolution) return Promise.resolve();
+    iconDrainAgain = true;
+    if (!iconDrain) {
+      iconDrain = (async () => {
+        try {
+          while (iconDrainAgain) {
+            iconDrainAgain = false;
+            await runIconDrain();
+          }
+        } finally {
+          iconDrain = null;
+        }
+      })();
+    }
+    return iconDrain;
+  };
+  // narrowed view of the byId seam (see ../lib/node-like): only the members
+  // the scrim touches. `fg` is a ColorInput because the seam hands back the
+  // real renderable, whose fg IS a parsed RGBA once assigned a theme hex.
   type SlotNode = {
     id?: unknown;
     parent?: SlotNode | null;
     visible?: boolean;
-    fg?: string;
+    fg?: ColorInput;
     getChildren?: () => Iterable<SlotNode>;
   };
 
+  // walk up to the nearest floating-layer root (see isFloatRootId)
   const isFloatChild = (slot: SlotNode | null | undefined): boolean => {
     let cur: SlotNode | null | undefined = slot?.parent;
     while (cur) {
-      if (typeof cur.id === "string" && FLOAT_ROOT_IDS.has(cur.id)) return true;
+      if (isFloatRootId(cur.id)) return true;
       cur = cur.parent;
     }
     return false;
@@ -367,7 +634,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
 
   const setScrim = (on: boolean) => {
     for (const spec of allSpecs.values()) {
-      const slot: SlotNode | null = ctx.byId(spec.slotId);
+      const slot: SlotNode | null | undefined = ctx.byId(spec.slotId);
       if (!slot) continue;
       if (on && isFloatChild(slot)) continue;
       const kids = [...(slot.getChildren?.() ?? [])];
@@ -405,12 +672,25 @@ export const makeSlots = (ctx: SlotsCtx) => {
   };
 
   // clickable "esc"/close hint shared by floating UIs (prompt/props/menu) —
-  // an icon-slot widget, so it lives with the slot machinery
-  const escHintBtn = (id: string, onClose: () => void): any => {
+  // an icon-slot widget, so it lives with the slot machinery. It is a FLOAT
+  // child by default: its rest raster flattens onto the floating layer's fill
+  // (style.slotBg role "float"), never onto the canvas, which would punch a
+  // canvas-colored square into the panel. `chrome` opts out for the one caller
+  // that is NOT a float (the terminal pane header). Under transparent-bg force
+  // the wrapper clears its rest fill too: the raster covers 2 of the 3 cells,
+  // so without this the padding cell paints one opaque square in a bare bar
+  // (safe for float callers — the island fill shows through).
+  const escHintBtn = (id: string, onClose: () => void, opts?: { chrome?: boolean }): SlotElement => {
+    const tForce = ctx.transparentForce?.() ? ("force" as const) : undefined;
     const states = (): IconState[] => [
       {
         fg: ctx.colors().sidebarFgMuted,
-        bg: slotBg(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
+        bg: slotBg(
+          ctx.uiStyle() as UiStyle,
+          ctx.colors() as Theme,
+          ctx.colors().sidebarBg,
+          opts?.chrome ? "chrome" : "float",
+        ),
       },
       { fg: ctx.colors().white, bg: ctx.colors().hoverBg },
     ];
@@ -418,8 +698,12 @@ export const makeSlots = (ctx: SlotsCtx) => {
     const paint = (on: boolean) => {
       setIconState(slot.spec, toggleIconState(on, false));
       try {
-        const n: any = ctx.byId(id);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, on, ctx.colors().sidebarBg));
+        const n = ctx.byId(id);
+        if (n)
+          applySurface(
+            n,
+            btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, on, ctx.colors().sidebarBg, tForce),
+          );
       } catch {}
     };
     return Box(
@@ -429,10 +713,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
         width: 3,
         height: 1,
         justifyContent: "center",
-        ...btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, false, ctx.colors().sidebarBg),
+        ...btnSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, false, ctx.colors().sidebarBg, tForce),
         onMouseDown: () => onClose(),
-        onMouseOver: () => paint(true),
-        onMouseOut: () => paint(false),
+        ...hoverEvents(paint, ctx.setPointer),
       },
       slot.el,
     );
@@ -450,10 +733,27 @@ export const makeSlots = (ctx: SlotsCtx) => {
     resetIconQueue: (): void => {
       // boot-baked slots may have already drained and left the pending set —
       // the registry keeps them reachable for theme/resize re-rasters (the
-      // old second queue grew unbounded; allSpecs prunes by node-liveness)
+      // old second queue grew unbounded; allSpecs prunes by node-liveness).
+      // iconForceRedrain also covers a pass that is mid-flight right now: the
+      // rerun revisits EVERY spec even one the in-flight pass already claimed.
       for (const s of allSpecs.values()) s.done = false;
+      iconForceRedrain = true;
+      // an icon-style toggle also flips the fallback glyphs (shown pre-raster
+      // and under the scrim): repaint mounted ones now so a failed/slow
+      // raster can't strand the old style's glyph
+      for (const s of allSpecs.values()) {
+        try {
+          const slot = ctx.byId(s.slotId);
+          const kids = slot?.getChildren?.() ?? [];
+          const g = kids.find((k) => typeof k.id === "string" && k.id.endsWith("-g"));
+          if (g) (g as { content?: unknown }).content = ctx.glyphFor(s.name);
+        } catch {}
+      }
+      if (iconDrain) iconDrainAgain = true;
     },
     pushThumbJob: (job: ThumbJob): void => {
+      if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
+      thumbOwners.set(job.slotId, thumbJobKey(job));
       thumbJobs.push(job);
     },
   };

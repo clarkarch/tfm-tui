@@ -33,6 +33,11 @@ export type Place = {
   action?: "connect";
 };
 
+// One sidebar group + the title the sidebar paints above it (see
+// [ui] sidebar-section-titles). Title rides with the group so a section hidden
+// by [ui] sidebar-show-* can never leave an orphan header.
+export type SidebarSection = { title: string; places: Place[] };
+
 type UserDir = { key: string; label: string; p: string };
 
 type MountEntry = { label: string; target: string; removable: boolean; device: string };
@@ -81,10 +86,12 @@ async function readUserDirs(): Promise<UserDir[]> {
     const out: UserDir[] = [];
     for (const line of text.split("\n")) {
       const m = line.match(/^(XDG_[A-Z_]+_DIR)\s*=\s*(.+)$/);
-      if (!m?.[1] || !m[2]) continue;
-      const label = XDG_LABELS[m[1]];
+      const key = m?.[1];
+      const value = m?.[2];
+      if (!key || !value) continue;
+      const label = XDG_LABELS[key];
       if (!label) continue;
-      const p = expandXdgValue(m[2]!);
+      const p = expandXdgValue(value);
       // XDG rule (and nautilus): pointing at $HOME disables the entry
       if (!p || p === home) continue;
       try {
@@ -92,7 +99,7 @@ async function readUserDirs(): Promise<UserDir[]> {
       } catch {
         continue;
       }
-      out.push({ key: m[1], label, p });
+      out.push({ key, label, p });
     }
     return out.sort((a, b) => (a.key < b.key ? -1 : 1));
   } catch {
@@ -167,21 +174,39 @@ const PSEUDO_FSTYPES = new Set([
 ]);
 const SYSTEM_MOUNTS = new Set(["/", "/boot", "/boot/efi", "/efi", "/swap"]);
 
-export function parseLsblk(json: any): MountEntry[] {
+// lsblk's `-J` payload: only these fields are read, and any of them may be
+// missing (or mistyped) on an odd util-linux build — so they are typed to what
+// the code assumes rather than to what the JSON is guaranteed to carry.
+type LsblkNode = {
+  name?: string;
+  label?: string;
+  path?: string;
+  rm?: boolean;
+  fstype?: string | null;
+  mountpoint?: string;
+  mountpoints?: Array<string | { mountpoint?: string }>;
+  children?: LsblkNode[];
+  blockdevices?: LsblkNode[];
+};
+
+export function parseLsblk(json: unknown): MountEntry[] {
   const out: MountEntry[] = [];
-  const visit = (nodes: any[], parentRm: boolean) => {
+  const visit = (nodes: unknown, parentRm: boolean): void => {
     if (!Array.isArray(nodes)) return;
-    for (const n of nodes) {
+    for (const raw of nodes) {
+      const n = raw as LsblkNode;
       const name: string = n?.name ?? "";
       const rm = !!n?.rm || parentRm;
       if (/^(loop|zram|ram\d+)/.test(name)) {
-        if (Array.isArray(n?.children)) visit(n.children, rm);
+        const kids = n?.children;
+        if (Array.isArray(kids)) visit(kids, rm);
         continue;
       }
       const fstype: string | null | undefined = n?.fstype;
       let mps: string[] = [];
-      if (Array.isArray(n?.mountpoints)) {
-        mps = n.mountpoints.map((m: any) => (typeof m === "string" ? m : m?.mountpoint)).filter(Boolean);
+      const rawMps = n?.mountpoints;
+      if (Array.isArray(rawMps)) {
+        mps = rawMps.map((m) => (typeof m === "string" ? m : m?.mountpoint)).filter((m): m is string => !!m);
       } else if (typeof n?.mountpoint === "string") {
         mps = [n.mountpoint];
       }
@@ -202,20 +227,35 @@ export function parseLsblk(json: any): MountEntry[] {
       if (Array.isArray(n?.children)) visit(n.children, rm);
     }
   };
-  visit(json?.blockdevices ?? [], false);
+  visit((json as LsblkNode | null | undefined)?.blockdevices ?? [], false);
   return out;
 }
 
 async function listMounts(): Promise<MountEntry[]> {
   try {
-    const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"]);
+    // timeout: a wedged lsblk must not stall the sidebar load forever
+    const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"], {
+      timeout: 10_000,
+    });
     return parseLsblk(JSON.parse(stdout));
   } catch {
     return [];
   }
 }
 
-export function buildSections(): Place[][] {
+export type SidebarVisibility = {
+  showRecent?: boolean;
+  showStarred?: boolean;
+  showTrash?: boolean;
+  showUserDirs?: boolean;
+  showBookmarks?: boolean;
+  showDevices?: boolean;
+  showNetwork?: boolean;
+};
+
+export function buildSections(vis: SidebarVisibility = {}): SidebarSection[] {
+  const { showRecent = true, showStarred = true, showTrash = true } = vis;
+  const { showUserDirs = true, showBookmarks = true, showDevices = true, showNetwork = true } = vis;
   const trashFilesDir = path.join(trashDir(), "files");
   const hasTrash = (() => {
     try {
@@ -226,21 +266,26 @@ export function buildSections(): Place[][] {
   })();
 
   const defaults: Place[] = [{ icon: "home", label: "Home", path: home, ejectable: false }];
-  defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false, scheme: "recent" });
-  defaults.push({ icon: "star", label: "Starred", path: null, ejectable: false, scheme: "starred" });
-  if (hasTrash) defaults.push({ icon: "trash-can", label: "Trash", path: trashFilesDir, ejectable: false });
+  if (showRecent) defaults.push({ icon: "clock", label: "Recent", path: null, ejectable: false, scheme: "recent" });
+  if (showStarred) defaults.push({ icon: "star", label: "Starred", path: null, ejectable: false, scheme: "starred" });
+  if (showTrash && hasTrash)
+    defaults.push({ icon: "trash-can", label: "Trash", path: trashFilesDir, ejectable: false });
 
-  const dirs: Place[] = sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }));
+  const dirs: Place[] = showUserDirs
+    ? sysUserDirs.map((d) => ({ icon: "folder", label: d.label, path: d.p, ejectable: false }))
+    : [];
 
-  const bookmarks: Place[] = sysBookmarks
-    .filter((b) => !b.remote)
-    .map((b) => ({
-      icon: "bookmark",
-      label: b.label,
-      path: b.p,
-      ejectable: false,
-      bookmarked: true,
-    }));
+  const bookmarks: Place[] = showBookmarks
+    ? sysBookmarks
+        .filter((b) => !b.remote)
+        .map((b) => ({
+          icon: "bookmark",
+          label: b.label,
+          path: b.p,
+          ejectable: false,
+          bookmarked: true,
+        }))
+    : [];
 
   const devices: Place[] = [
     { icon: "harddisk", label: "This Device", path: "/", ejectable: false },
@@ -287,10 +332,10 @@ export function buildSections(): Place[][] {
       ),
   ];
 
-  const groups = [defaults];
-  if (dirs.length) groups.push(dirs);
-  if (bookmarks.length) groups.push(bookmarks);
-  groups.push(devices);
-  groups.push(network);
-  return groups;
+  const sections: SidebarSection[] = [{ title: "Places", places: defaults }];
+  if (dirs.length) sections.push({ title: "Folders", places: dirs });
+  if (bookmarks.length) sections.push({ title: "Bookmarks", places: bookmarks });
+  if (showDevices) sections.push({ title: "Devices", places: devices });
+  if (showNetwork) sections.push({ title: "Network", places: network });
+  return sections;
 }

@@ -1,7 +1,16 @@
 import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
-import { failSuffix, fsErrText, rmTrashInfo, safeRestoreMove, xdgTrashMove } from "../fs/fsutil";
+import {
+  failSuffix,
+  fsErrText,
+  rmTrashInfo,
+  rmTrashInfoForPath,
+  safeRestoreMove,
+  trashIfSameFile,
+  xdgTrashMove,
+} from "../fs/fsutil";
 import { copyTreeProgress, type TransferSink } from "../fs/transfer";
+import { sharedOpQueue } from "../lib/op-queue";
 import type { NotifyLevel } from "../lib/notify-level";
 
 // progress-less sink for journal redo copies (no toast to report into)
@@ -37,7 +46,7 @@ type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
 // steps never throw — they encode redo guards (`if (!existsSync(t)) …`).
 // Unconditional steps throw so the outer handler reports them like today. ---
 export type UndoStep =
-  | { op: "trash"; path: string }
+  | { op: "trash"; path: string; dev?: number; ino?: number; born?: number }
   | { op: "trash-if-exists"; path: string }
   | { op: "restore-move"; from: string; to: string }
   | { op: "rename"; from: string; to: string }
@@ -46,7 +55,7 @@ export type UndoStep =
   | { op: "rm"; path: string }
   | { op: "mkdir-if-missing"; path: string }
   | { op: "write-empty-if-missing"; path: string }
-  | { op: "rm-trashinfo"; name: string };
+  | { op: "rm-trashinfo"; name: string; path?: string };
 
 export type UndoBatchData = {
   label: string;
@@ -74,7 +83,19 @@ export const MAX_UNDO_BATCHES = 30;
 export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}): UndoUnit => {
   switch (step.op) {
     case "trash":
-      return () => xdgTrashMove(step.path).then(() => undefined);
+      // idempotent: undoing a copy whose target the user already deleted is
+      // already at the desired end-state (path absent) — report success, not
+      // FAILED. A path reoccupied since the op (dev+ino mismatch) is skipped,
+      // never trashed: the stranger isn't ours. Present paths still trash
+      // loudly on real errors.
+      return () =>
+        trashIfSameFile(
+          step.path,
+          step.dev !== undefined && step.ino !== undefined
+            ? { dev: step.dev, ino: step.ino, ...(step.born !== undefined ? { born: step.born } : {}) }
+            : null,
+          log,
+        );
     case "trash-if-exists":
       return async () => {
         try {
@@ -116,11 +137,13 @@ export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}
     case "write-empty-if-missing":
       return async () => {
         try {
-          if (!existsSync(step.path)) await writeFile(step.path, "");
+          // O_EXCL create, not check-then-write: a raced occupant between
+          // existsSync and writeFile would be silently truncated otherwise
+          if (!existsSync(step.path)) await writeFile(step.path, "", { flag: "wx" });
         } catch {}
       };
     case "rm-trashinfo":
-      return () => rmTrashInfo(step.name, log);
+      return () => (step.path ? rmTrashInfoForPath(step.path, log) : rmTrashInfo(step.name, log));
   }
 };
 
@@ -174,6 +197,26 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     sink.notify(op === "undo" ? "Nothing to undo" : "Nothing to redo", op, "info");
   };
 
+  // shared batch envelope: serialize with transfers/trash/extract (an undo
+  // running concurrently with a queued op can interleave on the same paths,
+  // and a redo copy writes `.tfm-part-*` temps the concurrent transfer's
+  // orphan sweep deletes mid-copy — data loss), tally per-step failures.
+  const runBatch = async (steps: Iterable<UndoUnit>): Promise<{ failed: number; failWhy: Set<string> }> => {
+    let failed = 0;
+    const failWhy = new Set<string>();
+    await sharedOpQueue().enqueue(async () => {
+      for (const u of steps) {
+        try {
+          await u?.();
+        } catch (err) {
+          failed++;
+          failWhy.add(fsErrText(err));
+        }
+      }
+    });
+    return { failed, failWhy };
+  };
+
   const undoLast = (): void => {
     if (running) return; // in-flight fs closures must not interleave
     const entry = undoStack.pop();
@@ -185,17 +228,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     running = true;
     void (async () => {
       try {
-        let failed = 0;
-        const failWhy = new Set<string>();
-        for (let i = entry.batch.units.length - 1; i >= 0; i--) {
-          const u = entry.batch.units[i];
-          try {
-            await u?.();
-          } catch (err) {
-            failed++;
-            failWhy.add(fsErrText(err));
-          }
-        }
+        const { failed, failWhy } = await runBatch([...entry.batch.units].reverse());
         // only batches that know how to re-apply themselves stay redoable
         if (entry.batch.redos.length) redoStack.push(entry);
         sink.renderAll();
@@ -225,16 +258,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
     running = true;
     void (async () => {
       try {
-        let failed = 0;
-        const failWhy = new Set<string>();
-        for (const r of entry.batch.redos) {
-          try {
-            await r?.();
-          } catch (err) {
-            failed++;
-            failWhy.add(fsErrText(err));
-          }
-        }
+        const { failed, failWhy } = await runBatch(entry.batch.redos);
         undoStack.push(entry);
         sink.renderAll();
         const summary = failed

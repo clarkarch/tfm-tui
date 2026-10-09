@@ -1,5 +1,7 @@
 import { Box, Text } from "@opentui/core";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
+import type { IconSlotHandle, SlotElement } from "./ui-slots";
 
 // --- Toast notifications (top-right stack, animated slide-in + fade-out).
 // THE single toast stack: plain auto-dismiss toasts AND the sticky transfer
@@ -10,9 +12,9 @@ import type { NotifyLevel } from "../lib/notify-level";
 // without importing from ui/). ---
 
 export type NotifyCtx = {
-  rootAdd(node: any): void;
-  remove(node: any): void;
-  byId(id: string): any;
+  rootAdd(node: unknown): void;
+  remove(node: unknown): void;
+  byId(id: string): MaybeNode;
   termW(): number;
   accentBg(): string;
   white(): string;
@@ -23,11 +25,7 @@ export type NotifyCtx = {
   ansi2?(): string;
   // raster level icon: single-state slot (fg = level color on the toast bg);
   // the async drain swaps the fallback glyph for the tinted raster
-  makeIconSlot(
-    name: string,
-    states: { fg: string; bg: string }[],
-    heightCells?: number,
-  ): { el: any; slotId: string; spec: any };
+  makeIconSlot(name: string, states: { fg: string; bg: string }[], heightCells?: number): IconSlotHandle;
   drainIconQueue(): unknown;
   stripSelectable(): void;
   // config knob [ui] toast-duration-ms (default 3000)
@@ -39,7 +37,10 @@ export type NotifyCtx = {
 export const ERROR_TOAST_MS = 5000;
 
 // pure level mapping (tested): raster icon + title/body fg + lifetime. Stays
-// on existing Theme keys (white/muted/ansi1/ansi2) — no new theme knobs.
+// on existing Theme keys (white/ansi1/ansi2) — no new theme knobs. Bodies
+// are always white, never muted: muted is only guaranteed on sidebarBg, and
+// no accentBg fill can serve both bright and dim text at once (the dual
+// requirement drove derived fills darker than bg itself).
 // Toasts keep their accentBg fill in every ui-style (a border ring would clip
 // the 3-row shape, same reason tiles stay fill-only).
 export const toastLevelMeta = (
@@ -49,8 +50,8 @@ export const toastLevelMeta = (
 ): { icon: "information" | "check" | "close"; titleFg: string; bodyFg: string; duration: number } => {
   if (level === "error")
     return { icon: "close", titleFg: colors.red, bodyFg: colors.white, duration: Math.max(durationMs, ERROR_TOAST_MS) };
-  if (level === "success") return { icon: "check", titleFg: colors.green, bodyFg: colors.muted, duration: durationMs };
-  return { icon: "information", titleFg: colors.white, bodyFg: colors.muted, duration: durationMs };
+  if (level === "success") return { icon: "check", titleFg: colors.green, bodyFg: colors.white, duration: durationMs };
+  return { icon: "information", titleFg: colors.white, bodyFg: colors.white, duration: durationMs };
 };
 
 export type ToastHandle = { id: number; nodeId: string; close: () => void };
@@ -94,15 +95,26 @@ export const wrapToastText = (s: string, budget: number, maxLines: number = MAX_
   if (cur) lines.push(cur);
   if (lines.length <= maxLines) return lines;
   const kept = lines.slice(0, maxLines);
-  const tail = `${kept[maxLines - 1]!}…`;
-  kept[maxLines - 1] = tail.length > budget ? truncateToastText(tail, budget) : tail;
+  // lines.length > maxLines is guaranteed here, so the last kept row exists
+  const lastIdx = maxLines - 1;
+  const last = kept[lastIdx];
+  if (last === undefined) return kept;
+  const tail = `${last}…`;
+  kept[lastIdx] = tail.length > budget ? truncateToastText(tail, budget) : tail;
   return kept;
 };
 
-type ToastEntry = { id: number; nodeId: string; height: number; sticky: boolean; timer: any };
+type ToastEntry = {
+  id: number;
+  nodeId: string;
+  height: number;
+  sticky: boolean;
+  // auto-dismiss handle; null while a sticky toast waits for an explicit close
+  timer: ReturnType<typeof setTimeout> | null;
+};
 
 // shared slide-in animation (slide-out is just the reverse direction)
-const animateLeft = (node: any, from: number, to: number, ms: number): void => {
+const animateLeft = (node: NodeLike, from: number, to: number, ms: number): void => {
   const steps = 8;
   let i = 0;
   const tick = () => {
@@ -119,7 +131,7 @@ export const makeNotify = (
   ctx: NotifyCtx,
 ): {
   notify: (message: string, title?: string, level?: NotifyLevel) => void;
-  notifySticky: (children: any[], opts?: { width?: number; height?: number }) => ToastHandle | null;
+  notifySticky: (children: SlotElement[], opts?: { width?: number; height?: number }) => ToastHandle | null;
 } => {
   let toasts: ToastEntry[] = [];
   let toastSeq = 0;
@@ -141,7 +153,7 @@ export const makeNotify = (
         clearTimeout(entry.timer);
       } catch {}
     }
-    const node: any = ctx.byId(entry.nodeId);
+    const node = ctx.byId(entry.nodeId);
     try {
       if (node) ctx.remove(node);
     } catch {}
@@ -153,7 +165,10 @@ export const makeNotify = (
   // from live array order, never from show-time counts, so they can't stale
   const restack = (): void => {
     toasts.forEach((t, i) => {
-      const n: any = ctx.byId(t.nodeId);
+      const n = ctx.byId(t.nodeId);
+      // a toast reaped by a rebuild is simply not restacked (this used to rely
+      // on a property write on null throwing inside the try)
+      if (!n) return;
       try {
         n.top = slotTop(i);
       } catch {}
@@ -172,7 +187,7 @@ export const makeNotify = (
       } catch {}
       entry.timer = null;
     }
-    const real: any = ctx.byId(entry.nodeId);
+    const real = ctx.byId(entry.nodeId);
     if (!real) {
       removeEntry(id);
       return;
@@ -192,7 +207,7 @@ export const makeNotify = (
   const pushToast = (
     width: number,
     height: number,
-    children: any[],
+    children: SlotElement[],
     sticky: boolean,
     duration?: number,
   ): ToastHandle | null => {
@@ -203,7 +218,7 @@ export const makeNotify = (
       const id = ++toastSeq;
       const nodeId = `tfm-toast-${id}`;
       const y = slotTop(toasts.length);
-      const node: any = Box(
+      const node = Box(
         {
           id: nodeId,
           position: "absolute",
@@ -220,7 +235,7 @@ export const makeNotify = (
       );
       ctx.rootAdd(node);
       // the proxy is dead weight post-mount — animate/dismiss via the real renderable
-      const real: any = ctx.byId(nodeId);
+      const real = ctx.byId(nodeId);
       if (!real) {
         // lookup miss (the memory-pressure scenario the guard anticipates):
         // the node is mounted but untracked — no timer, no removal path. It
@@ -273,7 +288,11 @@ export const makeNotify = (
         );
         // the level icon is a fixed 2-cell raster slot beside the title (same
         // shape as the progress toast's button slots); the drain swaps the
-        // fallback glyph for the tinted raster async
+        // fallback glyph for the tinted raster async. The toast shell is a
+        // floating layer whose island keeps its accentBg fill in EVERY ui-style
+        // (see FLOAT_TOAST_PREFIX in ui-slots), so this is the raster's flatten
+        // target and the icon is opaque under `transparent-partial` like every
+        // other float icon — it is decoration, so it has no hover state.
         const slot = ctx.makeIconSlot(meta.icon, [{ fg: meta.titleFg, bg: ctx.accentBg() }], 1);
         pushToast(
           w,
@@ -308,5 +327,20 @@ export const makeNotify = (
     notifySticky(children, opts) {
       return pushToast(opts?.width ?? TOAST_W, opts?.height ?? 4, children, true);
     },
+  };
+};
+
+// Shared sticky-toast closer for the two notifySticky callers (the transfer
+// toast + plugin api.ui): a null handle = no toast — the closer no-ops;
+// double-close is a no-op.
+export const stickyClose = (handle: ToastHandle | null | undefined): (() => void) => {
+  if (!handle) return () => {};
+  let closed = false;
+  return () => {
+    if (closed) return;
+    closed = true;
+    try {
+      handle.close();
+    } catch {}
   };
 };

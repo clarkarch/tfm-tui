@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readdir } from "node:fs/promises";
+import { errMessage } from "../lib/uiutil";
 import { gvfsRoot, parseGvfsName, parseServerInput } from "./network";
 import type { NotifyLevel } from "../lib/notify-level";
 
@@ -30,8 +31,6 @@ const lastLine = (s: string): string =>
     .map((l) => l.trim())
     .filter(Boolean)
     .pop() ?? "";
-
-const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 // active gvfs mounts under the runtime dir; unreadable/missing root = none
 export const listNetworkMounts = async (
@@ -77,8 +76,12 @@ export const makeNetworkActions = (sink: NetworkSink) => {
   };
 
   const resolveName = async (uri: string, before: Set<string>): Promise<string | null> => {
-    // gio returns after the mount exists, but readdir can lag by a beat
+    // gio returns after the mount exists, but readdir can lag by a beat —
+    // poll with a delay (back-to-back readdirs all fire within milliseconds
+    // and a slow FUSE arrival deterministically reads "mount path not found"
+    // after a SUCCESSFUL mount, orphaning it)
     for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 250));
       const names = await readNames();
       const fresh = names.filter((n) => !before.has(n));
       const picked = fresh[0] ?? names.find((n) => nameMatchesUri(n, uri));

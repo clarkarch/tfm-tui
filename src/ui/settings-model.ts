@@ -5,6 +5,7 @@
 // presentations: theme presets, tab-bar adaptive/on, show-hidden state sync.
 // No renderer imports — ctx carries the sinks. ---
 import { spawnSafe } from "../fs/spawn-safe";
+import { errMessage } from "../lib/uiutil";
 import { THEME_PRESETS } from "../config/themes";
 import type { LoadedPlugin } from "../plugins/plugin-api";
 import {
@@ -18,12 +19,20 @@ import {
   KEY_SCHEMA,
   UI_SCHEMA,
   keybindConflict,
-  keySpecEqual,
-  validateKeybindSpec,
+  swapKeybind,
   type KeyAction,
   type UiSchemaRow,
 } from "../config/config-schema";
+import { keySpecEqual, validateKeybindSpec } from "../config/keyspec";
+import { isDark } from "./tty";
 import { getPluginCommandBinds, setPluginCommandBinds } from "../plugins/plugin-api";
+import {
+  KEYMAP_PRESET_NAMES,
+  PRESET_TYPE_TO_SEARCH,
+  PRESET_VIEW_MODE,
+  keymapPresetIdx,
+  presetKeys,
+} from "../config/keymap-presets";
 
 export type SettingsModelCtx = {
   // live object refs — getters/setters read through them on every call
@@ -31,13 +40,23 @@ export type SettingsModelCtx = {
   state: { showHidden: boolean };
   applyConfig(fresh: Config): void;
   scheduleSaveConfig(): void;
-  showRoot(): void;
   // conflict toasts for remapping (wired to notify in the settings wiring)
   warn(message: string, title?: string): void;
   // installed plugins (loader aggregates them; absent = no plugins). The
   // model renders one category PER PLUGIN (never inside core groups), each
   // led by a core-built on/off toggle over the plugin's own store.
   plugins?: () => LoadedPlugin[];
+  // fired after the on/off toggle writes the store: the wiring re-registers or
+  // drops the plugin's UI slots and repaints (the store flag alone only feeds
+  // the action-surface filters, which read it lazily). Optional for tests.
+  onPluginEnabledChanged?(name: string, enabled: boolean): void;
+  // system-theme resolve (terminal query → applyConfig): fired when the user
+  // picks the System theme entry. Optional so row SHAPE stays testable
+  // without it; absent = flag commits, derived colors land on next boot.
+  resolveSystemTheme?(): void;
+  // console-mode read: when active the theme row is display-only (one static
+  // console palette paints regardless of presets). Optional so tests stay light.
+  isTtyMode?(): boolean;
   // git installer orchestration (wired in wiring/settings — prompt, danger
   // confirm, clone/pull/rm, rescan). Optional so row SHAPE stays testable
   // without it; rows no-op when absent. Never throws (fire-and-forget).
@@ -83,10 +102,24 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         return {
           kind: "stepper",
           label: row.label,
+          blurb: row.blurb,
+          ...(row.restart ? { restart: true as const } : {}),
           min: row.min,
           max: row.max,
           step: row.step,
-          fmt: (v) => `${v}`,
+          // the schema row's unit belongs in the VALUE column ("26 cells",
+          // "40%", "2 s"), singularized at 1 only for word units ("1 cell") —
+          // a plural unit on a 1-cell row reads as a typo, while "%"/"ms"/"s"
+          // have no singular (the old /s$/ strip printed "1 m"). The blurb
+          // stays plain-language and unit-free by design.
+          fmt: (v) => {
+            if (!row.unit) return `${v}`;
+            if (row.unit === "%") return `${v}%`;
+            if (v === 1 && (row.unit === "cells" || row.unit === "rows" || row.unit === "files")) {
+              return `${v} ${row.unit.replace(/s$/, "")}`;
+            }
+            return `${v} ${row.unit}`;
+          },
           get: () => (ui[row.prop] as number) ?? row.def,
           set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
         };
@@ -94,6 +127,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         return {
           kind: "toggle",
           label: row.label,
+          blurb: row.blurb,
+          ...(row.restart ? { restart: true as const } : {}),
           get: () => !!ui[row.prop],
           set: (v) => commitUi({ [row.prop]: v } as Partial<UiConfig>),
         };
@@ -101,6 +136,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         return {
           kind: "cycle",
           label: row.label,
+          blurb: row.blurb,
+          ...(row.restart ? { restart: true as const } : {}),
           names: [...row.values],
           getIdx: () => row.values.indexOf(String(ui[row.prop] ?? row.def)),
           setIdx: (i) => commitUi({ [row.prop]: row.values[i] } as Partial<UiConfig>),
@@ -108,59 +145,113 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     }
   };
 
-  const keybindRow = (action: KeyAction, label: string): SettingRow => ({
+  const keybindRow = (action: KeyAction, label: string, blurb: string): SettingRow => ({
     kind: "keybind",
     label,
+    blurb,
     get: () => ctx.config.keys[action] ?? [],
     set: (v) => {
-      // conflict check: reject a bind another core action already owns — and
-      // (P1-2) one a plugin command owns, so core remaps can't silently
-      // shadow plugin binds either direction.
+      // core clash: no commit, no warn — the outcome lets the capture flow
+      // offer an inline Enter-to-swap instead of a dead-end toast
       for (const spec of v) {
         const clash = keybindConflict(ctx.config, action, spec);
         if (clash) {
           const labelOf = KEY_SCHEMA.find((r) => r.action === clash)?.label ?? clash;
-          ctx.warn(`"${spec}" is already used by: ${labelOf}`, "keybind conflict");
-          return;
+          return { status: "conflict", spec, owner: clash, ownerLabel: labelOf };
         }
         const pluginOwner = pluginBindOwner(spec);
         if (pluginOwner) {
           ctx.warn(`"${spec}" is already used by: ${pluginOwner}`, "keybind conflict");
-          return;
+          return { status: "rejected", spec };
         }
       }
       commitKeys(action, v);
+      return { status: "applied" };
+    },
+    swap: (spec) => {
+      // Enter on the swap offer: steal the spec from its current owner in ONE
+      // commit (the owner keeps its other binds). A meanwhile-moved owner
+      // (preset applied under the open panel) degrades to a plain set.
+      const clash = keybindConflict(ctx.config, action, spec);
+      if (!clash) {
+        commitKeys(action, [spec]);
+        return;
+      }
+      const next = swapKeybind(ctx.config.keys, clash, action, spec);
+      commit({ ui: { ...ctx.config.ui }, theme: { ...ctx.config.theme }, keys: next });
     },
   });
 
   const uiRowsIn = (group: NonNullable<UiSchemaRow["group"]>): UiSchemaRow[] =>
     UI_SCHEMA.filter((r): r is UiSchemaRow => r.section === "ui" && r.group === group);
 
-  // rows with a presentation a generic schema row can't express (theme presets,
-  // adaptive/on tab bar, live show-hidden state sync) are built by hand and
-  // spliced into their category; the schema row still exists for parsing
-  const SPECIAL_UI_PROPS = new Set(["showHidden", "tabBar"]);
+  // rows with a presentation a generic schema row can't express (theme presets
+  // (+ the System terminal-following entry), adaptive/on tab bar, live
+  // show-hidden state sync) are built by hand and spliced into their category;
+  // the schema row still exists for parsing
+  const SPECIAL_UI_PROPS = new Set(["showHidden", "tabBar", "followTerminal"]);
 
-  const themeRow = (): SettingRow => ({
-    kind: "cycle",
-    label: "theme",
-    repaint: true,
-    names: THEME_PRESETS.map((p) => p.name),
-    getIdx: themePresetIdx,
-    setIdx: (i) => {
-      commit({ ui: { ...ctx.config.ui }, theme: { ...THEME_PRESETS[i]!.theme }, keys: { ...ctx.config.keys } });
-    },
-    // hand-edited themes match no preset: name the nearest one with a ~
-    // prefix (picking any preset returns to an exact match)
-    customLabel: () => {
-      const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
-      return n >= 0 ? `~${THEME_PRESETS[n]!.name}` : "custom";
-    },
-  });
+  const themeRow = (): SettingRow => {
+    // "System" leads: it owns the [ui] follow-terminal knob (the schema row
+    // is skipped in genericUiRows via SPECIAL_UI_PROPS) and builds the theme
+    // from the terminal's own colors on select; presets sit behind it at +1.
+    // On the console the row is display-only: one static palette paints no
+    // matter the preset, so adjusting warns instead of committing (config is
+    // still stored, and applies back on a graphical terminal).
+    const names = ["System", ...THEME_PRESETS.map((p) => p.name)];
+    return {
+      kind: "cycle",
+      label: "theme",
+      blurb: "Pick a look, or follow your terminal",
+      repaint: true,
+      names,
+      getIdx: () => {
+        if (ctx.isTtyMode?.()) return -1;
+        if (ctx.config.ui.followTerminal) return 0;
+        const i = themePresetIdx();
+        return i < 0 ? -1 : i + 1;
+      },
+      setIdx: (i) => {
+        if (ctx.isTtyMode?.()) {
+          ctx.warn("theme is fixed on the console — presets apply back on a graphical terminal", "theme");
+          return;
+        }
+        if (i === 0) {
+          commit({
+            ui: { ...ctx.config.ui, followTerminal: true },
+            theme: { ...ctx.config.theme },
+            keys: { ...ctx.config.keys },
+          });
+          // fire-and-forget by contract: the wiring wraps the promise with
+          // .catch (a try/catch here could never see an async rejection)
+          ctx.resolveSystemTheme?.();
+          return;
+        }
+        // i - 1 indexes the preset list; a stale index leaves the theme alone
+        const preset = THEME_PRESETS[i - 1];
+        if (!preset) return;
+        commit({
+          ui: { ...ctx.config.ui, followTerminal: false },
+          theme: { ...preset.theme },
+          keys: { ...ctx.config.keys },
+        });
+      },
+      // hand-edited themes match no preset: name the nearest one with a ~
+      // prefix (picking any preset returns to an exact match). On the console
+      // the static palette is named instead.
+      customLabel: () => {
+        if (ctx.isTtyMode?.()) return isDark(ctx.config.theme.bg) ? "Console" : "Console Light";
+        const n = settingsThemeNearestIdx(THEME_PRESETS, ctx.config.theme);
+        const near = n >= 0 ? THEME_PRESETS[n] : undefined;
+        return near ? `~${near.name}` : "custom";
+      },
+    };
+  };
 
   const hiddenFilesRow = (): SettingRow => ({
     kind: "toggle",
     label: "hidden files",
+    blurb: "Show hidden files",
     // state.showHidden is the effective runtime flag (the remap bind writes
     // it without persisting); config is only updated when the GUI commits
     get: () => ctx.state.showHidden,
@@ -174,34 +265,88 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const tabBarRow = (): SettingRow => ({
     kind: "cycle",
     label: "tab bar",
+    blurb: "Always show the tab strip",
     names: ["adaptive", "on"],
     getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
+  });
+
+  // keymap preset switch (tfm/yazi): one batch commit over the whole [keys]
+  // table + the type-to-search/view flips, like manual remaps (nothing
+  // stashed). Leads the keys category outright (theme, appearance's other
+  // hand row, rides that category's look header instead).
+  const keymapPresetRow = (): SettingRow => ({
+    kind: "cycle",
+    label: "keymap preset",
+    blurb: "tfm or yazi style shortcuts",
+    // repaint: one batch rewrites EVERY keybind row's value, so the panel
+    // must rebuild (afterAdjust only repaints the adjusted row itself —
+    // without this the new binds appear only as rows scroll into view)
+    repaint: true,
+    names: [...KEYMAP_PRESET_NAMES],
+    getIdx: () => keymapPresetIdx(ctx.config.keys),
+    setIdx: (i) => {
+      const name = KEYMAP_PRESET_NAMES[i];
+      if (name === undefined) return;
+      commit({
+        ui: { ...ctx.config.ui, typeToSearch: PRESET_TYPE_TO_SEARCH[name], viewMode: PRESET_VIEW_MODE[name] },
+        theme: { ...ctx.config.theme },
+        keys: presetKeys(name),
+      });
+      ctx.warn(
+        name === "yazi"
+          ? "yazi keymap on · list view, hjkl move, space toggles, q quits, / searches"
+          : "tfm keymap on · grid view, type-to-search restored",
+        "keymap preset",
+      );
+    },
+    customLabel: () => "custom",
   });
 
   // keys category: same subsection-divider mechanism as genericUiRows —
   // one header row where the schema subsection changes (first section leads
   // with one too, so every binds group is labeled)
   const keyRowsWithHeaders = (): SettingRow[] => {
-    const rows: SettingRow[] = [];
+    const rows: SettingRow[] = [keymapPresetRow()];
     let subsection = "";
     for (const r of KEY_SCHEMA) {
       if (r.subsection && r.subsection !== subsection) {
         subsection = r.subsection;
         rows.push({ kind: "header", label: r.subsection });
       }
-      rows.push(keybindRow(r.action, r.label));
+      rows.push(keybindRow(r.action, r.label, r.blurb));
     }
     return rows;
   };
+
+  // master toggles that gate dependent rows (schema showWhen): flipping one
+  // must rebuild the panel so children appear/vanish live (afterAdjust only
+  // repaints the adjusted row's own value text without this)
+  const GATING_MASTERS = new Set([
+    "fileAnimation",
+    "fileHoverAnimation",
+    "sidebarAnimation",
+    "sidebarHoverAnimation",
+    "topbarAnimation",
+    "directoryBarAnimation",
+    "previewEnabled",
+    "sidebarAutoHide",
+    "previewAutoHide",
+    "terminalAutoHide",
+    "listingsCache",
+    "windowedGrid",
+  ]);
 
   const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
     const rows: SettingRow[] = [];
     // subsection dividers: one header row where the schema's subsection name
     // changes — including the first section, so every group with dividers is
-    // uniformly labeled (groups without subsections render no headers at all)
+    // uniformly labeled (groups without subsections render no headers at all).
+    // showWhen filters BEFORE header emission, so a fully hidden section
+    // leaves no orphan header behind.
     let subsection = "";
-    for (const row of uiRowsIn(group)) {
+    const live = uiRowsIn(group).filter((row) => row.showWhen?.(ctx.config.ui) ?? true);
+    for (const row of live) {
       if (SPECIAL_UI_PROPS.has(row.prop)) continue;
       if (row.subsection && row.subsection !== subsection) {
         subsection = row.subsection;
@@ -209,7 +354,14 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       }
       const built = schemaRow(row);
       // these change the PANEL's own colors (or its icons) — their adjust must re-render it
-      if (row.prop === "uiStyle" || row.prop === "transparentBg" || row.prop === "icons") {
+      if (
+        row.prop === "uiStyle" ||
+        row.prop === "transparentBg" ||
+        row.prop === "icons" ||
+        row.prop === "ttyMode" ||
+        row.prop === "forceGlyph" ||
+        GATING_MASTERS.has(row.prop)
+      ) {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }
       rows.push(built);
@@ -220,24 +372,34 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   // ordered categories: schema `group` id -> GUI label + category icon. Icons
   // are existing assets/icons SVGs; a wrong name silently falls back to the
   // generic cog (AGENTS.md), so keep these byte-identical to filenames.
+  // Order is everyday priority: look first, tuning last. layout (one
+  // surface-ordered category: view/sidebar/preview/terminal/panes/grid/list)
+  // and animations sit directly under appearance: they answer "how does the
+  // UI look and move?".
   const CATEGORIES: { id: NonNullable<UiSchemaRow["group"]>; label: string; icon: string }[] = [
-    { id: "appearance", label: "appearance", icon: "pencil" },
+    { id: "appearance", label: "appearance", icon: "palette" },
     { id: "layout", label: "layout", icon: "select-all" },
     { id: "animations", label: "animations", icon: "play" },
-    { id: "optimization", label: "optimization", icon: "power" },
-    { id: "panes", label: "panes", icon: "desktop-tower" },
-    { id: "behavior", label: "behavior", icon: "clock" },
     { id: "files", label: "files & session", icon: "folder" },
-    { id: "keys", label: "keys", icon: "sort" },
+    { id: "behavior", label: "behavior", icon: "clock" },
+    { id: "keys", label: "keys", icon: "keyboard" },
+    { id: "optimization", label: "optimization", icon: "lightning-bolt" },
     { id: "advanced", label: "advanced", icon: "cog" },
   ];
 
   const advancedRows = (): SettingRow[] => [
     ...genericUiRows("advanced"),
-    { kind: "action", label: "reset to defaults", keepOpen: true, run: resetToDefaults },
+    {
+      kind: "action",
+      label: "reset to defaults",
+      blurb: "Put every setting back",
+      keepOpen: true,
+      run: resetToDefaults,
+    },
     {
       kind: "action",
       label: "edit config.toml…",
+      blurb: "Open the settings file",
       run: () => {
         spawnSafe("xdg-open", [configPath()], { stdio: "ignore", detached: true }, (err) =>
           ctx.warn(err.message, "config"),
@@ -253,12 +415,41 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         case "keys":
           rows = keyRowsWithHeaders();
           break;
-        case "appearance":
-          rows = [themeRow(), ...genericUiRows("appearance"), tabBarRow()];
+        case "appearance": {
+          // theme splices in under the look header (same splice precedent as
+          // the files hidden-files row — presets are a presentation generic
+          // schema rows can't express, the schema row is skipped via
+          // SPECIAL_UI_PROPS)
+          const uiRows = genericUiRows("appearance");
+          const lookIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "look");
+          if (lookIdx >= 0) uiRows.splice(lookIdx + 1, 0, themeRow());
+          else uiRows.unshift(themeRow());
+          rows = uiRows;
           break;
-        case "files":
-          rows = [hiddenFilesRow(), ...genericUiRows("files")];
+        }
+        case "layout": {
+          // tab bar is a hand-built cycle (adaptive/on, not the schema's bool
+          // toggle), so splice it after wrap mode where its schema row sits —
+          // the generic builder skips it via SPECIAL_UI_PROPS
+          const uiRows = genericUiRows("layout");
+          const tabRow = tabBarRow();
+          const wrapIdx = uiRows.findIndex((r) => r.kind !== "header" && r.label === "wrap mode");
+          if (wrapIdx >= 0) uiRows.splice(wrapIdx + 1, 0, tabRow);
+          else uiRows.unshift(tabRow);
+          rows = uiRows;
           break;
+        }
+        case "files": {
+          // hidden files splices in under the listing header (same splice
+          // precedent as the layout tab-bar row — the schema row is skipped
+          // via SPECIAL_UI_PROPS while the hand row carries the live-state sync)
+          const uiRows = genericUiRows("files");
+          const listingIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "listing");
+          if (listingIdx >= 0) uiRows.splice(listingIdx + 1, 0, hiddenFilesRow());
+          else uiRows.unshift(hiddenFilesRow());
+          rows = uiRows;
+          break;
+        }
         case "advanced":
           rows = advancedRows();
           break;
@@ -280,9 +471,21 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       return p.store.get("enabled", true);
     } catch (err) {
       try {
-        ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
+        ctx.warn(`plugin ${p.name} store failed: ${errMessage(err)}`, "plugins");
       } catch {}
       return true;
+    }
+  };
+
+  // guarded-warn: run + warn through ctx.warn; the warn itself is try/catch'd
+  // (a failing sink must never break the row). Shared by the 5 plugin rows.
+  const guardedRun = (msg: string, run: () => void): void => {
+    try {
+      run();
+    } catch (err) {
+      try {
+        ctx.warn(`${msg}: ${errMessage(err)}`, "plugins");
+      } catch {}
     }
   };
   // owner lookup across plugin commands (core coverage lives in
@@ -307,32 +510,22 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     rows: [
       {
         kind: "action",
-        label: "Add from git URL…",
+        label: "add from git URL…",
+        blurb: "Install a plugin from a link",
         keepOpen: true,
         run: () => {
-          try {
-            ctx.pluginInstall?.addFromUrl();
-          } catch (err) {
-            try {
-              ctx.warn(`add plugin failed: ${err instanceof Error ? err.message : err}`, "plugins");
-            } catch {}
-          }
+          guardedRun("add plugin failed", () => ctx.pluginInstall?.addFromUrl());
         },
       },
       {
         kind: "action",
-        label: "Open plugins folder…",
+        label: "open plugins folder…",
+        blurb: "Browse installed plugins",
         // not keepOpen: navigating with the menu up strands the user over a
         // changed cwd — close first (rowActivate closes, then runs), landing
         // in the folder
         run: () => {
-          try {
-            ctx.pluginInstall?.openFolder();
-          } catch (err) {
-            try {
-              ctx.warn(`open plugins folder failed: ${err instanceof Error ? err.message : err}`, "plugins");
-            } catch {}
-          }
+          guardedRun("open plugins folder failed", () => ctx.pluginInstall?.openFolder());
         },
       },
     ],
@@ -343,30 +536,20 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   const lifecycleRows = (p: LoadedPlugin): SettingRow[] => [
     {
       kind: "action",
-      label: "Update from git",
+      label: "update from git",
+      blurb: "Pull the newest version",
       keepOpen: true,
       run: () => {
-        try {
-          ctx.pluginInstall?.update(p.name);
-        } catch (err) {
-          try {
-            ctx.warn(`update ${p.name} failed: ${err instanceof Error ? err.message : err}`, "plugins");
-          } catch {}
-        }
+        guardedRun(`update ${p.name} failed`, () => ctx.pluginInstall?.update(p.name));
       },
     },
     {
       kind: "action",
-      label: "Remove…",
+      label: "remove…",
+      blurb: "Delete this plugin",
       keepOpen: true,
       run: () => {
-        try {
-          ctx.pluginInstall?.remove(p.name);
-        } catch (err) {
-          try {
-            ctx.warn(`remove ${p.name} failed: ${err instanceof Error ? err.message : err}`, "plugins");
-          } catch {}
-        }
+        guardedRun(`remove ${p.name} failed`, () => ctx.pluginInstall?.remove(p.name));
       },
     },
   ];
@@ -380,13 +563,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         repaint: true,
         get: () => safeEnabled(p),
         set: (v) => {
-          try {
+          guardedRun(`plugin ${p.name} store failed`, () => {
             p.store.set("enabled", v);
-          } catch (err) {
-            try {
-              ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
-            } catch {}
-          }
+            ctx.onPluginEnabledChanged?.(p.name, v);
+          });
         },
       };
       let rows: SettingRow[];
@@ -405,7 +585,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
               kind: "keybind",
               label: `${c.title} (key)`,
               get: () => getPluginCommandBinds(p, c.id),
-              set: (v) => {
+              set: (v): undefined => {
                 // every rejection warns through the guarded helper (a
                 // throwing warn must never escape a row setter)
                 const reject = (message: string): void => {
@@ -435,13 +615,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
                     return;
                   }
                 }
-                try {
-                  setPluginCommandBinds(p, c.id, v);
-                } catch (err) {
-                  try {
-                    ctx.warn(`plugin ${p.name} store failed: ${err instanceof Error ? err.message : err}`, "plugins");
-                  } catch {}
-                }
+                guardedRun(`plugin ${p.name} store failed`, () => setPluginCommandBinds(p, c.id, v));
               },
             }),
           );

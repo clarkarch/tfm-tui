@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeSelection, type SelTileRef, type SelectionCtx } from "./selection";
+import { fmtBytes } from "../fs/propsinfo";
 import { TileVisual } from "./grid-input";
+import type { IconSpec } from "../ui/ui-slots";
 
 const COLORS: any = {
   bg: "#111111",
@@ -12,6 +14,7 @@ const COLORS: any = {
   accentBg: "#333333",
   sidebarFg: "#aaaaaa",
   sidebarFgMuted: "#666666",
+  white: "#ffffff",
 };
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {
@@ -61,7 +64,10 @@ const makeHarness = () => {
       tileId,
       labelId,
       isDir,
-      ...(withIconSpec ? { iconSpec: { __key: key } } : { iconSlotId: `slot:${key}` }),
+      ...(withIconSpec
+        ? // a marker spec: the test only asserts identity, not the icon surface
+          { iconSpec: { __key: key } as unknown as IconSpec }
+        : { iconSlotId: `slot:${key}` }),
     };
     if (!withIconSpec) nodes.set(`slot:${key}`, { id: `slot:${key}`, opacity: 1 });
     sel.tileRefs.set(key, ref);
@@ -154,6 +160,26 @@ describe("moveFocus", () => {
     const h = makeHarness();
     expect(h.sel.moveFocus(0, 1)).toBe(false);
   });
+
+  test("plain moves re-anchor so a later extend starts at the focus", () => {
+    const h = makeHarness();
+    const keys = ["a", "b", "c", "d"];
+    h.sel.setFocusKeys(keys);
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(1);
+    expect(h.sel.selAnchor()).toBe(1);
+    h.sel.moveFocus(0, 1); // plain nav 1 -> 2
+    expect(h.sel.focusIdx()).toBe(2);
+    // extend now measures from the moved focus (was 1, jumping to 2..3)
+    expect(h.sel.selAnchor()).toBe(2);
+    h.sel.selectRange(h.sel.selAnchor()!, 3);
+    expect(h.sel.selPaths().map((p) => p.path)).toEqual(["c", "d"]);
+    // range-extend keeps its own anchor across the focus jump
+    h.sel.selectTileAt(0, true);
+    expect(h.sel.selAnchor()).toBe(2);
+  });
 });
 
 describe("selectRange / selectAll / clearTileSelection", () => {
@@ -189,6 +215,51 @@ describe("selectRange / selectAll / clearTileSelection", () => {
   });
 });
 
+describe("toggleFocused / invertSelection", () => {
+  test("toggleFocused flips only the focused tile, focus stays put", () => {
+    const h = makeHarness();
+    const keys = ["a", "b", "c"];
+    h.sel.setFocusKeys(keys);
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(1);
+    expect(h.sel.toggleFocused()).toBe(true);
+    expect(h.sel.tileRefs.get("b")!.selected).toBe(false);
+    expect(h.sel.focusIdx()).toBe(1);
+    expect(h.sel.toggleFocused()).toBe(true);
+    expect(h.sel.tileRefs.get("b")!.selected).toBe(true);
+    expect(h.sel.selPaths().map((p) => p.path)).toEqual(["b"]);
+  });
+
+  test("toggleFocused with no focus is a no-op", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a"]);
+    h.addTile("a");
+    expect(h.sel.toggleFocused()).toBe(false);
+    expect(h.sel.selPaths()).toEqual([]);
+  });
+
+  test("invertSelection flips every tile", () => {
+    const h = makeHarness();
+    const keys = ["a", "b", "c"];
+    h.sel.setFocusKeys(keys);
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(0);
+    h.sel.invertSelection();
+    expect(
+      h.sel
+        .selPaths()
+        .map((p) => p.path)
+        .sort(),
+    ).toEqual(["b", "c"]);
+    h.sel.invertSelection();
+    expect(h.sel.selPaths().map((p) => p.path)).toEqual(["a"]);
+  });
+});
+
 describe("setTileVisual", () => {
   test("unknown tile key is a no-op", () => {
     const h = makeHarness();
@@ -211,6 +282,17 @@ describe("setTileVisual", () => {
     h.addTile("a");
     h.sel.setTileVisual("a", TileVisual.Selected);
     expect(h.nodes.get("label:a").fg).toBe(COLORS.accent);
+    expect(h.nodes.get("tile:a").backgroundColor).toBe(COLORS.accentBg);
+  });
+
+  test("transparent-bg force clears the rest fill (terminal shows through)", () => {
+    const h = makeHarness();
+    (h.ctx as SelectionCtx).transparentForce = () => true;
+    h.addTile("a");
+    h.sel.setTileVisual("a", TileVisual.Rest);
+    expect(h.nodes.get("tile:a").backgroundColor).toBe("transparent");
+    // selection keeps its fill under force
+    h.sel.setTileVisual("a", TileVisual.Selected);
     expect(h.nodes.get("tile:a").backgroundColor).toBe(COLORS.accentBg);
   });
 });
@@ -297,6 +379,52 @@ describe("updateSelectionStatusReal", () => {
     h.sel.selectTileAt(1);
     h.sel.updateSelectionStatusReal();
     expect(seen).toEqual([["/a"], [], ["/b"]]);
+  });
+
+  test("link+target total is on-disk cost (link bytes, not double target)", async () => {
+    const h = makeHarness();
+    h.nodes.set("tfm-status-label", { id: "tfm-status-label", content: "" });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-sel-"));
+    try {
+      const f = path.join(dir, "f.bin");
+      writeFileSync(f, "hello world"); // 11 bytes
+      const link = path.join(dir, "l.bin");
+      symlinkSync(f, link);
+      // on-disk cost: file bytes + the link's own bytes (transfer preserves links)
+      const total = lstatSync(f).size + lstatSync(link).size;
+      h.sel.setFocusKeys([f, link]);
+      h.addTile(f);
+      h.addTile(link);
+      h.sel.selectAll();
+      h.sel.updateSelectionStatusReal();
+      const status = h.nodes.get("tfm-status-label");
+      await settleUntil(() => status.content === `2 selected · ${fmtBytes(total)}`);
+      expect(status.content).toBe(`2 selected · ${fmtBytes(total)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("hardlink pair counts shared bytes once (inode dedupe)", async () => {
+    const h = makeHarness();
+    h.nodes.set("tfm-status-label", { id: "tfm-status-label", content: "" });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-sel-"));
+    try {
+      const f = path.join(dir, "f.bin");
+      writeFileSync(f, "hello world"); // 11 bytes
+      const g = path.join(dir, "g.bin");
+      linkSync(f, g); // same inode, two names
+      h.sel.setFocusKeys([f, g]);
+      h.addTile(f);
+      h.addTile(g);
+      h.sel.selectAll();
+      h.sel.updateSelectionStatusReal();
+      const status = h.nodes.get("tfm-status-label");
+      await settleUntil(() => status.content === `2 selected · ${fmtBytes(lstatSync(f).size)}`);
+      expect(status.content).toBe(`2 selected · ${fmtBytes(lstatSync(f).size)}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a newer status request wins over a still-in-flight older one", async () => {

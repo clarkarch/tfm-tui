@@ -10,7 +10,9 @@
 // files importing "@opentui/core" would otherwise get a second instance and
 // their nodes wouldn't integrate. ---
 
+import { errMessage } from "../lib/uiutil";
 import {
+  type CliRenderer,
   createCoreSlotRegistry,
   registerCorePlugin,
   SlotRenderable,
@@ -18,6 +20,7 @@ import {
   type CoreSlotRegistry,
 } from "@opentui/core";
 import type { Theme } from "../config/config";
+import type { MaybeNode } from "../lib/node-like";
 
 export type TfmSlotName = "statusbar" | "sidebar-footer";
 
@@ -27,7 +30,7 @@ export type TfmSlotContext = {
   app: string;
   version: string;
   // host renderer — construct your renderables with ctx.renderer()
-  renderer: () => any;
+  renderer: () => CliRenderer;
   // live theme colors — read inside the contribution so a theme flip repaints
   colors: () => Theme;
   cwd: () => string;
@@ -41,14 +44,14 @@ export type TfmSlotContribution = CorePlugin<TfmSlotName, TfmSlotContext, TfmSlo
 
 export type PluginSlots = {
   register(plugin: { id: string; order?: number; slots: TfmSlotContribution }): () => void;
-  mount(byId: (id: string) => any): void;
+  mount(byId: (id: string) => MaybeNode): void;
   refresh(): void;
   dispose(): void;
   isMounted(): boolean;
 };
 
 export const makePluginSlots = (opts: {
-  renderer: any;
+  renderer: CliRenderer;
   context: TfmSlotContext;
   log?: (message: string) => void;
 }): PluginSlots => {
@@ -58,7 +61,7 @@ export const makePluginSlots = (opts: {
   } catch (err) {
     // a renderer without a live slot-registry store (tests / headless wiring)
     // degrades to a no-op host — logged so a real failure isn't silent
-    opts.log?.(`plugin slots disabled: ${err instanceof Error ? err.message : err}`);
+    opts.log?.(`plugin slots disabled: ${errMessage(err)}`);
     registry = null;
   }
   if (!registry) {
@@ -118,7 +121,7 @@ export const makePluginSlots = (opts: {
     return { cwd, selection };
   };
 
-  const mountInto = (parent: any, name: TfmSlotName, layout: Record<string, unknown>): void => {
+  const mountInto = (parent: MaybeNode, name: TfmSlotName, layout: Record<string, unknown>): void => {
     if (!parent) return;
     try {
       const slot = new SlotRenderable<TfmSlotName, TfmSlotContext, TfmSlotData>(opts.renderer, {
@@ -134,7 +137,7 @@ export const makePluginSlots = (opts: {
       parent.add(slot);
       mounted.push(slot);
     } catch (err) {
-      opts.log?.(`plugin slot ${name} mount failed: ${err instanceof Error ? err.message : err}`);
+      opts.log?.(`plugin slot ${name} mount failed: ${errMessage(err)}`);
     }
   };
 

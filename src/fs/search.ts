@@ -4,7 +4,7 @@
 // cap takes over. Pure fs + process — the UI (ui-grid) owns rendering and
 // gen-counter staleness. ---
 
-import { readdir, stat } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
 import type { Entry } from "./listing";
@@ -48,11 +48,27 @@ export const parseSearchPaths = (stdout: string): string[] =>
 const defaultRunFd = async (bin: string, args: string[], cwd: string, signal?: AbortSignal): Promise<string | null> => {
   try {
     const proc = Bun.spawn([bin, ...args], { cwd, stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    let escalateTimer: ReturnType<typeof setTimeout> | null = null;
     const onAbort = (): void => {
       try {
-        proc.kill();
+        proc.kill("SIGTERM");
       } catch {}
+      // a SIGTERM-immune child (wedged FUSE) would hold proc.exited past every
+      // timer: escalate once, cleared on exit below
+      if (escalateTimer === null) {
+        escalateTimer = setTimeout(() => {
+          try {
+            proc.kill("SIGKILL");
+          } catch {}
+        }, 2000);
+      }
     };
+    void proc.exited.then(() => {
+      if (escalateTimer !== null) clearTimeout(escalateTimer);
+    });
+    // a wedged fd (stale NFS/FUSE cwd) must not burn until the next keystroke:
+    // time out like every other helper read (10s) and let the walk take over
+    const timer = setTimeout(onAbort, 10_000);
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       const out = new Response(proc.stdout).text();
@@ -65,6 +81,7 @@ const defaultRunFd = async (bin: string, args: string[], cwd: string, signal?: A
       if (code >= 2) return null;
       return text;
     } finally {
+      clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
   } catch {
@@ -125,12 +142,26 @@ export const searchTree = async (root: string, query: string, opts: SearchOpts =
     paths.slice(0, limit).map(async (p): Promise<Entry | null> => {
       try {
         const st = await stat(p);
+        // size/mtime are the link's own (on-disk cost, like the list view);
+        // routing still follows it
+        let size = st.size;
+        let mtimeMs = st.mtimeMs ?? 0;
+        let isLink = false;
+        try {
+          const lst = await lstat(p);
+          isLink = lst.isSymbolicLink();
+          if (isLink) {
+            size = lst.size;
+            mtimeMs = lst.mtimeMs ?? mtimeMs;
+          }
+        } catch {}
         return {
           name: path.relative(root, p) || path.basename(p),
           isDir: st.isDirectory(),
-          size: st.size,
-          mtimeMs: st.mtimeMs ?? 0,
+          size,
+          mtimeMs,
           abs: p,
+          isLink,
         };
       } catch {
         return null;

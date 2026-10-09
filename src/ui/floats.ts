@@ -122,7 +122,7 @@ export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {
     close,
     closeAll,
     isOpen: (kind) => stack.some((e) => e.kind === kind),
-    top: () => (stack.length ? stack[stack.length - 1]!.kind : null),
+    top: () => stack[stack.length - 1]?.kind ?? null,
     depth: () => stack.length,
     hasModal,
   };

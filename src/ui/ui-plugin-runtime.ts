@@ -11,9 +11,12 @@ let installed = false;
 
 export const installPluginRuntimeSupport = (): boolean => {
   if (installed) return true;
-  installed = true;
   try {
-    return ensureRuntimePluginSupport();
+    const ok = ensureRuntimePluginSupport();
+    // only latch on success: a throwing first call must not make every later
+    // caller report a false "installed"
+    installed = ok;
+    return ok;
   } catch {
     return false;
   }

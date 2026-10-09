@@ -9,6 +9,7 @@
 // leaf with the loader), .tmp staging dirs are dot-prefixed so the rescan
 // skips them. ---
 
+import { errMessage } from "../lib/uiutil";
 import {
   cpSync,
   existsSync,
@@ -153,10 +154,18 @@ const defaultExec: ExecFn = async (cmd, args, opts) => {
       stderr: "pipe",
       stdin: "ignore",
     });
+    let escalateTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       try {
         proc.kill();
       } catch {}
+      // escalation: a SIGTERM-immune hung git must not hold `exited` (and the
+      // install UI) forever — SIGKILL follows after a grace period
+      escalateTimer = setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      }, 5_000);
     }, 120_000);
     try {
       const [out, err, exit] = await Promise.all([
@@ -168,9 +177,10 @@ const defaultExec: ExecFn = async (cmd, args, opts) => {
       return { exit, output };
     } finally {
       clearTimeout(timer);
+      if (escalateTimer) clearTimeout(escalateTimer);
     }
   } catch (err) {
-    return { exit: 127, output: err instanceof Error ? err.message : String(err) };
+    return { exit: 127, output: errMessage(err) };
   }
 };
 
@@ -237,9 +247,9 @@ export const installPlugin = async (opts: {
       throw new Error(`subdir not found in repo: ${JSON.stringify(parsed.subdir)}`);
     }
     const mains = findPluginMains(source);
-    if (!mains.length) throw new Error("no plugin found (need <name>/<name>.ts or <name>.ts)");
+    const [main] = mains;
+    if (main === undefined) throw new Error("no plugin found (need <name>/<name>.ts or <name>.ts)");
     if (mains.length > 1) throw new AmbiguousPluginError(mains);
-    const main = mains[0]!;
     // folder main: install just that folder; flat file: install the whole
     // source root (helpers ride along) under the file's own name
     const srcFolder = main.includes("/") ? path.join(source, path.dirname(main)) : source;
@@ -247,19 +257,27 @@ export const installPlugin = async (opts: {
     if (!PLUGIN_NAME_RE.test(finalName)) throw new Error(`unsafe plugin name: ${JSON.stringify(finalName)}`);
     const dest = path.join(dir, finalName);
     if (existsSync(dest)) throw new Error(`"${finalName}" already installed (remove it first)`);
-    cpSync(srcFolder, dest, { recursive: true });
-    writeFileSync(
-      path.join(dest, SOURCE_FILE),
-      JSON.stringify(
-        {
-          url: parsed.url,
-          ...(parsed.ref ? { ref: parsed.ref } : {}),
-          ...(parsed.subdir ? { subdir: parsed.subdir } : {}),
-        },
-        null,
-        2,
-      ),
-    );
+    try {
+      cpSync(srcFolder, dest, { recursive: true });
+      writeFileSync(
+        path.join(dest, SOURCE_FILE),
+        JSON.stringify(
+          {
+            url: parsed.url,
+            ...(parsed.ref ? { ref: parsed.ref } : {}),
+            ...(parsed.subdir ? { subdir: parsed.subdir } : {}),
+          },
+          null,
+          2,
+        ),
+      );
+    } catch (err) {
+      // a throw mid-copy would leave a half-populated folder: the existence
+      // guard above then refuses every re-install forever and the loader may
+      // pick up the fragments. Remove what we created.
+      rmrf(dest);
+      throw err;
+    }
     return { name: finalName, dest };
   } finally {
     rmrf(tmp);
@@ -289,12 +307,20 @@ export const updatePlugin = async (opts: { dir: string; name: string; exec?: Exe
   // (enabled flag, keybinds) and the provenance record survive the refresh.
   const src = readSource(dest);
   if (!src) throw new Error(`"${name}" is not a git checkout (installed manually?)`);
+  // re-validate provenance: install gated the URL through parseGitUrl, update
+  // must too — a tampered .tfm-source.json could otherwise smuggle a
+  // dash-prefixed git option or a local path into the clone argv
+  const srcUrl = parseGitUrl(src.url).url;
+  if (src.ref && (src.ref.startsWith("-") || /\s/.test(src.ref)))
+    throw new Error(`unsafe ref in ${SOURCE_FILE}: ${JSON.stringify(src.ref)}`);
+  if (src.subdir && (path.isAbsolute(src.subdir) || src.subdir.split(/[\\/]/).includes("..")))
+    throw new Error(`unsafe subdir in ${SOURCE_FILE}: ${JSON.stringify(src.subdir)}`);
   const tmp = path.join(dir, `.tmp-update-${process.pid}-${crypto.randomUUID()}`);
   rmrf(tmp);
   try {
     const args = ["clone", "--depth", "1"];
     if (src.ref) args.push("--branch", src.ref);
-    args.push(src.url, tmp);
+    args.push(srcUrl, tmp);
     const res = await exec("git", args);
     if (res.exit !== 0) throw new Error(`update failed: ${res.output.slice(0, 200) || `exit ${res.exit}`}`);
     const source = src.subdir ? path.join(tmp, src.subdir) : tmp;

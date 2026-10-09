@@ -3,7 +3,7 @@ import { makeQuit, type QuitCtx } from "./quit";
 
 const mkCtx = (
   calls: string[],
-  fail?: "drops" | "release" | "destroy" | "session" | "terminal" | "onQuit",
+  fail?: "drops" | "release" | "destroy" | "session" | "terminal" | "gpm" | "onQuit",
 ): QuitCtx & { codes: number[] } => {
   const codes: number[] = [];
   return {
@@ -24,6 +24,13 @@ const mkCtx = (
       calls.push("terminal");
       if (fail === "terminal") throw new Error("pty close failed");
     },
+    stopGpm: () => {
+      calls.push("gpm");
+      if (fail === "gpm") throw new Error("gpm close failed");
+    },
+    stopChromeTimers: () => {
+      calls.push("chrome");
+    },
     onQuit: () => {
       calls.push("onQuit");
       if (fail === "onQuit") throw new Error("plugin deactivate failed");
@@ -40,28 +47,45 @@ const mkCtx = (
 };
 
 describe("makeQuit", () => {
-  test("teardown order: drops -> release -> session -> terminal -> onQuit -> destroy -> exit(0)", () => {
+  test("teardown order: drops -> release -> session -> terminal -> gpm -> chrome -> onQuit -> destroy -> exit(0)", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "onQuit", "destroy", "exit:0"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:0"]);
   });
 
   test("a throwing disableDrops still completes teardown and exits 1", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "drops"))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "onQuit", "destroy", "exit:1"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:1"]);
   });
 
   test("a throwing shift-release still completes teardown and exits 1", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "release"))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "onQuit", "destroy", "exit:1"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:1"]);
   });
 
   test("a throwing renderer destroy still exits 1", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls, "destroy"))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "onQuit", "destroy", "exit:1"]);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:1"]);
+  });
+
+  test("refuses to quit while file ops are in flight (no teardown, no exit)", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    let busied = 0;
+    const busyCtx: QuitCtx & { codes: number[] } = {
+      ...ctx,
+      codes: ctx.codes,
+      isBusy: () => true,
+      onBusy: () => {
+        busied++;
+      },
+    };
+    makeQuit(busyCtx)();
+    expect(calls).toEqual([]);
+    expect(busied).toBe(1);
   });
 
   test("exit code is 0 clean, 1 when any teardown step threw", () => {
@@ -69,17 +93,11 @@ describe("makeQuit", () => {
     const okCtx = mkCtx(okCalls);
     makeQuit(okCtx)();
     expect(okCtx.codes).toEqual([0]);
-    for (const fail of ["drops", "release", "destroy", "session", "terminal", "onQuit"] as const) {
+    for (const fail of ["drops", "release", "destroy", "session", "terminal", "gpm", "onQuit"] as const) {
       const calls: string[] = [];
       const ctx = mkCtx(calls, fail);
       makeQuit(ctx)();
       expect(ctx.codes).toEqual([1]);
     }
-  });
-
-  test("teardown order: drops -> release -> session -> terminal -> onQuit -> destroy -> exit", () => {
-    const calls: string[] = [];
-    makeQuit(mkCtx(calls))();
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "onQuit", "destroy", "exit:0"]);
   });
 });

@@ -7,7 +7,7 @@
 import { makeSelection, type SelTileRef, type Selection } from "../input/selection";
 import { makeRename } from "../ui/ui-rename";
 import { makeBulkRename } from "../ui/ui-bulk-rename";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { activeFacade, activeMapFacade } from "../app/panes";
 import type { CoreWiring } from "./core";
@@ -26,11 +26,12 @@ export const wireGridFoundation = (deps: {
     makeSelection({
       colors: core.themeGet,
       uiStyle: () => core.config.ui.uiStyle,
+      transparentForce: () => core.config.ui.transparentBg === "force",
       byId: core.lookup.byId,
       setText: core.lookup.setTextOnId,
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
-      scroller: () => core.scrollerRefs[pane]!.current,
+      scroller: () => core.scrollerRefs[pane].current,
       viewH: () => chrome.renderer.terminalHeight - 3,
       rowHInit: () => core.geometry.tileH,
       renderPreview: () => getGrid().renderPreview(),
@@ -43,8 +44,8 @@ export const wireGridFoundation = (deps: {
   // tileRefs is overridden with a live map facade because ui-rename/preview and
   // the menu capture it ONCE at construction.
   const selections: [Selection, Selection] = [selectionFor(0), selectionFor(1)];
-  const activeTileRefs = activeMapFacade(() => selections[core.panes.active]!.tileRefs as Map<string, SelTileRef>);
-  const selection = activeFacade(() => selections[core.panes.active]!, {
+  const activeTileRefs = activeMapFacade(() => selections[core.panes.active].tileRefs as Map<string, SelTileRef>);
+  const selection = activeFacade(() => selections[core.panes.active], {
     tileRefs: activeTileRefs as unknown,
   });
 
@@ -54,6 +55,10 @@ export const wireGridFoundation = (deps: {
     selections[0].refreshCutVisuals();
     selections[1].refreshCutVisuals();
   };
+
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
 
   // --- inline rename/create: widget + state live in ./ui-rename ---
   const rename = makeRename({
@@ -74,6 +79,7 @@ export const wireGridFoundation = (deps: {
     cwd: () => core.state.cwd,
     focusKeys: () => selection.focusKeys(),
     selectTileAt: selection.selectTileAt,
+    setPointer,
   });
 
   // --- bulk rename: F2 on a multi-selection edits names one-per-line in a
@@ -82,15 +88,16 @@ export const wireGridFoundation = (deps: {
     renderer: () => chrome.renderer,
     byId: core.lookup.byId,
     rootAdd: (node) => chrome.renderer.root.add(node),
-    clearChildren,
+    destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     floats: core.floats,
     // arrow wrapper: performBulkRename belongs to the fileops wiring (TDZ)
     performBulkRename: (pairs) => getFileops().fileops.performBulkRename(pairs),
+    setPointer,
   });
   // rename guard here (both callers — keymap F2 and the context menu — route
   // through it): virtual views span directories, so one-name-per-line is

@@ -95,7 +95,6 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   const arrive: Record<number, string> = {};
   let dragPaths: string[] | null = null;
   let dragOp = 1; // 1 copy / 2 move
-  let selfHandled = false; // self-drop already moved/copied the files
   let selfTargetKey: string | null = null; // folder tile currently highlighted
   // session whose self-drop already finished — the end event (t=e:x=4:y=1,
   // canceled=true) that follows every accepted drop must not overwrite the
@@ -139,7 +138,6 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     dragSession++;
     dragPaths = paths;
     dragOp = 1;
-    selfHandled = false;
     selfDropDoneSession = -1;
     ctx.finishDrag(); // pointer is about to be grabbed by the terminal
     write(agreeDragFrame(), "agree drag either");
@@ -181,13 +179,11 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       endTimer = null;
     }
     const paths = dragPaths;
-    selfHandled = true;
     selfDropDoneSession = dragSession;
     const target = ctx.hitTargetAt(x, y, dragPaths);
     clearSelfDropHighlight();
     ctx.clearHoverPlace();
     dragPaths = null;
-    selfHandled = false;
     if (!paths?.length || !target) {
       write(selfDropRejectFrame(), "self drop rejected");
       ctx.setStatusMsg("drag cancelled");
@@ -262,17 +258,16 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
         ctx.log(`drag landed op=${dragOp}`);
       } else if (x === 4) {
         const canceled = y !== 0;
-        ctx.log(`drag end canceled=${canceled} op=${dragOp} selfHandled=${selfHandled}`);
+        ctx.log(`drag end canceled=${canceled} op=${dragOp}`);
         // snapshot EVERYTHING the epilogue needs at end time — the timer may
         // fire after a newer session began, and the live values then belong
         // to that newer session
         const seqAtEnd = dragSession;
         const pathsAtEnd = dragPaths;
         const opAtEnd = dragOp;
-        const selfAtEnd = selfHandled;
         const selfDoneAtEnd = selfDropDoneSession === seqAtEnd;
         const finishExternal = (): void => {
-          if (!canceled && pathsAtEnd && !selfAtEnd) {
+          if (!canceled && pathsAtEnd) {
             // released over another app: honor move semantics by trashing our copies
             if (opAtEnd === 2) void ctx.trashPaths(pathsAtEnd);
             else
@@ -284,7 +279,6 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
           } else if (canceled && !selfDoneAtEnd) ctx.setStatusMsg("drag cancelled");
           if (dragSession === seqAtEnd) {
             dragPaths = null;
-            selfHandled = false;
             clearSelfDropHighlight();
           }
         };
@@ -294,11 +288,11 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
           endTimer = null;
         }
         // a self-drop M may still be in flight behind the end event — defer
-        if (!canceled && pathsAtEnd && !selfAtEnd) {
+        if (!canceled && pathsAtEnd) {
           endTimerSession = seqAtEnd;
           endTimer = setTimeout(finishExternal, 700);
         } else finishExternal();
-      } else if (x === 5 && dragPaths && !selfHandled) {
+      } else if (x === 5 && dragPaths) {
         ctx.log("drag send request");
         presentDragUriList(dragPaths);
       }

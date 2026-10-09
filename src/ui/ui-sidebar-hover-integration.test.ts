@@ -106,7 +106,8 @@ afterAll(() => {
   t.renderer.destroy();
 });
 
-const fire = (id: string, type: "over" | "out") =>
+// hover-on rides on MOVE (see ui-slots.hoverEvents)
+const fire = (id: string, type: "move" | "out") =>
   (byId(id) as any).processMouseEvent({
     type,
     button: 0,
@@ -126,7 +127,7 @@ describe("sidebar hover lift (real animator + real chrome)", () => {
     const iconId = target!.specs[0]!.slotId;
 
     // hover it (unselected) → the real node nudges one cell left
-    fire(target!.rowId, "over");
+    fire(target!.rowId, "move");
     await t.renderOnce();
     expect((byId(iconId) as any).translateX).toBe(-1);
 
@@ -138,10 +139,18 @@ describe("sidebar hover lift (real animator + real chrome)", () => {
     expect((byId(iconId) as any).translateX).toBe(0);
 
     // the repaint changes the row's hit grid, so the real terminal re-fires a
-    // SYNTHETIC over on the stationary cursor — the selected row must stay flat
-    fire(target!.rowId, "over");
+    // SYNTHETIC hover on the stationary cursor — the selected row must stay flat.
+    // The shared wiring already swallows a repeat for the same node; this pins
+    // the second line of defence (the animator itself refuses a selected row).
+    fire(target!.rowId, "move");
     await t.renderOnce();
     expect((byId(iconId) as any).translateX).toBe(0);
+
+    // release the pointer so the next test starts from a clean hover state
+    // (the shared wiring keeps a per-node "is the pointer on me" flag, and the
+    // row node survives the fast-path renderSidebar above)
+    fire(target!.rowId, "out");
+    await t.renderOnce();
   });
 
   test("a lifted row clears when swept to by the cursor leaving it for another row", async () => {
@@ -150,7 +159,7 @@ describe("sidebar hover lift (real animator + real chrome)", () => {
     await t.renderOnce();
     const a = chrome.placesHost.find((r) => !r.selected && r.place.path)!;
     const iconA = a.specs[0]!.slotId;
-    fire(a.rowId, "over");
+    fire(a.rowId, "move");
     await t.renderOnce();
     expect((byId(iconA) as any).translateX).toBe(-1);
     // real out restores

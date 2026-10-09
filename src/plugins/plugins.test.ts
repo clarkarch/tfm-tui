@@ -141,6 +141,106 @@ describe("loadPlugins", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  test("an invalid rows shape after activate tears the plugin down (no leaked listeners)", async () => {
+    const dir = mkDir();
+    try {
+      // activate subscribes, then returns a malformed rows value; the loader
+      // must run deactivate or the listener leaks forever (the plugin never
+      // reaches `plugins`, so deactivateAll can't see it)
+      writePlugin(
+        dir,
+        "leaky.ts",
+        `export default { name: "leaky", activate: (api) => ({
+           deactivate: () => api.notify("leaky-deactivated"),
+           rows: "nope",
+         }) };\n`,
+      );
+      const notes: string[] = [];
+      const { plugins, errors } = await loadPlugins({ dir, api: mkApi(dir, notes), warn: (m) => notes.push(m) });
+      expect(plugins).toEqual([]);
+      expect(errors.some((e) => e.includes("rows must be an array"))).toBe(true);
+      expect(notes).toContain("leaky-deactivated");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a disabled plugin receives no events and cannot veto (live, no restart)", async () => {
+    const dir = mkDir();
+    try {
+      const eventCbs: Array<(p: unknown) => void> = [];
+      const hooks: Array<(p: unknown) => unknown> = [];
+      const notes: string[] = [];
+      const base = mkApi(dir, notes);
+      const api: PluginApi = {
+        ...base,
+        events: {
+          on: (_evt, cb) => {
+            eventCbs.push(cb as (p: unknown) => void);
+            return () => {};
+          },
+        },
+        hooks: {
+          beforeFileOp: (fn) => {
+            hooks.push(fn as (p: unknown) => unknown);
+            return () => {};
+          },
+        },
+      };
+      writePlugin(
+        dir,
+        "gated.ts",
+        `export default { name: "gated", activate: (api) => {
+           api.events.on("quit", () => api.notify("gated-event"));
+           api.hooks.beforeFileOp(() => ({ skip: true, reason: "gated-veto" }));
+           return { rows: [] };
+         } };\n`,
+      );
+      const { plugins } = await loadPlugins({ dir, api, warn: (m) => notes.push(m) });
+      expect(plugins.map((p) => p.name)).toEqual(["gated"]);
+      const p = plugins[0]!;
+
+      // enabled: the push fires and the veto blocks
+      eventCbs[0]!({});
+      expect(notes).toContain("gated-event");
+      expect(hooks[0]!({ op: "trash", paths: [] })).toEqual({ skip: true, reason: "gated-veto" });
+
+      // toggled off in the Plugins view: both channels go quiet immediately
+      p.store.set("enabled", false);
+      eventCbs[0]!({});
+      expect(notes.filter((n) => n === "gated-event").length).toBe(1);
+      expect(hooks[0]!({ op: "trash", paths: [] })).toBeUndefined();
+
+      // re-enable restores them (live read, no restart)
+      p.store.set("enabled", true);
+      eventCbs[0]!({});
+      expect(notes.filter((n) => n === "gated-event").length).toBe(2);
+      expect(hooks[0]!({ op: "trash", paths: [] })).toEqual({ skip: true, reason: "gated-veto" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("concurrent scans share one in-flight pass (no duplicate load)", async () => {
+    // reloadPlugins fires from esc-menu open AND from install/update/remove;
+    // overlapping rescans could both pass the prev check and double-load
+    const dir = mkDir();
+    try {
+      writePlugin(dir, "aaa.ts", GOOD_A);
+      const notes: string[] = [];
+      const reg = makePluginRegistry({ dir, api: mkApi(dir, notes), warn: (m) => notes.push(m) });
+      const p1 = reg.scan();
+      const p2 = reg.scan();
+      expect(p1).toBe(p2);
+      await p1;
+      expect(reg.plugins.map((p) => p.name)).toEqual(["aaa"]);
+      expect(reg.scan()).not.toBe(p1);
+      await reg.scan();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("each loaded plugin carries a working store", async () => {
     const dir = mkDir();
     try {

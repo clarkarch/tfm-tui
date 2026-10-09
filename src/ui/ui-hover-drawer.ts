@@ -13,8 +13,9 @@
 //   not pop the drawer.
 // - Terminal auto-hide must NOT touch the PTY: it clips the host box height.
 
-import { createTimeline, engine, type JSAnimation } from "@opentui/core";
+import { type CliRenderer, createTimeline, engine, type JSAnimation, type MouseEvent } from "@opentui/core";
 import type { UiConfig } from "../config/config-schema";
+import type { MaybeNode } from "../lib/node-like";
 
 export type DrawerEdge = "left" | "right" | "bottom";
 
@@ -53,7 +54,7 @@ export const collapsedHeight = (style: string): number => (style === "header" ? 
 
 type Tween = { run(target: number, ms: number, onDone?: () => void): void };
 
-const makeTween = (getNode: () => any, axis: "width" | "height"): Tween => {
+const makeTween = (getNode: () => MaybeNode, axis: "width" | "height"): Tween => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   let from = 0;
@@ -122,8 +123,8 @@ const makeTween = (getNode: () => any, axis: "width" | "height"): Tween => {
 };
 
 export type HoverDrawerCtx = {
-  renderer: any;
-  byId(id: string): any;
+  renderer: CliRenderer;
+  byId(id: string): MaybeNode;
   ui(): UiConfig;
   terminalOpen(): boolean;
   // keyboard focus inside the embedded shell — a focused terminal never
@@ -169,7 +170,7 @@ type Panel = {
 };
 
 export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
-  const getNode = (id: string): any => {
+  const getNode = (id: string): MaybeNode => {
     try {
       return ctx.byId(id);
     } catch {
@@ -183,7 +184,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     if (t) {
       try {
         // the drawer's open state AND the [ui] sidebar-title preference
-        t.visible = visible && ctx.ui().sidebarTitle;
+        t.visible = visible && ctx.ui().sidebarTitle !== "none";
       } catch {}
     }
   };
@@ -377,7 +378,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     }, delay);
   };
 
-  const onMove = (ev: any): void => {
+  const onMove = (ev: MouseEvent): void => {
     if (ctx.blocked()) return;
     const ui = ctx.ui();
     for (const p of panels) {
@@ -443,8 +444,11 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     }
   }
 
+  // same attach guard as the sidebar/grid animators: a renderer without a
+  // frame loop must never reach engine.attach (it overwrites the singleton
+  // before calling setFrameCallback, wedging every later attach process-wide)
   try {
-    engine.attach(ctx.renderer);
+    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
   } catch {}
   ctx.renderer.root.onMouseMove = onMove;
 

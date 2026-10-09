@@ -16,18 +16,16 @@ import { debounced } from "../lib/uiutil";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { gridDrag } from "../input/grid-input";
 import { mergedMapFacade } from "../app/panes";
-import { waitForResolution } from "../ui/ui-lookup";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces } from "../fs/places";
-import { startMemHygiene, type AllocatorStats } from "../app/mem-hygiene";
+import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { configPath } from "../config/config";
+import { describeKeybindConflicts } from "../config/config-schema";
+import type { ListEntry } from "../ui/ui-menu";
 import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../app/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
-
-// narrowed shape of CliRenderer's private native binding — diagnostics only
-type NativeStatsReach = { lib?: { getAllocatorStats?: () => AllocatorStats | null } };
 
 // --- Live directory watching: external changes refresh the grid.
 // Watch lifecycle lives in ./watcher (tested); the wiring supplies the live
@@ -58,10 +56,11 @@ export const wireWatcher = (deps: {
       // full-rebuild the grid 200ms later (visible flash after every select)
       ignorePaths: () => [DND_LOG, DEBUG_LOG],
     });
-  const watchers = [makeFor(0), makeFor(1)];
+  // `as const` keeps the pair a TUPLE so indexing needs no non-null assertion
+  const watchers = [makeFor(0), makeFor(1)] as const;
   const syncCwdWatcher = (): void => {
-    watchers[0]!.syncCwdWatcher();
-    watchers[1]!.syncCwdWatcher();
+    watchers[0].syncCwdWatcher();
+    watchers[1].syncCwdWatcher();
   };
   return { syncCwdWatcher };
 };
@@ -88,6 +87,10 @@ export const wireBoot = (deps: {
   // cold-boot-only top bar intro, played right after the sidebar intro (built
   // in wireChrome; a no-op unless [ui] topbar-animation is on)
   playTopbarIntro?: () => void;
+  // system (terminal-adaptive) theme: resolves after the renderer answers
+  // its first queries but before buildLayout bakes colors into the chrome
+  // (built in wireSettings; a no-op unless [ui] follow-terminal is on)
+  applyBootSystemTheme?: () => Promise<boolean>;
   // re-apply the hover drawer's panel states AFTER the boot layout mounts
   // (constructed pre-boot, its collapse writes hit no nodes yet — without
   // this, auto-hidden panels paint expanded while the grid is laid out
@@ -96,7 +99,11 @@ export const wireBoot = (deps: {
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
   runBoot({
-    waitForResolution: () => waitForResolution(chrome.renderer),
+    // boot: ONE full-budget wait — a terminal that answered nothing by then
+    // never reports pixels (linux console/tmux), and the gate latches so no
+    // later rebuild parks on it again (see makeResolutionGate)
+    waitForResolution: () => core.resolutionGate.settle(),
+    applyBootSystemTheme: () => deps.applyBootSystemTheme?.() ?? Promise.resolve(false),
     // restart child only: the waiting parent never destroyed, so its kitty
     // placements are still on screen under ours — delete-all once, first.
     // Fresh boots skip this so other programs' images are never nuked. The
@@ -128,11 +135,12 @@ export const wireBoot = (deps: {
         isRenaming: gridFoundation.rename.isRenaming,
         finishInlineRename: gridFoundation.rename.finishInlineRename,
         clearTileSelection: gridFoundation.selection.clearTileSelection,
-        openContextMenu: (x: number, y: number, t: string, e: any[]) => chrome.menu.openContextMenu(x, y, t, e),
+        openContextMenu: (x: number, y: number, t: string, e: ListEntry[]) => chrome.menu.openContextMenu(x, y, t, e),
         emptyAreaEntries: grid.menuEntries.emptyAreaEntries,
+        isTtyMode: core.isTtyMode,
       });
-      core.scrollerRefs[0]!.current = scrollers[0];
-      core.scrollerRefs[1]!.current = scrollers[1];
+      core.scrollerRefs[0].current = scrollers[0];
+      core.scrollerRefs[1].current = scrollers[1];
       // [ui] windowed-grid: the hook wraps the scrollTop setter (wheel, drag
       // auto-scroll, programmatic scrollTo) AND chains the scrollbar's
       // _onChange — a thumb drag writes the position field raw, never the
@@ -185,7 +193,19 @@ export const wireBoot = (deps: {
     },
     isDebug,
     showLaunchTime: () => core.config.ui.showLaunchTime,
-  }).catch(() => {}); // every step is guarded in ./boot; this catches the tail
+  })
+    .then(() => {
+      // hand-edited [keys] can bind one key twice — dispatch silently shadows
+      // the loser (core order wins), so surface it once instead of never
+      try {
+        const text = describeKeybindConflicts(core.config);
+        if (text) {
+          dlog(`keybind conflicts: ${text}`);
+          chrome.notify(`${text} — Settings → keys`, "keybind conflict");
+        }
+      } catch {}
+    })
+    .catch(() => {}); // every step is guarded in ./boot; this catches the tail
 };
 
 // --- OSC 72 (kitty drag-and-drop): wire format per yazi's reference impl;
@@ -221,7 +241,7 @@ export const wireDnd = (deps: {
       byNumber: (num) => Renderable.renderablesByNumber.get(num),
       placesHost: () => chrome.chrome.placesHost,
       tileRefs: allTileRefs,
-      panesCwd: () => [core.panes.states[0]!.cwd, core.panes.states[1]!.cwd],
+      panesCwd: () => [core.panes.states[0].cwd, core.panes.states[1].cwd],
     }),
     tileRefs: allTileRefs,
     setTileVisual: gridFoundation.selection.setTileVisual,

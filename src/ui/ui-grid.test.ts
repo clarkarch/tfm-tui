@@ -1,15 +1,22 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { makeGridRenderer, hookScrollerScroll, type GridState } from "./ui-grid";
+import { loadingLabel, loadingLine, makeGridRenderer, SPIN_FRAMES_ASCII, SPIN_FRAMES_BRAILLE } from "./ui-grid";
+import { hookScrollerScroll } from "./ui-grid-window";
+import type { GridState } from "./ui-grid-types";
+import { fmtBytes } from "../fs/propsinfo";
+import { linkRowLabel, loadingNodeId } from "./ui-grid-rows";
+import type { ScrollerLike } from "../lib/node-like";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { makeSelection } from "../input/selection";
 import type { Entry } from "../fs/listing";
+import type { TileMouseHandlers } from "../input/grid-input";
+import type { IconSlotHandle } from "./ui-slots";
 import { defaultConfig } from "../config/config-schema";
-import type { HoverLiftOpts } from "../config/config-schema";
+import type { HoverLiftOpts, WrapMode } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SortMode } from "../lib/sort";
 import type { Scheduler } from "../lib/uiutil";
@@ -61,7 +68,8 @@ const ASPECT = 0.5;
 let t: TestRendererSetup;
 let tmp: string;
 let content: Renderable;
-let scroller: { content: Renderable; scrollTop: number; viewport?: { height: number } };
+// stand-in for the ScrollBox: the grid only reads content/scrollTop/viewport
+let scroller: ScrollerLike;
 let gridState: GridState;
 let cutKeys: Set<string>;
 let iconStateCalls: Array<{ spec: any; idx: number }>;
@@ -69,13 +77,14 @@ let thumbJobs: any[];
 let iconSlots: Array<{ name: string; heightCells: number; initialState: number }>;
 let mouseHandlers: Array<{ name: string; key: string; idx: number }>;
 let searchQuery: string;
-let wordWrap: boolean;
+let wrapMode: WrapMode;
 let recursiveSearch: boolean;
 let searchCalls: string[];
 let searchSignals: AbortSignal[];
 let searchGate: Promise<void> | null;
 let searchEntries: Entry[];
 let viewMode: "grid" | "list";
+let rasterSig: string;
 let selection: ReturnType<typeof makeSelection>;
 let renderGrid: (force?: boolean) => Promise<void>;
 let syncWindow: () => void;
@@ -84,9 +93,25 @@ let renamingOn: boolean;
 let availWSet: number | null;
 let hoverLiftOpts: HoverLiftOpts;
 let tilePrefix: string;
+let throwOnName: string | null;
+// virtual clock for the play-cooldown gate (plays inside 500ms of the last
+// wave are skipped): tests step it explicitly wherever a new wave is intended
+let testNow: number;
+const stepClock = (ms = 1000): void => {
+  testNow += ms;
+};
 let visibleOnly: boolean;
 let revealDelayMs: number;
+// [ui] loading-delay-ms seam: undefined = ABSENT (the feature is off, which is
+// what every pre-existing test in this file runs against)
+let loadingDelayMs: number | undefined;
+let ttyModeOn: boolean;
 let fileAnimMode: "rows" | "tiles" | "container" | null;
+// the park between "decide to rebuild" and "build" — the console's null
+// renderer.resolution makes the real one a 50ms-per-poll sleep, so tests swap
+// in a controllable one to interleave two renders inside that window
+let waitForResolutionImpl: () => Promise<void>;
+let gridLogs: string[];
 let fileAnimCalls: Array<{
   tiles: string[];
   rows: string[] | null;
@@ -106,13 +131,19 @@ beforeAll(async () => {
   iconSlots = [];
   mouseHandlers = [];
   searchQuery = "";
-  wordWrap = false;
+  wrapMode = "none";
   recursiveSearch = false;
   searchCalls = [];
   searchSignals = [];
   searchGate = null;
   searchEntries = [];
   viewMode = "grid";
+  rasterSig = "raster-a";
+  // initialized here, not mid-file: ctx.now() returning undefined made the
+  // cooldown comparison NaN (silently disabled) for the first tests, so the
+  // clock only worked by declaration order
+  throwOnName = null;
+  testNow = 1_000_000;
   availWSet = null;
   hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
@@ -123,6 +154,10 @@ beforeAll(async () => {
   fileAnimMode = "rows";
   revealClock = mkRevealClock();
   fileAnimCalls = [];
+  waitForResolutionImpl = () => Promise.resolve();
+  loadingDelayMs = undefined;
+  ttyModeOn = false;
+  gridLogs = [];
   let iconSeq = 0;
 
   t.renderer.root.add(Box({ id: "tfm-scroll-test", flexDirection: "column", flexGrow: 1 }));
@@ -172,7 +207,8 @@ beforeAll(async () => {
     previewEnabled: () => false,
     previewWidth: () => 0,
     viewMode: () => viewMode,
-    wordWrap: () => wordWrap,
+    rasterSig: () => rasterSig,
+    wrapMode: () => wrapMode,
     reservedRight: () => 0,
     // per-pane width: null falls back to termW - sw - reservedRight
     availW: () => availWSet ?? TERM_W - SW,
@@ -192,6 +228,12 @@ beforeAll(async () => {
     drainIconQueue: () => {},
     drainThumbs: () => {},
     stripSelectable: () => {},
+    // mirrors makeLookup.setTextOnId (wiring passes the real one): stats-only
+    // ticks repaint size/date cells in place instead of rebuilding rows
+    setTextOnId: (id: string, s: string) => {
+      const n = t.renderer.root.findDescendantById(id) as any;
+      if (n) n.content = s;
+    },
     fileAnim: (target: {
       tiles: string[];
       rows?: string[];
@@ -213,15 +255,26 @@ beforeAll(async () => {
     fileAnimVisibleOnly: () => visibleOnly,
     fileAnimScrollRevealDelayMs: () => revealDelayMs,
     sched: revealClock.sched,
+    now: () => testNow,
     windowedGrid: () => windowedGridOn,
     isRenaming: () => renamingOn,
     selection,
-    entryMouseHandlers: (e: any, key: string, idx: number) => {
+    entryMouseHandlers: (e, key, idx) => {
+      if (throwOnName !== null && e.name === throwOnName) throw new Error("boom");
       mouseHandlers.push({ name: e.name, key, idx });
-      return {};
+      return {} as unknown as TileMouseHandlers;
     },
     isCutKey: (key) => cutKeys.has(key),
-    waitForResolution: () => Promise.resolve(),
+    log: (m: string) => gridLogs.push(m),
+    waitForResolution: () => waitForResolutionImpl(),
+    // dynamic seams: a test flips the placeholder on/off per case
+    get loadingDelayMs() {
+      return loadingDelayMs === undefined ? undefined : () => loadingDelayMs as number;
+    },
+
+    get isTtyMode() {
+      return () => ttyModeOn;
+    },
     clearRenameEdit: () => {},
   });
   renderGrid = rg;
@@ -340,7 +393,7 @@ describe("renderGrid (grid tiles)", () => {
 
   test("a wrapped label consumes the vertical spare: no lift, no headroom", async () => {
     writeFileSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), "x");
-    wordWrap = true;
+    wrapMode = "char";
     hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
     try {
       await renderGrid();
@@ -364,16 +417,77 @@ describe("renderGrid (grid tiles)", () => {
       expect(wrapped).toBe(1);
       expect(lifted).toBeGreaterThan(0);
     } finally {
-      // a red run must not leak the long file / wordWrap flag into the next
+      // a red run must not leak the long file / wrapMode flag into the next
       // test (stale grid contents break unrelated counts)
       rmSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), { force: true });
-      wordWrap = false;
+      wrapMode = "none";
       hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
       await renderGrid();
     }
   });
 
-  test("changing the hover lift direction rebuilds the tiles", async () => {
+  test("wrapped label lines center under the icon instead of flush-left", async () => {
+    // a wrapped name's short trailing line must sit centered in the tile, under
+    // the (centered) icon: flush-left text read as "icon right of the name"
+    // (11 chars over the TILE_W-2=8 label box wraps 8 + 3)
+    const name = "abcdefghijk";
+    writeFileSync(path.join(tmp, name), "x");
+    wrapMode = "char";
+    try {
+      await renderGrid();
+      await t.renderOnce();
+      const rows = t.captureCharFrame().split("\n");
+      const first = rows.find((r) => r.includes("abcdefgh"))!;
+      const second = rows.find((r) => r.includes("ijk") && !r.includes("abcdefgh"))!;
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+      // the full first line starts at the label box edge; the 3-char second
+      // line indents by exactly floor((8-3)/2)=2 — native textAlign:center
+      // floors the odd remainder (opentui Text.test.ts: "  world   "), so the
+      // line sits a half cell left of true center. That is the minimum error
+      // on a cell grid (a ceil would sit a half cell right); a leading-space
+      // "fix" only mirrors it, verified by breaking this to +3 and going red.
+      expect(second.indexOf("ijk")).toBe(first.indexOf("abcdefgh") + 2);
+    } finally {
+      rmSync(path.join(tmp, name), { force: true });
+      wrapMode = "none";
+      await renderGrid();
+    }
+  });
+
+  test("odd single-line names sit a half cell left, same as wrapped lines", async () => {
+    // single-line labels take the intrinsic-width path (no label box): Yoga
+    // centers them in the tile and floors the .5 offset, exactly like the
+    // native text floor for wrapped lines — one consistent direction, never
+    // mixed. "abcdef" (6) lands exact, "abcdefg" (7) one column left of it.
+    // A leading-space pad was tried and reverted: it flips singles right
+    // while wrapped lines stay left (mixed reads worse than uniform), and a
+    // zero-width space counts zero cells in layout (probed no-op).
+    const even = "abcdef";
+    const odd = "abcdefg";
+    writeFileSync(path.join(tmp, even), "x");
+    writeFileSync(path.join(tmp, odd), "x");
+    availWSet = 13; // 1 column: every tile starts at x=0, comparable directly
+    try {
+      await renderGrid();
+      await t.renderOnce();
+      const rows = t.captureCharFrame().split("\n");
+      const evenRow = rows.find((r) => r.includes(even) && !r.includes(odd))!;
+      const oddRow = rows.find((r) => r.includes(odd))!;
+      expect(evenRow).toBeTruthy();
+      expect(oddRow).toBeTruthy();
+      // even center = start+3 hits tile center 5; odd center = start+3.5
+      // reads 4.5, i.e. starts exactly one column left of the even name
+      expect(oddRow.indexOf(odd)).toBe(evenRow.indexOf(even) - 1);
+    } finally {
+      rmSync(path.join(tmp, even), { force: true });
+      rmSync(path.join(tmp, odd), { force: true });
+      availWSet = null;
+      await renderGrid();
+    }
+  });
+
+  test("changing the lift direction rebuilds the tiles", async () => {
     // tile ids are absolute now (the windowed grid needs them stable across
     // slides), so "it actually rebuilt" is pinned on the layout the direction
     // bakes: an up lift reserves a marginTop row, down/none never do.
@@ -414,7 +528,8 @@ describe("renderGrid (grid tiles)", () => {
     const { renderGrid: bootRender } = makeGridRenderer({
       termW: () => TERM_W,
       termH: () => TERM_H,
-      scroller: () => ({ content: bootContent }),
+      // the boot path only needs a content host; the VNode stands in for it
+      scroller: () => ({ content: bootContent }) as unknown as ScrollerLike,
       state: gridState,
       searchQuery: () => "",
       recursiveSearch: () => false,
@@ -430,14 +545,15 @@ describe("renderGrid (grid tiles)", () => {
       previewEnabled: () => false,
       previewWidth: () => 0,
       viewMode: () => viewMode,
-      wordWrap: () => false,
+      wrapMode: () => "none" as WrapMode,
       reservedRight: () => 0,
       availW: () => TERM_W - SW,
       tileIdPrefix: "tfm-tile-boot-",
       cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: ASPECT }),
       makeIconSlot: (name: string) => {
         const slotId = `boot-slot-${bootSeq++}`;
-        return { el: null, slotId, spec: { slotId, name } };
+        // the boot path only reads slotId; el/spec are placeholders
+        return { el: null, slotId, spec: { slotId, name } } as unknown as IconSlotHandle;
       },
       pushThumbJob: () => {},
       nextIconId: () => `boot-icon-${bootSeq++}`,
@@ -454,7 +570,7 @@ describe("renderGrid (grid tiles)", () => {
       },
       fileAnimVisibleOnly: () => visibleOnly,
       selection: bootSelection,
-      entryMouseHandlers: () => ({}),
+      entryMouseHandlers: () => ({}) as unknown as TileMouseHandlers,
       isCutKey: (key) => cutKeys.has(key),
       waitForResolution: () => Promise.resolve(),
       clearRenameEdit: () => {},
@@ -468,6 +584,7 @@ describe("renderGrid (grid tiles)", () => {
   test("hands built tile ids + the container to the file animation sink, but not on a skipped render", async () => {
     fileAnimCalls = [];
     gridState.sortAsc = false; // force a signature change so a real rebuild runs
+    stepClock(); // a new wave is intended: move past the play cooldown
     await renderGrid();
     const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
     // clearGrid stops the previous animation first, then the rebuild plays
@@ -492,6 +609,7 @@ describe("renderGrid (grid tiles)", () => {
     }));
     visibleOnly = true;
     try {
+      stepClock(); // each build below intends a fresh wave
       await renderGrid();
       const gridPlay = fileAnimCalls.at(-1)!;
       // grid cap = cols * (rows in the terminal + 1 margin) = 5 * 5 = 25
@@ -513,6 +631,7 @@ describe("renderGrid (grid tiles)", () => {
       // same visibleTileCap math the thumb ranking uses)
       searchQuery = "fi";
       viewMode = "list";
+      stepClock();
       await renderGrid();
       const listPlay = fileAnimCalls.at(-1)!;
       expect(listPlay.tiles.length).toBe(13);
@@ -522,6 +641,7 @@ describe("renderGrid (grid tiles)", () => {
       searchQuery = "fil";
       viewMode = "grid";
       visibleOnly = false;
+      stepClock();
       await renderGrid();
       const fullPlay = fileAnimCalls.at(-1)!;
       expect(fullPlay.tiles.length).toBe(30);
@@ -554,6 +674,7 @@ describe("renderGrid (grid tiles)", () => {
       gridState.cwd = big;
       scroller.scrollTop = 12; // two tile-rows down: tiles [10,35), rows [2,7)
       visibleOnly = true;
+      stepClock();
       await renderGrid();
       const play = fileAnimCalls.at(-1)!;
       // 60 files / 5 cols = 12 rows; viewport cap 25 tiles = 5 rows from row 2
@@ -594,6 +715,7 @@ describe("renderGrid (grid tiles)", () => {
 
     // a real content change afterwards still animates
     gridState.sortAsc = false;
+    stepClock();
     await renderGrid();
     const play = fileAnimCalls.at(-1)!;
     expect(play.tiles.length).toBeGreaterThan(0);
@@ -686,6 +808,27 @@ describe("renderGrid (grid tiles)", () => {
     await t.renderOnce();
     expect(searchCalls).toEqual([]);
     gridState.cwd = tmp;
+    recursiveSearch = false;
+    searchQuery = "";
+    searchEntries = [];
+  });
+
+  test("recursive results follow the active sort mode, not hardcoded name order", async () => {
+    searchEntries = [
+      { name: "small.txt", isDir: false, size: 10, abs: path.join(tmp, "small.txt") },
+      { name: "big.txt", isDir: false, size: 9000, abs: path.join(tmp, "big.txt") },
+    ];
+    gridState.sortBy = "size";
+    gridState.sortAsc = false;
+    searchQuery = "txt";
+    recursiveSearch = true;
+    mouseHandlers = [];
+    await renderGrid();
+    await t.renderOnce();
+    // size-descending: the 9000-byte file paints first
+    expect(mouseHandlers.map((m) => m.name)).toEqual(["big.txt", "small.txt"]);
+    gridState.sortBy = "name";
+    gridState.sortAsc = true;
     recursiveSearch = false;
     searchQuery = "";
     searchEntries = [];
@@ -938,6 +1081,464 @@ describe("renderGrid (list view)", () => {
     expect(selection.colsAtBuild()).toBe(1);
     expect(selection.rowHAtBuild()).toBe(2);
     viewMode = "grid";
+  });
+
+  test("stats-only tick repaints size/date in place: no rebuild, no fileAnim replay", async () => {
+    // busy-log case: same names, new size/mtime — must not clear+rebuild (the
+    // TTY full-flash loop), just repaint the stat cells; membership changes
+    // still take the full rebuild path with animation
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-statsonly-"));
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "hello"); // 5 B
+      writeFileSync(path.join(dir, "b.txt"), "world!");
+      viewMode = "list";
+      gridState.cwd = dir;
+      fileAnimCalls.length = 0;
+      mouseHandlers.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("5 B");
+      expect(fileAnimCalls.length).toBeGreaterThan(0); // the initial build plays
+      const refsBefore = selection.tileRefs.size;
+      expect(refsBefore).toBe(2);
+
+      // same names, only stats change (an append bumps size + mtime)
+      writeFileSync(path.join(dir, "a.txt"), "hello, much longer content here"); // 31 B
+      fileAnimCalls.length = 0;
+      mouseHandlers.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      // no rebuild: no rows rebuilt, no animation replayed, refs/focus intact
+      expect(mouseHandlers.length).toBe(0);
+      expect(fileAnimCalls.length).toBe(0);
+      expect(selection.tileRefs.size).toBe(refsBefore);
+      // ...but the painted stat cells show the new size
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("31 B");
+      expect(frame).not.toContain("5 B");
+
+      // a membership change still rebuilds + plays a fresh wave
+      writeFileSync(path.join(dir, "c.txt"), "new");
+      fileAnimCalls.length = 0;
+      stepClock();
+      await renderGrid();
+      await t.renderOnce();
+      expect(selection.tileRefs.size).toBe(refsBefore + 1);
+      expect(fileAnimCalls.some((c) => c.tiles.length > 0)).toBe(true);
+      expect(t.captureCharFrame()).toContain("c.txt");
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("stats change to a thumbnailed image still rebuilds (raster keys on stats)", async () => {
+    // the fast path pushes no thumb jobs — an edited photo must take the full
+    // rebuild so its raster re-queues instead of going stale
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-thumbstat-"));
+    try {
+      writeFileSync(path.join(dir, "photo.png"), "fake-png-1");
+      viewMode = "list";
+      gridState.cwd = dir;
+      thumbJobs.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      expect(thumbJobs.length).toBeGreaterThan(0);
+      const jobsAfterBuild = thumbJobs.length;
+
+      writeFileSync(path.join(dir, "photo.png"), "fake-png-1, edited and longer");
+      fileAnimCalls.length = 0;
+      mouseHandlers.length = 0;
+      stepClock();
+      await renderGrid();
+      await t.renderOnce();
+
+      expect(mouseHandlers.length).toBeGreaterThan(0); // rebuilt, not fast-pathed
+      expect(fileAnimCalls.some((c) => c.tiles.length > 0)).toBe(true); // fresh wave, not just the stop
+      expect(thumbJobs.length).toBeGreaterThan(jobsAfterBuild); // raster re-queued
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("a throwing row degrades to a placeholder, siblings still paint", async () => {
+    // buildInner runs AFTER clearGrid — an unguarded throw used to strand an
+    // empty scroller on every tick and every restart for that folder
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-badrow-"));
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "boom.txt"), "boom");
+      writeFileSync(path.join(dir, "c.txt"), "c");
+      viewMode = "list";
+      gridState.cwd = dir;
+      throwOnName = "boom.txt";
+      fileAnimCalls.length = 0;
+      await renderGrid(); // must resolve, not reject
+      await t.renderOnce();
+
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("c.txt");
+      // every entry still registered; the bad row holds a same-id placeholder
+      expect(selection.tileRefs.size).toBe(3);
+      expect(t.renderer.root.findDescendantById("tfm-tile-1")).toBeTruthy();
+    } finally {
+      throwOnName = null;
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+});
+
+test("rapid successive rebuilds coalesce to one wave (storm gate)", async () => {
+  // a rotation burst must repaint every time but restart the wave only once
+  // the cooldown passes — overlapping waves never complete and read as
+  // invisible files on a slow VT
+  const plays = (): number => fileAnimCalls.filter((c) => c.tiles.length > 0).length;
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-storm-"));
+  try {
+    writeFileSync(path.join(dir, "a.txt"), "a");
+    viewMode = "list";
+    gridState.cwd = dir;
+    stepClock();
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+    expect(plays()).toBe(1);
+
+    // two membership changes inside the cooldown: both repaint, neither waves
+    writeFileSync(path.join(dir, "b.txt"), "b");
+    await renderGrid();
+    writeFileSync(path.join(dir, "c.txt"), "c");
+    await renderGrid();
+    await t.renderOnce();
+    expect(selection.tileRefs.size).toBe(3);
+    expect(t.captureCharFrame()).toContain("c.txt");
+    expect(plays()).toBe(1);
+
+    // past the cooldown a new change waves again
+    stepClock();
+    writeFileSync(path.join(dir, "d.txt"), "d");
+    await renderGrid();
+    await t.renderOnce();
+    expect(plays()).toBe(2);
+  } finally {
+    viewMode = "grid";
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("navigating to a different folder within the cooldown still plays its intro", async () => {
+  // the cooldown coalesces a STORM in one listing; a cwd change is a new
+  // folder's intro and must animate (the old global clock swallowed it)
+  const plays = (): number => fileAnimCalls.filter((c) => c.tiles.length > 0).length;
+  const dirA = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-nav-a-"));
+  const dirB = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-nav-b-"));
+  try {
+    writeFileSync(path.join(dirA, "a.txt"), "a");
+    writeFileSync(path.join(dirB, "b.txt"), "b");
+    viewMode = "list";
+    gridState.cwd = dirA;
+    stepClock();
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+    expect(plays()).toBe(1);
+
+    // navigate immediately — no stepClock, still inside the cooldown
+    gridState.cwd = dirB;
+    await renderGrid();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("b.txt");
+    expect(plays()).toBe(2);
+  } finally {
+    viewMode = "grid";
+    rmSync(dirA, { recursive: true, force: true });
+    rmSync(dirB, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("a stats tick on a non-thumbnailable image takes the fast path (no rebuild)", async () => {
+  // thumbStatsChanged must mirror thumbPlanFor: a 0-byte image never rasters,
+  // so its mtime moving must not force the full clear+rebuild
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-thumb0-"));
+  try {
+    const p = path.join(dir, "empty.png");
+    writeFileSync(p, "");
+    viewMode = "list";
+    gridState.cwd = dir;
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    const later = new Date(Date.now() + 5000);
+    utimesSync(p, later, later);
+    fileAnimCalls.length = 0;
+    mouseHandlers.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    expect(mouseHandlers.length).toBe(0); // fast path, no row rebuild
+    expect(fileAnimCalls.length).toBe(0);
+  } finally {
+    viewMode = "grid";
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("a stats tick that crosses OUT of the rasterizable range rebuilds (stale-thumb guard)", async () => {
+  // a thumbnailed image truncated to 0 bytes can no longer raster: the old
+  // guard `continue`d on the NEW size and took the fast path, leaving the
+  // previous thumbnail on screen for a file that has none
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-thumbcross-"));
+  try {
+    const p = path.join(dir, "shrink.png");
+    writeFileSync(p, "x"); // 1 byte: eligible
+    viewMode = "list";
+    gridState.cwd = dir;
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    writeFileSync(p, ""); // 0 bytes: no longer eligible
+    fileAnimCalls.length = 0;
+    mouseHandlers.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+
+    expect(mouseHandlers.length).toBeGreaterThan(0); // rebuilt, not fast-pathed
+  } finally {
+    viewMode = "grid";
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+test("windowed busy loop: repeated stats ticks keep every mounted row visible", async () => {
+  // production default is windowed-grid ON — the non-windowed stats test
+  // above doesn't cover the window snapshot interplay
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-busywin-"));
+  try {
+    for (let i = 1; i <= 40; i++) writeFileSync(path.join(dir, `f${String(i).padStart(2, "0")}.txt`), "x");
+    viewMode = "list";
+    windowedGridOn = true;
+    gridState.cwd = dir;
+    scroller.scrollTop = 0;
+    await renderGrid();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("f01.txt");
+
+    // several busy ticks: appends move size/mtime, never membership
+    for (let round = 0; round < 3; round++) {
+      writeFileSync(path.join(dir, "f01.txt"), `x${"y".repeat(round + 5)}`);
+      fileAnimCalls.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("f01.txt");
+      expect(frame).toContain("f02.txt");
+      expect(fileAnimCalls.length).toBe(0);
+    }
+    // scroll deep, tick again: the slid window still paints its rows
+    scroller.scrollTop = 20;
+    syncWindow();
+    await t.renderOnce();
+    writeFileSync(path.join(dir, "f12.txt"), "changed!");
+    await renderGrid();
+    await t.renderOnce();
+    const scrolled = t.captureCharFrame();
+    expect(scrolled).toContain("f12.txt");
+    expect(scrolled).toContain("8 B");
+  } finally {
+    viewMode = "grid";
+    windowedGridOn = false;
+    scroller.scrollTop = 0;
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
+// --- superseded renders: the pane-claim invariant. renderGrid clears the
+// scroller and rebuilds, and a second render (a file op's renderAll burst, the
+// watcher) can start inside the first one's await. That first render must then
+// neither destroy the painted pane nor leave a "painted as of listing X" claim
+// behind: the combination blanked the pane on the console (null
+// renderer.resolution parks for seconds) until the cwd changed.
+describe("renderGrid (superseded renders)", () => {
+  const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+    const deadline = Date.now() + ms;
+    while (!cond() && Date.now() < deadline) await Bun.sleep(5);
+  };
+  // controllable waitForResolution: every call parks until open(), which
+  // releases the parked ones AND lets later calls through — no release-vs-park
+  // ordering deadlock when a test interleaves renders
+  const parkWaits = () => {
+    const waiters: Array<() => void> = [];
+    let open = false;
+    return {
+      count: (): number => waiters.length,
+      open: (): void => {
+        open = true;
+        for (const r of waiters.splice(0)) r();
+      },
+      impl: (): Promise<void> => {
+        if (open) return Promise.resolve();
+        return new Promise<void>((r) => {
+          waiters.push(r);
+        });
+      },
+    };
+  };
+
+  test("a superseded render never strands a cleared pane (file-op render storm)", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-superseded-"));
+    const waits = parkWaits();
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "b.txt"), "b");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      // only the rebuild under test parks
+      waitForResolutionImpl = waits.impl;
+
+      // the op's write lands, then its render burst fires a second render while
+      // the first is still parked mid-rebuild
+      writeFileSync(path.join(dir, "c.txt"), "c");
+      const first = renderGrid(); // deliberately not awaited — it parks
+      await settleUntil(() => waits.count() >= 1);
+      const second = renderGrid();
+      waits.open();
+      await Promise.all([first, second]);
+      await t.renderOnce();
+
+      // the NEWEST render owns the pane: every file is on screen and the
+      // selection contract is intact. A cleared pane plus a committed paint
+      // claim left it blank until a cwd change (the VT-only regression).
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("b.txt");
+      expect(frame).toContain("c.txt");
+      expect(selection.tileRefs.size).toBe(3);
+      expect(selection.focusKeys().length).toBe(3);
+    } finally {
+      waits.open();
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a parked rebuild keeps the previous rows on screen", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-parked-"));
+    const waits = parkWaits();
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "b.txt"), "b");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      // only the rebuild under test parks
+      waitForResolutionImpl = waits.impl;
+
+      writeFileSync(path.join(dir, "c.txt"), "c");
+      const parked = renderGrid();
+      await settleUntil(() => waits.count() >= 1);
+      await t.renderOnce();
+      // the park happens BEFORE the grid is cleared: on the console the null
+      // resolution parks for seconds and the old rows must survive it
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("b.txt");
+      expect(frame).not.toContain("c.txt");
+
+      waits.open();
+      await parked;
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("c.txt");
+    } finally {
+      waits.open();
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a failed build invalidates the paint claim so the next render rebuilds", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-buildfail-"));
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "b.txt"), "b");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+
+      // native allocation failures (Failed to create TextBuffer under memory
+      // pressure) throw INSIDE the build, after the grid is already cleared
+      const realAdd = content.add.bind(content);
+      let boom = true;
+      (content as any).add = (child: Renderable) => {
+        if (boom) {
+          boom = false;
+          throw new Error("native allocator refused");
+        }
+        return realAdd(child);
+      };
+      gridLogs.length = 0;
+      try {
+        writeFileSync(path.join(dir, "c.txt"), "c");
+        await renderGrid().catch(() => {}); // the old code rejected here
+      } finally {
+        (content as any).add = realAdd;
+      }
+
+      // a claim committed before the build would make this render skip the
+      // rebuild and leave the pane blank for good — the failure must invalidate
+      await renderGrid();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).toContain("c.txt");
+      expect(selection.tileRefs.size).toBe(3);
+      // and the failure is surfaced instead of swallowed
+      expect(gridLogs.some((m) => m.includes("rebuild failed"))).toBe(true);
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
   });
 });
 
@@ -1530,6 +2131,22 @@ describe("renderGrid (windowed grid)", () => {
     }
   });
 
+  test("flipping the raster mode rebuilds so force-glyph applies live", async () => {
+    // force-glyph/icons/tty-mode change what each tile paints (raster vs glyph)
+    // without touching the listing, and without a signature entry the render
+    // early-outs and the toggle visibly does nothing until restart
+    await renderGrid();
+    const before = iconSlots.length;
+    rasterSig = "raster-b";
+    try {
+      await renderGrid();
+      expect(iconSlots.length).toBeGreaterThan(before);
+    } finally {
+      rasterSig = "raster-a";
+      await renderGrid();
+    }
+  });
+
   test("recursively-searched (flat) results window identically", async () => {
     // results come from the injected fake; 40 abs-keyed entries exercise the
     // same window with `entry.abs` instead of cwd-joined names
@@ -1633,5 +2250,412 @@ describe("hookScrollerScroll", () => {
     expect(hookScrollerScroll(sc, () => seen.push("notify"))).toBe(true);
     sc.verticalScrollBar._onChange(42);
     expect(seen).toEqual(["orig:42", "notify"]);
+  });
+});
+
+// --- [ui] loading-delay-ms ---------------------------------------------------
+// The pane must never blank on a rebuild (clearing before the paint stranded
+// it — see the pane-claim invariant), so before this the only thing a slow
+// listing showed was the PREVIOUS folder's tiles: an app that looks frozen.
+// The placeholder replaces that after the configured delay and writes NO paint
+// claim, so the render that finally lands still owns the pane.
+describe("loadingLabel / loadingLine", () => {
+  test("names the folder being opened, or the recursive walk that has no listing yet", () => {
+    expect(loadingLabel("/home/clark/Pictures", "", false)).toBe("loading Pictures…");
+    expect(loadingLabel(RECENT_URI, "", false)).toBe("loading recent files…");
+    expect(loadingLabel(STARRED_URI, "", false)).toBe("loading starred…");
+    expect(loadingLabel("/x", "foo", true)).toBe("searching…");
+    // an in-dir filter still has the folder to show — not a search
+    expect(loadingLabel("/x", "foo", false)).toBe("loading x…");
+  });
+
+  test("clamps the painted line to the pane so it can't overflow into a neighbour", () => {
+    expect(loadingLine("⠋", "loading Pictures…", 40)).toBe("⠋ loading Pictures…");
+    const long = loadingLine("⠋", "loading a-really-long-folder-name…", 10);
+    expect(long.length).toBeLessThanOrEqual(10);
+    expect(long.endsWith("…")).toBe(true);
+    // a pane narrower than the sprite still gets the 8-cell floor
+    expect(loadingLine("⠋", "loading some-folder…", 1).length).toBe(8);
+  });
+});
+
+describe("renderGrid (loading placeholder)", () => {
+  const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+    const deadline = Date.now() + ms;
+    while (!cond() && Date.now() < deadline) await Bun.sleep(5);
+  };
+  // holds renders inside the resolution park — the seam the console's slow path
+  // used to be (and still is, right after a resize requery)
+  const parkWait = () => {
+    const waiters: Array<() => void> = [];
+    let open = false;
+    return {
+      count: (): number => waiters.length,
+      open: (): void => {
+        open = true;
+        for (const r of waiters.splice(0)) r();
+      },
+      impl: (): Promise<void> =>
+        open
+          ? Promise.resolve()
+          : new Promise<void>((r) => {
+              waiters.push(r);
+            }),
+    };
+  };
+  const loadingId = (): string => loadingNodeId(tilePrefix);
+  const loadingNode = (): any => t.renderer.root.findDescendantById(loadingId()) as any;
+  // one root with two SIBLING folders of known names: the placeholder names
+  // the folder it is opening, so the painted label must be predictable (and a
+  // fresh root per test keeps the listings cache out of the way)
+  const mkPair = (): { root: string; a: string; b: string } => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-loading-"));
+    const a = path.join(root, "alpha");
+    const b = path.join(root, "beta");
+    mkdirSync(a);
+    mkdirSync(b);
+    writeFileSync(path.join(a, "a.txt"), "x");
+    writeFileSync(path.join(b, "b.txt"), "x");
+    return { root, a, b };
+  };
+
+  test("a slow listing swaps the stale tiles for the placeholder, then paints", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 150;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      await settleUntil(() => park.count() >= 1);
+      // the listing is in hand and the pane is parked before the clear: the
+      // armed delay fires now, so the OLD folder's tiles are replaced by the
+      // placeholder instead of sitting there looking frozen
+      revealClock.flush();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("loading beta");
+      expect(frame).not.toContain("a.txt");
+
+      park.open();
+      await parked;
+      await t.renderOnce();
+      const after = t.captureCharFrame();
+      expect(after).toContain("b.txt");
+      expect(after).not.toContain("loading");
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a listing inside the delay never flashes one (and a stray timer can't paint later)", async () => {
+    const { root, a } = mkPair();
+    loadingDelayMs = 150;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      expect(loadingNode()).toBeFalsy();
+      // the render cancelled its own armed timer — flushing finds nothing
+      revealClock.flush();
+      await t.renderOnce();
+      expect(loadingNode()).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("a.txt");
+    } finally {
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("the placeholder writes no paint claim: navigating back still repaints", async () => {
+    // the regression this pins: the claim describes listing A, the screen shows
+    // the placeholder, and the user comes back to A — its signature MATCHES the
+    // claim, so without the showingLoading gate the render would early-out and
+    // leave "loading…" on screen until the cwd moved
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 150;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parkedB = renderGrid();
+      await settleUntil(() => park.count() >= 1);
+      revealClock.flush();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).not.toContain("a.txt");
+
+      gridState.cwd = a;
+      const again = renderGrid();
+      park.open();
+      await Promise.all([parkedB, again]);
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(frame).not.toContain("loading");
+      expect(selection.tileRefs.size).toBe(1);
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("delay 0 clears the pane synchronously (the always-show mode)", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 0;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      // no clock to advance: the placeholder is painted in the render's own
+      // synchronous prefix, before it ever touches the disk
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("loading beta");
+      expect(t.captureCharFrame()).not.toContain("a.txt");
+
+      park.open();
+      await parked;
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("b.txt");
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("spins per frame — braille on a graphics terminal, ASCII on the console", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 0;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      await t.renderOnce();
+      const braille = SPIN_FRAMES_BRAILLE[0] as string;
+      expect(t.captureCharFrame()).toContain(`${braille} loading beta`);
+      revealClock.flush(); // one tick
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain(`${SPIN_FRAMES_BRAILLE[1]} loading beta`);
+      park.open();
+      await parked;
+      await t.renderOnce();
+
+      // the tick died with the placeholder: flushing can't repaint "loading…"
+      // over the fresh listing
+      revealClock.flush();
+      await t.renderOnce();
+      expect(loadingNode()).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("b.txt");
+
+      // console: the VT font has no braille block. Back to alpha first — a
+      // render for the folder already on screen is not a context change and
+      // arms nothing (the placeholder only ever covers a STALE pane)
+      ttyModeOn = true;
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      const park2 = parkWait();
+      waitForResolutionImpl = park2.impl;
+      gridState.cwd = b;
+      const parked2 = renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain(`${SPIN_FRAMES_ASCII[0]} loading beta`);
+      park2.open();
+      await parked2;
+      await t.renderOnce();
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      ttyModeOn = false;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a slow navigation logs its own components; a layout-only render stays quiet", async () => {
+    const { root, a } = mkPair();
+    try {
+      viewMode = "list";
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+
+      gridLogs.length = 0;
+      // the parked rebuild IS the console's old 2s stall (now bounded to the
+      // render path's short wait) — whatever a report calls "stuck", the
+      // breadcrumb names list/park/build
+      waitForResolutionImpl = async () => {
+        await Bun.sleep(100);
+      };
+      writeFileSync(path.join(a, "later.txt"), "x");
+      await renderGrid();
+      const line = gridLogs.find((m) => m.startsWith("grid: "));
+      expect(line).toBeTruthy();
+      expect(line).toContain("n=2");
+      expect(line).toContain("list=");
+      expect(line).toContain("build=");
+      expect(Number(/park=(\d+)ms/.exec(line ?? "")?.[1])).toBeGreaterThanOrEqual(90);
+
+      // a same-listing render (the pane is already correct) ends without work
+      // and without a line
+      waitForResolutionImpl = () => Promise.resolve();
+      gridLogs.length = 0;
+      await renderGrid();
+      expect(gridLogs.filter((m) => m.startsWith("grid: "))).toEqual([]);
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridLogs.length = 0;
+      gridState.cwd = tmp;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("list row badges a symlink as name → target", async () => {
+    // the two-names-one-inode confusion (tfm + terminal-file-manager reading
+    // the same size): the link row must say what it points at
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-linkbadge-"));
+    try {
+      writeFileSync(path.join(dir, "tgt.txt"), "hello");
+      symlinkSync(path.join(dir, "tgt.txt"), path.join(dir, "lnk"));
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("lnk → tgt.txt");
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("list row sizes a symlink by its link bytes, not the target's", async () => {
+    // badge says WHERE it points, the size cell says what the link costs —
+    // the row must never repeat the target's size
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-linksize-"));
+    try {
+      writeFileSync(path.join(dir, "tgt.txt"), "x".repeat(500));
+      const link = path.join(dir, "lnk");
+      symlinkSync(path.join(dir, "tgt.txt"), link);
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("lnk → tgt.txt");
+      const line = frame.split("\n").find((l) => l.includes("lnk → tgt.txt"));
+      expect(line).toContain(fmtBytes(lstatSync(link).size));
+      expect(line).not.toContain(fmtBytes(500));
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("link-to-image thumbnails key on the target's stats, not the link's", async () => {
+    // the raster reads target pixels: an edited target must change the job
+    // key (link bytes never change on target edits — stale photo otherwise)
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-linkthumb-"));
+    try {
+      const target = path.join(dir, "tgt.png");
+      writeFileSync(target, "x".repeat(100));
+      const link = path.join(dir, "lnk.png");
+      symlinkSync(target, link);
+      viewMode = "list";
+      gridState.cwd = dir;
+      thumbJobs.length = 0;
+      await renderGrid();
+      await t.renderOnce();
+      const job = thumbJobs.find((j: any) => j.path === link);
+      expect(job).toBeTruthy();
+      expect(job.size).toBe(100);
+    } finally {
+      viewMode = "grid";
+      rmSync(dir, { recursive: true, force: true });
+      gridState.cwd = tmp;
+      await renderGrid();
+    }
+  });
+
+  test("linkRowLabel truncates the combined label to max", () => {
+    expect(linkRowLabel("lnk", "tgt.txt", 30)).toBe("lnk → tgt.txt");
+    expect(linkRowLabel("averylongname.txt", "anotherlongtarget.txt", 20)).toBe("averylongname.txt →…");
+  });
+
+  test("never yanks a live inline rename", async () => {
+    const { root, a, b } = mkPair();
+    loadingDelayMs = 0;
+    renamingOn = true;
+    try {
+      gridState.cwd = a;
+      await renderGrid();
+      await t.renderOnce();
+      const park = parkWait();
+      waitForResolutionImpl = park.impl;
+      gridState.cwd = b;
+      const parked = renderGrid();
+      await t.renderOnce();
+      expect(loadingNode()).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("a.txt");
+      park.open();
+      await parked;
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      loadingDelayMs = undefined;
+      renamingOn = false;
+      revealClock.reset();
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
   });
 });

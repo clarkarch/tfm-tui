@@ -44,4 +44,15 @@ describe("spawnSafe", () => {
     expect(code).toBe(0);
     expect(out).toBe("payload");
   });
+
+  test("timeoutMs kills a wedged helper instead of never resolving", async () => {
+    // without the backstop this test hangs forever: a wedged udisksctl never
+    // resolves, never toasts, never dies (use sleep — universally present)
+    const p = spawnSafe("sleep", ["30"], { stdio: "ignore", timeoutMs: 50 });
+    const code: number = await new Promise((res) => {
+      p.on("close", (c) => res(c ?? -1));
+      p.on("exit", (c) => res(c ?? -1));
+    });
+    expect(code).not.toBe(0);
+  });
 });

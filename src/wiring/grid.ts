@@ -4,32 +4,34 @@
 // AFTER the fileops wiring — gridCtx takes moveInto directly. ---
 
 import path from "node:path";
+import { errMessage } from "../lib/uiutil";
+import { existsSync, statSync } from "node:fs";
+import { chmod } from "node:fs/promises";
+import { spawnSafe } from "../fs/spawn-safe";
+import { addExecBits, classifyPath, executableChoiceLabels, type ExecutableInfo } from "../fs/executable";
 import { registerSyntaxParsers } from "../ui/syntax";
 import { availableCompressionFormats, canExtract, compressionExt, compressionHint } from "../fs/archive";
 import { appsForFile, launchApp } from "../fs/apps";
+import { runSudo, sudoCatArgv } from "../fs/elevate";
 import type { makePick } from "../ui/ui-pick";
 import { makePreview } from "../ui/ui-preview";
-import {
-  finishDragState,
-  gridDrag,
-  makeEntryMouseHandlers,
-  type BandCtx,
-  type GridMenuEntry,
-} from "../input/grid-input";
+import { finishDragState, gridDrag, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
-import { waitForResolution } from "../ui/ui-lookup";
-import { glyph } from "../ui/glyphs";
+import { FILE_GLYPH, glyph } from "../ui/glyphs";
+import { rasterSigOf } from "../ui/tty";
 import { activeFacade } from "../app/panes";
 import { isVirtualUri } from "../fs/uri";
-import { isTrashFilesDir } from "../fs/fsutil";
+import { isTrashFilesDir, canReadSync } from "../fs/fsutil";
 import { dlog } from "../app/log";
 import type { ListEntry } from "../ui/ui-menu";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, NavWiring } from "./types";
 import type { PluginsWiring } from "./plugins";
+import { isPluginEnabled } from "../plugins/plugin-api";
+import type { RethemeWiring } from "./settings";
 
 export const wireGrid = (deps: {
   core: CoreWiring;
@@ -40,8 +42,10 @@ export const wireGrid = (deps: {
   plugins: PluginsWiring;
   // pick overlay wires LAST (wiring/keymap) — lazy getter, action-time only
   getPick(): ReturnType<typeof makePick>;
+  // retheme wires after grid — lazy getter, action-time only (same seam)
+  getRetheme: () => RethemeWiring;
 }) => {
-  const { core, nav, chrome, gridFoundation, fileops, plugins, getPick } = deps;
+  const { core, nav, chrome, gridFoundation, fileops, plugins, getPick, getRetheme } = deps;
   const { selection, selections, rename } = gridFoundation;
   const { byId, stripSelectable } = core.lookup;
   const { themeGet, home, state } = core;
@@ -56,21 +60,39 @@ export const wireGrid = (deps: {
     uiStyle,
     previewEnabled: () => core.config.ui.previewEnabled,
     previewWidth: () => core.config.ui.previewWidth,
+    // global wrap mode ([ui] wrap-mode) drives preview bodies too —
+    // keymap reads config.keys live, the preview reads this live the same way
+    wrapMode: () => core.config.ui.wrapMode,
     // skip preview rebuilds while the pane is collapsed (auto-hide) — the
     // effective width is 0 then, and the work is invisible native churn
     visible: () => core.geometry.previewEff > 0 && core.config.ui.previewEnabled,
     termH: () => chrome.renderer.terminalHeight,
     cellMetrics: core.slots.cellMetrics,
-    focusKey: () =>
-      selection.focusIdx() >= 0 && selection.focusKeys()[selection.focusIdx()]
-        ? selection.focusKeys()[selection.focusIdx()]!
-        : null,
+    focusKey: () => {
+      // resolve the index once and read through `?? null` — the original read
+      // the key twice and asserted the second read non-null
+      const idx = selection.focusIdx();
+      if (idx < 0) return null;
+      return selection.focusKeys()[idx] ?? null;
+    },
     tileRefs: selection.tileRefs,
     pushThumbJob: core.slots.pushThumbJob,
-    drainThumbs: () => core.slots.drainThumbs(),
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainThumbs: core.slots.drainThumbs,
+    drainIconQueue: core.slots.drainIconQueue,
     nextIconId: core.slots.nextIconId,
-    fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    fallbackGlyphFor: (name) => glyph[name] ?? FILE_GLYPH,
+    isTtyMode: core.isTtyMode,
+    forceGlyph: core.forceGlyph,
+    // root preview: non-interactive `sudo -n cat` only (cached timestamp) —
+    // a preview must never pop a password prompt on every focus move
+    sudoCat: async (p) => {
+      try {
+        const r = await runSudo(sudoCatArgv(p), { timeoutMs: 10_000 });
+        return r.status === 0 ? r.stdout : null;
+      } catch {
+        return null;
+      }
+    },
     pluginPreview: async (filePath) => {
       // path.extname, not split(".").pop(): dotfiles (".bashrc") have no ext,
       // "foo." has none either — the naive split claims "bashrc"/"".
@@ -78,7 +100,7 @@ export const wireGrid = (deps: {
       if (!ext) return null;
       // first matching ext in load order wins; a throwing/empty render falls
       // through to the next plugin, then to core — never a blank pane.
-      for (const p of plugins.plugins) {
+      for (const p of plugins.plugins.filter(isPluginEnabled)) {
         for (const pv of p.preview) {
           if (!pv.exts.includes(ext)) continue;
           try {
@@ -117,7 +139,7 @@ export const wireGrid = (deps: {
     const prev = core.panes.active;
     if (prev === pane) return;
     // a selection must not survive a pane switch: drop the pane we're leaving
-    selections[prev]!.clearTileSelection();
+    selections[prev].clearTileSelection();
     core.setActivePane(pane);
     core.refreshPaneFocus();
     try {
@@ -133,6 +155,9 @@ export const wireGrid = (deps: {
   // PER PANE so a tile's handlers always act on their own pane's selection/map
   // regardless of focus timing. All state lives in tileRefs + the drag module
   // vars, keyed by path.
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
   const makePaneGridCtx = (pane: 0 | 1) => {
     const s = selections[pane];
     return {
@@ -162,10 +187,10 @@ export const wireGrid = (deps: {
       openFileDefault: chrome.openFileDefault,
       moveInto: fileops.fileops.moveInto,
       // --- menu deps (GridMenuDeps) ---
-      openContextMenu: (x: number, y: number, title: string, entries: GridMenuEntry[]) =>
-        chrome.menu.openContextMenu(x, y, title, entries as ListEntry[]),
-      fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): GridMenuEntry[] =>
-        menuEntries.fileEntriesFor(key, isDir, x, y) as GridMenuEntry[],
+      openContextMenu: (x: number, y: number, title: string, entries: ListEntry[]) =>
+        chrome.menu.openContextMenu(x, y, title, entries),
+      fileEntriesFor: (key: string, isDir: boolean, x: number, y: number): ListEntry[] =>
+        menuEntries.fileEntriesFor(key, isDir, x, y),
       closeFileMenu: chrome.menu.closeFileMenu,
       renameEditKey: rename.renameEditKey,
       finishInlineRename: rename.finishInlineRename,
@@ -174,6 +199,7 @@ export const wireGrid = (deps: {
       focusPane: () => focusPane(pane),
       blurTerminal: () => fileops.terminal.blurTerminal(),
       hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
+      setPointer,
       log: (msg: string) => dlog(msg),
     };
   };
@@ -188,7 +214,7 @@ export const wireGrid = (deps: {
   const dropIntoPane = (pane: 0 | 1): void => {
     const keys = gridDrag.keys;
     if (!keys?.length) return;
-    const dest = core.panes.states[pane]!.cwd;
+    const dest = core.panes.states[pane].cwd;
     finishDragCtx();
     if (isVirtualUri(dest) || isTrashFilesDir(dest)) return;
     if (dest === core.state.cwd) {
@@ -217,6 +243,8 @@ export const wireGrid = (deps: {
       renderer: chrome.renderer,
       byId: core.lookup.byId,
       opts: () => ({
+        // text-cell opacity/translate needs no graphics protocol, so file
+        // anims stay enabled in tty mode (rasters/thumbs/list-force aside)
         style: fileAnimStyleFrom({
           enabled: core.config.ui.fileAnimation,
           slide: core.config.ui.fileAnimationSlide,
@@ -241,6 +269,7 @@ export const wireGrid = (deps: {
       tileRefs: () => selections[pane].tileRefs,
       colors: themeGet,
       uiStyle,
+      transparentForce: () => core.config.ui.transparentBg === "force",
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
       hoverLiftOpts: () => ({
@@ -254,11 +283,11 @@ export const wireGrid = (deps: {
     makeGridRenderer({
       termW: () => chrome.renderer.terminalWidth,
       termH: () => chrome.renderer.terminalHeight,
-      scroller: () => core.scrollerRefs[pane]!.current,
+      scroller: () => core.scrollerRefs[pane].current,
       state: core.panes.states[pane],
-      searchQuery: () => nav.searches[pane]!.getQuery(),
+      searchQuery: () => nav.searches[pane].getQuery(),
       recursiveSearch: () => core.config.ui.recursiveSearch,
-      pathEditMode: () => chrome.toolbars[pane]!.pathEditMode(),
+      pathEditMode: () => chrome.toolbars[pane].pathEditMode(),
       // column math reads the EFFECTIVE sidebar width (hover drawer rewrites it
       // as the sidebar collapses); core.geometry.sw is the config width used for
       // sidebar content, which stays baked at full size and clips
@@ -274,20 +303,35 @@ export const wireGrid = (deps: {
       listRowH: () => core.config.ui.listRowHeight,
       uiStyle,
       colors: themeGet,
+      transparentForce: () => core.config.ui.transparentBg === "force",
       previewEnabled: () => core.config.ui.previewEnabled,
       previewWidth: () => core.config.ui.previewWidth,
-      viewMode: () => core.config.ui.viewMode,
-      wordWrap: () => core.config.ui.wordWrap,
+      // tty mode forces the compact rows: icon tiles need graphics + Nerd glyphs
+      viewMode: () => (core.isTtyMode() ? "list" : core.config.ui.viewMode),
+      // raster-affecting state the grid rebuild keys off (force-glyph/icons/
+      // tty mode/transparent-bg flips must rebuild even though the listing
+      // is unchanged)
+      rasterSig: () =>
+        rasterSigOf(
+          core.config.ui.icons,
+          core.isTtyMode(),
+          core.config.ui.forceGlyph,
+          core.config.ui.iconStyle,
+          core.config.ui.transparentBg,
+        ),
+      wrapMode: () => core.config.ui.wrapMode,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,
       tileIdPrefix: `tfm-tile-p${pane}-`,
       cellMetrics: core.slots.cellMetrics,
       makeIconSlot: core.slots.makeIconSlot,
       pushThumbJob: core.slots.pushThumbJob,
-      nextIconId: () => core.slots.nextIconId(),
-      drainIconQueue: () => core.slots.drainIconQueue(),
-      drainThumbs: () => core.slots.drainThumbs(),
+      nextIconId: core.slots.nextIconId,
+      drainIconQueue: core.slots.drainIconQueue,
+      drainThumbs: core.slots.drainThumbs,
       stripSelectable,
+      setTextOnId: core.lookup.setTextOnId,
+      log: (msg) => dlog(msg),
       fileAnim: (target) => fileAnims[pane].play(target),
       fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
       fileAnimScrollRevealDelayMs: () => core.config.ui.fileAnimationScrollRevealDelayMs,
@@ -296,10 +340,15 @@ export const wireGrid = (deps: {
       listingsCache: () => core.config.ui.listingsCache,
       listingsCacheStats: () => core.config.ui.listingsCacheStats,
       listingsCacheTtlMs: () => core.config.ui.listingsCacheTtl * 1000,
+      loadingDelayMs: () => core.config.ui.loadingDelayMs,
+      isTtyMode: core.isTtyMode,
       selection: selections[pane],
       entryMouseHandlers: entryMouseHandlers[pane],
       isCutKey: core.isCutKey,
-      waitForResolution: () => waitForResolution(chrome.renderer),
+      // render path: the gate's cheap wait. Once boot latched "this terminal
+      // never reports pixels" this is an instant no-op — the old unbounded
+      // 2s park here stalled EVERY navigation on the console.
+      waitForResolution: () => core.resolutionGate.wait(),
       clearRenameEdit: rename.clearRenameEdit,
     });
   const renderers = [makeRenderer(0), makeRenderer(1)] as const;
@@ -322,8 +371,8 @@ export const wireGrid = (deps: {
     setTextOnId: core.lookup.setTextOnId,
     setOnId: core.lookup.setOnId,
     stripSelectable,
-    drainIconQueue: () => core.slots.drainIconQueue(),
-    drainThumbs: () => core.slots.drainThumbs(),
+    drainIconQueue: core.slots.drainIconQueue,
+    drainThumbs: core.slots.drainThumbs,
     pushThumbJob: core.slots.pushThumbJob,
     nextIconId: core.slots.nextIconId,
     escHintBtn: core.slots.escHintBtn,
@@ -336,18 +385,113 @@ export const wireGrid = (deps: {
     home,
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
-    fallbackGlyphFor: (name) => glyph[name] ?? glyph.file!,
+    fallbackGlyphFor: (name) => glyph[name] ?? FILE_GLYPH,
+    isTtyMode: core.isTtyMode,
+    forceGlyph: core.forceGlyph,
     cellMetrics: core.slots.cellMetrics,
+    setPointer,
   });
+
+  // open a folder in the inactive pane, enabling dual-pane when off: enable
+  // through the single applyConfig path (normalizePanes points the fresh pane
+  // at the current cwd), then switch + navigate the now-active other pane
+  // through the tested navigate path (tab sync, hooks, renderAll included).
+  const openInOtherPane = (dir: string): void => {
+    if (!core.config.ui.dualPane) {
+      getRetheme().applyConfig({ ...core.config, ui: { ...core.config.ui, dualPane: true } });
+      getRetheme().scheduleSaveConfig();
+    }
+    const other = core.panes.active === 0 ? 1 : 0;
+    // a selection must not survive a pane switch (same rule as switchPane)
+    gridFoundation.selections[core.panes.active]?.clearTileSelection();
+    core.setActivePane(other);
+    nav.navigate(dir);
+  };
 
   // --- Menu entry builders (what the menus contain) live in ./menu-entries;
   // the floating menu widget itself lives in ./ui-menu ---
+  // --- Executable launches: a +x file (or ELF/shebang content) runs instead
+  // of landing in the browser/editor via xdg-open. Detached spawn uses the
+  // file's own dir as cwd; terminal runs feed the absolute quoted path into
+  // the embedded pane. needsChmod files gain exec bits (where read exists)
+  // first, with a toast saying so. ---
+  const spawnDetached = (p: string): void => {
+    try {
+      spawnSafe(p, [], { stdio: "ignore", detached: true, cwd: path.dirname(p) }, (err) => {
+        dlog(`run ${p}: ${err.message}`);
+        chrome.notify(`Can't run ${path.basename(p)} · ${err.message}`, "run", "error");
+      }).unref?.();
+    } catch (err) {
+      chrome.notify(`Can't run ${path.basename(p)} · ${errMessage(err)}`, "run", "error");
+      return;
+    }
+    chrome.notify(`Running ${path.basename(p)}`, "run", "info");
+  };
+
+  const ensureExec = async (p: string): Promise<boolean> => {
+    try {
+      await chmod(p, addExecBits(statSync(p).mode));
+      return true;
+    } catch (err) {
+      chrome.notify(`Chmod failed (${errMessage(err)})`, "run", "error");
+      return false;
+    }
+  };
+
+  const runExecutable = (p: string): void => {
+    const info = classifyPath(p);
+    if (!info.executable) {
+      chrome.notify(`Can't run ${path.basename(p)}`, "run", "error");
+      return;
+    }
+    if (!info.needsChmod) {
+      spawnDetached(p);
+      return;
+    }
+    void (async () => {
+      if (await ensureExec(p)) spawnDetached(p);
+    })();
+  };
+
+  const runExecutableInTerminal = (p: string): void => {
+    const info = classifyPath(p);
+    if (!info.executable) {
+      chrome.notify(`Can't run ${path.basename(p)}`, "run", "error");
+      return;
+    }
+    if (!info.needsChmod) {
+      fileops.terminal.execInTerminal(p);
+      return;
+    }
+    void (async () => {
+      if (await ensureExec(p)) fileops.terminal.execInTerminal(p);
+    })();
+  };
+
+  // the Run prompt behind openFileDefault's executable fork (same pick
+  // overlay as Open With…/Compress to… — no new float kind)
+  const askExecutable = (p: string, info: ExecutableInfo, openAnyway: () => void): void => {
+    const [runLabel, termLabel, openLabel] = executableChoiceLabels(info);
+    getPick().open({
+      title: `Run "${path.basename(p)}"?`,
+      placeholder: "Choose how to open…",
+      items: [
+        { label: runLabel, run: () => runExecutable(p) },
+        { label: termLabel, run: () => runExecutableInTerminal(p) },
+        { label: openLabel, run: openAnyway },
+      ],
+    });
+  };
+
   const menuEntries = makeMenuEntries({
     closeFileMenu: chrome.menu.closeFileMenu,
     navigate: nav.navigate,
     newTab: nav.newTab,
+    openInOtherPane,
     // "Open With…": enumerate handlers for the file's mime, then let the
-    // generic pick overlay choose (same pick instance the compress picker uses)
+    // generic pick overlay choose (same pick instance the compress picker uses).
+    // Unreadable files escalate: the chosen app launches elevated after the
+    // password prompt, same honest-toast contract as the adaptive open.
     openWith: (p) => {
       void appsForFile(p).then((apps) => {
         if (!apps.length) {
@@ -361,6 +505,13 @@ export const wireGrid = (deps: {
             label: a.name,
             hint: a.id.replace(/\.desktop$/, ""),
             run: () => {
+              // ENOENT (deleted between listing and pick, dangling symlink)
+              // launches unprivileged and errors honestly — no sudo prompt
+              // for something that isn't there
+              if (!canReadSync(p) && existsSync(p)) {
+                void chrome.launchAppAsRoot(a.file, a.name, p);
+                return;
+              }
               launchApp(a.file, p, (err) => dlog(`gio launch failed: ${err.message}`));
               chrome.notify(`Opening ${path.basename(p)} · ${a.name}`, "open");
             },
@@ -383,6 +534,9 @@ export const wireGrid = (deps: {
     tileRefs: selection.tileRefs,
     selPaths: selection.selPaths,
     openFileDefault: chrome.openFileDefault,
+    isExecutable: (p: string): boolean => classifyPath(p).executable,
+    runExecutable,
+    runExecutableInTerminal,
     setClipboard: fileops.fileops.setClipboard,
     duplicate: (paths) => void fileops.fileops.duplicate(paths),
     startInlineRename: rename.startInlineRename,
@@ -393,7 +547,7 @@ export const wireGrid = (deps: {
     openProperties: props.openProperties,
     selectAll: selection.selectAll,
     cwd: () => state.cwd,
-    canExtract: (p) => canExtract(p),
+    canExtract: canExtract,
     extractArchive: (files, dest) => {
       void fileops.fileops.extractArchive(files, dest);
     },
@@ -413,9 +567,9 @@ export const wireGrid = (deps: {
       });
     },
     sortState: state,
-    plugins: () => plugins.plugins,
+    plugins: () => plugins.plugins.filter(isPluginEnabled),
     onPluginError: (name, err) => {
-      const msg = `plugin ${name} failed: ${err instanceof Error ? err.message : err}`;
+      const msg = `plugin ${name} failed: ${errMessage(err)}`;
       dlog(msg);
       try {
         chrome.notify(msg, "plugins");
@@ -434,5 +588,8 @@ export const wireGrid = (deps: {
     bandCtx,
     props,
     menuEntries,
+    runExecutable,
+    runExecutableInTerminal,
+    askExecutable,
   };
 };

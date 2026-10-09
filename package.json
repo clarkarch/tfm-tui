@@ -1,6 +1,6 @@
 {
   "name": "tfm-tui",
-  "version": "0.1.0-beta.0",
+  "version": "1.0.0",
   "type": "module",
   "private": true,
   "scripts": {
@@ -8,18 +8,29 @@
     "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
     "lint": "biome lint .",
     "fmt": "biome format --write .",
-    "check": "biome check . && tsc --noEmit"
+    "check": "biome check . && tsgo --noEmit"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.11",
+    "@jsquash/avif": "^2.1.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/bun": "^1.3.14",
+    "@types/pngjs": "^6.0.5",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "typescript": "^5"
   },
   "dependencies": {
-    "@opentui/core": "0.5.11",
-    "smol-toml": "^1.8.0"
+    "@humanwhocodes/ico-to-png": "^1.1.0",
+    "@opentui/core": "0.5.16",
+    "fflate": "^0.8.3",
+    "ffmpeg-static": "5.3.0",
+    "heic-decode": "^2.1.0",
+    "pngjs": "^7.0.0",
+    "smol-toml": "^1.8.0",
+    "utif2": "^4.1.0"
   }
 }

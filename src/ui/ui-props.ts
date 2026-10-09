@@ -1,21 +1,23 @@
-import { Box, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import { execFile } from "node:child_process";
-import { statSync } from "node:fs";
+import { lstatSync, type Stats } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
-import type { IconState, ThumbJob } from "./ui-slots";
-import { dirWalkStats, fmtBytes, fmtDate, mimeLabelFor } from "../fs/propsinfo";
+import type { IconSlotHandle, IconSpec, IconState, SlotElement, ThumbJob } from "./ui-slots";
+import { dirWalkStats, fmtBytes, fmtDate, inodeKey, mimeLabelFor } from "../fs/propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
 import type { ListEntry } from "./ui-menu";
 import { FLOAT_Z, type Floats } from "./floats";
-import { IconStateIdx, toggleIconState } from "./ui-slots";
+import { hoverEvents, IconStateIdx, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -24,27 +26,26 @@ import type { NotifyLevel } from "../lib/notify-level";
 
 // shared slot/thumb types live in ./ui-slots (the queue they feed) — the old
 // byte-identical local mirrors drifted when ui-slots gained a field
-type PropsIconState = IconState;
 
 type PropsCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   openDialog(opts: {
     id: string;
     zIndex: number;
     width: number;
     paddingDiv?: number;
-    rows: () => any[];
+    rows: () => SlotElement[];
     onClose: () => void;
   }): void;
   closeDialog(id: string): void;
   setTextOnId(nodeId: string, s: string): void;
-  setOnId(id: string, fn: (n: any) => void): void;
+  setOnId(id: string, fn: (n: NodeLike) => void): void;
   stripSelectable(): void;
   drainIconQueue(): void;
   drainThumbs(): void;
   pushThumbJob(job: ThumbJob): void;
   nextIconId(): string;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   closeFileMenu(): void;
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   floats: Floats;
@@ -55,15 +56,23 @@ type PropsCtx = {
   home: string;
   makeIconSlot(
     name: string,
-    states: PropsIconState[],
+    states: IconState[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
-    statesFactory?: () => PropsIconState[],
-  ): { el: any; slotId: string; spec: any };
-  setIconState(spec: any, stateIdx: number): boolean;
+    onMouseDown?: (ev: MouseEvent) => void,
+    statesFactory?: () => IconState[],
+  ): IconSlotHandle;
+  setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };
+  // tty mode (linux console): hero falls back to the icon slot, the thumb
+  // raster could never land. force-glyph does the same for buggy kitty impls.
+  // Optional so test fakes keep working.
+  isTtyMode?(): boolean;
+  forceGlyph?(): boolean;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 const execFileP = promisify(execFile);
@@ -72,6 +81,7 @@ export const makeProps = (ctx: PropsCtx) => {
   // --- Properties dialog (floating, right-click -> Properties…) ---
   const PROPS_W = 46;
   let propsOpen = false;
+  let dirWalkGen = 0;
 
   // raw teardown — registered with floats at open time; the public closeProps
   // is floats.close("props"), which also takes any popup spawned on top of
@@ -79,25 +89,18 @@ export const makeProps = (ctx: PropsCtx) => {
   const rawCloseProps = (): void => {
     ctx.closeDialog("tfm-props");
     propsOpen = false;
+    // hovered toggles/rows have no out (their nodes are gone) — restore here
+    ctx.setPointer?.("default");
   };
   const closeProps = (): void => {
     ctx.floats.close("props");
   };
 
-  const openSingle = (targetPath: string): void => {
-    const colors = ctx.colors();
-    let st: any = null;
-    try {
-      st = statSync(targetPath);
-    } catch {
-      // right-click → Properties on a just-deleted file must say so, not blink
-      ctx.notify("Can't show properties (source gone)", "properties", "error");
-      return;
-    }
+  // shared preamble: floats open + the (empty) dialog skeleton + panel
+  // lookup — single and multi selection open the same shell
+  const openPropsDialog = (): MaybeNode => {
     ctx.floats.open("props", rawCloseProps);
     propsOpen = true;
-    const isDirTarget = st.isDirectory();
-
     ctx.openDialog({
       id: "tfm-props",
       zIndex: FLOAT_Z.props,
@@ -106,22 +109,42 @@ export const makeProps = (ctx: PropsCtx) => {
       rows: () => [],
       onClose: () => closeProps(),
     });
+    return ctx.byId("tfm-props-panel");
+  };
 
-    const panel: any = ctx.byId("tfm-props-panel");
+  const openSingle = (targetPath: string): void => {
+    const colors = ctx.colors();
+    let st: Stats | null = null;
+    try {
+      // on-disk cost: a symlink reports its own bytes, never the target's
+      // (copies preserve links; broken links stay openable instead of
+      // toasting "source gone")
+      st = lstatSync(targetPath);
+    } catch {
+      // right-click → Properties on a just-deleted file must say so, not blink
+      ctx.notify("Can't show properties (source gone)", "properties", "error");
+      return;
+    }
+    const isDirTarget = st.isDirectory();
+
+    const panel = openPropsDialog();
     if (!panel) return;
 
     // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
-    // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps
-    const propsToggleStates = (): PropsIconState[] => [
-      { fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) },
-      { fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) },
+    // (idx = on*1 + hover*2), plus matching wrapper-box bg swaps. The rasters
+    // flatten onto the DIALOG's fill (role "float"): the dialog is filled in
+    // solid + outline-partial, so the chrome role would bake a canvas-colored
+    // square into the panel.
+    const propsToggleStates = (): IconState[] => [
+      { fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") },
+      { fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") },
       { fg: colors.sidebarFgMuted, bg: colors.hoverBg },
       { fg: colors.accent, bg: colors.hoverBg },
     ];
-    const propsTogglePaint = (btnId: string, spec: any, on: boolean, hover: boolean) => {
+    const propsTogglePaint = (btnId: string, spec: IconSpec | undefined, on: boolean, hover: boolean) => {
       ctx.setIconState(spec, toggleIconState(on, hover));
       try {
-        const n: any = ctx.byId(btnId);
+        const n = ctx.byId(btnId);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), colors, hover, colors.sidebarBg));
       } catch {}
     };
@@ -131,14 +154,14 @@ export const makeProps = (ctx: PropsCtx) => {
       propsTogglePaint("tfm-props-star", starSlot.spec, starred, starHover);
       if (starred) starredRegistryAdd(targetPath);
       else starredRegistryRemove(targetPath);
-      void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""]).catch(
-        () => {},
-      );
+      void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""], {
+        timeout: 10_000,
+      }).catch(() => {});
     });
     let starHover = false;
     let starred = readStarredList().includes(targetPath);
     if (starred) ctx.setIconState(starSlot.spec, IconStateIdx.Active);
-    void execFileP("gio", ["info", "-a", "metadata::starred", targetPath])
+    void execFileP("gio", ["info", "-a", "metadata::starred", targetPath], { timeout: 10_000 })
       .then(({ stdout }) => {
         const m = stdout.match(/metadata::starred:\s*(\S+)/);
         const gioStarred = !!m && m[1] !== "";
@@ -169,14 +192,10 @@ export const makeProps = (ctx: PropsCtx) => {
               id: "tfm-props-star",
               paddingLeft: 1,
               ...btnSurface(ctx.uiStyle(), colors, false, colors.sidebarBg),
-              onMouseOver: () => {
-                starHover = true;
-                propsTogglePaint("tfm-props-star", starSlot.spec, starred, true);
-              },
-              onMouseOut: () => {
-                starHover = false;
-                propsTogglePaint("tfm-props-star", starSlot.spec, starred, false);
-              },
+              ...hoverEvents((on) => {
+                starHover = on;
+                propsTogglePaint("tfm-props-star", starSlot.spec, starred, on);
+              }, ctx.setPointer),
             },
             starSlot.el,
           );
@@ -189,14 +208,10 @@ export const makeProps = (ctx: PropsCtx) => {
                   id: "tfm-props-bm",
                   paddingLeft: 1,
                   ...btnSurface(ctx.uiStyle(), colors, false, colors.sidebarBg),
-                  onMouseOver: () => {
-                    bmHover = true;
-                    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, true);
-                  },
-                  onMouseOut: () => {
-                    bmHover = false;
-                    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, false);
-                  },
+                  ...hoverEvents((on) => {
+                    bmHover = on;
+                    propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, on);
+                  }, ctx.setPointer),
                 },
                 bmSlot.el,
               ),
@@ -214,8 +229,13 @@ export const makeProps = (ctx: PropsCtx) => {
     const heroW = Math.max(1, Math.round(aspect * ICON_H));
     const isVideo = !isDirTarget && fileIsVideo(targetPath);
     const wantsThumb =
-      !isDirTarget && (fileIsImage(targetPath) || (isVideo && canThumbVideo())) && st.size > 0 && st.size <= 26214400;
-    let heroEl: ReturnType<typeof Box>;
+      !ctx.isTtyMode?.() &&
+      !ctx.forceGlyph?.() &&
+      !isDirTarget &&
+      (fileIsImage(targetPath) || (isVideo && canThumbVideo())) &&
+      st.size > 0 &&
+      st.size <= 26214400;
+    let heroEl: SlotElement;
     if (wantsThumb) {
       const slotId = ctx.nextIconId();
       // flex row + center, exactly like the grid/list thumb slots: the raster
@@ -229,7 +249,7 @@ export const makeProps = (ctx: PropsCtx) => {
         size: st.size,
         wCells: heroW,
         hCells: ICON_H,
-        bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg),
+        bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float"),
         vector: targetPath.toLowerCase().endsWith(".svg"),
         video: isVideo,
         fallbackGlyph: ctx.fallbackGlyphFor(iconName),
@@ -238,7 +258,7 @@ export const makeProps = (ctx: PropsCtx) => {
     } else {
       heroEl = ctx.makeIconSlot(
         iconName,
-        [{ fg: colors.sidebarFg, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+        [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
         ICON_H,
       ).el;
     }
@@ -264,7 +284,13 @@ export const makeProps = (ctx: PropsCtx) => {
     panel.add(
       Box(
         { width: "100%", height: 1, flexDirection: "row", justifyContent: "center", paddingLeft: 1, paddingRight: 1 },
-        Text({ content: path.basename(targetPath).slice(0, PROPS_W - 4), fg: colors.white }),
+        Text({
+          content:
+            path.basename(targetPath).length > PROPS_W - 4
+              ? `${path.basename(targetPath).slice(0, PROPS_W - 5)}…`
+              : path.basename(targetPath),
+          fg: colors.white,
+        }),
       ),
     );
     panel.add(
@@ -284,18 +310,28 @@ export const makeProps = (ctx: PropsCtx) => {
       ),
     );
 
-    const row = (label: string, value: string, id?: string) =>
-      Box(
+    const row = (label: string, value: string, id?: string) => {
+      const v = String(value);
+      return Box(
         { width: "100%", height: 1, flexDirection: "row", paddingLeft: 1 },
         Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
-        Text({ ...(id ? { id } : {}), content: String(value).slice(0, PROPS_W - 14), fg: colors.sidebarFg }),
+        Text({
+          ...(id ? { id } : {}),
+          content: v.length > PROPS_W - 14 ? `${v.slice(0, PROPS_W - 15)}…` : v,
+          fg: colors.white,
+        }),
       );
+    };
 
     if (isDirTarget) {
+      // generation guard: closing and reopening Properties on another target
+      // must not paint this walk's stats into the new dialog
+      const walkGen = ++dirWalkGen;
       void dirWalkStats(targetPath).then((s) => {
+        if (walkGen !== dirWalkGen) return;
         if (!propsOpen || !s) {
           if (propsOpen) {
-            const n: any = ctx.byId("tfm-props-size");
+            const n = ctx.byId("tfm-props-size");
             if (n) {
               try {
                 // dirWalkStats gives up past 200k entries (null) — say that
@@ -306,7 +342,7 @@ export const makeProps = (ctx: PropsCtx) => {
           }
           return;
         }
-        const n: any = ctx.byId("tfm-props-size");
+        const n = ctx.byId("tfm-props-size");
         if (n) {
           try {
             n.content = `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`;
@@ -315,15 +351,7 @@ export const makeProps = (ctx: PropsCtx) => {
       });
     }
     panel.add(row("type", isDirTarget ? "inode/directory" : mimeLabelFor(targetPath)));
-    panel.add(
-      row(
-        "location",
-        path
-          .dirname(targetPath)
-          .replace(ctx.home, "~")
-          .slice(0, PROPS_W - 14),
-      ),
-    );
+    panel.add(row("location", path.dirname(targetPath).replace(ctx.home, "~")));
     panel.add(row("modified", fmtDate(st.mtimeMs)));
     panel.add(row("accessed", fmtDate(st.atimeMs)));
 
@@ -352,21 +380,9 @@ export const makeProps = (ctx: PropsCtx) => {
   // list; no star/bookmark/perms (those are per-file semantics) ---
   const PROPS_LIST_MAX = 6;
 
-  const openMulti = (items: { path: string; st: any }[]): void => {
+  const openMulti = (items: { path: string; st: Stats }[]): void => {
     const colors = ctx.colors();
-    ctx.floats.open("props", rawCloseProps);
-    propsOpen = true;
-
-    ctx.openDialog({
-      id: "tfm-props",
-      zIndex: FLOAT_Z.props,
-      width: PROPS_W,
-      paddingDiv: 4,
-      rows: () => [],
-      onClose: () => closeProps(),
-    });
-
-    const panel: any = ctx.byId("tfm-props-panel");
+    const panel = openPropsDialog();
     if (!panel) return;
 
     panel.add(
@@ -380,7 +396,7 @@ export const makeProps = (ctx: PropsCtx) => {
     const ICON_H = 6;
     const heroEl = ctx.makeIconSlot(
       "select-all",
-      [{ fg: colors.sidebarFg, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+      [{ fg: colors.white, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       ICON_H,
     ).el;
     panel.add(
@@ -422,16 +438,23 @@ export const makeProps = (ctx: PropsCtx) => {
     let nFiles = 0;
     let nFolders = 0;
     const dirPaths: string[] = [];
+    // Stats arrive via lstat (openProperties), so links never masquerade as
+    // dirs here; bodies shared by hardlinks count once, like the status bar.
+    const seen = new Set<string>();
     for (const it of items) {
       if (it.st.isDirectory()) dirPaths.push(it.path);
       else {
-        totalBytes += it.st.size ?? 0;
+        const k = inodeKey(it.st);
+        if (!seen.has(k)) {
+          seen.add(k);
+          totalBytes += it.st.size ?? 0;
+        }
         nFiles++;
       }
     }
     const settle = (): void => {
       if (!propsOpen) return;
-      const n: any = ctx.byId("tfm-props-size");
+      const n = ctx.byId("tfm-props-size");
       if (n) {
         const counts = dirPaths.length ? ` · ${nFiles} files · ${nFolders} folders` : ` · ${nFiles} files`;
         try {
@@ -459,7 +482,13 @@ export const makeProps = (ctx: PropsCtx) => {
       panel.add(
         Box(
           { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ content: ` ${path.basename(it.path)}`.slice(0, PROPS_W - 1), fg: colors.sidebarFg }),
+          Text({
+            content: (() => {
+              const s = ` ${path.basename(it.path)}`;
+              return s.length > PROPS_W - 1 ? `${s.slice(0, PROPS_W - 2)}…` : s;
+            })(),
+            fg: colors.white,
+          }),
         ),
       );
     }
@@ -475,23 +504,42 @@ export const makeProps = (ctx: PropsCtx) => {
     void ctx.drainIconQueue();
   };
 
+  // last target for theme-switch rebuilds (repaint re-opens, below)
+  let lastTarget: string | string[] | null = null;
+
   const openProperties = (target: string | string[]): void => {
+    lastTarget = target;
     if (!Array.isArray(target)) {
       openSingle(target);
       return;
     }
-    const stats: { path: string; st: any }[] = [];
+    const stats: { path: string; st: Stats }[] = [];
     for (const p of target) {
       try {
-        stats.push({ path: p, st: statSync(p) });
+        stats.push({ path: p, st: lstatSync(p) });
       } catch {}
     }
-    if (stats.length === 1) {
-      openSingle(stats[0]!.path);
+    const only = stats[0];
+    if (stats.length === 1 && only) {
+      openSingle(only.path);
       return;
     }
     if (stats.length > 1) openMulti(stats);
   };
 
-  return { openProperties, closeProps, isOpen: () => propsOpen };
+  // theme-switch repaint while open: rebuild with the retained target (live
+  // colors throughout — icon slots, rows, perms). No text inputs exist in
+  // the dialog, so close+reopen loses nothing user-typed; the perm-class
+  // cursor popup above it (if any) closes with the rebuild by floats policy.
+  const repaint = (): void => {
+    if (!propsOpen || lastTarget === null) return;
+    try {
+      closeProps();
+    } catch {}
+    try {
+      openProperties(lastTarget);
+    } catch {}
+  };
+
+  return { openProperties, closeProps, isOpen: () => propsOpen, repaint };
 };

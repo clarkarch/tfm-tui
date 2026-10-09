@@ -23,6 +23,10 @@ const mkCtx = (over: Partial<Parameters<typeof makeRecentOpen>[0]> = {}) => {
     spawnOpen: (p: string) => {
       calls.push(`spawn:${p}`);
     },
+    openAsRoot: async (p: string) => {
+      calls.push(`escalate:${p}`);
+    },
+    canRead: (_p: string) => true,
     appForFile: async (_p: string) => "Video Player",
     ...over,
   };
@@ -67,5 +71,112 @@ describe("makeRecentOpen", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(calls.some((c) => c.startsWith("upsert:"))).toBe(false);
     expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true); // still opens
+  });
+
+  test("unreadable file escalates through openAsRoot, never spawns or records", async () => {
+    const { calls, ctx } = mkCtx({ canRead: () => false });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/etc/shadow");
+    await settleUntil(() => calls.some((c) => c.startsWith("escalate:")));
+    expect(calls).toContain("escalate:/etc/shadow");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(false);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls.some((c) => c.startsWith("upsert:"))).toBe(false);
+  });
+
+  test("readable files never touch openAsRoot", async () => {
+    const { calls, ctx } = mkCtx();
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/movie.mp4");
+    await settleUntil(() => calls.some((c) => c.startsWith("notify:")));
+    expect(calls.some((c) => c.startsWith("escalate:"))).toBe(false);
+  });
+
+  test("missing file takes the plain path, never escalates", async () => {
+    // canRead is false for ENOENT too — a file deleted between listing and
+    // open (or a dangling symlink) must spawn-and-error, not sudo-prompt
+    const { calls, ctx } = mkCtx({ canRead: () => false });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/definitely/not/here-tfm-xyz");
+    expect(calls).toContain("spawn:/definitely/not/here-tfm-xyz");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls.some((c) => c.startsWith("escalate:"))).toBe(false);
+  });
+
+  test("spawn failure suppresses the optimistic Opening toast", async () => {
+    let onFailed!: () => void;
+    let resolveProbe!: (app: string) => void;
+    const { calls, ctx } = mkCtx({
+      spawnOpen: (_p: string, f: () => void) => {
+        calls.push("spawn:x");
+        onFailed = f;
+      },
+      appForFile: () =>
+        new Promise<string>((res) => {
+          resolveProbe = res;
+        }),
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/movie.mp4");
+    onFailed(); // spawn fails before the app probe answers
+    resolveProbe("Video Player");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(calls.some((c) => c.includes("Opening movie.mp4"))).toBe(false);
+  });
+
+  test("executable routes to the Run prompt, never xdg-open", async () => {
+    const { calls, ctx } = mkCtx({
+      isExecutable: () => ({ executable: true, needsChmod: false }),
+      askExecutable: (p) => {
+        calls.push(`ask:${p}`);
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/run.sh");
+    expect(calls).toContain("ask:/home/a/run.sh");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(false);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls.some((c) => c.startsWith("upsert:"))).toBe(false);
+  });
+
+  test("non-executable still spawns when the prompt seam is wired", async () => {
+    const { calls, ctx } = mkCtx({
+      isExecutable: () => ({ executable: false, needsChmod: false }),
+      askExecutable: () => {
+        calls.push("ask:unexpected");
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/movie.mp4");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true);
+    expect(calls).not.toContain("ask:unexpected");
+  });
+
+  test("Open anyway re-runs the plain spawn path", async () => {
+    const { calls, ctx } = mkCtx({
+      isExecutable: () => ({ executable: true, needsChmod: true }),
+      askExecutable: (_p, _info, openAnyway) => {
+        calls.push("ask:shown");
+        openAnyway();
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/app.AppImage");
+    expect(calls).toContain("ask:shown");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true);
+  });
+
+  test("trash view never prompts, even for executables", async () => {
+    const { calls, ctx } = mkCtx({
+      inTrashView: () => true,
+      isExecutable: () => ({ executable: true, needsChmod: false }),
+      askExecutable: () => {
+        calls.push("ask:unexpected");
+      },
+    });
+    const { openFileDefault } = makeRecentOpen(ctx);
+    openFileDefault("/home/a/run.sh");
+    expect(calls).not.toContain("ask:unexpected");
+    expect(calls.some((c) => c.startsWith("spawn:"))).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fdArgs, parseSearchPaths, searchTree } from "./search";
@@ -95,6 +95,16 @@ describe("searchTree", () => {
 
     const capped = await searchTree(dir, "bar", { fdBin: null, limit: 1 });
     expect(capped.length).toBe(1);
+  });
+
+  test("walk fallback marks links and sizes them by link bytes", async () => {
+    W(path.join(dir, "target.txt"), "x".repeat(500));
+    const link = path.join(dir, "alias.txt");
+    symlinkSync(path.join(dir, "target.txt"), link);
+    const entries = await searchTree(dir, "alias", { fdBin: null });
+    const hit = entries.find((e) => e.name === "alias.txt");
+    expect(hit?.isLink).toBe(true);
+    expect(hit?.size).toBe(lstatSync(link).size);
   });
 
   test("walk fallback honors the hidden flag", async () => {

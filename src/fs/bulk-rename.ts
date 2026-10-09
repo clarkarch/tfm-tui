@@ -49,8 +49,10 @@ export const planBulkRename = (
   const seen = new Set<string>();
   const pairs: BulkRenamePair[] = [];
   for (let i = 0; i < items.length; i++) {
-    const from = items[i]!.path;
-    const name = names[i]!;
+    const item = items[i];
+    const name = names[i];
+    if (item === undefined || name === undefined) continue;
+    const from = item.path;
     if (name === path.basename(from)) continue;
     if (seen.has(name)) return { ok: false, error: `Duplicate name: ${name}` };
     seen.add(name);

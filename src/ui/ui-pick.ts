@@ -6,12 +6,16 @@
 // any future plugin gets fuzzy lists over arbitrary items for free.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, Input, RGBA, Text } from "@opentui/core";
-import { floatSurface } from "./style";
-import { invokeIsolated } from "../lib/uiutil";
+import { Box, type CliRenderer, Input, Text } from "@opentui/core";
+import { applySurface, floatSurface } from "./style";
+import { makeModalScrim } from "./ui-dialogs";
+import { advanceCursor, invokeIsolated } from "../lib/uiutil";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import type { SlotElement } from "./ui-slots";
 
 export type PickItem = {
   label: string;
@@ -20,22 +24,25 @@ export type PickItem = {
 };
 
 type PickCtx = {
-  renderer(): any;
-  byId(id: string): any;
-  rootAdd(node: any): void;
-  clearChildren(node: any): void;
+  renderer(): CliRenderer;
+  byId(id: string): MaybeNode;
+  rootAdd(node: unknown): void;
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
   colors(): Theme;
   uiStyle(): UiStyle;
   floats: Floats;
   // shared close-X widget (icon slot); mirrors prompt/props
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   drainIconQueue(): unknown;
   // live item source — read fresh on every open so remaps and plugin
   // contributions apply without rebuilds
   commands(): PickItem[];
   // runtime isolation for plugin-contributed items (optional; silent when absent)
   onError?: (err: unknown) => void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 // subsequence score, case-insensitive; lower = better. Null when query is
@@ -86,11 +93,13 @@ export const makePick = (ctx: PickCtx) => {
     idx = -1;
     results = [];
     try {
-      const input: any = ctx.byId("tfm-pick-input");
+      const input = ctx.byId("tfm-pick-input");
       input?.blur?.();
     } catch {}
-    const scrim: any = ctx.byId("tfm-pick");
+    const scrim = ctx.byId("tfm-pick");
     scrim?.parent?.remove(scrim);
+    // hovered rows have no out (their nodes are gone) — restore here
+    ctx.setPointer?.("default");
   };
 
   const close = (): void => {
@@ -98,12 +107,12 @@ export const makePick = (ctx: PickCtx) => {
   };
 
   const renderList = (): void => {
-    const list: any = ctx.byId("tfm-pick-list");
+    const list = ctx.byId("tfm-pick-list");
     if (!list) return;
     const colors = ctx.colors();
     results = filterItems(items, query).slice(0, MAX_ROWS);
     if (idx >= results.length) idx = results.length - 1;
-    ctx.clearChildren(list);
+    ctx.destroyChildren(list);
     if (!results.length) {
       list.add(
         Box(
@@ -132,13 +141,15 @@ export const makePick = (ctx: PickCtx) => {
             // the cursor back to the row under a stationary mouse and fight
             // arrow-key nav. Real motion dispatches "move".
             onMouseMove: () => {
+              // position truth (pointer) before change truth (highlight)
+              ctx.setPointer?.("pointer");
               if (idx !== i) {
                 idx = i;
                 renderList();
               }
             },
           },
-          Text({ content: item.label, fg: active ? colors.white : colors.sidebarFg }),
+          Text({ content: item.label, fg: colors.white }),
           Box({ flexGrow: 1 }),
           ...(item.hint ? [Text({ content: `${item.hint} `, fg: colors.sidebarFgMuted })] : []),
         ),
@@ -158,59 +169,38 @@ export const makePick = (ctx: PickCtx) => {
     query = "";
     idx = -1;
     const colors = ctx.colors();
-    const scrim = Box(
+    const scrim = makeModalScrim(
+      { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {
         id: "tfm-pick",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: "100%",
-        height: "100%",
-        alignItems: "center",
-        justifyContent: "center",
         zIndex: 3700,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-        onMouseDown: () => close(),
+        panelWidth: PANEL_W,
+        onClose: () => close(),
       },
       Box(
-        {
-          id: "tfm-pick-panel",
-          width: PANEL_W,
-          ...floatSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
-          paddingTop: 1,
-          paddingBottom: 1,
-          flexDirection: "column",
-          onMouseDown: (ev: any) => {
-            try {
-              ev.stopPropagation?.();
-            } catch {}
-          },
-        },
-        Box(
-          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-          Text({ content: title, fg: colors.accent }),
-          Box({ flexGrow: 1 }),
-          ctx.escHintBtn("tfm-pick-close", () => close()),
-        ),
-        Box(
-          // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
-          { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
-          Input({
-            id: "tfm-pick-input",
-            width: PANEL_W - 6,
-            placeholder: opts.placeholder ?? "Type a command…",
-            backgroundColor: colors.accentBg,
-            focusedBackgroundColor: colors.accentBg,
-            textColor: colors.white,
-          }),
-        ),
-        Box({ id: "tfm-pick-list", width: "100%", flexDirection: "column", paddingTop: 1 }),
+        { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+        Text({ id: "tfm-pick-title", content: title, fg: colors.accent }),
+        Box({ flexGrow: 1 }),
+        ctx.escHintBtn("tfm-pick-close", () => close()),
       ),
+      Box(
+        // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
+        { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
+        Input({
+          id: "tfm-pick-input",
+          width: PANEL_W - 6,
+          placeholder: opts.placeholder ?? "Type a command…",
+          backgroundColor: colors.accentBg,
+          focusedBackgroundColor: colors.accentBg,
+          textColor: colors.white,
+        }),
+      ),
+      Box({ id: "tfm-pick-list", width: "100%", flexDirection: "column", paddingTop: 1 }),
     );
     ctx.rootAdd(scrim);
     ctx.stripSelectable();
     void ctx.drainIconQueue();
-    const input: any = ctx.byId("tfm-pick-input");
+    const input = ctx.byId("tfm-pick-input");
     if (input?.on) {
       input.on("input", () => {
         try {
@@ -233,7 +223,7 @@ export const makePick = (ctx: PickCtx) => {
   const move = (delta: number): void => {
     if (!results.length) return;
     // idx -1 = no cursor yet: down fills the first row, up the last
-    idx = idx < 0 ? (delta >= 0 ? 0 : results.length - 1) : (idx + delta + results.length) % results.length;
+    idx = advanceCursor(idx, delta, results.length);
     renderList();
   };
 
@@ -260,6 +250,33 @@ export const makePick = (ctx: PickCtx) => {
     return true;
   };
 
+  // theme-switch repaint while open: panel + input + title by id plus a
+  // list rebuild (live colors, same query/idx — the Input node itself is
+  // untouched, so focus and typed text survive). No-op when closed.
+  const repaint = (): void => {
+    if (!opened) return;
+    const c = ctx.colors();
+    try {
+      const panel = ctx.byId("tfm-pick-panel");
+      if (panel) applySurface(panel, floatSurface(ctx.uiStyle(), c, c.sidebarBg));
+    } catch {}
+    try {
+      const input = ctx.byId("tfm-pick-input");
+      if (input) {
+        input.backgroundColor = c.accentBg;
+        input.focusedBackgroundColor = c.accentBg;
+        input.textColor = c.white;
+      }
+    } catch {}
+    try {
+      const title = ctx.byId("tfm-pick-title");
+      if (title) title.fg = c.accent;
+    } catch {}
+    try {
+      renderList();
+    } catch {}
+  };
+
   return {
     open,
     close,
@@ -267,6 +284,7 @@ export const makePick = (ctx: PickCtx) => {
     activate,
     handleKey,
     isOpen: (): boolean => opened,
+    repaint,
     // test seam: drive the filter without Input events
     setFilter: (q: string): void => {
       query = q;

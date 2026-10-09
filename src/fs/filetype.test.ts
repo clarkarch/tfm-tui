@@ -18,6 +18,14 @@ describe("extOf", () => {
     expect(extOf(".hidden")).toBe(""); // leading dot = no ext
     expect(extOf(".config.toml")).toBe("toml");
   });
+
+  test("matches path.extname on dirs, trailing dots and trailing slashes", () => {
+    expect(extOf("foo.")).toBe("");
+    expect(extOf("a/.hidden")).toBe("");
+    expect(extOf("/a.b/c")).toBe(""); // dot in a dir segment is not an ext
+    expect(extOf("/x/y.z/")).toBe("z"); // trailing slashes are ignored
+    expect(extOf("")).toBe("");
+  });
 });
 
 describe("mimeCategory", () => {

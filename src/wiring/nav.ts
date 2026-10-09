@@ -97,6 +97,8 @@ export const wireNav = (deps: {
       } catch {}
     },
     closeTerminal: () => getTerm().closeTerminalPane(),
+    stopGpm: () => getChrome().stopGpm(),
+    stopChromeTimers: () => getChrome().stopChromeTimers(),
     flushSession: () => {
       // no isVirtualCwd() guard: restore deliberately accepts recent:// and
       // starred:// tabs, so quitting from a virtual place must still persist
@@ -106,6 +108,14 @@ export const wireNav = (deps: {
     },
     destroy: () => getChrome().renderer.destroy(),
     exit: (code: number) => process.exit(code),
+    // refuse quit while file ops are in flight (same guard as restart):
+    // exiting mid-batch strands completed files with no undo batch
+    isBusy: () => !sharedOpQueue().isIdle(),
+    onBusy: () => {
+      try {
+        getChrome().notify("Can't quit during file operations — cancel (✕) or wait for it to finish", "quit", "error");
+      } catch {}
+    },
   };
   const quitApp = makeQuit(quitSteps);
 
@@ -120,8 +130,8 @@ export const wireNav = (deps: {
     execPath: process.execPath,
     // NOT slice(1): the compiled binary's argv carries the /$bunfs/ virtual
     // entry at [1] — re-passing it makes the child treat it as a PATH (exit
-    // 1). restartArgs strips it (same rule as cli parseArgs).
-    argv: restartArgs(process.argv),
+    // 1). The dev runner (argv[0] === execPath) keeps its script instead.
+    argv: restartArgs(process.argv, process.execPath),
     // the shared serial queue: a live op would race the child's orphan sweep
     // while the parent loop is frozen inside spawnSync (see app/restart)
     isBusy: () => !sharedOpQueue().isIdle(),
@@ -163,7 +173,7 @@ export const wireNav = (deps: {
     makeTabs(core.panes.states[0], { onChanged: renderAll, status: setStatusMsg, quit: quitApp }),
     makeTabs(core.panes.states[1], { onChanged: renderAll, status: setStatusMsg, quit: quitApp }),
   ];
-  const activeTabModel = () => tabModels[core.panes.active]!;
+  const activeTabModel = () => tabModels[core.panes.active];
   const syncTabsFromState = (): void => {
     tabModels[0].syncTabFromState();
     tabModels[1].syncTabFromState();
@@ -182,13 +192,13 @@ export const wireNav = (deps: {
   const { scheduleSaveSession, restoreSession } = makeSessionSync({
     paneTabs,
     syncTabsFromState,
-    adoptPaneTabs: (pane, tabs, activeTab) => tabModels[pane]!.adoptTabs(tabs, activeTab),
+    adoptPaneTabs: (pane, tabs, activeTab) => tabModels[pane].adoptTabs(tabs, activeTab),
     adoptDefaultTabs: () => {
       tabModels[0].adoptTab();
       tabModels[1].adoptTab();
     },
     activePane: () => core.panes.active,
-    setActivePane: (i) => core.setActivePane(i),
+    setActivePane: core.setActivePane,
     config: core.config,
     isVirtualCwd: core.isVirtualCwd,
   });
@@ -196,16 +206,20 @@ export const wireNav = (deps: {
   // --- Type-to-search: ONE query + input per pane (each pane's toolbar has
   // its own search box). The keymap drives the focused pane's; its grid reads
   // its own query so a search filters only that side. ---
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
   const mkSearch = (pane: 0 | 1) =>
     makeSearch({
       byId: core.lookup.byId,
       inputId: `tfm-p${pane}-search`,
       // arrow wrappers: termHasFocus/renderGrid belong to later wirings (TDZ)
-      termHasFocus: () => getTermHasFocus(),
+      termHasFocus: getTermHasFocus,
       renderGrid: () => getGrid().renderPane(pane),
+      setPointer,
     });
   const searches: [ReturnType<typeof makeSearch>, ReturnType<typeof makeSearch>] = [mkSearch(0), mkSearch(1)];
-  const activeSearch = () => searches[core.panes.active]!;
+  const activeSearch = () => searches[core.panes.active];
   const clearSearch = (): void => activeSearch().clearSearch();
   const beginTypeToSearch = (ch: string): void => activeSearch().beginTypeToSearch(ch);
   const wireSearchInput = (): void => {
@@ -223,20 +237,13 @@ export const wireNav = (deps: {
     goBack,
     goFwd,
     navigate,
-    get tabModel() {
-      return activeTabModel();
-    },
     tabModels,
-    activeTabModel,
     switchTab,
     newTab,
     closeTab,
     nextTab,
     prevTab,
     restoreSession,
-    get search() {
-      return activeSearch();
-    },
     searches,
     activeSearch,
     clearSearch,

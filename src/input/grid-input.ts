@@ -4,11 +4,25 @@
 // that the sidebar, OSC 72 bridge and keyboard paths read. No module-level
 // imports from the renderer — everything flows through ctx. ---
 
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import type { ListEntry } from "../ui/ui-menu";
+
 export type ClipItem = { path: string; isDir: boolean };
+
+// What makeEntryMouseHandlers hands the grid to spread onto a tile: the tile
+// mouse pipeline, typed so a misspelled handler name is a compile error.
+export type TileMouseHandlers = {
+  onMouseDown: (ev: TileMouseEvent) => void;
+  onMouseUp: () => void;
+  onMouseDragEnd: () => void;
+  onMouseDrag: (ev: TileMouseEvent) => void;
+  onMouseDrop: () => void;
+};
 
 // Mouse-event shape the tile pipeline actually reads (cell coords, button,
 // modifiers). The renderer hands a richer object; handlers only touch these.
-type TileMouseEvent = {
+export type TileMouseEvent = {
   x: number;
   y: number;
   button?: number;
@@ -24,15 +38,6 @@ export type TileVisualMode = (typeof TileVisual)[keyof typeof TileVisual];
 
 // structural view of a tile ref — the full TileRefs in ./selection satisfies this
 export type GridTileRef = { selected: boolean; isDir: boolean };
-
-export type GridMenuEntry = {
-  icon?: string;
-  label: string;
-  hint?: string;
-  hintIcon?: string;
-  action: () => void;
-  sep?: boolean;
-};
 
 // shared drag state: one plain mutable object so the wiring closures and the
 // handlers here see the same fields without getter/setter plumbing
@@ -66,8 +71,8 @@ export type GridSelectionDeps = {
 };
 /** Context menu + inline rename (owned by the menu/rename widgets). */
 export type GridMenuDeps = {
-  openContextMenu(x: number, y: number, title: string, entries: GridMenuEntry[]): void;
-  fileEntriesFor(key: string, isDir: boolean, x: number, y: number): GridMenuEntry[];
+  openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
+  fileEntriesFor(key: string, isDir: boolean, x: number, y: number): ListEntry[];
   closeFileMenu(): void;
   renameEditKey(): string | null;
   finishInlineRename(commit: boolean): void;
@@ -80,7 +85,7 @@ export type GridNavDeps = {
 };
 
 export type GridInputCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   termW(): number;
   termH(): number;
   dblClickMs(): number;
@@ -101,6 +106,9 @@ export type GridInputCtx = {
   // animate the tile hover (instant highlight + one-cell lift, [ui] file-
   // hover-animation). Absent = today's instant paint via setTileVisual.
   hoverAnim?(key: string, hovered: boolean): void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 } & GridSelectionDeps &
   GridMenuDeps &
   GridNavDeps;
@@ -120,12 +128,12 @@ export const commitPendingCtrlToggle = (ctx: GridInputCtx): void => {
 };
 
 const updateDragGhost = (ctx: GridInputCtx, x: number, y: number): void => {
-  const g: any = ctx.byId(DRAG_GHOST_ID);
+  const g = ctx.byId(DRAG_GHOST_ID);
   if (!g) return;
   try {
     const n = gridDrag.keys?.length ?? 0;
     const label = `moving ${n} item${n === 1 ? "" : "s"}`;
-    const t: any = ctx.byId(`${DRAG_GHOST_ID}-label`);
+    const t = ctx.byId(`${DRAG_GHOST_ID}-label`);
     if (t && t.content !== label) t.content = label;
     g.width = label.length + 2;
     g.left = Math.max(0, Math.min(x + 1, ctx.termW() - label.length - 2));
@@ -135,7 +143,7 @@ const updateDragGhost = (ctx: GridInputCtx, x: number, y: number): void => {
 };
 
 const hideDragGhost = (ctx: GridInputCtx): void => {
-  const g: any = ctx.byId(DRAG_GHOST_ID);
+  const g = ctx.byId(DRAG_GHOST_ID);
   if (g) {
     try {
       g.visible = false;
@@ -156,6 +164,10 @@ export const finishDragState = (ctx: GridInputCtx): void => {
   gridDrag.dropTarget = null;
   gridDrag.active = false;
   gridDrag.keys = null;
+  // central pointer restore: every cleanup path (tile drop, pane-background
+  // drop, sidebar drop, deferred release) heals through here; the tile drop
+  // re-applies its own pointer afterwards
+  ctx.setPointer?.("default");
   // release without a drop: "Dragging N items…" must not linger — restore the
   // selection status (a real drop overwrites it with the move/copy progress)
   if (wasActive) ctx.updateSelectionStatusReal();
@@ -172,7 +184,7 @@ export const scheduleDragCleanup = (ctx: GridInputCtx): void => {
 // Module-level state mirrors the gridDrag singleton above.
 
 export type BandCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   tileRefs: Map<string, { selected: boolean; tileId: string }>;
   clearTileSelection(): void;
   setTileVisual(key: string, mode: TileVisualMode): void;
@@ -194,7 +206,7 @@ export const beginBand = (ev: { x: number; y: number; button: number }): void =>
 
 export const updateBandRect = (ctx: BandCtx, ev: { x: number; y: number }): void => {
   if (!bandStart) return;
-  const b: any = ctx.byId(BAND_ID);
+  const b = ctx.byId(BAND_ID);
   if (!b) return;
   try {
     b.x = Math.min(bandStart.x, ev.x);
@@ -209,7 +221,7 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
   const start = bandStart;
   bandStart = null;
   ctx.setSelAnchor(null);
-  const b: any = ctx.byId(BAND_ID);
+  const b = ctx.byId(BAND_ID);
   if (b) {
     try {
       b.visible = false;
@@ -222,12 +234,14 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
     y1 = Math.max(start.y, ev.y);
   ctx.clearTileSelection();
   ctx.tileRefs.forEach((refs, key) => {
-    const t: any = ctx.byId(refs.tileId);
+    const t = ctx.byId(refs.tileId);
     if (!t) return;
+    // width/height carry OpenTUI's CssLike union; a mounted tile is always a
+    // resolved number, so a percentage/auto miss means it never laid out
     const tx = t.screenX,
       ty = t.screenY,
-      tw = t.width,
-      th = t.height;
+      tw = typeof t.width === "number" ? t.width : 0,
+      th = typeof t.height === "number" ? t.height : 0;
     if (tx < x1 + 1 && tx + tw > x0 && ty < y1 + 1 && ty + th > y0) {
       refs.selected = true;
       ctx.setTileVisual(key, TileVisual.Selected);
@@ -240,7 +254,7 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
 // modal menus kill any in-flight band so a stale rect can't commit later
 export const cancelBand = (ctx: BandCtx): void => {
   bandStart = null;
-  const b: any = ctx.byId(BAND_ID);
+  const b = ctx.byId(BAND_ID);
   if (b) {
     try {
       b.visible = false;
@@ -278,7 +292,12 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       return true;
     };
 
-    const handleDoubleClick = (): boolean => {
+    const handleDoubleClick = (ev: TileMouseEvent): boolean => {
+      // a modifier means toggle (ctrl) / range (shift/alt), never open: two
+      // fast ctrl-clicks must not launch the file. Don't touch lastClick, so
+      // the modified press leaves the double-click clock as it was.
+      const mods = ev.modifiers ?? {};
+      if (mods.ctrl || mods.shift || mods.alt) return false;
       const now = Date.now();
       if (now - lastClick >= ctx.dblClickMs()) {
         lastClick = now;
@@ -314,8 +333,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
     const handleRangePress = (ev: TileMouseEvent): boolean => {
       const mods = ev.modifiers ?? {};
       if (!(mods.shift || mods.alt)) return false;
-      if (ctx.getSelAnchor() === null) ctx.setSelAnchor(ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
-      ctx.selectRange(ctx.getSelAnchor()!, idx);
+      const anchor = ctx.getSelAnchor() ?? (ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
+      ctx.setSelAnchor(anchor);
+      ctx.selectRange(anchor, idx);
       // the keyboard extend endpoint must follow the clicked tile, or the next
       // shift+arrow extends from a stale focusIdx and collapses the range
       ctx.setFocusIdx(idx);
@@ -349,7 +369,6 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       ctx.updateSelectionStatusReal();
       void ctx.renderPreview();
       armDragPayload(ev, wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: entry.isDir }], false);
-      gridDrag.ctrl = !!ev.modifiers?.ctrl;
       ctx.log(
         `tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${gridDrag.keys?.length ?? 0} ctrl=${gridDrag.ctrl}`,
       );
@@ -378,6 +397,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         }
       }
       ctx.log(`internal drag start n=${gridDrag.keys?.length ?? 0}`);
+      ctx.setPointer?.("grabbing");
       ctx.setStatusMsg(`Dragging ${gridDrag.keys?.length ?? 0} item${gridDrag.keys?.length === 1 ? "" : "s"}…`);
     };
 
@@ -394,7 +414,7 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         if (handleRightClick(ev)) return;
         // the ctrl modifier decides internal vs external for drags
         // (see the OSC 72 offer handler)
-        if (handleDoubleClick()) return;
+        if (handleDoubleClick(ev)) return;
         if (handleCtrlPress(ev)) return;
         if (handleRangePress(ev)) return;
         handlePlainPress(ev);
@@ -416,11 +436,14 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         // gridDrag.dropTarget: over fires before the drag trips and doesn't
         // re-fire while the pointer stays on one tile, so the hover-set proxy
         // is frequently null at release (this is what broke cross-pane drops).
-        const dest = entry.isDir ? key : gridDrag.dropTarget;
+        const dest = entry.isDir ? key : null;
         ctx.log(
           `tile drop keys=${keys?.length ?? -1}[${keys?.map((item) => item.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${entry.isDir}`,
         );
         finishDragState(ctx);
+        // the cursor sits on a tile: re-apply its pointer after the central
+        // default restore (a pane-background drop keeps default)
+        ctx.setPointer?.("pointer");
         if (keys && dest && entry.isDir)
           void ctx.moveInto(
             dest,
@@ -434,20 +457,30 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
             ctx.log(`hover target set ${key}`);
             gridDrag.dropTarget = key;
             ctx.setTileVisual(key, TileVisual.Selected);
+            ctx.setPointer?.("grabbing");
+          } else {
+            ctx.setPointer?.("not-allowed");
           }
           return;
         }
+        // the pointer is an affordance (draggable/clickable), not a highlight:
+        // it sets/restores even on selected tiles, which skip the paint below
+        ctx.setPointer?.("pointer");
         const refs = ctx.tileRefs.get(key);
         if (refs?.selected) return;
         if (ctx.hoverAnim) ctx.hoverAnim(key, true);
         else ctx.setTileVisual(key, TileVisual.Hover);
       },
       onMouseOut: () => {
-        if (gridDrag.active && gridDrag.dropTarget === key) {
-          gridDrag.dropTarget = null;
-          ctx.setTileVisual(key, TileVisual.Rest);
+        if (gridDrag.active) {
+          if (gridDrag.dropTarget === key) {
+            gridDrag.dropTarget = null;
+            ctx.setTileVisual(key, TileVisual.Rest);
+          }
+          ctx.setPointer?.("grabbing");
           return;
         }
+        ctx.setPointer?.("default");
         const refs = ctx.tileRefs.get(key);
         if (refs?.selected) return;
         if (ctx.hoverAnim) ctx.hoverAnim(key, false);

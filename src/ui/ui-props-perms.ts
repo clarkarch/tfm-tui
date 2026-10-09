@@ -1,13 +1,17 @@
-import { Box, Text } from "@opentui/core";
-import { statSync, openSync, readSync, closeSync } from "node:fs";
+import { Box, type MouseEvent, Text } from "@opentui/core";
+import { statSync, openSync, readSync, closeSync, type Stats } from "node:fs";
 import { chmod } from "node:fs/promises";
 import path from "node:path";
+import { isRunnableHead } from "../fs/executable";
 import { applySurface, rowSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { idName, permWords } from "../fs/propsinfo";
 import { fsErrText } from "../fs/fsutil";
 import type { ListEntry } from "./ui-menu";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import { hoverEvents, type IconSlotHandle, type SlotElement } from "./ui-slots";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
 // class row to pick access (cursor popup via openContextMenu), the checkbox
@@ -17,9 +21,9 @@ import type { NotifyLevel } from "../lib/notify-level";
 // ./ui-props (the dialog shell): this owns the mode-bit state machine. ---
 
 type PermsCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   setTextOnId(nodeId: string, s: string): void;
-  setOnId(id: string, fn: (n: any) => void): void;
+  setOnId(id: string, fn: (n: NodeLike) => void): void;
   openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
   closeFileMenu(): void;
   notify(msg: string, title?: string, level?: NotifyLevel): void;
@@ -30,18 +34,21 @@ type PermsCtx = {
     states: { fg: string; bg: string }[],
     heightCells?: number,
     initialState?: number,
-  ): { el: any; slotId: string; spec: any };
+  ): IconSlotHandle;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 type PermsDeps = {
   // rows are appended here, in dialog order
-  panel: any;
+  panel: NodeLike;
   targetPath: string;
   // live stat object — mode is refreshed in place after every chmod
-  st: any;
+  st: Stats;
   isDirTarget: boolean;
   // the dialog's shared one-row builder (label/value/id), for the owner row
-  row(label: string, value: string, id?: string): any;
+  row(label: string, value: string, id?: string): SlotElement;
 };
 
 export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
@@ -97,12 +104,17 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
         flexDirection: "row",
         paddingLeft: 1,
         ...rowSurface(ctx.uiStyle(), colors, "rest"),
-        onMouseDown: (ev: any) => ctx.openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
-        onMouseOver: () => ctx.setOnId(rowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
-        onMouseOut: () => ctx.setOnId(rowId, (n) => applySurface(n, rowSurface(ctx.uiStyle(), colors, "rest"))),
+        onMouseDown: (ev: MouseEvent) => ctx.openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
+        ...hoverEvents(
+          (on) =>
+            ctx.setOnId(rowId, (n) =>
+              applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
+            ),
+          ctx.setPointer,
+        ),
       },
       Text({ content: ` ${label}`.padEnd(12), fg: colors.sidebarFgMuted }),
-      Text({ id: `${permRowId(cls)}-words`, content: permWords(st.mode, shift, isDirTarget), fg: colors.sidebarFg }),
+      Text({ id: `${permRowId(cls)}-words`, content: permWords(st.mode, shift, isDirTarget), fg: colors.white }),
     );
   };
   panel.add(permRow("you", "owner", 6));
@@ -112,6 +124,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
 
   // "execute as program" only makes sense for things that can actually run:
   // already-executable files, ELF binaries, shebang scripts, known script exts
+  // (content sniff shared with the open-path leaf in fs/executable)
   const execCapable = ((): boolean => {
     if (isDirTarget) return false;
     if (st.mode & 0o111) return true;
@@ -125,10 +138,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
       } finally {
         closeSync(fd);
       }
-      return (
-        (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) ||
-        (head[0] === 0x23 && head[1] === 0x21)
-      );
+      return isRunnableHead(head);
     } catch {
       return false;
     }
@@ -136,22 +146,24 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
   if (execCapable) {
     // raster checkbox: two slots (marked/blank) stacked in one hit area,
     // visibility flips with the exec bit
+    // role "float": the checkboxes sit on the properties dialog's fill (see
+    // style.slotBg) — the chrome role would bake a canvas-colored square
     const cbOnSpec = ctx.makeIconSlot(
       "checkbox-marked",
-      [{ fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+      [{ fg: colors.accent, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       1,
       0,
     );
     const cbOffSpec = ctx.makeIconSlot(
       "checkbox-blank",
-      [{ fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg) }],
+      [{ fg: colors.sidebarFgMuted, bg: slotBg(ctx.uiStyle(), colors, colors.sidebarBg, "float") }],
       1,
       0,
     );
     syncExecCheckbox = (): void => {
       const on = !!(st.mode & 0o100);
-      const a: any = ctx.byId(cbOnSpec.slotId);
-      const b: any = ctx.byId(cbOffSpec.slotId);
+      const a = ctx.byId(cbOnSpec.slotId);
+      const b = ctx.byId(cbOffSpec.slotId);
       try {
         if (a) a.visible = on;
       } catch {}
@@ -181,11 +193,16 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
           }
           void applyMode(nm);
         },
-        onMouseOver: () => ctx.setOnId(execRowId, (n) => applySurface(n, { backgroundColor: colors.hoverBg })),
-        onMouseOut: () => ctx.setOnId(execRowId, (n) => applySurface(n, rowSurface(ctx.uiStyle(), colors, "rest"))),
+        ...hoverEvents(
+          (on) =>
+            ctx.setOnId(execRowId, (n) =>
+              applySurface(n, on ? { backgroundColor: colors.hoverBg } : rowSurface(ctx.uiStyle(), colors, "rest")),
+            ),
+          ctx.setPointer,
+        ),
       },
       Box({ width: 2, height: 1, flexDirection: "row" }, cbOffSpec.el, cbOnSpec.el),
-      Text({ content: "execute as program", fg: colors.sidebarFg }),
+      Text({ content: "execute as program", fg: colors.white }),
     );
     panel.add(execRow);
     syncExecCheckbox();

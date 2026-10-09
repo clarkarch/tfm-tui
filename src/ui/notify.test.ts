@@ -10,6 +10,7 @@ import {
   type NotifyCtx,
 } from "./notify";
 import { makeProgress } from "./ui-progress";
+import type { IconSlotHandle, SlotElement } from "./ui-slots";
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {
   const deadline = Date.now() + 3000;
@@ -22,15 +23,16 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
 const makeFake = (opts?: { durationMs?: number }) => {
   const nodes = new Map<string, any>();
   const removed: string[] = [];
-  const icons: Array<{ name: string; fg: string }> = [];
+  const icons: Array<{ name: string; fg: string; bg: string }> = [];
   const ctx: NotifyCtx = {
     rootAdd: (_node: any) => {},
     remove: (node: any) => {
       removed.push(node.id);
     },
     makeIconSlot: (name: string, states: Array<{ fg: string; bg: string }>) => {
-      icons.push({ name, fg: states[0]?.fg ?? "" });
-      return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} };
+      icons.push({ name, fg: states[0]?.fg ?? "", bg: states[0]?.bg ?? "" });
+      // the notify path only reads slotId; the slot's icon surface is untested here
+      return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} } as unknown as IconSlotHandle;
     },
     drainIconQueue: () => {},
     stripSelectable: () => {},
@@ -55,11 +57,14 @@ const makeFake = (opts?: { durationMs?: number }) => {
 
 describe("toastLevelMeta", () => {
   const colors = { white: "#ffffff", muted: "#666666", red: "#e06c75", green: "#7fd88f" };
-  test("info keeps the classic white title + muted body + base duration", () => {
+  test("info keeps the classic white title + white body + base duration", () => {
+    // body is white, not muted: muted is only guaranteed on sidebarBg, never
+    // on the accentBg island (derived fills kept failing it) — one fill
+    // cannot serve both bright and dim text
     expect(toastLevelMeta("info", colors, 3000)).toEqual({
       icon: "information",
       titleFg: "#ffffff",
-      bodyFg: "#666666",
+      bodyFg: "#ffffff",
       duration: 3000,
     });
   });
@@ -67,7 +72,7 @@ describe("toastLevelMeta", () => {
     expect(toastLevelMeta("success", colors, 3000)).toEqual({
       icon: "check",
       titleFg: "#7fd88f",
-      bodyFg: "#666666",
+      bodyFg: "#ffffff",
       duration: 3000,
     });
   });
@@ -143,11 +148,14 @@ describe("notify stacking", () => {
     notify("a", "t", "info");
     notify("b", "t", "success");
     notify("c", "t", "error");
-    // white info, green check, red close — the meta→slot wiring, not just names
+    // white info, green check, red close — the meta→slot wiring, not just names.
+    // bg is the toast island's accentBg: the raster flattens onto the island
+    // (the toast shell is a floating layer — see FLOAT_TOAST_PREFIX), so its
+    // icon stays opaque under `transparent-partial` like every menu/dialog icon.
     expect(icons).toEqual([
-      { name: "information", fg: "#ffffff" },
-      { name: "check", fg: "#7fd88f" },
-      { name: "close", fg: "#e06c75" },
+      { name: "information", fg: "#ffffff", bg: "#1a1b26" },
+      { name: "check", fg: "#7fd88f", bg: "#1a1b26" },
+      { name: "close", fg: "#e06c75", bg: "#1a1b26" },
     ]);
   });
 
@@ -157,7 +165,7 @@ describe("notify stacking", () => {
     // leave no hole when closed
     const { ctx, nodes, removed } = makeFake({ durationMs: 10000 });
     const { notify, notifySticky } = makeNotify(ctx);
-    const sticky = notifySticky([{ kind: "progress" }], { width: 36, height: 4 });
+    const sticky = notifySticky([{ kind: "progress" } as unknown as SlotElement], { width: 36, height: 4 });
     expect(sticky).not.toBeNull();
     notify("below");
     expect(nodes.get(sticky!.nodeId).top).toBe(1);
@@ -197,11 +205,12 @@ describe("notify stacking (real renderer)", () => {
         accentBg: () => "#1a1b26",
         white: () => "#ffffff",
         sidebarFgMuted: () => "#666666",
-        makeIconSlot: (name: string) => ({
-          el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
-          slotId: `tfm-icon-test-${name}`,
-          spec: {},
-        }),
+        makeIconSlot: (name: string) =>
+          ({
+            el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
+            slotId: `tfm-icon-test-${name}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,
@@ -258,11 +267,12 @@ describe("notify stacking (real renderer)", () => {
         accentBg: () => "#1a1b26",
         white: () => "#ffffff",
         sidebarFgMuted: () => "#666666",
-        makeIconSlot: (name: string) => ({
-          el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
-          slotId: `tfm-icon-test-${name}`,
-          spec: {},
-        }),
+        makeIconSlot: (name: string) =>
+          ({
+            el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
+            slotId: `tfm-icon-test-${name}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
         drainIconQueue: () => {},
         stripSelectable: () => {},
         durationMs: () => 10000,
@@ -272,7 +282,8 @@ describe("notify stacking (real renderer)", () => {
         byId: (id: string) => r.renderer.root.findDescendantById(id),
         stripSelectable: () => {},
         colors,
-        makeIconSlot: () => ({ el: Text({ content: "i" }), slotId: "tfm-icon-test", spec: {} }),
+        makeIconSlot: () =>
+          ({ el: Text({ content: "i" }), slotId: "tfm-icon-test", spec: {} }) as unknown as IconSlotHandle,
         setIconState: () => false,
         drainIconQueue: () => {},
         notifySticky: (children: any[], opts?: { width?: number; height?: number }) => notifySticky(children, opts),

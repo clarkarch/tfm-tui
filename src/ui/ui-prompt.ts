@@ -8,22 +8,28 @@
 // pick via the floats modal policy (depth stays 1).
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, Input, RGBA, Text } from "@opentui/core";
-import { floatSurface } from "./style";
+import { Box, type CliRenderer, Input, type MouseEvent, Text } from "@opentui/core";
 import type { Theme } from "../config/config";
+import { makeModalScrim } from "./ui-dialogs";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import { hoverEvents, type SlotElement } from "./ui-slots";
 
 type PromptCtx = {
-  renderer(): any;
-  byId(id: string): any;
-  rootAdd(node: any): void;
+  renderer(): CliRenderer;
+  byId(id: string): MaybeNode;
+  rootAdd(node: unknown): void;
   stripSelectable(): void;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   drainIconQueue(): void | Promise<void>;
   colors(): Theme;
   uiStyle(): UiStyle;
   floats: Floats;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 const PANEL_W = 62;
@@ -39,7 +45,7 @@ export const makePrompt = (ctx: PromptCtx) => {
 
   const paintMask = (): void => {
     try {
-      const node: any = ctx.byId("tfm-prompt-mask");
+      const node = ctx.byId("tfm-prompt-mask");
       if (!node) return;
       node.content = secret ? "•".repeat(secret.length) : "Password";
       node.fg = secret ? ctx.colors().white : ctx.colors().sidebarFgMuted;
@@ -66,8 +72,10 @@ export const makePrompt = (ctx: PromptCtx) => {
     try {
       ctx.byId("tfm-prompt-input")?.blur?.();
     } catch {}
-    const scrim: any = ctx.byId("tfm-prompt");
+    const scrim = ctx.byId("tfm-prompt");
     scrim?.parent?.remove(scrim);
+    // the input is gone — default (stale-until-move, same rule as menus)
+    ctx.setPointer?.("default");
     // floats-initiated teardown (policy dismissal / replace) settles a
     // pending open as cancel — never leave the awaiter hanging
     const r = resolveFn;
@@ -113,6 +121,8 @@ export const makePrompt = (ctx: PromptCtx) => {
       passwordMode = !!opts.password;
       secret = "";
       resolveFn = resolve;
+      // the input owns the keyboard now — text pointer until it settles
+      ctx.setPointer?.("text");
       const c = ctx.colors();
       const okLabel = opts.okLabel ?? "OK";
       const btn = (id: string, label: string, fg: string, onPick: () => void): ReturnType<typeof Box> =>
@@ -123,85 +133,69 @@ export const makePrompt = (ctx: PromptCtx) => {
             flexGrow: 1,
             flexDirection: "row",
             justifyContent: "center",
-            onMouseDown: (ev: any) => {
+            onMouseDown: (ev: MouseEvent) => {
               try {
                 ev.stopPropagation?.();
               } catch {}
               onPick();
             },
+            // pointer only — the buttons carry no hover paint by design
+            ...hoverEvents(() => {}, ctx.setPointer),
           },
           Text({ content: label, fg }),
         );
-      const scrim = Box(
+      const scrim = makeModalScrim(
+        { uiStyle: ctx.uiStyle, colors: ctx.colors },
         {
           id: "tfm-prompt",
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: "100%",
-          height: "100%",
-          alignItems: "center",
-          justifyContent: "center",
           zIndex: 3750,
-          backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-          onMouseDown: () => cancel(),
+          panelWidth: PANEL_W,
+          onClose: () => cancel(),
         },
         Box(
+          { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
+          Text({
+            content: opts.title.length > PANEL_W - 8 ? `${opts.title.slice(0, PANEL_W - 9)}…` : opts.title,
+            fg: c.accent,
+          }),
+          Box({ flexGrow: 1 }),
+          ctx.escHintBtn("tfm-prompt-esc", () => cancel()),
+        ),
+        Box(
+          // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
+          // and the input paints underneath the next sibling (invisible
+          // whenever that row paints anything) — auto height fits both
+          { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
+          opts.password
+            ? Text({ id: "tfm-prompt-mask", content: "Password", fg: c.sidebarFgMuted })
+            : Input({
+                id: "tfm-prompt-input",
+                width: PANEL_W - 6,
+                placeholder: opts.placeholder ?? "",
+                backgroundColor: c.accentBg,
+                focusedBackgroundColor: c.accentBg,
+                textColor: c.white,
+                ...(opts.initial ? { value: opts.initial } : {}),
+              }),
+        ),
+        // breathing room above the buttons: fixed height + padding OVERFLOWS
+        // a 1-row box in @opentui/core 0.5.9 (the input painted underneath
+        // the next sibling and vanished whenever that row painted), so the
+        // input wrapper above uses auto height — and a childless spacer box
+        // collapses to zero rows while a plain " " measures empty, so a
+        // non-breaking space forces this row to lay out while painting blank
+        Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
+        Box(
           {
-            id: "tfm-prompt-panel",
-            width: PANEL_W,
-            ...floatSurface(ctx.uiStyle(), ctx.colors(), ctx.colors().sidebarBg),
-            paddingTop: 1,
-            paddingBottom: 1,
-            flexDirection: "column",
-            onMouseDown: (ev: any) => {
-              try {
-                ev.stopPropagation?.();
-              } catch {}
-            },
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            columnGap: 2,
+            paddingLeft: 2,
+            paddingRight: 2,
           },
-          Box(
-            { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
-            Text({ content: opts.title.slice(0, PANEL_W - 8), fg: c.accent }),
-            Box({ flexGrow: 1 }),
-            ctx.escHintBtn("tfm-prompt-esc", () => cancel()),
-          ),
-          Box(
-            // no fixed height: height 1 + paddingTop 1 overflows a 1-row box
-            // and the input paints underneath the next sibling (invisible
-            // whenever that row paints anything) — auto height fits both
-            { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
-            opts.password
-              ? Text({ id: "tfm-prompt-mask", content: "Password", fg: c.sidebarFgMuted })
-              : Input({
-                  id: "tfm-prompt-input",
-                  width: PANEL_W - 6,
-                  placeholder: opts.placeholder ?? "",
-                  backgroundColor: c.accentBg,
-                  focusedBackgroundColor: c.accentBg,
-                  textColor: c.white,
-                  ...(opts.initial ? { value: opts.initial } : {}),
-                }),
-          ),
-          // breathing room above the buttons: fixed height + padding OVERFLOWS
-          // a 1-row box in @opentui/core 0.5.9 (the input painted underneath
-          // the next sibling and vanished whenever that row painted), so the
-          // input wrapper above uses auto height — and a childless spacer box
-          // collapses to zero rows while a plain " " measures empty, so a
-          // non-breaking space forces this row to lay out while painting blank
-          Box({ width: "100%", height: 1 }, Text({ content: "\u00A0", fg: c.sidebarFgMuted })),
-          Box(
-            {
-              width: "100%",
-              height: 1,
-              flexDirection: "row",
-              columnGap: 2,
-              paddingLeft: 2,
-              paddingRight: 2,
-            },
-            btn("tfm-prompt-cancel", "[ Cancel ]", c.sidebarFg, () => cancel()),
-            btn("tfm-prompt-ok", `[ ${okLabel} ]`, c.accent, () => submit()),
-          ),
+          btn("tfm-prompt-cancel", "[ Cancel ]", c.white, () => cancel()),
+          btn("tfm-prompt-ok", `[ ${okLabel} ]`, c.accent, () => submit()),
         ),
       );
       ctx.rootAdd(scrim);
@@ -263,7 +257,7 @@ export const makePrompt = (ctx: PromptCtx) => {
         return;
       }
       try {
-        const input: any = ctx.byId("tfm-prompt-input");
+        const input = ctx.byId("tfm-prompt-input");
         if (input) input.value = v;
       } catch {}
     },

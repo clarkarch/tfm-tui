@@ -1,15 +1,25 @@
 // --- Directory listing + sort: pure fs/dir-entry logic. No renderer, no UI
 // state — sort mode arrives as params so callers (grid, tests) own state.
 // Virtual places (Recent/Starred) resolve through the registries in ./recent. ---
-import { readdir, stat } from "node:fs/promises";
-import { statSync } from "node:fs";
+import { lstat, readdir, stat } from "node:fs/promises";
+import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "./uri";
 import { readRecentXbel, readStarredList } from "./recent";
 import type { SortMode } from "../lib/sort";
 import { extOf } from "./filetype";
 
-export type Entry = { name: string; isDir: boolean; size?: number; mtimeMs?: number; abs?: string };
+export type Entry = {
+  name: string;
+  isDir: boolean;
+  size?: number;
+  mtimeMs?: number;
+  abs?: string;
+  // set at scan time (free from the dirent; probed for virtual/search rows):
+  // drives the list-row link badge. Not part of the structural sig — a
+  // retargeted link keeps its name, same documented staleness as isDir.
+  isLink?: boolean;
+};
 
 // One collator for the whole process (JSC/Bun rebuilds collation data on every
 // String#localeCompare call, turning an n log n sort into a slow-mode flood —
@@ -48,7 +58,9 @@ export const compareEntries = (sortBy: SortMode, sortAsc: boolean) => {
 
 const statEntry = (abs: string): { size?: number; mtimeMs?: number } => {
   try {
-    const st = statSync(abs);
+    // link-own bytes/mtime (on-disk cost, ls -l semantics); routing stays in
+    // scanDir's target-following isDir
+    const st = lstatSync(abs);
     return { size: st.size, mtimeMs: st.mtimeMs ?? 0 };
   } catch {
     return {};
@@ -66,12 +78,20 @@ const statEntries = (items: Array<{ path: string; mtimeMs?: number }>): Entry[] 
     } catch {
       continue;
     }
+    // size/mtime are the link's own (on-disk cost); routing still follows it.
+    // A second lstat (not the dirent — virtual rows have none) also settles
+    // isLink, so one probe serves both.
+    let link: ReturnType<typeof lstatSync> | null = null;
+    try {
+      link = lstatSync(it.path);
+    } catch {}
     out.push({
       name: path.basename(it.path),
       isDir: st.isDirectory(),
       abs: it.path,
-      size: st.size,
-      mtimeMs: it.mtimeMs ?? st.mtimeMs ?? 0,
+      size: link?.size ?? st.size,
+      mtimeMs: it.mtimeMs ?? link?.mtimeMs ?? st.mtimeMs ?? 0,
+      isLink: link?.isSymbolicLink() ?? false,
     });
   }
   return out;
@@ -117,22 +137,45 @@ const scanDir = async (dir: string): Promise<Entry[]> => {
         isDir = false;
       }
     }
-    out.push({ name: d.name, isDir });
+    out.push({ name: d.name, isDir, isLink: d.isSymbolicLink() });
   }
   return out;
 };
 
-// stats written INTO the cached entries ([ui] listings-cache-stats): ONE
-// stat fills size AND mtimeMs, so switching sorts later finds them present.
-// Failed stats stay missing and are retried next call — never fake a zero.
-const fillInto = (entries: Entry[], dir: string): void => {
-  for (const e of entries) {
-    if (e.size !== undefined && e.mtimeMs !== undefined) continue;
-    const got = statEntry(e.abs ?? path.join(dir, e.name));
-    if (got.size === undefined) continue;
-    e.size = got.size;
-    e.mtimeMs = got.mtimeMs;
-  }
+// Stats written INTO entries, asynchronously and with bounded concurrency.
+// ONE stat fills size AND mtimeMs, so switching sorts later finds them present;
+// failed stats stay missing and are retried next call — never fake a zero.
+//
+// Used by BOTH the GRID's list view and the listings cache's stat fill. It must
+// stay async: the old synchronous statSync loop it replaced froze the whole app
+// (this render, the frame loop, the toast spinner) for tens to hundreds of ms on
+// a big folder — exactly the console, where tty mode FORCES list view. The
+// cache path used to call a sync `fillInto` and re-introduced that freeze, so it
+// now routes here too. The loop yields between batches so input stays alive.
+export const fillStatsInto = async (
+  entries: Entry[],
+  dir: string,
+  deps?: { stat?: (p: string) => Promise<{ size: number; mtimeMs: number }>; concurrency?: number },
+): Promise<void> => {
+  // default follows NOTHING (lstat): the Size/mtime columns show link-own
+  // bytes (on-disk cost, ls -l semantics) — a following default is how the
+  // link row ended up repeating its target's size. Injected fakes keep working.
+  const statFn = deps?.stat ?? ((p: string) => lstat(p));
+  const workers = Math.max(1, Math.min(deps?.concurrency ?? 32, entries.length));
+  let i = 0;
+  const worker = async (): Promise<void> => {
+    while (i < entries.length) {
+      const e = entries[i++];
+      // already complete (a size/mtime sort filled it, or a retry landed)
+      if (!e || (e.size !== undefined && e.mtimeMs !== undefined)) continue;
+      try {
+        const st = await statFn(e.abs ?? path.join(dir, e.name));
+        e.size = st.size;
+        e.mtimeMs = st.mtimeMs ?? 0;
+      } catch {}
+    }
+  };
+  await Promise.all(Array.from({ length: workers }, worker));
 };
 
 // raw scan (hidden INCLUDED — listDir filters per call so the showHidden
@@ -152,11 +195,11 @@ const loadEntries = async (
     // deliberately NOT refreshed (absolute staleness cap, not idle expiry)
     listings.delete(key);
     listings.set(key, hit);
-    if (o.fillStats) fillInto(hit.entries, dir);
+    if (o.fillStats) await fillStatsInto(hit.entries, dir);
     return hit.entries.map((e) => ({ ...e }));
   }
   const entries = await scanDir(dir);
-  if (o.fillStats) fillInto(entries, dir);
+  if (o.fillStats) await fillStatsInto(entries, dir);
   listings.delete(key);
   listings.set(key, { sig, entries, t: o.now() });
   while (listings.size > LISTINGS_CAP) {

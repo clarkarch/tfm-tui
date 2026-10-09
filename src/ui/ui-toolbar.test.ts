@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren } from "../lib/uiutil";
 import { crumbItemIds, isNavigableTarget, makeToolbar, toolbarItemIds } from "./ui-toolbar";
 import { RECENT_URI } from "../fs/uri";
+import type { MaybeNode } from "../lib/node-like";
 
 describe("isNavigableTarget", () => {
   test("real dirs pass, files and missing paths fail", () => {
@@ -53,7 +54,7 @@ const mkToolbar = (
     prefix,
     renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
-    clearChildren,
+    destroyChildren,
     stripSelectable: () => {},
     uiStyle: () => "solid",
     colors: () => COLORS,
@@ -101,9 +102,10 @@ describe("makeToolbar (per pane)", () => {
 });
 
 describe("toolbar item ids (animation targets)", () => {
+  // the probes only ask whether an id resolves; the stand-in carries just the id
   const mapById = (ids: string[]) => {
     const set = new Set(ids);
-    return (id: string) => (set.has(id) ? { id } : null);
+    return (id: string): MaybeNode => (set.has(id) ? ({ id } as unknown as MaybeNode) : null);
   };
 
   test("toolbarItemIds runs nav, crumbs, sort, search left-to-right", () => {
@@ -126,7 +128,7 @@ describe("toolbar item ids (animation targets)", () => {
   });
 
   test("the crumb probe is capped (a registry that never misses can't loop forever)", () => {
-    expect(crumbItemIds(() => ({}), "tfm-p0-", 5)).toHaveLength(5);
+    expect(crumbItemIds(() => ({}) as unknown as MaybeNode, "tfm-p0-", 5)).toHaveLength(5);
   });
 });
 

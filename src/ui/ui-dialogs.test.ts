@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
 import { makeFloats, type Floats } from "./floats";
 
@@ -55,7 +56,13 @@ describe("openDialog chokepoint", () => {
     // simulate a menu popup being open
     floats.open("filemenu", () => {});
     const dialogs = makeDialogs(ctx);
-    const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, floats });
+    const conflict = makeConflict(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: () => null,
+      drainIconQueue: () => {},
+      floats,
+    });
     void conflict.promptConflict("/a/b.txt", 0);
     expect(floats.isOpen("filemenu")).toBe(false);
     expect(floats.top()).toBe("conflict");
@@ -70,7 +77,13 @@ describe("openDialog chokepoint", () => {
   test("pending conflict resolves 'skip' when floats dismisses it (policy close)", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);
-    const conflict = makeConflict(dialogs, { colors: ctx.colors, drainIconQueue: () => {}, floats });
+    const conflict = makeConflict(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: () => null,
+      drainIconQueue: () => {},
+      floats,
+    });
     void conflict.promptConflict("/a/b.txt", 0);
     // a props dialog opens afterwards — floats clears the desktop, the
     // pending prompt must not hang forever
@@ -79,10 +92,41 @@ describe("openDialog chokepoint", () => {
     expect(floats.top()).toBe("props");
   });
 
+  // Contract this pins: confirm() has NO readiness gate. Its old wiring keyed
+  // off `renderer.resolution`, which never lands on the Linux console or tmux
+  // (no pixel-size reply), so Empty Trash / Delete Forever silently no-op'd
+  // there. makeConflict already opens ungated; re-adding any gate defaulting
+  // closed breaks this test (and the floats/traversal tests above).
+  test("confirm opens with no readiness gate and the pending Yes still fires", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
+    let confirmed = false;
+    expect(
+      yesNo.confirm("Empty Trash?", "Empty", () => {
+        confirmed = true;
+      }),
+    ).toBe(true);
+    expect(floats.top()).toBe("yesno");
+    yesNo.moveFocus(1); // → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
+  });
+
   test("yesno opens through floats; No routes back through floats", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);
-    const yesNo = makeYesNo(dialogs, { colors: ctx.colors, canOpen: () => true, floats });
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
     let confirmed = false;
     yesNo.confirm("Empty Trash?", "Empty", () => {
       confirmed = true;
@@ -91,6 +135,73 @@ describe("openDialog chokepoint", () => {
     yesNo.close();
     expect(floats.isOpen("yesno")).toBe(false);
     expect(confirmed).toBe(false);
+  });
+
+  test("keyboard: focus defaults to No, arrows move, submit activates", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
+    let confirmed = false;
+    yesNo.confirm("Empty Trash?", "Empty", () => {
+      confirmed = true;
+    });
+    yesNo.submit(); // No focused → closes as No
+    expect(confirmed).toBe(false);
+    expect(floats.isOpen("yesno")).toBe(false);
+
+    yesNo.confirm("Empty Trash?", "Empty", () => {
+      confirmed = true;
+    });
+    yesNo.moveFocus(1); // → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
+    expect(floats.isOpen("yesno")).toBe(false);
+  });
+
+  test("moveFocus wraps and is a no-op while closed", () => {
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
+    expect(() => yesNo.moveFocus(1)).not.toThrow();
+    expect(() => yesNo.submit()).not.toThrow();
+    let confirmed = false;
+    yesNo.confirm("Sure?", "Yes", () => {
+      confirmed = true;
+    });
+    yesNo.moveFocus(-1); // wraps No → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
+  });
+
+  test("yesno shows the full delete message without slicing (two lines, buttons intact)", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const { yesNo } = mkLive(t, floats, makeCtx().ctx.colors);
+      yesNo.confirm("Permanently delete 3 items? This cannot be undone.", "Delete permanently", () => {}, true);
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      // the irreversibility warning must survive — the old 36-wide slice cut it
+      // (wrapped over two lines, so assert the words, not one contiguous span)
+      expect(frame).toContain("cannot be");
+      expect(frame).toContain("undone");
+      expect(frame).toContain("Permanently delete 3 items?");
+      // both buttons paint in full, not clipped by the panel edge
+      expect(frame).toContain("[ No ]");
+      expect(frame).toContain("[ Delete permanently ]");
+    } finally {
+      t.renderer.destroy();
+    }
   });
 
   test("scrim click routes to onClose (dismiss-by-click-away still works)", () => {
@@ -110,5 +221,147 @@ describe("openDialog chokepoint", () => {
     expect(typeof scrim.props.onMouseDown).toBe("function");
     scrim.props.onMouseDown({});
     expect(closed).toBe(true);
+  });
+});
+
+// Theme-switch repaints: conflict/yesno persist while open (batch ops), so a
+// palette landing mid-dialog must repaint them — by id, no rebuild (the
+// pending promise + focus state survive).
+const hexInts = (hex: string): [number, number, number, number] => {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+};
+
+// post-mount fg is a parsed RGBA object, never the assigned hex string
+const fgInts = (n: any): [number, number, number, number] =>
+  typeof n.fg === "string" ? hexInts(n.fg) : (n.fg.toInts() as [number, number, number, number]);
+
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
+
+const mkLive = (t: TestRendererSetup, floats: Floats, getColors: () => any) => {
+  const ctx = {
+    byId: (id: string) => t.renderer.root.findDescendantById(id),
+    rootAdd: (n: any) => t.renderer.root.add(n),
+    stripSelectable: () => {},
+    termH: () => 24,
+    uiStyle: () => "solid" as const,
+    colors: getColors,
+    closeFileMenu: () => {},
+    floats,
+  };
+  const dialogs = makeDialogs(ctx);
+  return {
+    conflict: makeConflict(dialogs, {
+      colors: getColors,
+      uiStyle: () => "solid" as const,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      drainIconQueue: () => {},
+      floats,
+      setPointer: (s) => void pointers.push(s),
+    }),
+    yesNo: makeYesNo(dialogs, {
+      colors: getColors,
+      uiStyle: () => "solid" as const,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      floats,
+      setPointer: (s) => void pointers.push(s),
+    }),
+  };
+};
+
+describe("dialog repaints", () => {
+  test("conflict repaint() repaints panel + buttons + texts, keeps the pending choice", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let live: any = { ...makeCtx().ctx.colors() };
+      const { conflict } = mkLive(t, floats, () => live);
+      let choice = "";
+      const p = conflict.promptConflict("/a/b.txt", 1).then((c) => (choice = c));
+      await t.renderOnce();
+      expect(floats.isOpen("conflict")).toBe(true);
+      live = { ...live, sidebarBg: "#101020", accentBg: "#303040", accent: "#ff0000", sidebarFg: "#f0f0f0" };
+      conflict.repaint();
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-conflict") as any;
+      expect([...panel.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const btn = t.renderer.root.findDescendantById("tfm-conflict-b0") as any;
+      expect([...btn.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const title = t.renderer.root.findDescendantById("tfm-conflict-title") as any;
+      expect(fgInts(title)).toEqual(hexInts("#ff0000"));
+      // the pending prompt still resolves (no rebuild swallowed it)
+      conflict.closeConflict("keepBoth");
+      await p;
+      expect(choice).toBe("keepBoth");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("yesno repaint() repaints panel + texts + focus, keeps the pending confirm", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let live: any = { ...makeCtx().ctx.colors() };
+      const { yesNo } = mkLive(t, floats, () => live);
+      let confirmed = false;
+      yesNo.confirm("Empty Trash?", "Empty", () => (confirmed = true), true);
+      await t.renderOnce();
+      expect(floats.isOpen("yesno")).toBe(true);
+      live = { ...live, sidebarBg: "#101020", ansi1: "#00ff00" };
+      yesNo.repaint();
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-yesno") as any;
+      expect([...panel.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const msg = t.renderer.root.findDescendantById("tfm-yesno-msg") as any;
+      expect(fgInts(msg)).toEqual(hexInts("#00ff00"));
+      yesNo.moveFocus(1);
+      yesNo.submit();
+      expect(confirmed).toBe(true);
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("dialog repaints no-op when closed", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const { conflict, yesNo } = mkLive(t, floats, makeCtx().ctx.colors);
+      expect(() => conflict.repaint()).not.toThrow();
+      expect(() => yesNo.repaint()).not.toThrow();
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("teardowns restore default (hovered buttons have no out)", async () => {
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const { conflict, yesNo } = mkLive(t, floats, makeCtx().ctx.colors);
+      pointers.length = 0;
+      // conflict: policy dismissal routes through the raw teardown
+      void conflict.promptConflict("/a/b.txt", 0);
+      await t.renderOnce();
+      floats.open("props", () => {});
+      expect(conflict.isOpen()).toBe(false);
+      expect(pointers).toEqual(["default"]);
+      // yesno: submit closes through floats the same way
+      pointers.length = 0;
+      let confirmed = false;
+      expect(
+        yesNo.confirm("Empty Trash?", "Empty", () => {
+          confirmed = true;
+        }),
+      ).toBe(true);
+      yesNo.moveFocus(1);
+      yesNo.submit();
+      expect(confirmed).toBe(true);
+      expect(pointers).toEqual(["default"]);
+    } finally {
+      t.renderer.destroy();
+    }
   });
 });

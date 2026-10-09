@@ -2,8 +2,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Box } from "@opentui/core";
+import { createTestRenderer } from "@opentui/core/testing";
 import { makeRetheme } from "./ui-retheme";
+import { makePick } from "./ui-pick";
+import { makeFloats } from "./floats";
 import { bumpHex } from "../config/color";
+import { ANSI16, TTY_DARK_THEME, TTY_LIGHT_THEME } from "./tty";
 import { defaultConfig, type Config } from "../config/config-schema";
 import { loadConfig } from "../config/config";
 
@@ -29,6 +34,7 @@ const mkCtx = () => {
     geom: { sw: 0, tileW: 0, tileH: 0, iconCells: 0 },
     renderAll: 0,
     clearIconCaches: 0,
+    clearFailedThumbs: 0,
     resetIconQueue: 0,
     syncTerminalTheme: 0,
     syncTerminalHeight: 0,
@@ -69,6 +75,9 @@ const mkCtx = () => {
     },
     clearIconCaches: () => {
       calls.clearIconCaches++;
+    },
+    clearFailedThumbs: () => {
+      calls.clearFailedThumbs++;
     },
     resetIconQueue: () => {
       calls.resetIconQueue++;
@@ -118,6 +127,22 @@ afterAll(() => {
 });
 
 describe("applyConfig", () => {
+  test("live-reload watcher creates a missing config dir (fresh profile)", () => {
+    // fs.watch throws ENOENT synchronously on a missing dir; without the
+    // mkdir the watcher never installed and external edits never reloaded
+    const missingParent = path.join(cfgSandbox, "fresh-profile");
+    const saved = process.env.TFM_CONFIG;
+    process.env.TFM_CONFIG = path.join(missingParent, "config.toml");
+    try {
+      expect(existsSync(missingParent)).toBe(false);
+      makeRetheme(mkCtx() as any);
+      expect(existsSync(missingParent)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.TFM_CONFIG;
+      else process.env.TFM_CONFIG = saved;
+    }
+  });
+
   test("merges the fresh config into the live one and rewrites geometry through the setters", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
@@ -132,7 +157,7 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
-  test("colors merge in place; transparent-bg off nudges bg opaque, on keeps the raw hex", () => {
+  test("colors merge in place; off nudges bg, on/force keep the raw hex", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
@@ -142,24 +167,103 @@ describe("applyConfig", () => {
     expect(ctx.colors.accent).toBe(defaultConfig.theme.accent);
 
     const on = clone(defaultConfig);
-    on.ui.transparentBg = true;
+    on.ui.transparentBg = "on";
     on.theme.bg = "#010203";
     retheme.applyConfig(on);
     expect(ctx.colors.bg).toBe("#010203"); // on -> faithful
-    expect(ctx.config.ui.transparentBg).toBe(true);
+    expect(ctx.config.ui.transparentBg).toBe("on");
+
+    const force = clone(defaultConfig);
+    force.ui.transparentBg = "force";
+    force.theme.bg = "#010203";
+    retheme.applyConfig(force);
+    expect(ctx.colors.bg).toBe("#010203"); // force -> faithful (fills clear at the surface seam)
+    expect(ctx.calls.bg.at(-1)).toBe("transparent"); // renderer stays transparent
   });
 
-  test("theme change invalidates rasters + repaints chrome + syncs the terminal", () => {
+  test("theme change re-rasters via the queue + repaints chrome + syncs the terminal (memory kept)", () => {
+    // WHY the wipe is gone: icon/thumb keys already carry fg/bg/mode, so a
+    // flip misses naturally while the old theme's rasters stay hot for
+    // cycling back — the per-flip wipe made every switch cold (rapid theme
+    // cycling lag). resetIconQueue still re-renders (disk serves the misses).
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.theme.accent = "#ff0000";
     retheme.applyConfig(fresh);
-    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
     expect(ctx.calls.resetIconQueue).toBe(1);
     expect(ctx.calls.syncTerminalTheme).toBe(1);
     expect(ctx.calls.repaintButtons).toBe(1); // rethemeChrome ran
     expect(ctx.calls.bg).toEqual([bumpHex(defaultConfig.theme.bg)]); // renderer bg reset
+  });
+
+  test("theme flip restyles the grid scrollbars via the optional hook (absent = no-op)", () => {
+    // hook present: a theme flip fans out once (thumb/track follow the palette
+    // without rebuilding the scrollers or dropping the scroll pos)
+    const ctx = mkCtx();
+    let restyled = 0;
+    (ctx as any).restyleScrollbars = () => {
+      restyled++;
+    };
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#00ff00";
+    retheme.applyConfig(fresh);
+    expect(restyled).toBe(1);
+    // hook absent (old fakes): the same flip must not throw
+    const bare = makeRetheme(mkCtx() as any);
+    const fresh2 = clone(defaultConfig);
+    fresh2.theme.accent = "#0000ff";
+    expect(() => bare.applyConfig(fresh2)).not.toThrow();
+  });
+
+  test("tty-active applyConfig paints the static console palette, ignoring user hues", () => {
+    // the Linux VT ignores 48;2 truecolor, so tty mode paints one hand-tuned
+    // static palette (dark/light by configured-bg brightness) instead of the
+    // user's theme — two wildly different user themes land byte-identical
+    const ctx = mkCtx();
+    (ctx as Record<string, unknown>).isTtyMode = () => true;
+    const retheme = makeRetheme(ctx as any);
+    const dark = clone(defaultConfig);
+    dark.ui.ttyMode = "on";
+    dark.theme.accent = "#ff0000";
+    dark.theme.bg = "#1a1b26";
+    retheme.applyConfig(dark);
+    expect(ctx.colors).toEqual(TTY_DARK_THEME);
+    for (const v of Object.values(ctx.colors)) expect(ANSI16).toContain(v);
+
+    const other = clone(defaultConfig);
+    other.ui.ttyMode = "on";
+    other.theme.accent = "#00ff00";
+    other.theme.bg = "#101014";
+    retheme.applyConfig(other);
+    expect(ctx.colors).toEqual(TTY_DARK_THEME); // hues discarded, same static
+
+    const light = clone(defaultConfig);
+    light.ui.ttyMode = "on";
+    light.theme.bg = "#e1e2e7";
+    retheme.applyConfig(light);
+    expect(ctx.colors).toEqual(TTY_LIGHT_THEME);
+  });
+
+  test("tty-active user-theme edits invalidate nothing (theme is not painted)", () => {
+    const ctx = mkCtx();
+    (ctx as Record<string, unknown>).isTtyMode = () => true;
+    const retheme = makeRetheme(ctx as any);
+    const booted = clone(defaultConfig);
+    booted.ui.ttyMode = "on";
+    retheme.applyConfig(booted);
+    const baseline = { ...ctx.calls };
+    const fresh = clone(defaultConfig);
+    fresh.ui.ttyMode = "on";
+    fresh.theme.accent = "#123456";
+    retheme.applyConfig(fresh);
+    expect(ctx.calls.clearIconCaches).toBe(baseline.clearIconCaches);
+    expect(ctx.calls.resetIconQueue).toBe(baseline.resetIconQueue);
+    expect(ctx.calls.renderAll).toBe(baseline.renderAll);
+    expect(ctx.config.theme.accent).toBe("#123456"); // still STORED for life off-console
   });
 
   test("a ui-only knob flip re-renders but never invalidates the raster caches", () => {
@@ -169,28 +273,115 @@ describe("applyConfig", () => {
     fresh.ui.showHidden = true;
     retheme.applyConfig(fresh);
     expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(0);
     expect(ctx.calls.resetIconQueue).toBe(0);
     expect(ctx.calls.renderAll).toBe(1);
   });
 
-  test("icons mode flip invalidates the raster caches (icons re-raster)", () => {
+  test("icons mode flip re-rasters via the queue (transparent flag is in the key, memory kept)", () => {
+    // same no-wipe contract as the theme flip: the transparency mode rides
+    // the cache key, so old-mode rasters stay valid for flipping back
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.ui.icons = "transparent";
     retheme.applyConfig(fresh);
-    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
     expect(ctx.calls.resetIconQueue).toBe(1);
     expect(ctx.calls.renderAll).toBe(1);
   });
 
-  test("a hover-geometry toggle re-renders so tiles gain or lose lift room", () => {
+  test("force-glyph flip re-rasters via the queue (drains resume on the way back, memory kept)", () => {
+    // off->on stops the drains; on->off must re-raster, or tiles keep glyphs
+    // forever — same no-wipe contract as the theme flip (resetIconQueue
+    // re-renders, the kept memory serves a flip back)
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).forceGlyph = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.clearIconCaches).toBe(0);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
+    expect(ctx.calls.resetIconQueue).toBe(1);
+  });
+
+  test("force-glyph rising edge nudges toward list view once (no repeat spam)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).forceGlyph = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(1);
+    expect(String(ctx.calls.notify[0]![0])).toMatch(/list/i);
+
+    retheme.applyConfig(clone(ctx.config));
+    expect(ctx.calls.notify.length).toBe(1); // held on: silent
+
+    const off = clone(ctx.config);
+    (off.ui as Record<string, unknown>).forceGlyph = false;
+    retheme.applyConfig(off);
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(2); // off->on again: remind again
+  });
+
+  test("follow-terminal under tty warns once that the console palette wins", () => {
+    const ctx = mkCtx();
+    (ctx as Record<string, unknown>).isTtyMode = () => true;
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).followTerminal = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(1);
+    expect(String(ctx.calls.notify[0]![0])).toMatch(/console/i);
+
+    retheme.applyConfig(clone(ctx.config));
+    expect(ctx.calls.notify.length).toBe(1); // held on: silent
+
+    const off = clone(ctx.config);
+    (off.ui as Record<string, unknown>).followTerminal = false;
+    retheme.applyConfig(off);
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(2); // off->on again: remind again
+  });
+
+  test("follow-terminal off the console stays silent", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const on = clone(defaultConfig);
+    (on.ui as Record<string, unknown>).followTerminal = true;
+    retheme.applyConfig(on);
+    expect(ctx.calls.notify.length).toBe(0);
+  });
+
+  test("tile-hover enable/direction re-render (headroom is baked at build)", () => {
+    // fileHoverAnimation/direction BAKE layout at tile build (marginTop
+    // headroom + the refs.hoverLift flag, ui-grid-rows.ts) — the live per-hover
+    // read only covers the highlight/lift paint and includeLabel. Exempting
+    // them skipped renderAll, so toggling the feature on did nothing until the
+    // next natural rebuild (the reported "needs manual reload"). The grid sig
+    // already covers both keys, so un-exempting rebuilds exactly once.
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.ui.fileHoverAnimation = true;
+    fresh.ui.fileHoverDirection = "down";
     retheme.applyConfig(fresh);
     expect(ctx.calls.renderAll).toBe(1);
+    expect(ctx.config.ui.fileHoverAnimation).toBe(true);
+    expect(ctx.config.ui.fileHoverDirection).toBe("down");
+  });
+
+  test("tile-hover include-label stays value-only (rides live in the animator)", () => {
+    // includeLabel is read per hover at ui-grid-anim.ts playHover — no baked
+    // layout depends on it, so it skips the grid rebuild.
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.fileHoverIncludeLabel = true;
+    retheme.applyConfig(fresh);
+    expect(ctx.calls.renderAll).toBe(0);
+    expect(ctx.config.ui.fileHoverIncludeLabel).toBe(true);
   });
 
   test("a value-only knob skips the heavy renderAll (no grid rebuild churn)", () => {
@@ -234,17 +425,116 @@ describe("applyConfig", () => {
     const first = clone(defaultConfig);
     first.theme.accent = "#111111";
     retheme.applyConfig(first);
-    expect(ctx.calls.clearIconCaches).toBe(1);
+    expect(ctx.calls.clearFailedThumbs).toBe(1);
 
     // settings-row pattern: mutate the LIVE config, then applyConfig(config)
     ctx.config.theme.accent = "#222222";
     retheme.applyConfig(ctx.config);
-    expect(ctx.calls.clearIconCaches).toBe(2); // still detected!
+    expect(ctx.calls.clearFailedThumbs).toBe(2); // still detected!
     expect(ctx.colors.accent).toBe("#222222");
+  });
+
+  test("applyConfig converges pane sort state through the syncSortMode hook", () => {
+    // the grid reads per-pane AppState.sortBy, not config — a sort-mode
+    // settings change must re-seed state or renderAll repaints the same order
+    const ctx = mkCtx();
+    let hookCalls = 0;
+    const retheme = makeRetheme({
+      ...ctx,
+      syncSortMode: () => {
+        hookCalls++;
+      },
+    } as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.sortMode = "size";
+    retheme.applyConfig(fresh);
+    expect(hookCalls).toBe(1);
+    expect(ctx.calls.renderAll).toBe(1);
+  });
+
+  test("applyConfig converges pane hidden state through the syncShowHidden hook", () => {
+    // the grid reads per-pane AppState.showHidden, not config — an external
+    // config.toml edit (live reload) that flips show-hidden must re-seed state
+    // or renderAll repaints the same filter. The GUI row writes state itself,
+    // but the file-reload path never touches it (same hook shape as sort).
+    const ctx = mkCtx();
+    let hookCalls = 0;
+    const retheme = makeRetheme({
+      ...ctx,
+      syncShowHidden: () => {
+        hookCalls++;
+      },
+    } as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.showHidden = true;
+    retheme.applyConfig(fresh);
+    expect(hookCalls).toBe(1);
+    expect(ctx.calls.renderAll).toBe(1);
   });
 });
 
 describe("rethemeChrome", () => {
+  test("a sidebar-title mode change repaints the title block WITHOUT a theme flip", () => {
+    // the title block is boot-baked (renderAll never rebuilds it), so
+    // rethemeChrome alone isn't enough — applyConfig paints the title itself.
+    // Without that, switching modes in Settings only landed after a restart.
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const files = clone(defaultConfig);
+    files.ui.sidebarTitle = "files";
+    retheme.applyConfig(files);
+
+    const painted = new Map(ctx.calls.setOnId);
+    const font: any = {};
+    painted.get("tfm-title-font")!(font);
+    expect(font.text).toBe("Files");
+    expect(font.color).toBe(ctx.colors.white);
+    const sub: any = {};
+    painted.get("tfm-title-sub")!(sub);
+    expect(sub.visible).toBe(false);
+
+    // none hides the whole block; tfm restores the original title
+    const noneMode = clone(defaultConfig);
+    noneMode.ui.sidebarTitle = "none";
+    ctx.calls.setOnId.length = 0;
+    retheme.applyConfig(noneMode);
+    const after = new Map(ctx.calls.setOnId);
+    const font2: any = {};
+    after.get("tfm-title-font")!(font2);
+    expect(font2.visible).toBe(false);
+    const sub2: any = {};
+    after.get("tfm-title-sub")!(sub2);
+    expect(sub2.visible).toBe(false);
+
+    const tfmMode = clone(defaultConfig);
+    tfmMode.ui.sidebarTitle = "tfm";
+    ctx.calls.setOnId.length = 0;
+    retheme.applyConfig(tfmMode);
+    const back = new Map(ctx.calls.setOnId);
+    const font3: any = {};
+    back.get("tfm-title-font")!(font3);
+    expect(font3.text).toBe("tfm");
+    expect(font3.color).toBe(ctx.colors.accent);
+    const sub3: any = {};
+    back.get("tfm-title-sub")!(sub3);
+    expect(sub3.visible).toBe(true);
+  });
+
+  test("a theme flip still repaints the title block (rethemeChrome path)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const first = clone(defaultConfig);
+    first.theme.accent = "#111111";
+    retheme.applyConfig(first);
+    ctx.calls.setOnId.length = 0;
+    retheme.rethemeChrome();
+    const painted = new Map(ctx.calls.setOnId);
+    const font: any = {};
+    painted.get("tfm-title-font")!(font);
+    expect(font.color).toBe("#111111");
+    expect(font.text).toBe("tfm");
+  });
+
   test("paints the boot-baked widgets by id (widths, surfaces, fg colors)", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
@@ -297,6 +587,99 @@ describe("rethemeChrome", () => {
           expect(node.border, `${id} @ ${style}`).toBe(true);
         }
       }
+    }
+  });
+});
+
+describe("open-float repaints", () => {
+  test("open floats repaint on theme switch; closed ones are skipped", () => {
+    const ctx = mkCtx();
+    const painted: string[] = [];
+    (ctx as any).floatRepaints = [
+      { isOpen: () => true, repaint: () => painted.push("open-float") },
+      { isOpen: () => false, repaint: () => painted.push("closed-float") },
+    ];
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#ff0000";
+    retheme.applyConfig(fresh);
+    expect(painted).toEqual(["open-float"]);
+  });
+
+  test("a throwing float repaint is isolated — the rest still repaint", () => {
+    const ctx = mkCtx();
+    const painted: string[] = [];
+    (ctx as any).floatRepaints = [
+      {
+        isOpen: () => true,
+        repaint: () => {
+          throw new Error("float-boom");
+        },
+      },
+      { isOpen: () => true, repaint: () => painted.push("second") },
+    ];
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#ff0000";
+    expect(() => retheme.applyConfig(fresh)).not.toThrow();
+    expect(painted).toEqual(["second"]);
+  });
+
+  test("no float list, no fan-out (optional dep)", () => {
+    const ctx = mkCtx();
+    const retheme = makeRetheme(ctx as any);
+    const fresh = clone(defaultConfig);
+    fresh.theme.accent = "#ff0000";
+    expect(() => retheme.applyConfig(fresh)).not.toThrow();
+    expect(ctx.calls.renderAll).toBe(1);
+  });
+
+  test("end-to-end: an open pick repaints through a real applyConfig theme switch", async () => {
+    // the reported issue, no fakes: pick open in a real renderer, theme flip
+    // through the real retheme path, painted panel carries the new palette
+    const t = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const live: Record<string, string> = { ...defaultConfig.theme };
+      const pick = makePick({
+        renderer: () => t.renderer,
+        byId: (id) => t.renderer.root.findDescendantById(id),
+        rootAdd: (n) => t.renderer.root.add(n),
+        destroyChildren: (node: any) => {
+          for (const c of [...node.getChildren()]) c.destroy?.();
+        },
+        stripSelectable: () => {},
+        colors: () => live as any,
+        uiStyle: () => "solid",
+        floats,
+        escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
+        drainIconQueue: () => {},
+        commands: () => [{ label: "quit tfm", run: () => {} }],
+      });
+      pick.open({ title: "Palette" });
+      await t.renderOnce();
+      expect(floats.isOpen("pick")).toBe(true);
+
+      const ctx = mkCtx();
+      // retheme merges into ITS colors ref — point it at the live palette so
+      // the switch actually changes what the pick reads
+      (ctx as any).colors = live;
+      (ctx as any).floatRepaints = [{ isOpen: () => pick.isOpen(), repaint: () => pick.repaint() }];
+      // byId that resolves against the real renderer for the chrome repaints
+      const retheme = makeRetheme(ctx as any);
+      const fresh = clone(defaultConfig);
+      fresh.theme.sidebarBg = "#101020";
+      fresh.theme.accentBg = "#303040";
+      // live palette flips with the commit (what applyConfig's merge does)
+      Object.assign(live, fresh.theme);
+      retheme.applyConfig(fresh);
+      await t.renderOnce();
+      const panel = t.renderer.root.findDescendantById("tfm-pick-panel") as any;
+      const ints = [...panel.backgroundColor.toInts()];
+      expect(ints).toEqual([0x10, 0x10, 0x20, 255]);
+      expect(floats.isOpen("pick")).toBe(true);
+    } finally {
+      t.renderer.destroy();
     }
   });
 });

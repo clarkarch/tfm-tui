@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import os from "node:os";
 import path from "node:path";
 import { MAX_UNDO_BATCHES, type UndoBatchData, type UndoStep } from "../app/undo";
+import { swallow } from "../app/log";
 
 // --- Undo journal persistence: the journalable tail of the undo stack as
 // JSON, next to session.json. Writes are synchronous + atomic (tmp+rename)
@@ -20,6 +21,10 @@ const isStep = (v: unknown): v is UndoStep => {
   const s = v as Record<string, unknown>;
   switch (s.op) {
     case "trash":
+      return (
+        typeof s.path === "string" &&
+        ["dev", "ino", "born"].every((k) => s[k] === undefined || (typeof s[k] === "number" && Number.isFinite(s[k])))
+      );
     case "trash-if-exists":
       return typeof s.path === "string";
     case "restore-move":
@@ -33,7 +38,7 @@ const isStep = (v: unknown): v is UndoStep => {
     case "write-empty-if-missing":
       return typeof s.path === "string";
     case "rm-trashinfo":
-      return typeof s.name === "string";
+      return typeof s.name === "string" && (s.path === undefined || typeof s.path === "string");
     default:
       return false;
   }
@@ -76,15 +81,26 @@ export const readUndoJournal = (now: number = Date.now()): UndoBatchData[] => {
 };
 
 export const saveUndoJournal = (batches: UndoBatchData[]): void => {
-  const file = undoJournalFile();
-  mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(batches.slice(-MAX_UNDO_BATCHES)));
-  renameSync(tmp, file);
+  try {
+    const file = undoJournalFile();
+    mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(batches.slice(-MAX_UNDO_BATCHES)));
+    renameSync(tmp, file);
+  } catch (err) {
+    // ENOSPC/EROFS/unwritable XDG_STATE_HOME must never mask the successful
+    // op that triggered the save (or break a fire-and-forget caller) — the
+    // journal is best-effort, the next save retries
+    swallow("undo journal save", err);
+  }
 };
 
 export const clearUndoJournal = (): void => {
   try {
     rmSync(undoJournalFile(), { force: true });
-  } catch {}
+  } catch (err) {
+    // force:true means ENOENT never throws here, so any failure is real —
+    // a journal that can't be cleared replays stale undo batches next launch
+    swallow("undo journal clear", err);
+  }
 };

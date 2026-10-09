@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tfm: terminal file manager</title>
 <meta name="description" content="A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails right inside your terminal. Built on OpenTUI + Bun.">
+<link rel="icon" href="tfm.svg" type="image/svg+xml">
 <style>
   :root {
     --bg: #1a1b26;
@@ -80,7 +81,6 @@
     font-family: inherit; font-size: 12px; border-radius: 5px; padding: 3px 9px; cursor: pointer;
   }
   .copy:hover { color: var(--fg); }
-  .warn { font-size: 12px; color: var(--muted); margin-top: 16px; }
 
   /* terminal frame */
   .term {
@@ -107,8 +107,7 @@
     padding: 20px; transition: border-color .15s, transform .15s;
   }
   .card:hover { border-color: var(--accent); transform: translateY(-2px); }
-  .card .ico { font-size: 20px; color: var(--accent); }
-  .card h3 { margin: 8px 0 6px; font-size: 16px; color: var(--accent); }
+  .card h3 { margin: 0 0 6px; font-size: 16px; color: var(--accent); }
   .card p { margin: 0; font-size: 13px; color: var(--muted); }
 
   kbd {
@@ -180,7 +179,7 @@
 <nav>
   <div class="wrap">
     <span class="logo">tfm</span>
-    <span class="badge">beta</span>
+    <span class="badge">stable</span>
     <div class="links">
       <a href="#features">features</a>
       <a href="#themes">themes</a>
@@ -195,7 +194,7 @@
   <div class="pitch">
     <h1>tfm</h1>
     <p class="subtitle">(terminal file manager)</p>
-    <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails <b>right inside your terminal</b>.<br>Built on <a href="https://opentui.dev">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
+    <p class="tagline">A modern, <b>mouse-first</b> file manager with places sidebar, grid view, drag &amp; drop, image thumbnails <b>right inside your terminal</b>.<br>Built on <a href="https://opentui.com">OpenTUI</a> + <a href="https://bun.sh">Bun</a>.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/clarkarch/tfm-tui/releases">Download</a>
       <a class="btn" href="https://github.com/clarkarch/tfm-tui">GitHub</a>
@@ -204,7 +203,6 @@
       <code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash</code>
       <button class="copy" id="copyBtn" type="button">copy</button>
     </div>
-    <p class="warn">Linux only · beta software, <b>back up anything irreplaceable</b> first</p>
   </div>
 
   <div class="term">
@@ -225,53 +223,51 @@
   <p class="sub">a GUI file manager that lives in your terminal</p>
   <div class="cards">
     <div class="card">
-      <div class="ico">➤</div>
       <h3>Mouse-first</h3>
       <p>Click, rubber-band select, right-click context menus, inline rename, no memorizing a modal keymap to get things done. <kbd>ctrl</kbd>+click toggles, <kbd>shift</kbd>+click ranges.</p>
     </div>
     <div class="card">
-      <div class="ico">⇄</div>
       <h3>Drag &amp; drop</h3>
       <p>Move files between folders with <kbd>ctrl</kbd>+drag. Drag <i>out</i> of the terminal to other apps and drop files <i>in</i>, cross-app DnD via the kitty graphics protocol (OSC 72).</p>
     </div>
     <div class="card">
-      <div class="ico">⌘</div>
       <h3>Desktop integration</h3>
       <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every reversible operation: permanent delete / empty trash cannot be undone.</p>
     </div>
     <div class="card">
-      <div class="ico">&gt;_</div>
       <h3>Embedded terminal</h3>
       <p>Right-click empty space → <i>Open Terminal Here</i> runs your <kbd>$SHELL</kbd> in a pane at the current folder. Drop files onto the prompt to paste their paths.</p>
     </div>
     <div class="card">
-      <div class="ico">❐</div>
       <h3>Previews &amp; thumbnails</h3>
       <p>Image and video thumbnails (kitty graphics), tree-sitter syntax-highlighted text previews, folder stats, with a disk-cached thumbnail pipeline so folder revisits are instant.</p>
     </div>
     <div class="card">
-      <div class="ico">◫</div>
       <h3>Dual pane</h3>
       <p>Two independent file panes side by side, each with its own top bar and tabs. <kbd>tab</kbd> switches sides, <kbd>F5</kbd> / <kbd>F6</kbd> copy or move across.</p>
     </div>
     <div class="card">
-      <div class="ico">🌐</div>
+      <h3>Tabs</h3>
+      <p>Per-pane tab strips with <kbd>ctrl</kbd>+<kbd>t</kbd> / <kbd>w</kbd> and <kbd>ctrl</kbd>+<kbd>tab</kbd> cycling, middle-click to close. Sessions restore them on launch.</p>
+    </div>
+    <div class="card">
       <h3>Network locations</h3>
       <p>Open <i>sftp://</i>, <i>smb://</i>, WebDAV and FTP shares through gvfs, sidebar → Connect to Server…, credentials prompted in-app.</p>
     </div>
     <div class="card">
-      <div class="ico">📦</div>
       <h3>Archives</h3>
       <p>Right-click → <i>Extract Here</i> (staged, conflict prompt, undoable) or <i>Compress to…</i> across 13 formats, from tar.gz to 7z.</p>
     </div>
     <div class="card">
-      <div class="ico">🔌</div>
       <h3>Plugins</h3>
       <p>TypeScript plugins with hot reload: commands, context menus, previews, events, UI slots. Install from a git URL or <i>tfm plugins add</i>.</p>
     </div>
     <div class="card">
-      <div class="ico">◑</div>
-      <h3>30+ themes</h3>
+      <h3>Animation</h3>
+      <p>Staggered file entrances, sidebar and top-bar intros, auto-hide drawer slides — all tunable under Settings → animations, calm by default.</p>
+    </div>
+    <div class="card">
+      <h3>32 themes</h3>
       <p>Tokyo Night, Catppuccin, Dracula, Gruvbox, Nord, Rose Pine, Solarized… live-switchable in the settings menu, fully configurable via <i>config.toml</i>. Try them below.</p>
     </div>
   </div>
@@ -292,13 +288,15 @@
     <table>
       <tr><td><kbd>type anywhere</kbd></td><td>live search · enter opens first match</td></tr>
       <tr><td><kbd>enter</kbd> / <kbd>f2</kbd></td><td>open / rename</td></tr>
-      <tr><td><kbd>backspace</kbd></td><td>parent directory</td></tr>
+      <tr><td><kbd>backspace</kbd> / <kbd>alt</kbd>+<kbd>up</kbd></td><td>parent directory</td></tr>
       <tr><td><kbd>esc</kbd></td><td>menu (settings, view mode, sort, …)</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>q</kbd></td><td>quit</td></tr>
-      <tr><td><kbd>ctrl</kbd>+<kbd>z</kbd> / <kbd>ctrl</kbd>+<kbd>y</kbd></td><td>undo / redo</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>z</kbd> / <kbd>ctrl</kbd>+<kbd>y</kbd></td><td>undo / redo (<kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>z</kbd> also redoes)</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>x</kbd> / <kbd>c</kbd> / <kbd>v</kbd></td><td>cut / copy / paste</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>d</kbd></td><td>duplicate</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>a</kbd></td><td>select all</td></tr>
+      <tr><td><kbd>space</kbd> / <kbd>shift</kbd>+arrows</td><td>toggle / extend selection</td></tr>
+      <tr><td><kbd>f1</kbd></td><td>help</td></tr>
     </table>
     <table>
       <tr><td><kbd>ctrl</kbd>+<kbd>t</kbd> / <kbd>w</kbd></td><td>new tab / close tab</td></tr>
@@ -313,7 +311,14 @@
       <tr><td><kbd>F5</kbd> / <kbd>F6</kbd></td><td>copy / move to other pane</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>d</kbd></td><td>toggle dual pane</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>s</kbd></td><td>connect to server</td></tr>
-      <tr><td><kbd>F4</kbd> / <kbd>F9</kbd></td><td>terminal / preview</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>`</kbd> / <kbd>F4</kbd></td><td>terminal</td></tr>
+      <tr><td><kbd>F3</kbd></td><td>preview pane</td></tr>
+      <tr><td><kbd>alt</kbd>+<kbd>home</kbd></td><td>home folder</td></tr>
+      <tr><td><kbd>alt</kbd>+<kbd>left</kbd> / <kbd>right</kbd></td><td>history back / forward</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>n</kbd> / <kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>n</kbd></td><td>new folder / new file</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>=</kbd> / <kbd>-</kbd></td><td>zoom in / out</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>r</kbd></td><td>reload places</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>r</kbd></td><td>restart</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>g</kbd> / <kbd>l</kbd></td><td>grid-list view / path bar</td></tr>
       <tr><td><kbd>alt</kbd>+<kbd>enter</kbd></td><td>properties</td></tr>
     </table>
@@ -330,10 +335,10 @@ tile-width      <span class="c">=</span> <span class="v">20</span>      <span cl
 tile-height     <span class="c">=</span> <span class="v">5</span>       <span class="c"># 3..10 cells</span>
 preview-enabled <span class="c">=</span> <span class="v">false</span>   <span class="c"># right-side preview pane</span>
 view-mode       <span class="c">=</span> <span class="s">"grid"</span>  <span class="c"># "grid" tiles or "list" rows</span>
-ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># or "outline", rounded borders</span>
+ui-style        <span class="c">=</span> <span class="s">"solid"</span> <span class="c"># "solid" filled panels; "outline" rounded borders; "outline-partial" outline chrome, solid floats</span>
 restore-session <span class="c">=</span> <span class="v">false</span>   <span class="c"># reopen last folder on launch</span>
 persist-undo    <span class="c">=</span> <span class="v">false</span>   <span class="c"># undo history survives restarts</span>
-transparent-bg  <span class="c">=</span> <span class="v">false</span>   <span class="c"># follow kitty background_opacity</span>
+transparent-bg  <span class="c">=</span> <span class="s">"off"</span>   <span class="c"># "off" opaque; "on" faithful hex; "force" terminal bg shows through</span>
 
 <span class="k">[theme]</span>
 bg     <span class="c">=</span> <span class="s">"#1a1b26"</span>   <span class="c"># or pick a preset: esc → Settings → Theme</span>
@@ -351,26 +356,26 @@ quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="
       <h4>Requirements</h4>
       <ul>
         <li>Linux</li>
-        <li>kitty-graphics terminal for thumbnails (kitty, ghostty, WezTerm, Konsole…); cross-app DnD is kitty-only; others fall back to Nerd Font glyphs</li>
+        <li>any terminal (need image support for the full experience)</li>
       </ul>
     </div>
     <div>
-      <h4>Optional helpers</h4>
+      <h4>Optional dependencies</h4>
       <ul>
-        <li><code>rsvg-convert</code>: tinted icons and SVG thumbnails (<code>magick</code> covers rasters as fallback)</li>
-        <li><code>magick</code> / <code>ffmpeg</code>: raster / video thumbnails</li>
-        <li><code>gio</code>: starred-file metadata (trash is built-in XDG), <code>xdg-open</code> / <code>udisksctl</code>: default apps / mounts</li>
+        <li>icons render in-process (no setup); <code>magick</code> covers extra raster formats as fallback</li>
+        <li>video thumbnails use the bundled <code>tfm-ffmpeg</code> sidecar (no system <code>ffmpeg</code> needed)</li>
+        <li><code>gio</code>: starred-file metadata and network locations (trash is built-in XDG), <code>xdg-open</code> / <code>udisksctl</code>: default apps / mounts</li>
         <li><code>wl-paste</code> / <code>wl-copy</code> or <code>xclip</code>: clipboard bridge</li>
         <li><code>tar</code> / <code>unzip</code> / <code>zip</code> / <code>7z</code>: archives</li>
       </ul>
     </div>
     <div>
-      <h4>Know the limits</h4>
+      <h4>Notes</h4>
       <ul>
-        <li>beta, usable daily, back up anything irreplaceable</li>
-        <li>cross-app DnD is kitty-only (OSC 72)</li>
-        <li>tmux needs <code>allow-passthrough</code> for images</li>
-        <li>cross-device moves are copy+delete</li>
+        <li>cross-app drag &amp; drop is kitty-only</li>
+        <li>mouse on the Linux console (TTY) needs <code>gpm</code> running</li>
+        <li>icons can show a black box behind open menus or while rubber-band selecting</li>
+        <li>custom kitty themes can misbehave</li>
       </ul>
     </div>
   </div>

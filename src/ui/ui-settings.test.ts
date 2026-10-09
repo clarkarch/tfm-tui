@@ -6,6 +6,7 @@ import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { SettingGroup, SettingRow } from "./settings";
+import { destroyChildren } from "../lib/uiutil";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // esc-menu + settings panel through the PUBLIC makeEscMenu surface only, so
@@ -43,7 +44,14 @@ const mkRows = (): SettingRow[] => {
       getIdx: () => cycle.i,
       setIdx: (i) => (cycle.i = i),
     },
-    { kind: "keybind", label: "quit", get: () => keybind.binds, set: (v) => (keybind.binds = v) },
+    {
+      kind: "keybind",
+      label: "quit",
+      get: () => keybind.binds,
+      set: (v): undefined => {
+        keybind.binds = v;
+      },
+    },
     { kind: "action", label: "edit config.toml", keepOpen: false, run: () => action.ran++ },
   ];
   return rows;
@@ -52,7 +60,7 @@ const mkRows = (): SettingRow[] => {
 const mkGroups = (rowCount = 5): SettingGroup[] => {
   const rows = mkRows().slice(0, rowCount) as any[];
   const big: SettingGroup[] = [{ header: "general", rows }];
-  // a scrollable category for the windowing contract (vis = min(14, 24-12) = 12)
+  // a scrollable category for the windowing contract (vis = min(20, 24-12) = 12)
   big.push({
     header: "behavior",
     rows: Array.from({ length: 20 }, (_, i) => ({
@@ -76,16 +84,23 @@ let menu: ReturnType<typeof makeEscMenu>;
 let scrim: boolean;
 let cancelledBand: number;
 let warns: Array<[string, string | undefined]>;
+let dlogs: string[];
 let groups: SettingGroup[];
 let plugGroups: SettingGroup[];
 let quitCalls: number;
 // icon names requested through the slot sink (the entry's icon choice is
 // observable here — the sink IS the seam, not fake bookkeeping)
 let requestedIcons: string[];
+// external URLs requested through the opener seam (About link rows)
+let openedUrls: string[];
 // rescan hook: openMenu re-reads the plugins dir so added/removed plugins
 // reflect without a restart (code edits still need one — Bun module cache)
 let reloadImpl: () => Promise<unknown>;
 let reloadCalls: number;
+// category hover flips a slot's pre-rastered state by id (no rebuild)
+let iconStateCalls: Array<[string, number]>;
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: 90, height: TERM_H });
@@ -93,10 +108,13 @@ beforeAll(async () => {
   scrim = false;
   cancelledBand = 0;
   warns = [];
+  dlogs = [];
   groups = mkGroups();
   plugGroups = [];
   quitCalls = 0;
   requestedIcons = [];
+  openedUrls = [];
+  iconStateCalls = [];
   reloadCalls = 0;
   reloadImpl = async () => {
     reloadCalls++;
@@ -106,9 +124,8 @@ beforeAll(async () => {
   menu = makeEscMenu({
     renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
-    clearChildren: (node) => {
-      for (const c of [...node.getChildren()]) node.remove(c);
-    },
+    // the ctx hands over a real node, so the REAL teardown is the honest fake
+    destroyChildren,
     stripSelectable: () => {},
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
     makeIconSlot: (name: string, states: any, heightCells?: number, initialState?: number) => {
@@ -121,6 +138,9 @@ beforeAll(async () => {
       };
     },
     drainIconQueue: () => {},
+    setIconState: (spec, stateIdx) => {
+      iconStateCalls.push([spec.slotId, stateIdx]);
+    },
     setScrim: (on) => {
       scrim = on;
     },
@@ -130,6 +150,7 @@ beforeAll(async () => {
     colors: () => colors,
     uiStyle: () => "solid",
     menuW: () => 36,
+    keybinds: () => [],
     settingGroups: () => groups,
     pluginGroups: () => plugGroups,
     reloadPlugins: () => reloadImpl(),
@@ -137,10 +158,16 @@ beforeAll(async () => {
       warns.push([message, title]);
     },
     floats,
-    log: () => {},
+    log: (message: string) => {
+      dlogs.push(message);
+    },
     quit: () => {
       quitCalls++;
     },
+    openUrl: (url: string) => {
+      openedUrls.push(url);
+    },
+    setPointer: (s) => void pointers.push(s),
   });
 });
 
@@ -167,6 +194,12 @@ const bgInts = (id: string): number[] => {
   const n: any = t.renderer.root.findDescendantById(id);
   return n?.backgroundColor ? [...n.backgroundColor.toInts()] : [0, 0, 0, 0];
 };
+const fgInts = (id: string): number[] => {
+  const n: any = t.renderer.root.findDescendantById(id);
+  const fg = n?.fg;
+  if (fg && typeof fg.toInts === "function") return [...fg.toInts()];
+  return fg;
+};
 const hexInts = (hex: string): number[] => {
   const h = hex.replace("#", "");
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 255];
@@ -180,8 +213,64 @@ const text = (id: string): string => {
   if (Array.isArray(c)) return c.map((x: any) => x?.text ?? "").join("");
   return c?.text ?? "";
 };
+// fire a synthetic mouse event at a mounted node (escHintBtn pattern).
+// Carries the real propagation protocol: row handlers call
+// ev.stopPropagation() to hold the click out of the scrim's click-away
+// closer, and the dispatcher honors event.propagationStopped — a bare
+// object without it bubbles and closes the menu, unlike production.
+const fire = (id: string, type: string) => {
+  const ev = {
+    type,
+    button: 0,
+    x: 0,
+    y: 0,
+    modifiers: { shift: false, alt: false, ctrl: false },
+    propagationStopped: false,
+    stopPropagation() {
+      ev.propagationStopped = true;
+    },
+  };
+  return (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent(ev);
+};
 
 describe("esc-menu root view", () => {
+  test("sustained render failure warns instead of leaving a silent empty panel", async () => {
+    // break the settings-view render twice: first failure schedules the
+    // one-shot retry, the second (retry exhausted) must surface a toast —
+    // otherwise the user stares at an empty panel with no explanation
+    const saved = groups;
+    const savedWarns = warns.length;
+    const savedBand = cancelledBand;
+    (groups as unknown as unknown) = null;
+    try {
+      warns.length = 0;
+      expect(floats.isOpen("escmenu")).toBe(false);
+      menu.openMenu();
+      await t.renderOnce();
+      menu.moveMenu(1);
+      menu.menuActivate();
+      await t.renderOnce();
+      // first failure schedules the deferred retry; poll for the second
+      // attempt's warn (fixed sleeps flake under parallel-suite load)
+      const deadline = Date.now() + 2000;
+      while (warns.length === 0 && Date.now() < deadline) await Bun.sleep(20);
+      await t.renderOnce();
+      expect(warns.some((w) => w[1] === "menu" && w[0].toLowerCase().includes("failed to render"))).toBe(true);
+    } finally {
+      groups = saved;
+      menu.closeMenu();
+      await t.renderOnce();
+      // a successful root render re-arms retry + clears the once-warn burst so
+      // the next test starts from a clean menu state
+      menu.openMenu();
+      await t.renderOnce();
+      menu.closeMenu();
+      await t.renderOnce();
+      warns.length = savedWarns;
+      cancelledBand = savedBand;
+    }
+  });
+
   test("openMenu mounts the scrim + panel and paints the root items", async () => {
     menu.openMenu();
     await t.renderOnce();
@@ -220,6 +309,34 @@ describe("esc-menu root view", () => {
     menu.closeMenu();
     await t.renderOnce();
   });
+
+  test("hovering a root row flips its icon raster in lockstep with the row bg", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const fire = (id: string) =>
+      (t.renderer.root.findDescendantById(id) as any).processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    iconStateCalls.length = 0;
+    fire("tfm-root-row-1");
+    expect(bgInts("tfm-root-row-1")).toEqual(hexInts(colors.accentBg));
+    // Active = the accent raster. A baked raster carries its own bg, so a
+    // row-only repaint left the icon on a stale sidebarBg square.
+    expect(iconStateCalls.some(([, idx]) => idx === 1)).toBe(true);
+    // sweeping to another row restores the abandoned row's icon to Rest
+    iconStateCalls.length = 0;
+    fire("tfm-root-row-0");
+    expect(bgInts("tfm-root-row-1")).toEqual([0, 0, 0, 0]);
+    expect(iconStateCalls.some(([, idx]) => idx === 0)).toBe(true);
+    menu.closeMenu();
+    await t.renderOnce();
+  });
 });
 
 describe("settings view", () => {
@@ -234,22 +351,68 @@ describe("settings view", () => {
     expect(frame).toContain("Menu — settings");
   });
 
+  test("settings panel fills the terminal (adaptive width, not fixed 78)", async () => {
+    // test renderer is 90 wide → panel caps at 80, not 86 (90 - 4)
+    await openSettings();
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    expect(panel?.width).toBe(80);
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("hovering a category highlights it by id WITHOUT switching (no auto-nav)", async () => {
+    await openSettings();
+    iconStateCalls.length = 0;
+    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg)); // active
+    expect(t.captureCharFrame()).toContain("show hidden");
+
+    (t.renderer.root.findDescendantById("tfm-set-cat-1") as any).processMouseEvent({
+      type: "move",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+
+    // hovered category lights up, the active one keeps its highlight, and the
+    // right pane did NOT change (hover is visual only, never switchCategory)
+    expect(bgInts("tfm-set-cat-1")).toEqual(hexInts(colors.accentBg));
+    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg));
+    expect(t.captureCharFrame()).toContain("show hidden");
+    expect(t.captureCharFrame()).not.toContain("knob-0");
+    // the icon slot flipped to its pre-rastered active state (no rebuild)
+    expect(iconStateCalls.some(([, idx]) => idx === 1)).toBe(true);
+
+    // leaving clears the hover highlight; the active category stays lit
+    (t.renderer.root.findDescendantById("tfm-set-cat-1") as any).processMouseEvent({
+      type: "out",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+    expect(bgInts("tfm-set-cat-1")).toEqual([0, 0, 0, 0]);
+    expect(bgInts("tfm-set-cat-0")).toEqual(hexInts(colors.accentBg));
+  });
+
   test("row adjust: toggle flips on/accent, stepper steps within bounds, cycle wraps", async () => {
-    // toggle row 0
+    // toggle row 0 (values center inside their boxes — padded, not bare)
     menu.menuActivate();
     await t.renderOnce();
-    expect(text("tfm-set-rowv-0")).toBe("on");
+    expect(text("tfm-set-rowv-0")).toBe("  on  ");
     // stepper row 1: 20 -> 22 (step 2, in bounds)
     menu.moveMenu(1);
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(text("tfm-set-rowv-1")).toBe("22");
+    expect(text("tfm-set-rowv-1")).toBe("      22       ");
     // cycle row 2: tokyo-night -> gruvbox -> tokyo-night (wraps)
     menu.moveMenu(1);
     menu.adjustSelectedSetting(1);
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(text("tfm-set-rowv-2")).toBe("tokyo-night");
+    expect(text("tfm-set-rowv-2")).toBe("  tokyo-night  ");
   });
 
   test("hover paints the hovered row by id WITHOUT a rebuild (prev row restored)", async () => {
@@ -266,6 +429,152 @@ describe("settings view", () => {
     await t.renderOnce();
     expect(bgInts("tfm-set-row-2")).toEqual(hexInts(colors.accentBg));
     expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]); // initial row cleared
+  });
+
+  test("settings rows + cats set pointer per motion, even with no cursor change", async () => {
+    await openSettings();
+    // openSettings closes the previous test's menu first (a correct
+    // default-restore) — clear past it, then assert motion behavior only
+    pointers.length = 0;
+    const move = (id: string) =>
+      (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    // value row twice (second motion changes nothing, shape still sets)
+    move("tfm-set-row-2");
+    move("tfm-set-row-2");
+    // category twice (hoverCat guard blocks the repaint, not the shape)
+    move("tfm-set-cat-1");
+    move("tfm-set-cat-1");
+    expect(pointers).toEqual(["pointer", "pointer", "pointer", "pointer"]);
+  });
+
+  test("selected toggle reads white (not accent); unselected on-toggle keeps the accent cue", async () => {
+    await openSettings();
+    // row 0 = toggle; flip it while selected — the value must read white
+    // on the highlighted row regardless of on/off
+    menu.menuActivate();
+    await t.renderOnce();
+    const shown = text("tfm-set-rowv-0");
+    expect(["  on  ", " off  "]).toContain(shown);
+    expect(fgInts("tfm-set-rowv-0")).toEqual(hexInts(colors.white));
+    // move off: value falls back to the on/accent cue (or muted when off)
+    menu.moveMenu(1);
+    await t.renderOnce();
+    expect(fgInts("tfm-set-rowv-0")).toEqual(
+      shown.trim() === "on" ? hexInts(colors.accent) : hexInts(colors.sidebarFgMuted),
+    );
+  });
+
+  test("chevrons follow the row highlight; synthetic over never steals the cursor", async () => {
+    await openSettings();
+    const move = (id: string, type: string) =>
+      (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    move("tfm-set-row-1", "move");
+    await t.renderOnce();
+    expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+    expect(fgInts("tfm-chev-1--1")).toEqual(hexInts(colors.white));
+    expect(fgInts("tfm-chev-1-1")).toEqual(hexInts(colors.white));
+    // a stationary-cursor synthetic "over" on the old row must not move anything
+    move("tfm-set-row-0", "over");
+    await t.renderOnce();
+    expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+    expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]);
+  });
+
+  test("header hover-off restores the muted label (not the value-row gray)", async () => {
+    const keep = groups;
+    groups = [
+      {
+        header: "general",
+        rows: [
+          { kind: "toggle", label: "aaa", get: () => false, set: () => {} },
+          { kind: "header", label: "section one" },
+          { kind: "toggle", label: "bbb", get: () => false, set: () => {} },
+        ],
+      },
+    ];
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1);
+      menu.menuActivate();
+      await t.renderOnce();
+      const move = (id: string) =>
+        (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+          type: "move",
+          button: 0,
+          x: 0,
+          y: 0,
+          modifiers: { shift: false, alt: false, ctrl: false },
+        });
+      move("tfm-set-row-1");
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      move("tfm-set-row-2");
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual([0, 0, 0, 0]);
+      expect(fgInts("tfm-set-rowl-1")).toEqual(hexInts(colors.sidebarFgMuted));
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("root-menu hover repaints by id without rebuilding the panel", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    const before = [...panel.getChildren()].length;
+    (t.renderer.root.findDescendantById("tfm-root-row-1") as any)?.processMouseEvent({
+      type: "move",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+    expect(bgInts("tfm-root-row-1")).toEqual(hexInts(colors.accentBg));
+    expect([...(t.renderer.root.findDescendantById("tfm-menu-panel") as any).getChildren()].length).toBe(before);
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("root-menu hover sets pointer per motion, even on the keyboard-selected row", async () => {
+    // position truth vs change truth: the keyboard cursor may already sit on
+    // the hovered row (no repaint runs), but the shape must still set
+    pointers.length = 0;
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const move = (id: string) =>
+      (t.renderer.root.findDescendantById(id) as any)?.processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    move("tfm-root-row-1");
+    move("tfm-root-row-1");
+    expect(pointers).toEqual(["pointer", "pointer"]);
+    menu.closeMenu();
+    await t.renderOnce();
   });
 
   test("tab toggles panes; category switch repaints the active cat", async () => {
@@ -297,7 +606,7 @@ describe("settings view", () => {
     expect(t.captureCharFrame()).toContain("1-12 of 20");
   });
 
-  test("header (divider) rows render as labels, never take the cursor, never activate", async () => {
+  test("headers take the cursor and collapse/expand on activate (no more skip)", async () => {
     const keep = groups;
     let ran = 0;
     groups = [
@@ -318,30 +627,43 @@ describe("settings view", () => {
       menu.moveMenu(1); // root: down fills Settings
       menu.menuActivate();
       await t.renderOnce();
-      // the divider label paints in the rows pane...
+      // the section header paints with its chevron and no option count...
       expect(t.captureCharFrame()).toContain("section one");
-      // ...as its own node, not a selectable row
-      expect(t.renderer.root.findDescendantById("tfm-set-sep-1")).toBeTruthy();
-      expect(t.renderer.root.findDescendantById("tfm-set-row-1")).toBeFalsy();
+      expect(t.captureCharFrame()).toContain("▼");
+      expect(t.captureCharFrame()).not.toMatch(/section one\s*\(\d+\)/);
+      expect(t.renderer.root.findDescendantById("tfm-set-row-1")).toBeTruthy();
       // the view opens with no cursor: first arrow fills row 0...
       menu.moveMenu(1);
       await t.renderOnce();
       expect(bgInts("tfm-set-row-0")).toEqual(hexInts(colors.accentBg));
-      // ...second arrow skips the header and lands on row 2
+      // ...second arrow LANDS on the header (it takes the cursor now)
       menu.moveMenu(1);
       await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      // activate collapses the section: bbb vanishes, counter reports it
+      menu.menuActivate();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).not.toContain("bbb");
+      expect(t.captureCharFrame()).toContain("▶");
+      expect(t.captureCharFrame()).toContain("collapsed");
+      // cursor parks on the header, menu stays open
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      expect(floats.isOpen("escmenu")).toBe(true);
+      // activate again re-expands
+      menu.menuActivate();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("bbb");
+      // arrows walk through the header in both directions (no skipping)
+      menu.moveMenu(1); // header -> bbb
+      await t.renderOnce();
       expect(bgInts("tfm-set-row-2")).toEqual(hexInts(colors.accentBg));
-      // up from row 2 skips back over the header to row 0
-      menu.moveMenu(-1);
+      menu.moveMenu(-1); // bbb -> header
+      await t.renderOnce();
+      expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+      menu.moveMenu(-1); // header -> aaa
       await t.renderOnce();
       expect(bgInts("tfm-set-row-0")).toEqual(hexInts(colors.accentBg));
-      // hover over the divider never steals the cursor (handler-free node)
-      expect(t.renderer.root.findDescendantById("tfm-set-sep-1")).toBeTruthy();
-      menu.moveMenu(1); // row 0 -> skips to row 2 (toggle bbb)
-      menu.menuActivate(); // toggle adjust, not the ccc action
-      await t.renderOnce();
       expect(ran).toBe(0);
-      expect(floats.isOpen("escmenu")).toBe(true);
     } finally {
       groups = keep;
       menu.closeMenu();
@@ -349,7 +671,101 @@ describe("settings view", () => {
     }
   });
 
-  test("all-header group: cursor parks on a header, activate/adjust stay no-ops", async () => {
+  test("description footer shows the row blurb and follows the cursor; no hint line", async () => {
+    const keep = groups;
+    groups = [
+      {
+        header: "general",
+        rows: [
+          { kind: "toggle", label: "aaa", blurb: "first thing explained", get: () => false, set: () => {} },
+          { kind: "toggle", label: "bbb", blurb: "second thing explained", get: () => false, set: () => {} },
+        ],
+      },
+    ];
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1); // root: down fills Settings
+      menu.menuActivate();
+      await t.renderOnce();
+      // no cursor yet: placeholder, and the old hint line is gone
+      expect(t.captureCharFrame()).toContain("Choose a setting");
+      expect(t.captureCharFrame()).not.toContain("↑↓ move");
+      menu.moveMenu(1); // cursor on aaa
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("first thing explained");
+      menu.moveMenu(1); // cursor on bbb — footer follows live
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("second thing explained");
+      expect(t.captureCharFrame()).not.toContain("first thing explained");
+      // hover moves the footer too (by-id paint, no rebuild)
+      (t.renderer.root.findDescendantById("tfm-set-row-0") as any).processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("first thing explained");
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("restart-flagged rows badge the footer and warn once per menu open", async () => {
+    const keep = groups;
+    groups = [
+      {
+        header: "general",
+        rows: [
+          {
+            kind: "toggle",
+            label: "zzz restartable",
+            blurb: "does a boot thing",
+            restart: true,
+            get: () => false,
+            set: () => {},
+          },
+          { kind: "toggle", label: "plain live", blurb: "does a live thing", get: () => false, set: () => {} },
+        ],
+      },
+    ];
+    try {
+      warns.length = 0;
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      menu.moveMenu(1); // root: down fills Settings
+      menu.menuActivate();
+      await t.renderOnce();
+      menu.moveMenu(1); // cursor on the restartable row
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("does a boot thing · needs restart");
+      menu.menuActivate(); // toggle adjust -> one toast
+      expect(warns.length).toBe(1);
+      expect(warns[0]![1]).toBe("restart");
+      expect(warns[0]![0]).toContain("zzz restartable");
+      menu.menuActivate(); // second adjust, same open -> no second toast
+      expect(warns.length).toBe(1);
+      menu.moveMenu(1); // cursor on the live row — badge gone
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("does a live thing");
+      expect(t.captureCharFrame()).not.toContain("needs restart");
+      menu.menuActivate(); // live row adjust -> still no toast
+      expect(warns.length).toBe(1);
+    } finally {
+      groups = keep;
+      warns.length = 0; // later tests (keybind capture) assert exact warn counts
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("collapsing under the cursor parks it on the header (never hidden)", async () => {
     const keep = groups;
     groups = [{ header: "empty", rows: [{ kind: "header", label: "nothing here" }] }];
     try {
@@ -398,6 +814,45 @@ describe("keybind capture", () => {
     expect(t.captureCharFrame()).not.toContain("press a key…");
   });
 
+  test("clicking empty panel space during capture cancels it", async () => {
+    await openSettings();
+    for (let i = 0; i < 3; i++) menu.moveMenu(1);
+    menu.menuActivate(); // arm capture on the keybind row
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("press a key…"); // armed
+
+    // click the panel's own padding (empty panel space — not a row, not the
+    // scrim): the panel mousedown must cancel an in-flight capture. The scrim
+    // handler never sees inside clicks (the panel stops propagation), so a
+    // bare stopPropagation here leaves the capture armed.
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    const px = Math.round(panel.yogaNode.getComputedLeft()) + 2;
+    const py = Math.round(panel.yogaNode.getComputedTop()) + Math.round(panel.yogaNode.getComputedHeight()) - 1;
+    await t.mockMouse.click(px, py);
+    await t.renderOnce();
+    expect(t.captureCharFrame()).not.toContain("press a key…"); // cancelled
+  });
+
+  test("ctrl+tab is recordable; a plain tab still cancels", async () => {
+    await openSettings();
+    for (let i = 0; i < 3; i++) menu.moveMenu(1);
+    menu.menuActivate(); // arm capture on the keybind row
+    await t.renderOnce();
+
+    // plain tab cancels without committing
+    expect(menu.captureKey({ name: "tab", ctrl: false, shift: false, meta: false })).toBe(true);
+    await t.renderOnce();
+    expect(t.captureCharFrame()).not.toContain("press a key…");
+
+    // ctrl+tab is a real bind (next-tab default) and must commit
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(menu.captureKey({ name: "tab", ctrl: true, shift: false, meta: false })).toBe(true);
+    await t.renderOnce();
+    const keyRow = groups[0]!.rows.find((r) => r.kind === "keybind") as { get(): string[] };
+    expect(keyRow.get()).toEqual(["ctrl+tab"]);
+  });
+
   test("escape cancels capture without committing; while armed every key is swallowed", async () => {
     await openSettings();
     for (let i = 0; i < 3; i++) menu.moveMenu(1);
@@ -414,6 +869,165 @@ describe("keybind capture", () => {
     expect(menu.captureKey({ name: "escape", ctrl: false, shift: false, meta: false })).toBe(true);
     await t.renderOnce();
     expect((groups[0]!.rows.find((r) => r.kind === "keybind") as { get(): string[] }).get()).toEqual(binds);
+  });
+});
+
+describe("keybind swap offer", () => {
+  // fake row mirroring the real settings-model contract: set returns an
+  // outcome (applied/conflict), swap steals the bind. ctrl+z is owned
+  // elsewhere, everything else applies.
+  const swapBinds = { binds: ["ctrl+q"] };
+  const swapRow = {
+    kind: "keybind" as const,
+    label: "quit",
+    get: () => swapBinds.binds,
+    set: (v: string[]) => {
+      if (v[0] === "ctrl+z") return { status: "conflict", spec: "ctrl+z", owner: "undo", ownerLabel: "Undo" } as const;
+      swapBinds.binds = v;
+      return { status: "applied" } as const;
+    },
+    swap: (spec: string) => {
+      swapBinds.binds = [spec];
+    },
+  };
+  const openSwapSettings = async () => {
+    const keep = groups;
+    groups = [{ header: "keys", rows: [swapRow] }];
+    swapBinds.binds = ["ctrl+q"];
+    await openSettings();
+    menu.menuActivate(); // row 0 = keybind -> startCapture
+    await t.renderOnce();
+    return () => {
+      groups = keep;
+      menu.closeMenu();
+    };
+  };
+
+  test("conflicting key offers an inline swap instead of rejecting", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(t.captureCharFrame()).toContain("press a key…");
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      // the offer replaces the capture prompt on the row and names the owner
+      // in the footer — capture is still armed (esc goes back to "press a key…")
+      expect(t.captureCharFrame()).toContain("swap?");
+      expect(t.captureCharFrame()).toContain("Undo");
+      expect(swapBinds.binds).toEqual(["ctrl+q"]); // nothing committed yet
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
+  });
+
+  test("enter while the offer is open swaps; esc goes back to capture", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("swap?");
+      // enter commits the steal and ends capture
+      expect(menu.captureKey({ name: "return", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+z"]);
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+      // re-arm, offer again, esc returns to capture without committing
+      menu.menuActivate();
+      await t.renderOnce();
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("swap?");
+      expect(menu.captureKey({ name: "escape", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+z"]);
+      expect(t.captureCharFrame()).toContain("press a key…");
+      expect(t.captureCharFrame()).not.toContain("swap?");
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
+  });
+
+  test("an unrecordable key during the offer drops it and repaints capture", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("swap?");
+      // bare letter = invalid: the offer must clear AND repaint (no stale
+      // "swap?" left on screen), capture stays armed for retry
+      expect(menu.captureKey({ name: "a", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("press a key…");
+      expect(t.captureCharFrame()).not.toContain("swap?");
+      // retry still works: a free key applies and ends capture
+      expect(menu.captureKey({ name: "f", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+f"]);
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
+  });
+
+  test("enter on a swap-less row keeps the offer up (never a silent clear)", async () => {
+    const keep = groups;
+    const noswap = { binds: ["ctrl+q"] };
+    groups = [
+      {
+        header: "keys",
+        rows: [
+          {
+            kind: "keybind" as const,
+            label: "quit",
+            get: () => noswap.binds,
+            // conflict outcome like a core row, but no swap fn (plugin-style)
+            set: (v: string[]) => {
+              if (v[0] === "ctrl+z")
+                return { status: "conflict", spec: "ctrl+z", owner: "undo", ownerLabel: "Undo" } as const;
+              noswap.binds = v;
+              return { status: "applied" } as const;
+            },
+          },
+        ],
+      },
+    ];
+    try {
+      await openSettings();
+      menu.menuActivate(); // row 0 = keybind -> startCapture
+      await t.renderOnce();
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("swap?");
+      // enter with no swap fn: offer stays, capture stays, nothing committed
+      expect(menu.captureKey({ name: "return", ctrl: false, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(noswap.binds).toEqual(["ctrl+q"]);
+      expect(t.captureCharFrame()).toContain("swap?");
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+    } finally {
+      groups = keep;
+      menu.closeMenu();
+      await t.renderOnce();
+    }
+  });
+
+  test("another key while the offer is open re-proposes", async () => {
+    const restore = await openSwapSettings();
+    try {
+      expect(menu.captureKey({ name: "z", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("swap?");
+      // a free key applies straight away and ends capture
+      expect(menu.captureKey({ name: "f", ctrl: true, shift: false, meta: false })).toBe(true);
+      await t.renderOnce();
+      expect(swapBinds.binds).toEqual(["ctrl+f"]);
+      expect(t.captureCharFrame()).not.toContain("press a key…");
+    } finally {
+      restore();
+      await t.renderOnce();
+    }
   });
 });
 
@@ -549,6 +1163,137 @@ describe("menu placement", () => {
     // …and the old top-third pad is gone (a coincident height could satisfy
     // the centering formula under the old code — zero pad kills that hole)
     expect(scrim.yogaNode.getComputedPadding(1)).toBe(0); // Edge.Top
+  });
+});
+
+describe("help view", () => {
+  test("toggleHelp reopens after close (closed view must not stick)", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.toggleHelp();
+    await t.renderOnce();
+    expect(menu.isOpen()).toBe(true);
+    expect(t.captureCharFrame()).toContain("Lost? Start here.");
+    menu.toggleHelp();
+    await t.renderOnce();
+    expect(menu.isOpen()).toBe(false);
+    // second reopen is the regression: the closed help view stuck around and
+    // the third F1 took the close branch (a no-op) instead of reopening
+    menu.toggleHelp();
+    await t.renderOnce();
+    expect(menu.isOpen()).toBe(true);
+    expect(floats.isOpen("escmenu")).toBe(true);
+    expect(t.captureCharFrame()).toContain("Lost? Start here.");
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("arrows scroll the help body instead of moving a cursor", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.toggleHelp();
+    await t.renderOnce();
+    // second frame: the fresh scroller measures its content on the first
+    // frame, so scrollHeight is 0 until layout settles (same mount settle
+    // the grid tests rely on — the live loop always has warm frames)
+    await t.renderOnce();
+    const scroller: any = t.renderer.root.findDescendantById("tfm-help-scroll");
+    expect(scroller).toBeDefined();
+    expect(scroller.scrollTop).toBe(0);
+    menu.moveMenu(1);
+    await t.renderOnce();
+    expect(scroller.scrollTop).toBeGreaterThan(0);
+    menu.moveMenu(-1);
+    await t.renderOnce();
+    // clamped back at the top; still cursorless (hero text, no selection)
+    expect(scroller.scrollTop).toBe(0);
+    expect(t.captureCharFrame()).toContain("Lost? Start here.");
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("about sits below help and opens a cursorless brand view", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    requestedIcons.length = 0;
+    menu.openMenu();
+    await t.renderOnce();
+    // root order without plugins: Settings, Help, About (Quit last)
+    let frame = t.captureCharFrame();
+    expect(frame.indexOf("Help")).toBeLessThan(frame.indexOf("About"));
+    menu.moveMenu(1); // Settings
+    menu.moveMenu(1); // Help
+    menu.moveMenu(1); // About
+    menu.menuActivate();
+    await t.renderOnce();
+    frame = t.captureCharFrame();
+    expect(frame).toContain("Menu — about");
+    expect(frame).toContain("terminal file manager");
+    expect(requestedIcons).toContain("tfm");
+    // cursorless: arrows and enter are no-ops, the view stays put
+    menu.moveMenu(1);
+    menu.moveMenu(-1);
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Menu — about");
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("about credits row drills to detail and back through real mouse events", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    openedUrls.length = 0;
+    menu.openMenu();
+    menu.moveMenu(1); // Settings
+    menu.moveMenu(1); // Help
+    menu.moveMenu(1); // About
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Credits");
+    // link rows reach the opener seam with their exact URL
+    fire("tfm-about-row-website", "down");
+    expect(openedUrls).toEqual(["https://clarkarch.github.io/tfm-tui"]);
+    // the overloaded credits row drills instead of opening
+    fire("tfm-about-row-credits", "down");
+    await t.renderOnce();
+    let frame = t.captureCharFrame();
+    expect(frame).toContain("← Back");
+    expect(frame).toContain("opentui.com");
+    expect(openedUrls.length).toBe(1);
+    // values share one column: an overflowing value must wrap below,
+    // never squeeze its label left (flex shrink stole 2 cells here)
+    {
+      const colOf = (needle: string): number => {
+        const line = t
+          .captureCharFrame()
+          .split("\n")
+          .find((l) => l.includes(needle));
+        return line?.indexOf(needle) ?? -1;
+      };
+      expect(colOf("opentui.com")).toBeGreaterThan(0);
+      expect(colOf("nerdfonts.com")).toBe(colOf("opentui.com"));
+    }
+    // credit links reach the opener seam with their exact project URLs
+    fire("tfm-about-row-d-opentui", "down");
+    fire("tfm-about-row-d-mdi", "down");
+    expect(openedUrls).toEqual([
+      "https://clarkarch.github.io/tfm-tui",
+      "https://opentui.com",
+      "https://pictogrammers.com/library/mdi/",
+    ]);
+    // back returns to main; arrows/enter still no-op there
+    fire("tfm-about-back", "down");
+    await t.renderOnce();
+    frame = t.captureCharFrame();
+    expect(frame).toContain("Credits");
+    expect(frame).not.toContain("← Back");
+    menu.moveMenu(1);
+    menu.menuActivate();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("Credits");
+    menu.closeMenu();
+    await t.renderOnce();
   });
 });
 

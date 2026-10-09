@@ -6,18 +6,22 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { Text } from "@opentui/core";
-import { truncateToastText, wrapToastText } from "../ui/notify";
+import { stickyClose, truncateToastText, wrapToastText } from "../ui/notify";
 import { THEME_PRESETS } from "../config/themes";
 import { themePresetIdx } from "../ui/settings";
 import { makeSettingModel } from "../ui/settings-model";
+import { makeSystemTheme } from "../ui/ui-system-theme";
 import { MENU_W } from "../ui/ui-menu";
 import { makeEscMenu } from "../ui/ui-settings";
 import { makeRetheme } from "../ui/ui-retheme";
+import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
-import { clearIconCaches } from "../ui/icons";
+import { syncSortState } from "../lib/sort";
+import { clearFailedThumbs } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
-import { clearChildren } from "../lib/uiutil";
+import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../app/log";
+import { makeUrlOpener } from "../fs/open-url";
 import { pointPaneAt } from "../app/panes";
 import {
   AmbiguousPluginError,
@@ -71,15 +75,7 @@ export const wireSettings = (deps: {
         ],
         { width: 40, height: 1 + lines.length },
       );
-      if (!handle) return () => {};
-      let closed = false;
-      return () => {
-        if (closed) return;
-        closed = true;
-        try {
-          handle.close();
-        } catch {}
-      };
+      return stickyClose(handle);
     } catch {
       return () => {};
     }
@@ -95,7 +91,7 @@ export const wireSettings = (deps: {
         } catch {}
       })
       .catch((err) => {
-        dlog(`plugin rescan failed: ${err instanceof Error ? err.message : err}`);
+        dlog(`plugin rescan failed: ${errMessage(err)}`);
       });
   };
 
@@ -128,7 +124,7 @@ export const wireSettings = (deps: {
         try {
           name = derivePluginName(parseGitUrl(raw));
         } catch (err) {
-          chrome.notify(err instanceof Error ? err.message : String(err), "add plugin");
+          chrome.notify(errMessage(err), "add plugin");
           return;
         }
         // early collision hint on the derived name (the install may still
@@ -161,9 +157,9 @@ export const wireSettings = (deps: {
               "add plugin",
             );
           } else {
-            chrome.notify(err instanceof Error ? err.message : String(err), "add plugin");
+            chrome.notify(errMessage(err), "add plugin");
           }
-          dlog(`plugin install failed: ${err instanceof Error ? err.message : err}`);
+          dlog(`plugin install failed: ${errMessage(err)}`);
           return;
         } finally {
           doneCloning();
@@ -183,7 +179,7 @@ export const wireSettings = (deps: {
         dlog(`plugin updated: ${name}: ${out}`);
         chrome.notify(`${name}: ${out}`, "plugins");
       } catch (err) {
-        chrome.notify(err instanceof Error ? err.message : String(err), "plugins");
+        chrome.notify(errMessage(err), "plugins");
         return;
       } finally {
         doneUpdating();
@@ -203,7 +199,7 @@ export const wireSettings = (deps: {
       try {
         removePluginDir(pluginsDir(), name);
       } catch (err) {
-        chrome.notify(err instanceof Error ? err.message : String(err), "plugins");
+        chrome.notify(errMessage(err), "plugins");
         return;
       }
       dlog(`plugin removed: ${name}`);
@@ -221,9 +217,30 @@ export const wireSettings = (deps: {
       mkdirSync(pluginsDir(), { recursive: true });
       nav.navigate(pluginsDir());
     } catch (err) {
-      chrome.notify(err instanceof Error ? err.message : String(err), "plugins");
+      chrome.notify(errMessage(err), "plugins");
     }
   };
+
+  // --- System (terminal-adaptive) theme: queries the terminal's own colors
+  // through the booted renderer. applyConfig arrives via the retheme TDZ
+  // arrow (same seam as the model below); the settings theme row's System
+  // entry and the boot sequence both drive it from here. ---
+  const systemTheme = makeSystemTheme({
+    renderer: () => chrome.renderer,
+    config: core.config,
+    colors: core.colors,
+    applyConfig: (fresh) => getRetheme().applyConfig(fresh),
+    scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
+    log: (message) => dlog(message),
+    isTtyMode: core.isTtyMode,
+    // the boot resolve bypasses applyConfig (nothing mounted yet), so its
+    // plugin `theme` event is emitted here instead of onConfigApplied
+    onBootDerived: (theme) => {
+      try {
+        sharedPluginEvents().emit("theme", { preset: "System", theme });
+      } catch {}
+    },
+  });
 
   // --- Settings model: row type + pure semantics live in ./settings.ts, the
   // row->config wiring in ./settings-model, the panel in ./ui-settings ---
@@ -233,35 +250,62 @@ export const wireSettings = (deps: {
     // arrow wrappers: applyConfig/scheduleSaveConfig belong to the retheme wiring (TDZ)
     applyConfig: (fresh) => getRetheme().applyConfig(fresh),
     scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
-    showRoot: () => escMenu.showRoot(),
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
+    // console mode: the theme row is display-only (static palette paints)
+    isTtyMode: core.isTtyMode,
     plugins: () => plugins.plugins,
+    // on/off toggle: register or drop the plugin's slots right away, then
+    // repaint so the change is visible without a navigation
+    onPluginEnabledChanged: (name, enabled) => {
+      plugins.setSlotEnabled(name, enabled);
+      nav.renderAll();
+    },
     pluginInstall: { addFromUrl, openFolder, update: updateOne, remove: removeOne },
+    // picking the System theme entry resolves the terminal colors now
+    // (fire-and-forget — failures keep the committed flag + current theme)
+    resolveSystemTheme: () => {
+      void systemTheme.resolveSystemTheme().catch(() => {});
+    },
+  });
+
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
+
+  // About link rows open in the desktop browser (failure toasts, never throws)
+  const urlOpener = makeUrlOpener({
+    notify: (message, title, level) => chrome.notify(message, title ?? "tfm", level),
+    log: (message) => dlog(message),
   });
 
   const escMenu = makeEscMenu({
     renderer: () => chrome.renderer,
+    setPointer,
     byId: core.lookup.byId,
     floats: core.floats,
-    clearChildren,
+    destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
     makeIconSlot: core.slots.makeIconSlot,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    setIconState: core.slots.setIconState,
+    drainIconQueue: core.slots.drainIconQueue,
     setScrim: core.slots.setScrim,
     cancelBand: () => cancelBand(grid.bandCtx),
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     menuW: () => MENU_W,
+    // live binds straight from config (remaps show)
+    keybinds: (action) => core.config.keys[action] ?? [],
     settingGroups: () => settingGroups(),
     pluginGroups: () => pluginGroups(),
     reloadPlugins: () => plugins.reloadPlugins(),
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
     log: (message) => dlog(message),
     quit: nav.quitApp,
+    openUrl: (url) => urlOpener.openUrl(url),
   });
 
-  return { escMenu };
+  return { escMenu, systemTheme };
 };
 
 export const wireRetheme = (deps: {
@@ -273,12 +317,32 @@ export const wireRetheme = (deps: {
   // hover drawer (wired just before this) — rethemeChrome rewrites the sidebar
   // width by id, so an auto-hidden panel must be resynced after applyConfig
   getHover: () => { refresh(): void };
+  // late clusters owning persistent floats — deferred arrows (TDZ): keymap
+  // wires last, grid/grid-foundation own props/bulk-rename. Only read at
+  // repaint time, long after the wiring settled.
+  getKeymap: () => { pick: { isOpen(): boolean; repaint(): void } };
+  getGrid: () => { props: { isOpen(): boolean; repaint(): void } };
+  getGridFoundation: () => { bulkRename: { isOpen(): boolean; repaint(): void } };
 }) => {
-  const { core, nav, chrome, fileops, settings, getHover } = deps;
+  const { core, nav, chrome, fileops, settings, getHover, getKeymap, getGrid, getGridFoundation } = deps;
 
   // --- Config application & persistence: lives in ./ui-retheme (rethemeChrome,
   // applyConfig, scheduleSaveConfig, live reload). Geometry rewrites go
   // through the core cell's setters — never bake them into consts. ---
+  // floats that persist while open (pick, conflict/yes-no, bulk-rename,
+  // props, progress): rethemeChrome repaints each open one by id when a
+  // theme switch lands underneath it — none of them rebuild on their own.
+  // Getters (never captured handles): keymap wires last, same TDZ seam as
+  // the settings model above.
+  const floatRepaints: Array<{ isOpen(): boolean; repaint(): void }> = [
+    { isOpen: () => getKeymap().pick.isOpen(), repaint: () => getKeymap().pick.repaint() },
+    { isOpen: () => fileops.conflict.isOpen(), repaint: () => fileops.conflict.repaint() },
+    { isOpen: () => fileops.yesNo.isOpen(), repaint: () => fileops.yesNo.repaint() },
+    { isOpen: () => getGridFoundation().bulkRename.isOpen(), repaint: () => getGridFoundation().bulkRename.repaint() },
+    { isOpen: () => getGrid().props.isOpen(), repaint: () => getGrid().props.repaint() },
+    { isOpen: () => fileops.progress.isOpen(), repaint: () => fileops.progress.repaint() },
+  ];
+
   let lastDual = core.config.ui.dualPane;
   const retheme = makeRetheme({
     config: core.config,
@@ -301,12 +365,24 @@ export const wireRetheme = (deps: {
     },
     sideInnerW: core.sideInnerW,
     renderAll: nav.renderAll,
-    clearIconCaches,
-    resetIconQueue: () => core.slots.resetIconQueue(),
+    clearFailedThumbs,
+    resetIconQueue: core.slots.resetIconQueue,
     syncTerminalTheme: fileops.terminal.syncTerminalTheme,
     syncTerminalHeight: () => fileops.terminal.syncTerminalHeight(),
     repaintButtons: () => {
       for (const t of chrome.toolbars) t.repaintButtons();
+    },
+    // grid scrollbar bars bake thumb/track colors at boot — repaint the
+    // live Sliders on a theme flip (a rebuild would drop the scroll pos)
+    restyleScrollbars: () => {
+      const m = scrollbarTrackColors(core.colors);
+      for (const ref of core.scrollerRefs) {
+        const s = ref.current;
+        if (!s) continue;
+        try {
+          s.verticalScrollBar.trackOptions = m;
+        } catch {}
+      }
     },
     renderCrumbs: () => {
       for (const t of chrome.toolbars) t.renderCrumbs();
@@ -317,7 +393,9 @@ export const wireRetheme = (deps: {
     escMenu: settings.escMenu,
     fileMenuIsOpen: chrome.menu.isFileMenuOpen,
     renderFileMenu: chrome.menu.renderFileMenu,
+    floatRepaints,
     notify: chrome.notify,
+    isTtyMode: core.isTtyMode,
     // toggling [ui] persist-undo persists the live stack (or clears the
     // journal file) immediately — not on the next file op
     onConfigApplied: () => {
@@ -327,8 +405,10 @@ export const wireRetheme = (deps: {
       } catch {}
       try {
         const idx = themePresetIdx(THEME_PRESETS, core.config.theme);
+        // `?.` rather than an `idx >= 0` guard + assertion: a stale idx past
+        // the preset list falls back to custom exactly like a miss
         sharedPluginEvents().emit("theme", {
-          preset: idx >= 0 ? THEME_PRESETS[idx]!.name : "custom",
+          preset: core.config.ui.followTerminal ? "System" : (THEME_PRESETS[idx]?.name ?? "custom"),
           theme: core.config.theme,
         });
       } catch {}
@@ -342,8 +422,24 @@ export const wireRetheme = (deps: {
       // dual pane just turned on: the hidden pane's cwd is stale from boot —
       // open it at the active pane's current directory (both the keybind and
       // the settings GUI row funnel through applyConfig, so one hook covers all)
-      else if (dual && !lastDual) pointPaneAt(core.panes.states[1]!, core.state.cwd);
+      else if (dual && !lastDual) pointPaneAt(core.panes.states[1], core.state.cwd);
       lastDual = dual;
+    },
+    // the grid reads per-pane AppState.sortBy, not config: converge both panes
+    // onto [ui] sort-mode here so a settings/live-reload change re-sorts (same
+    // hook shape as normalizePanes). Transient cycleSort/menu picks stay
+    // state-only and never rewrite the persisted default.
+    syncSortMode: () => {
+      const mode = core.config.ui.sortMode;
+      for (const s of core.panes.states) syncSortState(s, mode);
+    },
+    // the grid reads per-pane AppState.showHidden, not config: an external
+    // config.toml flip must converge both panes here or the reload repaints
+    // the same filter. The GUI row + remap bind already write live state, so
+    // a settings commit just re-converges to the same value (no clobber).
+    syncShowHidden: () => {
+      const showHidden = core.config.ui.showHidden;
+      for (const s of core.panes.states) s.showHidden = showHidden;
     },
   });
 

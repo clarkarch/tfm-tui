@@ -5,6 +5,7 @@ import { makeFloats } from "./floats";
 import { makeBulkRename } from "./ui-bulk-rename";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
+import { destroyChildren } from "../lib/uiutil";
 
 // Headless tests for the bulk-rename modal: one stem input + numbering-style
 // chips + a live read-only preview. The apply sink is injected; everything
@@ -16,14 +17,14 @@ const mkBulk = (
   t: TestRendererSetup,
   floats: ReturnType<typeof makeFloats>,
   performed: Array<{ from: string; to: string }>,
+  getColors: () => Theme = () => colors,
 ) =>
   makeBulkRename({
     renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
     rootAdd: (n) => t.renderer.root.add(n),
-    clearChildren: (node) => {
-      for (const c of [...node.getChildren()]) node.remove(c);
-    },
+    // the ctx hands over a real node, so the REAL teardown is the honest fake
+    destroyChildren,
     stripSelectable: () => {},
     escHintBtn: (id, onClose) => {
       const hint: any = Text({ id, content: "esc", fg: colors.sidebarFgMuted });
@@ -31,16 +32,20 @@ const mkBulk = (
       return hint;
     },
     drainIconQueue: () => {},
-    colors: () => colors,
+    colors: getColors,
     uiStyle: () => "solid",
     floats,
     performBulkRename: (pairs) => {
       performed.push(...pairs);
     },
+    setPointer: (s) => void pointers.push(s),
   });
 
 const TWO = ["/tfm-bulk/IMG_001.jpg", "/tfm-bulk/IMG_002.jpg"];
 const TEN = Array.from({ length: 10 }, (_, i) => `/tfm-bulk/f${i}.txt`);
+
+// mouse pointer shapes requested through the ctx seam (OSC 22 sink)
+const pointers: string[] = [];
 
 describe("bulk rename widget", () => {
   test("open mounts the input; typing shows live generated names", async () => {
@@ -210,6 +215,68 @@ describe("bulk rename widget", () => {
       expect(bulk.handleKey({ name: "down" })).toBe(true);
       expect(floats.isOpen("bulkrename")).toBe(true);
       bulk.handleKey({ name: "escape" });
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("repaint() repaints panel + input + title + preview with live colors, keeps the value", async () => {
+    const t = await createTestRenderer({ width: 100, height: 26 });
+    try {
+      const floats = makeFloats();
+      let live: Theme = { ...colors };
+      const bulk = mkBulk(t, floats, [], () => live);
+      bulk.open(TWO);
+      await t.renderOnce();
+      bulk.setValue("vacation");
+      await t.renderOnce();
+      live = { ...colors, sidebarBg: "#101020", accentBg: "#303040", accent: "#ff0000", white: "#f0f0f0" };
+      bulk.repaint();
+      await t.renderOnce();
+      const hexInts = (hex: string): [number, number, number, number] => {
+        const n = Number.parseInt(hex.slice(1), 16);
+        return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+      };
+      const panel = t.renderer.root.findDescendantById("tfm-bulkrename-panel") as any;
+      expect([...panel.backgroundColor.toInts()]).toEqual(hexInts("#101020"));
+      const input = t.renderer.root.findDescendantById("tfm-bulkrename-input") as any;
+      expect([...input.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
+      const title = t.renderer.root.findDescendantById("tfm-bulkrename-title") as any;
+      expect([...title.fg.toInts()]).toEqual(hexInts("#ff0000"));
+      // value + preview survive (no rebuild of the input)
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("vacation 1.jpg");
+      expect(frame).toContain("Rename 2 items");
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("repaint() is a no-op when closed", async () => {
+    const t = await createTestRenderer({ width: 100, height: 26 });
+    try {
+      const floats = makeFloats();
+      const bulk = mkBulk(t, floats, []);
+      expect(() => bulk.repaint()).not.toThrow();
+      expect(t.renderer.root.findDescendantById("tfm-bulkrename")).toBeFalsy();
+    } finally {
+      t.renderer.destroy();
+    }
+  });
+
+  test("open sets the text pointer, esc restores default", async () => {
+    const t = await createTestRenderer({ width: 100, height: 26 });
+    try {
+      pointers.length = 0;
+      const floats = makeFloats();
+      const bulk = mkBulk(t, floats, []);
+      bulk.open(TWO);
+      await t.renderOnce();
+      expect(pointers).toEqual(["text"]);
+      bulk.handleKey({ name: "escape" });
+      await t.renderOnce();
+      expect(floats.isOpen("bulkrename")).toBe(false);
+      expect(pointers).toEqual(["text", "default"]);
     } finally {
       t.renderer.destroy();
     }

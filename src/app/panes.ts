@@ -51,7 +51,9 @@ export const togglePane = <T>(p: PanePair<T>): void => {
 export const activeFacade = <T extends object>(get: () => T, overrides?: Partial<Record<keyof T, unknown>>): T =>
   new Proxy({} as T, {
     get: (_t, prop) => {
-      if (overrides && Object.hasOwn(overrides, prop)) return (overrides as any)[prop];
+      // Reflect, not a cast: `prop` is a plain string/symbol and `overrides`
+      // is a Partial record, so direct indexing is not expressible
+      if (overrides && Object.hasOwn(overrides, prop)) return Reflect.get(overrides, prop);
       const value = Reflect.get(get(), prop);
       if (typeof value !== "function") return value;
       // Dispatch at CALL time against the CURRENT active pane. Binding here
@@ -66,7 +68,7 @@ export const activeFacade = <T extends object>(get: () => T, overrides?: Partial
     },
     set: (_t, prop, value) => {
       if (overrides && Object.hasOwn(overrides, prop)) {
-        (overrides as any)[prop] = value;
+        Reflect.set(overrides, prop, value);
         return true;
       }
       Reflect.set(get(), prop, value);
@@ -125,8 +127,9 @@ export const mergedMapFacade = <K, V>(maps: () => Array<Map<K, V>>): Map<K, V> =
         };
       }
       if (prop === "keys" || prop === "values" || prop === "entries") {
+        // prop is narrowed to the three iterator names, all with the same shape
         return function* (): Generator {
-          for (const m of list) yield* (m as any)[prop]();
+          for (const m of list) yield* m[prop]();
         };
       }
       if (prop === Symbol.iterator) {

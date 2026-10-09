@@ -1,10 +1,14 @@
-import { Box, EmbeddedTerminalRenderable, Text } from "@opentui/core";
-import { clearChildren } from "../lib/uiutil";
+import { Box, type CliRenderer, EmbeddedTerminalRenderable, type MouseEvent, Text } from "@opentui/core";
+import path from "node:path";
+import { destroyChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
 import { applySurface, type UiStyle } from "./style";
 import { gridDrag } from "../input/grid-input";
 import type { Theme } from "../config/config";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
+import { hoverEvents, type SlotElement } from "./ui-slots";
 
 // --- Embedded terminal pane ("Open Terminal Here") ---
 // OpenTUI's EmbeddedTerminalRenderable draws the VT stream; the PTY belongs to
@@ -16,14 +20,40 @@ import type { NotifyLevel } from "../lib/notify-level";
 // into the PTY (the VT never registers a "drop" mouse listener, so the event
 // bubbles up to the host).
 
+// The PTY child shape the pane actually consumes (a structural subset of
+// Bun.spawn's terminal child: write/resize/close, kill, exited). Extracted so
+// the spawnPty seam below can be faked in tests without forking a shell.
+export type TermChild = {
+  readonly terminal?: {
+    write(data: Uint8Array): void;
+    resize(cols: number, rows: number): void;
+    close(): void;
+  };
+  kill(): void;
+  exited: Promise<unknown>;
+};
+
+export type TermSpawnOpts = {
+  argv: string[];
+  cwd: string;
+  env: Record<string, string | undefined>;
+  cols: number;
+  rows: number;
+  // every PTY chunk: probe replies + DECSET sniffing + the VT write all run
+  // through this one callback in the widget
+  onData(data: Uint8Array): void;
+};
+
 type TermCtx = {
-  renderer: any;
-  byId(id: string): any;
+  renderer: CliRenderer;
+  byId(id: string): MaybeNode;
   uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number;
   termH(): number; // live [ui] terminal-height (rows of VT, +1 for the header)
-  escHintBtn(id: string, onClose: () => void): any;
+  // `chrome` opts the hint's raster out of the float flatten target (this is
+  // the one non-floating esc hint: the pane header, not a dialog)
+  escHintBtn(id: string, onClose: () => void, opts?: { chrome?: boolean }): SlotElement;
   stripSelectable(): void;
   drainIconQueue(): void;
   notify(message: string, title?: string, level?: NotifyLevel): void;
@@ -33,6 +63,15 @@ type TermCtx = {
   home: string;
   finishDrag(): void; // ends an internal drag (finishDragState)
   dlog(msg: string): void;
+  // injectable PTY spawn (default = Bun.spawn). Tests open the pane headlessly
+  // through this seam instead of forking a real shell.
+  spawnPty?(o: TermSpawnOpts): TermChild;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
+  // transparent-bg force: the VT's default-bg cells compose as the terminal
+  // default instead of the theme bg. Absent = opaque (old fakes keep working).
+  transparentForce?(): boolean;
 };
 
 // Theme's 16 ANSI slots as const keys — the OSC 4 palette maps over them
@@ -168,23 +207,41 @@ export const promptClickArrows = (
 
 export const makeTerminal = (ctx: TermCtx) => {
   let term: EmbeddedTerminalRenderable | null = null;
-  let termChild: ReturnType<typeof Bun.spawn> | null = null;
+  let termChild: TermChild | null = null;
   let termFocused = false;
   let headerHot = false; // drag-hover cue latched — avoids redundant repaints
   let ptyScreen: PtyScreenState = { mouse: false, alt: false };
   let ptyScanTail = ""; // DECSET sequences can split across PTY chunks
   let downCell: { x: number; y: number } | null = null; // click vs drag for the prompt bridge
 
+  // PTY spawn seam — default is the real Bun.spawn PTY; tests inject a fake
+  // child so the open path can be driven without a shell process.
+  const spawnPty =
+    ctx.spawnPty ??
+    ((o: TermSpawnOpts): TermChild =>
+      Bun.spawn(o.argv, {
+        cwd: o.cwd,
+        env: o.env,
+        terminal: {
+          cols: o.cols,
+          rows: o.rows,
+          data(_pty, data) {
+            o.onData(data);
+          },
+        },
+      }));
+
   // the flag can lag reality (click-refocus inside the pane bypasses our focus()
   // call) — ask the renderer who owns the keyboard before acting on keys
   const termHasFocus = (): boolean => !!term && ctx.renderer.currentFocusedRenderable === term;
 
   // drop-target cue: light the header while an internal drag hovers the pane
-  // (rest fill follows the ui-style seam — none in outline mode)
+  // (rest fill follows the ui-style seam — none in outline mode — and under
+  // transparent-bg force the rest fill is the terminal bg itself)
   const paintHeaderCue = (hot: boolean): void => {
     if (hot === headerHot) return;
     headerHot = hot;
-    const header: any = ctx.byId("tfm-term-header");
+    const header = ctx.byId("tfm-term-header");
     if (!header) return;
     try {
       const colors = ctx.colors();
@@ -192,7 +249,7 @@ export const makeTerminal = (ctx: TermCtx) => {
         header,
         hot
           ? { backgroundColor: colors.hoverBg }
-          : ctx.uiStyle() === "solid"
+          : ctx.uiStyle() === "solid" && !ctx.transparentForce?.()
             ? { backgroundColor: colors.sidebarBg }
             : {},
       );
@@ -227,7 +284,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   // at the prompt reaches no one. Translate same-row clicks into char-movement
   // arrows (what kitty's OSC 133 click_events does for fish). Skipped while a
   // mouse-aware program owns the input — those get real mouse bytes from the VT.
-  const bridgePromptClick = (ev: any): void => {
+  const bridgePromptClick = (ev: MouseEvent): void => {
     if (!term || !termChild || ev.button !== 0) return;
     if (ptyScreen.mouse || ptyScreen.alt) return;
     const screen = term.screen();
@@ -257,8 +314,32 @@ export const makeTerminal = (ctx: TermCtx) => {
 
   // make the embedded terminal match the tfm theme: OSC 4 sets the 16-color
   // palette (so ls/vim/prompts stop floating on stock xterm hues) and
-  // OSC 10/11/12 set the default fg/bg/cursor
+  // OSC 10/11/12 set the default fg/bg/cursor. Also the live transparent-bg
+  // force switch: applyConfig calls this on every theme/transparent flip
+  // (both ride themeSig), so the open pane flips without close/reopen.
   const syncTerminalTheme = (): void => {
+    const force = ctx.transparentForce?.() ?? false;
+    if (term) {
+      try {
+        term.transparentBackground = force;
+      } catch {}
+    }
+    const header = ctx.byId("tfm-term-header");
+    if (header) {
+      try {
+        const colors = ctx.colors();
+        applySurface(header, ctx.uiStyle() === "solid" && !force ? { backgroundColor: colors.sidebarBg } : {});
+      } catch {}
+    }
+    // the X is a separate node from the header with its own fill — a live
+    // flip that skips it strands one opaque cell in the transparent bar
+    const escBtn = ctx.byId("tfm-esc-term");
+    if (escBtn) {
+      try {
+        const colors = ctx.colors();
+        applySurface(escBtn, ctx.uiStyle() === "solid" && !force ? { backgroundColor: colors.sidebarBg } : {});
+      } catch {}
+    }
     if (!term) return;
     const colors = ctx.colors();
     try {
@@ -283,7 +364,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   // host from live config on refresh. The layout change flows into
   // onTerminalResize, which resizes the PTY. No-op while closed.
   const syncTerminalHeight = (): void => {
-    let node: any = term;
+    let node: MaybeNode = term;
     if (!node) {
       try {
         node = ctx.byId("tfm-term");
@@ -302,6 +383,9 @@ export const makeTerminal = (ctx: TermCtx) => {
     try {
       term?.blur();
     } catch {}
+    // the host's out never fires (its nodes are destroyed below) — restore
+    // here or a keyboard-close while hovering sticks the pointer
+    ctx.setPointer?.("default");
     try {
       termChild?.kill();
     } catch {}
@@ -321,13 +405,15 @@ export const makeTerminal = (ctx: TermCtx) => {
     // DA/DSR reply of the next session
     termProbeTail = "";
     downCell = null;
-    const host: any = ctx.byId("tfm-term-host");
+    const host = ctx.byId("tfm-term-host");
     if (host) {
-      clearChildren(host);
+      // destroy (not detach): the header/hero nodes own TextBuffers, and a
+      // close/open cycle per dir visit would otherwise leak one pane's worth
+      destroyChildren(host);
       host.height = 0;
       // the pane is gone — the host must stop acting as a drop target
       try {
-        host.onMouseOver = undefined;
+        host.onMouseMove = undefined;
       } catch {}
       try {
         host.onMouseOut = undefined;
@@ -352,8 +438,27 @@ export const makeTerminal = (ctx: TermCtx) => {
     } catch {}
   };
 
+  // every PTY chunk in one place (probe replies, DECSET sniffing, VT write) so
+  // the spawnPty seam above only has to forward bytes
+  const handlePtyData = (data: Uint8Array): void => {
+    answerTerminalProbes(data);
+    // sniff mouse-mode/alt-screen DECSETs (split-safe) for the bridge
+    const scan = ptyScreenState(ptyScanTail + new TextDecoder().decode(data), ptyScreen);
+    ptyScreen = scan.state;
+    ptyScanTail = scan.tail;
+    try {
+      term?.write(data);
+    } catch {}
+  };
+
   const openTerminalHere = (dir?: string): void => {
-    if (!ctx.renderer.resolution) return;
+    // NOT gated on renderer.resolution: that is only ever set from the
+    // terminal's reply to OpenTUI's pixel-size query, and the Linux console,
+    // tmux and dumb frontends never answer it — the old `!resolution` guard
+    // made this a silent no-op there (tty.cast only highlights the menu row,
+    // no `terminal ·` header ever paints). The pane is pure text; the mounted
+    // host node is the real post-boot readiness signal (findDescendantById
+    // resolves post-mount only).
     if (term) {
       try {
         term.focus();
@@ -361,16 +466,24 @@ export const makeTerminal = (ctx: TermCtx) => {
       termFocused = true;
       return;
     }
-    const host: any = ctx.byId("tfm-term-host");
+    const host = ctx.byId("tfm-term-host");
     if (!host) return;
-    // the host box is the pane's drop target: over/out give the drag-hover cue,
-    // drop pastes the payload into the PTY (see handleTermDrop)
-    host.onMouseOver = () => {
+    // the host box is the pane's drop target: the shared hover wiring gives the
+    // drag-hover cue, drop pastes the payload into the PTY (see handleTermDrop).
+    // The host handlers are assigned imperatively (it's a pre-built node, not a
+    // factory), so the pair is spread from the one implementation.
+    const hostHover = hoverEvents((on) => {
+      if (!on) {
+        paintHeaderCue(false);
+        ctx.setPointer?.(gridDrag.active ? "grabbing" : "default");
+        return;
+      }
+      // a drag owns the pointer — same rule as the sidebar rows
       if (gridDrag.active) paintHeaderCue(true);
-    };
-    host.onMouseOut = () => {
-      paintHeaderCue(false);
-    };
+      else ctx.setPointer?.("pointer");
+    });
+    host.onMouseMove = hostHover.onMouseMove;
+    host.onMouseOut = hostHover.onMouseOut;
     host.onMouseDrop = handleTermDrop;
     const colors = ctx.colors();
     const cwd = dir ?? (ctx.virtualCwd() ? ctx.home : ctx.cwd());
@@ -383,11 +496,13 @@ export const makeTerminal = (ctx: TermCtx) => {
         height: 1,
         flexDirection: "row",
         paddingLeft: 1,
-        ...(ctx.uiStyle() === "solid" ? { backgroundColor: colors.sidebarBg } : {}),
+        // same condition as rethemeChrome's tfm-term-header repaint: solid
+        // without transparent-bg force keeps the fill, otherwise bare
+        ...(ctx.uiStyle() === "solid" && !ctx.transparentForce?.() ? { backgroundColor: colors.sidebarBg } : {}),
       },
       Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
       Box({ flexGrow: 1 }),
-      ctx.escHintBtn("tfm-esc-term", closeTerminalPane),
+      ctx.escHintBtn("tfm-esc-term", closeTerminalPane, { chrome: true }),
     );
     term = new EmbeddedTerminalRenderable(ctx.renderer, {
       id: "tfm-term",
@@ -396,6 +511,10 @@ export const makeTerminal = (ctx: TermCtx) => {
       cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
       rows: termH,
       maxScrollback: 20_000,
+      // the pane opts into the terminal showing through only under
+      // transparent-bg force (`on` keeps panels painted, so the VT stays
+      // opaque there) — default-bg cells compose as terminal-default.
+      transparentBackground: ctx.transparentForce?.() ?? false,
       onData: (data: Uint8Array) => {
         // the only PTY write without a guard — a keystroke landing between
         // shell death and the exited callback nulling termChild threw
@@ -411,10 +530,10 @@ export const makeTerminal = (ctx: TermCtx) => {
       },
       // the bridge tracks press→release movement itself (a plain click still
       // reports isDragging on up — Selection defaults it to true)
-      onMouseDown: (ev: any) => {
+      onMouseDown: (ev: MouseEvent) => {
         downCell = { x: ev.x, y: ev.y };
       },
-      onMouseUp: (ev: any) => {
+      onMouseUp: (ev: MouseEvent) => {
         const wasClick = !!downCell && downCell.x === ev.x && downCell.y === ev.y;
         downCell = null;
         if (wasClick) bridgePromptClick(ev);
@@ -425,23 +544,13 @@ export const makeTerminal = (ctx: TermCtx) => {
     ctx.stripSelectable();
     const shell = process.env.SHELL || "/bin/bash";
     try {
-      termChild = Bun.spawn([shell], {
+      termChild = spawnPty({
+        argv: [shell],
         cwd,
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
-        terminal: {
-          cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
-          rows: termH,
-          data(_pty, data) {
-            answerTerminalProbes(data);
-            // sniff mouse-mode/alt-screen DECSETs (split-safe) for the bridge
-            const scan = ptyScreenState(ptyScanTail + new TextDecoder().decode(data), ptyScreen);
-            ptyScreen = scan.state;
-            ptyScanTail = scan.tail;
-            try {
-              term?.write(data);
-            } catch {}
-          },
-        },
+        cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
+        rows: termH,
+        onData: handlePtyData,
       });
     } catch (err) {
       ctx.notify(`terminal failed (${fsErrText(err)})`, "terminal", "error");
@@ -471,6 +580,22 @@ export const makeTerminal = (ctx: TermCtx) => {
   return {
     openTerminalHere,
     closeTerminalPane,
+    // run a file in the embedded shell: open the pane at the file's dir (or
+    // focus it when already open — the path is absolute so the shell's cwd
+    // doesn't matter) and feed the quoted path + newline, i.e. exactly what
+    // the user would type. Absolute quoting keeps spaces/quotes safe.
+    execInTerminal: (targetPath: string): void => {
+      openTerminalHere(path.dirname(targetPath));
+      const pty = termChild?.terminal;
+      if (!pty) return;
+      try {
+        pty.write(new TextEncoder().encode(`${shellQuotePaths([targetPath])}\n`));
+      } catch {}
+      try {
+        term?.focus();
+        termFocused = true;
+      } catch {}
+    },
     syncTerminalHeight,
     syncTerminalTheme,
     termHasFocus,

@@ -6,12 +6,14 @@
 // prompt overlay (plugin git-URL entry). Last wiring step — everything it
 // reads exists by now. ---
 
+import type { KeyEvent } from "@opentui/core";
 import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
-import { clearChildren } from "../lib/uiutil";
-import { flattenPluginCommands, getPluginCommandBinds } from "../plugins/plugin-api";
+import { cycleSortMode } from "../lib/sort";
+import { destroyChildren, errMessage } from "../lib/uiutil";
+import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled } from "../plugins/plugin-api";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
 import { dlog } from "../app/log";
@@ -42,26 +44,30 @@ export const wireKeymap = (deps: {
   // contributions apply without rebuilds). coreCommands is backfilled after
   // the router exists — keypresses can't precede the wiring return. ---
   let coreCommands: () => Command[] = () => [];
+  // Mouse pointer shapes (OSC 22): the single shared tty-guarded sink from
+  // wireCore (see there for why per-cluster instances diverged).
+  const setPointer = core.setPointer;
   const pick = makePick({
     renderer: () => chrome.renderer,
     byId,
     rootAdd: (node) => chrome.renderer.root.add(node),
-    clearChildren,
+    destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     floats,
     escHintBtn: core.slots.escHintBtn,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     commands: () =>
-      [...coreCommands(), ...flattenPluginCommands(plugins.plugins)].map((c) => ({
+      [...coreCommands(), ...flattenPluginCommands(plugins.plugins.filter(isPluginEnabled))].map((c) => ({
         label: c.title,
         hint: c.hint || undefined,
         run: c.run,
       })),
     onError: (err) => {
-      dlog(`plugin command failed: ${err instanceof Error ? err.message : err}`);
+      dlog(`plugin command failed: ${errMessage(err)}`);
     },
+    setPointer,
   });
 
   // --- Single-line prompt overlay (plugin git-URL entry): same Input-native
@@ -73,10 +79,11 @@ export const wireKeymap = (deps: {
     rootAdd: (node) => chrome.renderer.root.add(node),
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
-    drainIconQueue: () => core.slots.drainIconQueue(),
+    drainIconQueue: core.slots.drainIconQueue,
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     floats,
+    setPointer,
   });
 
   // Copy/move the active selection into the other pane's directory through the
@@ -117,11 +124,24 @@ export const wireKeymap = (deps: {
       isOpen: () => floats.isOpen("conflict"),
       closeConflict: (p: "skip") => fileops.conflict.closeConflict(p),
     },
-    yesNo: { isOpen: () => floats.isOpen("yesno"), close: () => fileops.yesNo.close() },
+    yesNo: {
+      isOpen: () => floats.isOpen("yesno"),
+      close: fileops.yesNo.close,
+      moveFocus: fileops.yesNo.moveFocus,
+      submit: fileops.yesNo.submit,
+    },
+    typeToSearchEnabled: () => core.config.ui.typeToSearch,
+    // startSearch re-arms the filter (yazi preset leaves it off) through the
+    // single applyConfig -> save path like every other config flip
+    enableTypeToSearch: () => {
+      if (core.config.ui.typeToSearch) return;
+      getRetheme().applyConfig({ ...core.config, ui: { ...core.config.ui, typeToSearch: true } });
+      getRetheme().scheduleSaveConfig();
+    },
     isRenaming: gridFoundation.rename.isRenaming,
     bulkRename: {
       isOpen: () => floats.isOpen("bulkrename"),
-      handleKey: (ev) => gridFoundation.bulkRename.handleKey(ev),
+      handleKey: gridFoundation.bulkRename.handleKey,
     },
     propsIsOpen: () => floats.isOpen("props"),
     closeProps: grid.props.closeProps,
@@ -157,7 +177,6 @@ export const wireKeymap = (deps: {
     prevTab: nav.prevTab,
     newTab: nav.newTab,
     closeTab: nav.closeTab,
-    switchTab: nav.switchTab,
     inTrashView: core.inTrashView,
     confirmDeleteForever: fileops.confirmDeleteForever,
     trashPaths: fileops.trash.trashPaths,
@@ -189,6 +208,15 @@ export const wireKeymap = (deps: {
       getRetheme().applyConfig({ ...core.config, ui: { ...ui, viewMode } });
       getRetheme().scheduleSaveConfig();
     },
+    // single-key sort cycle on the ACTIVE pane's state (same nautilus
+    // semantics + renderGrid tail as the sort menu's pick)
+    cycleSort: () => {
+      const s = core.activeState();
+      const next = cycleSortMode(s.sortBy);
+      s.sortBy = next.sortBy;
+      s.sortAsc = next.sortAsc;
+      void grid.renderGrid();
+    },
     zoomTiles: (dir) => {
       const ui = core.config.ui;
       const patch = zoomUiPatch(ui, dir);
@@ -200,7 +228,7 @@ export const wireKeymap = (deps: {
     switchPane: () => {
       if (!core.config.ui.dualPane) return;
       // a selection must not survive a pane switch
-      gridFoundation.selections[core.panes.active]!.clearTileSelection();
+      gridFoundation.selections[core.panes.active].clearTileSelection();
       core.togglePane();
       nav.renderAll();
     },
@@ -214,22 +242,22 @@ export const wireKeymap = (deps: {
     undoLast: fileops.undo.undoLast,
     redoLast: fileops.undo.redoLast,
     pluginCommands: () =>
-      plugins.plugins.flatMap((p) =>
-        p.commands.map((c) => ({ id: c.id, binds: getPluginCommandBinds(p, c.id), run: c.run })),
-      ),
+      plugins.plugins
+        .filter(isPluginEnabled)
+        .flatMap((p) => p.commands.map((c) => ({ id: c.id, binds: getPluginCommandBinds(p, c.id), run: c.run }))),
     pick: {
       isOpen: () => pick.isOpen(),
-      handleKey: (ev) => pick.handleKey(ev),
+      handleKey: pick.handleKey,
     },
     prompt: {
       isOpen: () => prompt.isOpen(),
-      handleKey: (ev) => prompt.handleKey(ev),
+      handleKey: prompt.handleKey,
     },
   });
 
   coreCommands = () => keyRouter.commands();
 
-  chrome.renderer.keyInput.on("keypress", (e: any) => keyRouter.handleKey(e));
+  chrome.renderer.keyInput.on("keypress", (e: KeyEvent) => keyRouter.handleKey(e));
 
   return { keyRouter, pick, prompt };
 };

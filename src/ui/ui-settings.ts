@@ -10,44 +10,66 @@
 // MOUSE-FIRST: every control is clickable, rows hover-select, click-away
 // cancels capture.
 
-import { Box, RGBA, Text } from "@opentui/core";
-import { floatSurface, type UiStyle } from "./style";
+import { Box, type CliRenderer, type MouseEvent, Text } from "@opentui/core";
+import { advanceCursor, errMessage, invokeIsolated } from "../lib/uiutil";
+import type { UiStyle } from "../config/config-schema";
+import { makeModalScrim } from "./ui-dialogs";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
-import type { IconState, IconSpec } from "./ui-slots";
+import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
 import type { Theme } from "../config/config";
-import { keySpecFromEvent, validateKeybindSpec } from "../config/config-schema";
+import { type KeyEventLike, keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
+import type { NodeLike } from "../lib/node-like";
 import { FLOAT_Z, type Floats } from "./floats";
-import { pokeGc } from "../app/mem-hygiene";
+import { pokeGc, type NativeStatsReach } from "../app/mem-hygiene";
 import {
+  clampToVisible,
+  descText,
   ensureVisible,
+  fitDescText,
+  fitValueText,
+  flatVisible,
   renderSettingsPanel,
+  sectionKey,
+  settingsPanelWidth,
   settingsVisRows,
-  SETTINGS_W,
+  SET_TOGGLE_W,
+  SET_VAL_W,
+  visiblePos,
   type SettingsPanelState,
 } from "./ui-settings-panel";
+import { helpPanelWidth, renderHelpPanel } from "./ui-help";
+import { aboutPanelWidth, renderAboutPanel, type AboutDetail } from "./ui-about";
+import type { KeyAction, KeybindSetResult } from "../config/config-schema";
+import type { MaybeNode } from "../lib/node-like";
+import type { PointerStyle } from "../lib/pointer";
 
 type EscMenuCtx = {
-  renderer(): any;
-  byId(id: string): any;
-  clearChildren(node: any): void;
+  renderer(): CliRenderer;
+  byId(id: string): MaybeNode;
+  destroyChildren(node: unknown): void;
   stripSelectable(): void;
-  escHintBtn(id: string, onClose: () => void): any;
+  escHintBtn(id: string, onClose: () => void): SlotElement;
   makeIconSlot(
     name: string,
     states: IconState[],
     heightCells?: number,
     initialState?: number,
-    onMouseDown?: (ev: any) => void,
+    onMouseDown?: (ev: MouseEvent) => void,
     statesFactory?: () => IconState[],
-  ): { el: any; slotId: string; spec: IconSpec };
+    opts?: { faithful?: boolean },
+  ): IconSlotHandle;
+  setIconState(spec: IconSpec, stateIdx: number): void;
   drainIconQueue(): void | Promise<void>;
   setScrim(on: boolean): void;
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)
   cancelBand(): void;
   colors(): Theme;
-  uiStyle(): string;
+  uiStyle(): UiStyle;
   // root-view width — same value the context menu uses (MENU_W in ./ui-menu)
   menuW(): number;
+  // live keybind lookup for the help view (same getter keymap uses).
+  // Optional so older fakes read as defaults; wiring always sets it.
+  keybinds?(action: KeyAction): string[];
   settingGroups(): SettingGroup[];
   // plugin-contributed groups for the DEDICATED Plugins view (separate from
   // settings — plugins add, never modify core rows). Empty without plugins.
@@ -63,11 +85,17 @@ type EscMenuCtx = {
   // debug sink (dlog) — rebuild failures MUST surface somewhere
   log?(message: string): void;
   quit(): void;
+  // external URL opener for About link rows (wired to xdg-open). Optional
+  // so older fakes keep working; absent = link clicks no-op.
+  openUrl?(url: string): void;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
+  // Absent = no pointer changes (old fakes keep working).
+  setPointer?(style: PointerStyle): void;
 };
 
 export const makeEscMenu = (ctx: EscMenuCtx) => {
   let menuOpen = false;
-  let menuView: "root" | "settings" | "plugins" = "root";
+  let menuView: "root" | "settings" | "plugins" | "help" | "about" = "root";
   // panel cursor state — rendered by ./ui-settings-panel, mutated by the ops here
   const st: SettingsPanelState = {
     catIdx: 0,
@@ -76,24 +104,43 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     scrollOff: 0,
     hoverCat: -1,
     capturing: null,
+    swapOffer: null,
+    collapsed: new Set<string>(),
   };
+  // restart-toast dedupe: one "needs restart" toast per row per menu open —
+  // holding ←/→ on a stepper otherwise floods the toast stack
+  const restartWarned = new Set<string>();
 
   // settings and plugins views share the panel renderer; the plugins view
   // only sees plugin groups (a plugin can never inject rows into settings)
   const groups = (): SettingGroup[] => (menuView === "plugins" ? ctx.pluginGroups() : ctx.settingGroups());
   const rowsOf = (gi: number): SettingRow[] => groups()[gi]?.rows ?? [];
+  const headerOf = (gi: number): string => groups()[gi]?.header ?? "";
+  // visible-row projection for a category (collapsible sections; full indices)
+  const visOf = (gi: number): number[] => flatVisible(rowsOf(gi), headerOf(gi), st.collapsed);
   // every keyboard/panel op below branches root vs panel — never on a single view
   const inPanelView = (): boolean => menuView !== "root";
 
+  // the help/about views are cursorless (static panels) — cursor ops no-op there
+  const isHelpView = (): boolean => menuView === "help";
+  const isAboutView = (): boolean => menuView === "about";
+  const isStaticView = (): boolean => menuView === "help" || menuView === "about";
+  // about detail drill (credits row → full list, ← Back returns). Reset on
+  // every fresh about entry and menu close — never carried across opens.
+  let aboutDetail: AboutDetail = null;
   // root <-> panel-view transitions reset the shared cursor state (same reset
   // Settings always did — the panel is rebuilt fresh for either view)
-  const enterView = (view: "settings" | "plugins"): void => {
+  const enterView = (view: "settings" | "plugins" | "help" | "about"): void => {
     menuView = view;
+    // a fresh about entry always lands on main (detail never carries over)
+    if (view === "about") aboutDetail = null;
     st.catIdx = 0;
     // no row cursor until the first arrow/hover (category highlight stays)
     st.menuIdx = -1;
     st.pane = "rows";
     st.scrollOff = 0;
+    st.capturing = null;
+    st.swapOffer = null;
     renderMenuContent();
   };
 
@@ -124,6 +171,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           },
         ]
       : []),
+    // the help view sits below Plugins: everything above quits the app,
+    // this one just explains it
+    { icon: "help", label: "Help", keepOpen: true, action: () => enterView("help") },
+    // the about view sits below Help: brand + version + links, no controls
+    { icon: "information", label: "About", keepOpen: true, action: () => enterView("about") },
     {
       icon: "power",
       label: "Quit",
@@ -135,13 +187,23 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const switchCategory = (gi: number): void => {
     const n = groups().length;
     st.catIdx = ((gi % n) + n) % n;
-    // land on the first INTERACTIVE row — a leading header never takes the cursor
-    const rows = rowsOf(st.catIdx);
-    let i = 0;
-    for (let k = 0; rows[i]?.kind === "header" && k < rows.length; k++) i++;
-    st.menuIdx = i;
+    // land on the first VISIBLE row — headers take the cursor now (they
+    // collapse/expand), hidden children are never landed on
+    st.menuIdx = visOf(st.catIdx)[0] ?? -1;
     st.pane = "rows";
     st.scrollOff = 0;
+    renderMenuContent();
+  };
+
+  // collapse/expand one section; collapsing under the cursor parks it on the
+  // section's header (the nearest visible row at or above the old cursor)
+  const toggleSection = (key: string): void => {
+    if (st.collapsed.has(key)) st.collapsed.delete(key);
+    else st.collapsed.add(key);
+    const flat = visOf(st.catIdx);
+    if (st.menuIdx >= 0 && !flat.includes(st.menuIdx)) {
+      st.menuIdx = [...flat].reverse().find((i) => i <= st.menuIdx) ?? flat[0] ?? -1;
+    }
     renderMenuContent();
   };
 
@@ -149,12 +211,21 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const adjustSelectedSetting = (dir: number): void => {
     if (!inPanelView()) return;
+    // the static views are cursorless — ←/→ do nothing there
+    if (isStaticView()) return;
     if (st.pane === "cats") {
       switchCategory(st.catIdx + dir);
       return;
     }
     const row = rowsOf(st.catIdx)[st.menuIdx];
-    if (!row || row.kind === "header") return;
+    if (!row) return;
+    // headers collapse/expand: → opens, ← closes (enter toggles via rowActivate)
+    if (row.kind === "header") {
+      const key = sectionKey(headerOf(st.catIdx), row.label);
+      const shut = st.collapsed.has(key);
+      if ((dir > 0 && shut) || (dir < 0 && !shut)) toggleSection(key);
+      return;
+    }
     // keybind/action rows have no left/right value — the arrows switch category
     if (row.kind === "keybind" || row.kind === "action") {
       switchCategory(st.catIdx + dir);
@@ -171,6 +242,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const cancelCapture = (): boolean => {
     if (st.capturing === null) return false;
     st.capturing = null;
+    st.swapOffer = null;
     renderMenuContent();
     return true;
   };
@@ -186,18 +258,58 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // (menu colors can't change while the panel is up without a rebuild)
   let menuC: Theme = ctx.colors();
 
+  // live description-footer repaint via byId — NO rebuild (same OOM rule as paintRowAt)
+  const paintDesc = (text: string): void => {
+    setOnId("tfm-set-desc", (n) => {
+      n.content = text;
+    });
+  };
+
   // repaint one row's highlight via byId — NO rebuild (rebuild churn under
   // memory pressure trips native allocation failures; see AGENTS.md OOM note)
+  // Single paint truth: bg + label + value + BOTH chevrons, so hover and
+  // keyboard land on identical colors (the old split left chevrons muted on
+  // a highlighted row and headers the wrong gray on hover-off).
   const paintRowAt = (idx: number, on: boolean): void => {
     const c = menuC;
+    const row = rowsOf(st.catIdx)[idx];
+    const isHeader = row?.kind === "header";
     setOnId(`tfm-set-row-${idx}`, (n) => {
       n.backgroundColor = on ? c.accentBg : undefined;
     });
     setOnId(`tfm-set-rowl-${idx}`, (n) => {
-      n.fg = on ? c.white : c.sidebarFg;
+      n.fg = !on && isHeader ? c.sidebarFgMuted : c.white;
     });
     setOnId(`tfm-set-rowv-${idx}`, (n) => {
-      n.fg = on ? c.white : c.sidebarFgMuted;
+      if (on) {
+        n.fg = c.white;
+        return;
+      }
+      // off: toggle keeps its on/accent cue, everything else mutes
+      if (row?.kind === "toggle") {
+        let isOn = false;
+        try {
+          isOn = row.get();
+        } catch {}
+        n.fg = isOn ? c.accent : c.sidebarFgMuted;
+        return;
+      }
+      n.fg = c.sidebarFgMuted;
+    });
+    for (const dir of [-1, 1]) {
+      setOnId(`tfm-chev-${idx}-${dir}`, (n) => {
+        n.fg = on ? c.white : c.sidebarFgMuted;
+      });
+    }
+  };
+
+  // repaint ONE category's hover/active highlight by id — no rebuild, and it
+  // never switches the active category (hover is visual feedback only)
+  const paintCatAt = (gi: number, on: boolean): void => {
+    const c = menuC;
+    const isActive = gi === st.catIdx;
+    setOnId(`tfm-set-cat-${gi}`, (n) => {
+      n.backgroundColor = on || isActive ? c.accentBg : undefined;
     });
   };
 
@@ -206,46 +318,133 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // panel's own colors and need the full rebuild.
   const afterAdjust = (index: number, row: SettingRow): void => {
     if (row.kind === "action" || row.kind === "keybind" || row.kind === "header") return;
+    // cold-boot-only rows (schema restart flag): say so once per row per menu
+    // open — the footer already badges them persistently, this confirms the
+    // just-committed change specifically
+    if ("restart" in row && row.restart && !restartWarned.has(row.label)) {
+      restartWarned.add(row.label);
+      try {
+        ctx.warn(`${row.label} takes effect after restart`, "restart");
+      } catch {}
+    }
     if (row.repaint) {
+      // a gating master may have hidden rows at/below the cursor (its own
+      // children): park on the nearest still-visible row BEFORE the rebuild
+      // paints highlights, or the cursor strands on a vanished row
+      if (st.menuIdx >= 0) st.menuIdx = clampToVisible(visOf(st.catIdx), st.menuIdx);
       renderMenuContent();
       return;
     }
     const value =
       row.kind === "toggle"
-        ? row.get()
-          ? "on"
-          : "off"
+        ? fitValueText(row.get() ? "on" : "off", SET_TOGGLE_W)
         : row.kind === "stepper"
-          ? row.fmt(row.get())
+          ? fitValueText(row.fmt(row.get()), SET_VAL_W - 1)
           : (() => {
               const i = row.getIdx();
-              return i >= 0 ? (row.names[i] ?? "?") : (row.customLabel?.() ?? "custom");
+              const name = i >= 0 ? (row.names[i] ?? "?") : (row.customLabel?.() ?? "custom");
+              return fitValueText(name, SET_VAL_W - 1);
             })();
     setOnId(`tfm-set-rowv-${index}`, (n) => {
-      n.content = value.length > 12 ? value.slice(0, 12) : value;
-      if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
+      n.content = value;
+      // selected rows keep white values; unselected toggles keep the on/accent cue
+      if (st.pane === "rows" && st.menuIdx === index) n.fg = menuC.white;
+      else if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
     });
   };
 
+  // keybind set outcomes (config-schema): legacy void rows (and throwing
+  // ones) fall through to the old clear-capture path; only real outcomes
+  // steer the capture. An array return (older test fakes assigned the binds)
+  // is not an outcome — "status" in [] is false.
+  const isSwapOffer = (r: unknown): r is Extract<KeybindSetResult, { status: "conflict" }> =>
+    typeof r === "object" && r !== null && (r as { status?: unknown }).status === "conflict";
+  const isSetRejection = (r: unknown): r is Extract<KeybindSetResult, { status: "rejected" }> =>
+    typeof r === "object" && r !== null && (r as { status?: unknown }).status === "rejected";
+
   // called from the keyboard router BEFORE the esc-menu nav branch: while
-  // recording, every key is swallowed. enter/click-away also cancel.
-  const captureKey = (e: any): boolean => {
+  // recording, every key is swallowed. enter/click-away also cancel. A
+  // conflicting key opens an inline swap offer instead of rejecting: enter
+  // steals the bind, esc returns to capture, any other key re-proposes.
+  const captureKey = (e: KeyEventLike): boolean => {
     if (st.capturing === null) return false;
-    if (e.name === "escape" || e.name === "return" || e.name === "tab") {
+    // only an UNMODIFIED escape/return/tab cancels: ctrl+tab / ctrl+shift+tab
+    // are next/prev-tab binds and must be recordable (they were unbindable
+    // through the GUI — every tab chord cancelled capture)
+    const unmodified = !e.ctrl && !e.shift && !e.meta && !e.option;
+    // whether the key below drops an open offer: the unrecordable/invalid
+    // early returns must repaint then, or a stale offer stays on screen
+    let droppedOffer = false;
+    if (st.swapOffer !== null) {
+      if (unmodified && e.name === "tab") {
+        st.capturing = null;
+        st.swapOffer = null;
+        renderMenuContent();
+        return true;
+      }
+      if (unmodified && e.name === "escape") {
+        st.swapOffer = null;
+        renderMenuContent();
+        return true;
+      }
+      // OpenTUI reports Enter as "return" (see the capture comment below) —
+      // the same spelling the cancel branch matches, so both agree
+      if (unmodified && e.name === "return") {
+        const row = rowsOf(st.catIdx)[st.capturing];
+        const offer = st.swapOffer;
+        if (row?.kind === "keybind" && row.swap) {
+          st.swapOffer = null;
+          st.capturing = null;
+          try {
+            row.swap(offer.spec);
+          } catch {}
+          renderMenuContent();
+          return true;
+        }
+        // swap-less row (only rows whose set reports conflicts define swap,
+        // so this is unreachable in prod): keep the offer up rather than a
+        // silent no-commit clear
+        renderMenuContent();
+        return true;
+      }
+      droppedOffer = true;
+      st.swapOffer = null; // re-propose with the key below
+    }
+    if (unmodified && (e.name === "escape" || e.name === "return" || e.name === "tab")) {
       st.capturing = null;
       renderMenuContent();
       return true;
     }
     const spec = keySpecFromEvent(e);
-    if (!spec) return true;
+    if (!spec) {
+      // an unrecordable keypress dropped the offer above — repaint so no
+      // stale "swap?" offer stays on screen (capture stays armed for retry)
+      if (droppedOffer) renderMenuContent();
+      return true;
+    }
     const problem = validateKeybindSpec(spec);
     if (problem) {
       ctx.warn(problem, "invalid keybind");
+      if (droppedOffer) renderMenuContent();
       return true; // stay in capture so the user can retry
     }
     const row = rowsOf(st.catIdx)[st.capturing];
+    let outcome: unknown;
+    try {
+      if (row?.kind === "keybind") outcome = row.set([spec]);
+    } catch {
+      outcome = undefined;
+    }
+    if (isSwapOffer(outcome)) {
+      st.swapOffer = { spec: outcome.spec, ownerLabel: outcome.ownerLabel };
+      renderMenuContent();
+      return true;
+    }
+    if (isSetRejection(outcome)) {
+      renderMenuContent();
+      return true; // already warned — stay in capture so the user can retry
+    }
     st.capturing = null;
-    if (row?.kind === "keybind") row.set([spec]);
     renderMenuContent();
     return true;
   };
@@ -256,13 +455,18 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       return;
     }
     const row = rowsOf(st.catIdx)[rowIdx];
-    if (!row || row.kind === "header") return;
+    if (!row) return;
+    // headers collapse/expand in place (enter toggles; ←/→ handled in adjust)
+    if (row.kind === "header") {
+      toggleSection(sectionKey(headerOf(st.catIdx), row.label));
+      return;
+    }
     if (row.kind === "toggle") {
       try {
         applyAdjust(row, 1);
         afterAdjust(rowIdx, row);
       } catch (err) {
-        ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+        ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`);
       }
       return;
     }
@@ -273,33 +477,45 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (row.kind === "action") {
       // runtime isolation: a throwing plugin row must never break the
       // menu's close path — the menu still closes, the error is logged.
+      // invokeIsolated also catches async run() rejections a bare
+      // try/catch misses.
       if (row.keepOpen) {
-        try {
-          row.run();
-        } catch (err) {
-          ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
-        }
+        invokeIsolated(
+          () => row.run(),
+          (err) => ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`),
+        );
         renderMenuContent();
       } else {
         closeMenu();
-        try {
-          row.run();
-        } catch (err) {
-          ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
-        }
+        invokeIsolated(
+          () => row.run(),
+          (err) => ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`),
+        );
       }
       return;
     }
     try {
       applyAdjust(row, 1);
     } catch (err) {
-      ctx.log?.(`plugin row "${row.label}" threw: ${err instanceof Error ? err.message : err}`);
+      ctx.log?.(`plugin row "${row.label}" threw: ${errMessage(err)}`);
       return;
     }
     afterAdjust(rowIdx, row);
   };
 
+  // toggles the help view: F1 from anywhere (grid, or inside the menu),
+  // esc on the root row, or the Help row itself
+  const toggleHelp = (): void => {
+    if (menuView === "help") closeMenu();
+    else {
+      if (!menuOpen) openMenu();
+      enterView("help");
+    }
+  };
+
   const menuActivate = () => {
+    // the static views are cursorless — enter is a no-op
+    if (isStaticView()) return;
     if (inPanelView()) {
       if (st.pane === "cats") {
         switchCategory(st.catIdx);
@@ -325,8 +541,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     renderMenuContent();
   };
 
-  const setOnId = (id: string, fn: (n: any) => void): void => {
-    const n: any = ctx.byId(id);
+  const setOnId = (id: string, fn: (n: NodeLike) => void): void => {
+    const n = ctx.byId(id);
     if (n) {
       try {
         fn(n);
@@ -334,25 +550,34 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     }
   };
 
-  // A mid-rebuild throw after clearChildren leaves the panel EMPTY — to the
+  // A mid-rebuild throw after destroyChildren leaves the panel EMPTY — to the
   // user the floating UI just "vanishes". Guard the rebuild: log the failure
   // and retry once (deferred, so a transient native alloc hiccup recovers).
   // A failed retry does NOT reschedule — under sustained memory pressure
   // (see the OOM note in AGENTS.md) infinite retries just amplify it.
-  let retryArmed = false;
+  let retryArmed = true;
+  let warnedThisBurst = false;
   const renderMenuContent = () => {
     const c = ctx.colors();
-    const panel: any = ctx.byId("tfm-menu-panel");
+    const panel = ctx.byId("tfm-menu-panel");
     if (!panel) return;
-    ctx.clearChildren(panel);
     try {
+      ctx.destroyChildren(panel);
       buildMenuContent(c, panel, menuView);
       retryArmed = true; // a successful build re-arms the one-shot retry
+      warnedThisBurst = false;
     } catch (err) {
       logRenderFailure(err);
       if (retryArmed) {
         retryArmed = false;
         setTimeout(() => renderMenuContent(), 120);
+      } else if (!warnedThisBurst) {
+        // retry exhausted: the panel sits empty — say so once instead of a
+        // silent blank menu (neutral wording: only the debug log names OOM)
+        warnedThisBurst = true;
+        try {
+          ctx.warn("Menu failed to render — close and try again", "menu");
+        } catch {}
       }
     }
   };
@@ -361,8 +586,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // best-effort native allocator stats (renderer.lib is private — this is
     // diagnostics only); tells a tfm-side leak apart from system OOM
     try {
-      const lib = ctx.renderer().lib;
-      const s = lib?.getAllocatorStats?.();
+      const s = (ctx.renderer() as unknown as NativeStatsReach).lib?.getAllocatorStats?.();
       if (s) {
         ctx.log?.(
           `esc-menu render failed: ${err} | native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`,
@@ -373,10 +597,20 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.log?.(`esc-menu render failed: ${err}`);
   };
 
-  const buildMenuContent = (c: Theme, panel: any, view: "root" | "settings" | "plugins") => {
+  const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins" | "help" | "about") => {
     menuC = c;
     const panelView = view !== "root";
-    const panelW = panelView ? SETTINGS_W : ctx.menuW();
+    // the help view uses its own wide poster width, about its narrow brand
+    // width; settings/plugins fill the terminal the same way
+    // (settingsPanelWidth clamps small terminals)
+    const panelW =
+      view === "help"
+        ? helpPanelWidth(ctx.renderer().terminalWidth)
+        : view === "about"
+          ? aboutPanelWidth(ctx.renderer().terminalWidth)
+          : panelView
+            ? settingsPanelWidth(ctx.renderer().terminalWidth)
+            : ctx.menuW();
     try {
       panel.width = panelW;
     } catch {}
@@ -385,7 +619,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       Box(
         { width: "100%", height: 1, flexDirection: "row", alignItems: "center", paddingLeft: 2, paddingRight: 1 },
         Text({
-          content: view === "plugins" ? "Menu — plugins" : view === "settings" ? "Menu — settings" : "Menu",
+          content:
+            view === "plugins"
+              ? "Menu — plugins"
+              : view === "settings"
+                ? "Menu — settings"
+                : view === "help"
+                  ? "Menu — help"
+                  : view === "about"
+                    ? "Menu — about"
+                    : "Menu",
           fg: c.accent,
         }),
         Box({ flexGrow: 1 }),
@@ -400,15 +643,35 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     );
 
     if (!panelView) {
-      const hoverSelect = (index: number) => () => {
-        if (st.menuIdx !== index) {
-          st.menuIdx = index;
-          renderMenuContent();
-        }
+      // root-row icon specs, by index — the hover repaint flips them in lockstep
+      // with the row bg. A baked raster carries its own bg, so highlighting only
+      // the row left the icon showing a stale sidebarBg square; the settings
+      // categories have always flipped both, this brings the root view in line.
+      const rootSpecs: (IconSpec | undefined)[] = [];
+      const paintRootAt = (index: number, on: boolean): void => {
+        setOnId(`tfm-root-row-${index}`, (n) => {
+          n.backgroundColor = on ? c.accentBg : undefined;
+        });
+        setOnId(`tfm-root-rowl-${index}`, (n) => {
+          n.fg = c.white;
+        });
+        const spec = rootSpecs[index];
+        if (spec) ctx.setIconState(spec, on ? IconStateIdx.Active : IconStateIdx.Rest);
       };
-      const activateRow = (index: number) => (ev: any) => {
+      const hoverSelect = (index: number) => () => {
+        // position truth (pointer) before change truth (highlight): the
+        // keyboard cursor may already sit here, in which case no repaint
+        // runs but the shape must still set
+        ctx.setPointer?.("pointer");
+        if (st.menuIdx === index) return;
+        const prev = st.menuIdx;
+        st.menuIdx = index;
+        if (prev >= 0) paintRootAt(prev, false);
+        paintRootAt(index, true);
+      };
+      const activateRow = (index: number) => (ev?: MouseEvent) => {
         try {
-          ev.stopPropagation?.();
+          ev?.stopPropagation?.();
         } catch {}
         st.menuIdx = index;
         menuActivate();
@@ -419,10 +682,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         hint: string | undefined,
         active: boolean,
         index: number,
-        onClick: (ev?: any) => void,
+        onClick: (ev?: MouseEvent) => void,
       ) =>
         Box(
           {
+            id: `tfm-root-row-${index}`,
             width: "100%",
             height: 1,
             flexDirection: "row",
@@ -432,21 +696,32 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
             backgroundColor: active ? c.accentBg : undefined,
             onMouseDown: onClick,
             onMouseMove: hoverSelect(index),
+            // leaving the row always drops back to default; the next row's
+            // move re-sets (rows have no paired guard on the way out)
+            onMouseOut: () => ctx.setPointer?.("default"),
           },
           ...(icon
             ? [
-                ctx.makeIconSlot(
-                  icon,
-                  [
-                    { fg: c.sidebarFg, bg: active ? c.accentBg : c.sidebarBg },
-                    { fg: c.white, bg: c.accentBg },
-                  ],
-                  1,
-                  active ? 1 : 0,
-                ).el,
+                (() => {
+                  const slot = ctx.makeIconSlot(
+                    icon,
+                    [
+                      { fg: c.white, bg: active ? c.accentBg : c.sidebarBg },
+                      { fg: c.white, bg: c.accentBg },
+                    ],
+                    1,
+                    active ? IconStateIdx.Active : IconStateIdx.Rest,
+                  );
+                  rootSpecs[index] = slot.spec;
+                  return slot.el;
+                })(),
               ]
             : []),
-          Text({ content: icon ? label : ` ${label}`, fg: active ? c.white : c.sidebarFg }),
+          Text({
+            id: `tfm-root-rowl-${index}`,
+            content: icon ? label : ` ${label}`,
+            fg: c.white,
+          }),
           Box({ flexGrow: 1 }),
           ...(hint ? [Text({ content: `${hint} `, fg: c.sidebarFgMuted })] : []),
         );
@@ -454,19 +729,57 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       items.forEach((it, i) => {
         panel.add(rootRow(it.icon, it.label, it.hint, i === st.menuIdx, i, activateRow(i)));
       });
-    } else {
-      renderSettingsPanel(c, panel, st, {
-        groups,
-        visRows: visibleRows,
-        setOnId,
-        makeIconSlot: ctx.makeIconSlot,
-        switchCategory,
-        cancelCapture,
-        rowActivate,
-        afterAdjust,
-        paintRowAt,
-        rebuild: renderMenuContent,
+    } else if (view === "help") {
+      // static cheat sheet (no cursor, no settings rows) in a bounded
+      // scroller — wheel scrolls natively, arrows drive it from moveMenu
+      renderHelpPanel(c, panel, {
+        keybinds: (a) => ctx.keybinds?.(a) ?? [],
+        renderer: ctx.renderer,
+        termH: () => ctx.renderer().terminalHeight,
       });
+    } else if (view === "about") {
+      // drillable brand block (no cursor — rows drive via mouse only)
+      renderAboutPanel(c, panel, {
+        renderer: ctx.renderer,
+        makeIconSlot: ctx.makeIconSlot,
+        onOpenUrl: (url) => ctx.openUrl?.(url),
+        detail: aboutDetail,
+        onOpenDetail: () => {
+          aboutDetail = "credits";
+          renderMenuContent();
+        },
+        onBack: () => {
+          aboutDetail = null;
+          renderMenuContent();
+        },
+        setPointer: ctx.setPointer,
+      });
+    } else {
+      renderSettingsPanel(
+        c,
+        panel,
+        st,
+        {
+          groups,
+          visRows: visibleRows,
+          setOnId,
+          makeIconSlot: ctx.makeIconSlot,
+          setIconState: ctx.setIconState,
+          paintCatAt,
+          switchCategory,
+          cancelCapture,
+          rowActivate,
+          afterAdjust,
+          paintRowAt,
+          rebuild: renderMenuContent,
+          isCollapsed: (key) => st.collapsed.has(key),
+          toggleSection,
+          paintDesc,
+          log: (message) => ctx.log?.(message),
+          setPointer: ctx.setPointer,
+        },
+        panelW,
+      );
     }
 
     // vertical centering is structural (scrim justifyContent:center) — no
@@ -483,7 +796,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const nativeMemTrace = (tag: string): void => {
     if (!ctx.log) return;
     try {
-      const s = ctx.renderer().lib?.getAllocatorStats?.();
+      const s = (ctx.renderer() as unknown as NativeStatsReach).lib?.getAllocatorStats?.();
       if (s)
         ctx.log?.(`${tag} native mem=${(s.totalRequestedBytes / 1048576).toFixed(1)}MB active=${s.activeAllocations}`);
     } catch {}
@@ -493,10 +806,19 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // floats.close("escmenu")
   const rawCloseMenu = () => {
     menuOpen = false;
+    // reset the view or toggleHelp's `menuView === "help"` check sticks after
+    // close and the next F1 takes the close branch (a no-op) instead of
+    // reopening
+    menuView = "root";
     st.capturing = null;
+    st.swapOffer = null;
+    aboutDetail = null;
     ctx.log?.("esc-menu close");
+    // hovered rows have no out (their nodes are gone) — restore here or the
+    // pointer sticks (same stale-until-move rule as the highlight paint)
+    ctx.setPointer?.("default");
     nativeMemTrace("esc-menu close");
-    const scrim: any = ctx.byId("tfm-menu");
+    const scrim = ctx.byId("tfm-menu");
     scrim?.parent?.remove(scrim);
     ctx.setScrim(false);
     // esc-menu open/close churns native allocations (documented leak vector);
@@ -515,41 +837,31 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.pane = "rows";
     st.scrollOff = 0;
     st.capturing = null;
+    st.swapOffer = null;
+    aboutDetail = null;
+    restartWarned.clear();
     ctx.log?.("esc-menu open");
     nativeMemTrace("esc-menu open");
     ctx.cancelBand();
     ctx.setScrim(true);
-    const scrim = Box(
+    const scrim = makeModalScrim(
+      { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {
         id: "tfm-menu",
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: "100%",
-        height: "100%",
-        alignItems: "center",
-        justifyContent: "center",
         zIndex: FLOAT_Z.escmenu,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
-        // mouse-first: first outside click cancels an in-flight capture,
-        // the next one dismisses the menu
-        onMouseDown: () => {
+        panelWidth: ctx.menuW(),
+        // mouse-first: first outside click cancels an in-flight capture, the
+        // next one dismisses the menu
+        onClose: () => {
           if (!cancelCapture()) closeMenu();
         },
-      },
-      Box({
-        id: "tfm-menu-panel",
-        width: ctx.menuW(),
-        ...floatSurface(ctx.uiStyle() as UiStyle, ctx.colors() as Theme, ctx.colors().sidebarBg),
-        paddingTop: 1,
-        paddingBottom: 1,
-        onMouseDown: (ev: any) => {
-          try {
-            ev.stopPropagation?.();
-          } catch {}
+        // empty-panel click (not a row, not the scrim): cancel an in-flight
+        // capture — the scrim handler never sees inside clicks (the panel
+        // stops propagation), so this is the only path for it
+        panelMouseDown: () => {
           if (st.capturing !== null) cancelCapture();
         },
-      }),
+      },
     );
     ctx.renderer().root.add(scrim);
     // rescan the plugins dir on every open (the scan itself never rejects —
@@ -565,11 +877,28 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.floats.close("escmenu");
   };
 
+  // the help view is cursorless but scrollable: arrows move the viewport
+  // (menuIdx stays -1, there is still no cursor), the wheel scrolls natively
+  const scrollHelp = (delta: number): void => {
+    const scroller = ctx.byId("tfm-help-scroll");
+    if (!scroller || scroller.isDestroyed) return;
+    try {
+      scroller.scrollTop = Math.max(0, (scroller.scrollTop ?? 0) + delta);
+    } catch {}
+  };
+
   const moveMenu = (delta: number) => {
+    // the help view is cursorless — ↑/↓ scroll the body instead of a cursor;
+    // the about view fits its panel, so arrows are a plain no-op there
+    if (isHelpView()) {
+      scrollHelp(delta * 3);
+      return;
+    }
+    if (isAboutView()) return;
     if (!inPanelView()) {
       const count = rootMenuItems().length;
-      if (!count) return;
-      st.menuIdx = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
+      if (count === 0) return;
+      st.menuIdx = advanceCursor(st.menuIdx, delta, count);
       renderMenuContent();
       return;
     }
@@ -577,29 +906,31 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       switchCategory(st.catIdx + delta);
       return;
     }
-    const rows = rowsOf(st.catIdx);
-    const count = rows.length;
-    if (!count) return;
-    // idx -1 = no cursor yet: down fills the first row, up the last
-    let i = st.menuIdx < 0 ? (delta >= 0 ? 0 : count - 1) : (st.menuIdx + delta + count) % count;
-    // skip headers; bounded so an all-header group can't spin forever
-    for (let k = 0; rows[i]?.kind === "header" && k < count; k++) i = (i + delta + count) % count;
-    st.menuIdx = i;
-    ensureVisible(st, visibleRows());
+    const flat = visOf(st.catIdx);
+    if (!flat.length) return;
+    // idx -1 = no cursor yet: down fills the first VISIBLE row, up the last.
+    // Headers take the cursor (they collapse/expand); hidden children are
+    // stepped over because the walk stays inside the visible projection.
+    // flat is non-empty (checked above); bind head/tail once so the walk needs
+    // no assertions, and an impossible empty projection simply no-ops
+    const first = flat[0];
+    const last = flat[flat.length - 1];
+    if (first === undefined || last === undefined) return;
+    if (st.menuIdx < 0 || !flat.includes(st.menuIdx)) {
+      st.menuIdx = delta >= 0 ? first : last;
+    } else {
+      const pos = visiblePos(flat, st.menuIdx);
+      st.menuIdx = flat[(pos + delta + flat.length) % flat.length] ?? first;
+    }
+    ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, st.menuIdx));
+    paintDesc(fitDescText(descText(rowsOf(st.catIdx)[st.menuIdx]), settingsPanelWidth(ctx.renderer().terminalWidth)));
     renderMenuContent();
-  };
-
-  // the "back" action row returns to the root view
-  const showRoot = (): void => {
-    menuView = "root";
-    st.menuIdx = -1;
-    st.pane = "rows";
-    st.capturing = null;
   };
 
   return {
     openMenu,
     closeMenu,
+    toggleHelp,
     isOpen: (): boolean => menuOpen,
     moveMenu,
     menuActivate,
@@ -607,6 +938,5 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     adjustSelectedSetting,
     captureKey,
     renderMenuContent,
-    showRoot,
   };
 };

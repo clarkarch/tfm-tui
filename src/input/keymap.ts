@@ -1,32 +1,38 @@
 // --- Keyboard router: ONE keypress entry point with a strict precedence
 // chain — capture > quit/restart > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/
 // props, which keep their keys even above an open pick) > pick > esc-menu >
-// terminal > path-edit > file menu > search > sidebar > grid > actions.
-// Action keys are remappable via config [keys] (see config-schema.ts);
-// modal-internal nav (arrows/enter/esc inside menus) and type-to-search stay
-// structural. The order IS load-bearing — do not reorder; handleKey below is
-// the canonical sequence, this header mirrors it.
+// terminal > path-edit > file menu > search > specifics (histBack/showProps/…)
+// > sidebar > extend > grid > parentDir > type-to-search > actions.
+// ALL dispatchable keys are remappable via config [keys] (see config-schema.ts):
+// the move*/openSelected/extend*/page*/first/last binds drive the grid AND
+// every menu/sidebar/search context (one row moves everywhere). Still
+// structural: esc-close, tab inside menus, and the type-to-search catch-all
+// (gated on the [ui] type-to-search knob — the yazi preset flips it off).
+// The order IS load-bearing — do not reorder; handleKey below is the canonical
+// sequence, this header mirrors it.
 // Every remappable action ALSO lives in the commands() table (same closures)
 // so the pick overlay runs exactly what the keypress would. ---
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { loadSystemPlaces } from "../fs/places";
 import type { KeyAction } from "../config/config-schema";
-import { KEY_SCHEMA, keyMatch, parseKeySpec } from "../config/config-schema";
+import { KEY_SCHEMA } from "../config/config-schema";
+import { type KeyEventLike, keyMatch, parseKeySpec } from "../config/keyspec";
 import type { Command } from "../lib/command";
-import { invokeIsolated } from "../lib/uiutil";
+import { advanceCursor, invokeIsolated } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Selection } from "./selection";
 import { TileVisual } from "./grid-input";
+import type { MaybeNode } from "../lib/node-like";
 
 // Keypress shape the router actually reads. The renderer hands a richer
 // object (scan codes, text, meta); dispatch only touches name + modifiers.
-type KeyPressEvent = {
-  name?: string;
-  shift?: boolean;
-  ctrl?: boolean;
+// Built on KeyEventLike so the same event can be handed to the config
+// matcher and the settings keybind capture without a cast; `control` is
+// kitty's alias for ctrl, and the index signature keeps the rest opaque.
+type KeyPressEvent = KeyEventLike & {
   control?: boolean;
-  [extra: string]: unknown;
+  repeated?: boolean;
 };
 
 // structural subset of index's AppState — the router only touches these
@@ -36,7 +42,7 @@ type KeyState = {
 };
 
 export type KeyRouterCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   state: KeyState;
   // live keybind lookup — reads config.keys so remaps apply without rebuilds
   keybinds(action: KeyAction): string[];
@@ -44,7 +50,15 @@ export type KeyRouterCtx = {
   restart(): void;
   // --- modal layers (precedence order) ---
   conflict: { isOpen(): boolean; closeConflict(policy: "skip"): void };
-  yesNo: { isOpen(): boolean; close(): void };
+  yesNo: { isOpen(): boolean; close(): void; moveFocus(delta: number): void; submit(): void };
+  // [ui] type-to-search knob (live read): false = bare keys never filter.
+  // The yazi preset flips it off (it binds bare j/k/h/l…); startSearch
+  // re-arms it on demand via enableTypeToSearch().
+  typeToSearchEnabled(): boolean;
+  enableTypeToSearch(): void;
+  // active pane's sort cycle (single-key sort for the palette + presets;
+  // yazi's `,` chords have no engine, so this is the refugee path)
+  cycleSort(): void;
   isRenaming(): boolean;
   propsIsOpen(): boolean;
   closeProps(): void;
@@ -65,8 +79,9 @@ export type KeyRouterCtx = {
     menuActivate(): void;
     menuTab(): void;
     openMenu(): void;
+    toggleHelp(): void;
     // keybind capture (settings panel): consume the event while recording
-    captureKey(e: any): boolean;
+    captureKey(e: KeyEventLike): boolean;
   };
   termOwnsKeyboard(): boolean;
   pathEditMode(): boolean;
@@ -110,7 +125,6 @@ export type KeyRouterCtx = {
   prevTab(): void;
   newTab(): void;
   closeTab(): void;
-  switchTab(i: number): void;
   // --- file ops ---
   inTrashView(): boolean;
   confirmDeleteForever(paths: string[]): void;
@@ -153,34 +167,43 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // terminal-hint throttle: the "click the grid to leave" status shows once
   // per terminal focus visit, not on every swallowed keypress
   let termHintShown = false;
+  // ctrl+c is copy, never quit (exitOnCtrlC:false) — hammering it is the
+  // SIGINT habit, so the third consecutive copy key hints at the quit bind
+  // once per streak; any other key resets the streak
+  let copyQuitStreak = 0;
+  let quitHintShown = false;
 
   // does this event match any configured bind for the action?
   const enterAlias = (name: string): string | null =>
     name === "enter" ? "return" : name === "return" ? "enter" : null;
 
+  // one spec vs one event (parse + match + enter/return alias — OpenTUI
+  // reports Enter as "return", kitty/legacy forms vary; accept both
+  // spellings so alt+enter works whatever the parser emits)
+  const matchSpec = (ev: KeyPressEvent, specText: string): boolean => {
+    const spec = parseKeySpec(specText);
+    if (!spec) return false;
+    if (keyMatch(ev, spec)) return true;
+    const alias = enterAlias(spec.name);
+    return !!alias && keyMatch(ev, { ...spec, name: alias });
+  };
+
   const hit = (ev: KeyPressEvent, action: KeyAction): boolean => {
     const specs = ctx.keybinds(action);
     if (!specs?.length) return false;
-    for (const specText of specs) {
-      const spec = parseKeySpec(specText);
-      if (spec && keyMatch(ev, spec)) return true;
-      // OpenTUI reports Enter as "return" (kitty/legacy forms vary) — accept
-      // both spellings in binds so alt+enter works whatever the parser emits
-      const alias = spec && enterAlias(spec.name);
-      if (alias && keyMatch(ev, { ...spec, name: alias })) return true;
-    }
+    for (const specText of specs) if (matchSpec(ev, specText)) return true;
     return false;
   };
 
+  // directional match for menu/sidebar contexts: plain and shift-extend binds
+  // both steer the cursor there (shift+down while sidebar-focused moves sidebar
+  // focus — it must not leak into a grid extend). Grid nav itself stays strict
+  // (move* only; extend has its own branch).
+  const hitDir = (ev: KeyPressEvent, plain: KeyAction, extend: KeyAction): boolean => hit(ev, plain) || hit(ev, extend);
+
   // does this event match any of the plugin's effective binds?
   const hitBinds = (ev: KeyPressEvent, binds: string[]): boolean => {
-    for (const specText of binds) {
-      const spec = parseKeySpec(specText);
-      if (!spec) continue;
-      if (keyMatch(ev, spec)) return true;
-      const alias = enterAlias(spec.name);
-      if (alias && keyMatch(ev, { ...spec, name: alias })) return true;
-    }
+    for (const specText of binds) if (matchSpec(ev, specText)) return true;
     return false;
   };
 
@@ -197,12 +220,13 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   const extendFromAnchor = (next: number): void => {
-    if (selection.selAnchor() === null) {
-      selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-    }
+    // resolve once: the anchor is seeded when unset, then reused for the range
+    // (the original re-read it here and asserted non-null)
+    const anchor = selection.selAnchor() ?? (selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+    selection.setSelAnchor(anchor);
     if (next === selection.focusIdx() || next < 0 || next >= selection.focusKeys().length) return;
-    selection.selectTileAt(next);
-    selection.selectRange(selection.selAnchor()!, next);
+    selection.selectTileAt(next, true);
+    selection.selectRange(anchor, next);
     selection.updateSelectionStatusReal();
     void ctx.renderPreview();
   };
@@ -236,18 +260,22 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       if (ev.name === "escape") ctx.conflict.closeConflict("skip");
       return true;
     }
-    // yes/no confirm: esc = No, everything else swallowed
+    // yes/no confirm: esc = No, arrows move the No/Yes cursor (focus starts
+    // on No so a stray Enter is safe), openSelected activates it
     if (ctx.yesNo.isOpen()) {
       if (ev.name === "escape") ctx.yesNo.close();
+      else if (hitDir(ev, "moveUp", "extendUp") || hitDir(ev, "moveLeft", "extendLeft")) ctx.yesNo.moveFocus(-1);
+      else if (hitDir(ev, "moveDown", "extendDown") || hitDir(ev, "moveRight", "extendRight")) ctx.yesNo.moveFocus(1);
+      else if (hit(ev, "openSelected")) ctx.yesNo.submit();
       return true;
     }
     // inline rename: the focused Input consumes typing; swallow everything
     // else so arrows/shortcuts don't move grid focus mid-edit (esc/enter
     // handled at the source via handleKeyPress / "enter")
     if (ctx.isRenaming()) return true;
-    // floating properties dialog: esc/enter closes, everything else swallowed
+    // floating properties dialog: esc/openSelected closes, else swallowed
     if (ctx.propsIsOpen()) {
-      if (ev.name === "escape" || ev.name === "return") ctx.closeProps();
+      if (ev.name === "escape" || hit(ev, "openSelected")) ctx.closeProps();
       return true;
     }
     return false;
@@ -257,12 +285,13 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (handleOverlayModalKeys(ev)) return true;
     if (ctx.escMenu.isOpen()) {
       if (ev.name === "escape") ctx.escMenu.closeMenu();
-      else if (ev.name === "up") ctx.escMenu.moveMenu(-1);
-      else if (ev.name === "down") ctx.escMenu.moveMenu(1);
-      else if (ev.name === "left") ctx.escMenu.adjustSelectedSetting(-1);
-      else if (ev.name === "right") ctx.escMenu.adjustSelectedSetting(1);
+      else if (hitDir(ev, "moveUp", "extendUp")) ctx.escMenu.moveMenu(-1);
+      else if (hitDir(ev, "moveDown", "extendDown")) ctx.escMenu.moveMenu(1);
+      else if (hitDir(ev, "moveLeft", "extendLeft")) ctx.escMenu.adjustSelectedSetting(-1);
+      else if (hitDir(ev, "moveRight", "extendRight")) ctx.escMenu.adjustSelectedSetting(1);
       else if (ev.name === "tab") ctx.escMenu.menuTab();
-      else if (ev.name === "return") ctx.escMenu.menuActivate();
+      else if (hit(ev, "toggleHelp")) ctx.escMenu.toggleHelp();
+      else if (hit(ev, "openSelected")) ctx.escMenu.menuActivate();
       return true;
     }
     // embedded terminal owns the keyboard while focused — everything below is
@@ -283,49 +312,78 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     return false;
   };
 
-  // File context menu: arrows move, enter activates, esc closes. A parent row
-  // with a submenu opens a flyout on right/enter; while it is open, left/esc
-  // close it and up/down/enter act on the flyout. Returns true when the menu is
-  // open (it swallows all other keys while open).
+  // File context menu: move*/openSelected navigate it (shared with the grid),
+  // esc closes. A parent row's action fires on enter; its flyout opens on
+  // right; while it is open, left/esc close it and up/down/enter act on it.
+  // Returns true when the menu is open (it swallows all other keys while open).
+  const stepFileMenu = (fmenu: NonNullable<ReturnType<KeyRouterCtx["getFileMenuState"]>>, delta: number): void => {
+    const entries = fmenu.entries;
+    const count = entries.length;
+    if (count === 0) return;
+    fmenu.idx = advanceCursor(fmenu.idx, delta, count, entries);
+    fmenu.subIdx = null; // moving to another parent closes the flyout
+    ctx.renderFileMenu();
+  };
+  const activateFileMenu = (fmenu: NonNullable<ReturnType<KeyRouterCtx["getFileMenuState"]>>): void => {
+    const entries = fmenu.entries;
+    if (fmenu.subIdx !== null) {
+      ctx.activateFileSubmenu();
+      return;
+    }
+    if (fmenu.idx < 0) return; // no cursor yet: enter is a no-op
+    // parent rows are directly clickable — enter fires the action, → opens
+    // the flyout for the variants
+    entries[fmenu.idx]?.action();
+  };
   const handleFileMenuKeys = (ev: KeyPressEvent): boolean => {
     const fmenu = ctx.getFileMenuState();
     if (!fmenu) return false;
     const entries = fmenu.entries;
     const inSub = fmenu.subIdx !== null;
-    const count = entries.length;
-    const step = (delta: number) => {
-      if (count === 0) return;
-      // idx -1 = no cursor yet: down fills the first row, up the last
-      let i = fmenu.idx < 0 ? (delta >= 0 ? 0 : count - 1) : (fmenu.idx + delta + count) % count;
-      // skip separators; bounded so an all-separator menu can't spin forever
-      for (let n = 0; entries[i]?.sep && n < count; n++) i = (i + delta + count) % count;
-      fmenu.idx = i;
-      fmenu.subIdx = null; // moving to another parent closes the flyout
-      ctx.renderFileMenu();
-    };
     if (ev.name === "escape") {
       if (inSub) ctx.closeFileSubmenu();
       else ctx.closeFileMenu();
-    } else if (ev.name === "up") {
+    } else if (hitDir(ev, "moveUp", "extendUp")) {
       if (inSub) ctx.moveFileSubmenu(-1);
-      else step(-1);
-    } else if (ev.name === "down") {
+      else stepFileMenu(fmenu, -1);
+    } else if (hitDir(ev, "moveDown", "extendDown")) {
       if (inSub) ctx.moveFileSubmenu(1);
-      else step(1);
-    } else if (ev.name === "right") {
+      else stepFileMenu(fmenu, 1);
+    } else if (hitDir(ev, "moveRight", "extendRight")) {
       if (!inSub && entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
-    } else if (ev.name === "left") {
+    } else if (hitDir(ev, "moveLeft", "extendLeft")) {
       if (inSub) ctx.closeFileSubmenu();
-    } else if (ev.name === "return") {
-      if (inSub) ctx.activateFileSubmenu();
-      else if (entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
-      else entries[fmenu.idx]?.action();
+    } else if (hit(ev, "openSelected")) {
+      activateFileMenu(fmenu);
     }
     return true;
   };
 
   // Type-to-search commit/cancel. Returns true while the search box is open
-  // (enter opens the first match, esc clears).
+  // (openSelected commits the first match, esc clears).
+  const commitSearch = (): void => {
+    // open the first folder match (dirs sort first in the filtered grid);
+    // fall back to opening the first file match. The grid render is DEBOUNCED
+    // 150ms after the first char, so a fast 2nd+ char + Enter can read a stale
+    // pre-debounce listing — only open a match that still satisfies the query.
+    const q = (ctx.searchQuery?.() ?? "").toLowerCase();
+    const matchesQ = (k?: string): boolean => !q || !k || path.basename(k).toLowerCase().includes(q);
+    const firstDir = selection.focusKeys().find((key) => selection.tileRefs.get(key)?.isDir && matchesQ(key));
+    const fallback = selection.focusKeys().find((key) => matchesQ(key));
+    const targetKey = firstDir ?? fallback;
+    const refs = targetKey !== undefined ? selection.tileRefs.get(targetKey) : undefined;
+    if (targetKey && refs) {
+      if (refs.isDir) ctx.navigate(targetKey);
+      else {
+        ctx.openFileDefault(targetKey);
+        ctx.clearSearch();
+        void ctx.renderGrid();
+      }
+    } else {
+      ctx.clearSearch();
+      void ctx.renderGrid();
+    }
+  };
   const handleSearchKeys = (ev: KeyPressEvent): boolean => {
     if (!ctx.searchVisible()) return false;
     if (ev.name === "escape") {
@@ -334,126 +392,114 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       if (had) void ctx.renderGrid();
       return true;
     }
-    // enter commits: open the first folder match (dirs sort first in the
-    // filtered grid); fall back to opening the first file match. The grid
-    // render is DEBOUNCED 150ms after the first char, so a fast 2nd+ char +
-    // Enter can read a stale pre-debounce listing — only open a match that
-    // still satisfies the live query.
-    if (ev.name === "return") {
-      const q = (ctx.searchQuery?.() ?? "").toLowerCase();
-      const matchesQ = (k?: string): boolean => !q || !k || path.basename(k).toLowerCase().includes(q);
-      const firstDir = selection.focusKeys().find((key) => selection.tileRefs.get(key)?.isDir && matchesQ(key));
-      const fallback = selection.focusKeys().find((key) => matchesQ(key));
-      const targetKey = firstDir ?? fallback;
-      const refs = targetKey !== undefined ? selection.tileRefs.get(targetKey) : undefined;
-      if (targetKey && refs) {
-        if (refs.isDir) ctx.navigate(targetKey);
-        else {
-          ctx.openFileDefault(targetKey);
-          ctx.clearSearch();
-          void ctx.renderGrid();
-        }
-      } else {
-        ctx.clearSearch();
-        void ctx.renderGrid();
-      }
-    }
+    if (hit(ev, "openSelected")) commitSearch();
     return true;
   };
 
-  // Shift+arrows extend the selection from the anchor instead of moving it.
-  // Returns true when the event was a shift+arrow (consumed either way).
-  const handleShiftExtend = (ev: KeyPressEvent, ctrl: boolean): boolean => {
-    if (!(ev.shift && !ctrl)) return false;
-    if (ev.name === "up") {
-      if (selection.focusKeys().length) {
-        if (selection.selAnchor() === null)
-          selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-        extendFromAnchor(selection.focusIdx() < 0 ? 0 : selection.focusIdx() - selection.colsAtBuild());
-      }
-      return true;
-    }
-    if (ev.name === "down") {
-      if (selection.focusKeys().length) {
-        if (selection.selAnchor() === null)
-          selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-        extendFromAnchor(selection.focusIdx() < 0 ? 0 : selection.focusIdx() + selection.colsAtBuild());
-      }
-      return true;
-    }
-    if (ev.name === "left") {
-      if (selection.focusKeys().length && selection.focusIdx() > 0) extendFromAnchor(selection.focusIdx() - 1);
-      return true;
-    }
-    if (ev.name === "right") {
-      if (selection.focusKeys().length && selection.focusIdx() < selection.focusKeys().length - 1)
-        extendFromAnchor(selection.focusIdx() + 1);
-      return true;
-    }
+  // Extend binds grow the selection from the anchor instead of moving it
+  // (defaults: shift+arrows). Returns true when the event matched an extend
+  // bind (consumed either way, even on an empty listing).
+  const extendBy = (next: number): void => {
+    if (!selection.focusKeys().length) return;
+    if (selection.selAnchor() === null) selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+    extendFromAnchor(next);
+  };
+  const handleShiftExtend = (ev: KeyPressEvent): boolean => {
+    if (hit(ev, "extendUp") && runAction("extendUp")) return true;
+    if (hit(ev, "extendDown") && runAction("extendDown")) return true;
+    if (hit(ev, "extendLeft") && runAction("extendLeft")) return true;
+    if (hit(ev, "extendRight") && runAction("extendRight")) return true;
     return false;
   };
 
-  // Sidebar keyboard focus (entered via left-arrow at the grid edge).
+  const activateSidebarPlace = (): void => {
+    const rec = ctx.placesHost[placeIdx];
+    if (!rec) return;
+    ctx.closeFileMenu();
+    sidebarActive = false;
+    placeIdx = -1;
+    const target =
+      rec.place.scheme === "recent" ? RECENT_URI : rec.place.scheme === "starred" ? STARRED_URI : rec.place.path;
+    if (target) ctx.navigate(target);
+    else if (rec.place.mountDevice) ctx.mountDevice(rec.place.mountDevice);
+  };
+
+  // Sidebar keyboard focus (entered via moveLeft at the grid edge).
   // Returns true while sidebar focus is active (it swallows all keys).
   const handleSidebarKeys = (ev: KeyPressEvent): boolean => {
     if (!sidebarActive) return false;
-    if (ev.name === "up") setSidebarFocus(placeIdx - 1);
-    else if (ev.name === "down") setSidebarFocus(placeIdx + 1);
-    else if (ev.name === "left" || ev.name === "right") {
+    if (hitDir(ev, "moveUp", "extendUp")) setSidebarFocus(placeIdx - 1);
+    else if (hitDir(ev, "moveDown", "extendDown")) setSidebarFocus(placeIdx + 1);
+    else if (hitDir(ev, "moveLeft", "extendLeft") || hitDir(ev, "moveRight", "extendRight")) {
       leaveSidebarToGrid();
       selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-    } else if (ev.name === "return") {
-      const rec = ctx.placesHost[placeIdx];
-      if (rec) {
-        ctx.closeFileMenu();
-        sidebarActive = false;
-        placeIdx = -1;
-        const target =
-          rec.place.scheme === "recent" ? RECENT_URI : rec.place.scheme === "starred" ? STARRED_URI : rec.place.path;
-        if (target) ctx.navigate(target);
-        else if (rec.place.mountDevice) ctx.mountDevice(rec.place.mountDevice);
-      }
-    }
+    } else if (hit(ev, "openSelected")) activateSidebarPlace();
     return true;
   };
 
-  // Grid arrows/enter. Returns true when the key moved focus or opened a tile.
+  const openFocusedTile = (): void => {
+    if (selection.focusIdx() < 0) return;
+    const key = selection.focusKeys()[selection.focusIdx()];
+    const refs = key !== undefined ? selection.tileRefs.get(key) : undefined;
+    if (key && refs) {
+      if (refs.isDir) ctx.navigate(key);
+      else ctx.openFileDefault(key);
+    }
+  };
+
+  const enterSidebarFromGrid = (): void => {
+    const selRec = ctx.placesHost.findIndex((place) => place.selected);
+    const pressedKey = selection.focusIdx() >= 0 ? selection.focusKeys()[selection.focusIdx()] : undefined;
+    if (pressedKey !== undefined) {
+      const pressedRef = selection.tileRefs.get(pressedKey);
+      if (pressedRef && !pressedRef.selected) selection.setTileVisual(pressedKey, TileVisual.Rest);
+    }
+    sidebarActive = true;
+    setSidebarFocus(selRec >= 0 ? selRec : 0);
+  };
+
+  // Grid nav: move*/openSelected/page*/first/last binds. Returns true when the
+  // key moved focus, opened a tile, or entered the sidebar.
   const handleGridNavKeys = (ev: KeyPressEvent): boolean => {
-    if (ev.name === "up") {
+    if (hit(ev, "moveUp")) {
       selection.moveFocus(0, -1);
       return true;
     }
-    if (ev.name === "down") {
+    if (hit(ev, "moveDown")) {
       selection.moveFocus(0, 1);
       return true;
     }
-    if (ev.name === "left") {
+    if (hit(ev, "moveLeft")) {
       const atLeftEdge = selection.focusIdx() === -1 || selection.focusIdx() % selection.colsAtBuild() === 0;
       if (atLeftEdge || selection.focusKeys().length === 0) {
-        const selRec = ctx.placesHost.findIndex((place) => place.selected);
-        const pressedKey = selection.focusIdx() >= 0 ? selection.focusKeys()[selection.focusIdx()] : undefined;
-        if (pressedKey !== undefined) {
-          const pressedRef = selection.tileRefs.get(pressedKey);
-          if (pressedRef && !pressedRef.selected) selection.setTileVisual(pressedKey, TileVisual.Rest);
-        }
-        sidebarActive = true;
-        setSidebarFocus(selRec >= 0 ? selRec : 0);
+        enterSidebarFromGrid();
         return true;
       }
       selection.moveFocus(-1, 0);
       return true;
     }
-    if (ev.name === "right") {
+    if (hit(ev, "moveRight")) {
       selection.moveFocus(1, 0);
       return true;
     }
-    if (ev.name === "return" && selection.focusIdx() >= 0) {
-      const key = selection.focusKeys()[selection.focusIdx()];
-      const refs = key !== undefined ? selection.tileRefs.get(key) : undefined;
-      if (key && refs) {
-        if (refs.isDir) ctx.navigate(key);
-        else ctx.openFileDefault(key);
-      }
+    if (hit(ev, "openSelected")) {
+      if (selection.focusIdx() >= 0) openFocusedTile();
+      return true;
+    }
+    if (hit(ev, "pageUp")) {
+      selection.pageBy(-1);
+      return true;
+    }
+    if (hit(ev, "pageDown")) {
+      selection.pageBy(1);
+      return true;
+    }
+    if (hit(ev, "firstItem")) {
+      selection.selectTileAt(0);
+      return true;
+    }
+    if (hit(ev, "lastItem")) {
+      selection.selectTileAt(selection.focusKeys().length - 1);
       return true;
     }
     return false;
@@ -465,61 +511,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // behavior. Guarded actions (trash/copy/cut/rename) no-op on empty
   // selection instead of falling through: the chain pre-checks the guard so
   // keypress behavior is unchanged, while palette runs stay safe. ---
-  const doQuit = (): void => {
-    ctx.quit();
-  };
-  const doRestart = (): void => {
-    ctx.restart();
-  };
-  const doHistBack = (): void => {
-    ctx.goBack();
-  };
-  const doHistForward = (): void => {
-    ctx.goFwd();
-  };
   const doShowProps = (): void => {
     const sel = selection.selPaths();
     if (sel.length) ctx.openProperties(sel.map((s) => s.path));
     else if (!ctx.isVirtualCwd()) ctx.openProperties([ctx.state.cwd]);
-  };
-  const doNewFolder = (): void => {
-    ctx.startInlineCreate("folder");
-  };
-  const doNewFile = (): void => {
-    ctx.startInlineCreate("file");
-  };
-  const doPathEdit = (): void => {
-    ctx.enterPathEdit();
-  };
-  const doTogglePreview = (): void => {
-    ctx.togglePreview();
-  };
-  const doOpenTerminal = (): void => {
-    ctx.openTerminal();
-  };
-  const doConnectServer = (): void => {
-    ctx.connectServer();
-  };
-  const doToggleView = (): void => {
-    ctx.toggleViewMode();
-  };
-  const doZoomIn = (): void => {
-    ctx.zoomTiles(1);
-  };
-  const doZoomOut = (): void => {
-    ctx.zoomTiles(-1);
-  };
-  const doToggleDualPane = (): void => {
-    ctx.toggleDualPane();
-  };
-  const doSwitchPane = (): void => {
-    ctx.switchPane();
-  };
-  const doCopyToOtherPane = (): void => {
-    ctx.copyToOtherPane();
-  };
-  const doMoveToOtherPane = (): void => {
-    ctx.moveToOtherPane();
   };
   const doParentDir = (): void => {
     // virtual views have no fs parent (path.resolve would shred the URI)
@@ -530,31 +525,6 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const cwd = path.resolve(ctx.state.cwd);
     const parent = path.dirname(cwd);
     if (parent !== cwd) ctx.navigate(parent);
-  };
-  const doOpenMenu = (): void => {
-    ctx.escMenu.openMenu();
-  };
-  const doToggleHidden = (): void => {
-    ctx.state.showHidden = !ctx.state.showHidden;
-    void ctx.renderGrid();
-  };
-  const doReloadPlaces = (): void => {
-    void loadSystemPlaces().then(() => ctx.renderAll());
-  };
-  const doNewTab = (): void => {
-    ctx.newTab();
-  };
-  const doCloseTab = (): void => {
-    ctx.closeTab();
-  };
-  const doPrevTab = (): void => {
-    ctx.prevTab();
-  };
-  const doNextTab = (): void => {
-    ctx.nextTab();
-  };
-  const doSelectAll = (): void => {
-    selection.selectAll();
   };
   const doTrash = (): void => {
     const selected = selection.selPaths();
@@ -607,53 +577,192 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
     ctx.pasteSmart(ctx.state.cwd);
   };
-  const doRedo = (): void => {
-    ctx.redoLast();
+  // --- context-aware nav dispatchers for the commands() table: the palette
+  // has no key event, so each run replicates the keypress precedence
+  // (file menu > esc menu > sidebar/search > grid) for its direction ---
+  const doMoveUp = (): void => {
+    const fmenu = ctx.getFileMenuState();
+    if (fmenu) {
+      if (fmenu.subIdx !== null) ctx.moveFileSubmenu(-1);
+      else stepFileMenu(fmenu, -1);
+      return;
+    }
+    if (ctx.escMenu.isOpen()) {
+      ctx.escMenu.moveMenu(-1);
+      return;
+    }
+    if (sidebarActive) {
+      setSidebarFocus(placeIdx - 1);
+      return;
+    }
+    selection.moveFocus(0, -1);
   };
-  const doUndo = (): void => {
-    ctx.undoLast();
+  const doMoveDown = (): void => {
+    const fmenu = ctx.getFileMenuState();
+    if (fmenu) {
+      if (fmenu.subIdx !== null) ctx.moveFileSubmenu(1);
+      else stepFileMenu(fmenu, 1);
+      return;
+    }
+    if (ctx.escMenu.isOpen()) {
+      ctx.escMenu.moveMenu(1);
+      return;
+    }
+    if (sidebarActive) {
+      setSidebarFocus(placeIdx + 1);
+      return;
+    }
+    selection.moveFocus(0, 1);
+  };
+  const doMoveLeft = (): void => {
+    const fmenu = ctx.getFileMenuState();
+    if (fmenu) {
+      if (fmenu.subIdx !== null) ctx.closeFileSubmenu();
+      return;
+    }
+    if (ctx.escMenu.isOpen()) {
+      ctx.escMenu.adjustSelectedSetting(-1);
+      return;
+    }
+    if (sidebarActive) {
+      leaveSidebarToGrid();
+      selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+      return;
+    }
+    const atLeftEdge = selection.focusIdx() === -1 || selection.focusIdx() % selection.colsAtBuild() === 0;
+    if (atLeftEdge || selection.focusKeys().length === 0) enterSidebarFromGrid();
+    else selection.moveFocus(-1, 0);
+  };
+  const doMoveRight = (): void => {
+    const fmenu = ctx.getFileMenuState();
+    if (fmenu) {
+      if (fmenu.subIdx === null && fmenu.entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
+      return;
+    }
+    if (ctx.escMenu.isOpen()) {
+      ctx.escMenu.adjustSelectedSetting(1);
+      return;
+    }
+    if (sidebarActive) {
+      leaveSidebarToGrid();
+      selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+      return;
+    }
+    selection.moveFocus(1, 0);
+  };
+  const doOpenSelected = (): void => {
+    const fmenu = ctx.getFileMenuState();
+    if (fmenu) {
+      activateFileMenu(fmenu);
+      return;
+    }
+    if (ctx.escMenu.isOpen()) {
+      ctx.escMenu.menuActivate();
+      return;
+    }
+    if (ctx.searchVisible()) {
+      commitSearch();
+      return;
+    }
+    if (sidebarActive) {
+      activateSidebarPlace();
+      return;
+    }
+    openFocusedTile();
+  };
+  const doExtendUp = (): void => {
+    extendBy(selection.focusIdx() < 0 ? 0 : selection.focusIdx() - selection.colsAtBuild());
+  };
+  const doExtendDown = (): void => {
+    extendBy(selection.focusIdx() < 0 ? 0 : selection.focusIdx() + selection.colsAtBuild());
+  };
+  const doExtendLeft = (): void => {
+    if (selection.focusKeys().length && selection.focusIdx() > 0) extendFromAnchor(selection.focusIdx() - 1);
+  };
+  const doExtendRight = (): void => {
+    if (selection.focusKeys().length && selection.focusIdx() < selection.focusKeys().length - 1)
+      extendFromAnchor(selection.focusIdx() + 1);
   };
 
   const labelOf = (action: KeyAction): string => KEY_SCHEMA.find((r) => r.action === action)?.label ?? action;
 
   // KEY_SCHEMA order (config order) doubles as the palette listing order
   const ACTION_TABLE: Array<{ action: KeyAction; run: () => void }> = [
-    { action: "quit", run: doQuit },
-    { action: "restart", run: doRestart },
-    { action: "openMenu", run: doOpenMenu },
-    { action: "toggleHidden", run: doToggleHidden },
-    { action: "reloadPlaces", run: doReloadPlaces },
-    { action: "newTab", run: doNewTab },
-    { action: "closeTab", run: doCloseTab },
-    { action: "nextTab", run: doNextTab },
-    { action: "prevTab", run: doPrevTab },
-    { action: "selectAll", run: doSelectAll },
+    { action: "quit", run: () => ctx.quit() },
+    { action: "restart", run: () => ctx.restart() },
+    { action: "openMenu", run: () => ctx.escMenu.openMenu() },
+    { action: "toggleHelp", run: () => ctx.escMenu.toggleHelp() },
+    {
+      action: "toggleHidden",
+      run: () => {
+        ctx.state.showHidden = !ctx.state.showHidden;
+        void ctx.renderGrid();
+      },
+    },
+    { action: "reloadPlaces", run: () => void loadSystemPlaces().then(() => ctx.renderAll()) },
+    { action: "newTab", run: () => ctx.newTab() },
+    { action: "closeTab", run: () => ctx.closeTab() },
+    { action: "nextTab", run: () => ctx.nextTab() },
+    { action: "prevTab", run: () => ctx.prevTab() },
+    { action: "selectAll", run: () => selection.selectAll() },
     { action: "trash", run: doTrash },
     { action: "renameOrRestore", run: doRenameOrRestore },
     { action: "copy", run: doCopy },
     { action: "cut", run: doCut },
     { action: "duplicate", run: doDuplicate },
     { action: "paste", run: doPaste },
-    { action: "undo", run: doUndo },
-    { action: "redo", run: doRedo },
+    { action: "undo", run: () => ctx.undoLast() },
+    { action: "redo", run: () => ctx.redoLast() },
     { action: "parentDir", run: doParentDir },
-    { action: "histBack", run: doHistBack },
-    { action: "histForward", run: doHistForward },
+    { action: "histBack", run: () => ctx.goBack() },
+    { action: "histForward", run: () => ctx.goFwd() },
     { action: "showProps", run: doShowProps },
-    { action: "newFolder", run: doNewFolder },
-    { action: "newFile", run: doNewFile },
-    { action: "pathEdit", run: doPathEdit },
-    { action: "togglePreview", run: doTogglePreview },
-    { action: "openTerminal", run: doOpenTerminal },
-    { action: "connectServer", run: doConnectServer },
-    { action: "toggleView", run: doToggleView },
-    { action: "zoomIn", run: doZoomIn },
-    { action: "zoomOut", run: doZoomOut },
-    { action: "toggleDualPane", run: doToggleDualPane },
-    { action: "switchPane", run: doSwitchPane },
-    { action: "copyToOtherPane", run: doCopyToOtherPane },
-    { action: "moveToOtherPane", run: doMoveToOtherPane },
+    { action: "newFolder", run: () => ctx.startInlineCreate("folder") },
+    { action: "newFile", run: () => ctx.startInlineCreate("file") },
+    { action: "pathEdit", run: () => ctx.enterPathEdit() },
+    { action: "togglePreview", run: () => ctx.togglePreview() },
+    { action: "openTerminal", run: () => ctx.openTerminal() },
+    { action: "connectServer", run: () => ctx.connectServer() },
+    { action: "toggleView", run: () => ctx.toggleViewMode() },
+    { action: "zoomIn", run: () => ctx.zoomTiles(1) },
+    { action: "zoomOut", run: () => ctx.zoomTiles(-1) },
+    { action: "toggleDualPane", run: () => ctx.toggleDualPane() },
+    { action: "switchPane", run: () => ctx.switchPane() },
+    { action: "copyToOtherPane", run: () => ctx.copyToOtherPane() },
+    { action: "moveToOtherPane", run: () => ctx.moveToOtherPane() },
+    { action: "moveUp", run: doMoveUp },
+    { action: "moveDown", run: doMoveDown },
+    { action: "moveLeft", run: doMoveLeft },
+    { action: "moveRight", run: doMoveRight },
+    { action: "openSelected", run: doOpenSelected },
+    { action: "extendUp", run: doExtendUp },
+    { action: "extendDown", run: doExtendDown },
+    { action: "extendLeft", run: doExtendLeft },
+    { action: "extendRight", run: doExtendRight },
+    { action: "pageUp", run: () => selection.pageBy(-1) },
+    { action: "pageDown", run: () => selection.pageBy(1) },
+    { action: "firstItem", run: () => selection.selectTileAt(0) },
+    { action: "lastItem", run: () => selection.selectTileAt(selection.focusKeys().length - 1) },
+    { action: "toggleFocused", run: () => selection.toggleFocused() },
+    { action: "invertSelection", run: () => selection.invertSelection() },
+    {
+      action: "startSearch",
+      run: () => {
+        ctx.enableTypeToSearch();
+        ctx.notify("type-to-search on · type to filter, esc clears", "search", "info");
+      },
+    },
+    { action: "cycleSort", run: () => ctx.cycleSort() },
+    { action: "goHome", run: () => ctx.navigate(ctx.home) },
   ];
+
+  // dispatch a table action by name (hit() callers): keybinds and the
+  // palette dispatch through one table — the closures ARE the runs
+  const runAction = (action: KeyAction): boolean => {
+    const found = ACTION_TABLE.find((t) => t.action === action);
+    found?.run();
+    return found !== undefined;
+  };
 
   // fresh titles/hints on every call so remaps apply without rebuilds
   const commands = (): Command[] =>
@@ -669,15 +778,16 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // keybind capture in the settings panel is the ONE state above quit:
     // recording ctrl+q must not quit the app mid-capture
     if (ctx.escMenu.captureKey(ev)) return;
-    if (hit(ev, "quit")) {
-      doQuit();
-      return;
+    // any non-copy key ends the ctrl+c streak (and re-arms the quit hint);
+    // the streak itself only advances at the copy dispatch below, so keys
+    // swallowed by modals/terminal/pick never count toward it
+    if (!hit(ev, "copy")) {
+      copyQuitStreak = 0;
+      quitHintShown = false;
     }
+    if (hit(ev, "quit") && runAction("quit")) return;
     // held restart must not queue overlapping teardown/spawn pairs
-    if (hit(ev, "restart") && ev.repeated !== true) {
-      doRestart();
-      return;
-    }
+    if (hit(ev, "restart") && ev.repeated !== true && runAction("restart")) return;
     // a true modal open above the pick overlay keeps its keys (see
     // handleOverlayModalKeys) — esc must reach a confirm opened over pick.
     if (handleOverlayModalKeys(ev)) return;
@@ -699,83 +809,38 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // handleGridNavKeys consumes bare arrows/return regardless of modifiers,
     // so alt+arrows and alt+enter must dispatch BEFORE it (plain arrows and
     // return are unaffected — they match no bind unless remapped onto one) ---
-    if (hit(ev, "histBack")) {
-      doHistBack();
-      return;
-    }
-    if (hit(ev, "histForward")) {
-      doHistForward();
-      return;
-    }
-    if (hit(ev, "showProps")) {
-      doShowProps();
-      return;
-    }
-    if (hit(ev, "newFolder") && ev.repeated !== true) {
-      doNewFolder();
-      return;
-    }
-    if (hit(ev, "newFile") && ev.repeated !== true) {
-      doNewFile();
-      return;
-    }
-    if (hit(ev, "pathEdit")) {
-      doPathEdit();
-      return;
-    }
-    if (hit(ev, "togglePreview")) {
-      doTogglePreview();
-      return;
-    }
-    if (hit(ev, "openTerminal")) {
-      doOpenTerminal();
-      return;
-    }
-    if (hit(ev, "connectServer")) {
-      doConnectServer();
-      return;
-    }
-    if (hit(ev, "toggleView")) {
-      doToggleView();
-      return;
-    }
-    if (hit(ev, "zoomIn")) {
-      doZoomIn();
-      return;
-    }
-    if (hit(ev, "zoomOut")) {
-      doZoomOut();
-      return;
-    }
-    if (hit(ev, "toggleDualPane") && ev.repeated !== true) {
-      doToggleDualPane();
-      return;
-    }
-    if (hit(ev, "switchPane") && ev.repeated !== true) {
-      doSwitchPane();
-      return;
-    }
-    if (hit(ev, "copyToOtherPane") && ev.repeated !== true) {
-      doCopyToOtherPane();
-      return;
-    }
-    if (hit(ev, "moveToOtherPane") && ev.repeated !== true) {
-      doMoveToOtherPane();
-      return;
-    }
+    if (hit(ev, "histBack") && ev.repeated !== true && runAction("histBack")) return;
+    if (hit(ev, "histForward") && ev.repeated !== true && runAction("histForward")) return;
+    if (hit(ev, "goHome") && runAction("goHome")) return;
+    if (hit(ev, "showProps") && runAction("showProps")) return;
+    if (hit(ev, "newFolder") && ev.repeated !== true && runAction("newFolder")) return;
+    if (hit(ev, "newFile") && ev.repeated !== true && runAction("newFile")) return;
+    if (hit(ev, "pathEdit") && runAction("pathEdit")) return;
+    if (hit(ev, "togglePreview") && ev.repeated !== true && runAction("togglePreview")) return;
+    if (hit(ev, "openTerminal") && runAction("openTerminal")) return;
+    if (hit(ev, "connectServer") && runAction("connectServer")) return;
+    if (hit(ev, "toggleView") && runAction("toggleView")) return;
+    if (hit(ev, "cycleSort") && ev.repeated !== true && runAction("cycleSort")) return;
+    if (hit(ev, "zoomIn") && runAction("zoomIn")) return;
+    if (hit(ev, "zoomOut") && runAction("zoomOut")) return;
+    if (hit(ev, "toggleDualPane") && ev.repeated !== true && runAction("toggleDualPane")) return;
+    if (hit(ev, "switchPane") && ev.repeated !== true && runAction("switchPane")) return;
+    if (hit(ev, "copyToOtherPane") && ev.repeated !== true && runAction("copyToOtherPane")) return;
+    if (hit(ev, "moveToOtherPane") && ev.repeated !== true && runAction("moveToOtherPane")) return;
+    if (hit(ev, "startSearch") && runAction("startSearch")) return;
 
     // --- keyboard navigation: sidebar <-> grid ---
     // sidebar focus swallows ALL keys — it must precede shift-extend or
     // shift+arrows would mutate the grid selection while the sidebar is
     // focused (it returns false when inactive, so grid extend is unchanged)
     if (handleSidebarKeys(ev)) return;
-    if (handleShiftExtend(ev, ctrl)) return;
+    if (handleShiftExtend(ev)) return;
     if (handleGridNavKeys(ev)) return;
-    if (hit(ev, "parentDir")) {
-      doParentDir();
-      return;
-    }
+    if (hit(ev, "parentDir") && runAction("parentDir")) return;
+    // type-to-search catch-all: gated on the [ui] knob (the yazi preset
+    // flips it off — bound bare keys already dispatched above regardless)
     if (
+      ctx.typeToSearchEnabled() &&
       !ctrl &&
       !ev.shift &&
       !ev.meta &&
@@ -788,43 +853,22 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
 
-    if (hit(ev, "openMenu")) {
-      doOpenMenu();
-      return;
-    }
-    if (hit(ev, "toggleHidden")) {
-      doToggleHidden();
-      return;
-    }
-    if (hit(ev, "reloadPlaces")) {
-      doReloadPlaces();
-      return;
-    }
+    if (hit(ev, "openMenu") && runAction("openMenu")) return;
+    if (hit(ev, "toggleHelp") && runAction("toggleHelp")) return;
+    if (hit(ev, "toggleHidden") && ev.repeated !== true && runAction("toggleHidden")) return;
+    if (hit(ev, "reloadPlaces") && ev.repeated !== true && runAction("reloadPlaces")) return;
 
     // --- tabs (kitty needs map no_op for ctrl+tab / ctrl+shift+tab — its
     // default next_tab/previous_tab eat the keys before they reach us) ---
-    if (hit(ev, "newTab")) {
-      doNewTab();
-      return;
-    }
-    if (hit(ev, "closeTab")) {
-      doCloseTab();
-      return;
-    }
-    if (hit(ev, "prevTab")) {
-      doPrevTab();
-      return;
-    }
-    if (hit(ev, "nextTab")) {
-      doNextTab();
-      return;
-    }
+    if (hit(ev, "newTab") && runAction("newTab")) return;
+    if (hit(ev, "closeTab") && runAction("closeTab")) return;
+    if (hit(ev, "prevTab") && runAction("prevTab")) return;
+    if (hit(ev, "nextTab") && runAction("nextTab")) return;
 
     // --- file operations ---
-    if (hit(ev, "selectAll")) {
-      doSelectAll();
-      return;
-    }
+    if (hit(ev, "selectAll") && runAction("selectAll")) return;
+    if (hit(ev, "toggleFocused") && runAction("toggleFocused")) return;
+    if (hit(ev, "invertSelection") && runAction("invertSelection")) return;
     const selected = selection.selPaths();
     // terminal autorepeat (ev.repeated) must never enqueue fs work: holding
     // ctrl+d used to start one real copy per keypress until the native
@@ -832,45 +876,33 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // stay reachable on repeat (idempotent clipboard writes); rename is
     // already guarded by the inline-edit modal swallowing keys.
     const repeated = ev.repeated === true;
-    if (hit(ev, "trash") && selected.length && !repeated) {
-      doTrash();
-      return;
+    if (hit(ev, "trash") && selected.length && !repeated && runAction("trash")) return;
+    if (hit(ev, "renameOrRestore") && selected.length && runAction("renameOrRestore")) return;
+    // third consecutive copy key (with or without a selection — an empty
+    // selection is a silent no-op otherwise) hints at the quit bind once per
+    // streak, for the SIGINT habit
+    const isCopyKey = hit(ev, "copy");
+    if (isCopyKey) {
+      copyQuitStreak++;
+      if (copyQuitStreak >= 3 && !quitHintShown) {
+        quitHintShown = true;
+        const quitBinds = ctx.keybinds("quit").join(" ") || "ctrl+q";
+        ctx.notify(`ctrl+c copies · ${quitBinds} to quit`, "quit", "info");
+      }
     }
-    if (hit(ev, "renameOrRestore") && selected.length) {
-      doRenameOrRestore();
-      return;
-    }
-    if (hit(ev, "copy") && selected.length) {
-      doCopy();
-      return;
-    }
-    if (hit(ev, "cut") && selected.length) {
-      doCut();
-      return;
-    }
-    if (hit(ev, "duplicate") && selected.length && !repeated) {
-      doDuplicate();
-      return;
-    }
-    if (hit(ev, "paste") && !repeated) {
-      doPaste();
-      return;
-    }
-    if (hit(ev, "redo")) {
-      doRedo();
-      return;
-    }
-    if (hit(ev, "undo")) {
-      doUndo();
-      return;
-    }
+    if (isCopyKey && selected.length && runAction("copy")) return;
+    if (hit(ev, "cut") && selected.length && runAction("cut")) return;
+    if (hit(ev, "duplicate") && selected.length && !repeated && runAction("duplicate")) return;
+    if (hit(ev, "paste") && !repeated && runAction("paste")) return;
+    if (hit(ev, "redo") && runAction("redo")) return;
+    if (hit(ev, "undo") && runAction("undo")) return;
 
     // --- plugin commands: LAST, after every core action — "core wins ties"
     // means a plugin defaultBind colliding with ctrl+t/ctrl+c/ctrl+z must NOT
-    // swallow the core op. Structural keys (arrows/enter/esc/type-to-search)
-    // preempt above too: validateKeybindSpec accepts key NAMES like enter/arrows,
-    // so a plugin registering one is shadowed silently — structural keys are
-    // never dispatchable plugin binds.
+    // swallow the core op. Nav keys (move*/openSelected) and structural keys
+    // (esc-close/tab/type-to-search) preempt above too: validateKeybindSpec
+    // accepts key NAMES like enter/arrows, so a plugin registering one is
+    // shadowed silently by the core bind — remap the core bind to free the key.
     if (ctx.pluginCommands) {
       try {
         for (const cmd of ctx.pluginCommands()) {

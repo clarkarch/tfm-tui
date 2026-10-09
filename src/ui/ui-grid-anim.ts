@@ -12,14 +12,15 @@
 //
 // Live knobs ([ui] file-animation-*): the style is DERIVED from
 // file-animation (master) + slide/stagger toggles (fileAnimStyleFrom); the
-// curves read easing, slide distance/direction and stagger spread live at play
+// curves read easing, travel/direction and spread live at play
 
-import { createTimeline, engine, type JSAnimation } from "@opentui/core";
-import type { HoverLiftOpts, Theme, UiStyle } from "../config/config-schema";
+import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
+import type { HoverLiftOpts, Theme, TransparentBgMode, UiStyle } from "../config/config-schema";
 import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
 import { tileSurface } from "./style";
-import { IconStateIdx } from "./ui-slots";
+import { IconStateIdx, type IconSpec } from "./ui-slots";
+import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slide";
 export type EaseKey = "linear" | "ease-out" | "ease-in-out";
@@ -36,7 +37,8 @@ const SLIDE_MAX = 28;
 // stagger-slide): one native push per tile per frame. See play().
 export const MAX_PER_NODE_ANIM = 1000;
 
-const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+import { clamp01 } from "../lib/uiutil";
+
 const outQuad = (p: number): number => p * (2 - p);
 const smoothstep = (p: number): number => p * p * (3 - 2 * p);
 
@@ -186,8 +188,8 @@ type FileAnimOpts = {
 };
 
 type FileAnimCtx = {
-  renderer: any;
-  byId(id: string): any;
+  renderer: CliRenderer;
+  byId(id: string): MaybeNode;
   opts(): FileAnimOpts;
 };
 
@@ -195,13 +197,13 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   const holder = { p: 0 };
-  let nodes: any[] = [];
+  let nodes: NodeLike[] = [];
   let cfg: FileAnimCfg = {};
   let style: FileAnimStyle = "fade";
   // full file count when `nodes` is a viewport-capped subset (0 = use nodes.length)
   let total = 0;
 
-  const write = (node: any, f: { opacity: number; dx: number; dy: number }): void => {
+  const write = (node: NodeLike, f: { opacity: number; dx: number; dy: number }): void => {
     try {
       node.opacity = Number.isFinite(f.opacity) ? f.opacity : 1;
       // renderable screen coords must be whole cells: a fractional translate
@@ -284,8 +286,9 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       // row-granularity knob is on: same cascade look, cols-times fewer nodes
       // A reveal play is the exception: container moves are wrong per notch,
       // and plain "slide" maps to the edge-following stagger-slide curve.
-      const reveal = !!target?.enterFrom;
-      const rm = reveal ? revealStyleMap(o.style, o.dir, target!.enterFrom!) : { style: o.style, dir: o.dir };
+      const enterFrom = target?.enterFrom ?? null;
+      const reveal = enterFrom !== null;
+      const rm = reveal ? revealStyleMap(o.style, o.dir, enterFrom) : { style: o.style, dir: o.dir };
       const useRows =
         (target?.rows?.length ?? 0) > 0 &&
         o.rowsGranularity &&
@@ -296,7 +299,9 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       // (a row at opacity 0 would hide per-file children regardless — the
       // tiles self-stage via play's frame-0 pass, same as the delay-0 path).
       let container = !reveal && (rm.style === "slide" || (rm.style === "fade" && o.containerFade));
-      let ids = container && target?.inner ? [target.inner] : useRows ? target.rows! : (target?.tiles ?? []);
+      // useRows already implies rows is non-empty (see useRows above), so the
+      // empty fallback is unreachable-but-total rather than an assertion
+      let ids = container && target?.inner ? [target.inner] : useRows ? (target?.rows ?? []) : (target?.tiles ?? []);
       if (rm.style === "off" || !(o.ms > 0) || ids.length === 0) {
         stop();
         return null;
@@ -320,7 +325,8 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
           return null;
         }
       }
-      const resolved = ids.map((id) => ctx.byId(id)).filter(Boolean);
+      // only resolvable ids: an unresolved one has nothing to animate
+      const resolved = ids.map((id) => ctx.byId(id)).filter((n): n is NodeLike => !!n);
       if (resolved.length === 0) {
         stop();
         return null;
@@ -368,8 +374,13 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     }
   };
 
+  // A renderer without a frame loop (unit-test fakes) must never reach
+  // engine.attach: attach overwrites the singleton's renderer BEFORE calling
+  // setFrameCallback, so a fake wedges the shared engine — every later
+  // attach (including other test files in the same process) throws out of
+  // detach and no timeline ever advances again.
   try {
-    engine.attach(ctx.renderer);
+    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
   } catch {}
 
   return { play, stop };
@@ -396,9 +407,10 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
 // rebuilds.
 
 // pure: the rest-state tile background per ui-style, sourced from the SAME
-// surface seam setTileVisual paints through
-export const restTileBg = (style: UiStyle, colors: Theme): string =>
-  tileSurface(style, colors, "rest").backgroundColor ?? "transparent";
+// surface seam setTileVisual paints through (force included — a mouse-out
+// under force must release to transparent, not to the theme fill)
+export const restTileBg = (style: UiStyle, colors: Theme, transparentBg?: TransparentBgMode): string =>
+  tileSurface(style, colors, "rest", transparentBg).backgroundColor ?? "transparent";
 
 // pure: whole-cell hover offset for a direction — always exactly one cell,
 // the terminal minimum (fractional offsets crash image draw: "y must be an
@@ -419,22 +431,25 @@ export const hoverLiftDelta = (direction: string): { dx: number; dy: number } =>
 };
 
 type TileHoverCtx = {
-  byId(id: string): any;
+  byId(id: string): MaybeNode;
   tileRefs(): Map<string, SelTileRef>;
   colors(): Theme;
   uiStyle(): UiStyle;
-  setIconState(spec: any, idx: number): void;
+  setIconState(spec: IconSpec | undefined, idx: number): void;
   // clipboard cut-dim resolution (mirrors selection.setTileVisual)
   isCutKey?(key: string): boolean;
   hoverLiftOpts(): HoverLiftOpts;
+  // transparent-bg force: rest repaints release to transparent. Optional so
+  // test fakes keep working.
+  transparentForce?(): boolean;
 };
 
 type HoverCur = {
   key: string;
   refs: SelTileRef;
-  node: any;
-  slot: any;
-  label: any;
+  node: MaybeNode;
+  slot: MaybeNode;
+  label: MaybeNode;
 };
 
 export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
@@ -449,7 +464,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
   const restLabelFg = (refs: SelTileRef, key: string): string =>
     !refs.selected && ctx.isCutKey?.(key) === true ? ctx.colors().sidebarFgMuted : refs.baseFg;
 
-  const writeBg = (node: any, hex: string): void => {
+  const writeBg = (node: NodeLike, hex: string): void => {
     try {
       node.backgroundColor = hex === "transparent" ? "transparent" : hex;
     } catch {}
@@ -457,7 +472,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
 
   // A tile copied from a previous build may have been destroyed by a grid
   // rebuild, so only repaint the node refs when byId still resolves to them.
-  const ownedNode = (cur: HoverCur | null): any => {
+  const ownedNode = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       const node = ctx.byId(cur.refs.tileId);
@@ -466,7 +481,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       return null;
     }
   };
-  const ownedSlot = (cur: HoverCur | null): any => {
+  const ownedSlot = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       return cur.refs.iconSlotId ? ctx.byId(cur.refs.iconSlotId) : null;
@@ -474,7 +489,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       return null;
     }
   };
-  const ownedLabel = (cur: HoverCur | null): any => {
+  const ownedLabel = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
     try {
       return cur.refs.labelId ? ctx.byId(cur.refs.labelId) : null;
@@ -501,6 +516,9 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     } catch {}
   };
 
+  // transparent-bg force as a surface-seam value (absent = today's behavior)
+  const tForce = (): TransparentBgMode | undefined => (ctx.transparentForce?.() ? "force" : undefined);
+
   // repaint `cur` to its resting look: cut-dim icon + label when the tile is
   // on the clipboard (unselected), plain rest otherwise, plus the rest bg and a
   // released lift. Skips a selected tile entirely — selection owns its visuals.
@@ -511,9 +529,9 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       if (!node) return;
       if (!cur.refs.selected) {
         ctx.setIconState(cur.refs.iconSpec, restIconIdx(cur.refs, cur.key));
-        const lab: any = ctx.byId(cur.refs.labelId);
+        const lab = ctx.byId(cur.refs.labelId);
         if (lab) lab.fg = restLabelFg(cur.refs, cur.key);
-        writeBg(node, restTileBg(ctx.uiStyle(), ctx.colors()));
+        writeBg(node, restTileBg(ctx.uiStyle(), ctx.colors(), tForce()));
       }
     } catch {}
     dropLift(cur);
@@ -537,13 +555,13 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
         }
         if (refs.selected) return; // selection owns the icon/bg visuals
         const offColors = ctx.colors();
-        const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors);
+        const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors, tForce());
         try {
           ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
-          if (!hovered) {
-            const lab: any = ctx.byId(refs.labelId);
-            if (lab) lab.fg = restLabelFg(refs, key);
-          }
+          // hover-in lifts the label to white (readable on the hover fill);
+          // hover-out restores the rest fg — same contract as setTileVisual
+          const lab = ctx.byId(refs.labelId);
+          if (lab) lab.fg = hovered ? offColors.white : restLabelFg(refs, key);
           if (slot) {
             slot.translateX = 0;
             slot.translateY = 0;
@@ -581,15 +599,13 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       }
 
       const colors = ctx.colors();
-      const toHex = hovered ? colors.hoverBg : restTileBg(ctx.uiStyle(), colors);
+      const toHex = hovered ? colors.hoverBg : restTileBg(ctx.uiStyle(), colors, tForce());
       // icon raster + label flip instantly (hover-in never dims — cut only
       // applies at Rest, exactly like setTileVisual)
       try {
         ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
-        if (!hovered) {
-          const lab: any = ctx.byId(refs.labelId);
-          if (lab) lab.fg = restLabelFg(refs, key);
-        }
+        const lab = ctx.byId(refs.labelId);
+        if (lab) lab.fg = hovered ? colors.white : restLabelFg(refs, key);
       } catch {}
       writeBg(node, toHex);
 

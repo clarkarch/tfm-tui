@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box, CodeRenderable, TextRenderable } from "@opentui/core";
+import { Box, type CliRenderer, CodeRenderable, LineNumberRenderable, MarkdownRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
+import type { MaybeNode } from "../lib/node-like";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defaultConfig, type Theme } from "../config/config";
+import type { WrapMode } from "../config/config-schema";
 import { makePreview } from "./ui-preview";
 import type { Scheduler } from "../lib/uiutil";
 
@@ -53,8 +55,8 @@ const COLORS: any = { sidebarFg: "#aaa", sidebarFgMuted: "#666", divider: "#333"
 
 const mkPreview = (opts: { visible: boolean; clock: ReturnType<typeof mkClock>; pane: ReturnType<typeof mkPane> }) =>
   makePreview({
-    renderer: null,
-    byId: () => opts.pane.node,
+    renderer: null as unknown as CliRenderer,
+    byId: () => opts.pane.node as unknown as MaybeNode,
     colors: () => COLORS,
     uiStyle: () => "solid",
     previewEnabled: () => true,
@@ -131,7 +133,17 @@ const settleUntil = async (t: TestRendererSetup, cond: () => boolean): Promise<b
 };
 
 let paneSeq = 0;
-const mkLivePreview = (file: string) => {
+// recursive descendant walk: bodies nest inside gutter (and clip) wrappers,
+// so direct-children filters would miss them after a structural change
+const walkKids = (node: any): any[] => {
+  const out: any[] = [];
+  for (const k of node.getChildren?.() ?? []) {
+    out.push(k);
+    out.push(...walkKids(k));
+  }
+  return out;
+};
+const mkLivePreview = (file: string, wrap: WrapMode = "none") => {
   const live: Theme = { ...defaultConfig.theme };
   const clock = mkClock();
   const id = `tfm-preview-${paneSeq++}`;
@@ -154,13 +166,12 @@ const mkLivePreview = (file: string) => {
     nextIconId: () => "slot",
     fallbackGlyphFor: () => "?",
     sched: clock.sched,
+    wrapMode: () => wrap,
   });
   const realPane = () => t.renderer.root.findDescendantById(id) as any;
-  const codeNodes = () =>
-    realPane()
-      .getChildren()
-      .filter((c: any) => c instanceof CodeRenderable);
-  return { live, clock, p, codeNodes, realPane };
+  // bodies nest inside gutter/clip wrappers — walk the whole subtree
+  const codeNodes = () => walkKids(realPane()).filter((c: any) => c instanceof CodeRenderable);
+  return { live, clock, p, codeNodes, realPane, paneId: id };
 };
 
 describe("preview theme awareness", () => {
@@ -194,36 +205,337 @@ describe("preview theme awareness", () => {
     expect((codeNodes()[0] as any).baseHighlight).toBe("default");
   });
 
-  test("a no-filetype text file renders as theme-colored Text, not an unstyled Code node", async () => {
+  test("a no-filetype text file renders as a theme-colored Code node, not a bare Text node", async () => {
     const file = path.join(tmpDir, "c.txt");
     writeFileSync(file, "hello preview\n");
-    const { live, clock, p, codeNodes, realPane } = mkLivePreview(file);
+    const { live, clock, p, codeNodes } = mkLivePreview(file);
     Object.assign(live, { sidebarFg: "#aabbcc" });
     p.renderPreview();
     clock.flush();
     // settle ON the body node itself: the header Textes paint synchronously,
-    // the file content only after the async readFile resolves.
-    const textOf = (c: any) => (c.content?.chunks ?? c.chunks ?? []).map((ch: any) => ch.text).join("");
-    const findBody = () =>
-      realPane()
-        .getChildren()
-        .find((c: any) => c instanceof TextRenderable && textOf(c).includes("hello preview"));
-    expect(await settleUntil(t, () => !!findBody())).toBe(true);
-    expect(codeNodes().length).toBe(0);
-    const body = findBody() as any;
-    expect([...body.fg.toInts()]).toEqual([0xaa, 0xbb, 0xcc, 0xff]); // live sidebarFg
+    // the file content only after the async readFile resolves. The body
+    // nests inside the gutter — codeNodes() walks the whole subtree.
+    const bodyOf = () => codeNodes().find((c: any) => String(c.content).includes("hello preview"));
+    expect(await settleUntil(t, () => !!bodyOf())).toBe(true);
+    const body = bodyOf() as any;
+    const hexInts = (h: string): [number, number, number, number] => [
+      Number.parseInt(h.slice(1, 3), 16),
+      Number.parseInt(h.slice(3, 5), 16),
+      Number.parseInt(h.slice(5, 7), 16),
+      255,
+    ];
+    expect([...body.fg.toInts()]).toEqual(hexInts(live.white)); // panel text role (white)
 
     // re-preview of the same unchanged file must REUSE the cached node
     // (no fresh native TextBuffer per selection) ...
     p.renderPreview();
     clock.flush();
-    expect(await settleUntil(t, () => findBody() === body)).toBe(true);
-    // ... and a theme flip must evict it too (sig carries sidebarFg)
-    Object.assign(live, { sidebarFg: "#112233" });
+    expect(await settleUntil(t, () => bodyOf() === body)).toBe(true);
+    // ... and a theme flip must evict it too (sig carries white + sidebarFg)
+    Object.assign(live, { white: "#112233" });
     p.renderPreview();
     clock.flush();
-    expect(await settleUntil(t, () => !!findBody() && findBody() !== body)).toBe(true);
-    expect([...(findBody() as any).fg.toInts()]).toEqual([0x11, 0x22, 0x33, 0xff]);
+    expect(await settleUntil(t, () => !!bodyOf() && bodyOf() !== body)).toBe(true);
+    expect([...(bodyOf() as any).fg.toInts()]).toEqual([0x11, 0x22, 0x33, 0xff]);
     expect(body.isDestroyed).toBe(true);
+  });
+});
+
+// chmod-based permission tests never fail as uid 0 (root bypasses
+// file perms), so the whole block is skipped there with a reason
+const describeNonRoot = process.getuid?.() === 0 ? describe.skip : describe;
+describeNonRoot("sudo preview", () => {
+  test("unreadable file renders via sudoCat without prompting", async () => {
+    const { chmodSync } = await import("node:fs");
+    const file = path.join(tmpDir, "root-only.txt");
+    writeFileSync(file, "secret-bytes");
+    chmodSync(file, 0o000);
+    try {
+      const clock = mkClock();
+      const id = `tfm-preview-${paneSeq++}`;
+      const pane = Box({ id, width: 40, height: 20 });
+      t.renderer.root.add(pane);
+      const seen: string[] = [];
+      const p = makePreview({
+        renderer: t.renderer,
+        byId: () => t.renderer.root.findDescendantById(id),
+        colors: () => ({ ...defaultConfig.theme }) as Theme,
+        uiStyle: () => "solid",
+        previewEnabled: () => true,
+        previewWidth: () => 40,
+        termH: () => 24,
+        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+        focusKey: () => file,
+        tileRefs: new Map(),
+        pushThumbJob: () => {},
+        drainThumbs: () => {},
+        drainIconQueue: () => {},
+        nextIconId: () => "slot",
+        fallbackGlyphFor: () => "?",
+        sched: clock.sched,
+        sudoCat: async (f) => {
+          seen.push(f);
+          return "secret-bytes";
+        },
+      });
+      p.renderPreview();
+      clock.flush();
+      const ok = await settleUntil(
+        t,
+        () =>
+          walkKids(t.renderer.root.findDescendantById(id)).filter(
+            (c: any) => c instanceof CodeRenderable && String(c.content).includes("secret-bytes"),
+          ).length > 0,
+      );
+      expect(seen).toEqual([file]);
+      expect(ok).toBe(true);
+    } finally {
+      chmodSync(file, 0o644);
+    }
+  });
+});
+
+// --- rich preview: markdown renders through MarkdownRenderable (headings,
+// lists, links — not a monochrome code dump), every text body (code or not)
+// rides inside a LineNumberRenderable gutter, and code
+// bodies linkify bare URLs via
+// detectLinks (OSC-8, terminal-native ctrl+click). ---
+const mdNodes = (id: string) =>
+  walkKids(t.renderer.root.findDescendantById(id)).filter((c: any) => c instanceof MarkdownRenderable);
+const gutterNodes = (id: string) =>
+  walkKids(t.renderer.root.findDescendantById(id)).filter((c: any) => c instanceof LineNumberRenderable);
+
+describe("preview rich rendering", () => {
+  test("a .md file mounts MarkdownRenderable, not CodeRenderable", async () => {
+    const file = path.join(tmpDir, "doc.md");
+    writeFileSync(file, "# Hello\n\n- one\n- two\n");
+    const clock = mkClock();
+    const id = `tfm-preview-${paneSeq++}`;
+    const pane = Box({ id, width: 40, height: 20 });
+    t.renderer.root.add(pane);
+    const p = makePreview({
+      renderer: t.renderer,
+      byId: () => t.renderer.root.findDescendantById(id),
+      colors: () => ({ ...defaultConfig.theme }) as Theme,
+      uiStyle: () => "solid",
+      previewEnabled: () => true,
+      previewWidth: () => 40,
+      termH: () => 24,
+      cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+      focusKey: () => file,
+      tileRefs: new Map(),
+      pushThumbJob: () => {},
+      drainThumbs: () => {},
+      drainIconQueue: () => {},
+      nextIconId: () => "slot",
+      fallbackGlyphFor: () => "?",
+      sched: clock.sched,
+    });
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => mdNodes(id).length === 1)).toBe(true);
+    const kids = (t.renderer.root.findDescendantById(id) as any).getChildren();
+    expect(kids.filter((c: any) => c instanceof CodeRenderable).length).toBe(0);
+    // the heading text survives the markdown render (conceal hides the `#`)
+    expect(String((mdNodes(id)[0] as any).content ?? "")).toContain("Hello");
+  });
+
+  test("a code file body rides inside a LineNumberRenderable gutter", async () => {
+    const file = path.join(tmpDir, "g.js");
+    writeFileSync(file, "const a = 1;\nconst b = 2;\n");
+    const { clock, p, paneId } = mkLivePreview(file);
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => gutterNodes(paneId).length === 1)).toBe(true);
+    // the gutter wraps the real code body (not an empty shell)
+    const textOf = (c: any) => {
+      if (typeof c.content === "string") return c.content;
+      const ch = c.content?.chunks ?? c.chunks;
+      return Array.isArray(ch) ? ch.map((x: any) => x.text).join("") : "";
+    };
+    const body = (gutterNodes(paneId)[0] as any).getChildren().find((c: any) => c instanceof CodeRenderable);
+    expect(body).toBeTruthy();
+    expect(textOf(body)).toContain("const a = 1;");
+  });
+
+  test("a code body carries the linkify onChunks hook (bare URLs become OSC-8)", async () => {
+    const file = path.join(tmpDir, "u.js");
+    writeFileSync(file, "// see https://example.com/docs\nconst z = 9;\n");
+    const { clock, p, realPane } = mkLivePreview(file);
+    p.renderPreview();
+    clock.flush();
+    const ok = await settleUntil(
+      t,
+      () =>
+        walkKids(realPane()).filter((c: any) => c instanceof CodeRenderable && typeof c.onChunks === "function")
+          .length > 0,
+    );
+    expect(ok).toBe(true);
+  });
+
+  test("wrap mode drives code bodies (char wraps, none clips)", async () => {
+    const file = path.join(tmpDir, "w.js");
+    writeFileSync(file, "const wrap = true;\n");
+    const on = mkLivePreview(file, "char");
+    on.p.renderPreview();
+    on.clock.flush();
+    expect(await settleUntil(t, () => gutterNodes(on.paneId).length === 1)).toBe(true);
+    const onBody = (gutterNodes(on.paneId)[0] as any).getChildren().find((c: any) => c instanceof CodeRenderable);
+    expect((onBody as any).wrapMode).toBe("char");
+
+    const off = mkLivePreview(file, "none");
+    off.p.renderPreview();
+    off.clock.flush();
+    expect(await settleUntil(t, () => gutterNodes(off.paneId).length === 1)).toBe(true);
+    const offBody = (gutterNodes(off.paneId)[0] as any).getChildren().find((c: any) => c instanceof CodeRenderable);
+    // off clips (none), it must NOT fall back to word: word mode still
+    // hard-slices spaceless code runs by character (consumePendingWordPrefix)
+    expect((offBody as any).wrapMode).toBe("none");
+  });
+
+  test("a wrap toggle rebuilds the cached node instead of serving stale wrap", async () => {
+    const file = path.join(tmpDir, "wt.js");
+    writeFileSync(file, "const t = 1;\n");
+    const first = mkLivePreview(file, "char");
+    first.p.renderPreview();
+    first.clock.flush();
+    expect(await settleUntil(t, () => gutterNodes(first.paneId).length === 1)).toBe(true);
+    const firstNode = gutterNodes(first.paneId)[0];
+    // same file re-previewed with the toggle flipped: key/mtime/size match,
+    // so only the wrap key can force the rebuild
+    const flipClock = mkClock();
+    const flip = makePreview({
+      renderer: t.renderer,
+      byId: () => t.renderer.root.findDescendantById(first.paneId),
+      colors: () => ({ ...defaultConfig.theme }) as Theme,
+      uiStyle: () => "solid",
+      previewEnabled: () => true,
+      previewWidth: () => 40,
+      termH: () => 24,
+      cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+      focusKey: () => file,
+      tileRefs: new Map(),
+      pushThumbJob: () => {},
+      drainThumbs: () => {},
+      drainIconQueue: () => {},
+      nextIconId: () => "slot",
+      fallbackGlyphFor: () => "?",
+      sched: flipClock.sched,
+      wrapMode: () => "none" as WrapMode,
+    });
+    flip.renderPreview();
+    flipClock.flush();
+    expect(
+      await settleUntil(t, () => gutterNodes(first.paneId).length === 1 && gutterNodes(first.paneId)[0] !== firstNode),
+    ).toBe(true);
+  });
+
+  test("none clips wide lines without spill and the body scrolls to deep lines", async () => {
+    // isolated renderer: the shared one accumulates 20-row panes and pushes
+    // later panes off its 30-row viewport, so frame asserts would be
+    // meaningless there.
+    const solo = await createTestRenderer({ width: 60, height: 20 });
+    try {
+      const file = path.join(tmpDir, "tallwide.js");
+      const lines = [`${"Q".repeat(60)}`, ...Array.from({ length: 59 }, (_, i) => `const w${i}marker = ${i};`)];
+      writeFileSync(file, `${lines.join("\n")}\n`);
+      const clock = mkClock();
+      const id = "tfm-preview-solo";
+      solo.renderer.root.add(Box({ id, width: 40, height: 18 }));
+      const p = makePreview({
+        renderer: solo.renderer,
+        byId: () => solo.renderer.root.findDescendantById(id),
+        colors: () => ({ ...defaultConfig.theme }) as Theme,
+        uiStyle: () => "solid",
+        previewEnabled: () => true,
+        previewWidth: () => 40,
+        termH: () => 18,
+        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+        focusKey: () => file,
+        tileRefs: new Map(),
+        pushThumbJob: () => {},
+        drainThumbs: () => {},
+        drainIconQueue: () => {},
+        nextIconId: () => "slot",
+        fallbackGlyphFor: () => "?",
+        sched: clock.sched,
+        wrapMode: () => "none" as WrapMode,
+      });
+      p.renderPreview();
+      clock.flush();
+      const settled = async (): Promise<boolean> => {
+        const deadline = Date.now() + 3000;
+        const has = () =>
+          walkKids(solo.renderer.root.findDescendantById(id)).filter((c: any) => c instanceof LineNumberRenderable)
+            .length === 1;
+        while (!has() && Date.now() < deadline) {
+          await solo.renderOnce();
+          await Bun.sleep(10);
+        }
+        return has();
+      };
+      expect(await settled()).toBe(true);
+      await solo.renderOnce();
+      // the 60-Q line is cut at the body width: no visual row carries the
+      // 26-Q continuation a wrap would paint
+      const frame0 = await solo.captureCharFrame();
+      expect(/Q{30,}/.test(frame0)).toBe(true); // head visible
+      expect(/Q{35,}/.test(frame0)).toBe(false); // clipped, not wrapped
+      expect(frame0.includes("w40marker")).toBe(false); // deep lines below the fold
+      // exactly one scrollbox per pane; scrolling it reveals deep lines
+      const scrollers = walkKids(solo.renderer.root.findDescendantById(id)).filter(
+        (c: any) => typeof c.scrollTo === "function",
+      );
+      expect(scrollers.length).toBe(1);
+      const sc = scrollers[0] as any;
+      sc.scrollTo({ y: 30 });
+      await solo.renderOnce();
+      expect(sc.scrollTop).toBe(30);
+      // w-markers are unique to this file, so the frame assert is exact
+      expect((await solo.captureCharFrame()).includes("w40marker")).toBe(true);
+    } finally {
+      solo.renderer.destroy();
+    }
+  });
+
+  test("markdown fences follow the mode, prose and tables stay word", async () => {
+    // Fence blocks carry their info-string filetype (e.g. javascript);
+    // prose blocks stay filetype markdown. Only fences take the mode.
+    const file = path.join(tmpDir, "fence.md");
+    writeFileSync(file, "# T\n\nSome paragraph prose here.\n\n```js\nconst fence = true;\n```\n");
+    const findCode = (id: string): any[] =>
+      walkKids(t.renderer.root.findDescendantById(id)).filter((k: any) => k instanceof CodeRenderable);
+    for (const mode of ["char", "none", "word"] as WrapMode[]) {
+      const pv = mkLivePreview(file, mode);
+      pv.p.renderPreview();
+      pv.clock.flush();
+      expect(await settleUntil(t, () => findCode(pv.paneId).length > 0)).toBe(true);
+      await t.renderOnce();
+      const codes = findCode(pv.paneId);
+      const fences = codes.filter((c: any) => c.filetype !== "markdown");
+      const prose = codes.filter((c: any) => c.filetype === "markdown");
+      expect(fences.length).toBeGreaterThan(0);
+      expect(prose.length).toBeGreaterThan(0);
+      for (const c of fences) expect(c.wrapMode).toBe(mode);
+      for (const c of prose) expect(c.wrapMode).toBe("word");
+    }
+  });
+
+  test("no-filetype files follow the wrap mode and get the gutter", async () => {
+    // The old "prose" branch forced word wrap on every grammarless file,
+    // which char-sliced long spaceless key=value lines mid-word even with
+    // wrap-mode=none (the reported .conf preview bug). Mode now governs
+    // them like any other code body, gutter included.
+    const conf = path.join(tmpDir, "app.conf");
+    writeFileSync(conf, "averyveryverylongkeyvaluewithoutanyspacesatallhere=1\n");
+    for (const mode of ["char", "none", "word"] as WrapMode[]) {
+      const pv = mkLivePreview(conf, mode);
+      pv.p.renderPreview();
+      pv.clock.flush();
+      expect(await settleUntil(t, () => gutterNodes(pv.paneId).length === 1)).toBe(true);
+      const body = (gutterNodes(pv.paneId)[0] as any).getChildren().find((c: any) => c instanceof CodeRenderable);
+      expect(body).toBeTruthy();
+      expect(body.wrapMode).toBe(mode);
+    }
   });
 });

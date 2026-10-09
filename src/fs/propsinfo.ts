@@ -76,15 +76,22 @@ export const mimeLabelFor = (name: string): string => {
                 : "data";
 };
 
+// on-disk identity for totals: two names sharing dev+ino (hardlinks) are one
+// body on disk. Symlinks never dedupe against their target — an lstat key is
+// the link's own inode, always distinct.
+export const inodeKey = (st: { dev: number; ino: number }): string => `${st.dev}:${st.ino}`;
+
 // recursive dir totals; null when the tree is absurdly large
 export const dirWalkStats = async (root: string): Promise<{ bytes: number; files: number; folders: number } | null> => {
   let bytes = 0,
     files = 0,
     folders = 0,
     count = 0;
+  const seen = new Set<string>();
   const stack: string[] = [root];
   while (stack.length) {
-    const dir = stack.pop()!;
+    const dir = stack.pop();
+    if (dir === undefined) break;
     let dirents: Dirent[];
     try {
       dirents = await readdir(dir, { withFileTypes: true });
@@ -109,7 +116,12 @@ export const dirWalkStats = async (root: string): Promise<{ bytes: number; files
       }
       files++;
       try {
-        bytes += (await stat(p)).size;
+        const st = await stat(p);
+        // names are counted per entry, bodies once (hardlink pair = 2 files, 1x bytes)
+        const k = inodeKey(st);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        bytes += st.size;
       } catch {}
     }
   }

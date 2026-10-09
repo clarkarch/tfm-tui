@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -169,6 +178,29 @@ describe("installPlugin", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // chmod-based: root bypasses file perms, so this can't fail as uid 0
+  test.skipIf(process.getuid?.() === 0)(
+    "a mid-copy failure removes the half-populated dest (re-install stays possible)",
+    async () => {
+      const dir = mkDir();
+      try {
+        const { exec } = fakeCloneWith((dest) => {
+          mkdirSync(path.join(dest, "broken"), { recursive: true });
+          writeFileSync(path.join(dest, "broken", "broken.ts"), "export default {};\n");
+          // an unreadable helper makes cpSync of the folder throw mid-copy
+          writeFileSync(path.join(dest, "broken", "secret"), "x");
+          chmodSync(path.join(dest, "broken", "secret"), 0o000);
+        });
+        await expect(installPlugin({ dir, raw: "https://github.com/u/broken", exec })).rejects.toThrow();
+        // the partially-copied folder is gone, so the existence guard doesn't
+        // permanently refuse a retry
+        expect(existsSync(path.join(dir, "broken"))).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("clone failure surfaces stderr and leaves no dest behind", async () => {
     const dir = mkDir();
@@ -346,6 +378,31 @@ describe("updatePlugin / removePluginDir", () => {
       mkdirSync(path.join(dir, "manual"), { recursive: true });
       await expect(updatePlugin({ dir, name: "manual", exec })).rejects.toThrow("not a git checkout");
       await expect(updatePlugin({ dir, name: "missing", exec })).rejects.toThrow("not installed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("update rejects a tampered provenance URL/ref/subdir before spawning git", async () => {
+    const dir = mkDir();
+    try {
+      const mk = (name: string, src: Record<string, unknown>): void => {
+        mkdirSync(path.join(dir, name), { recursive: true });
+        writeFileSync(path.join(dir, name, ".tfm-source.json"), JSON.stringify(src));
+      };
+      mk("badurl", { url: "/etc/passwd" });
+      mk("badref", { url: "https://example.com/x.git", ref: "--upload-pack=evil" });
+      mk("badsub", { url: "https://example.com/x.git", subdir: "../../etc" });
+      const calls: string[] = [];
+      const exec: ExecFn = async (_cmd, args) => {
+        calls.push(args.join(" "));
+        return { exit: 0, output: "" };
+      };
+      await expect(updatePlugin({ dir, name: "badurl", exec })).rejects.toThrow();
+      await expect(updatePlugin({ dir, name: "badref", exec })).rejects.toThrow("unsafe ref");
+      await expect(updatePlugin({ dir, name: "badsub", exec })).rejects.toThrow("unsafe subdir");
+      // git was never invoked with the hostile values
+      expect(calls).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -9,6 +9,11 @@
 
 export type AllocatorStats = { activeAllocations: number; totalRequestedBytes: number };
 
+// CliRenderer.lib is private with no public stats accessor, so the two
+// diagnostics reaches (wiring/io's sampler, ui-settings' failure log) share
+// this one narrowed shape instead of going through `any`.
+export type NativeStatsReach = { lib?: { getAllocatorStats?: () => AllocatorStats | null } };
+
 // one "mem ..." heartbeat line: allocator activity + process RSS
 export const nativeMemLine = (stats: AllocatorStats | null): string => {
   let out = "n/a";

@@ -50,6 +50,7 @@ const baseCtx = (): MenuEntriesCtx & {
     disconnectServer: (p) => calls.push(`disconnect:${p}`),
     navigate: (d) => calls.push(`navigate:${d}`),
     newTab: (d) => calls.push(`newTab:${d}`),
+    openInOtherPane: (d) => calls.push(`pane:${d}`),
     openWith: (p) => calls.push(`openWith:${p}`),
     renderAll: () => calls.push("renderAll"),
     renderGrid: () => {
@@ -65,6 +66,9 @@ const baseCtx = (): MenuEntriesCtx & {
     inTrashView: () => false,
     selPaths: () => [{ path: "/a", isDir: false }],
     openFileDefault: (p) => calls.push(`open:${p}`),
+    isExecutable: () => false,
+    runExecutable: (p) => calls.push(`run:${p}`),
+    runExecutableInTerminal: (p) => calls.push(`runterm:${p}`),
     setClipboard: (m, items) => calls.push(`clip:${m}:${items.length}`),
     duplicate: (ps) => calls.push(`duplicate:${ps.join(",")}`),
     startInlineRename: (k) => calls.push(`rename:${k}`),
@@ -112,24 +116,53 @@ describe("pasteLabel", () => {
 });
 
 describe("fileEntriesFor", () => {
+  test("executables get a single Run row with a Terminal/Open-With flyout", () => {
+    const ctx = baseCtx();
+    ctx.isExecutable = () => true;
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a", false, 0, 0);
+    expect(entries[0]!.label).toBe("Run");
+    expect(entries.some((e) => e.label === "Open")).toBe(false);
+    expect(entries.some((e) => e.label === "Run in Terminal")).toBe(false);
+    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Run in Terminal", "Open With…"]);
+    entries[0]!.action();
+    expect(ctx.calls).toContain("run:/a");
+    entries[0]!.submenu![0]!.action();
+    expect(ctx.calls).toContain("runterm:/a");
+    entries[0]!.submenu![1]!.action();
+    expect(ctx.calls).toContain("openWith:/a");
+  });
+
+  test("non-executables and dirs get no Run rows", () => {
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    expect(m.fileEntriesFor("/a", false, 0, 0).some((e) => e.label === "Run")).toBe(false);
+    ctx.isExecutable = () => true;
+    expect(m.fileEntriesFor("/d", true, 0, 0).some((e) => e.label === "Run")).toBe(false);
+  });
+
   test("file menu opens files, dirs get paste-into + navigate", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);
+    // files: Open is directly clickable, Open With… stays in its flyout
     const file = m.fileEntriesFor("/a", false, 0, 0);
     expect(file[0]!.label).toBe("Open");
-    expect(file[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open With…"]);
-    file[0]!.submenu![0]!.action();
+    expect(file[0]!.submenu!.map((e) => e.label)).toEqual(["Open With…"]);
+    file[0]!.action();
     expect(ctx.calls).toContain("open:/a");
-    file[0]!.submenu![1]!.action();
+    file[0]!.submenu![0]!.action();
     expect(ctx.calls).toContain("openWith:/a");
 
     const dir = m.fileEntriesFor("/d", true, 0, 0);
     expect(dir[0]!.label).toBe("Open");
-    expect(dir[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open in New Tab", "Open Terminal Here"]);
-    dir[0]!.submenu![0]!.action();
+    expect(dir[0]!.submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane", "Open Terminal Here"]);
+    // the parent row itself opens the folder
+    dir[0]!.action();
     expect(ctx.calls).toContain("navigate:/d");
-    dir[0]!.submenu![1]!.action();
+    dir[0]!.submenu![0]!.action();
     expect(ctx.calls).toContain("newTab:/d");
+    dir[0]!.submenu![1]!.action();
+    expect(ctx.calls).toContain("pane:/d");
     dir[0]!.submenu![2]!.action();
     expect(ctx.calls).toContain("term:/d");
     const paste = dir.find((e) => e.label.includes("into folder"));
@@ -185,6 +218,7 @@ describe("fileEntriesFor", () => {
     const m = makeMenuEntries(ctx);
     const dup = m.fileEntriesFor("/a", false, 0, 0).find((e) => e.label.startsWith("Duplicate"))!;
     expect(dup.label).toBe("Duplicate 2 items");
+    expect(dup.icon).toBe("content-duplicate");
     dup.action();
     expect(ctx.calls).toContain("duplicate:/a,/b");
   });
@@ -228,7 +262,15 @@ describe("sidebarEntriesFor", () => {
     const home = m.sidebarEntriesFor(place({ path: "/home/u" }), 0, 0);
     expect(home.some((e) => e.label.startsWith("Paste"))).toBe(true);
     const homeOpen = home.find((e) => e.label === "Open")!;
-    expect(homeOpen.submenu!.map((e) => e.label)).toEqual(["Open", "Open in New Tab", "Open Terminal Here"]);
+    expect(homeOpen.submenu!.map((e) => e.label)).toEqual([
+      "Open in New Tab",
+      "Open in New Pane",
+      "Open Terminal Here",
+    ]);
+    homeOpen.action();
+    expect(ctx.calls).toContain("navigate:/home/u");
+    homeOpen.submenu![1]!.action();
+    expect(ctx.calls).toContain("pane:/home/u");
     homeOpen.submenu![2]!.action();
     expect(ctx.calls).toContain("term:/home/u");
 
@@ -237,7 +279,7 @@ describe("sidebarEntriesFor", () => {
     expect(trash.some((e) => e.label === "Empty Trash")).toBe(true);
 
     const recent = m.sidebarEntriesFor(place({ scheme: "recent" }), 0, 0);
-    recent.find((e) => e.label === "Open")!.submenu![0]!.action();
+    recent.find((e) => e.label === "Open")!.action();
     expect(ctx.calls).toContain("navigate:recent://");
   });
 
@@ -543,5 +585,20 @@ describe("archive entries", () => {
     const entries = m.fileEntriesFor("/some-dir", true, 0, 0);
     expect(entries.some((e) => e.label === "Extract Here")).toBe(false);
     expect(entries.some((e) => e.label === "Compress to…")).toBe(true);
+  });
+});
+
+describe("open submenu", () => {
+  test("file Open is direct with an Open With… flyout (escalation is adaptive, no row)", () => {
+    const m = makeMenuEntries(baseCtx());
+    const entries = m.fileEntriesFor("/a", false, 0, 0);
+    expect(entries[0]!.label).toBe("Open");
+    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open With…"]);
+  });
+  test("dir Open is direct with a New Tab / New Pane / Terminal submenu", () => {
+    const m = makeMenuEntries(baseCtx());
+    const open = m.fileEntriesFor("/d", true, 0, 0)[0]!;
+    expect(open.label).toBe("Open");
+    expect(open.submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane", "Open Terminal Here"]);
   });
 });

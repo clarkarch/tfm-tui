@@ -1,5 +1,6 @@
 import { accessSync, constants } from "node:fs";
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import { runTeardownSteps, type QuitCtx } from "./quit";
 
@@ -32,22 +33,20 @@ export type RestartCheck = (path: string) => void;
 // re-sets it explicitly, so nested restarts keep working)
 export const RESTART_ENV = "TFM_RESTART";
 
-// Spawn args for the restart child: process.argv minus argv[0] minus the
-// script token. The compiled binary's runtime injects argv=["bun",
-// "/$bunfs/root/tfm", ...userArgs] (probed 2026-09), so a naive slice(1)
-// re-passes the virtual entry as a PATH and the child exits 1 ("no such
-// file or directory"). Same strip rule as parseArgs in ./cli (runner +
-// script-token shape), so dev (`bun src/index.ts …`) keeps working and a
-// real user path is never swallowed.
-export const restartArgs = (argv: string[]): string[] => {
-  const args = argv.slice(1);
-  const runner = (argv[0] ?? "").replace(/\\/g, "/").split("/").pop() ?? "";
-  const script = args[0] ?? "";
+// Spawn args for the restart child, for a spawn of `execPath`.
+// The compiled binary's runtime injects argv=["bun", "/$bunfs/root/tfm",
+// ...userArgs] (probed 2026-09): the virtual entry must be stripped or the
+// child treats it as a PATH (exit 1). The dev runner (`bun src/index.ts …`)
+// is the SAME process as execPath but DOES need its script re-passed — strip
+// it and the child runs `bun <first-user-arg>` (Module not found). So strip
+// the script token ONLY when the entry differs from the executable we spawn.
+export const restartArgs = (argv: string[], execPath = ""): string[] => {
+  const rest = argv.slice(1);
+  const script = rest[0] ?? "";
   const isScriptToken = /index\.[tj]s$/.test(script) || script.startsWith("/$bunfs/");
-  if (/^(bun|node|deno)(\.exe)?$/.test(runner) && args.length && isScriptToken) {
-    return args.slice(1);
-  }
-  return args;
+  if (!isScriptToken || !rest.length) return rest;
+  // argv[0] === execPath means we re-spawn the interpreter (dev): keep the script
+  return argv[0] === execPath ? rest : rest.slice(1);
 };
 
 // read-and-clear the restart-generation marker. UNCONDITIONAL by design: a
@@ -70,7 +69,7 @@ export type RestartCtx = QuitCtx & {
   isBusy?: () => boolean;
   // re-arm after a failed spawn (renderer is still alive). Restores what has
   // a clean seam (wiring re-enables drops + shift-capture, then re-renders);
-  // one-way steps stay lost: the PTY pane is closed (reopen with F4) and
+  // one-way steps stay lost: the PTY pane is closed (reopen with ctrl+`) and
   // plugin instances stay deactivated until the next boot.
   recover?(): void;
   notify?(msg: string, title?: string, level?: NotifyLevel): void;
@@ -91,14 +90,14 @@ export const makeRestart =
     try {
       (ctx.preflight ?? defaultPreflight)(ctx.execPath);
     } catch (err) {
-      fail(`restart failed: ${err instanceof Error ? err.message : String(err)}`);
+      fail(`restart failed: ${errMessage(err)}`);
       return;
     }
     // refuse while file ops are in flight: the parent loop freezes inside
     // spawnSync, and the child's orphan sweep could delete the paused op's
     // staging temp mid-copy (the op would die silently once resumed)
     if ((ctx.isBusy ?? (() => false))()) {
-      ctx.notify?.("Can't restart during file operations", "restart", "error");
+      ctx.notify?.("Can't restart during file operations — cancel (✕) or wait for it to finish", "restart", "error");
       return;
     }
     const preFailed = runTeardownSteps(ctx);
@@ -119,7 +118,7 @@ export const makeRestart =
       try {
         ctx.recover?.();
       } catch {}
-      fail(`restart failed: ${err instanceof Error ? err.message : String(err)}`);
+      fail(`restart failed: ${errMessage(err)}`);
       return;
     }
     let failed = preFailed;

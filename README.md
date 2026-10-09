@@ -1,50 +1,77 @@
-# tfm (terminal file manager)
-
-A modern, mouse-first file manager with places sidebar, grid view, drag & drop, image thumbnails and more, right inside your terminal.
-
-![beta](https://img.shields.io/badge/status-beta-yellow) [![website](https://img.shields.io/badge/website-tfm--tui-blue?logo=githubpages&logoColor=white)](https://clarkarch.github.io/tfm-tui/)
-
-> [!WARNING]
-> Beta software, usable daily, but back up anything irreplaceable first before performing a files op. 
-
-> [!IMPORTANT]
-> This is still a terminal UI running inside your terminal, expect some visual/behavioral anomalies.
+<h1 align="center">
+  <img src="assets/icons/tfm.svg" width="192" alt="tfm logo"><br>
+  tfm (terminal file manager)<br>
+  <img src="https://img.shields.io/badge/status-stable-brightgreen?style=flat-square" alt="stable"> <a href="https://clarkarch.github.io/tfm-tui/"><img src="https://img.shields.io/badge/website-tfm--tui-blue?style=flat-square&logo=githubpages&logoColor=white" alt="website"></a>
+</h1>
 
 ![tfm](screenshot.png)
 
+## Showcase
+
+
+
+https://github.com/user-attachments/assets/29c1e441-d871-4008-922f-47d0c1bc554f
+
+
+
+### Embedded terminal
+
+
+
+https://github.com/user-attachments/assets/06b395db-8a91-4402-9ad7-158a5f77ccfe
+
+
+
+### Preview pane
+
+
+
+https://github.com/user-attachments/assets/f0007e09-c273-4f77-9f9a-d3e7187405c0
+
+
+
+### Animations
+
+
+https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
+
 ## Features
 
-- Click, rubber-band select, right-click menus, inline rename.
-- Drag files between folders (ctrl+drag), out to other apps, or in from outside.
-  Cross-app drag is kitty-only.
-- Places sidebar, GTK bookmarks, recent files, XDG trash with restore, clipboard.
-- Dual pane: two independent file panes side by side, each with its own top bar
-  (path, sort, search) and its own tabs. `Tab` switches the focused side, `F5`
-  copies the selection to the other pane, `F6` moves it.
-- Network locations: `sftp://`, `smb://`, WebDAV, FTP… via gvfs
-  (sidebar → Connect to Server…), credentials prompted in-app.
-- Embedded terminal (right-click → Open Terminal Here).
-- Auto-hide panes: sidebar/preview/terminal collapse to the edge and slide back (animated) when the mouse nears them.
-- Extract and compress archives (right-click).
-- Image/video thumbnails, text syntax highlighting, folder sizes.
-- Type-to-search, tabs, undo/redo, 30+ themes.
+- Mouse: click, rubber-band select, right-click menus, drag and drop.
+- Browse files in grid or list view.
+- Sidebar with places, bookmarks, drives, trash, recent, starred.
+- Search as you type, including inside subfolders.
+- Sort by name, size, date.
+- Copy, move, paste, duplicate, rename.
+- Bulk rename multiple files at once.
+- New file / new folder inline.
+- Drag and drop between panes and from other apps.
+- Trash, restore, delete forever, empty trash.
+- Undo / redo file operations.
+- Preview text, code, images, videos, folders.
+- Open files + Open With app picker.
+- Properties dialog with permissions editing.
+- Tabs + dual pane.
+- Connect to network servers.
+- Extract and compress archives.
+- Embedded terminal.
+- Clipboard copy/paste with other apps.
+- Open privileged files with sudo prompt.
+- Customizable themes, settings GUI, keybinds.
+- Plugin support with hot reload.
+- …and many more.
 
 ## Requirements
 
 - Linux.
-- Image thumbnails need the
-  [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol.html)
-  (kitty, ghostty, WezTerm, Konsole…). Without it you get Nerd Font glyphs.
-  Cross-app drag needs kitty.
-- Optional tools (the installer lists what's missing):
-  - `rsvg-convert` (icons and SVG thumbnails)
-  - `magick` (raster image thumbnails)
-  - `ffmpeg` (video thumbnails)
-  - `gio` (starred files, network locations)
-  - `xdg-open` (open files in their default app)
-  - `udisksctl` (mount/eject drives)
-  - `wl-clipboard` / `xclip` (clipboard with GUI apps)
-  - `tar` / `unzip` / `zip` / `7z` (archives)
+- Any terminal (need image support for the full experience).
+- Everything below is optional.
+  - `xdg-open` (opening files)
+  - `magick` (extra photo thumbnails)
+  - `gio` (starred files and servers)
+  - `udisksctl` (USB drives)
+  - `wl-clipboard` / `xclip` (copy and paste with other apps)
+  - `tar` / `unzip` / `zip` / `7z` (zip files and archives)
 
 ## Install
 
@@ -72,43 +99,44 @@ bun run compile && cp dist/tfm ~/.local/bin/
 
 ## Keys
 
-- `enter` open · `f2` rename · `backspace` up · `escape` menu
+- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu · `f1` help
 - `ctrl+c/x/v/d` copy/cut/paste/duplicate · `ctrl+z/y` undo/redo
 - `tab` switch focused pane · `f5`/`f6` copy/move to the other pane (dual pane)
 - `ctrl+t/w` new/close tab · `ctrl+tab` switch tab (per pane)
 - `delete` trash · `alt+enter` properties · `ctrl+q` quit
-- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f9` preview · `f4` terminal · `ctrl+shift+s` connect to server
+- `ctrl+a` select all · `space` toggle · `shift+arrows` extend selection
+- `alt+left/right` history back/forward · `ctrl+shift+n` / `ctrl+alt+n` new folder/file
+- `ctrl+shift+d` dual pane · `ctrl+=/-` zoom · `ctrl+r` reload places · `ctrl+alt+r` restart
+- `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f3` preview · `ctrl+\``/`f4` terminal · `ctrl+shift+s` connect to server
+- `arrows` move · `pageup`/`pagedown` page · `home`/`end` first/last
 
 Everything is remappable: `esc` → Settings → keys.
 
 ## Config
 
-`~/.config/tfm/config.toml`, see [config.example.toml](config.example.toml).
-Override the path with `TFM_CONFIG`; XDG homes are honored. `--debug` writes a log.
+`esc` → Settings or:
+
+```bash
+TFM_CONFIG=/custom/path/config.toml tfm
+```
+See [config.example.toml](config.example.toml).
 
 ## Plugins
 
-TypeScript plugins in `~/.config/tfm/plugins/<name>/<name>.ts` with full trust,
-hot reload, commands/keybinds, context menus, previews, events, pre-op veto
-hooks, and **UI slots** (render OpenTUI widgets into the statusbar / sidebar
-footer). Install from a git URL in `esc` → Plugins, or:
+`esc` → Plugins or:
 
 ```bash
 tfm plugins search
 tfm plugins add <url|id>
 tfm plugins new my-plugin
 ```
-
 See [docs/plugins.md](docs/plugins.md).
 
-## Limitations
+## Notes
 
-- Linux only.
-- Thumbnails need the kitty graphics protocol; tmux hides them unless
-  `allow-passthrough` is on.
 - Cross-app drag & drop is kitty-only.
-- Rasterized icons can show a black box when a floating UI paints over them
-  (menu scrims, rubber-band selection).
+- Mouse on the Linux console (TTY) needs `gpm` running.
+- Icons can show a black box behind open menus or while rubber-band selecting.
 - Custom kitty themes can misbehave.
 
 ## License
