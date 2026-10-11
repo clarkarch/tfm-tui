@@ -1,5 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeDnd72, splitOsc72Seq, type Dnd72Ctx } from "./dnd72";
@@ -74,6 +85,7 @@ const baseCtx = () => {
     inTrashView: () => false,
     setStatusMsg: (m) => status.push(m),
     notify: (m, t, l) => notes.push(`${t}:${l}: ${m}`),
+    remoteTimeoutMs: () => 2000,
     subscribeOsc: (cb) => {
       oscCb = cb;
     },
@@ -194,6 +206,29 @@ describe("incoming drop", () => {
     expect(notes).toContain("drop:info: Drops land in a real folder");
   });
 
+  test("keyless continuation chunks complete the drop (kitty omits keys)", async () => {
+    // kitty sends continuations as bare `m=1;<chunk>` (spec: chunks after the
+    // first may omit all metadata but m) — a >3KB uri-list must still land,
+    // and the NEXT drop must not wedge on a stuck dropIdx
+    const { ctx, feed } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    const full = b64(`file:///home/u/${"a".repeat(4000)}.txt`);
+    feed("t=r:x=1:m=1", full.slice(0, 100));
+    feed("m=1", full.slice(100)); // no keys at all
+    feed("t=r:x=1"); // EOF
+    await settleUntil(() => ctx.runTransfers.length > 0);
+    // the FULL path landed, not the first chunk's truncation
+    expect(ctx.runTransfers[0]).toEqual(["copy", "/home/u", [`/home/u/${"a".repeat(4000)}.txt`], "drop 1 item"]);
+    // the session freed: a second drop transfers too
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1", b64("file:///home/u/b.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => ctx.runTransfers.length > 1);
+    expect(ctx.runTransfers.length).toBe(2);
+  });
+
   test("trash view trashes external drops (no raw copy without trashinfo)", async () => {
     const { ctx, feed } = baseCtx();
     ctx.inTrashView = () => true;
@@ -208,8 +243,27 @@ describe("incoming drop", () => {
 });
 
 describe("self drop", () => {
+  test("hover over a folder tile agrees the drop (else kitty cancels it)", () => {
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1"); // begin session
+    feed("t=m:x=5:y=5"); // self hover onto /d/dest
+    expect(tx.some((s) => s === "\x1b]72;t=m:o=2;text/uri-list\x1b\\")).toBe(true);
+    gridDrag.keys = null;
+  });
+
+  test("hover over no target rejects the hover (no late session cancel)", () => {
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=m:x=99:y=99"); // miss — hitTargetAt returns null
+    expect(tx.some((s) => s === "\x1b]72;t=m:o=0\x1b\\")).toBe(true);
+    gridDrag.keys = null;
+  });
   test("hover highlights the folder tile, drop moves into it", async () => {
-    const { ctx, feed, logs } = baseCtx();
+    const { ctx, feed, logs, tx } = baseCtx();
     makeDnd72(ctx);
     gridDrag.ctrl = false;
     gridDrag.keys = [{ path: "/d/a", isDir: false }];
@@ -218,6 +272,7 @@ describe("self drop", () => {
     expect(logs).toContain("visual:/d/dest:2");
     feed("t=M:x=5:y=5"); // self drop
     await settleUntil(() => ctx.moveIns.length > 0);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=2\x1b\\")).toBe(true); // completion handshake
     expect(ctx.moveIns.length).toBe(1);
     const [dest, items] = ctx.moveIns[0]!;
     expect(dest).toBe("/d/dest");
@@ -286,6 +341,380 @@ describe("self drop", () => {
   });
 });
 
+describe("remote drops", () => {
+  test("enableDrops declares the drop-side machine id when known", () => {
+    const { ctx, tx } = baseCtx();
+    ctx.machineId = () => "1:abcd";
+    const { enableDrops } = makeDnd72(ctx);
+    enableDrops();
+    expect(tx).toContain("\x1b]72;t=a:x=1;1:abcd\x1b\\");
+    // the drag side declares it too (invites t=k serve requests we answer)
+    expect(tx).toContain("\x1b]72;t=o:x=1;1:abcd\x1b\\");
+  });
+
+  test("enableDrops skips the id frame when unknown (today's behavior)", () => {
+    const { ctx, tx } = baseCtx();
+    const { enableDrops } = makeDnd72(ctx);
+    enableDrops();
+    expect(tx.some((s) => s.includes("t=a:x=1"))).toBe(false);
+  });
+
+  test("X=1 uri-list requests each entry by subidx", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt\r\nfile:///remote/b.txt"));
+    feed("t=r:x=1"); // empty frame + m=0 → uri-list complete
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    // answer the first entry so the fetch proceeds to the second
+    feed("t=r:x=1:y=1", b64("AAA"));
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=2\x1b\\"));
+    gridDrag.keys = null;
+  });
+
+  test("fetched file bytes land via runTransfer, finish handshake, staging cleaned", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    let stagedContent = "";
+    ctx.runTransfer = async (_op, _dest, srcs) => {
+      ctx.runTransfers.push([_op, _dest, srcs]);
+      stagedContent = readFileSync(srcs[0]!, "utf8");
+    };
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("t=r:x=1:y=1", b64("hello remote"));
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:o=1\x1b\\"));
+    expect(stagedContent).toBe("hello remote");
+    expect(ctx.runTransfers.length).toBe(1);
+    const stagedDir = path.dirname(ctx.runTransfers[0]![2][0]);
+    expect(existsSync(stagedDir)).toBe(false); // staging cleaned
+    expect(ctx.runTransfers[0]![2][0].endsWith("a.txt")).toBe(true);
+  });
+
+  test("chunked entry (m=1 + metadata-less continuation) reassembles", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    let stagedContent = "";
+    ctx.runTransfer = async (_op, _dest, srcs) => {
+      ctx.runTransfers.push([_op, _dest, srcs]);
+      stagedContent = readFileSync(srcs[0]!, "utf8");
+    };
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    const full = b64("hello chunked world");
+    feed("t=r:x=1:y=1:m=1", full.slice(0, 8));
+    feed("m=1", full.slice(8)); // continuation may omit all metadata but m
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:o=1\x1b\\"));
+    expect(stagedContent).toBe("hello chunked world");
+  });
+
+  test("same-basename remote entries stage without overwriting each other", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    let staged: string[] = [];
+    let bytes: string[] = [];
+    ctx.runTransfer = async (_op, _dest, srcs) => {
+      ctx.runTransfers.push([_op, _dest, srcs]);
+      // capture inside the transfer — staging is cleaned right after it resolves
+      staged = [...srcs];
+      bytes = srcs.map((s: string) => readFileSync(s, "utf8")).sort();
+    };
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/one/same.txt\r\nfile:///remote/two/same.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("t=r:x=1:y=1", b64("first-bytes"));
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=2\x1b\\"));
+    feed("t=r:x=1:y=2", b64("second-bytes"));
+    feed("t=r:x=1:y=2");
+    await settleUntil(() => ctx.runTransfers.length > 0);
+    expect(staged.length).toBe(2);
+    expect(new Set(staged).size).toBe(2); // distinct staged paths
+    expect(bytes).toEqual(["first-bytes", "second-bytes"]);
+  });
+
+  test("duplicate child names inside one dir listing stage distinctly", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    let kids: string[] = [];
+    ctx.runTransfer = async (_op, _dest, srcs) => {
+      ctx.runTransfers.push([_op, _dest, srcs]);
+      kids = readdirSync(srcs[0]!);
+    };
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/docs"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    const listing = Buffer.from("dup.txt\0dup.txt", "utf8").toString("base64").replace(/=+$/, "");
+    feed("t=r:x=1:y=1:X=7", listing);
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:Y=7:x=1\x1b\\"));
+    feed("t=r:Y=7:x=1", b64("aaa"));
+    feed("t=r:Y=7:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:Y=7:x=2\x1b\\"));
+    feed("t=r:Y=7:x=2", b64("bbb"));
+    feed("t=r:Y=7:x=2");
+    await settleUntil(() => ctx.runTransfers.length > 0);
+    expect(kids.length).toBe(2);
+    expect(new Set(kids).size).toBe(2);
+  });
+
+  test("symlink entry (X=1) stages a symlink with the remote target", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    let wasLink = false;
+    let target = "";
+    ctx.runTransfer = async (_op, _dest, srcs) => {
+      ctx.runTransfers.push([_op, _dest, srcs]);
+      // capture inside the transfer — staging is cleaned right after it resolves
+      wasLink = lstatSync(srcs[0]!).isSymbolicLink();
+      target = readlinkSync(srcs[0]!);
+    };
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/link"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("t=r:x=1:y=1:X=1", b64("/remote/real-target"));
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => ctx.runTransfers.length > 0);
+    expect(wasLink).toBe(true);
+    expect(target).toBe("/remote/real-target");
+  });
+
+  test("dir entry recurses children then releases the handle", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    let first = "";
+    let second = "";
+    ctx.runTransfer = async (_op, _dest, srcs) => {
+      ctx.runTransfers.push([_op, _dest, srcs]);
+      // capture inside the transfer — staging is cleaned right after it resolves
+      first = readFileSync(path.join(srcs[0]!, "a.txt"), "utf8");
+      second = readFileSync(path.join(srcs[0]!, "b.txt"), "utf8");
+    };
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/docs"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    const listing = Buffer.from("a.txt\0b.txt", "utf8").toString("base64").replace(/=+$/, "");
+    feed("t=r:x=1:y=1:X=7", listing);
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:Y=7:x=1\x1b\\"));
+    feed("t=r:Y=7:x=1", b64("first"));
+    feed("t=r:Y=7:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:Y=7:x=2\x1b\\"));
+    feed("t=r:Y=7:x=2", b64("second"));
+    feed("t=r:Y=7:x=2");
+    await settleUntil(() => ctx.runTransfers.length > 0);
+    expect(first).toBe("first");
+    expect(second).toBe("second");
+    expect(tx.some((s) => s === "\x1b]72;t=r:Y=7\x1b\\")).toBe(true); // handle released
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=1\x1b\\")).toBe(true);
+  });
+
+  test("t=R aborts with an error toast, cancel frame, no transfer", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("t=R:x=1:y=1", "ENOENT:gone");
+    await settleUntil(() => notes.some((n) => n.includes("ENOENT")));
+    expect(ctx.runTransfers).toEqual([]);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true);
+  });
+
+  test("request timeout aborts and cleans staging", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    ctx.remoteTimeoutMs = () => 50;
+    // only this module stages tfm-remote-* dirs — snapshot before/after
+    const stagedBefore = new Set(readdirSync(os.tmpdir()).filter((n) => n.startsWith("tfm-remote-")));
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    // never answer — the 50ms timer fires
+    await settleUntil(() => notes.length > 0, 3000);
+    expect(ctx.runTransfers).toEqual([]);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true);
+    const leaked = readdirSync(os.tmpdir()).filter((n) => n.startsWith("tfm-remote-") && !stagedBefore.has(n));
+    expect(leaked).toEqual([]);
+  });
+
+  test("keyless first chunk defaults to file (spec-violating peer)", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    let stagedContent = "";
+    ctx.runTransfer = async (_op, _dest, srcs) => {
+      ctx.runTransfers.push([_op, _dest, srcs]);
+      stagedContent = readFileSync(srcs[0]!, "utf8");
+    };
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("m=1", b64("peer skips keys")); // first chunk carries no X at all
+    feed("t=r:x=1:y=1"); // EOF
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:o=1\x1b\\"));
+    expect(stagedContent).toBe("peer skips keys");
+  });
+
+  test("byte cap counts decoded bytes, not b64 chars", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    // 25 decoded bytes = 34 b64 chars: trips a 30-char count, fits a 30-byte cap
+    ctx.remoteMaxBytes = () => 30;
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("t=r:x=1:y=1", b64("1234567890123456789012345"));
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:o=1\x1b\\"));
+    expect(ctx.runTransfers.length).toBe(1);
+  });
+
+  test("staging creation failure cancels loudly, not silently", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    const oldTmp = process.env.TMPDIR;
+    process.env.TMPDIR = "/nonexistent-tfm-tmpdir-xyz";
+    try {
+      makeDnd72(ctx);
+      feed("t=m", "text/uri-list");
+      feed("t=M:x=1", "text/uri-list");
+      feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+      feed("t=r:x=1");
+      await settleUntil(() => notes.length > 0);
+      expect(ctx.runTransfers).toEqual([]);
+      expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true); // cancel, not silence
+    } finally {
+      if (oldTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = oldTmp;
+    }
+  });
+
+  test("DropLeave mid-fetch aborts silently (no toast)", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("t=m:x=-1:y=-1");
+    await Bun.sleep(100);
+    expect(ctx.runTransfers).toEqual([]);
+    expect(notes).toEqual([]);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true);
+  });
+
+  test("second t=M while a remote fetch runs is refused (no agree)", async () => {
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    const agrees = tx.filter((s) => s.startsWith("\x1b]72;t=m:o=1")).length;
+    feed("t=M:x=1", "text/uri-list"); // second drop while fetching
+    await Bun.sleep(100);
+    expect(tx.filter((s) => s.startsWith("\x1b]72;t=m:o=1")).length).toBe(agrees);
+    gridDrag.keys = null;
+  });
+
+  test("dotdot top-level entry aborts before any subidx request", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///.."));
+    feed("t=r:x=1");
+    await settleUntil(() => notes.length > 0);
+    expect(tx.some((s) => s.includes(":y="))).toBe(false); // never fetched
+    expect(ctx.runTransfers).toEqual([]);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true);
+  });
+
+  test("slashed dir-child name aborts before any child fetch", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/docs"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    const listing = Buffer.from("sub/evil", "utf8").toString("base64").replace(/=+$/, "");
+    feed("t=r:x=1:y=1:X=7", listing);
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => notes.length > 0);
+    expect(tx.some((s) => s.includes(":Y=7"))).toBe(false); // no child fetched
+    expect(ctx.runTransfers).toEqual([]);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true);
+  });
+
+  test("virtual cwd refuses a remote drop before any subidx request", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    ctx.virtualCwd = () => true;
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => notes.length > 0);
+    expect(tx.some((s) => s.includes(":y="))).toBe(false);
+    expect(ctx.runTransfers).toEqual([]);
+  });
+
+  test("oversize staged bytes abort the drop (remoteMaxBytes seam)", async () => {
+    const { ctx, feed, notes, tx } = baseCtx();
+    ctx.remoteMaxBytes = () => 10;
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"));
+    feed("t=r:x=1:y=1", b64("way more than ten bytes of content"));
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => notes.length > 0);
+    expect(ctx.runTransfers).toEqual([]);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true);
+  });
+
+  test("local uri-list completion (X absent) still transfers", async () => {
+    const { ctx, feed } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1", b64("file:///home/u/a.txt"));
+    feed("t=r:x=1");
+    await settleUntil(() => ctx.runTransfers.length > 0);
+    expect(ctx.runTransfers.length).toBe(1);
+  });
+});
+
 describe("external drag end", () => {
   test("released over another app (copy) notifies Sent", async () => {
     const { ctx, feed, notes } = baseCtx();
@@ -349,6 +778,149 @@ describe("external drag end", () => {
     while (ctx.trashed.length === 0 && Date.now() < deadline) await Bun.sleep(10);
     expect(ctx.trashed).toEqual([["/d/b"]]);
     gridDrag.keys = null;
+  });
+});
+
+describe("remote serve (t=k)", () => {
+  const serveDir = (): string => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-serve-"));
+    writeFileSync(path.join(dir, "a.txt"), "serve-bytes");
+    writeFileSync(path.join(dir, "big.bin"), Buffer.alloc(4000, 7));
+    mkdirSync(path.join(dir, "sub"));
+    writeFileSync(path.join(dir, "sub", "inner.txt"), "inner");
+    symlinkSync(path.join(dir, "a.txt"), path.join(dir, "link"));
+    return dir;
+  };
+
+  // payload of a serve frame (text after the second ";", minus ST; "" when the
+  // frame carries no payload, e.g. the trailing m=0 EOF marker)
+  const payloadOf = (f: string): string => {
+    const first = f.indexOf(";");
+    const second = f.indexOf(";", first + 1);
+    return second < 0 ? "" : f.slice(second + 1, -2);
+  };
+
+  test("t=k:x=1 serves file bytes + EOF", () => {
+    const dir = serveDir();
+    try {
+      const { ctx, feed, tx } = baseCtx();
+      makeDnd72(ctx);
+      gridDrag.ctrl = false;
+      gridDrag.keys = [{ path: path.join(dir, "a.txt"), isDir: false }];
+      feed("t=o:x=64:y=10");
+      tx.length = 0;
+      feed("t=k:x=1");
+      const frames = tx.filter((s) => s.includes("t=k:x=1"));
+      expect(frames.length).toBe(2); // data + empty EOF
+      expect(Buffer.from(payloadOf(frames[0]!), "base64").toString("utf8")).toBe("serve-bytes");
+      expect(payloadOf(frames[1]!)).toBe("");
+      gridDrag.keys = null;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("out-of-range idx answers t=E", () => {
+    const dir = serveDir();
+    try {
+      const { ctx, feed, tx } = baseCtx();
+      makeDnd72(ctx);
+      gridDrag.keys = [{ path: path.join(dir, "a.txt"), isDir: false }];
+      feed("t=o:x=64:y=10");
+      tx.length = 0;
+      feed("t=k:x=5");
+      expect(tx.some((s) => s.startsWith("\x1b]72;t=E;"))).toBe(true);
+      gridDrag.keys = null;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("symlink serves X=1 + target, dir serves handle + children with Y", () => {
+    const dir = serveDir();
+    try {
+      const { ctx, feed, tx } = baseCtx();
+      makeDnd72(ctx);
+      gridDrag.keys = [
+        { path: path.join(dir, "link"), isDir: false },
+        { path: path.join(dir, "sub"), isDir: true },
+      ];
+      feed("t=o:x=64:y=10");
+      tx.length = 0;
+      feed("t=k:x=1");
+      const linkFrames = tx.filter((s) => s.includes("t=k:x=1"));
+      expect(linkFrames[0]).toContain(":X=1:");
+      expect(Buffer.from(payloadOf(linkFrames[0]!), "base64").toString("utf8")).toBe(path.join(dir, "a.txt"));
+      tx.length = 0;
+      feed("t=k:x=2");
+      const dirFrames = tx.filter((s) => s.includes("t=k:x=2"));
+      const handle = Number(/:X=(\d+)/.exec(dirFrames[0]!)![1]);
+      expect(handle).toBeGreaterThan(1);
+      expect(Buffer.from(payloadOf(dirFrames[0]!), "base64").toString("utf8")).toBe("inner.txt");
+      // the child is pushed with Y=handle:y=num and its own bytes + EOF
+      const childData = tx.find((s) => s.includes(`Y=${handle}:y=1`) && payloadOf(s) !== "");
+      expect(Buffer.from(payloadOf(childData!), "base64").toString("utf8")).toBe("inner");
+      gridDrag.keys = null;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("big file chunks at 4096 b64 chars and reassembles", () => {
+    const dir = serveDir();
+    try {
+      const { ctx, feed, tx } = baseCtx();
+      makeDnd72(ctx);
+      gridDrag.keys = [{ path: path.join(dir, "big.bin"), isDir: false }];
+      feed("t=o:x=64:y=10");
+      tx.length = 0;
+      feed("t=k:x=1");
+      const frames = tx.filter((s) => s.includes("t=k:x=1"));
+      expect(frames.length).toBeGreaterThan(2);
+      expect(payloadOf(frames[0]!).length).toBe(4096);
+      expect(frames[0]).toContain(":m=1;");
+      const bytes = Buffer.concat(frames.slice(0, -1).map((f) => Buffer.from(payloadOf(f), "base64")));
+      expect(bytes.equals(Buffer.alloc(4000, 7))).toBe(true);
+      expect(payloadOf(frames[frames.length - 1]!)).toBe(""); // EOF
+      gridDrag.keys = null;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("vanished file answers t=E;ENOENT", () => {
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/nonexistent-tfm-serve-target", isDir: false }];
+    feed("t=o:x=64:y=10");
+    tx.length = 0;
+    feed("t=k:x=1");
+    expect(tx.some((s) => s.startsWith("\x1b]72;t=E;ENOENT"))).toBe(true);
+    gridDrag.keys = null;
+  });
+
+  test("t=k with no session is ignored", () => {
+    const { ctx, feed, tx, notes } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=k:x=1");
+    expect(tx).toEqual([]);
+    expect(notes).toEqual([]);
+  });
+
+  test("dragged dir uri-list ends the dir URL with /", () => {
+    const dir = serveDir();
+    try {
+      const { ctx, feed, tx } = baseCtx();
+      makeDnd72(ctx);
+      gridDrag.keys = [{ path: path.join(dir, "sub"), isDir: true }];
+      feed("t=o:x=64:y=10");
+      const present = tx.find((s) => s.includes("t=p:x=0:m=0;"))!;
+      const uriList = Buffer.from(payloadOf(present), "base64").toString("utf8");
+      expect(uriList.endsWith("/")).toBe(true);
+      gridDrag.keys = null;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

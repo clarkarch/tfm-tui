@@ -12,6 +12,7 @@ import { isVirtualUri } from "../fs/uri";
 import { isNetworkPath } from "../fs/network";
 import { makeDnd72 } from "../dnd/dnd72";
 import { makeHitTargetAt } from "../dnd/hit-target";
+import { localMachineId } from "../dnd/machine-id";
 import { debounced } from "../lib/uiutil";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { gridDrag } from "../input/grid-input";
@@ -261,6 +262,13 @@ export const wireDnd = (deps: {
     inTrashView: core.inTrashView,
     setStatusMsg: nav.setStatusMsg,
     notify: chrome.notify,
+    machineId: () => {
+      try {
+        return localMachineId();
+      } catch {
+        return "";
+      }
+    },
     subscribeOsc: (cb) => chrome.renderer.subscribeOsc(cb),
   });
   enableDrops();

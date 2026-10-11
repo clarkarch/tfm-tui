@@ -1,6 +1,7 @@
 node_modules/
 nautilus/
 opentui/
+kitty/
 .agents/
 dist/
 AGENTS.md
