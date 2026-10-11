@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box, Text } from "@opentui/core";
+import { Box, InputRenderable, Text } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeRename, tileLabelFor, uniqueUntitledName, type RenameCtx } from "./ui-rename";
 
@@ -199,10 +199,18 @@ describe("makeRename (renderer)", () => {
     expect(pointers).toEqual(["text", "default"]);
   });
 
+  test("upstream premise: a raw control char in an Input value throws (why seeds strip)", () => {
+    // if a future 0.6.x relaxes validation, the strip call sites become
+    // pointless — this pins the premise so they get revisited, not cargo-culted
+    expect(() => new InputRenderable(t.renderer, { id: "premise-ctl", width: 10, value: "a\x01b" })).toThrow();
+    expect(() => new InputRenderable(t.renderer, { id: "premise-clean", width: 10, value: "ab\tcd" })).not.toThrow();
+  });
+
   test("a control-char filename opens rename without throwing (0.6.0 Input rejects C0)", async () => {
     // Linux filenames may carry C0 controls (everything except / and NUL);
     // the seeded Input value is stripped so construction never throws
-    // NativeError — the commit path still reads the real key, not the input
+    // NativeError — and an untouched Enter must NOT rename to the stripped
+    // display form (the commit reads the real key's basename, not the input)
     const key = path.join(dir, "we\x01ird\x1b.txt");
     await mountRow(key);
     rename.startInlineRename(key);
@@ -210,6 +218,10 @@ describe("makeRename (renderer)", () => {
     const input = t.renderer.root.findDescendantById("tfm-rename-input") as any;
     expect(input).toBeTruthy();
     expect(input.value).toBe("weird.txt");
+    calls.length = 0;
+    rename.finishInlineRename(true); // untouched Enter: no-op, not a rename
+    expect(calls.some((c) => c.startsWith("rename:"))).toBe(false);
+    expect(existsSync(key)).toBe(true);
     rename.finishInlineRename(false);
   });
 });

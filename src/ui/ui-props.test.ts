@@ -493,6 +493,12 @@ describe("image hero centering", () => {
   // row. Centering in the pad-reduced row means
   // left === round((rowW − 2 − slotW)/2) (yoga rounds half up) — flex-start
   // would park it at 0 (the old left-hug bug), and any pad change moves it.
+  // Parity note: ±1 pad shifts are rounding-masked at a single parity, so the
+  // four tests below span both (thumb slotW=3 → odd leftover, icon/multi
+  // slotW=2 → even) — a lone parity would silently reopen a ±1 hole.
+  // What this does NOT pin (drain is faked here): the slot's OWN row+center
+  // props that center a narrower raster inside the slot — see ui-slots.test.ts
+  // (real drain) for that half of the invariant.
   const heroLeft = (id: string): { left: number; rowW: number; slotW: number } => {
     const s: any = byId(id);
     const row: any = s?.parent;

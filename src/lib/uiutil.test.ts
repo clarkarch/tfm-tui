@@ -365,4 +365,15 @@ describe("stripControlChars", () => {
     expect(stripControlChars("plain")).toBe("plain");
     expect(stripControlChars("")).toBe("");
   });
+
+  test("boundary codes: 08/0B/0C/1F drop, 20/7E/A0 stay, surrogates survive", () => {
+    // every C0 except 09/0A/0D drops, including the whitespace-adjacent ones
+    expect(stripControlChars("\x08\x0b\x0c\x1f")).toBe("");
+    // printable ASCII edges + NBSP (U+00A0, first code above the C1 band)
+    expect(stripControlChars(" \x7e\u00a0")).toBe(" \x7e\u00a0");
+    // astral chars ride UTF-16 surrogate pairs — checked per unit, and
+    // surrogates (D800-DFFF) are outside every drop band, so the pair
+    // survives intact (no half-surrogate output)
+    expect(stripControlChars("a\u{10000}b\u0085c")).toBe("a\u{10000}bc");
+  });
 });

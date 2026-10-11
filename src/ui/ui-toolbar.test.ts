@@ -254,4 +254,56 @@ describe("renderCrumbs directory-change animation", () => {
       await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
+
+  test("path-edit re-seed strips control chars (0.6.0 Input rejects C0)", async () => {
+    // the `existing` branch re-seeds a LIVE input instead of constructing:
+    // driven here with a destroyChildren that spares the input (the real one
+    // drops it first, taking the ctor path — both must strip). A raw write
+    // throws NativeError inside try/catch and leaves the stale path in the box
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      let cwd = "/x/alpha";
+      const tb = makeToolbar({
+        prefix: "tfm-p0-",
+        renderer: () => t.renderer,
+        byId: (id) => t.renderer.root.findDescendantById(id),
+        destroyChildren: () => {}, // spare the live input → existing branch
+        stripSelectable: () => {},
+        uiStyle: () => "solid",
+        colors: () => COLORS,
+        makeIconSlot: (name, states) => ({
+          el: null,
+          slotId: `s-${name}`,
+          spec: { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0 },
+        }),
+        setIconState: () => {},
+        closeFileMenu: () => {},
+        blurTerminal: () => {},
+        navigate: () => {},
+        notify: () => {},
+        canBack: () => false,
+        canFwd: () => false,
+        goBack: () => {},
+        goFwd: () => {},
+        openContextMenu: () => {},
+        sortEntries: () => [],
+        cwd: () => cwd,
+        home: "/home/u",
+      });
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+      tb.renderCrumbs();
+      tb.enterPathEdit();
+      await t.renderOnce();
+      cwd = "/x/beta\x01gamma";
+      tb.renderCrumbs(); // mid-edit rebuild → existing-branch re-seed
+      await t.renderOnce();
+      const input = t.renderer.root.findDescendantById("tfm-p0-path-input") as any;
+      expect(input).toBeTruthy();
+      // stripped re-seed, not the stale pre-tick path
+      expect(input.value).toBe("/x/betagamma");
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
 });

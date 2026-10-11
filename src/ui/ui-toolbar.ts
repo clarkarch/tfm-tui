@@ -277,7 +277,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         };
       } else {
         try {
-          input.value = isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd());
+          input.value = stripControlChars(isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()));
         } catch {}
       }
       try {

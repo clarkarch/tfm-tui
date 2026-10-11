@@ -182,7 +182,11 @@ export const makeRename = (ctx: RenameCtx) => {
       return;
     }
     // plain F2 rename: goes through performRename, which owns conflict
-    // handling, undo units and the "Renamed a → b" reporting
+    // handling, undo units and the "Renamed a → b" reporting. The seeded
+    // input shows the STRIPPED name (control chars can't render), so an
+    // untouched Enter must be a no-op — committing the display form would
+    // rename the file to a name the user never typed.
+    if (!edit.createKind && value === stripControlChars(path.basename(edit.key))) return;
     void ctx.performRename(edit.key, value);
   };
 

@@ -354,6 +354,28 @@ describe("thumbnail mount", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("a narrower raster centers in its slot (the slot-internal half of hero centering)", async () => {
+    // prod thumb slots (grid/list/props hero) are row+center boxes: a raster
+    // narrower than the slot must center, not hug the left edge. The props
+    // hero tests can only pin the slot-in-row half (drain is faked there) —
+    // this pins the raster-in-slot half through the REAL drain.
+    const slotId = "tfm-tile-center-thumb";
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8, flexDirection: "row", justifyContent: "center" }));
+    await t.renderOnce();
+    const { dir, p } = writePng("narrow.png");
+    const slots = mkSlots();
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+    openResolution();
+    await slots.drainThumbs();
+    await t.renderOnce();
+
+    const img = t.renderer.root.findDescendantById(`${slotId}-t`) as any;
+    expect(img).toBeTruthy();
+    expect(img.getLayout().width).toBe(4);
+    expect(img.getLayout().left).toBe(2); // (8 − 4)/2 — flex-start would be 0
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   // A superseded drain must still DELIVER: renderAll fires drainThumbs from
   // several steps back-to-back (grid, preview, props), so overlap is the norm.
   // The old generation bail dropped the losing drain's jobs outright, and

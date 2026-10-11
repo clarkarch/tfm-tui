@@ -123,4 +123,26 @@ describe("makeQuit", () => {
     await Bun.sleep(0);
     expect(ctx.codes).toEqual([1]);
   });
+
+  test("a throwing destroy bypasses the closed wait (never-armed closed would hang)", () => {
+    // upstream arms closed only past destroy's internal arming — a destroy
+    // that throws never settles closed, so waiting would hang instead of
+    // exiting 1. The never-promise proves no wait: exit is synchronous.
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, "destroy");
+    (ctx as QuitCtx & { closed?: () => Promise<void> }).closed = () => new Promise<void>(() => {});
+    makeQuit(ctx)();
+    expect(calls[calls.length - 1]).toBe("exit:1");
+    expect(ctx.codes).toEqual([1]);
+  });
+
+  test("a synchronously-throwing closed() exits 1", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    (ctx as QuitCtx & { closed?: () => Promise<void> }).closed = () => {
+      throw new Error("seam gone");
+    };
+    makeQuit(ctx)();
+    expect(ctx.codes).toEqual([1]);
+  });
 });

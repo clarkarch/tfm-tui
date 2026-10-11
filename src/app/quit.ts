@@ -47,34 +47,54 @@ export const makeQuit =
       return;
     }
     let failed = runTeardownSteps(ctx);
+    let destroyThrew = false;
     try {
       ctx.destroy();
     } catch {
       failed = true;
+      destroyThrew = true;
     }
-    exitAfterClosed(ctx, failed ? 1 : 0);
+    // a throwing destroy never arms closed upstream (the close settles only
+    // past destroy's internal arming) — waiting would hang forever instead
+    // of exiting 1, so bypass the wait on that path
+    exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew);
   };
 
 // --- 0.6.0 destroy() returns at once while the terminal restore + remaining
 // output finish later — exit must wait for renderer.closed or the restore
 // truncates. Shared with restart's post-child path. A rejected closed (stream
 // failed mid-teardown) exits 1, never throws. No `closed` seam (fakes) = exit
-// synchronously. Quit/restart fire from sync contexts, so the wait chains. ---
-export const exitAfterClosed = (ctx: Pick<QuitCtx, "closed" | "exit">, code: number): void => {
-  if (!ctx.closed) {
-    ctx.exit(code);
+// synchronously. Quit/restart fire from sync contexts, so the wait chains.
+// skipWait (destroy threw before arming closed) exits 1 at once — waiting
+// would hang forever. The exit calls are guarded: a throwing exit inside the
+// chain would otherwise become an unhandled rejection on the derived promise.
+export const exitAfterClosed = (ctx: Pick<QuitCtx, "closed" | "exit">, code: number, skipWait = false): void => {
+  if (!ctx.closed || skipWait) {
+    try {
+      ctx.exit(skipWait ? 1 : code);
+    } catch {}
     return;
   }
   let closed: Promise<void>;
   try {
     closed = ctx.closed();
   } catch {
-    ctx.exit(1);
+    try {
+      ctx.exit(1);
+    } catch {}
     return;
   }
   void closed.then(
-    () => ctx.exit(code),
-    () => ctx.exit(1),
+    () => {
+      try {
+        ctx.exit(code);
+      } catch {}
+    },
+    () => {
+      try {
+        ctx.exit(1);
+      } catch {}
+    },
   );
 };
 

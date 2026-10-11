@@ -204,6 +204,15 @@ describe("makeRestart", () => {
     await Bun.sleep(0);
     expect(ctx.codes).toEqual([42]);
   });
+
+  test("a rejected closed drops the child status and exits 1", async () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, { status: 42 });
+    (ctx as RestartCtx & { closed?: () => Promise<void> }).closed = () => Promise.reject(new Error("stdout EIO"));
+    makeRestart(ctx)();
+    await Bun.sleep(0);
+    expect(ctx.codes).toEqual([1]);
+  });
 });
 
 describe("restartArgs", () => {

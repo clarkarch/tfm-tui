@@ -122,12 +122,14 @@ export const makeRestart =
       return;
     }
     let failed = preFailed;
+    let destroyThrew = false;
     try {
       ctx.destroy();
     } catch {
       failed = true;
+      destroyThrew = true;
     }
     // teardown failure wins over the child status (deliberate, matches quit's
     // honest-code rule: a broken shutdown must never exit 0)
-    exitAfterClosed(ctx, failed ? 1 : (status ?? 1));
+    exitAfterClosed(ctx, failed ? 1 : (status ?? 1), destroyThrew);
   };

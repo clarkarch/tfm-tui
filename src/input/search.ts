@@ -4,7 +4,7 @@
 // Renderer-free — node access goes through byId; renderGrid/termHasFocus
 // arrive as getters so the factory can exist pre-boot (TDZ seam rule). ---
 
-import { debounced, type Scheduler } from "../lib/uiutil";
+import { debounced, stripControlChars, type Scheduler } from "../lib/uiutil";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 
@@ -59,8 +59,12 @@ export const makeSearch = (ctx: SearchCtx) => {
     const el = ctx.byId(ctx.inputId);
     if (!el) return;
     el.visible = true;
-    el.value = ch;
-    searchQuery = ch;
+    // beginTypeToSearch is exported — any future caller with an unvetted
+    // string would throw NativeError on the write (0.6.0 Input rejects C0).
+    // Query follows the stripped seed so filter and box never disagree.
+    const seed = stripControlChars(ch);
+    el.value = seed;
+    searchQuery = seed;
     // the input owns the keyboard now — text pointer until it clears
     ctx.setPointer?.("text");
     void ctx.renderGrid();

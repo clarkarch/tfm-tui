@@ -104,8 +104,17 @@ const makeTween = (
     }
     usedMs = ms;
     // real renderer: register on the owner engine (per-renderer frame loop);
-    // fakes keep the legacy default-engine path (never attached)
-    tl = owner ? createTimeline({ autoplay: false }, renderer) : createTimeline({ autoplay: false });
+    // fakes keep the legacy default-engine path (never attached). Guarded: a
+    // destroyed renderer throws out of getTimelineEngine/attach, and this is
+    // the one ensure() outside a play()-level try/catch (driven by mousemove).
+    // The fallback strands one un-stepped timeline on the default engine at
+    // worst (stop()'s owner-unregister mismatch throws into its own
+    // try/catch) — unreachable in practice, nothing drives a dead renderer.
+    try {
+      tl = owner ? createTimeline({ autoplay: false }, renderer) : createTimeline({ autoplay: false });
+    } catch {
+      tl = createTimeline({ autoplay: false });
+    }
     tl.add(holder, {
       t: 1,
       duration: ms,

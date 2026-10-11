@@ -1157,8 +1157,10 @@ describe("menu placement", () => {
     expect(Math.abs(top - (TERM_H - h) / 2)).toBeLessThanOrEqual(1);
     // …and the old top-third pad is gone: a pad pushes the centered panel
     // DOWN by pad/2, so an exact-zero pad means top never exceeds the ceiled
-    // center (a coincident height could satisfy the ±1 band under old code —
-    // this kills that hole without a padding getter, which 0.6.0 removed)
+    // center. Tolerance note: this kills pad ≥ 2 and the historical top-third
+    // pad — a pad=1 on an odd-height panel lands exactly on ceil(center) and
+    // passes (visually inert under the intentional ±1 band, and the old
+    // getComputedPadding(1) === 0 getter is gone with the JS yoga node).
     expect(top).toBeLessThanOrEqual(Math.ceil((TERM_H - h) / 2));
   });
 });
