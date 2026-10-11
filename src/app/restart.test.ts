@@ -191,6 +191,19 @@ describe("makeRestart", () => {
     expect(calls).not.toContain("destroy");
     expect(ctx.codes).toEqual([]);
   });
+
+  test("post-child exit waits for renderer.closed (async destroy completion)", async () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, { status: 42 });
+    let resolveClosed!: () => void;
+    (ctx as RestartCtx & { closed?: () => Promise<void> }).closed = () => new Promise<void>((r) => (resolveClosed = r));
+    makeRestart(ctx)();
+    expect(calls[calls.length - 1]).toBe("destroy");
+    expect(ctx.codes).toEqual([]);
+    resolveClosed();
+    await Bun.sleep(0);
+    expect(ctx.codes).toEqual([42]);
+  });
 });
 
 describe("restartArgs", () => {

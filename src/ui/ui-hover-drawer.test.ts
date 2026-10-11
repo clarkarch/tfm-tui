@@ -121,7 +121,7 @@ describe("makeHoverDrawer (headless)", () => {
     mountLayout();
     await t.renderOnce();
   });
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   test("mouse near the left edge opens the sidebar; leaving collapses it", async () => {
     const ui = {
@@ -333,7 +333,7 @@ describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
     );
     await t2.renderOnce();
   });
-  afterAll(() => t2.renderer.destroy());
+  afterAll(() => t2.dispose()); // 0.6.0: destroy + await closed
 
   test("expand/collapse/restore size the host from live config, not the old const", async () => {
     // 9 ≠ the old TERM_H 12: every size below proves the config value is read

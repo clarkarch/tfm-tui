@@ -140,7 +140,7 @@ describe("makeSidebarHover (engine)", () => {
     t = await createTestRenderer({ width: 60, height: 20 });
     await t.renderOnce();
   });
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   test("hover lifts the live icon slot one cell, out restores it", async () => {
     t.renderer.root.add(Box({ id: "sh-row", width: 20, height: 1 }));

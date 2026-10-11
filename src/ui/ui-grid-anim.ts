@@ -1,8 +1,9 @@
 // --- Content-area file animation: fade/slide the just-rebuilt tiles/rows in.
 //
 // The per-style curves are pure and tested; the factory wires ONE reused
-// Timeline onto OpenTUI's frame loop (engine.attach) and writes every node's
-// `opacity` + `translateY` from the current progress. Per-node opacity applies
+// Timeline onto the renderer's own timeline engine (0.6.0
+// getTimelineEngine — the shared `engine` singleton belongs to React/Solid)
+// and writes every node's `opacity` + `translateY` from the current progress. Per-node opacity applies
 // to cells AND kitty image placements (native buffer.zig drawImage reads
 // getCurrentOpacity into the placement), so icon/thumbnail + label + bg fade
 // together; translateY is a render-only offset (no yoga reflow).
@@ -14,7 +15,7 @@
 // file-animation (master) + slide/stagger toggles (fileAnimStyleFrom); the
 // curves read easing, travel/direction and spread live at play
 
-import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
+import { type CliRenderer, createTimeline, engine, getTimelineEngine, type JSAnimation } from "@opentui/core";
 import type { HoverLiftOpts, Theme, TransparentBgMode, UiStyle } from "../config/config-schema";
 import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
@@ -194,6 +195,15 @@ type FileAnimCtx = {
 };
 
 export const makeFileAnim = (ctx: FileAnimCtx) => {
+  // 0.6.0: per-renderer timeline engine — the shared `engine` singleton is
+  // driven by the last React/Solid render(), so imperative modules must own
+  // theirs. The engine is captured once here (a fake renderer without a frame
+  // loop keeps the legacy default-engine path below — those tests drive
+  // `engine.update` directly and never attach).
+  let owner: Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null = null;
+  try {
+    if (typeof ctx.renderer?.setFrameCallback === "function") owner = getTimelineEngine(ctx.renderer);
+  } catch {}
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   const holder = { p: 0 };
@@ -238,7 +248,7 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   const stop = (): void => {
     if (tl) {
       try {
-        engine.unregister(tl);
+        (owner ?? engine).unregister(tl);
       } catch {}
     }
     tl = null;
@@ -254,11 +264,14 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     if (tl && usedMs === ms) return;
     if (tl) {
       try {
-        engine.unregister(tl);
+        (owner ?? engine).unregister(tl);
       } catch {}
     }
     usedMs = ms;
-    tl = createTimeline({ autoplay: false });
+    // real renderer: register on the owner engine (per-renderer frame loop);
+    // fakes keep the legacy default-engine path (never attached, stepped via
+    // engine.update in tests)
+    tl = owner ? createTimeline({ autoplay: false }, ctx.renderer) : createTimeline({ autoplay: false });
     tl.add(holder, {
       p: 1,
       duration: ms,
@@ -374,15 +387,9 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     }
   };
 
-  // A renderer without a frame loop (unit-test fakes) must never reach
-  // engine.attach: attach overwrites the singleton's renderer BEFORE calling
-  // setFrameCallback, so a fake wedges the shared engine — every later
-  // attach (including other test files in the same process) throws out of
-  // detach and no timeline ever advances again.
-  try {
-    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
-  } catch {}
-
+  // Renderer-owned engine attach already happened in getTimelineEngine()
+  // above; a renderer without a frame loop (unit-test fakes) takes the
+  // default-engine path in ensure() and must never attach.
   return { play, stop };
 };
 

@@ -100,4 +100,27 @@ describe("makeQuit", () => {
       expect(ctx.codes).toEqual([1]);
     }
   });
+
+  test("exit waits for renderer.closed (0.6.0: destroy returns at once, terminal restore finishes later)", async () => {
+    // deferred closed: exit must NOT run until the async teardown settles, or
+    // the terminal restore truncates and the alt screen never unwinds
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    let resolveClosed!: () => void;
+    (ctx as QuitCtx & { closed?: () => Promise<void> }).closed = () => new Promise<void>((r) => (resolveClosed = r));
+    makeQuit(ctx)();
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy"]);
+    resolveClosed();
+    await Bun.sleep(0);
+    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "onQuit", "destroy", "exit:0"]);
+  });
+
+  test("a rejected closed exits 1 (stream failure during async teardown)", async () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    (ctx as QuitCtx & { closed?: () => Promise<void> }).closed = () => Promise.reject(new Error("stdout EIO"));
+    makeQuit(ctx)();
+    await Bun.sleep(0);
+    expect(ctx.codes).toEqual([1]);
+  });
 });

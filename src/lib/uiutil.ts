@@ -178,3 +178,21 @@ export const advanceCursor = (idx: number, delta: number, count: number, entries
 };
 
 export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+// 0.6.0 Input value/initialValue/edits throw NativeError on control chars
+// other than tab/CR/LF (DEL + C1 too). Seeds come from the wild (filenames
+// allow every C0 except / and NUL, pasted URLs, gio credential output), so
+// every seeded Input passes through this or a weird name crashes the dialog
+// at construction. Kept-lossy by design: the rename still commits the real
+// name from the key, the input only needs to not throw. Char-code loop, not
+// a regex: biome forbids control chars in regex literals AND useRegexLiterals
+// forbids `new RegExp` for static patterns.
+export const stripControlChars = (s: string): string => {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const control = c < 0x20 ? c !== 0x09 && c !== 0x0a && c !== 0x0d : c === 0x7f || (c >= 0x80 && c <= 0x9f);
+    if (!control) out += s[i];
+  }
+  return out;
+};

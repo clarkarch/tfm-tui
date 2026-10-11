@@ -281,9 +281,9 @@ beforeAll(async () => {
   syncWindow = sw;
 });
 
-afterAll(() => {
+afterAll(async () => {
   rmSync(tmp, { recursive: true, force: true });
-  t.renderer.destroy();
+  await t.dispose(); // 0.6.0: destroy + await closed
 });
 
 describe("renderGrid (grid tiles)", () => {
@@ -1577,8 +1577,8 @@ describe("renderGrid (windowed grid)", () => {
       expect(inner.getChildren()).toHaveLength(8);
       expect(byId("tfm-tile-row-5")).toBeTruthy();
       expect(byId("tfm-tile-row-6")).toBeFalsy();
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(0);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((100 - 6) * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(0);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe((100 - 6) * 6);
       // unbuilt rows are not built AT ALL (mouse handlers only exist per built tile)
       expect(mouseHandlers.map((m) => m.idx)).toEqual([...Array(30).keys()]);
       // absolute ids: tile 0 is index 0, and off-window refs point at nothing
@@ -1593,7 +1593,7 @@ describe("renderGrid (windowed grid)", () => {
       expect(byId("tfm-tile-inner").getChildren()).toHaveLength(16);
       expect(byId("tfm-tile-13")).toBeTruthy();
       expect(byId("tfm-tile-14")).toBeFalsy();
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((500 - 14) * 2);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe((500 - 14) * 2);
       expect(selection.tileRefs.size).toBe(500);
     } finally {
       viewMode = "grid";
@@ -1622,7 +1622,7 @@ describe("renderGrid (windowed grid)", () => {
       expect(byId("tfm-tile-row-0")).toBeFalsy();
       expect(byId("tfm-tile-row-50")).toBeTruthy();
       expect(byId("tfm-tile-inner").getChildren()).toHaveLength(9); // pad-top + 7 rows + pad-bottom
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(49 * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(49 * 6);
       // slide-built tiles carry ABSOLUTE indices (handlers, ids and the
       // cascade window can never drift out of display order)
       expect(mouseHandlers.map((m) => m.idx)).toEqual(Array.from({ length: 35 }, (_, i) => 245 + i));
@@ -1650,8 +1650,8 @@ describe("renderGrid (windowed grid)", () => {
       expect(byId("tfm-tile-row-49")).toBeFalsy(); // left edge dropped…
       expect(byId("tfm-tile-row-56")).toBeTruthy(); // …right edge added
       expect(innerNode.getChildren()).toHaveLength(9); // same row count
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(50 * 6);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((100 - 1 - 56) * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(50 * 6);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe((100 - 1 - 56) * 6);
       // only the ENTERING row built tiles (handlers are the proof of work)
       expect(mouseHandlers.map((m) => m.idx)).toEqual([280, 281, 282, 283, 284]);
 
@@ -1669,7 +1669,7 @@ describe("renderGrid (windowed grid)", () => {
       ).toEqual(Array.from({ length: 7 }, (_, i) => `tfm-tile-row-${48 + i}`));
       expect(byId("tfm-tile-row-55")).toBeFalsy();
       expect(byId("tfm-tile-row-56")).toBeFalsy();
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(48 * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(48 * 6);
       expect(mouseHandlers.map((m) => m.idx)).toEqual([240, 241, 242, 243, 244, 245, 246, 247, 248, 249]);
 
       // back to the top: no overlap → full rebuild, and the stale selection
@@ -2166,7 +2166,7 @@ describe("renderGrid (windowed grid)", () => {
       await t.renderOnce();
       // 40 files / 5 cols = 8 rows, window rows 0..5 → 6 rows + pad
       expect(byId("tfm-tile-inner").getChildren()).toHaveLength(8);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe(2 * 6);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe(2 * 6);
       expect(selection.tileRefs.size).toBe(40);
     } finally {
       recursiveSearch = false;
@@ -2200,8 +2200,8 @@ describe("renderGrid (windowed grid)", () => {
       const r0 = Math.max(0, totalRows - 2);
       expect(byId(`tfm-tile-row-${totalRows - 1}`)).toBeTruthy();
       expect(byId(`tfm-tile-row-${r0}`)).toBeTruthy(); // no pads-only pane
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(r0 * 6);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe(0);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(r0 * 6);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe(0);
       expect([...byId("tfm-tile-inner").getChildren()].length).toBe(totalRows - r0 + 2);
     } finally {
       windowedGridOn = false;

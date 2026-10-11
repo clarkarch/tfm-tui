@@ -12,7 +12,7 @@ let t: TestRendererSetup;
 beforeAll(async () => {
   t = await createTestRenderer({ width: 100, height: 40 });
 });
-afterAll(() => t.renderer.destroy());
+afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
 const hexInts = (h: string): [number, number, number, number] => [
   Number.parseInt(h.slice(1, 3), 16),
@@ -64,7 +64,8 @@ describe("sidebar title block", () => {
   test("tfm mode keeps the original title: accent wordmark + tagline", async () => {
     await mountTitle("tfm");
     expect(node("tfm-title-font").text).toBe("tfm");
-    expect(node("tfm-title-font").color).toBe(theme.accent);
+    // 0.6.0 parses colors to RGBA at set — compare ints, not the hex echo
+    expect([...node("tfm-title-font").color.toInts()]).toEqual(hexInts(theme.accent));
     expect(node("tfm-title-sub").visible).toBe(true);
     expect(t.captureCharFrame()).toContain("terminal file manager");
   });
@@ -72,7 +73,7 @@ describe("sidebar title block", () => {
   test("files mode spells Files in the sidebar white, no tagline", async () => {
     await mountTitle("files");
     expect(node("tfm-title-font").text).toBe("Files");
-    expect(node("tfm-title-font").color).toBe(theme.white);
+    expect([...node("tfm-title-font").color.toInts()]).toEqual(hexInts(theme.white));
     expect(node("tfm-title-sub").visible).toBe(false);
   });
 

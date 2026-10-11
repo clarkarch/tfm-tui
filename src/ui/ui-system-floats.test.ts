@@ -78,9 +78,7 @@ beforeAll(async () => {
   t = await createTestRenderer({ width: 80, height: 24 });
 });
 
-afterAll(() => {
-  t.renderer.destroy();
-});
+afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
 const mkMenu = (colors: Theme) =>
   makeMenu({

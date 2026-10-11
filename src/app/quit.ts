@@ -23,6 +23,11 @@ export type QuitCtx = {
   flushSession?(): void;
   destroy(): void;
   exit(code: number): void;
+  // 0.6.0: destroy() returns at once but the terminal restoration + remaining
+  // output finish later — exit must wait for renderer.closed or the restore
+  // truncates (alt screen never unwinds). Absent = exit synchronously (fakes).
+  // A rejected closed (stream failed mid-teardown) exits 1, never throws.
+  closed?: () => Promise<void>;
   onQuit?: () => void;
   // file-op activity probe (wiring: shared queue depth) — refusing while
   // busy beats exiting mid-transfer (same reason restart refuses: completed
@@ -47,8 +52,31 @@ export const makeQuit =
     } catch {
       failed = true;
     }
-    ctx.exit(failed ? 1 : 0);
+    exitAfterClosed(ctx, failed ? 1 : 0);
   };
+
+// --- 0.6.0 destroy() returns at once while the terminal restore + remaining
+// output finish later — exit must wait for renderer.closed or the restore
+// truncates. Shared with restart's post-child path. A rejected closed (stream
+// failed mid-teardown) exits 1, never throws. No `closed` seam (fakes) = exit
+// synchronously. Quit/restart fire from sync contexts, so the wait chains. ---
+export const exitAfterClosed = (ctx: Pick<QuitCtx, "closed" | "exit">, code: number): void => {
+  if (!ctx.closed) {
+    ctx.exit(code);
+    return;
+  }
+  let closed: Promise<void>;
+  try {
+    closed = ctx.closed();
+  } catch {
+    ctx.exit(1);
+    return;
+  }
+  void closed.then(
+    () => ctx.exit(code),
+    () => ctx.exit(1),
+  );
+};
 
 // --- The pre-destroy teardown steps, shared with restart (which runs them,
 // then waits out the child, and only destroys/exits once it's gone). Order is

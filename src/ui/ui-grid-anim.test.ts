@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box, engine, Text } from "@opentui/core";
+import { Box, getTimelineEngine, Text } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
   easeAt,
@@ -182,7 +182,7 @@ describe("makeFileAnim (engine)", () => {
     t = await createTestRenderer({ width: 60, height: 20 });
     await t.renderOnce();
   });
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   const settleUntil = async (cond: () => boolean): Promise<void> => {
     for (let i = 0; i < 200; i++) {
@@ -192,6 +192,9 @@ describe("makeFileAnim (engine)", () => {
     }
     throw new Error("settleUntil timed out");
   };
+  // 0.6.0: timelines register on the renderer's OWN engine — step that, not
+  // the shared default `engine`.
+  const step = (ms: number): void => getTimelineEngine(t.renderer).update(ms);
 
   const opts = (over: Partial<Parameters<typeof makeFileAnim>[0] extends { opts(): infer O } ? O : never> = {}) => ({
     style: "fade" as const,
@@ -239,14 +242,14 @@ describe("makeFileAnim (engine)", () => {
     // bottom entry: plain slide maps to the stagger-slide curve and starts
     // BELOW the resting spot (dir "up") — on the ROW node, not the container
     anim.play({ tiles: ["rv-row"], rows: ["rv-row"], rowsTotal: 1, total: 1, inner: "rv-inner", enterFrom: "bottom" });
-    engine.update(1);
+    step(1);
     expect((byId("rv-inner") as any).translateY).toBe(0);
     expect((byId("rv-row") as any).translateY).toBeGreaterThan(0);
     anim.stop();
     expect((byId("rv-row") as any).translateY).toBe(0);
     // top entry: files drop in from above (dir "down")
     anim.play({ tiles: ["rv-row"], rows: ["rv-row"], rowsTotal: 1, total: 1, inner: "rv-inner", enterFrom: "top" });
-    engine.update(1);
+    step(1);
     expect((byId("rv-row") as any).translateY).toBeLessThan(0);
     anim.stop();
     // reveal + containerFade: the entering set fades ITSELF — a per-notch
@@ -257,7 +260,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "fade", containerFade: true, ms: 1000 }),
     });
     cfade.play({ tiles: ["rv-row"], rows: [], total: 1, inner: "rv-inner", enterFrom: "bottom" });
-    engine.update(1);
+    step(1);
     expect((byId("rv-inner") as any).opacity).toBe(1);
     expect((byId("rv-row") as any).opacity).toBeLessThan(1);
     cfade.stop();
@@ -273,7 +276,7 @@ describe("makeFileAnim (engine)", () => {
     expect(
       off.play({ tiles: ["rv-row"], rows: ["rv-row"], rowsTotal: 1, total: 1, inner: "rv-inner", enterFrom: "bottom" }),
     ).toBeNull();
-    engine.update(1);
+    step(1);
     expect((byId("rv-row") as any).opacity).toBe(1);
     expect((byId("rv-row") as any).translateY).toBe(0);
   });
@@ -290,10 +293,10 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "stagger", ms: 1000 }),
     });
     anim.play({ tiles: ["ap-a"], total: 1 });
-    engine.update(500);
+    step(500);
     const a1 = (byId("ap-a") as any).opacity;
     anim.play({ tiles: ["ap-b"], total: 1, enterFrom: "bottom" });
-    engine.update(100);
+    step(100);
     const a2 = (byId("ap-a") as any).opacity;
     // the in-flight node PROGRESSION continued (1 would mean the second play
     // snapped it; anything below a1 would mean it rewound)
@@ -304,11 +307,11 @@ describe("makeFileAnim (engine)", () => {
     expect((byId("ap-b") as any).opacity).toBeLessThan(1);
     // a direction flip is irrelevant to a style with no offsets: still one wave
     anim.play({ tiles: ["ap-c"], total: 1, enterFrom: "top" });
-    engine.update(50);
+    step(50);
     const a3 = (byId("ap-a") as any).opacity;
     expect(a3).toBeGreaterThan(a2);
     expect(a3).toBeLessThan(1);
-    engine.update(2000);
+    step(2000);
     expect([byId("ap-a"), byId("ap-b"), byId("ap-c")].map((n) => (n as any).opacity)).toEqual([1, 1, 1]);
     anim.stop();
   });
@@ -324,11 +327,11 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "stagger-slide", ms: 1000 }),
     });
     anim.play({ tiles: ["rs-a"], total: 1, enterFrom: "bottom" }); // rises up
-    engine.update(300);
+    step(300);
     expect((byId("rs-a") as any).translateY).toBeGreaterThan(0);
     anim.play({ tiles: ["rs-b"], total: 1, enterFrom: "top" }); // reversal: fresh wave…
     expect((byId("rs-a") as any).translateY).toBe(0); // …old node settled, not stranded mid-slide
-    engine.update(2000);
+    step(2000);
     expect((byId("rs-b") as any).opacity).toBe(1);
     anim.stop();
   });
@@ -357,7 +360,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "stagger", rowsGranularity: true, ms: 1000 }),
     });
     expect(rowsGran.play(target)).toBe("rows");
-    engine.update(500);
+    step(500);
     expect((byId("sr-row") as any).opacity).toBeLessThan(1); // the ROW carries the wave…
     expect((byId("sr-tile-a") as any).opacity).toBe(1); // …tiles untouched
     rowsGran.stop();
@@ -369,7 +372,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "stagger", rowsGranularity: false, ms: 1000 }),
     });
     expect(perFile.play(target)).toBe("tiles");
-    engine.update(500);
+    step(500);
     const oa = (byId("sr-tile-a") as any).opacity;
     const ob = (byId("sr-tile-b") as any).opacity;
     expect((byId("sr-row") as any).opacity).toBe(1); // row NEVER animates here
@@ -392,7 +395,7 @@ describe("makeFileAnim (engine)", () => {
     });
     anim.play({ tiles: ["gcf-tile"], inner: "gcf-inner" });
     // deterministic progress: no awaited frame between play and the tick
-    engine.update(500);
+    step(500);
     // the tile is untouched; the container carries the whole fade
     expect((byId("gcf-tile") as any).opacity).toBe(1);
     expect((byId("gcf-inner") as any).opacity).toBeCloseTo(fileAnimAt("fade", 0.5, 0, 1).opacity, 2);
@@ -411,7 +414,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "fade", containerFade: false, ms: 1000 }),
     });
     anim.play({ tiles: ["gpf-tile"], inner: "gpf-inner" });
-    engine.update(500);
+    step(500);
     expect((byId("gpf-tile") as any).opacity).toBeCloseTo(fileAnimAt("fade", 0.5, 0, 1).opacity, 2);
     expect((byId("gpf-inner") as any).opacity).toBe(1);
     anim.stop();
@@ -433,12 +436,12 @@ describe("makeFileAnim (engine)", () => {
     };
     // without total the animator assumes 2 files: the second node lags hard
     const a = mk();
-    engine.update(500);
+    step(500);
     const withoutTotal = (byId("gt-tile-b") as any).opacity;
     a.stop();
     // with total=10 the second node is near the front of a 10-file cascade
     const b = mk(10);
-    engine.update(500);
+    step(500);
     const withTotal = (byId("gt-tile-b") as any).opacity;
     const expected = fileAnimAt("stagger", 0.5, 1, 10, { span: 0.4, ease: "ease-out" }).opacity;
     b.stop();
@@ -465,7 +468,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "stagger", ms: 1000 }),
     });
     anim.play({ tiles: fakes.map((_, i) => `x${i}`), inner: "bigd-inner" });
-    engine.update(500);
+    step(500);
     // tiles untouched (at rest), the container carries the fade
     expect(fakes.every((n) => n.opacity === 1 && n.translateX === 0 && n.translateY === 0)).toBe(true);
     expect(inner.opacity).toBeLessThan(1);
@@ -486,7 +489,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "stagger", ms: 1000 }),
     });
     anim.play({ tiles: fakes.map((_, i) => `x${i}`) });
-    engine.update(500);
+    step(500);
     expect(fakes.every((n) => n.opacity === 1 && n.translateX === 0 && n.translateY === 0)).toBe(true);
     anim.stop();
   });
@@ -506,20 +509,20 @@ describe("makeFileAnim (engine)", () => {
     });
     // total (30) over the knob (25): nothing animates, not even the container
     anim.play({ tiles: tiles.map((_, i) => `x${i}`), inner: "maxf-inner", total: 30 });
-    engine.update(500);
+    step(500);
     expect(inner.opacity).toBe(1);
     expect(tiles.every((n) => n.opacity === 1)).toBe(true);
     // at/below the knob the same play animates normally (tiles is the
     // viewport-capped subset in real handoffs, so its length ≤ total)
     anim.play({ tiles: tiles.slice(0, 25).map((_, i) => `x${i}`), inner: "maxf-inner", total: 25 });
-    engine.update(500);
+    step(500);
     expect(inner.opacity).toBeLessThan(1);
     anim.stop();
     expect(inner.opacity).toBe(1);
     // 0 = the knob is off: a huge total still animates
     maxFiles = 0;
     anim.play({ tiles: tiles.slice(0, 25).map((_, i) => `x${i}`), inner: "maxf-inner", total: 50000 });
-    engine.update(500);
+    step(500);
     expect(inner.opacity).toBeLessThan(1);
     anim.stop();
   });
@@ -545,7 +548,7 @@ describe("makeFileAnim (engine)", () => {
       total: 25,
       rowsTotal: 5,
     });
-    engine.update(500);
+    step(500);
     // tiles never touched; row cascade keyed to rowsTotal (row 4 of 5 lags row 0)
     expect(tiles.every((n) => n.opacity === 1 && n.translateY === 0)).toBe(true);
     expect(rows[0]!.opacity).toBeGreaterThan(rows[4]!.opacity);
@@ -563,7 +566,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "stagger", ms: 1000 }),
     });
     anim.play({ tiles: fakes.map((_, i) => `x${i}`) });
-    engine.update(500);
+    step(500);
     expect(fakes[0]!.opacity).toBeLessThan(1);
     anim.stop();
     expect(fakes[0]!.opacity).toBe(1);
@@ -578,7 +581,7 @@ describe("makeFileAnim (engine)", () => {
       opts: () => opts({ style: "fade", containerFade: true, ms: 1000 }),
     });
     anim.play({ tiles: Array.from({ length: MAX_PER_NODE_ANIM + 1 }, (_, i) => `t${i}`), inner: "big-inner" });
-    engine.update(500);
+    step(500);
     expect(inner.opacity).toBeLessThan(1);
     anim.stop();
     expect(inner.opacity).toBe(1);
@@ -684,7 +687,7 @@ describe("makeTileHoverAnim (engine)", () => {
     t = await createTestRenderer({ width: 60, height: 20 });
     await t.renderOnce();
   });
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   const REST = [26, 27, 38, 255] as const;
   const HOVER = [59, 66, 97, 255] as const;

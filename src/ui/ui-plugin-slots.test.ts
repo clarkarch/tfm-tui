@@ -13,9 +13,7 @@ let t: TestRendererSetup;
 beforeAll(async () => {
   t = await createTestRenderer({ width: 60, height: 8 });
 });
-afterAll(() => {
-  t.renderer.destroy();
-});
+afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
 const context = {
   app: "tfm",

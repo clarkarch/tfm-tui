@@ -107,6 +107,8 @@ export const wireNav = (deps: {
       saveSessionSync(paneTabs(), core.panes.active);
     },
     destroy: () => getChrome().renderer.destroy(),
+    // 0.6.0: async destroy completion — exit waits for it (quit.ts)
+    closed: () => getChrome().renderer.closed,
     exit: (code: number) => process.exit(code),
     // refuse quit while file ops are in flight (same guard as restart):
     // exiting mid-batch strands completed files with no undo batch

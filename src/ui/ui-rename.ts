@@ -11,6 +11,7 @@ import { errCode, fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 import type { MaybeNode } from "../lib/node-like";
+import { stripControlChars } from "../lib/uiutil";
 import type { PointerStyle } from "../lib/pointer";
 
 type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
@@ -219,7 +220,9 @@ export const makeRename = (ctx: RenameCtx) => {
     const input = new InputRenderable(ctx.renderer(), {
       id: inputId,
       width: ctx.tileW() - 2,
-      value: path.basename(key),
+      // filenames may carry C0 controls (legal on Linux except / and NUL) —
+      // 0.6.0 Input throws NativeError on them at construction
+      value: stripControlChars(path.basename(key)),
       backgroundColor: ctx.colors().hoverBg,
       focusedBackgroundColor: ctx.colors().accentBg,
       textColor: ctx.colors().white,

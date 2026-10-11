@@ -232,7 +232,7 @@ describe("syncTerminalHeight", () => {
     await t.renderOnce();
   });
 
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   test("resizes the live pane node to the current config value", async () => {
     termH = 9;
@@ -328,7 +328,7 @@ describe("openTerminalHere", () => {
     await t.renderOnce();
   });
 
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   beforeEach(() => {
     spawnCalls = [];

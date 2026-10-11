@@ -182,13 +182,13 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
+afterAll(async () => {
   if (savedXdgData === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = savedXdgData;
   gridDrag.keys = null;
   gridDrag.active = false;
   rmSync(trashSandbox, { recursive: true, force: true });
-  t.renderer.destroy();
+  await t.dispose(); // 0.6.0: destroy + await closed
 });
 
 describe("renderSidebar", () => {
@@ -478,7 +478,7 @@ describe("renderTabbar", () => {
     chrome.renderTabbar(0);
     chrome.renderTabbar(1);
     await t.renderOnce();
-    const w = (id: string): number => (byId(id) as any)?.yogaNode?.getComputedWidth?.() ?? 99;
+    const w = (id: string): number => (byId(id) as any)?.getLayout?.()?.width ?? 99;
     const chips = [0, 1, 2, 3].map((i) => w(`tfm-p0-tab-${i}`));
     // 4 chips + 4 gaps + 3-wide plus must fit 32: chips shrink below content width
     const total = chips.reduce((a, b) => a + b, 0) + 4 + 3;

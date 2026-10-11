@@ -67,9 +67,7 @@ describe("about panel rendering", () => {
   beforeAll(async () => {
     t = await createTestRenderer({ width: 100, height: 30 });
   });
-  afterAll(() => {
-    t.renderer.destroy();
-  });
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   const pointers: string[] = [];
   const opened: string[] = [];

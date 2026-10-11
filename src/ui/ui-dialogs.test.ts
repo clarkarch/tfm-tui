@@ -200,7 +200,7 @@ describe("openDialog chokepoint", () => {
       expect(frame).toContain("[ No ]");
       expect(frame).toContain("[ Delete permanently ]");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -295,7 +295,7 @@ describe("dialog repaints", () => {
       await p;
       expect(choice).toBe("keepBoth");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -320,7 +320,7 @@ describe("dialog repaints", () => {
       yesNo.submit();
       expect(confirmed).toBe(true);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -332,7 +332,7 @@ describe("dialog repaints", () => {
       expect(() => conflict.repaint()).not.toThrow();
       expect(() => yesNo.repaint()).not.toThrow();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -361,7 +361,7 @@ describe("dialog repaints", () => {
       expect(confirmed).toBe(true);
       expect(pointers).toEqual(["default"]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

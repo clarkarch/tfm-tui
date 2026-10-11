@@ -264,7 +264,7 @@ describe("progress repaint", () => {
       const pause = t.renderer.root.findDescendantById("tfm-prog-pause") as any;
       expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -303,7 +303,7 @@ describe("progress repaint", () => {
       pause.processMouseEvent({ type: "out", button: 0, x: 0, y: 0, modifiers: {} });
       expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 

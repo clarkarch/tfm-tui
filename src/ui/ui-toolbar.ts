@@ -11,6 +11,7 @@ import { Box, type CliRenderer, Input, InputRenderable, type KeyEvent, type Mous
 import { applySurface, btnSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
+import { stripControlChars } from "../lib/uiutil";
 import type { IconSlotHandle, IconSpec, IconState, SlotElement } from "./ui-slots";
 import { hoverEvents, navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
@@ -239,7 +240,9 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         new InputRenderable(ctx.renderer(), {
           id: id("path-input"),
           flexGrow: 1,
-          value: isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()),
+          // cwd-seeded (a mounted path can carry odd bytes) — strip so the
+          // 0.6.0 Input ctor never throws NativeError here
+          value: stripControlChars(isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd())),
           backgroundColor: ctx.colors().accentBg,
           focusedBackgroundColor: ctx.colors().accentBg,
           textColor: ctx.colors().white,

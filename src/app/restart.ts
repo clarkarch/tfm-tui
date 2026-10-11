@@ -2,7 +2,7 @@ import { accessSync, constants } from "node:fs";
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
-import { runTeardownSteps, type QuitCtx } from "./quit";
+import { runTeardownSteps, exitAfterClosed, type QuitCtx } from "./quit";
 
 // --- Restart: relaunch the same binary with the same args, then WAIT for the
 // child (spawnSync, same process group, inherited stdio) before tearing down.
@@ -129,5 +129,5 @@ export const makeRestart =
     }
     // teardown failure wins over the child status (deliberate, matches quit's
     // honest-code rule: a broken shutdown must never exit 0)
-    ctx.exit(failed ? 1 : (status ?? 1));
+    exitAfterClosed(ctx, failed ? 1 : (status ?? 1));
   };

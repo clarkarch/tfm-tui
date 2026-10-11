@@ -1,8 +1,8 @@
 // --- Hover drawer: auto-hide/collapse panels until the mouse nears their edge.
 // Pure decision logic (drawerWantsOpen/collapsedSize/collapsedHeight) is
 // exported and tested; the factory wires one reused Timeline per panel onto
-// OpenTUI's frame loop (engine.attach) and drives width/height from a single
-// renderer.root onMouseMove. Never create a timeline per event — the engine
+// the renderer's own timeline engine (0.6.0 getTimelineEngine) and drives
+// width/height from a single renderer.root onMouseMove. Never create a
 // registers timelines in a Set and createTimeline never unregisters.
 //
 // Rules learned the hard way elsewhere in this codebase:
@@ -13,7 +13,14 @@
 //   not pop the drawer.
 // - Terminal auto-hide must NOT touch the PTY: it clips the host box height.
 
-import { type CliRenderer, createTimeline, engine, type JSAnimation, type MouseEvent } from "@opentui/core";
+import {
+  type CliRenderer,
+  createTimeline,
+  engine,
+  getTimelineEngine,
+  type JSAnimation,
+  type MouseEvent,
+} from "@opentui/core";
 import type { UiConfig } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 
@@ -54,7 +61,12 @@ export const collapsedHeight = (style: string): number => (style === "header" ? 
 
 type Tween = { run(target: number, ms: number, onDone?: () => void): void };
 
-const makeTween = (getNode: () => MaybeNode, axis: "width" | "height"): Tween => {
+const makeTween = (
+  getNode: () => MaybeNode,
+  axis: "width" | "height",
+  renderer: CliRenderer,
+  owner: Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null,
+): Tween => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   let from = 0;
@@ -87,11 +99,13 @@ const makeTween = (getNode: () => MaybeNode, axis: "width" | "height"): Tween =>
     if (tl && usedMs === ms) return;
     if (tl) {
       try {
-        engine.unregister(tl);
+        (owner ?? engine).unregister(tl);
       } catch {}
     }
     usedMs = ms;
-    tl = createTimeline({ autoplay: false });
+    // real renderer: register on the owner engine (per-renderer frame loop);
+    // fakes keep the legacy default-engine path (never attached)
+    tl = owner ? createTimeline({ autoplay: false }, renderer) : createTimeline({ autoplay: false });
     tl.add(holder, {
       t: 1,
       duration: ms,
@@ -170,6 +184,12 @@ type Panel = {
 };
 
 export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
+  // 0.6.0: per-renderer timeline engine (same rule as ui-grid-anim) — the
+  // tweens register on this owner; fakes keep the default-engine path.
+  let owner: Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null = null;
+  try {
+    if (typeof ctx.renderer?.setFrameCallback === "function") owner = getTimelineEngine(ctx.renderer);
+  } catch {}
   const getNode = (id: string): MaybeNode => {
     try {
       return ctx.byId(id);
@@ -226,7 +246,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
       open: false,
       initialized: false,
       timer: null,
-      tween: makeTween(() => getNode("tfm-sidebar-root"), "width"),
+      tween: makeTween(() => getNode("tfm-sidebar-root"), "width", ctx.renderer, owner),
     },
     {
       key: "preview",
@@ -264,7 +284,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
       open: false,
       initialized: false,
       timer: null,
-      tween: makeTween(() => getNode("tfm-preview"), "width"),
+      tween: makeTween(() => getNode("tfm-preview"), "width", ctx.renderer, owner),
     },
     {
       key: "terminal",
@@ -292,7 +312,7 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
       open: false,
       initialized: false,
       timer: null,
-      tween: makeTween(() => getNode("tfm-term-host"), "height"),
+      tween: makeTween(() => getNode("tfm-term-host"), "height", ctx.renderer, owner),
     },
   ];
 
@@ -444,12 +464,8 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     }
   }
 
-  // same attach guard as the sidebar/grid animators: a renderer without a
-  // frame loop must never reach engine.attach (it overwrites the singleton
-  // before calling setFrameCallback, wedging every later attach process-wide)
-  try {
-    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
-  } catch {}
+  // Renderer-owned engine attach already happened in getTimelineEngine()
+  // above; fakes take the default-engine path inside makeTween.
   ctx.renderer.root.onMouseMove = onMove;
 
   return { refresh, onMouseMove: onMove, panels };

@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { ResourceContext } from "@opentui/core";
 import { defaultConfig, type Theme } from "../config/config";
 import { buildSyntaxStyle, EXTRA_PARSERS, isTextLike, PREVIEW_FT_BY_EXT, syntaxStyleSig } from "./syntax";
 
@@ -69,8 +70,16 @@ describe("syntaxStyleSig", () => {
 });
 
 describe("buildSyntaxStyle", () => {
+  // 0.6.0: SyntaxStyle is Context-owned — the style BORROWS its owner
+  // (_getSceneHandle/guard assertAlive on every call), so the throwaway
+  // ResourceContext must outlive the styles, torn down once at file end.
+  // Prod passes renderer.nativeScene (lives with the renderer).
+  const owner = new ResourceContext({ objectCapacity: 64, renderCellsMax: 4096 });
+  afterAll(() => owner.destroy());
+  const styleOf = (t: Theme) => buildSyntaxStyle(t, owner);
+
   test("builds a style from a Theme without throwing", () => {
-    const style = buildSyntaxStyle({ ...defaultConfig.theme });
+    const style = styleOf({ ...defaultConfig.theme });
     expect(style).toBeTruthy();
   });
 
@@ -78,7 +87,7 @@ describe("buildSyntaxStyle", () => {
     // presets distinguish builtin constants; without a Theme slot the leaf
     // derives it as number-mixed-toward-white — a real visible step, math
     // on theme colors, never a literal
-    const style = buildSyntaxStyle({ ...defaultConfig.theme });
+    const style = styleOf({ ...defaultConfig.theme });
     const plain = style.getStyle("constant")?.fg;
     const builtin = style.getStyle("constant.builtin")?.fg;
     expect(plain).toBeDefined();
@@ -89,7 +98,7 @@ describe("buildSyntaxStyle", () => {
   test("registers a default style so unhighlighted text uses the theme fg", () => {
     // OpenTUI paints every non-captured region via getStyle("default");
     // without it, code/plain text falls back to the TERMINAL's fg.
-    const style = buildSyntaxStyle({ ...defaultConfig.theme });
+    const style = styleOf({ ...defaultConfig.theme });
     expect(style.getStyle("default")?.fg).toBeDefined();
   });
 });

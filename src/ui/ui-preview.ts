@@ -98,7 +98,7 @@ export const makePreview = (ctx: PreviewCtx) => {
       try {
         previewSyntaxStyle?.destroy();
       } catch {}
-      previewSyntaxStyle = buildSyntaxStyle(colors as Theme);
+      previewSyntaxStyle = buildSyntaxStyle(colors as Theme, ctx.renderer.nativeScene);
       previewSyntaxSig = sig;
     }
     return previewSyntaxStyle;

@@ -679,7 +679,7 @@ describe("open-float repaints", () => {
       expect(ints).toEqual([0x10, 0x10, 0x20, 255]);
       expect(floats.isOpen("pick")).toBe(true);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

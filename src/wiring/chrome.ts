@@ -288,7 +288,7 @@ export const wireChrome = async (deps: {
 
   // --- Sidebar startup intro (cold-boot-only): one reused timeline over the
   // places sidebar, played by the playSidebarIntro boot step after the first
-  // renderAll. Built here (post-renderer — engine.attach needs the frame
+  // renderAll. Built here (post-renderer — getTimelineEngine needs the frame
   // loop); row ids resolve live from placesHost at play time, so the factory
   // sees the rows renderAll just built. ---
   const sidebarIntro = makeSidebarAnim({
@@ -314,7 +314,7 @@ export const wireChrome = async (deps: {
 
   // --- Top bar intro (cold-boot-only): cascades each bar's buttons + crumbs
   // left-to-right, played by the playTopbarIntro boot step right after the
-  // sidebar intro. Built here (post-renderer — engine.attach needs the frame
+  // sidebar intro. Built here (post-renderer — getTimelineEngine needs the frame
   // loop); item ids resolve live — crumbs were just built by renderAll. ---
   const topbarIntro = makeTopbarAnim({
     renderer,

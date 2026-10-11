@@ -57,7 +57,7 @@ describe("prompt widget", () => {
       expect(floats.isOpen("prompt")).toBe(false);
       expect(t.renderer.root.findDescendantById("tfm-prompt")).toBeFalsy();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -74,7 +74,7 @@ describe("prompt widget", () => {
       await expect(pending).resolves.toBeNull();
       expect(pointers).toEqual(["text", "default"]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -93,7 +93,7 @@ describe("prompt widget", () => {
       await expect(pending).resolves.toBe("https://github.com/u/repo");
       expect(floats.isOpen("prompt")).toBe(false);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -110,7 +110,7 @@ describe("prompt widget", () => {
       prompt.handleKey({ name: "return" });
       await expect(pending).resolves.toBe("https://github.com/u/seed");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -125,7 +125,7 @@ describe("prompt widget", () => {
       await expect(pending).resolves.toBeNull();
       expect(t.renderer.root.findDescendantById("tfm-prompt")).toBeFalsy();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -145,7 +145,7 @@ describe("prompt widget", () => {
       prompt.handleKey({ name: "return" });
       await expect(second).resolves.toBe("https://github.com/u/other");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -168,7 +168,7 @@ describe("prompt widget", () => {
       prompt.handleKey({ name: "return" });
       await expect(pending).resolves.toBe("pw");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

@@ -99,11 +99,11 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
+afterAll(async () => {
   if (savedXdgData === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = savedXdgData;
   rmSync(trashSandbox, { recursive: true, force: true });
-  t.renderer.destroy();
+  await t.dispose(); // 0.6.0: destroy + await closed
 });
 
 // hover-on rides on MOVE (see ui-slots.hoverEvents)

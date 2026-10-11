@@ -56,9 +56,7 @@ describe("help panel tips section", () => {
     // short terminal: the full tip list must overflow into a scrollable body
     t = await createTestRenderer({ width: 100, height: 24 });
   });
-  afterAll(() => {
-    t.renderer.destroy();
-  });
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   const openHelp = async () => {
     const panel: any = Box({ id: "help-test-panel", width: "100%" });

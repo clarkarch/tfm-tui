@@ -3,8 +3,8 @@
 // renderAll (see app/boot.ts) — never on navigate/theme-flip/resize.
 //
 // Rules (same family as ui-grid-anim / ui-hover-drawer):
-// - ONE reused timeline (`restart()`, `engine.attach` once — the engine's Set
-//   never unregisters, so never createTimeline per event).
+// - ONE reused timeline (`restart()`, owner engine captured once — the
+//   engine's Set never unregisters, so never createTimeline per event).
 // - `fade`/`slide` target ONLY the sidebar root node; `stagger` cascades the
 //   place-row opacities and never translates; `stagger-slide` (files-style)
 //   cascades each row's own slide+fade — horizontal only, so rows stay in
@@ -24,7 +24,7 @@
 // The curves reuse the shared file-animation helpers (`easeAt`,
 // `staggerLocal`, `quantizeDy`); only the frame assembly + the gate are new. ---
 
-import { type CliRenderer, createTimeline, engine, type JSAnimation } from "@opentui/core";
+import { type CliRenderer, createTimeline, engine, getTimelineEngine, type JSAnimation } from "@opentui/core";
 import { easeAt, quantizeDy, staggerLocal, type EaseKey, type SlideDir } from "./ui-grid-anim";
 import { clamp01, type Scheduler } from "../lib/uiutil";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
@@ -116,6 +116,13 @@ type SidebarAnimCtx = {
 };
 
 export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
+  // 0.6.0: per-renderer timeline engine (same rule as ui-grid-anim) — the
+  // shared `engine` singleton belongs to React/Solid; fakes keep the
+  // default-engine path (never attached).
+  let owner: Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null = null;
+  try {
+    if (typeof ctx.renderer?.setFrameCallback === "function") owner = getTimelineEngine(ctx.renderer);
+  } catch {}
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   const holder = { p: 0 };
@@ -174,7 +181,7 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
     cancelGate();
     if (tl) {
       try {
-        engine.unregister(tl);
+        (owner ?? engine).unregister(tl);
       } catch {}
     }
     tl = null;
@@ -189,11 +196,11 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
     if (tl && usedMs === ms) return;
     if (tl) {
       try {
-        engine.unregister(tl);
+        (owner ?? engine).unregister(tl);
       } catch {}
     }
     usedMs = ms;
-    tl = createTimeline({ autoplay: false });
+    tl = owner ? createTimeline({ autoplay: false }, ctx.renderer) : createTimeline({ autoplay: false });
     tl.add(holder, {
       p: 1,
       duration: ms,
@@ -298,14 +305,8 @@ export const makeSidebarAnim = (ctx: SidebarAnimCtx) => {
     }
   };
 
-  // A renderer without a frame loop (unit-test fakes) must never reach
-  // engine.attach: attach overwrites the singleton's renderer BEFORE calling
-  // setFrameCallback, so a fake wedges the shared engine — every later
-  // attach (including other test files in the same process) throws out of
-  // detach and no timeline ever advances again.
-  try {
-    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
-  } catch {}
+  // Renderer-owned engine attach already happened in getTimelineEngine()
+  // above; fakes take the default-engine path in ensure().
 
   return { play, stop };
 };
@@ -339,6 +340,11 @@ type TopbarAnimCtx = {
 };
 
 export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
+  // 0.6.0: per-renderer timeline engine (same rule as makeSidebarAnim above).
+  let owner: Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null = null;
+  try {
+    if (typeof ctx.renderer?.setFrameCallback === "function") owner = getTimelineEngine(ctx.renderer);
+  } catch {}
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
   const holder = { p: 0 };
@@ -395,7 +401,7 @@ export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
     cancelGate();
     if (tl) {
       try {
-        engine.unregister(tl);
+        (owner ?? engine).unregister(tl);
       } catch {}
     }
     tl = null;
@@ -410,11 +416,11 @@ export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
     if (tl && usedMs === ms) return;
     if (tl) {
       try {
-        engine.unregister(tl);
+        (owner ?? engine).unregister(tl);
       } catch {}
     }
     usedMs = ms;
-    tl = createTimeline({ autoplay: false });
+    tl = owner ? createTimeline({ autoplay: false }, ctx.renderer) : createTimeline({ autoplay: false });
     tl.add(holder, {
       p: 1,
       duration: ms,
@@ -502,9 +508,7 @@ export const makeTopbarAnim = (ctx: TopbarAnimCtx) => {
   const play = (): void => run(ctx.barIds() ?? []);
   const playIds = (ids: string[]): void => run(ids ?? []);
 
-  try {
-    if (typeof ctx.renderer?.setFrameCallback === "function") engine.attach(ctx.renderer);
-  } catch {}
+  // (attach comment removed: getTimelineEngine above owns the engine now)
 
   return { play, playIds, stop };
 };

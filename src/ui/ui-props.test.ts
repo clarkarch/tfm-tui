@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box, Yoga } from "@opentui/core";
+import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeProps } from "./ui-props";
 import { makeDialogs } from "./ui-dialogs";
@@ -196,13 +196,13 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
+afterAll(async () => {
   for (const [k, v] of Object.entries(saved)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
   rmSync(sandbox, { recursive: true, force: true });
-  t.renderer.destroy();
+  await t.dispose(); // 0.6.0: destroy + await closed
 });
 
 const down = (id: string) => {
@@ -487,18 +487,39 @@ describe("multi-selection properties", () => {
 });
 
 describe("image hero centering", () => {
+  // 0.6.0 removed the JS yoga node (no getFlexDirection/getJustifyContent/
+  // getPadding), so the centering + paddingRight:2 invariants pin the
+  // OBSERVABLE instead: the slot's computed left inside the full-width hero
+  // row. Centering in the pad-reduced row means
+  // left === round((rowW − 2 − slotW)/2) (yoga rounds half up) — flex-start
+  // would park it at 0 (the old left-hug bug), and any pad change moves it.
+  const heroLeft = (id: string): { left: number; rowW: number; slotW: number } => {
+    const s: any = byId(id);
+    const row: any = s?.parent;
+    return {
+      left: s?.getLayout?.()?.left ?? NaN,
+      rowW: row?.getLayout?.()?.width ?? NaN,
+      slotW: s?.getLayout?.()?.width ?? NaN,
+    };
+  };
+  const expectHeroPlaced = (id: string): void => {
+    const { left, rowW, slotW } = heroLeft(id);
+    expect(rowW).toBeGreaterThan(slotW);
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBe(Math.round((rowW - 2 - slotW) / 2));
+  };
+
   test("the thumbnail slot centers its raster (parity with grid/list slots)", async () => {
     const img = path.join(sandbox, "pic.png");
     writeFileSync(img, "x");
     thumbJobs = [];
     props.openProperties(img);
     await settle(() => thumbJobs.length > 0);
+    await t.renderOnce();
     const job = thumbJobs.at(-1)!;
     const slot: any = byId(job.slotId);
     expect(slot).toBeTruthy();
-    // a raster narrower than the slot must center, not hug the left edge
-    expect(slot.yogaNode.getFlexDirection()).toBe(Yoga.FLEX_DIRECTION_ROW);
-    expect(slot.yogaNode.getJustifyContent()).toBe(Yoga.JUSTIFY_CENTER);
+    expectHeroPlaced(job.slotId);
     props.closeProps();
   });
 
@@ -508,9 +529,9 @@ describe("image hero centering", () => {
     thumbJobs = [];
     props.openProperties(img);
     await settle(() => thumbJobs.length > 0);
-    const slot: any = byId(thumbJobs.at(-1)!.slotId);
-    const heroRow: any = slot?.parent;
-    expect(heroRow?.yogaNode?.getPadding?.(Yoga.EDGE_RIGHT)?.value ?? 0).toBe(2);
+    await t.renderOnce();
+    expect(byId(thumbJobs.at(-1)!.slotId)).toBeTruthy();
+    expectHeroPlaced(thumbJobs.at(-1)!.slotId);
     props.closeProps();
   });
 
@@ -518,9 +539,8 @@ describe("image hero centering", () => {
     props.openProperties(fileA);
     await t.renderOnce();
     const slot: any = byId("slot-file-document");
-    const heroRow: any = slot?.parent;
     expect(slot).toBeTruthy();
-    expect(heroRow?.yogaNode?.getPadding?.(Yoga.EDGE_RIGHT)?.value ?? 0).toBe(2);
+    expectHeroPlaced("slot-file-document");
     props.closeProps();
   });
 
@@ -528,9 +548,8 @@ describe("image hero centering", () => {
     props.openProperties([fileA, fileSh]);
     await t.renderOnce();
     const slot: any = byId("slot-select-all");
-    const heroRow: any = slot?.parent;
     expect(slot).toBeTruthy();
-    expect(heroRow?.yogaNode?.getPadding?.(Yoga.EDGE_RIGHT)?.value ?? 0).toBe(2);
+    expectHeroPlaced("slot-select-all");
     props.closeProps();
   });
 

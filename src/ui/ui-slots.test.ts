@@ -297,8 +297,8 @@ describe("thumbnail mount", () => {
     process.env.XDG_CACHE_HOME = cacheSandbox;
     t = await createTestRenderer({ width: 80, height: 24 });
   });
-  afterAll(() => {
-    t.renderer.destroy();
+  afterAll(async () => {
+    await t.dispose(); // 0.6.0: destroy + await closed
     if (REAL_CACHE_HOME === undefined) delete process.env.XDG_CACHE_HOME;
     else process.env.XDG_CACHE_HOME = REAL_CACHE_HOME;
     rmSync(cacheSandbox, { recursive: true, force: true });

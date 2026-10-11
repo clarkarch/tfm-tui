@@ -172,7 +172,7 @@ describe("makeSidebarAnim (engine)", () => {
     t = await createTestRenderer({ width: 60, height: 20 });
     await t.renderOnce();
   });
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   const settleUntil = async (cond: () => boolean): Promise<void> => {
     for (let i = 0; i < 200; i++) {

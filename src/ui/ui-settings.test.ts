@@ -171,9 +171,7 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
-  t.renderer.destroy();
-});
+afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
 // openMenu is a no-op while open (shared instance state across tests) — close
 // first so every test starts from the root view. BOTH views now open with NO
@@ -826,8 +824,8 @@ describe("keybind capture", () => {
     // handler never sees inside clicks (the panel stops propagation), so a
     // bare stopPropagation here leaves the capture armed.
     const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
-    const px = Math.round(panel.yogaNode.getComputedLeft()) + 2;
-    const py = Math.round(panel.yogaNode.getComputedTop()) + Math.round(panel.yogaNode.getComputedHeight()) - 1;
+    const px = Math.round(panel.getLayout().left) + 2;
+    const py = Math.round(panel.getLayout().top) + Math.round(panel.getLayout().height) - 1;
     await t.mockMouse.click(px, py);
     await t.renderOnce();
     expect(t.captureCharFrame()).not.toContain("press a key…"); // cancelled
@@ -1152,17 +1150,16 @@ describe("menu placement", () => {
     await t.renderOnce();
     const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
     expect(panel).toBeTruthy();
-    // yogaNode is protected (TS-level only) — reachable at runtime; the
-    // computed top IS the painted position, not a prop echo
-    const yoga = panel.yogaNode;
-    const top = yoga.getComputedTop();
-    const h = yoga.getComputedHeight();
-    const scrim: any = t.renderer.root.findDescendantById("tfm-menu");
+    // getLayout() is the painted position, not a prop echo (0.6.0: the JS
+    // yoga node is gone; protected yogaNode reads became this)
+    const { top, height: h } = panel.getLayout();
     // centered in the terminal (yoga rounding may drift a cell)…
     expect(Math.abs(top - (TERM_H - h) / 2)).toBeLessThanOrEqual(1);
-    // …and the old top-third pad is gone (a coincident height could satisfy
-    // the centering formula under the old code — zero pad kills that hole)
-    expect(scrim.yogaNode.getComputedPadding(1)).toBe(0); // Edge.Top
+    // …and the old top-third pad is gone: a pad pushes the centered panel
+    // DOWN by pad/2, so an exact-zero pad means top never exceeds the ceiled
+    // center (a coincident height could satisfy the ±1 band under old code —
+    // this kills that hole without a padding getter, which 0.6.0 removed)
+    expect(top).toBeLessThanOrEqual(Math.ceil((TERM_H - h) / 2));
   });
 });
 

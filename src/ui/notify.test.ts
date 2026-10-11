@@ -243,7 +243,7 @@ describe("notify stacking (real renderer)", () => {
       expect(widthOf("tfm-toast-1")).toBe(36);
       expect(widthOf("tfm-toast-2")).toBe(36);
     } finally {
-      r.renderer.destroy();
+      await r.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -314,7 +314,7 @@ describe("notify stacking (real renderer)", () => {
       try {
         stopSpinner?.();
       } catch {}
-      r.renderer.destroy();
+      await r.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

@@ -119,7 +119,7 @@ beforeAll(async () => {
   tmpDir = mkdtempSync(path.join(os.tmpdir(), "tfm-preview-"));
 });
 
-afterAll(() => t.renderer.destroy());
+afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
 const settleUntil = async (t: TestRendererSetup, cond: () => boolean): Promise<boolean> => {
   // renderOnce per poll: Text()/Box() children are lazy VNode proxies until a
@@ -494,7 +494,7 @@ describe("preview rich rendering", () => {
       // w-markers are unique to this file, so the frame assert is exact
       expect((await solo.captureCharFrame()).includes("w40marker")).toBe(true);
     } finally {
-      solo.renderer.destroy();
+      await solo.dispose(); // 0.6.0: destroy + await closed
     }
   });
 

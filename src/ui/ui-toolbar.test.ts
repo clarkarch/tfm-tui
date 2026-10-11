@@ -97,7 +97,7 @@ describe("makeToolbar (per pane)", () => {
     // each toolbar owns its prefixed crumb node
     expect(t.renderer.root.findDescendantById("tfm-p0-crumbs")).toBeTruthy();
     expect(t.renderer.root.findDescendantById("tfm-p1-crumbs")).toBeTruthy();
-    t.renderer.destroy();
+    await t.dispose(); // 0.6.0: destroy + await closed
   });
 });
 
@@ -144,7 +144,7 @@ describe("renderCrumbs directory-change animation", () => {
       await t.renderOnce();
       expect(seen).toEqual([]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -164,7 +164,7 @@ describe("renderCrumbs directory-change animation", () => {
       tb.renderCrumbs();
       expect(seen).toHaveLength(1);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -181,7 +181,7 @@ describe("renderCrumbs directory-change animation", () => {
       tb.renderCrumbs();
       expect(seen).toEqual([]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -199,7 +199,7 @@ describe("renderCrumbs directory-change animation", () => {
       // [/, /x] shared, /x/gamma is new at index 2
       expect(seen).toEqual([["tfm-p0-crumb-2"]]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -216,7 +216,7 @@ describe("renderCrumbs directory-change animation", () => {
       tb.renderCrumbs();
       expect(seen).toEqual([["tfm-p0-crumb-0"]]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -232,7 +232,7 @@ describe("renderCrumbs directory-change animation", () => {
       tb.renderCrumbs();
       expect(seen).toEqual([]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -251,7 +251,7 @@ describe("renderCrumbs directory-change animation", () => {
       tb.exitPathEdit();
       expect(seen).toEqual([]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

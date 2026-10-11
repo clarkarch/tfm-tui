@@ -125,9 +125,9 @@ describe("makeRename (renderer)", () => {
     rename = makeRename(ctx);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     rmSync(dir, { recursive: true, force: true });
-    t.renderer.destroy();
+    await t.dispose(); // 0.6.0: destroy + await closed
   });
 
   test("committing a create keeps ONE undo batch and reports Created, not Renamed", async () => {
@@ -197,6 +197,20 @@ describe("makeRename (renderer)", () => {
     expect(pointers).toEqual(["text"]);
     rename.finishInlineRename(false);
     expect(pointers).toEqual(["text", "default"]);
+  });
+
+  test("a control-char filename opens rename without throwing (0.6.0 Input rejects C0)", async () => {
+    // Linux filenames may carry C0 controls (everything except / and NUL);
+    // the seeded Input value is stripped so construction never throws
+    // NativeError — the commit path still reads the real key, not the input
+    const key = path.join(dir, "we\x01ird\x1b.txt");
+    await mountRow(key);
+    rename.startInlineRename(key);
+    await t.renderOnce();
+    const input = t.renderer.root.findDescendantById("tfm-rename-input") as any;
+    expect(input).toBeTruthy();
+    expect(input.value).toBe("weird.txt");
+    rename.finishInlineRename(false);
   });
 });
 
