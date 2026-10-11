@@ -341,6 +341,124 @@ describe("self drop", () => {
   });
 });
 
+describe("self drop onto the embedded terminal", () => {
+  // a plain kitty drag over the terminal pane must paste like ctrl+drag does:
+  // the terminal is a third self-drop target beside folder tiles and places
+  const termSetup = () => {
+    const b = baseCtx();
+    const pasted: string[][] = [];
+    const cues: boolean[] = [];
+    let open = true;
+    const ext = b.ctx as typeof b.ctx & {
+      isTerminalOpen?(): boolean;
+      hoverTerminal?(hot: boolean): void;
+      pasteToTerminal?(paths: string[]): boolean;
+    };
+    ext.isTerminalOpen = () => open;
+    ext.hoverTerminal = (hot: boolean) => cues.push(hot);
+    ext.pasteToTerminal = (paths: string[]) => {
+      pasted.push(paths);
+      return true;
+    };
+    b.ctx.hitTargetAt = () => ({ kind: "terminal", path: "" });
+    return {
+      ...b,
+      pasted,
+      cues,
+      setOpen: (v: boolean) => {
+        open = v;
+      },
+    };
+  };
+
+  test("hover over the open terminal agrees the drop and lights the cue", () => {
+    const { ctx, feed, tx, cues } = termSetup();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=m:x=5:y=5");
+    expect(tx.some((s) => s === "\x1b]72;t=m:o=2;text/uri-list\x1b\\")).toBe(true);
+    expect(cues).toEqual([true]);
+    gridDrag.keys = null;
+  });
+
+  test("hover with the terminal closed rejects (never accepts into a dead pane)", () => {
+    const { ctx, feed, tx, cues, setOpen } = termSetup();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    setOpen(false);
+    feed("t=m:x=5:y=5");
+    expect(tx.some((s) => s === "\x1b]72;t=m:o=0\x1b\\")).toBe(true);
+    expect(cues).toEqual([]);
+    gridDrag.keys = null;
+  });
+
+  test("drop onto the open terminal pastes, never moves or copies", async () => {
+    const { ctx, feed, tx, pasted } = termSetup();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=m:x=5:y=5");
+    feed("t=M:x=5:y=5");
+    await settleUntil(() => pasted.length > 0);
+    expect(pasted).toEqual([["/d/a"]]);
+    expect(tx.some((s) => s === "\x1b]72;t=r:o=2\x1b\\")).toBe(true);
+    expect(ctx.moveIns).toEqual([]);
+    expect(ctx.runTransfers).toEqual([]);
+    expect(ctx.trashed).toEqual([]);
+    gridDrag.keys = null;
+  });
+
+  test("moving the hover from the terminal to a folder clears the cue", () => {
+    const { ctx, feed, cues } = termSetup();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=m:x=5:y=5");
+    ctx.hitTargetAt = () => ({ kind: "folder", path: "/d/dest" });
+    feed("t=m:x=5:y=5");
+    expect(cues).toEqual([true, false]);
+    gridDrag.keys = null;
+  });
+
+  test("leaving the terminal clears the cue", () => {
+    const { ctx, feed, cues } = termSetup();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=m:x=5:y=5");
+    feed("t=m:x=-1:y=-1");
+    expect(cues).toEqual([true, false]);
+    gridDrag.keys = null;
+  });
+
+  test("a completed terminal drop does not paint 'drag cancelled' after the end event", async () => {
+    const { ctx, feed, status, pasted } = termSetup();
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=M:x=5:y=5");
+    await settleUntil(() => pasted.length > 0);
+    feed("t=e:x=4:y=1");
+    await Bun.sleep(50);
+    expect(status).not.toContain("drag cancelled");
+    gridDrag.keys = null;
+  });
+
+  test("without the terminal seams an old fake still rejects the hover", () => {
+    // absent isTerminalOpen/hoverTerminal/pasteToTerminal = today's behavior
+    const { ctx, feed, tx } = baseCtx();
+    ctx.hitTargetAt = () => ({ kind: "terminal", path: "" });
+    makeDnd72(ctx);
+    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    feed("t=o:x=1:y=1");
+    feed("t=m:x=5:y=5");
+    expect(tx.some((s) => s === "\x1b]72;t=m:o=0\x1b\\")).toBe(true);
+    gridDrag.keys = null;
+  });
+});
+
 describe("remote drops", () => {
   test("enableDrops declares the drop-side machine id when known", () => {
     const { ctx, tx } = baseCtx();

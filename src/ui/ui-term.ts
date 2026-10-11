@@ -259,10 +259,11 @@ export const makeTerminal = (ctx: TermCtx) => {
   // release over the pane: paste the drag payload as quoted paths into the
   // shell. Payload is read from the shared gridDrag singleton BEFORE cleanup
   // (finishDragState nulls it), same order as the place/tab drop handlers.
-  const handleTermDrop = (): void => {
-    const keys = gridDrag.keys;
+  // Shared with the kitty self-drop path (plain drag onto the pane pastes
+  // through pastePaths below) — one sink so the two can't drift.
+  const termDropSink = (): TermDropSink => {
     const pty = termChild?.terminal ?? null;
-    pasteDroppedPaths(pty ? (keys?.map((k) => k.path) ?? null) : null, {
+    return {
       ptyWrite: (s) => {
         try {
           pty?.write(new TextEncoder().encode(s));
@@ -277,7 +278,13 @@ export const makeTerminal = (ctx: TermCtx) => {
       finishDrag: ctx.finishDrag,
       paintCue: paintHeaderCue,
       log: (m) => ctx.dlog(m),
-    });
+    };
+  };
+
+  const handleTermDrop = (): void => {
+    const keys = gridDrag.keys;
+    const pty = termChild?.terminal ?? null;
+    pasteDroppedPaths(pty ? (keys?.map((k) => k.path) ?? null) : null, termDropSink());
   };
 
   // prompt-click bridge: fish/bash don't use mouse reporting, so a left click
@@ -580,6 +587,14 @@ export const makeTerminal = (ctx: TermCtx) => {
   return {
     openTerminalHere,
     closeTerminalPane,
+    // kitty self-drop landing (plain drag onto the pane): paste quoted paths
+    // through the same sink as the internal ctrl+drag mouse drop above.
+    // A closed pane answers false so the sender rejects instead of accepting
+    // into nothing.
+    pastePaths: (paths: string[]): boolean => pasteDroppedPaths(termChild?.terminal ? paths : null, termDropSink()),
+    // self-drop hover cue: latched through paintHeaderCue, so repeated
+    // hover frames are no-ops and mouse hover shares the same state
+    setDropCue: paintHeaderCue,
     // run a file in the embedded shell: open the pane at the file's dir (or
     // focus it when already open — the path is absolute so the shell's cwd
     // doesn't matter) and feed the quoted path + newline, i.e. exactly what

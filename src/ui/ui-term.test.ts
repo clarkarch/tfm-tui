@@ -396,6 +396,44 @@ describe("openTerminalHere", () => {
     fac.closeTerminalPane();
   });
 
+  // the kitty self-drop path (plain drag onto the pane) shares one paste with
+  // the internal ctrl+drag mouse path: quoted paths + trailing space + focus
+  test("pastePaths pastes quoted paths like the internal ctrl+drag drop", () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    const written: string[] = [];
+    child.terminal!.write = (d: Uint8Array) => {
+      written.push(new TextDecoder().decode(d));
+    };
+    expect(fac.pastePaths(["/tmp/a.txt", "/tmp/b c"])).toBe(true);
+    expect(written.join("")).toBe("'/tmp/a.txt' '/tmp/b c' ");
+    fac.closeTerminalPane();
+  });
+
+  test("pastePaths with no pane returns false and writes nothing", () => {
+    const fac = mkTerm();
+    const written: string[] = [];
+    child.terminal!.write = (d: Uint8Array) => {
+      written.push(new TextDecoder().decode(d));
+    };
+    expect(fac.pastePaths(["/tmp/a.txt"])).toBe(false);
+    expect(written).toEqual([]);
+  });
+
+  test("setDropCue flips the header fill hot and back (shares the latch with mouse hover)", async () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    fac.setDropCue(true);
+    await t.renderOnce();
+    const header = t.renderer.root.findDescendantById("tfm-term-header") as any;
+    expect([...header.backgroundColor.toInts()]).not.toEqual(hexSidebarBg());
+    fac.setDropCue(false);
+    await t.renderOnce();
+    expect([...header.backgroundColor.toInts()]).toEqual(hexSidebarBg());
+    fac.closeTerminalPane();
+  });
+
   test("transparent force opts the VT into a transparent default background", async () => {
     const fac = mkTerm({ transparentForce: () => true });
     fac.openTerminalHere("/tmp");

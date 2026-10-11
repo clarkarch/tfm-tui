@@ -64,7 +64,7 @@ export const splitOsc72Seq = (seq: string): { meta: string; payload: string } | 
   return { meta: sep < 0 ? body : body.slice(0, sep), payload: sep < 0 ? "" : body.slice(sep + 1) };
 };
 
-export type DropTarget = { kind: "folder" | "place"; path: string };
+export type DropTarget = { kind: "folder" | "place" | "terminal"; path: string };
 
 export type Dnd72Ctx = {
   log(msg: string): void;
@@ -78,6 +78,13 @@ export type Dnd72Ctx = {
   // sidebar place highlight while a self-drop hovers it
   hoverPlace(path: string): void;
   clearHoverPlace(): void;
+  // embedded terminal as a self-drop target: a plain kitty drag released over
+  // the pane pastes the payload like the internal ctrl+drag drop does.
+  // Optional so old fakes keep working — absent means "no terminal target"
+  // (today's reject behavior).
+  isTerminalOpen?(): boolean;
+  hoverTerminal?(hot: boolean): void;
+  pasteToTerminal?(paths: string[]): boolean;
   // pointer is about to be grabbed by the terminal — end the internal drag
   finishDrag(): void;
   escMenuOpen(): boolean;
@@ -201,14 +208,29 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   // Returns the resolved target so the caller answers kitty's hover offer
   // (agree/reject per hover — without an answer kitty marks the drop as not
   // accepted and cancels it on release, so the t=M below never arrives).
+  const setTermCue = (hot: boolean): void => {
+    try {
+      ctx.hoverTerminal?.(hot);
+    } catch {}
+  };
+
   const handleSelfDropHover = (x: number, y: number): DropTarget | null => {
     clearSelfDropHighlight();
     const target = x >= 0 ? ctx.hitTargetAt(x, y, dragPaths) : null;
     ctx.log(`self hover ${x},${y} -> ${target ? `${target.kind}:${target.path}` : "none"}`);
     if (!target) {
       ctx.clearHoverPlace();
+      setTermCue(false);
       return null;
     }
+    if (target.kind === "terminal") {
+      // the pane must be open: accepting into a dead host strands the accept
+      const open = ctx.isTerminalOpen?.() ?? false;
+      ctx.clearHoverPlace();
+      if (open) setTermCue(true);
+      return open ? target : null;
+    }
+    setTermCue(false);
     if (target.kind === "folder") {
       selfTargetKey = target.path;
       // a folder tile wins over any previous place hover highlight
@@ -234,11 +256,26 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     const target = ctx.hitTargetAt(x, y, dragPaths);
     clearSelfDropHighlight();
     ctx.clearHoverPlace();
+    setTermCue(false);
     dragPaths = null;
     dragEntries = null;
     if (!paths?.length || !target) {
       write(cancelDropFrame(), "self drop rejected");
       ctx.setStatusMsg("drag cancelled");
+      return;
+    }
+    // the embedded terminal pastes the payload (quoted paths, like the
+    // internal ctrl+drag drop) — never a move/copy/transfer
+    if (target.kind === "terminal") {
+      let pasted = false;
+      try {
+        pasted = ctx.isTerminalOpen?.() === true && (ctx.pasteToTerminal?.(paths) ?? false);
+      } catch {}
+      write(
+        pasted ? finishSelfDropFrame() : cancelDropFrame(),
+        pasted ? "self drop to terminal" : "self drop rejected",
+      );
+      if (!pasted) ctx.setStatusMsg("drag cancelled");
       return;
     }
     const destDir = target.path;
@@ -723,6 +760,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       if (x === -1 && y === -1) {
         clearSelfDropHighlight();
         ctx.clearHoverPlace();
+        setTermCue(false);
         return;
       }
       if (t === "m") {

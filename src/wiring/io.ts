@@ -251,6 +251,11 @@ export const wireDnd = (deps: {
       if (idx >= 0) chrome.chrome.setMousePlace(idx);
     },
     clearHoverPlace: () => chrome.chrome.clearMousePlace(),
+    // embedded terminal as a plain-drag self-drop target (pastes paths like
+    // the internal ctrl+drag drop does — see ui-term's pastePaths/setDropCue)
+    isTerminalOpen: () => fileops.terminal.isOpen(),
+    hoverTerminal: (hot: boolean) => fileops.terminal.setDropCue(hot),
+    pasteToTerminal: (paths: string[]) => fileops.terminal.pastePaths(paths),
     finishDrag: grid.finishDrag,
     escMenuOpen: () => core.floats.isOpen("escmenu"),
     fileMenuOpen: () => core.floats.isOpen("filemenu"),
