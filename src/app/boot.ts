@@ -28,6 +28,9 @@ export type BootCtx = {
   restoreSession(): void;
   loadSystemPlaces(): Promise<void>;
   renderAll(): void;
+  // lazy mounts refresh: boot skips the ~200ms lsblk for first paint and this
+  // fills the Devices rows in right after (optional — absent in old fakes)
+  refreshMounts?(): void;
   // cold-boot-only sidebar intro (see ui-sidebar-anim): plays right after the
   // first renderAll so the staged frame 0 never flashes the finished sidebar
   playSidebarIntro?(): void;
@@ -89,6 +92,7 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   await guard(ctx, "restoreSession", () => ctx.restoreSession());
   debugLog("boot: renderAll");
   await guard(ctx, "renderAll", () => ctx.renderAll());
+  await guard(ctx, "refreshMounts", () => ctx.refreshMounts?.());
   await guard(ctx, "playSidebarIntro", () => ctx.playSidebarIntro?.());
   await guard(ctx, "playTopbarIntro", () => ctx.playTopbarIntro?.());
   debugLog("boot: done");

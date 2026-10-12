@@ -18,7 +18,7 @@ import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar, toolbarItemIds, crumbItemIds } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
-import { warmEmbeddedIcons } from "../ui/icons";
+import { warmEmbeddedIcons, warmSvgRenderer } from "../ui/icons";
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/tty";
@@ -283,6 +283,10 @@ export const wireChrome = async (deps: {
   });
   renderer.root.add(container);
   warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
+  // dlopen resvg-js on a macrotask during runBoot's I/O wait (not in the
+  // first drain worker). Skipped where drains never run (tty/force-glyph) —
+  // the dlopen would be pure waste on the console.
+  if (!core.isTtyMode() && !core.forceGlyph()) warmSvgRenderer();
   // opencode-style: global bg lives on the renderer, not per-box — transparent
   // modes stay transparent here (the old unconditional reset re-opaqued boot)
   if (core.config.ui.transparentBg !== "off" && !core.isTtyMode()) renderer.setBackgroundColor("transparent");

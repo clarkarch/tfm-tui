@@ -47,9 +47,10 @@ export type PluginApi = {
   reveal(path: string): void;
   select(paths: string[]): void;
   // every dispatchable action, core table first then plugin contributions in
-  // load order. Prefer LAZY calls (inside run/open): the keymap wires last,
-  // so a top-level call during your own activate sees only plugin commands
-  // (never throws — the core half appears post-boot).
+  // load order. Prefer LAZY calls (inside run/open): the keymap wires last
+  // and the scan runs in the background, so a top-level call during your own
+  // activate sees a prefix of the table (never throws — the rest appears
+  // post-boot).
   commands(): Command[];
   // generic filter-list overlay (the pick widget): any plugin gets fuzzy
   // lists over arbitrary items — the palette is just the first client.

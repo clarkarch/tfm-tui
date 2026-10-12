@@ -17,13 +17,7 @@ import { installPluginRuntimeSupport } from "../ui/ui-plugin-runtime";
 import { makePluginSlots } from "../ui/ui-plugin-slots";
 import { KEY_SCHEMA } from "../config/config-schema";
 import { keySpecEqual } from "../config/keyspec";
-import {
-  flattenPluginCommands,
-  getPluginCommandBinds,
-  isPluginEnabled,
-  type PluginApi,
-  type PluginStore,
-} from "../plugins/plugin-api";
+import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled, type PluginApi } from "../plugins/plugin-api";
 import { makePluginRegistry, makePluginStore, pluginsDir } from "../plugins/plugins";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
@@ -89,10 +83,6 @@ export const wirePlugins = async (deps: {
     selection: () => gridFoundation.selection.selPaths().map((s) => s.path),
   };
   const slotRegistry = makePluginSlots({ renderer: chrome.renderer, context: slotContext, log: (m) => dlog(m) });
-  let loaded: Array<{
-    commands: Array<{ id: string; title: string; hint?: string; run: () => void }>;
-    store: PluginStore;
-  }> = [];
   const api: PluginApi = {
     notify: (message, title) => chrome.notify(message, title ?? "tfm"),
     setStatusMsg: nav.setStatusMsg,
@@ -131,7 +121,9 @@ export const wirePlugins = async (deps: {
     // through tdzSafe: they close over wirings that initialize after scan.
     commands: () => [
       ...tdzSafe(() => getKeymap().commands(), [] as Command[])(),
-      ...flattenPluginCommands(loaded.filter(isPluginEnabled)),
+      // registry.plugins is the LIVE array: background-scan arrivals merge
+      // here with no re-wiring (same seam the settings model + menus read)
+      ...flattenPluginCommands(registry.plugins.filter(isPluginEnabled)),
     ],
     ui: {
       pick: (opts) => {
@@ -234,39 +226,53 @@ export const wirePlugins = async (deps: {
     warn,
     registerSlots: (name, slots) => slotRegistry.register({ id: name, slots: slots as never }),
   });
-  await registry.scan();
-  loaded = registry.plugins;
-  // colliding defaults load silently shadowed (core-wins at dispatch) — make
-  // the shadowing visible once per load so authors/users know to remap.
-  try {
-    const seenPluginBinds: Array<{ title: string; spec: string }> = [];
-    for (const p of registry.plugins) {
-      for (const c of p.commands) {
-        for (const spec of getPluginCommandBinds(p, c.id)) {
-          const coreOwner = KEY_SCHEMA.find((row) =>
-            (core.config.keys[row.action] ?? []).some((owned) => keySpecEqual(owned, spec)),
-          );
-          if (coreOwner) {
-            api.log(
-              `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by core "${coreOwner.label}" — remap it in the Plugins view`,
+  // lazy first paint: the scan (readdir + per-plugin hash + cpSync + import +
+  // 10s-capped activate) runs concurrently with the remaining wiring and the
+  // first renderAll — registry.plugins is the live array, so the model/menus/
+  // api.commands merge see arrivals with no re-wiring. The boot event fires
+  // when the scan settles, so a late plugin's boot listener still runs.
+  const reportShadowedBinds = (): void => {
+    // colliding defaults load silently shadowed (core-wins at dispatch) — make
+    // the shadowing visible once per load so authors/users know to remap.
+    try {
+      const seenPluginBinds: Array<{ title: string; spec: string }> = [];
+      for (const p of registry.plugins) {
+        for (const c of p.commands) {
+          for (const spec of getPluginCommandBinds(p, c.id)) {
+            const coreOwner = KEY_SCHEMA.find((row) =>
+              (core.config.keys[row.action] ?? []).some((owned) => keySpecEqual(owned, spec)),
             );
-            continue;
+            if (coreOwner) {
+              api.log(
+                `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by core "${coreOwner.label}" — remap it in the Plugins view`,
+              );
+              continue;
+            }
+            const sibling = seenPluginBinds.find((s) => keySpecEqual(s.spec, spec));
+            if (sibling) {
+              api.log(
+                `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by "${sibling.title}" — remap it in the Plugins view`,
+              );
+              continue;
+            }
+            seenPluginBinds.push({ title: `${p.name}:${c.title}`, spec });
           }
-          const sibling = seenPluginBinds.find((s) => keySpecEqual(s.spec, spec));
-          if (sibling) {
-            api.log(
-              `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by "${sibling.title}" — remap it in the Plugins view`,
-            );
-            continue;
-          }
-          seenPluginBinds.push({ title: `${p.name}:${c.title}`, spec });
         }
       }
-    }
-  } catch {}
-  try {
-    sharedPluginEvents().emit("boot", {});
-  } catch {}
+    } catch {}
+  };
+  void registry
+    .scan()
+    .then(() => {
+      reportShadowedBinds();
+      try {
+        sharedPluginEvents().emit("boot", {});
+      } catch {}
+    })
+    .catch(() => {
+      // the loader isolates per plugin and scan() itself never rejects, but a
+      // fire-and-forget must never surface an unhandled rejection either
+    });
   // promise confirm (danger-aware Yes/No) shared with the settings installer
   // rows — same dialog plugins get via api.ui.confirm, no second wrapper
   return {

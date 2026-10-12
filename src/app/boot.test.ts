@@ -74,6 +74,25 @@ describe("runBoot", () => {
     expect(calls.indexOf("hygiene")).toBeLessThan(calls.indexOf("search"));
   });
 
+  test("mounts refresh lands after the first render, before the intros", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        refreshMounts: () => {
+          calls.push("mounts");
+        },
+      }),
+    );
+    expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("mounts"));
+    expect(calls.indexOf("mounts")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("absent mounts step changes nothing (old fakes keep working)", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls));
+    expect(calls).not.toContain("mounts");
+  });
+
   test("sidebar intro plays right after the first render (cold boot only)", async () => {
     const calls: string[] = [];
     await runBoot(

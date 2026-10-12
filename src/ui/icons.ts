@@ -9,9 +9,11 @@ import { readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { extractImagesAsPng } from "@humanwhocodes/ico-to-png";
-import { PNG } from "pngjs";
-import * as UTIF from "utif2";
+// niche raster decoders (ico-to-png / pngjs / utif2) load LAZILY at the
+// lane call sites below — they rode wireCore's static import chain and cost
+// parse time on every boot while only ICO/TIFF thumbs ever touch them
+// (jpg/png ride Bun.Image; heic-decode was already a lazy import).
+import type * as UtifType from "utif2";
 import { atomicWriteFile } from "../fs/fsutil";
 import { extOf } from "../fs/filetype";
 import { resetVideoBin, videoBin } from "../fs/videobin";
@@ -198,6 +200,20 @@ const loadInprocResvg = (): ResvgCtor | null => {
 };
 
 const svgRenderer = (): SvgRendererKind => (loadInprocResvg() === null ? null : "inproc");
+
+// warm the resvg dlopen off the first-paint path: the first drainIconQueue
+// worker pays ~40ms for the sync require otherwise. Fire-and-forget like
+// warmEmbeddedIcons — memoized, failure remembered, salt-consistent.
+// setTimeout (a REAL macrotask): a Promise.then microtask runs before
+// index.ts continues past `await wireChrome` and delays first paint by the
+// full dlopen; the macrotask lands during runBoot's I/O wait instead.
+export const warmSvgRenderer = (): void => {
+  setTimeout(() => {
+    try {
+      loadInprocResvg();
+    } catch {}
+  }, 0);
+};
 
 // In-process render (resvg-js): fit-inside replicates the CLI's `-w`+`-h` —
 // resvg-js lacks FitTo::Size, so a parse-only probe (width/height getters, no
@@ -528,7 +544,18 @@ const bunResizeBytes = async (pngBytes: Uint8Array, pxW: number, pxH: number): P
     .png()
     .bytes();
 
-const rgbaToPng = (data: Uint8Array | Uint8ClampedArray, w: number, h: number): Uint8Array => {
+// memoized lazy decoders (same policy as heicDecodeP below: an import
+// failure is structural and the lane's catch falls through to magick/glyph)
+let pngjsP: Promise<typeof import("pngjs")> | null = null;
+const loadPngjs = (): Promise<typeof import("pngjs")> => (pngjsP ??= import("pngjs"));
+let utifP: Promise<typeof UtifType> | null = null;
+const loadUtif = (): Promise<typeof UtifType> => (utifP ??= import("utif2"));
+let icoPngP: Promise<typeof import("@humanwhocodes/ico-to-png")> | null = null;
+const loadIcoPng = (): Promise<typeof import("@humanwhocodes/ico-to-png")> =>
+  (icoPngP ??= import("@humanwhocodes/ico-to-png"));
+
+const rgbaToPng = async (data: Uint8Array | Uint8ClampedArray, w: number, h: number): Promise<Uint8Array> => {
+  const { PNG } = await loadPngjs();
   const png = new PNG({ width: w, height: h });
   png.data = Buffer.from(data);
   return PNG.sync.write(png);
@@ -536,6 +563,7 @@ const rgbaToPng = (data: Uint8Array | Uint8ClampedArray, w: number, h: number): 
 
 // ICOs carry multiple resolutions; the biggest decodes cleanest.
 const renderIcoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const { extractImagesAsPng } = await loadIcoPng();
   const imgs = extractImagesAsPng(new Uint8Array(readFileSync(p)));
   const best = imgs.sort((a, b) => b.width * b.height - a.width * a.height)[0];
   if (!best) throw new Error(`no images in ICO: ${p}`);
@@ -543,11 +571,12 @@ const renderIcoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8A
 };
 
 const renderTiffPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
+  const UTIF = await loadUtif();
   const buf = readFileSync(p);
   const ifd = UTIF.decode(buf)[0];
   if (!ifd) throw new Error(`no IFD in TIFF: ${p}`);
   UTIF.decodeImage(buf, ifd);
-  return bunResizeBytes(rgbaToPng(UTIF.toRGBA8(ifd), ifd.width, ifd.height), pxW, pxH);
+  return bunResizeBytes(await rgbaToPng(UTIF.toRGBA8(ifd), ifd.width, ifd.height), pxW, pxH);
 };
 
 // heic-decode loads its libheif wasm on first import (~300ms) — memoized and
@@ -557,7 +586,7 @@ let heicDecodeP: Promise<typeof import("heic-decode")["default"]> | null = null;
 const renderHeicPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
   heicDecodeP ??= import("heic-decode").then((m) => m.default);
   const { width, height, data } = await (await heicDecodeP)({ buffer: readFileSync(p) });
-  return bunResizeBytes(rgbaToPng(data, width, height), pxW, pxH);
+  return bunResizeBytes(await rgbaToPng(data, width, height), pxW, pxH);
 };
 
 // In-process decoders hold the whole image in RAM, so files past this skip

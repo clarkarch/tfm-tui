@@ -376,6 +376,48 @@ describe("icons", () => {
     clearIconCaches();
   });
 
+  test("niche decoders stay unloaded until a lane runs (lazy first paint)", () => {
+    // importing ui/icons must NOT pull ico-to-png/pngjs/utif2 into the
+    // process — they cost parse time on every boot while only ICO/TIFF
+    // thumbs touch them (jpg/png ride Bun.Image). Fresh subprocess: the
+    // suite's module cache is shared, so an in-process probe always sees
+    // whatever an earlier test already loaded.
+    const probe = `
+      await import(${JSON.stringify(new URL("./icons.ts", import.meta.url).href)});
+      const keys = Object.keys(require.cache ?? {});
+      console.log(JSON.stringify({
+        ico: keys.some((k) => k.includes("ico-to-png")),
+        pngjs: keys.some((k) => k.includes("pngjs")),
+        utif2: keys.some((k) => k.includes("utif2")),
+      }));
+    `;
+    const proc = Bun.spawnSync({ cmd: ["bun", "-e", probe], stdout: "pipe", stderr: "pipe" });
+    expect(proc.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(proc.stdout).trim())).toEqual({
+      ico: false,
+      pngjs: false,
+      utif2: false,
+    });
+  });
+
+  test.skipIf(!hasInproc)("warmSvgRenderer dlopens resvg outside the first drain (lazy first paint)", async () => {
+    // needs the resvg-js addon: addon-less machines take the remembered-null
+    // path (no cache key) and would fail this despite correct behavior
+    // the first icon raster pays ~40ms for the sync require-dlopen; warming
+    // it concurrently with runBoot moves that off the first-paint path.
+    // Fresh subprocess (shared module cache would see an already-warm addon).
+    const probe = `
+      const m = await import(${JSON.stringify(new URL("./icons.ts", import.meta.url).href)});
+      m.warmSvgRenderer();
+      await new Promise((r) => setTimeout(r, 50));
+      const keys = Object.keys(require.cache ?? {});
+      console.log(JSON.stringify(keys.some((k) => k.includes("resvg"))));
+    `;
+    const proc = Bun.spawnSync({ cmd: ["bun", "-e", probe], stdout: "pipe", stderr: "pipe" });
+    expect(proc.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(proc.stdout).trim())).toBe(true);
+  });
+
   test("rasterLaneFor routes niche exts to in-process lanes, rest to spawn", () => {
     expect(rasterLaneFor("a.ico")).toBe("ico");
     expect(rasterLaneFor("a.CUR")).toBe("ico");

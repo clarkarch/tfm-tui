@@ -79,18 +79,22 @@ let sysBookmarks: BookmarkEntry[] = [];
 let sysMounts: MountEntry[] = [];
 let sysNetwork: NetworkMount[] = [];
 
-export const loadSystemPlaces = async (): Promise<void> => {
+export const loadSystemPlaces = async (opts?: { skipMounts?: boolean }): Promise<void> => {
   // four independent sources — await them concurrently so the sidebar load costs
-  // the slowest one (lsblk ~20ms), not their sum (~60ms serialized)
+  // the slowest one, not their sum. lsblk is ~20ms typical but measured 218ms
+  // on slow udev (2026-10) — it is the only slow source, so first paint skips
+  // it (skipMounts, boot-only: sysMounts is guaranteed empty there) and a
+  // background refresh fills mounts in; sysMounts keeps its current value
+  // (empty at boot = "This Device" only).
   const [dirs, marks, mounts, network] = await Promise.all([
     readUserDirs(),
     readBookmarks(),
-    listMounts(),
+    opts?.skipMounts ? Promise.resolve<MountEntry[] | null>(null) : listMounts(),
     listNetworkMounts(),
   ]);
   sysUserDirs = dirs;
   sysBookmarks = marks;
-  sysMounts = mounts;
+  if (mounts !== null) sysMounts = mounts;
   sysNetwork = network;
 };
 

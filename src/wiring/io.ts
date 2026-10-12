@@ -77,7 +77,12 @@ export const wireWatcher = (deps: {
 export const wireDeviceWatcher = (deps: { nav: NavWiring; chrome: ChromeWiring; core: CoreWiring }) => {
   const { nav, chrome, core } = deps;
   const refresh = (): void => {
-    void loadSystemPlaces().then(() => nav.renderAll());
+    // trailing .catch: a fire-and-forget must never surface an unhandled
+    // rejection (every source catches internally today, but the chain must
+    // not depend on that staying true)
+    void loadSystemPlaces()
+      .then(() => nav.renderAll())
+      .catch(() => {});
   };
   const { stop } = makeDeviceWatcher({
     devices: () => listMounts(),
@@ -193,8 +198,27 @@ export const wireBoot = (deps: {
     restoreSession: () => {
       if (!deps.skipSessionRestore) nav.restoreSession();
     },
-    loadSystemPlaces: () => loadSystemPlaces(),
+    // boot fast path: skip the ~200ms lsblk so first paint doesn't wait for
+    // udev — refreshMounts (below) fills the Devices rows in right after
+    loadSystemPlaces: () => loadSystemPlaces({ skipMounts: true }),
     renderAll: nav.renderAll,
+    refreshMounts: () => {
+      void loadSystemPlaces()
+        .then(() => {
+          // targeted sidebar repaint, not a full renderAll (native-alloc churn
+          // — the OOM note; grid/preview already painted and mounts only feed
+          // the sidebar). The sig fast path no-ops when mounts didn't change.
+          try {
+            chrome.chrome.renderSidebar();
+          } catch {}
+          // .catch, not just try/catch: drainIconQueue rejects ASYNC (a node
+          // destroyed mid-raster), which `void <promise>` never catches
+          try {
+            void core.slots.drainIconQueue().catch(() => {});
+          } catch {}
+        })
+        .catch(() => {});
+    },
     playSidebarIntro: () => deps.playSidebarIntro?.(),
     playTopbarIntro: () => deps.playTopbarIntro?.(),
     debugTrace: () => {

@@ -93,17 +93,36 @@ if (target) {
 // truth about startup (imports were ~200ms of it, silently uncounted before)
 const bootStart = performance.now();
 
+// one Promise.all, not 10 serial awaits: the construction order below is
+// load-bearing, the module loading isn't (all wire* expose side-effect-free
+// factory fns). ~250ms serial transpile/parse becomes one parallel window.
+// app/log loads FIRST and alone: it registers the crash handlers, which must
+// exist before any other module (e.g. a failing @opentui/core native load)
+// can throw — under Promise.all evaluation order isn't guaranteed.
 const { appendLog, isDebug } = await import("./app/log");
-const { wireCore } = await import("./wiring/core");
-const { wireNav } = await import("./wiring/nav");
-const { wireChrome } = await import("./wiring/chrome");
-const { wireGridFoundation } = await import("./wiring/grid-foundation");
-const { wireFileops } = await import("./wiring/fileops");
-const { wireGrid } = await import("./wiring/grid");
-const { wirePlugins } = await import("./wiring/plugins");
-const { wireSettings, wireRetheme } = await import("./wiring/settings");
-const { wireWatcher, wireDeviceWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer } = await import("./wiring/io");
-const { wireKeymap } = await import("./wiring/keymap");
+const [
+  { wireCore },
+  { wireNav },
+  { wireChrome },
+  { wireGridFoundation },
+  { wireFileops },
+  { wireGrid },
+  { wirePlugins },
+  { wireSettings, wireRetheme },
+  { wireWatcher, wireDeviceWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer },
+  { wireKeymap },
+] = await Promise.all([
+  import("./wiring/core"),
+  import("./wiring/nav"),
+  import("./wiring/chrome"),
+  import("./wiring/grid-foundation"),
+  import("./wiring/fileops"),
+  import("./wiring/grid"),
+  import("./wiring/plugins"),
+  import("./wiring/settings"),
+  import("./wiring/io"),
+  import("./wiring/keymap"),
+]);
 
 if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
 
@@ -163,7 +182,10 @@ const fileops = wireFileops({
 
 // --- plugins: user extensions (after fileops — api context needs selection
 // + nav/chrome sinks; before grid — menu entries merge plugin sections;
-// before settings — aggregated rows feed the settings model) ---
+// before settings — aggregated rows feed the settings model). The initial
+// scan runs in the BACKGROUND (registrations hydrate the live array when
+// they land — slots self-paint via the registry subscription), so this await
+// only pays handle construction, never plugin load.
 // getKeymap/getPick close over `keymap`, which wires LAST — wirePlugins
 // degrades both via tdzSafe until the keymap exists, so an eager plugin
 // calling api.commands()/ui.pick at activate top level gets []/noop instead

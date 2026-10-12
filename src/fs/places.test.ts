@@ -179,6 +179,54 @@ describe("loadSystemPlaces + buildSections", () => {
   });
 });
 
+describe("loadSystemPlaces skipMounts (lazy first paint)", () => {
+  const oldPath = process.env.PATH;
+  afterEach(() => {
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+  });
+
+  // lsblk costs ~200ms on slow udev and used to gate the first renderAll.
+  // Boot loads dirs/bookmarks/network first and refreshes mounts in the
+  // background — skipMounts must not spawn lsblk at all. Stub on PATH (same
+  // seam install.sh tests use for curl): a marker file records invocation.
+  test("skipMounts loads the rest without spawning lsblk", async () => {
+    const root = path.join(os.tmpdir(), `tfm-places-skip-${process.pid}-${Date.now()}`);
+    const bin = path.join(root, "bin");
+    const marker = path.join(root, "lsblk-called");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      path.join(bin, "lsblk"),
+      `#!/bin/sh\necho called >> ${JSON.stringify(marker)}\necho '{"blockdevices":[]}'\n`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+    const configHome = path.join(root, "config");
+    mkdirSync(configHome, { recursive: true });
+    process.env.XDG_CONFIG_HOME = configHome;
+    const markerBytes = (): number => {
+      try {
+        return Bun.file(marker).size;
+      } catch {
+        return 0;
+      }
+    };
+    try {
+      await loadSystemPlaces({ skipMounts: true });
+      expect(markerBytes()).toBe(0);
+      // the rest still loaded (sysMounts keeps whatever earlier tests left —
+      // the skip only promises "no lsblk spawn", pinned above — so assert a
+      // static section instead of mount-dependent content)
+      expect(buildSections()[0]!.places[0]!.label).toBe("Home");
+      // full load spawns lsblk (stub records it)
+      await loadSystemPlaces();
+      expect(markerBytes()).toBeGreaterThan(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("virtual place uris used by places", () => {
   test("recent/starred are virtual", () => {
     expect(isVirtualUri("recent://")).toBe(true);
