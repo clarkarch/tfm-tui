@@ -44,7 +44,10 @@ export const buildTitle = (opts: { width: number; colors: Theme; mode?: SidebarT
     {
       id: "tfm-title-box",
       width: opts.width,
-      height: 5,
+      // files shows only the 2-row wordmark (no tagline): one row shorter, so
+      // the centered wordmark keeps tfm's 1-above/1-below breathing room
+      // instead of gaining a second dead row on top
+      height: files ? 4 : 5,
       visible: mode !== "none",
       flexDirection: "column",
       justifyContent: "center",

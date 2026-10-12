@@ -492,6 +492,10 @@ describe("rethemeChrome", () => {
     const sub: any = {};
     painted.get("tfm-title-sub")!(sub);
     expect(sub.visible).toBe(false);
+    // the box drops one row (no tagline) — matches buildTitle's files height
+    const box: any = {};
+    painted.get("tfm-title-box")!(box);
+    expect(box.height).toBe(4);
 
     // none hides the whole block; tfm restores the original title
     const noneMode = clone(defaultConfig);
@@ -518,6 +522,10 @@ describe("rethemeChrome", () => {
     const sub3: any = {};
     back.get("tfm-title-sub")!(sub3);
     expect(sub3.visible).toBe(true);
+    // wordmark + tagline need the full 5-row box again
+    const box3: any = {};
+    back.get("tfm-title-box")!(box3);
+    expect(box3.height).toBe(5);
   });
 
   test("a theme flip still repaints the title block (rethemeChrome path)", () => {

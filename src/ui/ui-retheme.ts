@@ -92,6 +92,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   const paintTitle = (colors: Theme): void => {
     const mode = ctx.config.ui.sidebarTitle;
     const files = mode === "files";
+    setOnId("tfm-title-box", (n) => {
+      // files shows only the 2-row wordmark (buildTitle's height) — without
+      // this a live mode flip keeps the 5-row box and its extra dead row
+      n.height = files ? 4 : 5;
+    });
     setOnId("tfm-title-font", (n) => {
       n.text = files ? "Files" : "tfm";
       n.color = files ? colors.white : colors.accent;

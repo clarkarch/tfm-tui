@@ -67,6 +67,8 @@ describe("sidebar title block", () => {
     // 0.6.0 parses colors to RGBA at set — compare ints, not the hex echo
     expect([...node("tfm-title-font").color.toInts()]).toEqual(hexInts(theme.accent));
     expect(node("tfm-title-sub").visible).toBe(true);
+    // wordmark (2 rows) + tagline (1) need the full 5-row box
+    expect(node("tfm-title-box").height).toBe(5);
     expect(t.captureCharFrame()).toContain("terminal file manager");
   });
 
@@ -75,6 +77,18 @@ describe("sidebar title block", () => {
     expect(node("tfm-title-font").text).toBe("Files");
     expect([...node("tfm-title-font").color.toInts()]).toEqual(hexInts(theme.white));
     expect(node("tfm-title-sub").visible).toBe(false);
+    // single 2-row wordmark only: one row shorter, so the centered glyph
+    // keeps tfm's 1-above/1-below breathing room instead of a second dead row.
+    // (the frame pin: the remount lands at the root tail in this harness, so
+    // locate the glyph rows instead of assuming rows 0-1.)
+    expect(node("tfm-title-box").height).toBe(4);
+    const rows = t.captureCharFrame().split("\n");
+    const glyph = rows.map((r, i) => (r.includes("█") ? i : -1)).filter((i) => i >= 0);
+    expect(glyph).toHaveLength(2);
+    expect(glyph[1]).toBe(glyph[0]! + 1);
+    // blank row above + below the wordmark, same as tfm mode
+    expect(rows[glyph[0]! - 1]!.trim()).toBe("");
+    expect(rows[glyph[1]! + 1]!.trim()).toBe("");
   });
 
   test("none mode hides the block but keeps it in the layout", async () => {
