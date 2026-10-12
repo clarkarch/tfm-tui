@@ -8,6 +8,7 @@ import { consumeRestartFlag } from "../app/restart";
 import { buildBootLayout } from "../ui/ui-boot-layout";
 import { hookScrollerScroll } from "../ui/ui-grid";
 import { makeCwdWatcher } from "../fs/watcher";
+import { makeDeviceWatcher } from "../fs/devwatch";
 import { isVirtualUri } from "../fs/uri";
 import { isNetworkPath } from "../fs/network";
 import { makeDnd72 } from "../dnd/dnd72";
@@ -18,7 +19,7 @@ import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { gridDrag } from "../input/grid-input";
 import { mergedMapFacade } from "../app/panes";
 import { loadGlobs2 } from "../fs/filetype";
-import { loadSystemPlaces } from "../fs/places";
+import { loadSystemPlaces, listMounts } from "../fs/places";
 import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { configPath } from "../config/config";
@@ -64,6 +65,40 @@ export const wireWatcher = (deps: {
     watchers[1].syncCwdWatcher();
   };
   return { syncCwdWatcher };
+};
+
+// --- USB device hotplug: a newly plugged drive appears in the sidebar
+// without restart (and without ctrl+r). Polls lsblk on an interval and
+// diffs by whole-disk path (see ./devwatch — the poll is ~34ms, renders
+// stay change-gated). Only genuinely NEW arrivals toast; boot-present
+// drives are the silent baseline and removals just vanish the row, same as
+// nautilus. Started post-boot (boot just loaded); stopped via the quit
+// teardown next to stopChromeTimers. ---
+export const wireDeviceWatcher = (deps: { nav: NavWiring; chrome: ChromeWiring; core: CoreWiring }) => {
+  const { nav, chrome, core } = deps;
+  const refresh = (): void => {
+    void loadSystemPlaces().then(() => nav.renderAll());
+  };
+  const { stop } = makeDeviceWatcher({
+    devices: () => listMounts(),
+    // live config read: a settings edit applies on the next tick — the key
+    // is RENDER_EXEMPT so the stepper never rebuilds the world for it
+    intervalMs: () => core.config.ui.devicePollMs,
+    onArrivals: (news) => {
+      const seen = new Set<string>();
+      for (const e of news) {
+        if (seen.has(e.disk)) continue;
+        seen.add(e.disk);
+        try {
+          chrome.notify(`Connected ${e.label}`, "devices");
+        } catch {}
+      }
+      refresh();
+    },
+    onChange: refresh,
+    log: (msg) => dlog(msg),
+  });
+  return { stopDeviceWatcher: stop };
 };
 
 // --- Boot sequence (order + toast gating live in ./boot, tested): resolution

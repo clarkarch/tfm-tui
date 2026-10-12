@@ -146,6 +146,14 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc(undefined).ui.fileAnimationRowGranularity).toBe(false);
   });
 
+  test("device poll interval defaults 1000ms, parses and clamps to [250, 10000]", () => {
+    expect(parseConfigDoc(undefined).ui.devicePollMs).toBe(1000);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": 500 } }).ui.devicePollMs).toBe(500);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": 100 } }).ui.devicePollMs).toBe(250);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": 60000 } }).ui.devicePollMs).toBe(10000);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": "fast" } }).ui.devicePollMs).toBe(1000);
+  });
+
   test("hover lift options parse with fallbacks (no distance knob: fixed 1 cell)", () => {
     const defs = parseConfigDoc(undefined).ui;
     expect(defs.fileHoverIncludeLabel).toBe(false);

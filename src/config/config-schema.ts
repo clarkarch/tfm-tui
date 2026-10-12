@@ -280,6 +280,7 @@ export type UiConfig = {
   fileAnimationVisibleOnly: boolean;
   fileAnimationRowGranularity: boolean;
   fileAnimationMaxFiles: number;
+  devicePollMs: number;
   windowedGrid: boolean;
   loadingDelayMs: number;
   listingsCache: boolean;
@@ -1697,6 +1698,22 @@ const UI_ROWS: SchemaRow[] = [
     // delay while the global animation master is off tells a coherent story
     // ("nothing animates"), while a knob hidden behind two masters is not
     showWhen: (ui) => ui.windowedGrid,
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "device-poll-ms",
+    prop: "devicePollMs",
+    min: 250,
+    max: 10000,
+    step: 250,
+    def: 1000,
+    doc: "how often to re-list USB drives for plug/unplug (one lsblk per poll, ~37ms; 250 = fastest detection, 10000 = least background churn)",
+    unit: "ms",
+    label: "device poll interval",
+    blurb: "How fast new USB drives appear",
+    group: "optimization",
+    subsection: "performance",
   },
   {
     kind: "bool",

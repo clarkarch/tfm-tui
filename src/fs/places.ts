@@ -58,7 +58,7 @@ export type EjectSpec = {
 
 type UserDir = { key: string; label: string; p: string };
 
-type MountEntry = {
+export type MountEntry = {
   label: string;
   target: string;
   removable: boolean;
@@ -269,7 +269,9 @@ export function parseLsblk(json: unknown): MountEntry[] {
   return out;
 }
 
-async function listMounts(): Promise<MountEntry[]> {
+// exported for the device watcher (devwatch.ts): the poll diffs this list,
+// loadSystemPlaces() re-reads everything only when it changed
+export async function listMounts(): Promise<MountEntry[]> {
   try {
     // timeout: a wedged lsblk must not stall the sidebar load forever
     const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,TRAN,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"], {

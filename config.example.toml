@@ -96,6 +96,7 @@ file-animation-visible-only           = true        # true = only animate the fi
 file-animation-row-granularity        = false       # true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)
 file-animation-max-files              = 2000        # skip the file animation entirely above this many files (any animation frame re-walks the whole grid render list, huge folders jank; 0 = never skip)
 file-animation-scroll-reveal-delay-ms = 0           # wait for scroll to settle this long before playing the scroll-reveal (0 = play every notch; higher = one wave per pause: cheaper on huge folders and the wave actually completes visibly)
+device-poll-ms                        = 1000        # how often to re-list USB drives for plug/unplug (one lsblk per poll, ~37ms; 250 = fastest detection, 10000 = least background churn)
 show-hidden                           = false       # start with dotfiles visible (ctrl+h toggles at runtime)
 recursive-search                      = false       # true = type-to-search also looks inside subfolders (fd when installed, built-in walk otherwise)
 sort-mode                             = "type"      # "name" = A-Z; "size" = largest first; "mtime" = oldest first; "type" = grouped by kind (folders first, always)

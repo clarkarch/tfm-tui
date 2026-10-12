@@ -18,6 +18,9 @@ export type QuitCtx = {
   // clear pending chrome timers (sidebar device-reload) so they can't fire
   // loadSystemPlaces+renderAll into a destroyed renderer post-teardown
   stopChromeTimers?(): void;
+  // stop the USB device poller (same reason: a poll landing post-teardown
+  // re-lists + re-renders into the destroyed renderer)
+  stopDevices?(): void;
   // synchronous final session write — process.exit kills pending async IO,
   // so the debounced 400ms save loses the last navigation
   flushSession?(): void;
@@ -130,6 +133,11 @@ export const runTeardownSteps = (ctx: QuitCtx): boolean => {
   }
   try {
     ctx.stopChromeTimers?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopDevices?.();
   } catch {
     failed = true;
   }

@@ -102,7 +102,7 @@ const { wireFileops } = await import("./wiring/fileops");
 const { wireGrid } = await import("./wiring/grid");
 const { wirePlugins } = await import("./wiring/plugins");
 const { wireSettings, wireRetheme } = await import("./wiring/settings");
-const { wireWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer } = await import("./wiring/io");
+const { wireWatcher, wireDeviceWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer } = await import("./wiring/io");
 const { wireKeymap } = await import("./wiring/keymap");
 
 if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
@@ -124,6 +124,7 @@ const nav = wireNav({
   getTermHasFocus: () => fileops.terminal.termHasFocus(),
   getTerm: () => fileops.terminal,
   getWatcher: () => watcher,
+  getDevices: () => devices,
   getPlugins: () => plugins,
 });
 
@@ -215,6 +216,12 @@ const watcher = wireWatcher({
   getGridFoundation: () => gridFoundation,
   getGrid: () => grid,
 });
+
+// USB hotplug (no restart to detect plug/unplug): the first poll captures
+// the silent baseline, so boot-present drives never toast — only transitions
+// do. Wired here (post-chrome for notify, post-nav for renderAll); quit
+// stops it via getDevices in wireNav, next to stopChromeTimers.
+const devices = wireDeviceWatcher({ nav, chrome, core });
 
 // hover drawer BEFORE boot: it collapses panels at construction and publishes
 // the collapsed effective widths, so the boot sequence's first renderAll and

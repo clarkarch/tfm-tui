@@ -29,6 +29,9 @@ export const wireNav = (deps: {
   getTermHasFocus: () => boolean;
   getTerm: () => { closeTerminalPane(): void };
   getWatcher: () => { syncCwdWatcher(): void };
+  // USB device poller (wired after nav in io; lazy getter like getWatcher).
+  // Optional so old callers keep compiling — absent = nothing to stop.
+  getDevices?: () => { stopDeviceWatcher(): void };
   // plugin teardown at quit (wired after nav; lazy getter). Best-effort sync.
   getPlugins?: () => {
     deactivateAll(): void;
@@ -99,6 +102,7 @@ export const wireNav = (deps: {
     closeTerminal: () => getTerm().closeTerminalPane(),
     stopGpm: () => getChrome().stopGpm(),
     stopChromeTimers: () => getChrome().stopChromeTimers(),
+    stopDevices: () => deps.getDevices?.().stopDeviceWatcher(),
     flushSession: () => {
       // no isVirtualCwd() guard: restore deliberately accepts recent:// and
       // starred:// tabs, so quitting from a virtual place must still persist

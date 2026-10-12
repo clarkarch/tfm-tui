@@ -251,6 +251,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "listingsCache",
     "listingsCacheStats",
     "listingsCacheTtl",
+    // device poll interval reads live per tick (devwatch arm closure) — the
+    // stepper repaints its own value text, no rebuild, no watcher restart
+    "devicePollMs",
     "fileHoverIncludeLabel",
     // fileHoverAnimation/direction are NOT exempt: the toggle + direction bake
     // tile layout at build (marginTop headroom + refs.hoverLift in

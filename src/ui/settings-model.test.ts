@@ -271,6 +271,9 @@ describe("settingGroups shape", () => {
       "row cascade",
       "max animated files",
       "reveal delay",
+      // device poll interval rides the same performance section (schema
+      // order: right after the reveal-delay row)
+      "device poll interval",
     ]);
   });
 
@@ -1133,7 +1136,8 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
     // optimization: the listings cache defaults on, so its stats rows show;
     // (flipping it off hides them — pinned below). The perf knobs need file
     // animation (off by default), but reveal delay answers to windowed grid
-    // alone (on) — so ##performance keeps one row at defaults.
+    // alone (on) — so ##performance keeps one row at defaults. The device
+    // poll knob has no master (always live), so it shows at defaults too.
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
       "windowed grid",
@@ -1144,6 +1148,7 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "cache age",
       "##performance",
       "reveal delay",
+      "device poll interval",
     ]);
   });
 
@@ -1160,7 +1165,8 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
     expect(labelsOf(h, "layout")).not.toContain("preview auto-hide");
     expect(labelsOf(h, "layout")).not.toContain("preview collapse");
     // listings cache off hides its stats rows but keeps the master
-    // (reveal delay rides windowed grid, still on)
+    // (reveal delay rides windowed grid, still on; the device poll knob has
+    // no master and stays)
     h.config.ui.listingsCache = false;
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
@@ -1170,6 +1176,7 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "cache folder listings",
       "##performance",
       "reveal delay",
+      "device poll interval",
     ]);
   });
 
