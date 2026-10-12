@@ -3,13 +3,14 @@ import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
 import { destroyChildren } from "../lib/uiutil";
 import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
-import { buildSections, loadSystemPlaces, type Place, type SidebarVisibility } from "../fs/places";
+import { buildSections, loadSystemPlaces, type EjectSpec, type Place, type SidebarVisibility } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { tabTitle, type Tab } from "../app/tabs";
 import { gridDrag, type ClipItem } from "../input/grid-input";
 import { hoverEvents, selectIconState, toggleIconState } from "./ui-slots";
 import type { Theme } from "../config/config";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { ListEntry } from "./ui-menu";
 
 // --- Places sidebar rows + tab strip + divider — rebuilt from scratch each
@@ -100,6 +101,16 @@ type ChromeCtx = {
   ): IconSlotHandle;
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   stateCwd(): string; // live state.cwd
+  // user feedback for mount/eject (wiring's notify). Optional so old fakes
+  // keep working — absent = today's silent behavior.
+  notify?(msg: string, title?: string, level?: NotifyLevel): void;
+  // home dir: eject navigates here before unmounting a cwd sitting on the
+  // device (same leave-first rule as the network disconnect). Optional so
+  // old fakes keep working — absent = no leave.
+  home?(): string;
+  // udisksctl spawn seam (default: spawnSafe, same argv/timeout). Optional so
+  // old fakes keep working; tests inject a fake child instead of a real USB.
+  spawnUdisks?(args: string[]): { on(ev: "close" | "error", cb: (...a: never[]) => void): unknown };
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
@@ -148,16 +159,111 @@ export const makeChrome = (ctx: ChromeCtx) => {
     }, ms);
   };
 
-  const mountDevice = (device: string) => {
-    const child = spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore", timeoutMs: 10_000 }, (err) =>
-      ctx.dlog(`mount ${device}: ${err.message}`),
-    );
-    // a failing mount (bad device, policy) used to be silent — the reload
-    // below fires either way, so log the exit for the --debug trail
-    child.on("close", (code) => {
-      if (code !== 0) ctx.dlog(`mount ${device} exit ${code}`);
+  const spawnUdisks =
+    ctx.spawnUdisks ??
+    ((args: string[]) => spawnSafe("udisksctl", args, { stdio: "ignore", timeoutMs: 10_000 }, () => {}));
+
+  // leave a mountpoint before operating on its device — unmounting under a
+  // live cwd strands the grid/watcher on a dead path (same leave-first rule
+  // as the network disconnect in wiring/chrome)
+  const leaveMount = (target: string | null): void => {
+    const home = ctx.home?.();
+    if (!target || !home) return;
+    const cwd = ctx.stateCwd();
+    if (cwd === target || cwd.startsWith(target + path.sep)) ctx.navigate(home);
+  };
+
+  // mount runner: refuse a missing device with a toast (used to spawn
+  // `udisksctl mount -b undefined`). False = nothing spawned, so the caller
+  // skips the device reload (a no-op must not re-list either).
+  const runMount = (device: string | undefined, label: string): boolean => {
+    if (!device) {
+      ctx.dlog("mount with no device");
+      ctx.notify?.(`Can't mount ${label}: no device`, "mount", "error");
+      return false;
+    }
+    void spawnWait(["mount", "-b", device]).then((res) => {
+      if (!res.ok) ctx.dlog(`mount ${device} ${res.detail}`);
+      ctx.notify?.(
+        res.ok ? `Mounted ${label}` : `Can't mount ${label} (${res.detail})`,
+        "mount",
+        res.ok ? "success" : "error",
+      );
     });
-    scheduleDeviceReload(1200);
+    return true;
+  };
+
+  // promise form of the udisks spawn: resolves once, on close OR error
+  // (node fires both on ENOENT — the settled flag keeps one failure to one
+  // result instead of two toasts)
+  const spawnWait = (args: string[]): Promise<{ ok: true } | { ok: false; detail: string }> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const child = spawnUdisks(args);
+      child.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        resolve({ ok: false, detail: err instanceof Error ? err.message : String(err) });
+      });
+      child.on("close", (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        // a signal kill (SIGKILL on timeout) carries no exit code — say so
+        // instead of toasting the raw null
+        resolve(
+          code === 0 ? { ok: true } : { ok: false, detail: typeof code === "number" ? `exit ${code}` : "killed" },
+        );
+      });
+    });
+
+  const mountDevice = (device: string | undefined, label?: string) => {
+    if (runMount(device, label ?? device ?? "device")) scheduleDeviceReload(1200);
+  };
+
+  // Nautilus-style safely-remove: leave every target, unmount each mounted
+  // partition of the disk in turn, then power the disk off so it spins down.
+  // First failure aborts the chain (a power-off over a mounted part fails
+  // anyway); without disk+parts this is a single unmount (non-USB rows).
+  const ejectDrive = async (spec: EjectSpec): Promise<void> => {
+    const parts =
+      spec.parts && spec.parts.length > 0
+        ? spec.parts
+        : spec.device
+          ? [{ device: spec.device, target: spec.target ?? "" }]
+          : [];
+    if (parts.length === 0) {
+      ctx.dlog("eject with no device");
+      ctx.notify?.(`Can't eject ${spec.label}: no device`, "eject", "error");
+      return;
+    }
+    for (const p of parts) leaveMount(p.target || null);
+    for (const p of parts) {
+      const res = await spawnWait(["unmount", "-b", p.device]);
+      if (!res.ok) {
+        ctx.dlog(`unmount ${p.device} ${res.detail}`);
+        ctx.notify?.(`Can't eject ${spec.label} · ${p.device} (${res.detail})`, "eject", "error");
+        scheduleDeviceReload(1500);
+        return;
+      }
+    }
+    if (spec.disk && spec.parts && spec.parts.length > 0) {
+      const res = await spawnWait(["power-off", "-b", spec.disk]);
+      if (!res.ok) {
+        // unmounted = flushed, so the data is safe — but the drive never
+        // spun down, so never claim it is safe to unplug
+        ctx.dlog(`power-off ${spec.disk} ${res.detail}`);
+        ctx.notify?.(`Unmounted ${spec.label} · power-off failed (${res.detail}), data is safe`, "eject", "error");
+        scheduleDeviceReload(1500);
+        return;
+      }
+    }
+    ctx.notify?.(`Safe to unplug ${spec.label}`, "eject", "success");
+    scheduleDeviceReload(1500);
+  };
+
+  // icon/menu entry point: one spec object built from the row's Place
+  const ejectDevice = (spec: EjectSpec) => {
+    void ejectDrive(spec);
   };
 
   const makeRow = (place: Place): ReturnType<typeof Box> => {
@@ -182,7 +288,15 @@ export const makeChrome = (ctx: ChromeCtx) => {
     let ejectSlot: ReturnType<typeof ctx.makeIconSlot> | undefined;
     const device = place.device;
     if (place.ejectable && device) {
-      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), () => ejectDevice(device));
+      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), (ev: MouseEvent) => {
+        // the slot is a row child: without this the click bubbles to the row
+        // below and navigates into the device being ejected (same guard as
+        // the tab-strip ✕)
+        try {
+          ev.stopPropagation?.();
+        } catch {}
+        ejectPlace(place);
+      });
     }
     const rowNode = Box(
       {
@@ -208,7 +322,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
           const target = placeTarget();
           if (target) ctx.navigate(target);
           else if (place.networkUri) ctx.connectServer(place.networkUri);
-          else if (place.mountDevice) mountDevice(place.mountDevice);
+          else if (place.mountDevice) mountDevice(place.mountDevice, place.label);
         },
         onMouseDrop: () => {
           const keys = gridDrag.keys;
@@ -265,14 +379,14 @@ export const makeChrome = (ctx: ChromeCtx) => {
     return rowNode;
   };
 
-  const ejectDevice = (device: string) => {
-    const child = spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore", timeoutMs: 10_000 }, (err) =>
-      ctx.dlog(`eject ${device}: ${err.message}`),
-    );
-    child.on("close", (code) => {
-      if (code !== 0) ctx.dlog(`eject ${device} exit ${code}`);
+  const ejectPlace = (place: Place): void => {
+    ejectDevice({
+      device: place.device,
+      label: place.label,
+      target: place.path,
+      disk: place.disk,
+      parts: place.diskParts,
     });
-    scheduleDeviceReload(1500);
   };
 
   const renderSidebar = () => {
@@ -298,6 +412,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
           p.networkUri ?? "",
           p.action ?? "",
           p.mountDevice ?? "",
+          // disk identity + partition set: without these a re-plugged disk
+          // (same mountpoint, new disk) skips the rebuild and ejects stale
+          p.disk ?? "",
+          (p.diskParts ?? []).map((d) => `${d.device}=${d.target}`).join(","),
         ]),
       ),
     ]);

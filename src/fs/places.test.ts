@@ -40,7 +40,10 @@ describe("parseLsblk", () => {
     const out = parseLsblk({
       blockdevices: [{ name: "sdb1", path: "/dev/sdb1", fstype: "ext4", mountpoints: [null] }],
     });
-    expect(out).toEqual([{ label: "sdb1", target: "", removable: false, device: "/dev/sdb1" }]);
+    // a parentless node is its own disk; non-usb so no power-off either way
+    expect(out).toEqual([
+      { label: "sdb1", target: "", removable: false, usb: false, device: "/dev/sdb1", disk: "/dev/sdb1" },
+    ]);
   });
 
   test("skips pseudo fstypes, snap/docker targets, duplicate targets", () => {
@@ -52,6 +55,100 @@ describe("parseLsblk", () => {
       ],
     });
     expect(out.map((o) => o.target)).toEqual(["/mnt/a"]);
+  });
+
+  test("a USB-SATA bridge with RM=0 still counts as removable (TRAN=usb)", () => {
+    // many enclosures lie about RM — TRAN is the truth (udisks2
+    // ConnectionBus agrees). Without this the drive is a dead row: mounted,
+    // so no click-to-mount, and no eject affordance either.
+    const out = parseLsblk({
+      blockdevices: [
+        {
+          name: "sdb",
+          rm: false,
+          tran: "usb",
+          path: "/dev/sdb",
+          children: [{ name: "sdb1", fstype: "ext4", mountpoints: ["/media/u/disk"] }],
+        },
+      ],
+    });
+    expect(out).toEqual([
+      { label: "disk", target: "/media/u/disk", removable: true, usb: true, device: "/dev/sdb1", disk: "/dev/sdb" },
+    ]);
+  });
+
+  test("children inherit the parent's TRAN (lsblk reports tran:null on partitions)", () => {
+    const out = parseLsblk({
+      blockdevices: [
+        {
+          name: "sdb",
+          rm: true,
+          tran: "usb",
+          path: "/dev/sdb",
+          children: [{ name: "sdb1", tran: null, fstype: "vfat", mountpoints: ["/media/u/stick"] }],
+        },
+      ],
+    });
+    expect(out[0]!.usb).toBe(true);
+    expect(out[0]!.disk).toBe("/dev/sdb");
+  });
+
+  test("TRAN matches case-insensitively (odd builds report USB)", () => {
+    const out = parseLsblk({
+      blockdevices: [
+        {
+          name: "sdb",
+          rm: false,
+          tran: "USB",
+          path: "/dev/sdb",
+          children: [{ name: "sdb1", fstype: "vfat", mountpoints: ["/media/u/stick"] }],
+        },
+      ],
+    });
+    expect(out[0]!.removable).toBe(true);
+    expect(out[0]!.usb).toBe(true);
+  });
+
+  test("sata/nvme stay non-removable even with children mounted", () => {
+    const out = parseLsblk({
+      blockdevices: [
+        {
+          name: "sda",
+          rm: false,
+          tran: "sata",
+          path: "/dev/sda",
+          children: [{ name: "sda1", fstype: "ext4", mountpoints: ["/data"] }],
+        },
+        {
+          name: "nvme0n1",
+          rm: false,
+          tran: "nvme",
+          path: "/dev/nvme0n1",
+          children: [{ name: "nvme0n1p1", fstype: "ext4", mountpoints: ["/fast"] }],
+        },
+      ],
+    });
+    expect(out.map((o) => [o.target, o.removable, o.usb])).toEqual([
+      ["/data", false, false],
+      ["/fast", false, false],
+    ]);
+  });
+
+  test("an unmounted USB partition carries its disk for click-to-mount", () => {
+    const out = parseLsblk({
+      blockdevices: [
+        {
+          name: "sdb",
+          rm: false,
+          tran: "usb",
+          path: "/dev/sdb",
+          children: [{ name: "sdb1", fstype: "ext4", mountpoints: [null] }],
+        },
+      ],
+    });
+    expect(out).toEqual([
+      { label: "sdb1", target: "", removable: true, usb: true, device: "/dev/sdb1", disk: "/dev/sdb" },
+    ]);
   });
 });
 

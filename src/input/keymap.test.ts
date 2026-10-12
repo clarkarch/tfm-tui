@@ -128,7 +128,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     selection,
     placesHost: places,
     normalizePlaces: rec("places:normalize"),
-    mountDevice: (d) => calls.push(`mount:${d}`),
+    mountDevice: (d, label) => calls.push(`mount:${d}:${label ?? ""}`),
     navigate: (dir) => calls.push(`navigate:${dir}`),
     goBack: rec("back"),
     goFwd: rec("fwd"),
@@ -568,7 +568,15 @@ describe("sidebar keyboard focus", () => {
     h.places[0] = { selected: false, place: { mountDevice: "sda9" } as any };
     h.key("left");
     h.key("return");
-    expect(h.calls).toContain("mount:sda9");
+    expect(h.calls).toContain("mount:sda9:");
+  });
+
+  test("return on a mount-only entry passes the row label for the toast", () => {
+    const h = makeHarness();
+    h.places[0] = { selected: false, place: { mountDevice: "sda9", label: "STICK" } as any };
+    h.key("left");
+    h.key("return");
+    expect(h.calls).toContain("mount:sda9:STICK");
   });
 
   test("left/right inside the sidebar return to the grid", () => {

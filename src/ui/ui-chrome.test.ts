@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box } from "@opentui/core";
@@ -8,6 +8,8 @@ import { MouseButtons } from "@opentui/core/testing";
 import { makeChrome, tabChipMaxWidth } from "./ui-chrome";
 import { gridDrag } from "../input/grid-input";
 import { defaultConfig } from "../config/config-schema";
+import { loadSystemPlaces } from "../fs/places";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 import type { Tab } from "../app/tabs";
 
@@ -53,6 +55,12 @@ let tabModel: { list: Tab[]; active: number };
 let tabModel1: { list: Tab[]; active: number };
 let kbActive: boolean;
 let kbIdx: number;
+// eject/mount test seams: notify/home/spawn capture for a second chrome
+// instance, built in the eject describe's beforeAll so the shared fakes above
+// keep their old shape
+let notifies: Array<[string, string | undefined, NotifyLevel | undefined]>;
+let fakeHome: string;
+let spawns: string[][];
 // [ui] sidebar-section-titles: names each group in place of the dividers
 let sectionTitles: boolean;
 
@@ -96,6 +104,11 @@ beforeAll(async () => {
   kbActive = false;
   kbIdx = -1;
   sectionTitles = false;
+  // eject/mount seams: written by the eject describe below; absent here so
+  // the shared fakes keep today's ctx shape
+  notifies = [];
+  fakeHome = HOME;
+  spawns = [];
 
   const host = Box(
     { flexDirection: "row" },
@@ -611,5 +624,437 @@ describe("normalizePlaces (hover/kb focus)", () => {
     // the newly-selected row's lift via hoverRow(key, false)
     chrome.renderSidebar();
     expect(calls.hoverRow.slice(n).filter(([k]) => k === target!.rowId)).toEqual([[target!.rowId, false]]);
+  });
+});
+
+// --- eject / mount UX: every op tells the user what happened (notify), and
+// the eject icon's click never also navigates (stopPropagation, like the tab
+// ✕). The fake slot mounts a LIVE row child carrying the real onMouseDown,
+// so processMouseEvent on it proves the bubble guard for real; the fake spawn
+// stores its child in `lastChild`, which the test then drives. The ejectable
+// row comes from a fake `lsblk` JSON on PATH: buildSections reads the real
+// module state, and the suite shares one module cache, so the PATH seam (not
+// a module mock) is what makes the row appear. ---
+describe("eject / mount", () => {
+  type FakeChild = {
+    on(ev: "close" | "error", cb: (...a: never[]) => void): FakeChild;
+    emitClose(code: number): void;
+    emitError(err: Error): void;
+  };
+  let lastChild: FakeChild | null;
+  let spawned: FakeChild[];
+  let slotSeq: number;
+  let ejectChrome: ReturnType<typeof makeChrome>;
+  let savedPath: string | undefined;
+  let binDir: string;
+
+  beforeAll(() => {
+    lastChild = null;
+    spawned = [];
+    slotSeq = 0;
+    // fake lsblk on PATH: a removable vfat stick at /media/usb plus a TWO-
+    // partition USB hard drive whose bridge lies about RM (RM=0, TRAN=usb),
+    // so buildSections yields ejectable rows for both after loadSystemPlaces
+    binDir = mkdtempSync(path.join(os.tmpdir(), "tfm-eject-bin-"));
+    writeFileSync(
+      path.join(binDir, "lsblk"),
+      `#!/bin/sh\ncat <<'EOF'\n{"blockdevices":[{"name":"sdb","rm":true,"tran":"usb","path":"/dev/sdb","children":[{"name":"sdb1","fstype":"vfat","mountpoints":["/media/usb"]}]},{"name":"sdc","rm":false,"tran":"usb","path":"/dev/sdc","children":[{"name":"sdc1","fstype":"ext4","mountpoints":["/media/hdd1"]},{"name":"sdc2","fstype":"ext4","mountpoints":["/media/hdd2"]}]}]}\nEOF\n`,
+    );
+    chmodSync(path.join(binDir, "lsblk"), 0o755);
+    savedPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${savedPath ?? ""}`;
+    const fakeMakeIconSlot = (
+      name: string,
+      states: unknown,
+      heightCells?: number,
+      initialState?: number,
+      onMouseDown?: (ev: unknown) => void,
+    ) => {
+      // unique ids per slot: the real makeIconSlot sequences them, and three
+      // ejectable rows share the "eject" name — a static id would make byId
+      // always hit the first row's icon (the sdb stick, never the hdd rows)
+      const slotId = `ej-slot-${name}-${slotSeq++}`;
+      const el =
+        typeof onMouseDown === "function"
+          ? Box({ id: slotId, width: 2, height: 1, onMouseDown }, Box({ width: 1, height: 1 }))
+          : Box({ id: slotId, width: 2, height: 1 });
+      return {
+        el,
+        slotId,
+        spec: { slotId, name, heightCells: heightCells ?? 1, states, initialState: initialState ?? 0 },
+      };
+    };
+    const spawnUdisks = (args: string[]): FakeChild => {
+      spawns.push(args);
+      const listeners: Record<"close" | "error", ((...a: never[]) => void)[]> = { close: [], error: [] };
+      const child: FakeChild = {
+        on: (ev, cb) => {
+          listeners[ev].push(cb);
+          return child;
+        },
+        emitClose: (code: number) => {
+          for (const cb of listeners.close) cb(code as never);
+        },
+        emitError: (err: Error) => {
+          for (const cb of listeners.error) cb(err as never);
+        },
+      };
+      lastChild = child;
+      spawned.push(child);
+      return child;
+    };
+    ejectChrome = makeChrome({
+      byId,
+      uiStyle: () => "solid",
+      colors: () => colors,
+      sw: () => 20,
+      sideInnerW: () => 20,
+      tabBar: () => tabBar,
+      renderAll: () => {},
+      navigate: (target) => {
+        calls.navigate.push(target);
+      },
+      blurTerminal: () => {},
+      closeFileMenu: () => {},
+      openContextMenu: () => {},
+      sidebarEntriesFor: () => [],
+      finishDrag: () => {},
+      dlog: () => {},
+      trashPaths: () => Promise.resolve(),
+      moveInto: () => Promise.resolve(),
+      kbActive: () => false,
+      kbIdx: () => -1,
+      tabs: (pane: 0 | 1) => (pane === 1 ? tabModel1 : tabModel),
+      focusPane: () => {},
+      closeTab: () => {},
+      switchTab: () => {},
+      newTab: () => {},
+      hoverBtn: () => Box({ id: "tfm-p0-tab-new", width: 3, height: 1 }),
+      stripSelectable: () => {},
+      drainIconQueue: () => {},
+      makeIconSlot: fakeMakeIconSlot as never,
+      setIconState: () => true,
+      stateCwd: () => cwd,
+      connectServer: () => {},
+      hoverRow: () => {},
+      notify: (msg, title, level) => {
+        notifies.push([msg, title, level]);
+      },
+      home: () => fakeHome,
+      spawnUdisks: spawnUdisks as never,
+    });
+  });
+
+  afterAll(async () => {
+    ejectChrome.dispose();
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+    rmSync(binDir, { recursive: true, force: true });
+    // give back real places state: the fake lsblk above replaced sysMounts
+    // for the whole shared module cache — later files must see real devices
+    await loadSystemPlaces();
+    gridDrag.keys = null;
+  });
+
+  const resetSeams = () => {
+    calls.navigate.length = 0;
+    notifies.length = 0;
+    spawns.length = 0;
+    // a previous test's child outlives its spawn: without clearing, a
+    // no-spawn regression still drives the OLD child and false-greens
+    lastChild = null;
+    spawned = [];
+    cwd = HOME;
+    fakeHome = HOME;
+  };
+
+  // the child of THIS test's spawn: asserts a fresh spawn happened first, so
+  // the failure reads "spawned no child", not a bare null-child
+  const child = (): FakeChild => {
+    expect(spawns.length).toBe(1);
+    expect(lastChild).toBeTruthy();
+    return lastChild!;
+  };
+
+  // Synthetic click carrying the real propagation protocol (Renderable.ts):
+  // stopPropagation flips the flag the parent's bubble check reads. A bare
+  // object without it keeps bubbling — the row navigates mid-test while the
+  // same click in production stops at the eject icon.
+  const clickEjectIcon = (slotId: string): boolean => {
+    const ev: {
+      type: string;
+      button: number;
+      x: number;
+      y: number;
+      modifiers: { shift: boolean; alt: boolean; ctrl: boolean };
+      propagationStopped: boolean;
+      stopPropagation(): void;
+    } = {
+      type: "down",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+      propagationStopped: false,
+      stopPropagation() {
+        ev.propagationStopped = true;
+      },
+    };
+    (byId(slotId) as any).processMouseEvent(ev);
+    return ev.propagationStopped;
+  };
+
+  // the ejectable row's icon slot id, once the sidebar has rendered it
+  const ejectSlotId = (target = "/media/usb"): string => {
+    const rec = ejectChrome.placesHost.find((r) => r.place.ejectable && r.place.path === target);
+    expect(rec).toBeTruthy();
+    return rec!.specs[1]!.slotId;
+  };
+
+  // i-th child of this test's spawns: sequential udisks spawns park on close,
+  // so the test drives each step after settling on the spawn count
+  const kid = (i: number): FakeChild => {
+    expect(spawns.length).toBeGreaterThan(i);
+    const c = spawned[i];
+    expect(c).toBeTruthy();
+    return c!;
+  };
+
+  const settleSpawns = async (n: number): Promise<void> => {
+    const deadline = Date.now() + 3000;
+    while (spawns.length < n && Date.now() < deadline) await Bun.sleep(10);
+    expect(spawns.length).toBeGreaterThanOrEqual(n);
+  };
+
+  const settleUntilNotifies = async (n: number): Promise<void> => {
+    const deadline = Date.now() + 3000;
+    while (notifies.length < n && Date.now() < deadline) await Bun.sleep(10);
+    expect(notifies.length).toBeGreaterThanOrEqual(n);
+  };
+
+  test("ejecting without a device spawns nothing and says why", () => {
+    resetSeams();
+    ejectChrome.ejectDevice({ label: "ghost" });
+    expect(spawns).toEqual([]);
+    expect(notifies.length).toBe(1);
+    expect(notifies[0]![2]).toBe("error");
+  });
+
+  test("eject click stops propagation: the row never navigates", async () => {
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    const stopped = clickEjectIcon(ejectSlotId());
+    expect(stopped).toBe(true);
+    expect(calls.navigate).toEqual([]);
+    ejectChrome.dispose();
+  });
+
+  test("eject leaves its own mountpoint before unmounting", async () => {
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    cwd = "/media/usb/some/dir";
+    clickEjectIcon(ejectSlotId());
+    expect(calls.navigate).toEqual([fakeHome]);
+    // Nautilus parity: unmount the partition, then power the disk off
+    await settleSpawns(1);
+    kid(0).emitClose(0);
+    await settleSpawns(2);
+    expect(spawns).toEqual([
+      ["unmount", "-b", "/dev/sdb1"],
+      ["power-off", "-b", "/dev/sdb"],
+    ]);
+    ejectChrome.dispose();
+  });
+
+  test("eject toasts safe-to-unplug after unmount + power-off", async () => {
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    clickEjectIcon(ejectSlotId());
+    await settleSpawns(1);
+    kid(0).emitClose(0);
+    await settleSpawns(2);
+    kid(1).emitClose(0);
+    await settleUntilNotifies(1);
+    // the fake lsblk carries no LABEL, so places.ts falls back to the
+    // mountpoint basename — the toast names the device either way
+    expect(notifies[0]).toEqual([expect.stringMatching(/safe to unplug/i), "eject", "success"]);
+    ejectChrome.dispose();
+  });
+
+  test("eject aborts the chain on an unmount failure (no power-off)", async () => {
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    clickEjectIcon(ejectSlotId());
+    await settleSpawns(1);
+    kid(0).emitClose(1);
+    await settleUntilNotifies(1);
+    expect(notifies.length).toBe(1);
+    expect(notifies[0]![2]).toBe("error");
+    // the chain stopped: no power-off spawn follows the failed unmount
+    expect(spawns).toEqual([["unmount", "-b", "/dev/sdb1"]]);
+    ejectChrome.dispose();
+  });
+
+  test("eject toasts failure when the spawn itself errors", async () => {
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    clickEjectIcon(ejectSlotId());
+    await settleSpawns(1);
+    kid(0).emitError(new Error("spawn ENOENT"));
+    await settleUntilNotifies(1);
+    expect(notifies.length).toBe(1);
+    expect(notifies[0]![2]).toBe("error");
+    ejectChrome.dispose();
+  });
+
+  test("a spawn error settles once: the trailing close never toasts twice", async () => {
+    // node fires error AND close on ENOENT — without a settled guard one
+    // failure yields two error toasts
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    clickEjectIcon(ejectSlotId());
+    await settleSpawns(1);
+    kid(0).emitError(new Error("spawn ENOENT"));
+    kid(0).emitClose(-2);
+    await settleUntilNotifies(1);
+    expect(notifies.length).toBe(1);
+    ejectChrome.dispose();
+  });
+
+  test("ejectDevice leaves the device's mountpoint before unmounting", async () => {
+    // the context-menu Eject row builds the same spec object the icon path
+    // uses, so ejectDevice can leave first either way
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    cwd = "/media/usb/some/dir";
+    ejectChrome.ejectDevice({ device: "/dev/sdb1", label: "usb", target: "/media/usb" });
+    expect(calls.navigate).toEqual([fakeHome]);
+    await settleSpawns(1);
+    expect(spawns).toEqual([["unmount", "-b", "/dev/sdb1"]]);
+    ejectChrome.dispose();
+  });
+
+  test("an RM=0 USB hard drive shows an ejectable row (TRAN=usb)", async () => {
+    // the bridge lies about RM — without the TRAN rule this row would be a
+    // mounted harddisk with no eject affordance at all
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    const rec = ejectChrome.placesHost.find((r) => r.place.path === "/media/hdd1");
+    expect(rec).toBeTruthy();
+    expect(rec!.place.ejectable).toBe(true);
+    expect(rec!.place.icon).toBe("usb");
+    expect(rec!.place.disk).toBe("/dev/sdc");
+  });
+
+  test("ejecting one partition unmounts every partition, then powers off", async () => {
+    // a two-partition USB HDD: power-off with a part still mounted fails, so
+    // the chain covers the whole disk even though the click names one row
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    clickEjectIcon(ejectSlotId("/media/hdd1"));
+    await settleSpawns(1);
+    kid(0).emitClose(0);
+    await settleSpawns(2);
+    kid(1).emitClose(0);
+    await settleSpawns(3);
+    expect(spawns).toEqual([
+      ["unmount", "-b", "/dev/sdc1"],
+      ["unmount", "-b", "/dev/sdc2"],
+      ["power-off", "-b", "/dev/sdc"],
+    ]);
+    kid(2).emitClose(0);
+    await settleUntilNotifies(1);
+    expect(notifies[0]![0]).toMatch(/safe to unplug/i);
+    expect(notifies[0]![2]).toBe("success");
+    ejectChrome.dispose();
+  });
+
+  test("ejecting from a sibling partition still leaves the disk first", async () => {
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    cwd = "/media/hdd2/docs";
+    clickEjectIcon(ejectSlotId("/media/hdd1"));
+    // left the disk (not just the clicked row) before unmounting anything
+    expect(calls.navigate).toEqual([fakeHome]);
+    await settleSpawns(1);
+    expect(spawns[0]).toEqual(["unmount", "-b", "/dev/sdc1"]);
+    ejectChrome.dispose();
+  });
+
+  test("a failed power-off after clean unmounts says the data is safe", async () => {
+    resetSeams();
+    await loadSystemPlaces();
+    ejectChrome.renderSidebar();
+    await t.renderOnce();
+    clickEjectIcon(ejectSlotId());
+    await settleSpawns(1);
+    kid(0).emitClose(0);
+    await settleSpawns(2);
+    kid(1).emitClose(1);
+    await settleUntilNotifies(1);
+    expect(notifies.length).toBe(1);
+    expect(notifies[0]![2]).toBe("error");
+    // unmounted = flushed, so the toast says so — but never claims the
+    // drive spun down or is safe to yank
+    expect(notifies[0]![0]).toMatch(/data is safe/i);
+    expect(notifies[0]![0]).not.toMatch(/safe to unplug/i);
+    ejectChrome.dispose();
+  });
+
+  test("a signal-killed child toasts killed, not exit null", async () => {
+    // the 10s spawnSafe kill-switch SIGKILLs wedged children: close arrives
+    // with code null, and `exit null` in a toast reads like a bug
+    resetSeams();
+    ejectChrome.mountDevice("/dev/sdc");
+    await settleSpawns(1);
+    kid(0).emitClose(null as never);
+    await settleUntilNotifies(1);
+    expect(notifies.length).toBe(1);
+    expect(notifies[0]![2]).toBe("error");
+    expect(notifies[0]![0]).toMatch(/killed/);
+    expect(notifies[0]![0]).not.toMatch(/null/);
+    ejectChrome.dispose();
+  });
+
+  test("mount toasts success on exit 0", async () => {
+    resetSeams();
+    ejectChrome.mountDevice("/dev/sdc");
+    expect(spawns).toEqual([["mount", "-b", "/dev/sdc"]]);
+    child().emitClose(0);
+    // mount toasts ride the spawnWait promise (a microtask past emitClose)
+    await settleUntilNotifies(1);
+    expect(notifies.length).toBe(1);
+    expect(notifies[0]![2]).toBe("success");
+    ejectChrome.dispose();
+  });
+
+  test("mount toasts failure on a non-zero exit", async () => {
+    resetSeams();
+    ejectChrome.mountDevice("/dev/sdc");
+    child().emitClose(1);
+    await settleUntilNotifies(1);
+    expect(notifies.length).toBe(1);
+    expect(notifies[0]![2]).toBe("error");
+    ejectChrome.dispose();
   });
 });

@@ -98,9 +98,12 @@ export type KeyRouterCtx = {
   renderAll(): void;
   selection: Selection;
   // --- sidebar kb-focus state (read by makeChrome for the highlight) ---
-  placesHost: Array<{ selected: boolean; place: { scheme?: string; path?: string | null; mountDevice?: string } }>;
+  placesHost: Array<{
+    selected: boolean;
+    place: { scheme?: string; path?: string | null; mountDevice?: string; label?: string };
+  }>;
   normalizePlaces(): void;
-  mountDevice(dev: string): void;
+  mountDevice(dev: string | undefined, label?: string): void;
   // --- navigation / open ---
   navigate(dir: string): void;
   goBack(): void;
@@ -421,7 +424,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const target =
       rec.place.scheme === "recent" ? RECENT_URI : rec.place.scheme === "starred" ? STARRED_URI : rec.place.path;
     if (target) ctx.navigate(target);
-    else if (rec.place.mountDevice) ctx.mountDevice(rec.place.mountDevice);
+    else if (rec.place.mountDevice) ctx.mountDevice(rec.place.mountDevice, rec.place.label);
   };
 
   // Sidebar keyboard focus (entered via moveLeft at the grid edge).

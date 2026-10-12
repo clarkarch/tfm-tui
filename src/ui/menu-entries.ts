@@ -4,7 +4,7 @@
 
 import path from "node:path";
 import { trashDir } from "../fs/fsutil";
-import { setBookmarked, loadSystemPlaces, type Place } from "../fs/places";
+import { setBookmarked, loadSystemPlaces, type EjectSpec, type Place } from "../fs/places";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import type { CompressionFormat } from "../fs/archive";
 import type { ListEntry } from "./ui-menu";
@@ -34,8 +34,8 @@ export type MenuEntriesCtx = {
   pasteSmart(dest: string): void;
   confirmEmptyTrash(): void;
   confirmDeleteForever(paths: string[]): void;
-  ejectDevice(device: string): void;
-  mountDevice(device: string): void;
+  ejectDevice(spec: EjectSpec): void;
+  mountDevice(device: string | undefined, label?: string): void;
   inTrashView(): boolean;
   // structural view of the tile refs — full TileRefs satisfies it
   tileRefs: Map<string, GridTileRef>;
@@ -266,7 +266,13 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         label: "Eject",
         action: () => {
           ctx.closeFileMenu();
-          ctx.ejectDevice(device);
+          ctx.ejectDevice({
+            device,
+            label: place.label,
+            target,
+            disk: place.disk,
+            parts: place.diskParts,
+          });
         },
       });
     }
@@ -276,7 +282,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         label: "Mount",
         action: () => {
           ctx.closeFileMenu();
-          ctx.mountDevice(mountDevice);
+          ctx.mountDevice(mountDevice, place.label);
         },
       });
     }

@@ -163,6 +163,8 @@ export const wireChrome = async (deps: {
     makeIconSlot,
     setIconState,
     stateCwd: () => state.cwd,
+    notify: (m, t, l) => notify(m, t, l),
+    home: () => home,
     connectServer,
     hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
     setPointer,

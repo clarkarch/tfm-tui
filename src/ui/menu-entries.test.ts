@@ -61,8 +61,8 @@ const baseCtx = (): MenuEntriesCtx & {
     pasteSmart: (d) => calls.push(`paste:${d}`),
     confirmEmptyTrash: () => calls.push("emptyTrash"),
     confirmDeleteForever: (ps) => calls.push(`delForever:${ps.join(",")}`),
-    ejectDevice: (dev) => calls.push(`eject:${dev}`),
-    mountDevice: (dev) => calls.push(`mount:${dev}`),
+    ejectDevice: (spec) => calls.push(`eject:${spec.device ?? ""}:${spec.label}:${spec.target ?? ""}`),
+    mountDevice: (dev, label) => calls.push(`mount:${dev}:${label ?? ""}`),
     inTrashView: () => false,
     selPaths: () => [{ path: "/a", isDir: false }],
     openFileDefault: (p) => calls.push(`open:${p}`),
@@ -99,6 +99,8 @@ const place = (p: Partial<Place>): Place => ({
   ejectable: p.ejectable ?? false,
   device: p.device,
   mountDevice: p.mountDevice,
+  disk: p.disk,
+  diskParts: p.diskParts,
   scheme: p.scheme,
   bookmarked: p.bookmarked,
   network: p.network,
@@ -322,15 +324,17 @@ describe("sidebarEntriesFor", () => {
   test("eject / mount / bookmark removal", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);
-    m.sidebarEntriesFor(place({ path: "/media/usb", ejectable: true, device: "sdb1" }), 0, 0)
+    m.sidebarEntriesFor(place({ label: "USB", path: "/media/usb", ejectable: true, device: "sdb1" }), 0, 0)
       .find((e) => e.label === "Eject")!
       .action();
-    expect(ctx.calls).toContain("eject:sdb1");
+    // the menu passes the row label + mountpoint through so the toast names
+    // the device and ejectDevice can leave the cwd first
+    expect(ctx.calls).toContain("eject:sdb1:USB:/media/usb");
 
-    m.sidebarEntriesFor(place({ mountDevice: "sdc" }), 0, 0)
+    m.sidebarEntriesFor(place({ label: "STICK", mountDevice: "sdc" }), 0, 0)
       .find((e) => e.label === "Mount")!
       .action();
-    expect(ctx.calls).toContain("mount:sdc");
+    expect(ctx.calls).toContain("mount:sdc:STICK");
 
     const bm = m.sidebarEntriesFor(place({ path: "/home/u/Docs", bookmarked: true }), 0, 0);
     expect(bm.some((e) => e.label === "Remove bookmark")).toBe(true);
