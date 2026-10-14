@@ -1341,6 +1341,14 @@ install_desktop_entry() {
   if [ -n "${DEST:-}" ]; then
     sed -i "s|^Exec=.*|Exec=$DEST/tfm %u|" "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
   fi
+  # themed Icon=tfm, never an absolute path: Quickshell launchers (noctalia)
+  # resolve via QIcon::fromTheme(name) only, and an Icon=/… path falls back
+  # to the generic icon there (GNOME tolerates it, so the breakage is
+  # launcher-specific). A hand-edited or legacy entry must not strand it.
+  sed -i "s|^Icon=.*|Icon=tfm|" "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  if ! grep -q "^Icon=" "$apps/tfm.desktop" 2>/dev/null; then
+    printf '%s\n' "Icon=tfm" >>"$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  fi
   if ! grep -q "^TryExec=" "$apps/tfm.desktop" 2>/dev/null; then
     printf '%s\n' "TryExec=tfm" >>"$apps/tfm.desktop" 2>>"$RUN_LOG" || true
   fi

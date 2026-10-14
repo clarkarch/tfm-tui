@@ -679,6 +679,27 @@ describe("installer desktop entry", () => {
     );
   });
 
+  test("the installer normalizes an absolute Icon= to the themed name", () => {
+    // Quickshell launchers (noctalia) resolve icons via QIcon::fromTheme(name)
+    // ONLY — an absolute Icon=/… path misses there and falls back to the
+    // generic icon (GNOME tolerates it, so the breakage is launcher-specific).
+    // A hand-edited or legacy entry carrying an absolute path must not strand
+    // the launcher on the fallback: the installed entry always says Icon=tfm.
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const src = join(dest, "src.desktop");
+    writeFileSync(
+      src,
+      "[Desktop Entry]\nType=Application\nName=tfm\nExec=tfm %u\nIcon=/home/user/.local/share/icons/tfm.svg\nTerminal=true\n",
+    );
+    const { code } = run(`TFM_DESKTOP_SRC="${src}" TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`);
+    expect(code).toBe(0);
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).toContain("Icon=tfm");
+    expect(installed).not.toContain("Icon=/");
+  });
+
   test("the installed entry carries an absolute Exec + TryExec, never StartupNotify", () => {
     const { dest, run } = sandbox();
     const apps = join(dest, "apps");
