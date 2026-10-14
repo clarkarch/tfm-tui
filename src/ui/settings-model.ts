@@ -284,84 +284,105 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
 
-  // "make tfm the default file manager?" as a persistent answers-the-prompt
-  // row: Yes = tfm is the default (set it when picked), No = declined AND
-  // restored (unset when picked while default, so Yes→No walks back),
-  // Ask again = undecided (record later). The marker file is the store — no
+  // one row for the whole default-file-manager story (advanced, last):
+  // the VALUE is the recorded answer, the blurb names the LIVE handler, so
+  // what the system actually uses is visible right under the answer — a
+  // stale belief ("I said yes") dies on sight. Cycling to Ask again opens
+  // the Yes/No/Ask prompt immediately (not just "later"), so a missed boot
+  // prompt is always one adjust away. The marker file is the store — no
   // config commit, so config-schema/example TOML stay untouched.
   // Fire-and-forget with an in-flight guard (rapid cycling collapses to one
   // spawn, same shape as the plugin installBusy): the wiring toasts the
   // outcome, onSettled repaints the panel once it lands, and the row
   // re-reads live state on the next build.
   let dfmBusy = false;
-  const defaultFileManagerRow = (): SettingRow => ({
-    kind: "cycle",
-    label: "default file manager",
-    blurb: "Open folders in tfm from other apps",
-    repaint: true,
-    names: ["Yes", "No", "Ask again"],
-    getIdx: () => {
-      try {
-        if (ctx.defaultFileManager?.current() === TFM_DESKTOP_ID) return 0;
-        if (ctx.defaultFileManager?.answer() === "no") return 1;
-      } catch {}
-      return 2;
-    },
-    setIdx: (i) => {
-      const dfm = ctx.defaultFileManager;
-      if (!dfm) {
-        ctx.warn("default file manager controls unavailable", "default file manager");
-        return;
-      }
-      if (dfmBusy) return;
-      dfmBusy = true;
-      const settled = (): void => {
-        dfmBusy = false;
+  const shortHandler = (id: string): string => id.replace(/\.desktop$/, "").replace(/^org\.(gnome|kde)\./, "");
+  const defaultFileManagerRow = (): SettingRow => {
+    let handler = "";
+    try {
+      handler = ctx.defaultFileManager?.current() ?? "";
+    } catch {}
+    return {
+      kind: "cycle",
+      label: "set as default file manager",
+      blurb: handler ? `folders open in: ${shortHandler(handler)}` : "ask the default question now",
+      repaint: true,
+      names: ["Yes", "No", "Ask again"],
+      getIdx: () => {
         try {
-          dfm.onSettled?.();
+          if (ctx.defaultFileManager?.current() === TFM_DESKTOP_ID) return 0;
+          if (ctx.defaultFileManager?.answer() === "no") return 1;
         } catch {}
-      };
-      void (async () => {
-        try {
-          if (i === 0) {
-            let already = false;
-            try {
-              already = dfm.current() === TFM_DESKTOP_ID;
-            } catch {}
-            if (already) {
-              ctx.warn("tfm is already the default file manager", "default file manager");
-              return;
-            }
-            const res = await dfm.set("set");
-            if (res.ok) dfm.record("yes");
-            ctx.warn(res.message, "default file manager");
-          } else if (i === 1) {
-            let isDefault = false;
-            try {
-              isDefault = dfm.current() === TFM_DESKTOP_ID;
-            } catch {}
-            if (isDefault) {
-              const res = await dfm.set("unset");
-              if (res.ok) dfm.record("no");
-              ctx.warn(res.message, "default file manager");
-            } else {
-              dfm.record("no");
-            }
-          } else {
-            dfm.record("later");
-          }
-        } catch (err) {
-          try {
-            ctx.warn(errMessage(err), "default file manager");
-          } catch {}
-        } finally {
-          settled();
+        return 2;
+      },
+      setIdx: (i) => {
+        const dfm = ctx.defaultFileManager;
+        if (!dfm) {
+          ctx.warn("default file manager controls unavailable", "default file manager");
+          return;
         }
-      })().catch(() => {
-        settled();
-      });
-    },
-  });
+        // Ask again answers NOW: re-open the prompt instead of silently
+        // recording "later" (a row that only defers is a dead end)
+        if (i === 2) {
+          try {
+            if (dfm.askNow?.() === false) ctx.warn("already settled — nothing to ask", "default file manager");
+          } catch (err) {
+            try {
+              ctx.warn(errMessage(err), "default file manager");
+            } catch {}
+          }
+          return;
+        }
+        if (dfmBusy) return;
+        dfmBusy = true;
+        const settled = (): void => {
+          dfmBusy = false;
+          try {
+            dfm.onSettled?.();
+          } catch {}
+        };
+        void (async () => {
+          try {
+            if (i === 0) {
+              let already = false;
+              try {
+                already = dfm.current() === TFM_DESKTOP_ID;
+              } catch {}
+              if (already) {
+                ctx.warn("tfm is already the default file manager", "default file manager");
+                return;
+              }
+              const res = await dfm.set("set");
+              if (res.ok) dfm.record("yes");
+              ctx.warn(res.message, "default file manager");
+            } else if (i === 1) {
+              let isDefault = false;
+              try {
+                isDefault = dfm.current() === TFM_DESKTOP_ID;
+              } catch {}
+              if (isDefault) {
+                const res = await dfm.set("unset");
+                if (res.ok) dfm.record("no");
+                ctx.warn(res.message, "default file manager");
+              } else {
+                dfm.record("no");
+              }
+            } else {
+              dfm.record("later");
+            }
+          } catch (err) {
+            try {
+              ctx.warn(errMessage(err), "default file manager");
+            } catch {}
+          } finally {
+            settled();
+          }
+        })().catch(() => {
+          settled();
+        });
+      },
+    };
+  };
 
   // keymap preset switch (tfm/yazi): one batch commit over the whole [keys]
   // table + the type-to-search/view flips, like manual remaps (nothing
@@ -394,39 +415,6 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     },
     customLabel: () => "custom",
   });
-
-  // on-demand trigger for the first-boot prompt: re-opens the Yes/No/Ask
-  // question any time (missed boot prompt, stale yes, changed mind). The
-  // blurb names the LIVE handler probed at build time, so what the system
-  // actually uses is visible right under the recorded answer — a stale
-  // belief ("I said yes, so tfm must be default") dies on sight. keepOpen:
-  // the prompt is its own overlay, the menu must stay out of its way.
-  const defaultFileManagerAskRow = (): SettingRow => {
-    let handler = "";
-    try {
-      handler = ctx.defaultFileManager?.current() ?? "";
-    } catch {}
-    return {
-      kind: "action",
-      label: "review now…",
-      blurb: handler ? `system opens folders in: ${handler}` : "ask the default question now",
-      keepOpen: true,
-      run: () => {
-        const dfm = ctx.defaultFileManager;
-        if (!dfm?.askNow) {
-          ctx.warn("default file manager controls unavailable", "default file manager");
-          return;
-        }
-        try {
-          if (!dfm.askNow()) ctx.warn("already settled — nothing to ask", "default file manager");
-        } catch (err) {
-          try {
-            ctx.warn(errMessage(err), "default file manager");
-          } catch {}
-        }
-      },
-    };
-  };
 
   // keys category: same subsection-divider mechanism as genericUiRows —
   // one header row where the schema subsection changes (first section leads
@@ -531,6 +519,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         ).unref?.();
       },
     },
+    // one row for the whole default-file-manager story, last in advanced:
+    // the value names the LIVE handler (never a stale belief), cycling
+    // re-opens the Yes/No/Ask prompt on demand. Ask-again keeps asking on
+    // boot; the marker file is the store, so config-schema/example TOML
+    // stay untouched.
+    defaultFileManagerRow(),
   ];
 
   const settingGroups = (): SettingGroup[] =>
@@ -572,13 +566,6 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           const listingIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "listing");
           if (listingIdx >= 0) uiRows.splice(listingIdx + 1, 0, hiddenFilesRow());
           else uiRows.unshift(hiddenFilesRow());
-          // the default-file-manager opt-in answers the first-boot prompt
-          // persistently (Yes/No/Ask again) — same hand-row splice, no schema
-          // row (the marker file is the store, not config). The "review now"
-          // action re-opens the prompt on demand, so a missed boot prompt is
-          // always one click away; its blurb names the LIVE handler so a
-          // stale belief ("I said yes") is visible next to the answer.
-          uiRows.push(defaultFileManagerRow(), defaultFileManagerAskRow());
           rows = uiRows;
           break;
         }

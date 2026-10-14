@@ -27,6 +27,7 @@ import {
   makeDefaultFileManagerPrompt,
   type FileManagerPickItem,
 } from "../fs/default-filemanager";
+import { installFileManagerService, resolveServiceExec } from "../app/filemanager-service";
 import { pointPaneAt } from "../app/panes";
 import {
   AmbiguousPluginError,
@@ -293,6 +294,9 @@ export const wireSettings = (deps: {
     openPick: (opts: { title: string; items: FileManagerPickItem[] }) => getPick().open(opts),
     setDefault: (op) => defaultFileManagerOrchestration.set(op),
     record: (a) => defaultFileManagerOrchestration.record(a),
+    // Full combo second half: a Yes also points browser "show in folder" at
+    // tfm. Best-effort inside the leaf (failure warns, yes stays recorded).
+    installService: () => installFileManagerService(resolveServiceExec()),
     notify: (msg, title, level) => chrome.notify(msg, title ?? "tfm", level),
     notifySticky: (msg) => {
       try {

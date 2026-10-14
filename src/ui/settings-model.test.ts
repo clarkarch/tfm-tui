@@ -354,9 +354,8 @@ describe("settingGroups shape", () => {
       "drag threshold",
     ]);
     // hidden files splices in under the listing header; session persistence
-    // is its own section; the default-file-manager opt-in closes the group
-    // (it answers the first-boot prompt persistently, no schema row) with an
-    // on-demand "review now…" trigger right after it
+    // is its own section. the default-file-manager control lives in advanced
+    // (one row: the Ask-again pick re-opens the prompt on demand)
     expect(seq("files & session")).toEqual([
       "##listing",
       "hidden files",
@@ -365,8 +364,6 @@ describe("settingGroups shape", () => {
       "##session",
       "restore session",
       "persistent undo",
-      "default file manager",
-      "review now…",
     ]);
     // theme rides under the look header (its presets are the look), then
     // the compatibility pair — plain words only ("chrome" is jargon, and the
@@ -966,7 +963,7 @@ describe("hand-written rows", () => {
         record: () => {},
       },
     });
-    const row = h.byLabel("default file manager");
+    const row = h.byLabel("set as default file manager");
     expect(row.kind).toBe("cycle");
     // not default + no recorded answer yet → the prompt-facing state
     expect(asCycle(row).getIdx()).toBe(2);
@@ -984,13 +981,13 @@ describe("hand-written rows", () => {
         record: () => {},
       },
     });
-    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(0);
+    expect(asCycle(h.byLabel("set as default file manager")).getIdx()).toBe(0);
     // externally switched away after a yes: undecided, NOT "No"
     current = "org.gnome.Nautilus.desktop";
     answer = "yes";
-    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(2);
+    expect(asCycle(h.byLabel("set as default file manager")).getIdx()).toBe(2);
     answer = "no";
-    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(1);
+    expect(asCycle(h.byLabel("set as default file manager")).getIdx()).toBe(1);
   });
 
   test("picking yes sets the default + records yes; picking no records no", async () => {
@@ -1010,13 +1007,13 @@ describe("hand-written rows", () => {
         },
       },
     });
-    asCycle(h.byLabel("default file manager")).setIdx(0);
+    asCycle(h.byLabel("set as default file manager")).setIdx(0);
     expect(sets).toEqual(["set"]);
     // fire-and-forget row (never throws — the wiring toasts): poll on the
     // observable record, never a fixed sleep (settleUntil pattern)
     await settleUntil(() => records.length === 1);
     expect(records).toEqual(["yes"]);
-    asCycle(h.byLabel("default file manager")).setIdx(1);
+    asCycle(h.byLabel("set as default file manager")).setIdx(1);
     await settleUntil(() => records.length === 2);
     expect(records).toEqual(["yes", "no"]);
   });
@@ -1042,7 +1039,7 @@ describe("hand-written rows", () => {
         },
       },
     });
-    asCycle(h.byLabel("default file manager")).setIdx(1);
+    asCycle(h.byLabel("set as default file manager")).setIdx(1);
     await settleUntil(() => records.length === 1);
     expect(sets).toEqual(["unset"]);
     expect(records).toEqual(["no"]);
@@ -1063,7 +1060,7 @@ describe("hand-written rows", () => {
         record: () => {},
       },
     });
-    asCycle(h.byLabel("default file manager")).setIdx(0);
+    asCycle(h.byLabel("set as default file manager")).setIdx(0);
     await settleUntil(() => h.warns.length === 1);
     expect(sets).toEqual([]);
     expect(h.warns[0]!.message).toContain("already");
@@ -1086,7 +1083,7 @@ describe("hand-written rows", () => {
         },
       },
     });
-    asCycle(h.byLabel("default file manager")).setIdx(0);
+    asCycle(h.byLabel("set as default file manager")).setIdx(0);
     await settleUntil(() => settled === 1);
     expect(records).toEqual([]);
     expect(h.warns.map((w) => w.message)).toContain("boom");
@@ -1110,7 +1107,7 @@ describe("hand-written rows", () => {
         record: () => {},
       },
     });
-    const row = asCycle(h.byLabel("default file manager"));
+    const row = asCycle(h.byLabel("set as default file manager"));
     row.setIdx(0);
     row.setIdx(0);
     row.setIdx(2);
@@ -1119,12 +1116,42 @@ describe("hand-written rows", () => {
     expect(sets).toEqual(["set"]);
   });
 
+  test("cycling to Ask again opens the prompt now (not a silent later)", () => {
+    let asked = 0;
+    const records: string[] = [];
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: true, message: "done" }),
+        record: (a: "yes" | "no" | "later") => {
+          records.push(a);
+        },
+        askNow: () => {
+          asked++;
+          return true;
+        },
+      },
+    });
+    asCycle(h.byLabel("set as default file manager")).setIdx(2);
+    // prompt opened synchronously; nothing recorded (the pick owns the answer)
+    expect(asked).toBe(1);
+    expect(records).toEqual([]);
+  });
+
+  test("Ask again without wiring warns instead of throwing", () => {
+    const h = mk();
+    expect(() => asCycle(h.byLabel("set as default file manager")).setIdx(2)).not.toThrow();
+    expect(h.warns.map((w) => w.title)).toContain("default file manager");
+  });
+
   test("default file manager row without wiring warns instead of throwing", () => {
     const h = mk();
     // getIdx degrades to the prompt-facing state with no wiring
-    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(2);
+    expect(asCycle(h.byLabel("set as default file manager")).getIdx()).toBe(2);
     for (const i of [0, 1, 2]) {
-      expect(() => asCycle(h.byLabel("default file manager")).setIdx(i)).not.toThrow();
+      expect(() => asCycle(h.byLabel("set as default file manager")).setIdx(i)).not.toThrow();
     }
     expect(h.warns.map((w) => w.title)).toEqual([
       "default file manager",
@@ -1133,8 +1160,7 @@ describe("hand-written rows", () => {
     ]);
   });
 
-  test("review now row re-opens the prompt and names the live handler", () => {
-    let asked = 0;
+  test("row blurb names the live handler (never a stale belief)", () => {
     const h = mk(undefined, {
       defaultFileManager: {
         current: () => "org.gnome.Nautilus.desktop",
@@ -1142,27 +1168,13 @@ describe("hand-written rows", () => {
         answer: () => "yes",
         set: async () => ({ ok: true, message: "done" }),
         record: () => {},
-        askNow: () => {
-          asked++;
-          return true;
-        },
       },
     });
-    const row = h.byLabel("review now…");
-    expect(row.kind).toBe("action");
-    // stale-yes state is visible: recorded yes, but the system uses nautilus
-    if (row.kind !== "action" || !row.blurb) throw new Error("review row must carry the live handler blurb");
-    expect(row.blurb).toContain("org.gnome.Nautilus.desktop");
-    (row as Extract<SettingRow, { kind: "action" }>).run();
-    expect(asked).toBe(1);
-  });
-
-  test("review now row without wiring warns instead of throwing", () => {
-    const h = mk();
-    const row = h.byLabel("review now…");
-    expect(row.kind).toBe("action");
-    expect(() => (row as Extract<SettingRow, { kind: "action" }>).run()).not.toThrow();
-    expect(h.warns.map((w) => w.title)).toContain("default file manager");
+    // stale-yes state is visible in the footer: recorded yes, but the system
+    // uses nautilus
+    const row = h.byLabel("set as default file manager");
+    if (row.kind !== "cycle" || !row.blurb) throw new Error("row must carry the live handler blurb");
+    expect(row.blurb).toContain("Nautilus");
   });
 });
 
@@ -1284,6 +1296,24 @@ describe("config group", () => {
     expect(cfg.some((r) => r.label === "back")).toBe(false);
     expect(cfg.map((r) => r.label)).toContain("reset to defaults");
     expect(cfg.map((r) => r.label)).toContain("edit config.toml…");
+  });
+
+  test("advanced ends with one default-file-manager row (cycle, Ask-again re-opens the prompt)", () => {
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+      },
+    });
+    const rows = h.groups().find((g) => g.header === "advanced")!.rows;
+    const row = rows[rows.length - 1]!;
+    expect(row.kind).toBe("cycle");
+    expect(row.label).toBe("set as default file manager");
+    // undecided → the prompt-facing state
+    expect(asCycle(row).getIdx()).toBe(2);
   });
 });
 

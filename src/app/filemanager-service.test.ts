@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeFileManagerService, SERVICE_NAME, SERVICE_PATH } from "./filemanager-service";
+import { installFileManagerService, makeFileManagerService, SERVICE_NAME, SERVICE_PATH } from "./filemanager-service";
 
 // Daemon contract (faked bus — no session bus needed): owns
 // org.freedesktop.FileManager1, routes ShowItems/ShowFolders into per-dir
@@ -83,5 +83,49 @@ describe("makeFileManagerService", () => {
     expect(() => svc.showItems(["file:///a/1.txt", "file:///b/3.txt"], "")).not.toThrow();
     expect(opened).toEqual([{ dir: "/b", select: "/b/3.txt" }]);
     expect(logged.join("\n")).toContain("boom");
+  });
+
+  test("a bus disconnect exits the daemon (activation restarts us next call)", () => {
+    const logged: string[] = [];
+    const listeners = new Map<string, Array<() => void>>();
+    const bus = {
+      export: () => {},
+      requestName: async () => 1,
+      on: (ev: string, cb: () => void) => {
+        listeners.set(ev, [...(listeners.get(ev) ?? []), cb]);
+      },
+    } as never;
+    const exits: number[] = [];
+    makeFileManagerService({
+      bus,
+      openPlan: () => {},
+      log: (m: string) => logged.push(m),
+      onExit: (code: number) => exits.push(code),
+    });
+    // prod wires bus 'disconnect'/'error' → onExit; the fake bus records them
+    for (const cbs of listeners.values()) for (const cb of cbs) cb();
+    expect(exits).toEqual([2]);
+    expect(logged.join("\n")).toMatch(/disconnect/i);
+  });
+});
+
+describe("installFileManagerService", () => {
+  test("writes the activator pointing at the given binary", async () => {
+    const written: Array<{ file: string; content: string }> = [];
+    const res = await installFileManagerService("/home/u/.local/bin/tfm", {
+      serviceFile: () => "/tmp/svc/org.freedesktop.FileManager1.service",
+      write: (file: string, content: string) => written.push({ file, content }),
+    });
+    expect(res.ok).toBe(true);
+    expect(written).toHaveLength(1);
+    expect(written[0]!.content).toContain("Name=org.freedesktop.FileManager1");
+    expect(written[0]!.content).toContain("Exec=/home/u/.local/bin/tfm --filemanager-service");
+  });
+
+  test("a hostile target never throws (reports failure for the toast)", async () => {
+    const res = await installFileManagerService("/home/u/.local/bin/tfm", {
+      serviceFile: () => "/proc/1/nope.service",
+    });
+    expect(res.ok).toBe(false);
   });
 });

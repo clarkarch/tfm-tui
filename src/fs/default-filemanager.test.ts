@@ -25,6 +25,13 @@ import {
 
 const sandbox = (): string => mkdtempSync(path.join(os.tmpdir(), "tfm-defmgr-"));
 
+// fire-and-forget answers settle async — poll the observable, never sleep
+const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+  if (!cond()) throw new Error("settleUntil timeout");
+};
+
 describe("queryFileManagerChoice", () => {
   test("no marker and not the default yet: ask", () => {
     const dir = sandbox();
@@ -303,6 +310,52 @@ describe("makeDefaultFileManagerOrchestration", () => {
     expect(asking.choice()).toBe("ask");
   });
 
+  test("current() memoizes the spawn: a hover storm probes once, a successful set re-probes", async () => {
+    // the settings panel rebuilds the model per hover step; without a cache
+    // every rebuild spawns xdg-mime twice (cycle getIdx + blurb) — the lag
+    let probes = 0;
+    const spawns: string[][] = [];
+    const orch = makeDefaultFileManagerOrchestration({
+      currentDefault: () => {
+        probes++;
+        return "org.gnome.Nautilus.desktop";
+      },
+      setDeps: {
+        entryInstalled: () => true,
+        exec: async (_cmd: string, args: string[]) => {
+          spawns.push(args);
+          return { exit: 0, output: "" };
+        },
+      },
+    });
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(probes).toBe(1);
+    // a successful set changes system state → the cache must drop
+    const res = await orch.set("set");
+    expect(res.ok).toBe(true);
+    expect(spawns).toEqual([["default", "tfm.desktop", "inode/directory"]]);
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(probes).toBe(2);
+  });
+
+  test("a failed set keeps the cache (nothing changed on disk)", async () => {
+    let probes = 0;
+    const orch = makeDefaultFileManagerOrchestration({
+      currentDefault: () => {
+        probes++;
+        return "org.gnome.Nautilus.desktop";
+      },
+      setDeps: { entryInstalled: () => false },
+    });
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    const res = await orch.set("set");
+    expect(res.ok).toBe(false);
+    expect(orch.current()).toBe("org.gnome.Nautilus.desktop");
+    expect(probes).toBe(1);
+  });
+
   test("openPrompt answers yes/no/later through the pick items (prompt opener contract)", () => {
     const dir = sandbox();
     const marker = path.join(dir, "choice");
@@ -369,6 +422,58 @@ describe("makeDefaultFileManagerOrchestration", () => {
     expect(opener()).toBe(true);
     expect(toasted).toHaveLength(1);
     expect(logged.length).toBeGreaterThan(0);
+  });
+
+  test("Yes installs the service activator too (Full combo: mime + browser path)", async () => {
+    const dir = sandbox();
+    const marker = path.join(dir, "choice");
+    const records: string[] = [];
+    const notified: string[] = [];
+    let installed = 0;
+    let runs: Array<() => void> = [];
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      openPick: (opts: { title: string; items: Array<{ label: string; hint?: string; run: () => void }> }) => {
+        runs = opts.items.map((i) => i.run);
+      },
+      setDefault: async () => ({ ok: true, message: "mime set" }),
+      record: (a: "yes" | "no" | "later") => {
+        records.push(a);
+        recordFileManagerChoice(a, { markerFile: () => marker });
+      },
+      notify: (msg: string) => notified.push(msg),
+      installService: async () => {
+        installed++;
+        return { ok: true, message: "activator installed" };
+      },
+      log: () => {},
+    });
+    expect(opener()).toBe(true);
+    runs[0]!(); // Yes
+    await settleUntil(() => notified.length === 1);
+    expect(records).toEqual(["yes"]);
+    expect(installed).toBe(1);
+    expect(notified[0]).toBe("mime set");
+  });
+
+  test("a failing activator install keeps the recorded yes (mime half landed)", async () => {
+    const notified: Array<{ msg: string }> = [];
+    let runs: Array<() => void> = [];
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      openPick: (opts: { title: string; items: Array<{ label: string; hint?: string; run: () => void }> }) => {
+        runs = opts.items.map((i) => i.run);
+      },
+      setDefault: async () => ({ ok: true, message: "mime set" }),
+      record: () => {},
+      notify: (msg: string) => notified.push({ msg }),
+      installService: async () => ({ ok: false, message: "no bus dir" }),
+      log: () => {},
+    });
+    opener();
+    runs[0]!(); // Yes
+    await settleUntil(() => notified.length === 1);
+    expect(notified[0]!.msg).toContain("activator failed");
   });
 });
 

@@ -106,6 +106,36 @@ describe("runDefaultFileManagerCli", () => {
     expect(text).not.toContain("not in effect");
   });
 
+  test("status shows the activator + name ownership (the nautilus-alongside state)", async () => {
+    const c = collect();
+    await runDefaultFileManagerCli(["status"], {
+      ...c.deps,
+      currentDefault: () => "tfm.desktop",
+      recordedAnswer: () => "yes",
+      entryInstalled: () => true,
+      serviceInstalled: () => false,
+      nameOwned: () => false,
+    });
+    const text = c.out.join("\n");
+    // no activator + nobody holding the name = next ShowItems cold-starts nautilus
+    expect(text).toContain("service file: missing");
+    expect(text).toContain("name owned: no");
+    expect(text).toContain("service-install");
+  });
+
+  test("status celebrates a held name (browsers reach tfm, not nautilus)", async () => {
+    const c = collect();
+    await runDefaultFileManagerCli(["status"], {
+      ...c.deps,
+      currentDefault: () => "tfm.desktop",
+      recordedAnswer: () => "yes",
+      entryInstalled: () => true,
+      serviceInstalled: () => true,
+      nameOwned: () => true,
+    });
+    expect(c.out.join("\n")).toContain("name owned: yes");
+  });
+
   test("forget deletes the marker so the prompt asks again", async () => {
     const c = collect();
     let forgotten = 0;

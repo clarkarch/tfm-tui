@@ -19,6 +19,10 @@ export const SERVICE_PATH = "/org/freedesktop/FileManager1";
 type BusLike = {
   export(path: string, iface: unknown): void;
   requestName(name: string, flags: unknown): Promise<number>;
+  // dbus-next MessageBus is an EventEmitter ('disconnect'/'error' end the
+  // session). Optional so old fakes keep working; prod wires them to onExit.
+  on?(event: string, cb: () => void): void;
+  disconnect?(): void;
 };
 
 type ServiceDeps = {
@@ -28,6 +32,11 @@ type ServiceDeps = {
   // builds the exported interface object (lazy dbus-next import — prod only;
   // tests inject a stub so start() never touches the real bus modules)
   buildInterface?: () => Promise<unknown>;
+  // called when the bus session ends (disconnect/error). Prod exits non-zero
+  // so the NEXT activation restarts a fresh daemon — a disconnected daemon
+  // that lingers would hold a dead name and silently eat every ShowItems.
+  // Optional so old fakes keep working.
+  onExit?(code: number): void;
 };
 
 // the real dbus-next interface object (lazy import: the main TUI graph never
@@ -64,6 +73,23 @@ export const buildFileManagerInterface = async (calls: {
 const PRIMARY_OWNER = 1;
 
 export const makeFileManagerService = (deps: ServiceDeps) => {
+  // a dead session must never linger: exit so the next ShowItems ACTIVATES a
+  // fresh daemon instead of landing on a name nobody answers (the "only the
+  // first open works" bug class). Exit once — error+disconnect often arrive
+  // together and a double exit races the teardown.
+  let exited = false;
+  const exitOnce = (why: string): void => {
+    if (exited) return;
+    exited = true;
+    deps.log(`${why} — exiting so activation restarts a fresh daemon`);
+    try {
+      deps.onExit?.(2);
+    } catch {}
+  };
+  try {
+    deps.bus.on?.("disconnect", () => exitOnce("bus disconnected"));
+    deps.bus.on?.("error", () => exitOnce("bus error"));
+  } catch {}
   const route = (plans: ShowPlan[], method: string): void => {
     if (!plans.length) {
       deps.log(`${method}: no local plans, nothing opened`);
@@ -155,6 +181,66 @@ export const fileManagerServiceFile = (): string =>
 export const fileManagerServiceEntry = (execPath: string): string =>
   `[D-BUS Service]\nName=${SERVICE_NAME}\nExec=${execPath} --filemanager-service\n`;
 
+// binary path for the service activator: the installed tfm on PATH wins
+// (dev runs would otherwise point the bus at the bun interpreter)
+export const resolveServiceExec = (): string => {
+  try {
+    return Bun.which("tfm") ?? process.execPath;
+  } catch {
+    return process.execPath;
+  }
+};
+
+// is the well-known name currently owned (by anyone)? Best-effort busctl
+// probe for `status` (null = unknown: no busctl, no bus). Short timeout —
+// a wedged busctl must never hang the CLI.
+export const probeNameOwned = async (): Promise<boolean | null> => {
+  try {
+    const proc = Bun.spawn(
+      [
+        "busctl",
+        "--user",
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameHasOwner",
+        "s",
+        SERVICE_NAME,
+      ],
+      { stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: 3000 },
+    );
+    const out = (await new Response(proc.stdout).text()).trim();
+    await proc.exited;
+    if (/\bb\s+true\b/.test(out)) return true;
+    if (/\bb\s+false\b/.test(out)) return false;
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+// writes the user-bus activator for the given binary (the Full combo's
+// second half: Yes = mime default + activator). Injectable fs so tests never
+// touch the bus dir; failures arrive as {ok:false}, never throws.
+export const installFileManagerService = async (
+  execPath: string,
+  deps: { serviceFile?: () => string; write?: (file: string, content: string) => void } = {},
+): Promise<{ ok: boolean; message: string }> => {
+  const file = deps.serviceFile?.() ?? fileManagerServiceFile();
+  try {
+    if (deps.write) deps.write(file, fileManagerServiceEntry(execPath));
+    else {
+      const { mkdirSync, writeFileSync } = await import("node:fs");
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, fileManagerServiceEntry(execPath));
+    }
+    return { ok: true, message: `FileManager1 activator installed (${file})` };
+  } catch (err) {
+    return { ok: false, message: `Couldn't install the FileManager1 activator · ${errMessage(err)}` };
+  }
+};
+
 // process entry: real session bus + real opener, run until killed (D-Bus
 // activation restarts us on demand via the service file). Never returns 0
 // while the bus is alive — the process IS the service.
@@ -176,10 +262,17 @@ export const runFileManagerService = async (
     return 2;
   }
   const { launchApp, desktopFilePath } = await import("../fs/apps");
+  const sessionBus = bus.sessionBus();
   const svc = makeFileManagerService({
-    bus: bus.sessionBus(),
+    bus: sessionBus,
     openPlan: (plan) => openPlanWithEntry(plan, launchApp, desktopFilePath, log),
     log,
+    onExit: (code) => {
+      try {
+        sessionBus.disconnect?.();
+      } catch {}
+      process.exit(code);
+    },
   });
   const code = await svc.start();
   if (code !== 0) {

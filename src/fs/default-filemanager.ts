@@ -62,27 +62,59 @@ export type DefaultFileManagerOrchestration = {
   record(answer: FileManagerPromptAnswer): void;
 };
 
-export const makeDefaultFileManagerOrchestration = (deps: ProbeDeps = {}): DefaultFileManagerOrchestration => {
+export const makeDefaultFileManagerOrchestration = (
+  deps: ProbeDeps & {
+    // forwarded to setDefaultFileManager (tests fake the spawn; prod uses
+    // the real xdg-mime + entry scan)
+    setDeps?: MimeDeps;
+    // probe cache TTL in ms (tests use the default; the settings panel
+    // rebuilds the model per hover step and each rebuild reads current()
+    // twice — without this every hover spawns xdg-mime twice: the lag)
+    cacheTtlMs?: number;
+  } = {},
+): DefaultFileManagerOrchestration => {
+  const ttl = deps.cacheTtlMs ?? 2000;
+  let cached = "";
+  let cachedAt = 0;
+  let hasCache = false;
   const liveProbe = (): string => {
+    const now = Date.now();
+    if (hasCache && now - cachedAt < ttl) return cached;
+    let value = "";
     if (deps.currentDefault) {
       try {
-        return deps.currentDefault();
+        value = deps.currentDefault();
       } catch {
-        return "";
+        value = "";
+      }
+    } else {
+      try {
+        value = probeDefaultFileManagerSync();
+      } catch {
+        value = "";
       }
     }
-    try {
-      return probeDefaultFileManagerSync();
-    } catch {
-      return "";
-    }
+    cached = value;
+    cachedAt = now;
+    hasCache = true;
+    return value;
+  };
+  const dropCache = (): void => {
+    hasCache = false;
   };
   const marker = deps.markerFile ? { markerFile: deps.markerFile } : {};
   return {
     current: liveProbe,
     choice: () => queryFileManagerChoice({ currentDefault: liveProbe, ...marker }),
     answer: () => readFileManagerAnswer(marker),
-    set: (op: "set" | "unset") => setDefaultFileManager(op),
+    // a successful set/unset changes system state → the cache must drop or
+    // the row keeps showing the pre-pick handler until the TTL. A failed op
+    // changed nothing → keep the cache.
+    set: async (op: "set" | "unset") => {
+      const res = await setDefaultFileManager(op, deps.setDeps ?? {});
+      if (res.ok) dropCache();
+      return res;
+    },
     record: (a) => recordFileManagerChoice(a, marker),
   };
 };
@@ -107,6 +139,11 @@ export type FileManagerPromptDeps = {
   // throwing root). Absent = plain notify. Optional so old fakes work.
   notifySticky?(msg: string): void;
   log(msg: string): void;
+  // installs the FileManager1 D-Bus activator after a successful Yes (the
+  // Full combo: mime default + activator, so browsers reach tfm instead of
+  // nautilus). Best-effort: a failure warns but never un-records the yes —
+  // the mime half worked. Absent = mime only. Optional so old fakes work.
+  installService?: () => Promise<{ ok: boolean; message: string }>;
 };
 
 export const PROMPT_TITLE = "Make tfm the default file manager?";
@@ -126,10 +163,30 @@ export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() =
         if (choice === "yes") {
           void deps
             .setDefault("set")
-            .then((res) => {
+            .then(async (res) => {
               try {
-                if (res.ok) deps.record("yes");
-                deps.notify(res.message, "default file manager", res.ok ? "success" : "error");
+                if (!res.ok) {
+                  deps.notify(res.message, "default file manager", "error");
+                  return;
+                }
+                deps.record("yes");
+                // Full combo second half: point browser "show in folder" at
+                // tfm too. Best-effort — the mime half already landed.
+                if (deps.installService) {
+                  try {
+                    const svc = await deps.installService();
+                    deps.notify(
+                      svc.ok ? res.message : `${res.message} · activator failed: ${svc.message}`,
+                      "default file manager",
+                      svc.ok ? "success" : "error",
+                    );
+                  } catch (err) {
+                    deps.log(`default-file-manager service install failed: ${errMessage(err)}`);
+                    deps.notify(res.message, "default file manager", "success");
+                  }
+                } else {
+                  deps.notify(res.message, "default file manager", "success");
+                }
               } catch (err) {
                 deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
               }
@@ -142,7 +199,7 @@ export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() =
           if (choice === "no") {
             try {
               deps.notify(
-                "tfm won't ask again — files & session → default file manager to change this",
+                "tfm won't ask again — advanced → set as default file manager to change this",
                 "default file manager",
               );
             } catch (err) {
@@ -168,7 +225,7 @@ export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() =
       deps.log(`default-file-manager prompt failed to open: ${errMessage(err)}`);
       try {
         (deps.notifySticky ?? deps.notify)(
-          "Make tfm the default file manager? — files & session → default file manager",
+          "Make tfm the default file manager? — advanced → set as default file manager",
         );
       } catch (err2) {
         deps.log(`default-file-manager fallback toast failed: ${errMessage(err2)}`);
