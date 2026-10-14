@@ -131,6 +131,41 @@ describe("makeSidebarHover", () => {
     expect(freshIcon.translateX).toBe(-1);
     expect(refs.get("tfm-place-0")!.rowId).toBe("tfm-place-0");
   });
+
+  test("forgetStale drops ownership of dead nodes so the fresh row's out releases", () => {
+    // the mounts-refresh race: hover owns the old row, the sidebar rebuilds,
+    // renderSidebar forgets the stale ownership — then the synthetic over on
+    // the fresh row lifts it and the mouse-out releases it. Without the
+    // forget, the out no-ops against the dead refs and the fresh lift sticks.
+    const { hover, nodes } = setup();
+    hover.playHover("tfm-place-0", true);
+    // rebuild: fresh nodes under the same ids
+    const freshIcon = { translateX: 0, translateY: 0 };
+    const freshLabel = { translateX: 0, translateY: 0 };
+    nodes.set("tfm-place-0", { id: "tfm-place-0" });
+    nodes.set("tfm-place-0-icon", freshIcon);
+    nodes.set("tfm-place-0-label", freshLabel);
+    expect(hover.forgetStale()).toBe(true);
+    hover.playHover("tfm-place-0", true);
+    expect(freshIcon.translateX).toBe(-1);
+    hover.playHover("tfm-place-0", false);
+    expect(freshIcon.translateX).toBe(0);
+    expect(freshLabel.translateX).toBe(0);
+  });
+
+  test("forgetStale keeps live ownership (a repaint without a rebuild changes nothing)", () => {
+    const { hover, nodes } = setup();
+    hover.playHover("tfm-place-0", true);
+    expect(hover.forgetStale()).toBe(false);
+    // still owned: the out releases the lift
+    hover.playHover("tfm-place-0", false);
+    expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(0);
+  });
+
+  test("forgetStale with nothing owned is a silent no-op", () => {
+    const { hover } = setup();
+    expect(hover.forgetStale()).toBe(false);
+  });
 });
 
 // real renderables: the translate lands on the live icon slot and clears on out

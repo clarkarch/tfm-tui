@@ -265,6 +265,8 @@ describe("settingGroups shape", () => {
       "cache folder listings",
       "cache file stats",
       "cache age",
+      "##startup",
+      "lazy startup",
       "##performance",
       "one-layer fade",
       "visible only",
@@ -827,10 +829,10 @@ describe("generic schema rows", () => {
     expect("repaint" in plain && plain.repaint).toBeFalsy();
   });
 
-  test("cold-boot-only rows carry the restart flag (sidebar/topbar intro + session + launch time)", () => {
+  test("cold-boot-only rows carry the restart flag (session/launch/lazy-startup + sidebar/topbar intro)", () => {
     const h = mk();
     withMasters(h, true);
-    for (const label of ["restore session", "launch time", "sidebar animation", "top bar animation"]) {
+    for (const label of ["restore session", "launch time", "lazy startup", "sidebar animation", "top bar animation"]) {
       const row = h.byLabel(label);
       expect("restart" in row && row.restart, `${label} should need restart`).toBe(true);
     }
@@ -1138,6 +1140,8 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
     // animation (off by default), but reveal delay answers to windowed grid
     // alone (on) — so ##performance keeps one row at defaults. The device
     // poll knob has no master (always live), so it shows at defaults too.
+    // lazy-startup has no master either (always visible, next to the cache
+    // rows it complements).
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
       "windowed grid",
@@ -1146,6 +1150,8 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "cache folder listings",
       "cache file stats",
       "cache age",
+      "##startup",
+      "lazy startup",
       "##performance",
       "reveal delay",
       "device poll interval",
@@ -1166,7 +1172,7 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
     expect(labelsOf(h, "layout")).not.toContain("preview collapse");
     // listings cache off hides its stats rows but keeps the master
     // (reveal delay rides windowed grid, still on; the device poll knob has
-    // no master and stays)
+    // no master and stays; lazy-startup has no master either and stays)
     h.config.ui.listingsCache = false;
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
@@ -1174,6 +1180,8 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "loading delay",
       "##caching",
       "cache folder listings",
+      "##startup",
+      "lazy startup",
       "##performance",
       "reveal delay",
       "device poll interval",

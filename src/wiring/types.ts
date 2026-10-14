@@ -61,6 +61,7 @@ export type ChromeWiring = {
   menu: ReturnType<typeof makeMenu>;
   chrome: ReturnType<typeof makeChrome>;
   sidebarIntro: ReturnType<typeof makeSidebarAnim>;
+  markIntroPlayed: () => void;
   topbarIntro: ReturnType<typeof makeTopbarAnim>;
   toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>];
   activeToolbar: () => ReturnType<typeof makeToolbar>;

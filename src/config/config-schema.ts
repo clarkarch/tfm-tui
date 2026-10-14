@@ -286,6 +286,7 @@ export type UiConfig = {
   listingsCache: boolean;
   listingsCacheStats: boolean;
   listingsCacheTtl: number;
+  lazyStartup: boolean;
   fileHoverAnimation: boolean;
   fileHoverIncludeLabel: boolean;
   fileHoverDirection: HoverLiftDirection;
@@ -1199,6 +1200,19 @@ const UI_ROWS: SchemaRow[] = [
     group: "optimization",
     subsection: "caching",
     showWhen: (ui) => ui.listingsCache,
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "lazy-startup",
+    prop: "lazyStartup",
+    def: false,
+    doc: "true = paint first, then load USB drives and plugins in the background (faster first paint, Devices rows and plugin UI arrive a beat later); false = everything loaded before the first paint",
+    label: "lazy startup",
+    blurb: "Paint first, load drives and plugins after",
+    group: "optimization",
+    subsection: "startup",
+    restart: true,
   },
   {
     kind: "bool",

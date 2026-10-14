@@ -41,6 +41,10 @@ export const tabChipMaxWidth = (availW: number, nTabs: number): number => {
 
 type ChromeCtx = {
   byId(id: string): MaybeNode;
+  // sidebar mount point (prod: the "tfm-places" box; tests mount an isolated
+  // host so two chrome instances never fight over one box). Optional so old
+  // fakes keep working — absent = byId("tfm-places").
+  hostBox?(): MaybeNode;
   uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
@@ -75,8 +79,17 @@ type ChromeCtx = {
   trashPaths(paths: string[]): Promise<void>;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
   // per-row hover nudge (icon lift, see ui-sidebar-hover) — built in the
-  // chrome wiring; paint stays owned by normalizePlaces below
+  // chrome wiring; paint stays owned by normalizePlaces below. forgetStale
+  // drops hover ownership of pre-rebuild nodes (same rebuild path as above).
+  // Boolean seam: true = a real drop (dead nodes forgotten), false = nothing
+  // owned — lets tests tell a live-hover rebuild from a redundant call.
   hoverRow(key: string, hovered: boolean): void;
+  forgetStaleHover?(): boolean;
+  // replay the cold-boot sidebar intro (built in the chrome wiring): the lazy
+  // mounts refresh rebuilds the sidebar right after the first render and its
+  // fresh nodes never saw the intro's frame-0 staging. Optional so old fakes
+  // keep working — absent = no replay.
+  replaySidebarIntro?(): void;
   // network: with no arg opens the "Connect to Server…" prompt; with a URI
   // connects straight to a saved connection
   connectServer(raw?: string): void;
@@ -390,7 +403,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
   };
 
   const renderSidebar = () => {
-    const hostBox = ctx.byId("tfm-places");
+    const hostBox = ctx.hostBox?.() ?? ctx.byId("tfm-places");
     if (!hostBox) return;
     const groups = buildSections(ctx.sidebarSections?.() ?? {});
     const titles = ctx.sectionTitles?.() === true;
@@ -435,6 +448,20 @@ export const makeChrome = (ctx: ChromeCtx) => {
       for (const place of group.places) hostBox.add(makeRow(place));
       if (!titles && gi < groups.length - 1) hostBox.add(makeDivider());
     });
+    // a sidebar rebuild destroys every row node a running intro staged (row
+    // ids are index-keyed, so mounts shift everything below Devices): replay
+    // it so the fresh nodes cascade instead of arriving already settled.
+    // First-render paranoia: renderSidebar runs during renderAll BEFORE the
+    // boot intro ever played — replaySidebarIntro is a no-op until the intro
+    // played once (tracked in the chrome wiring), so the boot wave isn't
+    // doubled and navigate-time rebuilds stay silent. Hover ownership of the
+    // dead nodes is forgotten first, or the fresh rows' lifts never release.
+    try {
+      ctx.forgetStaleHover?.();
+    } catch {}
+    try {
+      ctx.replaySidebarIntro?.();
+    } catch {}
     if (ctx.kbActive() && ctx.kbIdx() >= 0) {
       normalizePlaces();
     }

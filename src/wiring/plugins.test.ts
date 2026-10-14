@@ -115,10 +115,17 @@ describe("background scan (lazy first paint)", () => {
     // renderer-independent)
     const fakeRenderer = {};
     try {
+      let renders = 0;
       const t0 = Date.now();
       const wiring = await wirePlugins({
-        core: { state: { cwd: "/x" }, config: { keys: {} } } as never,
-        nav: { navigate: () => {}, setStatusMsg: () => {} } as never,
+        core: { state: { cwd: "/x" }, config: { keys: {}, ui: { lazyStartup: true } } } as never,
+        nav: {
+          navigate: () => {},
+          setStatusMsg: () => {},
+          renderAll: () => {
+            renders++;
+          },
+        } as never,
         chrome: {
           renderer: fakeRenderer,
           notify: () => {},
@@ -141,6 +148,65 @@ describe("background scan (lazy first paint)", () => {
       while (wiring.plugins.length === 0 && Date.now() < deadline) await Bun.sleep(10);
       expect(wiring.plugins.map((p) => p.name)).toEqual(["slow"]);
       expect(wiring.api.commands().map((c) => c.id)).toContain("slow:hi");
+      // late arrivals paint: the background scan triggers one renderAll when
+      // it settles, so slots/rows/menus don't wait for the next navigation
+      const deadline2 = Date.now() + 10000;
+      while (renders === 0 && Date.now() < deadline2) await Bun.sleep(10);
+      expect(renders).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // [ui] lazy-startup off (default) = classic: the scan settles BEFORE
+  // wirePlugins returns, so plugins are present on the first paint. A SLOW
+  // activate proves the await: instant plugins resolve either way, so only a
+  // parked activate tells eager from background (the lazy test's mirror).
+  // The classic path must NOT render: at wirePlugins time the later wirings
+  // (grid/settings/watcher/keymap) don't exist yet, so an eager renderAll
+  // TDZ-throws inside every step that reads them (the bug this pins — the
+  // fake's counter goes red, no debug-log probe needed).
+  test("classic scan awaits: slow plugin present at return, renders nothing", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-wire-plugins-classic-"));
+    const pluginsHome = path.join(root, "config", "tfm", "plugins");
+    process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    process.env.XDG_CACHE_HOME = path.join(root, "cache");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    mkdirSync(path.join(pluginsHome, "slow2"), { recursive: true });
+    writeFileSync(
+      path.join(pluginsHome, "slow2", "slow2.ts"),
+      `export default { name: "slow2", activate: async () => { await new Promise((r) => setTimeout(r, 800)); return { commands: [{ id: "slow2:hi", title: "hi", run: () => {} }] }; } };\n`,
+    );
+    const fakeRenderer = {};
+    try {
+      const t0 = Date.now();
+      let renders = 0;
+      const wiring = await wirePlugins({
+        core: { state: { cwd: "/x" }, config: { keys: {}, ui: { lazyStartup: false } } } as never,
+        nav: {
+          navigate: () => {},
+          setStatusMsg: () => {},
+          renderAll: () => {
+            renders++;
+          },
+        } as never,
+        chrome: {
+          renderer: fakeRenderer,
+          notify: () => {},
+          notifySticky: () => null,
+          openFileDefault: () => {},
+        } as never,
+        gridFoundation: { selection: { selPaths: () => [], selectPaths: () => {} } } as never,
+        getKeymap: () => ({ commands: () => [] }),
+        getPick: () => ({ open: () => {} }),
+      });
+      // the await held the return past the 800ms activate: hydrated at return
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(700);
+      expect(wiring.plugins.map((p) => p.name)).toEqual(["slow2"]);
+      expect(wiring.api.commands().map((c) => c.id)).toContain("slow2:hi");
+      // … and settled with zero renders: an eager renderAll here TDZ-throws
+      // (later wirings don't exist yet) — the fake counts, it can't throw
+      expect(renders).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

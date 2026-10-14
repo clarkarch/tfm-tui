@@ -220,6 +220,7 @@ describe("serializeConfig", () => {
       new Set([
         "restoreSession",
         "showLaunchTime",
+        "lazyStartup",
         "sidebarAnimation",
         "sidebarAnimationStyle",
         "sidebarAnimationMs",

@@ -18,7 +18,7 @@ import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar, toolbarItemIds, crumbItemIds } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
-import { warmEmbeddedIcons, warmSvgRenderer } from "../ui/icons";
+import { warmEmbeddedIcons, warmSvgRenderer, shouldWarmBootCaches } from "../ui/icons";
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/tty";
@@ -167,6 +167,11 @@ export const wireChrome = async (deps: {
     home: () => home,
     connectServer,
     hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
+    // boolean seam: only a REAL drop (dead nodes forgotten) counts — a
+    // redundant call stays silent, so tests can tell rebuild from no-op
+    forgetStaleHover: () => sidebarHover.forgetStale(),
+    // mounts-refresh rebuild (below) replays the boot intro on fresh nodes
+    replaySidebarIntro: () => replaySidebarIntro(),
     setPointer,
   });
 
@@ -282,11 +287,18 @@ export const wireChrome = async (deps: {
     ...(core.config.ui.transparentBg !== "off" && !core.isTtyMode() ? {} : { backgroundColor: core.colors.bg }),
   });
   renderer.root.add(container);
-  warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
-  // dlopen resvg-js on a macrotask during runBoot's I/O wait (not in the
-  // first drain worker). Skipped where drains never run (tty/force-glyph) —
-  // the dlopen would be pure waste on the console.
-  if (!core.isTtyMode() && !core.forceGlyph()) warmSvgRenderer();
+  // [ui] lazy-startup warms: index the embedded svg blobs + dlopen resvg-js
+  // on a macrotask during runBoot's I/O wait (not in the first drain worker).
+  // Off (default) = classic: the first drain pays both inline. Skipped where
+  // drains never run (tty/force-glyph) — pure waste on the console.
+  // One shared gate (ui/icons): the two call sites can't drift apart.
+  // Optional-chain: old fakes carry no ui section (absent = classic boot).
+  const lazyBoot = (): boolean => shouldWarmBootCaches(core.config.ui?.lazyStartup);
+  const drainsRun = !core.isTtyMode() && !core.forceGlyph();
+  if (lazyBoot() && drainsRun) {
+    warmEmbeddedIcons();
+    warmSvgRenderer();
+  }
   // opencode-style: global bg lives on the renderer, not per-box — transparent
   // modes stay transparent here (the old unconditional reset re-opaqued boot)
   if (core.config.ui.transparentBg !== "off" && !core.isTtyMode()) renderer.setBackgroundColor("transparent");
@@ -317,6 +329,22 @@ export const wireChrome = async (deps: {
     // in while it is hidden cascades the rows exactly as before
     titleId: () => (core.config.ui.sidebarTitle !== "none" ? "tfm-title-box" : ""),
   });
+  // the lazy mounts refresh rebuilds the sidebar right after the first render
+  // (row ids are index-keyed, so mounts shift every row below Devices): its
+  // fresh nodes never saw the intro's frame-0 staging. Replay retargets them —
+  // but ONLY while the boot intro is still young (playedOnce + still staged):
+  // navigate-time rebuilds (mount/eject/connect) must stay silent, and the
+  // first renderAll's own build must not double the wave about to play.
+  let introPlayedAt = 0;
+  const replaySidebarIntro = (): void => {
+    if (!introPlayedAt) return;
+    try {
+      if (Date.now() - introPlayedAt > core.config.ui.sidebarAnimationMs + 150) return;
+    } catch {}
+    try {
+      sidebarIntro.play();
+    } catch {}
+  };
 
   // --- Top bar intro (cold-boot-only): cascades each bar's buttons + crumbs
   // left-to-right, played by the playTopbarIntro boot step right after the
@@ -598,6 +626,11 @@ export const wireChrome = async (deps: {
     menu,
     chrome,
     sidebarIntro,
+    // the boot step records the play time so a mounts-refresh rebuild inside
+    // the intro window replays onto fresh nodes (see replaySidebarIntro)
+    markIntroPlayed: () => {
+      introPlayedAt = Date.now();
+    },
     topbarIntro,
     toolbars,
     activeToolbar: () => toolbars[core.panes.active],

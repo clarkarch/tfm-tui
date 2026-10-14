@@ -207,6 +207,12 @@ const svgRenderer = (): SvgRendererKind => (loadInprocResvg() === null ? null : 
 // setTimeout (a REAL macrotask): a Promise.then microtask runs before
 // index.ts continues past `await wireChrome` and delays first paint by the
 // full dlopen; the macrotask lands during runBoot's I/O wait instead.
+// [ui] lazy-startup gates BOTH warms in wiring/chrome (off = classic: the
+// first drain pays them inline). shouldWarmBootCaches is the shared gate so
+// the two call sites can't drift (one warmed + one not = half the win for
+// the same config read).
+export const shouldWarmBootCaches = (lazyStartup: unknown): boolean => lazyStartup === true;
+
 export const warmSvgRenderer = (): void => {
   setTimeout(() => {
     try {

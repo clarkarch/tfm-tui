@@ -256,6 +256,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "listingsCache",
     "listingsCacheStats",
     "listingsCacheTtl",
+    // lazy-startup is boot-only (mounts/plugin paths run once at boot, warms
+    // before first paint) — flipping it mid-session must not rebuild the world
+    "lazyStartup",
     // device poll interval reads live per tick (devwatch arm closure) — the
     // stepper repaints its own value text, no rebuild, no watcher restart
     "devicePollMs",

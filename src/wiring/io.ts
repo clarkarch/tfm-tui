@@ -106,6 +106,54 @@ export const wireDeviceWatcher = (deps: { nav: NavWiring; chrome: ChromeWiring; 
   return { stopDeviceWatcher: stop };
 };
 
+// --- Boot mount loading ([ui] lazy-startup). Extracted seam so tests pin
+// the branch WITHOUT spawning lsblk or touching the renderer: lazy on =
+// skipMounts now, full refresh after first paint; off (default) = full load
+// inline, refresh step a no-op. Prod closures below are thin arrows over
+// loadSystemPlaces/renderSidebar/drainIconQueue; boot.ts owns the ordering. ---
+export type BootMountsCtx = {
+  // strict === true read of the flag (optional-chain at the call site: old
+  // fakes carry no ui section — absent = classic boot, never lazy)
+  lazyBoot(): boolean;
+  loadAll(): Promise<void>;
+  loadWithoutMounts(): Promise<void>;
+  repaintSidebar(): void;
+  // drainIconQueue may reject async (node destroyed mid-raster) — handled inside
+  drainIcons(): unknown;
+};
+
+export const runBootMountsLoad = (ctx: BootMountsCtx): Promise<void> =>
+  ctx.lazyBoot() ? ctx.loadWithoutMounts() : ctx.loadAll();
+
+export const runBootMountsRefresh = (ctx: BootMountsCtx): void => {
+  // classic boot already loaded mounts inline — nothing to refresh
+  if (!ctx.lazyBoot()) return;
+  // fire-and-forget ON PURPOSE (never awaited by boot): the whole point
+  // of the lazy mounts path is that first paint doesn't wait for lsblk.
+  // Ordering vs the intros: play() re-resolves its row ids live at play
+  // time, and ui-chrome replays a running intro after any sidebar rebuild
+  // (see replaySidebarIntro), so a mounts landing mid-intro retargets the
+  // fresh nodes instead of writing dead ones. Returning the promise here
+  // would re-serialize boot on udev and defeat the lazy path.
+  void ctx
+    .loadAll()
+    .then(() => {
+      // targeted sidebar repaint, not a full renderAll (native-alloc churn
+      // — the OOM note; grid/preview already painted and mounts only feed
+      // the sidebar). The sig fast path no-ops when mounts didn't change.
+      try {
+        ctx.repaintSidebar();
+      } catch {}
+      // .catch, not just try/catch: drainIconQueue rejects ASYNC (a node
+      // destroyed mid-raster), which `void <promise>` never catches
+      try {
+        const r = ctx.drainIcons();
+        if (r instanceof Promise) void r.catch(() => {});
+      } catch {}
+    })
+    .catch(() => {});
+};
+
 // --- Boot sequence (order + toast gating live in ./boot, tested): resolution
 // wait, fixed nodes, globs2, session restore, places, first render, hygiene,
 // search wiring. Fire-and-forget, exactly like the old flat wiring. ---
@@ -139,6 +187,19 @@ export const wireBoot = (deps: {
   afterLayout?: () => void;
 }) => {
   const { core, nav, chrome, gridFoundation, grid, fileops, bootStart } = deps;
+  // [ui] lazy-startup: captured ONCE here (config loads in wireCore, before
+  // boot runs — nothing rewrites it mid-boot, and the key is restart:true +
+  // RENDER_EXEMPT so no live path can either). A live re-read per step could
+  // split the pair (skip-load + no-refresh = Devices missing until restart).
+  // Optional-chain: old fakes carry no ui section (absent = classic, never lazy).
+  const lazyBootFlag = core.config.ui?.lazyStartup === true;
+  const mountsCtx: BootMountsCtx = {
+    lazyBoot: () => lazyBootFlag,
+    loadAll: () => loadSystemPlaces(),
+    loadWithoutMounts: () => loadSystemPlaces({ skipMounts: true }),
+    repaintSidebar: () => chrome.chrome.renderSidebar(),
+    drainIcons: () => core.slots.drainIconQueue(),
+  };
   runBoot({
     // boot: ONE full-budget wait — a terminal that answered nothing by then
     // never reports pixels (linux console/tmux), and the gate latches so no
@@ -198,27 +259,13 @@ export const wireBoot = (deps: {
     restoreSession: () => {
       if (!deps.skipSessionRestore) nav.restoreSession();
     },
-    // boot fast path: skip the ~200ms lsblk so first paint doesn't wait for
-    // udev — refreshMounts (below) fills the Devices rows in right after
-    loadSystemPlaces: () => loadSystemPlaces({ skipMounts: true }),
+    // [ui] lazy-startup: skip the ~200ms lsblk so first paint doesn't wait
+    // for udev — refreshMounts (below) fills the Devices rows in right after.
+    // Off (default) = classic fully-loaded first paint. Branches tested via
+    // runBootMountsLoad/Refresh (same file) — this closure only binds prod deps.
+    loadSystemPlaces: () => runBootMountsLoad(mountsCtx),
     renderAll: nav.renderAll,
-    refreshMounts: () => {
-      void loadSystemPlaces()
-        .then(() => {
-          // targeted sidebar repaint, not a full renderAll (native-alloc churn
-          // — the OOM note; grid/preview already painted and mounts only feed
-          // the sidebar). The sig fast path no-ops when mounts didn't change.
-          try {
-            chrome.chrome.renderSidebar();
-          } catch {}
-          // .catch, not just try/catch: drainIconQueue rejects ASYNC (a node
-          // destroyed mid-raster), which `void <promise>` never catches
-          try {
-            void core.slots.drainIconQueue().catch(() => {});
-          } catch {}
-        })
-        .catch(() => {});
-    },
+    refreshMounts: () => runBootMountsRefresh(mountsCtx),
     playSidebarIntro: () => deps.playSidebarIntro?.(),
     playTopbarIntro: () => deps.playTopbarIntro?.(),
     debugTrace: () => {

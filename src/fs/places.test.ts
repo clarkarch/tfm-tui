@@ -181,16 +181,23 @@ describe("loadSystemPlaces + buildSections", () => {
 
 describe("loadSystemPlaces skipMounts (lazy first paint)", () => {
   const oldPath = process.env.PATH;
+  const oldCfg = process.env.XDG_CONFIG_HOME;
   afterEach(() => {
     if (oldPath === undefined) delete process.env.PATH;
     else process.env.PATH = oldPath;
+    if (oldCfg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = oldCfg;
   });
 
   // lsblk costs ~200ms on slow udev and used to gate the first renderAll.
   // Boot loads dirs/bookmarks/network first and refreshes mounts in the
   // background — skipMounts must not spawn lsblk at all. Stub on PATH (same
   // seam install.sh tests use for curl): a marker file records invocation.
-  test("skipMounts loads the rest without spawning lsblk", async () => {
+  // SCOPE: these tests pin places.ts only (skipMounts skips the spawn, full
+  // load performs it). The FLAG branch (which call wiring/io.ts makes) is
+  // pinned in wiring/io-boot-mounts.test.ts — these tests never read
+  // lazyStartup and would stay green through a wiring flip-flop.
+  const withLsblkStub = async (): Promise<{ root: string; markerBytes: () => number }> => {
     const root = path.join(os.tmpdir(), `tfm-places-skip-${process.pid}-${Date.now()}`);
     const bin = path.join(root, "bin");
     const marker = path.join(root, "lsblk-called");
@@ -204,13 +211,22 @@ describe("loadSystemPlaces skipMounts (lazy first paint)", () => {
     const configHome = path.join(root, "config");
     mkdirSync(configHome, { recursive: true });
     process.env.XDG_CONFIG_HOME = configHome;
-    const markerBytes = (): number => {
-      try {
-        return Bun.file(marker).size;
-      } catch {
-        return 0;
-      }
+    return {
+      root,
+      markerBytes: (): number => {
+        try {
+          return Bun.file(marker).size;
+        } catch {
+          return 0;
+        }
+      },
     };
+  };
+
+  test("skipMounts loads the rest without spawning lsblk; full load spawns it", async () => {
+    // one test for both halves of the places-level contract (skip = no spawn,
+    // full = spawn) — the second half used to live inline in the test above
+    const { root, markerBytes } = await withLsblkStub();
     try {
       await loadSystemPlaces({ skipMounts: true });
       expect(markerBytes()).toBe(0);

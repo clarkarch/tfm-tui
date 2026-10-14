@@ -182,10 +182,12 @@ const fileops = wireFileops({
 
 // --- plugins: user extensions (after fileops — api context needs selection
 // + nav/chrome sinks; before grid — menu entries merge plugin sections;
-// before settings — aggregated rows feed the settings model). The initial
-// scan runs in the BACKGROUND (registrations hydrate the live array when
-// they land — slots self-paint via the registry subscription), so this await
-// only pays handle construction, never plugin load.
+// before settings — aggregated rows feed the settings model). With [ui]
+// lazy-startup on, the initial scan runs in the BACKGROUND (registrations
+// hydrate the live array when they land — slots self-paint via the registry
+// subscription), so this await only pays handle construction, never plugin
+// load. With it off (default) the scan settles here, so plugins are present
+// on the first paint.
 // getKeymap/getPick close over `keymap`, which wires LAST — wirePlugins
 // degrades both via tdzSafe until the keymap exists, so an eager plugin
 // calling api.commands()/ui.pick at activate top level gets []/noop instead
@@ -267,7 +269,10 @@ wireBoot({
   skipSessionRestore: explicitPath,
   mountSlots: () => plugins.mountSlots(),
   afterLayout: () => hover.refresh(),
-  playSidebarIntro: () => chrome.sidebarIntro.play(),
+  playSidebarIntro: () => {
+    chrome.sidebarIntro.play();
+    chrome.markIntroPlayed();
+  },
   playTopbarIntro: () => chrome.topbarIntro.play(),
   // system theme: terminal colors land before the first layout bakes them in
   applyBootSystemTheme: () => settings.systemTheme.applyBootSystemTheme(),

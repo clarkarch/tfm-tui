@@ -226,11 +226,13 @@ export const wirePlugins = async (deps: {
     warn,
     registerSlots: (name, slots) => slotRegistry.register({ id: name, slots: slots as never }),
   });
-  // lazy first paint: the scan (readdir + per-plugin hash + cpSync + import +
-  // 10s-capped activate) runs concurrently with the remaining wiring and the
-  // first renderAll — registry.plugins is the live array, so the model/menus/
-  // api.commands merge see arrivals with no re-wiring. The boot event fires
-  // when the scan settles, so a late plugin's boot listener still runs.
+  // [ui] lazy-startup on: the scan (readdir + per-plugin hash + cpSync +
+  // import + 10s-capped activate) runs concurrently with the remaining wiring
+  // and the first renderAll — registry.plugins is the live array, so the
+  // model/menus/api.commands merge see arrivals with no re-wiring. The boot
+  // event fires when the scan settles, so a late plugin's boot listener still
+  // runs. Off (default): the scan is awaited below so plugins are present on
+  // the first paint.
   const reportShadowedBinds = (): void => {
     // colliding defaults load silently shadowed (core-wins at dispatch) — make
     // the shadowing visible once per load so authors/users know to remap.
@@ -261,18 +263,51 @@ export const wirePlugins = async (deps: {
       }
     } catch {}
   };
-  void registry
-    .scan()
-    .then(() => {
-      reportShadowedBinds();
+  const scanSettled = (): void => {
+    reportShadowedBinds();
+    try {
+      sharedPluginEvents().emit("boot", {});
+    } catch {}
+    // the scan ran in the background while boot already rendered: late
+    // arrivals (slots/rows/menus/commands) paint on the next renderAll
+    // instead of waiting for the next navigation. Render-only (no layout
+    // work the boot steps own); safe no-op when nothing arrived.
+    try {
+      nav.renderAll();
+    } catch {}
+  };
+  // Classic boot (lazy-startup off, the default) awaits the scan so plugins
+  // are present on the first paint. NOTE: this follow-up renderAll is
+  // LAZY-ONLY — at this point in index.ts the later wirings (grid, settings,
+  // watcher, keymap) don't exist yet, so an eager renderAll would TDZ-throw
+  // inside every step that reads them (grid/keymap/watcher/plugins getters).
+  // The boot sequence's own renderAll paints everything once those exist.
+  if (core.config.ui?.lazyStartup === true) {
+    void registry
+      .scan()
+      .then(() => {
+        scanSettled();
+      })
+      .catch(() => {
+        // the loader isolates per plugin and scan() itself never rejects, but a
+        // fire-and-forget must never surface an unhandled rejection either
+      });
+  } else {
+    // framework-level scan failure must not break boot either (the module
+    // contract: a plugin failure never breaks boot — per-plugin throws are
+    // isolated inside scan, this covers the framework path)
+    try {
+      await registry.scan();
+    } catch (err) {
       try {
-        sharedPluginEvents().emit("boot", {});
+        warn(`plugin scan failed: ${err instanceof Error ? err.message : String(err)}`);
       } catch {}
-    })
-    .catch(() => {
-      // the loader isolates per plugin and scan() itself never rejects, but a
-      // fire-and-forget must never surface an unhandled rejection either
-    });
+    }
+    reportShadowedBinds();
+    try {
+      sharedPluginEvents().emit("boot", {});
+    } catch {}
+  }
   // promise confirm (danger-aware Yes/No) shared with the settings installer
   // rows — same dialog plugins get via api.ui.confirm, no second wrapper
   return {

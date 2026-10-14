@@ -161,6 +161,42 @@ describe("makeSidebarAnim (synchronous paths)", () => {
     expect((byId("sb-nt-0") as any).opacity).toBe(0);
     anim.stop();
   });
+
+  test("replay after a sidebar rebuild animates the FRESH nodes (mounts race)", () => {
+    // the boot kill path: refreshMounts lands after the first render and its
+    // renderSidebar destroys every row node the intro just staged (row ids are
+    // index-keyed, so mounts shift every row below Devices). A replay must
+    // resolve ids live and stage the new nodes — not keep writing dead ones.
+    const nodes = fakeNodes();
+    nodes.add("sb-re");
+    const rows = ["sb-re-0", "sb-re-1"];
+    const rowIds = [...rows];
+    const anim = makeSidebarAnim({
+      renderer: {} as unknown as CliRenderer,
+      byId: nodes.byId,
+      opts: () => opts({ style: "stagger" }),
+      rootId: () => "sb-re",
+      rowIds: () => [...rowIds],
+      titleId: () => "sb-re-title",
+    });
+    for (const r of rows) nodes.add(r);
+    anim.play();
+    expect((nodes.byId("sb-re-0") as any).opacity).toBe(0);
+    // mounts land: the sidebar rebuilds, old row nodes die, fresh ones mount
+    const dead0 = nodes.byId("sb-re-0");
+    const dead1 = nodes.byId("sb-re-1");
+    rowIds.length = 0;
+    rowIds.push("sb-re-0", "sb-re-1", "sb-re-2");
+    for (const r of rowIds) nodes.add(r);
+    expect(nodes.byId("sb-re-0")).not.toBe(dead0);
+    expect(nodes.byId("sb-re-1")).not.toBe(dead1);
+    anim.play();
+    expect((nodes.byId("sb-re-0") as any).opacity).toBe(0);
+    expect((nodes.byId("sb-re-2") as any).opacity).toBe(0);
+    anim.stop();
+    expect((nodes.byId("sb-re-0") as any).opacity).toBe(1);
+    expect((nodes.byId("sb-re-2") as any).opacity).toBe(1);
+  });
 });
 
 // real engine glue: the timeline starts after the frame gate and settles every

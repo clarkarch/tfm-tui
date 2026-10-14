@@ -336,6 +336,108 @@ describe("renderSidebar", () => {
     chrome.renderSidebar();
     await t.renderOnce();
   });
+
+  test("a mounts-driven rebuild replays the boot intro on the fresh nodes", async () => {
+    // isolated renderer: this file's shared renderer/module state (sysMounts
+    // in fs/places, "tfm-places" host contents) made the replay asserts order-
+    // dependent — a dedicated renderer per replay test is the only honest
+    // isolation (same pattern as the toolbar crumb tests below).
+    const rt = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      // the lazy-mounts race: renderAll builds the sidebar, the boot intro
+      // plays (stages frame 0 on the rows), then refreshMounts lands with new
+      // Devices rows and rebuilds — the fresh nodes must cascade, not arrive
+      // settled.
+      const replays: number[] = [];
+      const staleDrops: number[] = [];
+      // the wiring's guard: replaySidebarIntro is a no-op until the boot intro
+      // played once (playedAt seam here) — the widget calls unconditionally
+      // and the guard decides. First build replays nothing; a rebuild inside
+      // the intro window replays once; later rebuilds stay silent.
+      // forgetStaleHover answers through a REAL animator (empty refs =
+      // nothing owned = false), so the test pins the call shape while
+      // ui-sidebar-hover.test.ts pins the behavior.
+      const { makeSidebarHover } = await import("./ui-sidebar-hover");
+      const staleHover = makeSidebarHover({
+        byId: () => null,
+        rowRefs: () => new Map(),
+        hoverOpts: () => ({ enabled: true, direction: "left", includeLabel: false }),
+      });
+      let playedAt = 0;
+      let sigNow = "intro-replay";
+      const hostId = "tfm-places-intro-replay";
+      const rbyId = (id: string) => rt.renderer.root.findDescendantById(id);
+      rt.renderer.root.add(Box({ id: hostId, flexDirection: "column", width: 20 }));
+      await rt.renderOnce();
+      const introChrome = makeChrome({
+        byId: rbyId,
+        hostBox: () => rbyId(hostId),
+        uiStyle: () => "solid",
+        colors: () => colors,
+        sw: () => 20,
+        sideInnerW: () => 20,
+        tabBar: () => false,
+        availW: () => 0,
+        rasterSig: () => sigNow,
+        renderAll: () => {},
+        navigate: () => {},
+        blurTerminal: () => {},
+        closeFileMenu: () => {},
+        openContextMenu: () => {},
+        sidebarEntriesFor: () => [],
+        finishDrag: () => {},
+        dlog: () => {},
+        trashPaths: () => Promise.resolve(),
+        moveInto: () => Promise.resolve(),
+        kbActive: () => false,
+        kbIdx: () => -1,
+        tabs: () => ({ list: mkTabs(1), active: 0 }),
+        focusPane: () => {},
+        closeTab: () => {},
+        switchTab: () => {},
+        newTab: () => {},
+        hoverBtn: () => Box({ id: "tfm-intro-tab-new", width: 3, height: 1 }),
+        stripSelectable: () => {},
+        drainIconQueue: () => {},
+        makeIconSlot: (name: string) => ({
+          el: null,
+          slotId: `intro-${name}`,
+          spec: { slotId: `intro-${name}`, name, heightCells: 1, states: [], initialState: 0 },
+        }),
+        setIconState: () => true,
+        stateCwd: () => HOME,
+        connectServer: () => {},
+        hoverRow: () => {},
+        forgetStaleHover: () => {
+          const dropped = staleHover.forgetStale();
+          if (dropped) staleDrops.push(1);
+          return dropped;
+        },
+        replaySidebarIntro: () => {
+          if (playedAt) replays.push(1);
+        },
+      });
+      introChrome.renderSidebar();
+      await rt.renderOnce();
+      expect(replays.length).toBe(0); // first build: the boot step hasn't played yet
+      // the boot intro plays; mounts land inside the window: exactly one replay.
+      // nothing is hovered here, so the stale-hover forget stays a silent
+      // no-op (its true path is pinned in ui-sidebar-hover.test.ts).
+      playedAt = 1;
+      sigNow = "intro-replay-2";
+      introChrome.renderSidebar();
+      await rt.renderOnce();
+      expect(replays).toHaveLength(1);
+      expect(staleDrops).toHaveLength(0);
+      // same sig again: fast path, no replay, no storm
+      introChrome.renderSidebar();
+      await rt.renderOnce();
+      expect(replays).toHaveLength(1);
+      expect(staleDrops).toHaveLength(0);
+    } finally {
+      await rt.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
 });
 
 describe("place drops (OSC-72 / internal drag targets)", () => {

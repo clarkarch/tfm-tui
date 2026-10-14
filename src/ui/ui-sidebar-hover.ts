@@ -137,5 +137,23 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
     }
   };
 
-  return { playHover };
+  // the hover drawer / mounts refresh / watcher rebuild rows under a live
+  // hover: rowRefs re-resolve to FRESH nodes while `current` still owns the
+  // dead ones. ownedNode identity-checks the write, so a repaint can never
+  // touch a destroyed row — but the stale ownership must ALSO be forgotten,
+  // or the next out/sweep no-ops against the dead refs and the fresh row's
+  // lift (re-applied by the synthetic over after the rebuild) is never
+  // released. Called by renderSidebar after every rebuild. Returns whether
+  // anything was actually forgotten (lets callers — and tests — tell a real
+  // rebuild from a redundant call).
+  const forgetStale = (): boolean => {
+    if (!current) return false;
+    if (!ownedNode(current)) {
+      current = null;
+      return true;
+    }
+    return false;
+  };
+
+  return { playHover, forgetStale };
 };
