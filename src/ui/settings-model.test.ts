@@ -1029,6 +1029,21 @@ describe("hand-written rows", () => {
     if (row.kind !== "action" || !row.blurb) throw new Error("row must carry the live handler blurb");
     expect(row.blurb).toContain("Nautilus");
   });
+
+  test("row blurb falls back to plain words when no handler is detected (never word salad)", () => {
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+      },
+    });
+    const row = h.byLabel("set as default file manager");
+    if (row.kind !== "action" || !row.blurb) throw new Error("row must carry a fallback blurb");
+    expect(row.blurb).toBe("open folder links in tfm");
+  });
 });
 
 describe("keybind rows", () => {

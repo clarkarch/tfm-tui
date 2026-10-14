@@ -304,7 +304,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     return {
       kind: "action",
       label: "set as default file manager",
-      blurb: handler ? `folders open in: ${shortHandler(handler)}` : "ask the default question now",
+      blurb: handler ? `folders open in: ${shortHandler(handler)}` : "open folder links in tfm",
       keepOpen: true,
       run: () => {
         const dfm = ctx.defaultFileManager;
