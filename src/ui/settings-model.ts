@@ -75,9 +75,9 @@ export type SettingsModelCtx = {
   // before the spawn resolved). Optional so old fakes keep working.
   defaultFileManager?: DefaultFileManagerOrchestration & {
     onSettled?(): void;
-    // opens the Yes/No/Ask-again prompt on demand (the "ask me now" row).
-    // Returns true when the question surfaced. Optional so old fakes work.
-    askNow?(): boolean;
+    // opens the Yes/No confirm on demand. Resolves true when the question
+    // surfaced. Optional so old fakes work.
+    ask?(): Promise<boolean>;
   };
 };
 
@@ -304,7 +304,6 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     try {
       handler = ctx.defaultFileManager?.current() ?? "";
     } catch {}
-    const isDefault = handler === TFM_DESKTOP_ID;
     return {
       kind: "toggle",
       label: "set as default file manager",
@@ -323,10 +322,46 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           ctx.warn("default file manager controls unavailable", "default file manager");
           return;
         }
-        // flipping off while undecided (never answered, or stale yes) opens
-        // the prompt instead of recording a blind "no" — the user reached
-        // for the control, so show them the question
-        if (!v && !isDefault) {
+        // flipping ON shows the confirm UI (the Yes button drives the
+        // set+record+service flow) instead of silently spawning xdg-mime —
+        // the toggle promises the question, not a side effect
+        const askQuestion = (): void => {
+          if (!dfm.ask) {
+            ctx.warn("default file manager controls unavailable", "default file manager");
+            return;
+          }
+          void dfm
+            .ask()
+            .then((surfaced) => {
+              if (!surfaced) ctx.warn("already settled — nothing to ask", "default file manager");
+            })
+            .catch((err) => {
+              try {
+                ctx.warn(errMessage(err), "default file manager");
+              } catch {}
+            });
+        };
+        if (v) {
+          let already = false;
+          try {
+            already = dfm.current() === TFM_DESKTOP_ID;
+          } catch {}
+          if (already) {
+            ctx.warn("tfm is already the default file manager", "default file manager");
+            return;
+          }
+          askQuestion();
+          return;
+        }
+        // flipping OFF while tfm is default unsets directly; while undecided
+        // (never answered, or stale yes) it opens the question instead of
+        // recording a blind "no" — the user reached for the control, so show
+        // them the question
+        let stillDefault = false;
+        try {
+          stillDefault = dfm.current() === TFM_DESKTOP_ID;
+        } catch {}
+        if (!stillDefault) {
           let undecided = false;
           try {
             undecided = dfm.answer() !== "no";
@@ -334,13 +369,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
             undecided = true;
           }
           if (undecided) {
-            try {
-              if (dfm.askNow?.() === false) ctx.warn("already settled — nothing to ask", "default file manager");
-            } catch (err) {
-              try {
-                ctx.warn(errMessage(err), "default file manager");
-              } catch {}
-            }
+            askQuestion();
             return;
           }
           try {
@@ -358,31 +387,9 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         };
         void (async () => {
           try {
-            if (v) {
-              let already = false;
-              try {
-                already = dfm.current() === TFM_DESKTOP_ID;
-              } catch {}
-              if (already) {
-                ctx.warn("tfm is already the default file manager", "default file manager");
-                return;
-              }
-              const res = await dfm.set("set");
-              if (res.ok) dfm.record("yes");
-              ctx.warn(res.message, "default file manager");
-            } else {
-              let stillDefault = false;
-              try {
-                stillDefault = dfm.current() === TFM_DESKTOP_ID;
-              } catch {}
-              if (stillDefault) {
-                const res = await dfm.set("unset");
-                if (res.ok) dfm.record("no");
-                ctx.warn(res.message, "default file manager");
-              } else {
-                dfm.record("no");
-              }
-            }
+            const res = await dfm.set("unset");
+            if (res.ok) dfm.record("no");
+            ctx.warn(res.message, "default file manager");
           } catch (err) {
             try {
               ctx.warn(errMessage(err), "default file manager");

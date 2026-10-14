@@ -25,7 +25,7 @@ import { makeUrlOpener } from "../fs/open-url";
 import {
   makeDefaultFileManagerOrchestration,
   makeDefaultFileManagerPrompt,
-  type FileManagerPickItem,
+  type FileManagerConfirmItem,
 } from "../fs/default-filemanager";
 import { installFileManagerService, resolveServiceExec } from "../app/filemanager-service";
 import { pointPaneAt } from "../app/panes";
@@ -57,13 +57,14 @@ export const wireSettings = (deps: {
   getPrompt: () => {
     open(opts: { title: string; placeholder?: string; okLabel?: string; initial?: string }): Promise<string | null>;
   };
-  // pick overlay wires LAST too (keymap) — the first-boot default-file-manager
-  // prompt opens through it, long after the wiring settled
-  getPick: () => {
-    open(opts: { title: string; items?: Array<{ label: string; hint?: string; run: () => void }> }): void;
+  // yes/no confirm dialog wires in fileops (before settings) — the
+  // default-file-manager prompt opens through it; boot calls it post-wiring
+  getConfirm: () => {
+    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): boolean;
+    isOpen(): boolean;
   };
 }) => {
-  const { core, nav, chrome, grid, plugins, getRetheme, getPrompt, getPick } = deps;
+  const { core, nav, chrome, grid, plugins, getRetheme, getPrompt, getConfirm } = deps;
 
   // --- Plugin git installer orchestration: prompt -> validate -> danger
   // confirm -> clone/pull/rm -> rescan + live panel rebuild. Fire-and-forget
@@ -269,19 +270,21 @@ export const wireSettings = (deps: {
         escMenu.renderMenuContent();
       } catch {}
     },
-    // on-demand trigger for the settings "review now…" row: same opener the
-    // boot step uses, so a missed boot prompt is one click away
-    askNow: () => openDefaultFileManagerPrompt(),
+    // on-demand trigger for the settings toggle: same opener the boot step
+    // uses, so flipping the toggle shows the confirm UI (the Yes button
+    // drives the yes-flow — the toggle promises the question, not a side
+    // effect)
+    ask: () => openDefaultFileManagerPrompt(),
   };
 
-  // first-boot "make tfm the default file manager?" — a pick overlay with
-  // first-boot "make tfm the default file manager?" — the mapping lives in
-  // the leaf (makeDefaultFileManagerPrompt, unit-tested); the wiring only
-  // supplies the live pick overlay + sinks. Guarded boot step, post-intros,
-  // so the user sees tfm before being asked. Fire-and-forget, never throws.
-  // A verdict of "ask" always surfaces SOMETHING (pick, or a sticky toast
-  // when pick is unavailable) — never silent. Dismissing the pick records
-  // nothing, so dismissal is "ask again" by omission.
+  // first-boot "make tfm the default file manager?" — a real confirm dialog
+  // (Yes/No buttons), not the command palette. The mapping lives in the leaf
+  // (makeDefaultFileManagerPrompt, unit-tested); the wiring only supplies the
+  // live confirm + sinks. Guarded boot step, post-intros, so the user sees
+  // tfm before being asked. Fire-and-forget, never throws. A verdict of
+  // "ask" always surfaces SOMETHING (confirm, or a sticky toast when the
+  // dialog is unavailable) — never silent. Dismissing the confirm records
+  // nothing, so dismissal asks again next boot by omission.
   const openDefaultFileManagerPrompt = makeDefaultFileManagerPrompt({
     choice: () => {
       try {
@@ -291,12 +294,26 @@ export const wireSettings = (deps: {
         return "silent";
       }
     },
-    openPick: (opts: { title: string; items: FileManagerPickItem[] }) => getPick().open(opts),
+    openConfirm: (opts: FileManagerConfirmItem) => {
+      const c = getConfirm();
+      if (!c.confirm(opts.message, opts.yesLabel, opts.onYes)) {
+        throw new Error("confirm unavailable");
+      }
+    },
     setDefault: (op) => defaultFileManagerOrchestration.set(op),
     record: (a) => defaultFileManagerOrchestration.record(a),
     // Full combo second half: a Yes also points browser "show in folder" at
     // tfm. Best-effort inside the leaf (failure warns, yes stays recorded).
     installService: () => installFileManagerService(resolveServiceExec()),
+    // the yes-flow lands async (dialog long closed) — repaint the open panel
+    // so the toggle shows the new live state without reopening the menu
+    onSettled: () => {
+      try {
+        escMenu.renderMenuContent();
+      } catch (err) {
+        dlog(`default-file-manager settled repaint failed: ${errMessage(err)}`);
+      }
+    },
     notify: (msg, title, level) => chrome.notify(msg, title ?? "tfm", level),
     notifySticky: (msg) => {
       try {
@@ -312,7 +329,7 @@ export const wireSettings = (deps: {
   // boot entry: the guarded step calls this (asks only on "ask")
   const promptDefaultFileManager = (): void => {
     try {
-      openDefaultFileManagerPrompt();
+      void openDefaultFileManagerPrompt();
     } catch (err) {
       dlog(`default-file-manager boot prompt failed: ${errMessage(err)}`);
     }

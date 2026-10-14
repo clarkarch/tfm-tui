@@ -235,10 +235,10 @@ const grid = wireGrid({
 });
 
 // --- settings: settings model + esc menu ---
-// getPrompt/getPick close over `keymap`, which wires LAST — only called from
-// post-boot installer rows and the first-boot default-file-manager prompt,
-// so the TDZ is settled by first use (same seam as wirePlugins'
-// getKeymap/getPick above).
+// getPrompt closes over `keymap`, which wires LAST — only called from
+// post-boot installer rows, so the TDZ is settled by first use (same seam
+// as wirePlugins' getKeymap/getPick above). getConfirm closes over
+// `fileops`, which wires BEFORE settings — settled by construction.
 const settings = wireSettings({
   core,
   nav,
@@ -247,7 +247,7 @@ const settings = wireSettings({
   plugins,
   getRetheme: () => retheme,
   getPrompt: () => keymap.prompt,
-  getPick: () => keymap.pick,
+  getConfirm: () => fileops.yesNo,
 });
 
 // --- watcher → boot → retheme: the boot sequence starts between the esc-menu

@@ -120,22 +120,24 @@ export const makeDefaultFileManagerOrchestration = (
 };
 
 // the first-boot (and on-demand) "make tfm the default file manager?"
-// prompt, extracted so the verdict→open→record glue is unit-testable: the
-// wiring supplies the pick overlay + sinks, the leaf owns the mapping.
-// Returns true when the question surfaced (pick opened OR fallback toast),
-// false when it stayed silent — a verdict of "ask" must NEVER end silent
-// (that was the "no popup" bug class: swallowed throws with no trace).
-// Dismissing the pick (esc/click-away) records nothing, so dismissal is
-// "ask again" by omission.
-export type FileManagerPickItem = { label: string; hint?: string; run: () => void };
+// confirm, extracted so the verdict→open→record glue is unit-testable: the
+// wiring supplies the confirm dialog + sinks, the leaf owns the mapping.
+// Returns a promise of true when the question surfaced (confirm opened OR
+// fallback toast), false when it stayed silent — a verdict of "ask" must
+// NEVER end silent (that was the "no popup" bug class: swallowed throws
+// with no trace). Dismissing the confirm (No/esc/click-away) records
+// nothing — the dialog only fires onYes — so dismissal asks again by
+// omission. There is deliberately no "later" write: the marker only ever
+// says yes or no.
+export type FileManagerConfirmItem = { message: string; yesLabel: string; onYes: () => void };
 
 export type FileManagerPromptDeps = {
   choice(): FileManagerPromptVerdict;
-  openPick(opts: { title: string; items: FileManagerPickItem[] }): void;
+  openConfirm(opts: FileManagerConfirmItem): void;
   setDefault(op: "set" | "unset"): Promise<{ ok: boolean; message: string }>;
   record(answer: FileManagerPromptAnswer): void;
   notify(msg: string, title?: string, level?: NotifyLevel): void;
-  // sticky fallback when the pick overlay is unavailable (TDZ at boot, a
+  // sticky fallback when the confirm dialog is unavailable (TDZ at boot, a
   // throwing root). Absent = plain notify. Optional so old fakes work.
   notifySticky?(msg: string): void;
   log(msg: string): void;
@@ -144,12 +146,15 @@ export type FileManagerPromptDeps = {
   // nautilus). Best-effort: a failure warns but never un-records the yes —
   // the mime half worked. Absent = mime only. Optional so old fakes work.
   installService?: () => Promise<{ ok: boolean; message: string }>;
+  // fired when the yes-flow lands (success or failure) so the opener can
+  // repaint. Optional so old fakes work.
+  onSettled?: () => void;
 };
 
 export const PROMPT_TITLE = "Make tfm the default file manager?";
 
-export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() => boolean) => {
-  return (): boolean => {
+export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() => Promise<boolean>) => {
+  return async (): Promise<boolean> => {
     let verdict: FileManagerPromptVerdict;
     try {
       verdict = deps.choice();
@@ -158,68 +163,57 @@ export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() =
       return false;
     }
     if (verdict !== "ask") return false;
-    const answer = (choice: FileManagerPromptAnswer): void => {
-      try {
-        if (choice === "yes") {
-          void deps
-            .setDefault("set")
-            .then(async (res) => {
-              try {
-                if (!res.ok) {
-                  deps.notify(res.message, "default file manager", "error");
-                  return;
-                }
-                deps.record("yes");
-                // Full combo second half: point browser "show in folder" at
-                // tfm too. Best-effort — the mime half already landed.
-                if (deps.installService) {
-                  try {
-                    const svc = await deps.installService();
-                    deps.notify(
-                      svc.ok ? res.message : `${res.message} · activator failed: ${svc.message}`,
-                      "default file manager",
-                      svc.ok ? "success" : "error",
-                    );
-                  } catch (err) {
-                    deps.log(`default-file-manager service install failed: ${errMessage(err)}`);
-                    deps.notify(res.message, "default file manager", "success");
-                  }
-                } else {
-                  deps.notify(res.message, "default file manager", "success");
-                }
-              } catch (err) {
-                deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
-              }
-            })
-            .catch((err) => {
-              deps.log(`default-file-manager set failed: ${errMessage(err)}`);
-            });
-        } else {
-          deps.record(choice);
-          if (choice === "no") {
+    const onYes = (): void => {
+      void (async () => {
+        const settled = (): void => {
+          try {
+            deps.onSettled?.();
+          } catch (err) {
+            deps.log(`default-file-manager settled hook failed: ${errMessage(err)}`);
+          }
+        };
+        let res: { ok: boolean; message: string };
+        try {
+          res = await deps.setDefault("set");
+        } catch (err) {
+          deps.log(`default-file-manager set failed: ${errMessage(err)}`);
+          settled();
+          return;
+        }
+        try {
+          if (!res.ok) {
+            deps.notify(res.message, "default file manager", "error");
+            settled();
+            return;
+          }
+          deps.record("yes");
+          // Full combo second half: point browser "show in folder" at
+          // tfm too. Best-effort — the mime half already landed.
+          if (deps.installService) {
             try {
+              const svc = await deps.installService();
               deps.notify(
-                "tfm won't ask again — advanced → set as default file manager to change this",
+                svc.ok ? res.message : `${res.message} · activator failed: ${svc.message}`,
                 "default file manager",
+                svc.ok ? "success" : "error",
               );
             } catch (err) {
-              deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
+              deps.log(`default-file-manager service install failed: ${errMessage(err)}`);
+              deps.notify(res.message, "default file manager", "success");
             }
+          } else {
+            deps.notify(res.message, "default file manager", "success");
           }
+        } catch (err) {
+          deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
         }
-      } catch (err) {
-        deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
-      }
+        settled();
+      })().catch((err) => {
+        deps.log(`default-file-manager set failed: ${errMessage(err)}`);
+      });
     };
     try {
-      deps.openPick({
-        title: PROMPT_TITLE,
-        items: [
-          { label: "Yes", hint: "open folders in tfm", run: () => answer("yes") },
-          { label: "No", hint: "never ask again", run: () => answer("no") },
-          { label: "Ask again", hint: "ask on next boot", run: () => answer("later") },
-        ],
-      });
+      deps.openConfirm({ message: PROMPT_TITLE, yesLabel: "Set as default", onYes });
       return true;
     } catch (err) {
       deps.log(`default-file-manager prompt failed to open: ${errMessage(err)}`);

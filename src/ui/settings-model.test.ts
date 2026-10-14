@@ -986,40 +986,39 @@ describe("hand-written rows", () => {
     expect(asToggle(h.byLabel("set as default file manager")).get()).toBe(false);
   });
 
-  test("flipping on sets the default + records yes; flipping off unsets + records no", async () => {
+  test("flipping on shows the confirm UI (the Yes button drives the flow, not the toggle)", async () => {
+    let asked = 0;
     const sets: string[] = [];
     const records: string[] = [];
-    let current = "org.gnome.Nautilus.desktop";
     const h = mk(undefined, {
       defaultFileManager: {
-        current: () => current,
+        current: () => "org.gnome.Nautilus.desktop",
         choice: () => "ask",
         answer: () => null,
         set: async (op: "set" | "unset") => {
           sets.push(op);
-          if (op === "set") current = "tfm.desktop";
-          else current = "org.gnome.Nautilus.desktop";
           return { ok: true, message: "done" };
         },
         record: (a: "yes" | "no" | "later") => {
           records.push(a);
         },
+        ask: async () => {
+          asked++;
+          return true;
+        },
       },
     });
     asToggle(h.byLabel("set as default file manager")).set(true);
-    expect(sets).toEqual(["set"]);
-    // fire-and-forget row (never throws — the wiring toasts): poll on the
-    // observable record, never a fixed sleep (settleUntil pattern)
-    await settleUntil(() => records.length === 1);
-    expect(records).toEqual(["yes"]);
-    expect(asToggle(h.byLabel("set as default file manager")).get()).toBe(true);
-    asToggle(h.byLabel("set as default file manager")).set(false);
-    await settleUntil(() => records.length === 2);
-    expect(sets).toEqual(["set", "unset"]);
-    expect(records).toEqual(["yes", "no"]);
+    // confirm opened; the toggle itself spawns nothing and records nothing
+    // (the Yes button owns the yes-flow)
+    await settleUntil(() => asked === 1);
+    expect(asked).toBe(1);
+    expect(sets).toEqual([]);
+    expect(records).toEqual([]);
   });
 
-  test("flipping on when already default skips the spawn (no redundant xdg-mime)", async () => {
+  test("flipping on when already default skips everything (no confirm, no spawn)", async () => {
+    let asked = 0;
     const sets: string[] = [];
     const h = mk(undefined, {
       defaultFileManager: {
@@ -1031,22 +1030,57 @@ describe("hand-written rows", () => {
           return { ok: true, message: "done" };
         },
         record: () => {},
+        ask: async () => {
+          asked++;
+          return true;
+        },
       },
     });
     asToggle(h.byLabel("set as default file manager")).set(true);
     await settleUntil(() => h.warns.length === 1);
+    expect(asked).toBe(0);
     expect(sets).toEqual([]);
     expect(h.warns[0]!.message).toContain("already");
   });
 
-  test("a failing set records nothing and still repaints (failed yes re-asks)", async () => {
+  test("flipping off while default unsets directly (no confirm needed to turn off)", async () => {
+    const sets: string[] = [];
+    const records: string[] = [];
+    let settled = 0;
+    let current = "tfm.desktop";
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => current,
+        choice: () => "silent",
+        answer: () => "yes",
+        set: async (op: "set" | "unset") => {
+          sets.push(op);
+          if (op === "unset") current = "org.gnome.Nautilus.desktop";
+          return { ok: true, message: "done" };
+        },
+        record: (a: "yes" | "no" | "later") => {
+          records.push(a);
+        },
+        onSettled: () => {
+          settled++;
+        },
+      },
+    });
+    asToggle(h.byLabel("set as default file manager")).set(false);
+    await settleUntil(() => records.length === 1);
+    expect(sets).toEqual(["unset"]);
+    expect(records).toEqual(["no"]);
+    expect(settled).toBe(1);
+  });
+
+  test("a failing unset records nothing and still repaints", async () => {
     const records: string[] = [];
     let settled = 0;
     const h = mk(undefined, {
       defaultFileManager: {
-        current: () => "org.gnome.Nautilus.desktop",
-        choice: () => "ask",
-        answer: () => null,
+        current: () => "tfm.desktop",
+        choice: () => "silent",
+        answer: () => "yes",
         set: async () => ({ ok: false, message: "boom" }),
         record: (a: "yes" | "no" | "later") => {
           records.push(a);
@@ -1056,7 +1090,7 @@ describe("hand-written rows", () => {
         },
       },
     });
-    asToggle(h.byLabel("set as default file manager")).set(true);
+    asToggle(h.byLabel("set as default file manager")).set(false);
     await settleUntil(() => settled === 1);
     expect(records).toEqual([]);
     expect(h.warns.map((w) => w.message)).toContain("boom");
@@ -1070,9 +1104,9 @@ describe("hand-written rows", () => {
     });
     const h = mk(undefined, {
       defaultFileManager: {
-        current: () => "org.gnome.Nautilus.desktop",
-        choice: () => "ask",
-        answer: () => null,
+        current: () => "tfm.desktop",
+        choice: () => "silent",
+        answer: () => "yes",
         set: async (op: "set" | "unset") => {
           sets.push(op);
           return gate;
@@ -1081,15 +1115,15 @@ describe("hand-written rows", () => {
       },
     });
     const row = asToggle(h.byLabel("set as default file manager"));
-    row.set(true);
-    row.set(true);
+    row.set(false);
+    row.set(false);
     row.set(false);
     (release as (() => void) | null)?.();
     await settleUntil(() => sets.length === 1, 1000).catch(() => {});
-    expect(sets).toEqual(["set"]);
+    expect(sets).toEqual(["unset"]);
   });
 
-  test("flipping off with Ask-again pending opens the prompt now (not a silent later)", () => {
+  test("flipping off while undecided opens the confirm (not a blind no)", async () => {
     let asked = 0;
     const records: string[] = [];
     const h = mk(undefined, {
@@ -1101,14 +1135,15 @@ describe("hand-written rows", () => {
         record: (a: "yes" | "no" | "later") => {
           records.push(a);
         },
-        askNow: () => {
+        ask: async () => {
           asked++;
           return true;
         },
       },
     });
     asToggle(h.byLabel("set as default file manager")).set(false);
-    // prompt opened synchronously; nothing recorded (the pick owns the answer)
+    // confirm opened; nothing recorded (the dialog owns the answer)
+    await settleUntil(() => asked === 1);
     expect(asked).toBe(1);
     expect(records).toEqual([]);
   });

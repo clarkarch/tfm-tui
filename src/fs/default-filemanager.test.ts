@@ -356,25 +356,21 @@ describe("makeDefaultFileManagerOrchestration", () => {
     expect(probes).toBe(1);
   });
 
-  test("openPrompt answers yes/no/later through the pick items (prompt opener contract)", () => {
+  test("openPrompt asks via confirm dialog (Yes/No buttons, not a palette)", async () => {
     const dir = sandbox();
     const marker = path.join(dir, "choice");
-    const opened: Array<{ title: string; labels: string[] }> = [];
+    const confirmed: Array<{ message: string; yesLabel: string }> = [];
     const notified: string[] = [];
     const sets: string[] = [];
-    const pick = {
-      open: (opts: { title: string; items?: Array<{ label: string; run: () => void }> }) => {
-        opened.push({ title: opts.title, labels: (opts.items ?? []).map((i) => i.label) });
-      },
-    };
     const orch = makeDefaultFileManagerOrchestration({
       currentDefault: () => "org.gnome.Nautilus.desktop",
       markerFile: () => marker,
     });
     const opener = makeDefaultFileManagerPrompt({
       choice: () => orch.choice(),
-      openPick: (opts: { title: string; items: Array<{ label: string; hint?: string; run: () => void }> }) =>
-        pick.open(opts),
+      openConfirm: (opts: { message: string; yesLabel: string; onYes: () => void }) => {
+        confirmed.push({ message: opts.message, yesLabel: opts.yesLabel });
+      },
       setDefault: async (op: "set" | "unset") => {
         sets.push(op);
         return { ok: true, message: "done" };
@@ -383,17 +379,17 @@ describe("makeDefaultFileManagerOrchestration", () => {
       notify: (msg: string) => notified.push(msg),
       log: () => {},
     });
-    // verdict ask → opens with three equal rows
-    expect(opener()).toBe(true);
-    expect(opened).toHaveLength(1);
-    expect(opened[0]!.labels).toEqual(["Yes", "No", "Ask again"]);
+    // verdict ask → one confirm dialog opens (the boot prompt drives the flow)
+    expect(await opener()).toBe(true);
+    expect(confirmed).toHaveLength(1);
+    expect(confirmed[0]!.yesLabel).toBe("Set as default");
   });
 
-  test("openPrompt stays shut on silent verdict (already answered)", () => {
+  test("openPrompt stays shut on silent verdict (already answered)", async () => {
     let opened = 0;
     const opener = makeDefaultFileManagerPrompt({
       choice: () => "silent",
-      openPick: () => {
+      openConfirm: () => {
         opened++;
       },
       setDefault: async () => ({ ok: true, message: "done" }),
@@ -401,16 +397,16 @@ describe("makeDefaultFileManagerOrchestration", () => {
       notify: () => {},
       log: () => {},
     });
-    expect(opener()).toBe(false);
+    expect(await opener()).toBe(false);
     expect(opened).toBe(0);
   });
 
-  test("openPrompt degrades to a sticky toast when pick is unavailable (never silent)", () => {
+  test("openPrompt degrades to a sticky toast when confirm is unavailable (never silent)", async () => {
     const logged: string[] = [];
     const toasted: string[] = [];
     const opener = makeDefaultFileManagerPrompt({
       choice: () => "ask",
-      openPick: () => {
+      openConfirm: () => {
         throw new Error("tdz");
       },
       setDefault: async () => ({ ok: true, message: "done" }),
@@ -419,7 +415,7 @@ describe("makeDefaultFileManagerOrchestration", () => {
       notifySticky: (msg: string) => toasted.push(msg),
       log: (msg: string) => logged.push(msg),
     });
-    expect(opener()).toBe(true);
+    expect(await opener()).toBe(true);
     expect(toasted).toHaveLength(1);
     expect(logged.length).toBeGreaterThan(0);
   });
@@ -430,11 +426,11 @@ describe("makeDefaultFileManagerOrchestration", () => {
     const records: string[] = [];
     const notified: string[] = [];
     let installed = 0;
-    let runs: Array<() => void> = [];
+    let onYes: (() => void) | null = null;
     const opener = makeDefaultFileManagerPrompt({
       choice: () => "ask",
-      openPick: (opts: { title: string; items: Array<{ label: string; hint?: string; run: () => void }> }) => {
-        runs = opts.items.map((i) => i.run);
+      openConfirm: (opts: { message: string; yesLabel: string; onYes: () => void }) => {
+        onYes = opts.onYes;
       },
       setDefault: async () => ({ ok: true, message: "mime set" }),
       record: (a: "yes" | "no" | "later") => {
@@ -448,8 +444,8 @@ describe("makeDefaultFileManagerOrchestration", () => {
       },
       log: () => {},
     });
-    expect(opener()).toBe(true);
-    runs[0]!(); // Yes
+    expect(await opener()).toBe(true);
+    onYes!(); // Yes button
     await settleUntil(() => notified.length === 1);
     expect(records).toEqual(["yes"]);
     expect(installed).toBe(1);
@@ -458,11 +454,11 @@ describe("makeDefaultFileManagerOrchestration", () => {
 
   test("a failing activator install keeps the recorded yes (mime half landed)", async () => {
     const notified: Array<{ msg: string }> = [];
-    let runs: Array<() => void> = [];
+    let onYes: (() => void) | null = null;
     const opener = makeDefaultFileManagerPrompt({
       choice: () => "ask",
-      openPick: (opts: { title: string; items: Array<{ label: string; hint?: string; run: () => void }> }) => {
-        runs = opts.items.map((i) => i.run);
+      openConfirm: (opts: { message: string; yesLabel: string; onYes: () => void }) => {
+        onYes = opts.onYes;
       },
       setDefault: async () => ({ ok: true, message: "mime set" }),
       record: () => {},
@@ -470,10 +466,27 @@ describe("makeDefaultFileManagerOrchestration", () => {
       installService: async () => ({ ok: false, message: "no bus dir" }),
       log: () => {},
     });
-    opener();
-    runs[0]!(); // Yes
+    await opener();
+    onYes!(); // Yes button
     await settleUntil(() => notified.length === 1);
     expect(notified[0]!.msg).toContain("activator failed");
+  });
+
+  test("dismissing the confirm (No/esc) records nothing (asks again next boot)", async () => {
+    const records: string[] = [];
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      // the confirm widget calls onYes only on Yes; a dismiss never fires it
+      openConfirm: () => {},
+      setDefault: async () => ({ ok: true, message: "done" }),
+      record: (a: "yes" | "no" | "later") => {
+        records.push(a);
+      },
+      notify: () => {},
+      log: () => {},
+    });
+    expect(await opener()).toBe(true);
+    expect(records).toEqual([]);
   });
 });
 
