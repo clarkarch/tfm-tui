@@ -283,18 +283,20 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
-
-  // one row for the whole default-file-manager story (advanced, last):
-  // the VALUE is the recorded answer, the blurb names the LIVE handler, so
-  // what the system actually uses is visible right under the answer — a
-  // stale belief ("I said yes") dies on sight. Cycling to Ask again opens
-  // the Yes/No/Ask prompt immediately (not just "later"), so a missed boot
-  // prompt is always one adjust away. The marker file is the store — no
-  // config commit, so config-schema/example TOML stay untouched.
-  // Fire-and-forget with an in-flight guard (rapid cycling collapses to one
-  // spawn, same shape as the plugin installBusy): the wiring toasts the
-  // outcome, onSettled repaints the panel once it lands, and the row
-  // re-reads live state on the next build.
+  // one row for the whole default-file-manager story (advanced, last): a
+  // plain Yes/No toggle. The VALUE is live system state (is tfm the handler
+  // right now?), never the recorded answer — a stale yes can never display
+  // as on. The blurb names the live handler, so what the system actually
+  // uses is visible right under the answer. Flipping on sets the default
+  // (skipped when already default); flipping off unsets when tfm is default,
+  // otherwise opens the prompt when the answer is still undecided (Ask-again
+  // opens the question NOW — a toggle with no path back to the prompt is a
+  // dead end). The marker file is the store — no config commit, so
+  // config-schema/example TOML stay untouched. Fire-and-forget with an
+  // in-flight guard (rapid flipping collapses to one spawn, same shape as
+  // the plugin installBusy): the wiring toasts the outcome, onSettled
+  // repaints the panel once it lands, and the row re-reads live state on
+  // the next build.
   let dfmBusy = false;
   const shortHandler = (id: string): string => id.replace(/\.desktop$/, "").replace(/^org\.(gnome|kde)\./, "");
   const defaultFileManagerRow = (): SettingRow => {
@@ -302,35 +304,48 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     try {
       handler = ctx.defaultFileManager?.current() ?? "";
     } catch {}
+    const isDefault = handler === TFM_DESKTOP_ID;
     return {
-      kind: "cycle",
+      kind: "toggle",
       label: "set as default file manager",
       blurb: handler ? `folders open in: ${shortHandler(handler)}` : "ask the default question now",
       repaint: true,
-      names: ["Yes", "No", "Ask again"],
-      getIdx: () => {
+      get: () => {
         try {
-          if (ctx.defaultFileManager?.current() === TFM_DESKTOP_ID) return 0;
-          if (ctx.defaultFileManager?.answer() === "no") return 1;
-        } catch {}
-        return 2;
+          return ctx.defaultFileManager?.current() === TFM_DESKTOP_ID;
+        } catch {
+          return false;
+        }
       },
-      setIdx: (i) => {
+      set: (v) => {
         const dfm = ctx.defaultFileManager;
         if (!dfm) {
           ctx.warn("default file manager controls unavailable", "default file manager");
           return;
         }
-        // Ask again answers NOW: re-open the prompt instead of silently
-        // recording "later" (a row that only defers is a dead end)
-        if (i === 2) {
+        // flipping off while undecided (never answered, or stale yes) opens
+        // the prompt instead of recording a blind "no" — the user reached
+        // for the control, so show them the question
+        if (!v && !isDefault) {
+          let undecided = false;
           try {
-            if (dfm.askNow?.() === false) ctx.warn("already settled — nothing to ask", "default file manager");
-          } catch (err) {
-            try {
-              ctx.warn(errMessage(err), "default file manager");
-            } catch {}
+            undecided = dfm.answer() !== "no";
+          } catch {
+            undecided = true;
           }
+          if (undecided) {
+            try {
+              if (dfm.askNow?.() === false) ctx.warn("already settled — nothing to ask", "default file manager");
+            } catch (err) {
+              try {
+                ctx.warn(errMessage(err), "default file manager");
+              } catch {}
+            }
+            return;
+          }
+          try {
+            dfm.record("no");
+          } catch {}
           return;
         }
         if (dfmBusy) return;
@@ -343,7 +358,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         };
         void (async () => {
           try {
-            if (i === 0) {
+            if (v) {
               let already = false;
               try {
                 already = dfm.current() === TFM_DESKTOP_ID;
@@ -355,20 +370,18 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
               const res = await dfm.set("set");
               if (res.ok) dfm.record("yes");
               ctx.warn(res.message, "default file manager");
-            } else if (i === 1) {
-              let isDefault = false;
+            } else {
+              let stillDefault = false;
               try {
-                isDefault = dfm.current() === TFM_DESKTOP_ID;
+                stillDefault = dfm.current() === TFM_DESKTOP_ID;
               } catch {}
-              if (isDefault) {
+              if (stillDefault) {
                 const res = await dfm.set("unset");
                 if (res.ok) dfm.record("no");
                 ctx.warn(res.message, "default file manager");
               } else {
                 dfm.record("no");
               }
-            } else {
-              dfm.record("later");
             }
           } catch (err) {
             try {

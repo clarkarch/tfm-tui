@@ -45,6 +45,53 @@ describe("makeFileManagerService", () => {
     expect(logged.join("\n")).toMatch(/already owned|in use/i);
   });
 
+  test("requests REPLACE_EXISTING so a stale nautilus loses the name (no silent alongside)", async () => {
+    const seen: unknown[] = [];
+    const svc = makeFileManagerService({
+      bus: {
+        export: () => {},
+        requestName: async (_name: string, flags: unknown) => {
+          seen.push(flags);
+          return 1;
+        },
+      } as never,
+      openPlan: () => {},
+      log: () => {},
+    });
+    expect(await svc.start()).toBe(0);
+    // REPLACE_EXISTING (2) must be in the flag set — DO_NOT_QUEUE alone (4)
+    // leaves nautilus holding the name and both file managers open side by side
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as number) & 2).toBe(2);
+  });
+
+  test("losing the name later exits too (re-taken by nautilus = dead name, never linger)", () => {
+    const logged: string[] = [];
+    const exits: number[] = [];
+    const listeners = new Map<string, Array<(msg?: unknown) => void>>();
+    const bus = {
+      export: () => {},
+      requestName: async () => 1,
+      on: (ev: string, cb: (msg?: unknown) => void) => {
+        listeners.set(ev, [...(listeners.get(ev) ?? []), cb]);
+      },
+    } as never;
+    makeFileManagerService({
+      bus,
+      openPlan: () => {},
+      log: (m: string) => logged.push(m),
+      onExit: (code: number) => exits.push(code),
+    });
+    // NameLost signal for our well-known name → exit so activation restarts us
+    for (const cb of listeners.get("message") ?? [])
+      cb({ type: 4, member: "NameLost", body: ["org.freedesktop.FileManager1"] });
+    expect(exits).toEqual([2]);
+    expect(logged.join("\n")).toMatch(/lost the name/i);
+    // other names' signals are none of our business
+    for (const cb of listeners.get("message") ?? []) cb({ type: 4, member: "NameLost", body: ["org.other.X"] });
+    expect(exits).toEqual([2]);
+  });
+
   test("ShowItems opens one plan per dir with the highlight", () => {
     const { opened, svc } = harness();
     svc.showItems(["file:///a/1.txt", "file:///a/2.txt", "file:///b/3.txt"], "");

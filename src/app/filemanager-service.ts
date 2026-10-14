@@ -19,9 +19,10 @@ export const SERVICE_PATH = "/org/freedesktop/FileManager1";
 type BusLike = {
   export(path: string, iface: unknown): void;
   requestName(name: string, flags: unknown): Promise<number>;
-  // dbus-next MessageBus is an EventEmitter ('disconnect'/'error' end the
-  // session). Optional so old fakes keep working; prod wires them to onExit.
-  on?(event: string, cb: () => void): void;
+  // dbus-next MessageBus is an EventEmitter ('disconnect'/'error'/'message'
+  // end or inform the session). Optional so old fakes keep working; prod
+  // wires them to onExit.
+  on?(event: string, cb: (msg?: unknown) => void): void;
   disconnect?(): void;
 };
 
@@ -89,6 +90,18 @@ export const makeFileManagerService = (deps: ServiceDeps) => {
   try {
     deps.bus.on?.("disconnect", () => exitOnce("bus disconnected"));
     deps.bus.on?.("error", () => exitOnce("bus error"));
+    // NameLost for OUR name (nautilus re-took it): a daemon without the name
+    // answers nothing — exit so the next ShowItems activates whoever is
+    // configured instead of landing on a dead holder. Other names' signals
+    // are none of our business. dbus-next MessageType.SIGNAL = 4.
+    deps.bus.on?.("message", (msg) => {
+      try {
+        const m = msg as { type?: unknown; member?: unknown; body?: unknown };
+        if (m?.type === 4 && m?.member === "NameLost" && Array.isArray(m?.body) && m.body[0] === SERVICE_NAME) {
+          exitOnce(`lost the name ${SERVICE_NAME}`);
+        }
+      } catch {}
+    });
   } catch {}
   const route = (plans: ShowPlan[], method: string): void => {
     if (!plans.length) {
@@ -130,8 +143,12 @@ export const makeFileManagerService = (deps: ServiceDeps) => {
     }
     let result = 0;
     try {
-      // DO_NOT_QUEUE = 4 (dbus-next exposes NameFlag; the fake bus ignores it)
-      result = await deps.bus.requestName(SERVICE_NAME, 4);
+      // REPLACE_EXISTING (2) | DO_NOT_QUEUE (4): take the name off a stale
+      // holder instead of queueing behind it — DO_NOT_QUEUE alone leaves
+      // nautilus holding the name and BOTH file managers open side by side.
+      // A running nautilus that disallows replacement still wins (result 3);
+      // NameLost later exits us the moment it re-takes it.
+      result = await deps.bus.requestName(SERVICE_NAME, 2 | 4);
     } catch (err) {
       deps.log(`requestName failed: ${errMessage(err)}`);
       return 2;
