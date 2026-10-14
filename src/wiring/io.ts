@@ -176,6 +176,11 @@ export const wireBoot = (deps: {
   // cold-boot-only top bar intro, played right after the sidebar intro (built
   // in wireChrome; a no-op unless [ui] topbar-animation is on)
   playTopbarIntro?: () => void;
+  // cold-boot-only default-file-manager opt-in (built in wireSettings from
+  // the pick overlay; deferred — keymap wires last, same TDZ seam as
+  // getPrompt in wireSettings). Fires after the intros so the user sees tfm
+  // before being asked.
+  promptDefaultFileManager?: () => void;
   // system (terminal-adaptive) theme: resolves after the renderer answers
   // its first queries but before buildLayout bakes colors into the chrome
   // (built in wireSettings; a no-op unless [ui] follow-terminal is on)
@@ -268,6 +273,7 @@ export const wireBoot = (deps: {
     refreshMounts: () => runBootMountsRefresh(mountsCtx),
     playSidebarIntro: () => deps.playSidebarIntro?.(),
     playTopbarIntro: () => deps.playTopbarIntro?.(),
+    promptDefaultFileManager: () => deps.promptDefaultFileManager?.(),
     debugTrace: () => {
       debugLog(
         `terminal ${chrome.renderer.terminalWidth}x${chrome.renderer.terminalHeight} cwd=${process.cwd()} config=${configPath()}`,

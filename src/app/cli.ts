@@ -6,6 +6,7 @@
 // before or after the path. `--` ends option parsing. ---
 
 import pkg from "../../package.json";
+import { fileUriToPath } from "../fs/uri";
 
 export type CliOptions = {
   help: boolean;
@@ -37,6 +38,11 @@ export const parseArgs = (argv: string[]): CliOptions => {
   // belongs to it (so a URL with dashes isn't read as a flag)
   if (args[0] === "plugins") {
     opts.command = { name: "plugins", args: args.slice(1) };
+    return opts;
+  }
+  // same headless shape for the default-file-manager controls (no TUI boot)
+  if (args[0] === "default-filemanager") {
+    opts.command = { name: "default-filemanager", args: args.slice(1) };
     return opts;
   }
 
@@ -94,7 +100,8 @@ export const usageText = (): string => `tfm ${pkg.version} — terminal file man
 Usage: tfm [OPTIONS] [PATH]
 
   PATH               directory to open (default: current dir). A file opens
-                     its parent folder and selects that file.
+                     its parent folder and selects that file. file:// URIs
+                     (what desktops pass for %U) decode to paths.
 
 Options:
   -h, --help         show this help and exit
@@ -105,4 +112,9 @@ Options:
 
 Commands:
   plugins [list|search|add|remove|update|new]   manage plugins (see 'tfm plugins help')
+  default-filemanager [status|set|unset]        default file manager opt-in (see 'tfm default-filemanager help')
 `;
+
+// desktop %U launches arrive as file:// URIs — decode them with the shared
+// lenient decoder (host-strip + malformed-escape tolerance), never a new one.
+export const decodeCliPath = (raw: string): string => (raw.startsWith("file://") ? fileUriToPath(raw) : raw);

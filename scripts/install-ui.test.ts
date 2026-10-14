@@ -602,3 +602,141 @@ describe("installer download bar", () => {
     expect(code).toBe(22);
   });
 });
+
+describe("installer desktop entry", () => {
+  // Registration, not a default: install.sh places tfm.desktop so desktops
+  // know tfm opens folders — it never runs `xdg-mime default` (that choice
+  // belongs to the first-boot prompt, where the user can see tfm first).
+  test("install_desktop_entry copies the entry and refreshes the database", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const { out, code } = run(
+      `TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`,
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).toContain("MimeType=inode/directory;");
+    expect(installed).toContain("Terminal=true");
+  });
+
+  test("a missing source warns and continues (entry skipped, install survives)", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const body = `TFM_DESKTOP_SRC="/nonexistent/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`;
+    const { out, code } = run(body);
+    expect(code).toBe(0);
+    // fancy mode draws the ⚠ glyph (see the step_warn contract above)
+    expect(out).toContain("⚠");
+    expect(out).toContain("desktop entry skipped");
+    // plain mode names it a warning (the step_warn plain contract)
+    expect(run(body, { fancy: false }).out).toContain("tfm: warning: desktop");
+    expect(existsSync(join(apps, "tfm.desktop"))).toBe(false);
+  });
+
+  test("the shipped entry claims folders and launches a terminal", () => {
+    const raw = readFileSync(join(ROOT, "assets/tfm.desktop"), "utf8");
+    expect(raw).toContain("MimeType=inode/directory;");
+    expect(raw).toContain("Terminal=true");
+    expect(raw).toContain("FileManager");
+  });
+
+  test("the installed entry carries an absolute Exec + TryExec, never StartupNotify", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const src = join(dest, "src.desktop");
+    writeFileSync(src, "[Desktop Entry]\nType=Application\nName=tfm\nExec=tfm %u\nTerminal=true\nStartupNotify=true\n");
+    const bin = join(dest, "bin");
+    mkdirSync(bin, { recursive: true });
+    const { code } = run(`TFM_DESKTOP_SRC="${src}" TFM_APPLICATIONS_DIR="${apps}" DEST="${bin}" install_desktop_entry`);
+    expect(code).toBe(0);
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    // absolute Exec survives a declined PATH prompt (bare `tfm` would be dead)
+    expect(installed).toContain(`Exec=${bin}/tfm %u`);
+    expect(installed).not.toContain("Exec=tfm ");
+    // TryExec hides the entry where tfm isn't on PATH; a terminal app never
+    // completes startup-notification, so launchers would spin on it
+    expect(installed).toContain("TryExec=tfm");
+    expect(installed).not.toContain("StartupNotify");
+  });
+
+  test("TFM_NO_DESKTOP=1 skips the entry without failing", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    const { out, code } = run(`TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`, {
+      env: { TFM_NO_DESKTOP: "1" },
+    });
+    expect(code).toBe(0);
+    expect(out).toContain("skipped");
+    expect(existsSync(join(apps, "tfm.desktop"))).toBe(false);
+  });
+
+  test("the applications dir honors XDG_DATA_HOME", () => {
+    const { dest, run } = sandbox();
+    const data = join(dest, "data");
+    const { out, code } = run(`TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" install_desktop_entry`, {
+      env: { XDG_DATA_HOME: data, TFM_APPLICATIONS_DIR: "" },
+    });
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    expect(existsSync(join(data, "applications", "tfm.desktop"))).toBe(true);
+  });
+
+  test("a release download lands the entry when no checkout exists", () => {
+    const { dest, stubs, run } = sandbox();
+    const apps = join(dest, "apps");
+    // stateful stub curl: serves the entry bytes for the .desktop URL and the
+    // MATCHING digest for the .sha256 URL (computed with the real sha256sum,
+    // like step_verify's digest-compare rule). The X- marker proves the
+    // download path ran (X- keys are spec-legal, so desktop-file-validate
+    // passes; the dirname fallback would serve the real asset, which carries
+    // MimeType and no marker). The shell suffix-strip is spliced so biome
+    // doesn't read it as a template placeholder.
+    const stripSuffix = "${out" + "%.sha256}";
+    writeFileSync(
+      join(stubs, "curl"),
+      '#!/bin/sh\nout=""; while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; *) shift;; esac; done\ncase "$out" in *.sha256) printf "%s  tfm.desktop\\n" "$(sha256sum <"' +
+        stripSuffix +
+        '" | cut -d" " -f1)" >"$out";; *) printf "[Desktop Entry]\\nType=Application\\nName=tfm\\nExec=tfm %%u\\nTerminal=true\\nX-Stub-Marker=1\\n" >"$out";; esac\n',
+    );
+    chmodSync(join(stubs, "curl"), 0o755);
+    const bin = join(dest, "bin");
+    mkdirSync(bin, { recursive: true });
+    const { out, code } = run(
+      `MODE=release BASE=https://example.invalid TFM_APPLICATIONS_DIR="${apps}" DEST="${bin}" install_desktop_entry`,
+      { env: { PATH: `${stubs}:${process.env.PATH ?? ""}` } },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).toContain("X-Stub-Marker=1");
+    expect(installed).not.toContain("MimeType=");
+  });
+
+  test("a release checksum mismatch falls back instead of failing", () => {
+    const { dest, stubs, run } = sandbox();
+    const apps = join(dest, "apps");
+    // entry bytes served, digest lied about: the download is distrusted and
+    // the dirname fallback (real asset, cwd is the repo root here) installs
+    // instead — warn-and-continue, never abort
+    writeFileSync(
+      join(stubs, "curl"),
+      '#!/bin/sh\nout=""; while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; *) shift;; esac; done\ncase "$out" in *.sha256) printf "0%.0s  tfm.desktop\\n" 1 2 3 >"$out";; *) printf "[Desktop Entry]\\nType=Application\\nName=tfm\\nSTUB-MARKER=1\\n" >"$out";; esac\n',
+    );
+    chmodSync(join(stubs, "curl"), 0o755);
+    const bin = join(dest, "bin");
+    mkdirSync(bin, { recursive: true });
+    const { out, code } = run(
+      `MODE=release BASE=https://example.invalid TFM_APPLICATIONS_DIR="${apps}" DEST="${bin}" install_desktop_entry`,
+      { env: { PATH: `${stubs}:${process.env.PATH ?? ""}` } },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).not.toContain("STUB-MARKER=1");
+    expect(installed).toContain("MimeType=inode/directory;");
+  });
+});

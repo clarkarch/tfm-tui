@@ -13,7 +13,7 @@
 import pkg from "../package.json";
 import path from "node:path";
 import { statSync, type Stats } from "node:fs";
-import { parseArgs, usageText } from "./app/cli";
+import { decodeCliPath, parseArgs, usageText } from "./app/cli";
 
 // --- CLI: one parse for the whole process. --help/--version and parse errors
 // answer BEFORE the lazy app graph loads, so they stay instant. ---
@@ -40,6 +40,13 @@ if (cli.command?.name === "plugins") {
   process.exit(await runPluginsCli(cli.command.args));
 }
 
+// headless default-file-manager controls (no TUI boot — scriptable/SSH twin
+// of the first-boot prompt + settings row)
+if (cli.command?.name === "default-filemanager") {
+  const { runDefaultFileManagerCli } = await import("./app/default-filemanager-cli");
+  process.exit(await runDefaultFileManagerCli(cli.command.args));
+}
+
 // launch PATH (`tfm ~/some/path`): chdir before anything resolves the cwd, so
 // tabs/history/session all start there. A FILE opens its parent and is then
 // selected by the grid. An invalid explicit path is a HARD ERROR (exit 1, no
@@ -53,7 +60,8 @@ const fail = (msg: string): never => {
 };
 let pendingSelect: string | null = null;
 let explicitPath = false;
-const target = cli.paths[0];
+// desktop %U launches arrive as file:// URIs — decode before stat/chdir
+const target = cli.paths[0] ? decodeCliPath(cli.paths[0]) : undefined;
 if (cli.paths.length > 1) console.error(`tfm: only the first path is used: ${target}`);
 if (target === "") fail("tfm: empty path");
 if (target) {
@@ -220,9 +228,10 @@ const grid = wireGrid({
 });
 
 // --- settings: settings model + esc menu ---
-// getPrompt closes over `keymap`, which wires LAST — only called from
-// post-boot installer rows, so the TDZ is settled by first use (same seam
-// as wirePlugins' getKeymap/getPick above).
+// getPrompt/getPick close over `keymap`, which wires LAST — only called from
+// post-boot installer rows and the first-boot default-file-manager prompt,
+// so the TDZ is settled by first use (same seam as wirePlugins'
+// getKeymap/getPick above).
 const settings = wireSettings({
   core,
   nav,
@@ -231,6 +240,7 @@ const settings = wireSettings({
   plugins,
   getRetheme: () => retheme,
   getPrompt: () => keymap.prompt,
+  getPick: () => keymap.pick,
 });
 
 // --- watcher → boot → retheme: the boot sequence starts between the esc-menu
@@ -274,6 +284,7 @@ wireBoot({
     chrome.markIntroPlayed();
   },
   playTopbarIntro: () => chrome.topbarIntro.play(),
+  promptDefaultFileManager: () => settings.promptDefaultFileManager(),
   // system theme: terminal colors land before the first layout bakes them in
   applyBootSystemTheme: () => settings.systemTheme.applyBootSystemTheme(),
 });

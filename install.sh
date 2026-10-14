@@ -24,6 +24,11 @@
 #   TFM_LOCAL         install this binary instead of downloading or building
 #   TFM_NO_VERIFY=1   skip the checksum check (not recommended)
 #   TFM_NO_SMOKE=1    install without testing the build first (not recommended)
+#   TFM_NO_DESKTOP=1  skip the desktop-entry registration (no tfm.desktop)
+#   TFM_DESKTOP_SRC   desktop entry source file (default: release download,
+#                     checkout asset, or script-dir asset, in that order)
+#   TFM_APPLICATIONS_DIR  where to install tfm.desktop
+#                     (default $XDG_DATA_HOME/applications)
 #   TFM_VERBOSE=1     stream child output instead of capturing it
 #   TFM_WIDTH=N       force the render width (testing)
 #   TFM_INSTALL_LIB_ONLY=1  define the helpers and stop (testing)
@@ -1246,6 +1251,101 @@ step_install() {
   step_ok "$detail"
 }
 
+# ── desktop entry (registration, NOT a default) ──────────────────────────
+# Places tfm.desktop where desktops look for folder handlers, so "open with"
+# menus and xdg-mime know tfm exists. This never runs `xdg-mime default` —
+# becoming the default is the first-boot prompt's opt-in, where the user can
+# see tfm first. Warn-and-continue like the ffmpeg sidecar: a skipped entry
+# must never fail an otherwise working install.
+# Seams (tests): TFM_DESKTOP_SRC overrides the shipped entry, and
+# TFM_APPLICATIONS_DIR overrides the applications dir (XDG_DATA_HOME-aware
+# default). TFM_NO_DESKTOP=1 skips the step entirely.
+install_desktop_entry() {
+  step_begin "desktop"
+  if [ "${TFM_NO_DESKTOP:-}" = "1" ]; then
+    step_ok "skipped (TFM_NO_DESKTOP=1)"
+    return 0
+  fi
+  local src="${TFM_DESKTOP_SRC:-}"
+  if [ -z "$src" ]; then
+    if [ "$MODE" = "source" ] && [ -n "${SRC_DIR:-}" ]; then
+      src="$SRC_DIR/assets/tfm.desktop"
+    elif [ "$MODE" = "release" ]; then
+      # pipe installs carry no checkout — fetch the published entry (same
+      # digest-compare rule as step_verify, but warn-and-continue: a missing
+      # sidecar must never fail the install, only skip registration)
+      if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm.desktop" -o "$WORK/tfm.desktop" >>"$RUN_LOG" 2>&1 &&
+        [ -s "$WORK/tfm.desktop" ]; then
+        if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm.desktop.sha256" -o "$WORK/tfm.desktop.sha256" >>"$RUN_LOG" 2>&1; then
+          local want
+          local got
+          want=$(cut -d' ' -f1 <"$WORK/tfm.desktop.sha256")
+          got=$(sha256sum <"$WORK/tfm.desktop" | cut -d' ' -f1)
+          if [ -n "$want" ] && [ "$want" = "$got" ]; then
+            src="$WORK/tfm.desktop"
+          else
+            dlog_desktop "checksum mismatch, skipping"
+          fi
+        else
+          dlog_desktop "no checksum published, skipping"
+        fi
+      else
+        dlog_desktop "download failed, skipping"
+      fi
+    fi
+    if [ -z "$src" ]; then
+      # local mode and checkout-less leftovers: the entry rides the script's
+      # own dir when present (curl|bash without the release sidecar warns
+      # below — registration needs a source, and guessing one is worse)
+      src="$(dirname "${BASH_SOURCE[0]:-$0}")/assets/tfm.desktop"
+    fi
+  fi
+  local apps="${TFM_APPLICATIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/applications}"
+  if [ ! -f "$src" ]; then
+    step_warn "desktop entry skipped (no entry to install from)"
+    return 0
+  fi
+  if ! mkdir -p "$apps" 2>>"$RUN_LOG"; then
+    step_warn "desktop entry skipped (can't create $apps)"
+    return 0
+  fi
+  if ! cp -f "$src" "$apps/tfm.desktop" 2>>"$RUN_LOG"; then
+    step_warn "desktop entry skipped (can't write $apps/tfm.desktop)"
+    return 0
+  fi
+  # desktop files must not carry +x (some managers prompt "untrusted" for
+  # executable ones); a +x source would propagate it through the copy above
+  chmod 644 "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  # absolute Exec: a declined PATH prompt leaves bare `tfm` unresolvable, and
+  # TryExec hides the entry where tfm isn't on PATH. StartupNotify never
+  # completes for a terminal app (launchers spin), so it goes too.
+  if [ -n "${DEST:-}" ]; then
+    sed -i "s|^Exec=.*|Exec=$DEST/tfm %u|" "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  fi
+  if ! grep -q "^TryExec=" "$apps/tfm.desktop" 2>/dev/null; then
+    printf '%s\n' "TryExec=tfm" >>"$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  fi
+  sed -i "/^StartupNotify=/d" "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  # validate BEFORE the database ingests it: a failing entry warns honestly
+  # instead of a step_ok over a skipped refresh
+  if have desktop-file-validate; then
+    if ! run_child desktop-file-validate "$apps/tfm.desktop"; then
+      step_warn "desktop entry installed but invalid (see log)"
+      return 0
+    fi
+  fi
+  if have update-desktop-database; then
+    run_child update-desktop-database "$apps" || true
+  fi
+  step_ok "desktop entry · $(pretty_home "$apps")/tfm.desktop"
+}
+
+# best-effort note for the release-download fallbacks above (RUN_LOG is kept
+# on failure, deleted on success — either way the reason isn't lost)
+dlog_desktop() {
+  printf '%s\n' "desktop: $*" >>"$RUN_LOG" 2>/dev/null || true
+}
+
 # ── PATH setup + result ─────────────────────────────────────────────────────
 path_action=""
 reload_cmd=""
@@ -1382,6 +1482,7 @@ step_install
 if [ "$MODE" != "local" ]; then
   step_install_ffmpeg
 fi
+install_desktop_entry
 if [ "$MODE" = "source" ]; then
   rule
   note "$C_DIM" "unreleased dev build · re-run the same command to update"

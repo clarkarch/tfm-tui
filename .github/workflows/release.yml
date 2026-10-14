@@ -51,6 +51,10 @@ jobs:
         run: |
           gzip -kf dist/tfm-${{ matrix.arch }}
           (cd dist && sha256sum tfm-${{ matrix.arch }}.gz > tfm-${{ matrix.arch }}.gz.sha256)
+          # desktop entry sidecar (arch-independent, same bytes every build):
+          # install.sh fetches it for pipe installs that carry no checkout
+          cp assets/tfm.desktop dist/tfm.desktop
+          (cd dist && sha256sum tfm.desktop > tfm.desktop.sha256)
 
       # Sidecar source: BtbN versioned static builds, pinned to the n9.0
       # series below (bumping series = changing these two matrix lines).
@@ -80,6 +84,8 @@ jobs:
             dist/tfm-${{ matrix.arch }}.gz.sha256
             dist/tfm-ffmpeg-${{ matrix.arch }}.gz
             dist/tfm-ffmpeg-${{ matrix.arch }}.gz.sha256
+            dist/tfm.desktop
+            dist/tfm.desktop.sha256
 
   release:
     needs: build
@@ -107,3 +113,5 @@ jobs:
             dist/tfm-ffmpeg-x86_64-linux.gz.sha256
             dist/tfm-ffmpeg-aarch64-linux.gz
             dist/tfm-ffmpeg-aarch64-linux.gz.sha256
+            dist/tfm.desktop
+            dist/tfm.desktop.sha256

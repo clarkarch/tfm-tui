@@ -123,6 +123,29 @@ describe("runBoot", () => {
     expect(calls.indexOf("topbar-intro")).toBeLessThan(calls.indexOf("hygiene"));
   });
 
+  test("default-file-manager prompt fires after the intros (user sees tfm first)", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        playTopbarIntro: () => {
+          calls.push("topbar-intro");
+        },
+        promptDefaultFileManager: () => {
+          calls.push("defmgr");
+        },
+      }),
+    );
+    expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("defmgr"));
+    expect(calls.indexOf("topbar-intro")).toBeLessThan(calls.indexOf("defmgr"));
+    expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("absent default-file-manager step changes nothing (old fakes keep working)", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls));
+    expect(calls).not.toContain("defmgr");
+  });
+
   test("a throwing intro is reported but the sequence continues", async () => {
     const calls: string[] = [];
     const reported: string[] = [];

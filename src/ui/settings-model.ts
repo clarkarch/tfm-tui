@@ -5,6 +5,7 @@
 // presentations: theme presets, tab-bar adaptive/on, show-hidden state sync.
 // No renderer imports — ctx carries the sinks. ---
 import { spawnSafe } from "../fs/spawn-safe";
+import { TFM_DESKTOP_ID, type DefaultFileManagerOrchestration } from "../fs/default-filemanager";
 import { errMessage } from "../lib/uiutil";
 import { THEME_PRESETS } from "../config/themes";
 import type { LoadedPlugin } from "../plugins/plugin-api";
@@ -65,6 +66,15 @@ export type SettingsModelCtx = {
     openFolder(): void;
     update(name: string): void;
     remove(name: string): void;
+  };
+  // default-file-manager opt-in (one shared leaf orchestration, built in
+  // wiring/settings — xdg-mime set/unset, marker record, live probe).
+  // Optional so row SHAPE stays testable without it; the row degrades to a
+  // warn when absent. onSettled repaints the open panel after the async
+  // set/unset lands (afterAdjust already rebuilt on the synchronous return,
+  // before the spawn resolved). Optional so old fakes keep working.
+  defaultFileManager?: DefaultFileManagerOrchestration & {
+    onSettled?(): void;
   };
 };
 
@@ -271,6 +281,85 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
 
+  // "make tfm the default file manager?" as a persistent answers-the-prompt
+  // row: Yes = tfm is the default (set it when picked), No = declined AND
+  // restored (unset when picked while default, so Yes→No walks back),
+  // Ask again = undecided (record later). The marker file is the store — no
+  // config commit, so config-schema/example TOML stay untouched.
+  // Fire-and-forget with an in-flight guard (rapid cycling collapses to one
+  // spawn, same shape as the plugin installBusy): the wiring toasts the
+  // outcome, onSettled repaints the panel once it lands, and the row
+  // re-reads live state on the next build.
+  let dfmBusy = false;
+  const defaultFileManagerRow = (): SettingRow => ({
+    kind: "cycle",
+    label: "default file manager",
+    blurb: "Open folders in tfm from other apps",
+    repaint: true,
+    names: ["Yes", "No", "Ask again"],
+    getIdx: () => {
+      try {
+        if (ctx.defaultFileManager?.current() === TFM_DESKTOP_ID) return 0;
+        if (ctx.defaultFileManager?.answer() === "no") return 1;
+      } catch {}
+      return 2;
+    },
+    setIdx: (i) => {
+      const dfm = ctx.defaultFileManager;
+      if (!dfm) {
+        ctx.warn("default file manager controls unavailable", "default file manager");
+        return;
+      }
+      if (dfmBusy) return;
+      dfmBusy = true;
+      const settled = (): void => {
+        dfmBusy = false;
+        try {
+          dfm.onSettled?.();
+        } catch {}
+      };
+      void (async () => {
+        try {
+          if (i === 0) {
+            let already = false;
+            try {
+              already = dfm.current() === TFM_DESKTOP_ID;
+            } catch {}
+            if (already) {
+              ctx.warn("tfm is already the default file manager", "default file manager");
+              return;
+            }
+            const res = await dfm.set("set");
+            if (res.ok) dfm.record("yes");
+            ctx.warn(res.message, "default file manager");
+          } else if (i === 1) {
+            let isDefault = false;
+            try {
+              isDefault = dfm.current() === TFM_DESKTOP_ID;
+            } catch {}
+            if (isDefault) {
+              const res = await dfm.set("unset");
+              if (res.ok) dfm.record("no");
+              ctx.warn(res.message, "default file manager");
+            } else {
+              dfm.record("no");
+            }
+          } else {
+            dfm.record("later");
+          }
+        } catch (err) {
+          try {
+            ctx.warn(errMessage(err), "default file manager");
+          } catch {}
+        } finally {
+          settled();
+        }
+      })().catch(() => {
+        settled();
+      });
+    },
+  });
+
   // keymap preset switch (tfm/yazi): one batch commit over the whole [keys]
   // table + the type-to-search/view flips, like manual remaps (nothing
   // stashed). Leads the keys category outright (theme, appearance's other
@@ -447,6 +536,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           const listingIdx = uiRows.findIndex((r) => r.kind === "header" && r.label === "listing");
           if (listingIdx >= 0) uiRows.splice(listingIdx + 1, 0, hiddenFilesRow());
           else uiRows.unshift(hiddenFilesRow());
+          // the default-file-manager opt-in answers the first-boot prompt
+          // persistently (Yes/No/Ask again) — same hand-row splice, no schema
+          // row (the marker file is the store, not config)
+          uiRows.push(defaultFileManagerRow());
           rows = uiRows;
           break;
         }

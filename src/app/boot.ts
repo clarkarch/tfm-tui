@@ -37,6 +37,10 @@ export type BootCtx = {
   // cold-boot-only top bar intro (same module): plays right after the sidebar
   // intro, so both staged frame-0s land before the first presented frame
   playTopbarIntro?(): void;
+  // cold-boot-only default-file-manager opt-in (Yes/No/Ask-again): fires
+  // after the intros so the user sees tfm first, before being asked to make
+  // it the default. Absent = never asked (old fakes keep working).
+  promptDefaultFileManager?(): void;
   debugTrace(): void;
   launchToast(): void;
   startHygiene(): void;
@@ -95,6 +99,7 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   await guard(ctx, "refreshMounts", () => ctx.refreshMounts?.());
   await guard(ctx, "playSidebarIntro", () => ctx.playSidebarIntro?.());
   await guard(ctx, "playTopbarIntro", () => ctx.playTopbarIntro?.());
+  await guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
   debugLog("boot: done");
   if (ctx.isDebug) await guard(ctx, "debugTrace", () => ctx.debugTrace());
   if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());

@@ -117,4 +117,5 @@ export type GridWiring = {
 export type SettingsWiring = {
   escMenu: ReturnType<typeof makeEscMenu>;
   systemTheme: ReturnType<typeof makeSystemTheme>;
+  promptDefaultFileManager: () => void;
 };

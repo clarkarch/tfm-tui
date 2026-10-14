@@ -106,6 +106,13 @@ const inSection = (h: MkHarness, groupHeader: string, section: string, label: st
 };
 
 const isKeybind = (r: SettingRow): r is Extract<SettingRow, { kind: "keybind" }> => r.kind === "keybind";
+// fire-and-forget rows settle async — poll the observable (records/warns),
+// never a fixed sleep (trashops.test.ts settleUntil pattern)
+const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+  if (!cond()) throw new Error("settleUntil timeout");
+};
 const asToggle = (r: SettingRow): Extract<SettingRow, { kind: "toggle" }> => {
   if (r.kind !== "toggle") throw new Error(`not a toggle: ${r.label}`);
   return r;
@@ -347,7 +354,8 @@ describe("settingGroups shape", () => {
       "drag threshold",
     ]);
     // hidden files splices in under the listing header; session persistence
-    // is its own section
+    // is its own section; the default-file-manager opt-in closes the group
+    // (it answers the first-boot prompt persistently, no schema row)
     expect(seq("files & session")).toEqual([
       "##listing",
       "hidden files",
@@ -356,6 +364,7 @@ describe("settingGroups shape", () => {
       "##session",
       "restore session",
       "persistent undo",
+      "default file manager",
     ]);
     // theme rides under the look header (its presets are the look), then
     // the compatibility pair — plain words only ("chrome" is jargon, and the
@@ -943,6 +952,183 @@ describe("hand-written rows", () => {
     expect(h.warns[0]!.title).toBe("theme");
     h.config.theme = { ...h.config.theme, bg: "#e1e2e7" };
     expect(row.customLabel()).toBe("Console Light");
+  });
+
+  test("default file manager row is a cycle reflecting the live xdg-mime state", () => {
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+      },
+    });
+    const row = h.byLabel("default file manager");
+    expect(row.kind).toBe("cycle");
+    // not default + no recorded answer yet → the prompt-facing state
+    expect(asCycle(row).getIdx()).toBe(2);
+  });
+
+  test("default file manager row reports the settled states honestly", () => {
+    let current = "tfm.desktop";
+    let answer: "yes" | "no" | "later" | null = null;
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => current,
+        choice: () => "ask",
+        answer: () => answer,
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+      },
+    });
+    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(0);
+    // externally switched away after a yes: undecided, NOT "No"
+    current = "org.gnome.Nautilus.desktop";
+    answer = "yes";
+    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(2);
+    answer = "no";
+    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(1);
+  });
+
+  test("picking yes sets the default + records yes; picking no records no", async () => {
+    const sets: string[] = [];
+    const records: string[] = [];
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async (op: "set" | "unset") => {
+          sets.push(op);
+          return { ok: true, message: "done" };
+        },
+        record: (a: "yes" | "no" | "later") => {
+          records.push(a);
+        },
+      },
+    });
+    asCycle(h.byLabel("default file manager")).setIdx(0);
+    expect(sets).toEqual(["set"]);
+    // fire-and-forget row (never throws — the wiring toasts): poll on the
+    // observable record, never a fixed sleep (settleUntil pattern)
+    await settleUntil(() => records.length === 1);
+    expect(records).toEqual(["yes"]);
+    asCycle(h.byLabel("default file manager")).setIdx(1);
+    await settleUntil(() => records.length === 2);
+    expect(records).toEqual(["yes", "no"]);
+  });
+
+  test("picking no while default unsets first (Yes→No walks back)", async () => {
+    const sets: string[] = [];
+    const records: string[] = [];
+    let settled = 0;
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "tfm.desktop",
+        choice: () => "silent",
+        answer: () => "yes",
+        set: async (op: "set" | "unset") => {
+          sets.push(op);
+          return { ok: true, message: "done" };
+        },
+        record: (a: "yes" | "no" | "later") => {
+          records.push(a);
+        },
+        onSettled: () => {
+          settled++;
+        },
+      },
+    });
+    asCycle(h.byLabel("default file manager")).setIdx(1);
+    await settleUntil(() => records.length === 1);
+    expect(sets).toEqual(["unset"]);
+    expect(records).toEqual(["no"]);
+    expect(settled).toBe(1);
+  });
+
+  test("picking yes when already default skips the spawn (no redundant xdg-mime)", async () => {
+    const sets: string[] = [];
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "tfm.desktop",
+        choice: () => "silent",
+        answer: () => "yes",
+        set: async (op: "set" | "unset") => {
+          sets.push(op);
+          return { ok: true, message: "done" };
+        },
+        record: () => {},
+      },
+    });
+    asCycle(h.byLabel("default file manager")).setIdx(0);
+    await settleUntil(() => h.warns.length === 1);
+    expect(sets).toEqual([]);
+    expect(h.warns[0]!.message).toContain("already");
+  });
+
+  test("a failing set records nothing and still repaints (failed yes re-asks)", async () => {
+    const records: string[] = [];
+    let settled = 0;
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: false, message: "boom" }),
+        record: (a: "yes" | "no" | "later") => {
+          records.push(a);
+        },
+        onSettled: () => {
+          settled++;
+        },
+      },
+    });
+    asCycle(h.byLabel("default file manager")).setIdx(0);
+    await settleUntil(() => settled === 1);
+    expect(records).toEqual([]);
+    expect(h.warns.map((w) => w.message)).toContain("boom");
+  });
+
+  test("rapid cycling collapses to one spawn (in-flight guard)", async () => {
+    const sets: string[] = [];
+    let release: (() => void) | null = null;
+    const gate = new Promise<{ ok: boolean; message: string }>((resolve) => {
+      release = () => resolve({ ok: true, message: "done" });
+    });
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async (op: "set" | "unset") => {
+          sets.push(op);
+          return gate;
+        },
+        record: () => {},
+      },
+    });
+    const row = asCycle(h.byLabel("default file manager"));
+    row.setIdx(0);
+    row.setIdx(0);
+    row.setIdx(2);
+    (release as (() => void) | null)?.();
+    await settleUntil(() => sets.length === 1, 1000).catch(() => {});
+    expect(sets).toEqual(["set"]);
+  });
+
+  test("default file manager row without wiring warns instead of throwing", () => {
+    const h = mk();
+    // getIdx degrades to the prompt-facing state with no wiring
+    expect(asCycle(h.byLabel("default file manager")).getIdx()).toBe(2);
+    for (const i of [0, 1, 2]) {
+      expect(() => asCycle(h.byLabel("default file manager")).setIdx(i)).not.toThrow();
+    }
+    expect(h.warns.map((w) => w.title)).toEqual([
+      "default file manager",
+      "default file manager",
+      "default file manager",
+    ]);
   });
 });
 
