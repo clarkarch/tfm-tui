@@ -5,7 +5,7 @@
 // presentations: theme presets, tab-bar adaptive/on, show-hidden state sync.
 // No renderer imports — ctx carries the sinks. ---
 import { spawnSafe } from "../fs/spawn-safe";
-import { TFM_DESKTOP_ID, type DefaultFileManagerOrchestration } from "../fs/default-filemanager";
+import type { DefaultFileManagerOrchestration } from "../fs/default-filemanager";
 import { errMessage } from "../lib/uiutil";
 import { THEME_PRESETS } from "../config/themes";
 import type { LoadedPlugin } from "../plugins/plugin-api";
@@ -285,21 +285,16 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
-  // one row for the whole default-file-manager story (advanced, last): a
-  // plain Yes/No toggle. The VALUE is live system state (is tfm the handler
-  // right now?), never the recorded answer — a stale yes can never display
-  // as on. The blurb names the live handler, so what the system actually
-  // uses is visible right under the answer. Flipping on sets the default
-  // (skipped when already default); flipping off unsets when tfm is default,
-  // otherwise opens the prompt when the answer is still undecided (Ask-again
-  // opens the question NOW — a toggle with no path back to the prompt is a
-  // dead end). The marker file is the store — no config commit, so
-  // config-schema/example TOML stay untouched. Fire-and-forget with an
-  // in-flight guard (rapid flipping collapses to one spawn, same shape as
-  // the plugin installBusy): the wiring toasts the outcome, onSettled
-  // repaints the panel once it lands, and the row re-reads live state on
-  // the next build.
-  let dfmBusy = false;
+  // one row for the whole default-file-manager story (advanced, last): an
+  // ACTION row, not a toggle — pressing it always spawns the Yes/No confirm
+  // UI, which is the ONLY path to the yes-flow. (A toggle was tried and
+  // deleted: its on/off paint promises live state while the confirm owns the
+  // outcome, so the switch visibly lied in both directions.) The blurb names
+  // the live handler, so what the system actually uses is visible right
+  // under the row — a stale belief ("I said yes") dies on sight. The marker
+  // file is the store — no config commit, so config-schema/example TOML
+  // stay untouched. Fire-and-forget; the wiring toasts the outcome and the
+  // yes-flow's onSettled repaints the panel once it lands.
   const shortHandler = (id: string): string => id.replace(/\.desktop$/, "").replace(/^org\.(gnome|kde)\./, "");
   const defaultFileManagerRow = (): SettingRow => {
     let handler = "";
@@ -307,101 +302,26 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       handler = ctx.defaultFileManager?.current() ?? "";
     } catch {}
     return {
-      kind: "toggle",
+      kind: "action",
       label: "set as default file manager",
       blurb: handler ? `folders open in: ${shortHandler(handler)}` : "ask the default question now",
-      repaint: true,
-      get: () => {
-        try {
-          return ctx.defaultFileManager?.current() === TFM_DESKTOP_ID;
-        } catch {
-          return false;
-        }
-      },
-      set: (v) => {
+      keepOpen: true,
+      run: () => {
         const dfm = ctx.defaultFileManager;
-        if (!dfm) {
+        if (!dfm?.ask) {
           ctx.warn("default file manager controls unavailable", "default file manager");
           return;
         }
-        // flipping ON shows the confirm UI (the Yes button drives the
-        // set+record+service flow) instead of silently spawning xdg-mime —
-        // the toggle promises the question, not a side effect
-        const askQuestion = (): void => {
-          if (!dfm.ask) {
-            ctx.warn("default file manager controls unavailable", "default file manager");
-            return;
-          }
-          void dfm
-            .ask()
-            .then((surfaced) => {
-              if (!surfaced) ctx.warn("already settled — nothing to ask", "default file manager");
-            })
-            .catch((err) => {
-              try {
-                ctx.warn(errMessage(err), "default file manager");
-              } catch {}
-            });
-        };
-        if (v) {
-          let already = false;
-          try {
-            already = dfm.current() === TFM_DESKTOP_ID;
-          } catch {}
-          if (already) {
-            ctx.warn("tfm is already the default file manager", "default file manager");
-            return;
-          }
-          askQuestion();
-          return;
-        }
-        // flipping OFF while tfm is default unsets directly; while undecided
-        // (never answered, or stale yes) it opens the question instead of
-        // recording a blind "no" — the user reached for the control, so show
-        // them the question
-        let stillDefault = false;
-        try {
-          stillDefault = dfm.current() === TFM_DESKTOP_ID;
-        } catch {}
-        if (!stillDefault) {
-          let undecided = false;
-          try {
-            undecided = dfm.answer() !== "no";
-          } catch {
-            undecided = true;
-          }
-          if (undecided) {
-            askQuestion();
-            return;
-          }
-          try {
-            dfm.record("no");
-          } catch {}
-          return;
-        }
-        if (dfmBusy) return;
-        dfmBusy = true;
-        const settled = (): void => {
-          dfmBusy = false;
-          try {
-            dfm.onSettled?.();
-          } catch {}
-        };
-        void (async () => {
-          try {
-            const res = await dfm.set("unset");
-            if (res.ok) dfm.record("no");
-            ctx.warn(res.message, "default file manager");
-          } catch (err) {
+        void dfm
+          .ask()
+          .then((surfaced) => {
+            if (!surfaced) ctx.warn("already settled — nothing to ask", "default file manager");
+          })
+          .catch((err) => {
             try {
               ctx.warn(errMessage(err), "default file manager");
             } catch {}
-          } finally {
-            settled();
-          }
-        })().catch(() => {
-          settled();
-        });
+          });
       },
     };
   };

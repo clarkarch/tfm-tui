@@ -217,6 +217,11 @@ export const makeDefaultFileManagerPrompt = (
         settled();
       })().catch((err) => {
         deps.log(`default-file-manager set failed: ${errMessage(err)}`);
+        try {
+          deps.onSettled?.();
+        } catch (err2) {
+          deps.log(`default-file-manager settled hook failed: ${errMessage(err2)}`);
+        }
       });
     };
     try {
