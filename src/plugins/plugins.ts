@@ -28,10 +28,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { withTimeout, errMessage } from "../lib/uiutil";
 import { validateKeybindSpec } from "../config/keyspec";
 import {
@@ -111,7 +109,7 @@ export const hashPluginFolder = (folder: string): string => {
       else files.push(e.full);
     }
   });
-  const h = createHash("sha256");
+  const h = new Bun.CryptoHasher("sha256");
   let bytes = 0;
   let cutByteCap = false;
   for (const f of files) {
@@ -416,7 +414,7 @@ export const makePluginRegistry = (deps: {
     originalFile: string,
     rejectDuplicate?: (name: string) => boolean,
   ): Promise<LoadedPlugin> => {
-    const mod: unknown = (await import(pathToFileURL(stagedFile).href)).default;
+    const mod: unknown = (await import(Bun.pathToFileURL(stagedFile).href)).default;
     if (!isPluginModule(mod)) throw new Error(`default export must be { name, activate }`);
     if (!PLUGIN_NAME_RE.test(mod.name)) throw new Error(`unsafe plugin name: ${JSON.stringify(mod.name)}`);
     // duplicate check BEFORE activate: a rejected duplicate must never have

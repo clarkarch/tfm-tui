@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
+import { execBun, type ExecBunResult } from "./exec-bun";
 import { fileUriToPath, pathToUri } from "./uri";
 import { trashDir } from "./fsutil";
 import { parseServerInput } from "./network";
@@ -14,7 +13,9 @@ import { listNetworkMounts, type NetworkMount } from "./netmount";
 // loaded state behind accessors; callers re-run loadSystemPlaces() to
 // refresh. No renderer, no UI state. ---
 
-const execFileP = promisify(execFile);
+// lsblk is re-read on every device poll, so this rides the fast Bun.spawn
+// path (execBun) — a wedged lsblk resolves empty via the timeout, never throws
+const execLsblk = (args: string[]): Promise<ExecBunResult> => execBun("lsblk", args, { timeoutMs: 10_000 });
 const home = os.homedir();
 
 export type Place = {
@@ -278,9 +279,8 @@ export function parseLsblk(json: unknown): MountEntry[] {
 export async function listMounts(): Promise<MountEntry[]> {
   try {
     // timeout: a wedged lsblk must not stall the sidebar load forever
-    const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,TRAN,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"], {
-      timeout: 10_000,
-    });
+    const { code, stdout } = await execLsblk(["-J", "-o", "NAME,PATH,RM,TRAN,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"]);
+    if (code !== 0) return [];
     return parseLsblk(JSON.parse(stdout));
   } catch {
     return [];

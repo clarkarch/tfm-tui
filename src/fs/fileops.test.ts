@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { ChildProcess } from "node:child_process";
+import type { Subprocess } from "bun";
 import {
   cpSync,
   mkdirSync,
@@ -1104,7 +1104,7 @@ describe("extractArchive", () => {
 
   test("cancel wakes a paused child (SIGCONT) before hard-killing it", async () => {
     const killed: string[] = [];
-    const child = { kill: (sig: string) => killed.push(sig), pid: 0 } as unknown as ChildProcess;
+    const child = { kill: (sig: string) => killed.push(sig), pid: 0 } as unknown as Subprocess;
     const h = makeHarness({
       listArchive: async () => 1,
       runArchive: async (_spec, opts) => {

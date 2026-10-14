@@ -123,7 +123,7 @@ type ChromeCtx = {
   home?(): string;
   // udisksctl spawn seam (default: spawnSafe, same argv/timeout). Optional so
   // old fakes keep working; tests inject a fake child instead of a real USB.
-  spawnUdisks?(args: string[]): { on(ev: "close" | "error", cb: (...a: never[]) => void): unknown };
+  spawnUdisks?(args: string[]): { on(ev: "close" | "error", cb: (...a: unknown[]) => void): unknown };
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
@@ -174,7 +174,27 @@ export const makeChrome = (ctx: ChromeCtx) => {
 
   const spawnUdisks =
     ctx.spawnUdisks ??
-    ((args: string[]) => spawnSafe("udisksctl", args, { stdio: "ignore", timeoutMs: 10_000 }, () => {}));
+    ((args: string[]): { on(ev: "close" | "error", cb: (...a: unknown[]) => void): unknown } => {
+      // default over Bun-backed spawnSafe: adapt Subprocess (exited promise,
+      // no .on) to the seam's close/error surface. null = spawn failed (the
+      // noop onFail already ran) — synthesize error + close so spawnWait
+      // resolves "can't eject" instead of hanging forever.
+      const proc = spawnSafe("udisksctl", args, { stdio: "ignore", timeoutMs: 10_000 }, () => {});
+      return {
+        on: (ev: "close" | "error", cb: (...a: never[]) => void): unknown => {
+          if (ev === "close") {
+            if (!proc) queueMicrotask(() => (cb as (c: number) => void)(-1));
+            else void proc.exited.then(
+              (c) => (cb as (c: number | null) => void)(c),
+              () => (cb as (c: number) => void)(-1),
+            );
+          } else if (!proc) {
+            queueMicrotask(() => (cb as (e: Error) => void)(new Error("udisksctl spawn failed")));
+          }
+          return undefined;
+        },
+      };
+    });
 
   // leave a mountpoint before operating on its device — unmounting under a
   // live cwd strands the grid/watcher on a dead path (same leave-first rule
@@ -218,7 +238,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         settled = true;
         resolve({ ok: false, detail: err instanceof Error ? err.message : String(err) });
       });
-      child.on("close", (code: number | null) => {
+      child.on("close", (code: unknown) => {
         if (settled) return;
         settled = true;
         // a signal kill (SIGKILL on timeout) carries no exit code — say so

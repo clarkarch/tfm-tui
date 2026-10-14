@@ -872,12 +872,28 @@ const countBluePixels = (bytes: Uint8Array): number => {
 
 describe("pngFromProc timeout", () => {
   test("a hung renderer rejects instead of holding its slot forever", async () => {
-    const { spawn } = await import("node:child_process");
-    const proc = spawn("sleep", ["30"], { stdio: ["pipe", "pipe", "pipe"] });
+    const proc = Bun.spawn(["sleep", "30"], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const start = Date.now();
     await expect(pngFromProc(proc, "sleep-probe", 100)).rejects.toThrow(/timed out/);
     // well under the child's 30s life: the wrapper killed it, nothing lingers
     expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  test("a successful renderer resolves its bytes", async () => {
+    const proc = Bun.spawn(["sh", "-c", "printf 'PNGDATA'"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const bytes = await pngFromProc(proc, "printf-probe");
+    expect(new TextDecoder().decode(bytes)).toBe("PNGDATA");
+  });
+
+  test("an empty success rejects (the video retry relies on this)", async () => {
+    // ffmpeg with no decodable frame exits 0 with no bytes: that must read
+    // as a miss (retry at 0), not as a valid thumbnail
+    const proc = Bun.spawn(["true"], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    await expect(pngFromProc(proc, "empty-probe")).rejects.toThrow(/exited 0/);
   });
 });
 

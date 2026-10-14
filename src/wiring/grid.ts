@@ -420,7 +420,7 @@ export const wireGrid = (deps: {
       spawnSafe(p, [], { stdio: "ignore", detached: true, cwd: path.dirname(p) }, (err) => {
         dlog(`run ${p}: ${err.message}`);
         chrome.notify(`Can't run ${path.basename(p)} · ${err.message}`, "run", "error");
-      }).unref?.();
+      })?.unref();
     } catch (err) {
       chrome.notify(`Can't run ${path.basename(p)} · ${errMessage(err)}`, "run", "error");
       return;

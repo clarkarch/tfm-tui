@@ -1,8 +1,7 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
-import { execFile } from "node:child_process";
 import { lstatSync, type Stats } from "node:fs";
 import path from "node:path";
-import { promisify } from "node:util";
+import { execBun, type ExecBunResult } from "../fs/exec-bun";
 import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
@@ -75,7 +74,9 @@ type PropsCtx = {
   setPointer?(style: PointerStyle): void;
 };
 
-const execFileP = promisify(execFile);
+// gio star/bookmark metadata rides execBun (never throws for spawn
+// failures — the fire-and-forget call below degrades to a no-op like before)
+const execGio = (args: string[]): Promise<ExecBunResult> => execBun("gio", args, { timeoutMs: 10_000 });
 
 export const makeProps = (ctx: PropsCtx) => {
   // --- Properties dialog (floating, right-click -> Properties…) ---
@@ -154,15 +155,14 @@ export const makeProps = (ctx: PropsCtx) => {
       propsTogglePaint("tfm-props-star", starSlot.spec, starred, starHover);
       if (starred) starredRegistryAdd(targetPath);
       else starredRegistryRemove(targetPath);
-      void execFileP("gio", ["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""], {
-        timeout: 10_000,
-      }).catch(() => {});
+      void execGio(["set", "-t", "string", targetPath, "metadata::starred", starred ? "true" : ""]).catch(() => {});
     });
     let starHover = false;
     let starred = readStarredList().includes(targetPath);
     if (starred) ctx.setIconState(starSlot.spec, IconStateIdx.Active);
-    void execFileP("gio", ["info", "-a", "metadata::starred", targetPath], { timeout: 10_000 })
-      .then(({ stdout }) => {
+    void execGio(["info", "-a", "metadata::starred", targetPath])
+      .then(({ code, stdout }) => {
+        if (code !== 0) return;
         const m = stdout.match(/metadata::starred:\s*(\S+)/);
         const gioStarred = !!m && m[1] !== "";
         if (gioStarred && !starred) {

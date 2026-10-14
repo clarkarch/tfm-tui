@@ -3,8 +3,7 @@
 // this module only turns (name, colors, pixel size) into PNG bytes. All caches
 // are keyed by everything that changes the output, so theme switches miss
 // naturally and never need explicit invalidation beyond clearIconCaches.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
+import type { Subprocess } from "bun";
 import { readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
@@ -305,7 +304,7 @@ const ICON_DISK_VER = "v4";
 const iconSalt = (): string => `${ICON_DISK_VER}:${svgRenderer() ?? "none"}`;
 const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
-  path.join(iconDiskDir(), `${createHash("sha1").update(`${iconSalt()}:${key}`).digest("hex").slice(0, 20)}.png`);
+  path.join(iconDiskDir(), `${new Bun.CryptoHasher("sha1").update(`${iconSalt()}:${key}`).digest("hex").slice(0, 20)}.png`);
 let iconDirReady: Promise<void> | null = null;
 const ensureIconDir = (): Promise<void> =>
   (iconDirReady ??= mkdir(iconDiskDir(), { recursive: true })
@@ -424,13 +423,9 @@ export const brandPng = async (name: string, pxW: number, pxH: number, bg?: stri
 // cell-box PNG thumb is bytes, anything past this is pathological and fails
 // downstream decode into the next lane/sentinel instead of growing RAM).
 const MAX_PROC_CAPTURE = 256 * 1024;
-export const pngFromProc = (
-  proc: ChildProcessWithoutNullStreams,
-  tool: string,
-  timeoutMs = 30_000,
-): Promise<Uint8Array> =>
+export const pngFromProc = (proc: Subprocess, tool: string, timeoutMs = 30_000): Promise<Uint8Array> =>
   new Promise<Uint8Array>((resolve, reject) => {
-    const chunks: Buffer[] = [];
+    const chunks: Uint8Array[] = [];
     let retained = 0;
     let settled = false;
     const settle = (fn: () => void): void => {
@@ -448,25 +443,69 @@ export const pngFromProc = (
       } catch {}
       settle(() => reject(new Error(`${tool} timed out`)));
     }, timeoutMs);
-    proc.stdout.on("data", (c: Buffer) => {
-      if (retained >= MAX_PROC_CAPTURE) return;
-      const room = MAX_PROC_CAPTURE - retained;
-      const take = c.length > room ? c.subarray(0, room) : c;
-      chunks.push(take);
-      retained += take.length;
-    });
-    // drain stderr: a chatty failing renderer filling its pipe would block the
-    // process and 'close' would never fire (the thumb job would hang)
-    proc.stderr.resume();
-    proc.on("error", (err) => settle(() => reject(err)));
-    proc.on("close", (code) =>
+    // stderr is drained + discarded: a chatty failing renderer filling its
+    // pipe would block the process and the exit would never resolve (the
+    // thumb job would hang)
+    const pump = async (stream: unknown, keep: boolean): Promise<void> => {
+      if (!(stream instanceof ReadableStream)) return;
+      const reader = (stream as ReadableStream<Uint8Array>).getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!keep) continue;
+          if (retained >= MAX_PROC_CAPTURE) continue;
+          const room = MAX_PROC_CAPTURE - retained;
+          const take = value.length > room ? value.subarray(0, room) : value;
+          chunks.push(take);
+          retained += take.length;
+        }
+      } catch (err) {
+        settle(() => reject(err instanceof Error ? err : new Error(String(err))));
+      } finally {
+        reader.releaseLock();
+      }
+    };
+    void (async () => {
+      await Promise.all([pump(proc.stdout, true), pump(proc.stderr, false)]);
+      let code: number | null = null;
+      try {
+        code = await proc.exited;
+      } catch {
+        code = null;
+      }
+      // message shapes are load-bearing: the video retry matches "timed out"
+      // vs /exited \d+/ to tell a hung ffmpeg from a corrupt file
+      const out = new Uint8Array(retained);
+      let off = 0;
+      for (const c of chunks) {
+        out.set(c, off);
+        off += c.length;
+      }
       settle(() =>
-        code === 0 && chunks.length > 0
-          ? resolve(new Uint8Array(Buffer.concat(chunks)))
+        code === 0 && retained > 0
+          ? resolve(out)
           : reject(new Error(`${tool} exited ${code}`)),
-      ),
-    );
+      );
+    })();
   });
+
+// spawn wrapper for the raster pipes: Bun.spawn throws synchronously on a
+// missing binary (node's spawn did not), so the throw is converted to a
+// rejection — every magick()/attempt() call site chains .catch() and would
+// otherwise see a sync throw escape where a rejection belonged. The message
+// carries neither "timed out" nor "exited N", so the video path still reads
+// it as a dead binary (resetVideoBin) rather than a corrupt file.
+const spawnPng = (bin: string, args: string[], tool: string): Promise<Uint8Array> => {
+  try {
+    return pngFromProc(
+      Bun.spawn([bin, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env } }),
+      tool,
+    );
+  } catch (err) {
+    return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+  }
+};
 
 // SVG files render vector-crisp through the SAME single renderer icons use
 // (the in-process resvg-js addon; magick is the addon-failure last resort —
@@ -490,7 +529,7 @@ const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): stri
 const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
   // Text-bearing SVGs render glyphless in-process (fonts-off, probed: the
   // glyphs vanish, no crash) — no renderer is re-spawned for fonts.
-  const magick = () => pngFromProc(spawn("magick", magickVectorArgs(p, pxW, pxH, bg)), "magick");
+  const magick = () => spawnPng("magick", magickVectorArgs(p, pxW, pxH, bg), "magick");
   return Promise.resolve()
     .then(() => renderInproc(readFileSync(p, "utf8"), pxW, pxH, bg))
     .catch(magick);
@@ -613,8 +652,9 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
   // runtime older than 1.3.14, where `new Bun.Image` throws inside the async
   // fn and the catch routes here.
   const magick = (): Promise<Uint8Array> =>
-    pngFromProc(
-      spawn("magick", [
+    spawnPng(
+      "magick",
+      [
         // decode at ~2x target size: full-res JPEG decode dominates thumb time
         // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
         "-define",
@@ -630,7 +670,7 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
         "-extent",
         `${pxW}x${pxH}`,
         "png:-",
-      ]),
+      ],
       "magick",
     );
   // Faster lane first (measured, see above): a refusing lane falls through to
@@ -661,8 +701,9 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
   if (!vb) throw new Error(`no video ffmpeg available: ${p}`);
   const vf = `scale=${pxW}:${pxH}:force_original_aspect_ratio=increase,crop=${pxW}:${pxH}`;
   const attempt = (ss: string) =>
-    pngFromProc(
-      spawn(vb.bin, [
+    spawnPng(
+      vb.bin,
+      [
         "-hide_banner",
         "-loglevel",
         "error",
@@ -679,7 +720,7 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
         "-vcodec",
         "png",
         "-",
-      ]),
+      ],
       "ffmpeg",
     );
   try {
@@ -745,7 +786,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const THUMB_DISK_VER = "v3";
 const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
-  path.join(thumbDiskDir(), `${createHash("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
+  path.join(thumbDiskDir(), `${new Bun.CryptoHasher("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
 // NOT memoized: tests re-point XDG_CACHE_HOME per run, a memoized mkdir would
 // cache the first dir and strand later writes in a missing directory
 const ensureThumbDir = async (): Promise<void> => {

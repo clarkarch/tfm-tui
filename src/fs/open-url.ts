@@ -24,9 +24,8 @@ export const makeUrlOpener = (deps: UrlOpenerDeps) => {
   const openUrl = (url: string): void => {
     try {
       const child = (deps.spawn ?? spawnSafe)("xdg-open", [url], { stdio: "ignore" }, (err) => failToast(url, err));
-      try {
-        child.unref?.();
-      } catch {}
+      // null = spawn failed, already toasted through onFail — nothing to detach
+      child?.unref();
     } catch (err) {
       failToast(url, err);
     }

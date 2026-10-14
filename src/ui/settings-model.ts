@@ -458,7 +458,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       run: () => {
         spawnSafe("xdg-open", [configPath()], { stdio: "ignore", detached: true }, (err) =>
           ctx.warn(err.message, "config"),
-        ).unref?.();
+        )?.unref();
       },
     },
     // one row for the whole default-file-manager story, last in advanced:

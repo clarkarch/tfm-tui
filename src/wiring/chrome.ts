@@ -449,7 +449,7 @@ export const wireChrome = async (deps: {
         onFailed();
         dlog(`open ${p}: ${err.message}`);
         notify(`Can't open ${path.basename(p)} · ${err.message}`, "open", "error");
-      }).unref?.();
+      })?.unref();
     },
     appForFile,
     openAsRoot,

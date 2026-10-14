@@ -89,7 +89,7 @@ describe("publishPathsToSystemClipboard", () => {
     const fakeSpawn = ((_cmd: string, args: string[]) => {
       argv = args;
       return {
-        stdin: { end: (s: string) => (payload = s) },
+        stdin: { write: (s: string) => (payload = s), end: () => {} },
         unref: () => {},
       };
     }) as unknown as Parameters<typeof publishPathsToSystemClipboard>[3];
@@ -106,7 +106,7 @@ describe("publishPathsToSystemClipboard", () => {
     const fakeSpawn = ((_cmd: string, args: string[]) => {
       argv = args;
       return {
-        stdin: { end: (s: string) => (payload = s) },
+        stdin: { write: (s: string) => (payload = s), end: () => {} },
         unref: () => {},
       };
     }) as unknown as Parameters<typeof publishPathsToSystemClipboard>[3];

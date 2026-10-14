@@ -1,47 +1,41 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSafe } from "./spawn-safe";
 
-// spawn() of a missing binary does not throw synchronously — it fires an
-// async uncaughtException ("Executable not found in $PATH") that the crash
-// handler turns into exit(1). spawnSafe must swallow that via a listener
-// armed at spawn time, or opening a file on a system without xdg-open kills
-// the whole TUI.
-
-const until = async (cond: () => boolean, ms = 3000): Promise<boolean> => {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > ms) return false;
-    await Bun.sleep(5);
-  }
-  return true;
-};
+// Bun.spawn-backed spawnSafe. Contract (same as the node version, pinned):
+// a missing binary NEVER throws and NEVER fires an async uncaughtException —
+// it reports through onFail and returns null, or opening a file on a system
+// without xdg-open kills the whole TUI. Differences from node: onFail fires
+// SYNCHRONOUSLY (Bun.spawn throws sync, there is no async error event), so
+// callers null-guard instead of relying on a later event.
 
 describe("spawnSafe", () => {
-  test("missing binary reports through onFail instead of an uncaughtException", async () => {
+  test("missing binary reports through onFail and returns null (never throws)", () => {
     const errs: Error[] = [];
-    spawnSafe("tfm-no-such-binary-xyz", [], { stdio: "ignore" }, (e) => errs.push(e));
-    // poll the observable: the error event must arrive, and the test process
-    // must still be alive to observe it (a bare spawn would have exited us)
-    expect(await until(() => errs.length > 0)).toBe(true);
+    const child = spawnSafe("tfm-no-such-binary-xyz", [], { stdio: "ignore" }, (e) => errs.push(e));
+    expect(child).toBeNull();
+    expect(errs.length).toBe(1);
     expect(errs[0]).toBeInstanceOf(Error);
   });
 
   test("existing binary still runs and exits cleanly", async () => {
     const p = spawnSafe(process.execPath, ["--version"]);
-    const code: number = await new Promise((res) => p.on("exit", (c) => res(c ?? -1)));
-    expect(code).toBe(0);
+    expect(p).not.toBeNull();
+    expect(await p!.exited).toBe(0);
+    p!.unref();
   });
 
   test("piped stdin still works (clipboard tool shape)", async () => {
-    // wl-copy/xclip publish via stdin — the helper must not disturb the pipe
     const p = spawnSafe(process.execPath, ["-e", "const b = await Bun.stdin.text(); process.stdout.write(b)"], {
       stdio: ["pipe", "pipe", "ignore"],
     });
-    p.stdin?.end("payload");
-    let out = "";
-    p.stdout?.on("data", (c: Buffer) => (out += String(c)));
-    const code: number = await new Promise((res) => p.on("exit", (c) => res(c ?? -1)));
-    expect(code).toBe(0);
+    expect(p).not.toBeNull();
+    const stdin = p!.stdin;
+    if (stdin === null || stdin === undefined || typeof stdin === "number") throw new Error("expected a piped stdin");
+    stdin.write("payload");
+    stdin.end();
+    if (!(p!.stdout instanceof ReadableStream)) throw new Error("expected a piped stdout");
+    const out = await new Response(p!.stdout).text();
+    expect(await p!.exited).toBe(0);
     expect(out).toBe("payload");
   });
 
@@ -49,10 +43,39 @@ describe("spawnSafe", () => {
     // without the backstop this test hangs forever: a wedged udisksctl never
     // resolves, never toasts, never dies (use sleep — universally present)
     const p = spawnSafe("sleep", ["30"], { stdio: "ignore", timeoutMs: 50 });
-    const code: number = await new Promise((res) => {
-      p.on("close", (c) => res(c ?? -1));
-      p.on("exit", (c) => res(c ?? -1));
-    });
-    expect(code).not.toBe(0);
+    expect(p).not.toBeNull();
+    expect(await p!.exited).not.toBe(0);
+  });
+
+  test("detached fire-and-forget shape (xdg-open) is accepted", () => {
+    const errs: Error[] = [];
+    const p = spawnSafe("true", [], { stdio: "ignore", detached: true }, (e) => errs.push(e));
+    expect(p).not.toBeNull();
+    p!.unref();
+    expect(errs).toEqual([]);
+  });
+
+  test("binary resolution honors runtime PATH changes (stub dir)", async () => {
+    // Bun.spawn resolves against a stale PATH unless env is passed fresh
+    // (probed 1.4.0) — pin the fresh-PATH behavior with a stub binary
+    const dir = await Bun.$`mktemp -d`.text().then((s) => s.trim());
+    try {
+      await Bun.write(`${dir}/tfm-stub-echo`, "#!/bin/sh\necho stubbed\n");
+      await Bun.$`chmod +x ${dir}/tfm-stub-echo`.quiet();
+      const oldPath = process.env.PATH;
+      process.env.PATH = `${dir}:${oldPath ?? ""}`;
+      try {
+        const p = spawnSafe("tfm-stub-echo", [], { stdio: ["ignore", "pipe", "ignore"] });
+        expect(p).not.toBeNull();
+        if (!(p!.stdout instanceof ReadableStream)) throw new Error("expected a piped stdout");
+        const out = await new Response(p!.stdout).text();
+        expect(await p!.exited).toBe(0);
+        expect(out.trim()).toBe("stubbed");
+      } finally {
+        process.env.PATH = oldPath;
+      }
+    } finally {
+      await Bun.$`rm -rf ${dir}`.quiet();
+    }
   });
 });

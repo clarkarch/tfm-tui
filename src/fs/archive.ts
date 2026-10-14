@@ -1,10 +1,10 @@
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import type { Subprocess } from "bun";
 import type { Stats } from "node:fs";
 import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { lstat, readdir, readlink } from "node:fs/promises";
 import { errMessage } from "../lib/uiutil";
 import path from "node:path";
-import { spawnSafe } from "./spawn-safe";
+import { spawnSafe, type SpawnSafeOpts } from "./spawn-safe";
 
 // --- Archive engine: extension -> format detection, exact argv for tar/unzip/
 // zip/7z, listing for a total count, and a line-streaming child runner. Pure
@@ -39,7 +39,7 @@ export type ArchiveRunOpts = {
   onLine?: (line: string) => void;
   // the live child, so the caller can register cancel (SIGTERM) / pause
   // (SIGSTOP/SIGCONT)
-  onChild?: (child: ChildProcess) => void;
+  onChild?: (child: Subprocess) => void;
   spawn?: SpawnFn;
   // cooperative control for the in-process (js) lanes, which have no child
   // to signal: polled between entries, so ✕/pause behave like the spawn path
@@ -57,7 +57,12 @@ export type ArchiveRunOpts = {
   onLoss?: (loss: { exec: number; links: number }) => void;
 };
 export type ArchiveRun = (spec: ToolSpec, opts?: ArchiveRunOpts) => Promise<ArchiveRunResult>;
-type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions, onFail: (err: Error) => void) => ChildProcess;
+type SpawnFn = (
+  cmd: string,
+  args: string[],
+  opts: SpawnSafeOpts,
+  onFail: (err: Error) => void,
+) => Subprocess | null;
 export type WhichFn = (bin: string) => string | null;
 
 type CompressionDef = {
@@ -386,7 +391,7 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
     };
     const stdoutCounter = makeLineCounter((l) => opts.onLine?.(l));
     const stderrCounter = makeLineCounter((l) => opts.onLine?.(l));
-    let child: ChildProcess;
+    let child: Subprocess | null;
     try {
       child = spawnFn(spec.tool, spec.args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] }, (err) => {
         stderr = appendCapped(stderr, err.message);
@@ -397,34 +402,66 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
       finish(-1);
       return;
     }
-    opts.onChild?.(child);
+    // spawn failure (missing binary): the onFail above already finished the
+    // run — nothing to read, nobody to signal. The finish is repeated
+    // defensively: a spawn fn that returns null WITHOUT reporting must still
+    // resolve (hanging the serial op queue is worse than a bare code -1).
+    if (!child) {
+      finish(-1);
+      return;
+    }
+    const proc = child;
+    opts.onChild?.(proc);
+    let exitedDone = false;
     if (opts.timeoutMs && opts.timeoutMs > 0) {
       timer = setTimeout(() => {
+        if (exitedDone) return;
         try {
-          child.kill("SIGCONT");
+          proc.kill("SIGCONT");
         } catch {}
         try {
-          child.kill("SIGKILL");
+          proc.kill("SIGKILL");
         } catch {}
         stderr = appendCapped(stderr, `timed out after ${opts.timeoutMs}ms`);
         finish(-1);
       }, opts.timeoutMs);
     }
-    child.stdout?.on("data", (c: Buffer | string) => {
-      const s = typeof c === "string" ? c : c.toString();
-      stdout = appendCapped(stdout, s);
-      stdoutCounter.push(s);
-    });
-    child.stderr?.on("data", (c: Buffer | string) => {
-      const s = typeof c === "string" ? c : c.toString();
-      stderr = appendCapped(stderr, s);
-      stderrCounter.push(s);
-    });
-    child.on("error", (err) => {
-      stderr = appendCapped(stderr, err.message);
-      finish(-1);
-    });
-    child.on("close", (code) => finish(code ?? -1));
+    // stream pumps: a real child EOFs both pipes on exit, so awaiting the
+    // pumps before the exit code keeps the capture COMPLETE at resolve (the
+    // node version resolved on "close", which also fires after stdio flush).
+    // The timeout path above still resolves early like before.
+    const pump = async (stream: unknown, isErr: boolean, push: (l: string) => void): Promise<void> => {
+      if (!(stream instanceof ReadableStream)) return;
+      const reader = (stream as ReadableStream<Uint8Array>).getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const s = Buffer.from(value).toString();
+          if (isErr) stderr = appendCapped(stderr, s);
+          else stdout = appendCapped(stdout, s);
+          push(s);
+        }
+      } catch (err) {
+        if (isErr) stderr = appendCapped(stderr, errMessage(err));
+        else stdout = appendCapped(stdout, errMessage(err));
+        finish(-1);
+      } finally {
+        reader.releaseLock();
+      }
+    };
+    void (async () => {
+      await Promise.all([pump(proc.stdout, false, (s) => stdoutCounter.push(s)), pump(proc.stderr, true, (s) => stderrCounter.push(s))]);
+      let code: number | null = null;
+      try {
+        code = await proc.exited;
+      } catch {
+        code = null;
+      }
+      exitedDone = true;
+      if (timer !== null) clearTimeout(timer);
+      finish(typeof code === "number" ? code : -1);
+    })();
   });
 
 // entry count for the progress total (tar/tar.gz must decompress once here;

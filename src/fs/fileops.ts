@@ -6,7 +6,7 @@
 // internal clipboard. Same seam as grid-input.ts: no renderer imports. ---
 
 import path from "node:path";
-import type { ChildProcess } from "node:child_process";
+import type { Subprocess } from "bun";
 import { existsSync } from "node:fs";
 import { mkdir, lstat, readdir, readlink, rm, rename as fsRename } from "node:fs/promises";
 import { swallow } from "../app/log";
@@ -237,7 +237,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // register the live child so the toast's ✕ kills it (SIGKILL, SIGCONT first
   // when paused) and the pause button stops/resumes it (SIGSTOP/SIGCONT) —
   // archive tools report no bytes, so the ReadStream path never applies
-  const onArchiveChild = (child: ChildProcess): void => {
+  const onArchiveChild = (child: Subprocess): void => {
     prog.processCancel = () => {
       // SIGCONT first: a paused (SIGSTOPped) child ignores SIGTERM/SIGKILL
       // until it is resumed, and a stuck child would lock the serial op queue
