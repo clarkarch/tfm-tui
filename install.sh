@@ -1378,10 +1378,19 @@ install_desktop_icon() {
     fi
   fi
   [ -f "$iconsrc" ] || return 0
+  # hicolor scalable slot (primary): strict themes resolve it via the cache
   local icondir="$data/icons/hicolor/scalable/apps"
-  if ! mkdir -p "$icondir" 2>>"$RUN_LOG"; then return 0; fi
-  if ! cp -f "$iconsrc" "$icondir/tfm.svg" 2>>"$RUN_LOG"; then return 0; fi
-  chmod 644 "$icondir/tfm.svg" 2>>"$RUN_LOG" || true
+  if mkdir -p "$icondir" 2>>"$RUN_LOG" && cp -f "$iconsrc" "$icondir/tfm.svg" 2>>"$RUN_LOG"; then
+    chmod 644 "$icondir/tfm.svg" 2>>"$RUN_LOG" || true
+  fi
+  # bare icons/ copy (same bytes): a foreign index.theme that doesn't declare
+  # the scalable dir makes the hicolor copy invisible (verified live: GTK
+  # missed it while the file sat on disk, and XDG_DATA_HOME/pixmaps isn't
+  # scanned either — while a bare $data/icons/tfm.svg resolves through the
+  # default theme lookup). one source of truth, both copies byte-identical.
+  if cp -f "$iconsrc" "$data/icons/tfm.svg" 2>>"$RUN_LOG"; then
+    chmod 644 "$data/icons/tfm.svg" 2>>"$RUN_LOG" || true
+  fi
   if have gtk-update-icon-cache; then
     run_child gtk-update-icon-cache -f -t "$data/icons/hicolor" || true
   fi

@@ -659,6 +659,26 @@ describe("installer desktop entry", () => {
     expect(icon).toBe(readFileSync(join(ROOT, "assets/icons/tfm.svg"), "utf8"));
   });
 
+  test("the icon ALSO lands bare in icons/ (broken hicolor indexes hide scalable)", () => {
+    // a foreign index.theme that doesn't declare scalable/apps makes the
+    // hicolor copy invisible to GTK lookups (verified live: lookup missed
+    // while the file sat on disk, and XDG_DATA_HOME/pixmaps isn't scanned
+    // either — while a bare $data/icons/tfm.svg resolves through the
+    // default theme lookup).
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const data = join(dest, "data");
+    const { code } = run(
+      `TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" TFM_ICON_SRC="${ROOT}/assets/icons/tfm.svg" install_desktop_entry`,
+      { env: { XDG_DATA_HOME: data } },
+    );
+    expect(code).toBe(0);
+    expect(readFileSync(join(data, "icons", "tfm.svg"), "utf8")).toBe(
+      readFileSync(join(ROOT, "assets/icons/tfm.svg"), "utf8"),
+    );
+  });
+
   test("the installed entry carries an absolute Exec + TryExec, never StartupNotify", () => {
     const { dest, run } = sandbox();
     const apps = join(dest, "apps");
