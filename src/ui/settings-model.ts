@@ -75,8 +75,10 @@ export type SettingsModelCtx = {
   // before the spawn resolved). Optional so old fakes keep working.
   defaultFileManager?: DefaultFileManagerOrchestration & {
     onSettled?(): void;
-    // opens the Yes/No confirm on demand. Resolves true when the question
-    // surfaced. Optional so old fakes work.
+    // opens the Yes/No confirm on demand, FORCED past the verdict gate (an
+    // explicit toggle flip must always surface the question, even on a
+    // settled answer — otherwise the toggle visibly does nothing). Resolves
+    // true when the question surfaced. Optional so old fakes work.
     ask?(): Promise<boolean>;
   };
 };

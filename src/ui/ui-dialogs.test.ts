@@ -137,6 +137,35 @@ describe("openDialog chokepoint", () => {
     expect(confirmed).toBe(false);
   });
 
+  test("confirm force-opens over the esc-menu (settings toggle must surface the question)", () => {
+    // the default-file-manager toggle lives INSIDE the esc-menu: opening the
+    // confirm through the floats modal policy would dismiss the menu first
+    // and then die with it — the user flips the toggle and nothing happens.
+    // confirm() closes the menu explicitly, THEN opens, so the pending Yes
+    // still fires on a live dialog.
+    const { ctx, floats } = makeCtx();
+    floats.open("escmenu", () => {});
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
+    let confirmed = false;
+    expect(
+      yesNo.confirm("Make tfm the default file manager?", "Set as default", () => {
+        confirmed = true;
+      }),
+    ).toBe(true);
+    expect(floats.isOpen("escmenu")).toBe(false);
+    expect(floats.top()).toBe("yesno");
+    yesNo.moveFocus(1); // → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
+    expect(floats.isOpen("yesno")).toBe(false);
+  });
+
   test("keyboard: focus defaults to No, arrows move, submit activates", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);

@@ -153,16 +153,23 @@ export type FileManagerPromptDeps = {
 
 export const PROMPT_TITLE = "Make tfm the default file manager?";
 
-export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() => Promise<boolean>) => {
-  return async (): Promise<boolean> => {
-    let verdict: FileManagerPromptVerdict;
-    try {
-      verdict = deps.choice();
-    } catch (err) {
-      deps.log(`default-file-manager prompt skipped (verdict threw): ${errMessage(err)}`);
-      return false;
+export const makeDefaultFileManagerPrompt = (
+  deps: FileManagerPromptDeps,
+): ((opts?: { force?: boolean }) => Promise<boolean>) => {
+  return async (opts?: { force?: boolean }): Promise<boolean> => {
+    // force bypasses the verdict gate: an explicit user gesture (flipping
+    // the settings toggle) must ALWAYS surface the question, even when the
+    // boot gate would stay shut on a settled answer. Boot never forces.
+    let verdict: FileManagerPromptVerdict = "ask";
+    if (!opts?.force) {
+      try {
+        verdict = deps.choice();
+      } catch (err) {
+        deps.log(`default-file-manager prompt skipped (verdict threw): ${errMessage(err)}`);
+        return false;
+      }
+      if (verdict !== "ask") return false;
     }
-    if (verdict !== "ask") return false;
     const onYes = (): void => {
       void (async () => {
         const settled = (): void => {

@@ -271,10 +271,10 @@ export const wireSettings = (deps: {
       } catch {}
     },
     // on-demand trigger for the settings toggle: same opener the boot step
-    // uses, so flipping the toggle shows the confirm UI (the Yes button
-    // drives the yes-flow — the toggle promises the question, not a side
-    // effect)
-    ask: () => openDefaultFileManagerPrompt(),
+    // uses, FORCED past the verdict gate — flipping the toggle is an
+    // explicit gesture for the question, so a settled answer (stale yes,
+    // revisit-after-no) must never keep the dialog shut. Boot never forces.
+    ask: () => openDefaultFileManagerPrompt({ force: true }),
   };
 
   // first-boot "make tfm the default file manager?" — a real confirm dialog

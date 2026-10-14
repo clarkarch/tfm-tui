@@ -401,6 +401,25 @@ describe("makeDefaultFileManagerOrchestration", () => {
     expect(opened).toBe(0);
   });
 
+  test("force opens the confirm even on a silent verdict (explicit toggle flip)", async () => {
+    // the settings toggle promises the question on flip: a stale yes (or an
+    // explicit no the user is revisiting) must not keep the dialog shut or
+    // the toggle visibly does nothing — the exact "flipped it, no popup" bug
+    let opened = 0;
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "silent",
+      openConfirm: () => {
+        opened++;
+      },
+      setDefault: async () => ({ ok: true, message: "done" }),
+      record: () => {},
+      notify: () => {},
+      log: () => {},
+    });
+    expect(await opener({ force: true })).toBe(true);
+    expect(opened).toBe(1);
+  });
+
   test("openPrompt degrades to a sticky toast when confirm is unavailable (never silent)", async () => {
     const logged: string[] = [];
     const toasted: string[] = [];
