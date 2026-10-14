@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { errMessage } from "../lib/uiutil";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { ExecFn } from "../plugins/plugin-install";
 
 // --- "Make tfm the default file manager?" Yes/No/Ask-again opt-in. The
@@ -86,14 +87,107 @@ export const makeDefaultFileManagerOrchestration = (deps: ProbeDeps = {}): Defau
   };
 };
 
-// should boot ask? A recorded yes/no is final (silent); later (or a missing/
-// garbage marker) asks only while tfm is NOT already the default — nothing to
-// ask when the user already set it outside tfm. A throwing probe asks: failed
-// detection must not wedge boot into silence.
+// the first-boot (and on-demand) "make tfm the default file manager?"
+// prompt, extracted so the verdict→open→record glue is unit-testable: the
+// wiring supplies the pick overlay + sinks, the leaf owns the mapping.
+// Returns true when the question surfaced (pick opened OR fallback toast),
+// false when it stayed silent — a verdict of "ask" must NEVER end silent
+// (that was the "no popup" bug class: swallowed throws with no trace).
+// Dismissing the pick (esc/click-away) records nothing, so dismissal is
+// "ask again" by omission.
+export type FileManagerPickItem = { label: string; hint?: string; run: () => void };
+
+export type FileManagerPromptDeps = {
+  choice(): FileManagerPromptVerdict;
+  openPick(opts: { title: string; items: FileManagerPickItem[] }): void;
+  setDefault(op: "set" | "unset"): Promise<{ ok: boolean; message: string }>;
+  record(answer: FileManagerPromptAnswer): void;
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
+  // sticky fallback when the pick overlay is unavailable (TDZ at boot, a
+  // throwing root). Absent = plain notify. Optional so old fakes work.
+  notifySticky?(msg: string): void;
+  log(msg: string): void;
+};
+
+export const PROMPT_TITLE = "Make tfm the default file manager?";
+
+export const makeDefaultFileManagerPrompt = (deps: FileManagerPromptDeps): (() => boolean) => {
+  return (): boolean => {
+    let verdict: FileManagerPromptVerdict;
+    try {
+      verdict = deps.choice();
+    } catch (err) {
+      deps.log(`default-file-manager prompt skipped (verdict threw): ${errMessage(err)}`);
+      return false;
+    }
+    if (verdict !== "ask") return false;
+    const answer = (choice: FileManagerPromptAnswer): void => {
+      try {
+        if (choice === "yes") {
+          void deps
+            .setDefault("set")
+            .then((res) => {
+              try {
+                if (res.ok) deps.record("yes");
+                deps.notify(res.message, "default file manager", res.ok ? "success" : "error");
+              } catch (err) {
+                deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
+              }
+            })
+            .catch((err) => {
+              deps.log(`default-file-manager set failed: ${errMessage(err)}`);
+            });
+        } else {
+          deps.record(choice);
+          if (choice === "no") {
+            try {
+              deps.notify(
+                "tfm won't ask again — files & session → default file manager to change this",
+                "default file manager",
+              );
+            } catch (err) {
+              deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
+            }
+          }
+        }
+      } catch (err) {
+        deps.log(`default-file-manager answer failed: ${errMessage(err)}`);
+      }
+    };
+    try {
+      deps.openPick({
+        title: PROMPT_TITLE,
+        items: [
+          { label: "Yes", hint: "open folders in tfm", run: () => answer("yes") },
+          { label: "No", hint: "never ask again", run: () => answer("no") },
+          { label: "Ask again", hint: "ask on next boot", run: () => answer("later") },
+        ],
+      });
+      return true;
+    } catch (err) {
+      deps.log(`default-file-manager prompt failed to open: ${errMessage(err)}`);
+      try {
+        (deps.notifySticky ?? deps.notify)(
+          "Make tfm the default file manager? — files & session → default file manager",
+        );
+      } catch (err2) {
+        deps.log(`default-file-manager fallback toast failed: ${errMessage(err2)}`);
+      }
+      return true;
+    }
+  };
+};
+
+// should boot ask? A recorded "no" is final (silent). Anything else asks
+// unless tfm is ACTUALLY the default right now — nothing to ask when the
+// user already set it outside tfm. A stale "yes" (recorded yes, but some
+// other handler is default now) re-asks: a yes on disk the user doesn't
+// remember must never silence the prompt forever. A throwing probe asks:
+// failed detection must not wedge boot into silence.
 export const queryFileManagerChoice = (deps: ProbeDeps = {}): FileManagerPromptVerdict => {
   const markerFile = deps.markerFile ?? defaultFileManagerMarker;
   const answer = readAnswer(markerFile);
-  if (answer === "yes" || answer === "no") return "silent";
+  if (answer === "no") return "silent";
   try {
     const current = deps.currentDefault?.() ?? "";
     if (current.trim() === TFM_DESKTOP_ID) return "silent";

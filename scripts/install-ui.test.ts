@@ -641,6 +641,22 @@ describe("installer desktop entry", () => {
     expect(raw).toContain("MimeType=inode/directory;");
     expect(raw).toContain("Terminal=true");
     expect(raw).toContain("FileManager");
+    expect(raw).toContain("Icon=tfm");
+  });
+
+  test("the brand icon ships to hicolor so launchers show the logo", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const data = join(dest, "data");
+    const { code } = run(
+      `TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" TFM_ICON_SRC="${ROOT}/assets/icons/tfm.svg" install_desktop_entry`,
+      { env: { XDG_DATA_HOME: data } },
+    );
+    expect(code).toBe(0);
+    const icon = readFileSync(join(data, "icons", "hicolor", "scalable", "apps", "tfm.svg"), "utf8");
+    // brand art ships verbatim (fixed palette, never theme-tinted)
+    expect(icon).toBe(readFileSync(join(ROOT, "assets/icons/tfm.svg"), "utf8"));
   });
 
   test("the installed entry carries an absolute Exec + TryExec, never StartupNotify", () => {

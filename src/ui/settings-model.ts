@@ -75,6 +75,9 @@ export type SettingsModelCtx = {
   // before the spawn resolved). Optional so old fakes keep working.
   defaultFileManager?: DefaultFileManagerOrchestration & {
     onSettled?(): void;
+    // opens the Yes/No/Ask-again prompt on demand (the "ask me now" row).
+    // Returns true when the question surfaced. Optional so old fakes work.
+    askNow?(): boolean;
   };
 };
 
@@ -392,6 +395,39 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     customLabel: () => "custom",
   });
 
+  // on-demand trigger for the first-boot prompt: re-opens the Yes/No/Ask
+  // question any time (missed boot prompt, stale yes, changed mind). The
+  // blurb names the LIVE handler probed at build time, so what the system
+  // actually uses is visible right under the recorded answer — a stale
+  // belief ("I said yes, so tfm must be default") dies on sight. keepOpen:
+  // the prompt is its own overlay, the menu must stay out of its way.
+  const defaultFileManagerAskRow = (): SettingRow => {
+    let handler = "";
+    try {
+      handler = ctx.defaultFileManager?.current() ?? "";
+    } catch {}
+    return {
+      kind: "action",
+      label: "review now…",
+      blurb: handler ? `system opens folders in: ${handler}` : "ask the default question now",
+      keepOpen: true,
+      run: () => {
+        const dfm = ctx.defaultFileManager;
+        if (!dfm?.askNow) {
+          ctx.warn("default file manager controls unavailable", "default file manager");
+          return;
+        }
+        try {
+          if (!dfm.askNow()) ctx.warn("already settled — nothing to ask", "default file manager");
+        } catch (err) {
+          try {
+            ctx.warn(errMessage(err), "default file manager");
+          } catch {}
+        }
+      },
+    };
+  };
+
   // keys category: same subsection-divider mechanism as genericUiRows —
   // one header row where the schema subsection changes (first section leads
   // with one too, so every binds group is labeled)
@@ -538,8 +574,11 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           else uiRows.unshift(hiddenFilesRow());
           // the default-file-manager opt-in answers the first-boot prompt
           // persistently (Yes/No/Ask again) — same hand-row splice, no schema
-          // row (the marker file is the store, not config)
-          uiRows.push(defaultFileManagerRow());
+          // row (the marker file is the store, not config). The "review now"
+          // action re-opens the prompt on demand, so a missed boot prompt is
+          // always one click away; its blurb names the LIVE handler so a
+          // stale belief ("I said yes") is visible next to the answer.
+          uiRows.push(defaultFileManagerRow(), defaultFileManagerAskRow());
           rows = uiRows;
           break;
         }

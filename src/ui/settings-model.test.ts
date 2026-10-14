@@ -355,7 +355,8 @@ describe("settingGroups shape", () => {
     ]);
     // hidden files splices in under the listing header; session persistence
     // is its own section; the default-file-manager opt-in closes the group
-    // (it answers the first-boot prompt persistently, no schema row)
+    // (it answers the first-boot prompt persistently, no schema row) with an
+    // on-demand "review now…" trigger right after it
     expect(seq("files & session")).toEqual([
       "##listing",
       "hidden files",
@@ -365,6 +366,7 @@ describe("settingGroups shape", () => {
       "restore session",
       "persistent undo",
       "default file manager",
+      "review now…",
     ]);
     // theme rides under the look header (its presets are the look), then
     // the compatibility pair — plain words only ("chrome" is jargon, and the
@@ -1129,6 +1131,38 @@ describe("hand-written rows", () => {
       "default file manager",
       "default file manager",
     ]);
+  });
+
+  test("review now row re-opens the prompt and names the live handler", () => {
+    let asked = 0;
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => "yes",
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+        askNow: () => {
+          asked++;
+          return true;
+        },
+      },
+    });
+    const row = h.byLabel("review now…");
+    expect(row.kind).toBe("action");
+    // stale-yes state is visible: recorded yes, but the system uses nautilus
+    if (row.kind !== "action" || !row.blurb) throw new Error("review row must carry the live handler blurb");
+    expect(row.blurb).toContain("org.gnome.Nautilus.desktop");
+    (row as Extract<SettingRow, { kind: "action" }>).run();
+    expect(asked).toBe(1);
+  });
+
+  test("review now row without wiring warns instead of throwing", () => {
+    const h = mk();
+    const row = h.byLabel("review now…");
+    expect(row.kind).toBe("action");
+    expect(() => (row as Extract<SettingRow, { kind: "action" }>).run()).not.toThrow();
+    expect(h.warns.map((w) => w.title)).toContain("default file manager");
   });
 });
 

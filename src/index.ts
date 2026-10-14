@@ -47,6 +47,13 @@ if (cli.command?.name === "default-filemanager") {
   process.exit(await runDefaultFileManagerCli(cli.command.args));
 }
 
+// D-Bus FileManager1 daemon (started by the service activator on demand —
+// the process IS the service and runs until killed, no TUI boot)
+if (cli.filemanagerService) {
+  const { runFileManagerService } = await import("./app/filemanager-service");
+  process.exit(await runFileManagerService());
+}
+
 // launch PATH (`tfm ~/some/path`): chdir before anything resolves the cwd, so
 // tabs/history/session all start there. A FILE opens its parent and is then
 // selected by the grid. An invalid explicit path is a HARD ERROR (exit 1, no

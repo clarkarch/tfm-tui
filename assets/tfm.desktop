@@ -4,6 +4,7 @@ Name=tfm
 Comment=Terminal file manager
 Exec=tfm %u
 TryExec=tfm
+Icon=tfm
 Terminal=true
 Categories=System;FileTools;FileManager;
 MimeType=inode/directory;

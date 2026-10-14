@@ -11,6 +11,7 @@ import { fileUriToPath } from "../fs/uri";
 export type CliOptions = {
   help: boolean;
   version: boolean;
+  filemanagerService: boolean;
   config: string | null;
   paths: string[];
   // `tfm plugins <args>` — a headless management subcommand (no TUI boot)
@@ -20,7 +21,15 @@ export type CliOptions = {
 };
 
 export const parseArgs = (argv: string[]): CliOptions => {
-  const opts: CliOptions = { help: false, version: false, config: null, paths: [], command: null, error: null };
+  const opts: CliOptions = {
+    help: false,
+    version: false,
+    filemanagerService: false,
+    config: null,
+    paths: [],
+    command: null,
+    error: null,
+  };
   let args = argv.slice(1);
   // Two script-token layouts: `bun src/index.ts PATH` (argv[1] is the script)
   // and the compiled binary, whose runtime injects `["bun",
@@ -70,6 +79,12 @@ export const parseArgs = (argv: string[]): CliOptions => {
       opts.version = true;
       continue;
     }
+    // D-Bus FileManager1 daemon (started by the service activator, never by
+    // hand normally) — answers before the TUI graph loads, like plugins
+    if (a === "--filemanager-service") {
+      opts.filemanagerService = true;
+      continue;
+    }
     // --debug/-d is consumed by ./log (which still scans argv); accepted here
     if (a === "-d" || a === "--debug") continue;
     if (a === "-c" || a === "--config") {
@@ -112,7 +127,8 @@ Options:
 
 Commands:
   plugins [list|search|add|remove|update|new]   manage plugins (see 'tfm plugins help')
-  default-filemanager [status|set|unset]        default file manager opt-in (see 'tfm default-filemanager help')
+  default-filemanager [status|set|unset|forget|service-install|service-remove]
+                                          default file manager opt-in (see 'tfm default-filemanager help')
 `;
 
 // desktop %U launches arrive as file:// URIs — decode them with the shared

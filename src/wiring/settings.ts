@@ -24,8 +24,8 @@ import { dlog } from "../app/log";
 import { makeUrlOpener } from "../fs/open-url";
 import {
   makeDefaultFileManagerOrchestration,
-  recordFileManagerChoice,
-  setDefaultFileManager,
+  makeDefaultFileManagerPrompt,
+  type FileManagerPickItem,
 } from "../fs/default-filemanager";
 import { pointPaneAt } from "../app/panes";
 import {
@@ -268,69 +268,49 @@ export const wireSettings = (deps: {
         escMenu.renderMenuContent();
       } catch {}
     },
+    // on-demand trigger for the settings "review now…" row: same opener the
+    // boot step uses, so a missed boot prompt is one click away
+    askNow: () => openDefaultFileManagerPrompt(),
   };
 
   // first-boot "make tfm the default file manager?" — a pick overlay with
-  // three EQUAL rows (Yes / No / Ask again), not a Yes/No confirm: the third
-  // option deserves the same weight, and dismissing the overlay (esc /
-  // click-away) is itself "ask again". Guarded boot step, post-intros, so
-  // the user sees tfm before being asked. Fire-and-forget, never throws.
-  // On a machine without xdg-mime the probe reads "" → verdict ask → the
-  // prompt opens → Yes fails unrecorded, so it re-asks next boot; the user
-  // silences it with No (recorded, never asked again). Deliberate: failed
-  // detection must not wedge boot into silence.
-  const promptDefaultFileManager = (): void => {
-    let verdict: "ask" | "silent";
-    try {
-      verdict = defaultFileManagerOrchestration.choice();
-    } catch {
-      return;
-    }
-    if (verdict !== "ask") return;
-    let pick: {
-      open(opts: { title: string; items?: Array<{ label: string; hint?: string; run: () => void }> }): void;
-    };
-    try {
-      pick = getPick();
-    } catch (err) {
-      dlog(`default-file-manager prompt skipped (pick unavailable): ${errMessage(err)}`);
-      return;
-    }
-    const answer = (choice: "yes" | "no" | "later"): void => {
+  // first-boot "make tfm the default file manager?" — the mapping lives in
+  // the leaf (makeDefaultFileManagerPrompt, unit-tested); the wiring only
+  // supplies the live pick overlay + sinks. Guarded boot step, post-intros,
+  // so the user sees tfm before being asked. Fire-and-forget, never throws.
+  // A verdict of "ask" always surfaces SOMETHING (pick, or a sticky toast
+  // when pick is unavailable) — never silent. Dismissing the pick records
+  // nothing, so dismissal is "ask again" by omission.
+  const openDefaultFileManagerPrompt = makeDefaultFileManagerPrompt({
+    choice: () => {
       try {
-        if (choice === "yes") {
-          void setDefaultFileManager("set")
-            .then((res) => {
-              try {
-                if (res.ok) recordFileManagerChoice("yes");
-                chrome.notify(res.message, "default file manager", res.ok ? "success" : "error");
-              } catch {}
-            })
-            .catch(() => {});
-        } else {
-          recordFileManagerChoice(choice);
-          if (choice === "no") {
-            try {
-              chrome.notify(
-                "tfm won't ask again — files & session → default file manager to change this",
-                "default file manager",
-              );
-            } catch {}
-          }
-        }
-      } catch {}
-    };
+        return defaultFileManagerOrchestration.choice();
+      } catch (err) {
+        dlog(`default-file-manager verdict failed: ${errMessage(err)}`);
+        return "silent";
+      }
+    },
+    openPick: (opts: { title: string; items: FileManagerPickItem[] }) => getPick().open(opts),
+    setDefault: (op) => defaultFileManagerOrchestration.set(op),
+    record: (a) => defaultFileManagerOrchestration.record(a),
+    notify: (msg, title, level) => chrome.notify(msg, title ?? "tfm", level),
+    notifySticky: (msg) => {
+      try {
+        const c = core.themeGet();
+        chrome.notifySticky([Text({ content: msg, fg: c.white })], { width: 58, height: 2 });
+      } catch (err) {
+        dlog(`default-file-manager sticky failed: ${errMessage(err)}`);
+        throw err;
+      }
+    },
+    log: (msg) => dlog(msg),
+  });
+  // boot entry: the guarded step calls this (asks only on "ask")
+  const promptDefaultFileManager = (): void => {
     try {
-      pick.open({
-        title: "Make tfm the default file manager?",
-        items: [
-          { label: "Yes", hint: "open folders in tfm", run: () => answer("yes") },
-          { label: "No", hint: "never ask again", run: () => answer("no") },
-          { label: "Ask again", hint: "ask on next boot", run: () => answer("later") },
-        ],
-      });
+      openDefaultFileManagerPrompt();
     } catch (err) {
-      dlog(`default-file-manager prompt failed to open: ${errMessage(err)}`);
+      dlog(`default-file-manager boot prompt failed: ${errMessage(err)}`);
     }
   };
   const { settingGroups, pluginGroups } = makeSettingModel({

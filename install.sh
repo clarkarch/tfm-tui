@@ -1257,9 +1257,10 @@ step_install() {
 # becoming the default is the first-boot prompt's opt-in, where the user can
 # see tfm first. Warn-and-continue like the ffmpeg sidecar: a skipped entry
 # must never fail an otherwise working install.
-# Seams (tests): TFM_DESKTOP_SRC overrides the shipped entry, and
-# TFM_APPLICATIONS_DIR overrides the applications dir (XDG_DATA_HOME-aware
-# default). TFM_NO_DESKTOP=1 skips the step entirely.
+# Seams (tests): TFM_DESKTOP_SRC overrides the shipped entry, TFM_ICON_SRC
+# the shipped brand icon, and TFM_APPLICATIONS_DIR overrides the
+# applications dir (XDG_DATA_HOME-aware default). TFM_NO_DESKTOP=1 skips
+# the step entirely.
 install_desktop_entry() {
   step_begin "desktop"
   if [ "${TFM_NO_DESKTOP:-}" = "1" ]; then
@@ -1291,6 +1292,24 @@ install_desktop_entry() {
         fi
       else
         dlog_desktop "download failed, skipping"
+      fi
+      # brand icon sidecar for the hicolor ship below (same warn-and-continue:
+      # an entry without its logo is still a working registration)
+      if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-icon.svg" -o "$WORK/tfm-icon.svg" >>"$RUN_LOG" 2>&1 &&
+        [ -s "$WORK/tfm-icon.svg" ]; then
+        if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-icon.svg.sha256" -o "$WORK/tfm-icon.svg.sha256" >>"$RUN_LOG" 2>&1; then
+          local iwant
+          local igot
+          iwant=$(cut -d' ' -f1 <"$WORK/tfm-icon.svg.sha256")
+          igot=$(sha256sum <"$WORK/tfm-icon.svg" | cut -d' ' -f1)
+          if [ -z "$iwant" ] || [ "$iwant" != "$igot" ]; then
+            rm -f "$WORK/tfm-icon.svg"
+            dlog_desktop "icon checksum mismatch, shipping entry without logo"
+          fi
+        else
+          rm -f "$WORK/tfm-icon.svg"
+          dlog_desktop "no icon checksum published, shipping entry without logo"
+        fi
       fi
     fi
     if [ -z "$src" ]; then
@@ -1337,7 +1356,35 @@ install_desktop_entry() {
   if have update-desktop-database; then
     run_child update-desktop-database "$apps" || true
   fi
+  # brand icon next to the entry (Icon=tfm in the desktop file): ships the
+  # fixed-palette logo verbatim to hicolor, then refreshes the cache so
+  # launchers pick it up. Best-effort — a missing icon never fails the step.
+  install_desktop_icon
   step_ok "desktop entry · $(pretty_home "$apps")/tfm.desktop"
+}
+
+# icon source mirrors the entry source (release sidecar / checkout / script
+# dir), so pipe installs get the logo too — never just the entry alone.
+install_desktop_icon() {
+  local data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  local iconsrc="${TFM_ICON_SRC:-}"
+  if [ -z "$iconsrc" ]; then
+    if [ "$MODE" = "source" ] && [ -n "${SRC_DIR:-}" ]; then
+      iconsrc="$SRC_DIR/assets/icons/tfm.svg"
+    elif [ "$MODE" = "release" ] && [ -s "$WORK/tfm-icon.svg" ]; then
+      iconsrc="$WORK/tfm-icon.svg"
+    else
+      iconsrc="$(dirname "${BASH_SOURCE[0]:-$0}")/assets/icons/tfm.svg"
+    fi
+  fi
+  [ -f "$iconsrc" ] || return 0
+  local icondir="$data/icons/hicolor/scalable/apps"
+  if ! mkdir -p "$icondir" 2>>"$RUN_LOG"; then return 0; fi
+  if ! cp -f "$iconsrc" "$icondir/tfm.svg" 2>>"$RUN_LOG"; then return 0; fi
+  chmod 644 "$icondir/tfm.svg" 2>>"$RUN_LOG" || true
+  if have gtk-update-icon-cache; then
+    run_child gtk-update-icon-cache -f -t "$data/icons/hicolor" || true
+  fi
 }
 
 # best-effort note for the release-download fallbacks above (RUN_LOG is kept

@@ -8,6 +8,7 @@ import {
   defaultFileManagerPrev,
   isDesktopEntryInstalled,
   makeDefaultFileManagerOrchestration,
+  makeDefaultFileManagerPrompt,
   probeDefaultFileManagerSync,
   queryFileManagerChoice,
   readFileManagerAnswer,
@@ -67,10 +68,24 @@ describe("queryFileManagerChoice", () => {
         markerFile: () => marker,
       }),
     ).toBe("silent");
+  });
+
+  test("a stale yes (recorded yes, but something else is default now) re-asks", () => {
+    // the "have no idea it's not set" case: a yes written by an older run
+    // (or a tampered marker) must not silence the prompt forever — only an
+    // actual tfm default, or an explicit no, is silent.
+    const dir = sandbox();
+    const marker = path.join(dir, "choice");
     writeFileSync(marker, "yes\n");
     expect(
       queryFileManagerChoice({
         currentDefault: () => "org.gnome.Nautilus.desktop",
+        markerFile: () => marker,
+      }),
+    ).toBe("ask");
+    expect(
+      queryFileManagerChoice({
+        currentDefault: () => TFM_DESKTOP_ID,
         markerFile: () => marker,
       }),
     ).toBe("silent");
@@ -113,8 +128,11 @@ describe("recordFileManagerChoice", () => {
     expect(queryFileManagerChoice(deps)).toBe("ask");
     recordFileManagerChoice("no", deps);
     expect(queryFileManagerChoice(deps)).toBe("silent");
+    // a recorded yes is only silent while tfm is ACTUALLY the default —
+    // otherwise the stale yes re-asks (the "have no idea" case)
     recordFileManagerChoice("yes", deps);
-    expect(queryFileManagerChoice(deps)).toBe("silent");
+    expect(queryFileManagerChoice(deps)).toBe("ask");
+    expect(queryFileManagerChoice({ currentDefault: () => TFM_DESKTOP_ID, markerFile: () => marker })).toBe("silent");
   });
 
   test("a hostile marker path never throws (best-effort, like every tfm sink write)", () => {
@@ -283,6 +301,74 @@ describe("makeDefaultFileManagerOrchestration", () => {
       markerFile: () => marker,
     });
     expect(asking.choice()).toBe("ask");
+  });
+
+  test("openPrompt answers yes/no/later through the pick items (prompt opener contract)", () => {
+    const dir = sandbox();
+    const marker = path.join(dir, "choice");
+    const opened: Array<{ title: string; labels: string[] }> = [];
+    const notified: string[] = [];
+    const sets: string[] = [];
+    const pick = {
+      open: (opts: { title: string; items?: Array<{ label: string; run: () => void }> }) => {
+        opened.push({ title: opts.title, labels: (opts.items ?? []).map((i) => i.label) });
+      },
+    };
+    const orch = makeDefaultFileManagerOrchestration({
+      currentDefault: () => "org.gnome.Nautilus.desktop",
+      markerFile: () => marker,
+    });
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => orch.choice(),
+      openPick: (opts: { title: string; items: Array<{ label: string; hint?: string; run: () => void }> }) =>
+        pick.open(opts),
+      setDefault: async (op: "set" | "unset") => {
+        sets.push(op);
+        return { ok: true, message: "done" };
+      },
+      record: (a: "yes" | "no" | "later") => recordFileManagerChoice(a, { markerFile: () => marker }),
+      notify: (msg: string) => notified.push(msg),
+      log: () => {},
+    });
+    // verdict ask → opens with three equal rows
+    expect(opener()).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.labels).toEqual(["Yes", "No", "Ask again"]);
+  });
+
+  test("openPrompt stays shut on silent verdict (already answered)", () => {
+    let opened = 0;
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "silent",
+      openPick: () => {
+        opened++;
+      },
+      setDefault: async () => ({ ok: true, message: "done" }),
+      record: () => {},
+      notify: () => {},
+      log: () => {},
+    });
+    expect(opener()).toBe(false);
+    expect(opened).toBe(0);
+  });
+
+  test("openPrompt degrades to a sticky toast when pick is unavailable (never silent)", () => {
+    const logged: string[] = [];
+    const toasted: string[] = [];
+    const opener = makeDefaultFileManagerPrompt({
+      choice: () => "ask",
+      openPick: () => {
+        throw new Error("tdz");
+      },
+      setDefault: async () => ({ ok: true, message: "done" }),
+      record: () => {},
+      notify: () => {},
+      notifySticky: (msg: string) => toasted.push(msg),
+      log: (msg: string) => logged.push(msg),
+    });
+    expect(opener()).toBe(true);
+    expect(toasted).toHaveLength(1);
+    expect(logged.length).toBeGreaterThan(0);
   });
 });
 
