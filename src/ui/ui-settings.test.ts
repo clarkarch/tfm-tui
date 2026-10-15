@@ -586,22 +586,27 @@ describe("settings view", () => {
     await t.renderOnce();
   });
 
-  test("windowed scrolling: the right pane caps at vis rows and the counter tracks the cursor", async () => {
+  test("windowed scrolling: the right pane caps at vis rows; a scroll hint shows", async () => {
     await openSettings();
     // switch to the 20-row behavior category via the cats pane — the switch
     // itself focuses the rows pane (switchCategory sets pane="rows")
     menu.menuTab();
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-12 of 20"); // vis = 12 at termH 24
+    // overflow → a plain hint replaces the old "N-M of T" counter
+    expect(t.captureCharFrame()).toContain("↑/↓ or wheel to scroll");
+    expect(t.captureCharFrame()).toContain("knob-0");
+    expect(t.captureCharFrame()).not.toContain("knob-19");
     // walk the cursor to the last row: window follows
     for (let i = 0; i < 19; i++) menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("9-20 of 20");
+    expect(t.captureCharFrame()).toContain("knob-19");
+    expect(t.captureCharFrame()).not.toContain("knob-0");
     // wrap-around from the end returns to the top window
     menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-12 of 20");
+    expect(t.captureCharFrame()).toContain("knob-0");
+    expect(t.captureCharFrame()).not.toContain("knob-19");
   });
 
   test("headers take the cursor and collapse/expand on activate (no more skip)", async () => {
@@ -638,12 +643,13 @@ describe("settings view", () => {
       menu.moveMenu(1);
       await t.renderOnce();
       expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
-      // activate collapses the section: bbb vanishes, counter reports it
+      // activate collapses the section: bbb vanishes
       menu.menuActivate();
       await t.renderOnce();
       expect(t.captureCharFrame()).not.toContain("bbb");
       expect(t.captureCharFrame()).toContain("▶");
-      expect(t.captureCharFrame()).toContain("collapsed");
+      // a short/folded list shows no scroll hint (only an overflowing list does)
+      expect(t.captureCharFrame()).not.toContain("wheel to scroll");
       // cursor parks on the header, menu stays open
       expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
       expect(floats.isOpen("escmenu")).toBe(true);
