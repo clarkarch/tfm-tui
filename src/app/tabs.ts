@@ -1,5 +1,6 @@
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
+import { parseArchiveUri } from "../fs/archive-scheme";
 
 // --- Tabs model: a browser-style tab list, ONE PER PANE. Each pane owns its
 // own model instance; `state.history/histIdx` are ALWAYS this pane's active
@@ -15,7 +16,10 @@ export const tabTitle = (t: Tab): string => {
   const cwd = t.history[t.histIdx] ?? t.history[0] ?? "";
   if (cwd === RECENT_URI) return "Recent";
   if (cwd === STARRED_URI) return "Starred";
-  const base = path.basename(cwd) || cwd || "/";
+  // an archive cwd is `archive://<enc-file>!/<inner>`: name the chip after the
+  // archive file (basename of the URI is percent-encoded garbage)
+  const archive = parseArchiveUri(cwd);
+  const base = archive ? path.basename(archive.file) : path.basename(cwd) || cwd || "/";
   return base.length > 16 ? `${base.slice(0, 15)}…` : base;
 };
 

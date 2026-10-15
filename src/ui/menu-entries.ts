@@ -5,7 +5,7 @@
 import path from "node:path";
 import { trashDir } from "../fs/fsutil";
 import { setBookmarked, loadSystemPlaces, type EjectSpec, type Place } from "../fs/places";
-import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
+import { RECENT_URI, STARRED_URI, isArchiveUri, isVirtualUri } from "../fs/uri";
 import { archiveBrowseUri } from "../fs/archive-scheme";
 import type { CompressionFormat } from "../fs/archive";
 import type { ListEntry } from "./ui-menu";
@@ -355,6 +355,54 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           },
         },
       );
+      return withPluginSection(entries, targets);
+    }
+    // archive members are read-only URIs, not fs paths: only navigation (a dir
+    // member opens deeper) and handing the archive itself to an app elsewhere
+    // make sense. Copy/cut/rename/trash/open-with/properties all need a real
+    // path, so the menu doesn't offer them here.
+    if (isArchiveUri(ctx.cwd())) {
+      const inSel = !!ctx.tileRefs.get(targetPath)?.selected;
+      const targets: ClipItem[] = inSel && ctx.selPaths().length > 1 ? ctx.selPaths() : [{ path: targetPath, isDir }];
+      if (isDir) {
+        entries.push({
+          icon: "folder",
+          label: "Open",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.navigate(targetPath);
+          },
+          submenu: [
+            {
+              icon: "plus",
+              label: "Open in New Tab",
+              action: () => {
+                ctx.closeFileMenu();
+                ctx.newTab(targetPath);
+              },
+            },
+            {
+              icon: "border-vertical",
+              label: "Open in New Pane",
+              action: () => {
+                ctx.closeFileMenu();
+                ctx.openInOtherPane(targetPath);
+              },
+            },
+          ],
+        });
+      } else {
+        // a member file can't be opened yet (per-entry extract is deferred):
+        // openFileDefault refuses an archive URI with an honest toast
+        entries.push({
+          icon: "eye",
+          label: "Open",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.openFileDefault(targetPath);
+          },
+        });
+      }
       return withPluginSection(entries, targets);
     }
     // Open is directly clickable everywhere; the flyout keeps the variants

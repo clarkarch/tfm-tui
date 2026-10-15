@@ -20,6 +20,7 @@ import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
 import { isNetworkPath } from "./network";
+import { isArchiveUri } from "./uri";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
 // --- Trash operations: trash / restore / delete-forever / empty. The fs
@@ -136,6 +137,11 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
     // remote file gone) — refuse instead of pretending it worked
     if (paths.some(isNetworkPath)) {
       sink.notify("Trash isn't available on network locations", "trash", "error");
+      return Promise.resolve();
+    }
+    // archive members are URIs inside a file, not fs paths — nothing to trash
+    if (paths.some(isArchiveUri)) {
+      sink.notify("Archive contents are read-only", "trash", "error");
       return Promise.resolve();
     }
     if (vetoedByPlugin("trash", paths)) return Promise.resolve();

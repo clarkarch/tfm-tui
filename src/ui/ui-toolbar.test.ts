@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { destroyChildren } from "../lib/uiutil";
-import { crumbItemIds, isNavigableTarget, makeToolbar, toolbarItemIds } from "./ui-toolbar";
+import { buildCrumbs, crumbItemIds, isNavigableTarget, makeToolbar, toolbarItemIds } from "./ui-toolbar";
 import { RECENT_URI } from "../fs/uri";
+import { archiveUri } from "../fs/archive-scheme";
 import type { MaybeNode } from "../lib/node-like";
 
 describe("isNavigableTarget", () => {
@@ -24,6 +25,45 @@ describe("isNavigableTarget", () => {
 
   test("virtual places always navigate", () => {
     expect(isNavigableTarget(RECENT_URI)).toBe(true);
+  });
+});
+
+describe("buildCrumbs", () => {
+  test("real paths in home: Home + segments, each clickable", () => {
+    expect(buildCrumbs("/home/u/Docs/x", "/home/u", "box")).toEqual([
+      { label: "Home", icon: "home", target: "/home/u" },
+      { label: "Docs", target: "/home/u/Docs" },
+      { label: "x", target: "/home/u/Docs/x" },
+    ]);
+  });
+
+  test("outside home: host base + absolute segments", () => {
+    expect(buildCrumbs("/mnt/data", "/home/u", "box")).toEqual([
+      { label: "box", icon: "desktop-tower", target: "/" },
+      { label: "mnt", target: "/mnt" },
+      { label: "data", target: "/mnt/data" },
+    ]);
+  });
+
+  test("virtual places are a single named crumb", () => {
+    expect(buildCrumbs(RECENT_URI, "/home/u", "box")).toEqual([{ label: "Recent", icon: "clock", target: RECENT_URI }]);
+  });
+
+  test("an archive cwd shows its real location, the file, then inner dirs", () => {
+    // the bug this guards: path.resolve(archive://…) glued the URI onto the
+    // process cwd and rendered the launch dir in the path bar
+    const uri = archiveUri("/home/u/x.tar.gz", "a/b");
+    const crumbs = buildCrumbs(uri, "/home/u", "box");
+    expect(crumbs.map((c) => c.label)).toEqual(["Home", "x.tar.gz", "a", "b"]);
+    expect(crumbs[1]).toEqual({ label: "x.tar.gz", icon: "zip-box", target: archiveUri("/home/u/x.tar.gz") });
+    expect(crumbs[2]!.target).toBe(archiveUri("/home/u/x.tar.gz", "a"));
+    expect(crumbs[3]!.target).toBe(archiveUri("/home/u/x.tar.gz", "a/b"));
+    // the mangled fallback rendered the percent-encoded URI as a crumb label
+    expect(crumbs.every((c) => !c.label.includes("%2F"))).toBe(true);
+  });
+
+  test("an archive at the root still gets a host-based chain", () => {
+    expect(buildCrumbs(archiveUri("/x.rar"), "/home/u", "box").map((c) => c.label)).toEqual(["box", "x.rar"]);
   });
 });
 

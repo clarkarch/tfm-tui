@@ -12,6 +12,7 @@ import { searchTree } from "../fs/search";
 import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
 import type { Renderable } from "@opentui/core";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
+import { parseArchiveUri } from "../fs/archive-scheme";
 import { fmtBytes } from "../fs/propsinfo";
 import { destroyChildren, destroyNode, errMessage } from "../lib/uiutil";
 import type { Scheduler } from "../lib/uiutil";
@@ -53,6 +54,7 @@ export const SPIN_FRAMES_ASCII = ["|", "/", "-", "\\"];
 // search is walking, which has no listing to show until it finishes)
 export const loadingLabel = (cwd: string, q: string, recursive: boolean): string => {
   if (q.length > 0 && recursive) return "searching…";
+  const archive = parseArchiveUri(cwd);
   const name =
     cwd === RECENT_URI
       ? "recent files"
@@ -60,7 +62,9 @@ export const loadingLabel = (cwd: string, q: string, recursive: boolean): string
         ? "starred"
         : isTrashFilesDir(cwd)
           ? "trash"
-          : path.basename(cwd) || cwd;
+          : archive
+            ? path.basename(archive.file)
+            : path.basename(cwd) || cwd;
   return `loading ${name}…`;
 };
 

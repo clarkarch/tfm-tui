@@ -56,6 +56,7 @@ import {
   type WhichFn,
 } from "./archive";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
+import { isArchiveUri } from "./uri";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { ConflictChoice } from "../ui/ui-dialogs";
@@ -467,6 +468,13 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     label: string,
     veto = true,
   ): Promise<void> => {
+    // archive members are `archive://` URIs, not fs paths: there is no real
+    // source to copy/move and no real destination to paste into (per-entry
+    // extract is deferred), so refuse honestly instead of a confusing ENOENT
+    if (isArchiveUri(destDir) || srcs.some(isArchiveUri)) {
+      ctx.notify("Archive contents are read-only", op, "error");
+      return Promise.resolve();
+    }
     // plugin veto BEFORE enqueue (and before any caller side effects — paste
     // clears its clipboard only after this returns false)
     if (veto && vetoedByPlugin(op, srcs, destDir)) return Promise.resolve();
@@ -807,6 +815,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // corrupts both, and an unqueued rename is invisible to the quit/restart
   // busy guard (half a bulk batch with no undo entry on teardown).
   const performRename = (p: string, v: string): Promise<void> => {
+    if (isArchiveUri(p)) {
+      ctx.notify("Archive contents are read-only", "rename", "error");
+      return Promise.resolve();
+    }
     const dest = path.join(path.dirname(p), v);
     if (path.resolve(dest) === path.resolve(p)) {
       ctx.notify("Name unchanged", "rename", "info");
@@ -936,6 +948,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const performBulkRename = (pairs: Array<{ from: string; to: string }>): Promise<void> => {
     if (!pairs.length) {
       ctx.notify("Nothing to rename", "rename", "info");
+      return Promise.resolve();
+    }
+    if (pairs.some((x) => isArchiveUri(x.from))) {
+      ctx.notify("Archive contents are read-only", "rename", "error");
       return Promise.resolve();
     }
     if (
@@ -1069,6 +1085,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // URIs) so Tfm->Nautilus / Tfm->Tfm paste-as-files works (bridge lives in
   // ./clipboard, tested)
   const setClipboard = (mode: "copy" | "cut", items: ClipItem[]): void => {
+    // nothing in an archive can be copied/cut out yet (members are URIs)
+    if (items.some((i) => isArchiveUri(i.path))) {
+      ctx.notify("Archive contents are read-only", mode, "error");
+      return;
+    }
     // identical re-stage (autorepeat re-cuts/copies the same selection):
     // the op is idempotent, so stay silent instead of stacking a toast per
     // press — a toast is an allocation, a status overwrite was not

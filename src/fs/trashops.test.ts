@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { trashDir } from "./fsutil";
 import { makeTrashConfirms, makeTrashOps, trashOrigPath, trashOrigPathForFile, type TrashOpsSink } from "./trashops";
+import { archiveUri } from "./archive-scheme";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 const oldHome = process.env.HOME;
@@ -46,6 +47,13 @@ const recordingSink = (): TrashOpsSink & {
 };
 
 describe("trashPaths", () => {
+  test("refuses archive members (URIs inside a file, not fs paths)", async () => {
+    const sink = recordingSink();
+    await makeTrashOps(sink).trashPaths([archiveUri("/x/a.zip", "inner/f.txt")]);
+    expect(sink.notes).toContain("notify:trash:error:Archive contents are read-only");
+    expect(sink.batches).toHaveLength(0);
+  });
+
   test("moves into XDG trash, writes trashinfo, pushes paired undo batch", async () => {
     const root = sandbox();
     try {

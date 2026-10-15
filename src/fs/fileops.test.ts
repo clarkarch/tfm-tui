@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { makeFileOps, type FileOpsCtx } from "./fileops";
 import type { UndoJournalData } from "../app/undo";
+import { archiveUri } from "./archive-scheme";
 import { trashDir } from "./fsutil";
 import type { ArchiveRun, ToolSpec } from "./archive";
 import type { ProgressState } from "../ui/ui-progress";
@@ -785,6 +786,30 @@ describe("trash guards", () => {
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     expect(existsSync(src)).toBe(true);
     expect(existsSync(path.join(trashFiles, "move-guard-src.txt"))).toBe(false);
+  });
+});
+
+describe("archive read-only guards", () => {
+  const member = archiveUri("/x/a.zip", "inner/f.txt");
+
+  test("copying an archive member is refused with an honest toast", () => {
+    const h = makeHarness();
+    h.ops.setClipboard("copy", [{ path: member, isDir: false }]);
+    expect(h.calls).toContain("notify:copy:error:Archive contents are read-only");
+    expect(h.ops.clipboard()).toBeNull();
+  });
+
+  test("a transfer sourced from an archive member is refused (never enqueued)", async () => {
+    const h = makeHarness();
+    await h.ops.runTransfer("copy", path.join(ROOT, "dest"), [member], "paste");
+    expect(h.calls).toContain("notify:copy:error:Archive contents are read-only");
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("renaming an archive member is refused", async () => {
+    const h = makeHarness();
+    await h.ops.performRename(member, "g.txt");
+    expect(h.calls).toContain("notify:rename:error:Archive contents are read-only");
   });
 });
 

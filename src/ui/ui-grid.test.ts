@@ -2283,6 +2283,11 @@ describe("loadingLabel / loadingLine", () => {
     expect(loadingLabel("/x", "foo", false)).toBe("loading x…");
   });
 
+  test("names the archive file (not the percent-encoded URI) while it lists", () => {
+    const uri = `archive://${encodeURIComponent("/home/u/game.tar.gz")}`;
+    expect(loadingLabel(uri, "", false)).toBe("loading game.tar.gz…");
+  });
+
   test("clamps the painted line to the pane so it can't overflow into a neighbour", () => {
     expect(loadingLine("⠋", "loading Pictures…", 40)).toBe("⠋ loading Pictures…");
     const long = loadingLine("⠋", "loading a-really-long-folder-name…", 10);

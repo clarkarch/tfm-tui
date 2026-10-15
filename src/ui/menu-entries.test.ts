@@ -188,6 +188,36 @@ describe("fileEntriesFor", () => {
     expect(ctx.calls).toContain("openWith:/a/x.zip");
   });
 
+  test("inside an archive, a file member offers only Open (read-only view)", () => {
+    const ctx = baseCtx();
+    const member = archiveUri("/a/x.zip", "inner/readme.txt");
+    ctx.cwd = () => archiveUri("/a/x.zip", "inner");
+    ctx.tileRefs = new Map<string, GridTileRef>([[member, { selected: false, isDir: false }]]);
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor(member, false, 0, 0);
+    expect(entries.map((e) => e.label)).toEqual(["Open"]);
+    entries[0]!.action();
+    // openFileDefault refuses the member URI (wired to the real handler)
+    expect(ctx.calls).toContain(`open:${member}`);
+  });
+
+  test("inside an archive, a dir member navigates deeper (tab/pane flyout, no file ops)", () => {
+    const ctx = baseCtx();
+    const dir = archiveUri("/a/x.zip", "inner");
+    ctx.cwd = () => archiveUri("/a/x.zip");
+    ctx.tileRefs = new Map<string, GridTileRef>([[dir, { selected: false, isDir: true }]]);
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor(dir, true, 0, 0);
+    expect(entries.map((e) => e.label)).toEqual(["Open"]);
+    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane"]);
+    entries[0]!.action();
+    expect(ctx.calls).toContain(`navigate:${dir}`);
+    entries[0]!.submenu![0]!.action();
+    expect(ctx.calls).toContain(`newTab:${dir}`);
+    // none of the real-path actions leak into the archive view
+    expect(entries.some((e) => /Copy|Cut|Rename|Trash|Properties|Duplicate/.test(e.label))).toBe(false);
+  });
+
   test("a host that can't list archives keeps the plain Open row", () => {
     const ctx = baseCtx();
     ctx.canExtract = () => false;

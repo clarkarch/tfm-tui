@@ -8,6 +8,7 @@ import { link, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../app/undo";
 import { errCode, fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
+import { isArchiveUri } from "../fs/uri";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 import type { MaybeNode } from "../lib/node-like";
@@ -192,6 +193,12 @@ export const makeRename = (ctx: RenameCtx) => {
 
   const startInlineRename = (key: string, createKind?: "file" | "folder"): void => {
     if (renameEdit) finishInlineRename(false);
+    // archive members are URIs, not fs paths (existsSync would refuse anyway,
+    // with a misleading "source gone")
+    if (isArchiveUri(key)) {
+      ctx.notify("Archive contents are read-only", "rename", "error");
+      return;
+    }
     const refs = ctx.tileRefs.get(key);
     // stale selection (tile rebuilt under us, or the file vanished mid-press):
     // say so instead of dead-ending — keyboard rename gives no other signal

@@ -519,6 +519,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // selection instead of falling through: the chain pre-checks the guard so
   // keypress behavior is unchanged, while palette runs stay safe. ---
   const doShowProps = (): void => {
+    // archive members are URIs, not fs paths — properties has nothing to stat
+    if (parseArchiveUri(ctx.state.cwd)) {
+      ctx.notify("Archive contents are read-only", "properties", "error");
+      return;
+    }
     const sel = selection.selPaths();
     if (sel.length) ctx.openProperties(sel.map((s) => s.path));
     else if (!ctx.isVirtualCwd()) ctx.openProperties([ctx.state.cwd]);
