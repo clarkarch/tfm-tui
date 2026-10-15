@@ -18,6 +18,7 @@ import { makePreview } from "../ui/ui-preview";
 import { finishDragState, gridDrag, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
+import { makeSmoothGlide, makeWheelSmoother, clampWheelBeat } from "../ui/ui-smooth-scroll";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { FILE_GLYPH, glyph } from "../ui/glyphs";
@@ -261,6 +262,43 @@ export const wireGrid = (deps: {
       }),
     });
   const fileAnims = [makeFileAnimator(), makeFileAnimator()] as const;
+  // one scroll glide per pane (each owns its reused timeline so a scroll in
+  // one pane can't clobber the other's); reads [ui] smooth-scroll-* live.
+  // TTY mode never glides (the grid gate skips it — the slow VT flashes).
+  const smoothGlides = [
+    makeSmoothGlide({ renderer: chrome.renderer }),
+    makeSmoothGlide({ renderer: chrome.renderer }),
+  ] as const;
+  // one wheel stepper per pane (each owns its single pending timer so a
+  // scroll in one pane can't clobber the other's); steps write through the
+  // hooked setter, so slides/reveals/drains behave exactly like instant
+  // scrolling, just spread over time
+  const makeWheelSmootherFor = (pane: 0 | 1) =>
+    makeWheelSmoother({
+      scrollTop: () => core.scrollerRefs[pane].current?.scrollTop ?? 0,
+      scrollBy: (d) => {
+        const s = core.scrollerRefs[pane].current;
+        if (!s) return;
+        s.scrollTop = Math.max(0, Math.round(s.scrollTop + d));
+      },
+    });
+  const wheelSmoothers = [makeWheelSmootherFor(0), makeWheelSmootherFor(1)] as const;
+  // [ui] smooth-scrolling wheel entry for wiring/io's content-level
+  // interception — true = consumed (the caller stopPropagation()s the native
+  // instant jump). Gated like the container glide: off/TTY stays native, and
+  // a 0 wheel beat means native instant jumps for the wheel only.
+  const pushWheel = (pane: 0 | 1, dir: 1 | -1, cells: number): boolean => {
+    if (!core.config.ui.smoothScrolling || core.isTtyMode()) return false;
+    if (!Number.isFinite(cells) || cells <= 0) return false;
+    const beat = core.config.ui.smoothWheelMs;
+    if (!Number.isFinite(beat) || beat <= 0) return false;
+    try {
+      wheelSmoothers[pane].push(dir * cells, clampWheelBeat(beat));
+      return true;
+    } catch {
+      return false;
+    }
+  };
   // one hover animator per pane (whole-cell icon lift, synchronous) — reads
   // [ui] file-hover-* live, lifts each pane's own reserved tiles
   const makeHoverAnimator = (pane: 0 | 1) =>
@@ -336,6 +374,18 @@ export const wireGrid = (deps: {
       fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
       fileAnimScrollRevealDelayMs: () => core.config.ui.fileAnimationScrollRevealDelayMs,
       windowedGrid: () => core.config.ui.windowedGrid,
+      smoothScroll: () => core.config.ui.smoothScrolling,
+      smoothScrollMs: () => core.config.ui.smoothScrollMs,
+      smoothGlide: (inner, deltaCells) => {
+        try {
+          smoothGlides[pane].glide(inner, deltaCells, core.config.ui.smoothScrollMs);
+        } catch {}
+      },
+      smoothStop: () => {
+        try {
+          smoothGlides[pane].stop();
+        } catch {}
+      },
       isRenaming: rename.isRenaming,
       listingsCache: () => core.config.ui.listingsCache,
       listingsCacheStats: () => core.config.ui.listingsCacheStats,
@@ -581,6 +631,7 @@ export const wireGrid = (deps: {
     renderPreview,
     renderGrid,
     syncWindowPane,
+    pushWheel,
     renderPane,
     focusPane,
     dropIntoPane,

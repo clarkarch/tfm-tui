@@ -120,6 +120,9 @@ let fileAnimCalls: Array<{
   total: number;
   enterFrom: string | null;
 }>;
+let smoothOn: boolean;
+let smoothGlideCalls: Array<{ inner: unknown; delta: number }>;
+let smoothStopCalls: number;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: TERM_W, height: TERM_H });
@@ -154,6 +157,9 @@ beforeAll(async () => {
   fileAnimMode = "rows";
   revealClock = mkRevealClock();
   fileAnimCalls = [];
+  smoothOn = false;
+  smoothGlideCalls = [];
+  smoothStopCalls = 0;
   waitForResolutionImpl = () => Promise.resolve();
   loadingDelayMs = undefined;
   ttyModeOn = false;
@@ -258,6 +264,14 @@ beforeAll(async () => {
     now: () => testNow,
     windowedGrid: () => windowedGridOn,
     isRenaming: () => renamingOn,
+    smoothScroll: () => smoothOn,
+    smoothScrollMs: () => 90,
+    smoothGlide: (inner: unknown, delta: number) => {
+      smoothGlideCalls.push({ inner, delta });
+    },
+    smoothStop: () => {
+      smoothStopCalls++;
+    },
     selection,
     entryMouseHandlers: (e, key, idx) => {
       if (throwOnName !== null && e.name === throwOnName) throw new Error("boom");
@@ -2655,6 +2669,136 @@ describe("renderGrid (loading placeholder)", () => {
       gridState.cwd = tmp;
       scroller.scrollTop = 0;
       rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+});
+
+// --- [ui] smooth-scrolling: a small scroll glides the mounted window container
+// home (one sink call with the signed cell delta) instead of snapping; flings
+// stop the glide and land instantly; master-off / tty / repeat-notches glide
+// nothing. The sink owns the timeline (wiring) — the grid only routes. ---
+describe("renderGrid (smooth scrolling)", () => {
+  const glideDir = (): string => path.join(tmp, "glide-dir");
+  const byId = (id: string): any => t.renderer.root.findDescendantById(id);
+  const ensureGlide = (): void => {
+    mkdirSync(glideDir(), { recursive: true });
+    for (let i = 1; i <= 500; i++) writeFileSync(path.join(glideDir(), `g${String(i).padStart(4, "0")}.txt`), "x");
+  };
+
+  test("a one-row notch glides the mounted inner by its signed delta", async () => {
+    ensureGlide();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    smoothOn = true;
+    smoothGlideCalls.length = 0;
+    smoothStopCalls = 0;
+    try {
+      gridState.cwd = glideDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      const inner = byId("tfm-tile-inner");
+      expect(inner).toBeTruthy();
+      // renderGrid's clearGrid stops any in-flight glide — count only the notch
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+
+      scroller.scrollTop = 6; // one TILE_H row down
+      syncWindow();
+      await t.renderOnce();
+      expect(smoothGlideCalls).toHaveLength(1);
+      expect(smoothGlideCalls[0]!.delta).toBe(6);
+      expect(smoothGlideCalls[0]!.inner).toBe(byId("tfm-tile-inner"));
+      expect(smoothStopCalls).toBe(0);
+
+      // same offset again: nothing moved, no second glide
+      syncWindow();
+      expect(smoothGlideCalls).toHaveLength(1);
+
+      // back up: signed the other way
+      scroller.scrollTop = 0;
+      syncWindow();
+      await t.renderOnce();
+      expect(smoothGlideCalls).toHaveLength(2);
+      expect(smoothGlideCalls[1]!.delta).toBe(-6);
+
+      // a 1-cell notch is below the glide floor (whole-cell rounding turns it
+      // into hold-then-snap, never motion) — the wheel stepper owns those
+      smoothGlideCalls.length = 0;
+      scroller.scrollTop = 1;
+      syncWindow();
+      await t.renderOnce();
+      expect(smoothGlideCalls).toHaveLength(0);
+    } finally {
+      windowedGridOn = false;
+      smoothOn = false;
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a fling stops the glide and lands instantly (no glide call)", async () => {
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    smoothOn = true;
+    smoothGlideCalls.length = 0;
+    smoothStopCalls = 0;
+    try {
+      gridState.cwd = glideDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      scroller.scrollTop = 300; // past the built window → fallback rebuild
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-50")).toBeTruthy();
+      expect(smoothGlideCalls).toHaveLength(0);
+      expect(smoothStopCalls).toBeGreaterThan(0);
+    } finally {
+      windowedGridOn = false;
+      smoothOn = false;
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("master off and tty mode glide nothing", async () => {
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    smoothGlideCalls.length = 0;
+    smoothStopCalls = 0;
+    try {
+      gridState.cwd = glideDir();
+      scroller.scrollTop = 0;
+      smoothOn = false;
+      await renderGrid();
+      await t.renderOnce();
+
+      scroller.scrollTop = 6;
+      syncWindow();
+      expect(smoothGlideCalls).toHaveLength(0);
+
+      smoothOn = true;
+      ttyModeOn = true;
+      scroller.scrollTop = 12;
+      syncWindow();
+      expect(smoothGlideCalls).toHaveLength(0);
+    } finally {
+      windowedGridOn = false;
+      smoothOn = false;
+      ttyModeOn = false;
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
       await renderGrid();
     }
   });

@@ -17,6 +17,7 @@ import { destroyChildren, destroyNode, errMessage } from "../lib/uiutil";
 import type { Scheduler } from "../lib/uiutil";
 import { TileVisual } from "../input/grid-input";
 import type { FileAnimMode } from "./ui-grid-anim";
+import { glideDelta } from "./ui-smooth-scroll";
 import { fmtDateShort, loadingNodeId, makeGridBuilders, thumbStatsChanged } from "./ui-grid-rows";
 import type { ScrollerLike } from "../lib/node-like";
 import type { GridRendererCtx } from "./ui-grid-types";
@@ -112,6 +113,8 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // overscan row) — the scroll-reveal fires on rows crossing THIS, not the
     // build edge, or every reveal would animate off-screen and arrive settled
     vis: { top: number; bottom: number };
+    // last synced scrollTop — the scroll glide animates the delta from here
+    top: number;
   } | null = null;
   // [ui] file-animation-scroll-reveal-delay-ms: deferred reveal state. A fast
   // fling crosses a row per notch; playing every notch retriggers the wave
@@ -248,6 +251,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // renderable is the use-after-destroy path
     try {
       ctx.fileAnim({ tiles: [], inner: null });
+    } catch {}
+    // same for an in-flight scroll glide (its node dies here too)
+    try {
+      ctx.smoothStop?.();
     } catch {}
     // destroy, not just detach: every tile owns a native TextBuffer (and often
     // an image), and relying on the 10s GC poke leaks whole folders' worth of
@@ -678,6 +685,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
             r0,
             r1,
             vis: { top: firstRow, bottom: visibleBottomRow(scrollTop, visH(scroller), rowHgt, totalRows) },
+            top: scrollTop,
           }
         : null;
       // grid-view ROW ids for the row-granularity cascade (see the handoff
@@ -811,6 +819,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const { entries, isList, cols, rowH: rh, rows } = win;
     const old = { r0: win.r0, r1: win.r1 };
     const scrollTop = Math.max(0, scroller.scrollTop ?? 0);
+    const prevTop = Number.isFinite(win.top) ? win.top : scrollTop;
     const { firstRow, r0, r1 } = windowRange(scrollTop, rh, rows, ctx.termH());
     const visFirst = isList ? firstRow : firstRow * cols;
     // operate on the MOUNTED nodes (VNode proxies no-op post-mount): content
@@ -846,6 +855,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         try {
           ctx.fileAnim({ tiles: [], inner: null });
         } catch {}
+        // same for the scroll glide: a fling lands instantly, no glide home
+        try {
+          ctx.smoothStop?.();
+        } catch {}
         destroyChildren(scroller.content);
         scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
         paint(r0, r1);
@@ -880,6 +893,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         paint(r0, Math.min(old.r0 - 1, r1));
         paint(Math.max(old.r1 + 1, r0), r1);
       }
+    }
+    // [ui] smooth-scrolling: the window math above already jumped instantly
+    // (one slide, one drain — the expensive parts run once); glide the mounted
+    // window container home from the old view for the smooth read. Skipped on
+    // flings (fallback rebuilt above + stopped), page jumps (glideDelta caps),
+    // the console (slow VT), and old fakes without the sink (today's snap).
+    if (slideable && mounted) {
+      try {
+        const d = glideDelta(prevTop, scrollTop);
+        if (d !== 0 && ctx.smoothScroll?.() === true && !ctx.isTtyMode?.()) ctx.smoothGlide?.(mounted, d);
+      } catch {}
     }
     // scroll-reveal: keyed to the VIEWPORT edge, not the build — the window
     // leads visibility by the overscan row, so revealing at build time faded
@@ -982,7 +1006,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         }
       }
     }
-    win = { ...win, r0, r1, vis: { top: visTop, bottom: visBottom } };
+    win = { ...win, r0, r1, top: scrollTop, vis: { top: visTop, bottom: visBottom } };
     ctx.stripSelectable();
     void ctx.drainIconQueue();
     void ctx.drainThumbs();

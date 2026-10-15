@@ -101,6 +101,8 @@ export type GridWiring = {
   renderPreview: ReturnType<typeof makePreview>["renderPreview"];
   renderGrid: ReturnType<typeof makeGridRenderer>["renderGrid"];
   syncWindowPane: (pane: 0 | 1) => void;
+  // queue a wheel move into the pane's stepper (true = consumed, native jump suppressed)
+  pushWheel: (pane: 0 | 1, dir: 1 | -1, cells: number) => boolean;
   renderPane: (pane: 0 | 1) => Promise<void>;
   focusPane: (pane: 0 | 1) => void;
   dropIntoPane: (pane: 0 | 1) => void;

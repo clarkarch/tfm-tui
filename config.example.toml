@@ -86,6 +86,9 @@ topbar-animation-slide-dir            = "down"      # "down"/"up" = slides in ve
 topbar-animation-stagger-pct          = 40          # how spread the item cascade is, 0..300% (0 = all items at once) (needs restart)
 topbar-animation-ease                 = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends (needs restart)
 directory-bar-animation               = false       # true = rebuilt crumbs cascade in on every directory change (not just boot)
+smooth-scrolling                      = true        # true = smooth-scroll the grid (keyboard jumps glide home over glide time, the wheel flows on the wheel beat); page jumps and the console stay instant
+smooth-scroll-ms                      = 160         # keyboard glide length, 0..800 ms (0 = instant)
+smooth-wheel-ms                       = 30          # pause between wheel steps, 0..200 ms (0 = instant native jumps)
 directory-bar-style                   = "stagger"   # "stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style
 directory-bar-ms                      = 180         # directory bar animation duration, 0..800 ms (0 = instant)
 directory-bar-slide-cells             = 8           # how far crumbs slide in, 0..32 cells (0 = fade in place)

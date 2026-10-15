@@ -78,6 +78,7 @@ const MASTERS_ON: Record<string, boolean> = {
   sidebarHoverAnimation: true,
   topbarAnimation: true,
   directoryBarAnimation: true,
+  smoothScrolling: true,
   previewEnabled: true,
   sidebarAutoHide: true,
   previewAutoHide: true,
@@ -1218,6 +1219,10 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "top bar animation",
       "##directory bar",
       "directory bar animation",
+      "##scrolling",
+      "smooth scrolling",
+      "glide time",
+      "wheel beat",
     ]);
     // layout: collapse styles and gated widths hidden; hover timing gone entirely
     expect(labelsOf(h, "layout")).toEqual([

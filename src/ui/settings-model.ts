@@ -384,6 +384,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     "sidebarHoverAnimation",
     "topbarAnimation",
     "directoryBarAnimation",
+    "smoothScrolling",
     "previewEnabled",
     "sidebarAutoHide",
     "previewAutoHide",
