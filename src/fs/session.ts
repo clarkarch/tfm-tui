@@ -29,10 +29,10 @@ export const saveSessionSync = (panes: [PaneTabs, PaneTabs], activePane: 0 | 1):
   writeFileSync(sessionFile(), JSON.stringify({ panes, activePane }));
 };
 
-// directory check shared with virtual places: recent/starred URIs are always
-// "usable", other virtual URIs are not, real paths must be existing dirs
+// directory check shared with virtual places: recent/starred/archive URIs are
+// always "usable" (no fs dir behind them), real paths must be existing dirs
 const usable = (p: string): boolean => {
-  if (isVirtualUri(p)) return p === RECENT_URI || p === STARRED_URI;
+  if (isVirtualUri(p)) return true;
   try {
     return statSync(p).isDirectory();
   } catch {

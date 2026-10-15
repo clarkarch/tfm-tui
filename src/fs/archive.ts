@@ -479,6 +479,75 @@ export const listArchiveEntries = async (
   return n;
 };
 
+// --- archive browsing: entry names (+ dir flag / size where the tool gives it)
+// for `archive://` virtual cwds. Spawn lane only — listing needs a real tool
+// (tar/unzip/7z); the js lane has no lister, so the caller shows an honest
+// "install …" error rather than a fake empty pane. Returns null on tool
+// failure so an unreadable/encrypted archive never reads as empty. ---
+
+export type ArchiveMember = { name: string; dir: boolean; size?: number };
+
+export const listMembersPlan = (fmt: ArchiveFormat, file: string, which: WhichFn = Bun.which): ToolSpec => {
+  const def = defOf(fmt);
+  if (def.kind === "tar") return { tool: "tar", args: ["-t", ...def.filter, "-f", file] };
+  // -slt: structured `Path = …` / `Attributes = D …` / `Size = …` blocks (the
+  // default `l` column layout is pain to split on names with spaces)
+  if (def.kind === "7z") return { tool: "7z", args: ["l", "-slt", file] };
+  return zipExtractTool(which) === "unzip"
+    ? { tool: "unzip", args: ["-Z1", file] }
+    : { tool: "7z", args: ["l", "-slt", file] };
+};
+
+export const listArchiveMembers = async (
+  fmt: ArchiveFormat,
+  file: string,
+  run: ArchiveRun = runArchiveTool,
+  which: WhichFn = Bun.which,
+): Promise<ArchiveMember[] | null> => {
+  const spec = listMembersPlan(fmt, file, which);
+  const members: ArchiveMember[] = [];
+  if (spec.tool === "7z") {
+    // everything before the `----------` banner is the archive's own metadata
+    let afterSep = false;
+    let cur: ArchiveMember | null = null;
+    const flush = (): void => {
+      if (cur?.name) members.push(cur);
+      cur = null;
+    };
+    const res = await run(spec, {
+      onLine: (line) => {
+        const t = line.trim();
+        if (t === "----------") {
+          afterSep = true;
+          return;
+        }
+        if (!afterSep) return;
+        if (t.startsWith("Path = ")) {
+          flush();
+          cur = { name: t.slice(7), dir: false };
+        } else if (!cur) return;
+        else if (t.startsWith("Folder = ")) cur.dir = t.slice(9).trim() === "+";
+        else if (t.startsWith("Attributes = ")) {
+          if (t[13] === "D") cur.dir = true;
+        } else if (t.startsWith("Size = ")) {
+          const n = Number(t.slice(7));
+          if (Number.isFinite(n)) cur.size = n;
+        }
+      },
+    });
+    flush();
+    return res.code === 0 || res.code === 1 ? members : null;
+  }
+  // tar -t / unzip -Z1: one name per line, dirs carry a trailing slash
+  const res = await run(spec, {
+    onLine: (line) => {
+      const name = line.replace(/\r$/, "");
+      if (name) members.push({ name, dir: name.endsWith("/") });
+    },
+  });
+  return res.code === 0 || res.code === 1 ? members : null;
+};
+
 // --- in-process fallback engine: tar/tar.gz via Bun.Archive, zip via fflate.
 // Used when selectArchiveLane says "js" (no native tools). Same
 // ArchiveRunResult contract as the spawn path — and the same never-throws

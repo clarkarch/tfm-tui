@@ -14,6 +14,7 @@
 // so the pick overlay runs exactly what the keypress would. ---
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
+import { archiveBrowseUri, archiveUri, parseArchiveUri } from "../fs/archive-scheme";
 import { loadSystemPlaces } from "../fs/places";
 import type { KeyAction } from "../config/config-schema";
 import { KEY_SCHEMA } from "../config/config-schema";
@@ -376,7 +377,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const targetKey = firstDir ?? fallback;
     const refs = targetKey !== undefined ? selection.tileRefs.get(targetKey) : undefined;
     if (targetKey && refs) {
-      if (refs.isDir) ctx.navigate(targetKey);
+      const archive = archiveBrowseUri(targetKey, refs.isDir);
+      if (archive || refs.isDir) ctx.navigate(archive ?? targetKey);
       else {
         ctx.openFileDefault(targetKey);
         ctx.clearSearch();
@@ -445,7 +447,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const key = selection.focusKeys()[selection.focusIdx()];
     const refs = key !== undefined ? selection.tileRefs.get(key) : undefined;
     if (key && refs) {
-      if (refs.isDir) ctx.navigate(key);
+      const archive = archiveBrowseUri(key, refs.isDir);
+      if (archive) ctx.navigate(archive);
+      else if (refs.isDir) ctx.navigate(key);
       else ctx.openFileDefault(key);
     }
   };
@@ -520,7 +524,19 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     else if (!ctx.isVirtualCwd()) ctx.openProperties([ctx.state.cwd]);
   };
   const doParentDir = (): void => {
-    // virtual views have no fs parent (path.resolve would shred the URI)
+    // inside an archive: step up one inner dir, or back to the archive's real
+    // parent dir from its root (an archive cwd has no fs parent path)
+    const archive = parseArchiveUri(ctx.state.cwd);
+    if (archive) {
+      if (archive.inner) {
+        const up = path.posix.dirname(archive.inner);
+        ctx.navigate(up === "." ? archiveUri(archive.file) : archiveUri(archive.file, up));
+      } else {
+        ctx.navigate(path.dirname(archive.file));
+      }
+      return;
+    }
+    // other virtual views have no fs parent (path.resolve would shred the URI)
     if (ctx.isVirtualCwd()) {
       ctx.navigate(ctx.home);
       return;

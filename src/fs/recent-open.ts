@@ -8,6 +8,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { debounced } from "../lib/uiutil";
 import { canReadSync } from "./fsutil";
+import { isArchiveUri } from "./uri";
 import { classifyPath, type ExecutableInfo } from "./executable";
 import type { NotifyLevel } from "../lib/notify-level";
 
@@ -52,6 +53,13 @@ export const makeRecentOpen = (ctx: RecentOpenCtx) => {
   };
 
   const openFileDefault = (p: string): void => {
+    // inside an archive cwd the "path" is an archive:// URI: xdg-open can't
+    // reach it, and recording it would pollute the recent list. Per-entry
+    // extract is not built yet, so say so instead of a bogus spawn.
+    if (isArchiveUri(p)) {
+      ctx.notify("Can't open a file inside an archive yet — extract it first", "open", "info");
+      return;
+    }
     const canRead = ctx.canRead ?? canReadSync;
     // canRead is false for ENOENT too — a file deleted between listing and
     // open (or a dangling symlink, which accessSync follows) takes the plain

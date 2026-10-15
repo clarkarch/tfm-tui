@@ -4,6 +4,7 @@
 // that the sidebar, OSC 72 bridge and keyboard paths read. No module-level
 // imports from the renderer — everything flows through ctx. ---
 
+import { archiveBrowseUri } from "../fs/archive-scheme";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { ListEntry } from "../ui/ui-menu";
@@ -303,7 +304,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         lastClick = now;
         return false;
       }
-      if (entry.isDir) ctx.navigate(key);
+      const archive = archiveBrowseUri(key, entry.isDir);
+      if (archive) ctx.navigate(archive);
+      else if (entry.isDir) ctx.navigate(key);
       else ctx.openFileDefault(key);
       lastClick = 0;
       return true;

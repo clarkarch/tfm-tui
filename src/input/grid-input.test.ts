@@ -6,6 +6,7 @@ import {
   makeEntryMouseHandlers,
   type GridInputCtx,
 } from "./grid-input";
+import { archiveUri } from "../fs/archive-scheme";
 
 beforeEach(() => {
   gridDrag.keys = null;
@@ -289,6 +290,20 @@ describe("selection model", () => {
     press(h, { x: 1, y: 1 });
     press(h, { x: 1, y: 1 });
     expect(navigated).toEqual(["/w/sub"]);
+  });
+  test("double-click on an archive enters its archive cwd, never xdg-open", () => {
+    const ctx = makeCtx();
+    const navigated: string[] = [];
+    ctx.navigate = (d) => {
+      navigated.push(d);
+    };
+    const opened: string[] = [];
+    ctx.openFileDefault = (p) => opened.push(p);
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.zip", 0);
+    press(h, { x: 1, y: 1 });
+    press(h, { x: 1, y: 1 });
+    expect(navigated).toEqual([archiveUri("/w/a.zip")]);
+    expect(opened).toEqual([]);
   });
   test("a modified double-press never opens (ctrl stays toggle)", () => {
     // regression: two fast ctrl+clicks on a tile toggled it on then off and

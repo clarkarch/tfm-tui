@@ -4,8 +4,9 @@
 import { lstat, readdir, stat } from "node:fs/promises";
 import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
-import { RECENT_URI, STARRED_URI } from "./uri";
+import { RECENT_URI, STARRED_URI, isArchiveUri } from "./uri";
 import { readRecentXbel, readStarredList } from "./recent";
+import { listArchiveDir } from "./archive-listing";
 import type { SortMode } from "../lib/sort";
 import { extOf } from "./filetype";
 
@@ -220,6 +221,12 @@ export const listDir = async (
   opts?: { cache?: boolean; cacheStats?: boolean; ttlMs?: number; now?: () => number },
 ): Promise<Entry[]> => {
   let out: Entry[];
+  // archive virtual cwd: entries come from the archive's member list, not the
+  // filesystem (abs is an `archive://…` URI, never a real path)
+  if (isArchiveUri(dir)) {
+    out = await listArchiveDir(dir);
+    return out.sort(compareEntries(sortBy, sortAsc));
+  }
   if (dir === RECENT_URI) {
     out = await recentEntries();
     // recency order wins over the global sort mode, like nautilus

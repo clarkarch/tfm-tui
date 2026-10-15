@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeKeyRouter, type KeyRouterCtx } from "./keymap";
+import { archiveUri } from "../fs/archive-scheme";
 import { makeSelection, type SelectionCtx } from "./selection";
 import { defaultConfig } from "../config/config-schema";
 
@@ -628,6 +629,14 @@ describe("grid keys", () => {
     expect(h.calls).toEqual(["open:a.txt"]);
   });
 
+  test("return on a focused archive enters its archive cwd", () => {
+    const h = makeHarness();
+    h.seedTiles(["/tmp/tfm-kb/sub/a.zip"]);
+    h.key("down");
+    h.key("return");
+    expect(h.calls).toEqual([`navigate:${archiveUri("/tmp/tfm-kb/sub/a.zip")}`]);
+  });
+
   test("return on a focused dir navigates into it", () => {
     const h = makeHarness();
     h.seedTiles(["sub/", "b.txt"]);
@@ -649,6 +658,16 @@ describe("grid keys", () => {
     const h = makeHarness({ isVirtualCwd: () => true, state: { cwd: "recent://", showHidden: false } as any });
     h.key("backspace");
     expect(h.calls).toEqual(["navigate:/home/u"]);
+  });
+
+  test("backspace inside an archive steps up inner dirs, then exits to the real parent", () => {
+    const h = makeHarness({ state: { cwd: archiveUri("/w/a.zip", "dir/sub"), showHidden: false } as any });
+    h.key("backspace");
+    expect(h.calls).toEqual([`navigate:${archiveUri("/w/a.zip", "dir")}`]);
+
+    const root = makeHarness({ state: { cwd: archiveUri("/w/a.zip"), showHidden: false } as any });
+    root.key("backspace");
+    expect(root.calls).toEqual(["navigate:/w"]);
   });
 
   test("plain typing starts type-to-search; shifted/ctrl keys do not", () => {
