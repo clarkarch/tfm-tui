@@ -359,9 +359,17 @@ describe("renderSidebar", () => {
       // ui-sidebar-hover.test.ts pins the behavior.
       const { makeSidebarHover } = await import("./ui-sidebar-hover");
       const staleHover = makeSidebarHover({
+        renderer: () => null as any,
         byId: () => null,
         rowRefs: () => new Map(),
-        hoverOpts: () => ({ enabled: true, direction: "left", includeLabel: false }),
+        hoverOpts: () => ({
+          enabled: true,
+          ms: 0,
+          slideCells: 1,
+          ease: "ease-out",
+          direction: "left",
+          includeLabel: false,
+        }),
       });
       let playedAt = 0;
       let sigNow = "intro-replay";

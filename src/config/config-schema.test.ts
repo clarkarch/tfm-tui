@@ -154,16 +154,18 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc({ ui: { "device-poll-ms": "fast" } }).ui.devicePollMs).toBe(1000);
   });
 
-  test("hover lift options parse with fallbacks (no distance knob: fixed 1 cell)", () => {
+  test("hover options parse with fallbacks (duration/travel/dir/ease defaults)", () => {
     const defs = parseConfigDoc(undefined).ui;
     expect(defs.fileHoverIncludeLabel).toBe(false);
-    expect(defs.fileHoverDirection).toBe("up");
-    expect("fileHoverDistance" in defs).toBe(false);
+    expect(defs.fileHoverSlideDir).toBe("up");
+    expect(defs.fileHoverMs).toBe(0);
+    expect(defs.fileHoverSlideCells).toBe(1);
+    expect(defs.fileHoverEase).toBe("ease-out");
     const cfg = parseConfigDoc({
-      ui: { "file-hover-include-label": true, "file-hover-direction": "sideways" },
+      ui: { "file-hover-include-label": true, "file-hover-slide-dir": "sideways" },
     }).ui;
     expect(cfg.fileHoverIncludeLabel).toBe(true);
-    expect(cfg.fileHoverDirection).toBe("up");
+    expect(cfg.fileHoverSlideDir).toBe("up");
   });
 
   test("round-trip: serialize -> parse -> identical config", () => {

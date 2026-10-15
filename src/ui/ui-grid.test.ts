@@ -148,7 +148,7 @@ beforeAll(async () => {
   throwOnName = null;
   testNow = 1_000_000;
   availWSet = null;
-  hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+  hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
   visibleOnly = false;
   windowedGridOn = false;
@@ -353,7 +353,7 @@ describe("renderGrid (grid tiles)", () => {
   });
 
   test("up lift reserves one top row so the icon never leaves the tile", async () => {
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
     await t.renderOnce();
     // the icon starts one row lower: the up motion lands exactly on the tile
@@ -366,7 +366,7 @@ describe("renderGrid (grid tiles)", () => {
     }
     expect([...selection.tileRefs.values()].some((r) => r.hoverLift)).toBe(true);
 
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
     await t.renderOnce();
     for (const ref of selection.tileRefs.values()) {
@@ -377,7 +377,7 @@ describe("renderGrid (grid tiles)", () => {
 
   test("up lift works on the first row too (overpaints nothing — headroom)", async () => {
     availWSet = 30; // 2 cols: idx 0,1 first row, idx 2 second row
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     try {
       await renderGrid();
       await t.renderOnce();
@@ -388,27 +388,27 @@ describe("renderGrid (grid tiles)", () => {
       for (const ref of refs) expect(ref.hoverLift).toBe(true);
     } finally {
       availWSet = null;
-      hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+      hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
       await renderGrid();
     }
   });
 
   test("hover lift down uses the spare bottom row without a top margin", async () => {
-    hoverLiftOpts = { enabled: true, direction: "down", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "down", includeLabel: false };
     await renderGrid();
     await t.renderOnce();
     const ref = [...selection.tileRefs.values()][0]!;
     expect(ref.hoverLift).toBe(true);
     const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
     expect(tile.getChildren()[0].marginTop || 0).toBe(0);
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
   });
 
   test("a wrapped label consumes the vertical spare: no lift, no headroom", async () => {
     writeFileSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), "x");
     wrapMode = "char";
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     try {
       await renderGrid();
       await t.renderOnce();
@@ -435,7 +435,7 @@ describe("renderGrid (grid tiles)", () => {
       // test (stale grid contents break unrelated counts)
       rmSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), { force: true });
       wrapMode = "none";
-      hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+      hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
       await renderGrid();
     }
   });
@@ -510,13 +510,13 @@ describe("renderGrid (grid tiles)", () => {
         const tile = t.renderer.root.findDescendantById(r.tileId) as any;
         return tile?.getChildren()[0]?.marginTop || 0;
       });
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
     expect(margins()).toContain(1);
-    hoverLiftOpts = { enabled: true, direction: "down", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "down", includeLabel: false };
     await renderGrid();
     expect(margins()).not.toContain(1);
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
   });
 

@@ -70,8 +70,8 @@ export type SettingRow =
     }
   | { kind: "action"; label: string; blurb?: string; keepOpen?: boolean; run: () => void }
   // divider rows split a long category into labeled sections (animations/panes).
-  // Non-interactive: never take the cursor, never adjust/activate — the settings
-  // shell + panel skip them the way the file menu skips separators.
+  // Headers take the cursor (fold/unfold); the section's master toggle stays a
+  // separate row beneath the divider.
   | { kind: "header"; label: string };
 
 export type SettingGroup = { header?: string; icon?: string; rows: SettingRow[] };
@@ -166,23 +166,33 @@ export type WrapMode = "none" | "char" | "word";
 // painting decisions live in ./style (the surface seam), which re-exports this.
 export type UiStyle = "solid" | "outline" | "outline-partial";
 
-// tile hover-lift controls ([ui] file-hover-*): which way the icon moves (one
-// cell, the terminal minimum) and whether the filename rides along. The grid
-// only lifts tiles that have one spare cell; the rest keep the highlight.
+// tile hover controls ([ui] file-hover-*). The ms/travel/dir/ease grammar is
+// shared with the entrance animations (ms = duration, slide-cells = travel,
+// slide-dir = direction, ease) so every animation surface exposes the same
+// low-level timing knobs. ms 0 = snap (the historical behavior — a tween would
+// lag a fast mouse sweep); a positive ms glides over `travel` cells. A tile
+// only moves when it has room; the rest keep the highlight.
 export type HoverLiftDirection = "up" | "down" | "left" | "right";
 export type HoverLiftOpts = {
   enabled: boolean;
+  ms: number;
+  slideCells: number;
   direction: HoverLiftDirection;
+  ease: string;
   includeLabel: boolean;
 };
 
-// sidebar row hover-nudge controls ([ui] sidebar-hover-*). Rows are one cell
-// tall with icons in a shared column, so a vertical nudge would always paint
-// over a neighbour's icon — only the horizontal pair is offered.
+// sidebar row hover controls ([ui] sidebar-hover-*), same grammar as the tile
+// hover. Rows are one cell tall with icons in a shared column, so a vertical
+// nudge would always paint over a neighbour's icon — only the horizontal pair
+// is offered (the one deliberate difference from the tile direction set).
 export type SidebarHoverDirection = "left" | "right";
 export type SidebarHoverOpts = {
   enabled: boolean;
+  ms: number;
+  slideCells: number;
   direction: SidebarHoverDirection;
+  ease: string;
   includeLabel: boolean;
 };
 
@@ -268,11 +278,10 @@ export type UiConfig = {
   listRowHeight: number;
   wrapMode: WrapMode;
   fileAnimation: boolean;
-  fileAnimationSlide: boolean;
-  fileAnimationStagger: boolean;
+  fileAnimationStyle: string;
   fileAnimationMs: number;
   fileAnimationStaggerPct: number;
-  fileAnimationSlidePct: number;
+  fileAnimationSlideCells: number;
   fileAnimationSlideDir: string;
   fileAnimationEase: string;
   fileAnimationScrollRevealDelayMs: number;
@@ -288,8 +297,11 @@ export type UiConfig = {
   listingsCacheTtl: number;
   lazyStartup: boolean;
   fileHoverAnimation: boolean;
+  fileHoverMs: number;
+  fileHoverSlideCells: number;
+  fileHoverSlideDir: HoverLiftDirection;
+  fileHoverEase: string;
   fileHoverIncludeLabel: boolean;
-  fileHoverDirection: HoverLiftDirection;
   sidebarAnimation: boolean;
   sidebarAnimationStyle: string;
   sidebarAnimationMs: number;
@@ -299,8 +311,11 @@ export type UiConfig = {
   sidebarAnimationEase: string;
   sidebarAnimationIncludeTitle: boolean;
   sidebarHoverAnimation: boolean;
+  sidebarHoverMs: number;
+  sidebarHoverSlideCells: number;
+  sidebarHoverSlideDir: SidebarHoverDirection;
+  sidebarHoverEase: string;
   sidebarHoverIncludeLabel: boolean;
-  sidebarHoverDirection: SidebarHoverDirection;
   topbarAnimation: boolean;
   topbarAnimationStyle: string;
   topbarAnimationMs: number;
@@ -309,12 +324,12 @@ export type UiConfig = {
   topbarAnimationStaggerPct: number;
   topbarAnimationEase: string;
   directoryBarAnimation: boolean;
-  directoryBarStyle: string;
-  directoryBarMs: number;
-  directoryBarSlideCells: number;
-  directoryBarDir: string;
-  directoryBarStaggerPct: number;
-  directoryBarEase: string;
+  directoryBarAnimationStyle: string;
+  directoryBarAnimationMs: number;
+  directoryBarAnimationSlideCells: number;
+  directoryBarAnimationSlideDir: string;
+  directoryBarAnimationStaggerPct: number;
+  directoryBarAnimationEase: string;
   smoothScrolling: boolean;
   smoothScrollMs: number;
   smoothWheelMs: number;
@@ -1023,34 +1038,22 @@ const UI_ROWS: SchemaRow[] = [
     tomlKey: "file-animation",
     prop: "fileAnimation",
     def: false,
-    doc: "true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)",
+    doc: "true = animate files appearing in the content area (style = file-animation-style)",
     label: "file animation",
     blurb: "Files glide in when folders open",
     group: "animations",
     subsection: "files",
   },
   {
-    kind: "bool",
+    kind: "enum",
     section: "ui",
-    tomlKey: "file-animation-slide",
-    prop: "fileAnimationSlide",
-    def: false,
-    doc: "true = files rise up into place (distance = file-animation-slide-pct)",
-    label: "slide in",
-    blurb: "Files rise into place",
-    group: "animations",
-    subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
-  },
-  {
-    kind: "bool",
-    section: "ui",
-    tomlKey: "file-animation-stagger",
-    prop: "fileAnimationStagger",
-    def: false,
-    doc: "true = top-to-bottom cascade instead of one wave",
-    label: "stagger cascade",
-    blurb: "Files appear one after another",
+    tomlKey: "file-animation-style",
+    prop: "fileAnimationStyle",
+    values: ["fade", "slide", "stagger", "stagger-slide"],
+    def: "fade",
+    doc: '"fade" = files fade in together; "slide" = they rise in as one wave; "stagger" = files appear one after another; "stagger-slide" = each file slides+fades in',
+    label: "style",
+    blurb: "How files arrive",
     group: "animations",
     subsection: "files",
     showWhen: (ui) => ui.fileAnimation,
@@ -1075,31 +1078,14 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "int",
     section: "ui",
-    tomlKey: "file-animation-stagger-pct",
-    prop: "fileAnimationStaggerPct",
+    tomlKey: "file-animation-slide-cells",
+    prop: "fileAnimationSlideCells",
     min: 0,
-    max: 300,
-    step: 5,
-    def: 40,
-    doc: "how spread the cascade wave is, 0..300% (0 = all tiles at once; over 100 = the wave outlives the duration)",
-    unit: "%",
-    label: "spread",
-    blurb: "How spread out the cascade is",
-    group: "animations",
-    subsection: "files",
-    showWhen: (ui) => ui.fileAnimation,
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "file-animation-slide-pct",
-    prop: "fileAnimationSlidePct",
-    min: 0,
-    max: 150,
-    step: 5,
-    def: 70,
-    doc: "how far files slide, 0..150% of the viewport (0 = fade in place; clamped to whole cells)",
-    unit: "%",
+    max: 32,
+    step: 1,
+    def: 16,
+    doc: "how far files slide, 0..32 cells (0 = fade in place)",
+    unit: "cells",
     label: "travel",
     blurb: "How far files glide in from",
     group: "animations",
@@ -1116,6 +1102,23 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"up"/"down" = files rise/drop vertically; "left"/"right" = files slide in horizontally',
     label: "direction",
     blurb: "Which way files glide in from",
+    group: "animations",
+    subsection: "files",
+    showWhen: (ui) => ui.fileAnimation,
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "file-animation-stagger-pct",
+    prop: "fileAnimationStaggerPct",
+    min: 0,
+    max: 300,
+    step: 5,
+    def: 40,
+    doc: "how spread the cascade wave is, 0..300% (0 = all tiles at once; over 100 = the wave outlives the duration)",
+    unit: "%",
+    label: "spread",
+    blurb: "How spread out the cascade is",
     group: "animations",
     subsection: "files",
     showWhen: (ui) => ui.fileAnimation,
@@ -1223,21 +1226,42 @@ const UI_ROWS: SchemaRow[] = [
     tomlKey: "file-hover-animation",
     prop: "fileHoverAnimation",
     def: false,
-    doc: "true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)",
+    doc: "true = hover animates the tile icon (ms/travel/dir/ease below; rest layout unchanged, only tiles with room move)",
     label: "lift icons",
-    blurb: "Icons lift when hovered",
+    blurb: "Icons react when hovered",
     group: "animations",
     subsection: "file hover",
   },
   {
-    kind: "bool",
+    kind: "int",
     section: "ui",
-    tomlKey: "file-hover-include-label",
-    prop: "fileHoverIncludeLabel",
-    def: false,
-    doc: "true = the filename rides along with the hover lift",
-    label: "lift labels",
-    blurb: "File names ride along on hover",
+    tomlKey: "file-hover-ms",
+    prop: "fileHoverMs",
+    min: 0,
+    max: 800,
+    step: 10,
+    def: 0,
+    doc: "tile hover animation duration, 0..800 ms (0 = snap instantly — responsive under fast mouse sweeps)",
+    unit: "ms",
+    label: "duration",
+    blurb: "How long the hover animation lasts",
+    group: "animations",
+    subsection: "file hover",
+    showWhen: (ui) => ui.fileHoverAnimation,
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "file-hover-slide-cells",
+    prop: "fileHoverSlideCells",
+    min: 0,
+    max: 8,
+    step: 1,
+    def: 1,
+    doc: "how far the icon travels on hover, 0..8 cells (0 = no motion); a longer travel plus a duration gives a smooth glide",
+    unit: "cells",
+    label: "travel",
+    blurb: "How far icons move on hover",
     group: "animations",
     subsection: "file hover",
     showWhen: (ui) => ui.fileHoverAnimation,
@@ -1245,13 +1269,40 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "enum",
     section: "ui",
-    tomlKey: "file-hover-direction",
-    prop: "fileHoverDirection",
+    tomlKey: "file-hover-slide-dir",
+    prop: "fileHoverSlideDir",
     values: ["up", "down", "left", "right"],
     def: "up",
-    doc: '"up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally',
-    label: "lift direction",
-    blurb: "Which way icons lift on hover",
+    doc: '"up"/"down" = the icon rises/drops vertically; "left"/"right" = it moves horizontally',
+    label: "direction",
+    blurb: "Which way icons move on hover",
+    group: "animations",
+    subsection: "file hover",
+    showWhen: (ui) => ui.fileHoverAnimation,
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "file-hover-ease",
+    prop: "fileHoverEase",
+    values: ["linear", "ease-out", "ease-in-out"],
+    def: "ease-out",
+    doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
+    label: "easing",
+    blurb: "How the hover animation settles",
+    group: "animations",
+    subsection: "file hover",
+    showWhen: (ui) => ui.fileHoverAnimation,
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "file-hover-include-label",
+    prop: "fileHoverIncludeLabel",
+    def: false,
+    doc: "true = the filename rides along with the hover motion",
+    label: "lift labels",
+    blurb: "File names move along on hover",
     group: "animations",
     subsection: "file hover",
     showWhen: (ui) => ui.fileHoverAnimation,
@@ -1388,21 +1439,42 @@ const UI_ROWS: SchemaRow[] = [
     tomlKey: "sidebar-hover-animation",
     prop: "sidebarHoverAnimation",
     def: false,
-    doc: "true = hovering a sidebar row nudges its icon one cell (rest layout unchanged; the cwd-selected row keeps its paint only)",
+    doc: "true = hover animates a sidebar row icon (ms/travel/dir/ease below; rest layout unchanged; the cwd-selected row keeps its paint only)",
     label: "nudge icons",
-    blurb: "Sidebar icons nudge on hover",
+    blurb: "Sidebar icons react when hovered",
     group: "animations",
     subsection: "sidebar hover",
   },
   {
-    kind: "bool",
+    kind: "int",
     section: "ui",
-    tomlKey: "sidebar-hover-include-label",
-    prop: "sidebarHoverIncludeLabel",
-    def: false,
-    doc: "true = the row label rides along with the hover nudge",
-    label: "nudge labels",
-    blurb: "Row labels ride along on hover",
+    tomlKey: "sidebar-hover-ms",
+    prop: "sidebarHoverMs",
+    min: 0,
+    max: 800,
+    step: 10,
+    def: 0,
+    doc: "row hover animation duration, 0..800 ms (0 = snap instantly — responsive under fast mouse sweeps)",
+    unit: "ms",
+    label: "duration",
+    blurb: "How long the hover animation lasts",
+    group: "animations",
+    subsection: "sidebar hover",
+    showWhen: (ui) => ui.sidebarHoverAnimation,
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "sidebar-hover-slide-cells",
+    prop: "sidebarHoverSlideCells",
+    min: 0,
+    max: 8,
+    step: 1,
+    def: 1,
+    doc: "how far the row icon travels on hover, 0..8 cells (0 = no motion); a longer travel plus a duration gives a smooth glide",
+    unit: "cells",
+    label: "travel",
+    blurb: "How far row icons move on hover",
     group: "animations",
     subsection: "sidebar hover",
     showWhen: (ui) => ui.sidebarHoverAnimation,
@@ -1410,13 +1482,40 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "enum",
     section: "ui",
-    tomlKey: "sidebar-hover-direction",
-    prop: "sidebarHoverDirection",
+    tomlKey: "sidebar-hover-slide-dir",
+    prop: "sidebarHoverSlideDir",
     values: ["left", "right"],
     def: "left",
-    doc: '"left" = the icon nudges into the row padding; "right" = it nudges toward the label',
-    label: "nudge direction",
-    blurb: "Which way sidebar icons nudge",
+    doc: '"left" = the icon moves into the row padding; "right" = it moves toward the label (rows are one cell tall, so only the horizontal pair is offered)',
+    label: "direction",
+    blurb: "Which way row icons move on hover",
+    group: "animations",
+    subsection: "sidebar hover",
+    showWhen: (ui) => ui.sidebarHoverAnimation,
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "sidebar-hover-ease",
+    prop: "sidebarHoverEase",
+    values: ["linear", "ease-out", "ease-in-out"],
+    def: "ease-out",
+    doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
+    label: "easing",
+    blurb: "How the hover animation settles",
+    group: "animations",
+    subsection: "sidebar hover",
+    showWhen: (ui) => ui.sidebarHoverAnimation,
+  },
+  {
+    kind: "bool",
+    section: "ui",
+    tomlKey: "sidebar-hover-include-label",
+    prop: "sidebarHoverIncludeLabel",
+    def: false,
+    doc: "true = the row label rides along with the hover motion",
+    label: "nudge labels",
+    blurb: "Row labels move along on hover",
     group: "animations",
     subsection: "sidebar hover",
     showWhen: (ui) => ui.sidebarHoverAnimation,
@@ -1546,6 +1645,99 @@ const UI_ROWS: SchemaRow[] = [
     subsection: "directory bar",
   },
   {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "directory-bar-animation-style",
+    prop: "directoryBarAnimationStyle",
+    values: ["fade", "slide", "stagger", "stagger-slide"],
+    def: "stagger",
+    doc: '"stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style',
+    label: "style",
+    blurb: "How folder crumbs arrive",
+    group: "animations",
+    subsection: "directory bar",
+    showWhen: (ui) => ui.directoryBarAnimation,
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "directory-bar-animation-ms",
+    prop: "directoryBarAnimationMs",
+    min: 0,
+    max: 800,
+    step: 20,
+    def: 180,
+    doc: "directory bar animation duration, 0..800 ms (0 = instant)",
+    unit: "ms",
+    label: "duration",
+    blurb: "How long the crumb animation plays",
+    group: "animations",
+    subsection: "directory bar",
+    showWhen: (ui) => ui.directoryBarAnimation,
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "directory-bar-animation-slide-cells",
+    prop: "directoryBarAnimationSlideCells",
+    min: 0,
+    max: 32,
+    step: 1,
+    def: 8,
+    doc: "how far crumbs slide in, 0..32 cells (0 = fade in place)",
+    unit: "cells",
+    label: "travel",
+    blurb: "How far crumbs slide in from",
+    group: "animations",
+    subsection: "directory bar",
+    showWhen: (ui) => ui.directoryBarAnimation,
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "directory-bar-animation-slide-dir",
+    prop: "directoryBarAnimationSlideDir",
+    values: ["left", "right", "up", "down"],
+    def: "right",
+    doc: '"right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically',
+    label: "direction",
+    blurb: "Which way crumbs slide in from",
+    group: "animations",
+    subsection: "directory bar",
+    showWhen: (ui) => ui.directoryBarAnimation,
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "directory-bar-animation-stagger-pct",
+    prop: "directoryBarAnimationStaggerPct",
+    min: 0,
+    max: 300,
+    step: 5,
+    def: 40,
+    doc: "how spread the crumb cascade is, 0..300% (0 = all crumbs at once)",
+    unit: "%",
+    label: "spread",
+    blurb: "How spread out the crumb cascade is",
+    group: "animations",
+    subsection: "directory bar",
+    showWhen: (ui) => ui.directoryBarAnimation,
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "directory-bar-animation-ease",
+    prop: "directoryBarAnimationEase",
+    values: ["linear", "ease-out", "ease-in-out"],
+    def: "ease-out",
+    doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
+    label: "easing",
+    blurb: "How the crumb animation speeds and settles",
+    group: "animations",
+    subsection: "directory bar",
+    showWhen: (ui) => ui.directoryBarAnimation,
+  },
+  {
     kind: "bool",
     section: "ui",
     tomlKey: "smooth-scrolling",
@@ -1590,99 +1782,6 @@ const UI_ROWS: SchemaRow[] = [
     group: "animations",
     subsection: "scrolling",
     showWhen: (ui) => ui.smoothScrolling,
-  },
-  {
-    kind: "enum",
-    section: "ui",
-    tomlKey: "directory-bar-style",
-    prop: "directoryBarStyle",
-    values: ["fade", "slide", "stagger", "stagger-slide"],
-    def: "stagger",
-    doc: '"stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style',
-    label: "style",
-    blurb: "How folder crumbs arrive",
-    group: "animations",
-    subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "directory-bar-ms",
-    prop: "directoryBarMs",
-    min: 0,
-    max: 800,
-    step: 20,
-    def: 180,
-    doc: "directory bar animation duration, 0..800 ms (0 = instant)",
-    unit: "ms",
-    label: "duration",
-    blurb: "How long the crumb animation plays",
-    group: "animations",
-    subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "directory-bar-slide-cells",
-    prop: "directoryBarSlideCells",
-    min: 0,
-    max: 32,
-    step: 1,
-    def: 8,
-    doc: "how far crumbs slide in, 0..32 cells (0 = fade in place)",
-    unit: "cells",
-    label: "travel",
-    blurb: "How far crumbs slide in from",
-    group: "animations",
-    subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
-  },
-  {
-    kind: "enum",
-    section: "ui",
-    tomlKey: "directory-bar-dir",
-    prop: "directoryBarDir",
-    values: ["left", "right", "up", "down"],
-    def: "right",
-    doc: '"right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically',
-    label: "direction",
-    blurb: "Which way crumbs slide in from",
-    group: "animations",
-    subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "directory-bar-stagger-pct",
-    prop: "directoryBarStaggerPct",
-    min: 0,
-    max: 300,
-    step: 5,
-    def: 40,
-    doc: "how spread the crumb cascade is, 0..300% (0 = all crumbs at once)",
-    unit: "%",
-    label: "spread",
-    blurb: "How spread out the crumb cascade is",
-    group: "animations",
-    subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
-  },
-  {
-    kind: "enum",
-    section: "ui",
-    tomlKey: "directory-bar-ease",
-    prop: "directoryBarEase",
-    values: ["linear", "ease-out", "ease-in-out"],
-    def: "ease-out",
-    doc: '"linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends',
-    label: "easing",
-    blurb: "How the crumb animation speeds and settles",
-    group: "animations",
-    subsection: "directory bar",
-    showWhen: (ui) => ui.directoryBarAnimation,
   },
   {
     kind: "bool",

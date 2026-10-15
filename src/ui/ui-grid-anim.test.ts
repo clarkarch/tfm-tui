@@ -6,13 +6,13 @@ import {
   fileAnimAt,
   fileAnimStyleFrom,
   hoverLiftDelta,
+  hoverOffset,
   makeFileAnim,
   makeTileHoverAnim,
   MAX_PER_NODE_ANIM,
   quantizeDy,
   restTileBg,
   revealStyleMap,
-  slideTravel,
 } from "./ui-grid-anim";
 import type { MaybeNode } from "../lib/node-like";
 
@@ -50,12 +50,14 @@ describe("easeAt", () => {
 });
 
 describe("fileAnimStyleFrom", () => {
-  test("derives the style from the toggles", () => {
-    expect(fileAnimStyleFrom({ enabled: false, slide: true, stagger: true })).toBe("off");
-    expect(fileAnimStyleFrom({ enabled: true, slide: false, stagger: false })).toBe("fade");
-    expect(fileAnimStyleFrom({ enabled: true, slide: true, stagger: false })).toBe("slide");
-    expect(fileAnimStyleFrom({ enabled: true, slide: false, stagger: true })).toBe("stagger");
-    expect(fileAnimStyleFrom({ enabled: true, slide: true, stagger: true })).toBe("stagger-slide");
+  test("derives the style from the master + style enum; only the master can turn it off", () => {
+    expect(fileAnimStyleFrom({ enabled: false, style: "slide" })).toBe("off");
+    expect(fileAnimStyleFrom({ enabled: true, style: "fade" })).toBe("fade");
+    expect(fileAnimStyleFrom({ enabled: true, style: "slide" })).toBe("slide");
+    expect(fileAnimStyleFrom({ enabled: true, style: "stagger" })).toBe("stagger");
+    expect(fileAnimStyleFrom({ enabled: true, style: "stagger-slide" })).toBe("stagger-slide");
+    // an unknown enum string (hand-edited TOML) degrades to fade, never crashes
+    expect(fileAnimStyleFrom({ enabled: true, style: "bogus" })).toBe("fade");
   });
 });
 
@@ -68,21 +70,7 @@ describe("revealStyleMap", () => {
   });
 });
 
-describe("slideTravel / smoothness", () => {
-  test("travel scales with the viewport and stays in a sane range", () => {
-    expect(slideTravel(51)).toBeGreaterThanOrEqual(20);
-    expect(slideTravel(20)).toBeGreaterThanOrEqual(8);
-    expect(slideTravel(0)).toBeGreaterThanOrEqual(8);
-    expect(slideTravel(Number.NaN)).toBeGreaterThanOrEqual(8);
-  });
-
-  test("travel scales with slide-pct; 0 disables motion (fade in place)", () => {
-    expect(slideTravel(51, 100)).toBeGreaterThanOrEqual(20);
-    expect(slideTravel(51, 20)).toBeLessThan(slideTravel(51, 100));
-    expect(slideTravel(51, 0)).toBe(0);
-    expect(slideTravel(51, 150)).toBeGreaterThan(slideTravel(51, 100));
-  });
-
+describe("slide smoothness", () => {
   test("a slide produces many distinct integer positions (not ~4 jumps)", () => {
     const seen = new Set<number>();
     for (let p = 0; p <= 1.0001; p += 1 / 60) seen.add(quantizeDy(fileAnimAt("slide", p, 0, 1, { dist: 28 }).dy));
@@ -200,7 +188,7 @@ describe("makeFileAnim (engine)", () => {
     style: "fade" as const,
     ms: 150,
     staggerPct: 40,
-    slidePct: 70,
+    slideCells: 16,
     dir: "up" as const,
     ease: "ease-out" as const,
     containerFade: false,
@@ -661,6 +649,14 @@ describe("hoverLiftDelta", () => {
   test("an unknown direction never moves", () => {
     expect(hoverLiftDelta("sideways")).toEqual({ dx: 0, dy: 0 });
   });
+
+  test("hoverOffset scales the unit vector by the travel in cells", () => {
+    expect(hoverOffset("up", 4)).toEqual({ dx: 0, dy: -4 });
+    expect(hoverOffset("right", 3)).toEqual({ dx: 3, dy: 0 });
+    expect(hoverOffset("up", 0)).toEqual({ dx: 0, dy: 0 });
+    expect(hoverOffset("up", -2)).toEqual({ dx: 0, dy: 0 });
+    expect(hoverOffset("left", 2.4)).toEqual({ dx: -2, dy: 0 });
+  });
 });
 describe("restTileBg", () => {
   test("solid fills with colors.bg, outline variants sit bare", () => {
@@ -747,6 +743,7 @@ describe("makeTileHoverAnim (engine)", () => {
     }
     await t.renderOnce();
     const anim = makeTileHoverAnim({
+      renderer: () => t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
@@ -755,6 +752,9 @@ describe("makeTileHoverAnim (engine)", () => {
       isCutKey,
       hoverLiftOpts: () => ({
         enabled,
+        ms: 0,
+        slideCells: 1,
+        ease: "ease-out",
         direction: (vector.direction ?? "up") as any,
         includeLabel: vector.includeLabel ?? false,
       }),
@@ -801,12 +801,20 @@ describe("makeTileHoverAnim (engine)", () => {
     t.renderer.root.add(tile);
     await t.renderOnce();
     const anim = makeTileHoverAnim({
+      renderer: () => t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
       setIconState: () => {},
-      hoverLiftOpts: () => ({ enabled: true, direction: "up", includeLabel: false }),
+      hoverLiftOpts: () => ({
+        enabled: true,
+        ms: 0,
+        slideCells: 1,
+        ease: "ease-out",
+        direction: "up",
+        includeLabel: false,
+      }),
     });
     anim.playHover(key, true);
     await t.renderOnce();
@@ -823,6 +831,54 @@ describe("makeTileHoverAnim (engine)", () => {
     expect(slotNode.screenY + slotNode.height).toBeLessThanOrEqual(tileTop + tileNode.height);
     expect(labelNode.screenY).toBeGreaterThanOrEqual(tileTop);
     expect(labelNode.screenY + labelNode.height).toBeLessThanOrEqual(tileTop + tileNode.height);
+  });
+
+  test("duration > 0 glides the lift in over `travel` cells; frame 0 is staged at rest", async () => {
+    const key = "/w/glide";
+    const tileId = "tile-glide";
+    const slotId = "slot-glide";
+    const labelId = "lab-glide";
+    const refs = new Map<string, any>();
+    refs.set(key, {
+      selected: false,
+      iconSpec: { slotId },
+      iconSlotId: slotId,
+      tileId,
+      labelId,
+      baseFg: "#c0caf5",
+      isDir: false,
+      hoverLift: true,
+    });
+    t.renderer.root.add(Box({ id: tileId, width: 8, height: 5, backgroundColor: "#1a1b26" }));
+    t.renderer.root.add(Box({ id: slotId, width: 4, height: 3 }));
+    t.renderer.root.add(Text({ id: labelId, content: "x", fg: "#c0caf5" }));
+    await t.renderOnce();
+    const anim = makeTileHoverAnim({
+      renderer: () => t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      tileRefs: () => refs,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
+      uiStyle: () => "solid" as const,
+      setIconState: () => {},
+      hoverLiftOpts: () => ({
+        enabled: true,
+        ms: 120,
+        slideCells: 4,
+        ease: "linear",
+        direction: "up",
+        includeLabel: false,
+      }),
+    });
+    anim.playHover(key, true);
+    await t.renderOnce();
+    const slot = () => t.renderer.root.findDescendantById(slotId) as any;
+    // frame 0 is staged at rest synchronously (no flash at the full offset)
+    expect(slot().translateY).toBe(0);
+    const step = (ms: number) => getTimelineEngine(t.renderer).update(ms);
+    step(60); // linear half of 4 cells = 2
+    expect(slot().translateY).toBe(-2);
+    step(60); // settle at the full travel
+    expect(slot().translateY).toBe(-4);
   });
 
   test("tiles without spare room keep the highlight but do not lift", async () => {
@@ -985,12 +1041,20 @@ describe("makeTileHoverAnim (engine)", () => {
     }
     await t.renderOnce();
     const anim = makeTileHoverAnim({
+      renderer: () => t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id),
       tileRefs: () => refs,
       colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
       uiStyle: () => "solid" as const,
       setIconState: () => {},
-      hoverLiftOpts: () => ({ enabled: true, direction: "up", includeLabel: false }),
+      hoverLiftOpts: () => ({
+        enabled: true,
+        ms: 0,
+        slideCells: 1,
+        ease: "ease-out",
+        direction: "up",
+        includeLabel: false,
+      }),
     });
     anim.playHover("/w/a-thumb", true);
     expect((t.renderer.root.findDescendantById("tile-a-thumb") as any).overflow).toBe("visible");

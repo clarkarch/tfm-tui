@@ -248,12 +248,11 @@ export const wireGrid = (deps: {
         // anims stay enabled in tty mode (rasters/thumbs/list-force aside)
         style: fileAnimStyleFrom({
           enabled: core.config.ui.fileAnimation,
-          slide: core.config.ui.fileAnimationSlide,
-          stagger: core.config.ui.fileAnimationStagger,
+          style: core.config.ui.fileAnimationStyle,
         }),
         ms: core.config.ui.fileAnimationMs,
         staggerPct: core.config.ui.fileAnimationStaggerPct,
-        slidePct: core.config.ui.fileAnimationSlidePct,
+        slideCells: core.config.ui.fileAnimationSlideCells,
         dir: core.config.ui.fileAnimationSlideDir as SlideDir,
         ease: core.config.ui.fileAnimationEase as EaseKey,
         containerFade: core.config.ui.fileAnimationContainerFade,
@@ -301,8 +300,19 @@ export const wireGrid = (deps: {
   };
   // one hover animator per pane (whole-cell icon lift, synchronous) — reads
   // [ui] file-hover-* live, lifts each pane's own reserved tiles
+  // shared tile-hover config read (the hover animator and the grid renderer
+  // both consume it — one live getter, so the two can't drift)
+  const hoverLiftOpts = () => ({
+    enabled: core.config.ui.fileHoverAnimation,
+    ms: core.config.ui.fileHoverMs,
+    slideCells: core.config.ui.fileHoverSlideCells,
+    direction: core.config.ui.fileHoverSlideDir,
+    ease: core.config.ui.fileHoverEase,
+    includeLabel: core.config.ui.fileHoverIncludeLabel,
+  });
   const makeHoverAnimator = (pane: 0 | 1) =>
     makeTileHoverAnim({
+      renderer: () => chrome.renderer,
       byId,
       tileRefs: () => selections[pane].tileRefs,
       colors: themeGet,
@@ -310,11 +320,7 @@ export const wireGrid = (deps: {
       transparentForce: () => core.config.ui.transparentBg === "force",
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
-      hoverLiftOpts: () => ({
-        enabled: core.config.ui.fileHoverAnimation,
-        direction: core.config.ui.fileHoverDirection,
-        includeLabel: core.config.ui.fileHoverIncludeLabel,
-      }),
+      hoverLiftOpts,
     });
   const hoverAnims = [makeHoverAnimator(0), makeHoverAnimator(1)] as const;
   const makeRenderer = (pane: 0 | 1) =>
@@ -333,11 +339,7 @@ export const wireGrid = (deps: {
       tileW: () => core.geometry.tileW,
       tileH: () => core.geometry.tileH,
       iconCells: () => core.geometry.iconCells,
-      hoverLiftOpts: () => ({
-        enabled: core.config.ui.fileHoverAnimation,
-        direction: core.config.ui.fileHoverDirection,
-        includeLabel: core.config.ui.fileHoverIncludeLabel,
-      }),
+      hoverLiftOpts,
       listRowH: () => core.config.ui.listRowHeight,
       uiStyle,
       colors: themeGet,

@@ -180,6 +180,7 @@ export const wireChrome = async (deps: {
   // per row), so every place/pin/device row nudges without its own registry.
   // Synchronous (no timeline), so it can live pre-renderer like the chrome. ---
   const sidebarHover = makeSidebarHover({
+    renderer: () => renderer,
     byId,
     rowRefs: () =>
       new Map(
@@ -195,7 +196,10 @@ export const wireChrome = async (deps: {
       ),
     hoverOpts: () => ({
       enabled: core.config.ui.sidebarHoverAnimation,
-      direction: core.config.ui.sidebarHoverDirection as SidebarHoverDirection,
+      ms: core.config.ui.sidebarHoverMs,
+      slideCells: core.config.ui.sidebarHoverSlideCells,
+      direction: core.config.ui.sidebarHoverSlideDir as SidebarHoverDirection,
+      ease: core.config.ui.sidebarHoverEase,
       includeLabel: core.config.ui.sidebarHoverIncludeLabel,
     }),
   });
@@ -377,12 +381,12 @@ export const wireChrome = async (deps: {
       byId,
       opts: () => ({
         enabled: core.config.ui.directoryBarAnimation,
-        style: core.config.ui.directoryBarStyle,
-        ms: core.config.ui.directoryBarMs,
-        slideCells: core.config.ui.directoryBarSlideCells,
-        dir: core.config.ui.directoryBarDir as SlideDir,
-        staggerPct: core.config.ui.directoryBarStaggerPct,
-        ease: core.config.ui.directoryBarEase as EaseKey,
+        style: core.config.ui.directoryBarAnimationStyle,
+        ms: core.config.ui.directoryBarAnimationMs,
+        slideCells: core.config.ui.directoryBarAnimationSlideCells,
+        dir: core.config.ui.directoryBarAnimationSlideDir as SlideDir,
+        staggerPct: core.config.ui.directoryBarAnimationStaggerPct,
+        ease: core.config.ui.directoryBarAnimationEase as EaseKey,
       }),
       barIds: () => crumbItemIds(byId, `tfm-p${pane}-`),
     });

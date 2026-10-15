@@ -185,12 +185,12 @@ describe("settingGroups shape", () => {
     // ##top bar vs ##directory bar); a NEW duplicate outside this set is a
     // naming regression, not progressive disclosure
     expect(dups).toEqual([
-      ["direction", 4],
-      ["duration", 4],
-      ["easing", 4],
+      ["direction", 6],
+      ["duration", 6],
+      ["easing", 6],
       ["spread", 4],
-      ["style", 3],
-      ["travel", 4],
+      ["style", 4],
+      ["travel", 6],
     ]);
   });
 
@@ -255,8 +255,20 @@ describe("settingGroups shape", () => {
     expect(anim[0]).toBe("##files");
     expect(anim.indexOf("file animation")).toBeGreaterThan(anim.indexOf("##files"));
     expect(anim.indexOf("file animation")).toBeLessThan(anim.indexOf("##file hover"));
-    expect(anim.indexOf("lift direction")).toBeLessThan(anim.indexOf("##sidebar intro"));
+    expect(anim.indexOf("lift labels")).toBeLessThan(anim.indexOf("##sidebar intro"));
     expect(anim.indexOf("include logo")).toBeLessThan(anim.indexOf("##sidebar hover"));
+    // every section header appears exactly ONCE and its children stay under it
+    const headers = anim.filter((r) => r.startsWith("##"));
+    expect(new Set(headers).size).toBe(headers.length);
+    const dirHeader = anim.indexOf("##directory bar");
+    const scrollHeader = anim.indexOf("##scrolling");
+    expect(dirHeader).toBeLessThan(scrollHeader);
+    // all six directory-bar children sit between their header and scrolling
+    for (const label of ["style", "duration", "travel", "direction", "spread", "easing"]) {
+      const i = anim.indexOf(label, dirHeader);
+      expect(i).toBeGreaterThan(dirHeader);
+      expect(i).toBeLessThan(scrollHeader);
+    }
     // every performance knob lives in the optimization category, nowhere here
     expect(anim).not.toContain("##performance");
     expect(anim).not.toContain("reveal delay");
@@ -505,23 +517,23 @@ describe("settingGroups shape", () => {
     expect(kb.filter((r) => r.kind !== "header" && r.label !== "keymap preset").every(isKeybind)).toBe(true);
   });
 
-  test("hover controls share one vocabulary per mechanism (lift vs nudge)", () => {
+  test("every animation surface shares one knob vocabulary (hover included)", () => {
     const h = mk();
     withMasters(h, true);
+    // hover is no longer a special mini-shape: it carries the same timing
+    // grammar as the entrance animations, under its own group row
+    for (const row of ["duration", "travel", "direction", "easing"]) {
+      expect(inSection(h, "animations", "file hover", row).label).toBe(row);
+      expect(inSection(h, "animations", "sidebar hover", row).label).toBe(row);
+    }
+    // hover-specific extras stay
+    expect(inSection(h, "animations", "file hover", "lift labels").label).toBe("lift labels");
+    expect(inSection(h, "animations", "sidebar hover", "nudge labels").label).toBe("nudge labels");
+    expect(inSection(h, "animations", "file hover", "lift icons").label).toBe("lift icons");
     const anim = h
       .groups()
       .find((g) => g.header === "animations")!
       .rows.map((r) => r.label);
-    for (const label of [
-      "lift icons",
-      "lift labels",
-      "lift direction",
-      "nudge icons",
-      "nudge labels",
-      "nudge direction",
-    ]) {
-      expect(anim).toContain(label);
-    }
     expect(anim).not.toContain("tile hover pop");
     expect(anim).not.toContain("hover lift distance");
   });
@@ -821,7 +833,8 @@ describe("generic schema rows", () => {
     expect(asStepper(h.byLabel("slide duration")).fmt(120)).toBe("120 ms");
     // percents render tight, no space
     expect(asStepper(files("spread")).fmt(40)).toBe("40%");
-    expect(asStepper(files("travel")).fmt(70)).toBe("70%");
+    expect(asStepper(files("travel")).fmt(16)).toBe("16 cells");
+    expect(asStepper(files("travel")).fmt(1)).toBe("1 cell");
     // cells singularize only at 1
     expect(asStepper(h.byLabel("sidebar width")).fmt(26)).toBe("26 cells");
     expect(asStepper(h.byLabel("sidebar width")).fmt(1)).toBe("1 cell");

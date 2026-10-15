@@ -378,11 +378,11 @@ describe("applyConfig", () => {
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.ui.fileHoverAnimation = true;
-    fresh.ui.fileHoverDirection = "down";
+    fresh.ui.fileHoverSlideDir = "down";
     retheme.applyConfig(fresh);
     expect(ctx.calls.renderAll).toBe(1);
     expect(ctx.config.ui.fileHoverAnimation).toBe(true);
-    expect(ctx.config.ui.fileHoverDirection).toBe("down");
+    expect(ctx.config.ui.fileHoverSlideDir).toBe("down");
   });
 
   test("tile-hover include-label stays value-only (rides live in the animator)", () => {

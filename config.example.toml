@@ -50,13 +50,12 @@ icon-style                            = "filled"    # "filled" = solid icon rast
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 tty-mode                              = "auto"      # "auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never
 force-glyph                           = false       # true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)
-file-animation                        = false       # true = animate files appearing in the content area (style derived from file-animation-slide + file-animation-stagger)
-file-animation-slide                  = false       # true = files rise up into place (distance = file-animation-slide-pct)
-file-animation-stagger                = false       # true = top-to-bottom cascade instead of one wave
+file-animation                        = false       # true = animate files appearing in the content area (style = file-animation-style)
+file-animation-style                  = "fade"      # "fade" = files fade in together; "slide" = they rise in as one wave; "stagger" = files appear one after another; "stagger-slide" = each file slides+fades in
 file-animation-ms                     = 180         # content-area file animation duration, 0..800 ms (0 = instant)
-file-animation-stagger-pct            = 40          # how spread the cascade wave is, 0..300% (0 = all tiles at once; over 100 = the wave outlives the duration)
-file-animation-slide-pct              = 70          # how far files slide, 0..150% of the viewport (0 = fade in place; clamped to whole cells)
+file-animation-slide-cells            = 16          # how far files slide, 0..32 cells (0 = fade in place)
 file-animation-slide-dir              = "up"        # "up"/"down" = files rise/drop vertically; "left"/"right" = files slide in horizontally
+file-animation-stagger-pct            = 40          # how spread the cascade wave is, 0..300% (0 = all tiles at once; over 100 = the wave outlives the duration)
 file-animation-ease                   = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
 windowed-grid                         = true        # true = render only the visible rows (plus overscan) of a folder, sliding as you scroll (huge folders stop rebuilding/relaying thousands of off-screen tiles; selection and search still see every file)
 loading-delay-ms                      = 150         # how long a folder listing may take before the pane swaps to a loading placeholder instead of keeping the previous folder's files on screen (0 = clear and show it immediately, 5000 = effectively never)
@@ -64,9 +63,12 @@ listings-cache                        = true        # true = reuse a folder's fi
 listings-cache-stats                  = true        # true = keep file sizes/dates inside the cached folder listing too, so size/date sorts stop re-stating every file on every repaint (displayed stats can lag a live edit by up to the cache ttl)
 listings-cache-ttl                    = 2           # seconds a cached folder listing may serve possibly-stale sizes/dates (or files at all on mounts whose folder timestamps freeze) before re-reading; 1 = freshest, 300 = best on slow network mounts
 lazy-startup                          = false       # true = paint first, then load USB drives and plugins in the background (faster first paint, Devices rows and plugin UI arrive a beat later); false = everything loaded before the first paint (needs restart)
-file-hover-animation                  = false       # true = hover nudges the tile icon one cell in the lift direction (rest layout unchanged; up skips the top row, tiles without room keep the highlight only)
-file-hover-include-label              = false       # true = the filename rides along with the hover lift
-file-hover-direction                  = "up"        # "up"/"down" = the icon rises/drops vertically; "left"/"right" = it nudges horizontally
+file-hover-animation                  = false       # true = hover animates the tile icon (ms/travel/dir/ease below; rest layout unchanged, only tiles with room move)
+file-hover-ms                         = 0           # tile hover animation duration, 0..800 ms (0 = snap instantly — responsive under fast mouse sweeps)
+file-hover-slide-cells                = 1           # how far the icon travels on hover, 0..8 cells (0 = no motion); a longer travel plus a duration gives a smooth glide
+file-hover-slide-dir                  = "up"        # "up"/"down" = the icon rises/drops vertically; "left"/"right" = it moves horizontally
+file-hover-ease                       = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
+file-hover-include-label              = false       # true = the filename rides along with the hover motion
 sidebar-animation                     = false       # true = animate the places sidebar on boot (style = sidebar-animation-style) (needs restart)
 sidebar-animation-style               = "fade"      # "fade" = the whole sidebar fades in; "slide" = it slides in from the edge; "stagger" = places rows cascade in; "stagger-slide" = each row slides+fades in, files-style (needs restart)
 sidebar-animation-ms                  = 180         # sidebar intro duration, 0..800 ms (0 = instant) (needs restart)
@@ -75,9 +77,12 @@ sidebar-animation-slide-dir           = "left"      # "left"/"right" = slides in
 sidebar-animation-stagger-pct         = 40          # how spread the sidebar cascade is, 0..300% (0 = all rows at once) (needs restart)
 sidebar-animation-ease                = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends (needs restart)
 sidebar-animation-include-title       = false       # true = the sidebar title joins the boot cascade first (stagger/stagger-slide only; fade/slide already move it with the whole panel) (needs restart)
-sidebar-hover-animation               = false       # true = hovering a sidebar row nudges its icon one cell (rest layout unchanged; the cwd-selected row keeps its paint only)
-sidebar-hover-include-label           = false       # true = the row label rides along with the hover nudge
-sidebar-hover-direction               = "left"      # "left" = the icon nudges into the row padding; "right" = it nudges toward the label
+sidebar-hover-animation               = false       # true = hover animates a sidebar row icon (ms/travel/dir/ease below; rest layout unchanged; the cwd-selected row keeps its paint only)
+sidebar-hover-ms                      = 0           # row hover animation duration, 0..800 ms (0 = snap instantly — responsive under fast mouse sweeps)
+sidebar-hover-slide-cells             = 1           # how far the row icon travels on hover, 0..8 cells (0 = no motion); a longer travel plus a duration gives a smooth glide
+sidebar-hover-slide-dir               = "left"      # "left" = the icon moves into the row padding; "right" = it moves toward the label (rows are one cell tall, so only the horizontal pair is offered)
+sidebar-hover-ease                    = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
+sidebar-hover-include-label           = false       # true = the row label rides along with the hover motion
 topbar-animation                      = false       # true = cascade each top bar button + crumb in on boot (style = topbar-animation-style) (needs restart)
 topbar-animation-style                = "fade"      # "fade" = all items fade in together; "slide" = they slide in from the edge as one wave; "stagger" = buttons + crumbs cascade left-to-right; "stagger-slide" = each item slides+fades in, files-style (needs restart)
 topbar-animation-ms                   = 180         # top bar intro duration, 0..800 ms (0 = instant) (needs restart)
@@ -86,15 +91,15 @@ topbar-animation-slide-dir            = "down"      # "down"/"up" = slides in ve
 topbar-animation-stagger-pct          = 40          # how spread the item cascade is, 0..300% (0 = all items at once) (needs restart)
 topbar-animation-ease                 = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends (needs restart)
 directory-bar-animation               = false       # true = rebuilt crumbs cascade in on every directory change (not just boot)
+directory-bar-animation-style         = "stagger"   # "stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style
+directory-bar-animation-ms            = 180         # directory bar animation duration, 0..800 ms (0 = instant)
+directory-bar-animation-slide-cells   = 8           # how far crumbs slide in, 0..32 cells (0 = fade in place)
+directory-bar-animation-slide-dir     = "right"     # "right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically
+directory-bar-animation-stagger-pct   = 40          # how spread the crumb cascade is, 0..300% (0 = all crumbs at once)
+directory-bar-animation-ease          = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
 smooth-scrolling                      = true        # true = smooth-scroll the grid (keyboard jumps glide home over glide time, the wheel flows on the wheel beat); page jumps and the console stay instant
 smooth-scroll-ms                      = 160         # keyboard glide length, 0..800 ms (0 = instant)
 smooth-wheel-ms                       = 30          # pause between wheel steps, 0..200 ms (0 = instant native jumps)
-directory-bar-style                   = "stagger"   # "stagger" = crumbs cascade in left-to-right; "fade"/"slide" = one wave; "stagger-slide" = each crumb slides+fades in, files-style
-directory-bar-ms                      = 180         # directory bar animation duration, 0..800 ms (0 = instant)
-directory-bar-slide-cells             = 8           # how far crumbs slide in, 0..32 cells (0 = fade in place)
-directory-bar-dir                     = "right"     # "right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically
-directory-bar-stagger-pct             = 40          # how spread the crumb cascade is, 0..300% (0 = all crumbs at once)
-directory-bar-ease                    = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
 file-animation-container-fade         = true        # true = fade the grid as one layer instead of per tile (same look, one opacity update per frame instead of one per file)
 file-animation-visible-only           = true        # true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)
 file-animation-row-granularity        = false       # true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)

@@ -10,9 +10,10 @@
 // byId, so a sidebar rebuild under a stationary cursor can never write to a
 // dead row. No timeline: a whole-cell translate cannot tween. ---
 
-import { hoverLiftDelta } from "./ui-grid-anim";
+import { hoverOffset, makeHoverTween, type EaseKey } from "./ui-grid-anim";
 import type { SidebarHoverOpts } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
+import type { CliRenderer } from "@opentui/core";
 
 export type { SidebarHoverOpts };
 
@@ -24,6 +25,7 @@ export type SidebarRowRef = {
 };
 
 type SidebarHoverCtx = {
+  renderer: () => CliRenderer;
   byId(id: string): MaybeNode;
   rowRefs(): Map<string, SidebarRowRef>;
   hoverOpts(): SidebarHoverOpts;
@@ -33,6 +35,8 @@ type HoverCur = { key: string; refs: SidebarRowRef; node: MaybeNode };
 
 export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
   let current: HoverCur | null = null;
+  // one reused tween drives the hover-in glide when duration > 0 (ms 0 = snap)
+  const tween = makeHoverTween(ctx.renderer);
 
   // A row copied from a previous build may have been destroyed by a sidebar
   // rebuild, so only touch the node refs when byId still resolves to them.
@@ -66,6 +70,7 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
   const dropLift = (cur: HoverCur | null): void => {
     if (!cur) return;
     if (!ownedNode(cur)) return;
+    tween.stop();
     writeLift(cur.refs, 0, 0);
   };
 
@@ -113,21 +118,33 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
         dropLift(current);
         current = null;
       }
-      const delta = hoverLiftDelta(opts.direction);
-      try {
-        const slot = refs.iconSlotId ? ctx.byId(refs.iconSlotId) : null;
-        if (slot) {
-          slot.translateX = delta.dx;
-          slot.translateY = delta.dy;
-        }
-        const label = refs.labelId ? ctx.byId(refs.labelId) : null;
-        if (label) {
-          const withLabel = opts.includeLabel;
-          label.translateX = withLabel ? delta.dx : 0;
-          label.translateY = withLabel ? delta.dy : 0;
-        }
-      } catch {}
-      current = { key, refs, node };
+      const off = hoverOffset(opts.direction, opts.slideCells);
+      const nextCur: HoverCur = { key, refs, node };
+      current = nextCur;
+      // writes the offset at hover progress p; the label rides only when
+      // include-label is on. p=1 settled hover, p=0 rest.
+      const writeAt = (cur: HoverCur | null, p: number): void => {
+        if (!cur) return;
+        try {
+          const slot = cur.refs.iconSlotId ? ctx.byId(cur.refs.iconSlotId) : null;
+          if (slot) {
+            slot.translateX = Math.round(off.dx * p);
+            slot.translateY = Math.round(off.dy * p);
+          }
+          const label = cur.refs.labelId ? ctx.byId(cur.refs.labelId) : null;
+          if (label) {
+            const wl = opts.includeLabel;
+            label.translateX = wl ? Math.round(off.dx * p) : 0;
+            label.translateY = wl ? Math.round(off.dy * p) : 0;
+          }
+        } catch {}
+      };
+      if (opts.ms > 0) {
+        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, (p) => writeAt(nextCur, p));
+      } else {
+        tween.stop();
+        writeAt(nextCur, 1);
+      }
     } catch {
       // never strand a lifted row when an unexpected lookup fails
       try {

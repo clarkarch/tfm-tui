@@ -47,6 +47,7 @@ beforeAll(async () => {
 
   // chrome's hoverRow seam forwards to the REAL animator (mirrors wiring/chrome)
   hover = makeSidebarHover({
+    renderer: () => t.renderer,
     byId,
     rowRefs: () =>
       new Map(
@@ -55,7 +56,7 @@ beforeAll(async () => {
           { rowId: r.rowId, iconSlotId: r.specs[0]?.slotId ?? "", labelId: r.labelId, selected: r.selected },
         ]),
       ),
-    hoverOpts: () => ({ enabled: true, direction: "left", includeLabel: true }),
+    hoverOpts: () => ({ enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "left", includeLabel: true }),
   });
 
   chrome = makeChrome({

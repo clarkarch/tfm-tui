@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box } from "@opentui/core";
+import { Box, getTimelineEngine } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeSidebarHover, type SidebarHoverOpts, type SidebarRowRef } from "./ui-sidebar-hover";
 
@@ -23,8 +23,17 @@ const setup = (
     nodes.set(labelId, { translateX: 0, translateY: 0 });
     refs.set(rowId, { rowId, iconSlotId, labelId, selected: r.selected ?? false });
   }
-  let o: SidebarHoverOpts = { enabled: true, direction: "left", includeLabel: false, ...over };
+  let o: SidebarHoverOpts = {
+    enabled: true,
+    ms: 0,
+    slideCells: 1,
+    ease: "ease-out",
+    direction: "left",
+    includeLabel: false,
+    ...over,
+  };
   const hover = makeSidebarHover({
+    renderer: () => null as any,
     byId: (id: string) => nodes.get(id) ?? null,
     rowRefs: () => refs,
     hoverOpts: () => o,
@@ -88,7 +97,7 @@ describe("makeSidebarHover", () => {
     const { hover, nodes, setOpts } = setup();
     hover.playHover("tfm-place-0", true);
     expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(-1);
-    setOpts({ enabled: false, direction: "left", includeLabel: false });
+    setOpts({ enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "left", includeLabel: false });
     hover.playHover("tfm-place-0", true);
     expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(0);
   });
@@ -186,9 +195,17 @@ describe("makeSidebarHover (engine)", () => {
       ["sh-row", { rowId: "sh-row", iconSlotId: "sh-icon", labelId: "sh-label", selected: false }],
     ]);
     const hover = makeSidebarHover({
+      renderer: () => t.renderer,
       byId,
       rowRefs: () => refs,
-      hoverOpts: () => ({ enabled: true, direction: "left", includeLabel: false }),
+      hoverOpts: () => ({
+        enabled: true,
+        ms: 0,
+        slideCells: 1,
+        ease: "ease-out",
+        direction: "left",
+        includeLabel: false,
+      }),
     });
     hover.playHover("sh-row", true);
     await t.renderOnce();
@@ -196,5 +213,37 @@ describe("makeSidebarHover (engine)", () => {
     hover.playHover("sh-row", false);
     await t.renderOnce();
     expect((byId("sh-icon") as any).translateX).toBe(0);
+  });
+
+  test("duration > 0 glides the row nudge in over `travel` cells", async () => {
+    t.renderer.root.add(Box({ id: "sg-row", width: 20, height: 1 }));
+    t.renderer.root.add(Box({ id: "sg-icon", width: 2, height: 1 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const refs = new Map<string, SidebarRowRef>([
+      ["sg-row", { rowId: "sg-row", iconSlotId: "sg-icon", labelId: "sg-label", selected: false }],
+    ]);
+    const hover = makeSidebarHover({
+      renderer: () => t.renderer,
+      byId,
+      rowRefs: () => refs,
+      hoverOpts: () => ({
+        enabled: true,
+        ms: 100,
+        slideCells: 4,
+        ease: "linear",
+        direction: "left",
+        includeLabel: false,
+      }),
+    });
+    hover.playHover("sg-row", true);
+    await t.renderOnce();
+    // frame 0 staged at rest (no flash at the full offset)
+    expect((byId("sg-icon") as any).translateX).toBe(0);
+    const step = (ms: number) => getTimelineEngine(t.renderer).update(ms);
+    step(50); // linear half of 4 cells = 2
+    expect((byId("sg-icon") as any).translateX).toBe(-2);
+    step(50);
+    expect((byId("sg-icon") as any).translateX).toBe(-4);
   });
 });

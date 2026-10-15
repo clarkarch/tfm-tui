@@ -27,12 +27,9 @@ export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slid
 export type EaseKey = "linear" | "ease-out" | "ease-in-out";
 export type SlideDir = "up" | "down" | "left" | "right";
 
-// `translateY` is whole-cells only (fractional coords crash image draw), so the
-// slide travel MUST be large: a 3-cell travel is just 4 integer positions over
-// ~40 frames and reads as 3 jumps. A viewport-ish travel gives ~1 step/frame.
-const SLIDE_FRACTION = 0.7;
-const SLIDE_MIN = 8;
-const SLIDE_MAX = 28;
+// `translateY` is whole-cells only (fractional coords crash image draw), so a
+// slide travel should be a good handful of cells; `file-animation-slide-cells`
+// is the knob (0 = fade in place).
 
 // ceiling for the PER-NODE styles (fade without container-fade, stagger,
 // stagger-slide): one native push per tile per frame. See play().
@@ -64,21 +61,13 @@ export const quantizeDy = (dy: number): number => {
   return q === 0 ? 0 : q;
 };
 
-// pure: how far `slide` travels. Must be many cells: rounded to whole cells, a
-// short travel has only a handful of positions and reads as a few jumps.
-// `pct` is file-animation-slide-pct (0 = fade in place).
-export const slideTravel = (viewportH: number, pct = 70): number => {
-  if (!(pct > 0)) return 0;
-  const vh = Number.isFinite(viewportH) ? viewportH : 24;
-  const travel = Math.round(vh * SLIDE_FRACTION * (pct / 100));
-  return Math.max(SLIDE_MIN, Math.min(Math.round(SLIDE_MAX * (pct / 100)), travel));
-};
-
 export type FileAnimFrame = { opacity: number; dx: number; dy: number };
 
-// pure: the config toggles -> the style the curves run
-export const fileAnimStyleFrom = (o: { enabled: boolean; slide: boolean; stagger: boolean }): FileAnimStyle =>
-  !o.enabled ? "off" : o.slide && o.stagger ? "stagger-slide" : o.slide ? "slide" : o.stagger ? "stagger" : "fade";
+// pure: the master toggle + style enum -> the style the curves run. The enum
+// matches the panel intros (sidebar/topbar/directory bar) exactly; only the
+// master can turn it off.
+export const fileAnimStyleFrom = (o: { enabled: boolean; style: string }): FileAnimStyle =>
+  !o.enabled ? "off" : o.style === "slide" || o.style === "stagger" || o.style === "stagger-slide" ? o.style : "fade";
 
 export type FileAnimCfg = {
   dist?: number; // slide travel in cells (0 = no motion)
@@ -170,7 +159,7 @@ type FileAnimOpts = {
   style: FileAnimStyle;
   ms: number;
   staggerPct: number;
-  slidePct: number;
+  slideCells: number;
   dir: SlideDir;
   ease: EaseKey;
   // [ui] file-animation-container-fade: fade the container node instead of
@@ -284,7 +273,6 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   const play = (target: FileAnimTarget): FileAnimMode => {
     try {
       const o = ctx.opts();
-      const vh = typeof ctx.renderer?.terminalHeight === "number" ? ctx.renderer.terminalHeight : 24;
       // max-files: the whole-grid render-list rewalk on every animation frame
       // scales with TOTAL files — over the knob, appear instantly instead of
       // janking through the animation (0 = the knob is off)
@@ -369,7 +357,7 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
         total = useRows ? Math.max(target?.rowsTotal ?? 0, nodes.length) : Math.max(target?.total ?? 0, nodes.length);
         style = rm.style;
         cfg = {
-          dist: slideTravel(vh, o.slidePct),
+          dist: Math.max(0, Math.round(o.slideCells)),
           span: o.staggerPct / 100,
           ease: o.ease,
           dir: rm.dir,
@@ -437,7 +425,98 @@ export const hoverLiftDelta = (direction: string): { dx: number; dy: number } =>
   }
 };
 
+// pure: the hover travel = the direction unit vector scaled by `cells` (0 =
+// no motion).
+export const hoverOffset = (direction: string, cells: number): { dx: number; dy: number } => {
+  const d = hoverLiftDelta(direction);
+  const c = Number.isFinite(cells) && cells > 0 ? Math.round(cells) : 0;
+  // `|| 0` normalizes -0 (Object.is distinguishes it; paints identically)
+  return { dx: d.dx * c || 0, dy: d.dy * c || 0 };
+};
+
+// One reused hover timeline (same rules as makeFileAnim: owner-engine once,
+// restart() to retarget, never createTimeline per event). `run` transitions a
+// 0..1 progress from `from` to `to` and hands the EASED value to `apply`; a
+// non-positive `ms` applies the end state synchronously — the historical
+// instant snap (a tween lags a fast mouse sweep).
+export const makeHoverTween = (getRenderer: () => CliRenderer) => {
+  let owner: Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null = null;
+  let ownerResolved = false;
+  const resolveOwner = (): Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null => {
+    if (ownerResolved) return owner;
+    ownerResolved = true;
+    try {
+      const r = getRenderer();
+      if (typeof r?.setFrameCallback === "function") owner = getTimelineEngine(r);
+    } catch {}
+    return owner;
+  };
+  let tl: ReturnType<typeof createTimeline> | null = null;
+  let usedMs = -1;
+  const holder = { p: 0 };
+  let applyCb: ((p: number) => void) | null = null;
+  let doneCb: (() => void) | null = null;
+
+  const stop = (): void => {
+    if (tl) {
+      try {
+        (owner ?? engine).unregister(tl);
+      } catch {}
+    }
+    tl = null;
+    usedMs = -1;
+    applyCb = null;
+    doneCb = null;
+  };
+
+  const ensure = (ms: number): void => {
+    if (tl && usedMs === ms) return;
+    if (tl) {
+      try {
+        (owner ?? engine).unregister(tl);
+      } catch {}
+    }
+    usedMs = ms;
+    const r = getRenderer();
+    owner = resolveOwner();
+    tl = owner ? createTimeline({ autoplay: false }, r) : createTimeline({ autoplay: false });
+    tl.add(holder, {
+      p: 1,
+      duration: Math.max(1, ms),
+      ease: "linear",
+      onUpdate: (a: JSAnimation) => applyCb?.(a.progress),
+      onComplete: () => doneCb?.(),
+    });
+  };
+
+  const run = (
+    ms: number,
+    ease: EaseKey,
+    from: number,
+    to: number,
+    apply: (p: number) => void,
+    done?: () => void,
+  ): void => {
+    applyCb = (prog: number) => apply(easeAt(ease, from + (to - from) * prog));
+    doneCb = done ?? null;
+    if (!(ms > 0)) {
+      applyCb(1);
+      const d = doneCb;
+      stop();
+      d?.();
+      return;
+    }
+    ensure(ms);
+    holder.p = 0;
+    applyCb(0);
+    tl?.restart();
+  };
+
+  return { run, stop };
+};
+
 type TileHoverCtx = {
+  renderer: () => CliRenderer;
   byId(id: string): MaybeNode;
   tileRefs(): Map<string, SelTileRef>;
   colors(): Theme;
@@ -461,6 +540,8 @@ type HoverCur = {
 
 export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
   let current: HoverCur | null = null;
+  // one reused tween drives the hover-in glide when duration > 0 (ms 0 = snap)
+  const tween = makeHoverTween(ctx.renderer);
 
   // cut state is resolved like selection.setTileVisual: only unselected
   // clipboard tiles render dimmed
@@ -509,6 +590,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     if (!cur) return;
     const node = ownedNode(cur);
     if (!node) return;
+    tween.stop();
     const slot = ownedSlot(cur);
     const label = ownedLabel(cur);
     try {
@@ -618,20 +700,39 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
 
       // sweep: the pointer moved to another tile without an out landing first
       if (hovered && current && current.key !== key) restPaint(current);
-      const delta = hoverLiftDelta(opts.direction);
       const lift = hovered && refs.hoverLift === true;
-      try {
-        if (slot) {
-          slot.translateX = lift ? delta.dx : 0;
-          slot.translateY = lift ? delta.dy : 0;
-        }
-        if (labNode) {
-          const withLabel = lift && opts.includeLabel;
-          labNode.translateX = withLabel ? delta.dx : 0;
-          labNode.translateY = withLabel ? delta.dy : 0;
-        }
-      } catch {}
-      current = hovered ? { key, refs, node, slot, label: labNode } : null;
+      const off = lift ? hoverOffset(opts.direction, opts.slideCells) : { dx: 0, dy: 0 };
+      const nextCur: HoverCur | null = hovered ? { key, refs, node, slot, label: labNode } : null;
+      current = nextCur;
+      // writes the offset at hover progress p (whole cells; the label rides
+      // only when include-label is on). p=1 is the settled hover, p=0 rest.
+      const writeAt = (cur: HoverCur | null, p: number): void => {
+        if (!cur) return;
+        const s = ownedSlot(cur);
+        const lab = ownedLabel(cur);
+        const dx = Math.round(off.dx * p);
+        const dy = Math.round(off.dy * p);
+        try {
+          if (s) {
+            s.translateX = dx;
+            s.translateY = dy;
+          }
+          if (lab) {
+            const wl = lift && opts.includeLabel;
+            lab.translateX = wl ? dx : 0;
+            lab.translateY = wl ? dy : 0;
+          }
+        } catch {}
+      };
+      // duration 0 (the default) keeps the historical instant snap; a positive
+      // duration glides in over `travel` cells (under a 1-cell travel the
+      // whole-cell rounding makes the tween a snap too — pick travel > 1)
+      if (lift && opts.ms > 0) {
+        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, (p) => writeAt(nextCur, p));
+      } else {
+        tween.stop();
+        writeAt(nextCur, 1);
+      }
     } catch {
       // never strand a lifted tile when an unexpected lookup/paint fails
       try {

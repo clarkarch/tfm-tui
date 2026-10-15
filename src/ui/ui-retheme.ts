@@ -241,11 +241,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "hoverAnimMs",
     "terminalHeight",
     "fileAnimation",
-    "fileAnimationSlide",
-    "fileAnimationStagger",
+    "fileAnimationStyle",
     "fileAnimationMs",
     "fileAnimationStaggerPct",
-    "fileAnimationSlidePct",
+    "fileAnimationSlideCells",
     "fileAnimationSlideDir",
     "fileAnimationEase",
     "fileAnimationScrollRevealDelayMs",
@@ -267,8 +266,12 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // tile layout at build (marginTop headroom + refs.hoverLift in
     // ui-grid-rows.ts, both in the grid content sig) — the live per-hover read
     // only covers the highlight/lift paint. Exempting them left the old tiles
-    // in place until the next natural rebuild. includeLabel stays exempt: it
-    // rides live in the animator with no baked layout behind it.
+    // in place until the next natural rebuild. ms/travel/ease/include-label stay
+    // exempt: they ride live in the hover animator with no baked layout behind
+    // them.
+    "fileHoverMs",
+    "fileHoverSlideCells",
+    "fileHoverEase",
     "sidebarAnimation",
     "sidebarAnimationStyle",
     "sidebarAnimationMs",
@@ -279,7 +282,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "sidebarAnimationIncludeTitle",
     "sidebarHoverAnimation",
     "sidebarHoverIncludeLabel",
-    "sidebarHoverDirection",
+    "sidebarHoverSlideDir",
+    "sidebarHoverMs",
+    "sidebarHoverSlideCells",
+    "sidebarHoverEase",
     "topbarAnimation",
     "topbarAnimationStyle",
     "topbarAnimationMs",
@@ -288,12 +294,12 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "topbarAnimationStaggerPct",
     "topbarAnimationEase",
     "directoryBarAnimation",
-    "directoryBarStyle",
-    "directoryBarMs",
-    "directoryBarSlideCells",
-    "directoryBarDir",
-    "directoryBarStaggerPct",
-    "directoryBarEase",
+    "directoryBarAnimationStyle",
+    "directoryBarAnimationMs",
+    "directoryBarAnimationSlideCells",
+    "directoryBarAnimationSlideDir",
+    "directoryBarAnimationStaggerPct",
+    "directoryBarAnimationEase",
     "smoothScrolling",
     "smoothScrollMs",
     "smoothWheelMs",
