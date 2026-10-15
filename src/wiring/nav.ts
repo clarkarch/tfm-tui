@@ -5,7 +5,7 @@
 // the old flat wiring used, just parameterized. ---
 
 import { makeRenderAll } from "../app/render-all";
-import { makeQuit } from "../app/quit";
+import { makeForceQuit, makeQuit } from "../app/quit";
 import { makeRestart, restartArgs } from "../app/restart";
 import { sharedOpQueue } from "../lib/op-queue";
 import { makeStatus } from "../ui/ui-status";
@@ -28,10 +28,18 @@ export const wireNav = (deps: {
   getGrid: () => GridWiring;
   getTermHasFocus: () => boolean;
   getTerm: () => { closeTerminalPane(): void };
-  getWatcher: () => { syncCwdWatcher(): void };
+  getWatcher: () => { syncCwdWatcher(): void; stopCwdWatchers?: () => void };
   // USB device poller (wired after nav in io; lazy getter like getWatcher).
   // Optional so old callers keep compiling — absent = nothing to stop.
   getDevices?: () => { stopDeviceWatcher(): void };
+  // live config watcher (wired after nav in retheme; lazy getter like
+  // getDevices). Optional so old callers keep compiling.
+  getRetheme?: () => { stopConfigWatch(): void; startConfigWatch?(): void };
+  // destroy marker for the renderer-closed fallback (index.ts): set when ANY
+  // quit path starts tearing the renderer down, so the fallback can tell a
+  // quit-initiated destroy from an outside one (terminal-close signal).
+  // Optional so old callers keep compiling.
+  onTeardownDestroy?: () => void;
   // plugin teardown at quit (wired after nav; lazy getter). Best-effort sync.
   getPlugins?: () => {
     deactivateAll(): void;
@@ -103,6 +111,8 @@ export const wireNav = (deps: {
     stopGpm: () => getChrome().stopGpm(),
     stopChromeTimers: () => getChrome().stopChromeTimers(),
     stopDevices: () => deps.getDevices?.().stopDeviceWatcher(),
+    stopWatchers: () => getWatcher().stopCwdWatchers?.(),
+    stopConfigWatch: () => deps.getRetheme?.().stopConfigWatch(),
     flushSession: () => {
       // no isVirtualCwd() guard: restore deliberately accepts recent:// and
       // starred:// tabs, so quitting from a virtual place must still persist
@@ -110,7 +120,12 @@ export const wireNav = (deps: {
       syncTabsFromState();
       saveSessionSync(paneTabs(), core.panes.active);
     },
-    destroy: () => getChrome().renderer.destroy(),
+    destroy: () => {
+      try {
+        deps.onTeardownDestroy?.();
+      } catch {}
+      getChrome().renderer.destroy();
+    },
     // 0.6.0: async destroy completion — exit waits for it (quit.ts)
     closed: () => getChrome().renderer.closed,
     exit: (code: number) => process.exit(code),
@@ -124,6 +139,9 @@ export const wireNav = (deps: {
     },
   };
   const quitApp = makeQuit(quitSteps);
+  // signal path (SIGHUP/SIGTERM): same steps, no isBusy refusal — the
+  // terminal is gone so the busy toast is invisible and refusing re-orphans
+  const quitAppForce = makeForceQuit(quitSteps);
 
   // --- Restart: same binary+args, parent WAITS (spawnSync) so the shell never
   // wakes mid-handoff — fire-and-forget left the child competing with the
@@ -147,6 +165,13 @@ export const wireNav = (deps: {
       } catch {}
       try {
         process.stdout.write(xtShiftEscapeFrame(true));
+      } catch {}
+      // the failed spawn ran the shared teardown first, which closed the live
+      // config watcher — re-arm it or external config.toml edits stop
+      // reloading for the rest of the session (cwd watchers re-arm themselves
+      // on the renderAll below via syncCwdWatcher)
+      try {
+        deps.getRetheme?.().startConfigWatch?.();
       } catch {}
       renderAll();
     },
@@ -236,6 +261,7 @@ export const wireNav = (deps: {
   return {
     renderAll,
     quitApp,
+    quitAppForce,
     restartApp,
     setStatusMsg,
     canBack,

@@ -461,36 +461,60 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       });
   });
 
-  // --- live config reload ---
-  try {
+  // --- live config reload (held so quit can close it — an open FSWatcher
+  // pins the event loop and orphaned tfm after a terminal close; re-armed by
+  // startConfigWatch after a failed restart recover, which shares the quit
+  // teardown and would otherwise lose external-edit reloads) ---
+  let configWatcher: { close(): void } | null = null;
+  const applyFreshConfig = debounced(250, () => {
+    try {
+      const fresh = loadConfig();
+      if (JSON.stringify(fresh) === lastSavedSig) return;
+      applyConfig(fresh);
+      ctx.notify("config reloaded", "config", "success");
+      // hand-edited dup binds shadow silently at dispatch — toast once per
+      // change (own saves are skipped above, so settings commits never echo)
+      const sig = JSON.stringify(findKeybindConflicts(fresh));
+      if (sig !== lastConflictSig) {
+        lastConflictSig = sig;
+        const text = describeKeybindConflicts(fresh);
+        if (text) ctx.notify(`${text} — Settings → keys`, "keybind conflict");
+      }
+    } catch {}
+  });
+  const armConfigWatch = (): void => {
+    if (configWatcher) return;
     const cfgPath = configPath();
     // fs.watch throws ENOENT SYNCHRONOUSLY when the dir is missing, and nothing
     // creates ~/.config/tfm at boot (session/undo live under $XDG_STATE_HOME,
     // saveConfig only mkdirs on first save) — on a fresh profile the watcher
     // silently never installed, so external config edits never live-reloaded.
     mkdirSync(path.dirname(cfgPath), { recursive: true });
-    const applyFreshConfig = debounced(250, () => {
-      try {
-        const fresh = loadConfig();
-        if (JSON.stringify(fresh) === lastSavedSig) return;
-        applyConfig(fresh);
-        ctx.notify("config reloaded", "config", "success");
-        // hand-edited dup binds shadow silently at dispatch — toast once per
-        // change (own saves are skipped above, so settings commits never echo)
-        const sig = JSON.stringify(findKeybindConflicts(fresh));
-        if (sig !== lastConflictSig) {
-          lastConflictSig = sig;
-          const text = describeKeybindConflicts(fresh);
-          if (text) ctx.notify(`${text} — Settings → keys`, "keybind conflict");
-        }
-      } catch {}
-    });
     const watcher = watch(path.dirname(cfgPath), (_event, filename) => {
       if (!filename || filename !== path.basename(cfgPath)) return;
       applyFreshConfig();
     });
     watcher.on("error", () => {});
+    configWatcher = watcher;
+  };
+  try {
+    armConfigWatch();
   } catch {}
 
-  return { rethemeChrome, applyConfig, scheduleSaveConfig };
+  const stopConfigWatch = (): void => {
+    if (configWatcher) {
+      try {
+        configWatcher.close();
+      } catch {}
+      configWatcher = null;
+    }
+  };
+
+  const startConfigWatch = (): void => {
+    try {
+      armConfigWatch();
+    } catch {}
+  };
+
+  return { rethemeChrome, applyConfig, scheduleSaveConfig, stopConfigWatch, startConfigWatch };
 };

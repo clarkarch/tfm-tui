@@ -65,7 +65,14 @@ export const wireWatcher = (deps: {
     watchers[0].syncCwdWatcher();
     watchers[1].syncCwdWatcher();
   };
-  return { syncCwdWatcher };
+  const stopCwdWatchers = (): void => {
+    for (const w of watchers) {
+      try {
+        w.closeWatcher();
+      } catch {}
+    }
+  };
+  return { syncCwdWatcher, stopCwdWatchers };
 };
 
 // --- USB device hotplug: a newly plugged drive appears in the sidebar

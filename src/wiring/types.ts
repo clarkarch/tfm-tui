@@ -44,6 +44,7 @@ import type { ExecutableInfo } from "../fs/executable";
 export type NavWiring = {
   renderAll: ReturnType<typeof makeRenderAll>;
   quitApp: ReturnType<typeof makeQuit>;
+  quitAppForce: ReturnType<typeof makeQuit>;
   restartApp: ReturnType<typeof makeRestart>;
   setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
   tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>];

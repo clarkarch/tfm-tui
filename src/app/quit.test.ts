@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { makeQuit, type QuitCtx } from "./quit";
+import { makeForceQuit, makeQuit, type QuitCtx } from "./quit";
 
 const mkCtx = (
   calls: string[],
-  fail?: "drops" | "release" | "destroy" | "session" | "terminal" | "gpm" | "onQuit",
+  fail?: "drops" | "release" | "destroy" | "session" | "terminal" | "gpm" | "onQuit" | "watchers" | "config",
 ): QuitCtx & { codes: number[] } => {
   const codes: number[] = [];
   return {
@@ -34,6 +34,14 @@ const mkCtx = (
     stopDevices: () => {
       calls.push("devices");
     },
+    stopWatchers: () => {
+      calls.push("watchers");
+      if (fail === "watchers") throw new Error("watcher close failed");
+    },
+    stopConfigWatch: () => {
+      calls.push("config");
+      if (fail === "config") throw new Error("config watch close failed");
+    },
     onQuit: () => {
       calls.push("onQuit");
       if (fail === "onQuit") throw new Error("plugin deactivate failed");
@@ -50,7 +58,7 @@ const mkCtx = (
 };
 
 describe("makeQuit", () => {
-  test("teardown order: drops -> release -> session -> terminal -> gpm -> chrome -> devices -> onQuit -> destroy -> exit(0)", () => {
+  test("teardown order: drops -> release -> session -> terminal -> gpm -> chrome -> devices -> watchers -> config -> onQuit -> destroy -> exit(0)", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls))();
     expect(calls).toEqual([
@@ -61,6 +69,8 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "watchers",
+      "config",
       "onQuit",
       "destroy",
       "exit:0",
@@ -78,6 +88,8 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "watchers",
+      "config",
       "onQuit",
       "destroy",
       "exit:1",
@@ -95,6 +107,8 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "watchers",
+      "config",
       "onQuit",
       "destroy",
       "exit:1",
@@ -112,6 +126,8 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "watchers",
+      "config",
       "onQuit",
       "destroy",
       "exit:1",
@@ -140,7 +156,17 @@ describe("makeQuit", () => {
     const okCtx = mkCtx(okCalls);
     makeQuit(okCtx)();
     expect(okCtx.codes).toEqual([0]);
-    for (const fail of ["drops", "release", "destroy", "session", "terminal", "gpm", "onQuit"] as const) {
+    for (const fail of [
+      "drops",
+      "release",
+      "destroy",
+      "session",
+      "terminal",
+      "gpm",
+      "watchers",
+      "config",
+      "onQuit",
+    ] as const) {
       const calls: string[] = [];
       const ctx = mkCtx(calls, fail);
       makeQuit(ctx)();
@@ -158,7 +184,19 @@ describe("makeQuit", () => {
     makeQuit(ctx)();
     // the USB device poller stops with the chrome timers (a poll landing
     // post-teardown would re-render into the destroyed renderer)
-    expect(calls).toEqual(["drops", "release", "session", "terminal", "gpm", "chrome", "devices", "onQuit", "destroy"]);
+    expect(calls).toEqual([
+      "drops",
+      "release",
+      "session",
+      "terminal",
+      "gpm",
+      "chrome",
+      "devices",
+      "watchers",
+      "config",
+      "onQuit",
+      "destroy",
+    ]);
     resolveClosed();
     await Bun.sleep(0);
     expect(calls).toEqual([
@@ -169,6 +207,8 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "watchers",
+      "config",
       "onQuit",
       "destroy",
       "exit:0",
@@ -204,5 +244,53 @@ describe("makeQuit", () => {
     };
     makeQuit(ctx)();
     expect(ctx.codes).toEqual([1]);
+  });
+
+  test("force quit bypasses the busy refusal (signal path must never re-orphan)", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    let busied = 0;
+    const busyCtx: QuitCtx & { codes: number[] } = {
+      ...ctx,
+      codes: ctx.codes,
+      isBusy: () => true,
+      onBusy: () => {
+        busied++;
+      },
+    };
+    makeForceQuit(busyCtx)();
+    expect(busied).toBe(0);
+    expect(calls).toEqual([
+      "drops",
+      "release",
+      "session",
+      "terminal",
+      "gpm",
+      "chrome",
+      "devices",
+      "watchers",
+      "config",
+      "onQuit",
+      "destroy",
+      "exit:0",
+    ]);
+  });
+
+  test("force quit closes watchers + config watch even without the busy guard", () => {
+    const calls: string[] = [];
+    makeForceQuit(mkCtx(calls))();
+    expect(calls).toContain("watchers");
+    expect(calls).toContain("config");
+  });
+
+  test("force quit caps a never-settling closed (dead pts must not re-orphan)", async () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    (ctx as QuitCtx & { closed?: () => Promise<void> }).closed = () => new Promise<void>(() => {});
+    const t0 = Date.now();
+    makeForceQuit(ctx)();
+    while (ctx.codes.length === 0 && Date.now() - t0 < 5000) await Bun.sleep(25);
+    expect(ctx.codes).toEqual([1]);
+    expect(Date.now() - t0).toBeLessThan(5000);
   });
 });

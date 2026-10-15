@@ -107,5 +107,5 @@ export const makeCwdWatcher = (ctx: CwdWatcherCtx) => {
     }
   };
 
-  return { syncCwdWatcher };
+  return { syncCwdWatcher, closeWatcher };
 };

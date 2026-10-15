@@ -21,6 +21,11 @@ export type QuitCtx = {
   // stop the USB device poller (same reason: a poll landing post-teardown
   // re-lists + re-renders into the destroyed renderer)
   stopDevices?(): void;
+  // close the cwd watchers (both panes hold an inotify watch that pins the
+  // event loop — without this a SIGHUP-destroyed renderer still never exits)
+  stopWatchers?(): void;
+  // close the live config watcher (same pin as above)
+  stopConfigWatch?(): void;
   // synchronous final session write — process.exit kills pending async IO,
   // so the debounced 400ms save loses the last navigation
   flushSession?(): void;
@@ -61,6 +66,59 @@ export const makeQuit =
     // past destroy's internal arming) — waiting would hang forever instead
     // of exiting 1, so bypass the wait on that path
     exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew);
+  };
+
+// --- Force quit for terminal-close signals (SIGHUP/SIGTERM): same teardown,
+// same honest exit code, but NO isBusy refusal. The terminal is gone so the
+// busy toast is invisible, and refusing would orphan the process exactly like
+// the bug. Staged transfers (.tfm-part-*) sweep on next boot; source intact.
+// The closed wait is capped: with the pts deleted the native close can stall
+// on EIO instead of settling, and waiting forever re-orphans. A live terminal
+// restores in ms, so the cap only bites the dead-terminal hang. ---
+export const FORCE_QUIT_CLOSE_TIMEOUT_MS = 2000;
+export const makeForceQuit =
+  (ctx: QuitCtx): (() => void) =>
+  () => {
+    let failed = runTeardownSteps(ctx);
+    let destroyThrew = false;
+    try {
+      ctx.destroy();
+    } catch {
+      failed = true;
+      destroyThrew = true;
+    }
+    if (!ctx.closed || destroyThrew) {
+      exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew);
+      return;
+    }
+    let closed: Promise<void>;
+    try {
+      closed = ctx.closed();
+    } catch {
+      try {
+        ctx.exit(1);
+      } catch {}
+      return;
+    }
+    void Promise.race([
+      closed,
+      new Promise<void>((_, reject) => {
+        const t = setTimeout(() => reject(new Error("force-quit close timeout")), FORCE_QUIT_CLOSE_TIMEOUT_MS);
+        // a lingering timer pins the loop the teardown just drained — unref it
+        (t as unknown as { unref?: () => void }).unref?.();
+      }),
+    ]).then(
+      () => {
+        try {
+          ctx.exit(failed ? 1 : 0);
+        } catch {}
+      },
+      () => {
+        try {
+          ctx.exit(1);
+        } catch {}
+      },
+    );
   };
 
 // --- 0.6.0 destroy() returns at once while the terminal restore + remaining
@@ -138,6 +196,16 @@ export const runTeardownSteps = (ctx: QuitCtx): boolean => {
   }
   try {
     ctx.stopDevices?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopWatchers?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopConfigWatch?.();
   } catch {
     failed = true;
   }

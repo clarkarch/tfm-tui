@@ -149,6 +149,9 @@ const core = wireCore({
 });
 
 // --- nav: renderAll, quit, status, history, tabs, session, type-to-search ---
+// rendererTornDown backs the renderer-closed fallback below: set by every
+// quit path's destroy step (wired here), read once the renderer exists.
+let rendererTornDown = false;
 const nav = wireNav({
   core,
   getChrome: () => chrome,
@@ -160,6 +163,11 @@ const nav = wireNav({
   getWatcher: () => watcher,
   getDevices: () => devices,
   getPlugins: () => plugins,
+  // retheme wires after nav — deferred like every other backward reference
+  getRetheme: () => retheme,
+  onTeardownDestroy: () => {
+    rendererTornDown = true;
+  },
 });
 
 // --- chrome: file menu, sidebar, toolbar, renderer boot, notify, dialogs ---
@@ -340,3 +348,30 @@ const keymap = wireKeymap({
 // system theme live-follow: terminal palette switches (kitty theme change)
 // re-derive through applyConfig — a no-op unless [ui] follow-terminal is on
 settings.systemTheme.followSystemTheme();
+
+// --- renderer-closed fallback: JS signal delivery past OpenTUI's native core
+// is unreliable (probed live: the first SIGTERM/SIGHUP usually destroys the
+// screen — the LEAVE frame lands — yet never reaches a process listener, so
+// a signal handler alone still orphans). destroy() ALWAYS runs there, so when
+// the native close settles without any quit having started it, run the same
+// force teardown instead of lingering with a dead renderer. Quit/restart/
+// signal paths all mark rendererTornDown in their destroy step and skip. ---
+const onRendererClosed = (): void => {
+  if (rendererTornDown) return;
+  rendererTornDown = true;
+  try {
+    nav.quitAppForce();
+  } catch {}
+};
+void chrome.renderer.closed.then(onRendererClosed, onRendererClosed);
+
+// --- terminal-close signals (SIGHUP/SIGTERM): the terminal is gone, so run
+// the FORCE teardown (no isBusy refusal) instead of orphaning with PPID 1.
+// Wired last — every quit step's getter is settled by first use. Best-effort
+// fast path only (see signals.ts): the renderer-closed fallback above is the
+// reliable one. ---
+const { wireSignalQuit } = await import("./app/signals");
+wireSignalQuit({
+  on: (event, cb) => process.on(event, cb),
+  quit: nav.quitAppForce,
+});

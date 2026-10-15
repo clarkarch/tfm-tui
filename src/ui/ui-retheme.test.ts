@@ -143,6 +143,19 @@ describe("applyConfig", () => {
     }
   });
 
+  test("config watcher stop/start are idempotent and re-arm after stop", () => {
+    // quit closes the watcher (event-loop pin); a failed restart recover
+    // re-arms it — both must be safe to call twice and in any order
+    const retheme = makeRetheme(mkCtx() as any);
+    expect(() => {
+      retheme.stopConfigWatch();
+      retheme.stopConfigWatch();
+      retheme.startConfigWatch();
+      retheme.startConfigWatch();
+      retheme.stopConfigWatch();
+    }).not.toThrow();
+  });
+
   test("merges the fresh config into the live one and rewrites geometry through the setters", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
