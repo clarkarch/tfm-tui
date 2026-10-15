@@ -100,6 +100,24 @@ describe("listArchiveDir (7z -slt lane)", () => {
   });
 });
 
+describe("listArchiveDir (rar lane)", () => {
+  test("rar lists through 7z -slt (read-only: 7z decodes it, nothing creates it)", async () => {
+    let spec: { tool: string; args: string[] } | undefined;
+    const run: ArchiveRun = async (s, opts) => {
+      spec = s;
+      opts?.onLine?.("----------");
+      opts?.onLine?.("Path = a.txt");
+      opts?.onLine?.("Size = 6");
+      opts?.onLine?.("Attributes = A -rw-r--r--");
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const rows = await listArchiveDir(archiveUri("/tmp/x.rar"), { run, which: whichAll });
+    expect(spec).toEqual({ tool: "7z", args: ["l", "-slt", "/tmp/x.rar"] });
+    expect(names(rows)).toEqual(["a.txt"]);
+    expect(find(rows, "a.txt")?.size).toBe(6);
+  });
+});
+
 describe("listArchiveDir failure modes", () => {
   test("a tool failure is an error, never a fake empty listing", async () => {
     await expect(

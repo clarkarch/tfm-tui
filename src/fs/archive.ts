@@ -27,9 +27,10 @@ export type ArchiveFormat =
   | "tar.lzo"
   | "tar.Z"
   | "zip"
-  | "7z";
-// every format we can create we can also list/extract
-export type CompressionFormat = ArchiveFormat;
+  | "7z"
+  | "rar";
+// formats we can create (a subset of ArchiveFormat: rar is read-only)
+export type CompressionFormat = Exclude<ArchiveFormat, "rar">;
 export type ToolSpec = { tool: string; args: string[] };
 export type ArchiveRunResult = { code: number; stdout: string; stderr: string };
 export type ArchiveRunOpts = {
@@ -91,6 +92,9 @@ const COMPRESSIONS: CompressionDef[] = [
   { fmt: "tar.lz", ext: ".tar.lz", hint: "lzip", kind: "tar", filter: ["--lzip"], need: ["tar", "lzip"] },
   { fmt: "tar.lzo", ext: ".tar.lzo", hint: "lzop", kind: "tar", filter: ["--lzop"], need: ["tar", "lzop"] },
   { fmt: "tar.Z", ext: ".tar.Z", hint: "compress", kind: "tar", filter: ["-Z"], need: ["tar", "compress"] },
+  // read-only: 7z decodes rar (Rar1-5) but cannot create it, so it never
+  // appears in availableCompressionFormats (the picker)
+  { fmt: "rar", ext: ".rar", hint: "7z", kind: "7z", filter: [], need: ["7z"] },
 ];
 
 const DEF = new Map<ArchiveFormat, CompressionDef>(COMPRESSIONS.map((d) => [d.fmt, d]));
@@ -125,6 +129,7 @@ const SUFFIXES: Array<[string, ArchiveFormat]> = [
   [".tar", "tar"],
   [".zip", "zip"],
   [".7z", "7z"],
+  [".rar", "rar"],
 ];
 
 export const detectArchiveFormat = (file: string): ArchiveFormat | null => {
@@ -222,8 +227,12 @@ export const compressPlan = (
 
 export const availableCompressionFormats = (which: WhichFn = Bun.which): CompressionFormat[] =>
   // tar/tar.gz/zip always show: the js fallback covers a tool-less machine
-  // (7z and exotic tar filters still need their binaries and hide without)
-  COMPRESSIONS.filter((d) => canCreate(d, which) || JS_FORMATS.has(d.fmt)).map((d) => d.fmt);
+  // (7z and exotic tar filters still need their binaries and hide without).
+  // rar is read-only (7z can't create it) so it never appears as a target.
+  COMPRESSIONS.filter(
+    (d): d is CompressionDef & { fmt: CompressionFormat } =>
+      d.fmt !== "rar" && (canCreate(d, which) || JS_FORMATS.has(d.fmt)),
+  ).map((d) => d.fmt);
 
 export const canExtract = (file: string, which: WhichFn = Bun.which): boolean => {
   const fmt = detectArchiveFormat(file);

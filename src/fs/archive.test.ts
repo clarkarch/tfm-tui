@@ -112,6 +112,8 @@ describe("detectArchiveFormat", () => {
     expect(detectArchiveFormat("a.tar")).toBe("tar");
     expect(detectArchiveFormat("a.zip")).toBe("zip");
     expect(detectArchiveFormat("a.7z")).toBe("7z");
+    expect(detectArchiveFormat("a.rar")).toBe("rar");
+    expect(detectArchiveFormat("a.RAR")).toBe("rar");
   });
 
   test("single-file compressed streams are not archives", () => {
@@ -153,6 +155,13 @@ describe("extractPlan", () => {
     expect(extractPlan("7z", "/x/a.7z", "/stage", which("7z"))).toEqual({
       tool: "7z",
       args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.7z"],
+    });
+  });
+
+  test("rar extracts via 7z (read-only format)", () => {
+    expect(extractPlan("rar", "/x/a.rar", "/stage", which("7z"))).toEqual({
+      tool: "7z",
+      args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.rar"],
     });
   });
 
@@ -267,6 +276,8 @@ describe("availableCompressionFormats / canExtract", () => {
       "tar.lzo",
       "tar.Z",
     ]);
+    // rar is read-only: never a compress target even with every tool present
+    expect(availableCompressionFormats(all)).not.toContain("rar");
   });
 
   test("missing compressors hide their tar rows; zip falls back to 7z", () => {
@@ -292,6 +303,8 @@ describe("availableCompressionFormats / canExtract", () => {
     expect(canExtract("a.tar.lz4", which("tar"))).toBe(false); // no fallback for exotic filters
     expect(canExtract("a.7z", which("7z"))).toBe(true);
     expect(canExtract("a.7z", () => null)).toBe(false); // no fallback for 7z
+    expect(canExtract("a.rar", which("7z"))).toBe(true);
+    expect(canExtract("a.rar", () => null)).toBe(false); // read-only, host-gated on 7z
     expect(canExtract("a.txt", which("tar", "gzip"))).toBe(false);
   });
 });
