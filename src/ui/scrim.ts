@@ -12,21 +12,19 @@ import type { ScrimMode, TransparentBgMode } from "../config/config-schema";
 
 export type ScrimPlan = {
   contentOpacity: number;
-  darkBackdrop: boolean;
   // classic full-screen RGBA(0,0,0,150) overlay; OpenTUI deletes rasters under
   // it, so `fill` implies the glyph fallback (setScrim) replaces them
   fill: boolean;
 };
 
-// shared fade strength for the dimming modes. 0.45 dimmed text too far (muted
-// colors nearly vanished); 0.65 keeps labels readable while still receding.
+// fade strength for the dim mode. 0.45 dimmed muted text too far
+// (near-invisible); 0.65 keeps labels readable while still receding.
 const DIM_OPACITY = 0.65;
 
 export const scrimPlan = (mode: ScrimMode): ScrimPlan => {
-  if (mode === "none") return { contentOpacity: 1, darkBackdrop: false, fill: false };
-  if (mode === "fill") return { contentOpacity: 1, darkBackdrop: false, fill: true };
-  if (mode === "dark") return { contentOpacity: DIM_OPACITY, darkBackdrop: true, fill: false };
-  return { contentOpacity: DIM_OPACITY, darkBackdrop: false, fill: false };
+  if (mode === "none") return { contentOpacity: 1, fill: false };
+  if (mode === "fill") return { contentOpacity: 1, fill: true };
+  return { contentOpacity: DIM_OPACITY, fill: false };
 };
 
 // the classic overlay color, made once (ui-boot-layout builds the node)

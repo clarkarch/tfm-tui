@@ -158,10 +158,10 @@ export type Theme = {
 type ViewMode = "grid" | "list";
 
 // modal backdrop mode ([ui] scrim): how the app dims when a floating modal
-// (esc menu, props, conflict, pick…) is open. `dim` fades the app over the
-// theme bg; `dark` fades over a near-black clear (pure-dark, icons read as
-// dimmed rather than see-through-to-colour); `none` leaves the background.
-export type ScrimMode = "dark" | "dim" | "fill" | "none";
+// (esc menu, props, conflict, pick…) is open. `dim` fades the app content over
+// the theme bg; `fill` is the classic RGBA(0,0,0,150) overlay (icons fall back
+// to dimmed glyphs); `none` leaves the background.
+export type ScrimMode = "dim" | "fill" | "none";
 
 // line-wrap vocabulary ([ui] wrap-mode): how over-long lines render
 // everywhere (grid tile labels, code preview, markdown). none cuts,
@@ -1020,9 +1020,9 @@ const UI_ROWS: SchemaRow[] = [
     section: "ui",
     tomlKey: "scrim",
     prop: "scrimMode",
-    values: ["dark", "dim", "fill", "none"],
-    def: "dark",
-    doc: '"dark" = dim the app behind a modal over a near-black backdrop; "dim" = fade over the theme bg (themed tint); "fill" = classic solid dark overlay (icons become dimmed glyphs); "none" = no dim.',
+    values: ["dim", "fill", "none"],
+    def: "dim",
+    doc: '"dim" = fade the app content behind a modal; "fill" = classic solid dark overlay (icons become dimmed glyphs); "none" = no dim.',
     label: "scrim",
     blurb: "Fade the background behind menus and dialogs",
     group: "appearance",

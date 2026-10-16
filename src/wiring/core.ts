@@ -7,7 +7,7 @@
 // both are only read at runtime, post-boot). ---
 
 import os from "node:os";
-import { CliRenderEvents, type CliRenderer, type ScrollBoxRenderable } from "@opentui/core";
+import type { CliRenderer, ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
@@ -19,7 +19,7 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
-import { backgroundClearColor, SCRIM_FILL_ID, scrimPlan } from "../ui/scrim";
+import { SCRIM_FILL_ID, scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -99,59 +99,29 @@ export const wireCore = (deps: {
   // Every lookup must tolerate a miss (nodes die on every rebuild). ---
   const lookup = makeLookup({ root: () => deps.renderer().root });
 
-  // Near-black backdrop for [ui] scrim = "dark" (see ui/scrim.ts).
-  const DARK_BACKDROP = "#05050a";
-
-  // Fired whenever a modal takes the screen (floats 0->1). Lets widgets drop
-  // state that a modal overlay would strand — e.g. a hovered tile/row that
-  // stays lifted/tinted behind the dim (wiring/grid + wiring/chrome register).
+  // Fired whenever a modal takes the screen (floats 0->1) AND when it closes.
+  // Lets widgets drop state that a modal overlay would strand — e.g. a hovered
+  // tile/row or the kb-focused sidebar row that stays highlighted behind the
+  // dim (wiring/grid + wiring/chrome register).
   const modalOpenHooks: Array<() => void> = [];
   const registerModalOpen = (fn: () => void): void => {
     modalOpenHooks.push(fn);
   };
-  // last renderer clear colour applyModalDim applied ("" = never) — only a
-  // real transition pays the forced full repaint
-  let lastClear = "";
 
-  const runModalOpenHooks = (): void => {
+  const runModalHooks = (): void => {
     for (const h of modalOpenHooks) {
       try {
         h();
       } catch {}
     }
   };
-  // `dark` changes the renderer clear; that render's recheckHoverState re-fires
-  // a synthetic "over" under the STATIONARY cursor, re-applying the hover (row /
-  // tile). Re-run the reset on the NEXT frame so the final paint is rest; a
-  // timeout is the fallback when no frame lands (headless/idle).
-  let hoverResetPending = false;
-  const scheduleHoverReset = (): void => {
-    if (hoverResetPending) return;
-    hoverResetPending = true;
-    const r = deps.renderer();
-    const run = (): void => {
-      if (!hoverResetPending) return;
-      hoverResetPending = false;
-      runModalOpenHooks();
-      try {
-        r.requestRender();
-      } catch {}
-    };
-    try {
-      r.once(CliRenderEvents.FRAME, run);
-      setTimeout(run, 60); // backstop: idle renderer may emit no frame
-    } catch {
-      setTimeout(run, 0);
-    }
-  };
 
-  // Dim the whole app behind a modal. dark/dim fade the app-content node's
-  // opacity (rasters re-transmit at reduced alpha, so they stay visible); `dark`
-  // also swaps the renderer clear to near-black. `fill` toggles a dedicated
-  // full-screen overlay node (SCRIM_FILL_ID, built by the boot layout) — a fill
-  // makes OpenTUI delete covered rasters, so `slots.setScrim` swaps them for
-  // dimmed glyphs. Toggling the node (not a per-modal Box bg) makes a live
-  // [ui] scrim change apply immediately.
+  // Dim the whole app behind a modal. `dim` fades the app-content node's
+  // opacity (rasters re-transmit at reduced alpha, so they stay visible);
+  // `fill` toggles a dedicated full-screen overlay node (SCRIM_FILL_ID, built
+  // by the boot layout) — a fill makes OpenTUI delete covered rasters, so
+  // `slots.setScrim` swaps them for dimmed glyphs. Toggling the node (not a
+  // per-modal Box bg) makes a live [ui] scrim change apply immediately.
   const applyModalDim = (open: boolean): void => {
     try {
       const plan = scrimPlan(config.ui.scrimMode);
@@ -159,21 +129,12 @@ export const wireCore = (deps: {
       if (content) content.opacity = open ? plan.contentOpacity : 1;
       const fill = lookup.byId(SCRIM_FILL_ID);
       if (fill) fill.visible = open && plan.fill;
-      const r = deps.renderer();
-      const base = backgroundClearColor(config.ui.transparentBg, colors.bg, isTtyMode());
-      const clear = open && plan.darkBackdrop ? DARK_BACKDROP : base;
-      if (clear !== lastClear) {
-        lastClear = clear;
-        r.setBackgroundColor(clear);
-        r.requestRender();
-      }
       slots.setScrim(open && plan.fill);
       // run on BOTH open and close: the widgets' reset also REPAINTS the
       // sidebar (normalizePlaces), which is gated on the live modal state — so
       // closing must repaint it back to the hover/kb highlight, and opening
       // must drop it (the kb-focused row otherwise stayed highlighted).
-      runModalOpenHooks();
-      if (open) scheduleHoverReset();
+      runModalHooks();
     } catch {}
   };
 
