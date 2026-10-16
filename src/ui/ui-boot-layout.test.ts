@@ -3,6 +3,7 @@ import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { defaultConfig } from "../config/config-schema";
 import { buildAppContainer, buildBootLayout, buildTitle, scrollbarTrackColors } from "./ui-boot-layout";
+import { BAND_ID } from "../input/grid-input";
 
 // the grid scrollers' bars must wear the theme (not the upstream gray
 // defaults), and rethemeChrome must be able to recompute the same mapping
@@ -133,5 +134,41 @@ describe("grid scrollbar theming", () => {
       expect([...slider.backgroundColor.toInts()]).toEqual(hexInts(theme.bg));
       expect([...slider.foregroundColor.toInts()]).toEqual(hexInts(theme.sidebarFgMuted));
     }
+  });
+});
+
+describe("rubber-band selection node", () => {
+  // Border-only marquee: Box defaults `shouldFill:true`, and OpenTUI's
+  // transparent fillRect unreserves EVERY image cell in the covered rect
+  // (the renderer clips rasters under any drawn fill) — so a default band
+  // deleted a thumbnail dragged over instead of drawing a border around it.
+  // shouldFill:false skips the fill so only the border glyphs clip.
+  test("band is border-only (shouldFill:false) so a marquee can't wipe thumbnails", async () => {
+    const theme = { ...defaultConfig.theme };
+    t.renderer.root.add(Box({ id: "tfm-pane-0", flexGrow: 1, width: "100%", flexDirection: "column" }));
+    t.renderer.root.add(Box({ id: "tfm-pane-1", flexGrow: 1, width: "100%", flexDirection: "column" }));
+    buildBootLayout({
+      renderer: t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
+      colors: theme,
+      bandCtx: {} as any,
+      focusPane: noop,
+      dropIntoPane: noop,
+      closeFileMenu: noop,
+      clearSearch: noop,
+      blurTerminal: noop,
+      pathEditMode: () => false,
+      exitPathEdit: noop,
+      isRenaming: () => false,
+      finishInlineRename: noop,
+      clearTileSelection: noop,
+      openContextMenu: () => {},
+      emptyAreaEntries: () => [],
+    });
+    await t.renderOnce();
+    const band: any = t.renderer.root.findDescendantById(BAND_ID);
+    expect(band).toBeTruthy();
+    expect(band.border).toBe(true);
+    expect(band.shouldFill).toBe(false);
   });
 });

@@ -274,6 +274,12 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       border: true,
       borderStyle: "rounded",
       borderColor: ctx.isTtyMode?.() ? ctx.colors.hoverBg : ctx.colors.accent,
+      // Border only: Box defaults `shouldFill: true`, and a transparent fill
+      // over an image unreserves the WHOLE covered rect in OpenTUI (the
+      // renderer treats any drawn fill as occluding) — dragging a marquee over
+      // a thumbnail then deletes the thumbnail ("black box"). shouldFill:false
+      // skips the fillRect so only the border glyphs' cells clip the raster.
+      shouldFill: false,
     }),
   );
 
