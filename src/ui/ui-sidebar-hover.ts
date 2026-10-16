@@ -172,5 +172,14 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
     return false;
   };
 
-  return { playHover, forgetStale };
+  // release any owned lift. wiring/chrome calls this when a modal takes the
+  // screen so a row hovered at that instant can't stay nudged behind the dim.
+  const release = (): void => {
+    if (!current) return;
+    const cur = current;
+    current = null;
+    dropLift(cur);
+  };
+
+  return { playHover, forgetStale, release };
 };

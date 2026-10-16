@@ -200,6 +200,7 @@ export const wireGrid = (deps: {
       focusPane: () => focusPane(pane),
       blurTerminal: () => fileops.terminal.blurTerminal(),
       hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
+      modalOpen: () => core.floats.hasModal(),
       setPointer,
       log: (msg: string) => dlog(msg),
     };
@@ -323,6 +324,11 @@ export const wireGrid = (deps: {
       hoverLiftOpts,
     });
   const hoverAnims = [makeHoverAnimator(0), makeHoverAnimator(1)] as const;
+  // drop any lifted tile when a modal takes the screen — the overlay can
+  // otherwise leave it hovered behind the dim
+  core.registerModalOpen(() => {
+    for (const a of hoverAnims) a.releaseCurrent();
+  });
   const makeRenderer = (pane: 0 | 1) =>
     makeGridRenderer({
       termW: () => chrome.renderer.terminalWidth,

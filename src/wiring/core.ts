@@ -102,6 +102,14 @@ export const wireCore = (deps: {
   // Near-black backdrop for [ui] scrim = "dark" (see ui/scrim.ts).
   const DARK_BACKDROP = "#05050a";
 
+  // Fired whenever a modal takes the screen (floats 0->1). Lets widgets drop
+  // state that a modal overlay would strand — e.g. a hovered tile/row that
+  // stays lifted/tinted behind the dim (wiring/grid + wiring/chrome register).
+  const modalOpenHooks: Array<() => void> = [];
+  const registerModalOpen = (fn: () => void): void => {
+    modalOpenHooks.push(fn);
+  };
+
   // Dim the whole app behind a modal. dark/dim fade the app-content node's
   // opacity (rasters re-transmit at reduced alpha, so they stay visible);
   // `fill` toggles a dedicated full-screen overlay node (SCRIM_FILL_ID, built
@@ -119,6 +127,12 @@ export const wireCore = (deps: {
       const base = backgroundClearColor(config.ui.transparentBg, colors.bg, isTtyMode());
       r.setBackgroundColor(open && plan.darkBackdrop ? DARK_BACKDROP : base);
       slots.setScrim(open && plan.fill);
+      if (open)
+        for (const h of modalOpenHooks) {
+          try {
+            h();
+          } catch {}
+        }
     } catch {}
   };
 
@@ -239,6 +253,8 @@ export const wireCore = (deps: {
     // re-apply the modal dim after a config change (scrim mode flip / theme
     // change while a modal is open) — no-op when no modal is up
     reapplyModalDim: () => applyModalDim(floats.hasModal()),
+    // widgets that own transient hover state register a dropper here
+    registerModalOpen,
     slots,
     home,
     state,

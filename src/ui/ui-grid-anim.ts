@@ -626,6 +626,17 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     dropLift(cur);
   };
 
+  // release any owned hover. wiring/grid calls this when a modal takes the
+  // screen (floats onModalOpen): a tile hovered at that instant would otherwise
+  // stay lifted/tinted behind the dim (the modal overlays it without an `out`
+  // reaching the tile in every terminal/synthetic-over path).
+  const releaseCurrent = (): void => {
+    if (!current) return;
+    const cur = current;
+    current = null;
+    restPaint(cur);
+  };
+
   const playHover = (key: string, hovered: boolean): void => {
     try {
       const refs = ctx.tileRefs().get(key);
@@ -742,5 +753,5 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     }
   };
 
-  return { playHover };
+  return { playHover, releaseCurrent };
 };

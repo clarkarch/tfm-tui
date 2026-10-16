@@ -109,6 +109,7 @@ export const wireChrome = async (deps: {
     byId,
     uiStyle,
     colors: themeGet,
+    modalOpen: () => core.floats.hasModal(),
     transparentForce: () => core.config.ui.transparentBg === "force",
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
@@ -205,6 +206,8 @@ export const wireChrome = async (deps: {
     }),
   });
   hoverRowImpl = (key, hovered) => sidebarHover.playHover(key, hovered);
+  // a modal taking the screen drops any lifted sidebar row (see wiring/grid)
+  core.registerModalOpen(() => sidebarHover.release());
 
   // --- Toolbars — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
   // path edit, sort/search buttons). ONE PER PANE, each with its own id prefix

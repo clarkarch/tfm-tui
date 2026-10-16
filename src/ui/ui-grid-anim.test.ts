@@ -908,6 +908,16 @@ describe("makeTileHoverAnim (engine)", () => {
     expect((byId("lab-a-one") as any).translateY).toBe(0);
   });
 
+  test("releaseCurrent drops a lifted tile back to rest (modal takes the screen)", async () => {
+    const { anim, iconCalls, byId } = await setup("rel");
+    anim.playHover("/w/a-rel", true);
+    expect((byId("slot-a-rel") as any).translateY).toBe(-1);
+    anim.releaseCurrent();
+    expect((byId("slot-a-rel") as any).translateY).toBe(0);
+    expect((byId("tile-a-rel") as any).backgroundColor.toInts()).toEqual([...REST] as any);
+    expect(iconCalls.at(-1)).toBe(0); // icon back to its rest state
+  });
+
   test("include filename moves the label with the icon", async () => {
     const { anim, byId } = await setup("nam", true, undefined, true, { includeLabel: true });
     anim.playHover("/w/a-nam", true);

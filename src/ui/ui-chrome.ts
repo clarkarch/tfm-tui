@@ -84,6 +84,8 @@ type ChromeCtx = {
   // Boolean seam: true = a real drop (dead nodes forgotten), false = nothing
   // owned — lets tests tell a live-hover rebuild from a redundant call.
   hoverRow(key: string, hovered: boolean): void;
+  // true while a modal owns the screen — no row hover paint behind the dim
+  modalOpen?(): boolean;
   forgetStaleHover?(): boolean;
   // replay the cold-boot sidebar intro (built in the chrome wiring): the lazy
   // mounts refresh rebuilds the sidebar right after the first render and its
@@ -384,6 +386,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         // paint truth (it recomputes every row), and the shared wiring keeps a
         // per-pixel move from re-running it — that would be O(rows) per cell
         ...hoverEvents((on) => {
+          if (on && ctx.modalOpen?.()) return;
           ctx.hoverRow(`tfm-place-${idx}`, on);
           if (on) mousePlaceIdx = idx;
           else if (mousePlaceIdx === idx) mousePlaceIdx = -1;
