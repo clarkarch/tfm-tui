@@ -7,7 +7,7 @@
 // both are only read at runtime, post-boot). ---
 
 import os from "node:os";
-import { RGBA, type CliRenderer, type ScrollBoxRenderable } from "@opentui/core";
+import type { CliRenderer, ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
@@ -19,8 +19,7 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
-import { backgroundClearColor, SCRIM_FILL_RGBA, scrimPlan } from "../ui/scrim";
-import { setScrimFill } from "../ui/ui-dialogs";
+import { backgroundClearColor, SCRIM_FILL_ID, scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -105,17 +104,17 @@ export const wireCore = (deps: {
 
   // Dim the whole app behind a modal. dark/dim fade the app-content node's
   // opacity (rasters re-transmit at reduced alpha, so they stay visible);
-  // `fill` restores the classic RGBA(0,0,0,150) overlay (which OpenTUI makes
-  // delete covered rasters — so slots.setScrim swaps them for dimmed glyphs).
+  // `fill` toggles a dedicated full-screen overlay node (SCRIM_FILL_ID, built
+  // by the boot layout) — a fill makes OpenTUI delete covered rasters, so
+  // slots.setScrim swaps them for dimmed glyphs. Toggling the node (not a
+  // per-modal Box bg) makes a live [ui] scrim change apply immediately.
   const applyModalDim = (open: boolean): void => {
     try {
       const plan = scrimPlan(config.ui.scrimMode);
       const content = lookup.byId("tfm-content");
       if (content) content.opacity = open ? plan.contentOpacity : 1;
-      // provider read at the NEXT modal's Box creation — set it now so the
-      // modal about to open (floats.open fires this before the widget builds)
-      // gets the right scrim
-      setScrimFill(open && plan.fill ? RGBA.fromInts(...SCRIM_FILL_RGBA) : undefined);
+      const fill = lookup.byId(SCRIM_FILL_ID);
+      if (fill) fill.visible = open && plan.fill;
       const r = deps.renderer();
       const base = backgroundClearColor(config.ui.transparentBg, colors.bg, isTtyMode());
       r.setBackgroundColor(open && plan.darkBackdrop ? DARK_BACKDROP : base);
@@ -165,10 +164,6 @@ export const wireCore = (deps: {
     forceGlyph,
     setPointer,
   });
-
-  // seed the scrim-fill provider so the FIRST modal (before any config change
-  // or modal transition) reads the right fill; applyModalDim keeps it current
-  setScrimFill(scrimPlan(config.ui.scrimMode).fill ? RGBA.fromInts(...SCRIM_FILL_RGBA) : undefined);
 
   // --- App state & history (type + boot-state factory live in ./nav with the
   // navigation logic). Two panes, each an independent AppState; `state` is a

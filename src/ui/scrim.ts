@@ -28,8 +28,16 @@ export const scrimPlan = (mode: ScrimMode): ScrimPlan => {
   return { contentOpacity: DIM_OPACITY, darkBackdrop: false, fill: false };
 };
 
-// the classic overlay color, made once (wiring feeds it to the scrim Boxes)
+// the classic overlay color, made once (ui-boot-layout builds the node)
 export const SCRIM_FILL_RGBA = [0, 0, 0, 150] as const;
+
+// Full-screen fill overlay for [ui] scrim = "fill", built once at boot
+// (ui-boot-layout) and toggled by wiring/core applyModalDim so a live mode
+// change applies immediately. z sits just below the lowest modal panel
+// (FLOAT_Z.escmenu = 3000) and above the app content (z 0): it dims everything
+// while every modal panel still draws above it.
+export const SCRIM_FILL_ID = "tfm-scrim-fill";
+export const SCRIM_FILL_Z = 2999;
 
 // The renderer clear color the app establishes: transparent-bg on/force under a
 // pixel-capable terminal ⇒ "transparent" (terminal shows through); otherwise

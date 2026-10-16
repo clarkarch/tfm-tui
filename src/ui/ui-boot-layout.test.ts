@@ -4,6 +4,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { defaultConfig } from "../config/config-schema";
 import { buildAppContainer, buildBootLayout, buildTitle, scrollbarTrackColors } from "./ui-boot-layout";
 import { BAND_ID } from "../input/grid-input";
+import { SCRIM_FILL_ID, SCRIM_FILL_Z } from "./scrim";
 
 // the grid scrollers' bars must wear the theme (not the upstream gray
 // defaults), and rethemeChrome must be able to recompute the same mapping
@@ -199,5 +200,41 @@ describe("app content dim target", () => {
     expect(content).toBeTruthy();
     content.opacity = 0.45;
     expect(content.opacity).toBe(0.45);
+  });
+});
+
+describe("scrim fill overlay", () => {
+  test("boot builds a hidden full-screen fill node for [ui] scrim = fill", async () => {
+    const theme = { ...defaultConfig.theme };
+    t.renderer.root.add(Box({ id: "tfm-pane-0", flexGrow: 1, width: "100%", flexDirection: "column" }));
+    t.renderer.root.add(Box({ id: "tfm-pane-1", flexGrow: 1, width: "100%", flexDirection: "column" }));
+    buildBootLayout({
+      renderer: t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
+      colors: theme,
+      bandCtx: {} as any,
+      focusPane: noop,
+      dropIntoPane: noop,
+      closeFileMenu: noop,
+      clearSearch: noop,
+      blurTerminal: noop,
+      pathEditMode: () => false,
+      exitPathEdit: noop,
+      isRenaming: () => false,
+      finishInlineRename: noop,
+      clearTileSelection: noop,
+      openContextMenu: () => {},
+      emptyAreaEntries: () => [],
+    });
+    await t.renderOnce();
+    // the fill mode toggles this node's visibility (wiring/core applyModalDim)
+    // — a live [ui] scrim change must not need a modal reopen, so it can't be
+    // the modal Boxes' own bg
+    const fill: any = t.renderer.root.findDescendantById(SCRIM_FILL_ID);
+    expect(fill).toBeTruthy();
+    expect(fill.visible).toBe(false);
+    expect(fill.zIndex).toBe(SCRIM_FILL_Z);
+    expect(fill.zIndex).toBeLessThan(3000); // below every modal panel (FLOAT_Z.escmenu)
+    expect(fill.backgroundColor.a).toBeGreaterThan(0); // a real, occluding fill
   });
 });

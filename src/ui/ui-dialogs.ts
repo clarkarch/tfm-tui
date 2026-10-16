@@ -1,4 +1,4 @@
-import { Box, type MouseEvent, type RGBA, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import type { VChild } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
@@ -36,17 +36,11 @@ type DialogsCtx = {
 // bulk-rename/esc-menu): absolute scrim + floatSurface panel that stops click
 // propagation so an inside click never dismisses. Deps arrive directly (same
 // seam as the widgets' ctx) — no ctx-type plumbing. ids must stay byte-
-// identical (rethemeChrome repaints them by id).
-//
-// Scrim fill color, set by the wiring from `scrimPlan([ui] scrim).fill`: an
-// RGBA for the classic overlay (fill mode), undefined for the transparent
-// click-catcher (dark/dim/none). Read at Box creation, so a mode change
-// applies to the NEXT modal opened.
-let scrimFillRGBA: RGBA | undefined;
-export const setScrimFill = (c: RGBA | undefined): void => {
-  scrimFillRGBA = c;
-};
-
+// identical (rethemeChrome repaints them by id). The scrim Box itself is a
+// transparent click-catcher (never a fill — a fill makes OpenTUI delete the
+// rasters it covers); the `fill` scrim mode uses a separate full-screen
+// overlay node (ui-boot-layout SCRIM_FILL_ID) so a live mode change applies
+// immediately.
 export const makeModalScrim = (
   deps: {
     uiStyle: () => UiStyle;
@@ -74,10 +68,7 @@ export const makeModalScrim = (
       alignItems: "center",
       justifyContent: "center",
       zIndex: opts.zIndex,
-      // classic overlay fill only for [ui] scrim = "fill" (wiring sets the
-      // provider); otherwise transparent click-catcher — a fill makes OpenTUI
-      // delete every raster it covers (the dark/dim modes dim via opacity)
-      backgroundColor: scrimFillRGBA,
+      // transparent click-catcher; the fill mode uses SCRIM_FILL_ID (see top)
       onMouseDown: () => opts.onClose(),
     },
     Box(
@@ -120,8 +111,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
         alignItems: "center",
         paddingTop: Math.max(2, Math.round(ctx.termH() / (opts.paddingDiv ?? 3))),
         zIndex: opts.zIndex,
-        // classic overlay fill only for [ui] scrim = "fill" — see makeModalScrim
-        backgroundColor: scrimFillRGBA,
+        // transparent click-catcher; the fill mode uses SCRIM_FILL_ID (see top)
         onMouseDown: () => opts.onClose(),
       },
       Box(

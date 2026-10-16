@@ -6,8 +6,9 @@
 // straight from ./grid-input so the wiring can't drift from the gesture
 // state machine. ---
 
-import { ASCIIFont, Box, type CliRenderer, type MouseEvent, ScrollBoxRenderable, Text } from "@opentui/core";
+import { ASCIIFont, Box, type CliRenderer, type MouseEvent, RGBA, ScrollBoxRenderable, Text } from "@opentui/core";
 import { chromeSurface, type UiStyle } from "./style";
+import { SCRIM_FILL_ID, SCRIM_FILL_RGBA, SCRIM_FILL_Z } from "./scrim";
 import type { MaybeNode } from "../lib/node-like";
 import type { SlotElement } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
@@ -280,6 +281,23 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       // a thumbnail then deletes the thumbnail ("black box"). shouldFill:false
       // skips the fillRect so only the border glyphs' cells clip the raster.
       shouldFill: false,
+    }),
+  );
+
+  // [ui] scrim = "fill" overlay: a real fill (dims everything; OpenTUI then
+  // deletes covered rasters, so the wiring runs the glyph fallback). Toggled
+  // live by applyModalDim, hence its own node rather than the modal Boxes.
+  ctx.renderer.root.add(
+    Box({
+      id: SCRIM_FILL_ID,
+      visible: false,
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      zIndex: SCRIM_FILL_Z,
+      backgroundColor: RGBA.fromInts(...SCRIM_FILL_RGBA),
     }),
   );
 
