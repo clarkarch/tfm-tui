@@ -394,6 +394,7 @@ describe("settingGroups shape", () => {
       "icon style",
       "ui style",
       "scrim",
+      "scrim dim",
       "##compatibility",
       "tty mode",
       "force glyph",

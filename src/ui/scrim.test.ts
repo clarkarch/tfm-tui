@@ -2,16 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { backgroundClearColor, scrimPlan } from "./scrim";
 
 describe("scrimPlan", () => {
-  test("dim fades the content over the theme bg", () => {
-    expect(scrimPlan("dim")).toEqual({ contentOpacity: 0.65, fill: false });
+  test("dim fades the content by the configured amount (opacity = 1 - dim%)", () => {
+    expect(scrimPlan("dim", 35)).toEqual({ contentOpacity: 0.65, fill: false });
+    expect(scrimPlan("dim", 50)).toEqual({ contentOpacity: 0.5, fill: false });
+    expect(scrimPlan("dim", 0)).toEqual({ contentOpacity: 1, fill: false });
   });
 
   test("fill uses the classic overlay (no opacity fade, glyph fallback)", () => {
-    expect(scrimPlan("fill")).toEqual({ contentOpacity: 1, fill: true });
+    expect(scrimPlan("fill", 35)).toEqual({ contentOpacity: 1, fill: true });
   });
 
   test("none leaves the content fully opaque", () => {
-    expect(scrimPlan("none")).toEqual({ contentOpacity: 1, fill: false });
+    expect(scrimPlan("none", 35)).toEqual({ contentOpacity: 1, fill: false });
   });
 });
 

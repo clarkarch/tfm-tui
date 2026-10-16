@@ -124,7 +124,7 @@ export const wireCore = (deps: {
   // per-modal Box bg) makes a live [ui] scrim change apply immediately.
   const applyModalDim = (open: boolean): void => {
     try {
-      const plan = scrimPlan(config.ui.scrimMode);
+      const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
       const content = lookup.byId("tfm-content");
       if (content) content.opacity = open ? plan.contentOpacity : 1;
       const fill = lookup.byId(SCRIM_FILL_ID);

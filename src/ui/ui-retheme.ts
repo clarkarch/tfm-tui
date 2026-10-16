@@ -307,6 +307,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // scrim reads live when a modal opens (wiring/core applyModalDim) — a flip
     // must not rebuild the world; onConfigApplied re-applies it if one is open
     "scrimMode",
+    "scrimDim",
     "persistUndo",
     "restoreSession",
     "showLaunchTime",

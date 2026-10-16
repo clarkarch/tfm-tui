@@ -49,6 +49,7 @@ icons                                 = "opaque"    # "opaque" = icons flattened
 icon-style                            = "filled"    # "filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
 scrim                                 = "dim"       # "dim" = fade the app content behind a modal; "fill" = classic solid dark overlay (icons become dimmed glyphs); "none" = no dim.
+scrim-dim                             = 35          # 0..80% backdrop darkening behind a modal (dim mode; higher = darker, 0 = barely faded)
 tty-mode                              = "auto"      # "auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never
 force-glyph                           = false       # true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)
 file-animation                        = false       # true = animate files appearing in the content area (style = file-animation-style)

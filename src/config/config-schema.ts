@@ -263,6 +263,7 @@ export type UiConfig = {
   followTerminal: boolean;
   transparentBg: TransparentBgMode;
   scrimMode: ScrimMode;
+  scrimDim: number;
   icons: IconMode;
   iconStyle: IconStyle;
   ttyMode: TtyMode;
@@ -1025,6 +1026,22 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"dim" = fade the app content behind a modal; "fill" = classic solid dark overlay (icons become dimmed glyphs); "none" = no dim.',
     label: "scrim",
     blurb: "Fade the background behind menus and dialogs",
+    group: "appearance",
+    subsection: "look",
+  },
+  {
+    kind: "int",
+    section: "ui",
+    tomlKey: "scrim-dim",
+    prop: "scrimDim",
+    min: 0,
+    max: 80,
+    step: 5,
+    def: 35,
+    doc: "0..80% backdrop darkening behind a modal (dim mode; higher = darker, 0 = barely faded)",
+    unit: "%",
+    label: "scrim dim",
+    blurb: "How dark the backdrop gets behind a modal",
     group: "appearance",
     subsection: "look",
   },

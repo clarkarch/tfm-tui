@@ -17,14 +17,13 @@ export type ScrimPlan = {
   fill: boolean;
 };
 
-// fade strength for the dim mode. 0.45 dimmed muted text too far
-// (near-invisible); 0.65 keeps labels readable while still receding.
-const DIM_OPACITY = 0.65;
-
-export const scrimPlan = (mode: ScrimMode): ScrimPlan => {
+// The `dim` backdrop is the app-content node's opacity: opacity = 1 - dim/100,
+// so a higher dim% fades the content further toward the backdrop (darker).
+export const scrimPlan = (mode: ScrimMode, dimPct: number): ScrimPlan => {
   if (mode === "none") return { contentOpacity: 1, fill: false };
   if (mode === "fill") return { contentOpacity: 1, fill: true };
-  return { contentOpacity: DIM_OPACITY, fill: false };
+  const dim = Math.min(100, Math.max(0, dimPct));
+  return { contentOpacity: 1 - dim / 100, fill: false };
 };
 
 // the classic overlay color, made once (ui-boot-layout builds the node)
