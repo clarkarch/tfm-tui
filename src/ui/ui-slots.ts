@@ -274,6 +274,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // unbounded and re-armed dead specs on every reset.
   const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
+  // last desired glyph-scrim state ([ui] scrim = fill while a modal is open);
+  // the drain reapply reads this, never modal-open alone
+  let scrimDesired = false;
   let thumbJobs: ThumbJob[] = [];
   // per-slot ownership: pushThumbJob records the key of the job it queued for a
   // slot, so a drain that resolves the slot later can tell whether ITS job still
@@ -582,9 +585,12 @@ export const makeSlots = (ctx: SlotsCtx) => {
     for (const [id, spec] of allSpecs) {
       if (spec.done && !ctx.byId(id)) allSpecs.delete(id);
     }
-    // re-rasters made fresh images visible; while a glyph scrim is up the icons
-    // must fall back to dimmed glyphs (the fill mode deletes the rasters)
-    if (ctx.modalOpen()) setScrim(true);
+    // re-rasters made fresh images visible; while the glyph scrim is up the
+    // icons must fall back to dimmed glyphs. Gated on the DESIRED scrim state
+    // (set by setScrim — only the [ui] scrim = "fill" mode turns it on), NOT
+    // on modal-open alone: dark/dim/none keep their rasters, so a drain while
+    // one of those has a modal open must not flip icons to glyphs.
+    if (ctx.modalOpen() && scrimDesired) setScrim(true);
   };
 
   // Serialized entry point: concurrent calls coalesce into the running pass
@@ -634,6 +640,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // pre-darkened glyph while it is up (rasters return on close). Used only by
   // the fill mode; dark/dim keep the rasters (faded via content opacity).
   const setScrim = (on: boolean) => {
+    scrimDesired = on;
     for (const spec of allSpecs.values()) {
       const slot: SlotNode | null | undefined = ctx.byId(spec.slotId);
       if (!slot) continue;

@@ -102,6 +102,24 @@ describe("icon slot registry", () => {
     expect(glyph.visible).toBe(false);
   });
 
+  test("a drain keeps rasters while a modal is open in a non-glyph mode", async () => {
+    // dark/dim/none call setScrim(false) on modal open — a later drain must
+    // NOT flip icons to glyphs (the old reapply keyed on modal-open alone, so
+    // every mode fell back to glyphs after any drain)
+    const h = makeHarness();
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
+    const { glyph, img } = h.mountFakeSlot(s.spec);
+
+    await h.slots.drainIconQueue();
+    h.setModal(true);
+    h.slots.setScrim(false);
+    h.slots.resetIconQueue();
+    await h.slots.drainIconQueue();
+
+    expect(img.visible).toBe(true);
+    expect(glyph.visible).toBe(false);
+  });
+
   test("resetIconQueue re-queues a drained slot whose raster finished earlier", async () => {
     // theme flips must re-raster boot-baked slots (nav buttons et al) that
     // already drained — the prune made them unreachable from the queue
