@@ -39,6 +39,15 @@ export const tabChipMaxWidth = (availW: number, nTabs: number): number => {
   return Math.max(TAB_CHIP_MIN_W, Math.min(TAB_CHIP_MAX_W, per));
 };
 
+// Sidebar row highlight source: the mouse hover, or the keyboard cursor when
+// the sidebar holds kb focus. A modal owns the screen — NO row may show a
+// highlight under the dim, or the kb-focused row (which mousePlaceIdx can't
+// clear) stayed lit after a menu opened.
+export const placeRowHover = (
+  o: { selected: boolean; modalOpen: boolean; kbActive: boolean; kbIdx: number; mousePlaceIdx: number },
+  i: number,
+): boolean => !o.selected && !o.modalOpen && (o.kbActive ? i === o.kbIdx : i === o.mousePlaceIdx);
+
 type ChromeCtx = {
   byId(id: string): MaybeNode;
   // sidebar mount point (prod: the "tfm-places" box; tests mount an isolated
@@ -667,7 +676,16 @@ export const makeChrome = (ctx: ChromeCtx) => {
       // repaint every selection change funnels through. hoverRow(key,false) is a
       // safe no-op unless the animator actually owns this exact row.
       if (isSel) ctx.hoverRow(rec.rowId, false);
-      const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
+      const isHover = placeRowHover(
+        {
+          selected: isSel,
+          modalOpen: !!ctx.modalOpen?.(),
+          kbActive: ctx.kbActive(),
+          kbIdx: ctx.kbIdx(),
+          mousePlaceIdx,
+        },
+        i,
+      );
       const row = ctx.byId(rec.rowId);
       const label = ctx.byId(rec.labelId);
       if (row)

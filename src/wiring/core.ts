@@ -120,12 +120,10 @@ export const wireCore = (deps: {
       } catch {}
     }
   };
-  // dark changes the renderer clear and forces a full repaint; that frame's
-  // recheckHoverState re-fires a synthetic "over" on the element under the
-  // STATIONARY cursor, re-applying the hover (sidebar row / tile) — and with no
-  // further mouse motion it stuck until close. Re-run the reset on the NEXT
-  // frame so the final paint is the rest state; a timeout is the fallback when
-  // no frame lands (headless/idle).
+  // `dark` changes the renderer clear; that render's recheckHoverState re-fires
+  // a synthetic "over" under the STATIONARY cursor, re-applying the hover (row /
+  // tile). Re-run the reset on the NEXT frame so the final paint is rest; a
+  // timeout is the fallback when no frame lands (headless/idle).
   let hoverResetPending = false;
   const scheduleHoverReset = (): void => {
     if (hoverResetPending) return;
@@ -148,11 +146,12 @@ export const wireCore = (deps: {
   };
 
   // Dim the whole app behind a modal. dark/dim fade the app-content node's
-  // opacity (rasters re-transmit at reduced alpha, so they stay visible);
-  // `fill` toggles a dedicated full-screen overlay node (SCRIM_FILL_ID, built
-  // by the boot layout) — a fill makes OpenTUI delete covered rasters, so
-  // slots.setScrim swaps them for dimmed glyphs. Toggling the node (not a
-  // per-modal Box bg) makes a live [ui] scrim change apply immediately.
+  // opacity (rasters re-transmit at reduced alpha, so they stay visible); `dark`
+  // also swaps the renderer clear to near-black. `fill` toggles a dedicated
+  // full-screen overlay node (SCRIM_FILL_ID, built by the boot layout) — a fill
+  // makes OpenTUI delete covered rasters, so `slots.setScrim` swaps them for
+  // dimmed glyphs. Toggling the node (not a per-modal Box bg) makes a live
+  // [ui] scrim change apply immediately.
   const applyModalDim = (open: boolean): void => {
     try {
       const plan = scrimPlan(config.ui.scrimMode);
@@ -166,20 +165,15 @@ export const wireCore = (deps: {
       if (clear !== lastClear) {
         lastClear = clear;
         r.setBackgroundColor(clear);
-        // setBackgroundColor only requests a DIFFED render; after a clear-color
-        // change the untouched cells keep the old backdrop (dark-mode hover
-        // ghosting), so force one full repaint on the transition. Private
-        // field — same narrow-cast precedent as mem-hygiene's allocatorStats.
-        try {
-          (r as unknown as { forceFullRepaintRequested?: boolean }).forceFullRepaintRequested = true;
-        } catch {}
         r.requestRender();
       }
       slots.setScrim(open && plan.fill);
-      if (open) {
-        runModalOpenHooks();
-        scheduleHoverReset();
-      }
+      // run on BOTH open and close: the widgets' reset also REPAINTS the
+      // sidebar (normalizePlaces), which is gated on the live modal state — so
+      // closing must repaint it back to the hover/kb highlight, and opening
+      // must drop it (the kb-focused row otherwise stayed highlighted).
+      runModalOpenHooks();
+      if (open) scheduleHoverReset();
     } catch {}
   };
 

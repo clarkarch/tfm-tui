@@ -55,6 +55,7 @@ let tabModel: { list: Tab[]; active: number };
 let tabModel1: { list: Tab[]; active: number };
 let kbActive: boolean;
 let kbIdx: number;
+let modalOpen: boolean;
 // eject/mount test seams: notify/home/spawn capture for a second chrome
 // instance, built in the eject describe's beforeAll so the shared fakes above
 // keep their old shape
@@ -103,6 +104,7 @@ beforeAll(async () => {
   tabModel1 = { list: mkTabs(3), active: 2 };
   kbActive = false;
   kbIdx = -1;
+  modalOpen = false;
   sectionTitles = false;
   // eject/mount seams: written by the eject describe below; absent here so
   // the shared fakes keep today's ctx shape
@@ -158,6 +160,7 @@ beforeAll(async () => {
     },
     kbActive: () => kbActive,
     kbIdx: () => kbIdx,
+    modalOpen: () => modalOpen,
     tabs: (pane: 0 | 1) => (pane === 1 ? tabModel1 : tabModel),
     focusPane: () => {},
     closeTab: (_pane: 0 | 1, i: number) => {
@@ -676,6 +679,25 @@ describe("normalizePlaces (hover/kb focus)", () => {
     kbActive = false;
     kbIdx = -1;
     chrome.clearMousePlace();
+  });
+
+  test("a modal open suppresses every sidebar highlight (kb focus can't keep one lit)", () => {
+    cwd = HOME;
+    chrome.renderSidebar();
+    kbActive = true;
+    kbIdx = 1;
+    chrome.renderSidebar();
+    expect(bgInts("tfm-place-1")).toEqual(hexInts(colors.hoverBg));
+    // the menu opened: the kb-focused row must drop its highlight under the dim
+    modalOpen = true;
+    chrome.normalizePlaces();
+    expect(bgInts("tfm-place-1")).toEqual(hexInts(colors.sidebarBg));
+    // closing restores it
+    modalOpen = false;
+    chrome.normalizePlaces();
+    expect(bgInts("tfm-place-1")).toEqual(hexInts(colors.hoverBg));
+    kbActive = false;
+    kbIdx = -1;
   });
 
   test("mouse move/out routes the row key to hoverRow (per-row nudge)", async () => {
