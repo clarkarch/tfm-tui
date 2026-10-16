@@ -7,7 +7,7 @@
 // both are only read at runtime, post-boot). ---
 
 import os from "node:os";
-import type { CliRenderer, ScrollBoxRenderable } from "@opentui/core";
+import { CliRenderEvents, type CliRenderer, type ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
@@ -113,6 +113,40 @@ export const wireCore = (deps: {
   // real transition pays the forced full repaint
   let lastClear = "";
 
+  const runModalOpenHooks = (): void => {
+    for (const h of modalOpenHooks) {
+      try {
+        h();
+      } catch {}
+    }
+  };
+  // dark changes the renderer clear and forces a full repaint; that frame's
+  // recheckHoverState re-fires a synthetic "over" on the element under the
+  // STATIONARY cursor, re-applying the hover (sidebar row / tile) — and with no
+  // further mouse motion it stuck until close. Re-run the reset on the NEXT
+  // frame so the final paint is the rest state; a timeout is the fallback when
+  // no frame lands (headless/idle).
+  let hoverResetPending = false;
+  const scheduleHoverReset = (): void => {
+    if (hoverResetPending) return;
+    hoverResetPending = true;
+    const r = deps.renderer();
+    const run = (): void => {
+      if (!hoverResetPending) return;
+      hoverResetPending = false;
+      runModalOpenHooks();
+      try {
+        r.requestRender();
+      } catch {}
+    };
+    try {
+      r.once(CliRenderEvents.FRAME, run);
+      setTimeout(run, 60); // backstop: idle renderer may emit no frame
+    } catch {
+      setTimeout(run, 0);
+    }
+  };
+
   // Dim the whole app behind a modal. dark/dim fade the app-content node's
   // opacity (rasters re-transmit at reduced alpha, so they stay visible);
   // `fill` toggles a dedicated full-screen overlay node (SCRIM_FILL_ID, built
@@ -142,12 +176,10 @@ export const wireCore = (deps: {
         r.requestRender();
       }
       slots.setScrim(open && plan.fill);
-      if (open)
-        for (const h of modalOpenHooks) {
-          try {
-            h();
-          } catch {}
-        }
+      if (open) {
+        runModalOpenHooks();
+        scheduleHoverReset();
+      }
     } catch {}
   };
 
