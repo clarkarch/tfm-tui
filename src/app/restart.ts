@@ -84,7 +84,9 @@ const defaultSpawn: RestartSpawn = (cmd, args, opts) => {
   // { status: null, error }) — map it back to the seam shape so a binary
   // vanishing between preflight and spawn reuses the failure path
   try {
-    return { status: Bun.spawnSync([cmd, ...args], { stdio: ["inherit", "inherit", "inherit"], env: opts.env }).exitCode };
+    return {
+      status: Bun.spawnSync([cmd, ...args], { stdio: ["inherit", "inherit", "inherit"], env: opts.env }).exitCode,
+    };
   } catch (err) {
     return { status: null, error: err };
   }

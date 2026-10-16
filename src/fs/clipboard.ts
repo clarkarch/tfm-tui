@@ -85,8 +85,7 @@ export const parsePlainPaths = (text: string, exists: (p: string) => boolean = e
 
 // clipboard reads ride execBun (never throws for spawn failures — a missing
 // tool resolves code -1 and the read below degrades to null like before)
-const execClip = (cmd: string, args: string[]): Promise<ExecBunResult> =>
-  execBun(cmd, args, { timeoutMs: 10_000 });
+const execClip = (cmd: string, args: string[]): Promise<ExecBunResult> => execBun(cmd, args, { timeoutMs: 10_000 });
 
 type ClipLog = (msg: string) => void;
 

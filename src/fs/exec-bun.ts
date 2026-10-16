@@ -45,16 +45,16 @@ export const execBun = async (
     }, opts.timeoutMs);
   }
   try {
-    const [stdout, stderr, code] = await Promise.all([
-      streamText(proc.stdout),
-      streamText(proc.stderr),
-      proc.exited,
-    ]);
+    const [stdout, stderr, code] = await Promise.all([streamText(proc.stdout), streamText(proc.stderr), proc.exited]);
     if (timer !== null) clearTimeout(timer);
     // a timeout kill lands here as a non-zero/signal exit: report it as the
     // timeout failure, not as the tool's own code
     if (timer !== null && code !== 0 && (proc.signalCode === "SIGKILL" || proc.signalCode === "SIGTERM")) {
-      return { code: -1, stdout, stderr: `${stderr}${stderr.endsWith("\n") || stderr === "" ? "" : "\n"}timed out after ${opts.timeoutMs}ms` };
+      return {
+        code: -1,
+        stdout,
+        stderr: `${stderr}${stderr.endsWith("\n") || stderr === "" ? "" : "\n"}timed out after ${opts.timeoutMs}ms`,
+      };
     }
     return { code: code ?? -1, stdout, stderr };
   } catch (err) {

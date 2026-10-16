@@ -184,10 +184,11 @@ export const makeChrome = (ctx: ChromeCtx) => {
         on: (ev: "close" | "error", cb: (...a: never[]) => void): unknown => {
           if (ev === "close") {
             if (!proc) queueMicrotask(() => (cb as (c: number) => void)(-1));
-            else void proc.exited.then(
-              (c) => (cb as (c: number | null) => void)(c),
-              () => (cb as (c: number) => void)(-1),
-            );
+            else
+              void proc.exited.then(
+                (c) => (cb as (c: number | null) => void)(c),
+                () => (cb as (c: number) => void)(-1),
+              );
           } else if (!proc) {
             queueMicrotask(() => (cb as (e: Error) => void)(new Error("udisksctl spawn failed")));
           }

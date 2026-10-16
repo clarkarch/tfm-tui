@@ -58,12 +58,7 @@ export type ArchiveRunOpts = {
   onLoss?: (loss: { exec: number; links: number }) => void;
 };
 export type ArchiveRun = (spec: ToolSpec, opts?: ArchiveRunOpts) => Promise<ArchiveRunResult>;
-type SpawnFn = (
-  cmd: string,
-  args: string[],
-  opts: SpawnSafeOpts,
-  onFail: (err: Error) => void,
-) => Subprocess | null;
+type SpawnFn = (cmd: string, args: string[], opts: SpawnSafeOpts, onFail: (err: Error) => void) => Subprocess | null;
 export type WhichFn = (bin: string) => string | null;
 
 type CompressionDef = {
@@ -460,7 +455,10 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
       }
     };
     void (async () => {
-      await Promise.all([pump(proc.stdout, false, (s) => stdoutCounter.push(s)), pump(proc.stderr, true, (s) => stderrCounter.push(s))]);
+      await Promise.all([
+        pump(proc.stdout, false, (s) => stdoutCounter.push(s)),
+        pump(proc.stderr, true, (s) => stderrCounter.push(s)),
+      ]);
       let code: number | null = null;
       try {
         code = await proc.exited;

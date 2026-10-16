@@ -19,7 +19,13 @@ export type SpawnSafeOpts = {
   cwd?: string;
   env?: Record<string, string | undefined>;
   // tuple (per-fd) or one value for all three, like node SpawnOptions
-  stdio?: SpawnSafeStdio | readonly [(SpawnSafeStdio | null | undefined)?, (SpawnSafeStdio | null | undefined)?, (SpawnSafeStdio | null | undefined)?];
+  stdio?:
+    | SpawnSafeStdio
+    | readonly [
+        (SpawnSafeStdio | null | undefined)?,
+        (SpawnSafeStdio | null | undefined)?,
+        (SpawnSafeStdio | null | undefined)?,
+      ];
   detached?: boolean;
   timeoutMs?: number;
 };
@@ -37,8 +43,11 @@ export const spawnSafe = (
   const { timeoutMs, detached: _detached, ...rest } = opts;
   void _detached;
   // string form ("ignore") applies to all three fds, like node SpawnOptions
-  const stdio: readonly [(SpawnSafeStdio | null | undefined)?, (SpawnSafeStdio | null | undefined)?, (SpawnSafeStdio | null | undefined)?] =
-    typeof rest.stdio === "string" ? [rest.stdio, rest.stdio, rest.stdio] : (rest.stdio ?? []);
+  const stdio: readonly [
+    (SpawnSafeStdio | null | undefined)?,
+    (SpawnSafeStdio | null | undefined)?,
+    (SpawnSafeStdio | null | undefined)?,
+  ] = typeof rest.stdio === "string" ? [rest.stdio, rest.stdio, rest.stdio] : (rest.stdio ?? []);
   let proc: Subprocess;
   try {
     proc = Bun.spawn([cmd, ...args], {

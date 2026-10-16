@@ -304,7 +304,10 @@ const ICON_DISK_VER = "v4";
 const iconSalt = (): string => `${ICON_DISK_VER}:${svgRenderer() ?? "none"}`;
 const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
-  path.join(iconDiskDir(), `${new Bun.CryptoHasher("sha1").update(`${iconSalt()}:${key}`).digest("hex").slice(0, 20)}.png`);
+  path.join(
+    iconDiskDir(),
+    `${new Bun.CryptoHasher("sha1").update(`${iconSalt()}:${key}`).digest("hex").slice(0, 20)}.png`,
+  );
 let iconDirReady: Promise<void> | null = null;
 const ensureIconDir = (): Promise<void> =>
   (iconDirReady ??= mkdir(iconDiskDir(), { recursive: true })
@@ -482,11 +485,7 @@ export const pngFromProc = (proc: Subprocess, tool: string, timeoutMs = 30_000):
         out.set(c, off);
         off += c.length;
       }
-      settle(() =>
-        code === 0 && retained > 0
-          ? resolve(out)
-          : reject(new Error(`${tool} exited ${code}`)),
-      );
+      settle(() => (code === 0 && retained > 0 ? resolve(out) : reject(new Error(`${tool} exited ${code}`))));
     })();
   });
 
@@ -786,7 +785,10 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const THUMB_DISK_VER = "v3";
 const thumbDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "thumbs");
 const thumbDiskPath = (key: string): string =>
-  path.join(thumbDiskDir(), `${new Bun.CryptoHasher("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`);
+  path.join(
+    thumbDiskDir(),
+    `${new Bun.CryptoHasher("sha1").update(`${THUMB_DISK_VER}:${key}`).digest("hex").slice(0, 20)}.png`,
+  );
 // NOT memoized: tests re-point XDG_CACHE_HOME per run, a memoized mkdir would
 // cache the first dir and strand later writes in a missing directory
 const ensureThumbDir = async (): Promise<void> => {
