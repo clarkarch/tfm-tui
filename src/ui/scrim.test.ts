@@ -3,11 +3,11 @@ import { backgroundClearColor, scrimPlan } from "./scrim";
 
 describe("scrimPlan", () => {
   test("dim fades the content over the theme bg (no dark backdrop)", () => {
-    expect(scrimPlan("dim")).toEqual({ contentOpacity: 0.45, darkBackdrop: false, fill: false });
+    expect(scrimPlan("dim")).toEqual({ contentOpacity: 0.65, darkBackdrop: false, fill: false });
   });
 
   test("dark fades the content AND requests the near-black backdrop", () => {
-    expect(scrimPlan("dark")).toEqual({ contentOpacity: 0.45, darkBackdrop: true, fill: false });
+    expect(scrimPlan("dark")).toEqual({ contentOpacity: 0.65, darkBackdrop: true, fill: false });
   });
 
   test("fill uses the classic overlay (no opacity fade, glyph fallback)", () => {

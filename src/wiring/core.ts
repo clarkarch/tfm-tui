@@ -109,6 +109,9 @@ export const wireCore = (deps: {
   const registerModalOpen = (fn: () => void): void => {
     modalOpenHooks.push(fn);
   };
+  // last renderer clear colour applyModalDim applied ("" = never) — only a
+  // real transition pays the forced full repaint
+  let lastClear = "";
 
   // Dim the whole app behind a modal. dark/dim fade the app-content node's
   // opacity (rasters re-transmit at reduced alpha, so they stay visible);
@@ -125,7 +128,19 @@ export const wireCore = (deps: {
       if (fill) fill.visible = open && plan.fill;
       const r = deps.renderer();
       const base = backgroundClearColor(config.ui.transparentBg, colors.bg, isTtyMode());
-      r.setBackgroundColor(open && plan.darkBackdrop ? DARK_BACKDROP : base);
+      const clear = open && plan.darkBackdrop ? DARK_BACKDROP : base;
+      if (clear !== lastClear) {
+        lastClear = clear;
+        r.setBackgroundColor(clear);
+        // setBackgroundColor only requests a DIFFED render; after a clear-color
+        // change the untouched cells keep the old backdrop (dark-mode hover
+        // ghosting), so force one full repaint on the transition. Private
+        // field — same narrow-cast precedent as mem-hygiene's allocatorStats.
+        try {
+          (r as unknown as { forceFullRepaintRequested?: boolean }).forceFullRepaintRequested = true;
+        } catch {}
+        r.requestRender();
+      }
       slots.setScrim(open && plan.fill);
       if (open)
         for (const h of modalOpenHooks) {

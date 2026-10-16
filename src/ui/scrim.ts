@@ -18,8 +18,9 @@ export type ScrimPlan = {
   fill: boolean;
 };
 
-// shared fade strength for the dimming modes (~ the old RGBA(0,0,0,150) veil)
-const DIM_OPACITY = 0.45;
+// shared fade strength for the dimming modes. 0.45 dimmed text too far (muted
+// colors nearly vanished); 0.65 keeps labels readable while still receding.
+const DIM_OPACITY = 0.65;
 
 export const scrimPlan = (mode: ScrimMode): ScrimPlan => {
   if (mode === "none") return { contentOpacity: 1, darkBackdrop: false, fill: false };
