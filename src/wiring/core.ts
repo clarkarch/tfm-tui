@@ -101,9 +101,11 @@ export const wireCore = (deps: {
   // --- Floating layers: THE single source of truth for which modal/cursor
   // layer is open + the dismiss-others policy. Pure module, created before
   // any widget (makeSlots reads its escmenu state through a getter). Modal
-  // open/close dims the background rasters via slots.setScrim (the scrim used
-  // to be esc-menu-only, so props/conflict/pick rasters floated over modals).
-  // `slots` is TDZ here — the callback fires post-construction only.
+  // open/close swaps background rasters for dimmed glyphs via slots.setScrim:
+  // 0.6.0's scrim drops the covered placements, so setScrim keeps a dimmed
+  // icon visible in their place (not a float-over-menu fix — the renderer
+  // clips that itself). `slots` is TDZ here — the callback fires
+  // post-construction only.
   const floats = makeFloats({
     onModalChange: (open) => {
       try {

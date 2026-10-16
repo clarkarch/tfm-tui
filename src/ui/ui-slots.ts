@@ -2,9 +2,11 @@
 // Widget-extraction seam (see ui-dialogs.ts for the template): build time
 // queues a small glyph box via makeIconSlot; the async drain swaps in
 // theme-tinted kitty rasters at exact cell pixels (resvg/rsvg-convert via
-// ./icons). Thumbnail jobs share the same drain model. Kitty placements
-// float above all cells, so while a modal is up every background slot falls
-// back to a pre-darkened glyph (setScrim); rasters come back on close.
+// ./icons). Thumbnail jobs share the same drain model. A modal's translucent
+// full-screen scrim makes OpenTUI (0.6.0) drop every covered placement, so
+// setScrim swaps each background raster for a pre-darkened glyph — a dimmed
+// icon stays visible behind the scrim instead of a blank cell; rasters come
+// back on close.
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
 import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
