@@ -380,7 +380,6 @@ export const wireSettings = (deps: {
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
     drainIconQueue: core.slots.drainIconQueue,
-    setScrim: core.slots.setScrim,
     cancelBand: () => cancelBand(grid.bandCtx),
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,

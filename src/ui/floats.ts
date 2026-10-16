@@ -93,8 +93,8 @@ export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {
       stack = [];
       runClosers(all);
       // stack-emptied dip: a modal the closer itself just cleared (e.g. a
-      // confirm opening over the esc-menu ran its setScrim(false)) must
-      // refire below, or the new modal paints with rasters un-dimmed
+      // confirm opening over the esc-menu ran its content-dim(false)) must
+      // refire below, or the new modal paints with the background undimmed
       syncModal();
     }
     stack.push({ kind, closer });

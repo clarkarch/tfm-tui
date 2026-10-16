@@ -81,7 +81,6 @@ const mkGroups = (rowCount = 5): SettingGroup[] => {
 let t: TestRendererSetup;
 let floats: ReturnType<typeof makeFloats>;
 let menu: ReturnType<typeof makeEscMenu>;
-let scrim: boolean;
 let cancelledBand: number;
 let warns: Array<[string, string | undefined]>;
 let dlogs: string[];
@@ -105,7 +104,6 @@ const pointers: string[] = [];
 beforeAll(async () => {
   t = await createTestRenderer({ width: 90, height: TERM_H });
   floats = makeFloats();
-  scrim = false;
   cancelledBand = 0;
   warns = [];
   dlogs = [];
@@ -140,9 +138,6 @@ beforeAll(async () => {
     drainIconQueue: () => {},
     setIconState: (spec, stateIdx) => {
       iconStateCalls.push([spec.slotId, stateIdx]);
-    },
-    setScrim: (on) => {
-      scrim = on;
     },
     cancelBand: () => {
       cancelledBand++;
@@ -278,7 +273,6 @@ describe("esc-menu root view", () => {
     expect(frame).toContain("Settings");
     expect(frame).toContain("Quit");
     expect(floats.isOpen("escmenu")).toBe(true);
-    expect(scrim).toBe(true);
     expect(cancelledBand).toBe(1); // a modal kills in-flight rubber-band
     menu.closeMenu();
     await t.renderOnce();
@@ -292,7 +286,6 @@ describe("esc-menu root view", () => {
     await t.renderOnce();
     expect(quitCalls).toBe(1);
     expect(floats.isOpen("escmenu")).toBe(false);
-    expect(scrim).toBe(false);
     expect(t.renderer.root.findDescendantById("tfm-menu")).toBeFalsy();
   });
 

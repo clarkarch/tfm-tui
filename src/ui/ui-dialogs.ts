@@ -1,4 +1,4 @@
-import { Box, type MouseEvent, RGBA, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import type { VChild } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
@@ -64,7 +64,10 @@ export const makeModalScrim = (
       alignItems: "center",
       justifyContent: "center",
       zIndex: opts.zIndex,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      // NO background fill: a translucent fill makes OpenTUI 0.6.0 delete
+      // every raster it covers (drag-selection black box / scrim glyphs were
+      // the same trap). The dim comes from `tfm-content` opacity (floats
+      // onModalChange); this Box is just the click-away catcher + centering.
       onMouseDown: () => opts.onClose(),
     },
     Box(
@@ -107,7 +110,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
         alignItems: "center",
         paddingTop: Math.max(2, Math.round(ctx.termH() / (opts.paddingDiv ?? 3))),
         zIndex: opts.zIndex,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+        // no fill — see makeModalScrim (dim rides tfm-content opacity)
         onMouseDown: () => opts.onClose(),
       },
       Box(

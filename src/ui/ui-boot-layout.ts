@@ -89,7 +89,7 @@ type AppContainerOpts = {
 
 export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
   Box(
-    { width: "100%", height: "100%", flexDirection: "row" },
+    { id: "tfm-content", width: "100%", height: "100%", flexDirection: "row" },
     Box(
       {
         id: "tfm-sidebar-root",

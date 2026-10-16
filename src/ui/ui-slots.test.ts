@@ -5,7 +5,6 @@ import path from "node:path";
 import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
-  dimHex,
   hoverEvents,
   isFloatRootId,
   makePointerSetter,
@@ -37,7 +36,6 @@ const BG = "#1a1b26";
 
 const makeHarness = () => {
   const nodes = new Map<string, any>();
-  let modalUp = false;
   let ttyMode = false;
   let forceGlyph = false;
   let iconStyle: "filled" | "outline" = "filled";
@@ -50,7 +48,6 @@ const makeHarness = () => {
     iconsMode: () => "opaque",
     iconStyle: () => iconStyle,
     iconCells: () => 3,
-    modalOpen: () => modalUp,
     glyphFor: (name) => (iconStyle === "outline" ? `O:${name}` : "F"),
     isTtyMode: () => ttyMode,
     forceGlyph: () => forceGlyph,
@@ -76,32 +73,13 @@ const makeHarness = () => {
     slots,
     nodes,
     mountFakeSlot,
-    setModal: (v: boolean) => (modalUp = v),
     setTtyMode: (v: boolean) => (ttyMode = v),
     setForceGlyph: (v: boolean) => (forceGlyph = v),
     setIconStyle: (v: "filled" | "outline") => (iconStyle = v),
   };
 };
 
-describe("icon slot scrim", () => {
-  test("setScrim dims a raster drained BEFORE the modal opened and restores it on close", async () => {
-    const h = makeHarness();
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
-    const { glyph, img } = h.mountFakeSlot(s.spec);
-
-    await h.slots.drainIconQueue(); // raster fails (missing asset) — done+prune still run
-    h.setModal(true);
-    h.slots.setScrim(true);
-
-    expect(img.visible).toBe(false);
-    expect(glyph.visible).toBe(true);
-    expect(glyph.fg).toBe(dimHex(FG, 0.41));
-
-    h.slots.setScrim(false);
-    expect(img.visible).toBe(true);
-    expect(glyph.visible).toBe(false);
-  });
-
+describe("icon slot registry", () => {
   test("resetIconQueue re-queues a drained slot whose raster finished earlier", async () => {
     // theme flips must re-raster boot-baked slots (nav buttons et al) that
     // already drained — the prune made them unreachable from the queue
@@ -312,7 +290,6 @@ describe("thumbnail mount", () => {
       uiStyle: () => "solid",
       iconsMode: () => "opaque",
       iconCells: () => 4,
-      modalOpen: () => false,
       glyphFor: () => "F",
       isTtyMode: () => false,
       forceGlyph: () => false,
@@ -518,7 +495,6 @@ describe("thumbnail mount", () => {
         iconsMode: () => "opaque",
         transparentForce: () => force,
         iconCells: () => 4,
-        modalOpen: () => false,
         glyphFor: () => "F",
         isTtyMode: () => false,
         forceGlyph: () => false,
@@ -547,7 +523,6 @@ describe("thumbnail mount", () => {
       iconsMode: () => "opaque",
       transparentForce: () => true,
       iconCells: () => 4,
-      modalOpen: () => false,
       glyphFor: () => "F",
       isTtyMode: () => false,
       forceGlyph: () => false,

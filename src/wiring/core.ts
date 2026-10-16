@@ -101,15 +101,16 @@ export const wireCore = (deps: {
   // --- Floating layers: THE single source of truth for which modal/cursor
   // layer is open + the dismiss-others policy. Pure module, created before
   // any widget (makeSlots reads its escmenu state through a getter). Modal
-  // open/close swaps background rasters for dimmed glyphs via slots.setScrim:
-  // 0.6.0's scrim drops the covered placements, so setScrim keeps a dimmed
-  // icon visible in their place (not a float-over-menu fix — the renderer
-  // clips that itself). `slots` is TDZ here — the callback fires
-  // post-construction only.
+  // open/close dims the whole app content (`tfm-content`) via node opacity:
+  // the old full-screen translucent scrim fill made OpenTUI 0.6.0 DELETE every
+  // raster it covered (hence the glyph-fallback hack), so the scrim is now a
+  // transparent click-catcher and the dim rides opacity — which OpenTUI
+  // applies to kitty placements too, so thumbnails stay visible (dimmed).
   const floats = makeFloats({
     onModalChange: (open) => {
       try {
-        slots.setScrim(open);
+        const content = lookup.byId("tfm-content");
+        if (content) content.opacity = open ? 0.45 : 1;
       } catch {}
     },
   });
@@ -125,7 +126,7 @@ export const wireCore = (deps: {
     isTtyMode,
   });
 
-  // --- Icon slots / thumbs / modal scrim — widget lives in ./ui-slots.
+  // --- Icon slots / thumbs — widget lives in ./ui-slots.
   // Called before the renderer boots: every ctx field the drain path needs is
   // an arrow wrapper (post-boot evaluation), per the widget-seam rules. ---
   const slots = makeSlots({
@@ -141,7 +142,6 @@ export const wireCore = (deps: {
     transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
     iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
-    modalOpen: () => floats.hasModal(),
     glyphFor: ttyGlyphFor,
     isTtyMode,
     forceGlyph,

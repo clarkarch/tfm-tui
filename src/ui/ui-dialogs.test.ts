@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
+import { makeDialogs, makeConflict, makeModalScrim, makeYesNo } from "./ui-dialogs";
 import { makeFloats, type Floats } from "./floats";
 
 // Floating-layer state lives in ./floats (single source of truth): the
@@ -250,6 +250,25 @@ describe("openDialog chokepoint", () => {
     expect(typeof scrim.props.onMouseDown).toBe("function");
     scrim.props.onMouseDown({});
     expect(closed).toBe(true);
+  });
+
+  test("the scrim carries NO background fill (a fill makes OpenTUI delete every raster under it)", () => {
+    // The old `RGBA(0,0,0,150)` fill made 0.6.0 unreserve every kitty placement
+    // it covered, so thumbnails vanished under any modal (the glyph-fallback
+    // hack existed only to mask that). The dim now rides tfm-content opacity.
+    const { ctx, lastAdded } = makeCtx();
+    const { openDialog } = makeDialogs(ctx);
+    openDialog({ id: "tfm-nofill", zIndex: 3300, width: 20, rows: () => [], onClose: () => {} });
+    expect(lastAdded().props.backgroundColor).toBeUndefined();
+  });
+
+  test("makeModalScrim (esc menu / pick / prompt path) is fill-less too", () => {
+    const node: any = makeModalScrim(
+      { uiStyle: () => "solid" as const, colors: () => ({ sidebarBg: "#000000" }) as any },
+      { id: "tfm-x", zIndex: 1, panelWidth: 10, onClose: () => {} },
+    );
+    expect(node.props.backgroundColor).toBeUndefined();
+    expect(typeof node.props.onMouseDown).toBe("function");
   });
 });
 

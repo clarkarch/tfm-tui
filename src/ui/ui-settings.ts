@@ -60,7 +60,6 @@ type EscMenuCtx = {
   ): IconSlotHandle;
   setIconState(spec: IconSpec, stateIdx: number): void;
   drainIconQueue(): void | Promise<void>;
-  setScrim(on: boolean): void;
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)
   cancelBand(): void;
   colors(): Theme;
@@ -820,7 +819,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     nativeMemTrace("esc-menu close");
     const scrim = ctx.byId("tfm-menu");
     scrim?.parent?.remove(scrim);
-    ctx.setScrim(false);
     // esc-menu open/close churns native allocations (documented leak vector);
     // a rapid cycle can exhaust the allocator before the 10s hygiene tick, so
     // drain finalizers immediately on close.
@@ -843,7 +841,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.log?.("esc-menu open");
     nativeMemTrace("esc-menu open");
     ctx.cancelBand();
-    ctx.setScrim(true);
     const scrim = makeModalScrim(
       { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {

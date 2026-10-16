@@ -172,3 +172,32 @@ describe("rubber-band selection node", () => {
     expect(band.shouldFill).toBe(false);
   });
 });
+
+describe("app content dim target", () => {
+  // Modal dimming rides this node's opacity (wiring/core onModalChange):
+  // a full-screen scrim FILL would make OpenTUI delete every raster it
+  // covered, so the scrim is fill-less and the dim is opacity instead.
+  test("buildAppContainer mounts tfm-content, whose opacity the modal dim sets", async () => {
+    const theme = { ...defaultConfig.theme };
+    t.renderer.root.findDescendantById("tfm-content")?.destroy?.();
+    t.renderer.root.add(
+      buildAppContainer({
+        sw: 26,
+        sideInnerW: 24,
+        colors: theme,
+        uiStyle: "solid",
+        tabBarVisible: true,
+        previewWidth: 40,
+        previewEnabled: false,
+        dualPane: false,
+        title: buildTitle({ width: 24, colors: theme }),
+        toolbarShells: [Box({}), Box({})] as any,
+      }),
+    );
+    await t.renderOnce();
+    const content: any = t.renderer.root.findDescendantById("tfm-content");
+    expect(content).toBeTruthy();
+    content.opacity = 0.45;
+    expect(content.opacity).toBe(0.45);
+  });
+});

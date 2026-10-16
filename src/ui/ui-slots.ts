@@ -1,12 +1,9 @@
-// --- Icon slots / thumbnails / modal scrim ---
+// --- Icon slots / thumbnails ---
 // Widget-extraction seam (see ui-dialogs.ts for the template): build time
 // queues a small glyph box via makeIconSlot; the async drain swaps in
 // theme-tinted kitty rasters at exact cell pixels (resvg/rsvg-convert via
-// ./icons). Thumbnail jobs share the same drain model. A modal's translucent
-// full-screen scrim makes OpenTUI (0.6.0) drop every covered placement, so
-// setScrim swaps each background raster for a pre-darkened glyph — a dimmed
-// icon stays visible behind the scrim instead of a blank cell; rasters come
-// back on close.
+// ./icons). Thumbnail jobs share the same drain model. (Modal dimming is the
+// app-content node's opacity, not a scrim that would delete covered rasters.)
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
 import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
@@ -239,8 +236,6 @@ export type SlotsCtx = {
   iconStyle?(): IconStyle;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
-  // true while a modal menu/scrim owns the screen (drain re-applies scrim)
-  modalOpen(): boolean;
   glyphFor(name: string): string;
   // tty mode (linux console): skip every raster/thumb spawn, glyphs only.
   // force-glyph does the same on modern terminals with buggy kitty graphics
@@ -269,12 +264,10 @@ export const dimHex = (hex: string, f: number): string => {
 };
 
 export const makeSlots = (ctx: SlotsCtx) => {
-  // registry of every queued slot, drained or not: setScrim must reach
-  // rasters that finished BEFORE the modal opened (the old queue pruned
-  // done specs at the end of each drain — scrim then iterated an almost
-  // empty queue and kitty rasters floated over the menu), and
-  // resetIconQueue must re-queue drained slots for theme/resize re-rasters.
-  // Pruned lazily in drainIconQueue when the slot node is gone from the tree.
+  // registry of every queued slot, drained or not: resetIconQueue must
+  // re-queue drained slots for theme/resize re-rasters, and every mounted
+  // raster finishing AFTER a modal opened must still be reachable. Pruned
+  // lazily in drainIconQueue when the slot node is gone from the tree.
   // This is the ONLY registry — a second `iconQueue` (the old design) grew
   // unbounded and re-armed dead specs on every reset.
   const allSpecs = new Map<string, IconSpec>();
@@ -582,14 +575,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // drop specs whose slot node is gone from the tree (tiles/sidebars
     // rebuilt by renderAll): their spec objects are dead weight and the
     // tile refs that kept them alive are gone too. Everything still
-    // mounted stays in the registry — the scrim and retheme re-rasters
-    // need it (see allSpecs above).
+    // mounted stays in the registry — retheme re-rasters need it (see
+    // allSpecs above).
     for (const [id, spec] of allSpecs) {
       if (spec.done && !ctx.byId(id)) allSpecs.delete(id);
     }
-    // re-rasters made fresh images visible; while a modal scrim is up the icons
-    // must fall back to dimmed glyphs or they float over the menu
-    if (ctx.modalOpen()) setScrim(true);
   };
 
   // Serialized entry point: concurrent calls coalesce into the running pass
@@ -632,45 +622,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
       cur = cur.parent;
     }
     return false;
-  };
-
-  const setScrim = (on: boolean) => {
-    for (const spec of allSpecs.values()) {
-      const slot: SlotNode | null | undefined = ctx.byId(spec.slotId);
-      if (!slot) continue;
-      if (on && isFloatChild(slot)) continue;
-      const kids = [...(slot.getChildren?.() ?? [])];
-      const glyphNode = kids.find((k) => k.id === `${spec.slotId}-g`);
-      if (!glyphNode) continue;
-      const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`));
-      if (stateImgs.length === 0 && !spec.done) continue;
-      if (on) {
-        stateImgs.forEach((k) => {
-          try {
-            k.visible = false;
-          } catch {}
-        });
-        try {
-          glyphNode.fg = dimHex(spec.states[spec.initialState]?.fg ?? ctx.colors().sidebarFg, 0.41);
-          glyphNode.visible = true;
-        } catch {}
-      } else {
-        if (stateImgs.length === 0) {
-          try {
-            glyphNode.visible = true;
-          } catch {}
-        } else {
-          try {
-            glyphNode.visible = false;
-          } catch {}
-          stateImgs.forEach((k, i) => {
-            try {
-              k.visible = i === spec.initialState;
-            } catch {}
-          });
-        }
-      }
-    }
   };
 
   // clickable "esc"/close hint shared by floating UIs (prompt/props/menu) —
@@ -730,7 +681,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
     setIconState,
     drainThumbs,
     drainIconQueue,
-    setScrim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
     resetIconQueue: (): void => {
       // boot-baked slots may have already drained and left the pending set —
