@@ -7,7 +7,7 @@
 // both are only read at runtime, post-boot). ---
 
 import os from "node:os";
-import type { CliRenderer, ScrollBoxRenderable } from "@opentui/core";
+import { RGBA, type CliRenderer, type ScrollBoxRenderable } from "@opentui/core";
 import { loadConfig, type Theme } from "../config/config";
 import { deriveColors } from "../config/color";
 import { applySurface, sideInnerWidth } from "../ui/style";
@@ -19,7 +19,8 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
-import { backgroundClearColor, scrimPlan } from "../ui/scrim";
+import { backgroundClearColor, SCRIM_FILL_RGBA, scrimPlan } from "../ui/scrim";
+import { setScrimFill } from "../ui/ui-dialogs";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -102,18 +103,23 @@ export const wireCore = (deps: {
   // Near-black backdrop for [ui] scrim = "dark" (see ui/scrim.ts).
   const DARK_BACKDROP = "#05050a";
 
-  // Dim the whole app behind a modal: `contentOpacity` on tfm-content plus, for
-  // `dark`, a near-black renderer clear so thumbnails read as *dimmed* rather
-  // than see-through to the themed background (OpenTUI clip/deletes rasters
-  // under a fill, so this is the only way to keep icons visible).
+  // Dim the whole app behind a modal. dark/dim fade the app-content node's
+  // opacity (rasters re-transmit at reduced alpha, so they stay visible);
+  // `fill` restores the classic RGBA(0,0,0,150) overlay (which OpenTUI makes
+  // delete covered rasters — so slots.setScrim swaps them for dimmed glyphs).
   const applyModalDim = (open: boolean): void => {
     try {
       const plan = scrimPlan(config.ui.scrimMode);
       const content = lookup.byId("tfm-content");
       if (content) content.opacity = open ? plan.contentOpacity : 1;
+      // provider read at the NEXT modal's Box creation — set it now so the
+      // modal about to open (floats.open fires this before the widget builds)
+      // gets the right scrim
+      setScrimFill(open && plan.fill ? RGBA.fromInts(...SCRIM_FILL_RGBA) : undefined);
       const r = deps.renderer();
       const base = backgroundClearColor(config.ui.transparentBg, colors.bg, isTtyMode());
       r.setBackgroundColor(open && plan.darkBackdrop ? DARK_BACKDROP : base);
+      slots.setScrim(open && plan.fill);
     } catch {}
   };
 
@@ -153,11 +159,16 @@ export const wireCore = (deps: {
     transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
     iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
+    modalOpen: () => floats.hasModal(),
     glyphFor: ttyGlyphFor,
     isTtyMode,
     forceGlyph,
     setPointer,
   });
+
+  // seed the scrim-fill provider so the FIRST modal (before any config change
+  // or modal transition) reads the right fill; applyModalDim keeps it current
+  setScrimFill(scrimPlan(config.ui.scrimMode).fill ? RGBA.fromInts(...SCRIM_FILL_RGBA) : undefined);
 
   // --- App state & history (type + boot-state factory live in ./nav with the
   // navigation logic). Two panes, each an independent AppState; `state` is a

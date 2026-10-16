@@ -13,16 +13,23 @@ import type { ScrimMode, TransparentBgMode } from "../config/config-schema";
 export type ScrimPlan = {
   contentOpacity: number;
   darkBackdrop: boolean;
+  // classic full-screen RGBA(0,0,0,150) overlay; OpenTUI deletes rasters under
+  // it, so `fill` implies the glyph fallback (setScrim) replaces them
+  fill: boolean;
 };
 
 // shared fade strength for the dimming modes (~ the old RGBA(0,0,0,150) veil)
 const DIM_OPACITY = 0.45;
 
 export const scrimPlan = (mode: ScrimMode): ScrimPlan => {
-  if (mode === "none") return { contentOpacity: 1, darkBackdrop: false };
-  if (mode === "dark") return { contentOpacity: DIM_OPACITY, darkBackdrop: true };
-  return { contentOpacity: DIM_OPACITY, darkBackdrop: false };
+  if (mode === "none") return { contentOpacity: 1, darkBackdrop: false, fill: false };
+  if (mode === "fill") return { contentOpacity: 1, darkBackdrop: false, fill: true };
+  if (mode === "dark") return { contentOpacity: DIM_OPACITY, darkBackdrop: true, fill: false };
+  return { contentOpacity: DIM_OPACITY, darkBackdrop: false, fill: false };
 };
+
+// the classic overlay color, made once (wiring feeds it to the scrim Boxes)
+export const SCRIM_FILL_RGBA = [0, 0, 0, 150] as const;
 
 // The renderer clear color the app establishes: transparent-bg on/force under a
 // pixel-capable terminal ⇒ "transparent" (terminal shows through); otherwise

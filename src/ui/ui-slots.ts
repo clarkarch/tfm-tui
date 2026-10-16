@@ -236,6 +236,8 @@ export type SlotsCtx = {
   iconStyle?(): IconStyle;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
+  // true while a modal menu/scrim owns the screen (drain re-applies scrim)
+  modalOpen(): boolean;
   glyphFor(name: string): string;
   // tty mode (linux console): skip every raster/thumb spawn, glyphs only.
   // force-glyph does the same on modern terminals with buggy kitty graphics
@@ -580,6 +582,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
     for (const [id, spec] of allSpecs) {
       if (spec.done && !ctx.byId(id)) allSpecs.delete(id);
     }
+    // re-rasters made fresh images visible; while a glyph scrim is up the icons
+    // must fall back to dimmed glyphs (the fill mode deletes the rasters)
+    if (ctx.modalOpen()) setScrim(true);
   };
 
   // Serialized entry point: concurrent calls coalesce into the running pass
@@ -622,6 +627,49 @@ export const makeSlots = (ctx: SlotsCtx) => {
       cur = cur.parent;
     }
     return false;
+  };
+
+  // [ui] scrim = "fill" fallback: the classic full-screen overlay makes
+  // OpenTUI delete every covered raster, so swap each background raster for a
+  // pre-darkened glyph while it is up (rasters return on close). Used only by
+  // the fill mode; dark/dim keep the rasters (faded via content opacity).
+  const setScrim = (on: boolean) => {
+    for (const spec of allSpecs.values()) {
+      const slot: SlotNode | null | undefined = ctx.byId(spec.slotId);
+      if (!slot) continue;
+      if (on && isFloatChild(slot)) continue;
+      const kids = [...(slot.getChildren?.() ?? [])];
+      const glyphNode = kids.find((k) => k.id === `${spec.slotId}-g`);
+      if (!glyphNode) continue;
+      const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`));
+      if (stateImgs.length === 0 && !spec.done) continue;
+      if (on) {
+        stateImgs.forEach((k) => {
+          try {
+            k.visible = false;
+          } catch {}
+        });
+        try {
+          glyphNode.fg = dimHex(spec.states[spec.initialState]?.fg ?? ctx.colors().sidebarFg, 0.41);
+          glyphNode.visible = true;
+        } catch {}
+      } else {
+        if (stateImgs.length === 0) {
+          try {
+            glyphNode.visible = true;
+          } catch {}
+        } else {
+          try {
+            glyphNode.visible = false;
+          } catch {}
+          stateImgs.forEach((k, i) => {
+            try {
+              k.visible = i === spec.initialState;
+            } catch {}
+          });
+        }
+      }
+    }
   };
 
   // clickable "esc"/close hint shared by floating UIs (prompt/props/menu) —
@@ -681,6 +729,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     setIconState,
     drainThumbs,
     drainIconQueue,
+    setScrim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
     resetIconQueue: (): void => {
       // boot-baked slots may have already drained and left the pending set —
