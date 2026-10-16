@@ -1044,6 +1044,7 @@ const UI_ROWS: SchemaRow[] = [
     blurb: "How dark the backdrop gets behind a modal",
     group: "appearance",
     subsection: "look",
+    showWhen: (ui) => ui.scrimMode === "dim",
   },
   {
     kind: "enum",

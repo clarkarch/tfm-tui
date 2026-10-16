@@ -401,6 +401,23 @@ describe("settingGroups shape", () => {
     ]);
   });
 
+  test("scrim dim only surfaces when the scrim mode is dim", () => {
+    const h = mk();
+    withMasters(h, true);
+    const labels = (): string[] =>
+      h
+        .groups()
+        .find((g) => g.header === "appearance")!
+        .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    expect(labels()).toContain("scrim dim"); // default mode is dim
+    (h.config.ui as { scrimMode: string }).scrimMode = "fill";
+    expect(labels()).not.toContain("scrim dim");
+    (h.config.ui as { scrimMode: string }).scrimMode = "none";
+    expect(labels()).not.toContain("scrim dim");
+    (h.config.ui as { scrimMode: string }).scrimMode = "dim";
+    expect(labels()).toContain("scrim dim");
+  });
+
   test("keys category groups binds under subsection dividers", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;

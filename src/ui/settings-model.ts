@@ -391,6 +391,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     "terminalAutoHide",
     "listingsCache",
     "windowedGrid",
+    "scrimMode",
   ]);
 
   const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
