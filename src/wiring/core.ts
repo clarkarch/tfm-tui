@@ -19,7 +19,7 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
-import { scrimPlan } from "../ui/scrim";
+import { SCRIM_FILL_ID, rasterDimPlan, scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -116,17 +116,24 @@ export const wireCore = (deps: {
     }
   };
 
-  // Dim the whole app behind a modal. Both modes are a fade of the app-content
-  // node's opacity; icon rasters opt out of that fade (placementOpacity 1) so
-  // they stay crisp instead of compositing translucently, while thumbnails
-  // inherit it and fade. (The old `fill` overlay is gone: a full-screen fill
-  // made OpenTUI delete every raster it covered.)
+  // Dim the whole app behind a modal. `dim` fades the app-content node's
+  // opacity; `fill` toggles the classic full-screen overlay node
+  // (SCRIM_FILL_ID), whose box opts into the fork's fillDimsImages so the
+  // rasters it covers are dimmed in place instead of deleted. In both modes
+  // the icon rasters keep their placement opaque and instead have their baked
+  // pixels shaded (rasterDimPlan), so they darken along with the text without
+  // the translucent `icons = transparent` look.
   const applyModalDim = (open: boolean): void => {
     try {
       const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
       const content = lookup.byId("tfm-content");
       if (content) content.opacity = open ? plan.contentOpacity : 1;
-      slots.setRasterDim(open && config.ui.scrimMode !== "none" ? 1 : null);
+      const fill = lookup.byId(SCRIM_FILL_ID);
+      if (fill) fill.visible = open && plan.fill;
+      const rasters = open
+        ? rasterDimPlan(config.ui.scrimMode, plan.contentOpacity)
+        : { opacity: null, shade: 1, bgShade: 1 };
+      slots.setRasterDim(rasters.opacity, rasters.shade, rasters.bgShade);
       // run on BOTH open and close: the widgets' reset also REPAINTS the
       // sidebar (normalizePlaces), which is gated on the live modal state — so
       // closing must repaint it back to the hover/kb highlight, and opening

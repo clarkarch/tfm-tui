@@ -4,6 +4,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { defaultConfig } from "../config/config-schema";
 import { buildAppContainer, buildBootLayout, buildTitle, scrollbarTrackColors } from "./ui-boot-layout";
 import { BAND_ID } from "../input/grid-input";
+import { SCRIM_FILL_ID, SCRIM_FILL_Z } from "./scrim";
 
 // the grid scrollers' bars must wear the theme (not the upstream gray
 // defaults), and rethemeChrome must be able to recompute the same mapping
@@ -226,9 +227,15 @@ describe("scrim fill overlay", () => {
       emptyAreaEntries: () => [],
     });
     await t.renderOnce();
-    // The scrim is a content-opacity fade now: the old full-screen fill overlay
-    // was removed because OpenTUI deletes every raster a fill covers (the
-    // "black box" icons under [ui] scrim = "fill").
-    expect(t.renderer.root.findDescendantById("tfm-scrim-fill")).toBeFalsy();
+    // The fill overlay dims the rasters it covers through the fork's
+    // fillDimsImages instead of deleting them (a plain fill unreserves every
+    // image cell it covers — the "black box" icons).
+    const fill: any = t.renderer.root.findDescendantById(SCRIM_FILL_ID);
+    expect(fill).toBeTruthy();
+    expect(fill.visible).toBe(false);
+    expect(fill.zIndex).toBe(SCRIM_FILL_Z);
+    expect(fill.zIndex).toBeLessThan(3000); // below every modal panel (FLOAT_Z.escmenu)
+    expect(fill.backgroundColor.a).toBeGreaterThan(0); // a real, occluding fill
+    expect(fill.fillDimsImages).toBe(true);
   });
 });

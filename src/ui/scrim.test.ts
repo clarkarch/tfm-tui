@@ -1,23 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { backgroundClearColor, scrimPlan } from "./scrim";
+import { backgroundClearColor, rasterDimPlan, scrimPlan } from "./scrim";
 
 describe("scrimPlan", () => {
   test("dim fades the content by the configured amount (opacity = 1 - dim%)", () => {
-    expect(scrimPlan("dim", 35)).toEqual({ contentOpacity: 0.65 });
-    expect(scrimPlan("dim", 50)).toEqual({ contentOpacity: 0.5 });
-    expect(scrimPlan("dim", 0)).toEqual({ contentOpacity: 1 });
+    expect(scrimPlan("dim", 35)).toEqual({ contentOpacity: 0.65, fill: false });
+    expect(scrimPlan("dim", 50)).toEqual({ contentOpacity: 0.5, fill: false });
+    expect(scrimPlan("dim", 0)).toEqual({ contentOpacity: 1, fill: false });
   });
 
-  test("fill is the classic darker backdrop, now a fixed content fade", () => {
-    // The RGBA(0,0,0,150) overlay is gone: a full-screen fill made OpenTUI
-    // delete every raster it covered (the "black box" icons). The old overlay's
-    // cell darkening is reproduced as a content fade instead.
-    expect(scrimPlan("fill", 35)).toEqual({ contentOpacity: 1 - 150 / 255 });
-    expect(scrimPlan("fill", 0)).toEqual({ contentOpacity: 1 - 150 / 255 });
+  test("fill is the classic dark overlay (content stays opaque)", () => {
+    // the overlay box opts into the fork's fillDimsImages so the rasters it
+    // covers are dimmed in place instead of deleted
+    expect(scrimPlan("fill", 35)).toEqual({ contentOpacity: 1, fill: true });
+    expect(scrimPlan("fill", 0)).toEqual({ contentOpacity: 1, fill: true });
   });
 
   test("none leaves the content fully opaque", () => {
-    expect(scrimPlan("none", 35)).toEqual({ contentOpacity: 1 });
+    expect(scrimPlan("none", 35)).toEqual({ contentOpacity: 1, fill: false });
+  });
+});
+
+describe("rasterDimPlan", () => {
+  test("dim keeps icons opaque and shades them by the content fade", () => {
+    // shading the baked pixels instead of alpha-fading the placement is what
+    // stops a dimmed icon from looking like [ui] icons = "transparent"
+    expect(rasterDimPlan("dim", 0.65)).toEqual({ opacity: 1, shade: 0.65, bgShade: 1 });
+    expect(rasterDimPlan("dim", 1)).toEqual({ opacity: 1, shade: 1, bgShade: 1 });
+  });
+
+  test("fill shades fg and the square by the overlay's darkening", () => {
+    // the overlay darkens the covered cells, so the flattened square must
+    // darken by the same amount or it pops
+    expect(rasterDimPlan("fill", 1)).toEqual({ opacity: 1, shade: 1 - 150 / 255, bgShade: 1 - 150 / 255 });
+  });
+
+  test("none restores the inherited placement opacity and no shade", () => {
+    expect(rasterDimPlan("none", 0.5)).toEqual({ opacity: null, shade: 1, bgShade: 1 });
   });
 });
 

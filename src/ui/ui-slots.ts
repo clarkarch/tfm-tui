@@ -263,6 +263,16 @@ export const dimHex = (hex: string, f: number): string => {
   return intToHex((r << 16) | (g << 8) | b);
 };
 
+// scrim dim: darken an icon's baked pixels without alpha, so the raster reads
+// as dimmed rather than lit or translucent. `bgShade` darkens the flattened
+// square too (the overlay darkens the cells it covers, so the square must
+// follow or it pops); under a content fade the square stays put (bg over bg).
+// Float islands never dim (identity).
+export const shadeIconStates = (states: IconState[], shade: number, floatChild: boolean, bgShade = 1): IconState[] =>
+  floatChild || (shade === 1 && bgShade === 1)
+    ? states
+    : states.map((st) => ({ fg: dimHex(st.fg, shade), bg: dimHex(st.bg, bgShade) }));
+
 export const makeSlots = (ctx: SlotsCtx) => {
   // registry of every queued slot, drained or not: resetIconQueue must
   // re-queue drained slots for theme/resize re-rasters, and every mounted
@@ -272,11 +282,13 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // unbounded and re-armed dead specs on every reset.
   const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
-  // scrim dim: placement-level opacity for icon rasters (1 = stay crisp while
-  // the content node fades, null = inherit the node opacity as before). New
-  // rasters bake it in via ImageRenderable; setRasterDim also repaints mounted
-  // state images so a modal opened after a drain is covered too.
+  // scrim dim: icon rasters stay opaque (placement opacity 1) while the content
+  // node fades, and their foreground is SHADED by this factor at drain time so
+  // they darken along with the text instead of compositing translucently.
+  // setRasterDim re-queues every slot; new rasters bake both in.
   let rasterDim: number | null = null;
+  let rasterShade = 1;
+  let rasterBgShade = 1;
   let thumbJobs: ThumbJob[] = [];
   // per-slot ownership: pushThumbJob records the key of the job it queued for a
   // slot, so a drain that resolves the slot later can tell whether ITS job still
@@ -458,18 +470,19 @@ export const makeSlots = (ctx: SlotsCtx) => {
     faithful = false,
   ) => {
     const { cellW, cellH } = cellMetrics();
+    const floatChild = isFloatChild(ctx.byId(slotId));
+    // scrim dim: bake the shade into the foreground (bg untouched, so the
+    // flattened square still matches the tile) and keep the placement opaque.
+    // Float islands are never dimmed.
+    const shaded = shadeIconStates(states, rasterShade, floatChild, rasterBgShade);
     // `transparent` = raster keeps alpha; strip it inside floating layers in
     // partial mode so an opaque island can't blend the desktop through.
     // transparent-bg force keeps alpha outside floats too (chrome tiles are
     // transparent under force); float children keep flattening onto the island.
-    const transparent = iconTransparent(
-      ctx.iconsMode(),
-      isFloatChild(ctx.byId(slotId)),
-      ctx.transparentForce?.() ? "force" : undefined,
-    );
+    const transparent = iconTransparent(ctx.iconsMode(), floatChild, ctx.transparentForce?.() ? "force" : undefined);
     const imgs: ImageRenderable[] = [];
-    for (let si = 0; si < states.length; si++) {
-      const st = states[si];
+    for (let si = 0; si < shaded.length; si++) {
+      const st = shaded[si];
       if (st === undefined) continue;
       try {
         const pxW = Math.max(1, Math.round(wCells * cellW));
@@ -495,9 +508,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
           height: heightCells,
           fit: "fit",
           protocol: "auto",
-          // scrim dim: keep icons crisp instead of letting the content-opacity
-          // dim alpha-fade them (see setRasterDim); null inherits as before.
-          placementOpacity: rasterDim ?? undefined,
+          // scrim dim: opaque placement (the foreground is already shaded);
+          // null inherits the node opacity as before. Floats stay inheriting.
+          placementOpacity: floatChild ? undefined : (rasterDim ?? undefined),
         });
         if (img.loadPromise) await img.loadPromise;
         img.visible = si === initial;
@@ -632,24 +645,22 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return false;
   };
 
-  // scrim dim / fill: set the placement-level opacity for icon rasters.
-  // `1` keeps icons fully opaque while the content node (or a scrim fill)
-  // dims everything else; `null` restores the inherited node opacity. Mounted
-  // state images are repainted so a modal opened after the drain is covered,
-  // and float children are skipped (their islands are never dimmed).
-  const setRasterDim = (frac: number | null): void => {
-    rasterDim = frac;
-    for (const spec of allSpecs.values()) {
-      const slot: SlotNode | null | undefined = ctx.byId(spec.slotId);
-      if (!slot) continue;
-      if (isFloatChild(slot)) continue;
-      for (const k of [...(slot.getChildren?.() ?? [])]) {
-        if (typeof k.id !== "string" || !k.id.startsWith(`${spec.slotId}-s`)) continue;
-        try {
-          (k as { placementOpacity?: number | null }).placementOpacity = frac;
-        } catch {}
-      }
-    }
+  // scrim dim / fill: keep icon rasters opaque (placement opacity) and shade
+  // their baked foreground so they darken with the rest of the content. Both
+  // values are read by the drain, so the change re-queues every slot and
+  // re-rasters — a slot whose raster finished before the modal opened is
+  // covered too, and floats are skipped by the drain itself.
+  const setRasterDim = (opacity: number | null, shade: number, bgShade = 1): void => {
+    if (rasterDim === opacity && rasterShade === shade && rasterBgShade === bgShade) return;
+    rasterDim = opacity;
+    rasterShade = shade;
+    rasterBgShade = bgShade;
+    // same effect as resetIconQueue (mark every spec for a re-raster) without
+    // repainting fallback glyphs — the drain rebuilds them from the shaded
+    // states anyway
+    for (const s of allSpecs.values()) s.done = false;
+    iconForceRedrain = true;
+    void drainIconQueue();
   };
 
   // clickable "esc"/close hint shared by floating UIs (prompt/props/menu) —

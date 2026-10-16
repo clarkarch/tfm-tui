@@ -5,7 +5,9 @@ import path from "node:path";
 import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
+  dimHex,
   hoverEvents,
+  shadeIconStates,
   isFloatRootId,
   makePointerSetter,
   makeSlots,
@@ -78,32 +80,15 @@ const makeHarness = () => {
 };
 
 describe("icon slot registry", () => {
-  test("setRasterDim keeps mounted icon rasters opaque for the scrim dim", async () => {
-    // scrim dim fades the content node; icon rasters opt out with a placement
-    // opacity so they stay crisp instead of compositing translucently. This
-    // covers slots whose raster finished BEFORE the modal opened.
-    const h = makeHarness();
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
-    const { img } = h.mountFakeSlot(s.spec);
-
-    await h.slots.drainIconQueue(); // raster fails (missing asset) — done+prune still run
-    h.slots.setRasterDim(1);
-    expect((img as { placementOpacity?: number | null }).placementOpacity).toBe(1);
-
-    h.slots.setRasterDim(null);
-    expect((img as { placementOpacity?: number | null }).placementOpacity).toBe(null);
-  });
-
-  test("setRasterDim skips slots inside floating layers", () => {
-    // float islands (menus/dialogs/toasts) are never dimmed, so their rasters
-    // must keep inheriting the node opacity
-    const h = makeHarness();
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
-    const { slot, img } = h.mountFakeSlot(s.spec);
-    (slot as { parent?: unknown }).parent = { id: "tfm-menu", parent: null };
-
-    h.slots.setRasterDim(1);
-    expect((img as { placementOpacity?: number | null }).placementOpacity).toBeUndefined();
+  test("shadeIconStates darkens the foreground and leaves the background", () => {
+    // the flattened square must keep matching the tile, so only fg is shaded;
+    // float islands are never dimmed
+    const states = [{ fg: FG, bg: BG }];
+    expect(shadeIconStates(states, 0.5, false)).toEqual([{ fg: dimHex(FG, 0.5), bg: BG }]);
+    // the fill overlay darkens the covered cells, so the square follows
+    expect(shadeIconStates(states, 0.5, false, 0.5)).toEqual([{ fg: dimHex(FG, 0.5), bg: dimHex(BG, 0.5) }]);
+    expect(shadeIconStates(states, 0.5, true)).toEqual(states);
+    expect(shadeIconStates(states, 1, false)).toEqual(states);
   });
 
   test("resetIconQueue re-queues a drained slot whose raster finished earlier", async () => {
