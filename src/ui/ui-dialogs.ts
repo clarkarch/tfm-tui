@@ -37,10 +37,9 @@ type DialogsCtx = {
 // propagation so an inside click never dismisses. Deps arrive directly (same
 // seam as the widgets' ctx) — no ctx-type plumbing. ids must stay byte-
 // identical (rethemeChrome repaints them by id). The scrim Box itself is a
-// transparent click-catcher (never a fill — a fill makes OpenTUI delete the
-// rasters it covers); the `fill` scrim mode uses a separate full-screen
-// overlay node (ui-boot-layout SCRIM_FILL_ID) so a live mode change applies
-// immediately.
+// transparent click-catcher, never a fill — a fill makes OpenTUI delete the
+// rasters it covers, which is why [ui] scrim dims via the content node's
+// opacity instead of an overlay.
 export const makeModalScrim = (
   deps: {
     uiStyle: () => UiStyle;
@@ -68,7 +67,7 @@ export const makeModalScrim = (
       alignItems: "center",
       justifyContent: "center",
       zIndex: opts.zIndex,
-      // transparent click-catcher; the fill mode uses SCRIM_FILL_ID (see top)
+      // transparent click-catcher (see the scrim note above)
       onMouseDown: () => opts.onClose(),
     },
     Box(
@@ -111,7 +110,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
         alignItems: "center",
         paddingTop: Math.max(2, Math.round(ctx.termH() / (opts.paddingDiv ?? 3))),
         zIndex: opts.zIndex,
-        // transparent click-catcher; the fill mode uses SCRIM_FILL_ID (see top)
+        // transparent click-catcher (see the scrim note above)
         onMouseDown: () => opts.onClose(),
       },
       Box(

@@ -19,7 +19,7 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
-import { SCRIM_FILL_ID, scrimPlan } from "../ui/scrim";
+import { scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -116,20 +116,17 @@ export const wireCore = (deps: {
     }
   };
 
-  // Dim the whole app behind a modal. `dim` fades the app-content node's
-  // opacity (rasters re-transmit at reduced alpha, so they stay visible);
-  // `fill` toggles a dedicated full-screen overlay node (SCRIM_FILL_ID, built
-  // by the boot layout) — a fill makes OpenTUI delete covered rasters, so
-  // `slots.setScrim` swaps them for dimmed glyphs. Toggling the node (not a
-  // per-modal Box bg) makes a live [ui] scrim change apply immediately.
+  // Dim the whole app behind a modal. Both modes are a fade of the app-content
+  // node's opacity; icon rasters opt out of that fade (placementOpacity 1) so
+  // they stay crisp instead of compositing translucently, while thumbnails
+  // inherit it and fade. (The old `fill` overlay is gone: a full-screen fill
+  // made OpenTUI delete every raster it covered.)
   const applyModalDim = (open: boolean): void => {
     try {
       const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
       const content = lookup.byId("tfm-content");
       if (content) content.opacity = open ? plan.contentOpacity : 1;
-      const fill = lookup.byId(SCRIM_FILL_ID);
-      if (fill) fill.visible = open && plan.fill;
-      slots.setScrim(open && plan.fill);
+      slots.setRasterDim(open && config.ui.scrimMode !== "none" ? 1 : null);
       // run on BOTH open and close: the widgets' reset also REPAINTS the
       // sidebar (normalizePlaces), which is gated on the live modal state — so
       // closing must repaint it back to the hover/kb highlight, and opening
@@ -174,7 +171,6 @@ export const wireCore = (deps: {
     transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
     iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
-    modalOpen: () => floats.hasModal(),
     glyphFor: ttyGlyphFor,
     isTtyMode,
     forceGlyph,

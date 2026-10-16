@@ -159,8 +159,10 @@ type ViewMode = "grid" | "list";
 
 // modal backdrop mode ([ui] scrim): how the app dims when a floating modal
 // (esc menu, props, conflict, pick…) is open. `dim` fades the app content over
-// the theme bg; `fill` is the classic RGBA(0,0,0,150) overlay (icons fall back
-// to dimmed glyphs); `none` leaves the background.
+// the theme bg by the scrim-dim amount; `fill` is a fixed deeper fade (the old
+// RGBA(0,0,0,150) overlay; the overlay itself is gone because a full-screen
+// fill made OpenTUI delete every raster it covered); `none` leaves the
+// background. Icon rasters stay crisp under both dim modes.
 export type ScrimMode = "dim" | "fill" | "none";
 
 // line-wrap vocabulary ([ui] wrap-mode): how over-long lines render
@@ -1023,7 +1025,7 @@ const UI_ROWS: SchemaRow[] = [
     prop: "scrimMode",
     values: ["dim", "fill", "none"],
     def: "dim",
-    doc: '"dim" = fade the app content behind a modal; "fill" = classic solid dark overlay (icons become dimmed glyphs); "none" = no dim.',
+    doc: '"dim" = fade the app content behind a modal (icon rasters stay crisp); "fill" = a fixed deeper fade (the old dark overlay, minus its raster-deleting full-screen fill); "none" = no dim.',
     label: "scrim",
     blurb: "Fade the background behind menus and dialogs",
     group: "appearance",

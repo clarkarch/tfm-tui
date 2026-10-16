@@ -1,41 +1,31 @@
 // --- Modal scrim plan: pure decisions for how the app dims behind a floating
 // modal (esc menu, props, conflict, pick…). The wiring (wiring/core) applies
-// it — `contentOpacity` on the `tfm-content` node and, for `dark`, a
-// near-black renderer clear. Kept renderer-free so it's unit-testable.
+// the plan as `contentOpacity` on the `tfm-content` node.
 //
-// OpenTUI's node opacity is applied as ALPHA (kitty placements re-transmit at
-// the reduced alpha), so any container dim makes rasters read through — there
-// is no "dim by colour" for a raster. `dark` therefore pairs the fade with a
-// near-black clear so thumbnails read as *dimmed* rather than see-through to
-// the themed background behind them. ---
+// OpenTUI applies node opacity as ALPHA, so rasters under a dimmed ancestor
+// composite translucently; the wiring instead keeps icon rasters opaque with a
+// per-image placement opacity override (ImageRenderable.placementOpacity),
+// while thumbnails inherit the fade. There is no "dim by colour" for a raster,
+// and a full-screen overlay FILL deletes every covered raster (OpenTUI treats
+// any drawn fill as occluding), so both modes are content fades.
 import type { ScrimMode, TransparentBgMode } from "../config/config-schema";
 
 export type ScrimPlan = {
   contentOpacity: number;
-  // classic full-screen RGBA(0,0,0,150) overlay; OpenTUI deletes rasters under
-  // it, so `fill` implies the glyph fallback (setScrim) replaces them
-  fill: boolean;
 };
+
+// `fill` reproduces the old RGBA(0,0,0,150) overlay's darkening as a fixed
+// content fade (the overlay itself is gone: it deleted the rasters it covered).
+const FILL_CONTENT_OPACITY = 1 - 150 / 255;
 
 // The `dim` backdrop is the app-content node's opacity: opacity = 1 - dim/100,
 // so a higher dim% fades the content further toward the backdrop (darker).
 export const scrimPlan = (mode: ScrimMode, dimPct: number): ScrimPlan => {
-  if (mode === "none") return { contentOpacity: 1, fill: false };
-  if (mode === "fill") return { contentOpacity: 1, fill: true };
+  if (mode === "none") return { contentOpacity: 1 };
+  if (mode === "fill") return { contentOpacity: FILL_CONTENT_OPACITY };
   const dim = Math.min(100, Math.max(0, dimPct));
-  return { contentOpacity: 1 - dim / 100, fill: false };
+  return { contentOpacity: 1 - dim / 100 };
 };
-
-// the classic overlay color, made once (ui-boot-layout builds the node)
-export const SCRIM_FILL_RGBA = [0, 0, 0, 150] as const;
-
-// Full-screen fill overlay for [ui] scrim = "fill", built once at boot
-// (ui-boot-layout) and toggled by wiring/core applyModalDim so a live mode
-// change applies immediately. z sits just below the lowest modal panel
-// (FLOAT_Z.escmenu = 3000) and above the app content (z 0): it dims everything
-// while every modal panel still draws above it.
-export const SCRIM_FILL_ID = "tfm-scrim-fill";
-export const SCRIM_FILL_Z = 2999;
 
 // The renderer clear color the app establishes: transparent-bg on/force under a
 // pixel-capable terminal ⇒ "transparent" (terminal shows through); otherwise

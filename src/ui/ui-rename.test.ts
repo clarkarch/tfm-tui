@@ -199,18 +199,21 @@ describe("makeRename (renderer)", () => {
     expect(pointers).toEqual(["text", "default"]);
   });
 
-  test("upstream premise: a raw control char in an Input value throws (why seeds strip)", () => {
-    // if a future 0.6.x relaxes validation, the strip call sites become
-    // pointless — this pins the premise so they get revisited, not cargo-culted
-    expect(() => new InputRenderable(t.renderer, { id: "premise-ctl", width: 10, value: "a\x01b" })).toThrow();
+  test("upstream premise: 0.6.6 Input accepts control chars (seeds still strip)", () => {
+    // 0.6.0 threw NativeError on a C0 in value/initialValue; 0.6.1+ accepts them
+    // and shows caret notation (^A, and <85> for C1). tfm still strips seeds:
+    // a filename's control chars would otherwise render as notation in the
+    // rename field, and the commit reads the real basename, never the input.
+    const withControls = new InputRenderable(t.renderer, { id: "premise-ctl", width: 10, value: "a\x01b" });
+    expect(withControls.value).toBe("a\x01b");
     expect(() => new InputRenderable(t.renderer, { id: "premise-clean", width: 10, value: "ab\tcd" })).not.toThrow();
   });
 
-  test("a control-char filename opens rename without throwing (0.6.0 Input rejects C0)", async () => {
+  test("a control-char filename opens rename without notation in the field", async () => {
     // Linux filenames may carry C0 controls (everything except / and NUL);
-    // the seeded Input value is stripped so construction never throws
-    // NativeError — and an untouched Enter must NOT rename to the stripped
-    // display form (the commit reads the real key's basename, not the input)
+    // the seeded Input value is stripped so the field shows the plain name —
+    // and an untouched Enter must NOT rename to the stripped display form
+    // (the commit reads the real key's basename, not the input)
     const key = path.join(dir, "we\x01ird\x1b.txt");
     await mountRow(key);
     rename.startInlineRename(key);
