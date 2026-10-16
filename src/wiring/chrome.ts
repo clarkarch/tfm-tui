@@ -22,6 +22,7 @@ import { warmEmbeddedIcons, warmSvgRenderer, shouldWarmBootCaches } from "../ui/
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/tty";
+import { backgroundClearColor } from "../ui/scrim";
 import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
@@ -305,8 +306,7 @@ export const wireChrome = async (deps: {
   }
   // opencode-style: global bg lives on the renderer, not per-box — transparent
   // modes stay transparent here (the old unconditional reset re-opaqued boot)
-  if (core.config.ui.transparentBg !== "off" && !core.isTtyMode()) renderer.setBackgroundColor("transparent");
-  else renderer.setBackgroundColor(core.colors.bg);
+  renderer.setBackgroundColor(backgroundClearColor(core.config.ui.transparentBg, core.colors.bg, core.isTtyMode()));
 
   // --- Sidebar startup intro (cold-boot-only): one reused timeline over the
   // places sidebar, played by the playSidebarIntro boot step after the first

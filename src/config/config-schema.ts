@@ -157,6 +157,12 @@ export type Theme = {
 
 type ViewMode = "grid" | "list";
 
+// modal backdrop mode ([ui] scrim): how the app dims when a floating modal
+// (esc menu, props, conflict, pick…) is open. `dim` fades the app over the
+// theme bg; `dark` fades over a near-black clear (pure-dark, icons read as
+// dimmed rather than see-through-to-colour); `none` leaves the background.
+export type ScrimMode = "dim" | "dark" | "none";
+
 // line-wrap vocabulary ([ui] wrap-mode): how over-long lines render
 // everywhere (grid tile labels, code preview, markdown). none cuts,
 // char slices mid-token, word breaks at spaces (spaceless runs still slice).
@@ -256,6 +262,7 @@ export type UiConfig = {
   persistUndo: boolean;
   followTerminal: boolean;
   transparentBg: TransparentBgMode;
+  scrimMode: ScrimMode;
   icons: IconMode;
   iconStyle: IconStyle;
   ttyMode: TtyMode;
@@ -1005,6 +1012,19 @@ const UI_ROWS: SchemaRow[] = [
     doc: '"solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels',
     label: "ui style",
     blurb: "Filled panels or outlined ones",
+    group: "appearance",
+    subsection: "look",
+  },
+  {
+    kind: "enum",
+    section: "ui",
+    tomlKey: "scrim",
+    prop: "scrimMode",
+    values: ["dim", "dark", "none"],
+    def: "dark",
+    doc: '"dark" = dim the app behind a modal over a near-black backdrop; "dim" = fade over the theme bg (themed tint); "none" = no dim. Icons stay visible in all three.',
+    label: "modal scrim",
+    blurb: "Fade the background behind menus and dialogs",
     group: "appearance",
     subsection: "look",
   },

@@ -1,6 +1,7 @@
 import { type CliRenderer, CliRenderEvents } from "@opentui/core";
 import { bumpHex } from "../config/color";
 import { deriveSystemTheme, type TerminalPaletteInput, type TerminalThemeMode } from "../config/system-theme";
+import { backgroundClearColor } from "./scrim";
 import type { Config, Theme } from "../config/config-schema";
 import { debounced, withTimeout, type Scheduler } from "../lib/uiutil";
 
@@ -151,7 +152,8 @@ export const makeSystemTheme = (ctx: SystemThemeCtx) => {
     Object.assign(ctx.colors, theme);
     if (ctx.config.ui.transparentBg === "off") ctx.colors.bg = bumpHex(ctx.colors.bg);
     try {
-      ctx.renderer()?.setBackgroundColor?.(ctx.config.ui.transparentBg !== "off" ? "transparent" : ctx.colors.bg);
+      // tty mode returned early above, so isTty is false here
+      ctx.renderer()?.setBackgroundColor?.(backgroundClearColor(ctx.config.ui.transparentBg, ctx.colors.bg, false));
     } catch {}
     try {
       ctx.onBootDerived?.(theme);

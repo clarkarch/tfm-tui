@@ -19,6 +19,7 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
+import { backgroundClearColor, scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -98,21 +99,31 @@ export const wireCore = (deps: {
   // Every lookup must tolerate a miss (nodes die on every rebuild). ---
   const lookup = makeLookup({ root: () => deps.renderer().root });
 
+  // Near-black backdrop for [ui] scrim = "dark" (see ui/scrim.ts).
+  const DARK_BACKDROP = "#05050a";
+
+  // Dim the whole app behind a modal: `contentOpacity` on tfm-content plus, for
+  // `dark`, a near-black renderer clear so thumbnails read as *dimmed* rather
+  // than see-through to the themed background (OpenTUI clip/deletes rasters
+  // under a fill, so this is the only way to keep icons visible).
+  const applyModalDim = (open: boolean): void => {
+    try {
+      const plan = scrimPlan(config.ui.scrimMode);
+      const content = lookup.byId("tfm-content");
+      if (content) content.opacity = open ? plan.contentOpacity : 1;
+      const r = deps.renderer();
+      const base = backgroundClearColor(config.ui.transparentBg, colors.bg, isTtyMode());
+      r.setBackgroundColor(open && plan.darkBackdrop ? DARK_BACKDROP : base);
+    } catch {}
+  };
+
   // --- Floating layers: THE single source of truth for which modal/cursor
-  // layer is open + the dismiss-others policy. Pure module, created before
-  // any widget (makeSlots reads its escmenu state through a getter). Modal
-  // open/close dims the whole app content (`tfm-content`) via node opacity:
-  // the old full-screen translucent scrim fill made OpenTUI 0.6.0 DELETE every
-  // raster it covered (hence the glyph-fallback hack), so the scrim is now a
-  // transparent click-catcher and the dim rides opacity — which OpenTUI
-  // applies to kitty placements too, so thumbnails stay visible (dimmed).
+  // layer is open + the dismiss-others policy. Pure module, created before any
+  // widget (makeSlots reads its escmenu state through a getter). Modal
+  // open/close dims the app content via `applyModalDim`; `slots` is TDZ here —
+  // the callback fires post-construction only.
   const floats = makeFloats({
-    onModalChange: (open) => {
-      try {
-        const content = lookup.byId("tfm-content");
-        if (content) content.opacity = open ? 0.45 : 1;
-      } catch {}
-    },
+    onModalChange: (open) => applyModalDim(open),
   });
 
   // --- Mouse pointer shapes (OSC 22): ONE tty-guarded, deduping sink for
@@ -219,6 +230,9 @@ export const wireCore = (deps: {
     lookup,
     resolutionGate,
     floats,
+    // re-apply the modal dim after a config change (scrim mode flip / theme
+    // change while a modal is open) — no-op when no modal is up
+    reapplyModalDim: () => applyModalDim(floats.hasModal()),
     slots,
     home,
     state,

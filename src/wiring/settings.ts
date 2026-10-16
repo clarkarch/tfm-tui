@@ -494,6 +494,10 @@ export const wireRetheme = (deps: {
         getHover().refresh();
       } catch {}
       try {
+        // scrim mode / theme may have changed while a modal is open — re-dim
+        core.reapplyModalDim();
+      } catch {}
+      try {
         const idx = themePresetIdx(THEME_PRESETS, core.config.theme);
         // `?.` rather than an `idx >= 0` guard + assertion: a stale idx past
         // the preset list falls back to custom exactly like a miss

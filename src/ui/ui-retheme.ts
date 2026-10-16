@@ -12,6 +12,7 @@ import { bumpHex } from "../config/color";
 import { isDark, resolveTtyMode, ttyStaticTheme } from "./tty";
 import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
+import { backgroundClearColor } from "./scrim";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { describeKeybindConflicts, findKeybindConflicts } from "../config/config-schema";
 import { debounced } from "../lib/uiutil";
@@ -303,6 +304,9 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "smoothScrolling",
     "smoothScrollMs",
     "smoothWheelMs",
+    // scrim reads live when a modal opens (wiring/core applyModalDim) — a flip
+    // must not rebuild the world; onConfigApplied re-applies it if one is open
+    "scrimMode",
     "persistUndo",
     "restoreSession",
     "showLaunchTime",
@@ -410,9 +414,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       try {
         ctx
           .renderer()
-          .setBackgroundColor(
-            ctx.config.ui.transparentBg !== "off" && !ctx.isTtyMode?.() ? "transparent" : ctx.colors.bg,
-          );
+          .setBackgroundColor(backgroundClearColor(ctx.config.ui.transparentBg, ctx.colors.bg, !!ctx.isTtyMode?.()));
       } catch {}
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();
