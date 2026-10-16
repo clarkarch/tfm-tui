@@ -79,7 +79,7 @@ const EDIT_ENTRIES: HelpEntry[] = [
   { action: "copy", verb: "Copy" },
   { action: "cut", verb: "Cut" },
   { action: "paste", verb: "Paste here" },
-  { action: "duplicate", verb: "Copy in place" },
+  { action: "duplicate", verb: "Duplicate" },
   { action: "trash", verb: "Trash" },
   { action: "renameOrRestore", verb: "Rename" },
   { action: "undo", verb: "Undo" },
