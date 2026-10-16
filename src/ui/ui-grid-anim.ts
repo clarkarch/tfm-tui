@@ -648,12 +648,19 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       const opts = ctx.hoverLiftOpts();
 
       if (!opts.enabled) {
-        // feature off = today's instant snap, no lift
-        if (current) {
+        // feature off = today's instant snap, no lift. Track `current` so
+        // releaseCurrent() (modal takes the screen) can rest-paint the hovered
+        // tile; sweep a different previous tile first (the old direct-paint path
+        // owned no state and left it tinted).
+        if (current && current.key !== key) {
           restPaint(current);
           current = null;
         }
-        if (refs.selected) return; // selection owns the icon/bg visuals
+        if (refs.selected) {
+          if (current?.key === key) current = null;
+          return; // selection owns the icon/bg visuals
+        }
+        current = hovered ? { key, refs, node, slot, label: labNode } : null;
         const offColors = ctx.colors();
         const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors, tForce());
         try {

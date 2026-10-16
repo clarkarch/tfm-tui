@@ -918,6 +918,17 @@ describe("makeTileHoverAnim (engine)", () => {
     expect(iconCalls.at(-1)).toBe(0); // icon back to its rest state
   });
 
+  test("releaseCurrent also clears an instant-path hover (hover animation off)", async () => {
+    // feature off = the old direct-paint path, which owned no `current`, so a
+    // tile hovered when a modal opened stayed tinted behind the dim
+    const { anim, iconCalls, byId } = await setup("reloff", false);
+    anim.playHover("/w/a-reloff", true);
+    expect((byId("tile-a-reloff") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+    anim.releaseCurrent();
+    expect((byId("tile-a-reloff") as any).backgroundColor.toInts()).toEqual([...REST] as any);
+    expect(iconCalls.at(-1)).toBe(0);
+  });
+
   test("include filename moves the label with the icon", async () => {
     const { anim, byId } = await setup("nam", true, undefined, true, { includeLabel: true });
     anim.playHover("/w/a-nam", true);

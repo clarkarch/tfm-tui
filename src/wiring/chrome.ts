@@ -206,8 +206,13 @@ export const wireChrome = async (deps: {
     }),
   });
   hoverRowImpl = (key, hovered) => sidebarHover.playHover(key, hovered);
-  // a modal taking the screen drops any lifted sidebar row (see wiring/grid)
-  core.registerModalOpen(() => sidebarHover.release());
+  // a modal taking the screen must drop sidebar hover state: the row nudge
+  // (release) AND the hover Bg, which normalizePlaces keys off mousePlaceIdx
+  // (clearMousePlace resets it + repaints), or the row stays tinted behind the dim
+  core.registerModalOpen(() => {
+    sidebarHover.release();
+    chrome.clearMousePlace();
+  });
 
   // --- Toolbars — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
   // path edit, sort/search buttons). ONE PER PANE, each with its own id prefix

@@ -1023,7 +1023,7 @@ const UI_ROWS: SchemaRow[] = [
     values: ["dark", "dim", "fill", "none"],
     def: "dark",
     doc: '"dark" = dim the app behind a modal over a near-black backdrop; "dim" = fade over the theme bg (themed tint); "fill" = classic solid dark overlay (icons become dimmed glyphs); "none" = no dim.',
-    label: "modal scrim",
+    label: "scrim",
     blurb: "Fade the background behind menus and dialogs",
     group: "appearance",
     subsection: "look",
