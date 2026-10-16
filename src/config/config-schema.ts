@@ -345,6 +345,7 @@ export type KeyAction =
   | "restart"
   | "openMenu"
   | "toggleHelp"
+  | "commandPalette"
   | "toggleHidden"
   | "reloadPlaces"
   | "newTab"
@@ -2006,6 +2007,7 @@ const KEY_ROWS: KeyRow[] = (
     ["restart", "restart", ["ctrl+alt+r"], "app", "Reload the app in place"],
     ["openMenu", "open menu", ["escape"], "app", "Open settings, plugins and help"],
     ["toggleHelp", "toggle help", ["f1"], "app", "Show or hide the shortcut sheet"],
+    ["commandPalette", "command palette", ["ctrl+p"], "app", "Search and run any action"],
     ["newTab", "new tab", ["ctrl+t"], "tabs", "Open a fresh tab here"],
     ["closeTab", "close tab", ["ctrl+w"], "tabs", "Close the current tab"],
     ["nextTab", "next tab", ["ctrl+tab"], "tabs", "Jump to the next tab"],

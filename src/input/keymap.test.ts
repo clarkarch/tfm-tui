@@ -75,6 +75,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     keybinds: (action) => binds[action] ?? [],
     quit: rec("quit"),
     restart: rec("restart"),
+    openCommandPalette: rec("palette:open"),
     conflict: { isOpen: () => false, closeConflict: (p) => calls.push(`conflict:close:${p}`) },
     yesNo: {
       isOpen: () => false,
@@ -365,6 +366,12 @@ describe("precedence chain", () => {
     expect(byId("toggleHelp").hint).toContain("f1");
     byId("toggleHelp").run();
     expect(h.calls).toEqual(["escmenu:help"]);
+  });
+
+  test("ctrl+p opens the core command palette", () => {
+    const h = makeHarness();
+    h.key("p", { ctrl: true });
+    expect(h.calls).toEqual(["palette:open"]);
   });
 
   test("embedded terminal owns the keyboard — hint once, then nothing below it fires", () => {

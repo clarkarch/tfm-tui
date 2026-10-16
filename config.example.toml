@@ -152,6 +152,7 @@ quit               = ["ctrl+q"]                  # default: ctrl+q
 restart            = ["ctrl+alt+r"]              # default: ctrl+alt+r
 open-menu          = ["escape"]                  # default: escape
 toggle-help        = ["f1"]                      # default: f1
+command-palette    = ["ctrl+p"]                  # default: ctrl+p
 new-tab            = ["ctrl+t"]                  # default: ctrl+t
 close-tab          = ["ctrl+w"]                  # default: ctrl+w
 next-tab           = ["ctrl+tab"]                # default: ctrl+tab

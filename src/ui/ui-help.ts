@@ -95,6 +95,7 @@ const VIEW_ENTRIES: HelpEntry[] = [
 ];
 
 const GO_ENTRIES: HelpEntry[] = [
+  { action: "commandPalette", verb: "Command palette" },
   { action: "newTab", verb: "New tab" },
   { action: "closeTab", verb: "Close tab" },
   { action: "nextTab", verb: "Next tab" },

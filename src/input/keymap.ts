@@ -1,7 +1,8 @@
 // --- Keyboard router: ONE keypress entry point with a strict precedence
 // chain — capture > quit/restart > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/
-// props, which keep their keys even above an open pick) > pick > esc-menu >
-// terminal > path-edit > file menu > search > specifics (histBack/showProps/…)
+// props, which keep their keys even above an open pick) > pick > command
+// palette > esc-menu > terminal > path-edit > file menu > search > specifics
+// (histBack/showProps/…)
 // > sidebar > extend > grid > parentDir > type-to-search > actions.
 // ALL dispatchable keys are remappable via config [keys] (see config-schema.ts):
 // the move*/openSelected/extend*/page*/first/last binds drive the grid AND
@@ -49,6 +50,9 @@ export type KeyRouterCtx = {
   keybinds(action: KeyAction): string[];
   quit(): void;
   restart(): void;
+  // core command palette: opens the pick overlay over the merged core+plugin
+  // command list (the same widget api.ui.pick uses)
+  openCommandPalette(): void;
   // --- modal layers (precedence order) ---
   conflict: { isOpen(): boolean; closeConflict(policy: "skip"): void };
   yesNo: { isOpen(): boolean; close(): void; moveFocus(delta: number): void; submit(): void };
@@ -716,6 +720,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "restart", run: () => ctx.restart() },
     { action: "openMenu", run: () => ctx.escMenu.openMenu() },
     { action: "toggleHelp", run: () => ctx.escMenu.toggleHelp() },
+    { action: "commandPalette", run: () => ctx.openCommandPalette() },
     {
       action: "toggleHidden",
       run: () => {
@@ -821,6 +826,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       ctx.pick.handleKey(ev);
       return;
     }
+    // the command palette replaces the esc menu (its own layer) but is
+    // deliberately BELOW handleOverlayModalKeys above: a data-loss confirm
+    // (conflict/yes-no), prompt or rename keeps its keys.
+    if (hit(ev, "commandPalette") && runAction("commandPalette")) return;
     if (handleModalKeys(ev)) return;
 
     // file context menu open: arrows/enter navigate it, esc closes.

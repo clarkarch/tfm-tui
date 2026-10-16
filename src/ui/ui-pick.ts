@@ -2,8 +2,9 @@
 // floating panel with a filter Input + live-narrowed rows (mouse hover/click,
 // up/down/enter/esc). Renderer-free core except the widget shell: fuzzy
 // matching is pure (tested), rows are text-only (no icon slots, so no scrim
-// or drain participation). The palette plugin opens this over api.commands();
-// any future plugin gets fuzzy lists over arbitrary items for free.
+// or drain participation). The core command palette (ctrl+p) and api.ui.pick
+// both open this over the merged api.commands() list; any plugin gets fuzzy
+// lists over arbitrary items for free.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
 import { Box, type CliRenderer, Input, Text } from "@opentui/core";

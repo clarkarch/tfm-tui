@@ -1,7 +1,8 @@
 // --- Keyboard wiring: the modal precedence chain router lives in ./keymap
 // (capture > quit/restart > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/props) >
-// pick > esc-menu > terminal > path-edit > file menu > search > sidebar >
-// grid > actions — mirrored from its header) + sidebar kb-focus state + the
+// pick > command palette > esc-menu > terminal > path-edit > file menu >
+// search > sidebar > grid > actions — mirrored from its header) + sidebar
+// kb-focus state + the
 // generic pick overlay widget (api.ui.pick primitive) and the single-line
 // prompt overlay (plugin git-URL entry). Last wiring step — everything it
 // reads exists by now. ---
@@ -118,6 +119,10 @@ export const wireKeymap = (deps: {
     keybinds: (action) => core.config.keys[action] ?? [],
     quit: nav.quitApp,
     restart: nav.restartApp,
+    // core command palette: the pick overlay over the merged core+plugin
+    // command list (its item source is backfilled with keyRouter.commands()
+    // after the router exists — see coreCommands below)
+    openCommandPalette: () => pick.open({ title: "Command palette" }),
     // layer-open reads go through floats — the single source of truth; the
     // close fns are the widgets' (they route back through floats themselves)
     conflict: {

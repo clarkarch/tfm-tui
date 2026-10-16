@@ -79,7 +79,8 @@ in `deactivate`, and anything async in an `api.events.on("quit")` listener
 - **Output**: `notify(msg, title?)`, `setStatusMsg(msg)`, `log(msg)`.
 - **Context (read)**: `selection()`, `cwd()`.
 - **Actions**: `navigate(dir)`, `open(path)`, `reveal(path)`, `select(paths)`.
-- **Commands**: `commands()` (core + every plugin, for palettes).
+- **Commands**: `commands()` (core + every plugin, shown in the core `ctrl+p`
+  command palette).
 - **UI**: `ui.pick({title, items})`, `ui.confirm({title, body?, danger?})`,
   `ui.prompt({title, value?, placeholder?, okLabel?})`,
   `ui.notifySticky(msg, title?) → close`.

@@ -57,6 +57,7 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 - Embedded terminal.
 - Clipboard copy/paste with other apps.
 - Open privileged files with sudo prompt.
+- Command palette to search and run any action.
 - Customizable themes, settings GUI, keybinds.
 - Plugin support with hot reload.
 - …and many more.
@@ -99,7 +100,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 
 ## Keys
 
-- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu · `f1` help
+- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu · `f1` help · `ctrl+p` command palette
 - `ctrl+c/x/v/d` copy/cut/paste/duplicate · `ctrl+z/y` undo/redo
 - `tab` switch focused pane · `f5`/`f6` copy/move to the other pane (dual pane)
 - `ctrl+t/w` new/close tab · `ctrl+tab` switch tab (per pane)
