@@ -64,6 +64,9 @@ let fakeHome: string;
 let spawns: string[][];
 // [ui] sidebar-section-titles: names each group in place of the dividers
 let sectionTitles: boolean;
+// fake icon-slot id sequence: the real makeIconSlot sequences ids (iconSeq), so
+// a constant one would resolve the FIRST tab's element for every tab
+let iconSlots = 0;
 
 const mkTabs = (n: number): Tab[] => Array.from({ length: n }, (_, i) => ({ history: [`/dir${i}`], histIdx: 0 }));
 
@@ -175,17 +178,34 @@ beforeAll(async () => {
     hoverBtn: () => Box({ id: "tfm-p0-tab-new", width: 3, height: 1 }),
     stripSelectable: () => {},
     drainIconQueue: () => {},
-    makeIconSlot: (name: string, states: any, heightCells?: number, initialState?: number) => ({
-      el: null,
-      slotId: `slot-${name}`,
-      spec: {
-        slotId: `slot-${name}`,
-        name,
-        heightCells: heightCells ?? 1,
-        states,
-        initialState: initialState ?? 0,
-      },
-    }),
+    // mirrors the REAL makeIconSlot contract: a mounted element box resolvable
+    // by byId AFTER the chip is added (the tab ✕'s hide/reveal writes
+    // `visible` on it), with a per-call id like the real iconSeq
+    makeIconSlot: (
+      name: string,
+      states: any,
+      heightCells?: number,
+      initialState?: number,
+      onMouseDown?: (ev: any) => void,
+    ) => {
+      const slotId = `slot-${name}-${iconSlots++}`;
+      return {
+        el: Box({
+          id: slotId,
+          width: Math.round((heightCells ?? 1) * 2),
+          height: heightCells ?? 1,
+          ...(onMouseDown ? { onMouseDown } : {}),
+        }),
+        slotId,
+        spec: {
+          slotId,
+          name,
+          heightCells: heightCells ?? 1,
+          states,
+          initialState: initialState ?? 0,
+        },
+      };
+    },
     setIconState: (spec, idx) => {
       calls.iconStates.push({ spec, idx });
       return true;
@@ -594,6 +614,105 @@ describe("renderTabbar", () => {
     fire("out");
     expect(calls.iconStates.at(-1)?.idx).toBe(0);
     expect(bgInts(closeId)).toEqual(hexInts(colors.bg));
+  });
+
+  test("the tab ✕ hides until the chip is hovered, with the reserved cells keeping the strip still", async () => {
+    tabModel = { list: mkTabs(2), active: 1 };
+    availWVal = 0;
+    chrome.renderTabbar(0);
+    await t.renderOnce();
+    const chip: any = byId("tfm-p0-tab-0");
+    const slotEl = (): any => (byId("tfm-p0-tab-0-close") as any)?.getChildren()[0];
+    const fire = (type: string) =>
+      chip.processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    expect(slotEl().visible).toBe(false); // at rest the strip shows no ✕
+    // The reserved cells are a FIXED width: the chip (and every chip after it)
+    // must sit exactly where it does with the ✕ hidden — a collapsing slot
+    // shrinks the chip and shifts the tail ("jittery strip under the mouse").
+    const restW = chip.getLayout().width;
+    const restX1 = (byId("tfm-p0-tab-1") as any).x;
+    // a rebuild under a stationary cursor re-fires a SYNTHETIC "over" (no move,
+    // no out) — the ✕ must reveal there, or a click-switch hides it until a wiggle
+    fire("over");
+    expect(slotEl().visible).toBe(true);
+    fire("out");
+    expect(slotEl().visible).toBe(false);
+    fire("move");
+    expect(slotEl().visible).toBe(true);
+    await t.renderOnce(); // layout AFTER the reveal
+    expect(chip.getLayout().width).toBe(restW);
+    expect((byId("tfm-p0-tab-1") as any).x).toBe(restX1);
+    fire("out");
+    await t.renderOnce();
+    expect(slotEl().visible).toBe(false);
+    expect(chip.getLayout().width).toBe(restW);
+  });
+
+  test("a folder dragged over a chip never reveals the ✕", async () => {
+    tabModel = { list: mkTabs(2), active: 0 };
+    availWVal = 0;
+    chrome.renderTabbar(0);
+    await t.renderOnce();
+    const chip: any = byId("tfm-p0-tab-0");
+    const slotEl = (): any => (byId("tfm-p0-tab-0-close") as any)?.getChildren()[0];
+    const fire = (type: string) =>
+      chip.processMouseEvent({
+        type,
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+    gridDrag.active = true;
+    gridDrag.keys = [{ path: "/x/dragdir", isDir: true }];
+    try {
+      // the drag's only chip signal is the over; the drop-target cue branch of
+      // the move paint hides it too (a close ✕ under a dragged folder misfires)
+      fire("over");
+      expect(slotEl().visible).toBe(false);
+      fire("move");
+      expect(slotEl().visible).toBe(false);
+    } finally {
+      gridDrag.active = false;
+      gridDrag.keys = null;
+      fire("out");
+    }
+    // drag over: the chip is a plain chip again and hovers normally
+    fire("move");
+    expect(slotEl().visible).toBe(true);
+    fire("out");
+  });
+
+  test("a click on the hidden ✕ falls through to the chip; a revealed one closes", async () => {
+    tabModel = { list: mkTabs(2), active: 1 };
+    availWVal = 0;
+    chrome.renderTabbar(0);
+    await t.renderOnce();
+    const wrap: any = byId("tfm-p0-tab-0-close");
+    calls.switchTab.length = 0;
+    calls.closeTab.length = 0;
+    // display:none drops the slot's hit cells, so these 2 cells belong to the
+    // chip: the click switches tab instead of closing it (no invisible ✕ trap)
+    await t.mockMouse.click(wrap.x, wrap.y, MouseButtons.LEFT);
+    expect(calls.closeTab).toEqual([]);
+    expect(calls.switchTab).toContain(0);
+    // hovering the CHIP BODY reveals the ✕ (the ✕'s own cells aren't hoverable yet)
+    const chipBody = byId("tfm-p0-tab-0") as any;
+    await t.mockMouse.moveTo(chipBody.x + 1, chipBody.y);
+    await t.renderOnce();
+    const revealed = (byId("tfm-p0-tab-0-close") as any).getChildren()[0] as any;
+    expect(revealed.visible).toBe(true);
+    // … and the same cell now hits the slot's own handler
+    calls.switchTab.length = 0;
+    await t.mockMouse.click(wrap.x, wrap.y, MouseButtons.LEFT);
+    expect(calls.closeTab).toContain(0);
+    expect(calls.switchTab).toEqual([]);
   });
 
   test("four tabs in a 32-wide strip fit without overflow (chips shrink, plus stays)", async () => {

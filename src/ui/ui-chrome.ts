@@ -565,14 +565,65 @@ export const makeChrome = (ctx: ChromeCtx) => {
         const n = ctx.byId(closeWrapId);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), colors, on, closeRestBg));
       };
+      // The ✕ is an affordance, not furniture: it stays hidden until the chip is
+      // hovered. Hide the SLOT ELEMENT (its paint AND its hit cells — display:none),
+      // never the wrapper: a click on the invisible cells then belongs to the chip
+      // and switches to that tab instead of closing it. The wrapper keeps the
+      // slot's own cell count as a fixed width, so revealing the ✕ cannot shrink
+      // the chip and shift every chip after it (a strip sweeping back and forth
+      // under the mouse).
+      const closeW = Math.round(closeSlot.spec.heightCells * 2); // makeIconSlot's box width
+      const setCloseShown = (on: boolean): void => {
+        const el = ctx.byId(closeSlot.slotId);
+        if (!el) return;
+        try {
+          el.visible = on;
+        } catch {}
+      };
       const closeWrap = Box(
         {
           id: closeWrapId,
+          width: closeW,
           ...btnSurface(ctx.uiStyle(), colors, false, closeRestBg),
           ...hoverEvents(paintClose, ctx.setPointer),
         },
         closeSlot.el,
       );
+      // Chip hover paint + the ✕ reveal. The reveal needs the out edge
+      // UNGUARDED: hoverEvents only runs its paint(false) after a real move lit
+      // it, so a reveal from the synthetic "over" below would never be undone.
+      // Hiding on every out is safe because the very same event turn re-shows
+      // it whenever the pointer is still inside the chip (the out/over/move
+      // burst of one physical move, in dispatch order).
+      const chipHoverBase = hoverEvents((on) => {
+        const n = ctx.byId(tabId);
+        if (!n) return;
+        if (on && dragTabDir() !== null) {
+          applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected", tForce()));
+          setCloseShown(false); // a drop target cue is not a close affordance
+          return;
+        }
+        if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest", tForce()));
+        setCloseShown(on);
+        // a drag owns the pointer — same rule as the sidebar rows
+        if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
+      });
+      const chipHover = {
+        onMouseMove: chipHoverBase.onMouseMove,
+        onMouseOut: () => {
+          setCloseShown(false);
+          chipHoverBase.onMouseOut();
+        },
+        // a rebuild under a STATIONARY cursor re-fires a synthetic "over" on
+        // whatever is under the mouse (no move): without this the ✕ would hide
+        // after a click-switch and only return on the next wiggle. NOT while a
+        // drag is in flight — there the chip is a DROP target, and a drag's only
+        // signal is exactly this over (its move edge never fires), so the close
+        // affordance must not appear under a shrunken folder.
+        onMouseOver: () => {
+          if (!gridDrag.active) setCloseShown(true);
+        },
+      };
       bar.add(
         Box(
           {
@@ -607,22 +658,15 @@ export const makeChrome = (ctx: ChromeCtx) => {
             },
             // drop-target cue: light the chip like the selected tab while a
             // single-folder drag hovers it, else the usual hover fill
-            ...hoverEvents((on) => {
-              const n = ctx.byId(tabId);
-              if (!n) return;
-              if (on && dragTabDir() !== null) {
-                applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected", tForce()));
-                return;
-              }
-              if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest", tForce()));
-              // a drag owns the pointer — same rule as the sidebar rows
-              if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
-            }),
+            ...chipHover,
           },
           Text({ content: tabTitle(t), fg: active ? colors.white : colors.sidebarFg }),
           closeWrap,
         ),
       );
+      // hidden until hovered — post-mount only (the composition helpers return
+      // lazy proxies; a pre-mount write there would be dropped)
+      setCloseShown(false);
     });
     bar.add(
       ctx.hoverBtn(pane, `${prefix}tab-new`, "plus", () => {
