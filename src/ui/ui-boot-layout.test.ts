@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box } from "@opentui/core";
+import { Box, Text } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { defaultConfig } from "../config/config-schema";
 import { buildAppContainer, buildBootLayout, buildTitle, scrollbarTrackColors } from "./ui-boot-layout";
@@ -237,5 +237,78 @@ describe("scrim fill overlay", () => {
     expect(fill.zIndex).toBeLessThan(3000); // below every modal panel (FLOAT_Z.escmenu)
     expect(fill.backgroundColor.a).toBeGreaterThan(0); // a real, occluding fill
     expect(fill.fillDimsImages).toBe(true);
+  });
+});
+
+describe("grid scrollers are not keyboard-focusable", () => {
+  // OpenTUI's autoFocus focuses the nearest focusable ancestor on any left
+  // click, and a focused ScrollBox/ScrollBar treats arrows/j/k/pgup/pgdn/
+  // home/end as ITS OWN scroll (1/5 of the viewport per key). The grid tiles
+  // live inside the scroller, so every grid click used to install a
+  // keyboard-scroll handler that fought the selection scroll AND kept
+  // scrolling the listing behind an open modal (focus survives under a float).
+  // tfm owns all grid keys, so the scroller must never be a focus target.
+  const dropPanes = (): void => {
+    for (const id of ["tfm-pane-0", "tfm-pane-1"]) {
+      for (let guard = 0; guard < 8; guard++) {
+        const n = t.renderer.root.findDescendantById(id) as any;
+        if (!n) break;
+        n.destroy();
+      }
+    }
+  };
+
+  test("clicking the pane (or its bar) focuses nothing and arrows don't scroll it", async () => {
+    const theme = { ...defaultConfig.theme };
+    dropPanes();
+    t.renderer.root.add(Box({ id: "tfm-pane-0", flexGrow: 1, width: "100%", flexDirection: "column" }));
+    t.renderer.root.add(Box({ id: "tfm-pane-1", flexGrow: 1, width: "100%", flexDirection: "column" }));
+    const [s0] = buildBootLayout({
+      renderer: t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
+      colors: theme,
+      bandCtx: {
+        byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
+        tileRefs: new Map(),
+        clearTileSelection: noop,
+        setTileVisual: noop,
+        updateSelectionStatusReal: noop,
+        renderPreview: noop,
+        setSelAnchor: noop,
+      },
+      focusPane: noop,
+      dropIntoPane: noop,
+      closeFileMenu: noop,
+      clearSearch: noop,
+      blurTerminal: noop,
+      pathEditMode: () => false,
+      exitPathEdit: noop,
+      isRenaming: () => false,
+      finishInlineRename: noop,
+      clearTileSelection: noop,
+      openContextMenu: () => {},
+      emptyAreaEntries: () => [],
+    });
+    for (let i = 0; i < 60; i++) s0.add(Text({ id: `tfm-lrow-${i}`, content: `row ${i}` }));
+    await t.renderOnce();
+
+    expect((s0 as any).focusable).toBe(false);
+    expect((s0 as any).verticalScrollBar.focusable).toBe(false);
+
+    // click INSIDE the scroller's own layout — earlier tests leave stray nodes
+    // in the renderer root, so a hardcoded cell can land outside this pane
+    const sc = s0 as any;
+    await t.mockMouse.click(sc.x + 2, sc.y + 2);
+    await t.renderOnce();
+    expect(t.renderer.currentFocusedRenderable).toBeNull();
+    // ...and the same on the scrollbar column
+    await t.mockMouse.click(sc.x + sc.width - 1, sc.y + 2);
+    await t.renderOnce();
+    expect(t.renderer.currentFocusedRenderable).toBeNull();
+
+    await t.mockInput.pressArrow("down");
+    await t.mockInput.pressArrow("down");
+    await t.renderOnce();
+    expect(s0.scrollTop).toBe(0);
   });
 });

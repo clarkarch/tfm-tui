@@ -220,8 +220,21 @@ export const scrollbarTrackColors = (colors: Theme): { backgroundColor: string; 
   foregroundColor: colors.sidebarFgMuted,
 });
 export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, ScrollBoxRenderable] => {
-  const makeScroller = (id: string, pane: number): ScrollBoxRenderable =>
-    new ScrollBoxRenderable(ctx.renderer, {
+  // NEVER keyboard-focusable (scroller + BOTH bars). OpenTUI's autoFocus
+  // focuses the nearest focusable ancestor on ANY left click, and a focused
+  // ScrollBox/ScrollBar turns arrows/j/k/pgup/pgdn/home/end into a 1/5-of-
+  // viewport self-scroll: it fought the selection scroll and kept scrolling the
+  // listing behind an open modal (focus survives under a float). tfm owns every
+  // grid key — the router also marks consumed keys handled; the wheel needs no
+  // focus (it is hitTest-routed).
+  //
+  // Set through the SETTER, not the option: `options.focusable` is only honored
+  // by classes whose default is already false (BoxRenderable's ctor does
+  // `if (options.focusable === true) this._focusable = true`, and Renderable's
+  // never reads it), so `focusable: false` is silently ignored on a ScrollBox /
+  // ScrollBar whose `defaultFocusable` is true (probed on this fork).
+  const makeScroller = (id: string, pane: number): ScrollBoxRenderable => {
+    const scroller = new ScrollBoxRenderable(ctx.renderer, {
       id,
       flexGrow: 1,
       width: "100%",
@@ -260,6 +273,11 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       // never receive a drag
       onMouseDrop: () => ctx.dropIntoPane(pane),
     });
+    scroller.focusable = false;
+    scroller.verticalScrollBar.focusable = false;
+    scroller.horizontalScrollBar.focusable = false;
+    return scroller;
+  };
 
   const scroller0 = makeScroller("tfm-scroll", 0);
   const scroller1 = makeScroller("tfm-scroll-2", 1);

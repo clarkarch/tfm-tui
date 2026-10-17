@@ -191,17 +191,26 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     ...over,
   };
   const router = makeKeyRouter(ctx);
+  // returns whether the router marked the event handled (preventDefault) —
+  // that flag is what stops a focused renderable from ALSO acting on the key
+  let prevented = false;
   const key = (
     name: string,
     opts: { ctrl?: boolean; shift?: boolean; meta?: boolean; repeated?: boolean } = {},
-  ): void =>
+  ): boolean => {
+    prevented = false;
     router.handleKey({
       name,
       ctrl: !!opts.ctrl,
       shift: !!opts.shift,
       meta: !!opts.meta,
       repeated: !!opts.repeated,
+      preventDefault: () => {
+        prevented = true;
+      },
     });
+    return prevented;
+  };
   return {
     router,
     ctx,
@@ -1383,5 +1392,112 @@ describe("dual-pane actions", () => {
     expect(h.calls).toEqual([]);
     h.key("u", { ctrl: true });
     expect(h.calls).toEqual(["pane:switch"]);
+  });
+});
+
+// --- consumed keys must be marked handled (preventDefault) ---
+//
+// OpenTUI runs a renderer's global keypress listeners BEFORE the focused
+// renderable's own handler, and `preventDefault()` is the only thing that
+// stops the focused handler from running. Without it, a focused grid ScrollBox
+// ALSO handles the key: ScrollBox.handleKeyPress -> ScrollBar.handleKeyPress
+// scrolls 1/5 of the viewport per arrow/j/k/pgup/pgdn/home/end (verified
+// headless), which is the "arrow keys jump the list" bug and the "the grid
+// still scrolls with the esc menu / properties open" bug (focus survives under
+// a float). Keys handed to a focused EDITOR stay unmarked: the router only
+// DELEGATES there, so marking them handled would starve the Input /
+// EmbeddedTerminal that receives the key natively.
+describe("consumed keys are marked handled so a focused scrollable can't self-scroll", () => {
+  test("grid nav marks the key handled while it moves the selection", () => {
+    const h = makeHarness();
+    expect(h.key("down")).toBe(true);
+    expect(h.selection.focusIdx()).toBe(0);
+    expect(h.key("down")).toBe(true);
+    expect(h.selection.focusIdx()).toBe(1);
+  });
+
+  test("page/first/last marks the key handled", () => {
+    const h = makeHarness();
+    expect(h.key("pagedown")).toBe(true);
+    expect(h.key("pageup")).toBe(true);
+    expect(h.key("home")).toBe(true);
+    expect(h.key("end")).toBe(true);
+  });
+
+  test("esc menu open: the arrow moves its cursor AND is marked handled (grid behind stays put)", () => {
+    const h = makeHarness();
+    h.ctx.escMenu.openMenu();
+    h.calls.length = 0;
+    expect(h.key("down")).toBe(true);
+    expect(h.calls).toContain("escmenu:move:1");
+  });
+
+  test("properties dialog open: keys are marked handled", () => {
+    const h = makeHarness({ propsIsOpen: () => true });
+    expect(h.key("down")).toBe(true);
+  });
+
+  test("keybind capture: the recorded key is marked handled", () => {
+    const h = makeHarness();
+    h.escMenuState.capturing = true;
+    expect(h.key("down")).toBe(true);
+    expect(h.calls).toContain("capture:down");
+  });
+
+  test("an unconsumed key stays unmarked", () => {
+    const h = makeHarness();
+    expect(h.key("f9")).toBe(false);
+  });
+
+  test("search box owns typing: keys stay unmarked", () => {
+    const h = makeHarness({ searchVisible: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+  });
+
+  test("inline rename owns typing: keys stay unmarked", () => {
+    const h = makeHarness({ isRenaming: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+  });
+
+  test("path edit owns typing: keys stay unmarked", () => {
+    const h = makeHarness({ pathEditMode: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+  });
+
+  test("pick overlay owns typing: keys stay unmarked", () => {
+    const h = makeHarness();
+    h.pickState.open = true;
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+    expect(h.calls).toContain("pick:a");
+  });
+
+  test("prompt overlay owns typing: keys stay unmarked", () => {
+    const h = makeHarness({
+      prompt: {
+        isOpen: () => true,
+        handleKey: (e) => h.calls.push(`prompt:${e.name}`),
+      },
+    });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+    expect(h.calls).toContain("prompt:a");
+  });
+
+  test("bulk rename owns typing: keys stay unmarked", () => {
+    const h = makeHarness();
+    h.bulkState.open = true;
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+    expect(h.calls).toContain("bulk:a");
+  });
+
+  test("embedded terminal owns the keyboard: keys stay unmarked", () => {
+    const h = makeHarness({ termOwnsKeyboard: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
   });
 });

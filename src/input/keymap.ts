@@ -35,6 +35,9 @@ import type { MaybeNode } from "../lib/node-like";
 type KeyPressEvent = KeyEventLike & {
   control?: boolean;
   repeated?: boolean;
+  // OpenTUI's KeyEvent carries these; the fallback shapes above don't, so the
+  // router only ever calls them optionally (tests pass bare objects).
+  preventDefault?(): void;
 };
 
 // structural subset of index's AppState — the router only touches these
@@ -802,11 +805,31 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       run,
     }));
 
-  const handleKey = (ev: KeyPressEvent): void => {
+  // A key tfm consumed must be marked handled (preventDefault) so OpenTUI does
+  // NOT also hand it to the focused renderable: a focused ScrollBox/ScrollBar
+  // turns arrows/j/k/pgup/pgdn/home/end into a 1/5-of-viewport self-scroll,
+  // which fought the selection scroll and kept scrolling the listing behind an
+  // open modal (focus survives under a float — the grid scrollers are built
+  // non-focusable too; this is the general half).
+  // EXCEPT while a focused editor owns typing: there the router only DELEGATES,
+  // so marking the key handled would starve the Input / EmbeddedTerminal that
+  // receives it natively. Snapshot BEFORE routing — a branch may close the very
+  // surface it was decided on (esc clears the search box).
+  const focusedEditorOwnsKeys = (): boolean =>
+    ctx.prompt?.isOpen() === true ||
+    ctx.bulkRename.isOpen() ||
+    ctx.pick.isOpen() ||
+    ctx.isRenaming() ||
+    ctx.searchVisible() ||
+    ctx.pathInputVisible() ||
+    ctx.pathEditMode() ||
+    ctx.termOwnsKeyboard();
+
+  const routeKey = (ev: KeyPressEvent): boolean => {
     const ctrl = !!ev.ctrl || !!ev.control;
     // keybind capture in the settings panel is the ONE state above quit:
     // recording ctrl+q must not quit the app mid-capture
-    if (ctx.escMenu.captureKey(ev)) return;
+    if (ctx.escMenu.captureKey(ev)) return true;
     // any non-copy key ends the ctrl+c streak (and re-arms the quit hint);
     // the streak itself only advances at the copy dispatch below, so keys
     // swallowed by modals/terminal/pick never count toward it
@@ -814,62 +837,62 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       copyQuitStreak = 0;
       quitHintShown = false;
     }
-    if (hit(ev, "quit") && runAction("quit")) return;
+    if (hit(ev, "quit") && runAction("quit")) return true;
     // held restart must not queue overlapping teardown/spawn pairs
-    if (hit(ev, "restart") && ev.repeated !== true && runAction("restart")) return;
+    if (hit(ev, "restart") && ev.repeated !== true && runAction("restart")) return true;
     // a true modal open above the pick overlay keeps its keys (see
     // handleOverlayModalKeys) — esc must reach a confirm opened over pick.
-    if (handleOverlayModalKeys(ev)) return;
+    if (handleOverlayModalKeys(ev)) return true;
     // pick overlay (command palette) open: it swallows everything below
     // (typing reaches its focused Input natively, like type-to-search)
     if (ctx.pick.isOpen()) {
       ctx.pick.handleKey(ev);
-      return;
+      return true;
     }
     // the command palette replaces the esc menu (its own layer) but is
     // deliberately BELOW handleOverlayModalKeys above: a data-loss confirm
     // (conflict/yes-no), prompt or rename keeps its keys.
-    if (hit(ev, "commandPalette") && runAction("commandPalette")) return;
-    if (handleModalKeys(ev)) return;
+    if (hit(ev, "commandPalette") && runAction("commandPalette")) return true;
+    if (handleModalKeys(ev)) return true;
 
     // file context menu open: arrows/enter navigate it, esc closes.
     // getFileMenuState() returns the LIVE state object — mutating fmenu.idx
     // below updates the menu module's state in place.
-    if (handleFileMenuKeys(ev)) return;
-    if (handleSearchKeys(ev)) return;
+    if (handleFileMenuKeys(ev)) return true;
+    if (handleSearchKeys(ev)) return true;
 
     // --- remappable action keys that grid nav would otherwise swallow:
     // handleGridNavKeys consumes bare arrows/return regardless of modifiers,
     // so alt+arrows and alt+enter must dispatch BEFORE it (plain arrows and
     // return are unaffected — they match no bind unless remapped onto one) ---
-    if (hit(ev, "histBack") && ev.repeated !== true && runAction("histBack")) return;
-    if (hit(ev, "histForward") && ev.repeated !== true && runAction("histForward")) return;
-    if (hit(ev, "goHome") && runAction("goHome")) return;
-    if (hit(ev, "showProps") && runAction("showProps")) return;
-    if (hit(ev, "newFolder") && ev.repeated !== true && runAction("newFolder")) return;
-    if (hit(ev, "newFile") && ev.repeated !== true && runAction("newFile")) return;
-    if (hit(ev, "pathEdit") && runAction("pathEdit")) return;
-    if (hit(ev, "togglePreview") && ev.repeated !== true && runAction("togglePreview")) return;
-    if (hit(ev, "openTerminal") && runAction("openTerminal")) return;
-    if (hit(ev, "connectServer") && runAction("connectServer")) return;
-    if (hit(ev, "toggleView") && runAction("toggleView")) return;
-    if (hit(ev, "cycleSort") && ev.repeated !== true && runAction("cycleSort")) return;
-    if (hit(ev, "zoomIn") && runAction("zoomIn")) return;
-    if (hit(ev, "zoomOut") && runAction("zoomOut")) return;
-    if (hit(ev, "toggleDualPane") && ev.repeated !== true && runAction("toggleDualPane")) return;
-    if (hit(ev, "switchPane") && ev.repeated !== true && runAction("switchPane")) return;
-    if (hit(ev, "copyToOtherPane") && ev.repeated !== true && runAction("copyToOtherPane")) return;
-    if (hit(ev, "moveToOtherPane") && ev.repeated !== true && runAction("moveToOtherPane")) return;
-    if (hit(ev, "startSearch") && runAction("startSearch")) return;
+    if (hit(ev, "histBack") && ev.repeated !== true && runAction("histBack")) return true;
+    if (hit(ev, "histForward") && ev.repeated !== true && runAction("histForward")) return true;
+    if (hit(ev, "goHome") && runAction("goHome")) return true;
+    if (hit(ev, "showProps") && runAction("showProps")) return true;
+    if (hit(ev, "newFolder") && ev.repeated !== true && runAction("newFolder")) return true;
+    if (hit(ev, "newFile") && ev.repeated !== true && runAction("newFile")) return true;
+    if (hit(ev, "pathEdit") && runAction("pathEdit")) return true;
+    if (hit(ev, "togglePreview") && ev.repeated !== true && runAction("togglePreview")) return true;
+    if (hit(ev, "openTerminal") && runAction("openTerminal")) return true;
+    if (hit(ev, "connectServer") && runAction("connectServer")) return true;
+    if (hit(ev, "toggleView") && runAction("toggleView")) return true;
+    if (hit(ev, "cycleSort") && ev.repeated !== true && runAction("cycleSort")) return true;
+    if (hit(ev, "zoomIn") && runAction("zoomIn")) return true;
+    if (hit(ev, "zoomOut") && runAction("zoomOut")) return true;
+    if (hit(ev, "toggleDualPane") && ev.repeated !== true && runAction("toggleDualPane")) return true;
+    if (hit(ev, "switchPane") && ev.repeated !== true && runAction("switchPane")) return true;
+    if (hit(ev, "copyToOtherPane") && ev.repeated !== true && runAction("copyToOtherPane")) return true;
+    if (hit(ev, "moveToOtherPane") && ev.repeated !== true && runAction("moveToOtherPane")) return true;
+    if (hit(ev, "startSearch") && runAction("startSearch")) return true;
 
     // --- keyboard navigation: sidebar <-> grid ---
     // sidebar focus swallows ALL keys — it must precede shift-extend or
     // shift+arrows would mutate the grid selection while the sidebar is
     // focused (it returns false when inactive, so grid extend is unchanged)
-    if (handleSidebarKeys(ev)) return;
-    if (handleShiftExtend(ev)) return;
-    if (handleGridNavKeys(ev)) return;
-    if (hit(ev, "parentDir") && runAction("parentDir")) return;
+    if (handleSidebarKeys(ev)) return true;
+    if (handleShiftExtend(ev)) return true;
+    if (handleGridNavKeys(ev)) return true;
+    if (hit(ev, "parentDir") && runAction("parentDir")) return true;
     // type-to-search catch-all: gated on the [ui] knob (the yazi preset
     // flips it off — bound bare keys already dispatched above regardless)
     if (
@@ -883,25 +906,25 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       /[a-z0-9._-]/i.test(ev.name)
     ) {
       ctx.beginTypeToSearch(ev.name);
-      return;
+      return true;
     }
 
-    if (hit(ev, "openMenu") && runAction("openMenu")) return;
-    if (hit(ev, "toggleHelp") && runAction("toggleHelp")) return;
-    if (hit(ev, "toggleHidden") && ev.repeated !== true && runAction("toggleHidden")) return;
-    if (hit(ev, "reloadPlaces") && ev.repeated !== true && runAction("reloadPlaces")) return;
+    if (hit(ev, "openMenu") && runAction("openMenu")) return true;
+    if (hit(ev, "toggleHelp") && runAction("toggleHelp")) return true;
+    if (hit(ev, "toggleHidden") && ev.repeated !== true && runAction("toggleHidden")) return true;
+    if (hit(ev, "reloadPlaces") && ev.repeated !== true && runAction("reloadPlaces")) return true;
 
     // --- tabs (kitty needs map no_op for ctrl+tab / ctrl+shift+tab — its
     // default next_tab/previous_tab eat the keys before they reach us) ---
-    if (hit(ev, "newTab") && runAction("newTab")) return;
-    if (hit(ev, "closeTab") && runAction("closeTab")) return;
-    if (hit(ev, "prevTab") && runAction("prevTab")) return;
-    if (hit(ev, "nextTab") && runAction("nextTab")) return;
+    if (hit(ev, "newTab") && runAction("newTab")) return true;
+    if (hit(ev, "closeTab") && runAction("closeTab")) return true;
+    if (hit(ev, "prevTab") && runAction("prevTab")) return true;
+    if (hit(ev, "nextTab") && runAction("nextTab")) return true;
 
     // --- file operations ---
-    if (hit(ev, "selectAll") && runAction("selectAll")) return;
-    if (hit(ev, "toggleFocused") && runAction("toggleFocused")) return;
-    if (hit(ev, "invertSelection") && runAction("invertSelection")) return;
+    if (hit(ev, "selectAll") && runAction("selectAll")) return true;
+    if (hit(ev, "toggleFocused") && runAction("toggleFocused")) return true;
+    if (hit(ev, "invertSelection") && runAction("invertSelection")) return true;
     const selected = selection.selPaths();
     // terminal autorepeat (ev.repeated) must never enqueue fs work: holding
     // ctrl+d used to start one real copy per keypress until the native
@@ -909,8 +932,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // stay reachable on repeat (idempotent clipboard writes); rename is
     // already guarded by the inline-edit modal swallowing keys.
     const repeated = ev.repeated === true;
-    if (hit(ev, "trash") && selected.length && !repeated && runAction("trash")) return;
-    if (hit(ev, "renameOrRestore") && selected.length && runAction("renameOrRestore")) return;
+    if (hit(ev, "trash") && selected.length && !repeated && runAction("trash")) return true;
+    if (hit(ev, "renameOrRestore") && selected.length && runAction("renameOrRestore")) return true;
     // third consecutive copy key (with or without a selection — an empty
     // selection is a silent no-op otherwise) hints at the quit bind once per
     // streak, for the SIGINT habit
@@ -923,12 +946,12 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
         ctx.notify(`ctrl+c copies · ${quitBinds} to quit`, "quit", "info");
       }
     }
-    if (isCopyKey && selected.length && runAction("copy")) return;
-    if (hit(ev, "cut") && selected.length && runAction("cut")) return;
-    if (hit(ev, "duplicate") && selected.length && !repeated && runAction("duplicate")) return;
-    if (hit(ev, "paste") && !repeated && runAction("paste")) return;
-    if (hit(ev, "redo") && runAction("redo")) return;
-    if (hit(ev, "undo") && runAction("undo")) return;
+    if (isCopyKey && selected.length && runAction("copy")) return true;
+    if (hit(ev, "cut") && selected.length && runAction("cut")) return true;
+    if (hit(ev, "duplicate") && selected.length && !repeated && runAction("duplicate")) return true;
+    if (hit(ev, "paste") && !repeated && runAction("paste")) return true;
+    if (hit(ev, "redo") && runAction("redo")) return true;
+    if (hit(ev, "undo") && runAction("undo")) return true;
 
     // --- plugin commands: LAST, after every core action — "core wins ties"
     // means a plugin defaultBind colliding with ctrl+t/ctrl+c/ctrl+z must NOT
@@ -945,11 +968,17 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
               () => cmd.run(),
               () => {},
             );
-            return;
+            return true;
           }
         }
       } catch {}
     }
+    return false;
+  };
+
+  const handleKey = (ev: KeyPressEvent): void => {
+    const keepForEditor = focusedEditorOwnsKeys();
+    if (routeKey(ev) && !keepForEditor) ev.preventDefault?.();
   };
 
   return {
