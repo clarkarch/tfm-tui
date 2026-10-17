@@ -140,6 +140,38 @@ describe("runBoot", () => {
     expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("hygiene"));
   });
 
+  test("lazy startup defers the default-file-manager probe past the launch report", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        lazyBoot: true,
+        showLaunchTime: () => true,
+        promptDefaultFileManager: () => {
+          calls.push("defmgr");
+        },
+      }),
+    );
+    expect(calls).toContain("toast");
+    // the verdict probe is a sync xdg-mime spawn (~200ms of blocked event
+    // loop): under lazy it must not sit on the launch path, but still runs
+    // before the post-report wiring
+    expect(calls.indexOf("toast")).toBeLessThan(calls.indexOf("defmgr"));
+    expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("classic boot keeps the prompt before the launch report (legacy order)", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        showLaunchTime: () => true,
+        promptDefaultFileManager: () => {
+          calls.push("defmgr");
+        },
+      }),
+    );
+    expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("toast"));
+  });
+
   test("absent default-file-manager step changes nothing (old fakes keep working)", async () => {
     const calls: string[] = [];
     await runBoot(mkCtx(calls));

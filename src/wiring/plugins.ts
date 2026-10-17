@@ -263,15 +263,26 @@ export const wirePlugins = async (deps: {
       }
     } catch {}
   };
+  // The boot sequence's first renderAll reads the LIVE registry.plugins, so a
+  // scan that settles BEFORE it needs no repaint — the old unconditional
+  // renderAll here fired a full pre-layout render (~100ms, measured) that made
+  // lazy-startup SLOWER than eager. bootRendered flips right after the boot
+  // render (wireBoot -> wirePlugins.markBootRendered); only genuinely late
+  // arrivals repaint.
+  let bootRendered = false;
+  const markBootRendered = (): void => {
+    bootRendered = true;
+  };
   const scanSettled = (): void => {
     reportShadowedBinds();
     try {
       sharedPluginEvents().emit("boot", {});
     } catch {}
-    // the scan ran in the background while boot already rendered: late
-    // arrivals (slots/rows/menus/commands) paint on the next renderAll
-    // instead of waiting for the next navigation. Render-only (no layout
-    // work the boot steps own); safe no-op when nothing arrived.
+    // late arrivals (slots/rows/menus/commands) paint without waiting for the
+    // next navigation — but ONLY once the first paint happened; otherwise the
+    // pending boot render already includes them. Render-only (no layout work
+    // the boot steps own); safe no-op when nothing arrived.
+    if (!bootRendered) return;
     try {
       nav.renderAll();
     } catch {}
@@ -315,6 +326,9 @@ export const wirePlugins = async (deps: {
     reloadPlugins: () => registry.scan(),
     confirm: api.ui.confirm,
     deactivateAll: registry.deactivateAll,
+    // wireBoot calls this right after its first renderAll step, so the lazy
+    // background scan knows a scan settled before that needs no repaint
+    markBootRendered,
     // Plugins-view on/off: register/unregister that plugin's slots immediately
     setSlotEnabled: registry.setSlotEnabled,
     // UI slots: mount after the boot layout exists; refresh with renderAll so

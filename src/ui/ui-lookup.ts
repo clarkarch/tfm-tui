@@ -71,6 +71,14 @@ export const RESOLUTION_POLL_MS = 50;
 // boot: the terminal's one chance to report cell pixels (unchanged 2s budget —
 // the one place a late reply still buys pixel-accurate rasters)
 export const RESOLUTION_SETTLE_MS = 2000;
+// boot UNDER [ui] lazy-startup: first paint must not wait on the probe. A
+// reporting terminal answers during the ~500ms of module/wiring load BEFORE
+// boot reaches this step, so this budget only covers a reply still in flight;
+// one that never answers (console/tmux/dumb) latches here instead of parking
+// the full 2s — the whole point of the lazy path. A reply that lands later
+// still lets every later render read it (wait() checks resolution first) and
+// the async raster drain picks it up; only the very first paint may fall back.
+export const RESOLUTION_LAZY_SETTLE_MS = 250;
 // render path: only ever paid on a terminal that DOES report pixels, right
 // after a resize nulled the resolution for its requery
 export const RESOLUTION_RENDER_MS = 200;

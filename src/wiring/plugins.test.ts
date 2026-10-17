@@ -142,17 +142,72 @@ describe("background scan (lazy first paint)", () => {
       // secondary timing bound: returned well before the parked activate could
       // settle (the window above is purely synchronous setup, no awaits)
       expect(Date.now() - t0).toBeLessThan(1000);
+      // the boot's first paint already happened while this plugin was still
+      // loading (the real lazy ordering: fast boot render, slow activate) —
+      // markBootRendered is what wireBoot calls after its renderAll step
+      wiring.markBootRendered();
       // the live array hydrates when the scan settles (poll, never sleep —
       // suite rule for fire-and-forget races)
       const deadline = Date.now() + 10000;
       while (wiring.plugins.length === 0 && Date.now() < deadline) await Bun.sleep(10);
       expect(wiring.plugins.map((p) => p.name)).toEqual(["slow"]);
       expect(wiring.api.commands().map((c) => c.id)).toContain("slow:hi");
-      // late arrivals paint: the background scan triggers one renderAll when
-      // it settles, so slots/rows/menus don't wait for the next navigation
+      // late arrivals paint: the background scan triggers ONE renderAll after
+      // the boot render, so slots/rows/menus don't wait for the next navigation
       const deadline2 = Date.now() + 10000;
       while (renders === 0 && Date.now() < deadline2) await Bun.sleep(10);
       expect(renders).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // The follow-up repaint exists ONLY for plugins that arrive AFTER the boot's
+  // first render. A scan that settles earlier used to fire a full renderAll
+  // BEFORE buildLayout (measured: a whole render cascade ~2s before
+  // `boot: buildLayout`) — that redundant pre-layout render is why lazy-startup
+  // measured SLOWER than eager. The pending boot render already reads the live
+  // registry.plugins, so the follow-up must be skipped until markBootRendered.
+  test("scan settled before the boot render pumps nothing (first paint covers it)", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "tfm-wire-plugins-early-"));
+    const pluginsHome = path.join(root, "config", "tfm", "plugins");
+    process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    process.env.XDG_CACHE_HOME = path.join(root, "cache");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    mkdirSync(path.join(pluginsHome, "early"), { recursive: true });
+    writeFileSync(
+      path.join(pluginsHome, "early", "early.ts"),
+      `export default { name: "early", activate: async () => { await new Promise((r) => setTimeout(r, 50)); return { commands: [{ id: "early:hi", title: "hi", run: () => {} }] }; } };\n`,
+    );
+    try {
+      let renders = 0;
+      const wiring = await wirePlugins({
+        core: { state: { cwd: "/x" }, config: { keys: {}, ui: { lazyStartup: true } } } as never,
+        nav: {
+          navigate: () => {},
+          setStatusMsg: () => {},
+          renderAll: () => {
+            renders++;
+          },
+        } as never,
+        chrome: {
+          renderer: {},
+          notify: () => {},
+          notifySticky: () => null,
+          openFileDefault: () => {},
+        } as never,
+        gridFoundation: { selection: { selPaths: () => [], selectPaths: () => {} } } as never,
+        getKeymap: () => ({ commands: () => [] }),
+        getPick: () => ({ open: () => {} }),
+      });
+      const deadline = Date.now() + 10000;
+      while (wiring.plugins.length === 0 && Date.now() < deadline) await Bun.sleep(10);
+      expect(wiring.plugins.map((p) => p.name)).toEqual(["early"]);
+      expect(wiring.api.commands().map((c) => c.id)).toContain("early:hi");
+      // boot has NOT rendered yet (markBootRendered was never called): the
+      // upcoming boot render includes this plugin, so no repaint is due — the
+      // old unconditional renderAll made this 1 (the regression)
+      expect(renders).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

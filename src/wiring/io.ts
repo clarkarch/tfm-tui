@@ -23,6 +23,7 @@ import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces, listMounts } from "../fs/places";
 import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
+import { RESOLUTION_LAZY_SETTLE_MS } from "../ui/ui-lookup";
 import { configPath } from "../config/config";
 import { describeKeybindConflicts } from "../config/config-schema";
 import type { ListEntry } from "../ui/ui-menu";
@@ -178,6 +179,10 @@ export const wireBoot = (deps: {
   skipSessionRestore?: boolean;
   // plugin UI slots mount into the boot layout (see app/boot.ts)
   mountSlots?: () => void;
+  // the lazy plugin background scan must know the boot's first renderAll has
+  // happened, so a scan that settles earlier skips its redundant repaint (the
+  // pre-layout render that made lazy-startup slower — see wiring/plugins.ts)
+  markBootRendered?: () => void;
   // cold-boot-only sidebar intro, played after the first renderAll (built in
   // wireChrome; a no-op unless [ui] sidebar-animation is on)
   playSidebarIntro?: () => void;
@@ -216,8 +221,11 @@ export const wireBoot = (deps: {
   runBoot({
     // boot: ONE full-budget wait — a terminal that answered nothing by then
     // never reports pixels (linux console/tmux), and the gate latches so no
-    // later rebuild parks on it again (see makeResolutionGate)
-    waitForResolution: () => core.resolutionGate.settle(),
+    // later rebuild parks on it again (see makeResolutionGate). Lazy startup
+    // caps that budget: first paint must not wait ~2s on a probe that (on this
+    // class of terminal) will never be answered — the single biggest launch
+    // cost the lazy path can remove.
+    waitForResolution: () => core.resolutionGate.settle(lazyBootFlag ? RESOLUTION_LAZY_SETTLE_MS : undefined),
     applyBootSystemTheme: () => deps.applyBootSystemTheme?.() ?? Promise.resolve(false),
     // restart child only: the waiting parent never destroyed, so its kitty
     // placements are still on screen under ours — delete-all once, first.
@@ -283,18 +291,30 @@ export const wireBoot = (deps: {
     // Off (default) = classic fully-loaded first paint. Branches tested via
     // runBootMountsLoad/Refresh (same file) — this closure only binds prod deps.
     loadSystemPlaces: () => runBootMountsLoad(mountsCtx),
-    renderAll: nav.renderAll,
+    renderAll: () => {
+      nav.renderAll();
+      // flip the lazy-scan gate right after the first paint (only on success —
+      // a throwing render leaves the app in a degraded state where a later
+      // repaint is the safer default)
+      deps.markBootRendered?.();
+    },
     refreshMounts: () => runBootMountsRefresh(mountsCtx),
     playSidebarIntro: () => deps.playSidebarIntro?.(),
     playTopbarIntro: () => deps.playTopbarIntro?.(),
     promptDefaultFileManager: () => deps.promptDefaultFileManager?.(),
+    lazyBoot: lazyBootFlag,
     debugTrace: () => {
       debugLog(
         `terminal ${chrome.renderer.terminalWidth}x${chrome.renderer.terminalHeight} cwd=${process.cwd()} config=${configPath()}`,
       );
       nav.setStatusMsg(`debug: ${DEBUG_LOG}`);
     },
-    launchToast: () => chrome.notify(`launched in ${Math.round(performance.now() - bootStart)} ms`),
+    launchToast: () => {
+      // also lands in the debug log: the launch time is the one number slow-boot
+      // reports need, and the toast itself is not greppable
+      debugLog(`boot: launched in ${Math.round(performance.now() - bootStart)} ms`);
+      chrome.notify(`launched in ${Math.round(performance.now() - bootStart)} ms`);
+    },
     startHygiene: () =>
       startMemHygiene({
         // CliRenderer.lib is private with no public stats accessor — this
