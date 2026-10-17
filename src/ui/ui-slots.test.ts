@@ -370,6 +370,69 @@ describe("thumbnail mount", () => {
   // renderGrid early-outs on an unchanged listing, so those thumbnails stayed
   // blank until the cwd changed. (Replaces the old "superseded drain drops its
   // job" case — that behaviour WAS the regression.)
+  test.skipIf(!hasSvgRenderer)("a scrim-active drain pins icon rasters opaque (content and float alike)", async () => {
+    // icons are shaded rather than alpha-faded under the scrim, and the
+    // frame-end region bake must skip them. A floating layer's icon sits ABOVE
+    // the overlay, so its panel is never dimmed and its raster must not be
+    // either — hence the override applies to floats too.
+    const slots = mkSlots();
+    const content = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    const floater = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    t.renderer.root.add(Box({ id: "scrim-content-host", width: 8, height: 1 }, content.el));
+    t.renderer.root.add(Box({ id: "tfm-menu", width: 8, height: 1 }, floater.el));
+    await t.renderOnce();
+    openResolution();
+
+    slots.setRasterDim(1, 0.5);
+    await slots.drainIconQueue();
+    await t.renderOnce();
+
+    const contentImg = t.renderer.root.findDescendantById(`${content.slotId}-s0`) as {
+      placementOpacity?: number | null;
+    };
+    const floatImg = t.renderer.root.findDescendantById(`${floater.slotId}-s0`) as { placementOpacity?: number | null };
+    expect(contentImg?.placementOpacity).toBe(1);
+    expect(floatImg?.placementOpacity).toBe(1);
+
+    slots.setRasterDim(null, 1);
+    await slots.drainIconQueue();
+    await t.renderOnce();
+    const restored = t.renderer.root.findDescendantById(`${content.slotId}-s0`) as { placementOpacity?: number | null };
+    expect(restored?.placementOpacity ?? null).toBeNull();
+  });
+
+  test("the scrim exempts mounted float thumbnails but not content ones", async () => {
+    // a properties-dialog thumbnail is above the overlay (its panel is not
+    // dimmed), so the mounted-thumb walk must opt it out of the frame-end
+    // region bake; a content thumbnail keeps inheriting and dims with the tile.
+    const slots = mkSlots();
+    t.renderer.root.add(
+      Box({ id: "tfm-menu", width: 6, height: 4 }, Box({ id: "float-thumb-slot", width: 4, height: 4 })),
+    );
+    t.renderer.root.add(Box({ id: "content-thumb-slot", width: 4, height: 4 }));
+    await t.renderOnce();
+    openResolution();
+    const { dir, p } = writePng("scrim-scope.png");
+    for (const slotId of ["float-thumb-slot", "content-thumb-slot"]) {
+      slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+    }
+    await slots.drainThumbs();
+    await t.renderOnce();
+
+    slots.setRasterDim(1, 0.5);
+    const floatThumb = t.renderer.root.findDescendantById("float-thumb-slot-t") as { placementOpacity?: number | null };
+    const contentThumb = t.renderer.root.findDescendantById("content-thumb-slot-t") as {
+      placementOpacity?: number | null;
+    };
+    expect(floatThumb?.placementOpacity).toBe(1);
+    expect(contentThumb?.placementOpacity ?? null).toBeNull();
+
+    slots.setRasterDim(null, 1);
+    const restored = t.renderer.root.findDescendantById("float-thumb-slot-t") as { placementOpacity?: number | null };
+    expect(restored?.placementOpacity ?? null).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("a superseded drain still delivers its thumbnail", async () => {
     const slotId = "tfm-tile-live-thumb";
     t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));

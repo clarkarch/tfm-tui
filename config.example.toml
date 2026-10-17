@@ -48,7 +48,7 @@ transparent-bg                        = "off"       # "off" = force opaque (pres
 icons                                 = "opaque"    # "opaque" = icons flattened onto the tile bg (default); "transparent" = rasters keep alpha (may fringe on some terminals); "transparent-partial" = transparent except inside floating menus/dialogs
 icon-style                            = "filled"    # "filled" = solid icon rasters (default); "outline" = hollow icon rasters where the set ships an outline sibling (icons with no outline variant stay filled)
 ui-style                              = "solid"     # "solid" = filled panels; "outline" = rounded borders, no panel fills at rest; "outline-partial" = outline chrome, solid floating panels
-scrim                                 = "dim"       # "dim" = fade the app content behind a modal (icon rasters stay crisp); "fill" = a fixed deeper fade (the old dark overlay, minus its raster-deleting full-screen fill); "none" = no dim.
+scrim                                 = "fill"      # "fill" = classic dark overlay behind a modal (icon and thumbnail rasters dim in place); "dim" = fade the app content by the scrim-dim amount (icon rasters stay crisp); "none" = no dim.
 scrim-dim                             = 35          # 0..80% backdrop darkening behind a modal (dim mode; higher = darker, 0 = barely faded)
 tty-mode                              = "auto"      # "auto" = list + ASCII glyphs + fixed console theme on linux/dumb terms; "on" = force it; "off" = never
 force-glyph                           = false       # true = skip kitty icon/thumbnail rasters, use Nerd-Font glyphs (for terminals with buggy graphics)

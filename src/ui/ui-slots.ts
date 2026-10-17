@@ -415,6 +415,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
         const pxH = Math.max(1, Math.round(hCells * cellH) - 2);
         try {
           const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector, j.video);
+          // a floating layer's thumbnail is above the scrim overlay (its panel
+          // is not dimmed), so it must opt out of the frame-end region bake
+          const floatThumb = isFloatChild(slot);
           const img = new ImageRenderable(ctx.renderer(), {
             id: `${j.slotId}-t`,
             source: bytes,
@@ -424,6 +427,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
             // thumbImageFit) — icons keep fit:"fit" at their own site
             fit: thumbImageFit(j.vector),
             protocol: "auto",
+            placementOpacity: floatThumb && rasterDim != null ? 1 : undefined,
           });
           if (img.loadPromise) await img.loadPromise;
           // RE-RESOLVE: a rebuild during the raster detached the captured node;
@@ -508,9 +512,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
           height: heightCells,
           fit: "fit",
           protocol: "auto",
-          // scrim dim: opaque placement (the foreground is already shaded);
-          // null inherits the node opacity as before. Floats stay inheriting.
-          placementOpacity: floatChild ? undefined : (rasterDim ?? undefined),
+          // scrim dim: opaque placement (the foreground is already shaded) and
+          // exempt from the frame-end region bake. Floats get it too: they sit
+          // ABOVE the scrim overlay, so their panels are never dimmed and their
+          // rasters must not be either. null (no scrim) inherits as before.
+          placementOpacity: rasterDim == null ? undefined : 1,
         });
         if (img.loadPromise) await img.loadPromise;
         img.visible = si === initial;
@@ -661,6 +667,19 @@ export const makeSlots = (ctx: SlotsCtx) => {
     for (const s of allSpecs.values()) s.done = false;
     iconForceRedrain = true;
     void drainIconQueue();
+    // Already-rastered FLOAT thumbnails (the properties dialog): their slot is
+    // never re-drained by a modal, so set the override in place. Content
+    // thumbnails keep inheriting (they are under the overlay and should dim).
+    const floatOverride = opacity == null ? null : 1;
+    for (const slotId of thumbOwners.keys()) {
+      const slot: SlotNode | null | undefined = ctx.byId(slotId);
+      if (!slot || !isFloatChild(slot)) continue;
+      const img = ctx.byId(`${slotId}-t`);
+      if (!img) continue;
+      try {
+        (img as { placementOpacity?: number | null }).placementOpacity = floatOverride;
+      } catch {}
+    }
   };
 
   // clickable "esc"/close hint shared by floating UIs (prompt/props/menu) —

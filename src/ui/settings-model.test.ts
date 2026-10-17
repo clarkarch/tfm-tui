@@ -153,6 +153,10 @@ describe("settingGroups shape", () => {
   test("every schema prop surfaces a GUI row (reachability, not label-uniqueness)", () => {
     const h = mk();
     withMasters(h, true);
+    // "scrim dim" is the one showWhen-gated row whose gate is not a master
+    // toggle: it surfaces only under [ui] scrim = "dim" (fill is the default).
+    // Reachability means "there is a row when its gate is open".
+    (h.config.ui as { scrimMode: string }).scrimMode = "dim";
     // knob labels intentionally repeat per animation section (the section
     // header supplies context: duration/travel/direction/spread/easing read
     // under ##files, ##sidebar intro, ##top bar, ##directory bar), so the
@@ -355,6 +359,9 @@ describe("settingGroups shape", () => {
 
   test("behavior/appearance/files carry subsection dividers (related options grouped)", () => {
     const h = mk();
+    // "scrim dim" sits under the look header but only under scrim = "dim"
+    // (fill: the default), so open the gate to pin the grouped sequence
+    (h.config.ui as { scrimMode: string }).scrimMode = "dim";
     const seq = (header: string): string[] =>
       h
         .groups()
@@ -409,13 +416,13 @@ describe("settingGroups shape", () => {
         .groups()
         .find((g) => g.header === "appearance")!
         .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    expect(labels()).toContain("scrim dim"); // default mode is dim
-    (h.config.ui as { scrimMode: string }).scrimMode = "fill";
-    expect(labels()).not.toContain("scrim dim");
+    expect(labels()).not.toContain("scrim dim"); // default mode is fill
     (h.config.ui as { scrimMode: string }).scrimMode = "none";
     expect(labels()).not.toContain("scrim dim");
     (h.config.ui as { scrimMode: string }).scrimMode = "dim";
     expect(labels()).toContain("scrim dim");
+    (h.config.ui as { scrimMode: string }).scrimMode = "fill";
+    expect(labels()).not.toContain("scrim dim");
   });
 
   test("keys category groups binds under subsection dividers", () => {
