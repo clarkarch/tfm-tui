@@ -1155,6 +1155,15 @@ step_opentui() {
         "Check your internet connection and try again. Nothing was installed."
     fi
   fi
+  # The fork's node_modules must exist: bun's file: dependency resolves through
+  # the fork's real path, so `bun build --compile` looks up the platform
+  # packages (imported by the fork's dist) there, not in tfm's node_modules.
+  # --production skips the fork's dev-only workspace deps.
+  if ! run_child_in "$FORK_DIR" bun install --frozen-lockfile --production; then
+    fail_at opentui "fork install failed" \
+      "bun couldn't install the fork's dependencies in $FORK_DIR." \
+      "See the output above. Nothing was installed."
+  fi
   step_ok "$ref → $(pretty_home "$FORK_DIR")"
 }
 
