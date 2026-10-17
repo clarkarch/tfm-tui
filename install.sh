@@ -41,6 +41,10 @@ SOURCE="${TFM_SOURCE:-${TFM_REF:-}}"
 LOCAL="${TFM_LOCAL:-}"
 SRC_DIR="${TFM_SRC_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/tfm/src}"
 REMOTE="${TFM_REMOTE:-https://github.com/$REPO.git}"
+# The patched OpenTUI fork must sit BESIDE the checkout: package.json depends on
+# file:../opentui-fork/packages/core/dist. URL/ref come from the checkout's
+# opentui-fork.ref so the installer and release CI can't drift.
+FORK_DIR="${TFM_FORK_DIR:-$(dirname "$SRC_DIR")/opentui-fork}"
 VERBOSE="${TFM_VERBOSE:-}"
 NO_SMOKE="${TFM_NO_SMOKE:-}"
 
@@ -1096,6 +1100,64 @@ step_fetch() {
   step_ok "$SOURCE @ $short → $(pretty_home "$SRC_DIR")"
 }
 
+# Fetches the patched opentui fork beside the checkout (a shallow clone of the
+# prebuilt branch: packages/core/dist + packages/native/lib/<target>/). The
+# build step stages its libopentui over the npm platform package afterwards.
+step_opentui() {
+  step_begin "opentui"
+  local ref_file="$SRC_DIR/opentui-fork.ref" url ref
+  if [ ! -f "$ref_file" ]; then
+    fail_at opentui "no fork ref" \
+      "$SRC_DIR/opentui-fork.ref is missing, so the patched opentui fork is unknown." \
+      "That checkout predates the fork, or it is incomplete. Nothing was installed."
+  fi
+  url=$(sed -n 's/^url *= *//p' "$ref_file" | head -n 1)
+  ref=$(sed -n 's/^ref *= *//p' "$ref_file" | head -n 1)
+  if [ -z "$url" ] || [ -z "$ref" ]; then
+    fail_at opentui "bad fork ref" \
+      "$ref_file must set both url and ref." \
+      "Fix the file in the checkout, or use the release one-liner. Nothing was installed."
+  fi
+  if [ -d "$FORK_DIR/.git" ]; then
+    local origin
+    origin=$(git -C "$FORK_DIR" remote get-url origin 2>/dev/null || true)
+    if [ "$origin" != "$url" ]; then
+      fail_at opentui "foreign fork checkout" \
+        "$FORK_DIR is a git checkout of $origin, not $url." \
+        "Point TFM_FORK_DIR at a different path, or remove that directory."
+    fi
+    if [ -n "$(git -C "$FORK_DIR" status --porcelain 2>/dev/null)" ]; then
+      fail_at opentui "fork changes" \
+        "$FORK_DIR has local changes, so tfm won't touch it." \
+        "Commit or stash them, or point TFM_FORK_DIR at a different path."
+    fi
+    if ! run_child git -C "$FORK_DIR" fetch --depth 1 origin "$ref"; then
+      fail_at opentui "fork fetch failed" \
+        "Couldn't fetch $ref from $url." \
+        "Check your internet connection and try again. Nothing was installed."
+    fi
+    if ! run_child git -C "$FORK_DIR" checkout -q --detach FETCH_HEAD; then
+      fail_at opentui "fork checkout failed" \
+        "Couldn't check out $ref in $FORK_DIR." \
+        "Remove that directory and run the same command again."
+    fi
+  else
+    if [ -e "$FORK_DIR" ]; then
+      fail_at opentui "not a checkout" \
+        "$FORK_DIR exists and isn't a git checkout, so tfm won't touch it." \
+        "Point TFM_FORK_DIR at a different path, or remove that directory."
+    fi
+    mkdir -p "$(dirname "$FORK_DIR")"
+    if ! run_child git clone --depth 1 --single-branch --branch "$ref" "$url" "$FORK_DIR"; then
+      rm -rf "$FORK_DIR" 2>/dev/null || true
+      fail_at opentui "fork clone failed" \
+        "Couldn't clone $ref from $url." \
+        "Check your internet connection and try again. Nothing was installed."
+    fi
+  fi
+  step_ok "$ref → $(pretty_home "$FORK_DIR")"
+}
+
 step_build() {
   step_begin "build"
   local t0 t1 secs
@@ -1104,6 +1166,12 @@ step_build() {
     fail_at build "install failed" \
       "bun couldn't install the dependencies of $SRC_DIR." \
       "See the output above, or run 'bun install --frozen-lockfile' there yourself." \
+      "Nothing was installed."
+  fi
+  if ! run_child_in "$SRC_DIR" sh scripts/sync-opentui-lib.sh; then
+    fail_at build "opentui lib missing" \
+      "The patched libopentui for this machine wasn't staged from $(pretty_home "$FORK_DIR")." \
+      "The fork must ship packages/native/lib/<target>/libopentui.so for this architecture." \
       "Nothing was installed."
   fi
   if ! run_child_in "$SRC_DIR" bun run compile; then
@@ -1540,6 +1608,7 @@ if [ "$MODE" = "release" ]; then
 elif [ "$MODE" = "source" ]; then
   step_toolchain
   step_fetch
+  step_opentui
   step_build
 fi
 step_install

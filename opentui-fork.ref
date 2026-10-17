@@ -1,0 +1,11 @@
+# tfm's patched OpenTUI fork — where the prebuilt core package
+# (packages/core/dist) and the patched native library
+# (packages/native/lib/<target>/libopentui.so) come from. package.json depends
+# on file:../opentui-fork/packages/core/dist, so the clone must sit BESIDE the
+# checkout: install.sh fetches it as <checkout>/../opentui-fork and release CI
+# does the same before `bun run compile`.
+#
+# Bump `ref` (branch or sha) when the fork changes; the fork commits its
+# prebuilt dist + libopentui on every change (see the fork's PREBUILT.md).
+url = https://github.com/clarkarch/opentui-fork
+ref = tfm

@@ -36,8 +36,23 @@ jobs:
       - name: Version matches package.json
         run: test "v$(bun -e 'console.log(require("./package.json").version)')" = "${{ github.ref_name }}"
 
+      # The patched opentui fork must sit BESIDE the checkout: package.json
+      # depends on file:../opentui-fork/packages/core/dist. Its prebuilt dist is
+      # committed on the branch named in opentui-fork.ref.
+      - name: Fetch the opentui fork
+        run: |
+          url=$(sed -n 's/^url *= *//p' opentui-fork.ref | head -n 1)
+          ref=$(sed -n 's/^ref *= *//p' opentui-fork.ref | head -n 1)
+          git clone --depth 1 --single-branch --branch "$ref" "$url" ../opentui-fork
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      # Stage the fork's patched libopentui over the UNPATCHED npm platform
+      # package, so the compiled binary embeds it. Fails loudly when the fork
+      # ships no prebuilt lib for this runner's architecture.
+      - name: Stage the patched libopentui
+        run: sh scripts/sync-opentui-lib.sh
 
       - name: Check + test
         run: |
