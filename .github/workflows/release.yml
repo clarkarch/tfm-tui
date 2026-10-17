@@ -55,11 +55,10 @@ jobs:
       # the fork ships no prebuilt lib for this runner's architecture.
       - name: Stage the patched libopentui
         run: |
-          mkdir -p ../opentui-fork/node_modules/@opentui
-          for pkg in node_modules/@opentui/core-linux-*; do
-            [ -d "$pkg" ] || continue
-            ln -sfn "$(readlink -f "$pkg")" "../opentui-fork/node_modules/@opentui/$(basename "$pkg")"
-          done
+          # bun resolves the file: dependency's dist through its real path, so
+          # the compile resolves imports from the FORK's node_modules: link it
+          # at ours instead of installing the fork's tree.
+          ln -sfn "$(readlink -f node_modules)" ../opentui-fork/node_modules
           sh scripts/sync-opentui-lib.sh
 
       - name: Check + test

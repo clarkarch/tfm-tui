@@ -1168,16 +1168,13 @@ step_build() {
       "See the output above, or run 'bun install --frozen-lockfile' there yourself." \
       "Nothing was installed."
   fi
-  # bun's file: dependency resolves the fork's dist through its real path, so
-  # `bun build --compile` looks the platform packages up in the FORK, not in
-  # tfm's node_modules. Point it at the ones tfm just installed (a couple of
-  # directories) instead of installing the fork's whole dependency tree.
-  if [ -d "$SRC_DIR/node_modules/@opentui" ]; then
-    mkdir -p "$FORK_DIR/node_modules/@opentui"
-    for pkg in "$SRC_DIR"/node_modules/@opentui/core-linux-*; do
-      [ -d "$pkg" ] || continue
-      ln -sfn "$(readlink -f "$pkg")" "$FORK_DIR/node_modules/@opentui/$(basename "$pkg")"
-    done
+  # bun resolves a file: dependency's dist through its real path, so
+  # `bun build --compile` resolves everything the fork's dist imports (the
+  # platform packages, web-tree-sitter, …) from the FORK's node_modules. Link
+  # it at the tree tfm just installed: same resolution, no second install.
+  # A fork checkout that has its own node_modules (dev) is left alone.
+  if [ -d "$SRC_DIR/node_modules" ] && [ ! -e "$FORK_DIR/node_modules" ]; then
+    ln -sfn "$(readlink -f "$SRC_DIR/node_modules")" "$FORK_DIR/node_modules"
   fi
   if ! run_child_in "$SRC_DIR" sh scripts/sync-opentui-lib.sh; then
     fail_at build "opentui lib missing" \
