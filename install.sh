@@ -1155,15 +1155,6 @@ step_opentui() {
         "Check your internet connection and try again. Nothing was installed."
     fi
   fi
-  # The fork's node_modules must exist: bun's file: dependency resolves through
-  # the fork's real path, so `bun build --compile` looks up the platform
-  # packages (imported by the fork's dist) there, not in tfm's node_modules.
-  # --production skips the fork's dev-only workspace deps.
-  if ! run_child_in "$FORK_DIR" bun install --frozen-lockfile --production; then
-    fail_at opentui "fork install failed" \
-      "bun couldn't install the fork's dependencies in $FORK_DIR." \
-      "See the output above. Nothing was installed."
-  fi
   step_ok "$ref → $(pretty_home "$FORK_DIR")"
 }
 
@@ -1176,6 +1167,17 @@ step_build() {
       "bun couldn't install the dependencies of $SRC_DIR." \
       "See the output above, or run 'bun install --frozen-lockfile' there yourself." \
       "Nothing was installed."
+  fi
+  # bun's file: dependency resolves the fork's dist through its real path, so
+  # `bun build --compile` looks the platform packages up in the FORK, not in
+  # tfm's node_modules. Point it at the ones tfm just installed (a couple of
+  # directories) instead of installing the fork's whole dependency tree.
+  if [ -d "$SRC_DIR/node_modules/@opentui" ]; then
+    mkdir -p "$FORK_DIR/node_modules/@opentui"
+    for pkg in "$SRC_DIR"/node_modules/@opentui/core-linux-*; do
+      [ -d "$pkg" ] || continue
+      ln -sfn "$(readlink -f "$pkg")" "$FORK_DIR/node_modules/@opentui/$(basename "$pkg")"
+    done
   fi
   if ! run_child_in "$SRC_DIR" sh scripts/sync-opentui-lib.sh; then
     fail_at build "opentui lib missing" \

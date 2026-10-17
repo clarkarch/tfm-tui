@@ -30,15 +30,20 @@ if [ -n "$host_pkg" ] && command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | 
   host_pkg="$host_pkg-musl"
 fi
 
-stage() { # stage TRIPLE PLATFORM_PKG
+stage() { # stage TRIPLE PLATFORM_PKG [required]
   src="$fork/packages/native/lib/$1/libopentui.so"
   dest="node_modules/@opentui/$2/libopentui.so"
   # the platform package is only installed after `bun install` — nothing to do
   [ -d "$(dirname "$dest")" ] || return 0
   if [ ! -f "$src" ]; then
-    printf 'tfm: the opentui fork at %s ships no prebuilt %s lib.\n' "$fork" "$1" >&2
-    printf 'tfm: build it once and commit it: (cd %s/packages/core && bun run build:native)\n' "$fork" >&2
-    return 1
+    if [ "${3:-}" = required ]; then
+      printf 'tfm: the opentui fork at %s ships no prebuilt %s lib.\n' "$fork" "$1" >&2
+      printf 'tfm: build it once and commit it: (cd %s/packages/core && bun run build:native)\n' "$fork" >&2
+      return 1
+    fi
+    # other targets are optional (only a checkout that resolves through the
+    # fork's own node_modules would touch them)
+    return 0
   fi
   cp -f "$src" "$dest"
   printf 'staged %s -> %s\n' "$1" "$dest"
@@ -52,7 +57,7 @@ stage() { # stage TRIPLE PLATFORM_PKG
 }
 
 if [ -n "$host_pkg" ]; then
-  stage "$host_triple" "$host_pkg" || exit 1
+  stage "$host_triple" "$host_pkg" required || exit 1
 fi
 for target in \
   "x86_64-linux core-linux-x64" \

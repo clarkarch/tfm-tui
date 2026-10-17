@@ -49,10 +49,18 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Stage the fork's patched libopentui over the UNPATCHED npm platform
-      # package, so the compiled binary embeds it. Fails loudly when the fork
-      # ships no prebuilt lib for this runner's architecture.
+      # package, so the compiled binary embeds it. bun resolves the fork's dist
+      # through its real path, so the compile looks the platform packages up in
+      # the fork — point it at the ones installed here first. Fails loudly when
+      # the fork ships no prebuilt lib for this runner's architecture.
       - name: Stage the patched libopentui
-        run: sh scripts/sync-opentui-lib.sh
+        run: |
+          mkdir -p ../opentui-fork/node_modules/@opentui
+          for pkg in node_modules/@opentui/core-linux-*; do
+            [ -d "$pkg" ] || continue
+            ln -sfn "$(readlink -f "$pkg")" "../opentui-fork/node_modules/@opentui/$(basename "$pkg")"
+          done
+          sh scripts/sync-opentui-lib.sh
 
       - name: Check + test
         run: |
