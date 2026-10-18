@@ -99,9 +99,8 @@ directory-bar-animation-slide-cells   = 8           # how far crumbs slide in, 0
 directory-bar-animation-slide-dir     = "right"     # "right"/"left" = crumbs slide in horizontally; "down"/"up" = slides vertically
 directory-bar-animation-stagger-pct   = 40          # how spread the crumb cascade is, 0..300% (0 = all crumbs at once)
 directory-bar-animation-ease          = "ease-out"  # "linear" = constant velocity; "ease-out" = fast start, soft landing; "ease-in-out" = soft both ends
-smooth-scrolling                      = true        # true = smooth-scroll the grid (keyboard jumps glide home over glide time, the wheel flows on the wheel beat); page jumps and the console stay instant
-smooth-scroll-ms                      = 160         # keyboard glide length, 0..800 ms (0 = instant)
-smooth-wheel-ms                       = 30          # pause between wheel steps, 0..200 ms (0 = instant native jumps)
+smooth-scrolling                      = true        # true = smooth-scroll the grid over the glide time below (wheel bursts drain on the beat, keyboard jumps glide home); page jumps and the console stay instant
+smooth-scroll-ms                      = 160         # scroll glide length, 0..800 ms (0 = instant); wheel drains and keyboard jumps both budget their motion against it
 file-animation-container-fade         = true        # true = fade the grid as one layer instead of per tile (same look, one opacity update per frame instead of one per file)
 file-animation-visible-only           = true        # true = only animate the files inside the viewport; off-screen files appear instantly (keeps very large folders cheap)
 file-animation-row-granularity        = false       # true = cascades animate grid rows instead of each file (same look at a distance, far cheaper on huge folders; tiles in one row appear together)

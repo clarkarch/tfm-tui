@@ -1011,9 +1011,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       }
     }
     win = { ...win, r0, r1, top: scrollTop, vis: { top: visTop, bottom: visBottom } };
-    ctx.stripSelectable();
-    void ctx.drainIconQueue();
-    void ctx.drainThumbs();
+    // A sub-row wheel step (no row entered/left the window) mounts nothing:
+    // the ScrollBox's own content translate is the whole repaint, so the
+    // post-rebuild work below (a full subtree walk for selectable stripping,
+    // an icon/thumb drain kick) is pure cost — and across a 1-cell-per-step
+    // wheel drain it dominated the beat (measured 2..43 ms/step, ~15 ms ave,
+    // which capped the drain at ~30 ms/cell no matter how short the beat).
+    if (windowMoved) {
+      ctx.stripSelectable();
+      void ctx.drainIconQueue();
+      void ctx.drainThumbs();
+    }
     // pads keep the content height exact, so the offset survives untouched —
     // restore only after a slide moved the window (matches the io
     // drawer-settle pattern; the nested hook call range-checks equal and

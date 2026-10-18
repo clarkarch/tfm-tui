@@ -18,7 +18,7 @@ import { makePreview } from "../ui/ui-preview";
 import { finishDragState, gridDrag, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
-import { makeSmoothGlide, makeWheelSmoother, clampWheelBeat } from "../ui/ui-smooth-scroll";
+import { makeSmoothGlide, makeWheelSmoother } from "../ui/ui-smooth-scroll";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { FILE_GLYPH, glyph } from "../ui/glyphs";
@@ -286,14 +286,14 @@ export const wireGrid = (deps: {
   // [ui] smooth-scrolling wheel entry for wiring/io's content-level
   // interception — true = consumed (the caller stopPropagation()s the native
   // instant jump). Gated like the container glide: off/TTY stays native, and
-  // a 0 wheel beat means native instant jumps for the wheel only.
+  // a 0 glide time means native instant jumps for the wheel too.
   const pushWheel = (pane: 0 | 1, dir: 1 | -1, cells: number): boolean => {
     if (!core.config.ui.smoothScrolling || core.isTtyMode()) return false;
     if (!Number.isFinite(cells) || cells <= 0) return false;
-    const beat = core.config.ui.smoothWheelMs;
-    if (!Number.isFinite(beat) || beat <= 0) return false;
+    const budget = core.config.ui.smoothScrollMs;
+    if (!Number.isFinite(budget) || budget <= 0) return false;
     try {
-      wheelSmoothers[pane].push(dir * cells, clampWheelBeat(beat));
+      wheelSmoothers[pane].push(dir * cells, budget);
       return true;
     } catch {
       return false;

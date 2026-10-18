@@ -2,16 +2,16 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box, getTimelineEngine } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
-  clampWheelBeat,
   glideDelta,
   glideOffsetAt,
   makeGridWheelHandler,
   makeSmoothGlide,
   makeWheelSmoother,
   MIN_GLIDE_CELLS,
+  WHEEL_BEAT_MAX_MS,
+  WHEEL_BEAT_MIN_MS,
   WHEEL_QUEUE_CELLS,
-  WHEEL_STEP_MAX_MS,
-  WHEEL_STEP_MIN_MS,
+  wheelBeatMs,
 } from "./ui-smooth-scroll";
 import type { Scheduler } from "../lib/uiutil";
 
@@ -107,13 +107,23 @@ describe("makeSmoothGlide (engine)", () => {
   });
 });
 
-describe("clampWheelBeat", () => {
-  test("keeps the beat inside the sane range", () => {
-    expect(clampWheelBeat(10)).toBe(10);
-    expect(clampWheelBeat(160)).toBe(160);
-    expect(clampWheelBeat(1000)).toBe(WHEEL_STEP_MAX_MS);
-    expect(clampWheelBeat(-3)).toBe(WHEEL_STEP_MIN_MS);
-    expect(clampWheelBeat(Number.NaN)).toBe(WHEEL_STEP_MIN_MS);
+describe("wheelBeatMs", () => {
+  test("a lone notch keeps the snappy max pace regardless of the budget", () => {
+    expect(wheelBeatMs(160, 1)).toBe(WHEEL_BEAT_MAX_MS);
+    expect(wheelBeatMs(800, 1)).toBe(WHEEL_BEAT_MAX_MS);
+  });
+
+  test("a burst spreads over the drain budget", () => {
+    // 20 cells over 160ms = one cell every 8ms — bounded lag, even pacing
+    expect(wheelBeatMs(160, 20)).toBe(WHEEL_BEAT_MIN_MS);
+    expect(wheelBeatMs(160, 5)).toBe(30);
+  });
+
+  test("never crawls below the frame floor, never stalls on a bad budget", () => {
+    expect(wheelBeatMs(160, 100000)).toBe(WHEEL_BEAT_MIN_MS);
+    expect(wheelBeatMs(0, 20)).toBe(WHEEL_BEAT_MAX_MS);
+    expect(wheelBeatMs(Number.NaN, 20)).toBe(WHEEL_BEAT_MAX_MS);
+    expect(wheelBeatMs(160, Number.NaN)).toBe(WHEEL_BEAT_MAX_MS);
   });
 });
 
@@ -122,11 +132,13 @@ describe("clampWheelBeat", () => {
 const mkClock = () => {
   let seq = 0;
   const timers = new Map<number, () => void>();
+  const delays: number[] = [];
   return {
     sched: {
-      setTimeout: (cb: () => void) => {
+      setTimeout: (cb: () => void, ms?: number) => {
         const id = ++seq;
         timers.set(id, cb);
+        delays.push(ms ?? 0);
         return id;
       },
       clearTimeout: (h: unknown) => {
@@ -134,6 +146,8 @@ const mkClock = () => {
       },
     } as Scheduler,
     pending: () => timers.size,
+    delays: () => [...delays],
+    lastDelay: () => delays[delays.length - 1] ?? 0,
     fire: () => {
       const first = [...timers.entries()][0];
       if (!first) throw new Error("no timer armed");
@@ -156,7 +170,7 @@ describe("makeWheelSmoother", () => {
       },
       sched: clock.sched,
     });
-    sm.push(3, 25);
+    sm.push(3, 160);
     // metronome: nothing applies synchronously — the beat picks it up, so
     // pacing holds from the first cell instead of reproducing tick lumpiness
     expect(top).toBe(0);
@@ -171,6 +185,36 @@ describe("makeWheelSmoother", () => {
     expect(writes).toEqual([1, 1, 1]);
   });
 
+  test("the beat is derived from the drain budget and held for the whole drain", () => {
+    const clock = mkClock();
+    let top = 0;
+    const sm = makeWheelSmoother({
+      scrollTop: () => top,
+      scrollBy: (d: number) => {
+        top += d;
+      },
+      sched: clock.sched,
+    });
+    // one cell: the frame-capped snappy pace, same as before the budget system
+    sm.push(1, 160);
+    expect(clock.lastDelay()).toBe(WHEEL_BEAT_MAX_MS);
+    clock.fire();
+    expect(clock.pending()).toBe(0);
+    expect(top).toBe(1);
+    // a 20-cell burst: the budget (160ms) spread across the queue = the floor,
+    // held constant so the total drain stays within the budget
+    sm.push(20, 160);
+    expect(clock.pending()).toBe(1);
+    const beat = clock.lastDelay();
+    expect(beat).toBe(WHEEL_BEAT_MIN_MS);
+    for (let i = 0; i < 20; i++) clock.fire();
+    expect(top).toBe(21);
+    expect(clock.pending()).toBe(0);
+    const drainBeats = clock.delays().filter((d) => d === beat).length;
+    expect(drainBeats).toBe(20);
+    expect(drainBeats * beat).toBeLessThanOrEqual(160);
+  });
+
   test("a second push while running extends the queue (bursts coalesce)", () => {
     const clock = mkClock();
     let top = 0;
@@ -181,9 +225,9 @@ describe("makeWheelSmoother", () => {
       },
       sched: clock.sched,
     });
-    sm.push(2, 25);
+    sm.push(2, 160);
     expect(top).toBe(0);
-    sm.push(2, 25);
+    sm.push(2, 160);
     clock.fire();
     clock.fire();
     clock.fire();
@@ -204,7 +248,7 @@ describe("makeWheelSmoother", () => {
       },
       sched: clock.sched,
     });
-    sm.push(9, 25);
+    sm.push(9, 160);
     clock.fire();
     expect(top).toBe(1);
     top = 50; // keyboard jump lands elsewhere before the next tick
@@ -226,7 +270,7 @@ describe("makeWheelSmoother", () => {
       sched: clock.sched,
     });
     expect(WHEEL_QUEUE_CELLS).toBeGreaterThan(0);
-    sm.push(1000, 25, 5);
+    sm.push(1000, 160, 5);
     expect(top).toBe(0);
     for (let i = 0; i < 5; i++) clock.fire();
     expect(top).toBe(5);
@@ -243,13 +287,13 @@ describe("makeWheelSmoother", () => {
       },
       sched: clock.sched,
     });
-    sm.push(9, 25);
+    sm.push(9, 160);
     expect(top).toBe(0);
     expect(clock.pending()).toBe(1);
     sm.stop();
     expect(clock.pending()).toBe(0);
-    sm.push(0, 25);
-    sm.push(Number.NaN, 25);
+    sm.push(0, 160);
+    sm.push(Number.NaN, 160);
     expect(top).toBe(0);
     expect(clock.pending()).toBe(0);
   });
@@ -307,7 +351,7 @@ describe("makeGridWheelHandler (interception over a real ScrollBox)", () => {
       });
       scroller.content.onMouseScroll = makeGridWheelHandler((_pane, dir, cells) => {
         pushed.push({ dir, cells });
-        smoother.push(dir * cells, 25);
+        smoother.push(dir * cells, 160);
         return true;
       })(0);
 
@@ -341,7 +385,7 @@ describe("makeGridWheelHandler (interception over a real ScrollBox)", () => {
         sched: clock.sched,
       });
       const handler = makeGridWheelHandler((_pane, dir, cells) => {
-        smoother.push(dir * cells, 25);
+        smoother.push(dir * cells, 160);
         return true;
       })(0);
       scroller.content.onMouseScroll = handler;

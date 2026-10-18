@@ -342,7 +342,6 @@ export type UiConfig = {
   directoryBarAnimationEase: string;
   smoothScrolling: boolean;
   smoothScrollMs: number;
-  smoothWheelMs: number;
   showLaunchTime: boolean;
 };
 
@@ -1784,7 +1783,7 @@ const UI_ROWS: SchemaRow[] = [
     tomlKey: "smooth-scrolling",
     prop: "smoothScrolling",
     def: true,
-    doc: "true = smooth-scroll the grid (keyboard jumps glide home over glide time, the wheel flows on the wheel beat); page jumps and the console stay instant",
+    doc: "true = smooth-scroll the grid over the glide time below (wheel bursts drain on the beat, keyboard jumps glide home); page jumps and the console stay instant",
     label: "smooth scrolling",
     blurb: "Glide the grid when scrolling",
     group: "animations",
@@ -1799,27 +1798,10 @@ const UI_ROWS: SchemaRow[] = [
     max: 800,
     step: 10,
     def: 160,
-    doc: "keyboard glide length, 0..800 ms (0 = instant)",
+    doc: "scroll glide length, 0..800 ms (0 = instant); wheel drains and keyboard jumps both budget their motion against it",
     unit: "ms",
     label: "glide time",
-    blurb: "How long the scroll glide lasts",
-    group: "animations",
-    subsection: "scrolling",
-    showWhen: (ui) => ui.smoothScrolling,
-  },
-  {
-    kind: "int",
-    section: "ui",
-    tomlKey: "smooth-wheel-ms",
-    prop: "smoothWheelMs",
-    min: 0,
-    max: 200,
-    step: 5,
-    def: 30,
-    doc: "pause between wheel steps, 0..200 ms (0 = instant native jumps)",
-    unit: "ms",
-    label: "wheel beat",
-    blurb: "How fast the wheel moves",
+    blurb: "How long a scroll glide lasts",
     group: "animations",
     subsection: "scrolling",
     showWhen: (ui) => ui.smoothScrolling,

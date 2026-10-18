@@ -1261,7 +1261,6 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "##scrolling",
       "smooth scrolling",
       "glide time",
-      "wheel beat",
     ]);
     // layout: collapse styles and gated widths hidden; hover timing gone entirely
     expect(labelsOf(h, "layout")).toEqual([

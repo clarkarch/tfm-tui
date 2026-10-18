@@ -144,8 +144,13 @@ export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
 // pacing IS the animation (human ticks arrive lumpily; instant-applying each
 // one just reproduces the lumpiness). Every step rides the hooked setter so
 // the windowed slide + reveal + drains behave exactly like instant scrolling,
-// just spread over time. A lone tick settles one beat later — the unavoidable
-// price, since a single 1-cell move cannot look like anything else.
+// just spread over time.
+//
+// The beat comes from the [ui] smooth-scroll-ms budget, NOT a fixed interval:
+// a lone notch keeps the snappy frame-capped pace, while a burst spreads the
+// SAME budget over all its cells — so a fling never trails the input by
+// `cells x interval` seconds (the old fixed 30 ms beat left a 20-notch spin
+// creeping for ~600 ms after the wheel stopped). One knob drives both halves.
 //
 // One pending timer at most (a chain, never overlapping); a keyboard jump,
 // thumb drag or rebuild clamp landing anywhere unexpected drops the queue
@@ -153,20 +158,24 @@ export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
 // so no maxTop plumbing is needed — a stall against the clamp reads as an
 // external write on the next tick and drains the queue. ---
 
-// bounds for the per-cell beat interval ([ui] smooth-wheel-ms); the schema
-// range-coerces the knob, the push guard below treats anything unusable as
-// "don't consume"
-export const WHEEL_STEP_MIN_MS = 5;
-export const WHEEL_STEP_MAX_MS = 200;
+// per-cell beat bounds: MIN is about half a 60 fps frame (a burst still steps
+// faster than the terminal can present, so it coalesces into one smooth
+// slide), MAX is the historical lone-notch pace (a single cell cannot read as
+// motion, so there is no point crawling it)
+export const WHEEL_BEAT_MIN_MS = 8;
+export const WHEEL_BEAT_MAX_MS = 30;
 // a fling never banks more than this many trailing cells — past it the target
 // pins and the steps chase continuously instead of queuing seconds of lag
 export const WHEEL_QUEUE_CELLS = 24;
 
-// pure: clamp a wheel beat into the sane range (schema already range-checks;
-// this is the backstop for hand-rolled config objects in tests)
-export const clampWheelBeat = (ms: number): number => {
-  if (!Number.isFinite(ms)) return WHEEL_STEP_MIN_MS;
-  return Math.max(WHEEL_STEP_MIN_MS, Math.min(WHEEL_STEP_MAX_MS, Math.round(ms)));
+// pure: the per-cell beat for a queue `remainingCells` deep at a `drainMs`
+// budget. A lone cell gets MAX (snappy); a burst gets budget/cells clamped to
+// [MIN, MAX], so the whole drain finishes within ~the budget. Never returns a
+// value that would stall the chain — an unusable budget falls back to MAX.
+export const wheelBeatMs = (drainMs: number, remainingCells: number): number => {
+  if (!Number.isFinite(drainMs) || drainMs <= 0) return WHEEL_BEAT_MAX_MS;
+  const cells = Number.isFinite(remainingCells) ? Math.max(1, Math.abs(Math.round(remainingCells))) : 1;
+  return Math.max(WHEEL_BEAT_MIN_MS, Math.min(WHEEL_BEAT_MAX_MS, Math.round(drainMs / cells)));
 };
 
 export const makeWheelSmoother = (ctx: {
@@ -178,7 +187,12 @@ export const makeWheelSmoother = (ctx: {
   let target: number | null = null;
   let timer: unknown = null;
   let lastDriven: number | null = null;
-  let cadence = WHEEL_STEP_MIN_MS;
+  // per-cell beat for the CURRENT drain, derived from the [ui]
+  // smooth-scroll-ms budget when the queue was last pushed. Held constant for
+  // the drain (even pacing) so the whole burst finishes within ~the budget —
+  // recomputing per tick from the shrinking queue would slow the tail back to
+  // the lone-notch pace and stretch a spin's lag out again.
+  let beat = WHEEL_BEAT_MAX_MS;
 
   const clear = (): void => {
     if (timer !== null && timer !== undefined) {
@@ -187,6 +201,16 @@ export const makeWheelSmoother = (ctx: {
       } catch {}
     }
     timer = null;
+  };
+
+  const arm = (): void => {
+    if (timer !== null || target === null) return;
+    try {
+      timer = sched.setTimeout(step, beat);
+    } catch {
+      target = null;
+      lastDriven = null;
+    }
   };
 
   const step = (): void => {
@@ -232,24 +256,18 @@ export const makeWheelSmoother = (ctx: {
         return;
       }
     } catch {}
-    try {
-      timer = sched.setTimeout(step, cadence);
-    } catch {
-      target = null;
-      lastDriven = null;
-    }
+    arm();
   };
   // queue a relative move; nothing applies synchronously — the beat picks it
   // up, so even pacing holds from the first cell (an instant first cell would
-  // reproduce tick lumpiness: the very thing this exists to remove). A lone
-  // tick settles one beat later. Never throws.
-  const push = (deltaCells: number, stepMs: number, maxQueue: number = WHEEL_QUEUE_CELLS): void => {
+  // reproduce tick lumpiness: the very thing this exists to remove). The beat
+  // shortens as the queue deepens, so the trailing lag stays ~`drainMs`.
+  const push = (deltaCells: number, drainMs: number, maxQueue: number = WHEEL_QUEUE_CELLS): void => {
     try {
       const d = Math.round(deltaCells);
       if (!Number.isFinite(d) || d === 0) return;
       const cur = Math.round(ctx.scrollTop());
       if (!Number.isFinite(cur)) return;
-      cadence = Number.isFinite(stepMs) && stepMs > 0 ? Math.round(stepMs) : WHEEL_STEP_MIN_MS;
       const cap = maxQueue > 0 ? maxQueue : WHEEL_QUEUE_CELLS;
       const base = target ?? cur;
       // a push landing between an external write and the step that would
@@ -264,13 +282,11 @@ export const makeWheelSmoother = (ctx: {
         target = null;
         return;
       }
-      if (timer === null) {
-        try {
-          timer = sched.setTimeout(step, cadence);
-        } catch {
-          target = null;
-        }
-      }
+      // derive the beat from the whole distance now queued, and hold it for
+      // the drain (a deeper queue = proportionally faster beats within the
+      // same budget; a lone notch = the snappy max pace)
+      beat = wheelBeatMs(drainMs, target - (lastDriven ?? cur));
+      arm();
     } catch {
       // scrolling must never break because the smoother did
     }

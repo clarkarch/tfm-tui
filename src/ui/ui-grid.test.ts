@@ -123,6 +123,9 @@ let fileAnimCalls: Array<{
 let smoothOn: boolean;
 let smoothGlideCalls: Array<{ inner: unknown; delta: number }>;
 let smoothStopCalls: number;
+// post-rebuild repaint tail counters (a sub-row step must skip these)
+let stripCalls: number;
+let drainCalls: number;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: TERM_W, height: TERM_H });
@@ -160,6 +163,8 @@ beforeAll(async () => {
   smoothOn = false;
   smoothGlideCalls = [];
   smoothStopCalls = 0;
+  stripCalls = 0;
+  drainCalls = 0;
   waitForResolutionImpl = () => Promise.resolve();
   loadingDelayMs = undefined;
   ttyModeOn = false;
@@ -231,9 +236,13 @@ beforeAll(async () => {
       thumbJobs.push(job);
     },
     nextIconId: () => `fake-icon-${iconSeq++}`,
-    drainIconQueue: () => {},
+    drainIconQueue: () => {
+      drainCalls++;
+    },
     drainThumbs: () => {},
-    stripSelectable: () => {},
+    stripSelectable: () => {
+      stripCalls++;
+    },
     // mirrors makeLookup.setTextOnId (wiring passes the real one): stats-only
     // ticks repaint size/date cells in place instead of rebuilding rows
     setTextOnId: (id: string, s: string) => {
@@ -1697,6 +1706,44 @@ describe("renderGrid (windowed grid)", () => {
       expect(selBg).not.toEqual(sibBg);
     } finally {
       selection.clearTileSelection();
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a sub-row scroll step reads as no-op work: no row builds, no repaint tail", async () => {
+    // Why it matters: the wheel drains 1 cell per tick and 4 of every 5 steps
+    // (TILE_H 6) cross no row boundary — the ScrollBox's own content translate
+    // is the whole repaint. Running the post-rebuild tail (a full subtree walk
+    // for selectable stripping + an icon/thumb drain kick) on those steps
+    // measured 2..43 ms each and capped the drain at ~30 ms/cell no matter how
+    // short the beat; skipping it when nothing mounted is what makes the beat
+    // actually bite.
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      stripCalls = 0;
+      drainCalls = 0;
+      scroller.scrollTop = 1; // still firstRow 0 → the same window
+      syncWindow();
+      expect(byId("tfm-tile-row-0")).toBeTruthy();
+      expect(stripCalls).toBe(0);
+      expect(drainCalls).toBe(0);
+
+      // crossing a row boundary DOES mount rows and must run the tail
+      scroller.scrollTop = 6; // firstRow 1
+      syncWindow();
+      await t.renderOnce();
+      expect(stripCalls).toBeGreaterThan(0);
+      expect(drainCalls).toBeGreaterThan(0);
+    } finally {
       windowedGridOn = false;
       scroller.scrollTop = 0;
       gridState.cwd = prevCwd;
