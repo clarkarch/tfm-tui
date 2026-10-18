@@ -74,6 +74,9 @@ describe("about panel rendering", () => {
   const details: string[] = [];
   const logoReqs: Array<{ name: string; heightCells: number; faithful: boolean }> = [];
   let backed = 0;
+  let checks = 0;
+  let updateValue = "check for updates";
+  let updateActionable = true;
   let detail: AboutDeps["detail"] = null;
   let openPanelSeq = 0;
 
@@ -105,6 +108,9 @@ describe("about panel rendering", () => {
       detail,
       onOpenDetail: (key: string) => void details.push(key),
       onBack: () => void backed++,
+      updateValue: () => updateValue,
+      updateActionable: () => updateActionable,
+      onCheckUpdates: () => void checks++,
       setPointer: (s) => void pointers.push(s as string),
     });
     await t.renderOnce();
@@ -140,6 +146,7 @@ describe("about panel rendering", () => {
     opened.length = 0;
     details.length = 0;
     backed = 0;
+    checks = 0;
     pointers.length = 0;
   };
 
@@ -179,10 +186,11 @@ describe("about panel rendering", () => {
     // spacer after the subtitle, then five contiguous rows, a divider,
     // then the version — tight properties rhythm, portrait-tall overall
     expect(lines[heroIdx + 1]?.trim()).toBe("");
-    for (const [off, label] of ["Website", "GitHub", "Credits", "Plugin API", "License"].entries()) {
+    for (const [off, label] of ["Website", "GitHub", "Credits", "Plugin API", "License", "Update"].entries()) {
       expect(lines[heroIdx + 2 + off]).toContain(label);
     }
-    expect(versionIdx - heroIdx).toBe(7);
+    // subtitle spacer + six rows, then the version footer on the next line
+    expect(versionIdx - heroIdx).toBe(8);
     await closePanel(id);
   });
 
@@ -234,6 +242,22 @@ describe("about panel rendering", () => {
     expect(opened).toEqual([]);
     expect(details).toEqual([]);
     await closePanel(id);
+  });
+
+  test("the update row paints the live value and clicking it checks", async () => {
+    updateValue = "update to v1.1.0";
+    updateActionable = true;
+    const id = await openMain();
+    reset();
+    const frame = t.captureCharFrame();
+    expect(frame).toContain("update to v1.1.0");
+    // actionable: the pointer comes up and the click reaches the wiring
+    fire("tfm-about-row-update", "move");
+    expect(pointers).toEqual(["pointer"]);
+    fire("tfm-about-row-update", "down");
+    expect(checks).toBe(1);
+    await closePanel(id);
+    updateValue = "check for updates";
   });
 
   test("hover sets the pointer on actionable rows only", async () => {

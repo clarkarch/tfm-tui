@@ -32,6 +32,11 @@ export type AboutDeps = {
   detail: AboutDetail;
   onOpenDetail(key: Exclude<AboutDetail, null>): void;
   onBack(): void;
+  // the update row is a CONTROL: its value is live and clicking it checks.
+  // Optional so older fakes keep working (static idle copy).
+  updateValue?(): string;
+  updateActionable?(): boolean;
+  onCheckUpdates?(): void;
   setPointer?(style: PointerStyle): void;
 };
 
@@ -72,6 +77,7 @@ export const ABOUT_ROWS: AboutRow[] = [
   },
   { key: "api", label: "Plugin API", value: `v${PLUGIN_API_VERSION}` },
   { key: "license", label: "License", value: "MIT" },
+  { key: "update", label: "Update", value: "check for updates" },
 ];
 
 export const CREDITS_DETAIL: AboutRow[] = [
@@ -119,6 +125,13 @@ export const renderAboutPanel = (c: Theme, panel: NodeLike, deps: AboutDeps): vo
       } catch {}
       deps.onOpenUrl(url);
     };
+  // the update row's click: ask the wiring to check (it may then prompt)
+  const liveAction = (): ((ev?: MouseEvent) => void) => (ev?: MouseEvent) => {
+    try {
+      ev?.stopPropagation?.();
+    } catch {}
+    deps.onCheckUpdates?.();
+  };
   const actionOf = (row: AboutRow): ((ev?: MouseEvent) => void) | undefined => {
     if (row.url !== undefined) return urlAction(row.url);
     if (aboutTruncates(row, room)) {
@@ -171,6 +184,30 @@ export const renderAboutPanel = (c: Theme, panel: NodeLike, deps: AboutDeps): vo
       },
       labelCell(row.label),
       Text({ content: aboutValueFor(row, room), fg: row.url !== undefined ? c.accent : c.white }),
+    );
+  };
+
+  // the update row: same properties shape, but a live value and a click that
+  // runs the check (the only row whose text changes while the panel is open)
+  const updateRow = (): ReturnType<typeof Box> => {
+    const id = "tfm-about-row-update";
+    const label = ABOUT_ROWS.find((r) => r.key === "update")?.label ?? "Update";
+    return Box(
+      {
+        id,
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        paddingLeft: 1,
+        onMouseDown: liveAction(),
+        ...hoverEvents((on: boolean) => paintRow(id, on), deps.setPointer),
+      },
+      labelCell(label),
+      Text({
+        id: "tfm-about-update-value",
+        content: deps.updateValue?.() ?? "check for updates",
+        fg: (deps.updateActionable?.() ?? false) ? c.accent : c.white,
+      }),
     );
   };
 
@@ -244,7 +281,9 @@ export const renderAboutPanel = (c: Theme, panel: NodeLike, deps: AboutDeps): vo
     { width: "100%", flexDirection: "column", paddingTop: 1 },
     hero,
     spacer(),
-    ...(deps.detail === "credits" ? [backRow, ...CREDITS_DETAIL.map(detailRow)] : ABOUT_ROWS.map(catRow)),
+    ...(deps.detail === "credits"
+      ? [backRow, ...CREDITS_DETAIL.map(detailRow)]
+      : ABOUT_ROWS.map((row) => (row.key === "update" ? updateRow() : catRow(row)))),
   );
   panel.add(body);
   panel.add(

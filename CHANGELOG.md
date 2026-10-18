@@ -1,28 +1,28 @@
 # Changelog
 
+## Unreleased
+
+Update checking and `tfm update`:
+
+- `tfm update` asks GitHub for the newest release, prints what it found, asks
+  before changing anything, then hands the install to `install.sh` (the same
+  script as the documented one-liner, so replace and checksum policy stays in
+  one place). `--tag vX` pins a release, `--force` reinstalls. Dev and source
+  builds are refused with a pointer at `source.sh` instead of being silently
+  swapped for a release.
+- `esc` → About gained an Update row: it shows the live state (check for
+  updates / up to date / update to vX), checks on click, and asks with the same
+  confirm dialog as the default-file-manager prompt. The in-app install runs in
+  the background behind a sticky toast and reports the outcome.
+- New `[ui] check-updates` (off by default: tfm makes no network requests of
+  its own). When on, the first frame is painted first and then one cached check
+  per day can report a newer release, once per version. Also a `check for
+  updates` command in the palette, unbound by default and remappable.
+- The installer now exits early when you already run the target release
+  (no more 40 MB re-download for nothing; `TFM_FORCE=1` reinstalls) and records
+  what it installed (`$XDG_DATA_HOME/tfm/install.json`), which is how the app
+  knows a source build from a release.
+- The yes/no confirm dialogs dropped their `~~~~` divider row (empty trash,
+  delete forever, default file manager, update).
+
 ## 1.0.0 — first stable release
-
-Terminal file manager goes stable: the beta warning is lifted and the
-version is `1.0.0`.
-
-Stability work in this release:
-
-- Quit refuses while file operations are in flight (same guard restart
-  already had) instead of exiting mid-batch and stranding completed files
-  with no undo entry.
-- Plugin `beforeFileOp` veto now covers `extract` and `compress` (it
-  previously covered only copy/move/rename/duplicate/trash paths).
-- Archive extraction is staged + contained: tools that write outside the
-  staging dir (`../` members) are refused with the escape moved to trash
-  (recoverable, never deleted), and symlinks resolving outside staging are
-  removed before entries move into place.
-- Bulk rename re-checks each target at apply time so a file created
-  between planning and applying is never silently overwritten.
-- Per-mount trash sidecars no longer fall back to the home trash: a
-  missing `$topdir/.Trash-$uid` sidecar (or unreadable original-path
-  lookup) no longer touches or resolves to a same-named home entry.
-- Undo journal `trash` steps are idempotent: undoing a copy whose target
-  is already gone succeeds instead of reporting FAILED.
-- Sudo outcomes keep their permission-qualified undo hint
-  (`ctrl+z to undo (may need permission)`); trash/restore stay
-  unprivileged by design, deletes escalate without an undo promise.

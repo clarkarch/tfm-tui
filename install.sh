@@ -1136,6 +1136,74 @@ smoke_version() { # smoke_version FILE
   esac
 }
 
+# The version of an already-installed tfm, "" when there is none (or it is not
+# a working tfm). Used to skip a 40 MB re-download when nothing changed.
+installed_version() {
+  local bin="$DEST/tfm"
+  [ -x "$bin" ] || return 0
+  local out
+  out=$("$bin" --version 2>/dev/null | head -n 1) || return 0
+  case "$out" in
+    'tfm '*) printf '%s' "${out#tfm }" ;;
+  esac
+}
+
+# The tag /releases/latest currently points at, "" when we cannot tell (offline,
+# no releases yet, no curl). One HEAD request, no API token, no rate limit.
+latest_tag() {
+  have curl || return 0
+  local loc
+  loc=$(curl -fsSI --retry 2 --proto '=https' -o /dev/null -w '%{redirect_url}' \
+    "${TFM_LATEST_PROBE:-https://github.com/$REPO/releases/latest}" 2>/dev/null) || return 0
+  case "$loc" in
+    */releases/tag/*) printf '%s' "${loc##*/releases/tag/}" ;;
+  esac
+}
+
+# Provenance: what this install IS, so `tfm update` never has to guess (a source
+# build must not be silently swapped for a release). Best-effort: a read-only
+# XDG dir must not fail an otherwise good install.
+write_provenance() {
+  local dir="${XDG_DATA_HOME:-$HOME/.local/share}/tfm"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  local channel version ref
+  case "$MODE" in
+    source) channel=source ;;
+    local) channel=local ;;
+    *) channel=release ;;
+  esac
+  version="${SMOKE_VER:-}"
+  ref="${SOURCE:-}"
+  printf '{"channel":"%s","version":"%s","ref":"%s","dest":"%s","installedAt":"%s"}\n' \
+    "$channel" "$version" "$ref" "$DEST" "$(date -Is)" >"$dir/install.json" 2>/dev/null || true
+}
+
+# Re-running the installer when you already have the target release used to
+# re-download 40 MB and swap identical bytes. Now it says so and exits 0, which
+# is what makes "just run it again" (and `tfm update`) safe any time.
+# TFM_FORCE=1 reinstalls anyway. Always returns 0 (it either exits the script
+# or leaves it installing): a non-zero return would trip `set -e` at the call
+# site, which is exactly the bug this comment prevents.
+skip_if_current() {
+  [ "${TFM_FORCE:-}" != "1" ] || return 0
+  local want=""
+  if [ "$VERSION" = "latest" ]; then want=$(latest_tag); else want="$VERSION"; fi
+  [ -n "$want" ] || return 0
+  local have
+  have=$(installed_version)
+  [ -n "$have" ] || return 0
+  [ "$have" = "${want#v}" ] || return 0
+  if [ "$FANCY" = 1 ]; then
+    panel "$C_OK" "tfm $have is the latest release" \
+      "already installed in $(pretty_home "$DEST")" "" \
+      "nothing to do (TFM_FORCE=1 reinstalls anyway)"
+  else
+    plain "tfm $have is the latest release, nothing to do"
+  fi
+  print_tip
+  exit 0
+}
+
 # One binary, two commands. Created BEFORE the swap, so the two names can never
 # disagree: if the name can't be installed, the install fails while your tfm is
 # still untouched.
@@ -1236,6 +1304,7 @@ step_install() {
       "Rebuild it and try again. Nothing was installed."
   fi
   install_binary "$src"
+  write_provenance
   if [ -n "$NO_SMOKE" ]; then
     detail="$(pretty_home "$DEST")/tfm · test skipped (TFM_NO_SMOKE=1)"
   else
@@ -1482,6 +1551,11 @@ print_result() {
       lines+=("start it:" "> tfm or terminal-file-manager")
       ;;
   esac
+  # an in-app update (`tfm update` from inside tfm): the running process still
+  # has the old binary, so name the restart instead of leaving it a surprise
+  if [ "${TFM_UPDATE_HINT:-}" = "1" ]; then
+    lines+=("" "restart tfm to use the new version:" "> ctrl+alt+r")
+  fi
   if [ "$FANCY" = 1 ]; then
     panel "$C_OK" "${lines[@]}"
   else
@@ -1528,6 +1602,7 @@ fi
 banner "$MODE"
 setup_workdir
 step_system
+if [ "$MODE" = "release" ]; then skip_if_current; fi
 if [ "$MODE" = "release" ]; then
   step_download
   step_verify

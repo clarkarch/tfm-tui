@@ -363,7 +363,7 @@ export const wrapYesNoMessage = (message: string, width: number = YESNO_W): stri
       // hard-slice space-less runs (never a silent cut — ellipsis marks it)
       let rest = w;
       while (rest.length > budget) {
-        lines.push(rest.slice(0, budget - 1) + "…");
+        lines.push(`${rest.slice(0, budget - 1)}…`);
         rest = rest.slice(budget - 1);
         if (lines.length === 2) {
           lines[1] = `${`${lines[1]}`.slice(0, budget - 1)}…`;
@@ -477,10 +477,6 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
               ),
             ]
           : []),
-        Box(
-          { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ id: "tfm-yesno-div", content: ` ${"~".repeat(YESNO_W - 2)}`, fg: c.divider }),
-        ),
         Box({ height: 1 }),
         Box(
           { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
@@ -511,10 +507,6 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
         if (msg) msg.fg = lastDanger ? c.ansi1 : c.accent;
       } catch {}
     }
-    try {
-      const div = ctx.byId("tfm-yesno-div");
-      if (div) div.fg = c.divider;
-    } catch {}
     try {
       paintFocus();
     } catch {}

@@ -32,6 +32,7 @@ export const wireNav = (deps: {
   // USB device poller (wired after nav in io; lazy getter like getWatcher).
   // Optional so old callers keep compiling — absent = nothing to stop.
   getDevices?: () => { stopDeviceWatcher(): void };
+  getUpdates?: () => { stop(): void };
   // live config watcher (wired after nav in retheme; lazy getter like
   // getDevices). Optional so old callers keep compiling.
   getRetheme?: () => { stopConfigWatch(): void; startConfigWatch?(): void };
@@ -111,6 +112,7 @@ export const wireNav = (deps: {
     stopGpm: () => getChrome().stopGpm(),
     stopChromeTimers: () => getChrome().stopChromeTimers(),
     stopDevices: () => deps.getDevices?.().stopDeviceWatcher(),
+    stopUpdates: () => deps.getUpdates?.().stop(),
     stopWatchers: () => getWatcher().stopCwdWatchers?.(),
     stopConfigWatch: () => deps.getRetheme?.().stopConfigWatch(),
     flushSession: () => {

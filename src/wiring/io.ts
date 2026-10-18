@@ -194,6 +194,9 @@ export const wireBoot = (deps: {
   // getPrompt in wireSettings). Fires after the intros so the user sees tfm
   // before being asked.
   promptDefaultFileManager?: () => void;
+  // fire-and-forget update check (built in wireUpdates; no-op unless
+  // [ui] check-updates is on). Last boot step: never delays the first frame.
+  checkUpdates?: () => void;
   // system (terminal-adaptive) theme: resolves after the renderer answers
   // its first queries but before buildLayout bakes colors into the chrome
   // (built in wireSettings; a no-op unless [ui] follow-terminal is on)
@@ -302,6 +305,7 @@ export const wireBoot = (deps: {
     playSidebarIntro: () => deps.playSidebarIntro?.(),
     playTopbarIntro: () => deps.playTopbarIntro?.(),
     promptDefaultFileManager: () => deps.promptDefaultFileManager?.(),
+    checkUpdates: () => deps.checkUpdates?.(),
     lazyBoot: lazyBootFlag,
     debugTrace: () => {
       debugLog(

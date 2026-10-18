@@ -44,6 +44,8 @@ export type BootCtx = {
   // ~200ms of blocked event loop — so under lazy startup it runs AFTER the
   // launch report (non-essential for the first frame / first input).
   promptDefaultFileManager?(): void;
+  // fire-and-forget update check (only starts one; never awaits the network)
+  checkUpdates?(): void;
   // [ui] lazy-startup: already-known at boot (config loads before). Classic
   // boots keep the legacy order; lazy moves the sync dialog probe past the
   // launch report. Absent = classic.
@@ -125,4 +127,8 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   if (ctx.lazyBoot === true) await guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
   await guard(ctx, "startHygiene", () => ctx.startHygiene());
   await guard(ctx, "wireSearchInput", () => ctx.wireSearchInput());
+  // updates LAST: a network question must never delay the first frame, the
+  // launch report or the default-file-manager prompt (and it never blocks:
+  // the step only starts the check)
+  await guard(ctx, "checkUpdates", () => ctx.checkUpdates?.());
 };

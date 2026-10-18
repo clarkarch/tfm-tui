@@ -47,6 +47,14 @@ if (cli.command?.name === "default-filemanager") {
   process.exit(await runDefaultFileManagerCli(cli.command.args));
 }
 
+// headless `tfm update` (no TUI boot): check the releases, then delegate to
+// install.sh. Replacing the on-disk binary never disturbs a running session
+// (Linux keeps the old inode), so this is safe to run from inside tfm too.
+if (cli.command?.name === "update") {
+  const { runUpdateCli } = await import("./app/update-cli");
+  process.exit(await runUpdateCli(cli.command.args));
+}
+
 // D-Bus FileManager1 daemon (started by the service activator on demand —
 // the process IS the service and runs until killed, no TUI boot)
 if (cli.filemanagerService) {
@@ -125,6 +133,7 @@ const [
   { wirePlugins },
   { wireSettings, wireRetheme },
   { wireWatcher, wireDeviceWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer },
+  { wireUpdates },
   { wireKeymap },
 ] = await Promise.all([
   import("./wiring/core"),
@@ -136,6 +145,7 @@ const [
   import("./wiring/plugins"),
   import("./wiring/settings"),
   import("./wiring/io"),
+  import("./wiring/updates"),
   import("./wiring/keymap"),
 ]);
 
@@ -162,6 +172,7 @@ const nav = wireNav({
   getTerm: () => fileops.terminal,
   getWatcher: () => watcher,
   getDevices: () => devices,
+  getUpdates: () => updates,
   getPlugins: () => plugins,
   // retheme wires after nav — deferred like every other backward reference
   getRetheme: () => retheme,
@@ -256,6 +267,22 @@ const settings = wireSettings({
   getRetheme: () => retheme,
   getPrompt: () => keymap.prompt,
   getConfirm: () => fileops.yesNo,
+  // updates wires right below (it needs this module's repaint) — deferred seam
+  getUpdates: () => updates,
+});
+
+// --- update checks: boot notice + the About row + the checkUpdates command ---
+// One shared cached question. The install itself delegates to install.sh, so
+// nothing about replace/checksum policy is re-implemented here.
+const updates = wireUpdates({
+  current: pkg.version,
+  execPath: process.execPath,
+  enabled: () => core.config.ui.checkUpdates === true,
+  notify: (m, t, l) => chrome.notify(m, t, l),
+  sticky: (msg) => chrome.notifyStickyText(msg),
+  confirm: (message, yesLabel, onYes) => fileops.yesNo.confirm(message, yesLabel, onYes),
+  repaint: () => settings.escMenu.renderMenuContent(),
+  log: (msg) => appendLog(`update check: ${msg}`),
 });
 
 // --- watcher → boot → retheme: the boot sequence starts between the esc-menu
@@ -301,6 +328,9 @@ wireBoot({
   },
   playTopbarIntro: () => chrome.topbarIntro.play(),
   promptDefaultFileManager: () => settings.promptDefaultFileManager(),
+  checkUpdates: () => {
+    void updates.checkOnBoot();
+  },
   // system theme: terminal colors land before the first layout bakes them in
   applyBootSystemTheme: () => settings.systemTheme.applyBootSystemTheme(),
 });
@@ -344,6 +374,7 @@ const keymap = wireKeymap({
   settings,
   plugins,
   getRetheme: () => retheme,
+  getUpdates: () => updates,
 });
 
 // system theme live-follow: terminal palette switches (kitty theme change)

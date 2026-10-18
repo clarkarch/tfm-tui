@@ -36,8 +36,11 @@ export const wireKeymap = (deps: {
   settings: SettingsWiring;
   plugins: PluginsWiring;
   getRetheme: () => RethemeWiring;
+  // update checks wire BEFORE keymap in index.ts, but the router is built
+  // against this ctx at construction, so the getter keeps the seam uniform
+  getUpdates: () => { activate(): Promise<unknown> };
 }) => {
-  const { core, nav, chrome, gridFoundation, grid, fileops, settings, plugins, getRetheme } = deps;
+  const { core, nav, chrome, gridFoundation, grid, fileops, settings, plugins, getRetheme, getUpdates } = deps;
   const { state, floats } = core;
   const { byId } = core.lookup;
 
@@ -125,6 +128,9 @@ export const wireKeymap = (deps: {
     // command list (its item source is backfilled with keyRouter.commands()
     // after the router exists — see coreCommands below)
     openCommandPalette: () => pick.open({ title: "Command palette" }),
+    checkUpdates: () => {
+      void getUpdates().activate();
+    },
     // layer-open reads go through floats — the single source of truth; the
     // close fns are the widgets' (they route back through floats themselves)
     conflict: {

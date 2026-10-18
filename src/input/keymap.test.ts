@@ -76,6 +76,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     quit: rec("quit"),
     restart: rec("restart"),
     openCommandPalette: rec("palette:open"),
+    checkUpdates: rec("update:check"),
     conflict: { isOpen: () => false, closeConflict: (p) => calls.push(`conflict:close:${p}`) },
     yesNo: {
       isOpen: () => false,

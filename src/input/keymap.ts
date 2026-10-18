@@ -58,6 +58,9 @@ export type KeyRouterCtx = {
   // core command palette: opens the pick overlay over the merged core+plugin
   // command list (the same widget api.ui.pick uses)
   openCommandPalette(): void;
+  // ask github (through the cached check) whether a newer release exists and
+  // report the verdict; never installs anything on its own
+  checkUpdates(): void;
   // --- modal layers (precedence order) ---
   conflict: { isOpen(): boolean; closeConflict(policy: "skip"): void };
   yesNo: { isOpen(): boolean; close(): void; moveFocus(delta: number): void; submit(): void };
@@ -845,6 +848,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "openMenu", run: () => ctx.escMenu.openMenu() },
     { action: "toggleHelp", run: () => ctx.escMenu.toggleHelp() },
     { action: "commandPalette", run: () => ctx.openCommandPalette() },
+    { action: "checkUpdates", run: () => ctx.checkUpdates() },
     { action: "newTab", run: () => ctx.newTab() },
     { action: "closeTab", run: () => ctx.closeTab() },
     { action: "nextTab", run: () => ctx.nextTab() },

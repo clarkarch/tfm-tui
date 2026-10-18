@@ -63,8 +63,12 @@ export const wireSettings = (deps: {
     confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): boolean;
     isOpen(): boolean;
   };
+  // update checking wires AFTER settings (it needs this module's repaint), so
+  // this arrives as a deferred getter. Structural type only, so no
+  // wiring↔wiring import is introduced.
+  getUpdates: () => { rowValue(): string; actionable(): boolean; status(): unknown; activate(): Promise<unknown> };
 }) => {
-  const { core, nav, chrome, grid, plugins, getRetheme, getPrompt, getConfirm } = deps;
+  const { core, nav, chrome, grid, plugins, getRetheme, getPrompt, getConfirm, getUpdates } = deps;
 
   // --- Plugin git installer orchestration: prompt -> validate -> danger
   // confirm -> clone/pull/rm -> rescan + live panel rebuild. Fire-and-forget
@@ -393,6 +397,13 @@ export const wireSettings = (deps: {
     log: (message) => dlog(message),
     quit: nav.quitApp,
     openUrl: (url) => urlOpener.openUrl(url),
+    // About's update row: live value + the check its click runs. The check may
+    // settle into a confirm dialog, so it is fire-and-forget here.
+    updateValue: () => getUpdates().rowValue(),
+    updateActionable: () => getUpdates().actionable(),
+    onCheckUpdates: () => {
+      void getUpdates().activate();
+    },
   });
 
   return { escMenu, systemTheme, promptDefaultFileManager };

@@ -18,6 +18,8 @@ export type QuitCtx = {
   // clear pending chrome timers (sidebar device-reload) so they can't fire
   // loadSystemPlaces+renderAll into a destroyed renderer post-teardown
   stopChromeTimers?(): void;
+  // aborts an in-flight update check (a pending fetch pins the event loop)
+  stopUpdates?(): void;
   // stop the USB device poller (same reason: a poll landing post-teardown
   // re-lists + re-renders into the destroyed renderer)
   stopDevices?(): void;
@@ -196,6 +198,11 @@ export const runTeardownSteps = (ctx: QuitCtx): boolean => {
   }
   try {
     ctx.stopDevices?.();
+  } catch {
+    failed = true;
+  }
+  try {
+    ctx.stopUpdates?.();
   } catch {
     failed = true;
   }

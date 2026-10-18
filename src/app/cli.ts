@@ -54,6 +54,11 @@ export const parseArgs = (argv: string[]): CliOptions => {
     opts.command = { name: "default-filemanager", args: args.slice(1) };
     return opts;
   }
+  // ...and for `tfm update` (release check + install, no TUI boot)
+  if (args[0] === "update") {
+    opts.command = { name: "update", args: args.slice(1) };
+    return opts;
+  }
 
   const fail = (msg: string): CliOptions => {
     opts.error = msg;
@@ -127,6 +132,8 @@ Options:
 
 Commands:
   plugins [list|search|add|remove|update|new]   manage plugins (see 'tfm plugins help')
+  update [--tag VERSION] [--force]
+                                          install the newest tfm (see 'tfm update help')
   default-filemanager [status|set|unset|forget|service-install|service-remove]
                                           default file manager opt-in (see 'tfm default-filemanager help')
 `;

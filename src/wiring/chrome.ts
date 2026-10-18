@@ -5,7 +5,7 @@
 // function is the TDZ seam). Async: index awaits it, everything downstream
 // gets a booted renderer. ---
 
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, Text } from "@opentui/core";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { startGpmInput } from "../fs/gpm";
@@ -427,6 +427,10 @@ export const wireChrome = async (deps: {
     durationMs: () => core.config.ui.toastDurationMs,
   });
 
+  // string-shaped sticky toast (no OpenTUI imports at the call site)
+  const notifyStickyText = (message: string, width = 36): { close(): void } | null =>
+    notifySticky([Text({ content: message, fg: core.colors.white })], { width, height: 2 });
+
   // --- Escalation primitive for the adaptive open: password gate (cached
   // timestamp first), then the default app elevated with the user's env
   // preserved (-E keeps Wayland / display sockets, so GUI editors work).
@@ -648,6 +652,7 @@ export const wireChrome = async (deps: {
     activeToolbar: () => toolbars[core.panes.active],
     notify,
     notifySticky,
+    notifyStickyText,
     ensureSudo: ensureSudoChrome,
     openFileDefault,
     launchAppAsRoot,

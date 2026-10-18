@@ -22,6 +22,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -841,5 +842,67 @@ describe("installer desktop entry", () => {
     const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
     expect(installed).not.toContain("STUB-MARKER=1");
     expect(installed).toContain("MimeType=inode/directory;");
+  });
+});
+
+// The re-run story: an install already on the target release must not
+// re-download 40 MB, and `tfm update` relies on that being cheap.
+describe("already-current short circuit", () => {
+  test("installed_version reads the binary, and says nothing for a non-tfm", () => {
+    const s = sandbox();
+    expect(s.run("installed_version").out.trim()).toBe("");
+    stage(join(s.dest, "tfm"), 'echo "tfm 1.2.3"');
+    expect(s.run("installed_version").out.trim()).toBe("1.2.3");
+    // a binary that answers something else is not a tfm we can compare with
+    stage(join(s.dest, "tfm"), 'echo "not-tfm 1.2.3"');
+    expect(s.run("installed_version").out.trim()).toBe("");
+  });
+
+  test("a matching pinned release exits 0 without downloading", () => {
+    const s = sandbox();
+    stage(join(s.dest, "tfm"), 'echo "tfm 1.0.0"');
+    const { out, code } = s.run("VERSION=v1.0.0; skip_if_current", { fancy: false });
+    expect(code).toBe(0);
+    expect(out).toContain("tfm 1.0.0 is the latest release, nothing to do");
+  });
+
+  test("TFM_FORCE=1 reinstalls instead of exiting early", () => {
+    const s = sandbox();
+    stage(join(s.dest, "tfm"), 'echo "tfm 1.0.0"');
+    const { out, code } = s.run("TFM_FORCE=1 VERSION=v1.0.0; skip_if_current");
+    expect(code).toBe(0);
+    expect(out).not.toContain("nothing to do");
+  });
+
+  test("an older install is not current, so the install path still runs", () => {
+    const s = sandbox();
+    stage(join(s.dest, "tfm"), 'echo "tfm 0.9.0"');
+    expect(s.run("VERSION=v1.0.0; skip_if_current").out).not.toContain("nothing to do");
+  });
+
+  test("provenance records the channel, so update never swaps a source build", () => {
+    const data = mkdtempSync(join(tmpdir(), "tfm-install-data-"));
+    try {
+      const s = sandbox();
+      const env = { env: { XDG_DATA_HOME: data } };
+      s.run("MODE=release SMOKE_VER=1.2.3 write_provenance", env);
+      const release = JSON.parse(readFileSync(join(data, "tfm", "install.json"), "utf8"));
+      expect(release.channel).toBe("release");
+      expect(release.version).toBe("1.2.3");
+      s.run("MODE=source SMOKE_VER=1.2.3 SOURCE=dev write_provenance", env);
+      const source = JSON.parse(readFileSync(join(data, "tfm", "install.json"), "utf8"));
+      expect(source.channel).toBe("source");
+      expect(source.ref).toBe("dev");
+    } finally {
+      rmSync(data, { recursive: true, force: true });
+    }
+  });
+
+  test("TFM_UPDATE_HINT names the restart an in-app update needs", () => {
+    const s = sandbox();
+    const withHint = s.run("TFM_UPDATE_HINT=1 SMOKE_VER=1.0.0 print_result");
+    expect(withHint.out).toContain("ctrl+alt+r");
+    const without = s.run("SMOKE_VER=1.0.0 print_result");
+    expect(without.out).not.toContain("ctrl+alt+r");
   });
 });

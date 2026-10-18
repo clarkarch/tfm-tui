@@ -342,6 +342,7 @@ export type UiConfig = {
   directoryBarAnimationEase: string;
   smoothScrolling: boolean;
   smoothScrollMs: number;
+  checkUpdates: boolean;
   showLaunchTime: boolean;
 };
 
@@ -355,6 +356,7 @@ export type KeyAction =
   | "openMenu"
   | "toggleHelp"
   | "commandPalette"
+  | "checkUpdates"
   | "toggleHidden"
   | "reloadPlaces"
   | "newTab"
@@ -1984,6 +1986,17 @@ const UI_ROWS: SchemaRow[] = [
   {
     kind: "bool",
     section: "ui",
+    tomlKey: "check-updates",
+    prop: "checkUpdates",
+    def: false,
+    doc: "true = ask github about newer releases once a day and tell you when there is one (off by default: tfm makes no network requests of its own)",
+    label: "update notices",
+    blurb: "Get told when a newer tfm exists",
+    group: "advanced",
+  },
+  {
+    kind: "bool",
+    section: "ui",
     tomlKey: "show-launch-time",
     prop: "showLaunchTime",
     def: false,
@@ -2050,6 +2063,7 @@ const KEY_ROWS: KeyRow[] = (
     ["openMenu", "open menu", ["escape"], "app", "Open settings, plugins and help"],
     ["toggleHelp", "toggle help", ["f1"], "app", "Show or hide the shortcut sheet"],
     ["commandPalette", "command palette", ["ctrl+p"], "app", "Search and run any action"],
+    ["checkUpdates", "check for updates", [], "app", "Look for a newer tfm"],
     ["newTab", "new tab", ["ctrl+t"], "tabs", "Open a fresh tab here"],
     ["closeTab", "close tab", ["ctrl+w"], "tabs", "Close the current tab"],
     ["nextTab", "next tab", ["ctrl+tab"], "tabs", "Jump to the next tab"],

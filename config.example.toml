@@ -112,6 +112,7 @@ recursive-search                      = false       # true = type-to-search also
 sort-mode                             = "type"      # "name" = A-Z; "size" = largest first; "mtime" = oldest first; "type" = grouped by kind (folders first, always)
 restore-session                       = false       # true = reopen the folder from the last quit instead of the launch cwd (needs restart)
 persist-undo                          = false       # true = undo history survives restarts (journal under $XDG_STATE_HOME/tfm/, entries expire after 7 days)
+check-updates                         = false       # true = ask github about newer releases once a day and tell you when there is one (off by default: tfm makes no network requests of its own)
 show-launch-time                      = false       # true = show a notification with the app launch time in ms (debug aid); also enabled by --debug (needs restart)
 
 [theme]
@@ -154,6 +155,7 @@ restart            = ["ctrl+alt+r"]              # default: ctrl+alt+r
 open-menu          = ["escape"]                  # default: escape
 toggle-help        = ["f1"]                      # default: f1
 command-palette    = ["ctrl+p"]                  # default: ctrl+p
+check-updates      = []                          # default: 
 new-tab            = ["ctrl+t"]                  # default: ctrl+t
 close-tab          = ["ctrl+w"]                  # default: ctrl+w
 next-tab           = ["ctrl+tab"]                # default: ctrl+tab

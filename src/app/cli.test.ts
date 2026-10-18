@@ -89,6 +89,16 @@ describe("parseArgs", () => {
     });
   });
 
+  test("update subcommand short-circuits too (no TUI boot)", () => {
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "update", "--tag", "v1.1.0"]).command).toEqual({
+      name: "update",
+      args: ["--tag", "v1.1.0"],
+    });
+    expect(parseArgs(["tfm", "update"]).command).toEqual({ name: "update", args: [] });
+    // the headless path never leaks into the TUI options
+    expect(parseArgs(["tfm", "update"]).paths).toEqual([]);
+  });
+
   test("file:// launch URIs decode to paths (desktop %U launches)", () => {
     expect(decodeCliPath("file:///home/u/some%20dir")).toBe("/home/u/some dir");
     expect(decodeCliPath("file://localhost/tmp/z")).toBe("/tmp/z");
