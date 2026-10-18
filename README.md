@@ -137,7 +137,6 @@ See [docs/plugins.md](docs/plugins.md).
 
 - Cross-app drag & drop is kitty-only.
 - Mouse on the Linux console (TTY) needs `gpm` running.
-- Overlaying a menu or the selection band on a thumbnail clips correctly on kitty graphics; sixel-only terminals can't clip, and the console / `force-glyph` use Nerd-font glyphs instead.
 - Custom kitty themes can misbehave.
 
 ## License

@@ -34,11 +34,12 @@ describe("quick tips", () => {
 
   test("tip pool carries the approved copy, minus the cut tips", () => {
     const problems = QUICK_TIPS.map((tip) => tip.problem);
-    expect(QUICK_TIPS.length).toBe(10);
+    expect(QUICK_TIPS.length).toBe(9);
     expect(problems).toContain("shift+clicks highlights tui not files?");
     expect(problems).toContain("ctrl+tab dead in kitty?");
     expect(problems).toContain("icons are boxes?");
     expect(problems).toContain("mouse doesnt work on tty?");
+    expect(problems).not.toContain("kitty drag escapes?");
     expect(problems).not.toContain("Nautilus paste empty?");
     expect(problems).not.toContain("panels pop open too fast?");
     expect(problems).not.toContain("video has no thumbnail?");

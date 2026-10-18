@@ -139,7 +139,6 @@ export const QUICK_TIPS: QuickTip[] = [
   { problem: "shift+clicks highlights tui not files?", fix: "do alt+click or edit your terminal config" },
   { problem: "ghostty eats shift+click?", fix: "set mouse-shift-capture to true" },
   { problem: "ctrl+tab dead in kitty?", fix: "set ctrl+tab to no_op in kitty.conf" },
-  { problem: "kitty drag escapes?", fix: "ctrl+drag stays inside tfm" },
   { problem: "icons are boxes?", fix: "install Nerd Font, Meslo works" },
   { problem: "scrolling on big folders stutter?", fix: "increase reveal delay (optimization)" },
   { problem: "no zip or 7z offered?", fix: "install that tool, absent ones hide" },
