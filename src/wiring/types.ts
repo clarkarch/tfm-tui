@@ -111,6 +111,12 @@ export type GridWiring = {
   bandCtx: BandCtx;
   props: ReturnType<typeof makeProps>;
   menuEntries: ReturnType<typeof makeMenuEntries>;
+  // app actions surfaced to the palette/keybinds (grid owns the menu-entry
+  // closures): Open With… / extract / compress + open-a-folder-elsewhere
+  openWith: (p: string) => void;
+  extractArchive: (files: string[], dest: string) => void;
+  compressTo: (paths: string[]) => void;
+  openInOtherPane: (dir: string) => void;
   // executable launches (the Run prompt behind openFileDefault's fork)
   runExecutable: (p: string) => void;
   runExecutableInTerminal: (p: string) => void;

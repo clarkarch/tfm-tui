@@ -170,6 +170,25 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     connectServer: rec("connect:server"),
     togglePreview: rec("preview:toggle"),
     toggleViewMode: rec("view:toggle"),
+    toggleHidden: () => {
+      state.showHidden = !state.showHidden;
+      calls.push("hidden:toggle");
+    },
+    extractArchive: (files) => calls.push(`extract:${files.join(",")}`),
+    compressTo: (paths) => calls.push(`compress:${paths.join(",")}`),
+    openWith: (p) => calls.push(`openWith:${p}`),
+    runFile: (p) => calls.push(`run:${p}`),
+    runInTerminal: (p) => calls.push(`runTerm:${p}`),
+    toggleBookmark: rec("bookmark"),
+    emptyTrash: rec("emptyTrash"),
+    refreshListing: rec("refresh"),
+    sortBy: (m) => calls.push(`sort:${m}`),
+    reverseSortOrder: rec("sort:reverse"),
+    openInNewTab: (d) => calls.push(`tab:new:${d}`),
+    openInOtherPane: (d) => calls.push(`pane:other:${d}`),
+    disconnectServer: rec("disconnect"),
+    ejectDrive: rec("eject"),
+    mountDrive: rec("mount"),
     zoomTiles: (d) => calls.push(`zoom:${d}`),
     toggleDualPane: rec("pane:toggle-dual"),
     switchPane: rec("pane:switch"),
@@ -703,11 +722,11 @@ describe("grid keys", () => {
     expect(h.escMenuState.open).toBe(true);
   });
 
-  test("ctrl+h toggles hidden files and re-renders", () => {
+  test("ctrl+h toggles hidden files through the config path", () => {
     const h = makeHarness();
     h.key("h", { ctrl: true });
     expect(h.state.showHidden).toBe(true);
-    expect(h.calls).toEqual(["renderGrid"]);
+    expect(h.calls).toEqual(["hidden:toggle"]);
     h.key("h", { ctrl: true });
     expect(h.state.showHidden).toBe(false);
   });
@@ -898,7 +917,7 @@ describe("remappable keybinds", () => {
     h.key("h", { ctrl: true }); // old bind is gone
     expect(h.calls).toEqual([]);
     h.key("j", { ctrl: true });
-    expect(h.calls).toEqual(["renderGrid"]);
+    expect(h.calls).toEqual(["hidden:toggle"]);
     expect(h.state.showHidden).toBe(true);
   });
 
@@ -1046,6 +1065,50 @@ describe("command table (everything is a command)", () => {
     for (const row of KEY_SCHEMA) {
       expect(ids, `missing command for ${row.action}`).toContain(row.action);
     }
+  });
+
+  test("commands() order mirrors KEY_SCHEMA (palette listing == config order)", async () => {
+    const h = makeHarness();
+    const { KEY_SCHEMA } = await import("../config/config-schema");
+    expect(h.router.commands().map((c) => c.id)).toEqual(KEY_SCHEMA.map((r) => r.action));
+  });
+
+  test("palette app actions act on the live selection/focus", () => {
+    const h = makeHarness();
+    // an archive tile beyond the seeded files (extract filters by canExtract)
+    h.selection.tileRefs.set("pack.zip", {
+      selected: false,
+      baseFg: "#aaa",
+      tileId: "tz",
+      labelId: "lz",
+      isDir: false,
+    });
+    h.selection.setFocusKeys(["a.txt", "b.txt", "c.txt", "d.txt", "pack.zip"]);
+    h.selection.selectTileAt(4);
+    expect(h.selection.selPaths().map((s) => s.path)).toEqual(["pack.zip"]);
+    const byId = (id: string) => h.router.commands().find((c) => c.id === id)!;
+
+    h.calls.length = 0;
+    byId("extractHere").run();
+    expect(h.calls).toEqual(["extract:pack.zip"]);
+    h.calls.length = 0;
+    byId("openWith").run();
+    expect(h.calls).toEqual(["openWith:pack.zip"]);
+    h.calls.length = 0;
+    byId("runFile").run();
+    expect(h.calls).toEqual(["run:pack.zip"]);
+    h.calls.length = 0;
+    byId("compressTo").run();
+    expect(h.calls).toEqual(["compress:pack.zip"]);
+    h.calls.length = 0;
+    byId("sortBySize").run();
+    expect(h.calls).toEqual(["sort:size"]);
+    h.calls.length = 0;
+    byId("refreshListing").run();
+    expect(h.calls).toEqual(["refresh"]);
+    h.calls.length = 0;
+    byId("ejectDrive").run();
+    expect(h.calls).toEqual(["eject"]);
   });
 
   test("command run() dispatches exactly like its keypress", () => {
@@ -1370,7 +1433,7 @@ describe("dual-pane actions", () => {
     h.key("b", { ctrl: true });
     expect(h.calls).toContain("sort:cycle");
     expect(h.calls).toContain("preview:toggle");
-    expect(h.calls).toContain("renderGrid");
+    expect(h.calls).toContain("hidden:toggle");
     expect(h.calls).toContain("back");
     // NOTE: reloadPlaces (ctrl+r) carries the same guard but isn't unit-
     // observable — doReloadPlaces is async real-fs (loadSystemPlaces), so a

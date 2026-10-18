@@ -541,42 +541,64 @@ export const wireGrid = (deps: {
     });
   };
 
+  // --- "Open With…": enumerate handlers for the file's mime, then let the
+  // generic pick overlay choose (same pick instance the compress picker uses).
+  // Unreadable files escalate: the chosen app launches elevated after the
+  // password prompt, same honest-toast contract as the adaptive open. Named
+  // consts (not inline ctx closures) so the palette actions reuse them.
+  const openWith = (p: string): void => {
+    void appsForFile(p).then((apps) => {
+      if (!apps.length) {
+        chrome.notify("No applications found", "open", "error");
+        return;
+      }
+      getPick().open({
+        title: "Open with…",
+        placeholder: "Filter applications…",
+        items: apps.map((a) => ({
+          label: a.name,
+          hint: a.id.replace(/\.desktop$/, ""),
+          run: () => {
+            // ENOENT (deleted between listing and pick, dangling symlink)
+            // launches unprivileged and errors honestly — no sudo prompt
+            // for something that isn't there
+            if (!canReadSync(p) && existsSync(p)) {
+              void chrome.launchAppAsRoot(a.file, a.name, p);
+              return;
+            }
+            launchApp(a.file, p, (err) => dlog(`gio launch failed: ${err.message}`));
+            chrome.notify(`Opening ${path.basename(p)} · ${a.name}`, "open");
+          },
+        })),
+      });
+    });
+  };
+
+  const extractArchive = (files: string[], dest: string): void => {
+    void fileops.fileops.extractArchive(files, dest);
+  };
+
+  const compressTo = (paths: string[]): void => {
+    const cwd = state.cwd;
+    getPick().open({
+      title: "Compress to…",
+      placeholder: "Filter formats…",
+      items: availableCompressionFormats().map((fmt) => ({
+        label: compressionExt(fmt),
+        hint: compressionHint(fmt),
+        run: () => {
+          void fileops.fileops.compressPaths(paths, fmt, cwd);
+        },
+      })),
+    });
+  };
+
   const menuEntries = makeMenuEntries({
     closeFileMenu: chrome.menu.closeFileMenu,
     navigate: nav.navigate,
     newTab: nav.newTab,
     openInOtherPane,
-    // "Open With…": enumerate handlers for the file's mime, then let the
-    // generic pick overlay choose (same pick instance the compress picker uses).
-    // Unreadable files escalate: the chosen app launches elevated after the
-    // password prompt, same honest-toast contract as the adaptive open.
-    openWith: (p) => {
-      void appsForFile(p).then((apps) => {
-        if (!apps.length) {
-          chrome.notify("No applications found", "open", "error");
-          return;
-        }
-        getPick().open({
-          title: "Open with…",
-          placeholder: "Filter applications…",
-          items: apps.map((a) => ({
-            label: a.name,
-            hint: a.id.replace(/\.desktop$/, ""),
-            run: () => {
-              // ENOENT (deleted between listing and pick, dangling symlink)
-              // launches unprivileged and errors honestly — no sudo prompt
-              // for something that isn't there
-              if (!canReadSync(p) && existsSync(p)) {
-                void chrome.launchAppAsRoot(a.file, a.name, p);
-                return;
-              }
-              launchApp(a.file, p, (err) => dlog(`gio launch failed: ${err.message}`));
-              chrome.notify(`Opening ${path.basename(p)} · ${a.name}`, "open");
-            },
-          })),
-        });
-      });
-    },
+    openWith,
     renderAll: nav.renderAll,
     renderGrid,
     openTerminalHere: fileops.terminal.openTerminalHere,
@@ -606,24 +628,9 @@ export const wireGrid = (deps: {
     selectAll: selection.selectAll,
     cwd: () => state.cwd,
     canExtract: canExtract,
-    extractArchive: (files, dest) => {
-      void fileops.fileops.extractArchive(files, dest);
-    },
+    extractArchive,
     compressionFormats: () => availableCompressionFormats(),
-    compressTo: (paths) => {
-      const cwd = state.cwd;
-      getPick().open({
-        title: "Compress to…",
-        placeholder: "Filter formats…",
-        items: availableCompressionFormats().map((fmt) => ({
-          label: compressionExt(fmt),
-          hint: compressionHint(fmt),
-          run: () => {
-            void fileops.fileops.compressPaths(paths, fmt, cwd);
-          },
-        })),
-      });
-    },
+    compressTo,
     sortState: state,
     plugins: () => plugins.plugins.filter(isPluginEnabled),
     onPluginError: (name, err) => {
@@ -647,6 +654,10 @@ export const wireGrid = (deps: {
     bandCtx,
     props,
     menuEntries,
+    openWith,
+    extractArchive,
+    compressTo,
+    openInOtherPane,
     runExecutable,
     runExecutableInTerminal,
     askExecutable,

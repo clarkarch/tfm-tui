@@ -16,10 +16,12 @@
 import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { archiveBrowseUri, archiveUri, parseArchiveUri } from "../fs/archive-scheme";
+import { canExtract } from "../fs/archive";
 import { loadSystemPlaces } from "../fs/places";
 import type { KeyAction } from "../config/config-schema";
 import { KEY_SCHEMA } from "../config/config-schema";
 import { type KeyEventLike, keyMatch, parseKeySpec } from "../config/keyspec";
+import type { SortMode } from "../lib/sort";
 import type { Command } from "../lib/command";
 import { advanceCursor, invokeIsolated } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -155,6 +157,29 @@ export type KeyRouterCtx = {
   switchPane(): void;
   copyToOtherPane(): void;
   moveToOtherPane(): void;
+  // hidden-files toggle commits [ui] show-hidden through the one applyConfig
+  // path (like toggleView/togglePreview) so the keybind persists and survives
+  // any later applyConfig — it used to flip AppState only and got clobbered
+  // back by the next unrelated config change
+  toggleHidden(): void;
+  // --- app actions beyond the classic keybinds: the palette lists every one
+  // (same table), and a bind exists for each so they are remappable too.
+  // Selection/target resolution happens in the closures below, these just act.
+  extractArchive(files: string[]): void;
+  compressTo(paths: string[]): void;
+  openWith(path: string): void;
+  runFile(path: string): void;
+  runInTerminal(path: string): void;
+  toggleBookmark(): void;
+  emptyTrash(): void;
+  refreshListing(): void;
+  sortBy(mode: SortMode): void;
+  reverseSortOrder(): void;
+  openInNewTab(dir: string): void;
+  openInOtherPane(dir: string): void;
+  disconnectServer(): void;
+  ejectDrive(): void;
+  mountDrive(): void;
   setClipboard(mode: "copy" | "cut", items: Array<{ path: string; isDir: boolean }>): void;
   duplicate(paths: string[]): void;
   isVirtualCwd(): boolean;
@@ -608,6 +633,101 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
     ctx.pasteSmart(ctx.state.cwd);
   };
+  // focused tile as {path, isDir}; null when nothing is focused (empty listing)
+  const focusedEntry = (): { path: string; isDir: boolean } | null => {
+    const idx = selection.focusIdx();
+    if (idx < 0) return null;
+    const key = selection.focusKeys()[idx];
+    if (key === undefined) return null;
+    const ref = selection.tileRefs.get(key);
+    return ref ? { path: key, isDir: ref.isDir } : null;
+  };
+  const doExtractHere = (): void => {
+    if (ctx.isVirtualCwd()) {
+      ctx.notify("Can't extract here", "extract", "error");
+      return;
+    }
+    const archives = selection
+      .selPaths()
+      .map((s) => s.path)
+      .filter((p) => canExtract(p));
+    if (!archives.length) {
+      ctx.notify("Select an archive to extract", "extract", "info");
+      return;
+    }
+    ctx.extractArchive(archives);
+  };
+  const doCompress = (): void => {
+    if (ctx.isVirtualCwd()) {
+      ctx.notify("Can't compress here", "compress", "error");
+      return;
+    }
+    const paths = selection.selPaths().map((s) => s.path);
+    if (!paths.length) {
+      ctx.notify("Select files to compress", "compress", "info");
+      return;
+    }
+    ctx.compressTo(paths);
+  };
+  const doOpenWith = (): void => {
+    // archive members are URIs, not fs paths — nothing for gio to launch
+    if (parseArchiveUri(ctx.state.cwd)) {
+      ctx.notify("Archive contents are read-only", "open", "error");
+      return;
+    }
+    const entry = focusedEntry();
+    if (!entry || entry.isDir) {
+      ctx.notify("Select a file to open", "open", "info");
+      return;
+    }
+    ctx.openWith(entry.path);
+  };
+  const doRun = (inTerminal: boolean): void => {
+    const entry = focusedEntry();
+    if (!entry || entry.isDir) {
+      ctx.notify("Select a program to run", "run", "info");
+      return;
+    }
+    if (inTerminal) ctx.runInTerminal(entry.path);
+    else ctx.runFile(entry.path);
+  };
+  const doToggleBookmark = (): void => {
+    if (ctx.isVirtualCwd() || ctx.inTrashView()) {
+      ctx.notify("Can't bookmark here", "bookmark", "error");
+      return;
+    }
+    ctx.toggleBookmark();
+  };
+  const doDeleteForever = (): void => {
+    const selected = selection.selPaths();
+    if (!selected.length) return;
+    if (!ctx.inTrashView()) {
+      ctx.notify("Already trashed — open the Trash to delete for good", "delete", "info");
+      return;
+    }
+    ctx.confirmDeleteForever(selected.map((item) => item.path));
+  };
+  const doRestoreFromTrash = (): void => {
+    const selected = selection.selPaths();
+    if (!selected.length) return;
+    if (!ctx.inTrashView()) {
+      ctx.notify("Nothing to restore outside the Trash", "restore", "info");
+      return;
+    }
+    void ctx.restoreFromTrash(selected.map((item) => item.path));
+  };
+  const doOpenInNewTab = (): void => {
+    const entry = focusedEntry();
+    ctx.openInNewTab(entry?.isDir ? entry.path : ctx.state.cwd);
+  };
+  const doOpenInOtherPane = (): void => {
+    const entry = focusedEntry();
+    if (!entry?.isDir) {
+      ctx.notify("Select a folder to open in the other pane", "pane", "info");
+      return;
+    }
+    ctx.openInOtherPane(entry.path);
+  };
   // --- context-aware nav dispatchers for the commands() table: the palette
   // has no key event, so each run replicates the keypress precedence
   // (file menu > esc menu > sidebar/search > grid) for its direction ---
@@ -717,21 +837,14 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
 
   const labelOf = (action: KeyAction): string => KEY_SCHEMA.find((r) => r.action === action)?.label ?? action;
 
-  // KEY_SCHEMA order (config order) doubles as the palette listing order
+  // ACTION_TABLE order IS the palette listing order and mirrors KEY_SCHEMA
+  // (config order) exactly — pinned by a test; keep the two in step.
   const ACTION_TABLE: Array<{ action: KeyAction; run: () => void }> = [
     { action: "quit", run: () => ctx.quit() },
     { action: "restart", run: () => ctx.restart() },
     { action: "openMenu", run: () => ctx.escMenu.openMenu() },
     { action: "toggleHelp", run: () => ctx.escMenu.toggleHelp() },
     { action: "commandPalette", run: () => ctx.openCommandPalette() },
-    {
-      action: "toggleHidden",
-      run: () => {
-        ctx.state.showHidden = !ctx.state.showHidden;
-        void ctx.renderGrid();
-      },
-    },
-    { action: "reloadPlaces", run: () => void loadSystemPlaces().then(() => ctx.renderAll()) },
     { action: "newTab", run: () => ctx.newTab() },
     { action: "closeTab", run: () => ctx.closeTab() },
     { action: "nextTab", run: () => ctx.nextTab() },
@@ -745,38 +858,36 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "paste", run: doPaste },
     { action: "undo", run: () => ctx.undoLast() },
     { action: "redo", run: () => ctx.redoLast() },
-    { action: "parentDir", run: doParentDir },
-    { action: "histBack", run: () => ctx.goBack() },
-    { action: "histForward", run: () => ctx.goFwd() },
     { action: "showProps", run: doShowProps },
     { action: "newFolder", run: () => ctx.startInlineCreate("folder") },
     { action: "newFile", run: () => ctx.startInlineCreate("file") },
+    { action: "extractHere", run: doExtractHere },
+    { action: "compressTo", run: doCompress },
+    { action: "openWith", run: doOpenWith },
+    { action: "runFile", run: () => doRun(false) },
+    { action: "runInTerminal", run: () => doRun(true) },
+    { action: "toggleBookmark", run: doToggleBookmark },
+    { action: "deleteForever", run: doDeleteForever },
+    { action: "restoreFromTrash", run: doRestoreFromTrash },
+    { action: "emptyTrash", run: () => ctx.emptyTrash() },
+    { action: "parentDir", run: doParentDir },
+    { action: "histBack", run: () => ctx.goBack() },
+    { action: "histForward", run: () => ctx.goFwd() },
+    { action: "goHome", run: () => ctx.navigate(ctx.home) },
     { action: "pathEdit", run: () => ctx.enterPathEdit() },
-    { action: "togglePreview", run: () => ctx.togglePreview() },
-    { action: "openTerminal", run: () => ctx.openTerminal() },
     { action: "connectServer", run: () => ctx.connectServer() },
-    { action: "toggleView", run: () => ctx.toggleViewMode() },
-    { action: "zoomIn", run: () => ctx.zoomTiles(1) },
-    { action: "zoomOut", run: () => ctx.zoomTiles(-1) },
-    { action: "toggleDualPane", run: () => ctx.toggleDualPane() },
-    { action: "switchPane", run: () => ctx.switchPane() },
-    { action: "copyToOtherPane", run: () => ctx.copyToOtherPane() },
-    { action: "moveToOtherPane", run: () => ctx.moveToOtherPane() },
+    { action: "disconnectServer", run: () => ctx.disconnectServer() },
+    { action: "openInNewTab", run: doOpenInNewTab },
+    { action: "openInOtherPane", run: doOpenInOtherPane },
     { action: "moveUp", run: doMoveUp },
     { action: "moveDown", run: doMoveDown },
     { action: "moveLeft", run: doMoveLeft },
     { action: "moveRight", run: doMoveRight },
     { action: "openSelected", run: doOpenSelected },
-    { action: "extendUp", run: doExtendUp },
-    { action: "extendDown", run: doExtendDown },
-    { action: "extendLeft", run: doExtendLeft },
-    { action: "extendRight", run: doExtendRight },
     { action: "pageUp", run: () => selection.pageBy(-1) },
     { action: "pageDown", run: () => selection.pageBy(1) },
     { action: "firstItem", run: () => selection.selectTileAt(0) },
     { action: "lastItem", run: () => selection.selectTileAt(selection.focusKeys().length - 1) },
-    { action: "toggleFocused", run: () => selection.toggleFocused() },
-    { action: "invertSelection", run: () => selection.invertSelection() },
     {
       action: "startSearch",
       run: () => {
@@ -784,8 +895,35 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
         ctx.notify("type-to-search on · type to filter, esc clears", "search", "info");
       },
     },
+    { action: "extendUp", run: doExtendUp },
+    { action: "extendDown", run: doExtendDown },
+    { action: "extendLeft", run: doExtendLeft },
+    { action: "extendRight", run: doExtendRight },
+    { action: "toggleFocused", run: () => selection.toggleFocused() },
+    { action: "invertSelection", run: () => selection.invertSelection() },
+    {
+      action: "toggleHidden",
+      run: () => ctx.toggleHidden(),
+    },
+    { action: "reloadPlaces", run: () => void loadSystemPlaces().then(() => ctx.renderAll()) },
+    { action: "togglePreview", run: () => ctx.togglePreview() },
+    { action: "toggleView", run: () => ctx.toggleViewMode() },
     { action: "cycleSort", run: () => ctx.cycleSort() },
-    { action: "goHome", run: () => ctx.navigate(ctx.home) },
+    { action: "sortByName", run: () => ctx.sortBy("name") },
+    { action: "sortBySize", run: () => ctx.sortBy("size") },
+    { action: "sortByModified", run: () => ctx.sortBy("mtime") },
+    { action: "sortByType", run: () => ctx.sortBy("type") },
+    { action: "reverseSortOrder", run: () => ctx.reverseSortOrder() },
+    { action: "refreshListing", run: () => ctx.refreshListing() },
+    { action: "zoomIn", run: () => ctx.zoomTiles(1) },
+    { action: "zoomOut", run: () => ctx.zoomTiles(-1) },
+    { action: "toggleDualPane", run: () => ctx.toggleDualPane() },
+    { action: "switchPane", run: () => ctx.switchPane() },
+    { action: "copyToOtherPane", run: () => ctx.copyToOtherPane() },
+    { action: "moveToOtherPane", run: () => ctx.moveToOtherPane() },
+    { action: "openTerminal", run: () => ctx.openTerminal() },
+    { action: "ejectDrive", run: () => ctx.ejectDrive() },
+    { action: "mountDrive", run: () => ctx.mountDrive() },
   ];
 
   // dispatch a table action by name (hit() callers): keybinds and the
@@ -871,6 +1009,29 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (hit(ev, "showProps") && runAction("showProps")) return true;
     if (hit(ev, "newFolder") && ev.repeated !== true && runAction("newFolder")) return true;
     if (hit(ev, "newFile") && ev.repeated !== true && runAction("newFile")) return true;
+    // --- app actions that used to be context-menu only: same table, so every
+    // one is palette-runnable AND remappable. Their closures resolve the
+    // selection/target and no-op with a toast when there is nothing to act on. ---
+    if (hit(ev, "extractHere") && ev.repeated !== true && runAction("extractHere")) return true;
+    if (hit(ev, "compressTo") && ev.repeated !== true && runAction("compressTo")) return true;
+    if (hit(ev, "openWith") && ev.repeated !== true && runAction("openWith")) return true;
+    if (hit(ev, "runFile") && ev.repeated !== true && runAction("runFile")) return true;
+    if (hit(ev, "runInTerminal") && ev.repeated !== true && runAction("runInTerminal")) return true;
+    if (hit(ev, "toggleBookmark") && ev.repeated !== true && runAction("toggleBookmark")) return true;
+    if (hit(ev, "deleteForever") && ev.repeated !== true && runAction("deleteForever")) return true;
+    if (hit(ev, "restoreFromTrash") && ev.repeated !== true && runAction("restoreFromTrash")) return true;
+    if (hit(ev, "emptyTrash") && ev.repeated !== true && runAction("emptyTrash")) return true;
+    if (hit(ev, "disconnectServer") && ev.repeated !== true && runAction("disconnectServer")) return true;
+    if (hit(ev, "openInNewTab") && ev.repeated !== true && runAction("openInNewTab")) return true;
+    if (hit(ev, "openInOtherPane") && ev.repeated !== true && runAction("openInOtherPane")) return true;
+    if (hit(ev, "refreshListing") && ev.repeated !== true && runAction("refreshListing")) return true;
+    if (hit(ev, "sortByName") && ev.repeated !== true && runAction("sortByName")) return true;
+    if (hit(ev, "sortBySize") && ev.repeated !== true && runAction("sortBySize")) return true;
+    if (hit(ev, "sortByModified") && ev.repeated !== true && runAction("sortByModified")) return true;
+    if (hit(ev, "sortByType") && ev.repeated !== true && runAction("sortByType")) return true;
+    if (hit(ev, "reverseSortOrder") && ev.repeated !== true && runAction("reverseSortOrder")) return true;
+    if (hit(ev, "ejectDrive") && ev.repeated !== true && runAction("ejectDrive")) return true;
+    if (hit(ev, "mountDrive") && ev.repeated !== true && runAction("mountDrive")) return true;
     if (hit(ev, "pathEdit") && runAction("pathEdit")) return true;
     if (hit(ev, "togglePreview") && ev.repeated !== true && runAction("togglePreview")) return true;
     if (hit(ev, "openTerminal") && runAction("openTerminal")) return true;

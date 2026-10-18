@@ -429,7 +429,7 @@ describe("settingGroups shape", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;
     const seq = kb.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    expect(kb.length).toBe(KEY_SCHEMA.length + 8);
+    expect(kb.length).toBe(KEY_SCHEMA.length + 9);
     expect(seq.filter((s) => s.startsWith("##"))).toEqual([
       "##app",
       "##tabs",
@@ -438,6 +438,7 @@ describe("settingGroups shape", () => {
       "##selection",
       "##view",
       "##split panes",
+      "##drives",
     ]);
     // spot-check section membership across the boundaries (preset leads)
     expect(seq.slice(0, 5)).toEqual(["keymap preset", "##app", "quit", "restart", "open menu"]);
@@ -447,13 +448,14 @@ describe("settingGroups shape", () => {
       "next tab",
       "previous tab",
     ]);
-    expect(seq.slice(seq.indexOf("##split panes") + 1)).toEqual([
+    expect(seq.slice(seq.indexOf("##split panes") + 1, seq.indexOf("##drives"))).toEqual([
       "toggle dual pane",
       "switch pane",
       "copy to other pane",
       "move to other pane",
       "open terminal here",
     ]);
+    expect(seq.slice(seq.indexOf("##drives") + 1)).toEqual(["eject drive…", "mount drive…"]);
     expect(seq).toContain("connect to server");
     expect(seq.indexOf("connect to server")).toBeGreaterThan(seq.indexOf("##navigation"));
     expect(seq.indexOf("connect to server")).toBeLessThan(seq.indexOf("##view"));
@@ -539,7 +541,7 @@ describe("settingGroups shape", () => {
   test("every keybind action gets a row", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;
-    expect(kb.length).toBe(KEY_SCHEMA.length + 8);
+    expect(kb.length).toBe(KEY_SCHEMA.length + 9);
     expect(kb.filter((r) => r.kind !== "header" && r.label !== "keymap preset").every(isKeybind)).toBe(true);
   });
 

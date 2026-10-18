@@ -529,8 +529,10 @@ export const wireRetheme = (deps: {
     },
     // the grid reads per-pane AppState.showHidden, not config: an external
     // config.toml flip must converge both panes here or the reload repaints
-    // the same filter. The GUI row + remap bind already write live state, so
-    // a settings commit just re-converges to the same value (no clobber).
+    // the same filter. The GUI row AND the remap bind/palette action both
+    // commit [ui] show-hidden through applyConfig, so this re-converges to the
+    // same value (no clobber — the old bind flipped AppState only and got
+    // reset by the next unrelated applyConfig).
     syncShowHidden: () => {
       const showHidden = core.config.ui.showHidden;
       for (const s of core.panes.states) s.showHidden = showHidden;

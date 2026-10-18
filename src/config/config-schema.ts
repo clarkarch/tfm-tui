@@ -376,11 +376,29 @@ export type KeyAction =
   | "showProps"
   | "newFolder"
   | "newFile"
+  | "extractHere"
+  | "compressTo"
+  | "openWith"
+  | "runFile"
+  | "runInTerminal"
+  | "toggleBookmark"
+  | "deleteForever"
+  | "restoreFromTrash"
+  | "emptyTrash"
   | "pathEdit"
+  | "connectServer"
+  | "disconnectServer"
+  | "openInNewTab"
+  | "openInOtherPane"
   | "togglePreview"
   | "openTerminal"
-  | "connectServer"
   | "toggleView"
+  | "refreshListing"
+  | "sortByName"
+  | "sortBySize"
+  | "sortByModified"
+  | "sortByType"
+  | "reverseSortOrder"
   | "zoomIn"
   | "zoomOut"
   | "toggleDualPane"
@@ -404,6 +422,8 @@ export type KeyAction =
   | "invertSelection"
   | "startSearch"
   | "cycleSort"
+  | "ejectDrive"
+  | "mountDrive"
   | "goHome";
 
 type KeysConfig = Record<KeyAction, string[]>;
@@ -2046,12 +2066,24 @@ const KEY_ROWS: KeyRow[] = (
     ["showProps", "properties", ["alt+enter"], "files", "Show details for the selection"],
     ["newFolder", "new folder", ["ctrl+shift+n"], "files", "Create a folder here"],
     ["newFile", "new file", ["ctrl+alt+n"], "files", "Create an empty file here"],
+    ["extractHere", "extract here", ["f7"], "files", "Unpack the selected archives into this folder"],
+    ["compressTo", "compress to…", ["f8"], "files", "Pack the selection into an archive"],
+    ["openWith", "open with…", ["f10"], "files", "Choose an app to open the focused file"],
+    ["runFile", "run", ["f11"], "files", "Execute the focused program"],
+    ["runInTerminal", "run in terminal", ["f12"], "files", "Execute the focused program in a shell"],
+    ["toggleBookmark", "bookmark folder", ["ctrl+shift+b"], "files", "Star or unstar this folder"],
+    ["deleteForever", "delete permanently", ["shift+delete"], "files", "Erase the selection without the trash"],
+    ["restoreFromTrash", "restore from trash", [], "files", "Put the trashed selection back"],
+    ["emptyTrash", "empty trash", [], "files", "Erase everything in the trash"],
     ["parentDir", "go to parent directory", ["backspace", "alt+up"], "navigation", "Climb one folder up"],
     ["histBack", "back in history", ["alt+left"], "navigation", "Step back through visited folders"],
     ["histForward", "forward in history", ["alt+right"], "navigation", "Step ahead through visited folders"],
     ["goHome", "go home", ["alt+home"], "navigation", "Jump to your home folder"],
     ["pathEdit", "edit the path bar", ["ctrl+l"], "navigation", "Type a path to jump to it"],
     ["connectServer", "connect to server", ["ctrl+shift+s"], "navigation", "Mount a folder shared on the network"],
+    ["disconnectServer", "disconnect network", [], "navigation", "Leave the mounted network folder"],
+    ["openInNewTab", "open in new tab", ["ctrl+enter"], "navigation", "Open the focused folder in a new tab"],
+    ["openInOtherPane", "open in other pane", [], "navigation", "Open the focused folder in the other pane"],
     ["moveUp", "move up", ["up"], "navigation", "Step to the row above"],
     ["moveDown", "move down", ["down"], "navigation", "Step to the row below"],
     ["moveLeft", "move left", ["left"], "navigation", "Step one column left"],
@@ -2075,6 +2107,12 @@ const KEY_ROWS: KeyRow[] = (
     ["togglePreview", "toggle preview pane", ["f3"], "view", "Show or hide the file preview"],
     ["toggleView", "toggle view", ["ctrl+g"], "view", "Swap between tiles and rows"],
     ["cycleSort", "cycle sort", [], "view", "Name, size, date, then type"],
+    ["sortByName", "sort by name", [], "view", "Order the listing by name"],
+    ["sortBySize", "sort by size", [], "view", "Order the listing by size"],
+    ["sortByModified", "sort by modified", [], "view", "Order the listing by date"],
+    ["sortByType", "sort by type", [], "view", "Order the listing by type"],
+    ["reverseSortOrder", "reverse sort order", [], "view", "Flip the sort direction"],
+    ["refreshListing", "refresh listing", [], "view", "Re-scan the folder contents"],
     ["zoomIn", "zoom in", ["ctrl+="], "view", "Grow tiles and icons a step"],
     ["zoomOut", "zoom out", ["ctrl+-"], "view", "Shrink tiles and icons a step"],
     ["toggleDualPane", "toggle dual pane", ["ctrl+shift+d"], "split panes", "Split into side-by-side panes"],
@@ -2082,6 +2120,8 @@ const KEY_ROWS: KeyRow[] = (
     ["copyToOtherPane", "copy to other pane", ["f5"], "split panes", "Copy the selection across panes"],
     ["moveToOtherPane", "move to other pane", ["f6"], "split panes", "Move the selection across panes"],
     ["openTerminal", "open terminal here", ["ctrl+`", "f4"], "split panes", "Drop to a shell in this folder"],
+    ["ejectDrive", "eject drive…", [], "drives", "Unmount and power off a removable drive"],
+    ["mountDrive", "mount drive…", [], "drives", "Mount a removable drive"],
   ] as const
 ).map(([action, label, def, subsection, blurb]) => ({
   kind: "key",
