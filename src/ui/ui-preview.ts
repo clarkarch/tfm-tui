@@ -112,6 +112,11 @@ export const makePreview = (ctx: PreviewCtx) => {
     // the wrap mode the node was built with — a toggle must not be served
     // the stale wrap from the cache (key/mtime/size don't change on toggle)
     wrap: string;
+    // body viewport the node was built for: the code body is padded to the
+    // viewport height and wraps to its width, so a resize or a preview-width
+    // change must rebuild instead of serving the old geometry
+    viewW: number;
+    viewH: number;
     // whichever renderable the last preview mounted — every body (code and
     // markdown) rides in a scrollbox, so the cached node is the scroller and
     // scroll position survives re-previews of one file.
@@ -313,12 +318,20 @@ export const makePreview = (ctx: PreviewCtx) => {
       // and follow the mode too (they used to force word wrap as "prose",
       // which char-sliced long key=value config lines).
       const wrap: WrapMode = ctx.wrapMode?.() ?? "none";
+      const bodyW = Math.max(8, ctx.previewWidth() - 2);
+      const bodyH = Math.max(1, ctx.termH() - 6);
+      const ext = path.extname(key).slice(1).toLowerCase();
+      // the padding below is derived from the VIEWPORT, so a resize (or a
+      // preview-width change) must not be served the previous node — key the
+      // viewport alongside the file identity
       if (
         previewCodeCache &&
         previewCodeCache.key === key &&
         previewCodeCache.mtimeMs === mtimeMs &&
         previewCodeCache.size === size &&
-        previewCodeCache.wrap === wrap
+        previewCodeCache.wrap === wrap &&
+        previewCodeCache.viewW === bodyW &&
+        previewCodeCache.viewH === bodyH
       ) {
         pane.add(previewCodeCache.node);
         return;
@@ -327,9 +340,6 @@ export const makePreview = (ctx: PreviewCtx) => {
       // (kept, not destroyed) and is about to be replaced — destroy it now so
       // its native buffer frees here, not at the next GC poke
       destroyCachedNode();
-      const ext = path.extname(key).slice(1).toLowerCase();
-      const bodyW = Math.max(8, ctx.previewWidth() - 2);
-      const bodyH = Math.max(1, ctx.termH() - 6);
       // markdown gets the rich render (headings/lists/links, OSC-8
       // hyperlink chunks included) instead of a monochrome code dump.
       // The whole node — prose and fences — renders in the global mode;
@@ -352,19 +362,23 @@ export const makePreview = (ctx: PreviewCtx) => {
           scrollbarOptions: { trackOptions: scrollbarTrackColors(colors) },
         });
         scroller.add(mdNode);
-        previewCodeCache = { key, mtimeMs, size, wrap, node: scroller };
+        previewCodeCache = { key, mtimeMs, size, wrap, viewW: bodyW, viewH: bodyH, node: scroller };
         pane.add(scroller);
         void ctx.drainIconQueue();
         return;
       }
       // every text body rides inside a line-number gutter (a
       // TextBufferRenderable, i.e. LineInfoProvider — the gutter counts
-      // VIRTUAL lines, so it stays aligned in every wrap mode). Gutter is
-      // ~4 cells (minWidth 3 + padding 1), so the body narrows to stay
-      // inside the pane. Files without a tree-sitter filetype get the same
-      // treatment: CodeRenderable renders an unknown/missing filetype as
-      // unstyled theme-colored text — plain code, not prose.
-      const gutterW = 4;
+      // VIRTUAL lines, so it stays aligned in every wrap mode). Files
+      // without a tree-sitter filetype get the same treatment: CodeRenderable
+      // renders an unknown/missing filetype as unstyled theme-colored text —
+      // plain code, not prose.
+      // The gutter's own width measure is max(3, digits + 1 padding + 1 left
+      // pad), so the body narrows by that much. A padded short file numbers
+      // up to bodyH rows, so that is the digit count to reserve; a taller
+      // file numbers its own lines instead.
+      const sourceLines = text.split("\n").length;
+      const gutterW = Math.max(3, String(Math.max(sourceLines, bodyH)).length + 2);
       const filetype = PREVIEW_FT_BY_EXT[ext];
       const scroller = new ScrollBoxRenderable(ctx.renderer, {
         width: bodyW,
@@ -388,6 +402,17 @@ export const makePreview = (ctx: PreviewCtx) => {
         selectable: false,
         wrapMode: wrap,
       });
+      // Blank lines appended AFTER construction so the line-number gutter runs
+      // to the bottom of the viewport instead of stopping at the last real
+      // line. The gutter measures to the target's virtual line count (a fixed
+      // measure func — it cannot stretch to the parent), so the body must own
+      // that many rows. Counted on the MEASURED row count, not the source
+      // lines: wrapped lines already fill rows, and padding by logical lines
+      // would push a wrapping short file past the viewport (a blank scrollable
+      // tail). Each appended "\n" adds exactly one single-row line. Files at
+      // least as tall as the body are left alone; markdown has no gutter.
+      const pad = bodyH - body.virtualLineCount;
+      if (pad > 0) body.content = text + "\n".repeat(pad);
       const gutter = new LineNumberRenderable(ctx.renderer, {
         id: `tfm-preview-code-${previewCodeSeq++}`,
         target: body,
@@ -397,7 +422,7 @@ export const makePreview = (ctx: PreviewCtx) => {
       // constraints): in a scrollbox it scrolls in sync with the body
       // instead of running past short content — its designed use.
       scroller.add(gutter);
-      previewCodeCache = { key, mtimeMs, size, wrap, node: scroller };
+      previewCodeCache = { key, mtimeMs, size, wrap, viewW: bodyW, viewH: bodyH, node: scroller };
       pane.add(scroller);
       void ctx.drainIconQueue();
     } catch {}

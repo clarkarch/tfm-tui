@@ -358,6 +358,168 @@ describe("preview rich rendering", () => {
     expect(textOf(body)).toContain("const a = 1;");
   });
 
+  test("the gutter numbers continue to the body bottom on a short file", async () => {
+    // isolated renderer: the shared one accumulates panes and pushes later
+    // ones off its viewport, so a whole-frame assert would be meaningless.
+    const solo = await createTestRenderer({ width: 60, height: 20 });
+    try {
+      const file = path.join(tmpDir, "stub.js");
+      writeFileSync(file, "const a = 1;\nconst b = 2;\n");
+      const clock = mkClock();
+      const id = "tfm-preview-gutter";
+      solo.renderer.root.add(Box({ id, width: 40, height: 18 }));
+      const p = makePreview({
+        renderer: solo.renderer,
+        byId: () => solo.renderer.root.findDescendantById(id),
+        colors: () => ({ ...defaultConfig.theme }) as Theme,
+        uiStyle: () => "solid",
+        previewEnabled: () => true,
+        previewWidth: () => 40,
+        termH: () => 18, // bodyH = termH - 6 = 12
+        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+        focusKey: () => file,
+        tileRefs: new Map(),
+        pushThumbJob: () => {},
+        drainThumbs: () => {},
+        drainIconQueue: () => {},
+        nextIconId: () => "slot",
+        fallbackGlyphFor: () => "?",
+        sched: clock.sched,
+      });
+      p.renderPreview();
+      clock.flush();
+      const deadline = Date.now() + 3000;
+      const hasGutter = () =>
+        walkKids(solo.renderer.root.findDescendantById(id)).some((c: any) => c instanceof LineNumberRenderable);
+      while (!hasGutter() && Date.now() < deadline) {
+        await solo.renderOnce();
+        await Bun.sleep(10);
+      }
+      expect(hasGutter()).toBe(true);
+      await solo.renderOnce();
+      // source lines: "const a = 1;", "const b = 2;", "" (the trailing
+      // newline) = 3. The body viewport is 12 rows, so the gutter must keep
+      // numbering blank rows 4..12 instead of stopping at the code.
+      const frame = await solo.captureCharFrame();
+      expect(frame).toContain("const a = 1;");
+      const numbers = frame
+        .split("\n")
+        .map((r) => r.trim())
+        .filter((r) => /^\d+$/.test(r));
+      expect(numbers).toEqual(["3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]);
+    } finally {
+      await solo.dispose();
+    }
+  });
+
+  test("a terminal resize rebuilds the body instead of serving the old viewport", async () => {
+    const file = path.join(tmpDir, "resize.js");
+    writeFileSync(file, "const x = 1;\n");
+    let h = 24; // bodyH = 18
+    const clock = mkClock();
+    const id = `tfm-preview-${paneSeq++}`;
+    t.renderer.root.add(Box({ id, width: 40, height: 20 }));
+    const p = makePreview({
+      renderer: t.renderer,
+      byId: () => t.renderer.root.findDescendantById(id),
+      colors: () => ({ ...defaultConfig.theme }) as Theme,
+      uiStyle: () => "solid",
+      previewEnabled: () => true,
+      previewWidth: () => 40,
+      termH: () => h,
+      cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+      focusKey: () => file,
+      tileRefs: new Map(),
+      pushThumbJob: () => {},
+      drainThumbs: () => {},
+      drainIconQueue: () => {},
+      nextIconId: () => "slot",
+      fallbackGlyphFor: () => "?",
+      sched: clock.sched,
+    });
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => gutterNodes(id).length === 1)).toBe(true);
+    const tall = gutterNodes(id)[0];
+    // a shorter terminal asks for a shorter body: the cached node's height no
+    // longer matches the new viewport, so it must be rebuilt (key/mtime/size
+    // are unchanged — only the body geometry differs)
+    h = 12; // bodyH = 6
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => gutterNodes(id).length === 1 && gutterNodes(id)[0] !== tall)).toBe(true);
+  });
+
+  test("wrapped short files pad to the viewport, not past it", async () => {
+    // padding counts MEASURED rows: a long wrapped line already fills rows, so
+    // padding by logical lines would push a wrapping short file past the
+    // viewport (blank scrollable tail)
+    const solo = await createTestRenderer({ width: 60, height: 20 });
+    try {
+      const file = path.join(tmpDir, "wrapped.js");
+      writeFileSync(file, `${"x".repeat(100)}\n`);
+      const clock = mkClock();
+      const id = "tfm-preview-wrapped";
+      solo.renderer.root.add(Box({ id, width: 40, height: 18 }));
+      const p = makePreview({
+        renderer: solo.renderer,
+        byId: () => solo.renderer.root.findDescendantById(id),
+        colors: () => ({ ...defaultConfig.theme }) as Theme,
+        uiStyle: () => "solid",
+        previewEnabled: () => true,
+        previewWidth: () => 40,
+        termH: () => 12, // bodyH = termH - 6 = 6
+        cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: 0.5 }),
+        focusKey: () => file,
+        tileRefs: new Map(),
+        pushThumbJob: () => {},
+        drainThumbs: () => {},
+        drainIconQueue: () => {},
+        nextIconId: () => "slot",
+        fallbackGlyphFor: () => "?",
+        sched: clock.sched,
+        wrapMode: () => "char" as WrapMode,
+      });
+      p.renderPreview();
+      clock.flush();
+      const deadline = Date.now() + 3000;
+      const gutterOf = () =>
+        walkKids(solo.renderer.root.findDescendantById(id)).find((c: any) => c instanceof LineNumberRenderable);
+      while (!gutterOf() && Date.now() < deadline) {
+        await solo.renderOnce();
+        await Bun.sleep(10);
+      }
+      expect(gutterOf()).toBeTruthy();
+      await solo.renderOnce();
+      // 100 chars in a 35-cell body = 3 rows + the trailing blank = 4 visual
+      // rows, so exactly 2 blank lines may be appended: the gutter ends at
+      // the viewport bottom (6), never past it
+      expect((gutterOf() as any).height).toBe(6);
+    } finally {
+      await solo.dispose();
+    }
+  });
+
+  test("the body is reserved against the gutter's widest number column", async () => {
+    // LineNumberRenderable sizes its gutter to max(3, digits + 2) on its own
+    // measure; a body sized for a narrower gutter overflows the scrollbox and
+    // clips its last cell (a 100+ line file widened the column to 5 while the
+    // body was still reserved 4)
+    const file = path.join(tmpDir, "wide.js");
+    writeFileSync(file, `${Array.from({ length: 120 }, (_, i) => `const v${i} = ${i};`).join("\n")}\n`);
+    const { clock, p, paneId } = mkLivePreview(file);
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => gutterNodes(paneId).length === 1)).toBe(true);
+    await t.renderOnce();
+    const gutter = gutterNodes(paneId)[0] as any;
+    const body = gutter.getChildren().find((c: any) => c instanceof CodeRenderable) as any;
+    expect(body).toBeTruthy();
+    // previewWidth 40 -> bodyW 38; gutter 5 (three digits) + body 33
+    const numbers = gutter.getChildren().find((c: any) => c !== body) as any;
+    expect(numbers.width + body.width).toBeLessThanOrEqual(38);
+  });
+
   test("a code body carries the linkify onChunks hook (bare URLs become OSC-8)", async () => {
     const file = path.join(tmpDir, "u.js");
     writeFileSync(file, "// see https://example.com/docs\nconst z = 9;\n");
