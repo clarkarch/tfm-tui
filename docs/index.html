@@ -363,7 +363,7 @@ quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="
       <h4>Optional dependencies</h4>
       <ul>
         <li>icons render in-process (no setup); <code>magick</code> covers extra raster formats as fallback</li>
-        <li>video thumbnails use the bundled <code>tfm-ffmpeg</code> sidecar (no system <code>ffmpeg</code> needed)</li>
+        <li>video thumbnails use the system <code>ffmpeg</code> (install it for video previews; without it videos just show plain icons)</li>
         <li><code>gio</code>: starred-file metadata and network locations (trash is built-in XDG), <code>xdg-open</code> / <code>udisksctl</code>: default apps / mounts</li>
         <li><code>wl-paste</code> / <code>wl-copy</code> or <code>xclip</code>: clipboard bridge</li>
         <li><code>tar</code> / <code>unzip</code> / <code>zip</code> / <code>7z</code>: archives</li>

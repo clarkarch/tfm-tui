@@ -690,10 +690,11 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
   }
 };
 
-// video thumbs: one representative frame via the bundled ffmpeg sidecar
-// (src/fs/videobin — never the system PATH), cover-cropped like the raster
-// path so tiles keep a uniform look. Input-seek ~1s in to skip the black
-// lead-in (fast keyframe seek); clips shorter than that retry at 0.
+// video thumbs: one representative frame via the system ffmpeg
+// (src/fs/videobin — $TFM_FFMPEG override then PATH; nothing is bundled, and
+// a machine without ffmpeg keeps plain icons via canThumbVideo), cover-cropped
+// like the raster path so tiles keep a uniform look. Input-seek ~1s in to skip
+// the black lead-in (fast keyframe seek); clips shorter than that retry at 0.
 export const canThumbVideo = (): boolean => videoBin() !== null;
 const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
   const vb = videoBin();
@@ -833,8 +834,8 @@ export const thumbPng = (
   // SVG thumbs are keyed by the rasterizer too: resvg vs rsvg produce different
   // pixels, and switching must not serve the other renderer's cache. Raster
   // keys stay renderer-free so a photo library is never needlessly redone;
-  // video keys carry the binary source instead (sidecar/dev/override swaps
-  // must not serve another binary's pixels — same argv, decoders may differ).
+  // video keys carry the binary source instead (override↔PATH swaps must not
+  // serve another binary's pixels — same argv, decoders may differ).
   // Niche lanes carry their lane in the mode: in-process pixels (aspect-fit)
   // differ from spawn pixels (exact cover box), so `raster:ico` etc. must not
   // serve magick-era `raster` entries. jpg/png/avif keep bare `raster` — their

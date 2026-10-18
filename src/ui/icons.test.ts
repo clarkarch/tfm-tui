@@ -42,8 +42,9 @@ const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => f
 const hasMagick = Bun.which("magick") !== null;
 // icons: in-process only; vector thumbs: in-process or the magick last resort
 const hasSvgRenderer = hasInproc || hasMagick;
-// video thumbs ride the bundled sidecar (never the system PATH); the corpus
-// below is generated with that same binary, so CI covers it via postinstall.
+// video thumbs need the system ffmpeg ($TFM_FFMPEG override or PATH — tfm
+// bundles nothing), so the video cases skip on a machine without it; CI
+// installs ffmpeg to keep them covered.
 const hasVideoBin = videoBin() !== null;
 
 // tiny fixtures, embedded so the raster tests need no external tool to CREATE
@@ -461,12 +462,12 @@ describe("icons", () => {
         );
       }
     });
-    test("video keys ignore bg but keep the binary source (sidecar swaps must not share pixels)", () => {
-      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:sidecar")).toBe(
-        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#ff0000", "video:sidecar"),
+    test("video keys ignore bg but keep the binary source (override↔PATH swaps must not share pixels)", () => {
+      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:path")).toBe(
+        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#ff0000", "video:path"),
       );
-      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:sidecar")).not.toBe(
-        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:dev"),
+      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:path")).not.toBe(
+        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:override"),
       );
     });
     test("vector keys keep bg (SVG thumbs flatten onto it)", () => {
@@ -578,32 +579,29 @@ describe("icons", () => {
     20000,
   );
 
-  test.skipIf(!hasVideoBin)(
-    "vanished binary rejects instead of hanging",
-    async () => {
-      const tmp = mkdtempSync(path.join(os.tmpdir(), "tfm-videobin-gone-"));
-      const prevEnv = process.env.TFM_FFMPEG;
+  // no system ffmpeg needed: the override IS the (deleted) binary under test
+  test("vanished binary rejects instead of hanging", async () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "tfm-videobin-gone-"));
+    const prevEnv = process.env.TFM_FFMPEG;
+    resetVideoBin();
+    try {
+      const ghost = path.join(tmp, "ffmpeg");
+      writeFileSync(ghost, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      chmodSync(ghost, 0o755);
+      process.env.TFM_FFMPEG = ghost;
       resetVideoBin();
-      try {
-        const ghost = path.join(tmp, "ffmpeg");
-        writeFileSync(ghost, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-        chmodSync(ghost, 0o755);
-        process.env.TFM_FFMPEG = ghost;
-        resetVideoBin();
-        expect(videoBin()?.source).toBe("override");
-        rmSync(ghost);
-        // resolver memo still points at the deleted path: the spawn must
-        // surface as a rejection (async ENOENT), never a stuck drain
-        await expect(thumbPng(path.join(tmp, "x.mp4"), 4, 4, 48, 64, "#1a1b26", false, true)).rejects.toThrow();
-      } finally {
-        if (prevEnv === undefined) delete process.env.TFM_FFMPEG;
-        else process.env.TFM_FFMPEG = prevEnv;
-        resetVideoBin();
-        rmSync(tmp, { recursive: true, force: true });
-      }
-    },
-    20000,
-  );
+      expect(videoBin()?.source).toBe("override");
+      rmSync(ghost);
+      // resolver memo still points at the deleted path: the spawn must
+      // surface as a rejection (async ENOENT), never a stuck drain
+      await expect(thumbPng(path.join(tmp, "x.mp4"), 4, 4, 48, 64, "#1a1b26", false, true)).rejects.toThrow();
+    } finally {
+      if (prevEnv === undefined) delete process.env.TFM_FFMPEG;
+      else process.env.TFM_FFMPEG = prevEnv;
+      resetVideoBin();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 20000);
 });
 
 // The in-memory layers are the only unbounded ones — every raster ever served

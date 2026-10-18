@@ -15,7 +15,16 @@
 //   5. install_binary tests the staged build BEFORE the swap, installs it under
 //      both command names, and leaves no tfm.bak behind.
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -357,6 +366,44 @@ printf 'bak=%s' "$BAK_REMOVED"`).out,
     expect(readFileSync(join(dest, "tfm"), "utf8")).toBe("OLD");
   });
 
+  // The video-thumbnail ffmpeg sidecar is no longer shipped (video thumbs use
+  // the system ffmpeg), so an upgrade from the sidecar era must not leave the
+  // ~80MB tfm-ffmpeg sitting next to the binary forever.
+  test("a stale ffmpeg sidecar is swept once the new binary is in place", () => {
+    const { dest, work, run } = sandbox();
+    writeFileSync(join(dest, "tfm"), "OLD");
+    writeFileSync(join(dest, "tfm-ffmpeg"), "SIDECAR");
+    writeFileSync(join(dest, "keep-me"), "unrelated");
+    stage(join(work, "new"), RUNS);
+
+    expect(
+      run(`FFMPEG_SWEPT=0
+install_binary "$WORK/new"
+printf 'swept=%s' "$FFMPEG_SWEPT"`).out,
+    ).toBe("swept=1");
+    expect(existsSync(join(dest, "tfm-ffmpeg"))).toBe(false);
+    // only the known sidecar name is removed
+    expect(existsSync(join(dest, "keep-me"))).toBe(true);
+  });
+
+  // Same rule as tfm.bak: a symlink by that name is the user's own, not ours.
+  test("an ffmpeg symlink is never followed or removed", () => {
+    const { dest, work, run } = sandbox();
+    writeFileSync(join(dest, "tfm"), "OLD");
+    const target = join(dest, "real-ffmpeg");
+    writeFileSync(target, "USER'S OWN");
+    symlinkSync(target, join(dest, "tfm-ffmpeg"));
+    stage(join(work, "new"), RUNS);
+
+    expect(
+      run(`FFMPEG_SWEPT=0
+install_binary "$WORK/new"
+printf 'swept=%s' "$FFMPEG_SWEPT"`).out,
+    ).toBe("swept=0");
+    expect(readFileSync(target, "utf8")).toBe("USER'S OWN");
+    expect(existsSync(join(dest, "tfm-ffmpeg"))).toBe(true);
+  });
+
   test("smoke_version reads the version a build reports", () => {
     const { work, run } = sandbox();
     stage(join(work, "good"), RUNS);
@@ -389,9 +436,9 @@ describe("installer packager hint", () => {
     expect(runLib(`pm_pkg apt gio\n`).out).toBe("libglib2.0-bin");
     expect(runLib(`pm_pkg pacman gio\n`).out).toBe("glib2");
     expect(runLib(`pm_pkg apk gio\n`).out).toBe("glib");
-    // ffmpeg left the probed bucket: video thumbs ride the bundled sidecar,
-    // so no package manager should ever suggest it again
-    expect(runLib(`pm_pkg apt ffmpeg\n`).out).toBe("");
+    // ffmpeg is back in the probed bucket: video thumbs ride the system
+    // package again (no bundled sidecar), so the hint must name it
+    expect(runLib(`pm_pkg apt ffmpeg\n`).out).toBe("ffmpeg");
     expect(runLib(`pm_pkg apt zip\n`).out).toBe("zip");
     expect(runLib(`pm_pkg apt unzip\n`).out).toBe("unzip");
     expect(runLib(`pm_pkg apt 7z\n`).out).toBe("p7zip-full");
@@ -408,8 +455,7 @@ describe("installer packager hint", () => {
     expect(out).toContain("optional");
     expect(out).not.toContain("recommended");
     expect(out).not.toContain("resvg");
-    expect(out).not.toContain("ffmpeg");
-    for (const t of ["xdg-open", "magick", "gio", "udisksctl", "wl-clipboard", "zip", "unzip", "7z"]) {
+    for (const t of ["xdg-open", "magick", "gio", "udisksctl", "wl-clipboard", "zip", "unzip", "7z", "ffmpeg"]) {
       expect(out).toContain(t);
     }
   });

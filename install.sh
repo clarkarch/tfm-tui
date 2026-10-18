@@ -120,11 +120,10 @@ LINE=""
 SMOKE_VER=""
 SMOKE_LINE=""
 BAK_REMOVED=0
+FFMPEG_SWEPT=0
 NEW_FILE=""
 FETCH_PID=""
 MODE=release
-# plain path (no .gz): set by step_download_ffmpeg on success, else ""
-FFMPEG_SRC=""
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 plain() { printf 'tfm: %s\n' "$*"; }
@@ -590,7 +589,7 @@ pretty_dollar_home() { # $HOME form for copy-paste export lines (tilde does not 
 # feature), so there is no recommended/optional split. The packager hint is
 # best-effort: a wrong `apt install` is worse than naming the tool alone, so
 # tools without a reliable package name are called out by name.
-TOOLS_OPTIONAL="xdg-open magick gio udisksctl clip zip unzip 7z"
+TOOLS_OPTIONAL="xdg-open magick gio udisksctl clip zip unzip 7z ffmpeg"
 
 tool_present() {
   case "$1" in
@@ -616,6 +615,7 @@ tool_desc() {
     zip) printf 'faster zip creation' ;;
     unzip) printf 'faster zip extraction' ;;
     7z) printf '7z archives' ;;
+    ffmpeg) printf 'video thumbnails' ;;
     *) printf '' ;;
   esac
 }
@@ -660,6 +660,7 @@ pm_pkg() { # pm_pkg PM TOOL — "" when we don't know a package for that family
     xdg-open) printf 'xdg-utils' ;;
     zip) printf 'zip' ;;
     unzip) printf 'unzip' ;;
+    ffmpeg) printf 'ffmpeg' ;;
     7z)
       case "$1" in
         apt) printf 'p7zip-full' ;;
@@ -884,97 +885,6 @@ step_verify() {
     fail_at verify "no checksum published" \
       "This release didn't publish a security checksum, so tfm refuses to install it." \
       "Re-run with TFM_NO_VERIFY=1 to skip the check, or pin TFM_VERSION to a release that includes checksums. Nothing was installed."
-  fi
-}
-
-# ── ffmpeg sidecar ────────────────────────────────────────────────────────
-# Video thumbnails ride a bundled static ffmpeg (tfm-ffmpeg-$ARCH.gz from the
-# same release), never the system PATH. Best-effort by design: every failure
-# below warns and continues — tfm itself installs either way, only video
-# thumbs degrade to glyphs until a reinstall.
-step_download_ffmpeg() {
-  step_begin "ffmpeg"
-  if ! fetch_with_bar "$BASE/tfm-ffmpeg-$ARCH.gz" "$WORK/ffmpeg.gz" "$WORK/ffmpeg.hdr"; then
-    step_warn "video thumbnails unavailable (download failed)"
-    return 0
-  fi
-  if [ ! -s "$WORK/ffmpeg.gz" ]; then
-    step_warn "video thumbnails unavailable (empty download)"
-    return 0
-  fi
-  # same digest-compare rule as step_verify (never `sha256sum -c`)
-  if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-ffmpeg-$ARCH.gz.sha256" -o "$WORK/ffmpeg.gz.sha256" >>"$RUN_LOG" 2>&1; then
-    local want
-    local got
-    want=$(cut -d' ' -f1 <"$WORK/ffmpeg.gz.sha256")
-    got=$(sha256sum <"$WORK/ffmpeg.gz" | cut -d' ' -f1)
-    if [ -z "$want" ] || [ "$want" != "$got" ]; then
-      step_warn "video thumbnails unavailable (checksum mismatch)"
-      return 0
-    fi
-  else
-    step_warn "video thumbnails unavailable (no checksum published)"
-    return 0
-  fi
-  FFMPEG_SRC="$WORK/ffmpeg.gz"
-  step_ok "sidecar downloaded and verified"
-}
-
-install_ffmpeg_sidecar() { # install_ffmpeg_sidecar SRC_FILE (plain binary)
-  local src=$1
-  local tmp=""
-  # no chmod on the SOURCE: it may be read-only (node_modules checkout) and
-  # needs none anyway — the copy below is chmod'd after staging
-  # the binary must actually run: a corrupt unpack must not replace a working sidecar
-  if have timeout; then
-    if ! timeout -k 2 15 "$src" -hide_banner -version >>"$RUN_LOG" 2>&1; then
-      step_warn "video thumbnails unavailable (sidecar won't run)"
-      return 0
-    fi
-  else
-    if ! "$src" -hide_banner -version >>"$RUN_LOG" 2>&1; then
-      step_warn "video thumbnails unavailable (sidecar won't run)"
-      return 0
-    fi
-  fi
-  # same atomic swap as install_binary: a running tfm must never see a half file
-  tmp="$DEST/.ffmpeg-new.$$"
-  if ! cp -f "$src" "$tmp" 2>>"$RUN_LOG" || ! chmod +x "$tmp" 2>>"$RUN_LOG" ||
-    ! mv -f "$tmp" "$DEST/tfm-ffmpeg" 2>>"$RUN_LOG"; then
-    rm -f "$tmp" 2>/dev/null || true
-    step_warn "video thumbnails unavailable (install failed)"
-    return 0
-  fi
-  step_ok "video thumbnails · $(pretty_home "$DEST")/tfm-ffmpeg"
-}
-
-step_install_ffmpeg() {
-  # nothing to do when there is nothing to install from (the download step
-  # already warned with the reason; local mode has no source context at all)
-  if [ "$MODE" = "local" ]; then return 0; fi
-  if [ "$MODE" = "release" ] && [ -z "$FFMPEG_SRC" ]; then return 0; fi
-  step_begin "ffmpeg"
-  if [ "$MODE" = "release" ]; then
-    if ! run_child gunzip -f "$WORK/ffmpeg.gz"; then
-      step_warn "video thumbnails unavailable (unpack failed)"
-      return 0
-    fi
-    # gunzip inherits the .gz file's mode (curl writes 644), so the unpacked
-    # sidecar is NOT executable until marked — without this the run test below
-    # fails EACCES and refuses a working sidecar (install_binary chmods first).
-    if ! run_child chmod +x "$WORK/ffmpeg"; then
-      step_warn "video thumbnails unavailable (chmod failed)"
-      return 0
-    fi
-    # || true: every failure inside warns and returns 0 today, but a future
-    # nonzero return must never abort a working tfm install under set -e
-    install_ffmpeg_sidecar "$WORK/ffmpeg" || true
-  elif [ "$MODE" = "source" ]; then
-    if [ -f "$SRC_DIR/node_modules/ffmpeg-static/ffmpeg" ]; then
-      install_ffmpeg_sidecar "$SRC_DIR/node_modules/ffmpeg-static/ffmpeg" || true
-    else
-      step_warn "video thumbnails unavailable (no bundled binary in checkout)"
-    fi
   fi
 }
 
@@ -1284,6 +1194,14 @@ install_binary() { # install_binary SRC_FILE
   if [ -f "$DEST/tfm.bak" ] && [ ! -L "$DEST/tfm.bak" ]; then
     if rm -f "$DEST/tfm.bak" 2>>"$RUN_LOG"; then BAK_REMOVED=1; fi
   fi
+  # the video-thumbnail ffmpeg sidecar is GONE (video thumbs use the system
+  # ffmpeg now): sweep one left by an older install so it doesn't sit next to
+  # the binary forever. Same `! -L` rule as tfm.bak — a symlink by that name is
+  # the user's own, not ours to remove.
+  FFMPEG_SWEPT=0
+  if [ -f "$DEST/tfm-ffmpeg" ] && [ ! -L "$DEST/tfm-ffmpeg" ]; then
+    if rm -f "$DEST/tfm-ffmpeg" 2>>"$RUN_LOG"; then FFMPEG_SWEPT=1; fi
+  fi
 }
 
 step_install() {
@@ -1324,6 +1242,7 @@ step_install() {
     detail="$(pretty_home "$DEST")/tfm · tfm $SMOKE_VER runs"
   fi
   if [ "$BAK_REMOVED" = 1 ]; then detail="$detail · removed old tfm.bak"; fi
+  if [ "$FFMPEG_SWEPT" = 1 ]; then detail="$detail · removed old ffmpeg sidecar"; fi
   step_ok "$detail"
 }
 
@@ -1331,7 +1250,7 @@ step_install() {
 # Places tfm.desktop where desktops look for folder handlers, so "open with"
 # menus and xdg-mime know tfm exists. This never runs `xdg-mime default` —
 # becoming the default is the first-boot prompt's opt-in, where the user can
-# see tfm first. Warn-and-continue like the ffmpeg sidecar: a skipped entry
+# see tfm first. Warn-and-continue: a skipped entry
 # must never fail an otherwise working install.
 # Seams (tests): TFM_DESKTOP_SRC overrides the shipped entry, TFM_ICON_SRC
 # the shipped brand icon, and TFM_APPLICATIONS_DIR overrides the
@@ -1612,7 +1531,6 @@ step_system
 if [ "$MODE" = "release" ]; then
   step_download
   step_verify
-  step_download_ffmpeg
 elif [ "$MODE" = "source" ]; then
   step_toolchain
   step_fetch
@@ -1620,9 +1538,6 @@ elif [ "$MODE" = "source" ]; then
   step_build
 fi
 step_install
-if [ "$MODE" != "local" ]; then
-  step_install_ffmpeg
-fi
 install_desktop_entry
 if [ "$MODE" = "source" ]; then
   rule
