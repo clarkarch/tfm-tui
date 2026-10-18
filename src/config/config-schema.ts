@@ -1991,7 +1991,7 @@ const UI_ROWS: SchemaRow[] = [
     def: false,
     doc: "true = ask github about newer releases once a day and tell you when there is one (off by default: tfm makes no network requests of its own)",
     label: "update notices",
-    blurb: "Get told when a newer tfm exists",
+    blurb: "Notify when there's a newer tfm version",
     group: "advanced",
   },
   {
