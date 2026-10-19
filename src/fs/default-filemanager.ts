@@ -231,7 +231,7 @@ export const makeDefaultFileManagerPrompt = (
       deps.log(`default-file-manager prompt failed to open: ${errMessage(err)}`);
       try {
         (deps.notifySticky ?? deps.notify)(
-          "Make tfm the default file manager? · advanced → set as default file manager",
+          "Make tfm the default file manager? · advanced → set tfm as default manager",
         );
       } catch (err2) {
         deps.log(`default-file-manager fallback toast failed: ${errMessage(err2)}`);

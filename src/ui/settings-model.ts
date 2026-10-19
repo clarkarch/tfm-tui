@@ -285,12 +285,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
-  // one row for the whole default-file-manager story (advanced, last): an
-  // ACTION row, not a toggle — pressing it always spawns the Yes/No confirm
-  // UI, which is the ONLY path to the yes-flow. (A toggle was tried and
-  // deleted: its on/off paint promises live state while the confirm owns the
-  // outcome, so the switch visibly lied in both directions.) The blurb names
-  // the live handler, so what the system actually uses is visible right
+  // one row for the whole default-file-manager story (advanced, directly under
+  // launch time): an ACTION row, not a toggle — pressing it always spawns the
+  // Yes/No confirm UI, which is the ONLY path to the yes-flow. (A toggle was
+  // tried and deleted: its on/off paint promises live state while the confirm
+  // owns the outcome, so the switch visibly lied in both directions.) The blurb
+  // names the live handler, so what the system actually uses is visible right
   // under the row — a stale belief ("I said yes") dies on sight. The marker
   // file is the store — no config commit, so config-schema/example TOML
   // stay untouched. Fire-and-forget; the wiring toasts the outcome and the
@@ -303,8 +303,10 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     } catch {}
     return {
       kind: "action",
-      label: "set as default file manager",
-      blurb: handler ? `folders open in: ${shortHandler(handler)}` : "open folder links in tfm",
+      // label stays <= 30 chars: settingsWidths caps the label column there and
+      // the panel slices silently, so "tfm" must ride the short form
+      label: "set tfm as default manager",
+      blurb: handler ? `folders open in: ${shortHandler(handler)}` : "Make tfm open folder links",
       keepOpen: true,
       run: () => {
         const dfm = ctx.defaultFileManager;
@@ -394,7 +396,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     "scrimMode",
   ]);
 
-  const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
+  // `extras` injects a hand-built row INTO the schema stream, keyed by the prop
+  // it must sit after — the default-file-manager control reads as part of the
+  // boot/network pair under launch time, not as a config-level action at the end.
+  const genericUiRows = (
+    group: NonNullable<UiSchemaRow["group"]>,
+    extras: Partial<Record<string, SettingRow[]>> = {},
+  ): SettingRow[] => {
     const rows: SettingRow[] = [];
     // subsection dividers: one header row where the schema's subsection name
     // changes — including the first section, so every group with dividers is
@@ -422,6 +430,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }
       rows.push(built);
+      const injected = extras[row.prop];
+      if (injected) rows.push(...injected);
     }
     return rows;
   };
@@ -445,7 +455,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
   ];
 
   const advancedRows = (): SettingRow[] => [
-    ...genericUiRows("advanced"),
+    ...genericUiRows("advanced", { showLaunchTime: [defaultFileManagerRow()] }),
     {
       kind: "action",
       label: "reset to defaults",
@@ -463,12 +473,6 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         )?.unref();
       },
     },
-    // one row for the whole default-file-manager story, last in advanced:
-    // the value names the LIVE handler (never a stale belief), cycling
-    // re-opens the Yes/No/Ask prompt on demand. Ask-again keeps asking on
-    // boot; the marker file is the store, so config-schema/example TOML
-    // stay untouched.
-    defaultFileManagerRow(),
   ];
 
   const settingGroups = (): SettingGroup[] =>

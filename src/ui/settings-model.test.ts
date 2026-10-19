@@ -378,8 +378,8 @@ describe("settingGroups shape", () => {
       "drag threshold",
     ]);
     // hidden files splices in under the listing header; session persistence
-    // is its own section. the default-file-manager control lives in advanced
-    // (one row: the Ask-again pick re-opens the prompt on demand)
+    // is its own section. the default-file-manager control lives in advanced,
+    // under launch time (one row: the Ask-again pick re-opens the prompt)
     expect(seq("files & session")).toEqual([
       "##listing",
       "hidden files",
@@ -1017,7 +1017,7 @@ describe("hand-written rows", () => {
         },
       },
     });
-    const row = h.byLabel("set as default file manager");
+    const row = h.byLabel("set tfm as default manager");
     expect(row.kind).toBe("action");
     asAction(row).run();
     await settleUntil(() => asked === 1);
@@ -1042,14 +1042,14 @@ describe("hand-written rows", () => {
         },
       },
     });
-    asAction(h.byLabel("set as default file manager")).run();
+    asAction(h.byLabel("set tfm as default manager")).run();
     await settleUntil(() => asked === 1);
     expect(asked).toBe(1);
   });
 
   test("action row without wiring warns instead of throwing", () => {
     const h = mk();
-    const row = h.byLabel("set as default file manager");
+    const row = h.byLabel("set tfm as default manager");
     expect(row.kind).toBe("action");
     expect(() => asAction(row).run()).not.toThrow();
     expect(h.warns.map((w) => w.title)).toContain("default file manager");
@@ -1067,7 +1067,7 @@ describe("hand-written rows", () => {
     });
     // stale-yes state is visible in the footer: recorded yes, but the system
     // uses nautilus
-    const row = h.byLabel("set as default file manager");
+    const row = h.byLabel("set tfm as default manager");
     if (row.kind !== "action" || !row.blurb) throw new Error("row must carry the live handler blurb");
     expect(row.blurb).toContain("Nautilus");
   });
@@ -1082,9 +1082,9 @@ describe("hand-written rows", () => {
         record: () => {},
       },
     });
-    const row = h.byLabel("set as default file manager");
+    const row = h.byLabel("set tfm as default manager");
     if (row.kind !== "action" || !row.blurb) throw new Error("row must carry a fallback blurb");
-    expect(row.blurb).toBe("open folder links in tfm");
+    expect(row.blurb).toBe("Make tfm open folder links");
   });
 });
 
@@ -1208,7 +1208,7 @@ describe("config group", () => {
     expect(cfg.map((r) => r.label)).toContain("edit config.toml…");
   });
 
-  test("advanced ends with one default-file-manager row (action, always spawns the confirm)", () => {
+  test("advanced sits the default-manager row directly under launch time, and labels the action", () => {
     const h = mk(undefined, {
       defaultFileManager: {
         current: () => "org.gnome.Nautilus.desktop",
@@ -1219,9 +1219,20 @@ describe("config group", () => {
       },
     });
     const rows = h.groups().find((g) => g.header === "advanced")!.rows;
-    const row = rows[rows.length - 1]!;
+    // the control rides the boot/debug pair at the top of advanced (it answers
+    // "what opens my folders?"), not the tail past the config-level actions
+    expect(rows.map((r) => r.label)).toEqual([
+      "update notices",
+      "launch time",
+      "set tfm as default manager",
+      "reset to defaults",
+      "edit config.toml…",
+    ]);
+    const row = rows[rows.findIndex((r) => r.label === "launch time") + 1]!;
     expect(row.kind).toBe("action");
-    expect(row.label).toBe("set as default file manager");
+    // the row label must fit the label column (settingsWidths caps at 30) or
+    // the panel silently slices it mid-word
+    expect(rows.every((r) => r.label.length <= 30 || r.kind === "header")).toBe(true);
   });
 });
 
