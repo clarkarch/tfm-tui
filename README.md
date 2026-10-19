@@ -107,20 +107,12 @@ bun run compile && cp dist/tfm ~/.local/bin/
 
 ## Update
 
+`esc` → About or:
+
 ```bash
 tfm update
 ```
-
-It asks GitHub for the newest release, shows you what it found, and asks before
-changing anything. `tfm update --tag v1.0.0` pins a release, `--force` installs
-again even when you already have it. The work itself is handed to `install.sh`,
-the same script as the one-liner above.
-
-Tfm also tells you when there is something new: turn on `update notices` in
-`esc` → Settings → advanced (off by default, tfm makes no network requests of
-its own), and the About panel has a row you can click to check at any time.
-Source builds update with `source.sh` instead, and `tfm update` says so rather
-than swapping a dev build for a release.
+`--tag v1.0.0` pins a release, `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings. Source builds use [source.sh](source.sh).
 
 ## Keys
 
