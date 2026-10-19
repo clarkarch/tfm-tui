@@ -54,6 +54,9 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 - Tabs + dual pane.
 - Connect to network servers.
 - Extract and compress archives.
+- Browse inside archives (tar, zip, 7z, rar) as folders.
+- Eject USB drives safely; plug and unplug detected live.
+- Set tfm as your default file manager.
 - Embedded terminal.
 - Clipboard copy/paste with other apps.
 - Open privileged files with sudo prompt.
@@ -71,6 +74,7 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
   - `magick` (extra photo thumbnails)
   - `gio` (starred files and servers)
   - `udisksctl` (USB drives)
+  - `ffmpeg` (video thumbnails)
   - `wl-clipboard` / `xclip` (copy and paste with other apps)
   - `tar` / `unzip` / `zip` / `7z` (zip files and archives)
 

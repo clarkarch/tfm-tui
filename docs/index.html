@@ -233,7 +233,7 @@
     </div>
     <div class="card">
       <h3>Desktop integration</h3>
-      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl. Undo/redo for every reversible operation: permanent delete / empty trash cannot be undone.</p>
+      <p>GTK bookmarks, recently-used files, XDG trash with restore, system clipboard bridge with GUI apps, removable drives via udisksctl — eject unmounts every partition and powers the disk off, and plug/unplug shows up live. Opt in to make tfm your default file manager. Undo/redo for every reversible operation: permanent delete / empty trash cannot be undone.</p>
     </div>
     <div class="card">
       <h3>Embedded terminal</h3>
@@ -257,7 +257,7 @@
     </div>
     <div class="card">
       <h3>Archives</h3>
-      <p>Right-click → <i>Extract Here</i> (staged, conflict prompt, undoable) or <i>Compress to…</i> across 13 formats, from tar.gz to 7z.</p>
+      <p>Open a tar.gz, zip, 7z (even a read-only rar) as a folder you can walk and preview, or right-click → <i>Extract Here</i> (staged, conflict prompt, undoable) / <i>Compress to…</i> across 13 formats.</p>
     </div>
     <div class="card">
       <h3>Plugins</h3>
@@ -291,6 +291,7 @@
       <tr><td><kbd>enter</kbd> / <kbd>f2</kbd></td><td>open / rename</td></tr>
       <tr><td><kbd>backspace</kbd> / <kbd>alt</kbd>+<kbd>up</kbd></td><td>parent directory</td></tr>
       <tr><td><kbd>esc</kbd></td><td>menu (settings, view mode, sort, …)</td></tr>
+      <tr><td><kbd>ctrl</kbd>+<kbd>p</kbd></td><td>command palette · run any action</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>q</kbd></td><td>quit</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>z</kbd> / <kbd>ctrl</kbd>+<kbd>y</kbd></td><td>undo / redo (<kbd>ctrl</kbd>+<kbd>shift</kbd>+<kbd>z</kbd> also redoes)</td></tr>
       <tr><td><kbd>ctrl</kbd>+<kbd>x</kbd> / <kbd>c</kbd> / <kbd>v</kbd></td><td>cut / copy / paste</td></tr>
@@ -375,7 +376,6 @@ quit <span class="c">=</span> [<span class="s">"ctrl+q"</span>]    <span class="
       <ul>
         <li>cross-app drag &amp; drop is kitty-only</li>
         <li>mouse on the Linux console (TTY) needs <code>gpm</code> running</li>
-        <li>icons can show a black box behind open menus or while rubber-band selecting</li>
         <li>custom kitty themes can misbehave</li>
       </ul>
     </div>
