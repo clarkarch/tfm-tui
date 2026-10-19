@@ -248,7 +248,7 @@ describe("esc-menu root view", () => {
       const deadline = Date.now() + 2000;
       while (warns.length === 0 && Date.now() < deadline) await Bun.sleep(20);
       await t.renderOnce();
-      expect(warns.some((w) => w[1] === "menu" && w[0].toLowerCase().includes("failed to render"))).toBe(true);
+      expect(warns.some((w) => w[1] === "menu" && w[0].toLowerCase().includes("render failed"))).toBe(true);
     } finally {
       groups = saved;
       menu.closeMenu();
@@ -339,7 +339,7 @@ describe("settings view", () => {
     const frame = t.captureCharFrame();
     expect(frame).toContain("show hidden");
     expect(frame).toContain("sidebar width");
-    expect(frame).toContain("Menu — settings");
+    expect(frame).toContain("Menu · settings");
   });
 
   test("settings panel fills the terminal (adaptive width, not fixed 78)", async () => {
@@ -1070,7 +1070,7 @@ describe("plugins view (separate from settings)", () => {
     const frame = t.captureCharFrame();
     expect(frame).toContain("Say hello");
     expect(frame).toContain("enabled"); // core-built on/off toggle, first row
-    expect(frame).toContain("Menu — plugins");
+    expect(frame).toContain("Menu · plugins");
     // core settings stay out of the plugins view
     expect(frame).not.toContain("sidebar width");
     plugGroups = [];
@@ -1225,7 +1225,7 @@ describe("help view", () => {
     menu.menuActivate();
     await t.renderOnce();
     frame = t.captureCharFrame();
-    expect(frame).toContain("Menu — about");
+    expect(frame).toContain("Menu · about");
     expect(frame).toContain("terminal file manager");
     expect(requestedIcons).toContain("tfm");
     // cursorless: arrows and enter are no-ops, the view stays put
@@ -1233,7 +1233,7 @@ describe("help view", () => {
     menu.moveMenu(-1);
     menu.menuActivate();
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("Menu — about");
+    expect(t.captureCharFrame()).toContain("Menu · about");
     menu.closeMenu();
     await t.renderOnce();
   });

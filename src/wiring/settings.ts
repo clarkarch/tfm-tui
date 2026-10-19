@@ -117,7 +117,7 @@ export const wireSettings = (deps: {
     void (async () => {
       try {
         if (!Bun.which("git")) {
-          chrome.notify("git not found — install git to add plugins", "plugins");
+          chrome.notify("git not found · install git", "plugins");
           return;
         }
         // getPrompt closes over the last-wired cluster (TDZ): post-boot only
@@ -127,11 +127,11 @@ export const wireSettings = (deps: {
         try {
           prompt = getPrompt();
         } catch {
-          chrome.notify("prompt unavailable (still booting?)", "plugins");
+          chrome.notify("Prompt unavailable · still booting", "plugins");
           return;
         }
         const raw = await prompt.open({
-          title: "Add plugin — runs code as you",
+          title: "Add plugin · runs code as you",
           placeholder: "https://github.com/owner/repo[#ref] [subdir]",
           okLabel: "Clone",
         });
@@ -147,7 +147,7 @@ export const wireSettings = (deps: {
         // normalize to a different final name — that error surfaces below)
         try {
           if (existsSync(path.join(pluginsDir(), name))) {
-            chrome.notify(`"${name}" is already installed (remove it first)`, "add plugin");
+            chrome.notify(`Already installed · remove first`, "add plugin");
             return;
           }
         } catch {}
@@ -167,11 +167,7 @@ export const wireSettings = (deps: {
           chrome.notify(`Installed ${res.name}`, "plugins");
         } catch (err) {
           if (err instanceof AmbiguousPluginError) {
-            const sample = err.candidates.slice(0, 3).join(", ");
-            chrome.notify(
-              `Repo holds ${err.candidates.length} plugins (${sample}) — retry as: URL subdir`,
-              "add plugin",
-            );
+            chrome.notify(`Repo has ${err.candidates.length} plugins · retry with URL subdir`, "add plugin");
           } else {
             chrome.notify(errMessage(err), "add plugin");
           }
@@ -193,7 +189,7 @@ export const wireSettings = (deps: {
       try {
         const out = await updatePlugin({ dir: pluginsDir(), name });
         dlog(`plugin updated: ${name}: ${out}`);
-        chrome.notify(`${name}: ${out}`, "plugins");
+        chrome.notify(`${name} · ${out}`, "plugins");
       } catch (err) {
         chrome.notify(errMessage(err), "plugins");
         return;

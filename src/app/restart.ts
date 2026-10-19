@@ -112,7 +112,7 @@ export const makeRestart =
     // spawnSync, and the child's orphan sweep could delete the paused op's
     // staging temp mid-copy (the op would die silently once resumed)
     if ((ctx.isBusy ?? (() => false))()) {
-      ctx.notify?.("Can't restart during file operations — cancel (✕) or wait for it to finish", "restart", "error");
+      ctx.notify?.("Can't restart · file op running", "restart", "error");
       return;
     }
     const preFailed = runTeardownSteps(ctx);

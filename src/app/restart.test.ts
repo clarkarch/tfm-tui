@@ -152,10 +152,7 @@ describe("makeRestart", () => {
   test("busy queue refuses before teardown (live transfer keeps its staging temp)", () => {
     const calls: string[] = [];
     makeRestart(mkCtx(calls, { busy: true }))();
-    expect(calls).toEqual([
-      "preflight:/usr/bin/tfm",
-      "notify:Can't restart during file operations — cancel (✕) or wait for it to finish",
-    ]);
+    expect(calls).toEqual(["preflight:/usr/bin/tfm", "notify:Can't restart · file op running"]);
   });
 
   test("teardown failure still spawns, then exits 1", () => {

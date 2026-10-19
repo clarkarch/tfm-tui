@@ -199,7 +199,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     sendDragIcon(entries.length);
     write(startDragFrame(), "start drag");
     ctx.setStatusMsg(
-      `Dragging ${entries.length} item${entries.length === 1 ? "" : "s"} — drop into another app or a folder`,
+      `Dragging ${entries.length} item${entries.length === 1 ? "" : "s"} · drop into another app or a folder`,
     );
   };
 
@@ -342,7 +342,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       rmSync(st.stagingDir, { recursive: true, force: true });
     } catch {}
     write(cancelDropFrame(), "remote drop aborted");
-    if (reason) ctx.notify(`Remote drop failed (${reason})`, "drop failed", "error");
+    if (reason) ctx.notify(`Remote drop failed · ${reason}`, "drop failed", "error");
   };
 
   // send one fetch request and resolve with the reassembled bytes + kind when
@@ -462,7 +462,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     const lines = listText.split(/\r?\n/).filter(Boolean);
     if (!lines.length || lines.some((l) => !l.startsWith("file://"))) {
       write(cancelDropFrame(), "remote drop rejected");
-      if (lines.length) ctx.notify("Remote drop has unsupported entries (only file://)", "drop failed", "error");
+      if (lines.length) ctx.notify("Remote drop · unsupported entries", "drop failed", "error");
       return;
     }
     if (remoteFetch) {
@@ -667,7 +667,7 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     if (ctx.virtualCwd()) {
       // virtual places have no folder to land in — refuse before any fetching
       write(remote ? cancelDropFrame() : finishDropFrame(), `finish drop idx=${idx} refused`);
-      ctx.notify("Drops land in a real folder", "drop", "info");
+      ctx.notify("Drops need a real folder", "drop", "info");
       return;
     }
     if (remote) {

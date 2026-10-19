@@ -408,7 +408,7 @@ describe("precedence chain", () => {
     h.key("escape");
     h.key("down");
     h.key("x");
-    expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard — click the grid to leave"]);
+    expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard"]);
   });
 
   test("path edit: esc exits, everything else swallowed", () => {
@@ -1359,7 +1359,7 @@ describe("type-to-search toggle + yazi-style bare binds", () => {
     h.setTypeToSearch(false);
     h.key("s");
     expect(h.calls).toContain("search:enable");
-    expect(h.calls).toContain("notify:search:info:type-to-search on · type to filter, esc clears");
+    expect(h.calls).toContain("notify:search:info:Type-to-search on");
   });
 
   test("cycleSort + goHome dispatch through binds", () => {

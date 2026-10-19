@@ -264,7 +264,7 @@ describe("single-file properties", () => {
     props.openProperties(path.join(sandbox, "vanished.txt"));
     await t.renderOnce();
     expect(props.isOpen()).toBe(false);
-    expect(statusMsgs).toContain("properties:error:Can't show properties (source gone)");
+    expect(statusMsgs).toContain("properties:error:Can't show properties");
   });
 
   test("exec checkbox only exists for exec-capable files (shebang/ext/mode)", async () => {

@@ -147,7 +147,7 @@ describe("makeRename (renderer)", () => {
     await t.renderOnce();
     const undoCalls = calls.filter((c) => c.startsWith("undo:"));
     expect(undoCalls).toEqual(["undo:new file notes.txt:1:1"]); // single batch, final name
-    expect(calls).toContain("notify:create:success:Created notes.txt · ctrl+z to undo");
+    expect(calls).toContain("notify:create:success:Created notes.txt");
     expect(calls.some((c) => c.startsWith("rename:"))).toBe(false); // no rename detour
     expect(calls).toContain("renderAll");
     // the file landed under the typed name; no placeholder left behind
@@ -173,7 +173,7 @@ describe("makeRename (renderer)", () => {
     while (!calls.some((c) => c.startsWith("undo:new file")) && Date.now() < landed) await Bun.sleep(5);
     expect(readFileSync(path.join(dir, "taken.txt"), "utf8")).toBe("precious");
     expect(existsSync(path.join(dir, "taken (copy).txt"))).toBe(true);
-    expect(calls).toContain("notify:create:success:Created taken (copy).txt · ctrl+z to undo");
+    expect(calls).toContain("notify:create:success:Created taken (copy).txt");
   });
 
   test("cancelling a rename restores the label at its ORIGINAL row index (not the end)", async () => {

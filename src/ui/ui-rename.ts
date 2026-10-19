@@ -166,19 +166,19 @@ export const makeRename = (ctx: RenameCtx) => {
         void landCreate()
           .then((target) => {
             if (createKind) pushCreateBatch(createKind, target);
-            const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
+            const msg = `Created ${path.basename(target)}`;
             ctx.notify(msg, "create", "success");
             void ctx.renderAll();
           })
           .catch((err: unknown) => {
             // the placeholder still exists under the old name — repaint it
-            ctx.notify(`Create failed (${fsErrText(err)})`, "create failed", "error");
+            ctx.notify(`Create failed · ${fsErrText(err)}`, "create failed", "error");
             void ctx.renderAll();
           });
         return;
       }
       pushCreateBatch(edit.createKind, k);
-      const msg = `Created ${value} · ctrl+z to undo`;
+      const msg = `Created ${value}`;
       ctx.notify(msg, "create", "success");
       return;
     }
@@ -209,7 +209,7 @@ export const makeRename = (ctx: RenameCtx) => {
     const tile = ctx.byId(refs.tileId);
     const label = ctx.byId(refs.labelId);
     if (!tile || !label || !existsSync(key)) {
-      ctx.notify("Can't rename here (source gone)", "rename", "error");
+      ctx.notify("Can't rename · source gone", "rename", "error");
       return;
     }
     // remember where the label sits so finishInlineRename can restore it in
@@ -288,7 +288,7 @@ export const makeRename = (ctx: RenameCtx) => {
         startInlineRename(target, kind);
       })
       .catch((err) => {
-        const summary = `Create failed (${fsErrText(err)})`;
+        const summary = `Create failed · ${fsErrText(err)}`;
         ctx.notify(summary, "create failed", "error");
       });
   };

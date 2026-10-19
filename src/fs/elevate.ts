@@ -53,7 +53,7 @@ export type SudoAuthDeps = {
 export const ensureSudoAuth = async (deps: SudoAuthDeps, opLabel = "file operation"): Promise<boolean> => {
   if (await deps.cached()) return true;
   if (!(deps.available?.() ?? sudoAvailable())) {
-    deps.notify("Permission denied (no sudo found)", "sudo", "error");
+    deps.notify("Permission denied · sudo missing", "sudo", "error");
     return false;
   }
   for (let attempt = 0; attempt < 3; attempt++) {

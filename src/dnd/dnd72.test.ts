@@ -203,7 +203,7 @@ describe("incoming drop", () => {
     feed("t=r:x=1");
     await settleUntil(() => notes.length > 0);
     expect(ctx.runTransfers).toEqual([]);
-    expect(notes).toContain("drop:info: Drops land in a real folder");
+    expect(notes).toContain("drop:info: Drops need a real folder");
   });
 
   test("keyless continuation chunks complete the drop (kitty omits keys)", async () => {
@@ -1067,7 +1067,7 @@ describe("wire errors", () => {
     feed("t=o:x=64:y=10");
     feed("t=E", "OK");
     expect(notes).toEqual([]);
-    expect(status).toEqual(["Dragging 1 item — drop into another app or a folder"]);
+    expect(status).toEqual(["Dragging 1 item · drop into another app or a folder"]);
     gridDrag.keys = null;
   });
 });

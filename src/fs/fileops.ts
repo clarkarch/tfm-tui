@@ -291,7 +291,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       await fn();
     } catch (err) {
       ctx.log(`${noun} failed: ${fsErrText(err)}`);
-      ctx.notify(`${noun} failed (${fsErrText(err)})`, noun.toLowerCase(), "error");
+      ctx.notify(`${noun} failed · ${fsErrText(err)}`, noun.toLowerCase(), "error");
       try {
         ctx.renderAll();
       } catch {}
@@ -412,8 +412,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // the user's trash, so the unprivileged restore fails EACCES — retry
   // privileged behind one gate instead of stranding the victim (the failure
   // mode trash/restore refuse to create by never escalating). Journal replay
-  // stays best-effort unprivileged (the persisted steps carry no privilege),
-  // covered by the "(may need permission)" hint.
+  // stays best-effort unprivileged (the persisted steps carry no privilege).
   const sudoStashVictim = async (victimDest: string, units: UndoUnit[], dUnits: UndoStep[]): Promise<boolean> => {
     try {
       const trashLoc = await xdgTrashMoveToRoot(victimDest, trashDir(), sudoMove);
@@ -531,11 +530,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const failWhy = new Set<string>();
     const total = srcs.length;
     // sudo gate memoized per op: one password prompt per batch, not per file.
-    // usedSudo marks the toast hint: set ONLY when a sudo success lands undo
-    // units (gate passes for cleanup-only paths must not qualify later
-    // unprivileged successes).
     let sudoOk: boolean | null = null;
-    let usedSudo = false;
     const needSudo = async (): Promise<boolean> => {
       if (sudoOk !== null) return sudoOk;
       sudoOk = ctx.ensureSudo ? await ctx.ensureSudo(label) : false;
@@ -622,7 +617,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               const sudoStashed =
                 isPrivilegeError(stashErr) && (await needSudo()) && (await sudoStashVictim(target, units, dUnits));
               if (sudoStashed) {
-                usedSudo = true;
                 replaced++;
               } else {
                 failWhy.add(fsErrText(stashErr));
@@ -753,7 +747,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                   }
                 } else await sudoMove(src, target);
                 recordSuccess();
-                usedSudo = true;
                 continue;
               } catch (sudoErr) {
                 failure = sudoErr;
@@ -786,7 +779,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       prog.active = false;
     }
     // a fully-failed batch carries no units — pushing it pollutes the undo
-    // stack with a redoable no-op ("Undid: rename 0 items"); stashed victims
+    // stack with a redoable no-op ("Undid rename 0 items"); stashed victims
     // still count (their restore unit is in units even when the op failed)
     if (units.length) ctx.pushUndoBatch(label, units, redos, { units: dUnits, redos: dRedos });
     ctx.renderAll();
@@ -803,7 +796,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (gone) bits.push(`${gone} source gone`);
     if (selfDrop) bits.push(`${selfDrop} folder into itself`);
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (ok || replaced) bits.push(usedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     // always surface the outcome — success, failure, or cancel
     finishOpSummary(op, opNoun, `${verb} ${ok}`, msg, [...srcs], destDir, cancelled, failed);
@@ -838,7 +830,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // one password gate per rename (stash + main share it — two prompts for
     // one rename is the UX bug this memo avoids)
     let renameSudoOk: boolean | null = null;
-    let renameUsedSudo = false;
     const needRenameSudo = async (): Promise<boolean> => {
       if (renameSudoOk !== null) return renameSudoOk;
       renameSudoOk = ctx.ensureSudo ? await ctx.ensureSudo(`rename ${path.basename(p)}`) : false;
@@ -865,9 +856,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             isPrivilegeError(renameStashErr) &&
             (await needRenameSudo()) &&
             (await sudoStashVictim(finalDest, units, dUnits));
-          if (sudoStashed) renameUsedSudo = true;
-          else {
-            ctx.notify("Replace failed — existing file kept", "rename failed", "error");
+          if (!sudoStashed) {
+            ctx.notify("Replace failed · file kept", "rename failed", "error");
             ctx.renderAll();
             return;
           }
@@ -904,7 +894,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           try {
             await sudoMove(p, finalDest);
             pushRenameUnits();
-            renameUsedSudo = true;
             failure = null;
           } catch (sudoErr) {
             failure = sudoErr;
@@ -927,14 +916,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     }
     ctx.renderAll();
     if (renameFailed) {
-      ctx.notify(`Rename failed (${renameFailed})`, "rename failed", "error");
+      ctx.notify(`Rename failed · ${renameFailed}`, "rename failed", "error");
       try {
         ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 1 });
       } catch {}
     } else {
-      // the arrow names both ends so multi-tab renames stay clear
-      const renameHint = renameUsedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo";
-      ctx.notify(`Renamed ${path.basename(p)} → ${path.basename(finalDest)} · ${renameHint}`, "rename", "success");
+      ctx.notify(`Renamed ${path.basename(p)}`, "rename", "success");
       try {
         ctx.onFileOp?.("rename", [p], finalDest, { cancelled: false, failed: 0 });
       } catch {}
@@ -973,7 +960,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let failed = 0;
     const failWhy = new Set<string>();
     let bulkSudoOk: boolean | null = null;
-    let bulkUsedSudo = false;
     for (const { from, to } of pairs) {
       const recordBulk = (): void => {
         units.push(() => safeRestoreMove(to, from).then(() => undefined));
@@ -1016,7 +1002,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           } else if (bulkSudoOk) {
             try {
               await sudoMove(from, to);
-              bulkUsedSudo = true;
               recordBulk();
               continue;
             } catch (sudoErr) {
@@ -1033,7 +1018,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     ctx.renderAll();
     const bits = [`Renamed ${ok} item${ok === 1 ? "" : "s"}`];
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (ok) bits.push(bulkUsedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     ctx.notify(msg, failed ? "rename failed" : "rename", failed ? "error" : "success");
     try {
@@ -1103,7 +1087,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // staging, not done — "Copied …" here made paste look already finished
     if (clipboard && !same)
       ctx.notify(
-        `${mode === "cut" ? "Cut" : "Copy"} ${items.length} item${items.length === 1 ? "" : "s"} · paste to complete`,
+        `${mode === "cut" ? "Cut" : "Copy"} ${items.length} item${items.length === 1 ? "" : "s"} · then paste`,
         mode,
         "info",
       );
@@ -1274,7 +1258,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let cancelled = false;
     // one password gate per op (same memo pattern as runTransferInner)
     let archiveSudoOk: boolean | null = null;
-    let usedSudo = false;
     const needArchiveSudo = async (): Promise<boolean> => {
       if (archiveSudoOk !== null) return archiveSudoOk;
       archiveSudoOk = ctx.ensureSudo ? await ctx.ensureSudo("extract") : false;
@@ -1399,8 +1382,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                   isPrivilegeError(stashErr) &&
                   (await needArchiveSudo()) &&
                   (await sudoStashVictim(target, units, dUnits));
-                if (sudoStashed) usedSudo = true;
-                else {
+                if (!sudoStashed) {
                   failWhy.add(fsErrText(stashErr));
                   failed++;
                   continue;
@@ -1440,10 +1422,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (units.length)
       ctx.pushUndoBatch(`extract ${ok} archive${ok === 1 ? "" : "s"}`, units, [], { units: dUnits, redos: [] });
     ctx.renderAll();
-    const bits = [cancelled ? `Extract cancelled (${ok} done)` : `Extracted ${ok} archive${ok === 1 ? "" : "s"}`];
+    const bits = [cancelled ? `Extract cancelled · ${ok} done` : `Extracted ${ok} archive${ok === 1 ? "" : "s"}`];
     if (skipped) bits.push(`${skipped} skipped`);
     if (failed) bits.push(failSuffix(failed, failWhy));
-    if (units.length && !cancelled) bits.push(usedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     finishOpSummary("extract", "Extract", `Extracted ${ok}`, msg, [...files], destDir, cancelled, failed);
   };
@@ -1475,7 +1456,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let cancelled = false;
     // one password gate per op (same memo pattern as runTransferInner)
     let archiveSudoOk: boolean | null = null;
-    let usedSudo = false;
     const needArchiveSudo = async (): Promise<boolean> => {
       if (archiveSudoOk !== null) return archiveSudoOk;
       archiveSudoOk = ctx.ensureSudo ? await ctx.ensureSudo("compress") : false;
@@ -1508,9 +1488,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         if (!stashed) {
           const sudoStashed =
             isPrivilegeError(stashErr) && (await needArchiveSudo()) && (await sudoStashVictim(out, units, dUnits));
-          if (sudoStashed) usedSudo = true;
-          else {
-            ctx.notify("Replace failed — existing archive kept", "compress failed", "error");
+          if (!sudoStashed) {
+            ctx.notify("Replace failed · archive kept", "compress failed", "error");
             return;
           }
         }
@@ -1580,7 +1559,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const bits = [cancelled ? "Compress cancelled" : `Compressed ${path.basename(out)}`];
     if (failed) bits.push(failSuffix(failed, failWhy));
     if (!failed && !cancelled && warns.length) bits.push(...warns);
-    if (!failed && !cancelled) bits.push(usedSudo ? "ctrl+z to undo (may need permission)" : "ctrl+z to undo");
     const msg = bits.join(" · ");
     finishOpSummary("compress", "Compress", `${base}${ext}`, msg, srcs, out, cancelled, failed);
   };

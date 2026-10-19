@@ -560,7 +560,7 @@ export const makeTerminal = (ctx: TermCtx) => {
         onData: handlePtyData,
       });
     } catch (err) {
-      ctx.notify(`terminal failed (${fsErrText(err)})`, "terminal", "error");
+      ctx.notify(`Terminal failed · ${fsErrText(err)}`, "terminal", "error");
       closeTerminalPane();
       return;
     }

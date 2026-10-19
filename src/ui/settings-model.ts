@@ -228,7 +228,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       },
       setIdx: (i) => {
         if (ctx.isTtyMode?.()) {
-          ctx.warn("theme is fixed on the console — presets apply back on a graphical terminal", "theme");
+          ctx.warn("Theme fixed on console", "theme");
           return;
         }
         if (i === 0) {
@@ -315,7 +315,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         void dfm
           .ask()
           .then((surfaced) => {
-            if (!surfaced) ctx.warn("already settled — nothing to ask", "default file manager");
+            if (!surfaced) ctx.warn("Already settled · nothing to ask", "default file manager");
           })
           .catch((err) => {
             try {

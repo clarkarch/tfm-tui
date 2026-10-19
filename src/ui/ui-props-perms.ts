@@ -73,7 +73,7 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
     } catch (err) {
       // one toast, not a status write: toasts are non-modal chrome above the
       // dialog (same stack as the progress toast), so nothing fights
-      ctx.notify(`Chmod failed (${fsErrText(err)})`, "permissions", "error");
+      ctx.notify(`Chmod failed · ${fsErrText(err)}`, "permissions", "error");
       return;
     }
     try {

@@ -351,7 +351,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     lastRenderSig = renderSig(ctx.config);
     if (ctx.config.ui.forceGlyph && !lastForceGlyph) {
       try {
-        ctx.notify("force glyph is on, list view pairs best with it", "tty", "info");
+        ctx.notify("Force glyph on · use list view", "tty", "info");
       } catch {}
     }
     lastForceGlyph = ctx.config.ui.forceGlyph;
@@ -359,7 +359,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // say so once per rising edge, same one-shot shape as forceGlyph
     if (ctx.config.ui.followTerminal && ctx.isTtyMode?.() && !lastFollowTerminalWarned) {
       try {
-        ctx.notify("follow-terminal can't run on this console, static palette paints instead", "tty", "info");
+        ctx.notify("Console · static palette", "tty", "info");
       } catch {}
     }
     lastFollowTerminalWarned = ctx.config.ui.followTerminal;
@@ -486,7 +486,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       if (sig !== lastConflictSig) {
         lastConflictSig = sig;
         const text = describeKeybindConflicts(fresh);
-        if (text) ctx.notify(`${text} — Settings → keys`, "keybind conflict");
+        if (text) ctx.notify(`${text} · Settings → keys`, "keybind conflict");
       }
     } catch {}
   });

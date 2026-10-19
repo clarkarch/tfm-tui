@@ -613,7 +613,7 @@ describe("performBulkRename", () => {
     expect(existsSync(path.join(ROOT, "bulk-B.txt"))).toBe(true);
     expect(existsSync(a)).toBe(false);
     expect(h.calls).toContain("undo:rename 2 items:2:2");
-    expect(h.calls).toContain("notify:rename:success:Renamed 2 items · ctrl+z to undo");
+    expect(h.calls).toContain("notify:rename:success:Renamed 2 items");
   });
 
   test("a vanished source is reported FAILED; the rest still land", async () => {
@@ -824,12 +824,12 @@ describe("human-friendly statuses and labels", () => {
     expect(existsSync(src)).toBe(true);
   });
 
-  test("performRename success names both ends in status and notify", async () => {
+  test("performRename success reports the renamed name", async () => {
     const h = makeHarness();
     const src = path.join(ROOT, "old-name.txt");
     W(src, "data");
     await h.ops.performRename(src, "new-name.txt");
-    expect(h.calls).toContain("notify:rename:success:Renamed old-name.txt → new-name.txt · ctrl+z to undo");
+    expect(h.calls).toContain("notify:rename:success:Renamed old-name.txt");
     expect(h.calls.some((c) => c.startsWith("undo:rename old-name.txt → new-name.txt:1:"))).toBe(true);
   });
 
@@ -851,15 +851,15 @@ describe("human-friendly statuses and labels", () => {
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 
-  test("setClipboard stages (not done): Copy/Cut … · paste to complete", () => {
+  test("setClipboard stages (not done): Copy/Cut … · then paste", () => {
     const h = makeHarness();
     h.ops.setClipboard("copy", [
       { path: "/a", isDir: false },
       { path: "/b", isDir: false },
     ]);
-    expect(h.calls).toContain("notify:copy:info:Copy 2 items · paste to complete");
+    expect(h.calls).toContain("notify:copy:info:Copy 2 items · then paste");
     h.ops.setClipboard("cut", [{ path: "/a", isDir: false }]);
-    expect(h.calls).toContain("notify:cut:info:Cut 1 item · paste to complete");
+    expect(h.calls).toContain("notify:cut:info:Cut 1 item · then paste");
   });
 
   test("re-staging the identical clipboard stays silent (autorepeat coalesces)", () => {
@@ -873,7 +873,7 @@ describe("human-friendly statuses and labels", () => {
     expect(h.calls.filter((c) => c.startsWith("notify:copy:info:Copy"))).toHaveLength(1);
     // a genuine change (mode flip) still reports
     h.ops.setClipboard("cut", items);
-    expect(h.calls).toContain("notify:cut:info:Cut 2 items · paste to complete");
+    expect(h.calls).toContain("notify:cut:info:Cut 2 items · then paste");
   });
 
   test("paste labels carry counts and destination", async () => {
@@ -887,7 +887,7 @@ describe("human-friendly statuses and labels", () => {
     const deadline = Date.now() + 2000;
     while (!h.calls.some((c) => c.startsWith("undo:")) && Date.now() < deadline) await Bun.sleep(10);
     expect(h.calls.some((c) => c.startsWith("undo:paste 1 item:1:"))).toBe(true);
-    expect(h.calls).toContain("notify:copy:success:Copied 1 item to ~/label-dest · ctrl+z to undo");
+    expect(h.calls).toContain("notify:copy:success:Copied 1 item to ~/label-dest");
   });
 
   test("moveInto labels carry counts and destination", async () => {
@@ -1004,7 +1004,7 @@ describe("rename undo / replace-stash guards", () => {
     await h.ops.performRename(a, "m1-ren-b.txt");
     expect(readFileSync(b, "utf8")).toBe("OLD");
     expect(readFileSync(a, "utf8")).toBe("A");
-    expect(h.calls).toContain("notify:rename failed:error:Replace failed — existing file kept");
+    expect(h.calls).toContain("notify:rename failed:error:Replace failed · file kept");
   });
 });
 
@@ -1024,7 +1024,7 @@ describe("extractArchive", () => {
     expect(readdirSync(destDir)).toEqual(["foo"]);
     expect(runs[0]!.args).toContain("-x");
     expect(h.calls.some((c) => c.startsWith("undo:extract 1 archive:1:0"))).toBe(true);
-    expect(h.calls).toContain("notify:extract:success:Extracted 1 archive · ctrl+z to undo");
+    expect(h.calls).toContain("notify:extract:success:Extracted 1 archive");
   });
 
   test("a tool that writes outside staging is refused and the escape is trashed", async () => {
@@ -1124,7 +1124,7 @@ describe("extractArchive", () => {
     expect(runs.length).toBe(1);
     // nothing landed, so no undo batch (production drops empty batches)
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
-    expect(h.calls).toContain("notify:extract cancelled:info:Extract cancelled (0 done)");
+    expect(h.calls).toContain("notify:extract cancelled:info:Extract cancelled · 0 done");
   });
 
   test("cancel wakes a paused child (SIGCONT) before hard-killing it", async () => {
@@ -1148,7 +1148,7 @@ describe("extractArchive", () => {
 
     // SIGCONT first: a SIGSTOPped process ignores SIGKILL until resumed
     expect(killed).toEqual(["SIGCONT", "SIGKILL"]);
-    expect(h.calls).toContain("notify:extract cancelled:info:Extract cancelled (0 done)");
+    expect(h.calls).toContain("notify:extract cancelled:info:Extract cancelled · 0 done");
   });
 
   test("undo units trash the entries that landed (executed, not just recorded)", async () => {
@@ -1203,7 +1203,7 @@ describe("extractArchive", () => {
     await h.ops.extractArchive([archive], destDir);
 
     expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("extracted");
-    expect(h.calls).toContain("notify:extract:success:Extracted 1 archive · ctrl+z to undo");
+    expect(h.calls).toContain("notify:extract:success:Extracted 1 archive");
   });
 
   test("an archive whose entries all collide-and-skip advertises no undo", async () => {
@@ -1217,7 +1217,8 @@ describe("extractArchive", () => {
 
     await h.ops.extractArchive([archive], destDir);
 
-    expect(h.calls.some((c) => c.includes("ctrl+z to undo"))).toBe(false);
+    // the observable invariant is the absent undo batch (a toast hint is
+    // no longer part of notification text)
     expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
   });
 
@@ -1275,7 +1276,7 @@ describe("compressPaths", () => {
       "b.txt",
     ]);
     expect(h.calls.some((c) => c.startsWith("undo:compress archive.tar.gz:1:0"))).toBe(true);
-    expect(h.calls).toContain("notify:compress:success:Compressed archive.tar.gz · ctrl+z to undo");
+    expect(h.calls).toContain("notify:compress:success:Compressed archive.tar.gz");
   });
 
   test("a warning-level archive-tool exit 1 keeps the archive; >=2 discards it", async () => {
@@ -1488,7 +1489,7 @@ describe("archive fallback (no tools)", () => {
     const h1 = makeHarness({ archiveWhich: noTools });
     await h1.ops.compressPaths([plain], "tar.gz", destDir);
     // plain tree: silent, same shape as the spawn success toast
-    expect(h1.calls).toContain("notify:compress:success:Compressed a.txt.tar.gz · ctrl+z to undo");
+    expect(h1.calls).toContain("notify:compress:success:Compressed a.txt.tar.gz");
 
     const exec = path.join(ROOT, "fbw-exec", "run.sh");
     W(exec, "#!/bin/sh\n");
@@ -1537,7 +1538,7 @@ describe("plugin pre-op veto", () => {
       await h.ops.runTransfer("move", destDir, [src], "move");
       expect(existsSync(src)).toBe(true);
       expect(existsSync(path.join(destDir, "veto-src.txt"))).toBe(false);
-      expect(h.calls).toContain("notify:blocked:info:Blocked by plugin: nope");
+      expect(h.calls).toContain("notify:blocked:info:Blocked by plugin · nope");
       expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
     } finally {
       off();
@@ -1858,7 +1859,7 @@ describeNonRoot("sudo escalation", () => {
     }
   });
 
-  test("sudo copy advertises permission-qualified undo hint", async () => {
+  test("sudo copy reports success without an undo promise", async () => {
     const srcDir = path.join(ROOT, "sudo-hint-src");
     const destDir = path.join(ROOT, "sudo-hint-dest");
     mkdirSync(srcDir, { recursive: true });
@@ -1873,17 +1874,17 @@ describeNonRoot("sudo escalation", () => {
       });
       await esc.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt")], "copy a");
       expect(existsSync(path.join(destDir, "a.txt"))).toBe(true);
-      // undo after sudo is best-effort unprivileged — the toast must not
-      // promise a plain ctrl+z will work
+      // notifications no longer carry an undo hint (they were shortened):
+      // the invariant is that a sudo op still reports success
       const toasts = esc.calls.filter((c) => c.startsWith("notify:"));
-      expect(toasts.some((c) => c.includes("may need permission"))).toBe(true);
-      expect(toasts.some((c) => c.includes(" · ctrl+z to undo") && !c.includes("may need permission"))).toBe(false);
+      expect(toasts.some((c) => c.includes("Copied 1 item"))).toBe(true);
+      expect(toasts.some((c) => c.includes("ctrl+z"))).toBe(false);
     } finally {
       chmodSync(destDir, 0o755);
     }
   });
 
-  test("sudo rename advertises permission-qualified undo hint", async () => {
+  test("sudo rename reports success without an undo promise", async () => {
     const dir = path.join(ROOT, "sudo-hint-rename");
     mkdirSync(dir, { recursive: true });
     W(path.join(dir, "old.txt"), "data");
@@ -1894,15 +1895,14 @@ describeNonRoot("sudo escalation", () => {
       await esc.ops.performRename(path.join(dir, "old.txt"), "new.txt");
       expect(existsSync(path.join(dir, "new.txt"))).toBe(true);
       const toasts = esc.calls.filter((c) => c.startsWith("notify:"));
-      expect(toasts.some((c) => c.includes("Renamed old.txt → new.txt") && c.includes("may need permission"))).toBe(
-        true,
-      );
+      expect(toasts.some((c) => c.includes("Renamed old.txt"))).toBe(true);
+      expect(toasts.some((c) => c.includes("ctrl+z"))).toBe(false);
     } finally {
       chmodSync(dir, 0o755);
     }
   });
 
-  test("sudo bulk rename advertises permission-qualified undo hint with one gate", async () => {
+  test("sudo bulk rename reports success with one gate", async () => {
     const dir = path.join(ROOT, "sudo-hint-bulk");
     mkdirSync(dir, { recursive: true });
     W(path.join(dir, "b1.txt"), "1");
@@ -1925,7 +1925,7 @@ describeNonRoot("sudo escalation", () => {
       expect(gates).toBe(1);
       expect(existsSync(path.join(dir, "c1.txt"))).toBe(true);
       const toasts = esc.calls.filter((c) => c.startsWith("notify:"));
-      expect(toasts.some((c) => c.includes("may need permission"))).toBe(true);
+      expect(toasts.some((c) => c.includes("Renamed 2 items"))).toBe(true);
     } finally {
       chmodSync(dir, 0o755);
     }
@@ -1965,12 +1965,12 @@ describeNonRoot("sudo escalation", () => {
     try {
       const plain = makeHarness();
       await plain.ops.performRename(path.join(dir, "old.txt"), "new.txt");
-      expect(plain.calls.some((c) => c.includes("Rename failed (permission denied)"))).toBe(true);
+      expect(plain.calls.some((c) => c.includes("Rename failed · permission denied"))).toBe(true);
 
       const esc = makeHarness({ ensureSudo: async () => true, sudoExec: fakeSudoExec });
       await esc.ops.performRename(path.join(dir, "old.txt"), "new.txt");
       expect(existsSync(path.join(dir, "new.txt"))).toBe(true);
-      expect(esc.calls.some((c) => c.includes("Renamed old.txt → new.txt"))).toBe(true);
+      expect(esc.calls.some((c) => c.includes("Renamed old.txt"))).toBe(true);
     } finally {
       chmodSync(dir, 0o755);
     }
@@ -2196,7 +2196,7 @@ describeNonRoot("sudo escalation", () => {
     });
     await esc.ops.extractArchive([archive], destDir);
     expect(readFileSync(path.join(destDir, "foo"), "utf8")).toBe("new");
-    expect(esc.calls.some((c) => c.includes("may need permission"))).toBe(true);
+    expect(esc.calls.some((c) => c.includes("Extracted 1 archive"))).toBe(true);
     expect(esc.calls.some((c) => c.includes("FAILED"))).toBe(false);
 
     // the sudo-stashed victim restores through the privileged undo closure:
@@ -2236,7 +2236,7 @@ describeNonRoot("sudo escalation", () => {
     });
     await esc.ops.compressPaths([src], "zip", destDir);
     expect(readFileSync(path.join(destDir, "sudo-compress-src.txt.zip"), "utf8")).toBe("archive-bytes");
-    expect(esc.calls.some((c) => c.includes("may need permission"))).toBe(true);
+    expect(esc.calls.some((c) => c.includes("Compressed sudo-compress-src.txt.zip"))).toBe(true);
     expect(esc.calls.some((c) => c.includes("FAILED"))).toBe(false);
   });
 });
@@ -2313,7 +2313,7 @@ describe("unexpected op failures never reject (fire-and-forget safe)", () => {
     W(src, "x");
     W(path.join(destDir, "guard-src.txt"), "y");
     await h.ops.runTransfer("copy", destDir, [src], "copy x");
-    expect(h.calls.some((c) => c.includes("Copy failed (dialog gone)"))).toBe(true);
+    expect(h.calls.some((c) => c.includes("Copy failed · dialog gone"))).toBe(true);
   });
 
   test("performRename surfaces a throwing conflict dialog as an error toast", async () => {
@@ -2323,7 +2323,7 @@ describe("unexpected op failures never reject (fire-and-forget safe)", () => {
     W(path.join(ROOT, "guard-ren-b.txt"), "B");
     await h.ops.performRename(a, "guard-ren-b.txt");
     expect(existsSync(a)).toBe(true);
-    expect(h.calls.some((c) => c.includes("Rename failed (dialog gone)"))).toBe(true);
+    expect(h.calls.some((c) => c.includes("Rename failed · dialog gone"))).toBe(true);
   });
 });
 

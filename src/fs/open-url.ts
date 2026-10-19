@@ -16,7 +16,7 @@ export type UrlOpenerDeps = {
 export const makeUrlOpener = (deps: UrlOpenerDeps) => {
   const failToast = (url: string, err: unknown): void => {
     try {
-      deps.notify(`Couldn't open ${url} — is xdg-open installed?`, "open", "error");
+      deps.notify(`Couldn't open ${url} · xdg-open missing`, "open", "error");
     } catch {}
     deps.log?.(`open-url failed for ${url}: ${err instanceof Error ? err.message : String(err)}`);
   };

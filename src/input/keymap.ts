@@ -339,7 +339,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (ctx.termOwnsKeyboard()) {
       if (!termHintShown) {
         termHintShown = true;
-        ctx.notify("Terminal owns keyboard — click the grid to leave", "terminal", "info");
+        ctx.notify("Terminal owns keyboard", "terminal", "info");
       }
       return true;
     }
@@ -655,7 +655,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       .map((s) => s.path)
       .filter((p) => canExtract(p));
     if (!archives.length) {
-      ctx.notify("Select an archive to extract", "extract", "info");
+      ctx.notify("Select an archive", "extract", "info");
       return;
     }
     ctx.extractArchive(archives);
@@ -680,7 +680,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
     const entry = focusedEntry();
     if (!entry || entry.isDir) {
-      ctx.notify("Select a file to open", "open", "info");
+      ctx.notify("Select a file", "open", "info");
       return;
     }
     ctx.openWith(entry.path);
@@ -688,7 +688,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doRun = (inTerminal: boolean): void => {
     const entry = focusedEntry();
     if (!entry || entry.isDir) {
-      ctx.notify("Select a program to run", "run", "info");
+      ctx.notify("Select a program", "run", "info");
       return;
     }
     if (inTerminal) ctx.runInTerminal(entry.path);
@@ -705,7 +705,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const selected = selection.selPaths();
     if (!selected.length) return;
     if (!ctx.inTrashView()) {
-      ctx.notify("Already trashed — open the Trash to delete for good", "delete", "info");
+      ctx.notify("Already in Trash", "delete", "info");
       return;
     }
     ctx.confirmDeleteForever(selected.map((item) => item.path));
@@ -714,7 +714,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const selected = selection.selPaths();
     if (!selected.length) return;
     if (!ctx.inTrashView()) {
-      ctx.notify("Nothing to restore outside the Trash", "restore", "info");
+      ctx.notify("Nothing to restore", "restore", "info");
       return;
     }
     void ctx.restoreFromTrash(selected.map((item) => item.path));
@@ -726,7 +726,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doOpenInOtherPane = (): void => {
     const entry = focusedEntry();
     if (!entry?.isDir) {
-      ctx.notify("Select a folder to open in the other pane", "pane", "info");
+      ctx.notify("Select a folder", "pane", "info");
       return;
     }
     ctx.openInOtherPane(entry.path);
@@ -896,7 +896,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       action: "startSearch",
       run: () => {
         ctx.enableTypeToSearch();
-        ctx.notify("type-to-search on · type to filter, esc clears", "search", "info");
+        ctx.notify("Type-to-search on", "search", "info");
       },
     },
     { action: "extendUp", run: doExtendUp },
@@ -1108,7 +1108,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       if (copyQuitStreak >= 3 && !quitHintShown) {
         quitHintShown = true;
         const quitBinds = ctx.keybinds("quit").join(" ") || "ctrl+q";
-        ctx.notify(`ctrl+c copies · ${quitBinds} to quit`, "quit", "info");
+        ctx.notify(`${quitBinds} to quit`, "quit", "info");
       }
     }
     if (isCopyKey && selected.length && runAction("copy")) return true;

@@ -352,7 +352,7 @@ export const wireBoot = (deps: {
         const text = describeKeybindConflicts(core.config);
         if (text) {
           dlog(`keybind conflicts: ${text}`);
-          chrome.notify(`${text} — Settings → keys`, "keybind conflict");
+          chrome.notify(`${text} · Settings → keys`, "keybind conflict");
         }
       } catch {}
     })

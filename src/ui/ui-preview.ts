@@ -222,7 +222,7 @@ export const makePreview = (ctx: PreviewCtx) => {
       try {
         const n = readdirSync(key).length;
         pane.add(
-          Text({ content: ` ${n} item${n === 1 ? "" : "s"} — Properties… for details`, fg: colors.sidebarFgMuted }),
+          Text({ content: ` ${n} item${n === 1 ? "" : "s"} · Properties… for details`, fg: colors.sidebarFgMuted }),
         );
       } catch {
         pane.add(Text({ content: "can't list this folder", fg: colors.sidebarFgMuted }));

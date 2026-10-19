@@ -187,7 +187,7 @@ const defaultExec: ExecFn = async (cmd, args, opts) => {
 export class AmbiguousPluginError extends Error {
   candidates: string[];
   constructor(candidates: string[]) {
-    super(`repo holds ${candidates.length} plugins — pick one: ${candidates.join(", ")}`);
+    super(`repo holds ${candidates.length} plugins · pick one: ${candidates.join(", ")}`);
     this.name = "AmbiguousPluginError";
     this.candidates = candidates;
   }

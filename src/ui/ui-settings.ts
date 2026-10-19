@@ -580,7 +580,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         // silent blank menu (neutral wording: only the debug log names OOM)
         warnedThisBurst = true;
         try {
-          ctx.warn("Menu failed to render — close and try again", "menu");
+          ctx.warn("Menu render failed · try again", "menu");
         } catch {}
       }
     }
@@ -625,13 +625,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         Text({
           content:
             view === "plugins"
-              ? "Menu — plugins"
+              ? "Menu · plugins"
               : view === "settings"
-                ? "Menu — settings"
+                ? "Menu · settings"
                 : view === "help"
-                  ? "Menu — help"
+                  ? "Menu · help"
                   : view === "about"
-                    ? "Menu — about"
+                    ? "Menu · about"
                     : "Menu",
           fg: c.accent,
         }),

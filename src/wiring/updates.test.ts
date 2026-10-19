@@ -168,8 +168,8 @@ describe("wireUpdates", () => {
     expect(h.stickies.map((s) => s.msg)).toEqual(["Updating tfm…"]);
     expect(h.stickies[0]?.closed).toBe(true);
     expect(h.notes.at(-1)).toEqual({
-      msg: "tfm 1.1.0 is installed, restart tfm to use it",
-      title: "Update",
+      msg: "tfm 1.1.0 ready · restart",
+      title: "update",
       level: "success",
     });
   });

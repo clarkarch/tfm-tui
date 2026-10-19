@@ -73,14 +73,13 @@ const makeFake = (opts?: { durationMs?: number }) => {
 
 describe("toastLevelMeta", () => {
   const colors = { white: "#ffffff", muted: "#666666", red: "#e06c75", green: "#7fd88f" };
-  test("info keeps the classic white title + white body + base duration", () => {
-    // body is white, not muted: muted is only guaranteed on sidebarBg, never
-    // on the accentBg island (derived fills kept failing it) — one fill
-    // cannot serve both bright and dim text
+  test("info keeps a white title + muted body + base duration", () => {
+    // the description line is muted (secondary text); the title carries the
+    // level tint so the stack reads title-first
     expect(toastLevelMeta("info", colors, 3000)).toEqual({
       icon: "information",
       titleFg: "#ffffff",
-      bodyFg: "#ffffff",
+      bodyFg: "#666666",
       duration: 3000,
     });
   });
@@ -88,15 +87,15 @@ describe("toastLevelMeta", () => {
     expect(toastLevelMeta("success", colors, 3000)).toEqual({
       icon: "check",
       titleFg: "#7fd88f",
-      bodyFg: "#ffffff",
+      bodyFg: "#666666",
       duration: 3000,
     });
   });
-  test("error tints the title red, brightens the body, lingers 5s", () => {
+  test("error tints the title red, mutes the body, lingers 5s", () => {
     expect(toastLevelMeta("error", colors, 3000)).toEqual({
       icon: "close",
       titleFg: "#e06c75",
-      bodyFg: "#ffffff",
+      bodyFg: "#666666",
       duration: 5000,
     });
   });

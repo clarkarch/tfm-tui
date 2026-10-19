@@ -177,11 +177,7 @@ const runElevated = async (
       .map((l) => l.trim())
       .find(Boolean) ?? `exit ${r.status}`;
   deps.log(`${tag} failed for ${file}: ${why}`);
-  deps.notify(
-    `${failedPrefix} · ${why}${tag === "open-as-root" ? " (try sudoedit in a terminal)" : ""}`,
-    "open",
-    "error",
-  );
+  deps.notify(`${failedPrefix} · ${why}${tag === "open-as-root" ? " · try sudoedit" : ""}`, "open", "error");
 };
 
 // Escalation primitive behind the adaptive open: password gate first, then

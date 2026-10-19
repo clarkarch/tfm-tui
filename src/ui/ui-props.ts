@@ -123,7 +123,7 @@ export const makeProps = (ctx: PropsCtx) => {
       st = lstatSync(targetPath);
     } catch {
       // right-click → Properties on a just-deleted file must say so, not blink
-      ctx.notify("Can't show properties (source gone)", "properties", "error");
+      ctx.notify("Can't show properties", "properties", "error");
       return;
     }
     const isDirTarget = st.isDirectory();
@@ -336,7 +336,7 @@ export const makeProps = (ctx: PropsCtx) => {
               try {
                 // dirWalkStats gives up past 200k entries (null) — say that
                 // instead of a bare word that reads like a bug
-                n.content = "200k+ entries — too large to scan";
+                n.content = "200k+ entries · too large to scan";
               } catch {}
             }
           }

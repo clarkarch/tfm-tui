@@ -136,7 +136,7 @@ export const wireNav = (deps: {
     isBusy: () => !sharedOpQueue().isIdle(),
     onBusy: () => {
       try {
-        getChrome().notify("Can't quit during file operations — cancel (✕) or wait for it to finish", "quit", "error");
+        getChrome().notify("Can't quit · file op running", "quit", "error");
       } catch {}
     },
   };

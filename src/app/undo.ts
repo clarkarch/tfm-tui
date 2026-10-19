@@ -234,12 +234,8 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
         sink.renderAll();
         const summary = failed
           ? `Undo ${entry.batch.label} · ${failSuffix(failed, failWhy)}`
-          : `Undid: ${entry.batch.label}`;
-        sink.notify(
-          failed || !entry.batch.redos.length ? summary : `${summary} · ctrl+y to redo`,
-          failed ? "undo failed" : "undo",
-          failed ? "error" : "success",
-        );
+          : `Undid ${entry.batch.label}`;
+        sink.notify(summary, failed ? "undo failed" : "undo", failed ? "error" : "success");
         onChange();
       } finally {
         running = false;
@@ -263,7 +259,7 @@ export const makeUndo = (sink: UndoSink, opts: UndoOpts = {}) => {
         sink.renderAll();
         const summary = failed
           ? `Redo ${entry.batch.label} · ${failSuffix(failed, failWhy)}`
-          : `Redid: ${entry.batch.label} · ctrl+z to undo`;
+          : `Redid ${entry.batch.label}`;
         sink.notify(summary, failed ? "redo failed" : "redo", failed ? "error" : "success");
         onChange();
       } finally {

@@ -141,16 +141,16 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
         // the running process keeps its old inode, so the row must stop
         // offering a version that is now on disk
         publish({ kind: "current", current: target });
-        ctx.notify(`tfm ${target} is installed, restart tfm to use it`, "Update", "success");
+        ctx.notify(`tfm ${target} ready · restart`, "update", "success");
       } else {
         ctx.notify(
-          `Couldn't update tfm${res.detail ? `, ${res.detail}` : ""}. Try again, or run 'tfm update' in a terminal`,
-          "Update",
+          `Can't update tfm${res.detail ? ` · ${res.detail}` : ""}. Run 'tfm update' in a terminal`,
+          "update",
           "error",
         );
       }
     } catch (err) {
-      ctx.notify(`Couldn't update tfm, ${errMessage(err)}`, "Update", "error");
+      ctx.notify(`Can't update tfm · ${errMessage(err)}`, "update", "error");
     } finally {
       try {
         progress?.close();
@@ -167,7 +167,7 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
       ctx.confirm(UPDATE_PROMPT_MESSAGE, updatePromptYesLabel(s.latest), yes);
     } catch (err) {
       ctx.log?.(`update prompt failed: ${errMessage(err)}`);
-      ctx.notify("A newer tfm is available, run 'tfm update' in a terminal", "Update", "info");
+      ctx.notify("Update available · run 'tfm update'", "update", "info");
     }
   };
 

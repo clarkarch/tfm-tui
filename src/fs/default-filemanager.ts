@@ -200,7 +200,7 @@ export const makeDefaultFileManagerPrompt = (
             try {
               const svc = await deps.installService();
               deps.notify(
-                svc.ok ? res.message : `${res.message} · activator failed: ${svc.message}`,
+                svc.ok ? res.message : `${res.message} · activator failed · ${svc.message}`,
                 "default file manager",
                 svc.ok ? "success" : "error",
               );
@@ -231,7 +231,7 @@ export const makeDefaultFileManagerPrompt = (
       deps.log(`default-file-manager prompt failed to open: ${errMessage(err)}`);
       try {
         (deps.notifySticky ?? deps.notify)(
-          "Make tfm the default file manager? — advanced → set as default file manager",
+          "Make tfm the default file manager? · advanced → set as default file manager",
         );
       } catch (err2) {
         deps.log(`default-file-manager fallback toast failed: ${errMessage(err2)}`);
@@ -322,7 +322,7 @@ export const setDefaultFileManager = async (
       prev = (deps.currentDefault?.() ?? "").trim();
     } catch {}
     if (!(deps.entryInstalled?.() ?? isDesktopEntryInstalled())) {
-      return fail("tfm.desktop isn't installed — reinstall tfm, then try again");
+      return fail("tfm.desktop isn't installed · reinstall tfm");
     }
     const res = await exec("xdg-mime", ["default", TFM_DESKTOP_ID, DIRECTORY_MIME]);
     if (res.exit !== 0)
@@ -339,9 +339,8 @@ export const setDefaultFileManager = async (
     return { ok: true, message: "tfm is now the default file manager" };
   }
   const prev = defaultFileManagerPrev({ ...(deps.prevFile ? { prevFile: deps.prevFile } : {}) });
-  if (!prev) return fail("No previous file manager recorded — the default is left unchanged");
-  if (!isSafeDesktopId(prev))
-    return fail("Recorded previous file manager looks unsafe — the default is left unchanged");
+  if (!prev) return fail("No previous file manager recorded · unchanged");
+  if (!isSafeDesktopId(prev)) return fail("Previous file manager unsafe · unchanged");
   const res = await exec("xdg-mime", ["default", prev, DIRECTORY_MIME]);
   if (res.exit !== 0) return fail(`Couldn't restore ${prev} · ${res.output || `exit ${res.exit}`}`);
   return { ok: true, message: `${prev} is the default file manager again` };

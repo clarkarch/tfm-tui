@@ -602,7 +602,7 @@ export const wireChrome = async (deps: {
     // fail fast when gio is absent (minimal/container distros) — otherwise
     // the URL prompt opens first and only the mount spawn fails afterwards
     if (!Bun.which("gio")) {
-      notify("Can't connect: gio not installed", "network", "error");
+      notify("Can't connect · gio missing", "network", "error");
       return;
     }
     let input = raw ?? "";
@@ -624,7 +624,7 @@ export const wireChrome = async (deps: {
 
   disconnectServerImpl = async (mountPath: string): Promise<void> => {
     if (!Bun.which("gio")) {
-      notify("Can't disconnect: gio not installed", "network", "error");
+      notify("Can't disconnect · gio missing", "network", "error");
       return;
     }
     const cwd = core.state.cwd;

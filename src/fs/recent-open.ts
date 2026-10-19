@@ -57,7 +57,7 @@ export const makeRecentOpen = (ctx: RecentOpenCtx) => {
     // reach it, and recording it would pollute the recent list. Per-entry
     // extract is not built yet, so say so instead of a bogus spawn.
     if (isArchiveUri(p)) {
-      ctx.notify("Can't open a file inside an archive yet — extract it first", "open", "info");
+      ctx.notify("Can't open archive member", "open", "info");
       return;
     }
     const canRead = ctx.canRead ?? canReadSync;

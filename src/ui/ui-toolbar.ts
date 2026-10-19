@@ -294,7 +294,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           // non-dirs, which used to eat the keystroke with zero feedback.
           // Stay in the edit on failure so the path can be fixed in place.
           if (!isNavigableTarget(target)) {
-            ctx.notify(`No such folder: ${target}`, "navigate", "error");
+            ctx.notify(`No such folder · ${target}`, "navigate", "error");
             return;
           }
           pathEditMode = false;

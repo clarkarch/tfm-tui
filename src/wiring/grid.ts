@@ -491,7 +491,7 @@ export const wireGrid = (deps: {
       await chmod(p, addExecBits(statSync(p).mode));
       return true;
     } catch (err) {
-      chrome.notify(`Chmod failed (${errMessage(err)})`, "run", "error");
+      chrome.notify(`Chmod failed · ${errMessage(err)}`, "run", "error");
       return false;
     }
   };

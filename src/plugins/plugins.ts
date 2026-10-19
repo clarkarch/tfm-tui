@@ -340,7 +340,7 @@ const discoverPlugins = (
       out.push({ file: main });
       folderMains.add(name);
     } else {
-      sinks.warn(`plugin folder ${name}/ has no ${name}.ts — skipped`);
+      sinks.warn(`plugin folder ${name}/ has no ${name}.ts · skipped`);
     }
   }
   for (const name of [...names].sort()) {
@@ -355,7 +355,7 @@ const discoverPlugins = (
     if (!st.isFile()) continue;
     const base = name.slice(0, -".ts".length);
     if (folderMains.has(base)) {
-      sinks.warn(`plugin ${name} is shadowed by the ${base}/ folder — skipped`);
+      sinks.warn(`plugin ${name} is shadowed by the ${base}/ folder · skipped`);
       continue;
     }
     // one-time move into the folder layout (logged, not warned: it happens
