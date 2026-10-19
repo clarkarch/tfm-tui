@@ -21,6 +21,12 @@ const harness = (over: Partial<UpdateCliDeps> = {}): Harness => {
     current: "1.0.0",
     execPath: "/home/u/.local/bin/tfm",
     isTTY: () => false,
+    // Injected, never the real `readInstallInfo`: that reads the machine's
+    // $XDG_DATA_HOME/tfm/install.json, so on a dev box with tfm source-installed
+    // (channel "source") every command here refused with exit 1 while CI, which
+    // has no install.json, stayed green. Tests that exercise the provenance
+    // branches pass their own `provenance` to override this.
+    provenance: () => null,
     fetch: async () => ({
       ok: true,
       status: 302,
