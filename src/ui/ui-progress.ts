@@ -4,7 +4,15 @@ import { fmtBytes } from "../fs/propsinfo";
 import { hoverEvents, toggleIconState, type IconSlotHandle, type IconSpec, type SlotElement } from "./ui-slots";
 import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
-import { TOAST_W, truncateToastText, type ToastHandle } from "./notify";
+import {
+  TOAST_GAP,
+  TOAST_H,
+  TOAST_ICON_CELLS,
+  TOAST_TEXT_BUDGET,
+  TOAST_W,
+  truncateToastText,
+  type ToastHandle,
+} from "./notify";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { applySurface, islandSurface } from "./style";
@@ -79,6 +87,12 @@ export const barLineFiles = (done: number, total: number, cells: number): string
   return `${barCells(filled, cells)} ${Math.min(done, total)}/${total}`;
 };
 
+// pick the bar width so `<bar> <done>/<total>` fits `budget` cells WITHOUT
+// truncating the numbers (a cut size reads as a different size). Clamped so
+// the bar stays a visible bar even when the numbers are long.
+export const barCellsFor = (budget: number, numer: string, denom: string): number =>
+  Math.max(4, Math.min(14, budget - 2 - numer.length - denom.length));
+
 // tiny transfers don't need a toast — canonical predicate lives in
 // ./fsutil (the transfer pre-scan shares it); re-exported here so the
 // widget's existing import surface doesn't move.
@@ -88,11 +102,26 @@ export { shouldToast } from "../fs/fsutil";
 // must not print a fake `N/0 (0%)` bar. Pure so it's testable without a renderer.
 export const countingLine = (files: number): string => `counting ${files} file${files === 1 ? "" : "s"}…`;
 
+// verb → the 2-row media icon that owns the transfer toast's left column
+// (same B1 shape as notify). Unknown verbs fall back to the copy glyph.
+export const progressIconFor = (verb: string): string => {
+  const v = verb.toLowerCase();
+  if (v.includes("delet")) return "trash-can";
+  if (v.includes("move") || v.includes("mov")) return "content-cut";
+  if (v.includes("extract")) return "zip-box";
+  if (v.includes("compress")) return "package";
+  return "content-copy";
+};
+
 export const makeProgress = (ctx: ProgressCtx) => {
   const PROG_T_TITLE = "tfm-prog-title";
   const PROG_T_BAR = "tfm-prog-bar";
   const PROG_T_BTNS = "tfm-prog-btns";
-  const PROG_BAR_CELLS = 14;
+  // the text column is TOAST_TEXT_BUDGET wide; the pause/close controls ride
+  // the right end of the title row (2+2 cells + a gap), so the title gets what
+  // is left and the bar keeps the full column
+  const PROG_TITLE_BUDGET = TOAST_TEXT_BUDGET - 6;
+  const PROG_BAR_BUDGET = TOAST_TEXT_BUDGET;
   // braille spinner frames (same as ~/loading_animation.py)
   const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -132,21 +161,25 @@ export const makeProgress = (ctx: ProgressCtx) => {
     progLastPaint = now;
     const spin = prog.paused ? "⏸" : SPIN_FRAMES[progSpinIdx];
     if (prog.counting) {
-      progSetText(PROG_T_TITLE, truncateToastText(`${spin} ${countingLine(prog.doneFiles)}`, TOAST_W - 2));
+      progSetText(PROG_T_TITLE, truncateToastText(`${spin} ${countingLine(prog.doneFiles)}`, PROG_TITLE_BUDGET));
       progSetText(PROG_T_BAR, "");
       return;
     }
     const filesMode = prog.totalBytes <= 0 && prog.totalFiles > 0;
     const pct = filesMode ? pctOfFiles(prog.doneFiles, prog.totalFiles) : pctOf(prog.bytes, prog.totalBytes);
-    progSetText(PROG_T_TITLE, `${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pct}%)`);
+    progSetText(
+      PROG_T_TITLE,
+      truncateToastText(`${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pct}%)`, PROG_TITLE_BUDGET),
+    );
+    // size the bar to the numbers so the totals are never cut off
+    const barCells = filesMode
+      ? barCellsFor(PROG_BAR_BUDGET, String(Math.min(prog.doneFiles, prog.totalFiles)), String(prog.totalFiles))
+      : barCellsFor(PROG_BAR_BUDGET, fmtBytes(prog.bytes), fmtBytes(prog.totalBytes));
     progSetText(
       PROG_T_BAR,
-      truncateToastText(
-        filesMode
-          ? barLineFiles(prog.doneFiles, prog.totalFiles, PROG_BAR_CELLS)
-          : barLine(prog.bytes, prog.totalBytes, PROG_BAR_CELLS),
-        TOAST_W - 2,
-      ),
+      filesMode
+        ? barLineFiles(prog.doneFiles, prog.totalFiles, barCells)
+        : barLine(prog.bytes, prog.totalBytes, barCells),
     );
   };
 
@@ -201,13 +234,21 @@ export const makeProgress = (ctx: ProgressCtx) => {
     const progCloseSpec = ctx.makeIconSlot("close", progBtnStates(), 1, 0, undefined, progBtnStates);
     // ids live on the TEXT nodes — boxes have no .content, mutating them no-ops.
     // The shell (position, slide-in, stack slot) comes from notifySticky.
-    const titleRow = Box(
-      { height: 1 },
-      Text({ id: PROG_T_TITLE, content: `${SPIN_FRAMES[0]} ${prog.verb}`, fg: ctx.colors().white }),
+    // B1 media-object layout (same as notify): a 2-row verb icon owns the left
+    // column and title + bar share the text column beside it. The pause/close
+    // controls ride the right end of the title row, so the toast keeps the
+    // same 2-row-content + symmetric-gutter shape as every notification.
+    const mediaStates = (): { fg: string; bg: string }[] => [{ fg: ctx.colors().white, bg: ctx.colors().accentBg }];
+    const verbSlot = ctx.makeIconSlot(
+      progressIconFor(prog.verb),
+      mediaStates(),
+      TOAST_ICON_CELLS,
+      0,
+      undefined,
+      mediaStates,
     );
-    const barRow = Box({ height: 1 }, Text({ id: PROG_T_BAR, content: "", fg: ctx.colors().white }));
-    const btnsRow = Box(
-      { id: PROG_T_BTNS, height: 1, flexDirection: "row", paddingLeft: 1, columnGap: 1 },
+    const btnsGroup = Box(
+      { id: PROG_T_BTNS, flexDirection: "row", columnGap: 1 },
       Box(
         {
           id: "tfm-prog-pause",
@@ -256,7 +297,21 @@ export const makeProgress = (ctx: ProgressCtx) => {
         progCloseSpec.el,
       ),
     );
-    activeHandle = ctx.notifySticky([titleRow, barRow, btnsRow], { width: TOAST_W, height: 4 });
+    const titleRow = Box(
+      { height: 1, flexDirection: "row", columnGap: 1 },
+      Box(
+        { flexGrow: 1 },
+        Text({ id: PROG_T_TITLE, content: `${SPIN_FRAMES[0]} ${prog.verb}`, fg: ctx.colors().white }),
+      ),
+      btnsGroup,
+    );
+    const barRow = Box({ height: 1 }, Text({ id: PROG_T_BAR, content: "", fg: ctx.colors().white }));
+    const mediaRow = Box(
+      { flexDirection: "row", columnGap: TOAST_GAP, alignItems: "center" },
+      verbSlot.el,
+      Box({ flexDirection: "column", flexGrow: 1 }, titleRow, barRow),
+    );
+    activeHandle = ctx.notifySticky([mediaRow], { width: TOAST_W, height: TOAST_H });
     // button Texts must not enter text-selection mode or they hijack the clicks
     ctx.stripSelectable();
     setPauseVisual(); // play slot ships visible — hide until actually paused
@@ -278,7 +333,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
       clearInterval(progSpinTimer);
       progSpinTimer = null;
     }
-    progSetText(PROG_T_TITLE, truncateToastText(title, TOAST_W - 2));
+    progSetText(PROG_T_TITLE, truncateToastText(title, PROG_TITLE_BUDGET));
     progSetText(PROG_T_BAR, "");
     // done means the controls go away — nothing left to pause or cancel
     const btns = ctx.byId(PROG_T_BTNS);

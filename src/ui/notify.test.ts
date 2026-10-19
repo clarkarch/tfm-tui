@@ -3,6 +3,8 @@ import { Box, Text } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import {
   MAX_TOAST_LINES,
+  TOAST_H,
+  TOAST_PAD_Y,
   makeNotify,
   toastLevelMeta,
   truncateToastText,
@@ -18,19 +20,33 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
   await Bun.sleep(10);
 };
 
+// wait for a toast's slide-in to finish (its `left` stops changing) so the
+// whole box is on-screen before asserting on painted text near the right edge
+const settleSlide = async (r: any, id = "tfm-toast-1"): Promise<void> => {
+  let last: number | undefined;
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    await r.renderOnce();
+    const n = r.renderer.root.findDescendantById(id) as any;
+    if (n && last !== undefined && n.left === last) return;
+    last = n?.left;
+    await Bun.sleep(30);
+  }
+};
+
 // byId stubs stand in for post-mount renderables (proxy props throw
 // pre-mount, so positions are pinned through the stub sets instead).
 const makeFake = (opts?: { durationMs?: number }) => {
   const nodes = new Map<string, any>();
   const removed: string[] = [];
-  const icons: Array<{ name: string; fg: string; bg: string }> = [];
+  const icons: Array<{ name: string; fg: string; bg: string; heightCells: number }> = [];
   const ctx: NotifyCtx = {
     rootAdd: (_node: any) => {},
     remove: (node: any) => {
       removed.push(node.id);
     },
-    makeIconSlot: (name: string, states: Array<{ fg: string; bg: string }>) => {
-      icons.push({ name, fg: states[0]?.fg ?? "", bg: states[0]?.bg ?? "" });
+    makeIconSlot: (name: string, states: Array<{ fg: string; bg: string }>, heightCells = 1) => {
+      icons.push({ name, fg: states[0]?.fg ?? "", bg: states[0]?.bg ?? "", heightCells });
       // the notify path only reads slotId; the slot's icon surface is untested here
       return { el: { icon: name }, slotId: `slot-${icons.length}`, spec: {} } as unknown as IconSlotHandle;
     },
@@ -124,18 +140,20 @@ describe("notify stacking", () => {
     const { notify } = makeNotify(ctx);
     notify("first");
     notify("second");
+    // every notify is TOAST_H (4) rows now, so the follower starts at 1 + 4 + 1
     expect(nodes.get("tfm-toast-1").top).toBe(1);
-    expect(nodes.get("tfm-toast-2").top).toBe(5);
+    expect(nodes.get("tfm-toast-2").top).toBe(1 + 4 + 1);
     // both toasts fade and remove themselves without taking the app down
     await settleUntil(() => removed.length >= 2);
     expect(removed).toContain("tfm-toast-1");
     expect(removed).toContain("tfm-toast-2");
   });
 
-  test("long warnings wrap over rows instead of one truncated line", async () => {
+  test("long warnings ellipsize to ONE body line (strict 2-row toasts)", async () => {
     const { ctx, nodes } = makeFake();
     const { notify } = makeNotify(ctx);
-    // 33-char budget: three rows (title + 3) — the follower tiles below all of it
+    // strict 2-row content: a long message never grows the toast — it folds
+    // into one ellipsized line, so the follower tiles at a fixed offset.
     notify("clone failed: Repository not found on this remote host today ok");
     expect(nodes.get("tfm-toast-1").top).toBe(1);
     notify("next");
@@ -152,10 +170,11 @@ describe("notify stacking", () => {
     // bg is the toast island's accentBg: the raster flattens onto the island
     // (the toast shell is a floating layer — see FLOAT_TOAST_PREFIX), so its
     // icon stays opaque under `transparent-partial` like every menu/dialog icon.
+    // heightCells 2 is the B1 layout: a 2-row icon column beside the text.
     expect(icons).toEqual([
-      { name: "information", fg: "#ffffff", bg: "#1a1b26" },
-      { name: "check", fg: "#7fd88f", bg: "#1a1b26" },
-      { name: "close", fg: "#e06c75", bg: "#1a1b26" },
+      { name: "information", fg: "#ffffff", bg: "#1a1b26", heightCells: 2 },
+      { name: "check", fg: "#7fd88f", bg: "#1a1b26", heightCells: 2 },
+      { name: "close", fg: "#e06c75", bg: "#1a1b26", heightCells: 2 },
     ]);
   });
 
@@ -216,16 +235,18 @@ describe("notify stacking (real renderer)", () => {
         durationMs: () => 10000,
       });
       notify("first-msg");
-      notify("second-msg with a much longer tail");
+      notify("second-msg with text");
       // slide-in takes ~180ms — poll the PAINTED frame until both toasts show
       // (never a bare sleep; animated renders are timing-dependent)
       const slideIn = Date.now() + 3000;
       while (Date.now() < slideIn) {
         await r.renderOnce();
         const rows = r.captureCharFrame().split("\n");
-        if (rows.some((row) => row.includes("first-msg")) && rows.some((row) => row.includes("longer tail"))) break;
+        if (rows.some((row) => row.includes("first-msg")) && rows.some((row) => row.includes("second-msg"))) break;
         await Bun.sleep(20);
       }
+      await settleSlide(r, "tfm-toast-1");
+      await settleSlide(r, "tfm-toast-2");
       await r.renderOnce();
       const frame = r.captureCharFrame();
       const rows = frame.split("\n");
@@ -237,7 +258,7 @@ describe("notify stacking (real renderer)", () => {
       // zigzag edges on both sides. Text starts inset by padding on both,
       // so pin the box left (frame) and the box width (node geometry).
       const row = rows[rowOf("first-msg")]!;
-      const row2 = rows[rowOf("second-msg with a much longer")]!;
+      const row2 = rows[rowOf("second-msg")]!;
       expect(row.search(/\S/)).toBe(row2.search(/\S/));
       const widthOf = (id: string): number => (r.renderer.root.findDescendantById(id) as any)?.width;
       expect(widthOf("tfm-toast-1")).toBe(36);
@@ -292,12 +313,19 @@ describe("notify stacking (real renderer)", () => {
       progress.showProgressToast();
       stopSpinner = () => progress.finishProgressToast("done");
       notify("late-note");
-      // poll the painted frame until all three are up (slide-in timing)
+      // poll the painted frame until all three toasts have slid fully into
+      // view (slide-in timing). The break must cover EVERY string asserted
+      // below: a toast sliding in from the right is clipped at the screen edge,
+      // and the B1 text column starts further right than the old full-width
+      // body, so a short string ("late-note") can be fully painted while a
+      // longer sibling ("early-note") is still cut by a cell — the old
+      // two-string condition broke on that partial frame.
       const slideIn = Date.now() + 3000;
+      const up = (rows: string[], s: string): boolean => rows.some((row) => row.includes(s));
       while (Date.now() < slideIn) {
         await r.renderOnce();
         const rows = r.captureCharFrame().split("\n");
-        if (rows.some((row) => row.includes("copying")) && rows.some((row) => row.includes("late-note"))) break;
+        if (up(rows, "copying") && up(rows, "early-note") && up(rows, "late-note")) break;
         await Bun.sleep(20);
       }
       await r.renderOnce();
@@ -314,6 +342,138 @@ describe("notify stacking (real renderer)", () => {
       try {
         stopSpinner?.();
       } catch {}
+      await r.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+});
+
+describe("notify layout (B1: big icon column)", () => {
+  test("title and body share a text column beside a 2-row icon", async () => {
+    // the media-object layout: the level icon owns its own left column and the
+    // title + wrapped description sit in a text column to its right, so the
+    // body is INDENTED under the title rather than running the full width.
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify({
+        rootAdd: (node: any) => r.renderer.root.add(node),
+        remove: (node: any) => {
+          try {
+            (node.parent ?? r.renderer.root).remove(node);
+          } catch {}
+        },
+        byId: (id: string) => r.renderer.root.findDescendantById(id),
+        termW: () => 80,
+        accentBg: () => "#1a1b26",
+        white: () => "#ffffff",
+        sidebarFgMuted: () => "#666666",
+        // faithful slot: mirrors makeIconSlot's own width/height formula
+        // (`heightCells*2` × `heightCells`) so the reserved column matches prod
+        makeIconSlot: (name: string, _states: any, heightCells = 1) =>
+          ({
+            el: Box(
+              { id: `tfm-icon-test-${name}`, width: Math.round(heightCells * 2), height: heightCells },
+              Text({ content: name }),
+            ),
+            slotId: `tfm-icon-test-${name}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
+        drainIconQueue: () => {},
+        stripSelectable: () => {},
+        durationMs: () => 10000,
+      });
+      notify("Copied 3 items to /home", "tfm");
+      // slide-in takes ~180ms — poll the painted frame until the body shows
+      // (never a bare sleep; the assertion below is expressed RELATIVE to the
+      // toast's own left edge, so the in-flight slide doesn't matter)
+      const slideIn = Date.now() + 3000;
+      while (Date.now() < slideIn) {
+        await r.renderOnce();
+        if (r.captureCharFrame().includes("Copied 3 items")) break;
+        await Bun.sleep(20);
+      }
+      await r.renderOnce();
+      const rows = r.captureCharFrame().split("\n");
+      const titleRow = rows.findIndex((row) => row.includes("tfm"));
+      const bodyRow = rows.findIndex((row) => row.includes("Copied 3 items"));
+      expect(titleRow).toBeGreaterThanOrEqual(0);
+      expect(bodyRow).toBe(titleRow + 1);
+      const toast = r.renderer.root.findDescendantById("tfm-toast-1") as any;
+      const left = toast.left;
+      // text column x = 1 pad + 4 icon + 1 gap = 6, measured from the toast's
+      // own left edge: title AND body start there, never the toast edge (that
+      // hanging indent IS the B1 look)
+      expect(rows[titleRow]!.indexOf("tfm") - left).toBe(6);
+      expect(rows[bodyRow]!.indexOf("Copied") - left).toBe(6);
+      // the icon owns the left column and is 2 rows tall (heightCells)
+      const icon = r.renderer.root.findDescendantById("tfm-icon-test-information") as any;
+      expect(icon.height).toBe(2);
+      expect(icon.width).toBe(4);
+      // strict 2-row shape + symmetric vertical gutter: the toast is exactly
+      // TOAST_H tall, the content block starts TOAST_PAD_Y rows down, and the
+      // row above the title and the row below the body are both blank — so the
+      // 2-row icon is centered (equal space above and below), never top-heavy.
+      expect(toast.height).toBe(TOAST_H);
+      // the content block starts one gutter row below the toast's top edge
+      expect(titleRow).toBe(toast.top + TOAST_PAD_Y);
+      const within = (row: string): string => row.slice(left, left + toast.width).trim();
+      expect(within(rows[titleRow - 1]!)).toBe("");
+      expect(within(rows[bodyRow + 1]!)).toBe("");
+    } finally {
+      await r.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("long messages ellipsize to one body line (fixed height)", async () => {
+    // strict 2 rows: a long message must NOT grow the toast — it folds into a
+    // single ellipsized body line, keeping every notification the same height.
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify({
+        rootAdd: (node: any) => r.renderer.root.add(node),
+        remove: (node: any) => {
+          try {
+            (node.parent ?? r.renderer.root).remove(node);
+          } catch {}
+        },
+        byId: (id: string) => r.renderer.root.findDescendantById(id),
+        termW: () => 80,
+        accentBg: () => "#1a1b26",
+        white: () => "#ffffff",
+        sidebarFgMuted: () => "#666666",
+        makeIconSlot: (name: string, _states: any, heightCells = 1) =>
+          ({
+            el: Box(
+              { id: `tfm-icon-test-${name}`, width: Math.round(heightCells * 2), height: heightCells },
+              Text({ content: name }),
+            ),
+            slotId: `tfm-icon-test-${name}`,
+            spec: {},
+          }) as unknown as IconSlotHandle,
+        drainIconQueue: () => {},
+        stripSelectable: () => {},
+        durationMs: () => 10000,
+      });
+      notify("clone failed: Repository not found on this remote host today ok", "tfm");
+      const slideIn = Date.now() + 3000;
+      while (Date.now() < slideIn) {
+        await r.renderOnce();
+        if (r.captureCharFrame().includes("clone failed")) break;
+        await Bun.sleep(20);
+      }
+      await settleSlide(r);
+      await r.renderOnce();
+      const rows = r.captureCharFrame().split("\n");
+      const titleRow = rows.findIndex((row) => row.includes("tfm"));
+      const bodyRow = rows.findIndex((row) => row.includes("clone failed"));
+      expect(titleRow).toBeGreaterThanOrEqual(0);
+      expect(bodyRow).toBe(titleRow + 1);
+      // the body folded into ONE ellipsized line — and the row below it is the
+      // blank bottom gutter, never a second body line
+      expect(rows[bodyRow]!.includes("…")).toBe(true);
+      const toast = r.renderer.root.findDescendantById("tfm-toast-1") as any;
+      expect(toast.height).toBe(TOAST_H);
+      expect(rows[bodyRow + 1]!.slice(toast.left, toast.left + toast.width).trim()).toBe("");
+    } finally {
       await r.dispose(); // 0.6.0: destroy + await closed
     }
   });
