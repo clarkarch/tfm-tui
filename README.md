@@ -112,7 +112,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 ```bash
 tfm update
 ```
-`--tag v1.0.0` pins a release, `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings. Source builds use [source.sh](source.sh).
+`--tag v1.0.0` pins a release, `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings.
 
 ## Keys
 
