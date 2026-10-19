@@ -171,7 +171,7 @@ describe("about panel rendering", () => {
     await closePanel(id);
   });
 
-  test("panel is compact: no scroller, tight properties rows, version below", async () => {
+  test("panel is compact: no scroller, tight properties rows, air above the footer", async () => {
     // regression 1: a termH-bounded scroller reserved dead rows and dangled
     // the version far below the content — fixed content rides auto-height.
     // regression 2 (properties idiom): rows stack tight with zero air, split
@@ -183,14 +183,17 @@ describe("about panel rendering", () => {
     const versionIdx = lines.findIndex((line) => line.includes(`v${pkg.version}`));
     expect(heroIdx).toBeGreaterThanOrEqual(0);
     expect(versionIdx).toBeGreaterThan(heroIdx);
-    // spacer after the subtitle, then five contiguous rows, a divider,
-    // then the version — tight properties rhythm, portrait-tall overall
+    // spacer after the subtitle, then six contiguous rows, then the version —
+    // tight properties rhythm, portrait-tall overall
     expect(lines[heroIdx + 1]?.trim()).toBe("");
     for (const [off, label] of ["Website", "GitHub", "Credits", "Plugin API", "License", "Update"].entries()) {
       expect(lines[heroIdx + 2 + off]).toContain(label);
     }
-    // subtitle spacer + six rows, then the version footer on the next line
-    expect(versionIdx - heroIdx).toBe(8);
+    // one blank row of air above the footer: the version used to hug the
+    // Update control and read as another clickable row
+    expect(lines[versionIdx - 1]?.trim()).toBe("");
+    // subtitle spacer + six rows + the footer spacer, then the version
+    expect(versionIdx - heroIdx).toBe(9);
     await closePanel(id);
   });
 

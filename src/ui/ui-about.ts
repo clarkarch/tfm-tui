@@ -276,7 +276,7 @@ export const renderAboutPanel = (c: Theme, panel: NodeLike, deps: AboutDeps): vo
   // auto-height with NO scroller: a termH-bounded box here reserved dead
   // rows and dangled the version footer far below the content. Sections
   // split with the properties nbsp spacer (a plain " " measures empty).
-  const spacer = () => Box({ width: "100%", height: 1 }, Text({ content: " " }));
+  const spacer = () => Box({ width: "100%", height: 1 }, Text({ content: " " }));
   const body = Box(
     { width: "100%", flexDirection: "column", paddingTop: 1 },
     hero,
@@ -284,6 +284,9 @@ export const renderAboutPanel = (c: Theme, panel: NodeLike, deps: AboutDeps): vo
     ...(deps.detail === "credits"
       ? [backRow, ...CREDITS_DETAIL.map(detailRow)]
       : ABOUT_ROWS.map((row) => (row.key === "update" ? updateRow() : catRow(row)))),
+    // trailing air: without it the version footer hugs the last row and the
+    // Update control (a live, clickable row) reads as part of the version line
+    spacer(),
   );
   panel.add(body);
   panel.add(
