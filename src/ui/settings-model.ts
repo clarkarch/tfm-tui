@@ -454,15 +454,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     { id: "advanced", label: "advanced", icon: "cog" },
   ];
 
+  // advanced = the boot/debug pair, then the default-manager control injected
+  // under launch time, then the two config-level actions — and reset DEAD LAST:
+  // its blast radius is the whole config, so it stays furthest from the knobs
+  // people actually touch.
   const advancedRows = (): SettingRow[] => [
     ...genericUiRows("advanced", { showLaunchTime: [defaultFileManagerRow()] }),
-    {
-      kind: "action",
-      label: "reset to defaults",
-      blurb: "Put every setting back",
-      keepOpen: true,
-      run: resetToDefaults,
-    },
     {
       kind: "action",
       label: "edit config.toml…",
@@ -472,6 +469,13 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
           ctx.warn(err.message, "config"),
         )?.unref();
       },
+    },
+    {
+      kind: "action",
+      label: "reset to defaults",
+      blurb: "Put every setting back",
+      keepOpen: true,
+      run: resetToDefaults,
     },
   ];
 

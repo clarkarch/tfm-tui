@@ -1220,13 +1220,15 @@ describe("config group", () => {
     });
     const rows = h.groups().find((g) => g.header === "advanced")!.rows;
     // the control rides the boot/debug pair at the top of advanced (it answers
-    // "what opens my folders?"), not the tail past the config-level actions
+    // "what opens my folders?"), not the tail past the config-level actions.
+    // reset to defaults sits DEAD LAST: its blast radius is the whole config,
+    // so it stays furthest from the everyday knobs.
     expect(rows.map((r) => r.label)).toEqual([
       "update notices",
       "launch time",
       "set tfm as default manager",
-      "reset to defaults",
       "edit config.toml…",
+      "reset to defaults",
     ]);
     const row = rows[rows.findIndex((r) => r.label === "launch time") + 1]!;
     expect(row.kind).toBe("action");
