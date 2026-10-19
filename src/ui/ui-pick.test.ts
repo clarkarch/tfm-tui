@@ -104,7 +104,7 @@ describe("pick widget", () => {
       expect(floats.isOpen("pick")).toBe(false);
       expect(t.renderer.root.findDescendantById("tfm-pick")).toBeFalsy();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -122,7 +122,7 @@ describe("pick widget", () => {
       expect(first).toBe(input + 2); // exactly one blank spacer row
       expect(lines[input + 1]?.trim()).toBe("");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -144,7 +144,7 @@ describe("pick widget", () => {
       expect(ran).toBe("quit tfm");
       expect(floats.isOpen("pick")).toBe(false);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -162,7 +162,7 @@ describe("pick widget", () => {
       expect(floats.isOpen("pick")).toBe(true);
       pick.handleKey({ name: "escape" });
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -192,7 +192,7 @@ describe("pick widget", () => {
       await Bun.sleep(10);
       expect(errs.length).toBe(1);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -214,7 +214,7 @@ describe("pick widget", () => {
       expect(floats.isOpen("pick")).toBe(false);
       expect(t.renderer.root.findDescendantById("tfm-pick")).toBeFalsy();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -243,7 +243,7 @@ describe("pick widget", () => {
       expect(floats.isOpen("pick")).toBe(false);
       expect(errs.length).toBe(1);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -279,7 +279,7 @@ describe("pick widget", () => {
       expect(frame).toContain("quit tfm");
       expect(frame).not.toContain("new tab");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -291,7 +291,7 @@ describe("pick widget", () => {
       expect(() => pick.repaint()).not.toThrow();
       expect(t.renderer.root.findDescendantById("tfm-pick")).toBeFalsy();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -317,7 +317,7 @@ describe("pick widget", () => {
       pick.handleKey({ name: "escape" });
       expect(pointers).toEqual(["pointer", "pointer", "default"]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

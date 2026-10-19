@@ -7,6 +7,7 @@ import {
   destroyNode,
   invokeIsolated,
   safeRenderStep,
+  stripControlChars,
   withTimeout,
   type Scheduler,
 } from "./uiutil";
@@ -148,7 +149,8 @@ describe("destroyChildren", () => {
 // leave grandchildren alive, and destroyChildren must then free them.
 describe("destroyChildren against real renderables", () => {
   test("the subtree of a destroyed node survives (the premise), and destroyChildren then frees it", async () => {
-    const { renderer, renderOnce } = await createTestRenderer({ width: 20, height: 5 });
+    const setup = await createTestRenderer({ width: 20, height: 5 });
+    const { renderer, renderOnce } = setup;
     const content = new BoxRenderable(renderer, { id: "rev-content" });
     const inner = new BoxRenderable(renderer, { id: "rev-inner" });
     const row = new BoxRenderable(renderer, { id: "rev-row" });
@@ -172,7 +174,7 @@ describe("destroyChildren against real renderables", () => {
     expect(inner.isDestroyed).toBe(true);
     expect(row.isDestroyed).toBe(true);
     expect(text.isDestroyed).toBe(true);
-    renderer.destroy();
+    await setup.dispose(); // 0.6.0: destroy + await closed
   });
 });
 
@@ -349,5 +351,29 @@ describe("safeRenderStep", () => {
       ran = true;
     });
     expect(ran).toBe(true);
+  });
+});
+
+describe("stripControlChars", () => {
+  test("drops C0/C1 + DEL but keeps tab/CR/LF (the 0.6.0 Input-legal set)", () => {
+    // 0.6.0 Input value/initialValue/edits throw NativeError on any other
+    // control char — seeds (filenames, pasted URLs, gio output) must pass
+    // through this or a weird name crashes the dialog at construction
+    expect(stripControlChars("a\x00b\x01c\x1bd\x7fe")).toBe("abcde");
+    expect(stripControlChars("a\x80b\x9fc")).toBe("abc");
+    expect(stripControlChars("a\tb\rc\nd")).toBe("a\tb\rc\nd");
+    expect(stripControlChars("plain")).toBe("plain");
+    expect(stripControlChars("")).toBe("");
+  });
+
+  test("boundary codes: 08/0B/0C/1F drop, 20/7E/A0 stay, surrogates survive", () => {
+    // every C0 except 09/0A/0D drops, including the whitespace-adjacent ones
+    expect(stripControlChars("\x08\x0b\x0c\x1f")).toBe("");
+    // printable ASCII edges + NBSP (U+00A0, first code above the C1 band)
+    expect(stripControlChars(" \x7e\u00a0")).toBe(" \x7e\u00a0");
+    // astral chars ride UTF-16 surrogate pairs — checked per unit, and
+    // surrogates (D800-DFFF) are outside every drop band, so the pair
+    // survives intact (no half-surrogate output)
+    expect(stripControlChars("a\u{10000}b\u0085c")).toBe("a\u{10000}bc");
   });
 });

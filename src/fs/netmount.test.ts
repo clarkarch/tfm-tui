@@ -78,7 +78,7 @@ describe("makeNetworkActions.connect", () => {
     const { sink, calls } = makeSink({ result: { code: 1, stdout: "", stderr: "Error: password required\n" } });
     const actions = makeNetworkActions(sink);
     expect(await actions.connect("sftp://host/")).toBeNull();
-    expect(calls.notify.at(-1)).toEqual(["Connect failed: Error: password required", "network", "error"]);
+    expect(calls.notify.at(-1)).toEqual(["Connect failed · Error: password required", "network", "error"]);
   });
 });
 
@@ -104,7 +104,7 @@ describe("makeNetworkActions.disconnect", () => {
     const actions = makeNetworkActions(sink);
     expect(await actions.disconnect("/run/user/4242/gvfs/junk")).toBe(false);
     expect(calls.unmount.length).toBe(0);
-    expect(calls.notify.at(-1)).toEqual(["Can't determine the mount to disconnect", "network", "error"]);
+    expect(calls.notify.at(-1)).toEqual(["Can't find mount to disconnect", "network", "error"]);
   });
 
   test("keeps the mapping on a failed unmount", async () => {
@@ -114,6 +114,6 @@ describe("makeNetworkActions.disconnect", () => {
     actions.rememberUri(p, "sftp://bob@example.com/");
     expect(await actions.disconnect(p)).toBe(false);
     expect(actions.uriForPath(p)).toBe("sftp://bob@example.com/");
-    expect(calls.notify.at(-1)).toEqual(["Disconnect failed: Error: busy", "network", "error"]);
+    expect(calls.notify.at(-1)).toEqual(["Disconnect failed · Error: busy", "network", "error"]);
   });
 });

@@ -34,11 +34,12 @@ describe("quick tips", () => {
 
   test("tip pool carries the approved copy, minus the cut tips", () => {
     const problems = QUICK_TIPS.map((tip) => tip.problem);
-    expect(QUICK_TIPS.length).toBe(10);
+    expect(QUICK_TIPS.length).toBe(9);
     expect(problems).toContain("shift+clicks highlights tui not files?");
     expect(problems).toContain("ctrl+tab dead in kitty?");
     expect(problems).toContain("icons are boxes?");
     expect(problems).toContain("mouse doesnt work on tty?");
+    expect(problems).not.toContain("kitty drag escapes?");
     expect(problems).not.toContain("Nautilus paste empty?");
     expect(problems).not.toContain("panels pop open too fast?");
     expect(problems).not.toContain("video has no thumbnail?");
@@ -56,9 +57,7 @@ describe("help panel tips section", () => {
     // short terminal: the full tip list must overflow into a scrollable body
     t = await createTestRenderer({ width: 100, height: 24 });
   });
-  afterAll(() => {
-    t.renderer.destroy();
-  });
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   const openHelp = async () => {
     const panel: any = Box({ id: "help-test-panel", width: "100%" });

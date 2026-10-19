@@ -3,6 +3,7 @@ import path from "node:path";
 import { makeMenuEntries, pasteLabel, type MenuEntriesCtx } from "./menu-entries";
 import type { SortMode } from "../lib/sort";
 import { trashDir } from "../fs/fsutil";
+import { archiveUri } from "../fs/archive-scheme";
 import type { ClipItem, GridTileRef } from "../input/grid-input";
 import type { Place } from "../fs/places";
 import type { LoadedPlugin } from "../plugins/plugin-api";
@@ -61,8 +62,8 @@ const baseCtx = (): MenuEntriesCtx & {
     pasteSmart: (d) => calls.push(`paste:${d}`),
     confirmEmptyTrash: () => calls.push("emptyTrash"),
     confirmDeleteForever: (ps) => calls.push(`delForever:${ps.join(",")}`),
-    ejectDevice: (dev) => calls.push(`eject:${dev}`),
-    mountDevice: (dev) => calls.push(`mount:${dev}`),
+    ejectDevice: (spec) => calls.push(`eject:${spec.device ?? ""}:${spec.label}:${spec.target ?? ""}`),
+    mountDevice: (dev, label) => calls.push(`mount:${dev}:${label ?? ""}`),
     inTrashView: () => false,
     selPaths: () => [{ path: "/a", isDir: false }],
     openFileDefault: (p) => calls.push(`open:${p}`),
@@ -99,6 +100,8 @@ const place = (p: Partial<Place>): Place => ({
   ejectable: p.ejectable ?? false,
   device: p.device,
   mountDevice: p.mountDevice,
+  disk: p.disk,
+  diskParts: p.diskParts,
   scheme: p.scheme,
   bookmarked: p.bookmarked,
   network: p.network,
@@ -169,6 +172,58 @@ describe("fileEntriesFor", () => {
     expect(paste?.label).toBe("Paste 1 item into folder");
     paste!.action();
     expect(ctx.calls).toContain("paste:/d");
+  });
+
+  test("archive targets get Open Archive + a flyout to still hand them to an app", () => {
+    const ctx = baseCtx();
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor("/a/x.zip", false, 0, 0);
+    expect(entries[0]!.label).toBe("Open Archive");
+    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open", "Open With…"]);
+    entries[0]!.action();
+    expect(ctx.calls).toContain(`navigate:${archiveUri("/a/x.zip")}`);
+    entries[0]!.submenu![0]!.action();
+    expect(ctx.calls).toContain("open:/a/x.zip");
+    entries[0]!.submenu![1]!.action();
+    expect(ctx.calls).toContain("openWith:/a/x.zip");
+  });
+
+  test("inside an archive, a file member offers only Open (read-only view)", () => {
+    const ctx = baseCtx();
+    const member = archiveUri("/a/x.zip", "inner/readme.txt");
+    ctx.cwd = () => archiveUri("/a/x.zip", "inner");
+    ctx.tileRefs = new Map<string, GridTileRef>([[member, { selected: false, isDir: false }]]);
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor(member, false, 0, 0);
+    expect(entries.map((e) => e.label)).toEqual(["Open"]);
+    entries[0]!.action();
+    // openFileDefault refuses the member URI (wired to the real handler)
+    expect(ctx.calls).toContain(`open:${member}`);
+  });
+
+  test("inside an archive, a dir member navigates deeper (tab/pane flyout, no file ops)", () => {
+    const ctx = baseCtx();
+    const dir = archiveUri("/a/x.zip", "inner");
+    ctx.cwd = () => archiveUri("/a/x.zip");
+    ctx.tileRefs = new Map<string, GridTileRef>([[dir, { selected: false, isDir: true }]]);
+    const m = makeMenuEntries(ctx);
+    const entries = m.fileEntriesFor(dir, true, 0, 0);
+    expect(entries.map((e) => e.label)).toEqual(["Open"]);
+    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open in New Tab", "Open in New Pane"]);
+    entries[0]!.action();
+    expect(ctx.calls).toContain(`navigate:${dir}`);
+    entries[0]!.submenu![0]!.action();
+    expect(ctx.calls).toContain(`newTab:${dir}`);
+    // none of the real-path actions leak into the archive view
+    expect(entries.some((e) => /Copy|Cut|Rename|Trash|Properties|Duplicate/.test(e.label))).toBe(false);
+  });
+
+  test("a host that can't list archives keeps the plain Open row", () => {
+    const ctx = baseCtx();
+    ctx.canExtract = () => false;
+    const entries = makeMenuEntries(ctx).fileEntriesFor("/a/x.zip", false, 0, 0);
+    expect(entries[0]!.label).toBe("Open");
+    expect(entries[0]!.submenu!.map((e) => e.label)).toEqual(["Open With…"]);
   });
 
   test("copy/cut/trash target the whole selection", () => {
@@ -322,15 +377,17 @@ describe("sidebarEntriesFor", () => {
   test("eject / mount / bookmark removal", () => {
     const ctx = baseCtx();
     const m = makeMenuEntries(ctx);
-    m.sidebarEntriesFor(place({ path: "/media/usb", ejectable: true, device: "sdb1" }), 0, 0)
+    m.sidebarEntriesFor(place({ label: "USB", path: "/media/usb", ejectable: true, device: "sdb1" }), 0, 0)
       .find((e) => e.label === "Eject")!
       .action();
-    expect(ctx.calls).toContain("eject:sdb1");
+    // the menu passes the row label + mountpoint through so the toast names
+    // the device and ejectDevice can leave the cwd first
+    expect(ctx.calls).toContain("eject:sdb1:USB:/media/usb");
 
-    m.sidebarEntriesFor(place({ mountDevice: "sdc" }), 0, 0)
+    m.sidebarEntriesFor(place({ label: "STICK", mountDevice: "sdc" }), 0, 0)
       .find((e) => e.label === "Mount")!
       .action();
-    expect(ctx.calls).toContain("mount:sdc");
+    expect(ctx.calls).toContain("mount:sdc:STICK");
 
     const bm = m.sidebarEntriesFor(place({ path: "/home/u/Docs", bookmarked: true }), 0, 0);
     expect(bm.some((e) => e.label === "Remove bookmark")).toBe(true);

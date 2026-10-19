@@ -75,6 +75,6 @@ export const checkPluginVeto = (
 ): boolean => {
   const veto = hooks.beforeFileOp({ op, paths, ...(dest ? { dest } : {}) });
   if (!veto) return false;
-  notify(`Blocked by plugin${veto.reason ? `: ${veto.reason}` : ""}`, "blocked", "info");
+  notify(`Blocked by plugin${veto.reason ? ` · ${veto.reason}` : ""}`, "blocked", "info");
   return true;
 };

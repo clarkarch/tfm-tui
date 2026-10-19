@@ -11,6 +11,8 @@ import { Box, type CliRenderer, Input, InputRenderable, type KeyEvent, type Mous
 import { applySurface, btnSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
+import { archiveUri, parseArchiveUri } from "../fs/archive-scheme";
+import { stripControlChars } from "../lib/uiutil";
 import type { IconSlotHandle, IconSpec, IconState, SlotElement } from "./ui-slots";
 import { hoverEvents, navIconState, toggleIconState } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
@@ -79,6 +81,42 @@ export const isNavigableTarget = (target: string): boolean => {
   } catch {
     return false;
   }
+};
+
+// --- Breadcrumb model (pure, so the archive/real-path machinery is testable
+// without mounting). A crumb is one clickable segment: `target` is what a click
+// navigates to. Real paths get base + segments; virtual places get one crumb;
+// an archive cwd shows its REAL location, then a crumb for the archive file,
+// then the inner dirs — never `path.resolve` on a URI (that glued the archive
+// onto process.cwd() and rendered the launch dir in the path bar). ---
+export type Crumb = { label: string; icon?: string; target: string };
+
+const dirChain = (dir: string, home: string, host: string): Crumb[] => {
+  const abs = path.resolve(dir);
+  const inHome = abs === home || abs.startsWith(home + path.sep);
+  const baseLabel = inHome ? "Home" : host;
+  const baseIcon = inHome ? "home" : "desktop-tower";
+  const basePath = inHome ? home : "/";
+  const rest = path.relative(basePath, abs).split(path.sep).filter(Boolean);
+  return [
+    { label: baseLabel, icon: baseIcon, target: basePath },
+    ...rest.map((seg, i) => ({ label: seg, target: path.join(basePath, ...rest.slice(0, i + 1)) })),
+  ];
+};
+
+export const buildCrumbs = (cwd: string, home: string, host: string): Crumb[] => {
+  if (cwd === RECENT_URI) return [{ label: "Recent", icon: "clock", target: cwd }];
+  if (cwd === STARRED_URI) return [{ label: "Starred", icon: "star", target: cwd }];
+  const archive = parseArchiveUri(cwd);
+  if (archive) {
+    const inner = archive.inner ? archive.inner.split("/").filter(Boolean) : [];
+    return [
+      ...dirChain(path.dirname(archive.file), home, host),
+      { label: path.basename(archive.file), icon: "zip-box", target: archiveUri(archive.file) },
+      ...inner.map((seg, i) => ({ label: seg, target: archiveUri(archive.file, inner.slice(0, i + 1).join("/")) })),
+    ];
+  }
+  return dirChain(cwd, home, host);
 };
 
 // animation targets inside one toolbar (ids are prefix-namespaced per pane).
@@ -239,7 +277,9 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         new InputRenderable(ctx.renderer(), {
           id: id("path-input"),
           flexGrow: 1,
-          value: isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()),
+          // cwd-seeded (a mounted path can carry odd bytes) — strip so the
+          // 0.6.0 Input ctor never throws NativeError here
+          value: stripControlChars(isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd())),
           backgroundColor: ctx.colors().accentBg,
           focusedBackgroundColor: ctx.colors().accentBg,
           textColor: ctx.colors().white,
@@ -254,7 +294,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           // non-dirs, which used to eat the keystroke with zero feedback.
           // Stay in the edit on failure so the path can be fixed in place.
           if (!isNavigableTarget(target)) {
-            ctx.notify(`No such folder: ${target}`, "navigate", "error");
+            ctx.notify(`No such folder · ${target}`, "navigate", "error");
             return;
           }
           pathEditMode = false;
@@ -274,7 +314,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         };
       } else {
         try {
-          input.value = isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd());
+          input.value = stripControlChars(isVirtualUri(ctx.cwd()) ? ctx.cwd() : path.resolve(ctx.cwd()));
         } catch {}
       }
       try {
@@ -292,28 +332,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     // rebuild crumbs from scratch — appending would duplicate them every nav
     ctx.destroyChildren(box);
 
-    const cwdAbs = path.resolve(ctx.cwd());
-    const virtCrumb =
-      ctx.cwd() === RECENT_URI
-        ? { label: "Recent", icon: "clock" }
-        : ctx.cwd() === STARRED_URI
-          ? { label: "Starred", icon: "star" }
-          : null;
-    const inHome = !virtCrumb && (cwdAbs === ctx.home || cwdAbs.startsWith(ctx.home + path.sep));
-    const baseLabel = virtCrumb ? virtCrumb.label : inHome ? "Home" : os.hostname();
-    const baseIcon = virtCrumb ? (virtCrumb.icon ?? "file") : inHome ? "home" : "desktop-tower";
-    const basePath = virtCrumb ? ctx.cwd() : inHome ? ctx.home : "/";
-    const rest = virtCrumb
-      ? []
-      : path
-          .relative(inHome ? ctx.home : "/", cwdAbs)
-          .split(path.sep)
-          .filter(Boolean);
-
-    const crumbs: { label: string; icon?: string; target: string }[] = [
-      { label: baseLabel, icon: baseIcon, target: basePath },
-      ...rest.map((seg, i) => ({ label: seg, target: path.join(basePath, ...rest.slice(0, i + 1)) })),
-    ];
+    const crumbs = buildCrumbs(ctx.cwd(), ctx.home, os.hostname());
 
     crumbs.forEach((c, i) => {
       const current = i === crumbs.length - 1;

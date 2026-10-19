@@ -87,16 +87,30 @@ describe("index.ts smoke boot", () => {
       };
       // wait for the alternate-screen enter frame: the observable "booted"
       await poll(() => out.includes(ENTER), 30000);
-      // TERM asks OpenTUI to run destroy() (which writes `?1049l`) — bun
-      // itself ignores it, so escalate to KILL like `timeout -k` does
       try {
-        proc.kill("SIGTERM");
-      } catch {}
-      await poll(() => out.includes(LEAVE), 5000);
-      try {
-        proc.kill("SIGKILL");
-      } catch {}
-      await proc.exited;
+        // TERM asks tfm to run the force-quit teardown (which writes `?1049l`)
+        // and self-exit — bun itself ignores it, so escalate to KILL like
+        // `timeout -k` does if the process outlives the teardown budget
+        try {
+          proc.kill("SIGTERM");
+        } catch {}
+        await poll(() => out.includes(LEAVE), 5000);
+        // the orphan fix: the process must have reaped ITSELF on SIGTERM. An
+        // until-KILL survivor (no SIGHUP/SIGTERM teardown) would still show
+        // LEAVE via the renderer's own destroy path yet linger — fail it here
+        // instead of letting the SIGKILL below mask the orphan. Budget covers
+        // loaded-suite slowness (the force-quit cap alone is 2s); only a real
+        // orphan burns the whole window.
+        await poll(() => proc.exitCode !== null, 10000);
+        expect(proc.exitCode !== null).toBe(true);
+      } finally {
+        // unconditional: a failing assert above must not litter an orphaned
+        // child (a red run once left six `bun src/index.ts` strays behind)
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+        await proc.exited;
+      }
       await Promise.all([outDone, errDone]);
 
       // stderr rides along in the message: an early exit leaves stdout empty

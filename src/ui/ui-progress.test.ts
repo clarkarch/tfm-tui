@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import {
+  barCellsFor,
   barLine,
   barLineFiles,
   countingLine,
   makeProgress,
   pctOf,
   pctOfFiles,
+  progressIconFor,
   shouldToast,
   type ProgressCtx,
 } from "./ui-progress";
@@ -82,6 +84,34 @@ describe("pctOfFiles / barLineFiles", () => {
     expect(pctOfFiles(9, 4)).toBe(100);
     expect(barLineFiles(1, 4, 14)).toBe("████░░░░░░░░░░ 1/4");
     expect(barLineFiles(9, 4, 14)).toBe("██████████████ 4/4");
+  });
+});
+
+describe("barCellsFor", () => {
+  test("sizes the bar so the numbers fit inside the budget", () => {
+    // 29 - 2 spaces - "120.0 MB" - "500.0 MB"
+    expect(barCellsFor(29, "120.0 MB", "500.0 MB")).toBe(11);
+    // the resulting line never exceeds the budget
+    const cells = barCellsFor(29, "120.0 MB", "500.0 MB");
+    expect(barLine(120 * MB, 500 * MB, cells).length).toBeLessThanOrEqual(29);
+  });
+
+  test("clamped to [4, 14] — a short line caps, a tight one still shows a bar", () => {
+    expect(barCellsFor(29, "1 B", "2 B")).toBe(14);
+    // 15 - 2 - 9 - 9 is negative: clamp up so the bar stays a bar
+    expect(barCellsFor(15, "1023.9 KB", "1023.9 KB")).toBe(4);
+  });
+});
+
+describe("progressIconFor", () => {
+  test("maps the transfer verb to the media-column icon", () => {
+    expect(progressIconFor("copying")).toBe("content-copy");
+    expect(progressIconFor("moving")).toBe("content-cut");
+    expect(progressIconFor("deleting")).toBe("trash-can");
+    expect(progressIconFor("extracting")).toBe("zip-box");
+    expect(progressIconFor("compressing")).toBe("package");
+    // unknown verbs fall back to the copy glyph (never an unverified asset)
+    expect(progressIconFor("teleporting")).toBe("content-copy");
   });
 });
 
@@ -264,7 +294,7 @@ describe("progress repaint", () => {
       const pause = t.renderer.root.findDescendantById("tfm-prog-pause") as any;
       expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -303,7 +333,7 @@ describe("progress repaint", () => {
       pause.processMouseEvent({ type: "out", button: 0, x: 0, y: 0, modifiers: {} });
       expect([...pause.backgroundColor.toInts()]).toEqual(hexInts("#303040"));
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 

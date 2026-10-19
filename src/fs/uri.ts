@@ -6,8 +6,13 @@ import path from "node:path";
 
 export const RECENT_URI = "recent://";
 export const STARRED_URI = "starred://";
+// archive browsing cwd: `archive://<enc-abs-file>` with an optional `!/<inner>`
+// for the directory inside the archive (see ./archive-scheme for the builders)
+export const ARCHIVE_URI = "archive://";
 
-export const isVirtualUri = (p: string): boolean => p === RECENT_URI || p === STARRED_URI;
+export const isArchiveUri = (p: string): boolean => p.startsWith(ARCHIVE_URI);
+
+export const isVirtualUri = (p: string): boolean => p === RECENT_URI || p === STARRED_URI || isArchiveUri(p);
 
 export const xdgDataHome = (): string => process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share");
 

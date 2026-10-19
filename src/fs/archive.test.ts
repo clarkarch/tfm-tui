@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import {
   existsSync,
   lstatSync,
@@ -14,7 +13,6 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import {
   availableCompressionFormats,
   canExtract,
@@ -37,15 +35,60 @@ import {
   uniqueArchiveTarget,
 } from "./archive";
 
-type FakeChild = EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill: () => void; pid: number };
+// Fake child mirroring the Bun Subprocess surface runArchiveTool consumes:
+// ReadableStream pipes, an exited promise, kill() (which EOFs the pipes like
+// a real SIGKILL) and a pid. The old EventEmitter/PassThrough fake cannot
+// model the pump-until-EOF reads, so it would hang the new runner.
+type FakeProc = {
+  child: {
+    stdout: ReadableStream<Uint8Array>;
+    stderr: ReadableStream<Uint8Array>;
+    exited: Promise<number>;
+    kill: (sig?: unknown) => void;
+    pid: number;
+  };
+  out: (s: string) => void;
+  err: (s: string) => void;
+  end: () => void;
+  settleExit: (code: number) => void;
+  killed: unknown[];
+};
 
-const fakeChild = (): FakeChild => {
-  const c = new EventEmitter() as FakeChild;
-  c.stdout = new PassThrough();
-  c.stderr = new PassThrough();
-  c.kill = () => {};
-  c.pid = 123;
-  return c;
+const fakeProc = (): FakeProc => {
+  const enc = new TextEncoder();
+  let outC!: ReadableStreamDefaultController<Uint8Array>;
+  let errC!: ReadableStreamDefaultController<Uint8Array>;
+  let settleExit!: (code: number) => void;
+  const stdout = new ReadableStream<Uint8Array>({ start: (c) => (outC = c) });
+  const stderr = new ReadableStream<Uint8Array>({ start: (c) => (errC = c) });
+  const exited = new Promise<number>((res) => (settleExit = res));
+  const killed: unknown[] = [];
+  const end = (): void => {
+    try {
+      outC.close();
+    } catch {}
+    try {
+      errC.close();
+    } catch {}
+  };
+  return {
+    child: {
+      stdout,
+      stderr,
+      exited,
+      kill: (sig?: unknown) => {
+        killed.push(sig);
+        end();
+        settleExit(-1);
+      },
+      pid: 123,
+    },
+    out: (s: string) => outC.enqueue(enc.encode(s)),
+    err: (s: string) => errC.enqueue(enc.encode(s)),
+    end,
+    settleExit,
+    killed,
+  };
 };
 
 const which =
@@ -69,6 +112,8 @@ describe("detectArchiveFormat", () => {
     expect(detectArchiveFormat("a.tar")).toBe("tar");
     expect(detectArchiveFormat("a.zip")).toBe("zip");
     expect(detectArchiveFormat("a.7z")).toBe("7z");
+    expect(detectArchiveFormat("a.rar")).toBe("rar");
+    expect(detectArchiveFormat("a.RAR")).toBe("rar");
   });
 
   test("single-file compressed streams are not archives", () => {
@@ -110,6 +155,13 @@ describe("extractPlan", () => {
     expect(extractPlan("7z", "/x/a.7z", "/stage", which("7z"))).toEqual({
       tool: "7z",
       args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.7z"],
+    });
+  });
+
+  test("rar extracts via 7z (read-only format)", () => {
+    expect(extractPlan("rar", "/x/a.rar", "/stage", which("7z"))).toEqual({
+      tool: "7z",
+      args: ["x", "-bb1", "-bso2", "-y", "-o/stage", "/x/a.rar"],
     });
   });
 
@@ -224,6 +276,8 @@ describe("availableCompressionFormats / canExtract", () => {
       "tar.lzo",
       "tar.Z",
     ]);
+    // rar is read-only: never a compress target even with every tool present
+    expect(availableCompressionFormats(all)).not.toContain("rar");
   });
 
   test("missing compressors hide their tar rows; zip falls back to 7z", () => {
@@ -249,6 +303,8 @@ describe("availableCompressionFormats / canExtract", () => {
     expect(canExtract("a.tar.lz4", which("tar"))).toBe(false); // no fallback for exotic filters
     expect(canExtract("a.7z", which("7z"))).toBe(true);
     expect(canExtract("a.7z", () => null)).toBe(false); // no fallback for 7z
+    expect(canExtract("a.rar", which("7z"))).toBe(true);
+    expect(canExtract("a.rar", () => null)).toBe(false); // read-only, host-gated on 7z
     expect(canExtract("a.txt", which("tar", "gzip"))).toBe(false);
   });
 });
@@ -414,18 +470,19 @@ describe("uniqueArchiveTarget", () => {
 
 describe("runArchiveTool", () => {
   test("streams both pipes line-buffered and reports the exit code", async () => {
-    const child = fakeChild();
+    const proc = fakeProc();
     const lines: string[] = [];
     const p = runArchiveTool(
       { tool: "tar", args: [] },
       {
         spawn: (() => {
           setTimeout(() => {
-            child.stdout.write("a/\nb\n");
-            child.stderr.write("c\n");
-            child.emit("close", 0);
+            proc.out("a/\nb\n");
+            proc.err("c\n");
+            proc.end();
+            proc.settleExit(0);
           }, 0);
-          return child;
+          return proc.child;
         }) as never,
         onLine: (l) => lines.push(l),
       },
@@ -437,13 +494,13 @@ describe("runArchiveTool", () => {
     expect(lines).toEqual(["a/", "b", "c"]);
   });
 
-  test("a missing binary (async error) resolves instead of throwing", async () => {
+  test("a missing binary (spawn returns null) resolves instead of throwing", async () => {
     const res = await runArchiveTool(
       { tool: "nope", args: [] },
       {
         spawn: ((_cmd: string, _args: string[], _opts: unknown, onFail: (e: Error) => void) => {
           onFail(new Error("spawn nope ENOENT"));
-          return fakeChild();
+          return null;
         }) as never,
       },
     );
@@ -451,18 +508,23 @@ describe("runArchiveTool", () => {
     expect(res.stderr).toContain("ENOENT");
   });
 
+  test("a null spawn without onFail still resolves instead of hanging the queue", async () => {
+    // the defensive finish(-1) on the null guard: without it this await
+    // never settles (red via the suite timeout, not an assertion)
+    const res = await runArchiveTool({ tool: "nope", args: [] }, { spawn: (() => null) as never });
+    expect(res.code).toBe(-1);
+  });
+
   test("timeoutMs kills a hung child instead of wedging the op queue", async () => {
     // without the backstop this test hangs forever (red via the suite timeout):
-    // a wedged tar/7z holds the serial queue, and quit/restart refuse while busy
-    const child = fakeChild();
-    const killed: unknown[] = [];
-    child.kill = ((sig: unknown) => {
-      killed.push(sig);
-    }) as never;
-    const res = await runArchiveTool({ tool: "tar", args: [] }, { spawn: (() => child) as never, timeoutMs: 20 });
+    // a wedged tar/7z holds the serial queue, and quit/restart refuse while busy.
+    // The streams stay open (a real wedged child holds its pipes) — the timer
+    // must resolve the run without waiting for EOF.
+    const proc = fakeProc();
+    const res = await runArchiveTool({ tool: "tar", args: [] }, { spawn: (() => proc.child) as never, timeoutMs: 20 });
     expect(res.code).toBe(-1);
     expect(res.stderr).toContain("timed out");
-    expect(killed).toContain("SIGKILL");
+    expect(proc.killed).toContain("SIGKILL");
   });
 });
 

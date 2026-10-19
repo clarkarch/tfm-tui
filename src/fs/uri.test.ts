@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ARCHIVE_URI,
   RECENT_URI,
   STARRED_URI,
+  isArchiveUri,
   isVirtualUri,
   parseIso,
   pathToUri,
@@ -11,9 +13,10 @@ import {
 } from "./uri";
 
 describe("isVirtualUri", () => {
-  test("recognizes exactly the two virtual places", () => {
+  test("recognizes the three virtual places (recent/starred/archive)", () => {
     expect(isVirtualUri(RECENT_URI)).toBe(true);
     expect(isVirtualUri(STARRED_URI)).toBe(true);
+    expect(isVirtualUri(`${ARCHIVE_URI}${encodeURIComponent("/tmp/a.zip")}`)).toBe(true);
     expect(isVirtualUri("/home/clark")).toBe(false);
     expect(isVirtualUri("trash://")).toBe(false);
     expect(isVirtualUri("")).toBe(false);
@@ -22,6 +25,15 @@ describe("isVirtualUri", () => {
   test("URI constants are the documented values (config/session round-trips rely on them)", () => {
     expect(RECENT_URI).toBe("recent://");
     expect(STARRED_URI).toBe("starred://");
+    expect(ARCHIVE_URI).toBe("archive://");
+  });
+});
+
+describe("isArchiveUri", () => {
+  test("matches only the archive scheme prefix", () => {
+    expect(isArchiveUri(`${ARCHIVE_URI}${encodeURIComponent("/tmp/a.zip")}`)).toBe(true);
+    expect(isArchiveUri("/tmp/a.zip")).toBe(false);
+    expect(isArchiveUri(RECENT_URI)).toBe(false);
   });
 });
 

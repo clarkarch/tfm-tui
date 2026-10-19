@@ -5,6 +5,8 @@ import path from "node:path";
 import { compareEntries, fillStatsInto, listDir, type Entry } from "./listing";
 import { extOf } from "./filetype";
 import { RECENT_URI, STARRED_URI } from "./uri";
+import { compressPlan, runArchiveTool } from "./archive";
+import { archiveUri } from "./archive-scheme";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
 // exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
@@ -485,5 +487,34 @@ describe("listings cache", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("listDir on an archive cwd", () => {
+  const hasTar = !!Bun.which("tar") && !!Bun.which("gzip");
+
+  test.skipIf(!hasTar)("lists the top level and drills into a subdir", async () => {
+    const dir = mktmp("tfm-arc-ls-");
+    try {
+      W(path.join(dir, "src/a.txt"));
+      W(path.join(dir, "src/sub/b.txt"));
+      W(path.join(dir, "readme.md"));
+      const out = path.join(dir, "bundle.tar.gz");
+      const c = await runArchiveTool(compressPlan("tar.gz", out, ["readme.md", "src"], dir), { cwd: dir });
+      expect(c.code).toBe(0);
+
+      const top = await listDir(archiveUri(out), false, "name", true);
+      expect(top.map((e) => e.name).sort()).toEqual(["readme.md", "src"]);
+      expect(top.find((e) => e.name === "src")?.isDir).toBe(true);
+
+      const src = await listDir(archiveUri(out, "src"), false, "name", true);
+      expect(src.map((e) => e.name).sort()).toEqual(["a.txt", "sub"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(!hasTar)("an unreadable archive rejects (grid shows the error pane)", async () => {
+    await expect(listDir(archiveUri("/tmp/definitely-missing-archive.tar.gz"), false, "name", true)).rejects.toThrow();
   });
 });

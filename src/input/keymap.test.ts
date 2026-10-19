@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeKeyRouter, type KeyRouterCtx } from "./keymap";
+import { archiveUri } from "../fs/archive-scheme";
 import { makeSelection, type SelectionCtx } from "./selection";
 import { defaultConfig } from "../config/config-schema";
 
@@ -74,6 +75,8 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     keybinds: (action) => binds[action] ?? [],
     quit: rec("quit"),
     restart: rec("restart"),
+    openCommandPalette: rec("palette:open"),
+    checkUpdates: rec("update:check"),
     conflict: { isOpen: () => false, closeConflict: (p) => calls.push(`conflict:close:${p}`) },
     yesNo: {
       isOpen: () => false,
@@ -128,7 +131,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     selection,
     placesHost: places,
     normalizePlaces: rec("places:normalize"),
-    mountDevice: (d) => calls.push(`mount:${d}`),
+    mountDevice: (d, label) => calls.push(`mount:${d}:${label ?? ""}`),
     navigate: (dir) => calls.push(`navigate:${dir}`),
     goBack: rec("back"),
     goFwd: rec("fwd"),
@@ -168,6 +171,25 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     connectServer: rec("connect:server"),
     togglePreview: rec("preview:toggle"),
     toggleViewMode: rec("view:toggle"),
+    toggleHidden: () => {
+      state.showHidden = !state.showHidden;
+      calls.push("hidden:toggle");
+    },
+    extractArchive: (files) => calls.push(`extract:${files.join(",")}`),
+    compressTo: (paths) => calls.push(`compress:${paths.join(",")}`),
+    openWith: (p) => calls.push(`openWith:${p}`),
+    runFile: (p) => calls.push(`run:${p}`),
+    runInTerminal: (p) => calls.push(`runTerm:${p}`),
+    toggleBookmark: rec("bookmark"),
+    emptyTrash: rec("emptyTrash"),
+    refreshListing: rec("refresh"),
+    sortBy: (m) => calls.push(`sort:${m}`),
+    reverseSortOrder: rec("sort:reverse"),
+    openInNewTab: (d) => calls.push(`tab:new:${d}`),
+    openInOtherPane: (d) => calls.push(`pane:other:${d}`),
+    disconnectServer: rec("disconnect"),
+    ejectDrive: rec("eject"),
+    mountDrive: rec("mount"),
     zoomTiles: (d) => calls.push(`zoom:${d}`),
     toggleDualPane: rec("pane:toggle-dual"),
     switchPane: rec("pane:switch"),
@@ -189,17 +211,26 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     ...over,
   };
   const router = makeKeyRouter(ctx);
+  // returns whether the router marked the event handled (preventDefault) —
+  // that flag is what stops a focused renderable from ALSO acting on the key
+  let prevented = false;
   const key = (
     name: string,
     opts: { ctrl?: boolean; shift?: boolean; meta?: boolean; repeated?: boolean } = {},
-  ): void =>
+  ): boolean => {
+    prevented = false;
     router.handleKey({
       name,
       ctrl: !!opts.ctrl,
       shift: !!opts.shift,
       meta: !!opts.meta,
       repeated: !!opts.repeated,
+      preventDefault: () => {
+        prevented = true;
+      },
     });
+    return prevented;
+  };
   return {
     router,
     ctx,
@@ -366,12 +397,18 @@ describe("precedence chain", () => {
     expect(h.calls).toEqual(["escmenu:help"]);
   });
 
+  test("ctrl+p opens the core command palette", () => {
+    const h = makeHarness();
+    h.key("p", { ctrl: true });
+    expect(h.calls).toEqual(["palette:open"]);
+  });
+
   test("embedded terminal owns the keyboard — hint once, then nothing below it fires", () => {
     const h = makeHarness({ termOwnsKeyboard: () => true });
     h.key("escape");
     h.key("down");
     h.key("x");
-    expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard — click the grid to leave"]);
+    expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard"]);
   });
 
   test("path edit: esc exits, everything else swallowed", () => {
@@ -568,7 +605,15 @@ describe("sidebar keyboard focus", () => {
     h.places[0] = { selected: false, place: { mountDevice: "sda9" } as any };
     h.key("left");
     h.key("return");
-    expect(h.calls).toContain("mount:sda9");
+    expect(h.calls).toContain("mount:sda9:");
+  });
+
+  test("return on a mount-only entry passes the row label for the toast", () => {
+    const h = makeHarness();
+    h.places[0] = { selected: false, place: { mountDevice: "sda9", label: "STICK" } as any };
+    h.key("left");
+    h.key("return");
+    expect(h.calls).toContain("mount:sda9:STICK");
   });
 
   test("left/right inside the sidebar return to the grid", () => {
@@ -620,6 +665,14 @@ describe("grid keys", () => {
     expect(h.calls).toEqual(["open:a.txt"]);
   });
 
+  test("return on a focused archive enters its archive cwd", () => {
+    const h = makeHarness();
+    h.seedTiles(["/tmp/tfm-kb/sub/a.zip"]);
+    h.key("down");
+    h.key("return");
+    expect(h.calls).toEqual([`navigate:${archiveUri("/tmp/tfm-kb/sub/a.zip")}`]);
+  });
+
   test("return on a focused dir navigates into it", () => {
     const h = makeHarness();
     h.seedTiles(["sub/", "b.txt"]);
@@ -643,6 +696,16 @@ describe("grid keys", () => {
     expect(h.calls).toEqual(["navigate:/home/u"]);
   });
 
+  test("backspace inside an archive steps up inner dirs, then exits to the real parent", () => {
+    const h = makeHarness({ state: { cwd: archiveUri("/w/a.zip", "dir/sub"), showHidden: false } as any });
+    h.key("backspace");
+    expect(h.calls).toEqual([`navigate:${archiveUri("/w/a.zip", "dir")}`]);
+
+    const root = makeHarness({ state: { cwd: archiveUri("/w/a.zip"), showHidden: false } as any });
+    root.key("backspace");
+    expect(root.calls).toEqual(["navigate:/w"]);
+  });
+
   test("plain typing starts type-to-search; shifted/ctrl keys do not", () => {
     const h = makeHarness();
     h.key("x");
@@ -660,11 +723,11 @@ describe("grid keys", () => {
     expect(h.escMenuState.open).toBe(true);
   });
 
-  test("ctrl+h toggles hidden files and re-renders", () => {
+  test("ctrl+h toggles hidden files through the config path", () => {
     const h = makeHarness();
     h.key("h", { ctrl: true });
     expect(h.state.showHidden).toBe(true);
-    expect(h.calls).toEqual(["renderGrid"]);
+    expect(h.calls).toEqual(["hidden:toggle"]);
     h.key("h", { ctrl: true });
     expect(h.state.showHidden).toBe(false);
   });
@@ -855,7 +918,7 @@ describe("remappable keybinds", () => {
     h.key("h", { ctrl: true }); // old bind is gone
     expect(h.calls).toEqual([]);
     h.key("j", { ctrl: true });
-    expect(h.calls).toEqual(["renderGrid"]);
+    expect(h.calls).toEqual(["hidden:toggle"]);
     expect(h.state.showHidden).toBe(true);
   });
 
@@ -1003,6 +1066,50 @@ describe("command table (everything is a command)", () => {
     for (const row of KEY_SCHEMA) {
       expect(ids, `missing command for ${row.action}`).toContain(row.action);
     }
+  });
+
+  test("commands() order mirrors KEY_SCHEMA (palette listing == config order)", async () => {
+    const h = makeHarness();
+    const { KEY_SCHEMA } = await import("../config/config-schema");
+    expect(h.router.commands().map((c) => c.id)).toEqual(KEY_SCHEMA.map((r) => r.action));
+  });
+
+  test("palette app actions act on the live selection/focus", () => {
+    const h = makeHarness();
+    // an archive tile beyond the seeded files (extract filters by canExtract)
+    h.selection.tileRefs.set("pack.zip", {
+      selected: false,
+      baseFg: "#aaa",
+      tileId: "tz",
+      labelId: "lz",
+      isDir: false,
+    });
+    h.selection.setFocusKeys(["a.txt", "b.txt", "c.txt", "d.txt", "pack.zip"]);
+    h.selection.selectTileAt(4);
+    expect(h.selection.selPaths().map((s) => s.path)).toEqual(["pack.zip"]);
+    const byId = (id: string) => h.router.commands().find((c) => c.id === id)!;
+
+    h.calls.length = 0;
+    byId("extractHere").run();
+    expect(h.calls).toEqual(["extract:pack.zip"]);
+    h.calls.length = 0;
+    byId("openWith").run();
+    expect(h.calls).toEqual(["openWith:pack.zip"]);
+    h.calls.length = 0;
+    byId("runFile").run();
+    expect(h.calls).toEqual(["run:pack.zip"]);
+    h.calls.length = 0;
+    byId("compressTo").run();
+    expect(h.calls).toEqual(["compress:pack.zip"]);
+    h.calls.length = 0;
+    byId("sortBySize").run();
+    expect(h.calls).toEqual(["sort:size"]);
+    h.calls.length = 0;
+    byId("refreshListing").run();
+    expect(h.calls).toEqual(["refresh"]);
+    h.calls.length = 0;
+    byId("ejectDrive").run();
+    expect(h.calls).toEqual(["eject"]);
   });
 
   test("command run() dispatches exactly like its keypress", () => {
@@ -1252,7 +1359,7 @@ describe("type-to-search toggle + yazi-style bare binds", () => {
     h.setTypeToSearch(false);
     h.key("s");
     expect(h.calls).toContain("search:enable");
-    expect(h.calls).toContain("notify:search:info:type-to-search on · type to filter, esc clears");
+    expect(h.calls).toContain("notify:search:info:Type-to-search on");
   });
 
   test("cycleSort + goHome dispatch through binds", () => {
@@ -1327,7 +1434,7 @@ describe("dual-pane actions", () => {
     h.key("b", { ctrl: true });
     expect(h.calls).toContain("sort:cycle");
     expect(h.calls).toContain("preview:toggle");
-    expect(h.calls).toContain("renderGrid");
+    expect(h.calls).toContain("hidden:toggle");
     expect(h.calls).toContain("back");
     // NOTE: reloadPlaces (ctrl+r) carries the same guard but isn't unit-
     // observable — doReloadPlaces is async real-fs (loadSystemPlaces), so a
@@ -1349,5 +1456,112 @@ describe("dual-pane actions", () => {
     expect(h.calls).toEqual([]);
     h.key("u", { ctrl: true });
     expect(h.calls).toEqual(["pane:switch"]);
+  });
+});
+
+// --- consumed keys must be marked handled (preventDefault) ---
+//
+// OpenTUI runs a renderer's global keypress listeners BEFORE the focused
+// renderable's own handler, and `preventDefault()` is the only thing that
+// stops the focused handler from running. Without it, a focused grid ScrollBox
+// ALSO handles the key: ScrollBox.handleKeyPress -> ScrollBar.handleKeyPress
+// scrolls 1/5 of the viewport per arrow/j/k/pgup/pgdn/home/end (verified
+// headless), which is the "arrow keys jump the list" bug and the "the grid
+// still scrolls with the esc menu / properties open" bug (focus survives under
+// a float). Keys handed to a focused EDITOR stay unmarked: the router only
+// DELEGATES there, so marking them handled would starve the Input /
+// EmbeddedTerminal that receives the key natively.
+describe("consumed keys are marked handled so a focused scrollable can't self-scroll", () => {
+  test("grid nav marks the key handled while it moves the selection", () => {
+    const h = makeHarness();
+    expect(h.key("down")).toBe(true);
+    expect(h.selection.focusIdx()).toBe(0);
+    expect(h.key("down")).toBe(true);
+    expect(h.selection.focusIdx()).toBe(1);
+  });
+
+  test("page/first/last marks the key handled", () => {
+    const h = makeHarness();
+    expect(h.key("pagedown")).toBe(true);
+    expect(h.key("pageup")).toBe(true);
+    expect(h.key("home")).toBe(true);
+    expect(h.key("end")).toBe(true);
+  });
+
+  test("esc menu open: the arrow moves its cursor AND is marked handled (grid behind stays put)", () => {
+    const h = makeHarness();
+    h.ctx.escMenu.openMenu();
+    h.calls.length = 0;
+    expect(h.key("down")).toBe(true);
+    expect(h.calls).toContain("escmenu:move:1");
+  });
+
+  test("properties dialog open: keys are marked handled", () => {
+    const h = makeHarness({ propsIsOpen: () => true });
+    expect(h.key("down")).toBe(true);
+  });
+
+  test("keybind capture: the recorded key is marked handled", () => {
+    const h = makeHarness();
+    h.escMenuState.capturing = true;
+    expect(h.key("down")).toBe(true);
+    expect(h.calls).toContain("capture:down");
+  });
+
+  test("an unconsumed key stays unmarked", () => {
+    const h = makeHarness();
+    expect(h.key("f9")).toBe(false);
+  });
+
+  test("search box owns typing: keys stay unmarked", () => {
+    const h = makeHarness({ searchVisible: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+  });
+
+  test("inline rename owns typing: keys stay unmarked", () => {
+    const h = makeHarness({ isRenaming: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+  });
+
+  test("path edit owns typing: keys stay unmarked", () => {
+    const h = makeHarness({ pathEditMode: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+  });
+
+  test("pick overlay owns typing: keys stay unmarked", () => {
+    const h = makeHarness();
+    h.pickState.open = true;
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+    expect(h.calls).toContain("pick:a");
+  });
+
+  test("prompt overlay owns typing: keys stay unmarked", () => {
+    const h = makeHarness({
+      prompt: {
+        isOpen: () => true,
+        handleKey: (e) => h.calls.push(`prompt:${e.name}`),
+      },
+    });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+    expect(h.calls).toContain("prompt:a");
+  });
+
+  test("bulk rename owns typing: keys stay unmarked", () => {
+    const h = makeHarness();
+    h.bulkState.open = true;
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
+    expect(h.calls).toContain("bulk:a");
+  });
+
+  test("embedded terminal owns the keyboard: keys stay unmarked", () => {
+    const h = makeHarness({ termOwnsKeyboard: () => true });
+    expect(h.key("a")).toBe(false);
+    expect(h.key("down")).toBe(false);
   });
 });

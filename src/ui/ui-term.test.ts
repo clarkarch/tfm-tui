@@ -232,7 +232,7 @@ describe("syncTerminalHeight", () => {
     await t.renderOnce();
   });
 
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   test("resizes the live pane node to the current config value", async () => {
     termH = 9;
@@ -328,7 +328,7 @@ describe("openTerminalHere", () => {
     await t.renderOnce();
   });
 
-  afterAll(() => t.renderer.destroy());
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   beforeEach(() => {
     spawnCalls = [];
@@ -393,6 +393,44 @@ describe("openTerminalHere", () => {
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]!.cwd).toBe("/tmp/my prog");
     expect(written.join("")).toBe("'/tmp/my prog/run.sh'\n");
+    fac.closeTerminalPane();
+  });
+
+  // the kitty self-drop path (plain drag onto the pane) shares one paste with
+  // the internal ctrl+drag mouse path: quoted paths + trailing space + focus
+  test("pastePaths pastes quoted paths like the internal ctrl+drag drop", () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    const written: string[] = [];
+    child.terminal!.write = (d: Uint8Array) => {
+      written.push(new TextDecoder().decode(d));
+    };
+    expect(fac.pastePaths(["/tmp/a.txt", "/tmp/b c"])).toBe(true);
+    expect(written.join("")).toBe("'/tmp/a.txt' '/tmp/b c' ");
+    fac.closeTerminalPane();
+  });
+
+  test("pastePaths with no pane returns false and writes nothing", () => {
+    const fac = mkTerm();
+    const written: string[] = [];
+    child.terminal!.write = (d: Uint8Array) => {
+      written.push(new TextDecoder().decode(d));
+    };
+    expect(fac.pastePaths(["/tmp/a.txt"])).toBe(false);
+    expect(written).toEqual([]);
+  });
+
+  test("setDropCue flips the header fill hot and back (shares the latch with mouse hover)", async () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    fac.setDropCue(true);
+    await t.renderOnce();
+    const header = t.renderer.root.findDescendantById("tfm-term-header") as any;
+    expect([...header.backgroundColor.toInts()]).not.toEqual(hexSidebarBg());
+    fac.setDropCue(false);
+    await t.renderOnce();
+    expect([...header.backgroundColor.toInts()]).toEqual(hexSidebarBg());
     fac.closeTerminalPane();
   });
 

@@ -4,8 +4,9 @@
 
 import path from "node:path";
 import { trashDir } from "../fs/fsutil";
-import { setBookmarked, loadSystemPlaces, type Place } from "../fs/places";
-import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
+import { setBookmarked, loadSystemPlaces, type EjectSpec, type Place } from "../fs/places";
+import { RECENT_URI, STARRED_URI, isArchiveUri, isVirtualUri } from "../fs/uri";
+import { archiveBrowseUri } from "../fs/archive-scheme";
 import type { CompressionFormat } from "../fs/archive";
 import type { ListEntry } from "./ui-menu";
 import type { ClipItem, GridTileRef } from "../input/grid-input";
@@ -34,8 +35,8 @@ export type MenuEntriesCtx = {
   pasteSmart(dest: string): void;
   confirmEmptyTrash(): void;
   confirmDeleteForever(paths: string[]): void;
-  ejectDevice(device: string): void;
-  mountDevice(device: string): void;
+  ejectDevice(spec: EjectSpec): void;
+  mountDevice(device: string | undefined, label?: string): void;
   inTrashView(): boolean;
   // structural view of the tile refs — full TileRefs satisfies it
   tileRefs: Map<string, GridTileRef>;
@@ -266,7 +267,13 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         label: "Eject",
         action: () => {
           ctx.closeFileMenu();
-          ctx.ejectDevice(device);
+          ctx.ejectDevice({
+            device,
+            label: place.label,
+            target,
+            disk: place.disk,
+            parts: place.diskParts,
+          });
         },
       });
     }
@@ -276,7 +283,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         label: "Mount",
         action: () => {
           ctx.closeFileMenu();
-          ctx.mountDevice(mountDevice);
+          ctx.mountDevice(mountDevice, place.label);
         },
       });
     }
@@ -350,6 +357,54 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       );
       return withPluginSection(entries, targets);
     }
+    // archive members are read-only URIs, not fs paths: only navigation (a dir
+    // member opens deeper) and handing the archive itself to an app elsewhere
+    // make sense. Copy/cut/rename/trash/open-with/properties all need a real
+    // path, so the menu doesn't offer them here.
+    if (isArchiveUri(ctx.cwd())) {
+      const inSel = !!ctx.tileRefs.get(targetPath)?.selected;
+      const targets: ClipItem[] = inSel && ctx.selPaths().length > 1 ? ctx.selPaths() : [{ path: targetPath, isDir }];
+      if (isDir) {
+        entries.push({
+          icon: "folder",
+          label: "Open",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.navigate(targetPath);
+          },
+          submenu: [
+            {
+              icon: "plus",
+              label: "Open in New Tab",
+              action: () => {
+                ctx.closeFileMenu();
+                ctx.newTab(targetPath);
+              },
+            },
+            {
+              icon: "border-vertical",
+              label: "Open in New Pane",
+              action: () => {
+                ctx.closeFileMenu();
+                ctx.openInOtherPane(targetPath);
+              },
+            },
+          ],
+        });
+      } else {
+        // a member file can't be opened yet (per-entry extract is deferred):
+        // openFileDefault refuses an archive URI with an honest toast
+        entries.push({
+          icon: "eye",
+          label: "Open",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.openFileDefault(targetPath);
+          },
+        });
+      }
+      return withPluginSection(entries, targets);
+    }
     // Open is directly clickable everywhere; the flyout keeps the variants
     // (dirs: tab/pane/terminal, files: the "Open With…" chooser). Executables
     // get a single Run row instead of Open (xdg-open would land them in the
@@ -418,23 +473,38 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
         ],
       });
     } else {
+      // archives browse in-place (Open Archive); the flyout keeps the ways to
+      // hand the file to another app (default handler / chooser)
+      const archive = ctx.canExtract(targetPath) ? archiveBrowseUri(targetPath, false) : null;
+      const submenu: ListEntry[] = [
+        {
+          icon: "cog",
+          label: "Open With…",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.openWith(targetPath);
+          },
+        },
+      ];
+      if (archive) {
+        submenu.unshift({
+          icon: "eye",
+          label: "Open",
+          action: () => {
+            ctx.closeFileMenu();
+            ctx.openFileDefault(targetPath);
+          },
+        });
+      }
       entries.push({
-        icon: "eye",
-        label: "Open",
+        icon: archive ? "zip-box" : "eye",
+        label: archive ? "Open Archive" : "Open",
         action: () => {
           ctx.closeFileMenu();
-          ctx.openFileDefault(targetPath);
+          if (archive) ctx.navigate(archive);
+          else ctx.openFileDefault(targetPath);
         },
-        submenu: [
-          {
-            icon: "cog",
-            label: "Open With…",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.openWith(targetPath);
-            },
-          },
-        ],
+        submenu,
       });
     }
     // actions apply to the whole live selection when the right-clicked tile is

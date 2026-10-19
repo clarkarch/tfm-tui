@@ -1,7 +1,8 @@
 // --- Keyboard wiring: the modal precedence chain router lives in ./keymap
 // (capture > quit/restart > overlay-modals (prompt/bulk-rename/conflict/yes-no/rename/props) >
-// pick > esc-menu > terminal > path-edit > file menu > search > sidebar >
-// grid > actions — mirrored from its header) + sidebar kb-focus state + the
+// pick > command palette > esc-menu > terminal > path-edit > file menu >
+// search > sidebar > grid > actions — mirrored from its header) + sidebar
+// kb-focus state + the
 // generic pick overlay widget (api.ui.pick primitive) and the single-line
 // prompt overlay (plugin git-URL entry). Last wiring step — everything it
 // reads exists by now. ---
@@ -11,11 +12,13 @@ import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
 import { zoomUiPatch } from "../ui/settings";
-import { cycleSortMode } from "../lib/sort";
+import { cycleSortMode, naturalAscFor } from "../lib/sort";
 import { destroyChildren, errMessage } from "../lib/uiutil";
 import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled } from "../plugins/plugin-api";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
+import { isBookmarked, loadSystemPlaces, setBookmarked } from "../fs/places";
+import { isNetworkPath } from "../fs/network";
 import { dlog } from "../app/log";
 import type { Command } from "../lib/command";
 import type { CoreWiring } from "./core";
@@ -33,8 +36,11 @@ export const wireKeymap = (deps: {
   settings: SettingsWiring;
   plugins: PluginsWiring;
   getRetheme: () => RethemeWiring;
+  // update checks wire BEFORE keymap in index.ts, but the router is built
+  // against this ctx at construction, so the getter keeps the seam uniform
+  getUpdates: () => { activate(): Promise<unknown> };
 }) => {
-  const { core, nav, chrome, gridFoundation, grid, fileops, settings, plugins, getRetheme } = deps;
+  const { core, nav, chrome, gridFoundation, grid, fileops, settings, plugins, getRetheme, getUpdates } = deps;
   const { state, floats } = core;
   const { byId } = core.lookup;
 
@@ -118,6 +124,13 @@ export const wireKeymap = (deps: {
     keybinds: (action) => core.config.keys[action] ?? [],
     quit: nav.quitApp,
     restart: nav.restartApp,
+    // core command palette: the pick overlay over the merged core+plugin
+    // command list (its item source is backfilled with keyRouter.commands()
+    // after the router exists — see coreCommands below)
+    openCommandPalette: () => pick.open({ title: "Command palette" }),
+    checkUpdates: () => {
+      void getUpdates().activate();
+    },
     // layer-open reads go through floats — the single source of truth; the
     // close fns are the widgets' (they route back through floats themselves)
     conflict: {
@@ -201,6 +214,103 @@ export const wireKeymap = (deps: {
       getRetheme().scheduleSaveConfig();
       // applyConfig handles the repaint + its normalizePanes hook resets the
       // active pane when turning off
+    },
+    // hidden files: commit through the one applyConfig path like every other
+    // view toggle. Flipping AppState alone was clobbered by the next unrelated
+    // config change (applyConfig re-converges both panes from [ui] show-hidden).
+    toggleHidden: () => {
+      const ui = core.config.ui;
+      getRetheme().applyConfig({ ...core.config, ui: { ...ui, showHidden: !ui.showHidden } });
+      getRetheme().scheduleSaveConfig();
+    },
+    extractArchive: (files) => grid.extractArchive(files, state.cwd),
+    compressTo: (paths) => grid.compressTo(paths),
+    openWith: (p) => grid.openWith(p),
+    runFile: (p) => grid.runExecutable(p),
+    runInTerminal: (p) => grid.runExecutableInTerminal(p),
+    toggleBookmark: () => {
+      const dir = state.cwd;
+      if (core.isVirtualCwd() || isTrashFilesDir(dir)) {
+        chrome.notify("Can't bookmark here", "bookmark", "error");
+        return;
+      }
+      const on = !isBookmarked(dir);
+      void setBookmarked(dir, on)
+        .then(() => loadSystemPlaces())
+        .then(() => nav.renderAll())
+        .then(() => chrome.notify(on ? "Folder bookmarked" : "Bookmark removed", "bookmark", "success"))
+        .catch(() => chrome.notify("Bookmark failed", "bookmark", "error"));
+    },
+    emptyTrash: fileops.confirmEmptyTrash,
+    refreshListing: () => void grid.renderGrid(true),
+    // nautilus pick semantics (same as the sort menu): choosing the active
+    // key flips its direction, a new key sorts in its natural direction
+    sortBy: (mode) => {
+      const s = core.activeState();
+      if (s.sortBy === mode) s.sortAsc = !s.sortAsc;
+      else {
+        s.sortBy = mode;
+        s.sortAsc = naturalAscFor(mode);
+      }
+      void grid.renderGrid();
+    },
+    reverseSortOrder: () => {
+      const s = core.activeState();
+      s.sortAsc = !s.sortAsc;
+      void grid.renderGrid();
+    },
+    openInNewTab: (dir) => nav.newTab(dir),
+    openInOtherPane: (dir) => grid.openInOtherPane(dir),
+    disconnectServer: () => {
+      if (!isNetworkPath(state.cwd)) {
+        chrome.notify("Not in a network folder", "network", "info");
+        return;
+      }
+      chrome.disconnectServer(state.cwd);
+    },
+    // device prompts: the sidebar rows own the real act; the palette just
+    // offers the same list (ejectable rows / unmounted devices) through pick
+    ejectDrive: () => {
+      const rows = chrome.chrome.placesHost.filter((r) => r.place.ejectable && r.place.device);
+      if (!rows.length) {
+        chrome.notify("No ejectable drives", "eject", "info");
+        return;
+      }
+      pick.open({
+        title: "Eject drive",
+        placeholder: "Choose a drive…",
+        items: rows.map((r) => {
+          const label = r.place.label || r.place.device || "drive";
+          return {
+            label,
+            hint: r.place.device,
+            run: () =>
+              chrome.chrome.ejectDevice({
+                device: r.place.device,
+                label,
+                target: r.place.path,
+                disk: r.place.disk,
+                parts: r.place.diskParts,
+              }),
+          };
+        }),
+      });
+    },
+    mountDrive: () => {
+      const rows = chrome.chrome.placesHost.filter((r) => r.place.mountDevice && !r.place.path);
+      if (!rows.length) {
+        chrome.notify("No unmounted drives", "mount", "info");
+        return;
+      }
+      pick.open({
+        title: "Mount drive",
+        placeholder: "Choose a drive…",
+        items: rows.map((r) => ({
+          label: r.place.label || r.place.mountDevice || "drive",
+          hint: r.place.mountDevice,
+          run: () => chrome.chrome.mountDevice(r.place.mountDevice, r.place.label),
+        })),
+      });
     },
     toggleViewMode: () => {
       const ui = core.config.ui;

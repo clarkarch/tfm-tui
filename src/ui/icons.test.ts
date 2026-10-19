@@ -12,6 +12,7 @@ import {
   brandPng,
   clearFailedThumbs,
   clearIconCaches,
+  shouldWarmBootCaches,
   svgAspect,
   iconCacheKey,
   iconPng,
@@ -41,8 +42,9 @@ const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => f
 const hasMagick = Bun.which("magick") !== null;
 // icons: in-process only; vector thumbs: in-process or the magick last resort
 const hasSvgRenderer = hasInproc || hasMagick;
-// video thumbs ride the bundled sidecar (never the system PATH); the corpus
-// below is generated with that same binary, so CI covers it via postinstall.
+// video thumbs need the system ffmpeg ($TFM_FFMPEG override or PATH — tfm
+// bundles nothing), so the video cases skip on a machine without it; CI
+// installs ffmpeg to keep them covered.
 const hasVideoBin = videoBin() !== null;
 
 // tiny fixtures, embedded so the raster tests need no external tool to CREATE
@@ -376,6 +378,60 @@ describe("icons", () => {
     clearIconCaches();
   });
 
+  test("niche decoders stay unloaded until a lane runs (lazy first paint)", () => {
+    // importing ui/icons must NOT pull ico-to-png/pngjs/utif2 into the
+    // process — they cost parse time on every boot while only ICO/TIFF
+    // thumbs touch them (jpg/png ride Bun.Image). Fresh subprocess: the
+    // suite's module cache is shared, so an in-process probe always sees
+    // whatever an earlier test already loaded.
+    const probe = `
+      await import(${JSON.stringify(new URL("./icons.ts", import.meta.url).href)});
+      const keys = Object.keys(require.cache ?? {});
+      console.log(JSON.stringify({
+        ico: keys.some((k) => k.includes("ico-to-png")),
+        pngjs: keys.some((k) => k.includes("pngjs")),
+        utif2: keys.some((k) => k.includes("utif2")),
+      }));
+    `;
+    const proc = Bun.spawnSync({ cmd: ["bun", "-e", probe], stdout: "pipe", stderr: "pipe" });
+    expect(proc.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(proc.stdout).trim())).toEqual({
+      ico: false,
+      pngjs: false,
+      utif2: false,
+    });
+  });
+
+  test("shouldWarmBootCaches gates both boot warms on [ui] lazy-startup", () => {
+    // the single gate wiring/chrome reads for warmEmbeddedIcons +
+    // warmSvgRenderer: only an explicit true warms (default off = classic
+    // boot pays both inline). Strict equality — legacy hand-edited truthy
+    // TOML ("yes"/1) must not silently opt into the lazy path.
+    expect(shouldWarmBootCaches(true)).toBe(true);
+    expect(shouldWarmBootCaches(false)).toBe(false);
+    expect(shouldWarmBootCaches(undefined)).toBe(false);
+    expect(shouldWarmBootCaches("yes")).toBe(false);
+    expect(shouldWarmBootCaches(1)).toBe(false);
+  });
+
+  test.skipIf(!hasInproc)("warmSvgRenderer dlopens resvg outside the first drain (lazy first paint)", async () => {
+    // needs the resvg-js addon: addon-less machines take the remembered-null
+    // path (no cache key) and would fail this despite correct behavior
+    // the first icon raster pays ~40ms for the sync require-dlopen; warming
+    // it concurrently with runBoot moves that off the first-paint path.
+    // Fresh subprocess (shared module cache would see an already-warm addon).
+    const probe = `
+      const m = await import(${JSON.stringify(new URL("./icons.ts", import.meta.url).href)});
+      m.warmSvgRenderer();
+      await new Promise((r) => setTimeout(r, 50));
+      const keys = Object.keys(require.cache ?? {});
+      console.log(JSON.stringify(keys.some((k) => k.includes("resvg"))));
+    `;
+    const proc = Bun.spawnSync({ cmd: ["bun", "-e", probe], stdout: "pipe", stderr: "pipe" });
+    expect(proc.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(proc.stdout).trim())).toBe(true);
+  });
+
   test("rasterLaneFor routes niche exts to in-process lanes, rest to spawn", () => {
     expect(rasterLaneFor("a.ico")).toBe("ico");
     expect(rasterLaneFor("a.CUR")).toBe("ico");
@@ -406,12 +462,12 @@ describe("icons", () => {
         );
       }
     });
-    test("video keys ignore bg but keep the binary source (sidecar swaps must not share pixels)", () => {
-      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:sidecar")).toBe(
-        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#ff0000", "video:sidecar"),
+    test("video keys ignore bg but keep the binary source (override↔PATH swaps must not share pixels)", () => {
+      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:path")).toBe(
+        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#ff0000", "video:path"),
       );
-      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:sidecar")).not.toBe(
-        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:dev"),
+      expect(thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:path")).not.toBe(
+        thumbCacheKey("/p/a.mp4", 1, 2, 32, 32, "#1a1b26", "video:override"),
       );
     });
     test("vector keys keep bg (SVG thumbs flatten onto it)", () => {
@@ -523,32 +579,29 @@ describe("icons", () => {
     20000,
   );
 
-  test.skipIf(!hasVideoBin)(
-    "vanished binary rejects instead of hanging",
-    async () => {
-      const tmp = mkdtempSync(path.join(os.tmpdir(), "tfm-videobin-gone-"));
-      const prevEnv = process.env.TFM_FFMPEG;
+  // no system ffmpeg needed: the override IS the (deleted) binary under test
+  test("vanished binary rejects instead of hanging", async () => {
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "tfm-videobin-gone-"));
+    const prevEnv = process.env.TFM_FFMPEG;
+    resetVideoBin();
+    try {
+      const ghost = path.join(tmp, "ffmpeg");
+      writeFileSync(ghost, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      chmodSync(ghost, 0o755);
+      process.env.TFM_FFMPEG = ghost;
       resetVideoBin();
-      try {
-        const ghost = path.join(tmp, "ffmpeg");
-        writeFileSync(ghost, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-        chmodSync(ghost, 0o755);
-        process.env.TFM_FFMPEG = ghost;
-        resetVideoBin();
-        expect(videoBin()?.source).toBe("override");
-        rmSync(ghost);
-        // resolver memo still points at the deleted path: the spawn must
-        // surface as a rejection (async ENOENT), never a stuck drain
-        await expect(thumbPng(path.join(tmp, "x.mp4"), 4, 4, 48, 64, "#1a1b26", false, true)).rejects.toThrow();
-      } finally {
-        if (prevEnv === undefined) delete process.env.TFM_FFMPEG;
-        else process.env.TFM_FFMPEG = prevEnv;
-        resetVideoBin();
-        rmSync(tmp, { recursive: true, force: true });
-      }
-    },
-    20000,
-  );
+      expect(videoBin()?.source).toBe("override");
+      rmSync(ghost);
+      // resolver memo still points at the deleted path: the spawn must
+      // surface as a rejection (async ENOENT), never a stuck drain
+      await expect(thumbPng(path.join(tmp, "x.mp4"), 4, 4, 48, 64, "#1a1b26", false, true)).rejects.toThrow();
+    } finally {
+      if (prevEnv === undefined) delete process.env.TFM_FFMPEG;
+      else process.env.TFM_FFMPEG = prevEnv;
+      resetVideoBin();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 20000);
 });
 
 // The in-memory layers are the only unbounded ones — every raster ever served
@@ -817,12 +870,28 @@ const countBluePixels = (bytes: Uint8Array): number => {
 
 describe("pngFromProc timeout", () => {
   test("a hung renderer rejects instead of holding its slot forever", async () => {
-    const { spawn } = await import("node:child_process");
-    const proc = spawn("sleep", ["30"], { stdio: ["pipe", "pipe", "pipe"] });
+    const proc = Bun.spawn(["sleep", "30"], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const start = Date.now();
     await expect(pngFromProc(proc, "sleep-probe", 100)).rejects.toThrow(/timed out/);
     // well under the child's 30s life: the wrapper killed it, nothing lingers
     expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  test("a successful renderer resolves its bytes", async () => {
+    const proc = Bun.spawn(["sh", "-c", "printf 'PNGDATA'"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const bytes = await pngFromProc(proc, "printf-probe");
+    expect(new TextDecoder().decode(bytes)).toBe("PNGDATA");
+  });
+
+  test("an empty success rejects (the video retry relies on this)", async () => {
+    // ffmpeg with no decodable frame exits 0 with no bytes: that must read
+    // as a miss (retry at 0), not as a valid thumbnail
+    const proc = Bun.spawn(["true"], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    await expect(pngFromProc(proc, "empty-probe")).rejects.toThrow(/exited 0/);
   });
 });
 

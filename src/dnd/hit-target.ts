@@ -34,6 +34,12 @@ export const makeHitTargetAt =
       while (cur) {
         const id: unknown = cur.id;
         if (typeof id === "string") {
+          // embedded terminal pane (host, header, VT, esc button): a plain
+          // kitty drag over it pastes paths like ctrl+drag does — without
+          // this the self-drop hover misses and kitty cancels the session
+          if (id === "tfm-term-host" || id === "tfm-term-header" || id === "tfm-term" || id === "tfm-esc-term") {
+            return { kind: "terminal", path: "" };
+          }
           if (id.startsWith("tfm-place-")) {
             const rec = ctx.placesHost()[parseInt(id.slice(10), 10)];
             return rec?.place?.path ? { kind: "place", path: rec.place.path } : null;

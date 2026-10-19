@@ -69,7 +69,7 @@ describe("bulk rename widget", () => {
       expect(floats.isOpen("bulkrename")).toBe(false);
       expect(t.renderer.root.findDescendantById("tfm-bulkrename")).toBeFalsy();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -85,7 +85,7 @@ describe("bulk rename widget", () => {
       expect(frame).not.toContain("type a name");
       bulk.handleKey({ name: "escape" });
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -102,7 +102,7 @@ describe("bulk rename widget", () => {
       expect(t.captureCharFrame()).toContain("Z 1.jpg");
       bulk.handleKey({ name: "escape" });
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -122,7 +122,7 @@ describe("bulk rename widget", () => {
       ]);
       expect(floats.isOpen("bulkrename")).toBe(false);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -142,7 +142,7 @@ describe("bulk rename widget", () => {
       expect(performed[0]!.to).toBe("/tfm-bulk/pic 01.txt");
       expect(performed[9]!.to).toBe("/tfm-bulk/pic 10.txt");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -159,7 +159,7 @@ describe("bulk rename widget", () => {
       expect(t.captureCharFrame()).toContain("pic (1).jpg");
       bulk.handleKey({ name: "escape" });
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -178,7 +178,7 @@ describe("bulk rename widget", () => {
       expect(floats.isOpen("bulkrename")).toBe(true);
       expect(t.captureCharFrame()).toContain("Name can't be empty");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -200,7 +200,7 @@ describe("bulk rename widget", () => {
       expect(floats.depth()).toBe(1);
       bulk.handleKey({ name: "escape" });
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -216,7 +216,7 @@ describe("bulk rename widget", () => {
       expect(floats.isOpen("bulkrename")).toBe(true);
       bulk.handleKey({ name: "escape" });
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -248,7 +248,7 @@ describe("bulk rename widget", () => {
       expect(frame).toContain("vacation 1.jpg");
       expect(frame).toContain("Rename 2 items");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -260,7 +260,7 @@ describe("bulk rename widget", () => {
       expect(() => bulk.repaint()).not.toThrow();
       expect(t.renderer.root.findDescendantById("tfm-bulkrename")).toBeFalsy();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -278,7 +278,7 @@ describe("bulk rename widget", () => {
       expect(floats.isOpen("bulkrename")).toBe(false);
       expect(pointers).toEqual(["text", "default"]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

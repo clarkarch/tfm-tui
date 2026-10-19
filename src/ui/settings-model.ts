@@ -5,6 +5,7 @@
 // presentations: theme presets, tab-bar adaptive/on, show-hidden state sync.
 // No renderer imports — ctx carries the sinks. ---
 import { spawnSafe } from "../fs/spawn-safe";
+import type { DefaultFileManagerOrchestration } from "../fs/default-filemanager";
 import { errMessage } from "../lib/uiutil";
 import { THEME_PRESETS } from "../config/themes";
 import type { LoadedPlugin } from "../plugins/plugin-api";
@@ -65,6 +66,20 @@ export type SettingsModelCtx = {
     openFolder(): void;
     update(name: string): void;
     remove(name: string): void;
+  };
+  // default-file-manager opt-in (one shared leaf orchestration, built in
+  // wiring/settings — xdg-mime set/unset, marker record, live probe).
+  // Optional so row SHAPE stays testable without it; the row degrades to a
+  // warn when absent. onSettled repaints the open panel after the async
+  // set/unset lands (afterAdjust already rebuilt on the synchronous return,
+  // before the spawn resolved). Optional so old fakes keep working.
+  defaultFileManager?: DefaultFileManagerOrchestration & {
+    onSettled?(): void;
+    // opens the Yes/No confirm on demand, FORCED past the verdict gate (an
+    // explicit toggle flip must always surface the question, even on a
+    // settled answer — otherwise the toggle visibly does nothing). Resolves
+    // true when the question surfaced. Optional so old fakes work.
+    ask?(): Promise<boolean>;
   };
 };
 
@@ -213,7 +228,7 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       },
       setIdx: (i) => {
         if (ctx.isTtyMode?.()) {
-          ctx.warn("theme is fixed on the console — presets apply back on a graphical terminal", "theme");
+          ctx.warn("Theme fixed on console", "theme");
           return;
         }
         if (i === 0) {
@@ -270,6 +285,48 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     getIdx: () => (ctx.config.ui.tabBar ? 1 : 0),
     setIdx: (i) => commitUi({ tabBar: i === 1 }),
   });
+  // one row for the whole default-file-manager story (advanced, directly under
+  // launch time): an ACTION row, not a toggle — pressing it always spawns the
+  // Yes/No confirm UI, which is the ONLY path to the yes-flow. (A toggle was
+  // tried and deleted: its on/off paint promises live state while the confirm
+  // owns the outcome, so the switch visibly lied in both directions.) The blurb
+  // names the live handler, so what the system actually uses is visible right
+  // under the row — a stale belief ("I said yes") dies on sight. The marker
+  // file is the store — no config commit, so config-schema/example TOML
+  // stay untouched. Fire-and-forget; the wiring toasts the outcome and the
+  // yes-flow's onSettled repaints the panel once it lands.
+  const shortHandler = (id: string): string => id.replace(/\.desktop$/, "").replace(/^org\.(gnome|kde)\./, "");
+  const defaultFileManagerRow = (): SettingRow => {
+    let handler = "";
+    try {
+      handler = ctx.defaultFileManager?.current() ?? "";
+    } catch {}
+    return {
+      kind: "action",
+      // label stays <= 30 chars: settingsWidths caps the label column there and
+      // the panel slices silently, so "tfm" must ride the short form
+      label: "set tfm as default manager",
+      blurb: handler ? `folders open in: ${shortHandler(handler)}` : "Make tfm open folder links",
+      keepOpen: true,
+      run: () => {
+        const dfm = ctx.defaultFileManager;
+        if (!dfm?.ask) {
+          ctx.warn("default file manager controls unavailable", "default file manager");
+          return;
+        }
+        void dfm
+          .ask()
+          .then((surfaced) => {
+            if (!surfaced) ctx.warn("Already settled · nothing to ask", "default file manager");
+          })
+          .catch((err) => {
+            try {
+              ctx.warn(errMessage(err), "default file manager");
+            } catch {}
+          });
+      },
+    };
+  };
 
   // keymap preset switch (tfm/yazi): one batch commit over the whole [keys]
   // table + the type-to-search/view flips, like manual remaps (nothing
@@ -329,15 +386,23 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     "sidebarHoverAnimation",
     "topbarAnimation",
     "directoryBarAnimation",
+    "smoothScrolling",
     "previewEnabled",
     "sidebarAutoHide",
     "previewAutoHide",
     "terminalAutoHide",
     "listingsCache",
     "windowedGrid",
+    "scrimMode",
   ]);
 
-  const genericUiRows = (group: NonNullable<UiSchemaRow["group"]>): SettingRow[] => {
+  // `extras` injects a hand-built row INTO the schema stream, keyed by the prop
+  // it must sit after — the default-file-manager control reads as part of the
+  // boot/network pair under launch time, not as a config-level action at the end.
+  const genericUiRows = (
+    group: NonNullable<UiSchemaRow["group"]>,
+    extras: Partial<Record<string, SettingRow[]>> = {},
+  ): SettingRow[] => {
     const rows: SettingRow[] = [];
     // subsection dividers: one header row where the schema's subsection name
     // changes — including the first section, so every group with dividers is
@@ -365,6 +430,8 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
         if (built.kind === "toggle" || built.kind === "cycle") built.repaint = true;
       }
       rows.push(built);
+      const injected = extras[row.prop];
+      if (injected) rows.push(...injected);
     }
     return rows;
   };
@@ -387,15 +454,12 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     { id: "advanced", label: "advanced", icon: "cog" },
   ];
 
+  // advanced = the boot/debug pair, then the default-manager control injected
+  // under launch time, then the two config-level actions — and reset DEAD LAST:
+  // its blast radius is the whole config, so it stays furthest from the knobs
+  // people actually touch.
   const advancedRows = (): SettingRow[] => [
-    ...genericUiRows("advanced"),
-    {
-      kind: "action",
-      label: "reset to defaults",
-      blurb: "Put every setting back",
-      keepOpen: true,
-      run: resetToDefaults,
-    },
+    ...genericUiRows("advanced", { showLaunchTime: [defaultFileManagerRow()] }),
     {
       kind: "action",
       label: "edit config.toml…",
@@ -403,8 +467,15 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
       run: () => {
         spawnSafe("xdg-open", [configPath()], { stdio: "ignore", detached: true }, (err) =>
           ctx.warn(err.message, "config"),
-        ).unref?.();
+        )?.unref();
       },
+    },
+    {
+      kind: "action",
+      label: "reset to defaults",
+      blurb: "Put every setting back",
+      keepOpen: true,
+      run: resetToDefaults,
     },
   ];
 

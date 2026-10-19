@@ -28,12 +28,28 @@ export type BootCtx = {
   restoreSession(): void;
   loadSystemPlaces(): Promise<void>;
   renderAll(): void;
+  // lazy mounts refresh: boot skips the ~200ms lsblk for first paint and this
+  // fills the Devices rows in right after (optional — absent in old fakes)
+  refreshMounts?(): void;
   // cold-boot-only sidebar intro (see ui-sidebar-anim): plays right after the
   // first renderAll so the staged frame 0 never flashes the finished sidebar
   playSidebarIntro?(): void;
   // cold-boot-only top bar intro (same module): plays right after the sidebar
   // intro, so both staged frame-0s land before the first presented frame
   playTopbarIntro?(): void;
+  // cold-boot-only default-file-manager opt-in (Yes/No/Ask-again): fires
+  // after the intros so the user sees tfm first, before being asked to make
+  // it the default. Absent = never asked (old fakes keep working). The verdict
+  // probe is a SYNCHRONOUS xdg-mime spawn (see probeDefaultFileManagerSync) —
+  // ~200ms of blocked event loop — so under lazy startup it runs AFTER the
+  // launch report (non-essential for the first frame / first input).
+  promptDefaultFileManager?(): void;
+  // fire-and-forget update check (only starts one; never awaits the network)
+  checkUpdates?(): void;
+  // [ui] lazy-startup: already-known at boot (config loads before). Classic
+  // boots keep the legacy order; lazy moves the sync dialog probe past the
+  // launch report. Absent = classic.
+  lazyBoot?: boolean;
   debugTrace(): void;
   launchToast(): void;
   startHygiene(): void;
@@ -48,16 +64,23 @@ export type BootCtx = {
 // one boot step, isolated: a throw is logged/reported and the sequence
 // continues — the first render must still happen even if a later step broke.
 const guard = (ctx: BootCtx, name: string, fn: () => void | Promise<void>): Promise<void> => {
+  const t0 = performance.now();
+  const settle = () => debugLog(`bootstep: ${name} ${Math.round(performance.now() - t0)}ms`);
   try {
     const r = fn();
     if (r instanceof Promise) {
-      return r.catch((err) => {
-        debugLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
-        ctx.reportBootError?.(name, err);
-      });
+      return r
+        .then(() => settle())
+        .catch((err) => {
+          settle();
+          debugLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
+          ctx.reportBootError?.(name, err);
+        });
     }
+    settle();
     return Promise.resolve();
   } catch (err) {
+    settle();
     debugLog(`boot ${name} failed: ${err instanceof Error ? (err.stack ?? err.message) : err}`);
     ctx.reportBootError?.(name, err);
     return Promise.resolve();
@@ -65,8 +88,9 @@ const guard = (ctx: BootCtx, name: string, fn: () => void | Promise<void>): Prom
 };
 
 export const runBoot = async (ctx: BootCtx): Promise<void> => {
-  // ISO timestamps on every line already give a full timeline in the debug
-  // log — free profiling for slow-boot reports, silent in production
+  // ISO timestamps on every line give the full timeline, and guard logs a
+  // `bootstep: <name> <ms>` duration per step — free profiling for slow-boot
+  // reports (silent in production: debugLog no-ops without --debug)
   if (ctx.isRestartChild) await guard(ctx, "clearStaleImages", () => ctx.clearStaleImages?.());
   await guard(ctx, "waitResolution", () => ctx.waitForResolution());
   debugLog("boot: systemTheme");
@@ -89,11 +113,22 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   await guard(ctx, "restoreSession", () => ctx.restoreSession());
   debugLog("boot: renderAll");
   await guard(ctx, "renderAll", () => ctx.renderAll());
+  await guard(ctx, "refreshMounts", () => ctx.refreshMounts?.());
   await guard(ctx, "playSidebarIntro", () => ctx.playSidebarIntro?.());
   await guard(ctx, "playTopbarIntro", () => ctx.playTopbarIntro?.());
+  // lazy startup: the sync verdict probe (~200ms of blocked event loop) is not
+  // needed for the first frame or first input — run it after the launch report
+  // so boot finishes and the app is interactive sooner. Classic keeps it here
+  // (unchanged legacy order: the prompt precedes the report).
+  if (ctx.lazyBoot !== true) await guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
   debugLog("boot: done");
   if (ctx.isDebug) await guard(ctx, "debugTrace", () => ctx.debugTrace());
   if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());
+  if (ctx.lazyBoot === true) await guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
   await guard(ctx, "startHygiene", () => ctx.startHygiene());
   await guard(ctx, "wireSearchInput", () => ctx.wireSearchInput());
+  // updates LAST: a network question must never delay the first frame, the
+  // launch report or the default-file-manager prompt (and it never blocks:
+  // the step only starts the check)
+  await guard(ctx, "checkUpdates", () => ctx.checkUpdates?.());
 };

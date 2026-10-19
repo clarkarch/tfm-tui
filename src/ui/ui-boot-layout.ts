@@ -6,8 +6,9 @@
 // straight from ./grid-input so the wiring can't drift from the gesture
 // state machine. ---
 
-import { ASCIIFont, Box, type CliRenderer, type MouseEvent, ScrollBoxRenderable, Text } from "@opentui/core";
+import { ASCIIFont, Box, type CliRenderer, type MouseEvent, RGBA, ScrollBoxRenderable, Text } from "@opentui/core";
 import { chromeSurface, type UiStyle } from "./style";
+import { SCRIM_FILL_ID, SCRIM_FILL_RGBA, SCRIM_FILL_Z } from "./scrim";
 import type { MaybeNode } from "../lib/node-like";
 import type { SlotElement } from "./ui-slots";
 import type { ListEntry } from "./ui-menu";
@@ -44,7 +45,10 @@ export const buildTitle = (opts: { width: number; colors: Theme; mode?: SidebarT
     {
       id: "tfm-title-box",
       width: opts.width,
-      height: 5,
+      // files shows only the 2-row wordmark (no tagline): one row shorter, so
+      // the centered wordmark keeps tfm's 1-above/1-below breathing room
+      // instead of gaining a second dead row on top
+      height: files ? 4 : 5,
       visible: mode !== "none",
       flexDirection: "column",
       justifyContent: "center",
@@ -86,7 +90,7 @@ type AppContainerOpts = {
 
 export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
   Box(
-    { width: "100%", height: "100%", flexDirection: "row" },
+    { id: "tfm-content", width: "100%", height: "100%", flexDirection: "row" },
     Box(
       {
         id: "tfm-sidebar-root",
@@ -216,8 +220,21 @@ export const scrollbarTrackColors = (colors: Theme): { backgroundColor: string; 
   foregroundColor: colors.sidebarFgMuted,
 });
 export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, ScrollBoxRenderable] => {
-  const makeScroller = (id: string, pane: number): ScrollBoxRenderable =>
-    new ScrollBoxRenderable(ctx.renderer, {
+  // NEVER keyboard-focusable (scroller + BOTH bars). OpenTUI's autoFocus
+  // focuses the nearest focusable ancestor on ANY left click, and a focused
+  // ScrollBox/ScrollBar turns arrows/j/k/pgup/pgdn/home/end into a 1/5-of-
+  // viewport self-scroll: it fought the selection scroll and kept scrolling the
+  // listing behind an open modal (focus survives under a float). tfm owns every
+  // grid key — the router also marks consumed keys handled; the wheel needs no
+  // focus (it is hitTest-routed).
+  //
+  // Set through the SETTER, not the option: `options.focusable` is only honored
+  // by classes whose default is already false (BoxRenderable's ctor does
+  // `if (options.focusable === true) this._focusable = true`, and Renderable's
+  // never reads it), so `focusable: false` is silently ignored on a ScrollBox /
+  // ScrollBar whose `defaultFocusable` is true (probed on this fork).
+  const makeScroller = (id: string, pane: number): ScrollBoxRenderable => {
+    const scroller = new ScrollBoxRenderable(ctx.renderer, {
       id,
       flexGrow: 1,
       width: "100%",
@@ -256,6 +273,11 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       // never receive a drag
       onMouseDrop: () => ctx.dropIntoPane(pane),
     });
+    scroller.focusable = false;
+    scroller.verticalScrollBar.focusable = false;
+    scroller.horizontalScrollBar.focusable = false;
+    return scroller;
+  };
 
   const scroller0 = makeScroller("tfm-scroll", 0);
   const scroller1 = makeScroller("tfm-scroll-2", 1);
@@ -271,6 +293,33 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       border: true,
       borderStyle: "rounded",
       borderColor: ctx.isTtyMode?.() ? ctx.colors.hoverBg : ctx.colors.accent,
+      // Border only: Box defaults `shouldFill: true`, and a transparent fill
+      // over an image unreserves the WHOLE covered rect in OpenTUI (the
+      // renderer treats any drawn fill as occluding) — dragging a marquee over
+      // a thumbnail then deletes the thumbnail ("black box"). shouldFill:false
+      // skips the fillRect so only the border glyphs' cells clip the raster.
+      shouldFill: false,
+    }),
+  );
+
+  // [ui] scrim = "fill" overlay: the classic RGBA(0,0,0,150) full-screen fill.
+  // Its box passes the fork's fillDimsImages so the image placements it covers
+  // are dimmed in place (reservations survive) instead of deleted — a plain
+  // fill makes OpenTUI delete every raster it covers (the "black box" icons).
+  // Toggled live by applyModalDim, hence its own node rather than the modal
+  // Boxes (which are created per-open).
+  ctx.renderer.root.add(
+    Box({
+      id: SCRIM_FILL_ID,
+      visible: false,
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+      zIndex: SCRIM_FILL_Z,
+      backgroundColor: RGBA.fromInts(...SCRIM_FILL_RGBA),
+      fillDimsImages: true,
     }),
   );
 

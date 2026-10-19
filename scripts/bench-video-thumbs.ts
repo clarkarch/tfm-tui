@@ -1,6 +1,8 @@
 // Benchmarks video-thumbnail lanes for the ffmpeg frame job
-// (src/ui/icons.ts renderVideoPng) against npm alternatives, ranking speed
-// AND OS-dependence (the point: fewer deps on whatever the user's OS has).
+// (src/ui/icons.ts renderVideoPng) against npm alternatives. The product
+// settled on the SYSTEM ffmpeg (src/fs/videobin: $TFM_FFMPEG then PATH — no
+// bundled sidecar); this bench is the record of why the zero-OS-dep lanes
+// lost, and whose argv/shape the winner uses.
 //
 //   bun scripts/bench-video-thumbs.ts                  # all lanes, 5 runs each
 //   bun scripts/bench-video-thumbs.ts --runs 10
@@ -8,23 +10,23 @@
 //   bun scripts/bench-video-thumbs.ts --sample /path/to/clip.mp4
 //   bun scripts/bench-video-thumbs.ts --pixels          # pixel diff vs spawn
 //
-// Corpus is generated at runtime via the bundled dev ffmpeg (testsrc2 exercises a
+// Corpus is generated at runtime via the system ffmpeg (testsrc2 exercises a
 // real demux+decode per container/codec). A real sample via --sample covers
 // what synthetics can't (B-frames, odd SAR, attached pics). The generator is
 // whatever ffmpeg is handy — it only builds the corpus, never the thumbs
-// under test (except lane `spawn`, the legacy system binary kept as the
-// before/after reference).
+// under test (except lane `spawn`, the system binary the product now uses,
+// kept as the before/after reference).
 //
-// Lanes benched: system-ffmpeg spawn (incumbent, exact renderVideoPng argv),
-// fluent-ffmpeg (stands in for ffmpeg-forge/peasy-video/mediax-sdk — same
-// spawn engine under the hood, so benching all four buys nothing),
-// @ffmpeg-installer/ffmpeg bundled-binary spawn (same engine, zero system
-// dep), ffmpeg-static install-time-downloaded static spawn (same engine,
-// zero system dep — the maintained one: measured 7.0.2 on disk vs the
-// installer's 2018 build), beamcoder native libav bindings (the only true non-spawn contender),
+// Lanes benched: system-ffmpeg spawn (the product's choice — exact
+// renderVideoPng argv), fluent-ffmpeg (stands in for
+// ffmpeg-forge/peasy-video/mediax-sdk — same spawn engine under the hood, so
+// benching all four buys nothing), @ffmpeg-installer/ffmpeg bundled-binary
+// spawn (same engine, zero system dep), ffmpeg-static static spawn (same
+// engine, zero system dep — measured 7.0.2 on disk vs the installer's 2018
+// build), beamcoder native libav bindings (the only true non-spawn contender),
 // @ffmpeg/ffmpeg wasm (no OS dep at all), Bun.Image (negative control).
 // Excluded with reason: totem-video-thumbnailer/ffmpegthumbnailer (just
-// another OS spawn, against the goal), videoframer/framewise (LLM-pipeline
+// another OS spawn, no argv win), videoframer/framewise (LLM-pipeline
 // shaped, same ffmpeg engine anyway).
 import { PassThrough } from "node:stream";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -51,15 +53,19 @@ const parseArgs = (argv: string[]): Args => {
 };
 
 // --- corpus (runtime-generated, except --sample) ---
-// Dev sidecar first, system binary as generator-only fallback (the product
-// never touches PATH; the bench just needs any ffmpeg to mint testsrc).
+// System ffmpeg first (what the product uses — src/fs/videobin resolves
+// $TFM_FFMPEG then PATH), with an optional manually-installed ffmpeg-static as
+// a fallback generator. This only mints the testsrc corpus; the thumbs under
+// test are produced by the lane binaries below.
 const genBin = (): string | null => {
+  const onPath = Bun.which("ffmpeg");
+  if (onPath) return onPath;
   try {
     // biome-ignore lint/suspicious/noExplicitAny: untyped CJS export (a path string)
     const mod: any = require("ffmpeg-static");
     if (typeof mod === "string") return mod;
   } catch {}
-  return Bun.which("ffmpeg");
+  return null;
 };
 const GEN = genBin();
 
@@ -276,10 +282,11 @@ const laneBundled: Lane = {
   run: (f) => (bundledBin ? spawnThumb(bundledBin, f) : Promise.resolve(null)),
 };
 
-// --- lane 3b: ffmpeg-static spawn (install-time-downloaded static binary) ---
-// The module exports the path string directly. Freshness gates on the
-// maintainer re-pinning the GitHub release per ffmpeg-static release
-// (measured 7.0.2 on disk 2026-10; README still claims 6.1.1).
+// --- lane 3b: ffmpeg-static spawn (optional manual `bun add -d ffmpeg-static`) ---
+// No longer a project dependency (the product uses the system binary); the
+// lane stays for anyone re-running the comparison. The module exports the path
+// string directly. Freshness gates on the maintainer re-pinning the GitHub
+// release per ffmpeg-static release (measured 7.0.2 on disk 2026-10).
 let staticBin: string | null = null;
 const laneStatic: Lane = {
   probe: async () => {
@@ -456,7 +463,7 @@ const main = async () => {
   const keep = (name: string): boolean => !wanted || wanted.includes(name);
   const corpus = buildCorpus(args.sample);
   if (corpus.length === 0) {
-    console.log("no corpus — no ffmpeg at all (dev sidecar or system)?");
+    console.log("no corpus — no ffmpeg at all (system PATH or ffmpeg-static)?");
     return;
   }
 

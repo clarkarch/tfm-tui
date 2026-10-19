@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { makeDialogs, makeConflict, makeYesNo } from "./ui-dialogs";
+import { makeDialogs, makeConflict, makeModalScrim, makeYesNo } from "./ui-dialogs";
 import { makeFloats, type Floats } from "./floats";
 
 // Floating-layer state lives in ./floats (single source of truth): the
@@ -137,6 +137,35 @@ describe("openDialog chokepoint", () => {
     expect(confirmed).toBe(false);
   });
 
+  test("confirm force-opens over the esc-menu (settings toggle must surface the question)", () => {
+    // the default-file-manager toggle lives INSIDE the esc-menu: opening the
+    // confirm through the floats modal policy would dismiss the menu first
+    // and then die with it — the user flips the toggle and nothing happens.
+    // confirm() closes the menu explicitly, THEN opens, so the pending Yes
+    // still fires on a live dialog.
+    const { ctx, floats } = makeCtx();
+    floats.open("escmenu", () => {});
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
+    let confirmed = false;
+    expect(
+      yesNo.confirm("Make tfm the default file manager?", "Set as default", () => {
+        confirmed = true;
+      }),
+    ).toBe(true);
+    expect(floats.isOpen("escmenu")).toBe(false);
+    expect(floats.top()).toBe("yesno");
+    yesNo.moveFocus(1); // → Yes
+    yesNo.submit();
+    expect(confirmed).toBe(true);
+    expect(floats.isOpen("yesno")).toBe(false);
+  });
+
   test("keyboard: focus defaults to No, arrows move, submit activates", () => {
     const { ctx, floats } = makeCtx();
     const dialogs = makeDialogs(ctx);
@@ -200,7 +229,7 @@ describe("openDialog chokepoint", () => {
       expect(frame).toContain("[ No ]");
       expect(frame).toContain("[ Delete permanently ]");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -221,6 +250,25 @@ describe("openDialog chokepoint", () => {
     expect(typeof scrim.props.onMouseDown).toBe("function");
     scrim.props.onMouseDown({});
     expect(closed).toBe(true);
+  });
+
+  test("the scrim carries NO background fill (a fill makes OpenTUI delete every raster under it)", () => {
+    // The old `RGBA(0,0,0,150)` fill made 0.6.0 unreserve every kitty placement
+    // it covered, so thumbnails vanished under any modal (the glyph-fallback
+    // hack existed only to mask that). The dim now rides tfm-content opacity.
+    const { ctx, lastAdded } = makeCtx();
+    const { openDialog } = makeDialogs(ctx);
+    openDialog({ id: "tfm-nofill", zIndex: 3300, width: 20, rows: () => [], onClose: () => {} });
+    expect(lastAdded().props.backgroundColor).toBeUndefined();
+  });
+
+  test("makeModalScrim (esc menu / pick / prompt path) is fill-less too", () => {
+    const node: any = makeModalScrim(
+      { uiStyle: () => "solid" as const, colors: () => ({ sidebarBg: "#000000" }) as any },
+      { id: "tfm-x", zIndex: 1, panelWidth: 10, onClose: () => {} },
+    );
+    expect(node.props.backgroundColor).toBeUndefined();
+    expect(typeof node.props.onMouseDown).toBe("function");
   });
 });
 
@@ -295,7 +343,7 @@ describe("dialog repaints", () => {
       await p;
       expect(choice).toBe("keepBoth");
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -320,7 +368,7 @@ describe("dialog repaints", () => {
       yesNo.submit();
       expect(confirmed).toBe(true);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -332,7 +380,7 @@ describe("dialog repaints", () => {
       expect(() => conflict.repaint()).not.toThrow();
       expect(() => yesNo.repaint()).not.toThrow();
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 
@@ -361,7 +409,7 @@ describe("dialog repaints", () => {
       expect(confirmed).toBe(true);
       expect(pointers).toEqual(["default"]);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

@@ -1,8 +1,7 @@
 import { existsSync } from "node:fs";
+import { execBun, type ExecBunResult } from "./exec-bun";
 import { spawnSafe } from "./spawn-safe";
 import { fileUriToPath } from "./uri";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 // --- System clipboard bridge (Nautilus-style copied-files). Nautilus
 // publishes files on the CLIPBOARD selection as MIME
@@ -84,7 +83,9 @@ export const parsePlainPaths = (text: string, exists: (p: string) => boolean = e
   return paths.length ? { op: "copy", paths } : null;
 };
 
-const execFileP = promisify(execFile);
+// clipboard reads ride execBun (never throws for spawn failures — a missing
+// tool resolves code -1 and the read below degrades to null like before)
+const execClip = (cmd: string, args: string[]): Promise<ExecBunResult> => execBun(cmd, args, { timeoutMs: 10_000 });
 
 type ClipLog = (msg: string) => void;
 
@@ -105,8 +106,14 @@ export const publishPathsToSystemClipboard = (
     const p = spawnFn(t.put, [...t.putBase], { stdio: ["pipe", "ignore", "ignore"] }, (err) =>
       log(`system clipboard FAILED: ${err.message}`),
     );
-    p.stdin?.end(payload);
-    p.unref?.();
+    // Bun FileSink takes the payload via write + end (node's end(chunk)
+    // wrote a final chunk — no equivalent); null = spawn failed, already
+    // logged through onFail above
+    if (p?.stdin && typeof p.stdin !== "number") {
+      p.stdin.write(payload);
+      p.stdin.end();
+    }
+    p?.unref();
     log(`system clipboard <- ${mode} ${items.length} item(s) via ${t.put} (text paths)`);
   } catch (err) {
     log(`system clipboard FAILED: ${err}`);
@@ -125,7 +132,8 @@ export const readCopiedFilesFromSystemClipboard = async (log: ClipLog = () => {}
   const read = async (args: string[]): Promise<string | null> => {
     try {
       // timeout: a hung wl-paste/xclip must not stall paste forever
-      const { stdout } = await execFileP(t.get, args, { timeout: 10_000 });
+      const { code, stdout } = await execClip(t.get, args);
+      if (code !== 0) throw new Error(`clipboard read exited ${code}`);
       return String(stdout ?? "");
     } catch (err) {
       log(`paste: clipboard read failed (${args.join(" ") || "default"}): ${err}`);

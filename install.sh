@@ -24,6 +24,11 @@
 #   TFM_LOCAL         install this binary instead of downloading or building
 #   TFM_NO_VERIFY=1   skip the checksum check (not recommended)
 #   TFM_NO_SMOKE=1    install without testing the build first (not recommended)
+#   TFM_NO_DESKTOP=1  skip the desktop-entry registration (no tfm.desktop)
+#   TFM_DESKTOP_SRC   desktop entry source file (default: release download,
+#                     checkout asset, or script-dir asset, in that order)
+#   TFM_APPLICATIONS_DIR  where to install tfm.desktop
+#                     (default $XDG_DATA_HOME/applications)
 #   TFM_VERBOSE=1     stream child output instead of capturing it
 #   TFM_WIDTH=N       force the render width (testing)
 #   TFM_INSTALL_LIB_ONLY=1  define the helpers and stop (testing)
@@ -36,6 +41,10 @@ SOURCE="${TFM_SOURCE:-${TFM_REF:-}}"
 LOCAL="${TFM_LOCAL:-}"
 SRC_DIR="${TFM_SRC_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/tfm/src}"
 REMOTE="${TFM_REMOTE:-https://github.com/$REPO.git}"
+# The patched OpenTUI fork must sit BESIDE the checkout: package.json depends on
+# file:../opentui-fork/packages/core/dist. URL/ref come from the checkout's
+# opentui-fork.ref so the installer and release CI can't drift.
+FORK_DIR="${TFM_FORK_DIR:-$(dirname "$SRC_DIR")/opentui-fork}"
 VERBOSE="${TFM_VERBOSE:-}"
 NO_SMOKE="${TFM_NO_SMOKE:-}"
 
@@ -111,11 +120,10 @@ LINE=""
 SMOKE_VER=""
 SMOKE_LINE=""
 BAK_REMOVED=0
+FFMPEG_SWEPT=0
 NEW_FILE=""
 FETCH_PID=""
 MODE=release
-# plain path (no .gz): set by step_download_ffmpeg on success, else ""
-FFMPEG_SRC=""
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 plain() { printf 'tfm: %s\n' "$*"; }
@@ -581,7 +589,7 @@ pretty_dollar_home() { # $HOME form for copy-paste export lines (tilde does not 
 # feature), so there is no recommended/optional split. The packager hint is
 # best-effort: a wrong `apt install` is worse than naming the tool alone, so
 # tools without a reliable package name are called out by name.
-TOOLS_OPTIONAL="xdg-open magick gio udisksctl clip zip unzip 7z"
+TOOLS_OPTIONAL="xdg-open magick gio udisksctl clip zip unzip 7z ffmpeg"
 
 tool_present() {
   case "$1" in
@@ -607,6 +615,7 @@ tool_desc() {
     zip) printf 'faster zip creation' ;;
     unzip) printf 'faster zip extraction' ;;
     7z) printf '7z archives' ;;
+    ffmpeg) printf 'video thumbnails' ;;
     *) printf '' ;;
   esac
 }
@@ -651,6 +660,7 @@ pm_pkg() { # pm_pkg PM TOOL — "" when we don't know a package for that family
     xdg-open) printf 'xdg-utils' ;;
     zip) printf 'zip' ;;
     unzip) printf 'unzip' ;;
+    ffmpeg) printf 'ffmpeg' ;;
     7z)
       case "$1" in
         apt) printf 'p7zip-full' ;;
@@ -878,97 +888,6 @@ step_verify() {
   fi
 }
 
-# ── ffmpeg sidecar ────────────────────────────────────────────────────────
-# Video thumbnails ride a bundled static ffmpeg (tfm-ffmpeg-$ARCH.gz from the
-# same release), never the system PATH. Best-effort by design: every failure
-# below warns and continues — tfm itself installs either way, only video
-# thumbs degrade to glyphs until a reinstall.
-step_download_ffmpeg() {
-  step_begin "ffmpeg"
-  if ! fetch_with_bar "$BASE/tfm-ffmpeg-$ARCH.gz" "$WORK/ffmpeg.gz" "$WORK/ffmpeg.hdr"; then
-    step_warn "video thumbnails unavailable (download failed)"
-    return 0
-  fi
-  if [ ! -s "$WORK/ffmpeg.gz" ]; then
-    step_warn "video thumbnails unavailable (empty download)"
-    return 0
-  fi
-  # same digest-compare rule as step_verify (never `sha256sum -c`)
-  if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-ffmpeg-$ARCH.gz.sha256" -o "$WORK/ffmpeg.gz.sha256" >>"$RUN_LOG" 2>&1; then
-    local want
-    local got
-    want=$(cut -d' ' -f1 <"$WORK/ffmpeg.gz.sha256")
-    got=$(sha256sum <"$WORK/ffmpeg.gz" | cut -d' ' -f1)
-    if [ -z "$want" ] || [ "$want" != "$got" ]; then
-      step_warn "video thumbnails unavailable (checksum mismatch)"
-      return 0
-    fi
-  else
-    step_warn "video thumbnails unavailable (no checksum published)"
-    return 0
-  fi
-  FFMPEG_SRC="$WORK/ffmpeg.gz"
-  step_ok "sidecar downloaded and verified"
-}
-
-install_ffmpeg_sidecar() { # install_ffmpeg_sidecar SRC_FILE (plain binary)
-  local src=$1
-  local tmp=""
-  # no chmod on the SOURCE: it may be read-only (node_modules checkout) and
-  # needs none anyway — the copy below is chmod'd after staging
-  # the binary must actually run: a corrupt unpack must not replace a working sidecar
-  if have timeout; then
-    if ! timeout -k 2 15 "$src" -hide_banner -version >>"$RUN_LOG" 2>&1; then
-      step_warn "video thumbnails unavailable (sidecar won't run)"
-      return 0
-    fi
-  else
-    if ! "$src" -hide_banner -version >>"$RUN_LOG" 2>&1; then
-      step_warn "video thumbnails unavailable (sidecar won't run)"
-      return 0
-    fi
-  fi
-  # same atomic swap as install_binary: a running tfm must never see a half file
-  tmp="$DEST/.ffmpeg-new.$$"
-  if ! cp -f "$src" "$tmp" 2>>"$RUN_LOG" || ! chmod +x "$tmp" 2>>"$RUN_LOG" ||
-    ! mv -f "$tmp" "$DEST/tfm-ffmpeg" 2>>"$RUN_LOG"; then
-    rm -f "$tmp" 2>/dev/null || true
-    step_warn "video thumbnails unavailable (install failed)"
-    return 0
-  fi
-  step_ok "video thumbnails · $(pretty_home "$DEST")/tfm-ffmpeg"
-}
-
-step_install_ffmpeg() {
-  # nothing to do when there is nothing to install from (the download step
-  # already warned with the reason; local mode has no source context at all)
-  if [ "$MODE" = "local" ]; then return 0; fi
-  if [ "$MODE" = "release" ] && [ -z "$FFMPEG_SRC" ]; then return 0; fi
-  step_begin "ffmpeg"
-  if [ "$MODE" = "release" ]; then
-    if ! run_child gunzip -f "$WORK/ffmpeg.gz"; then
-      step_warn "video thumbnails unavailable (unpack failed)"
-      return 0
-    fi
-    # gunzip inherits the .gz file's mode (curl writes 644), so the unpacked
-    # sidecar is NOT executable until marked — without this the run test below
-    # fails EACCES and refuses a working sidecar (install_binary chmods first).
-    if ! run_child chmod +x "$WORK/ffmpeg"; then
-      step_warn "video thumbnails unavailable (chmod failed)"
-      return 0
-    fi
-    # || true: every failure inside warns and returns 0 today, but a future
-    # nonzero return must never abort a working tfm install under set -e
-    install_ffmpeg_sidecar "$WORK/ffmpeg" || true
-  elif [ "$MODE" = "source" ]; then
-    if [ -f "$SRC_DIR/node_modules/ffmpeg-static/ffmpeg" ]; then
-      install_ffmpeg_sidecar "$SRC_DIR/node_modules/ffmpeg-static/ffmpeg" || true
-    else
-      step_warn "video thumbnails unavailable (no bundled binary in checkout)"
-    fi
-  fi
-}
-
 # ── steps: source ───────────────────────────────────────────────────────────
 bun_version() {
   local v
@@ -1091,6 +1010,64 @@ step_fetch() {
   step_ok "$SOURCE @ $short → $(pretty_home "$SRC_DIR")"
 }
 
+# Fetches the patched opentui fork beside the checkout (a shallow clone of the
+# prebuilt branch: packages/core/dist + packages/native/lib/<target>/). The
+# build step stages its libopentui over the npm platform package afterwards.
+step_opentui() {
+  step_begin "opentui"
+  local ref_file="$SRC_DIR/opentui-fork.ref" url ref
+  if [ ! -f "$ref_file" ]; then
+    fail_at opentui "no fork ref" \
+      "$SRC_DIR/opentui-fork.ref is missing, so the patched opentui fork is unknown." \
+      "That checkout predates the fork, or it is incomplete. Nothing was installed."
+  fi
+  url=$(sed -n 's/^url *= *//p' "$ref_file" | head -n 1)
+  ref=$(sed -n 's/^ref *= *//p' "$ref_file" | head -n 1)
+  if [ -z "$url" ] || [ -z "$ref" ]; then
+    fail_at opentui "bad fork ref" \
+      "$ref_file must set both url and ref." \
+      "Fix the file in the checkout, or use the release one-liner. Nothing was installed."
+  fi
+  if [ -d "$FORK_DIR/.git" ]; then
+    local origin
+    origin=$(git -C "$FORK_DIR" remote get-url origin 2>/dev/null || true)
+    if [ "$origin" != "$url" ]; then
+      fail_at opentui "foreign fork checkout" \
+        "$FORK_DIR is a git checkout of $origin, not $url." \
+        "Point TFM_FORK_DIR at a different path, or remove that directory."
+    fi
+    if [ -n "$(git -C "$FORK_DIR" status --porcelain 2>/dev/null)" ]; then
+      fail_at opentui "fork changes" \
+        "$FORK_DIR has local changes, so tfm won't touch it." \
+        "Commit or stash them, or point TFM_FORK_DIR at a different path."
+    fi
+    if ! run_child git -C "$FORK_DIR" fetch --depth 1 origin "$ref"; then
+      fail_at opentui "fork fetch failed" \
+        "Couldn't fetch $ref from $url." \
+        "Check your internet connection and try again. Nothing was installed."
+    fi
+    if ! run_child git -C "$FORK_DIR" checkout -q --detach FETCH_HEAD; then
+      fail_at opentui "fork checkout failed" \
+        "Couldn't check out $ref in $FORK_DIR." \
+        "Remove that directory and run the same command again."
+    fi
+  else
+    if [ -e "$FORK_DIR" ]; then
+      fail_at opentui "not a checkout" \
+        "$FORK_DIR exists and isn't a git checkout, so tfm won't touch it." \
+        "Point TFM_FORK_DIR at a different path, or remove that directory."
+    fi
+    mkdir -p "$(dirname "$FORK_DIR")"
+    if ! run_child git clone --depth 1 --single-branch --branch "$ref" "$url" "$FORK_DIR"; then
+      rm -rf "$FORK_DIR" 2>/dev/null || true
+      fail_at opentui "fork clone failed" \
+        "Couldn't clone $ref from $url." \
+        "Check your internet connection and try again. Nothing was installed."
+    fi
+  fi
+  step_ok "$ref → $(pretty_home "$FORK_DIR")"
+}
+
 step_build() {
   step_begin "build"
   local t0 t1 secs
@@ -1099,6 +1076,20 @@ step_build() {
     fail_at build "install failed" \
       "bun couldn't install the dependencies of $SRC_DIR." \
       "See the output above, or run 'bun install --frozen-lockfile' there yourself." \
+      "Nothing was installed."
+  fi
+  # bun resolves a file: dependency's dist through its real path, so
+  # `bun build --compile` resolves everything the fork's dist imports (the
+  # platform packages, web-tree-sitter, …) from the FORK's node_modules. Link
+  # it at the tree tfm just installed: same resolution, no second install.
+  # A fork checkout that has its own node_modules (dev) is left alone.
+  if [ -d "$SRC_DIR/node_modules" ] && [ ! -e "$FORK_DIR/node_modules" ]; then
+    ln -sfn "$(readlink -f "$SRC_DIR/node_modules")" "$FORK_DIR/node_modules"
+  fi
+  if ! run_child_in "$SRC_DIR" sh scripts/sync-opentui-lib.sh; then
+    fail_at build "opentui lib missing" \
+      "The patched libopentui for this machine wasn't staged from $(pretty_home "$FORK_DIR")." \
+      "The fork must ship packages/native/lib/<target>/libopentui.so for this architecture." \
       "Nothing was installed."
   fi
   if ! run_child_in "$SRC_DIR" bun run compile; then
@@ -1143,6 +1134,74 @@ smoke_version() { # smoke_version FILE
     'tfm '*) SMOKE_VER="${first#tfm }"; return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# The version of an already-installed tfm, "" when there is none (or it is not
+# a working tfm). Used to skip a 40 MB re-download when nothing changed.
+installed_version() {
+  local bin="$DEST/tfm"
+  [ -x "$bin" ] || return 0
+  local out
+  out=$("$bin" --version 2>/dev/null | head -n 1) || return 0
+  case "$out" in
+    'tfm '*) printf '%s' "${out#tfm }" ;;
+  esac
+}
+
+# The tag /releases/latest currently points at, "" when we cannot tell (offline,
+# no releases yet, no curl). One HEAD request, no API token, no rate limit.
+latest_tag() {
+  have curl || return 0
+  local loc
+  loc=$(curl -fsSI --retry 2 --proto '=https' -o /dev/null -w '%{redirect_url}' \
+    "${TFM_LATEST_PROBE:-https://github.com/$REPO/releases/latest}" 2>/dev/null) || return 0
+  case "$loc" in
+    */releases/tag/*) printf '%s' "${loc##*/releases/tag/}" ;;
+  esac
+}
+
+# Provenance: what this install IS, so `tfm update` never has to guess (a source
+# build must not be silently swapped for a release). Best-effort: a read-only
+# XDG dir must not fail an otherwise good install.
+write_provenance() {
+  local dir="${XDG_DATA_HOME:-$HOME/.local/share}/tfm"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  local channel version ref
+  case "$MODE" in
+    source) channel=source ;;
+    local) channel=local ;;
+    *) channel=release ;;
+  esac
+  version="${SMOKE_VER:-}"
+  ref="${SOURCE:-}"
+  printf '{"channel":"%s","version":"%s","ref":"%s","dest":"%s","installedAt":"%s"}\n' \
+    "$channel" "$version" "$ref" "$DEST" "$(date -Is)" >"$dir/install.json" 2>/dev/null || true
+}
+
+# Re-running the installer when you already have the target release used to
+# re-download 40 MB and swap identical bytes. Now it says so and exits 0, which
+# is what makes "just run it again" (and `tfm update`) safe any time.
+# TFM_FORCE=1 reinstalls anyway. Always returns 0 (it either exits the script
+# or leaves it installing): a non-zero return would trip `set -e` at the call
+# site, which is exactly the bug this comment prevents.
+skip_if_current() {
+  [ "${TFM_FORCE:-}" != "1" ] || return 0
+  local want=""
+  if [ "$VERSION" = "latest" ]; then want=$(latest_tag); else want="$VERSION"; fi
+  [ -n "$want" ] || return 0
+  local have
+  have=$(installed_version)
+  [ -n "$have" ] || return 0
+  [ "$have" = "${want#v}" ] || return 0
+  if [ "$FANCY" = 1 ]; then
+    panel "$C_OK" "tfm $have is the latest release" \
+      "already installed in $(pretty_home "$DEST")" "" \
+      "nothing to do (TFM_FORCE=1 reinstalls anyway)"
+  else
+    plain "tfm $have is the latest release, nothing to do"
+  fi
+  print_tip
+  exit 0
 }
 
 # One binary, two commands. Created BEFORE the swap, so the two names can never
@@ -1203,6 +1262,14 @@ install_binary() { # install_binary SRC_FILE
   if [ -f "$DEST/tfm.bak" ] && [ ! -L "$DEST/tfm.bak" ]; then
     if rm -f "$DEST/tfm.bak" 2>>"$RUN_LOG"; then BAK_REMOVED=1; fi
   fi
+  # the video-thumbnail ffmpeg sidecar is GONE (video thumbs use the system
+  # ffmpeg now): sweep one left by an older install so it doesn't sit next to
+  # the binary forever. Same `! -L` rule as tfm.bak — a symlink by that name is
+  # the user's own, not ours to remove.
+  FFMPEG_SWEPT=0
+  if [ -f "$DEST/tfm-ffmpeg" ] && [ ! -L "$DEST/tfm-ffmpeg" ]; then
+    if rm -f "$DEST/tfm-ffmpeg" 2>>"$RUN_LOG"; then FFMPEG_SWEPT=1; fi
+  fi
 }
 
 step_install() {
@@ -1237,13 +1304,174 @@ step_install() {
       "Rebuild it and try again. Nothing was installed."
   fi
   install_binary "$src"
+  write_provenance
   if [ -n "$NO_SMOKE" ]; then
     detail="$(pretty_home "$DEST")/tfm · test skipped (TFM_NO_SMOKE=1)"
   else
     detail="$(pretty_home "$DEST")/tfm · tfm $SMOKE_VER runs"
   fi
   if [ "$BAK_REMOVED" = 1 ]; then detail="$detail · removed old tfm.bak"; fi
+  if [ "$FFMPEG_SWEPT" = 1 ]; then detail="$detail · removed old ffmpeg sidecar"; fi
   step_ok "$detail"
+}
+
+# ── desktop entry (registration, NOT a default) ──────────────────────────
+# Places tfm.desktop where desktops look for folder handlers, so "open with"
+# menus and xdg-mime know tfm exists. This never runs `xdg-mime default` —
+# becoming the default is the first-boot prompt's opt-in, where the user can
+# see tfm first. Warn-and-continue: a skipped entry
+# must never fail an otherwise working install.
+# Seams (tests): TFM_DESKTOP_SRC overrides the shipped entry, TFM_ICON_SRC
+# the shipped brand icon, and TFM_APPLICATIONS_DIR overrides the
+# applications dir (XDG_DATA_HOME-aware default). TFM_NO_DESKTOP=1 skips
+# the step entirely.
+install_desktop_entry() {
+  step_begin "desktop"
+  if [ "${TFM_NO_DESKTOP:-}" = "1" ]; then
+    step_ok "skipped (TFM_NO_DESKTOP=1)"
+    return 0
+  fi
+  local src="${TFM_DESKTOP_SRC:-}"
+  if [ -z "$src" ]; then
+    if [ "$MODE" = "source" ] && [ -n "${SRC_DIR:-}" ]; then
+      src="$SRC_DIR/assets/tfm.desktop"
+    elif [ "$MODE" = "release" ]; then
+      # pipe installs carry no checkout — fetch the published entry (same
+      # digest-compare rule as step_verify, but warn-and-continue: a missing
+      # sidecar must never fail the install, only skip registration)
+      if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm.desktop" -o "$WORK/tfm.desktop" >>"$RUN_LOG" 2>&1 &&
+        [ -s "$WORK/tfm.desktop" ]; then
+        if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm.desktop.sha256" -o "$WORK/tfm.desktop.sha256" >>"$RUN_LOG" 2>&1; then
+          local want
+          local got
+          want=$(cut -d' ' -f1 <"$WORK/tfm.desktop.sha256")
+          got=$(sha256sum <"$WORK/tfm.desktop" | cut -d' ' -f1)
+          if [ -n "$want" ] && [ "$want" = "$got" ]; then
+            src="$WORK/tfm.desktop"
+          else
+            dlog_desktop "checksum mismatch, skipping"
+          fi
+        else
+          dlog_desktop "no checksum published, skipping"
+        fi
+      else
+        dlog_desktop "download failed, skipping"
+      fi
+      # brand icon sidecar for the hicolor ship below (same warn-and-continue:
+      # an entry without its logo is still a working registration)
+      if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-icon.svg" -o "$WORK/tfm-icon.svg" >>"$RUN_LOG" 2>&1 &&
+        [ -s "$WORK/tfm-icon.svg" ]; then
+        if curl -fsSL --retry 3 --proto '=https' "$BASE/tfm-icon.svg.sha256" -o "$WORK/tfm-icon.svg.sha256" >>"$RUN_LOG" 2>&1; then
+          local iwant
+          local igot
+          iwant=$(cut -d' ' -f1 <"$WORK/tfm-icon.svg.sha256")
+          igot=$(sha256sum <"$WORK/tfm-icon.svg" | cut -d' ' -f1)
+          if [ -z "$iwant" ] || [ "$iwant" != "$igot" ]; then
+            rm -f "$WORK/tfm-icon.svg"
+            dlog_desktop "icon checksum mismatch, shipping entry without logo"
+          fi
+        else
+          rm -f "$WORK/tfm-icon.svg"
+          dlog_desktop "no icon checksum published, shipping entry without logo"
+        fi
+      fi
+    fi
+    if [ -z "$src" ]; then
+      # local mode and checkout-less leftovers: the entry rides the script's
+      # own dir when present (curl|bash without the release sidecar warns
+      # below — registration needs a source, and guessing one is worse)
+      src="$(dirname "${BASH_SOURCE[0]:-$0}")/assets/tfm.desktop"
+    fi
+  fi
+  local apps="${TFM_APPLICATIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/applications}"
+  if [ ! -f "$src" ]; then
+    step_warn "desktop entry skipped (no entry to install from)"
+    return 0
+  fi
+  if ! mkdir -p "$apps" 2>>"$RUN_LOG"; then
+    step_warn "desktop entry skipped (can't create $apps)"
+    return 0
+  fi
+  if ! cp -f "$src" "$apps/tfm.desktop" 2>>"$RUN_LOG"; then
+    step_warn "desktop entry skipped (can't write $apps/tfm.desktop)"
+    return 0
+  fi
+  # desktop files must not carry +x (some managers prompt "untrusted" for
+  # executable ones); a +x source would propagate it through the copy above
+  chmod 644 "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  # absolute Exec: a declined PATH prompt leaves bare `tfm` unresolvable, and
+  # TryExec hides the entry where tfm isn't on PATH. StartupNotify never
+  # completes for a terminal app (launchers spin), so it goes too.
+  if [ -n "${DEST:-}" ]; then
+    sed -i "s|^Exec=.*|Exec=$DEST/tfm %u|" "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  fi
+  # themed Icon=tfm, never an absolute path: Quickshell launchers (noctalia)
+  # resolve via QIcon::fromTheme(name) only, and an Icon=/… path falls back
+  # to the generic icon there (GNOME tolerates it, so the breakage is
+  # launcher-specific). A hand-edited or legacy entry must not strand it.
+  sed -i "s|^Icon=.*|Icon=tfm|" "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  if ! grep -q "^Icon=" "$apps/tfm.desktop" 2>/dev/null; then
+    printf '%s\n' "Icon=tfm" >>"$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  fi
+  if ! grep -q "^TryExec=" "$apps/tfm.desktop" 2>/dev/null; then
+    printf '%s\n' "TryExec=tfm" >>"$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  fi
+  sed -i "/^StartupNotify=/d" "$apps/tfm.desktop" 2>>"$RUN_LOG" || true
+  # validate BEFORE the database ingests it: a failing entry warns honestly
+  # instead of a step_ok over a skipped refresh
+  if have desktop-file-validate; then
+    if ! run_child desktop-file-validate "$apps/tfm.desktop"; then
+      step_warn "desktop entry installed but invalid (see log)"
+      return 0
+    fi
+  fi
+  if have update-desktop-database; then
+    run_child update-desktop-database "$apps" || true
+  fi
+  # brand icon next to the entry (Icon=tfm in the desktop file): ships the
+  # fixed-palette logo verbatim to hicolor, then refreshes the cache so
+  # launchers pick it up. Best-effort — a missing icon never fails the step.
+  install_desktop_icon
+  step_ok "desktop entry · $(pretty_home "$apps")/tfm.desktop"
+}
+
+# icon source mirrors the entry source (release sidecar / checkout / script
+# dir), so pipe installs get the logo too — never just the entry alone.
+install_desktop_icon() {
+  local data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  local iconsrc="${TFM_ICON_SRC:-}"
+  if [ -z "$iconsrc" ]; then
+    if [ "$MODE" = "source" ] && [ -n "${SRC_DIR:-}" ]; then
+      iconsrc="$SRC_DIR/assets/icons/tfm.svg"
+    elif [ "$MODE" = "release" ] && [ -s "$WORK/tfm-icon.svg" ]; then
+      iconsrc="$WORK/tfm-icon.svg"
+    else
+      iconsrc="$(dirname "${BASH_SOURCE[0]:-$0}")/assets/icons/tfm.svg"
+    fi
+  fi
+  [ -f "$iconsrc" ] || return 0
+  # hicolor scalable slot (primary): strict themes resolve it via the cache
+  local icondir="$data/icons/hicolor/scalable/apps"
+  if mkdir -p "$icondir" 2>>"$RUN_LOG" && cp -f "$iconsrc" "$icondir/tfm.svg" 2>>"$RUN_LOG"; then
+    chmod 644 "$icondir/tfm.svg" 2>>"$RUN_LOG" || true
+  fi
+  # bare icons/ copy (same bytes): a foreign index.theme that doesn't declare
+  # the scalable dir makes the hicolor copy invisible (verified live: GTK
+  # missed it while the file sat on disk, and XDG_DATA_HOME/pixmaps isn't
+  # scanned either — while a bare $data/icons/tfm.svg resolves through the
+  # default theme lookup). one source of truth, both copies byte-identical.
+  if cp -f "$iconsrc" "$data/icons/tfm.svg" 2>>"$RUN_LOG"; then
+    chmod 644 "$data/icons/tfm.svg" 2>>"$RUN_LOG" || true
+  fi
+  if have gtk-update-icon-cache; then
+    run_child gtk-update-icon-cache -f -t "$data/icons/hicolor" || true
+  fi
+}
+
+# best-effort note for the release-download fallbacks above (RUN_LOG is kept
+# on failure, deleted on success — either way the reason isn't lost)
+dlog_desktop() {
+  printf '%s\n' "desktop: $*" >>"$RUN_LOG" 2>/dev/null || true
 }
 
 # ── PATH setup + result ─────────────────────────────────────────────────────
@@ -1323,6 +1551,11 @@ print_result() {
       lines+=("start it:" "> tfm or terminal-file-manager")
       ;;
   esac
+  # an in-app update (`tfm update` from inside tfm): the running process still
+  # has the old binary, so name the restart instead of leaving it a surprise
+  if [ "${TFM_UPDATE_HINT:-}" = "1" ]; then
+    lines+=("" "restart tfm to use the new version:" "> ctrl+alt+r")
+  fi
   if [ "$FANCY" = 1 ]; then
     panel "$C_OK" "${lines[@]}"
   else
@@ -1369,19 +1602,18 @@ fi
 banner "$MODE"
 setup_workdir
 step_system
+if [ "$MODE" = "release" ]; then skip_if_current; fi
 if [ "$MODE" = "release" ]; then
   step_download
   step_verify
-  step_download_ffmpeg
 elif [ "$MODE" = "source" ]; then
   step_toolchain
   step_fetch
+  step_opentui
   step_build
 fi
 step_install
-if [ "$MODE" != "local" ]; then
-  step_install_ffmpeg
-fi
+install_desktop_entry
 if [ "$MODE" = "source" ]; then
   rule
   note "$C_DIM" "unreleased dev build · re-run the same command to update"

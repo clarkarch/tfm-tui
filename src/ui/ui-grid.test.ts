@@ -120,6 +120,12 @@ let fileAnimCalls: Array<{
   total: number;
   enterFrom: string | null;
 }>;
+let smoothOn: boolean;
+let smoothGlideCalls: Array<{ inner: unknown; delta: number }>;
+let smoothStopCalls: number;
+// post-rebuild repaint tail counters (a sub-row step must skip these)
+let stripCalls: number;
+let drainCalls: number;
 
 beforeAll(async () => {
   t = await createTestRenderer({ width: TERM_W, height: TERM_H });
@@ -145,7 +151,7 @@ beforeAll(async () => {
   throwOnName = null;
   testNow = 1_000_000;
   availWSet = null;
-  hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+  hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
   tilePrefix = "tfm-tile-";
   visibleOnly = false;
   windowedGridOn = false;
@@ -154,6 +160,11 @@ beforeAll(async () => {
   fileAnimMode = "rows";
   revealClock = mkRevealClock();
   fileAnimCalls = [];
+  smoothOn = false;
+  smoothGlideCalls = [];
+  smoothStopCalls = 0;
+  stripCalls = 0;
+  drainCalls = 0;
   waitForResolutionImpl = () => Promise.resolve();
   loadingDelayMs = undefined;
   ttyModeOn = false;
@@ -225,9 +236,13 @@ beforeAll(async () => {
       thumbJobs.push(job);
     },
     nextIconId: () => `fake-icon-${iconSeq++}`,
-    drainIconQueue: () => {},
+    drainIconQueue: () => {
+      drainCalls++;
+    },
     drainThumbs: () => {},
-    stripSelectable: () => {},
+    stripSelectable: () => {
+      stripCalls++;
+    },
     // mirrors makeLookup.setTextOnId (wiring passes the real one): stats-only
     // ticks repaint size/date cells in place instead of rebuilding rows
     setTextOnId: (id: string, s: string) => {
@@ -258,6 +273,14 @@ beforeAll(async () => {
     now: () => testNow,
     windowedGrid: () => windowedGridOn,
     isRenaming: () => renamingOn,
+    smoothScroll: () => smoothOn,
+    smoothScrollMs: () => 90,
+    smoothGlide: (inner: unknown, delta: number) => {
+      smoothGlideCalls.push({ inner, delta });
+    },
+    smoothStop: () => {
+      smoothStopCalls++;
+    },
     selection,
     entryMouseHandlers: (e, key, idx) => {
       if (throwOnName !== null && e.name === throwOnName) throw new Error("boom");
@@ -281,9 +304,9 @@ beforeAll(async () => {
   syncWindow = sw;
 });
 
-afterAll(() => {
+afterAll(async () => {
   rmSync(tmp, { recursive: true, force: true });
-  t.renderer.destroy();
+  await t.dispose(); // 0.6.0: destroy + await closed
 });
 
 describe("renderGrid (grid tiles)", () => {
@@ -339,7 +362,7 @@ describe("renderGrid (grid tiles)", () => {
   });
 
   test("up lift reserves one top row so the icon never leaves the tile", async () => {
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
     await t.renderOnce();
     // the icon starts one row lower: the up motion lands exactly on the tile
@@ -352,7 +375,7 @@ describe("renderGrid (grid tiles)", () => {
     }
     expect([...selection.tileRefs.values()].some((r) => r.hoverLift)).toBe(true);
 
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
     await t.renderOnce();
     for (const ref of selection.tileRefs.values()) {
@@ -363,7 +386,7 @@ describe("renderGrid (grid tiles)", () => {
 
   test("up lift works on the first row too (overpaints nothing — headroom)", async () => {
     availWSet = 30; // 2 cols: idx 0,1 first row, idx 2 second row
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     try {
       await renderGrid();
       await t.renderOnce();
@@ -374,27 +397,27 @@ describe("renderGrid (grid tiles)", () => {
       for (const ref of refs) expect(ref.hoverLift).toBe(true);
     } finally {
       availWSet = null;
-      hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+      hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
       await renderGrid();
     }
   });
 
   test("hover lift down uses the spare bottom row without a top margin", async () => {
-    hoverLiftOpts = { enabled: true, direction: "down", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "down", includeLabel: false };
     await renderGrid();
     await t.renderOnce();
     const ref = [...selection.tileRefs.values()][0]!;
     expect(ref.hoverLift).toBe(true);
     const tile = t.renderer.root.findDescendantById(ref.tileId) as any;
     expect(tile.getChildren()[0].marginTop || 0).toBe(0);
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
   });
 
   test("a wrapped label consumes the vertical spare: no lift, no headroom", async () => {
     writeFileSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), "x");
     wrapMode = "char";
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     try {
       await renderGrid();
       await t.renderOnce();
@@ -421,7 +444,7 @@ describe("renderGrid (grid tiles)", () => {
       // test (stale grid contents break unrelated counts)
       rmSync(path.join(tmp, "a-very-long-file-name-that-wraps.txt"), { force: true });
       wrapMode = "none";
-      hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+      hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
       await renderGrid();
     }
   });
@@ -496,13 +519,13 @@ describe("renderGrid (grid tiles)", () => {
         const tile = t.renderer.root.findDescendantById(r.tileId) as any;
         return tile?.getChildren()[0]?.marginTop || 0;
       });
-    hoverLiftOpts = { enabled: true, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
     expect(margins()).toContain(1);
-    hoverLiftOpts = { enabled: true, direction: "down", includeLabel: false };
+    hoverLiftOpts = { enabled: true, ms: 0, slideCells: 1, ease: "ease-out", direction: "down", includeLabel: false };
     await renderGrid();
     expect(margins()).not.toContain(1);
-    hoverLiftOpts = { enabled: false, direction: "up", includeLabel: false };
+    hoverLiftOpts = { enabled: false, ms: 0, slideCells: 1, ease: "ease-out", direction: "up", includeLabel: false };
     await renderGrid();
   });
 
@@ -1577,8 +1600,8 @@ describe("renderGrid (windowed grid)", () => {
       expect(inner.getChildren()).toHaveLength(8);
       expect(byId("tfm-tile-row-5")).toBeTruthy();
       expect(byId("tfm-tile-row-6")).toBeFalsy();
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(0);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((100 - 6) * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(0);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe((100 - 6) * 6);
       // unbuilt rows are not built AT ALL (mouse handlers only exist per built tile)
       expect(mouseHandlers.map((m) => m.idx)).toEqual([...Array(30).keys()]);
       // absolute ids: tile 0 is index 0, and off-window refs point at nothing
@@ -1593,7 +1616,7 @@ describe("renderGrid (windowed grid)", () => {
       expect(byId("tfm-tile-inner").getChildren()).toHaveLength(16);
       expect(byId("tfm-tile-13")).toBeTruthy();
       expect(byId("tfm-tile-14")).toBeFalsy();
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((500 - 14) * 2);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe((500 - 14) * 2);
       expect(selection.tileRefs.size).toBe(500);
     } finally {
       viewMode = "grid";
@@ -1622,7 +1645,7 @@ describe("renderGrid (windowed grid)", () => {
       expect(byId("tfm-tile-row-0")).toBeFalsy();
       expect(byId("tfm-tile-row-50")).toBeTruthy();
       expect(byId("tfm-tile-inner").getChildren()).toHaveLength(9); // pad-top + 7 rows + pad-bottom
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(49 * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(49 * 6);
       // slide-built tiles carry ABSOLUTE indices (handlers, ids and the
       // cascade window can never drift out of display order)
       expect(mouseHandlers.map((m) => m.idx)).toEqual(Array.from({ length: 35 }, (_, i) => 245 + i));
@@ -1650,8 +1673,8 @@ describe("renderGrid (windowed grid)", () => {
       expect(byId("tfm-tile-row-49")).toBeFalsy(); // left edge dropped…
       expect(byId("tfm-tile-row-56")).toBeTruthy(); // …right edge added
       expect(innerNode.getChildren()).toHaveLength(9); // same row count
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(50 * 6);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe((100 - 1 - 56) * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(50 * 6);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe((100 - 1 - 56) * 6);
       // only the ENTERING row built tiles (handlers are the proof of work)
       expect(mouseHandlers.map((m) => m.idx)).toEqual([280, 281, 282, 283, 284]);
 
@@ -1669,7 +1692,7 @@ describe("renderGrid (windowed grid)", () => {
       ).toEqual(Array.from({ length: 7 }, (_, i) => `tfm-tile-row-${48 + i}`));
       expect(byId("tfm-tile-row-55")).toBeFalsy();
       expect(byId("tfm-tile-row-56")).toBeFalsy();
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(48 * 6);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(48 * 6);
       expect(mouseHandlers.map((m) => m.idx)).toEqual([240, 241, 242, 243, 244, 245, 246, 247, 248, 249]);
 
       // back to the top: no overlap → full rebuild, and the stale selection
@@ -1683,6 +1706,44 @@ describe("renderGrid (windowed grid)", () => {
       expect(selBg).not.toEqual(sibBg);
     } finally {
       selection.clearTileSelection();
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a sub-row scroll step reads as no-op work: no row builds, no repaint tail", async () => {
+    // Why it matters: the wheel drains 1 cell per tick and 4 of every 5 steps
+    // (TILE_H 6) cross no row boundary — the ScrollBox's own content translate
+    // is the whole repaint. Running the post-rebuild tail (a full subtree walk
+    // for selectable stripping + an icon/thumb drain kick) on those steps
+    // measured 2..43 ms each and capped the drain at ~30 ms/cell no matter how
+    // short the beat; skipping it when nothing mounted is what makes the beat
+    // actually bite.
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      stripCalls = 0;
+      drainCalls = 0;
+      scroller.scrollTop = 1; // still firstRow 0 → the same window
+      syncWindow();
+      expect(byId("tfm-tile-row-0")).toBeTruthy();
+      expect(stripCalls).toBe(0);
+      expect(drainCalls).toBe(0);
+
+      // crossing a row boundary DOES mount rows and must run the tail
+      scroller.scrollTop = 6; // firstRow 1
+      syncWindow();
+      await t.renderOnce();
+      expect(stripCalls).toBeGreaterThan(0);
+      expect(drainCalls).toBeGreaterThan(0);
+    } finally {
       windowedGridOn = false;
       scroller.scrollTop = 0;
       gridState.cwd = prevCwd;
@@ -2166,7 +2227,7 @@ describe("renderGrid (windowed grid)", () => {
       await t.renderOnce();
       // 40 files / 5 cols = 8 rows, window rows 0..5 → 6 rows + pad
       expect(byId("tfm-tile-inner").getChildren()).toHaveLength(8);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe(2 * 6);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe(2 * 6);
       expect(selection.tileRefs.size).toBe(40);
     } finally {
       recursiveSearch = false;
@@ -2200,8 +2261,8 @@ describe("renderGrid (windowed grid)", () => {
       const r0 = Math.max(0, totalRows - 2);
       expect(byId(`tfm-tile-row-${totalRows - 1}`)).toBeTruthy();
       expect(byId(`tfm-tile-row-${r0}`)).toBeTruthy(); // no pads-only pane
-      expect(byId("tfm-tile-pad-top").yogaNode.getComputedHeight()).toBe(r0 * 6);
-      expect(byId("tfm-tile-pad-bottom").yogaNode.getComputedHeight()).toBe(0);
+      expect(byId("tfm-tile-pad-top").getLayout().height).toBe(r0 * 6);
+      expect(byId("tfm-tile-pad-bottom").getLayout().height).toBe(0);
       expect([...byId("tfm-tile-inner").getChildren()].length).toBe(totalRows - r0 + 2);
     } finally {
       windowedGridOn = false;
@@ -2267,6 +2328,11 @@ describe("loadingLabel / loadingLine", () => {
     expect(loadingLabel("/x", "foo", true)).toBe("searching…");
     // an in-dir filter still has the folder to show — not a search
     expect(loadingLabel("/x", "foo", false)).toBe("loading x…");
+  });
+
+  test("names the archive file (not the percent-encoded URI) while it lists", () => {
+    const uri = `archive://${encodeURIComponent("/home/u/game.tar.gz")}`;
+    expect(loadingLabel(uri, "", false)).toBe("loading game.tar.gz…");
   });
 
   test("clamps the painted line to the pane so it can't overflow into a neighbour", () => {
@@ -2655,6 +2721,136 @@ describe("renderGrid (loading placeholder)", () => {
       gridState.cwd = tmp;
       scroller.scrollTop = 0;
       rmSync(root, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+});
+
+// --- [ui] smooth-scrolling: a small scroll glides the mounted window container
+// home (one sink call with the signed cell delta) instead of snapping; flings
+// stop the glide and land instantly; master-off / tty / repeat-notches glide
+// nothing. The sink owns the timeline (wiring) — the grid only routes. ---
+describe("renderGrid (smooth scrolling)", () => {
+  const glideDir = (): string => path.join(tmp, "glide-dir");
+  const byId = (id: string): any => t.renderer.root.findDescendantById(id);
+  const ensureGlide = (): void => {
+    mkdirSync(glideDir(), { recursive: true });
+    for (let i = 1; i <= 500; i++) writeFileSync(path.join(glideDir(), `g${String(i).padStart(4, "0")}.txt`), "x");
+  };
+
+  test("a one-row notch glides the mounted inner by its signed delta", async () => {
+    ensureGlide();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    smoothOn = true;
+    smoothGlideCalls.length = 0;
+    smoothStopCalls = 0;
+    try {
+      gridState.cwd = glideDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      const inner = byId("tfm-tile-inner");
+      expect(inner).toBeTruthy();
+      // renderGrid's clearGrid stops any in-flight glide — count only the notch
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+
+      scroller.scrollTop = 6; // one TILE_H row down
+      syncWindow();
+      await t.renderOnce();
+      expect(smoothGlideCalls).toHaveLength(1);
+      expect(smoothGlideCalls[0]!.delta).toBe(6);
+      expect(smoothGlideCalls[0]!.inner).toBe(byId("tfm-tile-inner"));
+      expect(smoothStopCalls).toBe(0);
+
+      // same offset again: nothing moved, no second glide
+      syncWindow();
+      expect(smoothGlideCalls).toHaveLength(1);
+
+      // back up: signed the other way
+      scroller.scrollTop = 0;
+      syncWindow();
+      await t.renderOnce();
+      expect(smoothGlideCalls).toHaveLength(2);
+      expect(smoothGlideCalls[1]!.delta).toBe(-6);
+
+      // a 1-cell notch is below the glide floor (whole-cell rounding turns it
+      // into hold-then-snap, never motion) — the wheel stepper owns those
+      smoothGlideCalls.length = 0;
+      scroller.scrollTop = 1;
+      syncWindow();
+      await t.renderOnce();
+      expect(smoothGlideCalls).toHaveLength(0);
+    } finally {
+      windowedGridOn = false;
+      smoothOn = false;
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a fling stops the glide and lands instantly (no glide call)", async () => {
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    smoothOn = true;
+    smoothGlideCalls.length = 0;
+    smoothStopCalls = 0;
+    try {
+      gridState.cwd = glideDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      scroller.scrollTop = 300; // past the built window → fallback rebuild
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-50")).toBeTruthy();
+      expect(smoothGlideCalls).toHaveLength(0);
+      expect(smoothStopCalls).toBeGreaterThan(0);
+    } finally {
+      windowedGridOn = false;
+      smoothOn = false;
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("master off and tty mode glide nothing", async () => {
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    smoothGlideCalls.length = 0;
+    smoothStopCalls = 0;
+    try {
+      gridState.cwd = glideDir();
+      scroller.scrollTop = 0;
+      smoothOn = false;
+      await renderGrid();
+      await t.renderOnce();
+
+      scroller.scrollTop = 6;
+      syncWindow();
+      expect(smoothGlideCalls).toHaveLength(0);
+
+      smoothOn = true;
+      ttyModeOn = true;
+      scroller.scrollTop = 12;
+      syncWindow();
+      expect(smoothGlideCalls).toHaveLength(0);
+    } finally {
+      windowedGridOn = false;
+      smoothOn = false;
+      ttyModeOn = false;
+      smoothGlideCalls.length = 0;
+      smoothStopCalls = 0;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
       await renderGrid();
     }
   });

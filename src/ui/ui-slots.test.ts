@@ -7,6 +7,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import {
   dimHex,
   hoverEvents,
+  shadeIconStates,
   isFloatRootId,
   makePointerSetter,
   makeSlots,
@@ -23,13 +24,11 @@ const hasMagick = Bun.which("magick") !== null;
 const hasSvgRenderer = hasInproc || hasMagick;
 // brand/faithful rasters are in-process only (no CLI fallback, same as iconPng)
 
-// The scrim (setScrim) must cover every RASTERED slot, including ones whose
-// raster finished before the modal opened. The old queue pruned drained
-// specs at the end of each drain, so setScrim iterated an (almost) empty
-// queue: kitty rasters rendered just before a modal opened floated over the
-// menu, and resetIconQueue could no longer re-queue drained slots for
-// theme-flip re-rasters. The drain's raster step is intentionally pointed at
-// a missing icon name — the raster fails cleanly without spawning anything,
+// The registry must cover every RASTERED slot, including ones whose raster
+// finished before a modal opened: resetIconQueue re-queues drained slots for
+// theme-flip re-rasters, and setRasterDim repaints mounted state images for
+// the scrim. The drain's raster step is intentionally pointed at a missing
+// icon name — the raster fails cleanly without spawning anything,
 // but done+prune still run, which is exactly the regression path.
 
 const FG = "#c0caf5";
@@ -37,7 +36,6 @@ const BG = "#1a1b26";
 
 const makeHarness = () => {
   const nodes = new Map<string, any>();
-  let modalUp = false;
   let ttyMode = false;
   let forceGlyph = false;
   let iconStyle: "filled" | "outline" = "filled";
@@ -50,7 +48,6 @@ const makeHarness = () => {
     iconsMode: () => "opaque",
     iconStyle: () => iconStyle,
     iconCells: () => 3,
-    modalOpen: () => modalUp,
     glyphFor: (name) => (iconStyle === "outline" ? `O:${name}` : "F"),
     isTtyMode: () => ttyMode,
     forceGlyph: () => forceGlyph,
@@ -76,30 +73,22 @@ const makeHarness = () => {
     slots,
     nodes,
     mountFakeSlot,
-    setModal: (v: boolean) => (modalUp = v),
     setTtyMode: (v: boolean) => (ttyMode = v),
     setForceGlyph: (v: boolean) => (forceGlyph = v),
     setIconStyle: (v: "filled" | "outline") => (iconStyle = v),
   };
 };
 
-describe("icon slot scrim", () => {
-  test("setScrim dims a raster drained BEFORE the modal opened and restores it on close", async () => {
-    const h = makeHarness();
-    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0);
-    const { glyph, img } = h.mountFakeSlot(s.spec);
-
-    await h.slots.drainIconQueue(); // raster fails (missing asset) — done+prune still run
-    h.setModal(true);
-    h.slots.setScrim(true);
-
-    expect(img.visible).toBe(false);
-    expect(glyph.visible).toBe(true);
-    expect(glyph.fg).toBe(dimHex(FG, 0.41));
-
-    h.slots.setScrim(false);
-    expect(img.visible).toBe(true);
-    expect(glyph.visible).toBe(false);
+describe("icon slot registry", () => {
+  test("shadeIconStates darkens the foreground and leaves the background", () => {
+    // the flattened square must keep matching the tile, so only fg is shaded;
+    // float islands are never dimmed
+    const states = [{ fg: FG, bg: BG }];
+    expect(shadeIconStates(states, 0.5, false)).toEqual([{ fg: dimHex(FG, 0.5), bg: BG }]);
+    // the fill overlay darkens the covered cells, so the square follows
+    expect(shadeIconStates(states, 0.5, false, 0.5)).toEqual([{ fg: dimHex(FG, 0.5), bg: dimHex(BG, 0.5) }]);
+    expect(shadeIconStates(states, 0.5, true)).toEqual(states);
+    expect(shadeIconStates(states, 1, false)).toEqual(states);
   });
 
   test("resetIconQueue re-queues a drained slot whose raster finished earlier", async () => {
@@ -297,8 +286,8 @@ describe("thumbnail mount", () => {
     process.env.XDG_CACHE_HOME = cacheSandbox;
     t = await createTestRenderer({ width: 80, height: 24 });
   });
-  afterAll(() => {
-    t.renderer.destroy();
+  afterAll(async () => {
+    await t.dispose(); // 0.6.0: destroy + await closed
     if (REAL_CACHE_HOME === undefined) delete process.env.XDG_CACHE_HOME;
     else process.env.XDG_CACHE_HOME = REAL_CACHE_HOME;
     rmSync(cacheSandbox, { recursive: true, force: true });
@@ -312,7 +301,6 @@ describe("thumbnail mount", () => {
       uiStyle: () => "solid",
       iconsMode: () => "opaque",
       iconCells: () => 4,
-      modalOpen: () => false,
       glyphFor: () => "F",
       isTtyMode: () => false,
       forceGlyph: () => false,
@@ -354,12 +342,97 @@ describe("thumbnail mount", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("a narrower raster centers in its slot (the slot-internal half of hero centering)", async () => {
+    // prod thumb slots (grid/list/props hero) are row+center boxes: a raster
+    // narrower than the slot must center, not hug the left edge. The props
+    // hero tests can only pin the slot-in-row half (drain is faked there) —
+    // this pins the raster-in-slot half through the REAL drain.
+    const slotId = "tfm-tile-center-thumb";
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8, flexDirection: "row", justifyContent: "center" }));
+    await t.renderOnce();
+    const { dir, p } = writePng("narrow.png");
+    const slots = mkSlots();
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+    openResolution();
+    await slots.drainThumbs();
+    await t.renderOnce();
+
+    const img = t.renderer.root.findDescendantById(`${slotId}-t`) as any;
+    expect(img).toBeTruthy();
+    expect(img.getLayout().width).toBe(4);
+    expect(img.getLayout().left).toBe(2); // (8 − 4)/2 — flex-start would be 0
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   // A superseded drain must still DELIVER: renderAll fires drainThumbs from
   // several steps back-to-back (grid, preview, props), so overlap is the norm.
   // The old generation bail dropped the losing drain's jobs outright, and
   // renderGrid early-outs on an unchanged listing, so those thumbnails stayed
   // blank until the cwd changed. (Replaces the old "superseded drain drops its
   // job" case — that behaviour WAS the regression.)
+  test.skipIf(!hasSvgRenderer)("a scrim-active drain pins icon rasters opaque (content and float alike)", async () => {
+    // icons are shaded rather than alpha-faded under the scrim, and the
+    // frame-end region bake must skip them. A floating layer's icon sits ABOVE
+    // the overlay, so its panel is never dimmed and its raster must not be
+    // either — hence the override applies to floats too.
+    const slots = mkSlots();
+    const content = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    const floater = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    t.renderer.root.add(Box({ id: "scrim-content-host", width: 8, height: 1 }, content.el));
+    t.renderer.root.add(Box({ id: "tfm-menu", width: 8, height: 1 }, floater.el));
+    await t.renderOnce();
+    openResolution();
+
+    slots.setRasterDim(1, 0.5);
+    await slots.drainIconQueue();
+    await t.renderOnce();
+
+    const contentImg = t.renderer.root.findDescendantById(`${content.slotId}-s0`) as {
+      placementOpacity?: number | null;
+    };
+    const floatImg = t.renderer.root.findDescendantById(`${floater.slotId}-s0`) as { placementOpacity?: number | null };
+    expect(contentImg?.placementOpacity).toBe(1);
+    expect(floatImg?.placementOpacity).toBe(1);
+
+    slots.setRasterDim(null, 1);
+    await slots.drainIconQueue();
+    await t.renderOnce();
+    const restored = t.renderer.root.findDescendantById(`${content.slotId}-s0`) as { placementOpacity?: number | null };
+    expect(restored?.placementOpacity ?? null).toBeNull();
+  });
+
+  test("the scrim exempts mounted float thumbnails but not content ones", async () => {
+    // a properties-dialog thumbnail is above the overlay (its panel is not
+    // dimmed), so the mounted-thumb walk must opt it out of the frame-end
+    // region bake; a content thumbnail keeps inheriting and dims with the tile.
+    const slots = mkSlots();
+    t.renderer.root.add(
+      Box({ id: "tfm-menu", width: 6, height: 4 }, Box({ id: "float-thumb-slot", width: 4, height: 4 })),
+    );
+    t.renderer.root.add(Box({ id: "content-thumb-slot", width: 4, height: 4 }));
+    await t.renderOnce();
+    openResolution();
+    const { dir, p } = writePng("scrim-scope.png");
+    for (const slotId of ["float-thumb-slot", "content-thumb-slot"]) {
+      slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+    }
+    await slots.drainThumbs();
+    await t.renderOnce();
+
+    slots.setRasterDim(1, 0.5);
+    const floatThumb = t.renderer.root.findDescendantById("float-thumb-slot-t") as { placementOpacity?: number | null };
+    const contentThumb = t.renderer.root.findDescendantById("content-thumb-slot-t") as {
+      placementOpacity?: number | null;
+    };
+    expect(floatThumb?.placementOpacity).toBe(1);
+    expect(contentThumb?.placementOpacity ?? null).toBeNull();
+
+    slots.setRasterDim(null, 1);
+    const restored = t.renderer.root.findDescendantById("float-thumb-slot-t") as { placementOpacity?: number | null };
+    expect(restored?.placementOpacity ?? null).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("a superseded drain still delivers its thumbnail", async () => {
     const slotId = "tfm-tile-live-thumb";
     t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
@@ -496,7 +569,6 @@ describe("thumbnail mount", () => {
         iconsMode: () => "opaque",
         transparentForce: () => force,
         iconCells: () => 4,
-        modalOpen: () => false,
         glyphFor: () => "F",
         isTtyMode: () => false,
         forceGlyph: () => false,
@@ -525,7 +597,6 @@ describe("thumbnail mount", () => {
       iconsMode: () => "opaque",
       transparentForce: () => true,
       iconCells: () => 4,
-      modalOpen: () => false,
       glyphFor: () => "F",
       isTtyMode: () => false,
       forceGlyph: () => false,

@@ -341,7 +341,6 @@ const renderRowPane = (
   const canScroll = flat.length > vis;
   const start = Math.min(st.scrollOff, Math.max(0, flat.length - vis));
   const end = Math.min(flat.length, start + vis);
-  const collapsedHidden = rows.length - flat.length;
   const pane2 = Box({ flexGrow: 1, flexDirection: "column" });
 
   // shared header/value-row hover pair (identical paint block, one factory —
@@ -587,14 +586,13 @@ const renderRowPane = (
     const rowSpec = rows[i];
     if (rowSpec) pane2.add(rowSpec.kind === "header" ? headerNode(rowSpec, i) : rowNode(rowSpec, i));
   }
-  if (canScroll || collapsedHidden > 0) {
+  // simple scroll hint (like the F1 help footer), shown only when the list
+  // actually overflows the window — a short or fully-folded list stays clean
+  if (canScroll) {
     pane2.add(
       Box(
-        { width: "100%", height: 1, paddingLeft: 1 },
-        Text({
-          content: `${start + 1}-${end} of ${flat.length}${collapsedHidden > 0 ? ` · ${collapsedHidden} collapsed` : ""}`,
-          fg: c.sidebarFgMuted,
-        }),
+        { width: "100%", height: 1, justifyContent: "center" },
+        Text({ content: "↑/↓ or wheel to scroll", fg: c.sidebarFgMuted }),
       ),
     );
   }

@@ -1,10 +1,10 @@
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import type { Subprocess } from "bun";
 import type { Stats } from "node:fs";
 import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { lstat, readdir, readlink } from "node:fs/promises";
 import { errMessage } from "../lib/uiutil";
 import path from "node:path";
-import { spawnSafe } from "./spawn-safe";
+import { spawnSafe, type SpawnSafeOpts } from "./spawn-safe";
 
 // --- Archive engine: extension -> format detection, exact argv for tar/unzip/
 // zip/7z, listing for a total count, and a line-streaming child runner. Pure
@@ -27,9 +27,10 @@ export type ArchiveFormat =
   | "tar.lzo"
   | "tar.Z"
   | "zip"
-  | "7z";
-// every format we can create we can also list/extract
-export type CompressionFormat = ArchiveFormat;
+  | "7z"
+  | "rar";
+// formats we can create (a subset of ArchiveFormat: rar is read-only)
+export type CompressionFormat = Exclude<ArchiveFormat, "rar">;
 export type ToolSpec = { tool: string; args: string[] };
 export type ArchiveRunResult = { code: number; stdout: string; stderr: string };
 export type ArchiveRunOpts = {
@@ -39,7 +40,7 @@ export type ArchiveRunOpts = {
   onLine?: (line: string) => void;
   // the live child, so the caller can register cancel (SIGTERM) / pause
   // (SIGSTOP/SIGCONT)
-  onChild?: (child: ChildProcess) => void;
+  onChild?: (child: Subprocess) => void;
   spawn?: SpawnFn;
   // cooperative control for the in-process (js) lanes, which have no child
   // to signal: polled between entries, so ✕/pause behave like the spawn path
@@ -57,7 +58,7 @@ export type ArchiveRunOpts = {
   onLoss?: (loss: { exec: number; links: number }) => void;
 };
 export type ArchiveRun = (spec: ToolSpec, opts?: ArchiveRunOpts) => Promise<ArchiveRunResult>;
-type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions, onFail: (err: Error) => void) => ChildProcess;
+type SpawnFn = (cmd: string, args: string[], opts: SpawnSafeOpts, onFail: (err: Error) => void) => Subprocess | null;
 export type WhichFn = (bin: string) => string | null;
 
 type CompressionDef = {
@@ -86,6 +87,9 @@ const COMPRESSIONS: CompressionDef[] = [
   { fmt: "tar.lz", ext: ".tar.lz", hint: "lzip", kind: "tar", filter: ["--lzip"], need: ["tar", "lzip"] },
   { fmt: "tar.lzo", ext: ".tar.lzo", hint: "lzop", kind: "tar", filter: ["--lzop"], need: ["tar", "lzop"] },
   { fmt: "tar.Z", ext: ".tar.Z", hint: "compress", kind: "tar", filter: ["-Z"], need: ["tar", "compress"] },
+  // read-only: 7z decodes rar (Rar1-5) but cannot create it, so it never
+  // appears in availableCompressionFormats (the picker)
+  { fmt: "rar", ext: ".rar", hint: "7z", kind: "7z", filter: [], need: ["7z"] },
 ];
 
 const DEF = new Map<ArchiveFormat, CompressionDef>(COMPRESSIONS.map((d) => [d.fmt, d]));
@@ -120,6 +124,7 @@ const SUFFIXES: Array<[string, ArchiveFormat]> = [
   [".tar", "tar"],
   [".zip", "zip"],
   [".7z", "7z"],
+  [".rar", "rar"],
 ];
 
 export const detectArchiveFormat = (file: string): ArchiveFormat | null => {
@@ -217,8 +222,12 @@ export const compressPlan = (
 
 export const availableCompressionFormats = (which: WhichFn = Bun.which): CompressionFormat[] =>
   // tar/tar.gz/zip always show: the js fallback covers a tool-less machine
-  // (7z and exotic tar filters still need their binaries and hide without)
-  COMPRESSIONS.filter((d) => canCreate(d, which) || JS_FORMATS.has(d.fmt)).map((d) => d.fmt);
+  // (7z and exotic tar filters still need their binaries and hide without).
+  // rar is read-only (7z can't create it) so it never appears as a target.
+  COMPRESSIONS.filter(
+    (d): d is CompressionDef & { fmt: CompressionFormat } =>
+      d.fmt !== "rar" && (canCreate(d, which) || JS_FORMATS.has(d.fmt)),
+  ).map((d) => d.fmt);
 
 export const canExtract = (file: string, which: WhichFn = Bun.which): boolean => {
   const fmt = detectArchiveFormat(file);
@@ -386,7 +395,7 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
     };
     const stdoutCounter = makeLineCounter((l) => opts.onLine?.(l));
     const stderrCounter = makeLineCounter((l) => opts.onLine?.(l));
-    let child: ChildProcess;
+    let child: Subprocess | null;
     try {
       child = spawnFn(spec.tool, spec.args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] }, (err) => {
         stderr = appendCapped(stderr, err.message);
@@ -397,34 +406,69 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
       finish(-1);
       return;
     }
-    opts.onChild?.(child);
+    // spawn failure (missing binary): the onFail above already finished the
+    // run — nothing to read, nobody to signal. The finish is repeated
+    // defensively: a spawn fn that returns null WITHOUT reporting must still
+    // resolve (hanging the serial op queue is worse than a bare code -1).
+    if (!child) {
+      finish(-1);
+      return;
+    }
+    const proc = child;
+    opts.onChild?.(proc);
+    let exitedDone = false;
     if (opts.timeoutMs && opts.timeoutMs > 0) {
       timer = setTimeout(() => {
+        if (exitedDone) return;
         try {
-          child.kill("SIGCONT");
+          proc.kill("SIGCONT");
         } catch {}
         try {
-          child.kill("SIGKILL");
+          proc.kill("SIGKILL");
         } catch {}
         stderr = appendCapped(stderr, `timed out after ${opts.timeoutMs}ms`);
         finish(-1);
       }, opts.timeoutMs);
     }
-    child.stdout?.on("data", (c: Buffer | string) => {
-      const s = typeof c === "string" ? c : c.toString();
-      stdout = appendCapped(stdout, s);
-      stdoutCounter.push(s);
-    });
-    child.stderr?.on("data", (c: Buffer | string) => {
-      const s = typeof c === "string" ? c : c.toString();
-      stderr = appendCapped(stderr, s);
-      stderrCounter.push(s);
-    });
-    child.on("error", (err) => {
-      stderr = appendCapped(stderr, err.message);
-      finish(-1);
-    });
-    child.on("close", (code) => finish(code ?? -1));
+    // stream pumps: a real child EOFs both pipes on exit, so awaiting the
+    // pumps before the exit code keeps the capture COMPLETE at resolve (the
+    // node version resolved on "close", which also fires after stdio flush).
+    // The timeout path above still resolves early like before.
+    const pump = async (stream: unknown, isErr: boolean, push: (l: string) => void): Promise<void> => {
+      if (!(stream instanceof ReadableStream)) return;
+      const reader = (stream as ReadableStream<Uint8Array>).getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const s = Buffer.from(value).toString();
+          if (isErr) stderr = appendCapped(stderr, s);
+          else stdout = appendCapped(stdout, s);
+          push(s);
+        }
+      } catch (err) {
+        if (isErr) stderr = appendCapped(stderr, errMessage(err));
+        else stdout = appendCapped(stdout, errMessage(err));
+        finish(-1);
+      } finally {
+        reader.releaseLock();
+      }
+    };
+    void (async () => {
+      await Promise.all([
+        pump(proc.stdout, false, (s) => stdoutCounter.push(s)),
+        pump(proc.stderr, true, (s) => stderrCounter.push(s)),
+      ]);
+      let code: number | null = null;
+      try {
+        code = await proc.exited;
+      } catch {
+        code = null;
+      }
+      exitedDone = true;
+      if (timer !== null) clearTimeout(timer);
+      finish(typeof code === "number" ? code : -1);
+    })();
   });
 
 // entry count for the progress total (tar/tar.gz must decompress once here;
@@ -440,6 +484,75 @@ export const listArchiveEntries = async (
   const res = await run({ tool: listTool(fmt, which), args: listArgs(fmt, file, which) }, { onLine: () => n++ });
   if (res.code !== 0 && res.code !== 1) return 0;
   return n;
+};
+
+// --- archive browsing: entry names (+ dir flag / size where the tool gives it)
+// for `archive://` virtual cwds. Spawn lane only — listing needs a real tool
+// (tar/unzip/7z); the js lane has no lister, so the caller shows an honest
+// "install …" error rather than a fake empty pane. Returns null on tool
+// failure so an unreadable/encrypted archive never reads as empty. ---
+
+export type ArchiveMember = { name: string; dir: boolean; size?: number };
+
+export const listMembersPlan = (fmt: ArchiveFormat, file: string, which: WhichFn = Bun.which): ToolSpec => {
+  const def = defOf(fmt);
+  if (def.kind === "tar") return { tool: "tar", args: ["-t", ...def.filter, "-f", file] };
+  // -slt: structured `Path = …` / `Attributes = D …` / `Size = …` blocks (the
+  // default `l` column layout is pain to split on names with spaces)
+  if (def.kind === "7z") return { tool: "7z", args: ["l", "-slt", file] };
+  return zipExtractTool(which) === "unzip"
+    ? { tool: "unzip", args: ["-Z1", file] }
+    : { tool: "7z", args: ["l", "-slt", file] };
+};
+
+export const listArchiveMembers = async (
+  fmt: ArchiveFormat,
+  file: string,
+  run: ArchiveRun = runArchiveTool,
+  which: WhichFn = Bun.which,
+): Promise<ArchiveMember[] | null> => {
+  const spec = listMembersPlan(fmt, file, which);
+  const members: ArchiveMember[] = [];
+  if (spec.tool === "7z") {
+    // everything before the `----------` banner is the archive's own metadata
+    let afterSep = false;
+    let cur: ArchiveMember | null = null;
+    const flush = (): void => {
+      if (cur?.name) members.push(cur);
+      cur = null;
+    };
+    const res = await run(spec, {
+      onLine: (line) => {
+        const t = line.trim();
+        if (t === "----------") {
+          afterSep = true;
+          return;
+        }
+        if (!afterSep) return;
+        if (t.startsWith("Path = ")) {
+          flush();
+          cur = { name: t.slice(7), dir: false };
+        } else if (!cur) return;
+        else if (t.startsWith("Folder = ")) cur.dir = t.slice(9).trim() === "+";
+        else if (t.startsWith("Attributes = ")) {
+          if (t[13] === "D") cur.dir = true;
+        } else if (t.startsWith("Size = ")) {
+          const n = Number(t.slice(7));
+          if (Number.isFinite(n)) cur.size = n;
+        }
+      },
+    });
+    flush();
+    return res.code === 0 || res.code === 1 ? members : null;
+  }
+  // tar -t / unzip -Z1: one name per line, dirs carry a trailing slash
+  const res = await run(spec, {
+    onLine: (line) => {
+      const name = line.replace(/\r$/, "");
+      if (name) members.push({ name, dir: name.endsWith("/") });
+    },
+  });
+  return res.code === 0 || res.code === 1 ? members : null;
 };
 
 // --- in-process fallback engine: tar/tar.gz via Bun.Archive, zip via fflate.

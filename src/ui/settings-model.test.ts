@@ -78,6 +78,7 @@ const MASTERS_ON: Record<string, boolean> = {
   sidebarHoverAnimation: true,
   topbarAnimation: true,
   directoryBarAnimation: true,
+  smoothScrolling: true,
   previewEnabled: true,
   sidebarAutoHide: true,
   previewAutoHide: true,
@@ -106,8 +107,19 @@ const inSection = (h: MkHarness, groupHeader: string, section: string, label: st
 };
 
 const isKeybind = (r: SettingRow): r is Extract<SettingRow, { kind: "keybind" }> => r.kind === "keybind";
+// fire-and-forget rows settle async — poll the observable (records/warns),
+// never a fixed sleep (trashops.test.ts settleUntil pattern)
+const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(10);
+  if (!cond()) throw new Error("settleUntil timeout");
+};
 const asToggle = (r: SettingRow): Extract<SettingRow, { kind: "toggle" }> => {
   if (r.kind !== "toggle") throw new Error(`not a toggle: ${r.label}`);
+  return r;
+};
+const asAction = (r: SettingRow): Extract<SettingRow, { kind: "action" }> => {
+  if (r.kind !== "action") throw new Error(`not an action: ${r.label}`);
   return r;
 };
 const asStepper = (r: SettingRow): Extract<SettingRow, { kind: "stepper" }> => {
@@ -141,6 +153,10 @@ describe("settingGroups shape", () => {
   test("every schema prop surfaces a GUI row (reachability, not label-uniqueness)", () => {
     const h = mk();
     withMasters(h, true);
+    // "scrim dim" is the one showWhen-gated row whose gate is not a master
+    // toggle: it surfaces only under [ui] scrim = "dim" (fill is the default).
+    // Reachability means "there is a row when its gate is open".
+    (h.config.ui as { scrimMode: string }).scrimMode = "dim";
     // knob labels intentionally repeat per animation section (the section
     // header supplies context: duration/travel/direction/spread/easing read
     // under ##files, ##sidebar intro, ##top bar, ##directory bar), so the
@@ -173,12 +189,12 @@ describe("settingGroups shape", () => {
     // ##top bar vs ##directory bar); a NEW duplicate outside this set is a
     // naming regression, not progressive disclosure
     expect(dups).toEqual([
-      ["direction", 4],
-      ["duration", 4],
-      ["easing", 4],
+      ["direction", 6],
+      ["duration", 6],
+      ["easing", 6],
       ["spread", 4],
-      ["style", 3],
-      ["travel", 4],
+      ["style", 4],
+      ["travel", 6],
     ]);
   });
 
@@ -243,8 +259,20 @@ describe("settingGroups shape", () => {
     expect(anim[0]).toBe("##files");
     expect(anim.indexOf("file animation")).toBeGreaterThan(anim.indexOf("##files"));
     expect(anim.indexOf("file animation")).toBeLessThan(anim.indexOf("##file hover"));
-    expect(anim.indexOf("lift direction")).toBeLessThan(anim.indexOf("##sidebar intro"));
+    expect(anim.indexOf("lift labels")).toBeLessThan(anim.indexOf("##sidebar intro"));
     expect(anim.indexOf("include logo")).toBeLessThan(anim.indexOf("##sidebar hover"));
+    // every section header appears exactly ONCE and its children stay under it
+    const headers = anim.filter((r) => r.startsWith("##"));
+    expect(new Set(headers).size).toBe(headers.length);
+    const dirHeader = anim.indexOf("##directory bar");
+    const scrollHeader = anim.indexOf("##scrolling");
+    expect(dirHeader).toBeLessThan(scrollHeader);
+    // all six directory-bar children sit between their header and scrolling
+    for (const label of ["style", "duration", "travel", "direction", "spread", "easing"]) {
+      const i = anim.indexOf(label, dirHeader);
+      expect(i).toBeGreaterThan(dirHeader);
+      expect(i).toBeLessThan(scrollHeader);
+    }
     // every performance knob lives in the optimization category, nowhere here
     expect(anim).not.toContain("##performance");
     expect(anim).not.toContain("reveal delay");
@@ -265,12 +293,17 @@ describe("settingGroups shape", () => {
       "cache folder listings",
       "cache file stats",
       "cache age",
+      "##startup",
+      "lazy startup",
       "##performance",
       "one-layer fade",
       "visible only",
       "row cascade",
       "max animated files",
       "reveal delay",
+      // device poll interval rides the same performance section (schema
+      // order: right after the reveal-delay row)
+      "device poll interval",
     ]);
   });
 
@@ -326,6 +359,9 @@ describe("settingGroups shape", () => {
 
   test("behavior/appearance/files carry subsection dividers (related options grouped)", () => {
     const h = mk();
+    // "scrim dim" sits under the look header but only under scrim = "dim"
+    // (fill: the default), so open the gate to pin the grouped sequence
+    (h.config.ui as { scrimMode: string }).scrimMode = "dim";
     const seq = (header: string): string[] =>
       h
         .groups()
@@ -342,7 +378,8 @@ describe("settingGroups shape", () => {
       "drag threshold",
     ]);
     // hidden files splices in under the listing header; session persistence
-    // is its own section
+    // is its own section. the default-file-manager control lives in advanced,
+    // under launch time (one row: the Ask-again pick re-opens the prompt)
     expect(seq("files & session")).toEqual([
       "##listing",
       "hidden files",
@@ -363,17 +400,36 @@ describe("settingGroups shape", () => {
       "icons",
       "icon style",
       "ui style",
+      "scrim",
+      "scrim dim",
       "##compatibility",
       "tty mode",
       "force glyph",
     ]);
   });
 
+  test("scrim dim only surfaces when the scrim mode is dim", () => {
+    const h = mk();
+    withMasters(h, true);
+    const labels = (): string[] =>
+      h
+        .groups()
+        .find((g) => g.header === "appearance")!
+        .rows.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
+    expect(labels()).not.toContain("scrim dim"); // default mode is fill
+    (h.config.ui as { scrimMode: string }).scrimMode = "none";
+    expect(labels()).not.toContain("scrim dim");
+    (h.config.ui as { scrimMode: string }).scrimMode = "dim";
+    expect(labels()).toContain("scrim dim");
+    (h.config.ui as { scrimMode: string }).scrimMode = "fill";
+    expect(labels()).not.toContain("scrim dim");
+  });
+
   test("keys category groups binds under subsection dividers", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;
     const seq = kb.map((r) => (r.kind === "header" ? `##${r.label}` : r.label));
-    expect(kb.length).toBe(KEY_SCHEMA.length + 8);
+    expect(kb.length).toBe(KEY_SCHEMA.length + 9);
     expect(seq.filter((s) => s.startsWith("##"))).toEqual([
       "##app",
       "##tabs",
@@ -382,6 +438,7 @@ describe("settingGroups shape", () => {
       "##selection",
       "##view",
       "##split panes",
+      "##drives",
     ]);
     // spot-check section membership across the boundaries (preset leads)
     expect(seq.slice(0, 5)).toEqual(["keymap preset", "##app", "quit", "restart", "open menu"]);
@@ -391,13 +448,14 @@ describe("settingGroups shape", () => {
       "next tab",
       "previous tab",
     ]);
-    expect(seq.slice(seq.indexOf("##split panes") + 1)).toEqual([
+    expect(seq.slice(seq.indexOf("##split panes") + 1, seq.indexOf("##drives"))).toEqual([
       "toggle dual pane",
       "switch pane",
       "copy to other pane",
       "move to other pane",
       "open terminal here",
     ]);
+    expect(seq.slice(seq.indexOf("##drives") + 1)).toEqual(["eject drive…", "mount drive…"]);
     expect(seq).toContain("connect to server");
     expect(seq.indexOf("connect to server")).toBeGreaterThan(seq.indexOf("##navigation"));
     expect(seq.indexOf("connect to server")).toBeLessThan(seq.indexOf("##view"));
@@ -483,27 +541,27 @@ describe("settingGroups shape", () => {
   test("every keybind action gets a row", () => {
     const h = mk();
     const kb = h.groups().find((g) => g.header === "keys")!.rows;
-    expect(kb.length).toBe(KEY_SCHEMA.length + 8);
+    expect(kb.length).toBe(KEY_SCHEMA.length + 9);
     expect(kb.filter((r) => r.kind !== "header" && r.label !== "keymap preset").every(isKeybind)).toBe(true);
   });
 
-  test("hover controls share one vocabulary per mechanism (lift vs nudge)", () => {
+  test("every animation surface shares one knob vocabulary (hover included)", () => {
     const h = mk();
     withMasters(h, true);
+    // hover is no longer a special mini-shape: it carries the same timing
+    // grammar as the entrance animations, under its own group row
+    for (const row of ["duration", "travel", "direction", "easing"]) {
+      expect(inSection(h, "animations", "file hover", row).label).toBe(row);
+      expect(inSection(h, "animations", "sidebar hover", row).label).toBe(row);
+    }
+    // hover-specific extras stay
+    expect(inSection(h, "animations", "file hover", "lift labels").label).toBe("lift labels");
+    expect(inSection(h, "animations", "sidebar hover", "nudge labels").label).toBe("nudge labels");
+    expect(inSection(h, "animations", "file hover", "lift icons").label).toBe("lift icons");
     const anim = h
       .groups()
       .find((g) => g.header === "animations")!
       .rows.map((r) => r.label);
-    for (const label of [
-      "lift icons",
-      "lift labels",
-      "lift direction",
-      "nudge icons",
-      "nudge labels",
-      "nudge direction",
-    ]) {
-      expect(anim).toContain(label);
-    }
     expect(anim).not.toContain("tile hover pop");
     expect(anim).not.toContain("hover lift distance");
   });
@@ -803,7 +861,8 @@ describe("generic schema rows", () => {
     expect(asStepper(h.byLabel("slide duration")).fmt(120)).toBe("120 ms");
     // percents render tight, no space
     expect(asStepper(files("spread")).fmt(40)).toBe("40%");
-    expect(asStepper(files("travel")).fmt(70)).toBe("70%");
+    expect(asStepper(files("travel")).fmt(16)).toBe("16 cells");
+    expect(asStepper(files("travel")).fmt(1)).toBe("1 cell");
     // cells singularize only at 1
     expect(asStepper(h.byLabel("sidebar width")).fmt(26)).toBe("26 cells");
     expect(asStepper(h.byLabel("sidebar width")).fmt(1)).toBe("1 cell");
@@ -824,10 +883,10 @@ describe("generic schema rows", () => {
     expect("repaint" in plain && plain.repaint).toBeFalsy();
   });
 
-  test("cold-boot-only rows carry the restart flag (sidebar/topbar intro + session + launch time)", () => {
+  test("cold-boot-only rows carry the restart flag (session/launch/lazy-startup + sidebar/topbar intro)", () => {
     const h = mk();
     withMasters(h, true);
-    for (const label of ["restore session", "launch time", "sidebar animation", "top bar animation"]) {
+    for (const label of ["restore session", "launch time", "lazy startup", "sidebar animation", "top bar animation"]) {
       const row = h.byLabel(label);
       expect("restart" in row && row.restart, `${label} should need restart`).toBe(true);
     }
@@ -938,6 +997,94 @@ describe("hand-written rows", () => {
     expect(h.warns[0]!.title).toBe("theme");
     h.config.theme = { ...h.config.theme, bg: "#e1e2e7" };
     expect(row.customLabel()).toBe("Console Light");
+  });
+
+  test("default file manager row is an action that always spawns the confirm", async () => {
+    // not a toggle: a toggle's on/off paint promises live state while the
+    // confirm owns the outcome, so the switch lied in both directions. the
+    // action row ALWAYS opens the question — it can never visibly do nothing.
+    let asked = 0;
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+        ask: async () => {
+          asked++;
+          return true;
+        },
+      },
+    });
+    const row = h.byLabel("set tfm as default manager");
+    expect(row.kind).toBe("action");
+    asAction(row).run();
+    await settleUntil(() => asked === 1);
+    expect(asked).toBe(1);
+  });
+
+  test("action row works when already default too (re-confirm, no silent skip)", async () => {
+    // the old toggle consulted the verdict gate and stayed shut on a settled
+    // answer — flipping it visibly did nothing. the action bypasses nothing
+    // because there is no gate: it always opens.
+    let asked = 0;
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "tfm.desktop",
+        choice: () => "silent",
+        answer: () => "yes",
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+        ask: async () => {
+          asked++;
+          return true;
+        },
+      },
+    });
+    asAction(h.byLabel("set tfm as default manager")).run();
+    await settleUntil(() => asked === 1);
+    expect(asked).toBe(1);
+  });
+
+  test("action row without wiring warns instead of throwing", () => {
+    const h = mk();
+    const row = h.byLabel("set tfm as default manager");
+    expect(row.kind).toBe("action");
+    expect(() => asAction(row).run()).not.toThrow();
+    expect(h.warns.map((w) => w.title)).toContain("default file manager");
+  });
+
+  test("row blurb names the live handler (never a stale belief)", () => {
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => "yes",
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+      },
+    });
+    // stale-yes state is visible in the footer: recorded yes, but the system
+    // uses nautilus
+    const row = h.byLabel("set tfm as default manager");
+    if (row.kind !== "action" || !row.blurb) throw new Error("row must carry the live handler blurb");
+    expect(row.blurb).toContain("Nautilus");
+  });
+
+  test("row blurb falls back to plain words when no handler is detected (never word salad)", () => {
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+      },
+    });
+    const row = h.byLabel("set tfm as default manager");
+    if (row.kind !== "action" || !row.blurb) throw new Error("row must carry a fallback blurb");
+    expect(row.blurb).toBe("Make tfm open folder links");
   });
 });
 
@@ -1060,6 +1207,35 @@ describe("config group", () => {
     expect(cfg.map((r) => r.label)).toContain("reset to defaults");
     expect(cfg.map((r) => r.label)).toContain("edit config.toml…");
   });
+
+  test("advanced sits the default-manager row directly under launch time, and labels the action", () => {
+    const h = mk(undefined, {
+      defaultFileManager: {
+        current: () => "org.gnome.Nautilus.desktop",
+        choice: () => "ask",
+        answer: () => null,
+        set: async () => ({ ok: true, message: "done" }),
+        record: () => {},
+      },
+    });
+    const rows = h.groups().find((g) => g.header === "advanced")!.rows;
+    // the control rides the boot/debug pair at the top of advanced (it answers
+    // "what opens my folders?"), not the tail past the config-level actions.
+    // reset to defaults sits DEAD LAST: its blast radius is the whole config,
+    // so it stays furthest from the everyday knobs.
+    expect(rows.map((r) => r.label)).toEqual([
+      "update notices",
+      "launch time",
+      "set tfm as default manager",
+      "edit config.toml…",
+      "reset to defaults",
+    ]);
+    const row = rows[rows.findIndex((r) => r.label === "launch time") + 1]!;
+    expect(row.kind).toBe("action");
+    // the row label must fit the label column (settingsWidths caps at 30) or
+    // the panel silently slices it mid-word
+    expect(rows.every((r) => r.label.length <= 30 || r.kind === "header")).toBe(true);
+  });
 });
 
 describe("plugin manifest header", () => {
@@ -1097,6 +1273,9 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "top bar animation",
       "##directory bar",
       "directory bar animation",
+      "##scrolling",
+      "smooth scrolling",
+      "glide time",
     ]);
     // layout: collapse styles and gated widths hidden; hover timing gone entirely
     expect(labelsOf(h, "layout")).toEqual([
@@ -1133,7 +1312,10 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
     // optimization: the listings cache defaults on, so its stats rows show;
     // (flipping it off hides them — pinned below). The perf knobs need file
     // animation (off by default), but reveal delay answers to windowed grid
-    // alone (on) — so ##performance keeps one row at defaults.
+    // alone (on) — so ##performance keeps one row at defaults. The device
+    // poll knob has no master (always live), so it shows at defaults too.
+    // lazy-startup has no master either (always visible, next to the cache
+    // rows it complements).
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
       "windowed grid",
@@ -1142,8 +1324,11 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "cache folder listings",
       "cache file stats",
       "cache age",
+      "##startup",
+      "lazy startup",
       "##performance",
       "reveal delay",
+      "device poll interval",
     ]);
   });
 
@@ -1160,7 +1345,8 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
     expect(labelsOf(h, "layout")).not.toContain("preview auto-hide");
     expect(labelsOf(h, "layout")).not.toContain("preview collapse");
     // listings cache off hides its stats rows but keeps the master
-    // (reveal delay rides windowed grid, still on)
+    // (reveal delay rides windowed grid, still on; the device poll knob has
+    // no master and stays; lazy-startup has no master either and stays)
     h.config.ui.listingsCache = false;
     expect(labelsOf(h, "optimization")).toEqual([
       "##rendering",
@@ -1168,8 +1354,11 @@ describe("dependent rows hide behind their master toggle (progressive disclosure
       "loading delay",
       "##caching",
       "cache folder listings",
+      "##startup",
+      "lazy startup",
       "##performance",
       "reveal delay",
+      "device poll interval",
     ]);
   });
 

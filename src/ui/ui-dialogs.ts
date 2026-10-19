@@ -1,4 +1,4 @@
-import { Box, type MouseEvent, RGBA, Text } from "@opentui/core";
+import { Box, type MouseEvent, Text } from "@opentui/core";
 import type { VChild } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface, type UiStyle } from "./style";
@@ -36,7 +36,10 @@ type DialogsCtx = {
 // bulk-rename/esc-menu): absolute scrim + floatSurface panel that stops click
 // propagation so an inside click never dismisses. Deps arrive directly (same
 // seam as the widgets' ctx) — no ctx-type plumbing. ids must stay byte-
-// identical (rethemeChrome repaints them by id).
+// identical (rethemeChrome repaints them by id). The scrim Box itself is a
+// transparent click-catcher, never a fill — a fill makes OpenTUI delete the
+// rasters it covers, which is why [ui] scrim dims via the content node's
+// opacity instead of an overlay.
 export const makeModalScrim = (
   deps: {
     uiStyle: () => UiStyle;
@@ -64,7 +67,7 @@ export const makeModalScrim = (
       alignItems: "center",
       justifyContent: "center",
       zIndex: opts.zIndex,
-      backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+      // transparent click-catcher (see the scrim note above)
       onMouseDown: () => opts.onClose(),
     },
     Box(
@@ -107,7 +110,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
         alignItems: "center",
         paddingTop: Math.max(2, Math.round(ctx.termH() / (opts.paddingDiv ?? 3))),
         zIndex: opts.zIndex,
-        backgroundColor: RGBA.fromInts(0, 0, 0, 150),
+        // transparent click-catcher (see the scrim note above)
         onMouseDown: () => opts.onClose(),
       },
       Box(
@@ -360,10 +363,10 @@ export const wrapYesNoMessage = (message: string, width: number = YESNO_W): stri
       // hard-slice space-less runs (never a silent cut — ellipsis marks it)
       let rest = w;
       while (rest.length > budget) {
-        lines.push(rest.slice(0, budget - 1) + "…");
+        lines.push(`${rest.slice(0, budget - 1)}…`);
         rest = rest.slice(budget - 1);
         if (lines.length === 2) {
-          lines[1] = `${lines[1]}`.slice(0, budget - 1) + "…";
+          lines[1] = `${`${lines[1]}`.slice(0, budget - 1)}…`;
           return lines;
         }
       }
@@ -376,7 +379,7 @@ export const wrapYesNoMessage = (message: string, width: number = YESNO_W): stri
       lines.push(cur);
       cur = w;
       if (lines.length === 2) {
-        lines[1] = `${lines[1]}`.slice(0, budget - 1) + "…";
+        lines[1] = `${`${lines[1]}`.slice(0, budget - 1)}…`;
         return lines;
       }
     }
@@ -474,10 +477,6 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
               ),
             ]
           : []),
-        Box(
-          { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
-          Text({ id: "tfm-yesno-div", content: ` ${"~".repeat(YESNO_W - 2)}`, fg: c.divider }),
-        ),
         Box({ height: 1 }),
         Box(
           { width: "100%", height: 1, flexDirection: "row", columnGap: 1, paddingLeft: 1, paddingRight: 1 },
@@ -508,10 +507,6 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
         if (msg) msg.fg = lastDanger ? c.ansi1 : c.accent;
       } catch {}
     }
-    try {
-      const div = ctx.byId("tfm-yesno-div");
-      if (div) div.fg = c.divider;
-    } catch {}
     try {
       paintFocus();
     } catch {}

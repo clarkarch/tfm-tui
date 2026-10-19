@@ -29,7 +29,7 @@ export const FLOAT_Z: Record<FloatKind, number> = {
   conflict: 3400,
   yesno: 3450,
   filemenu: 3600,
-  // generic filter-list overlay (api.ui.pick, e.g. the palette plugin): the
+  // generic filter-list overlay (the core command palette + api.ui.pick): the
   // newest modal wins, so it sits on top; opening one dismisses the rest
   // through the standard modal policy below
   pick: 3700,
@@ -93,8 +93,8 @@ export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {
       stack = [];
       runClosers(all);
       // stack-emptied dip: a modal the closer itself just cleared (e.g. a
-      // confirm opening over the esc-menu ran its setScrim(false)) must
-      // refire below, or the new modal paints with rasters un-dimmed
+      // confirm opening over the esc-menu ran its content-dim(false)) must
+      // refire below, or the new modal paints with the background undimmed
       syncModal();
     }
     stack.push({ kind, closer });

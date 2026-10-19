@@ -1,10 +1,9 @@
 name: Release
 
 # Produces the artifacts install.sh downloads: tfm-{x86_64,aarch64}-linux.gz
-# plus a .sha256 sidecar each, AND the bundled video-thumbnail ffmpeg as
-# tfm-ffmpeg-{x86_64,aarch64}-linux.gz plus its own .sha256 (install.sh
-# verifies when present and warns-but-continues when absent). Tag a version
-# to ship it:
+# plus a .sha256 sidecar each. Video thumbnails use the SYSTEM ffmpeg (an
+# optional runtime dep install.sh suggests), so nothing ffmpeg-shaped ships
+# here. Tag a version to ship it:
 #   git tag v1.0.0 && git push origin v1.0.0
 # Version must match package.json (checked below) so --version never lies.
 
@@ -20,11 +19,9 @@ jobs:
           - runner: ubuntu-latest
             target: bun-linux-x64
             arch: x86_64-linux
-            ffmpeg_asset: ffmpeg-n9.0-latest-linux64-gpl-9.0.tar.xz
           - runner: ubuntu-24.04-arm
             target: bun-linux-arm64
             arch: aarch64-linux
-            ffmpeg_asset: ffmpeg-n9.0-latest-linuxarm64-gpl-9.0.tar.xz
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -36,8 +33,35 @@ jobs:
       - name: Version matches package.json
         run: test "v$(bun -e 'console.log(require("./package.json").version)')" = "${{ github.ref_name }}"
 
+      # The patched opentui fork must sit BESIDE the checkout: package.json
+      # depends on file:../opentui-fork/packages/core/dist. Its prebuilt dist is
+      # committed on the branch named in opentui-fork.ref.
+      - name: Fetch the opentui fork
+        run: |
+          url=$(sed -n 's/^url *= *//p' opentui-fork.ref | head -n 1)
+          ref=$(sed -n 's/^ref *= *//p' opentui-fork.ref | head -n 1)
+          git clone --depth 1 --single-branch --branch "$ref" "$url" ../opentui-fork
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      # Stage the fork's patched libopentui over the UNPATCHED npm platform
+      # package, so the compiled binary embeds it. bun resolves the fork's dist
+      # through its real path, so the compile looks the platform packages up in
+      # the fork — point it at the ones installed here first. Fails loudly when
+      # the fork ships no prebuilt lib for this runner's architecture.
+      - name: Stage the patched libopentui
+        run: |
+          # bun resolves the file: dependency's dist through its real path, so
+          # the compile resolves imports from the FORK's node_modules: link it
+          # at ours instead of installing the fork's tree.
+          ln -sfn "$(readlink -f node_modules)" ../opentui-fork/node_modules
+          sh scripts/sync-opentui-lib.sh
+
+      # Video thumbs (and their tests) need ffmpeg; the runners aren't
+      # guaranteed to carry it and tfm no longer bundles one.
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
       - name: Check + test
         run: |
@@ -51,25 +75,12 @@ jobs:
         run: |
           gzip -kf dist/tfm-${{ matrix.arch }}
           (cd dist && sha256sum tfm-${{ matrix.arch }}.gz > tfm-${{ matrix.arch }}.gz.sha256)
-
-      # Sidecar source: BtbN versioned static builds, pinned to the n9.0
-      # series below (bumping series = changing these two matrix lines).
-      # The `latest` tag rolls monthly rebuilds, but our published .sha256
-      # freezes whatever bytes the release actually built — auditable per
-      # release. Upstream checksums are verified before we trust the bytes.
-      # (dev/CI runs use ffmpeg-static's older binary instead; same thumb
-      # argv, and the thumb disk cache is per-machine local so the skew
-      # never cross-serves.)
-      - name: Package ffmpeg sidecar
-        run: |
-          curl -fsSL --retry 3 -o ffmpeg-sidecar.tar.xz "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${{ matrix.ffmpeg_asset }}"
-          curl -fsSL --retry 3 -o ffmpeg-checksums.sha256 "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256"
-          awk -v f="${{ matrix.ffmpeg_asset }}" '$2==f {print $1 "  ffmpeg-sidecar.tar.xz"}' ffmpeg-checksums.sha256 | sha256sum -c -
-          mkdir -p ffmpeg-sidecar && tar -xJf ffmpeg-sidecar.tar.xz -C ffmpeg-sidecar --wildcards "*/bin/ffmpeg"
-          cp ffmpeg-sidecar/*/bin/ffmpeg dist/tfm-ffmpeg-${{ matrix.arch }}
-          dist/tfm-ffmpeg-${{ matrix.arch }} -hide_banner -version
-          gzip -kf dist/tfm-ffmpeg-${{ matrix.arch }}
-          (cd dist && sha256sum tfm-ffmpeg-${{ matrix.arch }}.gz > tfm-ffmpeg-${{ matrix.arch }}.gz.sha256)
+          # desktop entry sidecar (arch-independent, same bytes every build):
+          # install.sh fetches it for pipe installs that carry no checkout
+          cp assets/tfm.desktop dist/tfm.desktop
+          (cd dist && sha256sum tfm.desktop > tfm.desktop.sha256)
+          cp assets/icons/tfm.svg dist/tfm-icon.svg
+          (cd dist && sha256sum tfm-icon.svg > tfm-icon.svg.sha256)
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -78,8 +89,10 @@ jobs:
           path: |
             dist/tfm-${{ matrix.arch }}.gz
             dist/tfm-${{ matrix.arch }}.gz.sha256
-            dist/tfm-ffmpeg-${{ matrix.arch }}.gz
-            dist/tfm-ffmpeg-${{ matrix.arch }}.gz.sha256
+            dist/tfm.desktop
+            dist/tfm.desktop.sha256
+            dist/tfm-icon.svg
+            dist/tfm-icon.svg.sha256
 
   release:
     needs: build
@@ -103,7 +116,7 @@ jobs:
             dist/tfm-x86_64-linux.gz.sha256
             dist/tfm-aarch64-linux.gz
             dist/tfm-aarch64-linux.gz.sha256
-            dist/tfm-ffmpeg-x86_64-linux.gz
-            dist/tfm-ffmpeg-x86_64-linux.gz.sha256
-            dist/tfm-ffmpeg-aarch64-linux.gz
-            dist/tfm-ffmpeg-aarch64-linux.gz.sha256
+            dist/tfm.desktop
+            dist/tfm.desktop.sha256
+            dist/tfm-icon.svg
+            dist/tfm-icon.svg.sha256

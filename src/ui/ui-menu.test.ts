@@ -47,9 +47,7 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
-  t.renderer.destroy();
-});
+afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
 const panelRows = () => {
   const panel = t.renderer.root.findDescendantById("tfm-filemenu-panel") as any;

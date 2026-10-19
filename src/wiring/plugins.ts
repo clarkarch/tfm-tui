@@ -17,13 +17,7 @@ import { installPluginRuntimeSupport } from "../ui/ui-plugin-runtime";
 import { makePluginSlots } from "../ui/ui-plugin-slots";
 import { KEY_SCHEMA } from "../config/config-schema";
 import { keySpecEqual } from "../config/keyspec";
-import {
-  flattenPluginCommands,
-  getPluginCommandBinds,
-  isPluginEnabled,
-  type PluginApi,
-  type PluginStore,
-} from "../plugins/plugin-api";
+import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled, type PluginApi } from "../plugins/plugin-api";
 import { makePluginRegistry, makePluginStore, pluginsDir } from "../plugins/plugins";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
@@ -89,10 +83,6 @@ export const wirePlugins = async (deps: {
     selection: () => gridFoundation.selection.selPaths().map((s) => s.path),
   };
   const slotRegistry = makePluginSlots({ renderer: chrome.renderer, context: slotContext, log: (m) => dlog(m) });
-  let loaded: Array<{
-    commands: Array<{ id: string; title: string; hint?: string; run: () => void }>;
-    store: PluginStore;
-  }> = [];
   const api: PluginApi = {
     notify: (message, title) => chrome.notify(message, title ?? "tfm"),
     setStatusMsg: nav.setStatusMsg,
@@ -131,7 +121,9 @@ export const wirePlugins = async (deps: {
     // through tdzSafe: they close over wirings that initialize after scan.
     commands: () => [
       ...tdzSafe(() => getKeymap().commands(), [] as Command[])(),
-      ...flattenPluginCommands(loaded.filter(isPluginEnabled)),
+      // registry.plugins is the LIVE array: background-scan arrivals merge
+      // here with no re-wiring (same seam the settings model + menus read)
+      ...flattenPluginCommands(registry.plugins.filter(isPluginEnabled)),
     ],
     ui: {
       pick: (opts) => {
@@ -234,39 +226,99 @@ export const wirePlugins = async (deps: {
     warn,
     registerSlots: (name, slots) => slotRegistry.register({ id: name, slots: slots as never }),
   });
-  await registry.scan();
-  loaded = registry.plugins;
-  // colliding defaults load silently shadowed (core-wins at dispatch) — make
-  // the shadowing visible once per load so authors/users know to remap.
-  try {
-    const seenPluginBinds: Array<{ title: string; spec: string }> = [];
-    for (const p of registry.plugins) {
-      for (const c of p.commands) {
-        for (const spec of getPluginCommandBinds(p, c.id)) {
-          const coreOwner = KEY_SCHEMA.find((row) =>
-            (core.config.keys[row.action] ?? []).some((owned) => keySpecEqual(owned, spec)),
-          );
-          if (coreOwner) {
-            api.log(
-              `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by core "${coreOwner.label}" — remap it in the Plugins view`,
+  // [ui] lazy-startup on: the scan (readdir + per-plugin hash + cpSync +
+  // import + 10s-capped activate) runs concurrently with the remaining wiring
+  // and the first renderAll — registry.plugins is the live array, so the
+  // model/menus/api.commands merge see arrivals with no re-wiring. The boot
+  // event fires when the scan settles, so a late plugin's boot listener still
+  // runs. Off (default): the scan is awaited below so plugins are present on
+  // the first paint.
+  const reportShadowedBinds = (): void => {
+    // colliding defaults load silently shadowed (core-wins at dispatch) — make
+    // the shadowing visible once per load so authors/users know to remap.
+    try {
+      const seenPluginBinds: Array<{ title: string; spec: string }> = [];
+      for (const p of registry.plugins) {
+        for (const c of p.commands) {
+          for (const spec of getPluginCommandBinds(p, c.id)) {
+            const coreOwner = KEY_SCHEMA.find((row) =>
+              (core.config.keys[row.action] ?? []).some((owned) => keySpecEqual(owned, spec)),
             );
-            continue;
+            if (coreOwner) {
+              api.log(
+                `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by core "${coreOwner.label}" — remap it in the Plugins view`,
+              );
+              continue;
+            }
+            const sibling = seenPluginBinds.find((s) => keySpecEqual(s.spec, spec));
+            if (sibling) {
+              api.log(
+                `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by "${sibling.title}" — remap it in the Plugins view`,
+              );
+              continue;
+            }
+            seenPluginBinds.push({ title: `${p.name}:${c.title}`, spec });
           }
-          const sibling = seenPluginBinds.find((s) => keySpecEqual(s.spec, spec));
-          if (sibling) {
-            api.log(
-              `plugin ${p.name}: bind "${spec}" for ${JSON.stringify(c.id)} is shadowed by "${sibling.title}" — remap it in the Plugins view`,
-            );
-            continue;
-          }
-          seenPluginBinds.push({ title: `${p.name}:${c.title}`, spec });
         }
       }
+    } catch {}
+  };
+  // The boot sequence's first renderAll reads the LIVE registry.plugins, so a
+  // scan that settles BEFORE it needs no repaint — the old unconditional
+  // renderAll here fired a full pre-layout render (~100ms, measured) that made
+  // lazy-startup SLOWER than eager. bootRendered flips right after the boot
+  // render (wireBoot -> wirePlugins.markBootRendered); only genuinely late
+  // arrivals repaint.
+  let bootRendered = false;
+  const markBootRendered = (): void => {
+    bootRendered = true;
+  };
+  const scanSettled = (): void => {
+    reportShadowedBinds();
+    try {
+      sharedPluginEvents().emit("boot", {});
+    } catch {}
+    // late arrivals (slots/rows/menus/commands) paint without waiting for the
+    // next navigation — but ONLY once the first paint happened; otherwise the
+    // pending boot render already includes them. Render-only (no layout work
+    // the boot steps own); safe no-op when nothing arrived.
+    if (!bootRendered) return;
+    try {
+      nav.renderAll();
+    } catch {}
+  };
+  // Classic boot (lazy-startup off, the default) awaits the scan so plugins
+  // are present on the first paint. NOTE: this follow-up renderAll is
+  // LAZY-ONLY — at this point in index.ts the later wirings (grid, settings,
+  // watcher, keymap) don't exist yet, so an eager renderAll would TDZ-throw
+  // inside every step that reads them (grid/keymap/watcher/plugins getters).
+  // The boot sequence's own renderAll paints everything once those exist.
+  if (core.config.ui?.lazyStartup === true) {
+    void registry
+      .scan()
+      .then(() => {
+        scanSettled();
+      })
+      .catch(() => {
+        // the loader isolates per plugin and scan() itself never rejects, but a
+        // fire-and-forget must never surface an unhandled rejection either
+      });
+  } else {
+    // framework-level scan failure must not break boot either (the module
+    // contract: a plugin failure never breaks boot — per-plugin throws are
+    // isolated inside scan, this covers the framework path)
+    try {
+      await registry.scan();
+    } catch (err) {
+      try {
+        warn(`plugin scan failed: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {}
     }
-  } catch {}
-  try {
-    sharedPluginEvents().emit("boot", {});
-  } catch {}
+    reportShadowedBinds();
+    try {
+      sharedPluginEvents().emit("boot", {});
+    } catch {}
+  }
   // promise confirm (danger-aware Yes/No) shared with the settings installer
   // rows — same dialog plugins get via api.ui.confirm, no second wrapper
   return {
@@ -274,6 +326,9 @@ export const wirePlugins = async (deps: {
     reloadPlugins: () => registry.scan(),
     confirm: api.ui.confirm,
     deactivateAll: registry.deactivateAll,
+    // wireBoot calls this right after its first renderAll step, so the lazy
+    // background scan knows a scan settled before that needs no repaint
+    markBootRendered,
     // Plugins-view on/off: register/unregister that plugin's slots immediately
     setSlotEnabled: registry.setSlotEnabled,
     // UI slots: mount after the boot layout exists; refresh with renderAll so

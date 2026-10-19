@@ -12,6 +12,7 @@ import { bumpHex } from "../config/color";
 import { isDark, resolveTtyMode, ttyStaticTheme } from "./tty";
 import { applySurface, chromeSurface, floatSurface } from "./style";
 import { BAND_ID, DRAG_GHOST_ID } from "../input/grid-input";
+import { backgroundClearColor } from "./scrim";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { describeKeybindConflicts, findKeybindConflicts } from "../config/config-schema";
 import { debounced } from "../lib/uiutil";
@@ -92,6 +93,11 @@ export const makeRetheme = (ctx: RethemeCtx) => {
   const paintTitle = (colors: Theme): void => {
     const mode = ctx.config.ui.sidebarTitle;
     const files = mode === "files";
+    setOnId("tfm-title-box", (n) => {
+      // files shows only the 2-row wordmark (buildTitle's height) — without
+      // this a live mode flip keeps the 5-row box and its extra dead row
+      n.height = files ? 4 : 5;
+    });
     setOnId("tfm-title-font", (n) => {
       n.text = files ? "Files" : "tfm";
       n.color = files ? colors.white : colors.accent;
@@ -236,11 +242,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "hoverAnimMs",
     "terminalHeight",
     "fileAnimation",
-    "fileAnimationSlide",
-    "fileAnimationStagger",
+    "fileAnimationStyle",
     "fileAnimationMs",
     "fileAnimationStaggerPct",
-    "fileAnimationSlidePct",
+    "fileAnimationSlideCells",
     "fileAnimationSlideDir",
     "fileAnimationEase",
     "fileAnimationScrollRevealDelayMs",
@@ -251,13 +256,23 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "listingsCache",
     "listingsCacheStats",
     "listingsCacheTtl",
+    // lazy-startup is boot-only (mounts/plugin paths run once at boot, warms
+    // before first paint) — flipping it mid-session must not rebuild the world
+    "lazyStartup",
+    // device poll interval reads live per tick (devwatch arm closure) — the
+    // stepper repaints its own value text, no rebuild, no watcher restart
+    "devicePollMs",
     "fileHoverIncludeLabel",
     // fileHoverAnimation/direction are NOT exempt: the toggle + direction bake
     // tile layout at build (marginTop headroom + refs.hoverLift in
     // ui-grid-rows.ts, both in the grid content sig) — the live per-hover read
     // only covers the highlight/lift paint. Exempting them left the old tiles
-    // in place until the next natural rebuild. includeLabel stays exempt: it
-    // rides live in the animator with no baked layout behind it.
+    // in place until the next natural rebuild. ms/travel/ease/include-label stay
+    // exempt: they ride live in the hover animator with no baked layout behind
+    // them.
+    "fileHoverMs",
+    "fileHoverSlideCells",
+    "fileHoverEase",
     "sidebarAnimation",
     "sidebarAnimationStyle",
     "sidebarAnimationMs",
@@ -268,7 +283,10 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "sidebarAnimationIncludeTitle",
     "sidebarHoverAnimation",
     "sidebarHoverIncludeLabel",
-    "sidebarHoverDirection",
+    "sidebarHoverSlideDir",
+    "sidebarHoverMs",
+    "sidebarHoverSlideCells",
+    "sidebarHoverEase",
     "topbarAnimation",
     "topbarAnimationStyle",
     "topbarAnimationMs",
@@ -277,12 +295,18 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     "topbarAnimationStaggerPct",
     "topbarAnimationEase",
     "directoryBarAnimation",
-    "directoryBarStyle",
-    "directoryBarMs",
-    "directoryBarSlideCells",
-    "directoryBarDir",
-    "directoryBarStaggerPct",
-    "directoryBarEase",
+    "directoryBarAnimationStyle",
+    "directoryBarAnimationMs",
+    "directoryBarAnimationSlideCells",
+    "directoryBarAnimationSlideDir",
+    "directoryBarAnimationStaggerPct",
+    "directoryBarAnimationEase",
+    "smoothScrolling",
+    "smoothScrollMs",
+    // scrim reads live when a modal opens (wiring/core applyModalDim) — a flip
+    // must not rebuild the world; onConfigApplied re-applies it if one is open
+    "scrimMode",
+    "scrimDim",
     "persistUndo",
     "restoreSession",
     "showLaunchTime",
@@ -327,7 +351,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     lastRenderSig = renderSig(ctx.config);
     if (ctx.config.ui.forceGlyph && !lastForceGlyph) {
       try {
-        ctx.notify("force glyph is on, list view pairs best with it", "tty", "info");
+        ctx.notify("Force glyph on · use list view", "tty", "info");
       } catch {}
     }
     lastForceGlyph = ctx.config.ui.forceGlyph;
@@ -335,7 +359,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     // say so once per rising edge, same one-shot shape as forceGlyph
     if (ctx.config.ui.followTerminal && ctx.isTtyMode?.() && !lastFollowTerminalWarned) {
       try {
-        ctx.notify("follow-terminal can't run on this console, static palette paints instead", "tty", "info");
+        ctx.notify("Console · static palette", "tty", "info");
       } catch {}
     }
     lastFollowTerminalWarned = ctx.config.ui.followTerminal;
@@ -390,9 +414,7 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       try {
         ctx
           .renderer()
-          .setBackgroundColor(
-            ctx.config.ui.transparentBg !== "off" && !ctx.isTtyMode?.() ? "transparent" : ctx.colors.bg,
-          );
+          .setBackgroundColor(backgroundClearColor(ctx.config.ui.transparentBg, ctx.colors.bg, !!ctx.isTtyMode?.()));
       } catch {}
       // grid/sidebar rebuild picks up the new palette; everything else needs this
       rethemeChrome();
@@ -447,36 +469,60 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       });
   });
 
-  // --- live config reload ---
-  try {
+  // --- live config reload (held so quit can close it — an open FSWatcher
+  // pins the event loop and orphaned tfm after a terminal close; re-armed by
+  // startConfigWatch after a failed restart recover, which shares the quit
+  // teardown and would otherwise lose external-edit reloads) ---
+  let configWatcher: { close(): void } | null = null;
+  const applyFreshConfig = debounced(250, () => {
+    try {
+      const fresh = loadConfig();
+      if (JSON.stringify(fresh) === lastSavedSig) return;
+      applyConfig(fresh);
+      ctx.notify("config reloaded", "config", "success");
+      // hand-edited dup binds shadow silently at dispatch — toast once per
+      // change (own saves are skipped above, so settings commits never echo)
+      const sig = JSON.stringify(findKeybindConflicts(fresh));
+      if (sig !== lastConflictSig) {
+        lastConflictSig = sig;
+        const text = describeKeybindConflicts(fresh);
+        if (text) ctx.notify(`${text} · Settings → keys`, "keybind conflict");
+      }
+    } catch {}
+  });
+  const armConfigWatch = (): void => {
+    if (configWatcher) return;
     const cfgPath = configPath();
     // fs.watch throws ENOENT SYNCHRONOUSLY when the dir is missing, and nothing
     // creates ~/.config/tfm at boot (session/undo live under $XDG_STATE_HOME,
     // saveConfig only mkdirs on first save) — on a fresh profile the watcher
     // silently never installed, so external config edits never live-reloaded.
     mkdirSync(path.dirname(cfgPath), { recursive: true });
-    const applyFreshConfig = debounced(250, () => {
-      try {
-        const fresh = loadConfig();
-        if (JSON.stringify(fresh) === lastSavedSig) return;
-        applyConfig(fresh);
-        ctx.notify("config reloaded", "config", "success");
-        // hand-edited dup binds shadow silently at dispatch — toast once per
-        // change (own saves are skipped above, so settings commits never echo)
-        const sig = JSON.stringify(findKeybindConflicts(fresh));
-        if (sig !== lastConflictSig) {
-          lastConflictSig = sig;
-          const text = describeKeybindConflicts(fresh);
-          if (text) ctx.notify(`${text} — Settings → keys`, "keybind conflict");
-        }
-      } catch {}
-    });
     const watcher = watch(path.dirname(cfgPath), (_event, filename) => {
       if (!filename || filename !== path.basename(cfgPath)) return;
       applyFreshConfig();
     });
     watcher.on("error", () => {});
+    configWatcher = watcher;
+  };
+  try {
+    armConfigWatch();
   } catch {}
 
-  return { rethemeChrome, applyConfig, scheduleSaveConfig };
+  const stopConfigWatch = (): void => {
+    if (configWatcher) {
+      try {
+        configWatcher.close();
+      } catch {}
+      configWatcher = null;
+    }
+  };
+
+  const startConfigWatch = (): void => {
+    try {
+      armConfigWatch();
+    } catch {}
+  };
+
+  return { rethemeChrome, applyConfig, scheduleSaveConfig, stopConfigWatch, startConfigWatch };
 };

@@ -13,7 +13,7 @@
 import pkg from "../package.json";
 import path from "node:path";
 import { statSync, type Stats } from "node:fs";
-import { parseArgs, usageText } from "./app/cli";
+import { decodeCliPath, parseArgs, usageText } from "./app/cli";
 
 // --- CLI: one parse for the whole process. --help/--version and parse errors
 // answer BEFORE the lazy app graph loads, so they stay instant. ---
@@ -40,6 +40,28 @@ if (cli.command?.name === "plugins") {
   process.exit(await runPluginsCli(cli.command.args));
 }
 
+// headless default-file-manager controls (no TUI boot — scriptable/SSH twin
+// of the first-boot prompt + settings row)
+if (cli.command?.name === "default-filemanager") {
+  const { runDefaultFileManagerCli } = await import("./app/default-filemanager-cli");
+  process.exit(await runDefaultFileManagerCli(cli.command.args));
+}
+
+// headless `tfm update` (no TUI boot): check the releases, then delegate to
+// install.sh. Replacing the on-disk binary never disturbs a running session
+// (Linux keeps the old inode), so this is safe to run from inside tfm too.
+if (cli.command?.name === "update") {
+  const { runUpdateCli } = await import("./app/update-cli");
+  process.exit(await runUpdateCli(cli.command.args));
+}
+
+// D-Bus FileManager1 daemon (started by the service activator on demand —
+// the process IS the service and runs until killed, no TUI boot)
+if (cli.filemanagerService) {
+  const { runFileManagerService } = await import("./app/filemanager-service");
+  process.exit(await runFileManagerService());
+}
+
 // launch PATH (`tfm ~/some/path`): chdir before anything resolves the cwd, so
 // tabs/history/session all start there. A FILE opens its parent and is then
 // selected by the grid. An invalid explicit path is a HARD ERROR (exit 1, no
@@ -53,7 +75,8 @@ const fail = (msg: string): never => {
 };
 let pendingSelect: string | null = null;
 let explicitPath = false;
-const target = cli.paths[0];
+// desktop %U launches arrive as file:// URIs — decode before stat/chdir
+const target = cli.paths[0] ? decodeCliPath(cli.paths[0]) : undefined;
 if (cli.paths.length > 1) console.error(`tfm: only the first path is used: ${target}`);
 if (target === "") fail("tfm: empty path");
 if (target) {
@@ -93,17 +116,38 @@ if (target) {
 // truth about startup (imports were ~200ms of it, silently uncounted before)
 const bootStart = performance.now();
 
+// one Promise.all, not 10 serial awaits: the construction order below is
+// load-bearing, the module loading isn't (all wire* expose side-effect-free
+// factory fns). ~250ms serial transpile/parse becomes one parallel window.
+// app/log loads FIRST and alone: it registers the crash handlers, which must
+// exist before any other module (e.g. a failing @opentui/core native load)
+// can throw — under Promise.all evaluation order isn't guaranteed.
 const { appendLog, isDebug } = await import("./app/log");
-const { wireCore } = await import("./wiring/core");
-const { wireNav } = await import("./wiring/nav");
-const { wireChrome } = await import("./wiring/chrome");
-const { wireGridFoundation } = await import("./wiring/grid-foundation");
-const { wireFileops } = await import("./wiring/fileops");
-const { wireGrid } = await import("./wiring/grid");
-const { wirePlugins } = await import("./wiring/plugins");
-const { wireSettings, wireRetheme } = await import("./wiring/settings");
-const { wireWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer } = await import("./wiring/io");
-const { wireKeymap } = await import("./wiring/keymap");
+const [
+  { wireCore },
+  { wireNav },
+  { wireChrome },
+  { wireGridFoundation },
+  { wireFileops },
+  { wireGrid },
+  { wirePlugins },
+  { wireSettings, wireRetheme },
+  { wireWatcher, wireDeviceWatcher, wireBoot, wireDnd, wireResize, wireHoverDrawer },
+  { wireUpdates },
+  { wireKeymap },
+] = await Promise.all([
+  import("./wiring/core"),
+  import("./wiring/nav"),
+  import("./wiring/chrome"),
+  import("./wiring/grid-foundation"),
+  import("./wiring/fileops"),
+  import("./wiring/grid"),
+  import("./wiring/plugins"),
+  import("./wiring/settings"),
+  import("./wiring/io"),
+  import("./wiring/updates"),
+  import("./wiring/keymap"),
+]);
 
 if (isDebug) appendLog(`tfm starting pid=${process.pid} argv=[${process.argv.slice(1).join(" ")}]`);
 
@@ -115,6 +159,9 @@ const core = wireCore({
 });
 
 // --- nav: renderAll, quit, status, history, tabs, session, type-to-search ---
+// rendererTornDown backs the renderer-closed fallback below: set by every
+// quit path's destroy step (wired here), read once the renderer exists.
+let rendererTornDown = false;
 const nav = wireNav({
   core,
   getChrome: () => chrome,
@@ -124,7 +171,14 @@ const nav = wireNav({
   getTermHasFocus: () => fileops.terminal.termHasFocus(),
   getTerm: () => fileops.terminal,
   getWatcher: () => watcher,
+  getDevices: () => devices,
+  getUpdates: () => updates,
   getPlugins: () => plugins,
+  // retheme wires after nav — deferred like every other backward reference
+  getRetheme: () => retheme,
+  onTeardownDestroy: () => {
+    rendererTornDown = true;
+  },
 });
 
 // --- chrome: file menu, sidebar, toolbar, renderer boot, notify, dialogs ---
@@ -162,7 +216,12 @@ const fileops = wireFileops({
 
 // --- plugins: user extensions (after fileops — api context needs selection
 // + nav/chrome sinks; before grid — menu entries merge plugin sections;
-// before settings — aggregated rows feed the settings model) ---
+// before settings — aggregated rows feed the settings model). With [ui]
+// lazy-startup on, the initial scan runs in the BACKGROUND (registrations
+// hydrate the live array when they land — slots self-paint via the registry
+// subscription), so this await only pays handle construction, never plugin
+// load. With it off (default) the scan settles here, so plugins are present
+// on the first paint.
 // getKeymap/getPick close over `keymap`, which wires LAST — wirePlugins
 // degrades both via tdzSafe until the keymap exists, so an eager plugin
 // calling api.commands()/ui.pick at activate top level gets []/noop instead
@@ -197,7 +256,8 @@ const grid = wireGrid({
 // --- settings: settings model + esc menu ---
 // getPrompt closes over `keymap`, which wires LAST — only called from
 // post-boot installer rows, so the TDZ is settled by first use (same seam
-// as wirePlugins' getKeymap/getPick above).
+// as wirePlugins' getKeymap/getPick above). getConfirm closes over
+// `fileops`, which wires BEFORE settings — settled by construction.
 const settings = wireSettings({
   core,
   nav,
@@ -206,6 +266,23 @@ const settings = wireSettings({
   plugins,
   getRetheme: () => retheme,
   getPrompt: () => keymap.prompt,
+  getConfirm: () => fileops.yesNo,
+  // updates wires right below (it needs this module's repaint) — deferred seam
+  getUpdates: () => updates,
+});
+
+// --- update checks: boot notice + the About row + the checkUpdates command ---
+// One shared cached question. The install itself delegates to install.sh, so
+// nothing about replace/checksum policy is re-implemented here.
+const updates = wireUpdates({
+  current: pkg.version,
+  execPath: process.execPath,
+  enabled: () => core.config.ui.checkUpdates === true,
+  notify: (m, t, l) => chrome.notify(m, t, l),
+  sticky: (msg) => chrome.notifyStickyText(msg),
+  confirm: (message, yesLabel, onYes) => fileops.yesNo.confirm(message, yesLabel, onYes),
+  repaint: () => settings.escMenu.renderMenuContent(),
+  log: (msg) => appendLog(`update check: ${msg}`),
 });
 
 // --- watcher → boot → retheme: the boot sequence starts between the esc-menu
@@ -215,6 +292,12 @@ const watcher = wireWatcher({
   getGridFoundation: () => gridFoundation,
   getGrid: () => grid,
 });
+
+// USB hotplug (no restart to detect plug/unplug): the first poll captures
+// the silent baseline, so boot-present drives never toast — only transitions
+// do. Wired here (post-chrome for notify, post-nav for renderAll); quit
+// stops it via getDevices in wireNav, next to stopChromeTimers.
+const devices = wireDeviceWatcher({ nav, chrome, core });
 
 // hover drawer BEFORE boot: it collapses panels at construction and publishes
 // the collapsed effective widths, so the boot sequence's first renderAll and
@@ -237,9 +320,17 @@ wireBoot({
   bootStart,
   skipSessionRestore: explicitPath,
   mountSlots: () => plugins.mountSlots(),
+  markBootRendered: () => plugins.markBootRendered(),
   afterLayout: () => hover.refresh(),
-  playSidebarIntro: () => chrome.sidebarIntro.play(),
+  playSidebarIntro: () => {
+    chrome.sidebarIntro.play();
+    chrome.markIntroPlayed();
+  },
   playTopbarIntro: () => chrome.topbarIntro.play(),
+  promptDefaultFileManager: () => settings.promptDefaultFileManager(),
+  checkUpdates: () => {
+    void updates.checkOnBoot();
+  },
   // system theme: terminal colors land before the first layout bakes them in
   applyBootSystemTheme: () => settings.systemTheme.applyBootSystemTheme(),
 });
@@ -283,8 +374,36 @@ const keymap = wireKeymap({
   settings,
   plugins,
   getRetheme: () => retheme,
+  getUpdates: () => updates,
 });
 
 // system theme live-follow: terminal palette switches (kitty theme change)
 // re-derive through applyConfig — a no-op unless [ui] follow-terminal is on
 settings.systemTheme.followSystemTheme();
+
+// --- renderer-closed fallback: JS signal delivery past OpenTUI's native core
+// is unreliable (probed live: the first SIGTERM/SIGHUP usually destroys the
+// screen — the LEAVE frame lands — yet never reaches a process listener, so
+// a signal handler alone still orphans). destroy() ALWAYS runs there, so when
+// the native close settles without any quit having started it, run the same
+// force teardown instead of lingering with a dead renderer. Quit/restart/
+// signal paths all mark rendererTornDown in their destroy step and skip. ---
+const onRendererClosed = (): void => {
+  if (rendererTornDown) return;
+  rendererTornDown = true;
+  try {
+    nav.quitAppForce();
+  } catch {}
+};
+void chrome.renderer.closed.then(onRendererClosed, onRendererClosed);
+
+// --- terminal-close signals (SIGHUP/SIGTERM): the terminal is gone, so run
+// the FORCE teardown (no isBusy refusal) instead of orphaning with PPID 1.
+// Wired last — every quit step's getter is settled by first use. Best-effort
+// fast path only (see signals.ts): the renderer-closed fallback above is the
+// reliable one. ---
+const { wireSignalQuit } = await import("./app/signals");
+wireSignalQuit({
+  on: (event, cb) => process.on(event, cb),
+  quit: nav.quitAppForce,
+});

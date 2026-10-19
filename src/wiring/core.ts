@@ -19,6 +19,7 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
+import { SCRIM_FILL_ID, rasterDimPlan, scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../app/log";
@@ -98,18 +99,56 @@ export const wireCore = (deps: {
   // Every lookup must tolerate a miss (nodes die on every rebuild). ---
   const lookup = makeLookup({ root: () => deps.renderer().root });
 
-  // --- Floating layers: THE single source of truth for which modal/cursor
-  // layer is open + the dismiss-others policy. Pure module, created before
-  // any widget (makeSlots reads its escmenu state through a getter). Modal
-  // open/close dims the background rasters via slots.setScrim (the scrim used
-  // to be esc-menu-only, so props/conflict/pick rasters floated over modals).
-  // `slots` is TDZ here — the callback fires post-construction only.
-  const floats = makeFloats({
-    onModalChange: (open) => {
+  // Fired whenever a modal takes the screen (floats 0->1) AND when it closes.
+  // Lets widgets drop state that a modal overlay would strand — e.g. a hovered
+  // tile/row or the kb-focused sidebar row that stays highlighted behind the
+  // dim (wiring/grid + wiring/chrome register).
+  const modalOpenHooks: Array<() => void> = [];
+  const registerModalOpen = (fn: () => void): void => {
+    modalOpenHooks.push(fn);
+  };
+
+  const runModalHooks = (): void => {
+    for (const h of modalOpenHooks) {
       try {
-        slots.setScrim(open);
+        h();
       } catch {}
-    },
+    }
+  };
+
+  // Dim the whole app behind a modal. `dim` fades the app-content node's
+  // opacity; `fill` toggles the classic full-screen overlay node
+  // (SCRIM_FILL_ID), whose box opts into the fork's fillDimsImages so the
+  // rasters it covers are dimmed in place instead of deleted. In both modes
+  // the icon rasters keep their placement opaque and instead have their baked
+  // pixels shaded (rasterDimPlan), so they darken along with the text without
+  // the translucent `icons = transparent` look.
+  const applyModalDim = (open: boolean): void => {
+    try {
+      const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
+      const content = lookup.byId("tfm-content");
+      if (content) content.opacity = open ? plan.contentOpacity : 1;
+      const fill = lookup.byId(SCRIM_FILL_ID);
+      if (fill) fill.visible = open && plan.fill;
+      const rasters = open
+        ? rasterDimPlan(config.ui.scrimMode, plan.contentOpacity)
+        : { opacity: null, shade: 1, bgShade: 1 };
+      slots.setRasterDim(rasters.opacity, rasters.shade, rasters.bgShade);
+      // run on BOTH open and close: the widgets' reset also REPAINTS the
+      // sidebar (normalizePlaces), which is gated on the live modal state — so
+      // closing must repaint it back to the hover/kb highlight, and opening
+      // must drop it (the kb-focused row otherwise stayed highlighted).
+      runModalHooks();
+    } catch {}
+  };
+
+  // --- Floating layers: THE single source of truth for which modal/cursor
+  // layer is open + the dismiss-others policy. Pure module, created before any
+  // widget (makeSlots reads its escmenu state through a getter). Modal
+  // open/close dims the app content via `applyModalDim`; `slots` is TDZ here —
+  // the callback fires post-construction only.
+  const floats = makeFloats({
+    onModalChange: (open) => applyModalDim(open),
   });
 
   // --- Mouse pointer shapes (OSC 22): ONE tty-guarded, deduping sink for
@@ -123,7 +162,7 @@ export const wireCore = (deps: {
     isTtyMode,
   });
 
-  // --- Icon slots / thumbs / modal scrim — widget lives in ./ui-slots.
+  // --- Icon slots / thumbs — widget lives in ./ui-slots.
   // Called before the renderer boots: every ctx field the drain path needs is
   // an arrow wrapper (post-boot evaluation), per the widget-seam rules. ---
   const slots = makeSlots({
@@ -139,7 +178,6 @@ export const wireCore = (deps: {
     transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
     iconStyle: () => config.ui.iconStyle,
     iconCells: () => geometry.iconCells,
-    modalOpen: () => floats.hasModal(),
     glyphFor: ttyGlyphFor,
     isTtyMode,
     forceGlyph,
@@ -217,6 +255,11 @@ export const wireCore = (deps: {
     lookup,
     resolutionGate,
     floats,
+    // re-apply the modal dim after a config change (scrim mode flip / theme
+    // change while a modal is open) — no-op when no modal is up
+    reapplyModalDim: () => applyModalDim(floats.hasModal()),
+    // widgets that own transient hover state register a dropper here
+    registerModalOpen,
     slots,
     home,
     state,

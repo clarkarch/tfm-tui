@@ -137,6 +137,11 @@ describe("tabTitle", () => {
     expect(tabTitle({ history: ["starred://"], histIdx: 0 })).toBe("Starred");
   });
 
+  test("an archive cwd titles the chip after the archive file, not the URI", () => {
+    const uri = `archive://${encodeURIComponent("/home/u/game.tar.gz")}!/inner`;
+    expect(tabTitle({ history: [uri], histIdx: 0 })).toBe("game.tar.gz");
+  });
+
   test("long names truncate at 16 with an ellipsis; empty falls back to /", () => {
     const long = "a-very-long-folder-name";
     expect(tabTitle({ history: [`/x/${long}`], histIdx: 0 })).toBe(`${long.slice(0, 15)}…`);

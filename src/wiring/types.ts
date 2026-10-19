@@ -44,6 +44,7 @@ import type { ExecutableInfo } from "../fs/executable";
 export type NavWiring = {
   renderAll: ReturnType<typeof makeRenderAll>;
   quitApp: ReturnType<typeof makeQuit>;
+  quitAppForce: ReturnType<typeof makeQuit>;
   restartApp: ReturnType<typeof makeRestart>;
   setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
   tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>];
@@ -61,6 +62,7 @@ export type ChromeWiring = {
   menu: ReturnType<typeof makeMenu>;
   chrome: ReturnType<typeof makeChrome>;
   sidebarIntro: ReturnType<typeof makeSidebarAnim>;
+  markIntroPlayed: () => void;
   topbarIntro: ReturnType<typeof makeTopbarAnim>;
   toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>];
   activeToolbar: () => ReturnType<typeof makeToolbar>;
@@ -100,6 +102,8 @@ export type GridWiring = {
   renderPreview: ReturnType<typeof makePreview>["renderPreview"];
   renderGrid: ReturnType<typeof makeGridRenderer>["renderGrid"];
   syncWindowPane: (pane: 0 | 1) => void;
+  // queue a wheel move into the pane's stepper (true = consumed, native jump suppressed)
+  pushWheel: (pane: 0 | 1, dir: 1 | -1, cells: number) => boolean;
   renderPane: (pane: 0 | 1) => Promise<void>;
   focusPane: (pane: 0 | 1) => void;
   dropIntoPane: (pane: 0 | 1) => void;
@@ -107,6 +111,12 @@ export type GridWiring = {
   bandCtx: BandCtx;
   props: ReturnType<typeof makeProps>;
   menuEntries: ReturnType<typeof makeMenuEntries>;
+  // app actions surfaced to the palette/keybinds (grid owns the menu-entry
+  // closures): Open With… / extract / compress + open-a-folder-elsewhere
+  openWith: (p: string) => void;
+  extractArchive: (files: string[], dest: string) => void;
+  compressTo: (paths: string[]) => void;
+  openInOtherPane: (dir: string) => void;
   // executable launches (the Run prompt behind openFileDefault's fork)
   runExecutable: (p: string) => void;
   runExecutableInTerminal: (p: string) => void;
@@ -116,4 +126,5 @@ export type GridWiring = {
 export type SettingsWiring = {
   escMenu: ReturnType<typeof makeEscMenu>;
   systemTheme: ReturnType<typeof makeSystemTheme>;
+  promptDefaultFileManager: () => void;
 };

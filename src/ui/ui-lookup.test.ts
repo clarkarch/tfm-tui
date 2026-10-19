@@ -3,6 +3,7 @@ import type { CliRenderer } from "@opentui/core";
 import {
   makeLookup,
   makeResolutionGate,
+  RESOLUTION_LAZY_SETTLE_MS,
   RESOLUTION_POLL_MS,
   RESOLUTION_RENDER_MS,
   RESOLUTION_SETTLE_MS,
@@ -175,6 +176,26 @@ describe("makeResolutionGate", () => {
     const before = clock.slept.length;
     await gate.wait();
     await gate.settle();
+    expect(clock.slept.length).toBe(before);
+  });
+
+  test("the lazy-startup boot budget latches early (first paint must not wait ~2s)", async () => {
+    // [ui] lazy-startup: boot passes this short budget so a terminal that
+    // never answers the pixel query (console/tmux/dumb) doesn't park the full
+    // 2s before the first frame — the single biggest launch cost it removes.
+    const clock = mkClock();
+    const logs: string[] = [];
+    const gate = makeResolutionGate(() => mkRenderer(() => null), {
+      sleep: clock.sleep,
+      now: clock.now,
+      log: (m) => logs.push(m),
+    });
+    await gate.settle(RESOLUTION_LAZY_SETTLE_MS);
+    expect(clock.slept.length).toBe(RESOLUTION_LAZY_SETTLE_MS / RESOLUTION_POLL_MS);
+    expect(logs[0]).toContain(`none after ${RESOLUTION_LAZY_SETTLE_MS}ms`);
+    // latched exactly like the full budget: later renders never re-park
+    const before = clock.slept.length;
+    await gate.wait();
     expect(clock.slept.length).toBe(before);
   });
 

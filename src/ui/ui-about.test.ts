@@ -67,15 +67,16 @@ describe("about panel rendering", () => {
   beforeAll(async () => {
     t = await createTestRenderer({ width: 100, height: 30 });
   });
-  afterAll(() => {
-    t.renderer.destroy();
-  });
+  afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
   const pointers: string[] = [];
   const opened: string[] = [];
   const details: string[] = [];
   const logoReqs: Array<{ name: string; heightCells: number; faithful: boolean }> = [];
   let backed = 0;
+  let checks = 0;
+  let updateValue = "check for updates";
+  let updateActionable = true;
   let detail: AboutDeps["detail"] = null;
   let openPanelSeq = 0;
 
@@ -107,6 +108,9 @@ describe("about panel rendering", () => {
       detail,
       onOpenDetail: (key: string) => void details.push(key),
       onBack: () => void backed++,
+      updateValue: () => updateValue,
+      updateActionable: () => updateActionable,
+      onCheckUpdates: () => void checks++,
       setPointer: (s) => void pointers.push(s as string),
     });
     await t.renderOnce();
@@ -142,6 +146,7 @@ describe("about panel rendering", () => {
     opened.length = 0;
     details.length = 0;
     backed = 0;
+    checks = 0;
     pointers.length = 0;
   };
 
@@ -166,7 +171,7 @@ describe("about panel rendering", () => {
     await closePanel(id);
   });
 
-  test("panel is compact: no scroller, tight properties rows, version below", async () => {
+  test("panel is compact: no scroller, tight properties rows, air above the footer", async () => {
     // regression 1: a termH-bounded scroller reserved dead rows and dangled
     // the version far below the content — fixed content rides auto-height.
     // regression 2 (properties idiom): rows stack tight with zero air, split
@@ -178,13 +183,17 @@ describe("about panel rendering", () => {
     const versionIdx = lines.findIndex((line) => line.includes(`v${pkg.version}`));
     expect(heroIdx).toBeGreaterThanOrEqual(0);
     expect(versionIdx).toBeGreaterThan(heroIdx);
-    // spacer after the subtitle, then five contiguous rows, a divider,
-    // then the version — tight properties rhythm, portrait-tall overall
+    // spacer after the subtitle, then six contiguous rows, then the version —
+    // tight properties rhythm, portrait-tall overall
     expect(lines[heroIdx + 1]?.trim()).toBe("");
-    for (const [off, label] of ["Website", "GitHub", "Credits", "Plugin API", "License"].entries()) {
+    for (const [off, label] of ["Website", "GitHub", "Credits", "Plugin API", "License", "Update"].entries()) {
       expect(lines[heroIdx + 2 + off]).toContain(label);
     }
-    expect(versionIdx - heroIdx).toBe(7);
+    // one blank row of air above the footer: the version used to hug the
+    // Update control and read as another clickable row
+    expect(lines[versionIdx - 1]?.trim()).toBe("");
+    // subtitle spacer + six rows + the footer spacer, then the version
+    expect(versionIdx - heroIdx).toBe(9);
     await closePanel(id);
   });
 
@@ -236,6 +245,22 @@ describe("about panel rendering", () => {
     expect(opened).toEqual([]);
     expect(details).toEqual([]);
     await closePanel(id);
+  });
+
+  test("the update row paints the live value and clicking it checks", async () => {
+    updateValue = "update to v1.1.0";
+    updateActionable = true;
+    const id = await openMain();
+    reset();
+    const frame = t.captureCharFrame();
+    expect(frame).toContain("update to v1.1.0");
+    // actionable: the pointer comes up and the click reaches the wiring
+    fire("tfm-about-row-update", "move");
+    expect(pointers).toEqual(["pointer"]);
+    fire("tfm-about-row-update", "down");
+    expect(checks).toBe(1);
+    await closePanel(id);
+    updateValue = "check for updates";
   });
 
   test("hover sets the pointer on actionable rows only", async () => {

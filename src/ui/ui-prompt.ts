@@ -14,6 +14,7 @@ import { makeModalScrim } from "./ui-dialogs";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import { stripControlChars } from "../lib/uiutil";
 import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type SlotElement } from "./ui-slots";
 
@@ -175,7 +176,9 @@ export const makePrompt = (ctx: PromptCtx) => {
                 backgroundColor: c.accentBg,
                 focusedBackgroundColor: c.accentBg,
                 textColor: c.white,
-                ...(opts.initial ? { value: opts.initial } : {}),
+                // initial comes from the wild (gio credential output, plugin
+                // values, pasted URLs) — 0.6.0 Input throws on control chars
+                ...(opts.initial ? { value: stripControlChars(opts.initial) } : {}),
               }),
         ),
         // breathing room above the buttons: fixed height + padding OVERFLOWS
@@ -258,7 +261,7 @@ export const makePrompt = (ctx: PromptCtx) => {
       }
       try {
         const input = ctx.byId("tfm-prompt-input");
-        if (input) input.value = v;
+        if (input) input.value = stripControlChars(v);
       } catch {}
     },
   };

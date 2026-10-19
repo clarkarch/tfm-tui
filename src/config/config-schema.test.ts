@@ -146,16 +146,26 @@ describe("parseConfigDoc", () => {
     expect(parseConfigDoc(undefined).ui.fileAnimationRowGranularity).toBe(false);
   });
 
-  test("hover lift options parse with fallbacks (no distance knob: fixed 1 cell)", () => {
+  test("device poll interval defaults 1000ms, parses and clamps to [250, 10000]", () => {
+    expect(parseConfigDoc(undefined).ui.devicePollMs).toBe(1000);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": 500 } }).ui.devicePollMs).toBe(500);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": 100 } }).ui.devicePollMs).toBe(250);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": 60000 } }).ui.devicePollMs).toBe(10000);
+    expect(parseConfigDoc({ ui: { "device-poll-ms": "fast" } }).ui.devicePollMs).toBe(1000);
+  });
+
+  test("hover options parse with fallbacks (duration/travel/dir/ease defaults)", () => {
     const defs = parseConfigDoc(undefined).ui;
     expect(defs.fileHoverIncludeLabel).toBe(false);
-    expect(defs.fileHoverDirection).toBe("up");
-    expect("fileHoverDistance" in defs).toBe(false);
+    expect(defs.fileHoverSlideDir).toBe("up");
+    expect(defs.fileHoverMs).toBe(0);
+    expect(defs.fileHoverSlideCells).toBe(1);
+    expect(defs.fileHoverEase).toBe("ease-out");
     const cfg = parseConfigDoc({
-      ui: { "file-hover-include-label": true, "file-hover-direction": "sideways" },
+      ui: { "file-hover-include-label": true, "file-hover-slide-dir": "sideways" },
     }).ui;
     expect(cfg.fileHoverIncludeLabel).toBe(true);
-    expect(cfg.fileHoverDirection).toBe("up");
+    expect(cfg.fileHoverSlideDir).toBe("up");
   });
 
   test("round-trip: serialize -> parse -> identical config", () => {
@@ -212,6 +222,7 @@ describe("serializeConfig", () => {
       new Set([
         "restoreSession",
         "showLaunchTime",
+        "lazyStartup",
         "sidebarAnimation",
         "sidebarAnimationStyle",
         "sidebarAnimationMs",

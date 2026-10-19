@@ -6,7 +6,7 @@
 
 import path from "node:path";
 import { statSync } from "node:fs";
-import { RECENT_URI, STARRED_URI } from "../fs/uri";
+import { isVirtualUri } from "../fs/uri";
 import type { SortMode } from "../lib/sort";
 import { naturalAscFor } from "../lib/sort";
 import type { Config } from "../config/config";
@@ -89,7 +89,9 @@ export const makeNav = (state: AppState, hooks: NavHooks) => {
     debugLog(`navigate -> ${dir}`);
     hooks.exitPathEdit();
     hooks.closeFileMenuIfOpen();
-    if (dir === RECENT_URI || dir === STARRED_URI) {
+    // virtual places (recent/starred/archive) skip fs resolution + the
+    // isDirectory check — their contents come from a registry, not a path
+    if (isVirtualUri(dir)) {
       if (dir === state.cwd) {
         hooks.renderAll();
         return;

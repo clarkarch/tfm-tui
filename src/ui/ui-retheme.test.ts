@@ -143,6 +143,19 @@ describe("applyConfig", () => {
     }
   });
 
+  test("config watcher stop/start are idempotent and re-arm after stop", () => {
+    // quit closes the watcher (event-loop pin); a failed restart recover
+    // re-arms it — both must be safe to call twice and in any order
+    const retheme = makeRetheme(mkCtx() as any);
+    expect(() => {
+      retheme.stopConfigWatch();
+      retheme.stopConfigWatch();
+      retheme.startConfigWatch();
+      retheme.startConfigWatch();
+      retheme.stopConfigWatch();
+    }).not.toThrow();
+  });
+
   test("merges the fresh config into the live one and rewrites geometry through the setters", () => {
     const ctx = mkCtx();
     const retheme = makeRetheme(ctx as any);
@@ -365,11 +378,11 @@ describe("applyConfig", () => {
     const retheme = makeRetheme(ctx as any);
     const fresh = clone(defaultConfig);
     fresh.ui.fileHoverAnimation = true;
-    fresh.ui.fileHoverDirection = "down";
+    fresh.ui.fileHoverSlideDir = "down";
     retheme.applyConfig(fresh);
     expect(ctx.calls.renderAll).toBe(1);
     expect(ctx.config.ui.fileHoverAnimation).toBe(true);
-    expect(ctx.config.ui.fileHoverDirection).toBe("down");
+    expect(ctx.config.ui.fileHoverSlideDir).toBe("down");
   });
 
   test("tile-hover include-label stays value-only (rides live in the animator)", () => {
@@ -492,6 +505,10 @@ describe("rethemeChrome", () => {
     const sub: any = {};
     painted.get("tfm-title-sub")!(sub);
     expect(sub.visible).toBe(false);
+    // the box drops one row (no tagline) — matches buildTitle's files height
+    const box: any = {};
+    painted.get("tfm-title-box")!(box);
+    expect(box.height).toBe(4);
 
     // none hides the whole block; tfm restores the original title
     const noneMode = clone(defaultConfig);
@@ -518,6 +535,10 @@ describe("rethemeChrome", () => {
     const sub3: any = {};
     back.get("tfm-title-sub")!(sub3);
     expect(sub3.visible).toBe(true);
+    // wordmark + tagline need the full 5-row box again
+    const box3: any = {};
+    back.get("tfm-title-box")!(box3);
+    expect(box3.height).toBe(5);
   });
 
   test("a theme flip still repaints the title block (rethemeChrome path)", () => {
@@ -679,7 +700,7 @@ describe("open-float repaints", () => {
       expect(ints).toEqual([0x10, 0x10, 0x20, 255]);
       expect(floats.isOpen("pick")).toBe(true);
     } finally {
-      t.renderer.destroy();
+      await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
 });

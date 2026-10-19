@@ -8,9 +8,11 @@ import { link, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../app/undo";
 import { errCode, fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
+import { isArchiveUri } from "../fs/uri";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 import type { MaybeNode } from "../lib/node-like";
+import { stripControlChars } from "../lib/uiutil";
 import type { PointerStyle } from "../lib/pointer";
 
 type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder"; labelIdx?: number };
@@ -164,29 +166,39 @@ export const makeRename = (ctx: RenameCtx) => {
         void landCreate()
           .then((target) => {
             if (createKind) pushCreateBatch(createKind, target);
-            const msg = `Created ${path.basename(target)} · ctrl+z to undo`;
+            const msg = `Created ${path.basename(target)}`;
             ctx.notify(msg, "create", "success");
             void ctx.renderAll();
           })
           .catch((err: unknown) => {
             // the placeholder still exists under the old name — repaint it
-            ctx.notify(`Create failed (${fsErrText(err)})`, "create failed", "error");
+            ctx.notify(`Create failed · ${fsErrText(err)}`, "create failed", "error");
             void ctx.renderAll();
           });
         return;
       }
       pushCreateBatch(edit.createKind, k);
-      const msg = `Created ${value} · ctrl+z to undo`;
+      const msg = `Created ${value}`;
       ctx.notify(msg, "create", "success");
       return;
     }
     // plain F2 rename: goes through performRename, which owns conflict
-    // handling, undo units and the "Renamed a → b" reporting
+    // handling, undo units and the "Renamed a → b" reporting. The seeded
+    // input shows the STRIPPED name (control chars can't render), so an
+    // untouched Enter must be a no-op — committing the display form would
+    // rename the file to a name the user never typed.
+    if (!edit.createKind && value === stripControlChars(path.basename(edit.key))) return;
     void ctx.performRename(edit.key, value);
   };
 
   const startInlineRename = (key: string, createKind?: "file" | "folder"): void => {
     if (renameEdit) finishInlineRename(false);
+    // archive members are URIs, not fs paths (existsSync would refuse anyway,
+    // with a misleading "source gone")
+    if (isArchiveUri(key)) {
+      ctx.notify("Archive contents are read-only", "rename", "error");
+      return;
+    }
     const refs = ctx.tileRefs.get(key);
     // stale selection (tile rebuilt under us, or the file vanished mid-press):
     // say so instead of dead-ending — keyboard rename gives no other signal
@@ -197,7 +209,7 @@ export const makeRename = (ctx: RenameCtx) => {
     const tile = ctx.byId(refs.tileId);
     const label = ctx.byId(refs.labelId);
     if (!tile || !label || !existsSync(key)) {
-      ctx.notify("Can't rename here (source gone)", "rename", "error");
+      ctx.notify("Can't rename · source gone", "rename", "error");
       return;
     }
     // remember where the label sits so finishInlineRename can restore it in
@@ -219,7 +231,9 @@ export const makeRename = (ctx: RenameCtx) => {
     const input = new InputRenderable(ctx.renderer(), {
       id: inputId,
       width: ctx.tileW() - 2,
-      value: path.basename(key),
+      // filenames may carry C0 controls (legal on Linux except / and NUL) —
+      // 0.6.0 Input throws NativeError on them at construction
+      value: stripControlChars(path.basename(key)),
       backgroundColor: ctx.colors().hoverBg,
       focusedBackgroundColor: ctx.colors().accentBg,
       textColor: ctx.colors().white,
@@ -274,7 +288,7 @@ export const makeRename = (ctx: RenameCtx) => {
         startInlineRename(target, kind);
       })
       .catch((err) => {
-        const summary = `Create failed (${fsErrText(err)})`;
+        const summary = `Create failed · ${fsErrText(err)}`;
         ctx.notify(summary, "create failed", "error");
       });
   };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs, usageText } from "./cli";
+import { decodeCliPath, parseArgs, usageText } from "./cli";
 
 // CLI grammar: `tfm [OPTIONS] [PATH]`. GNU-style permutation (flags anywhere),
 // `--` ends option parsing, `--config` takes a value in all the usual spellings.
@@ -76,6 +76,34 @@ describe("parseArgs", () => {
     expect(parseArgs(["tfm", "--config"]).error).toBe("option '--config' needs a value");
     expect(parseArgs(["tfm", "-c"]).error).toBe("option '-c' needs a value");
     expect(parseArgs(["tfm", "--config="]).error).toBe("option '--config' needs a value");
+  });
+
+  test("default-filemanager subcommand short-circuits like plugins", () => {
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "default-filemanager", "status"]).command).toEqual({
+      name: "default-filemanager",
+      args: ["status"],
+    });
+    expect(parseArgs(["tfm", "default-filemanager"]).command).toEqual({
+      name: "default-filemanager",
+      args: [],
+    });
+  });
+
+  test("update subcommand short-circuits too (no TUI boot)", () => {
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "update", "--tag", "v1.1.0"]).command).toEqual({
+      name: "update",
+      args: ["--tag", "v1.1.0"],
+    });
+    expect(parseArgs(["tfm", "update"]).command).toEqual({ name: "update", args: [] });
+    // the headless path never leaks into the TUI options
+    expect(parseArgs(["tfm", "update"]).paths).toEqual([]);
+  });
+
+  test("file:// launch URIs decode to paths (desktop %U launches)", () => {
+    expect(decodeCliPath("file:///home/u/some%20dir")).toBe("/home/u/some dir");
+    expect(decodeCliPath("file://localhost/tmp/z")).toBe("/tmp/z");
+    expect(decodeCliPath("/plain/path")).toBe("/plain/path");
+    expect(decodeCliPath("-weird-dir")).toBe("-weird-dir");
   });
 });
 

@@ -163,4 +163,16 @@ describe("readRestoredSession", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("a pane with only an archive:// history restores (no fs dir behind it)", () => {
+    const root = sandbox();
+    try {
+      const uri = `archive://${encodeURIComponent("/tmp/a.zip")}`;
+      writeDoc({ panes: [{ tabs: [{ history: [uri], histIdx: 0 }] }, { tabs: [] }] });
+      const doc = readRestoredSession();
+      expect(doc!.panes[0].tabs[0]!.history).toEqual([uri]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

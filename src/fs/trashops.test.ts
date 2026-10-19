@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { trashDir } from "./fsutil";
 import { makeTrashConfirms, makeTrashOps, trashOrigPath, trashOrigPathForFile, type TrashOpsSink } from "./trashops";
+import { archiveUri } from "./archive-scheme";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 const oldHome = process.env.HOME;
@@ -46,6 +47,13 @@ const recordingSink = (): TrashOpsSink & {
 };
 
 describe("trashPaths", () => {
+  test("refuses archive members (URIs inside a file, not fs paths)", async () => {
+    const sink = recordingSink();
+    await makeTrashOps(sink).trashPaths([archiveUri("/x/a.zip", "inner/f.txt")]);
+    expect(sink.notes).toContain("notify:trash:error:Archive contents are read-only");
+    expect(sink.batches).toHaveLength(0);
+  });
+
   test("moves into XDG trash, writes trashinfo, pushes paired undo batch", async () => {
     const root = sandbox();
     try {
@@ -67,7 +75,7 @@ describe("trashPaths", () => {
       expect(sink.batches[0]!.label).toBe("trash 1 item");
       expect(sink.batches[0]!.units).toBe(1);
       expect(sink.batches[0]!.redos).toBe(1);
-      expect(sink.notes.some((n) => n === "notify:trash:success:Trashed 1 item · ctrl+z to undo")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:trash:success:Trashed 1 item")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -145,7 +153,7 @@ describe("trashOrigPath", () => {
       expect(existsSync(path.join(topRoot, "info", "usb.txt.trashinfo"))).toBe(false);
       await settleUntil(() => sink.batches.length === 1);
       expect(sink.batches[0]!.label).toBe("restore 1 item");
-      expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item · ctrl+z to undo")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -182,7 +190,7 @@ describe("restoreFromTrash", () => {
       await settleUntil(() => existsSync(path.join(origDir, "gone.txt")));
       expect(existsSync(path.join(origDir, "gone.txt"))).toBe(true);
       expect(existsSync(path.join(trashDir(), "info", "gone.txt.trashinfo"))).toBe(false);
-      expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item · ctrl+z to undo")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item")).toBe(true);
       // restore is reversible: undo batch re-trashes the restored item
       expect(sink.batches.length).toBe(1);
       expect(sink.batches[0]!.label).toBe("restore 1 item");
@@ -254,8 +262,8 @@ describe("deleteForever / emptyTrash", () => {
     try {
       const sink = recordingSink();
       makeTrashOps(sink).emptyTrash();
-      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:empty failed:error:Could not read trash")));
-      expect(sink.notes.some((n) => n.startsWith("notify:empty failed:error:Could not read trash"))).toBe(true);
+      await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:empty failed:error:Couldn't read trash")));
+      expect(sink.notes.some((n) => n.startsWith("notify:empty failed:error:Couldn't read trash"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -483,7 +491,7 @@ describe("trash pre-op veto", () => {
       makeTrashOps(sink).trashPaths([file]);
       await settleUntil(() => sink.notes.length > 0);
       expect(existsSync(file)).toBe(true);
-      expect(sink.notes.some((n) => n === "notify:blocked:info:Blocked by plugin: nope")).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:blocked:info:Blocked by plugin · nope")).toBe(true);
       expect(sink.notes.some((n) => n.startsWith("notify:blocked:"))).toBe(true);
       expect(sink.batches.length).toBe(0);
     } finally {
@@ -503,7 +511,7 @@ describe("trashPaths network guard", () => {
       const ops = makeTrashOps(sink);
       await ops.trashPaths(["/run/user/4242/gvfs/sftp:host=x,user=y/doomed.txt"]);
       expect(sink.batches.length).toBe(0);
-      expect(sink.notes.some((n) => n.includes("Trash isn't available on network locations"))).toBe(true);
+      expect(sink.notes.some((n) => n.includes("Can't trash on network"))).toBe(true);
     } finally {
       if (oldRuntime === undefined) delete process.env.XDG_RUNTIME_DIR;
       else process.env.XDG_RUNTIME_DIR = oldRuntime;

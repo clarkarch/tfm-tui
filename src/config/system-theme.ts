@@ -234,10 +234,9 @@ export const deriveSystemTheme = (input: TerminalPaletteInput, mode: TerminalThe
   // selection is neutral terminal paint, not an identity voice, and taking
   // it verbatim drained selection + title to grey while a palette hue
   // existed. Saturated selections (tokyo's own #283457) still ride verbatim.
-  // NOTE: only primary text is required here — muted body copy was moved off
-  // the island to white (toastLevelMeta), because one fill cannot serve both
-  // bright and dim text (proved: the dual requirement drove accentBg darker
-  // than bg itself).
+  // NOTE: only primary text is required here — the toast description line is
+  // muted (toastLevelMeta), a secondary role that reads as grey on the
+  // accentBg island while the title stays at full contrast.
   const hlBg = valid(input.highlightBackground ?? null);
   const hlBgHue = hlBg !== null && channelSpread(hlBg) >= 24 ? hlBg : null;
   // hueless terminals (no palette blues, no cursor, all-grey pool) carry no

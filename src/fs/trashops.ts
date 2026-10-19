@@ -20,6 +20,7 @@ import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
 import { isNetworkPath } from "./network";
+import { isArchiveUri } from "./uri";
 import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
 
 // --- Trash operations: trash / restore / delete-forever / empty. The fs
@@ -135,7 +136,12 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
     // .trashinfo pointing at a FUSE path that dies on unmount (unrestorable,
     // remote file gone) — refuse instead of pretending it worked
     if (paths.some(isNetworkPath)) {
-      sink.notify("Trash isn't available on network locations", "trash", "error");
+      sink.notify("Can't trash on network", "trash", "error");
+      return Promise.resolve();
+    }
+    // archive members are URIs inside a file, not fs paths — nothing to trash
+    if (paths.some(isArchiveUri)) {
+      sink.notify("Archive contents are read-only", "trash", "error");
       return Promise.resolve();
     }
     if (vetoedByPlugin("trash", paths)) return Promise.resolve();
@@ -178,14 +184,12 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       sink.renderAll();
       const failed = paths.length - ok;
       // full success omits the total (it equals ok); partial failures read
-      // "ok of N". The undo hint shows whenever anything landed (ok > 0),
-      // not just on clean sweeps.
+      // "ok of N"
       const summary = failed
         ? `Trashed ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
         : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
-      const hinted = ok > 0 ? `${summary} · ctrl+z to undo` : summary;
-      if (failed > 0) sink.notify(hinted, "trash failed", "error");
-      else sink.notify(hinted, "trash", "success");
+      if (failed > 0) sink.notify(summary, "trash failed", "error");
+      else sink.notify(summary, "trash", "success");
       emit("trash", paths);
     });
     // fire-and-forget safe: outcomes are reported via sink, never thrown —
@@ -258,8 +262,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const base = failed
         ? `Restored ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
         : `Restored ${ok} item${ok === 1 ? "" : "s"}`;
-      const summary = !failed || ok > 0 ? `${base} · ctrl+z to undo` : base;
-      sink.notify(summary, failed ? "restore failed" : "restore", failed ? "error" : "success");
+      sink.notify(base, failed ? "restore failed" : "restore", failed ? "error" : "success");
       emit("restore", paths);
     });
     return run.catch(() => {});
@@ -381,7 +384,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       } catch (err) {
         const reason = fsErrText(err);
         sink.renderAll();
-        sink.notify(`Could not read trash (${reason})`, "empty failed", "error");
+        sink.notify(`Couldn't read trash · ${reason}`, "empty failed", "error");
         emit("empty", []);
         return;
       }

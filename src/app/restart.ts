@@ -1,8 +1,7 @@
 import { accessSync, constants } from "node:fs";
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
-import { runTeardownSteps, type QuitCtx } from "./quit";
+import { runTeardownSteps, exitAfterClosed, type QuitCtx } from "./quit";
 
 // --- Restart: relaunch the same binary with the same args, then WAIT for the
 // child (spawnSync, same process group, inherited stdio) before tearing down.
@@ -18,12 +17,17 @@ import { runTeardownSteps, type QuitCtx } from "./quit";
 // own teardown LIFO), so a failed spawn recovers with a plain re-render.
 // The session IS flushed first so a restore-session child picks up live tabs.
 // Leaf: process identity + spawn arrive via params so tests inject fakes; the
-// only I/O defaults are node:child_process / node:fs. ---
+// only I/O defaults are Bun.spawnSync / node:fs. ---
+
+export type RestartSpawnOpts = {
+  stdio?: "inherit" | "ignore" | "pipe";
+  env?: Record<string, string | undefined>;
+};
 
 export type RestartSpawn = (
   cmd: string,
   args: string[],
-  opts: SpawnSyncOptions,
+  opts: RestartSpawnOpts,
 ) => { status: number | null; error?: unknown };
 
 export type RestartCheck = (path: string) => void;
@@ -75,7 +79,18 @@ export type RestartCtx = QuitCtx & {
   notify?(msg: string, title?: string, level?: NotifyLevel): void;
 };
 
-const defaultSpawn: RestartSpawn = (cmd, args, opts) => spawnSync(cmd, args, opts);
+const defaultSpawn: RestartSpawn = (cmd, args, opts) => {
+  // Bun.spawnSync THROWS on a missing binary (node's returned
+  // { status: null, error }) — map it back to the seam shape so a binary
+  // vanishing between preflight and spawn reuses the failure path
+  try {
+    return {
+      status: Bun.spawnSync([cmd, ...args], { stdio: ["inherit", "inherit", "inherit"], env: opts.env }).exitCode,
+    };
+  } catch (err) {
+    return { status: null, error: err };
+  }
+};
 
 const defaultPreflight: RestartCheck = (p) => accessSync(p, constants.X_OK);
 
@@ -97,7 +112,7 @@ export const makeRestart =
     // spawnSync, and the child's orphan sweep could delete the paused op's
     // staging temp mid-copy (the op would die silently once resumed)
     if ((ctx.isBusy ?? (() => false))()) {
-      ctx.notify?.("Can't restart during file operations — cancel (✕) or wait for it to finish", "restart", "error");
+      ctx.notify?.("Can't restart · file op running", "restart", "error");
       return;
     }
     const preFailed = runTeardownSteps(ctx);
@@ -122,12 +137,14 @@ export const makeRestart =
       return;
     }
     let failed = preFailed;
+    let destroyThrew = false;
     try {
       ctx.destroy();
     } catch {
       failed = true;
+      destroyThrew = true;
     }
     // teardown failure wins over the child status (deliberate, matches quit's
     // honest-code rule: a broken shutdown must never exit 0)
-    ctx.exit(failed ? 1 : (status ?? 1));
+    exitAfterClosed(ctx, failed ? 1 : (status ?? 1), destroyThrew);
   };

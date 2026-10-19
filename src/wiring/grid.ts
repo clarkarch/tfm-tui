@@ -18,6 +18,7 @@ import { makePreview } from "../ui/ui-preview";
 import { finishDragState, gridDrag, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
+import { makeSmoothGlide, makeWheelSmoother } from "../ui/ui-smooth-scroll";
 import { makeProps } from "../ui/ui-props";
 import { makeMenuEntries } from "../ui/menu-entries";
 import { FILE_GLYPH, glyph } from "../ui/glyphs";
@@ -199,6 +200,7 @@ export const wireGrid = (deps: {
       focusPane: () => focusPane(pane),
       blurTerminal: () => fileops.terminal.blurTerminal(),
       hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
+      modalOpen: () => core.floats.hasModal(),
       setPointer,
       log: (msg: string) => dlog(msg),
     };
@@ -247,12 +249,11 @@ export const wireGrid = (deps: {
         // anims stay enabled in tty mode (rasters/thumbs/list-force aside)
         style: fileAnimStyleFrom({
           enabled: core.config.ui.fileAnimation,
-          slide: core.config.ui.fileAnimationSlide,
-          stagger: core.config.ui.fileAnimationStagger,
+          style: core.config.ui.fileAnimationStyle,
         }),
         ms: core.config.ui.fileAnimationMs,
         staggerPct: core.config.ui.fileAnimationStaggerPct,
-        slidePct: core.config.ui.fileAnimationSlidePct,
+        slideCells: core.config.ui.fileAnimationSlideCells,
         dir: core.config.ui.fileAnimationSlideDir as SlideDir,
         ease: core.config.ui.fileAnimationEase as EaseKey,
         containerFade: core.config.ui.fileAnimationContainerFade,
@@ -261,10 +262,58 @@ export const wireGrid = (deps: {
       }),
     });
   const fileAnims = [makeFileAnimator(), makeFileAnimator()] as const;
+  // one scroll glide per pane (each owns its reused timeline so a scroll in
+  // one pane can't clobber the other's); reads [ui] smooth-scroll-* live.
+  // TTY mode never glides (the grid gate skips it — the slow VT flashes).
+  const smoothGlides = [
+    makeSmoothGlide({ renderer: chrome.renderer }),
+    makeSmoothGlide({ renderer: chrome.renderer }),
+  ] as const;
+  // one wheel stepper per pane (each owns its single pending timer so a
+  // scroll in one pane can't clobber the other's); steps write through the
+  // hooked setter, so slides/reveals/drains behave exactly like instant
+  // scrolling, just spread over time
+  const makeWheelSmootherFor = (pane: 0 | 1) =>
+    makeWheelSmoother({
+      scrollTop: () => core.scrollerRefs[pane].current?.scrollTop ?? 0,
+      scrollBy: (d) => {
+        const s = core.scrollerRefs[pane].current;
+        if (!s) return;
+        s.scrollTop = Math.max(0, Math.round(s.scrollTop + d));
+      },
+    });
+  const wheelSmoothers = [makeWheelSmootherFor(0), makeWheelSmootherFor(1)] as const;
+  // [ui] smooth-scrolling wheel entry for wiring/io's content-level
+  // interception — true = consumed (the caller stopPropagation()s the native
+  // instant jump). Gated like the container glide: off/TTY stays native, and
+  // a 0 glide time means native instant jumps for the wheel too.
+  const pushWheel = (pane: 0 | 1, dir: 1 | -1, cells: number): boolean => {
+    if (!core.config.ui.smoothScrolling || core.isTtyMode()) return false;
+    if (!Number.isFinite(cells) || cells <= 0) return false;
+    const budget = core.config.ui.smoothScrollMs;
+    if (!Number.isFinite(budget) || budget <= 0) return false;
+    try {
+      wheelSmoothers[pane].push(dir * cells, budget);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   // one hover animator per pane (whole-cell icon lift, synchronous) — reads
   // [ui] file-hover-* live, lifts each pane's own reserved tiles
+  // shared tile-hover config read (the hover animator and the grid renderer
+  // both consume it — one live getter, so the two can't drift)
+  const hoverLiftOpts = () => ({
+    enabled: core.config.ui.fileHoverAnimation,
+    ms: core.config.ui.fileHoverMs,
+    slideCells: core.config.ui.fileHoverSlideCells,
+    direction: core.config.ui.fileHoverSlideDir,
+    ease: core.config.ui.fileHoverEase,
+    includeLabel: core.config.ui.fileHoverIncludeLabel,
+  });
   const makeHoverAnimator = (pane: 0 | 1) =>
     makeTileHoverAnim({
+      renderer: () => chrome.renderer,
       byId,
       tileRefs: () => selections[pane].tileRefs,
       colors: themeGet,
@@ -272,13 +321,14 @@ export const wireGrid = (deps: {
       transparentForce: () => core.config.ui.transparentBg === "force",
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
-      hoverLiftOpts: () => ({
-        enabled: core.config.ui.fileHoverAnimation,
-        direction: core.config.ui.fileHoverDirection,
-        includeLabel: core.config.ui.fileHoverIncludeLabel,
-      }),
+      hoverLiftOpts,
     });
   const hoverAnims = [makeHoverAnimator(0), makeHoverAnimator(1)] as const;
+  // drop any lifted tile when a modal takes the screen — the overlay can
+  // otherwise leave it hovered behind the dim
+  core.registerModalOpen(() => {
+    for (const a of hoverAnims) a.releaseCurrent();
+  });
   const makeRenderer = (pane: 0 | 1) =>
     makeGridRenderer({
       termW: () => chrome.renderer.terminalWidth,
@@ -295,11 +345,7 @@ export const wireGrid = (deps: {
       tileW: () => core.geometry.tileW,
       tileH: () => core.geometry.tileH,
       iconCells: () => core.geometry.iconCells,
-      hoverLiftOpts: () => ({
-        enabled: core.config.ui.fileHoverAnimation,
-        direction: core.config.ui.fileHoverDirection,
-        includeLabel: core.config.ui.fileHoverIncludeLabel,
-      }),
+      hoverLiftOpts,
       listRowH: () => core.config.ui.listRowHeight,
       uiStyle,
       colors: themeGet,
@@ -336,6 +382,18 @@ export const wireGrid = (deps: {
       fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
       fileAnimScrollRevealDelayMs: () => core.config.ui.fileAnimationScrollRevealDelayMs,
       windowedGrid: () => core.config.ui.windowedGrid,
+      smoothScroll: () => core.config.ui.smoothScrolling,
+      smoothScrollMs: () => core.config.ui.smoothScrollMs,
+      smoothGlide: (inner, deltaCells) => {
+        try {
+          smoothGlides[pane].glide(inner, deltaCells, core.config.ui.smoothScrollMs);
+        } catch {}
+      },
+      smoothStop: () => {
+        try {
+          smoothGlides[pane].stop();
+        } catch {}
+      },
       isRenaming: rename.isRenaming,
       listingsCache: () => core.config.ui.listingsCache,
       listingsCacheStats: () => core.config.ui.listingsCacheStats,
@@ -420,7 +478,7 @@ export const wireGrid = (deps: {
       spawnSafe(p, [], { stdio: "ignore", detached: true, cwd: path.dirname(p) }, (err) => {
         dlog(`run ${p}: ${err.message}`);
         chrome.notify(`Can't run ${path.basename(p)} · ${err.message}`, "run", "error");
-      }).unref?.();
+      })?.unref();
     } catch (err) {
       chrome.notify(`Can't run ${path.basename(p)} · ${errMessage(err)}`, "run", "error");
       return;
@@ -433,7 +491,7 @@ export const wireGrid = (deps: {
       await chmod(p, addExecBits(statSync(p).mode));
       return true;
     } catch (err) {
-      chrome.notify(`Chmod failed (${errMessage(err)})`, "run", "error");
+      chrome.notify(`Chmod failed · ${errMessage(err)}`, "run", "error");
       return false;
     }
   };
@@ -483,42 +541,64 @@ export const wireGrid = (deps: {
     });
   };
 
+  // --- "Open With…": enumerate handlers for the file's mime, then let the
+  // generic pick overlay choose (same pick instance the compress picker uses).
+  // Unreadable files escalate: the chosen app launches elevated after the
+  // password prompt, same honest-toast contract as the adaptive open. Named
+  // consts (not inline ctx closures) so the palette actions reuse them.
+  const openWith = (p: string): void => {
+    void appsForFile(p).then((apps) => {
+      if (!apps.length) {
+        chrome.notify("No applications found", "open", "error");
+        return;
+      }
+      getPick().open({
+        title: "Open with…",
+        placeholder: "Filter applications…",
+        items: apps.map((a) => ({
+          label: a.name,
+          hint: a.id.replace(/\.desktop$/, ""),
+          run: () => {
+            // ENOENT (deleted between listing and pick, dangling symlink)
+            // launches unprivileged and errors honestly — no sudo prompt
+            // for something that isn't there
+            if (!canReadSync(p) && existsSync(p)) {
+              void chrome.launchAppAsRoot(a.file, a.name, p);
+              return;
+            }
+            launchApp(a.file, p, (err) => dlog(`gio launch failed: ${err.message}`));
+            chrome.notify(`Opening ${path.basename(p)} · ${a.name}`, "open");
+          },
+        })),
+      });
+    });
+  };
+
+  const extractArchive = (files: string[], dest: string): void => {
+    void fileops.fileops.extractArchive(files, dest);
+  };
+
+  const compressTo = (paths: string[]): void => {
+    const cwd = state.cwd;
+    getPick().open({
+      title: "Compress to…",
+      placeholder: "Filter formats…",
+      items: availableCompressionFormats().map((fmt) => ({
+        label: compressionExt(fmt),
+        hint: compressionHint(fmt),
+        run: () => {
+          void fileops.fileops.compressPaths(paths, fmt, cwd);
+        },
+      })),
+    });
+  };
+
   const menuEntries = makeMenuEntries({
     closeFileMenu: chrome.menu.closeFileMenu,
     navigate: nav.navigate,
     newTab: nav.newTab,
     openInOtherPane,
-    // "Open With…": enumerate handlers for the file's mime, then let the
-    // generic pick overlay choose (same pick instance the compress picker uses).
-    // Unreadable files escalate: the chosen app launches elevated after the
-    // password prompt, same honest-toast contract as the adaptive open.
-    openWith: (p) => {
-      void appsForFile(p).then((apps) => {
-        if (!apps.length) {
-          chrome.notify("No applications found", "open", "error");
-          return;
-        }
-        getPick().open({
-          title: "Open with…",
-          placeholder: "Filter applications…",
-          items: apps.map((a) => ({
-            label: a.name,
-            hint: a.id.replace(/\.desktop$/, ""),
-            run: () => {
-              // ENOENT (deleted between listing and pick, dangling symlink)
-              // launches unprivileged and errors honestly — no sudo prompt
-              // for something that isn't there
-              if (!canReadSync(p) && existsSync(p)) {
-                void chrome.launchAppAsRoot(a.file, a.name, p);
-                return;
-              }
-              launchApp(a.file, p, (err) => dlog(`gio launch failed: ${err.message}`));
-              chrome.notify(`Opening ${path.basename(p)} · ${a.name}`, "open");
-            },
-          })),
-        });
-      });
-    },
+    openWith,
     renderAll: nav.renderAll,
     renderGrid,
     openTerminalHere: fileops.terminal.openTerminalHere,
@@ -548,24 +628,9 @@ export const wireGrid = (deps: {
     selectAll: selection.selectAll,
     cwd: () => state.cwd,
     canExtract: canExtract,
-    extractArchive: (files, dest) => {
-      void fileops.fileops.extractArchive(files, dest);
-    },
+    extractArchive,
     compressionFormats: () => availableCompressionFormats(),
-    compressTo: (paths) => {
-      const cwd = state.cwd;
-      getPick().open({
-        title: "Compress to…",
-        placeholder: "Filter formats…",
-        items: availableCompressionFormats().map((fmt) => ({
-          label: compressionExt(fmt),
-          hint: compressionHint(fmt),
-          run: () => {
-            void fileops.fileops.compressPaths(paths, fmt, cwd);
-          },
-        })),
-      });
-    },
+    compressTo,
     sortState: state,
     plugins: () => plugins.plugins.filter(isPluginEnabled),
     onPluginError: (name, err) => {
@@ -581,6 +646,7 @@ export const wireGrid = (deps: {
     renderPreview,
     renderGrid,
     syncWindowPane,
+    pushWheel,
     renderPane,
     focusPane,
     dropIntoPane,
@@ -588,6 +654,10 @@ export const wireGrid = (deps: {
     bandCtx,
     props,
     menuEntries,
+    openWith,
+    extractArchive,
+    compressTo,
+    openInOtherPane,
     runExecutable,
     runExecutableInTerminal,
     askExecutable,

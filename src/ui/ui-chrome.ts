@@ -3,13 +3,14 @@ import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
 import { destroyChildren } from "../lib/uiutil";
 import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
-import { buildSections, loadSystemPlaces, type Place, type SidebarVisibility } from "../fs/places";
+import { buildSections, loadSystemPlaces, type EjectSpec, type Place, type SidebarVisibility } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { tabTitle, type Tab } from "../app/tabs";
 import { gridDrag, type ClipItem } from "../input/grid-input";
 import { hoverEvents, selectIconState, toggleIconState } from "./ui-slots";
 import type { Theme } from "../config/config";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { ListEntry } from "./ui-menu";
 
 // --- Places sidebar rows + tab strip + divider — rebuilt from scratch each
@@ -38,8 +39,21 @@ export const tabChipMaxWidth = (availW: number, nTabs: number): number => {
   return Math.max(TAB_CHIP_MIN_W, Math.min(TAB_CHIP_MAX_W, per));
 };
 
+// Sidebar row highlight source: the mouse hover, or the keyboard cursor when
+// the sidebar holds kb focus. A modal owns the screen — NO row may show a
+// highlight under the dim, or the kb-focused row (which mousePlaceIdx can't
+// clear) stayed lit after a menu opened.
+export const placeRowHover = (
+  o: { selected: boolean; modalOpen: boolean; kbActive: boolean; kbIdx: number; mousePlaceIdx: number },
+  i: number,
+): boolean => !o.selected && !o.modalOpen && (o.kbActive ? i === o.kbIdx : i === o.mousePlaceIdx);
+
 type ChromeCtx = {
   byId(id: string): MaybeNode;
+  // sidebar mount point (prod: the "tfm-places" box; tests mount an isolated
+  // host so two chrome instances never fight over one box). Optional so old
+  // fakes keep working — absent = byId("tfm-places").
+  hostBox?(): MaybeNode;
   uiStyle(): UiStyle;
   colors(): Theme;
   sw(): number; // live sidebar-width geometry let — applyConfig rewrites it; NEVER capture
@@ -74,8 +88,19 @@ type ChromeCtx = {
   trashPaths(paths: string[]): Promise<void>;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
   // per-row hover nudge (icon lift, see ui-sidebar-hover) — built in the
-  // chrome wiring; paint stays owned by normalizePlaces below
+  // chrome wiring; paint stays owned by normalizePlaces below. forgetStale
+  // drops hover ownership of pre-rebuild nodes (same rebuild path as above).
+  // Boolean seam: true = a real drop (dead nodes forgotten), false = nothing
+  // owned — lets tests tell a live-hover rebuild from a redundant call.
   hoverRow(key: string, hovered: boolean): void;
+  // true while a modal owns the screen — no row hover paint behind the dim
+  modalOpen?(): boolean;
+  forgetStaleHover?(): boolean;
+  // replay the cold-boot sidebar intro (built in the chrome wiring): the lazy
+  // mounts refresh rebuilds the sidebar right after the first render and its
+  // fresh nodes never saw the intro's frame-0 staging. Optional so old fakes
+  // keep working — absent = no replay.
+  replaySidebarIntro?(): void;
   // network: with no arg opens the "Connect to Server…" prompt; with a URI
   // connects straight to a saved connection
   connectServer(raw?: string): void;
@@ -100,6 +125,16 @@ type ChromeCtx = {
   ): IconSlotHandle;
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   stateCwd(): string; // live state.cwd
+  // user feedback for mount/eject (wiring's notify). Optional so old fakes
+  // keep working — absent = today's silent behavior.
+  notify?(msg: string, title?: string, level?: NotifyLevel): void;
+  // home dir: eject navigates here before unmounting a cwd sitting on the
+  // device (same leave-first rule as the network disconnect). Optional so
+  // old fakes keep working — absent = no leave.
+  home?(): string;
+  // udisksctl spawn seam (default: spawnSafe, same argv/timeout). Optional so
+  // old fakes keep working; tests inject a fake child instead of a real USB.
+  spawnUdisks?(args: string[]): { on(ev: "close" | "error", cb: (...a: unknown[]) => void): unknown };
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
@@ -148,16 +183,132 @@ export const makeChrome = (ctx: ChromeCtx) => {
     }, ms);
   };
 
-  const mountDevice = (device: string) => {
-    const child = spawnSafe("udisksctl", ["mount", "-b", device], { stdio: "ignore", timeoutMs: 10_000 }, (err) =>
-      ctx.dlog(`mount ${device}: ${err.message}`),
-    );
-    // a failing mount (bad device, policy) used to be silent — the reload
-    // below fires either way, so log the exit for the --debug trail
-    child.on("close", (code) => {
-      if (code !== 0) ctx.dlog(`mount ${device} exit ${code}`);
+  const spawnUdisks =
+    ctx.spawnUdisks ??
+    ((args: string[]): { on(ev: "close" | "error", cb: (...a: unknown[]) => void): unknown } => {
+      // default over Bun-backed spawnSafe: adapt Subprocess (exited promise,
+      // no .on) to the seam's close/error surface. null = spawn failed (the
+      // noop onFail already ran) — synthesize error + close so spawnWait
+      // resolves "can't eject" instead of hanging forever.
+      const proc = spawnSafe("udisksctl", args, { stdio: "ignore", timeoutMs: 10_000 }, () => {});
+      return {
+        on: (ev: "close" | "error", cb: (...a: never[]) => void): unknown => {
+          if (ev === "close") {
+            if (!proc) queueMicrotask(() => (cb as (c: number) => void)(-1));
+            else
+              void proc.exited.then(
+                (c) => (cb as (c: number | null) => void)(c),
+                () => (cb as (c: number) => void)(-1),
+              );
+          } else if (!proc) {
+            queueMicrotask(() => (cb as (e: Error) => void)(new Error("udisksctl spawn failed")));
+          }
+          return undefined;
+        },
+      };
     });
-    scheduleDeviceReload(1200);
+
+  // leave a mountpoint before operating on its device — unmounting under a
+  // live cwd strands the grid/watcher on a dead path (same leave-first rule
+  // as the network disconnect in wiring/chrome)
+  const leaveMount = (target: string | null): void => {
+    const home = ctx.home?.();
+    if (!target || !home) return;
+    const cwd = ctx.stateCwd();
+    if (cwd === target || cwd.startsWith(target + path.sep)) ctx.navigate(home);
+  };
+
+  // mount runner: refuse a missing device with a toast (used to spawn
+  // `udisksctl mount -b undefined`). False = nothing spawned, so the caller
+  // skips the device reload (a no-op must not re-list either).
+  const runMount = (device: string | undefined, label: string): boolean => {
+    if (!device) {
+      ctx.dlog("mount with no device");
+      ctx.notify?.(`Can't mount ${label}: no device`, "mount", "error");
+      return false;
+    }
+    void spawnWait(["mount", "-b", device]).then((res) => {
+      if (!res.ok) ctx.dlog(`mount ${device} ${res.detail}`);
+      ctx.notify?.(
+        res.ok ? `Mounted ${label}` : `Can't mount ${label} (${res.detail})`,
+        "mount",
+        res.ok ? "success" : "error",
+      );
+    });
+    return true;
+  };
+
+  // promise form of the udisks spawn: resolves once, on close OR error
+  // (node fires both on ENOENT — the settled flag keeps one failure to one
+  // result instead of two toasts)
+  const spawnWait = (args: string[]): Promise<{ ok: true } | { ok: false; detail: string }> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const child = spawnUdisks(args);
+      child.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        resolve({ ok: false, detail: err instanceof Error ? err.message : String(err) });
+      });
+      child.on("close", (code: unknown) => {
+        if (settled) return;
+        settled = true;
+        // a signal kill (SIGKILL on timeout) carries no exit code — say so
+        // instead of toasting the raw null
+        resolve(
+          code === 0 ? { ok: true } : { ok: false, detail: typeof code === "number" ? `exit ${code}` : "killed" },
+        );
+      });
+    });
+
+  const mountDevice = (device: string | undefined, label?: string) => {
+    if (runMount(device, label ?? device ?? "device")) scheduleDeviceReload(1200);
+  };
+
+  // Nautilus-style safely-remove: leave every target, unmount each mounted
+  // partition of the disk in turn, then power the disk off so it spins down.
+  // First failure aborts the chain (a power-off over a mounted part fails
+  // anyway); without disk+parts this is a single unmount (non-USB rows).
+  const ejectDrive = async (spec: EjectSpec): Promise<void> => {
+    const parts =
+      spec.parts && spec.parts.length > 0
+        ? spec.parts
+        : spec.device
+          ? [{ device: spec.device, target: spec.target ?? "" }]
+          : [];
+    if (parts.length === 0) {
+      ctx.dlog("eject with no device");
+      ctx.notify?.(`Can't eject ${spec.label}: no device`, "eject", "error");
+      return;
+    }
+    for (const p of parts) leaveMount(p.target || null);
+    for (const p of parts) {
+      const res = await spawnWait(["unmount", "-b", p.device]);
+      if (!res.ok) {
+        ctx.dlog(`unmount ${p.device} ${res.detail}`);
+        ctx.notify?.(`Can't eject ${spec.label} · ${p.device} (${res.detail})`, "eject", "error");
+        scheduleDeviceReload(1500);
+        return;
+      }
+    }
+    if (spec.disk && spec.parts && spec.parts.length > 0) {
+      const res = await spawnWait(["power-off", "-b", spec.disk]);
+      if (!res.ok) {
+        // unmounted = flushed, so the data is safe — but the drive never
+        // spun down, so never claim it is safe to unplug
+        ctx.dlog(`power-off ${spec.disk} ${res.detail}`);
+        ctx.notify?.(`Unmounted ${spec.label} · power-off failed (${res.detail}), data is safe`, "eject", "error");
+        scheduleDeviceReload(1500);
+        return;
+      }
+    }
+    ctx.notify?.(`Safe to unplug ${spec.label}`, "eject", "success");
+    scheduleDeviceReload(1500);
+  };
+
+  // icon/menu entry point: one spec object built from the row's Place
+  const ejectDevice = (spec: EjectSpec) => {
+    void ejectDrive(spec);
   };
 
   const makeRow = (place: Place): ReturnType<typeof Box> => {
@@ -182,7 +333,15 @@ export const makeChrome = (ctx: ChromeCtx) => {
     let ejectSlot: ReturnType<typeof ctx.makeIconSlot> | undefined;
     const device = place.device;
     if (place.ejectable && device) {
-      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), () => ejectDevice(device));
+      ejectSlot = ctx.makeIconSlot("eject", iconStates, 1, selectIconState(selected, false), (ev: MouseEvent) => {
+        // the slot is a row child: without this the click bubbles to the row
+        // below and navigates into the device being ejected (same guard as
+        // the tab-strip ✕)
+        try {
+          ev.stopPropagation?.();
+        } catch {}
+        ejectPlace(place);
+      });
     }
     const rowNode = Box(
       {
@@ -208,7 +367,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
           const target = placeTarget();
           if (target) ctx.navigate(target);
           else if (place.networkUri) ctx.connectServer(place.networkUri);
-          else if (place.mountDevice) mountDevice(place.mountDevice);
+          else if (place.mountDevice) mountDevice(place.mountDevice, place.label);
         },
         onMouseDrop: () => {
           const keys = gridDrag.keys;
@@ -236,6 +395,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         // paint truth (it recomputes every row), and the shared wiring keeps a
         // per-pixel move from re-running it — that would be O(rows) per cell
         ...hoverEvents((on) => {
+          if (on && ctx.modalOpen?.()) return;
           ctx.hoverRow(`tfm-place-${idx}`, on);
           if (on) mousePlaceIdx = idx;
           else if (mousePlaceIdx === idx) mousePlaceIdx = -1;
@@ -265,18 +425,18 @@ export const makeChrome = (ctx: ChromeCtx) => {
     return rowNode;
   };
 
-  const ejectDevice = (device: string) => {
-    const child = spawnSafe("udisksctl", ["unmount", "-b", device], { stdio: "ignore", timeoutMs: 10_000 }, (err) =>
-      ctx.dlog(`eject ${device}: ${err.message}`),
-    );
-    child.on("close", (code) => {
-      if (code !== 0) ctx.dlog(`eject ${device} exit ${code}`);
+  const ejectPlace = (place: Place): void => {
+    ejectDevice({
+      device: place.device,
+      label: place.label,
+      target: place.path,
+      disk: place.disk,
+      parts: place.diskParts,
     });
-    scheduleDeviceReload(1500);
   };
 
   const renderSidebar = () => {
-    const hostBox = ctx.byId("tfm-places");
+    const hostBox = ctx.hostBox?.() ?? ctx.byId("tfm-places");
     if (!hostBox) return;
     const groups = buildSections(ctx.sidebarSections?.() ?? {});
     const titles = ctx.sectionTitles?.() === true;
@@ -298,6 +458,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
           p.networkUri ?? "",
           p.action ?? "",
           p.mountDevice ?? "",
+          // disk identity + partition set: without these a re-plugged disk
+          // (same mountpoint, new disk) skips the rebuild and ejects stale
+          p.disk ?? "",
+          (p.diskParts ?? []).map((d) => `${d.device}=${d.target}`).join(","),
         ]),
       ),
     ]);
@@ -317,6 +481,20 @@ export const makeChrome = (ctx: ChromeCtx) => {
       for (const place of group.places) hostBox.add(makeRow(place));
       if (!titles && gi < groups.length - 1) hostBox.add(makeDivider());
     });
+    // a sidebar rebuild destroys every row node a running intro staged (row
+    // ids are index-keyed, so mounts shift everything below Devices): replay
+    // it so the fresh nodes cascade instead of arriving already settled.
+    // First-render paranoia: renderSidebar runs during renderAll BEFORE the
+    // boot intro ever played — replaySidebarIntro is a no-op until the intro
+    // played once (tracked in the chrome wiring), so the boot wave isn't
+    // doubled and navigate-time rebuilds stay silent. Hover ownership of the
+    // dead nodes is forgotten first, or the fresh rows' lifts never release.
+    try {
+      ctx.forgetStaleHover?.();
+    } catch {}
+    try {
+      ctx.replaySidebarIntro?.();
+    } catch {}
     if (ctx.kbActive() && ctx.kbIdx() >= 0) {
       normalizePlaces();
     }
@@ -387,14 +565,65 @@ export const makeChrome = (ctx: ChromeCtx) => {
         const n = ctx.byId(closeWrapId);
         if (n) applySurface(n, btnSurface(ctx.uiStyle(), colors, on, closeRestBg));
       };
+      // The ✕ is an affordance, not furniture: it stays hidden until the chip is
+      // hovered. Hide the SLOT ELEMENT (its paint AND its hit cells — display:none),
+      // never the wrapper: a click on the invisible cells then belongs to the chip
+      // and switches to that tab instead of closing it. The wrapper keeps the
+      // slot's own cell count as a fixed width, so revealing the ✕ cannot shrink
+      // the chip and shift every chip after it (a strip sweeping back and forth
+      // under the mouse).
+      const closeW = Math.round(closeSlot.spec.heightCells * 2); // makeIconSlot's box width
+      const setCloseShown = (on: boolean): void => {
+        const el = ctx.byId(closeSlot.slotId);
+        if (!el) return;
+        try {
+          el.visible = on;
+        } catch {}
+      };
       const closeWrap = Box(
         {
           id: closeWrapId,
+          width: closeW,
           ...btnSurface(ctx.uiStyle(), colors, false, closeRestBg),
           ...hoverEvents(paintClose, ctx.setPointer),
         },
         closeSlot.el,
       );
+      // Chip hover paint + the ✕ reveal. The reveal needs the out edge
+      // UNGUARDED: hoverEvents only runs its paint(false) after a real move lit
+      // it, so a reveal from the synthetic "over" below would never be undone.
+      // Hiding on every out is safe because the very same event turn re-shows
+      // it whenever the pointer is still inside the chip (the out/over/move
+      // burst of one physical move, in dispatch order).
+      const chipHoverBase = hoverEvents((on) => {
+        const n = ctx.byId(tabId);
+        if (!n) return;
+        if (on && dragTabDir() !== null) {
+          applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected", tForce()));
+          setCloseShown(false); // a drop target cue is not a close affordance
+          return;
+        }
+        if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest", tForce()));
+        setCloseShown(on);
+        // a drag owns the pointer — same rule as the sidebar rows
+        if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
+      });
+      const chipHover = {
+        onMouseMove: chipHoverBase.onMouseMove,
+        onMouseOut: () => {
+          setCloseShown(false);
+          chipHoverBase.onMouseOut();
+        },
+        // a rebuild under a STATIONARY cursor re-fires a synthetic "over" on
+        // whatever is under the mouse (no move): without this the ✕ would hide
+        // after a click-switch and only return on the next wiggle. NOT while a
+        // drag is in flight — there the chip is a DROP target, and a drag's only
+        // signal is exactly this over (its move edge never fires), so the close
+        // affordance must not appear under a shrunken folder.
+        onMouseOver: () => {
+          if (!gridDrag.active) setCloseShown(true);
+        },
+      };
       bar.add(
         Box(
           {
@@ -429,22 +658,15 @@ export const makeChrome = (ctx: ChromeCtx) => {
             },
             // drop-target cue: light the chip like the selected tab while a
             // single-folder drag hovers it, else the usual hover fill
-            ...hoverEvents((on) => {
-              const n = ctx.byId(tabId);
-              if (!n) return;
-              if (on && dragTabDir() !== null) {
-                applySurface(n, tileSurface(ctx.uiStyle(), colors, "selected", tForce()));
-                return;
-              }
-              if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest", tForce()));
-              // a drag owns the pointer — same rule as the sidebar rows
-              if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
-            }),
+            ...chipHover,
           },
           Text({ content: tabTitle(t), fg: active ? colors.white : colors.sidebarFg }),
           closeWrap,
         ),
       );
+      // hidden until hovered — post-mount only (the composition helpers return
+      // lazy proxies; a pre-mount write there would be dropped)
+      setCloseShown(false);
     });
     bar.add(
       ctx.hoverBtn(pane, `${prefix}tab-new`, "plus", () => {
@@ -498,7 +720,16 @@ export const makeChrome = (ctx: ChromeCtx) => {
       // repaint every selection change funnels through. hoverRow(key,false) is a
       // safe no-op unless the animator actually owns this exact row.
       if (isSel) ctx.hoverRow(rec.rowId, false);
-      const isHover = !isSel && (ctx.kbActive() ? i === ctx.kbIdx() : i === mousePlaceIdx);
+      const isHover = placeRowHover(
+        {
+          selected: isSel,
+          modalOpen: !!ctx.modalOpen?.(),
+          kbActive: ctx.kbActive(),
+          kbIdx: ctx.kbIdx(),
+          mousePlaceIdx,
+        },
+        i,
+      );
       const row = ctx.byId(rec.rowId);
       const label = ctx.byId(rec.labelId);
       if (row)

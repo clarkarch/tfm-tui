@@ -16,7 +16,7 @@ export type UrlOpenerDeps = {
 export const makeUrlOpener = (deps: UrlOpenerDeps) => {
   const failToast = (url: string, err: unknown): void => {
     try {
-      deps.notify(`Couldn't open ${url} — is xdg-open installed?`, "open", "error");
+      deps.notify(`Couldn't open ${url} · xdg-open missing`, "open", "error");
     } catch {}
     deps.log?.(`open-url failed for ${url}: ${err instanceof Error ? err.message : String(err)}`);
   };
@@ -24,9 +24,8 @@ export const makeUrlOpener = (deps: UrlOpenerDeps) => {
   const openUrl = (url: string): void => {
     try {
       const child = (deps.spawn ?? spawnSafe)("xdg-open", [url], { stdio: "ignore" }, (err) => failToast(url, err));
-      try {
-        child.unref?.();
-      } catch {}
+      // null = spawn failed, already toasted through onFail — nothing to detach
+      child?.unref();
     } catch (err) {
       failToast(url, err);
     }

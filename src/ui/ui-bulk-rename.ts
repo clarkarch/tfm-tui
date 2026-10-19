@@ -13,6 +13,7 @@ import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
+import { stripControlChars } from "../lib/uiutil";
 import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type SlotElement } from "./ui-slots";
 
@@ -336,7 +337,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     setValue: (v: string): void => {
       try {
         const input = ctx.byId("tfm-bulkrename-input");
-        if (input) input.value = v;
+        if (input) input.value = stripControlChars(v);
       } catch {}
       value = v;
       renderPreview();

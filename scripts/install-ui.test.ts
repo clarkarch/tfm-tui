@@ -15,7 +15,17 @@
 //   5. install_binary tests the staged build BEFORE the swap, installs it under
 //      both command names, and leaves no tfm.bak behind.
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -357,6 +367,44 @@ printf 'bak=%s' "$BAK_REMOVED"`).out,
     expect(readFileSync(join(dest, "tfm"), "utf8")).toBe("OLD");
   });
 
+  // The video-thumbnail ffmpeg sidecar is no longer shipped (video thumbs use
+  // the system ffmpeg), so an upgrade from the sidecar era must not leave the
+  // ~80MB tfm-ffmpeg sitting next to the binary forever.
+  test("a stale ffmpeg sidecar is swept once the new binary is in place", () => {
+    const { dest, work, run } = sandbox();
+    writeFileSync(join(dest, "tfm"), "OLD");
+    writeFileSync(join(dest, "tfm-ffmpeg"), "SIDECAR");
+    writeFileSync(join(dest, "keep-me"), "unrelated");
+    stage(join(work, "new"), RUNS);
+
+    expect(
+      run(`FFMPEG_SWEPT=0
+install_binary "$WORK/new"
+printf 'swept=%s' "$FFMPEG_SWEPT"`).out,
+    ).toBe("swept=1");
+    expect(existsSync(join(dest, "tfm-ffmpeg"))).toBe(false);
+    // only the known sidecar name is removed
+    expect(existsSync(join(dest, "keep-me"))).toBe(true);
+  });
+
+  // Same rule as tfm.bak: a symlink by that name is the user's own, not ours.
+  test("an ffmpeg symlink is never followed or removed", () => {
+    const { dest, work, run } = sandbox();
+    writeFileSync(join(dest, "tfm"), "OLD");
+    const target = join(dest, "real-ffmpeg");
+    writeFileSync(target, "USER'S OWN");
+    symlinkSync(target, join(dest, "tfm-ffmpeg"));
+    stage(join(work, "new"), RUNS);
+
+    expect(
+      run(`FFMPEG_SWEPT=0
+install_binary "$WORK/new"
+printf 'swept=%s' "$FFMPEG_SWEPT"`).out,
+    ).toBe("swept=0");
+    expect(readFileSync(target, "utf8")).toBe("USER'S OWN");
+    expect(existsSync(join(dest, "tfm-ffmpeg"))).toBe(true);
+  });
+
   test("smoke_version reads the version a build reports", () => {
     const { work, run } = sandbox();
     stage(join(work, "good"), RUNS);
@@ -389,9 +437,9 @@ describe("installer packager hint", () => {
     expect(runLib(`pm_pkg apt gio\n`).out).toBe("libglib2.0-bin");
     expect(runLib(`pm_pkg pacman gio\n`).out).toBe("glib2");
     expect(runLib(`pm_pkg apk gio\n`).out).toBe("glib");
-    // ffmpeg left the probed bucket: video thumbs ride the bundled sidecar,
-    // so no package manager should ever suggest it again
-    expect(runLib(`pm_pkg apt ffmpeg\n`).out).toBe("");
+    // ffmpeg is back in the probed bucket: video thumbs ride the system
+    // package again (no bundled sidecar), so the hint must name it
+    expect(runLib(`pm_pkg apt ffmpeg\n`).out).toBe("ffmpeg");
     expect(runLib(`pm_pkg apt zip\n`).out).toBe("zip");
     expect(runLib(`pm_pkg apt unzip\n`).out).toBe("unzip");
     expect(runLib(`pm_pkg apt 7z\n`).out).toBe("p7zip-full");
@@ -408,8 +456,7 @@ describe("installer packager hint", () => {
     expect(out).toContain("optional");
     expect(out).not.toContain("recommended");
     expect(out).not.toContain("resvg");
-    expect(out).not.toContain("ffmpeg");
-    for (const t of ["xdg-open", "magick", "gio", "udisksctl", "wl-clipboard", "zip", "unzip", "7z"]) {
+    for (const t of ["xdg-open", "magick", "gio", "udisksctl", "wl-clipboard", "zip", "unzip", "7z", "ffmpeg"]) {
       expect(out).toContain(t);
     }
   });
@@ -600,5 +647,262 @@ describe("installer download bar", () => {
       env: withStub(stubs),
     });
     expect(code).toBe(22);
+  });
+});
+
+describe("installer desktop entry", () => {
+  // Registration, not a default: install.sh places tfm.desktop so desktops
+  // know tfm opens folders — it never runs `xdg-mime default` (that choice
+  // belongs to the first-boot prompt, where the user can see tfm first).
+  test("install_desktop_entry copies the entry and refreshes the database", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const { out, code } = run(
+      `TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`,
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).toContain("MimeType=inode/directory;");
+    expect(installed).toContain("Terminal=true");
+  });
+
+  test("a missing source warns and continues (entry skipped, install survives)", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const body = `TFM_DESKTOP_SRC="/nonexistent/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`;
+    const { out, code } = run(body);
+    expect(code).toBe(0);
+    // fancy mode draws the ⚠ glyph (see the step_warn contract above)
+    expect(out).toContain("⚠");
+    expect(out).toContain("desktop entry skipped");
+    // plain mode names it a warning (the step_warn plain contract)
+    expect(run(body, { fancy: false }).out).toContain("tfm: warning: desktop");
+    expect(existsSync(join(apps, "tfm.desktop"))).toBe(false);
+  });
+
+  test("the shipped entry claims folders and launches a terminal", () => {
+    const raw = readFileSync(join(ROOT, "assets/tfm.desktop"), "utf8");
+    expect(raw).toContain("MimeType=inode/directory;");
+    expect(raw).toContain("Terminal=true");
+    expect(raw).toContain("FileManager");
+    expect(raw).toContain("Icon=tfm");
+  });
+
+  test("the brand icon ships to hicolor so launchers show the logo", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const data = join(dest, "data");
+    const { code } = run(
+      `TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" TFM_ICON_SRC="${ROOT}/assets/icons/tfm.svg" install_desktop_entry`,
+      { env: { XDG_DATA_HOME: data } },
+    );
+    expect(code).toBe(0);
+    const icon = readFileSync(join(data, "icons", "hicolor", "scalable", "apps", "tfm.svg"), "utf8");
+    // brand art ships verbatim (fixed palette, never theme-tinted)
+    expect(icon).toBe(readFileSync(join(ROOT, "assets/icons/tfm.svg"), "utf8"));
+  });
+
+  test("the icon ALSO lands bare in icons/ (broken hicolor indexes hide scalable)", () => {
+    // a foreign index.theme that doesn't declare scalable/apps makes the
+    // hicolor copy invisible to GTK lookups (verified live: lookup missed
+    // while the file sat on disk, and XDG_DATA_HOME/pixmaps isn't scanned
+    // either — while a bare $data/icons/tfm.svg resolves through the
+    // default theme lookup).
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const data = join(dest, "data");
+    const { code } = run(
+      `TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" TFM_APPLICATIONS_DIR="${apps}" TFM_ICON_SRC="${ROOT}/assets/icons/tfm.svg" install_desktop_entry`,
+      { env: { XDG_DATA_HOME: data } },
+    );
+    expect(code).toBe(0);
+    expect(readFileSync(join(data, "icons", "tfm.svg"), "utf8")).toBe(
+      readFileSync(join(ROOT, "assets/icons/tfm.svg"), "utf8"),
+    );
+  });
+
+  test("the installer normalizes an absolute Icon= to the themed name", () => {
+    // Quickshell launchers (noctalia) resolve icons via QIcon::fromTheme(name)
+    // ONLY — an absolute Icon=/… path misses there and falls back to the
+    // generic icon (GNOME tolerates it, so the breakage is launcher-specific).
+    // A hand-edited or legacy entry carrying an absolute path must not strand
+    // the launcher on the fallback: the installed entry always says Icon=tfm.
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const src = join(dest, "src.desktop");
+    writeFileSync(
+      src,
+      "[Desktop Entry]\nType=Application\nName=tfm\nExec=tfm %u\nIcon=/home/user/.local/share/icons/tfm.svg\nTerminal=true\n",
+    );
+    const { code } = run(`TFM_DESKTOP_SRC="${src}" TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`);
+    expect(code).toBe(0);
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).toContain("Icon=tfm");
+    expect(installed).not.toContain("Icon=/");
+  });
+
+  test("the installed entry carries an absolute Exec + TryExec, never StartupNotify", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    mkdirSync(apps, { recursive: true });
+    const src = join(dest, "src.desktop");
+    writeFileSync(src, "[Desktop Entry]\nType=Application\nName=tfm\nExec=tfm %u\nTerminal=true\nStartupNotify=true\n");
+    const bin = join(dest, "bin");
+    mkdirSync(bin, { recursive: true });
+    const { code } = run(`TFM_DESKTOP_SRC="${src}" TFM_APPLICATIONS_DIR="${apps}" DEST="${bin}" install_desktop_entry`);
+    expect(code).toBe(0);
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    // absolute Exec survives a declined PATH prompt (bare `tfm` would be dead)
+    expect(installed).toContain(`Exec=${bin}/tfm %u`);
+    expect(installed).not.toContain("Exec=tfm ");
+    // TryExec hides the entry where tfm isn't on PATH; a terminal app never
+    // completes startup-notification, so launchers would spin on it
+    expect(installed).toContain("TryExec=tfm");
+    expect(installed).not.toContain("StartupNotify");
+  });
+
+  test("TFM_NO_DESKTOP=1 skips the entry without failing", () => {
+    const { dest, run } = sandbox();
+    const apps = join(dest, "apps");
+    const { out, code } = run(`TFM_APPLICATIONS_DIR="${apps}" install_desktop_entry`, {
+      env: { TFM_NO_DESKTOP: "1" },
+    });
+    expect(code).toBe(0);
+    expect(out).toContain("skipped");
+    expect(existsSync(join(apps, "tfm.desktop"))).toBe(false);
+  });
+
+  test("the applications dir honors XDG_DATA_HOME", () => {
+    const { dest, run } = sandbox();
+    const data = join(dest, "data");
+    const { out, code } = run(`TFM_DESKTOP_SRC="${ROOT}/assets/tfm.desktop" install_desktop_entry`, {
+      env: { XDG_DATA_HOME: data, TFM_APPLICATIONS_DIR: "" },
+    });
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    expect(existsSync(join(data, "applications", "tfm.desktop"))).toBe(true);
+  });
+
+  test("a release download lands the entry when no checkout exists", () => {
+    const { dest, stubs, run } = sandbox();
+    const apps = join(dest, "apps");
+    // stateful stub curl: serves the entry bytes for the .desktop URL and the
+    // MATCHING digest for the .sha256 URL (computed with the real sha256sum,
+    // like step_verify's digest-compare rule). The X- marker proves the
+    // download path ran (X- keys are spec-legal, so desktop-file-validate
+    // passes; the dirname fallback would serve the real asset, which carries
+    // MimeType and no marker). The shell suffix-strip is spliced so biome
+    // doesn't read it as a template placeholder.
+    const stripSuffix = "${out" + "%.sha256}";
+    writeFileSync(
+      join(stubs, "curl"),
+      '#!/bin/sh\nout=""; while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; *) shift;; esac; done\ncase "$out" in *.sha256) printf "%s  tfm.desktop\\n" "$(sha256sum <"' +
+        stripSuffix +
+        '" | cut -d" " -f1)" >"$out";; *) printf "[Desktop Entry]\\nType=Application\\nName=tfm\\nExec=tfm %%u\\nTerminal=true\\nX-Stub-Marker=1\\n" >"$out";; esac\n',
+    );
+    chmodSync(join(stubs, "curl"), 0o755);
+    const bin = join(dest, "bin");
+    mkdirSync(bin, { recursive: true });
+    const { out, code } = run(
+      `MODE=release BASE=https://example.invalid TFM_APPLICATIONS_DIR="${apps}" DEST="${bin}" install_desktop_entry`,
+      { env: { PATH: `${stubs}:${process.env.PATH ?? ""}` } },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).toContain("X-Stub-Marker=1");
+    expect(installed).not.toContain("MimeType=");
+  });
+
+  test("a release checksum mismatch falls back instead of failing", () => {
+    const { dest, stubs, run } = sandbox();
+    const apps = join(dest, "apps");
+    // entry bytes served, digest lied about: the download is distrusted and
+    // the dirname fallback (real asset, cwd is the repo root here) installs
+    // instead — warn-and-continue, never abort
+    writeFileSync(
+      join(stubs, "curl"),
+      '#!/bin/sh\nout=""; while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; *) shift;; esac; done\ncase "$out" in *.sha256) printf "0%.0s  tfm.desktop\\n" 1 2 3 >"$out";; *) printf "[Desktop Entry]\\nType=Application\\nName=tfm\\nSTUB-MARKER=1\\n" >"$out";; esac\n',
+    );
+    chmodSync(join(stubs, "curl"), 0o755);
+    const bin = join(dest, "bin");
+    mkdirSync(bin, { recursive: true });
+    const { out, code } = run(
+      `MODE=release BASE=https://example.invalid TFM_APPLICATIONS_DIR="${apps}" DEST="${bin}" install_desktop_entry`,
+      { env: { PATH: `${stubs}:${process.env.PATH ?? ""}` } },
+    );
+    expect(code).toBe(0);
+    expect(out).toContain("desktop entry ·");
+    const installed = readFileSync(join(apps, "tfm.desktop"), "utf8");
+    expect(installed).not.toContain("STUB-MARKER=1");
+    expect(installed).toContain("MimeType=inode/directory;");
+  });
+});
+
+// The re-run story: an install already on the target release must not
+// re-download 40 MB, and `tfm update` relies on that being cheap.
+describe("already-current short circuit", () => {
+  test("installed_version reads the binary, and says nothing for a non-tfm", () => {
+    const s = sandbox();
+    expect(s.run("installed_version").out.trim()).toBe("");
+    stage(join(s.dest, "tfm"), 'echo "tfm 1.2.3"');
+    expect(s.run("installed_version").out.trim()).toBe("1.2.3");
+    // a binary that answers something else is not a tfm we can compare with
+    stage(join(s.dest, "tfm"), 'echo "not-tfm 1.2.3"');
+    expect(s.run("installed_version").out.trim()).toBe("");
+  });
+
+  test("a matching pinned release exits 0 without downloading", () => {
+    const s = sandbox();
+    stage(join(s.dest, "tfm"), 'echo "tfm 1.0.0"');
+    const { out, code } = s.run("VERSION=v1.0.0; skip_if_current", { fancy: false });
+    expect(code).toBe(0);
+    expect(out).toContain("tfm 1.0.0 is the latest release, nothing to do");
+  });
+
+  test("TFM_FORCE=1 reinstalls instead of exiting early", () => {
+    const s = sandbox();
+    stage(join(s.dest, "tfm"), 'echo "tfm 1.0.0"');
+    const { out, code } = s.run("TFM_FORCE=1 VERSION=v1.0.0; skip_if_current");
+    expect(code).toBe(0);
+    expect(out).not.toContain("nothing to do");
+  });
+
+  test("an older install is not current, so the install path still runs", () => {
+    const s = sandbox();
+    stage(join(s.dest, "tfm"), 'echo "tfm 0.9.0"');
+    expect(s.run("VERSION=v1.0.0; skip_if_current").out).not.toContain("nothing to do");
+  });
+
+  test("provenance records the channel, so update never swaps a source build", () => {
+    const data = mkdtempSync(join(tmpdir(), "tfm-install-data-"));
+    try {
+      const s = sandbox();
+      const env = { env: { XDG_DATA_HOME: data } };
+      s.run("MODE=release SMOKE_VER=1.2.3 write_provenance", env);
+      const release = JSON.parse(readFileSync(join(data, "tfm", "install.json"), "utf8"));
+      expect(release.channel).toBe("release");
+      expect(release.version).toBe("1.2.3");
+      s.run("MODE=source SMOKE_VER=1.2.3 SOURCE=dev write_provenance", env);
+      const source = JSON.parse(readFileSync(join(data, "tfm", "install.json"), "utf8"));
+      expect(source.channel).toBe("source");
+      expect(source.ref).toBe("dev");
+    } finally {
+      rmSync(data, { recursive: true, force: true });
+    }
+  });
+
+  test("TFM_UPDATE_HINT names the restart an in-app update needs", () => {
+    const s = sandbox();
+    const withHint = s.run("TFM_UPDATE_HINT=1 SMOKE_VER=1.0.0 print_result");
+    expect(withHint.out).toContain("ctrl+alt+r");
+    const without = s.run("SMOKE_VER=1.0.0 print_result");
+    expect(without.out).not.toContain("ctrl+alt+r");
   });
 });

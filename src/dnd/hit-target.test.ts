@@ -95,4 +95,18 @@ describe("makeHitTargetAt", () => {
     };
     expect(makeHitTargetAt(ctx)(3, 3, null)).toEqual({ kind: "folder", path: "/right/dir" });
   });
+
+  test("embedded terminal header resolves to the terminal target", () => {
+    // a plain kitty drag over the terminal pane must agree + paste (like
+    // ctrl+drag) instead of missing and letting kitty cancel the session
+    const { ctx } = mkCtx(node("tfm-term-header", node("tfm-term-host", node("tfm-main"))));
+    expect(makeHitTargetAt(ctx)(3, 3, null)).toEqual({ kind: "terminal", path: "" });
+  });
+
+  test("VT node and its esc button resolve to the terminal target", () => {
+    const { ctx } = mkCtx(node("tfm-term"));
+    expect(makeHitTargetAt(ctx)(3, 3, null)).toEqual({ kind: "terminal", path: "" });
+    const { ctx: ctx2 } = mkCtx(node("tfm-esc-term", node("tfm-term-header", node("tfm-term-host"))));
+    expect(makeHitTargetAt(ctx2)(3, 3, null)).toEqual({ kind: "terminal", path: "" });
+  });
 });

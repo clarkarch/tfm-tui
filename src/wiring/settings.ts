@@ -22,6 +22,12 @@ import { cancelBand } from "../input/grid-input";
 import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../app/log";
 import { makeUrlOpener } from "../fs/open-url";
+import {
+  makeDefaultFileManagerOrchestration,
+  makeDefaultFileManagerPrompt,
+  type FileManagerConfirmItem,
+} from "../fs/default-filemanager";
+import { installFileManagerService, resolveServiceExec } from "../app/filemanager-service";
 import { pointPaneAt } from "../app/panes";
 import {
   AmbiguousPluginError,
@@ -51,8 +57,18 @@ export const wireSettings = (deps: {
   getPrompt: () => {
     open(opts: { title: string; placeholder?: string; okLabel?: string; initial?: string }): Promise<string | null>;
   };
+  // yes/no confirm dialog wires in fileops (before settings) — the
+  // default-file-manager prompt opens through it; boot calls it post-wiring
+  getConfirm: () => {
+    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): boolean;
+    isOpen(): boolean;
+  };
+  // update checking wires AFTER settings (it needs this module's repaint), so
+  // this arrives as a deferred getter. Structural type only, so no
+  // wiring↔wiring import is introduced.
+  getUpdates: () => { rowValue(): string; actionable(): boolean; status(): unknown; activate(): Promise<unknown> };
 }) => {
-  const { core, nav, chrome, grid, plugins, getRetheme, getPrompt } = deps;
+  const { core, nav, chrome, grid, plugins, getRetheme, getPrompt, getConfirm, getUpdates } = deps;
 
   // --- Plugin git installer orchestration: prompt -> validate -> danger
   // confirm -> clone/pull/rm -> rescan + live panel rebuild. Fire-and-forget
@@ -101,7 +117,7 @@ export const wireSettings = (deps: {
     void (async () => {
       try {
         if (!Bun.which("git")) {
-          chrome.notify("git not found — install git to add plugins", "plugins");
+          chrome.notify("git not found · install git", "plugins");
           return;
         }
         // getPrompt closes over the last-wired cluster (TDZ): post-boot only
@@ -111,11 +127,11 @@ export const wireSettings = (deps: {
         try {
           prompt = getPrompt();
         } catch {
-          chrome.notify("prompt unavailable (still booting?)", "plugins");
+          chrome.notify("Prompt unavailable · still booting", "plugins");
           return;
         }
         const raw = await prompt.open({
-          title: "Add plugin — runs code as you",
+          title: "Add plugin · runs code as you",
           placeholder: "https://github.com/owner/repo[#ref] [subdir]",
           okLabel: "Clone",
         });
@@ -131,7 +147,7 @@ export const wireSettings = (deps: {
         // normalize to a different final name — that error surfaces below)
         try {
           if (existsSync(path.join(pluginsDir(), name))) {
-            chrome.notify(`"${name}" is already installed (remove it first)`, "add plugin");
+            chrome.notify(`Already installed · remove first`, "add plugin");
             return;
           }
         } catch {}
@@ -151,11 +167,7 @@ export const wireSettings = (deps: {
           chrome.notify(`Installed ${res.name}`, "plugins");
         } catch (err) {
           if (err instanceof AmbiguousPluginError) {
-            const sample = err.candidates.slice(0, 3).join(", ");
-            chrome.notify(
-              `Repo holds ${err.candidates.length} plugins (${sample}) — retry as: URL subdir`,
-              "add plugin",
-            );
+            chrome.notify(`Repo has ${err.candidates.length} plugins · retry with URL subdir`, "add plugin");
           } else {
             chrome.notify(errMessage(err), "add plugin");
           }
@@ -177,7 +189,7 @@ export const wireSettings = (deps: {
       try {
         const out = await updatePlugin({ dir: pluginsDir(), name });
         dlog(`plugin updated: ${name}: ${out}`);
-        chrome.notify(`${name}: ${out}`, "plugins");
+        chrome.notify(`${name} · ${out}`, "plugins");
       } catch (err) {
         chrome.notify(errMessage(err), "plugins");
         return;
@@ -244,6 +256,84 @@ export const wireSettings = (deps: {
 
   // --- Settings model: row type + pure semantics live in ./settings.ts, the
   // row->config wiring in ./settings-model, the panel in ./ui-settings ---
+  // default-file-manager opt-in: the settings row + first-boot prompt share
+  // one leaf orchestration (live probe read through on every call — an
+  // out-of-band `xdg-mime default tfm.desktop` silences the prompt without
+  // a marker; a throwing probe degrades to "" = ask, never silent).
+  const defaultFileManagerOrchestration = {
+    ...makeDefaultFileManagerOrchestration(),
+    // escMenu is created below; the arrow resolves the binding at call time
+    // (post-boot user interaction — same TDZ shape as refreshPluginsView),
+    // repainting the open panel once the async set/unset lands
+    onSettled: () => {
+      try {
+        escMenu.renderMenuContent();
+      } catch {}
+    },
+    // on-demand trigger for the settings toggle: same opener the boot step
+    // uses, FORCED past the verdict gate — flipping the toggle is an
+    // explicit gesture for the question, so a settled answer (stale yes,
+    // revisit-after-no) must never keep the dialog shut. Boot never forces.
+    ask: () => openDefaultFileManagerPrompt({ force: true }),
+  };
+
+  // first-boot "make tfm the default file manager?" — a real confirm dialog
+  // (Yes/No buttons), not the command palette. The mapping lives in the leaf
+  // (makeDefaultFileManagerPrompt, unit-tested); the wiring only supplies the
+  // live confirm + sinks. Guarded boot step, post-intros, so the user sees
+  // tfm before being asked. Fire-and-forget, never throws. A verdict of
+  // "ask" always surfaces SOMETHING (confirm, or a sticky toast when the
+  // dialog is unavailable) — never silent. Dismissing the confirm records
+  // nothing, so dismissal asks again next boot by omission.
+  const openDefaultFileManagerPrompt = makeDefaultFileManagerPrompt({
+    choice: () => {
+      try {
+        return defaultFileManagerOrchestration.choice();
+      } catch (err) {
+        dlog(`default-file-manager verdict failed: ${errMessage(err)}`);
+        return "silent";
+      }
+    },
+    openConfirm: (opts: FileManagerConfirmItem) => {
+      const c = getConfirm();
+      if (!c.confirm(opts.message, opts.yesLabel, opts.onYes)) {
+        throw new Error("confirm unavailable");
+      }
+    },
+    setDefault: (op) => defaultFileManagerOrchestration.set(op),
+    record: (a) => defaultFileManagerOrchestration.record(a),
+    // Full combo second half: a Yes also points browser "show in folder" at
+    // tfm. Best-effort inside the leaf (failure warns, yes stays recorded).
+    installService: () => installFileManagerService(resolveServiceExec()),
+    // the yes-flow lands async (dialog long closed) — repaint the open panel
+    // so the toggle shows the new live state without reopening the menu
+    onSettled: () => {
+      try {
+        escMenu.renderMenuContent();
+      } catch (err) {
+        dlog(`default-file-manager settled repaint failed: ${errMessage(err)}`);
+      }
+    },
+    notify: (msg, title, level) => chrome.notify(msg, title ?? "tfm", level),
+    notifySticky: (msg) => {
+      try {
+        const c = core.themeGet();
+        chrome.notifySticky([Text({ content: msg, fg: c.white })], { width: 58, height: 2 });
+      } catch (err) {
+        dlog(`default-file-manager sticky failed: ${errMessage(err)}`);
+        throw err;
+      }
+    },
+    log: (msg) => dlog(msg),
+  });
+  // boot entry: the guarded step calls this (asks only on "ask")
+  const promptDefaultFileManager = (): void => {
+    try {
+      void openDefaultFileManagerPrompt();
+    } catch (err) {
+      dlog(`default-file-manager boot prompt failed: ${errMessage(err)}`);
+    }
+  };
   const { settingGroups, pluginGroups } = makeSettingModel({
     config: core.config,
     state: core.state,
@@ -261,6 +351,7 @@ export const wireSettings = (deps: {
       nav.renderAll();
     },
     pluginInstall: { addFromUrl, openFolder, update: updateOne, remove: removeOne },
+    defaultFileManager: defaultFileManagerOrchestration,
     // picking the System theme entry resolves the terminal colors now
     // (fire-and-forget — failures keep the committed flag + current theme)
     resolveSystemTheme: () => {
@@ -289,7 +380,6 @@ export const wireSettings = (deps: {
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
     drainIconQueue: core.slots.drainIconQueue,
-    setScrim: core.slots.setScrim,
     cancelBand: () => cancelBand(grid.bandCtx),
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
@@ -303,9 +393,16 @@ export const wireSettings = (deps: {
     log: (message) => dlog(message),
     quit: nav.quitApp,
     openUrl: (url) => urlOpener.openUrl(url),
+    // About's update row: live value + the check its click runs. The check may
+    // settle into a confirm dialog, so it is fire-and-forget here.
+    updateValue: () => getUpdates().rowValue(),
+    updateActionable: () => getUpdates().actionable(),
+    onCheckUpdates: () => {
+      void getUpdates().activate();
+    },
   });
 
-  return { escMenu, systemTheme };
+  return { escMenu, systemTheme, promptDefaultFileManager };
 };
 
 export const wireRetheme = (deps: {
@@ -404,6 +501,10 @@ export const wireRetheme = (deps: {
         getHover().refresh();
       } catch {}
       try {
+        // scrim mode / theme may have changed while a modal is open — re-dim
+        core.reapplyModalDim();
+      } catch {}
+      try {
         const idx = themePresetIdx(THEME_PRESETS, core.config.theme);
         // `?.` rather than an `idx >= 0` guard + assertion: a stale idx past
         // the preset list falls back to custom exactly like a miss
@@ -435,8 +536,10 @@ export const wireRetheme = (deps: {
     },
     // the grid reads per-pane AppState.showHidden, not config: an external
     // config.toml flip must converge both panes here or the reload repaints
-    // the same filter. The GUI row + remap bind already write live state, so
-    // a settings commit just re-converges to the same value (no clobber).
+    // the same filter. The GUI row AND the remap bind/palette action both
+    // commit [ui] show-hidden through applyConfig, so this re-converges to the
+    // same value (no clobber — the old bind flipped AppState only and got
+    // reset by the next unrelated applyConfig).
     syncShowHidden: () => {
       const showHidden = core.config.ui.showHidden;
       for (const s of core.panes.states) s.showHidden = showHidden;

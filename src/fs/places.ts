@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process";
 import { statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
+import { execBun, type ExecBunResult } from "./exec-bun";
 import { fileUriToPath, pathToUri } from "./uri";
 import { trashDir } from "./fsutil";
 import { parseServerInput } from "./network";
@@ -14,7 +13,9 @@ import { listNetworkMounts, type NetworkMount } from "./netmount";
 // loaded state behind accessors; callers re-run loadSystemPlaces() to
 // refresh. No renderer, no UI state. ---
 
-const execFileP = promisify(execFile);
+// lsblk is re-read on every device poll, so this rides the fast Bun.spawn
+// path (execBun) — a wedged lsblk resolves empty via the timeout, never throws
+const execLsblk = (args: string[]): Promise<ExecBunResult> => execBun("lsblk", args, { timeoutMs: 10_000 });
 const home = os.homedir();
 
 export type Place = {
@@ -24,6 +25,11 @@ export type Place = {
   ejectable: boolean;
   device?: string;
   mountDevice?: string;
+  // whole-disk ancestor (/dev/sdb for /dev/sdb1) + every mounted partition
+  // on that disk: Eject unmounts each part then powers the disk off. Rides
+  // only on ejectable (USB) rows — internal disks never power off.
+  disk?: string;
+  diskParts?: Array<{ device: string; target: string }>;
   scheme?: "recent" | "starred";
   bookmarked?: boolean;
   // network locations (gvfs): `action:"connect"` opens the server prompt,
@@ -38,9 +44,34 @@ export type Place = {
 // by [ui] sidebar-show-* can never leave an orphan header.
 export type SidebarSection = { title: string; places: Place[] };
 
+// Safely-remove spec: everything ejectDevice needs in one object (the menu
+// row and the sidebar icon build the same shape from their Place). `parts`
+// is the whole disk's mounted partitions when known — the chain unmounts
+// each before powering `disk` off; without it eject degrades to unmounting
+// the single `device` (today's unmount-only behavior for non-USB rows).
+export type EjectSpec = {
+  device?: string;
+  label: string;
+  target?: string | null;
+  disk?: string;
+  parts?: Array<{ device: string; target: string }>;
+};
+
 type UserDir = { key: string; label: string; p: string };
 
-type MountEntry = { label: string; target: string; removable: boolean; device: string };
+export type MountEntry = {
+  label: string;
+  target: string;
+  removable: boolean;
+  device: string;
+  // usb-attached (lsblk TRAN, inherited parent→child like rm): the kernel RM
+  // flag lies on many USB-SATA bridges (RM=0), so TRAN is what marks a drive
+  // ejectable + power-off-eligible
+  usb: boolean;
+  // whole-disk ancestor path (/dev/sdb for /dev/sdb1) — power-off targets
+  // the disk, unmount targets the partitions
+  disk: string;
+};
 
 type BookmarkEntry = { p: string; label: string; remote?: boolean; uri?: string };
 
@@ -49,18 +80,22 @@ let sysBookmarks: BookmarkEntry[] = [];
 let sysMounts: MountEntry[] = [];
 let sysNetwork: NetworkMount[] = [];
 
-export const loadSystemPlaces = async (): Promise<void> => {
+export const loadSystemPlaces = async (opts?: { skipMounts?: boolean }): Promise<void> => {
   // four independent sources — await them concurrently so the sidebar load costs
-  // the slowest one (lsblk ~20ms), not their sum (~60ms serialized)
+  // the slowest one, not their sum. lsblk is ~20ms typical but measured 218ms
+  // on slow udev (2026-10) — it is the only slow source, so first paint skips
+  // it (skipMounts, boot-only: sysMounts is guaranteed empty there) and a
+  // background refresh fills mounts in; sysMounts keeps its current value
+  // (empty at boot = "This Device" only).
   const [dirs, marks, mounts, network] = await Promise.all([
     readUserDirs(),
     readBookmarks(),
-    listMounts(),
+    opts?.skipMounts ? Promise.resolve<MountEntry[] | null>(null) : listMounts(),
     listNetworkMounts(),
   ]);
   sysUserDirs = dirs;
   sysBookmarks = marks;
-  sysMounts = mounts;
+  if (mounts !== null) sysMounts = mounts;
   sysNetwork = network;
 };
 
@@ -177,11 +212,14 @@ const SYSTEM_MOUNTS = new Set(["/", "/boot", "/boot/efi", "/efi", "/swap"]);
 // lsblk's `-J` payload: only these fields are read, and any of them may be
 // missing (or mistyped) on an odd util-linux build — so they are typed to what
 // the code assumes rather than to what the JSON is guaranteed to carry.
+// TRAN exists since util-linux 2.25 (2014); children report tran:null, so it
+// inherits exactly like rm.
 type LsblkNode = {
   name?: string;
   label?: string;
   path?: string;
   rm?: boolean;
+  tran?: string | null;
   fstype?: string | null;
   mountpoint?: string;
   mountpoints?: Array<string | { mountpoint?: string }>;
@@ -191,15 +229,21 @@ type LsblkNode = {
 
 export function parseLsblk(json: unknown): MountEntry[] {
   const out: MountEntry[] = [];
-  const visit = (nodes: unknown, parentRm: boolean): void => {
+  const visit = (nodes: unknown, parentRm: boolean, parentTran: string | null, parentDisk: string): void => {
     if (!Array.isArray(nodes)) return;
     for (const raw of nodes) {
       const n = raw as LsblkNode;
       const name: string = n?.name ?? "";
       const rm = !!n?.rm || parentRm;
+      const tran = typeof n?.tran === "string" && n.tran ? n.tran : parentTran;
+      const usb = tran?.toLowerCase() === "usb";
+      // the whole disk is the topmost /dev node: children inherit the
+      // ancestor's path, the topmost node is its own disk
+      const device = n?.path ?? `/dev/${name}`;
+      const disk = parentDisk || device;
       if (/^(loop|zram|ram\d+)/.test(name)) {
         const kids = n?.children;
-        if (Array.isArray(kids)) visit(kids, rm);
+        if (Array.isArray(kids)) visit(kids, rm, tran, disk);
         continue;
       }
       const fstype: string | null | undefined = n?.fstype;
@@ -210,11 +254,10 @@ export function parseLsblk(json: unknown): MountEntry[] {
       } else if (typeof n?.mountpoint === "string") {
         mps = [n.mountpoint];
       }
-      const device = n?.path ?? `/dev/${name}`;
       if (mps.length === 0) {
         // mounted-nowhere but has a filesystem -> clickable to mount (nautilus behavior)
         if (fstype && !PSEUDO_FSTYPES.has(fstype)) {
-          out.push({ label: n?.label || name, target: "", removable: rm, device });
+          out.push({ label: n?.label || name, target: "", removable: rm || usb, usb, device, disk });
         }
       }
       for (const target of mps) {
@@ -222,21 +265,22 @@ export function parseLsblk(json: unknown): MountEntry[] {
         if (SYSTEM_MOUNTS.has(target)) continue;
         if (target.startsWith("/snap") || target.startsWith("/var/lib/docker")) continue;
         const label = n?.label || path.basename(target) || name;
-        if (!out.some((o) => o.target === target)) out.push({ label, target, removable: rm, device });
+        if (!out.some((o) => o.target === target)) out.push({ label, target, removable: rm || usb, usb, device, disk });
       }
-      if (Array.isArray(n?.children)) visit(n.children, rm);
+      if (Array.isArray(n?.children)) visit(n.children, rm, tran, disk);
     }
   };
-  visit((json as LsblkNode | null | undefined)?.blockdevices ?? [], false);
+  visit((json as LsblkNode | null | undefined)?.blockdevices ?? [], false, null, "");
   return out;
 }
 
-async function listMounts(): Promise<MountEntry[]> {
+// exported for the device watcher (devwatch.ts): the poll diffs this list,
+// loadSystemPlaces() re-reads everything only when it changed
+export async function listMounts(): Promise<MountEntry[]> {
   try {
     // timeout: a wedged lsblk must not stall the sidebar load forever
-    const { stdout } = await execFileP("lsblk", ["-J", "-o", "NAME,PATH,RM,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"], {
-      timeout: 10_000,
-    });
+    const { code, stdout } = await execLsblk(["-J", "-o", "NAME,PATH,RM,TRAN,LABEL,FSTYPE,MOUNTPOINTS,MOUNTPOINT"]);
+    if (code !== 0) return [];
     return parseLsblk(JSON.parse(stdout));
   } catch {
     return [];
@@ -297,6 +341,16 @@ export function buildSections(vis: SidebarVisibility = {}): SidebarSection[] {
         ejectable: m.removable && !!m.target,
         device: m.device,
         mountDevice: m.target ? undefined : m.device,
+        // every mounted partition sharing this row's disk: the eject chain
+        // unmounts each before powering the disk off
+        ...(m.usb && m.target
+          ? {
+              disk: m.disk,
+              diskParts: sysMounts
+                .filter((o) => o.usb && o.disk === m.disk && o.target)
+                .map((o) => ({ device: o.device, target: o.target })),
+            }
+          : {}),
       }),
     ),
   ];

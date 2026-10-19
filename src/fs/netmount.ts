@@ -101,18 +101,18 @@ export const makeNetworkActions = (sink: NetworkSink) => {
     try {
       res = await sink.mount(parsed.uri);
     } catch (err) {
-      sink.notify(`Connect failed: ${errMessage(err)}`, "network", "error");
+      sink.notify(`Connect failed · ${errMessage(err)}`, "network", "error");
       return null;
     }
     if (res.code !== 0) {
       const why = lastLine(res.stderr) || lastLine(res.stdout) || "unknown error";
-      sink.notify(`Connect failed: ${why}`, "network", "error");
+      sink.notify(`Connect failed · ${why}`, "network", "error");
       sink.log?.(`gio mount ${parsed.uri} exit ${res.code}: ${why}`);
       return null;
     }
     const name = await resolveName(parsed.uri, before);
     if (!name) {
-      sink.notify(`Connected to ${parsed.label} (mount path not found)`, "network", "error");
+      sink.notify(`Connected to ${parsed.label} · no mount path`, "network", "error");
       return null;
     }
     const mountPath = path.join(sink.gvfsRoot(), name);
@@ -125,19 +125,19 @@ export const makeNetworkActions = (sink: NetworkSink) => {
     const name = path.basename(mountPath);
     const uri = uriByPath.get(mountPath) ?? fallbackUri ?? parseGvfsName(name)?.uri;
     if (!uri) {
-      sink.notify("Can't determine the mount to disconnect", "network", "error");
+      sink.notify("Can't find mount to disconnect", "network", "error");
       return false;
     }
     let res: GioResult;
     try {
       res = await sink.unmount(uri);
     } catch (err) {
-      sink.notify(`Disconnect failed: ${errMessage(err)}`, "network", "error");
+      sink.notify(`Disconnect failed · ${errMessage(err)}`, "network", "error");
       return false;
     }
     if (res.code !== 0) {
       const why = lastLine(res.stderr) || lastLine(res.stdout) || "unknown error";
-      sink.notify(`Disconnect failed: ${why}`, "network", "error");
+      sink.notify(`Disconnect failed · ${why}`, "network", "error");
       sink.log?.(`gio mount -u ${uri} exit ${res.code}: ${why}`);
       return false;
     }

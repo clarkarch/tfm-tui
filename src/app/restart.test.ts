@@ -38,6 +38,10 @@ const mkCtx = (
     flushSession: () => calls.push("session"),
     closeTerminal: () => calls.push("terminal"),
     stopGpm: () => calls.push("gpm"),
+    stopChromeTimers: () => calls.push("chrome"),
+    stopDevices: () => calls.push("devices"),
+    stopWatchers: () => calls.push("watchers"),
+    stopConfigWatch: () => calls.push("config"),
     onQuit: () => calls.push("onQuit"),
     destroy: () => {
       calls.push("destroy");
@@ -67,6 +71,10 @@ describe("makeRestart", () => {
       "session",
       "terminal",
       "gpm",
+      "chrome",
+      "devices",
+      "watchers",
+      "config",
       "onQuit",
       expect.stringMatching(/^spawn:\/usr\/bin\/tfm:one,two:\{"stdio":"inherit","env":.*\}$/),
       "destroy",
@@ -118,6 +126,10 @@ describe("makeRestart", () => {
       "session",
       "terminal",
       "gpm",
+      "chrome",
+      "devices",
+      "watchers",
+      "config",
       "onQuit",
       expect.stringContaining("spawn:"),
       "recover",
@@ -140,10 +152,7 @@ describe("makeRestart", () => {
   test("busy queue refuses before teardown (live transfer keeps its staging temp)", () => {
     const calls: string[] = [];
     makeRestart(mkCtx(calls, { busy: true }))();
-    expect(calls).toEqual([
-      "preflight:/usr/bin/tfm",
-      "notify:Can't restart during file operations — cancel (✕) or wait for it to finish",
-    ]);
+    expect(calls).toEqual(["preflight:/usr/bin/tfm", "notify:Can't restart · file op running"]);
   });
 
   test("teardown failure still spawns, then exits 1", () => {
@@ -157,6 +166,10 @@ describe("makeRestart", () => {
       "session",
       "terminal",
       "gpm",
+      "chrome",
+      "devices",
+      "watchers",
+      "config",
       "onQuit",
       expect.stringContaining("spawn:"),
       "destroy",
@@ -175,6 +188,10 @@ describe("makeRestart", () => {
       "session",
       "terminal",
       "gpm",
+      "chrome",
+      "devices",
+      "watchers",
+      "config",
       "onQuit",
       expect.stringContaining("spawn:"),
       "recover",
@@ -190,6 +207,28 @@ describe("makeRestart", () => {
     expect(calls).toContain("notify:restart failed: boom");
     expect(calls).not.toContain("destroy");
     expect(ctx.codes).toEqual([]);
+  });
+
+  test("post-child exit waits for renderer.closed (async destroy completion)", async () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, { status: 42 });
+    let resolveClosed!: () => void;
+    (ctx as RestartCtx & { closed?: () => Promise<void> }).closed = () => new Promise<void>((r) => (resolveClosed = r));
+    makeRestart(ctx)();
+    expect(calls[calls.length - 1]).toBe("destroy");
+    expect(ctx.codes).toEqual([]);
+    resolveClosed();
+    await Bun.sleep(0);
+    expect(ctx.codes).toEqual([42]);
+  });
+
+  test("a rejected closed drops the child status and exits 1", async () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, { status: 42 });
+    (ctx as RestartCtx & { closed?: () => Promise<void> }).closed = () => Promise.reject(new Error("stdout EIO"));
+    makeRestart(ctx)();
+    await Bun.sleep(0);
+    expect(ctx.codes).toEqual([1]);
   });
 });
 

@@ -130,7 +130,7 @@ describe("makeUndo", () => {
     await settleUntil(() => ran.length === 1);
     expect(ran).toEqual([String(MAX_UNDO_BATCHES + 4)]);
     // batch was pushed without redos → not redoable, no hint
-    expect(sink.notes).toContain("notify:undo:success:Undid: op 34");
+    expect(sink.notes).toContain("notify:undo:success:Undid op 34");
   });
 
   test("undo runs units in reverse order", async () => {
@@ -160,7 +160,7 @@ describe("makeUndo", () => {
     undo.undoLast();
     await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
     expect(undo.redoDepth()).toBe(0);
-    expect(sink.notes).toContain("notify:undo:success:Undid: one-way");
+    expect(sink.notes).toContain("notify:undo:success:Undid one-way");
     expect(sink.notes.some((n) => n.includes("ctrl+y"))).toBe(false);
   });
 
@@ -227,8 +227,8 @@ describe("makeUndo", () => {
     expect(ran).toEqual(["u", "r"]);
     expect(undo.undoDepth()).toBe(1);
     expect(undo.redoDepth()).toBe(0);
-    expect(sink.notes).toContain("notify:redo:success:Redid: op · ctrl+z to undo");
-    expect(sink.notes).toContain("notify:redo:success:Redid: op · ctrl+z to undo");
+    expect(sink.notes).toContain("notify:redo:success:Redid op");
+    expect(sink.notes).toContain("notify:redo:success:Redid op");
   });
 
   test("redo on empty stack toasts once", async () => {
@@ -354,7 +354,7 @@ describe("journal data (persistent undo)", () => {
       await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
       expect(existsSync(moved)).toBe(false);
       expect(existsSync(orig)).toBe(true);
-      expect(sink.notes).toContain("notify:undo:success:Undid: rename · ctrl+y to redo");
+      expect(sink.notes).toContain("notify:undo:success:Undid rename");
       // and redo re-applies
       undo.redoLast();
       await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:redo:")));
@@ -423,7 +423,7 @@ describe("journal trash idempotency", () => {
       expect(undo.adoptBatches([data])).toBe(1);
       undo.undoLast();
       await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
-      expect(sink.notes).toContain("notify:undo:success:Undid: copy");
+      expect(sink.notes).toContain("notify:undo:success:Undid copy");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -456,7 +456,7 @@ describe("journal trash identity", () => {
       await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
       // the stranger survives and the batch reports success, not FAILED
       expect(readFileSync(p, "utf8")).toBe("stranger");
-      expect(sink.notes).toContain("notify:undo:success:Undid: copy");
+      expect(sink.notes).toContain("notify:undo:success:Undid copy");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -487,7 +487,7 @@ describe("journal trash identity", () => {
       expect(undo.adoptBatches([data])).toBe(1);
       undo.undoLast();
       await settleUntil(() => sink.notes.some((n) => n.startsWith("notify:undo:")));
-      expect(sink.notes).toContain("notify:undo:success:Undid: copy");
+      expect(sink.notes).toContain("notify:undo:success:Undid copy");
       expect(existsSync(p)).toBe(false);
     } finally {
       if (oldDataHome === undefined) delete process.env.XDG_DATA_HOME;

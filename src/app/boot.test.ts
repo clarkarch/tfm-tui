@@ -74,6 +74,25 @@ describe("runBoot", () => {
     expect(calls.indexOf("hygiene")).toBeLessThan(calls.indexOf("search"));
   });
 
+  test("mounts refresh lands after the first render, before the intros", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        refreshMounts: () => {
+          calls.push("mounts");
+        },
+      }),
+    );
+    expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("mounts"));
+    expect(calls.indexOf("mounts")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("absent mounts step changes nothing (old fakes keep working)", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls));
+    expect(calls).not.toContain("mounts");
+  });
+
   test("sidebar intro plays right after the first render (cold boot only)", async () => {
     const calls: string[] = [];
     await runBoot(
@@ -102,6 +121,61 @@ describe("runBoot", () => {
     expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("sidebar-intro"));
     expect(calls.indexOf("sidebar-intro")).toBeLessThan(calls.indexOf("topbar-intro"));
     expect(calls.indexOf("topbar-intro")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("default-file-manager prompt fires after the intros (user sees tfm first)", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        playTopbarIntro: () => {
+          calls.push("topbar-intro");
+        },
+        promptDefaultFileManager: () => {
+          calls.push("defmgr");
+        },
+      }),
+    );
+    expect(calls.indexOf("render")).toBeLessThan(calls.indexOf("defmgr"));
+    expect(calls.indexOf("topbar-intro")).toBeLessThan(calls.indexOf("defmgr"));
+    expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("lazy startup defers the default-file-manager probe past the launch report", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        lazyBoot: true,
+        showLaunchTime: () => true,
+        promptDefaultFileManager: () => {
+          calls.push("defmgr");
+        },
+      }),
+    );
+    expect(calls).toContain("toast");
+    // the verdict probe is a sync xdg-mime spawn (~200ms of blocked event
+    // loop): under lazy it must not sit on the launch path, but still runs
+    // before the post-report wiring
+    expect(calls.indexOf("toast")).toBeLessThan(calls.indexOf("defmgr"));
+    expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("hygiene"));
+  });
+
+  test("classic boot keeps the prompt before the launch report (legacy order)", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        showLaunchTime: () => true,
+        promptDefaultFileManager: () => {
+          calls.push("defmgr");
+        },
+      }),
+    );
+    expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("toast"));
+  });
+
+  test("absent default-file-manager step changes nothing (old fakes keep working)", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls));
+    expect(calls).not.toContain("defmgr");
   });
 
   test("a throwing intro is reported but the sequence continues", async () => {

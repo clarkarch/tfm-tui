@@ -4,6 +4,7 @@
 // that the sidebar, OSC 72 bridge and keyboard paths read. No module-level
 // imports from the renderer — everything flows through ctx. ---
 
+import { archiveBrowseUri } from "../fs/archive-scheme";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { ListEntry } from "../ui/ui-menu";
@@ -106,6 +107,9 @@ export type GridInputCtx = {
   // animate the tile hover (instant highlight + one-cell lift, [ui] file-
   // hover-animation). Absent = today's instant paint via setTileVisual.
   hoverAnim?(key: string, hovered: boolean): void;
+  // true while a modal owns the screen — hover must not paint behind the dim
+  // (a synthetic re-over after the modal opened left tiles highlighted)
+  modalOpen?(): boolean;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
@@ -303,7 +307,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         lastClick = now;
         return false;
       }
-      if (entry.isDir) ctx.navigate(key);
+      const archive = archiveBrowseUri(key, entry.isDir);
+      if (archive) ctx.navigate(archive);
+      else if (entry.isDir) ctx.navigate(key);
       else ctx.openFileDefault(key);
       lastClick = 0;
       return true;
@@ -463,6 +469,9 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
           }
           return;
         }
+        // a modal owns the screen: no hover paint under the dim (the scrim
+        // normally blocks the move, but a synthetic re-over can still land)
+        if (ctx.modalOpen?.()) return;
         // the pointer is an affordance (draggable/clickable), not a highlight:
         // it sets/restores even on selected tiles, which skip the paint below
         ctx.setPointer?.("pointer");

@@ -10,7 +10,9 @@
 
 
 
-https://github.com/user-attachments/assets/29c1e441-d871-4008-922f-47d0c1bc554f
+
+
+https://github.com/user-attachments/assets/843f0cf4-36ef-4732-a27a-7ebcb36bde03
 
 
 
@@ -26,7 +28,8 @@ https://github.com/user-attachments/assets/06b395db-8a91-4402-9ad7-158a5f77ccfe
 
 
 
-https://github.com/user-attachments/assets/f0007e09-c273-4f77-9f9a-d3e7187405c0
+
+https://github.com/user-attachments/assets/b8dc3ea8-93e1-4593-9516-a3108f613d10
 
 
 
@@ -54,9 +57,13 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 - Tabs + dual pane.
 - Connect to network servers.
 - Extract and compress archives.
+- Browse inside archives (tar, zip, 7z, rar) as folders.
+- Eject USB drives safely; plug and unplug detected live.
+- Set tfm as your default file manager.
 - Embedded terminal.
 - Clipboard copy/paste with other apps.
 - Open privileged files with sudo prompt.
+- Command palette to search and run any action.
 - Customizable themes, settings GUI, keybinds.
 - Plugin support with hot reload.
 - …and many more.
@@ -70,6 +77,7 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
   - `magick` (extra photo thumbnails)
   - `gio` (starred files and servers)
   - `udisksctl` (USB drives)
+  - `ffmpeg` (video thumbnails)
   - `wl-clipboard` / `xclip` (copy and paste with other apps)
   - `tar` / `unzip` / `zip` / `7z` (zip files and archives)
 
@@ -97,9 +105,18 @@ bun run check && bun test
 bun run compile && cp dist/tfm ~/.local/bin/
 ```
 
+## Update
+
+`esc` → About or:
+
+```bash
+tfm update
+```
+`--tag v1.0.0` pins a release, `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings.
+
 ## Keys
 
-- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu · `f1` help
+- `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu · `f1` help · `ctrl+p` command palette
 - `ctrl+c/x/v/d` copy/cut/paste/duplicate · `ctrl+z/y` undo/redo
 - `tab` switch focused pane · `f5`/`f6` copy/move to the other pane (dual pane)
 - `ctrl+t/w` new/close tab · `ctrl+tab` switch tab (per pane)
@@ -107,6 +124,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 - `ctrl+a` select all · `space` toggle · `shift+arrows` extend selection
 - `alt+left/right` history back/forward · `ctrl+shift+n` / `ctrl+alt+n` new folder/file
 - `ctrl+shift+d` dual pane · `ctrl+=/-` zoom · `ctrl+r` reload places · `ctrl+alt+r` restart
+- `tfm update` installs the newest release (`esc` → About → Update checks on demand)
 - `ctrl+h` hidden · `ctrl+l` path bar · `ctrl+g` grid/list · `f3` preview · `ctrl+\``/`f4` terminal · `ctrl+shift+s` connect to server
 - `arrows` move · `pageup`/`pagedown` page · `home`/`end` first/last
 
@@ -136,7 +154,6 @@ See [docs/plugins.md](docs/plugins.md).
 
 - Cross-app drag & drop is kitty-only.
 - Mouse on the Linux console (TTY) needs `gpm` running.
-- Icons can show a black box behind open menus or while rubber-band selecting.
 - Custom kitty themes can misbehave.
 
 ## License

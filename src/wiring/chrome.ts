@@ -5,7 +5,7 @@
 // function is the TDZ seam). Async: index awaits it, everything downstream
 // gets a booted renderer. ---
 
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, Text } from "@opentui/core";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { startGpmInput } from "../fs/gpm";
@@ -18,10 +18,11 @@ import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
 import { makeToolbar, toolbarItemIds, crumbItemIds } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
-import { warmEmbeddedIcons } from "../ui/icons";
+import { warmEmbeddedIcons, warmSvgRenderer, shouldWarmBootCaches } from "../ui/icons";
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/tty";
+import { backgroundClearColor } from "../ui/scrim";
 import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
@@ -108,6 +109,7 @@ export const wireChrome = async (deps: {
     byId,
     uiStyle,
     colors: themeGet,
+    modalOpen: () => core.floats.hasModal(),
     transparentForce: () => core.config.ui.transparentBg === "force",
     sw: () => core.geometry.sw,
     sideInnerW: core.sideInnerW,
@@ -163,8 +165,15 @@ export const wireChrome = async (deps: {
     makeIconSlot,
     setIconState,
     stateCwd: () => state.cwd,
+    notify: (m, t, l) => notify(m, t, l),
+    home: () => home,
     connectServer,
     hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
+    // boolean seam: only a REAL drop (dead nodes forgotten) counts — a
+    // redundant call stays silent, so tests can tell rebuild from no-op
+    forgetStaleHover: () => sidebarHover.forgetStale(),
+    // mounts-refresh rebuild (below) replays the boot intro on fresh nodes
+    replaySidebarIntro: () => replaySidebarIntro(),
     setPointer,
   });
 
@@ -173,6 +182,7 @@ export const wireChrome = async (deps: {
   // per row), so every place/pin/device row nudges without its own registry.
   // Synchronous (no timeline), so it can live pre-renderer like the chrome. ---
   const sidebarHover = makeSidebarHover({
+    renderer: () => renderer,
     byId,
     rowRefs: () =>
       new Map(
@@ -188,11 +198,21 @@ export const wireChrome = async (deps: {
       ),
     hoverOpts: () => ({
       enabled: core.config.ui.sidebarHoverAnimation,
-      direction: core.config.ui.sidebarHoverDirection as SidebarHoverDirection,
+      ms: core.config.ui.sidebarHoverMs,
+      slideCells: core.config.ui.sidebarHoverSlideCells,
+      direction: core.config.ui.sidebarHoverSlideDir as SidebarHoverDirection,
+      ease: core.config.ui.sidebarHoverEase,
       includeLabel: core.config.ui.sidebarHoverIncludeLabel,
     }),
   });
   hoverRowImpl = (key, hovered) => sidebarHover.playHover(key, hovered);
+  // a modal taking the screen must drop sidebar hover state: the row nudge
+  // (release) AND the hover Bg, which normalizePlaces keys off mousePlaceIdx
+  // (clearMousePlace resets it + repaints), or the row stays tinted behind the dim
+  core.registerModalOpen(() => {
+    sidebarHover.release();
+    chrome.clearMousePlace();
+  });
 
   // --- Toolbars — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
   // path edit, sort/search buttons). ONE PER PANE, each with its own id prefix
@@ -280,15 +300,25 @@ export const wireChrome = async (deps: {
     ...(core.config.ui.transparentBg !== "off" && !core.isTtyMode() ? {} : { backgroundColor: core.colors.bg }),
   });
   renderer.root.add(container);
-  warmEmbeddedIcons(); // index the embedded svg blobs while the renderer boots
+  // [ui] lazy-startup warms: index the embedded svg blobs + dlopen resvg-js
+  // on a macrotask during runBoot's I/O wait (not in the first drain worker).
+  // Off (default) = classic: the first drain pays both inline. Skipped where
+  // drains never run (tty/force-glyph) — pure waste on the console.
+  // One shared gate (ui/icons): the two call sites can't drift apart.
+  // Optional-chain: old fakes carry no ui section (absent = classic boot).
+  const lazyBoot = (): boolean => shouldWarmBootCaches(core.config.ui?.lazyStartup);
+  const drainsRun = !core.isTtyMode() && !core.forceGlyph();
+  if (lazyBoot() && drainsRun) {
+    warmEmbeddedIcons();
+    warmSvgRenderer();
+  }
   // opencode-style: global bg lives on the renderer, not per-box — transparent
   // modes stay transparent here (the old unconditional reset re-opaqued boot)
-  if (core.config.ui.transparentBg !== "off" && !core.isTtyMode()) renderer.setBackgroundColor("transparent");
-  else renderer.setBackgroundColor(core.colors.bg);
+  renderer.setBackgroundColor(backgroundClearColor(core.config.ui.transparentBg, core.colors.bg, core.isTtyMode()));
 
   // --- Sidebar startup intro (cold-boot-only): one reused timeline over the
   // places sidebar, played by the playSidebarIntro boot step after the first
-  // renderAll. Built here (post-renderer — engine.attach needs the frame
+  // renderAll. Built here (post-renderer — getTimelineEngine needs the frame
   // loop); row ids resolve live from placesHost at play time, so the factory
   // sees the rows renderAll just built. ---
   const sidebarIntro = makeSidebarAnim({
@@ -311,10 +341,26 @@ export const wireChrome = async (deps: {
     // in while it is hidden cascades the rows exactly as before
     titleId: () => (core.config.ui.sidebarTitle !== "none" ? "tfm-title-box" : ""),
   });
+  // the lazy mounts refresh rebuilds the sidebar right after the first render
+  // (row ids are index-keyed, so mounts shift every row below Devices): its
+  // fresh nodes never saw the intro's frame-0 staging. Replay retargets them —
+  // but ONLY while the boot intro is still young (playedOnce + still staged):
+  // navigate-time rebuilds (mount/eject/connect) must stay silent, and the
+  // first renderAll's own build must not double the wave about to play.
+  let introPlayedAt = 0;
+  const replaySidebarIntro = (): void => {
+    if (!introPlayedAt) return;
+    try {
+      if (Date.now() - introPlayedAt > core.config.ui.sidebarAnimationMs + 150) return;
+    } catch {}
+    try {
+      sidebarIntro.play();
+    } catch {}
+  };
 
   // --- Top bar intro (cold-boot-only): cascades each bar's buttons + crumbs
   // left-to-right, played by the playTopbarIntro boot step right after the
-  // sidebar intro. Built here (post-renderer — engine.attach needs the frame
+  // sidebar intro. Built here (post-renderer — getTimelineEngine needs the frame
   // loop); item ids resolve live — crumbs were just built by renderAll. ---
   const topbarIntro = makeTopbarAnim({
     renderer,
@@ -343,12 +389,12 @@ export const wireChrome = async (deps: {
       byId,
       opts: () => ({
         enabled: core.config.ui.directoryBarAnimation,
-        style: core.config.ui.directoryBarStyle,
-        ms: core.config.ui.directoryBarMs,
-        slideCells: core.config.ui.directoryBarSlideCells,
-        dir: core.config.ui.directoryBarDir as SlideDir,
-        staggerPct: core.config.ui.directoryBarStaggerPct,
-        ease: core.config.ui.directoryBarEase as EaseKey,
+        style: core.config.ui.directoryBarAnimationStyle,
+        ms: core.config.ui.directoryBarAnimationMs,
+        slideCells: core.config.ui.directoryBarAnimationSlideCells,
+        dir: core.config.ui.directoryBarAnimationSlideDir as SlideDir,
+        staggerPct: core.config.ui.directoryBarAnimationStaggerPct,
+        ease: core.config.ui.directoryBarAnimationEase as EaseKey,
       }),
       barIds: () => crumbItemIds(byId, `tfm-p${pane}-`),
     });
@@ -380,6 +426,10 @@ export const wireChrome = async (deps: {
     stripSelectable: core.lookup.stripSelectable,
     durationMs: () => core.config.ui.toastDurationMs,
   });
+
+  // string-shaped sticky toast (no OpenTUI imports at the call site)
+  const notifyStickyText = (message: string, width = 36): { close(): void } | null =>
+    notifySticky([Text({ content: message, fg: core.colors.white })], { width, height: 2 });
 
   // --- Escalation primitive for the adaptive open: password gate (cached
   // timestamp first), then the default app elevated with the user's env
@@ -415,7 +465,7 @@ export const wireChrome = async (deps: {
         onFailed();
         dlog(`open ${p}: ${err.message}`);
         notify(`Can't open ${path.basename(p)} · ${err.message}`, "open", "error");
-      }).unref?.();
+      })?.unref();
     },
     appForFile,
     openAsRoot,
@@ -552,7 +602,7 @@ export const wireChrome = async (deps: {
     // fail fast when gio is absent (minimal/container distros) — otherwise
     // the URL prompt opens first and only the mount spawn fails afterwards
     if (!Bun.which("gio")) {
-      notify("Can't connect: gio not installed", "network", "error");
+      notify("Can't connect · gio missing", "network", "error");
       return;
     }
     let input = raw ?? "";
@@ -574,7 +624,7 @@ export const wireChrome = async (deps: {
 
   disconnectServerImpl = async (mountPath: string): Promise<void> => {
     if (!Bun.which("gio")) {
-      notify("Can't disconnect: gio not installed", "network", "error");
+      notify("Can't disconnect · gio missing", "network", "error");
       return;
     }
     const cwd = core.state.cwd;
@@ -592,11 +642,17 @@ export const wireChrome = async (deps: {
     menu,
     chrome,
     sidebarIntro,
+    // the boot step records the play time so a mounts-refresh rebuild inside
+    // the intro window replays onto fresh nodes (see replaySidebarIntro)
+    markIntroPlayed: () => {
+      introPlayedAt = Date.now();
+    },
     topbarIntro,
     toolbars,
     activeToolbar: () => toolbars[core.panes.active],
     notify,
     notifySticky,
+    notifyStickyText,
     ensureSudo: ensureSudoChrome,
     openFileDefault,
     launchAppAsRoot,

@@ -158,7 +158,7 @@ describe("ensureSudoAuth failure paths", () => {
     });
     expect(ok).toBe(false);
     expect(prompts).toBe(0);
-    expect(notes.some((n) => n.includes("no sudo found"))).toBe(true);
+    expect(notes.some((n) => n.includes("sudo missing"))).toBe(true);
   });
 });
 

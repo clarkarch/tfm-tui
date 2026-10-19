@@ -60,7 +60,6 @@ type EscMenuCtx = {
   ): IconSlotHandle;
   setIconState(spec: IconSpec, stateIdx: number): void;
   drainIconQueue(): void | Promise<void>;
-  setScrim(on: boolean): void;
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)
   cancelBand(): void;
   colors(): Theme;
@@ -88,6 +87,11 @@ type EscMenuCtx = {
   // external URL opener for About link rows (wired to xdg-open). Optional
   // so older fakes keep working; absent = link clicks no-op.
   openUrl?(url: string): void;
+  // About's update row: a live value plus the check it triggers. Optional so
+  // older fakes keep the static idle copy.
+  updateValue?(): string;
+  updateActionable?(): boolean;
+  onCheckUpdates?(): void;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
@@ -576,7 +580,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         // silent blank menu (neutral wording: only the debug log names OOM)
         warnedThisBurst = true;
         try {
-          ctx.warn("Menu failed to render — close and try again", "menu");
+          ctx.warn("Menu render failed · try again", "menu");
         } catch {}
       }
     }
@@ -621,13 +625,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         Text({
           content:
             view === "plugins"
-              ? "Menu — plugins"
+              ? "Menu · plugins"
               : view === "settings"
-                ? "Menu — settings"
+                ? "Menu · settings"
                 : view === "help"
-                  ? "Menu — help"
+                  ? "Menu · help"
                   : view === "about"
-                    ? "Menu — about"
+                    ? "Menu · about"
                     : "Menu",
           fg: c.accent,
         }),
@@ -743,6 +747,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         renderer: ctx.renderer,
         makeIconSlot: ctx.makeIconSlot,
         onOpenUrl: (url) => ctx.openUrl?.(url),
+        updateValue: () => ctx.updateValue?.() ?? "check for updates",
+        updateActionable: () => ctx.updateActionable?.() ?? false,
+        onCheckUpdates: () => ctx.onCheckUpdates?.(),
         detail: aboutDetail,
         onOpenDetail: () => {
           aboutDetail = "credits";
@@ -820,7 +827,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     nativeMemTrace("esc-menu close");
     const scrim = ctx.byId("tfm-menu");
     scrim?.parent?.remove(scrim);
-    ctx.setScrim(false);
     // esc-menu open/close churns native allocations (documented leak vector);
     // a rapid cycle can exhaust the allocator before the 10s hygiene tick, so
     // drain finalizers immediately on close.
@@ -843,7 +849,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.log?.("esc-menu open");
     nativeMemTrace("esc-menu open");
     ctx.cancelBand();
-    ctx.setScrim(true);
     const scrim = makeModalScrim(
       { uiStyle: ctx.uiStyle, colors: ctx.colors },
       {

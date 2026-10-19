@@ -37,32 +37,54 @@ export type NotifyCtx = {
 export const ERROR_TOAST_MS = 5000;
 
 // pure level mapping (tested): raster icon + title/body fg + lifetime. Stays
-// on existing Theme keys (white/ansi1/ansi2) — no new theme knobs. Bodies
-// are always white, never muted: muted is only guaranteed on sidebarBg, and
-// no accentBg fill can serve both bright and dim text at once (the dual
-// requirement drove derived fills darker than bg itself).
-// Toasts keep their accentBg fill in every ui-style (a border ring would clip
-// the 3-row shape, same reason tiles stay fill-only).
+// on existing Theme keys (white/ansi1/ansi2) — no new theme knobs. The title
+// carries the level tint; the description line is MUTED (the secondary-text
+// role), so the stack reads title-first. Toasts keep their accentBg fill in
+// every ui-style (a border ring would clip the 2-row content shape, same
+// reason tiles stay fill-only).
 export const toastLevelMeta = (
   level: NotifyLevel,
   colors: { white: string; muted: string; red: string; green: string },
   durationMs: number,
 ): { icon: "information" | "check" | "close"; titleFg: string; bodyFg: string; duration: number } => {
   if (level === "error")
-    return { icon: "close", titleFg: colors.red, bodyFg: colors.white, duration: Math.max(durationMs, ERROR_TOAST_MS) };
-  if (level === "success") return { icon: "check", titleFg: colors.green, bodyFg: colors.white, duration: durationMs };
-  return { icon: "information", titleFg: colors.white, bodyFg: colors.white, duration: durationMs };
+    return { icon: "close", titleFg: colors.red, bodyFg: colors.muted, duration: Math.max(durationMs, ERROR_TOAST_MS) };
+  if (level === "success") return { icon: "check", titleFg: colors.green, bodyFg: colors.muted, duration: durationMs };
+  return { icon: "information", titleFg: colors.white, bodyFg: colors.muted, duration: durationMs };
 };
 
 export type ToastHandle = { id: number; nodeId: string; close: () => void };
 
 // one width for every toast (plain notifies AND the progress toast) —
 // content-sized widths left the stack with zigzag edges on both sides.
-// Messages word-wrap up to MAX_TOAST_LINES rows (the stack already tiles
-// mixed heights); only beyond that does the last line ellipsize. Titles
-// stay one truncated line.
 export const TOAST_W = 36;
+// word-wrap cap for the generic wrapper (tests + any caller that wants the
+// old multi-line body); the notify path below pins its own 2-row content.
 export const MAX_TOAST_LINES = 3;
+
+// B1 media-object layout: a 2-row level icon owns a left column, with the
+// title + description in a text column beside it. The build-time slot width
+// mirrors makeIconSlot's own formula (`heightCells * 2`); the drain re-derives
+// it from the terminal's cell aspect (≈4 at the usual ~2.0).
+export const TOAST_ICON_CELLS = 2;
+export const TOAST_ICON_W = TOAST_ICON_CELLS * 2;
+export const TOAST_PAD_X = 1;
+// vertical gutter above AND below the content block: every notify is the same
+// height and the 2-row icon sits with equal space above and below (the old
+// shell only had a stray air row at the bottom, which read as top-heavy).
+export const TOAST_PAD_Y = 1;
+export const TOAST_GAP = 1;
+// wrap/truncate budget for the text column (title + body share it): the toast
+// width minus both gutters, the icon column and the gap. Deriving it here keeps
+// the strings and the flex layout from drifting apart.
+export const TOAST_TEXT_BUDGET = TOAST_W - TOAST_PAD_X * 2 - TOAST_ICON_W - TOAST_GAP;
+
+// strict 2-row content (title row + ONE wrapped description line) so every
+// notification is the same height — a consistent stack. The body ellipsizes
+// past the single line instead of growing the toast.
+export const TOAST_CONTENT_ROWS = TOAST_ICON_CELLS;
+// total toast height: the content block plus the symmetric top/bottom gutter.
+export const TOAST_H = TOAST_CONTENT_ROWS + TOAST_PAD_Y * 2;
 
 // truncate with an ellipsis instead of a hard cut
 export const truncateToastText = (s: string, budget: number): string =>
@@ -137,11 +159,11 @@ export const makeNotify = (
   let toastSeq = 0;
 
   // slot grid: entries stack downward with a 1-row gap, each at the running
-  // sum of the heights above it — mixed heights (3-row notifies, 4-row
-  // progress) always tile without overlap
+  // sum of the heights above it — every notify is the same TOAST_H, the
+  // progress toast rides the same slot math, so they tile without overlap
   const slotTop = (i: number): number => {
     let y = 1;
-    for (let j = 0; j < i; j++) y += (toasts[j]?.height ?? 3) + 1;
+    for (let j = 0; j < i; j++) y += (toasts[j]?.height ?? TOAST_H) + 1;
     return y;
   };
 
@@ -229,7 +251,13 @@ export const makeNotify = (
           zIndex: 3500,
           backgroundColor: ctx.accentBg(),
           flexDirection: "column",
-          paddingLeft: 1,
+          // symmetric gutter: the old shell had only paddingLeft, so text could
+          // touch the right edge (and the icon column needs the left one)
+          paddingLeft: TOAST_PAD_X,
+          paddingRight: TOAST_PAD_X,
+          // matching vertical gutter so the 2-row content block is centered
+          paddingTop: TOAST_PAD_Y,
+          paddingBottom: TOAST_PAD_Y,
         },
         ...children,
       );
@@ -275,7 +303,10 @@ export const makeNotify = (
       // toast instead of taking the reporting call site down with it
       try {
         const w = TOAST_W;
-        const lines = wrapToastText(message, w - 3);
+        // strict 2-row content: title + exactly ONE description line (long
+        // messages ellipsize rather than growing the toast), so every notify
+        // is the same height.
+        const lines = wrapToastText(message, TOAST_TEXT_BUDGET, TOAST_CONTENT_ROWS - 1);
         const meta = toastLevelMeta(
           level,
           {
@@ -286,26 +317,35 @@ export const makeNotify = (
           },
           ctx.durationMs?.() ?? 3000,
         );
-        // the level icon is a fixed 2-cell raster slot beside the title (same
-        // shape as the progress toast's button slots); the drain swaps the
-        // fallback glyph for the tinted raster async. The toast shell is a
-        // floating layer whose island keeps its accentBg fill in EVERY ui-style
-        // (see FLOAT_TOAST_PREFIX in ui-slots), so this is the raster's flatten
+        // the level icon is a 2-row raster slot that owns the toast's left
+        // column (B1 media-object layout); the drain swaps the fallback glyph
+        // for the tinted raster async. The toast shell is a floating layer
+        // whose island keeps its accentBg fill in EVERY ui-style (see
+        // FLOAT_TOAST_PREFIX in ui-slots), so this is the raster's flatten
         // target and the icon is opaque under `transparent-partial` like every
         // other float icon — it is decoration, so it has no hover state.
-        const slot = ctx.makeIconSlot(meta.icon, [{ fg: meta.titleFg, bg: ctx.accentBg() }], 1);
+        const slot = ctx.makeIconSlot(meta.icon, [{ fg: meta.titleFg, bg: ctx.accentBg() }], TOAST_ICON_CELLS);
         pushToast(
           w,
-          // short messages keep the classic 3-row shape (title + line + air);
-          // longer ones grow instead of truncating
-          Math.max(3, 1 + lines.length),
+          // every notify is exactly TOAST_H rows: 2-row content + the
+          // symmetric vertical gutter, so the stack never zigzags in height
+          TOAST_H,
           [
+            // B1: icon column + text column. The title and the single wrapped
+            // body line share the text column, so the description hangs
+            // INDENTED under the title (both start at TOAST_PAD_X + icon +
+            // gap), not at the toast edge. The icon is 2 rows tall and the
+            // content block is 2 rows, so it fills the block; `alignItems`
+            // keeps it centered if a body ever renders shorter.
             Box(
-              { height: 1, flexDirection: "row", columnGap: 1 },
+              { flexDirection: "row", columnGap: TOAST_GAP, alignItems: "center" },
               slot.el,
-              Text({ content: truncateToastText(title, w - 4), fg: meta.titleFg }),
+              Box(
+                { flexDirection: "column" },
+                Text({ content: truncateToastText(title, TOAST_TEXT_BUDGET), fg: meta.titleFg }),
+                ...lines.map((line) => Text({ content: line, fg: meta.bodyFg })),
+              ),
             ),
-            ...lines.map((line) => Text({ content: line, fg: meta.bodyFg })),
           ],
           false,
           meta.duration,
@@ -325,7 +365,7 @@ export const makeNotify = (
       } catch {}
     },
     notifySticky(children, opts) {
-      return pushToast(opts?.width ?? TOAST_W, opts?.height ?? 4, children, true);
+      return pushToast(opts?.width ?? TOAST_W, opts?.height ?? TOAST_H, children, true);
     },
   };
 };

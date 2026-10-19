@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box, Text } from "@opentui/core";
+import { Box, InputRenderable, Text } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeRename, tileLabelFor, uniqueUntitledName, type RenameCtx } from "./ui-rename";
 
@@ -125,9 +125,9 @@ describe("makeRename (renderer)", () => {
     rename = makeRename(ctx);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     rmSync(dir, { recursive: true, force: true });
-    t.renderer.destroy();
+    await t.dispose(); // 0.6.0: destroy + await closed
   });
 
   test("committing a create keeps ONE undo batch and reports Created, not Renamed", async () => {
@@ -147,7 +147,7 @@ describe("makeRename (renderer)", () => {
     await t.renderOnce();
     const undoCalls = calls.filter((c) => c.startsWith("undo:"));
     expect(undoCalls).toEqual(["undo:new file notes.txt:1:1"]); // single batch, final name
-    expect(calls).toContain("notify:create:success:Created notes.txt · ctrl+z to undo");
+    expect(calls).toContain("notify:create:success:Created notes.txt");
     expect(calls.some((c) => c.startsWith("rename:"))).toBe(false); // no rename detour
     expect(calls).toContain("renderAll");
     // the file landed under the typed name; no placeholder left behind
@@ -173,7 +173,7 @@ describe("makeRename (renderer)", () => {
     while (!calls.some((c) => c.startsWith("undo:new file")) && Date.now() < landed) await Bun.sleep(5);
     expect(readFileSync(path.join(dir, "taken.txt"), "utf8")).toBe("precious");
     expect(existsSync(path.join(dir, "taken (copy).txt"))).toBe(true);
-    expect(calls).toContain("notify:create:success:Created taken (copy).txt · ctrl+z to undo");
+    expect(calls).toContain("notify:create:success:Created taken (copy).txt");
   });
 
   test("cancelling a rename restores the label at its ORIGINAL row index (not the end)", async () => {
@@ -197,6 +197,35 @@ describe("makeRename (renderer)", () => {
     expect(pointers).toEqual(["text"]);
     rename.finishInlineRename(false);
     expect(pointers).toEqual(["text", "default"]);
+  });
+
+  test("upstream premise: 0.6.6 Input accepts control chars (seeds still strip)", () => {
+    // 0.6.0 threw NativeError on a C0 in value/initialValue; 0.6.1+ accepts them
+    // and shows caret notation (^A, and <85> for C1). tfm still strips seeds:
+    // a filename's control chars would otherwise render as notation in the
+    // rename field, and the commit reads the real basename, never the input.
+    const withControls = new InputRenderable(t.renderer, { id: "premise-ctl", width: 10, value: "a\x01b" });
+    expect(withControls.value).toBe("a\x01b");
+    expect(() => new InputRenderable(t.renderer, { id: "premise-clean", width: 10, value: "ab\tcd" })).not.toThrow();
+  });
+
+  test("a control-char filename opens rename without notation in the field", async () => {
+    // Linux filenames may carry C0 controls (everything except / and NUL);
+    // the seeded Input value is stripped so the field shows the plain name —
+    // and an untouched Enter must NOT rename to the stripped display form
+    // (the commit reads the real key's basename, not the input)
+    const key = path.join(dir, "we\x01ird\x1b.txt");
+    await mountRow(key);
+    rename.startInlineRename(key);
+    await t.renderOnce();
+    const input = t.renderer.root.findDescendantById("tfm-rename-input") as any;
+    expect(input).toBeTruthy();
+    expect(input.value).toBe("weird.txt");
+    calls.length = 0;
+    rename.finishInlineRename(true); // untouched Enter: no-op, not a rename
+    expect(calls.some((c) => c.startsWith("rename:"))).toBe(false);
+    expect(existsSync(key)).toBe(true);
+    rename.finishInlineRename(false);
   });
 });
 

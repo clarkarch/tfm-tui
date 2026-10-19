@@ -6,10 +6,12 @@
 // before or after the path. `--` ends option parsing. ---
 
 import pkg from "../../package.json";
+import { fileUriToPath } from "../fs/uri";
 
 export type CliOptions = {
   help: boolean;
   version: boolean;
+  filemanagerService: boolean;
   config: string | null;
   paths: string[];
   // `tfm plugins <args>` — a headless management subcommand (no TUI boot)
@@ -19,7 +21,15 @@ export type CliOptions = {
 };
 
 export const parseArgs = (argv: string[]): CliOptions => {
-  const opts: CliOptions = { help: false, version: false, config: null, paths: [], command: null, error: null };
+  const opts: CliOptions = {
+    help: false,
+    version: false,
+    filemanagerService: false,
+    config: null,
+    paths: [],
+    command: null,
+    error: null,
+  };
   let args = argv.slice(1);
   // Two script-token layouts: `bun src/index.ts PATH` (argv[1] is the script)
   // and the compiled binary, whose runtime injects `["bun",
@@ -37,6 +47,16 @@ export const parseArgs = (argv: string[]): CliOptions => {
   // belongs to it (so a URL with dashes isn't read as a flag)
   if (args[0] === "plugins") {
     opts.command = { name: "plugins", args: args.slice(1) };
+    return opts;
+  }
+  // same headless shape for the default-file-manager controls (no TUI boot)
+  if (args[0] === "default-filemanager") {
+    opts.command = { name: "default-filemanager", args: args.slice(1) };
+    return opts;
+  }
+  // ...and for `tfm update` (release check + install, no TUI boot)
+  if (args[0] === "update") {
+    opts.command = { name: "update", args: args.slice(1) };
     return opts;
   }
 
@@ -62,6 +82,12 @@ export const parseArgs = (argv: string[]): CliOptions => {
     }
     if (a === "-v" || a === "--version") {
       opts.version = true;
+      continue;
+    }
+    // D-Bus FileManager1 daemon (started by the service activator, never by
+    // hand normally) — answers before the TUI graph loads, like plugins
+    if (a === "--filemanager-service") {
+      opts.filemanagerService = true;
       continue;
     }
     // --debug/-d is consumed by ./log (which still scans argv); accepted here
@@ -94,7 +120,8 @@ export const usageText = (): string => `tfm ${pkg.version} — terminal file man
 Usage: tfm [OPTIONS] [PATH]
 
   PATH               directory to open (default: current dir). A file opens
-                     its parent folder and selects that file.
+                     its parent folder and selects that file. file:// URIs
+                     (what desktops pass for %U) decode to paths.
 
 Options:
   -h, --help         show this help and exit
@@ -105,4 +132,12 @@ Options:
 
 Commands:
   plugins [list|search|add|remove|update|new]   manage plugins (see 'tfm plugins help')
+  update [--tag VERSION] [--force]
+                                          install the newest tfm (see 'tfm update help')
+  default-filemanager [status|set|unset|forget|service-install|service-remove]
+                                          default file manager opt-in (see 'tfm default-filemanager help')
 `;
+
+// desktop %U launches arrive as file:// URIs — decode them with the shared
+// lenient decoder (host-strip + malformed-escape tolerance), never a new one.
+export const decodeCliPath = (raw: string): string => (raw.startsWith("file://") ? fileUriToPath(raw) : raw);

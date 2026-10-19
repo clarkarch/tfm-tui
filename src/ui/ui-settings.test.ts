@@ -81,7 +81,6 @@ const mkGroups = (rowCount = 5): SettingGroup[] => {
 let t: TestRendererSetup;
 let floats: ReturnType<typeof makeFloats>;
 let menu: ReturnType<typeof makeEscMenu>;
-let scrim: boolean;
 let cancelledBand: number;
 let warns: Array<[string, string | undefined]>;
 let dlogs: string[];
@@ -105,7 +104,6 @@ const pointers: string[] = [];
 beforeAll(async () => {
   t = await createTestRenderer({ width: 90, height: TERM_H });
   floats = makeFloats();
-  scrim = false;
   cancelledBand = 0;
   warns = [];
   dlogs = [];
@@ -141,9 +139,6 @@ beforeAll(async () => {
     setIconState: (spec, stateIdx) => {
       iconStateCalls.push([spec.slotId, stateIdx]);
     },
-    setScrim: (on) => {
-      scrim = on;
-    },
     cancelBand: () => {
       cancelledBand++;
     },
@@ -171,9 +166,7 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => {
-  t.renderer.destroy();
-});
+afterAll(() => t.dispose()); // 0.6.0: destroy + await closed
 
 // openMenu is a no-op while open (shared instance state across tests) — close
 // first so every test starts from the root view. BOTH views now open with NO
@@ -255,7 +248,7 @@ describe("esc-menu root view", () => {
       const deadline = Date.now() + 2000;
       while (warns.length === 0 && Date.now() < deadline) await Bun.sleep(20);
       await t.renderOnce();
-      expect(warns.some((w) => w[1] === "menu" && w[0].toLowerCase().includes("failed to render"))).toBe(true);
+      expect(warns.some((w) => w[1] === "menu" && w[0].toLowerCase().includes("render failed"))).toBe(true);
     } finally {
       groups = saved;
       menu.closeMenu();
@@ -280,7 +273,6 @@ describe("esc-menu root view", () => {
     expect(frame).toContain("Settings");
     expect(frame).toContain("Quit");
     expect(floats.isOpen("escmenu")).toBe(true);
-    expect(scrim).toBe(true);
     expect(cancelledBand).toBe(1); // a modal kills in-flight rubber-band
     menu.closeMenu();
     await t.renderOnce();
@@ -294,7 +286,6 @@ describe("esc-menu root view", () => {
     await t.renderOnce();
     expect(quitCalls).toBe(1);
     expect(floats.isOpen("escmenu")).toBe(false);
-    expect(scrim).toBe(false);
     expect(t.renderer.root.findDescendantById("tfm-menu")).toBeFalsy();
   });
 
@@ -348,7 +339,7 @@ describe("settings view", () => {
     const frame = t.captureCharFrame();
     expect(frame).toContain("show hidden");
     expect(frame).toContain("sidebar width");
-    expect(frame).toContain("Menu — settings");
+    expect(frame).toContain("Menu · settings");
   });
 
   test("settings panel fills the terminal (adaptive width, not fixed 78)", async () => {
@@ -588,22 +579,27 @@ describe("settings view", () => {
     await t.renderOnce();
   });
 
-  test("windowed scrolling: the right pane caps at vis rows and the counter tracks the cursor", async () => {
+  test("windowed scrolling: the right pane caps at vis rows; a scroll hint shows", async () => {
     await openSettings();
     // switch to the 20-row behavior category via the cats pane — the switch
     // itself focuses the rows pane (switchCategory sets pane="rows")
     menu.menuTab();
     menu.adjustSelectedSetting(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-12 of 20"); // vis = 12 at termH 24
+    // overflow → a plain hint replaces the old "N-M of T" counter
+    expect(t.captureCharFrame()).toContain("↑/↓ or wheel to scroll");
+    expect(t.captureCharFrame()).toContain("knob-0");
+    expect(t.captureCharFrame()).not.toContain("knob-19");
     // walk the cursor to the last row: window follows
     for (let i = 0; i < 19; i++) menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("9-20 of 20");
+    expect(t.captureCharFrame()).toContain("knob-19");
+    expect(t.captureCharFrame()).not.toContain("knob-0");
     // wrap-around from the end returns to the top window
     menu.moveMenu(1);
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("1-12 of 20");
+    expect(t.captureCharFrame()).toContain("knob-0");
+    expect(t.captureCharFrame()).not.toContain("knob-19");
   });
 
   test("headers take the cursor and collapse/expand on activate (no more skip)", async () => {
@@ -640,12 +636,13 @@ describe("settings view", () => {
       menu.moveMenu(1);
       await t.renderOnce();
       expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
-      // activate collapses the section: bbb vanishes, counter reports it
+      // activate collapses the section: bbb vanishes
       menu.menuActivate();
       await t.renderOnce();
       expect(t.captureCharFrame()).not.toContain("bbb");
       expect(t.captureCharFrame()).toContain("▶");
-      expect(t.captureCharFrame()).toContain("collapsed");
+      // a short/folded list shows no scroll hint (only an overflowing list does)
+      expect(t.captureCharFrame()).not.toContain("wheel to scroll");
       // cursor parks on the header, menu stays open
       expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
       expect(floats.isOpen("escmenu")).toBe(true);
@@ -826,8 +823,8 @@ describe("keybind capture", () => {
     // handler never sees inside clicks (the panel stops propagation), so a
     // bare stopPropagation here leaves the capture armed.
     const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
-    const px = Math.round(panel.yogaNode.getComputedLeft()) + 2;
-    const py = Math.round(panel.yogaNode.getComputedTop()) + Math.round(panel.yogaNode.getComputedHeight()) - 1;
+    const px = Math.round(panel.getLayout().left) + 2;
+    const py = Math.round(panel.getLayout().top) + Math.round(panel.getLayout().height) - 1;
     await t.mockMouse.click(px, py);
     await t.renderOnce();
     expect(t.captureCharFrame()).not.toContain("press a key…"); // cancelled
@@ -1073,7 +1070,7 @@ describe("plugins view (separate from settings)", () => {
     const frame = t.captureCharFrame();
     expect(frame).toContain("Say hello");
     expect(frame).toContain("enabled"); // core-built on/off toggle, first row
-    expect(frame).toContain("Menu — plugins");
+    expect(frame).toContain("Menu · plugins");
     // core settings stay out of the plugins view
     expect(frame).not.toContain("sidebar width");
     plugGroups = [];
@@ -1152,17 +1149,18 @@ describe("menu placement", () => {
     await t.renderOnce();
     const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
     expect(panel).toBeTruthy();
-    // yogaNode is protected (TS-level only) — reachable at runtime; the
-    // computed top IS the painted position, not a prop echo
-    const yoga = panel.yogaNode;
-    const top = yoga.getComputedTop();
-    const h = yoga.getComputedHeight();
-    const scrim: any = t.renderer.root.findDescendantById("tfm-menu");
+    // getLayout() is the painted position, not a prop echo (0.6.0: the JS
+    // yoga node is gone; protected yogaNode reads became this)
+    const { top, height: h } = panel.getLayout();
     // centered in the terminal (yoga rounding may drift a cell)…
     expect(Math.abs(top - (TERM_H - h) / 2)).toBeLessThanOrEqual(1);
-    // …and the old top-third pad is gone (a coincident height could satisfy
-    // the centering formula under the old code — zero pad kills that hole)
-    expect(scrim.yogaNode.getComputedPadding(1)).toBe(0); // Edge.Top
+    // …and the old top-third pad is gone: a pad pushes the centered panel
+    // DOWN by pad/2, so an exact-zero pad means top never exceeds the ceiled
+    // center. Tolerance note: this kills pad ≥ 2 and the historical top-third
+    // pad — a pad=1 on an odd-height panel lands exactly on ceil(center) and
+    // passes (visually inert under the intentional ±1 band, and the old
+    // getComputedPadding(1) === 0 getter is gone with the JS yoga node).
+    expect(top).toBeLessThanOrEqual(Math.ceil((TERM_H - h) / 2));
   });
 });
 
@@ -1227,7 +1225,7 @@ describe("help view", () => {
     menu.menuActivate();
     await t.renderOnce();
     frame = t.captureCharFrame();
-    expect(frame).toContain("Menu — about");
+    expect(frame).toContain("Menu · about");
     expect(frame).toContain("terminal file manager");
     expect(requestedIcons).toContain("tfm");
     // cursorless: arrows and enter are no-ops, the view stays put
@@ -1235,7 +1233,7 @@ describe("help view", () => {
     menu.moveMenu(-1);
     menu.menuActivate();
     await t.renderOnce();
-    expect(t.captureCharFrame()).toContain("Menu — about");
+    expect(t.captureCharFrame()).toContain("Menu · about");
     menu.closeMenu();
     await t.renderOnce();
   });

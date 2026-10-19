@@ -126,7 +126,7 @@ export const appsForFile = async (
 
 // fire-and-forget launch through gio (detached so the app outlives the spawn)
 export const launchApp = (desktopFile: string, file: string, onFail?: (e: Error) => void): void => {
-  spawnSafe("gio", ["launch", desktopFile, file], { stdio: "ignore", detached: true }, onFail).unref?.();
+  spawnSafe("gio", ["launch", desktopFile, file], { stdio: "ignore", detached: true }, onFail)?.unref();
 };
 
 // Shared gate+exec core behind both escalation primitives below: one password
@@ -177,11 +177,7 @@ const runElevated = async (
       .map((l) => l.trim())
       .find(Boolean) ?? `exit ${r.status}`;
   deps.log(`${tag} failed for ${file}: ${why}`);
-  deps.notify(
-    `${failedPrefix} · ${why}${tag === "open-as-root" ? " (try sudoedit in a terminal)" : ""}`,
-    "open",
-    "error",
-  );
+  deps.notify(`${failedPrefix} · ${why}${tag === "open-as-root" ? " · try sudoedit" : ""}`, "open", "error");
 };
 
 // Escalation primitive behind the adaptive open: password gate first, then

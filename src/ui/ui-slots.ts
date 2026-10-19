@@ -1,10 +1,9 @@
-// --- Icon slots / thumbnails / modal scrim ---
+// --- Icon slots / thumbnails ---
 // Widget-extraction seam (see ui-dialogs.ts for the template): build time
 // queues a small glyph box via makeIconSlot; the async drain swaps in
 // theme-tinted kitty rasters at exact cell pixels (resvg/rsvg-convert via
-// ./icons). Thumbnail jobs share the same drain model. Kitty placements
-// float above all cells, so while a modal is up every background slot falls
-// back to a pre-darkened glyph (setScrim); rasters come back on close.
+// ./icons). Thumbnail jobs share the same drain model. (Modal dimming is the
+// app-content node's opacity, not a scrim that would delete covered rasters.)
 // Renderer/theme arrive via ctx getters — never capture geometry or colors.
 
 import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
@@ -237,8 +236,6 @@ export type SlotsCtx = {
   iconStyle?(): IconStyle;
   // default thumb height in cells (the ICON_CELLS_H geometry let)
   iconCells(): number;
-  // true while a modal menu/scrim owns the screen (drain re-applies scrim)
-  modalOpen(): boolean;
   glyphFor(name: string): string;
   // tty mode (linux console): skip every raster/thumb spawn, glyphs only.
   // force-glyph does the same on modern terminals with buggy kitty graphics
@@ -266,17 +263,32 @@ export const dimHex = (hex: string, f: number): string => {
   return intToHex((r << 16) | (g << 8) | b);
 };
 
+// scrim dim: darken an icon's baked pixels without alpha, so the raster reads
+// as dimmed rather than lit or translucent. `bgShade` darkens the flattened
+// square too (the overlay darkens the cells it covers, so the square must
+// follow or it pops); under a content fade the square stays put (bg over bg).
+// Float islands never dim (identity).
+export const shadeIconStates = (states: IconState[], shade: number, floatChild: boolean, bgShade = 1): IconState[] =>
+  floatChild || (shade === 1 && bgShade === 1)
+    ? states
+    : states.map((st) => ({ fg: dimHex(st.fg, shade), bg: dimHex(st.bg, bgShade) }));
+
 export const makeSlots = (ctx: SlotsCtx) => {
-  // registry of every queued slot, drained or not: setScrim must reach
-  // rasters that finished BEFORE the modal opened (the old queue pruned
-  // done specs at the end of each drain — scrim then iterated an almost
-  // empty queue and kitty rasters floated over the menu), and
-  // resetIconQueue must re-queue drained slots for theme/resize re-rasters.
-  // Pruned lazily in drainIconQueue when the slot node is gone from the tree.
+  // registry of every queued slot, drained or not: resetIconQueue must
+  // re-queue drained slots for theme/resize re-rasters, and every mounted
+  // raster finishing AFTER a modal opened must still be reachable. Pruned
+  // lazily in drainIconQueue when the slot node is gone from the tree.
   // This is the ONLY registry — a second `iconQueue` (the old design) grew
   // unbounded and re-armed dead specs on every reset.
   const allSpecs = new Map<string, IconSpec>();
   let iconSeq = 0;
+  // scrim dim: icon rasters stay opaque (placement opacity 1) while the content
+  // node fades, and their foreground is SHADED by this factor at drain time so
+  // they darken along with the text instead of compositing translucently.
+  // setRasterDim re-queues every slot; new rasters bake both in.
+  let rasterDim: number | null = null;
+  let rasterShade = 1;
+  let rasterBgShade = 1;
   let thumbJobs: ThumbJob[] = [];
   // per-slot ownership: pushThumbJob records the key of the job it queued for a
   // slot, so a drain that resolves the slot later can tell whether ITS job still
@@ -403,6 +415,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
         const pxH = Math.max(1, Math.round(hCells * cellH) - 2);
         try {
           const bytes = await thumbPng(j.path, j.mtimeMs, j.size, pxW, pxH, jobBg, j.vector, j.video);
+          // a floating layer's thumbnail is above the scrim overlay (its panel
+          // is not dimmed), so it must opt out of the frame-end region bake
+          const floatThumb = isFloatChild(slot);
           const img = new ImageRenderable(ctx.renderer(), {
             id: `${j.slotId}-t`,
             source: bytes,
@@ -412,6 +427,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
             // thumbImageFit) — icons keep fit:"fit" at their own site
             fit: thumbImageFit(j.vector),
             protocol: "auto",
+            placementOpacity: floatThumb && rasterDim != null ? 1 : undefined,
           });
           if (img.loadPromise) await img.loadPromise;
           // RE-RESOLVE: a rebuild during the raster detached the captured node;
@@ -458,18 +474,19 @@ export const makeSlots = (ctx: SlotsCtx) => {
     faithful = false,
   ) => {
     const { cellW, cellH } = cellMetrics();
+    const floatChild = isFloatChild(ctx.byId(slotId));
+    // scrim dim: bake the shade into the foreground (bg untouched, so the
+    // flattened square still matches the tile) and keep the placement opaque.
+    // Float islands are never dimmed.
+    const shaded = shadeIconStates(states, rasterShade, floatChild, rasterBgShade);
     // `transparent` = raster keeps alpha; strip it inside floating layers in
     // partial mode so an opaque island can't blend the desktop through.
     // transparent-bg force keeps alpha outside floats too (chrome tiles are
     // transparent under force); float children keep flattening onto the island.
-    const transparent = iconTransparent(
-      ctx.iconsMode(),
-      isFloatChild(ctx.byId(slotId)),
-      ctx.transparentForce?.() ? "force" : undefined,
-    );
+    const transparent = iconTransparent(ctx.iconsMode(), floatChild, ctx.transparentForce?.() ? "force" : undefined);
     const imgs: ImageRenderable[] = [];
-    for (let si = 0; si < states.length; si++) {
-      const st = states[si];
+    for (let si = 0; si < shaded.length; si++) {
+      const st = shaded[si];
       if (st === undefined) continue;
       try {
         const pxW = Math.max(1, Math.round(wCells * cellW));
@@ -495,6 +512,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
           height: heightCells,
           fit: "fit",
           protocol: "auto",
+          // scrim dim: opaque placement (the foreground is already shaded) and
+          // exempt from the frame-end region bake. Floats get it too: they sit
+          // ABOVE the scrim overlay, so their panels are never dimmed and their
+          // rasters must not be either. null (no scrim) inherits as before.
+          placementOpacity: rasterDim == null ? undefined : 1,
         });
         if (img.loadPromise) await img.loadPromise;
         img.visible = si === initial;
@@ -580,14 +602,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // drop specs whose slot node is gone from the tree (tiles/sidebars
     // rebuilt by renderAll): their spec objects are dead weight and the
     // tile refs that kept them alive are gone too. Everything still
-    // mounted stays in the registry — the scrim and retheme re-rasters
-    // need it (see allSpecs above).
+    // mounted stays in the registry — retheme re-rasters need it (see
+    // allSpecs above).
     for (const [id, spec] of allSpecs) {
       if (spec.done && !ctx.byId(id)) allSpecs.delete(id);
     }
-    // re-rasters made fresh images visible; while a modal scrim is up the icons
-    // must fall back to dimmed glyphs or they float over the menu
-    if (ctx.modalOpen()) setScrim(true);
   };
 
   // Serialized entry point: concurrent calls coalesce into the running pass
@@ -632,42 +651,34 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return false;
   };
 
-  const setScrim = (on: boolean) => {
-    for (const spec of allSpecs.values()) {
-      const slot: SlotNode | null | undefined = ctx.byId(spec.slotId);
-      if (!slot) continue;
-      if (on && isFloatChild(slot)) continue;
-      const kids = [...(slot.getChildren?.() ?? [])];
-      const glyphNode = kids.find((k) => k.id === `${spec.slotId}-g`);
-      if (!glyphNode) continue;
-      const stateImgs = kids.filter((k) => typeof k.id === "string" && k.id.startsWith(`${spec.slotId}-s`));
-      if (stateImgs.length === 0 && !spec.done) continue;
-      if (on) {
-        stateImgs.forEach((k) => {
-          try {
-            k.visible = false;
-          } catch {}
-        });
-        try {
-          glyphNode.fg = dimHex(spec.states[spec.initialState]?.fg ?? ctx.colors().sidebarFg, 0.41);
-          glyphNode.visible = true;
-        } catch {}
-      } else {
-        if (stateImgs.length === 0) {
-          try {
-            glyphNode.visible = true;
-          } catch {}
-        } else {
-          try {
-            glyphNode.visible = false;
-          } catch {}
-          stateImgs.forEach((k, i) => {
-            try {
-              k.visible = i === spec.initialState;
-            } catch {}
-          });
-        }
-      }
+  // scrim dim / fill: keep icon rasters opaque (placement opacity) and shade
+  // their baked foreground so they darken with the rest of the content. Both
+  // values are read by the drain, so the change re-queues every slot and
+  // re-rasters — a slot whose raster finished before the modal opened is
+  // covered too, and floats are skipped by the drain itself.
+  const setRasterDim = (opacity: number | null, shade: number, bgShade = 1): void => {
+    if (rasterDim === opacity && rasterShade === shade && rasterBgShade === bgShade) return;
+    rasterDim = opacity;
+    rasterShade = shade;
+    rasterBgShade = bgShade;
+    // same effect as resetIconQueue (mark every spec for a re-raster) without
+    // repainting fallback glyphs — the drain rebuilds them from the shaded
+    // states anyway
+    for (const s of allSpecs.values()) s.done = false;
+    iconForceRedrain = true;
+    void drainIconQueue();
+    // Already-rastered FLOAT thumbnails (the properties dialog): their slot is
+    // never re-drained by a modal, so set the override in place. Content
+    // thumbnails keep inheriting (they are under the overlay and should dim).
+    const floatOverride = opacity == null ? null : 1;
+    for (const slotId of thumbOwners.keys()) {
+      const slot: SlotNode | null | undefined = ctx.byId(slotId);
+      if (!slot || !isFloatChild(slot)) continue;
+      const img = ctx.byId(`${slotId}-t`);
+      if (!img) continue;
+      try {
+        (img as { placementOpacity?: number | null }).placementOpacity = floatOverride;
+      } catch {}
     }
   };
 
@@ -728,7 +739,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     setIconState,
     drainThumbs,
     drainIconQueue,
-    setScrim,
+    setRasterDim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
     resetIconQueue: (): void => {
       // boot-baked slots may have already drained and left the pending set —

@@ -118,6 +118,15 @@ export type GridRendererCtx = {
   // slide it on scroll. Optional so existing test fakes keep the full-build
   // contract; the real default lives in config-schema (on).
   windowedGrid?(): boolean;
+  // [ui] smooth-scrolling: glide the mounted window container on small
+  // scrolls (one translateY tween, whole cells) instead of snapping. The sink
+  // owns the timeline + duration (wiring closes over makeSmoothGlide); the
+  // grid only hands it the mounted inner node + the signed cell delta.
+  // Optional so test fakes keep working; absent = instant (today's behavior).
+  smoothScroll?(): boolean;
+  smoothScrollMs?(): number;
+  smoothGlide?(inner: unknown, deltaCells: number): void;
+  smoothStop?(): void;
   // an inline rename/create edit is live on a tile node — a window slide must
   // never destroy it (the watcher/hover-drawer skip rebuilds the same way;
   // commit/cancel rebuilds or the next scroll notch lands the slide)
