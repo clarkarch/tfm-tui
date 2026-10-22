@@ -240,7 +240,8 @@ describe("runUninstallCli", () => {
       restoreDefault: async () => ({ ok: false, message: "No previous file manager recorded · unchanged" }),
     });
     expect(await runUninstallCli([], h.deps)).toBe(0);
-    expect(h.err.join("\n")).toContain("No previous file manager recorded");
+    expect(h.err.join("\n")).toContain("folder opens are still set to tfm");
+    expect(h.err.join("\n")).toContain("xdg-mime default");
     expect(h.out.join("\n")).toContain("tfm removed");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(false);
   });
@@ -271,7 +272,7 @@ describe("runUninstallCli", () => {
     });
     expect(await runUninstallCli([], h.deps)).toBe(0);
     // it asks about the data first, then the confirm
-    expect(asked[0]).toMatch(/settings, plugins/);
+    expect(asked[0]).toMatch(/Delete your settings/);
     expect(asked[1]).toMatch(/Uninstall tfm/);
     expect(h.out.join("\n")).toContain("cancelled");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(true);
