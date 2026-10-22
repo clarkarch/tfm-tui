@@ -308,12 +308,12 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
       out("cancelled, nothing changed");
       return 0;
     }
-    if (plan.length) {
-      out("About to remove:");
-      for (const item of plan) out(`  ${item}`);
-    }
     removeData = await ask("Delete your settings, plugins and caches too?");
-    if (removeData) for (const dir of dataDirs) if (existsLstat(dir)) out(`  ${pretty(dir)}`);
+    const items = removeData ? [...plan, ...dataDirs.filter(existsLstat).map(pretty)] : plan;
+    if (items.length) {
+      out("About to remove:");
+      for (const item of items) out(`  ${item}`);
+    }
   } else if (plan.length) {
     out("will remove:");
     for (const item of plan) out(`  ${item}`);
