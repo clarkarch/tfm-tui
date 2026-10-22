@@ -122,8 +122,8 @@ tfm uninstall
 
 It removes the binary and its `terminal-file-manager` name, the desktop entry
 and icons, the D-Bus activator, the PATH line the installer added, and the
-install record — asking first. `--purge` also deletes your settings, plugins,
-session, undo journal, caches and a source-built checkout. Works offline.
+install record. It asks whether to keep your settings, plugins and caches,
+then asks you to confirm. Works offline.
 
 ## Keys
 

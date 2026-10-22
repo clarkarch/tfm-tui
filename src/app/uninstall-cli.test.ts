@@ -151,13 +151,12 @@ afterEach(() => {
 });
 
 describe("arg parsing (pure)", () => {
-  test("bare `tfm uninstall` keeps the user data", () => {
-    expect(parseUninstallArgs([])).toEqual({ cmd: "uninstall", purge: false, error: null });
+  test("bare `tfm uninstall` takes no options", () => {
+    expect(parseUninstallArgs([])).toEqual({ cmd: "uninstall", error: null });
   });
 
-  test("--purge (and -p) opt into deleting the user data", () => {
-    expect(parseUninstallArgs(["--purge"]).purge).toBe(true);
-    expect(parseUninstallArgs(["-p"]).purge).toBe(true);
+  test("the old --purge flag is gone, it is a usage error", () => {
+    expect(parseUninstallArgs(["--purge"]).error).toMatch(/unknown/);
   });
 
   test("help wins, unknown flags are usage errors", () => {
@@ -192,7 +191,8 @@ describe("runUninstallCli", () => {
   test("default: removes the program but keeps settings, plugins and caches", async () => {
     const h = harness();
     expect(await runUninstallCli([], h.deps)).toBe(0);
-    expect(h.out.join("\n")).toContain("tfm uninstalled");
+    expect(h.out.join("\n")).toContain("tfm removed");
+    expect(h.out.join("\n")).toContain("still in");
 
     for (const bin of binaries) expect(existsSync(bin)).toBe(false);
     expect(existsSync(path.join(applications, "tfm.desktop"))).toBe(false);
@@ -213,10 +213,10 @@ describe("runUninstallCli", () => {
     expect(existsSync(path.join(cacheDir, "cache"))).toBe(true);
   });
 
-  test("--purge: removes the settings, plugins, state, caches and checkout too", async () => {
+  test("interactive: answering yes to the data question deletes settings, plugins, state, caches and the checkout", async () => {
     mkdirSync(path.join(dataDir, "src", "tfm-tui"), { recursive: true });
-    const h = harness();
-    expect(await runUninstallCli(["--purge"], h.deps)).toBe(0);
+    const h = harness({ isTTY: () => true, ask: async () => true });
+    expect(await runUninstallCli([], h.deps)).toBe(0);
     expect(existsSync(configDir)).toBe(false);
     expect(existsSync(stateDir)).toBe(false);
     expect(existsSync(cacheDir)).toBe(false);
@@ -234,13 +234,14 @@ describe("runUninstallCli", () => {
     expect(restoring.out.join("\n")).toContain("default file manager again");
   });
 
-  test("a failed default-file-manager restore is reported, the binary still goes", async () => {
+  test("a failed default-file-manager restore warns but still counts as a successful uninstall", async () => {
     const h = harness({
       currentDefault: () => "tfm.desktop",
       restoreDefault: async () => ({ ok: false, message: "No previous file manager recorded · unchanged" }),
     });
-    expect(await runUninstallCli([], h.deps)).toBe(1);
+    expect(await runUninstallCli([], h.deps)).toBe(0);
     expect(h.err.join("\n")).toContain("No previous file manager recorded");
+    expect(h.out.join("\n")).toContain("tfm removed");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(false);
   });
 
@@ -259,7 +260,7 @@ describe("runUninstallCli", () => {
     expect(existsSync(path.join(binDir, "tfm"))).toBe(false);
   });
 
-  test("interactive: a No changes nothing", async () => {
+  test("interactive: a No on the confirm changes nothing", async () => {
     const asked: string[] = [];
     const h = harness({
       isTTY: () => true,
@@ -269,15 +270,25 @@ describe("runUninstallCli", () => {
       },
     });
     expect(await runUninstallCli([], h.deps)).toBe(0);
-    expect(asked[0]).toMatch(/Uninstall tfm/);
+    // it asks about the data first, then the confirm
+    expect(asked[0]).toMatch(/settings, plugins/);
+    expect(asked[1]).toMatch(/Uninstall tfm/);
     expect(h.out.join("\n")).toContain("cancelled");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(true);
   });
 
-  test("interactive: a Yes removes", async () => {
-    const h = harness({ isTTY: () => true, ask: async () => true });
+  test("interactive: a Yes removes and keeps data when the data answer is No", async () => {
+    let n = 0;
+    const h = harness({
+      isTTY: () => true,
+      ask: async () => {
+        n++;
+        return n > 1; // No to "delete data", Yes to the confirm
+      },
+    });
     expect(await runUninstallCli([], h.deps)).toBe(0);
     expect(existsSync(path.join(binDir, "tfm"))).toBe(false);
+    expect(existsSync(path.join(configDir, "config.toml"))).toBe(true);
   });
 
   test("a dev build refuses instead of deleting the interpreter", async () => {
@@ -287,7 +298,7 @@ describe("runUninstallCli", () => {
     expect(existsSync(path.join(binDir, "tfm"))).toBe(true);
   });
 
-  test("a source install keeps the checkout unless --purge", async () => {
+  test("a source install keeps its checkout when the data is kept", async () => {
     mkdirSync(path.join(dataDir, "src"), { recursive: true });
     const kept = harness({
       provenance: () => ({ channel: "source", version: null, ref: "dev", dest: null, installedAt: null }),
@@ -295,7 +306,7 @@ describe("runUninstallCli", () => {
     expect(await runUninstallCli([], kept.deps)).toBe(0);
     expect(existsSync(path.join(dataDir, "src"))).toBe(true);
     expect(existsSync(path.join(dataDir, "install.json"))).toBe(false);
-    expect(kept.out.join("\n")).toContain("--purge");
+    expect(kept.out.join("\n")).toContain("still in");
   });
 
   test("help prints usage and exits 0", async () => {

@@ -139,7 +139,7 @@ Commands:
   plugins [list|search|add|remove|update|new]   manage plugins (see 'tfm plugins help')
   update [--tag VERSION] [--force]
                                           install the newest tfm (see 'tfm update help')
-  uninstall [--purge]
+  uninstall
                                           remove tfm (see 'tfm uninstall help')
   default-filemanager [status|set|unset|forget|service-install|service-remove]
                                           default file manager opt-in (see 'tfm default-filemanager help')

@@ -37,34 +37,25 @@ import { installDirOf, installInfoPath, isDevBuild, readInstallInfo, type Instal
 
 export type UninstallCommand = "uninstall" | "help";
 
-export type UninstallArgs = { cmd: UninstallCommand; purge: boolean; error: string | null };
+export type UninstallArgs = { cmd: UninstallCommand; error: string | null };
 
-// PURE: `tfm uninstall [--purge]`
+// PURE: `tfm uninstall`
 export const parseUninstallArgs = (args: string[]): UninstallArgs => {
-  const base: UninstallArgs = { cmd: "uninstall", purge: false, error: null };
-  let purge = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i] as string;
-    if (a === "help" || a === "--help" || a === "-h") return { ...base, cmd: "help" };
-    if (a === "--purge" || a === "-p") {
-      purge = true;
-      continue;
-    }
-    return { ...base, error: `unknown option '${a}'` };
-  }
-  return { ...base, purge };
+  const first = args[0];
+  if (first === undefined) return { cmd: "uninstall", error: null };
+  if (first === "help" || first === "--help" || first === "-h") return { cmd: "help", error: null };
+  return { cmd: "uninstall", error: `unknown option '${first}'` };
 };
 
 export const uninstallHelp = (): string =>
   `tfm uninstall: remove the installed tfm
 
-Usage: tfm uninstall [--purge]
+Usage: tfm uninstall
 
-  --purge   also delete your settings and plugins, session, undo journal,
-            caches, and a source-built checkout
-
-It asks first and only touches what tfm installed. A custom TFM_CONFIG file
-is left alone. Source builds update with source.sh; this only removes.
+It shows what it will remove and asks twice: keep or delete your settings and
+plugins, then confirm the uninstall. Runs without prompts outside a terminal
+and keeps your data then. A custom TFM_CONFIG file is left alone. Source
+builds update with source.sh; this only removes.
 
   exit codes: 0 removed · 1 a part could not be removed · 2 usage
 `;
@@ -312,18 +303,24 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
   const channel = provenance?.channel ?? "local";
   out(`tfm${version} · ${channel} install`);
   if (plan.length) {
-    out(parsed.purge ? "will remove:" : "will remove (your settings, plugins and caches stay):");
+    out("will remove:");
     for (const item of plan) out(`  ${item}`);
   } else {
     out("nothing to remove");
   }
-  if (parsed.purge) out("and delete your settings, plugins, session, caches and checkouts");
 
+  // Two questions: keep or delete the user data, then confirm the uninstall.
+  // Outside a terminal there is nobody to ask, so the safe default (keep) wins.
   const interactive = (deps.isTTY ?? (() => process.stdin.isTTY === true))();
+  const ask = deps.ask ?? defaultNoAsk;
+  let removeData = false;
   if (interactive) {
-    const go = await (deps.ask ?? defaultNoAsk)(
-      parsed.purge ? "Uninstall tfm and delete all its data?" : "Uninstall tfm?",
-    );
+    removeData = await ask("Also delete your settings, plugins, session and caches?");
+    if (removeData) {
+      out("will also delete:");
+      for (const dir of dataDirs) if (existsLstat(dir)) out(`  ${pretty(dir)}`);
+    }
+    const go = await ask("Uninstall tfm?");
     if (!go) {
       out("cancelled, nothing changed");
       return 0;
@@ -332,6 +329,7 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
 
   // --- perform ---
   const failures: string[] = [];
+  const warnings: string[] = [];
   const removeTarget = (p: string, recursive = false): boolean => {
     try {
       rmSync(p, { recursive, force: true });
@@ -343,21 +341,19 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
     }
   };
 
-  // 1. give folder opens back to whoever had them BEFORE removing the entry
+  // 1. give folder opens back to whoever had them BEFORE removing the entry.
+  // A restore that cannot happen is a WARNING, not a failed uninstall: the
+  // binary is going regardless (a stale default is fixable, an unremoved
+  // install is not).
   try {
     const current = (deps.currentDefault ?? probeDefaultFileManagerSync)().trim();
     if (current === TFM_DESKTOP_ID) {
       const res = await (deps.restoreDefault ?? setDefaultFileManager)("unset");
       if (res.ok) out(res.message);
-      else {
-        err(`tfm: ${res.message}`);
-        err("your file manager default still points at tfm · set another one with xdg-mime");
-        failures.push("default file manager");
-      }
+      else warnings.push(`${res.message} · set another one with 'xdg-mime default <file>.desktop inode/directory'`);
     }
   } catch (e) {
-    err(`tfm: couldn't restore the default file manager · ${errMessage(e)}`);
-    failures.push("default file manager");
+    warnings.push(`couldn't restore the default file manager · ${errMessage(e)}`);
   }
 
   // 2. the second command name first — it is validated against the main binary
@@ -398,25 +394,25 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
     }
   }
 
-  // 5. the install record, or every tfm-owned dir under --purge
-  if (parsed.purge) {
+  // 5. the install record, or every tfm-owned dir when the data goes too
+  if (removeData) {
     if (process.env.TFM_CONFIG) out(`left your custom config alone: ${pretty(process.env.TFM_CONFIG)}`);
     for (const dir of dataDirs) removeTarget(dir, true);
   } else {
     removeTarget(path.join(dirs.dataDir, "install.json"));
     pruneIfEmpty(dirs.dataDir);
-    if (provenance?.channel === "source" && existsLstat(dirs.dataDir)) {
-      out(`left the source checkout in ${pretty(dirs.dataDir)} · use --purge to remove it`);
-    }
   }
 
   // 6. the binary LAST: any earlier failure still leaves a runnable tfm
   removeTarget(execPath);
 
+  for (const w of warnings) err(`tfm: warning · ${w}`);
   if (failures.length) {
-    err(`tfm: uninstall finished with ${failures.length} problem${failures.length === 1 ? "" : "s"}`);
+    err(`tfm: uninstall failed to remove ${failures.length} thing${failures.length === 1 ? "" : "s"}`);
     return 1;
   }
-  out("tfm uninstalled");
+  out("tfm removed");
+  if (removeData) out("your settings, plugins and caches were deleted too");
+  else out(`your settings and plugins are still in ${pretty(dirs.configDir)}`);
   return 0;
 };
