@@ -302,6 +302,7 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
   // green success line on a real terminal; plain when piped or NO_COLOR
   const green = (s: string): string => (interactive && !process.env.NO_COLOR ? `\u001b[32m${s}\u001b[0m` : s);
   let removeData = false;
+  let items: string[] = plan;
   if (interactive) {
     const go = await ask("Uninstall tfm?");
     if (!go) {
@@ -309,14 +310,7 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
       return 0;
     }
     removeData = await ask("Delete your settings, plugins and caches too?");
-    const items = removeData ? [...plan, ...dataDirs.filter(existsLstat).map(pretty)] : plan;
-    if (items.length) {
-      out("About to remove:");
-      for (const item of items) out(`  ${item}`);
-    }
-  } else if (plan.length) {
-    out("will remove:");
-    for (const item of plan) out(`  ${item}`);
+    if (removeData) items = [...plan, ...dataDirs.filter(existsLstat).map(pretty)];
   }
 
   // --- perform ---
@@ -407,5 +401,6 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
     return 1;
   }
   out(green("tfm removed"));
+  for (const item of items) out(`  ${item}`);
   return 0;
 };
