@@ -99,6 +99,15 @@ describe("parseArgs", () => {
     expect(parseArgs(["tfm", "update"]).paths).toEqual([]);
   });
 
+  test("uninstall subcommand short-circuits too (no TUI boot)", () => {
+    expect(parseArgs(["bun", "/$bunfs/root/tfm", "uninstall", "--purge"]).command).toEqual({
+      name: "uninstall",
+      args: ["--purge"],
+    });
+    expect(parseArgs(["tfm", "uninstall"]).command).toEqual({ name: "uninstall", args: [] });
+    expect(parseArgs(["tfm", "uninstall"]).paths).toEqual([]);
+  });
+
   test("file:// launch URIs decode to paths (desktop %U launches)", () => {
     expect(decodeCliPath("file:///home/u/some%20dir")).toBe("/home/u/some dir");
     expect(decodeCliPath("file://localhost/tmp/z")).toBe("/tmp/z");

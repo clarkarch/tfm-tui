@@ -81,8 +81,8 @@ export type UpdateCliDeps = {
 
 // read one line from stdin (only reached under a tty). EOF reads as yes: the
 // user typed the command, so a lost terminal must not silently abort the
-// update they asked for.
-const readTtyLine = async (): Promise<string> => {
+// update they asked for. Shared with `tfm uninstall` (which defaults to No).
+export const readTtyLine = async (): Promise<string> => {
   const reader = Bun.stdin.stream().getReader();
   const decoder = new TextDecoder();
   let buf = "";

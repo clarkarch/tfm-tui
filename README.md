@@ -114,6 +114,17 @@ tfm update
 ```
 `--tag v1.0.0` pins a release, `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings.
 
+## Uninstall
+
+```bash
+tfm uninstall
+```
+
+It removes the binary and its `terminal-file-manager` name, the desktop entry
+and icons, the D-Bus activator, the PATH line the installer added, and the
+install record — asking first. `--purge` also deletes your settings, plugins,
+session, undo journal, caches and a source-built checkout. Works offline.
+
 ## Keys
 
 - `enter` open · `f2` rename · `backspace`/`alt+up` up · `alt+home` home · `escape` menu · `f1` help · `ctrl+p` command palette

@@ -55,6 +55,15 @@ if (cli.command?.name === "update") {
   process.exit(await runUpdateCli(cli.command.args));
 }
 
+// headless `tfm uninstall` (no TUI boot): remove the installed program and,
+// with --purge, the user data. Deliberately LOCAL — there is nothing to
+// download, so removal works offline. The install itself still delegates to
+// install.sh, but there is no uninstall half there to fetch.
+if (cli.command?.name === "uninstall") {
+  const { runUninstallCli } = await import("./app/uninstall-cli");
+  process.exit(await runUninstallCli(cli.command.args));
+}
+
 // D-Bus FileManager1 daemon (started by the service activator on demand —
 // the process IS the service and runs until killed, no TUI boot)
 if (cli.filemanagerService) {
