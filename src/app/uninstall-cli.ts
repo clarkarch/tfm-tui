@@ -29,7 +29,12 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { errMessage } from "../lib/uiutil";
-import { probeDefaultFileManagerSync, setDefaultFileManager, TFM_DESKTOP_ID } from "../fs/default-filemanager";
+import {
+  defaultFileManagerPrev,
+  probeDefaultFileManagerSync,
+  setDefaultFileManager,
+  TFM_DESKTOP_ID,
+} from "../fs/default-filemanager";
 import { xdgCacheHome, xdgConfigHome, xdgDataHome, xdgStateHome } from "../fs/uri";
 import { fileManagerServiceFile } from "./filemanager-service";
 import { readTtyLine } from "./update-cli";
@@ -70,6 +75,9 @@ export type UninstallCliDeps = {
   ask?: (question: string) => Promise<boolean>;
   // default-file-manager seams (prod probes xdg-mime; tests never spawn)
   currentDefault?: () => string;
+  // the handler tfm replaced when it became the default; empty = nothing to
+  // restore (desktops fall back on their own, so this stays quiet)
+  prevDefault?: () => string;
   restoreDefault?: (op: "set" | "unset") => Promise<{ ok: boolean; message: string }>;
   // best-effort desktop-database refresh after the entry is removed
   refreshDesktop?: (applicationsDir: string) => void;
@@ -328,18 +336,16 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
   };
 
   // 1. give folder opens back to whoever had them BEFORE removing the entry.
-  // A restore that cannot happen is a WARNING, not a failed uninstall: the
-  // binary is going regardless (a stale default is fixable, an unremoved
-  // install is not).
+  // With no recorded previous handler there is nothing to restore — desktops
+  // fall back to another file manager on their own, so we stay quiet (warning
+  // about a default that is already harmless reads as a false alarm).
   try {
     const current = (deps.currentDefault ?? probeDefaultFileManagerSync)().trim();
-    if (current === TFM_DESKTOP_ID) {
+    const prev = (deps.prevDefault ?? defaultFileManagerPrev)().trim();
+    if (current === TFM_DESKTOP_ID && prev) {
       const res = await (deps.restoreDefault ?? setDefaultFileManager)("unset");
       if (res.ok) out(res.message);
-      else
-        warnings.push(
-          "folder opens still point to tfm · choose another with: xdg-mime default <file>.desktop inode/directory",
-        );
+      else warnings.push("couldn't restore your previous file manager");
     }
   } catch (e) {
     warnings.push(`couldn't check the file manager default (${errMessage(e)})`);

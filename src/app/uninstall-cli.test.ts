@@ -94,6 +94,7 @@ const harness = (over: Partial<UninstallCliDeps> = {}) => {
     execPath: path.join(binDir, "tfm"),
     isTTY: () => false,
     currentDefault: () => "",
+    prevDefault: () => "",
     restoreDefault: async (op) => {
       restored.push(op);
       return { ok: true, message: "nautilus is the default file manager again" };
@@ -226,20 +227,27 @@ describe("runUninstallCli", () => {
     expect(await runUninstallCli([], untouched.deps)).toBe(0);
     expect(untouched.restored).toEqual([]);
 
-    const restoring = harness({ currentDefault: () => "tfm.desktop" });
+    const restoring = harness({ currentDefault: () => "tfm.desktop", prevDefault: () => "nautilus.desktop" });
     expect(await runUninstallCli([], restoring.deps)).toBe(0);
     expect(restoring.restored).toEqual(["unset"]);
     expect(restoring.out.join("\n")).toContain("default file manager again");
   });
 
+  test("nothing to restore: a tfm default with no recorded previous handler stays quiet", async () => {
+    const h = harness({ currentDefault: () => "tfm.desktop", prevDefault: () => "" });
+    expect(await runUninstallCli([], h.deps)).toBe(0);
+    expect(h.restored).toEqual([]);
+    expect(h.err.join("\n")).toBe("");
+  });
+
   test("a failed default-file-manager restore warns but still counts as a successful uninstall", async () => {
     const h = harness({
       currentDefault: () => "tfm.desktop",
+      prevDefault: () => "nautilus.desktop",
       restoreDefault: async () => ({ ok: false, message: "No previous file manager recorded · unchanged" }),
     });
     expect(await runUninstallCli([], h.deps)).toBe(0);
-    expect(h.err.join("\n")).toContain("folder opens still point to tfm");
-    expect(h.err.join("\n")).toContain("xdg-mime default");
+    expect(h.err.join("\n")).toContain("couldn't restore your previous file manager");
     expect(h.out.join("\n")).toContain("removed");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(false);
   });
