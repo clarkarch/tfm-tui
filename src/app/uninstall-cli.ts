@@ -400,7 +400,7 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
     err(`tfm: uninstall failed to remove ${failures.length} thing${failures.length === 1 ? "" : "s"}`);
     return 1;
   }
-  out(green("tfm removed"));
+  out(green("removed"));
   for (const item of items) out(`  ${item}`);
   return 0;
 };

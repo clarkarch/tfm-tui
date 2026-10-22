@@ -190,7 +190,7 @@ describe("runUninstallCli", () => {
   test("default: removes the program but keeps settings, plugins and caches", async () => {
     const h = harness();
     expect(await runUninstallCli([], h.deps)).toBe(0);
-    expect(h.out.join("\n")).toContain("tfm removed");
+    expect(h.out.join("\n")).toContain("removed");
 
     for (const bin of binaries) expect(existsSync(bin)).toBe(false);
     expect(existsSync(path.join(applications, "tfm.desktop"))).toBe(false);
@@ -240,7 +240,7 @@ describe("runUninstallCli", () => {
     expect(await runUninstallCli([], h.deps)).toBe(0);
     expect(h.err.join("\n")).toContain("folder opens still point to tfm");
     expect(h.err.join("\n")).toContain("xdg-mime default");
-    expect(h.out.join("\n")).toContain("tfm removed");
+    expect(h.out.join("\n")).toContain("removed");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(false);
   });
 
