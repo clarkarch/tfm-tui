@@ -92,7 +92,6 @@ const harness = (over: Partial<UninstallCliDeps> = {}) => {
     out: (l) => out.push(l),
     err: (l) => err.push(l),
     execPath: path.join(binDir, "tfm"),
-    provenance: () => ({ channel: "release", version: "1.1.0", ref: null, dest: binDir, installedAt: null }),
     isTTY: () => false,
     currentDefault: () => "",
     restoreDefault: async (op) => {
@@ -192,7 +191,6 @@ describe("runUninstallCli", () => {
     const h = harness();
     expect(await runUninstallCli([], h.deps)).toBe(0);
     expect(h.out.join("\n")).toContain("tfm removed");
-    expect(h.out.join("\n")).toContain("still in");
 
     for (const bin of binaries) expect(existsSync(bin)).toBe(false);
     expect(existsSync(path.join(applications, "tfm.desktop"))).toBe(false);
@@ -240,7 +238,7 @@ describe("runUninstallCli", () => {
       restoreDefault: async () => ({ ok: false, message: "No previous file manager recorded · unchanged" }),
     });
     expect(await runUninstallCli([], h.deps)).toBe(0);
-    expect(h.err.join("\n")).toContain("folder opens are still set to tfm");
+    expect(h.err.join("\n")).toContain("folder opens still point to tfm");
     expect(h.err.join("\n")).toContain("xdg-mime default");
     expect(h.out.join("\n")).toContain("tfm removed");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(false);
@@ -271,9 +269,9 @@ describe("runUninstallCli", () => {
       },
     });
     expect(await runUninstallCli([], h.deps)).toBe(0);
-    // it asks about the data first, then the confirm
-    expect(asked[0]).toMatch(/Delete your settings/);
-    expect(asked[1]).toMatch(/Uninstall tfm/);
+    // it asks to uninstall first; a No stops there, no data question
+    expect(asked[0]).toMatch(/Uninstall tfm/);
+    expect(asked).toHaveLength(1);
     expect(h.out.join("\n")).toContain("cancelled");
     expect(existsSync(path.join(binDir, "tfm"))).toBe(true);
   });
@@ -284,7 +282,7 @@ describe("runUninstallCli", () => {
       isTTY: () => true,
       ask: async () => {
         n++;
-        return n > 1; // No to "delete data", Yes to the confirm
+        return n === 1; // Yes to "uninstall", No to "delete data"
       },
     });
     expect(await runUninstallCli([], h.deps)).toBe(0);
@@ -299,15 +297,12 @@ describe("runUninstallCli", () => {
     expect(existsSync(path.join(binDir, "tfm"))).toBe(true);
   });
 
-  test("a source install keeps its checkout when the data is kept", async () => {
+  test("keeps the data dir contents when the data is kept", async () => {
     mkdirSync(path.join(dataDir, "src"), { recursive: true });
-    const kept = harness({
-      provenance: () => ({ channel: "source", version: null, ref: "dev", dest: null, installedAt: null }),
-    });
+    const kept = harness();
     expect(await runUninstallCli([], kept.deps)).toBe(0);
     expect(existsSync(path.join(dataDir, "src"))).toBe(true);
     expect(existsSync(path.join(dataDir, "install.json"))).toBe(false);
-    expect(kept.out.join("\n")).toContain("still in");
   });
 
   test("help prints usage and exits 0", async () => {

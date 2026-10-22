@@ -33,7 +33,7 @@ import { probeDefaultFileManagerSync, setDefaultFileManager, TFM_DESKTOP_ID } fr
 import { xdgCacheHome, xdgConfigHome, xdgDataHome, xdgStateHome } from "../fs/uri";
 import { fileManagerServiceFile } from "./filemanager-service";
 import { readTtyLine } from "./update-cli";
-import { installDirOf, installInfoPath, isDevBuild, readInstallInfo, type InstallInfo } from "./update-run";
+import { installDirOf, installInfoPath, isDevBuild } from "./update-run";
 
 export type UninstallCommand = "uninstall" | "help";
 
@@ -66,7 +66,6 @@ export type UninstallCliDeps = {
   // the running binary owns the install location — a custom TFM_INSTALL_DIR
   // needs no config, exactly as `tfm update` derives it
   execPath?: string;
-  provenance?: () => InstallInfo | null;
   isTTY?: () => boolean;
   ask?: (question: string) => Promise<boolean>;
   // default-file-manager seams (prod probes xdg-mime; tests never spawn)
@@ -271,7 +270,6 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
     return 1;
   }
 
-  const provenance = (deps.provenance ?? readInstallInfo)();
   const binDir = installDirOf(execPath);
   const dirs = resolvePaths(deps, binDir);
   const pretty = (p: string): string => prettyHome(p, dirs.home);
@@ -299,31 +297,23 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
   for (const f of rcHits) plan.push(`PATH line in ${pretty(f)}`);
   planPath(path.join(dirs.dataDir, "install.json"));
 
-  const version = provenance?.version ? ` ${provenance.version}` : "";
-  const channel = provenance?.channel ?? "local";
-  out(`tfm${version} · ${channel} install`);
-
-  // Two questions: keep or delete the user data, then confirm the uninstall.
-  // Outside a terminal there is nobody to ask, so the safe default (keep) wins.
   const interactive = (deps.isTTY ?? (() => process.stdin.isTTY === true))();
   const ask = deps.ask ?? defaultNoAsk;
   // green success line on a real terminal; plain when piped or NO_COLOR
   const green = (s: string): string => (interactive && !process.env.NO_COLOR ? `\u001b[32m${s}\u001b[0m` : s);
   let removeData = false;
   if (interactive) {
-    // ask about the user data, then show the plan at the confirmation — the
-    // list belongs with the thing the user is about to approve
-    removeData = await ask("Delete your settings, plugins and caches too?");
-    const items = removeData ? [...plan, ...dataDirs.filter(existsLstat).map(pretty)] : plan;
-    if (items.length) {
-      out("About to remove:");
-      for (const item of items) out(`  ${item}`);
-    }
     const go = await ask("Uninstall tfm?");
     if (!go) {
       out("cancelled, nothing changed");
       return 0;
     }
+    if (plan.length) {
+      out("About to remove:");
+      for (const item of plan) out(`  ${item}`);
+    }
+    removeData = await ask("Delete your settings, plugins and caches too?");
+    if (removeData) for (const dir of dataDirs) if (existsLstat(dir)) out(`  ${pretty(dir)}`);
   } else if (plan.length) {
     out("will remove:");
     for (const item of plan) out(`  ${item}`);
@@ -352,7 +342,10 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
     if (current === TFM_DESKTOP_ID) {
       const res = await (deps.restoreDefault ?? setDefaultFileManager)("unset");
       if (res.ok) out(res.message);
-      else warnings.push("folder opens are still set to tfm");
+      else
+        warnings.push(
+          "folder opens still point to tfm · choose another with: xdg-mime default <file>.desktop inode/directory",
+        );
     }
   } catch (e) {
     warnings.push(`couldn't check the file manager default (${errMessage(e)})`);
@@ -408,18 +401,11 @@ export const runUninstallCli = async (args: string[], deps: UninstallCliDeps = {
   // 6. the binary LAST: any earlier failure still leaves a runnable tfm
   removeTarget(execPath);
 
-  for (const w of warnings) {
-    err(`note: ${w}`);
-    if (w === "folder opens are still set to tfm") {
-      err("      choose another with:  xdg-mime default <file>.desktop inode/directory");
-    }
-  }
+  for (const w of warnings) err(`note: ${w}`);
   if (failures.length) {
     err(`tfm: uninstall failed to remove ${failures.length} thing${failures.length === 1 ? "" : "s"}`);
     return 1;
   }
   out(green("tfm removed"));
-  if (removeData) out("your settings, plugins and caches were deleted too");
-  else out(`your settings and plugins are still in ${pretty(dirs.configDir)}`);
   return 0;
 };
