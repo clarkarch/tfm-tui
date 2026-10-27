@@ -8,6 +8,7 @@ import { errMessage } from "../lib/uiutil";
 import path from "node:path";
 import { installPlugin, removePluginDir, updatePlugin, type ExecFn } from "../plugins/plugin-install";
 import { pluginsDir } from "../plugins/plugins";
+import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import { PLUGIN_API_VERSION, PLUGIN_NAME_RE } from "../plugins/plugin-api";
 import {
   findIndexEntry,
@@ -103,6 +104,9 @@ type PluginsCliDeps = {
   err?: (line: string) => void;
   // index loader override (tests never hit the network)
   fetchIndex?: () => Promise<unknown>;
+  // this build cannot load plugins at all (AOT: an executable may only run
+  // code compiled into it). Defaults to the build-time gate.
+  pluginsEnabled?: boolean;
 };
 
 export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): Promise<number> => {
@@ -120,6 +124,14 @@ export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): 
     err(`tfm: ${parsed.error}`);
     err("try 'tfm plugins help'");
     return 2;
+  }
+
+  // plugins disabled in this build (AOT): a plugin file is code from disk,
+  // which such an executable may not run — every plugin subcommand is
+  // refused (help still answers, so the command stays discoverable)
+  if (parsed.cmd !== "help" && !(deps.pluginsEnabled ?? PLUGINS_ENABLED)) {
+    err("tfm: plugins are disabled in this build");
+    return 1;
   }
 
   const installed = (): string[] => {

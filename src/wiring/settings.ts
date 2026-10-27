@@ -38,6 +38,7 @@ import {
   updatePlugin,
 } from "../plugins/plugin-install";
 import { pluginsDir } from "../plugins/plugins";
+import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
 import type { PluginsWiring } from "./plugins";
@@ -344,6 +345,9 @@ export const wireSettings = (deps: {
     // console mode: the theme row is display-only (static palette paints)
     isTtyMode: core.isTtyMode,
     plugins: () => plugins.plugins,
+    // AOT builds cannot load a plugin file from disk — the Plugins entry
+    // disappears instead of offering an install that could never run
+    pluginsDisabled: !PLUGINS_ENABLED,
     // on/off toggle: register or drop the plugin's slots right away, then
     // repaint so the change is visible without a navigation
     onPluginEnabledChanged: (name, enabled) => {

@@ -59,6 +59,44 @@ describe("tfm plugins CLI", () => {
       expect(code).toBe(2);
       expect(errs.join("")).toContain("unsafe plugin name");
     });
+
+    // A build with plugins disabled (AOT) refuses every mutating/list
+    // subcommand — installing a plugin that can never load is a trap.
+    test("a build with plugins disabled refuses every subcommand", async () => {
+      for (const args of [
+        [],
+        ["list"],
+        ["add", "https://github.com/u/cool"],
+        ["remove", "cool"],
+        ["update"],
+        ["new", "cool"],
+        ["search", "cool"],
+      ]) {
+        const errs: string[] = [];
+        const outs: string[] = [];
+        const code = await runPluginsCli(args, {
+          dir: tmp(),
+          out: (s) => outs.push(s),
+          err: (s) => errs.push(s),
+          pluginsEnabled: false,
+        });
+        expect(code).toBe(1);
+        expect(errs.join("")).toContain("plugins are disabled in this build");
+        expect(outs).toEqual([]);
+      }
+    });
+
+    test("a build with plugins disabled still answers help", async () => {
+      const lines: string[] = [];
+      const code = await runPluginsCli(["help"], {
+        dir: tmp(),
+        out: (s) => lines.push(s),
+        err: () => {},
+        pluginsEnabled: false,
+      });
+      expect(code).toBe(0);
+      expect(lines.join("\n")).toContain("tfm plugins");
+    });
   });
 });
 
