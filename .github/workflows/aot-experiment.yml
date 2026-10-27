@@ -28,6 +28,10 @@ on:
         description: "boot runs per binary"
         type: string
         default: "5"
+      bun_run_id:
+        description: "reuse the bun from an earlier run (its build takes hours) — empty = build it"
+        type: string
+        default: ""
   push:
     branches: ["exp/aot-bun"]
     paths:
@@ -69,6 +73,7 @@ jobs:
           df -h /
 
       - uses: actions/checkout@v4
+        if: ${{ inputs.bun_run_id == '' }}
         with:
           repository: oven-sh/bun
           ref: ${{ env.BUN_AOT_SHA }}
@@ -76,6 +81,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install build dependencies
+        if: ${{ inputs.bun_run_id == '' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential ninja-build nasm pkg-config python3 libtool \
@@ -116,6 +122,7 @@ jobs:
           df -h /
 
       - name: Install rust
+        if: ${{ inputs.bun_run_id == '' }}
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -127,10 +134,26 @@ jobs:
           echo "RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}" >> "$GITHUB_ENV"
 
       - uses: oven-sh/setup-bun@v2
+        if: ${{ inputs.bun_run_id == '' }}
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      # The bun build is the long pole (hours). When a tfm-side fix needs a
+      # new run, the bun from an earlier run is reused instead: its artifact
+      # lives for 90 days and carries the exact binary the earlier run built.
+      - name: Reuse the bun from an earlier run
+        if: ${{ inputs.bun_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p bin
+          gh run download "${{ inputs.bun_run_id }}" --name bun-aot --dir bin
+          chmod +x bin/bun
+          ls -l bin/bun
+          ./bin/bun --version
+
       - name: Build bun
+        if: ${{ inputs.bun_run_id == '' }}
         working-directory: bun
         run: |
           bun install --frozen-lockfile
@@ -146,14 +169,18 @@ jobs:
       # ahead of time and run. (Without --aot the flag does not exist and the
       # build fails right here.)
       - name: Check the AOT compiler is in there
-        working-directory: bun
         run: |
-          ./build/release/bun --version
+          if [ -x bin/bun ]; then
+            bun_bin=bin/bun
+          else
+            bun_bin=bun/build/release/bun
+          fi
+          "$bun_bin" --version
           printf 'console.log("aot ok")\n' > /tmp/aot-probe.ts
-          ./build/release/bun build --compile --aot /tmp/aot-probe.ts --outfile /tmp/aot-probe-bin
+          "$bun_bin" build --compile --aot /tmp/aot-probe.ts --outfile /tmp/aot-probe-bin
           /tmp/aot-probe-bin
           # the runtime features tfm leans on: a PTY (the embedded terminal)
-          ./build/release/bun -e '
+          "$bun_bin" -e '
             const p = Bun.spawn(["echo", "pty-ok"], { terminal: { cols: 80, rows: 24, data() {} } });
             await p.exited;
             console.log("pty ok");
@@ -162,7 +189,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: bun-aot
-          path: bun/build/release/bun
+          path: |
+            bun/build/release/bun
+            bin/bun
           if-no-files-found: error
 
   # ─── 2. tfm, compiled ahead of time and on the JIT (same bun) ─────────────
@@ -170,7 +199,9 @@ jobs:
     name: build tfm (AOT + JIT baseline)
     needs: build-aot-bun
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # the AOT compile type checks the whole program (TS7) and compiles every
+    # reachable function — it is slow, and it has no cache
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -207,6 +238,23 @@ jobs:
 
       - name: Check
         run: bun run check
+
+      # The AOT build type checks the program (TS7) and a type error stops it.
+      # `bun check --aot` reports what the build would report, without
+      # building — so the answer arrives in seconds instead of after the
+      # compile. It is INFORMATIONAL: the build removes code it can prove
+      # dead (the plugin loader) and does not report errors in it, while
+      # the check may. The build below is the authority.
+      - name: What the AOT type check says
+        run: |
+          mkdir -p dist/logs
+          set +e
+          ./bin/bun check --aot src/index.ts > dist/logs/aot-check.log 2>&1
+          check_rc=$?
+          set -e
+          echo "bun check --aot exit=$check_rc"
+          tail -40 dist/logs/aot-check.log
+          echo "(full log: dist/logs/aot-check.log)"
 
       # The native-addon probe. tfm rasterizes its SVG icons with the
       # resvg-js napi addon, loaded through a sync require-dlopen. A
@@ -304,6 +352,7 @@ jobs:
             dist/tfm-jit.gz
             dist/logs/aot-build.log
             dist/logs/jit-build.log
+            dist/logs/aot-check.log
             dist/logs/probe-aot.out
             dist/logs/probe-jit.out
           if-no-files-found: error
