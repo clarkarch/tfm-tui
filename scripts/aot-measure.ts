@@ -126,8 +126,11 @@ const bootOnce = async (bin: string, sandbox: string): Promise<Run> => {
   const configPath = path.join(runDir, "config.toml");
   // lazy-startup caps the (unanswered) cell-pixel probe at 250ms instead of
   // 2s — the sandbox has no tty, so the classic budget would be a constant
-  // wait that hides the very difference we measure
-  writeFileSync(configPath, "[ui]\nlazy-startup = true\n");
+  // wait that hides the very difference we measure.
+  // preview-enabled turns the preview pane on (off by default): it reads
+  // and renders the selected file, so it exercises a lot more of the app
+  // than an empty grid does.
+  writeFileSync(configPath, "[ui]\nlazy-startup = true\npreview-enabled = true\n");
   const stateDir = path.join(runDir, "state", "tfm");
   mkdirSync(stateDir, { recursive: true });
   // "no" = the default-file-manager question is answered and stays silent

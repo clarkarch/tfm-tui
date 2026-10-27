@@ -85,39 +85,22 @@ jobs:
             "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh"
           sudo sh /tmp/cmake.sh --skip-license --prefix=/usr/local
           rm -f /tmp/cmake.sh
-          # LLVM: the pinned release. ONLY the tools bun's build looks for are
-          # unpacked (the CI image installs the same subset) — the full
-          # tarball is several GB the runner cannot spare. ONE pass over the
-          # archive (xz decompression is slow), wildcards so a tool the
-          # release does not ship is skipped instead of failing the step.
+          # LLVM: the pinned release. The bin/ tools and the clang resource
+          # dir are what bun's build looks for (the CI image installs the same
+          # subset). The release's lld/llvm-mt link against ICU 70 — Ubuntu
+          # 22.04's — so that .deb comes with them (same pin as
+          # scripts/build/ci-images/spec.ts).
+          curl -fsSL -o /tmp/libicu70.deb \
+            "http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu70_70.1-2_amd64.deb"
+          echo "58a154f6307289813da2276f900498ef536ae7c0522d2cf31a3c3c5cf62dfd9a  /tmp/libicu70.deb" | sha256sum -c -
+          sudo dpkg -i /tmp/libicu70.deb || sudo dpkg -i --force-depends /tmp/libicu70.deb
+          rm -f /tmp/libicu70.deb
           curl -fsSL -o /tmp/llvm.tar.xz \
             "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/LLVM-${LLVM_VERSION}-Linux-X64.tar.xz"
           mkdir -p /opt/llvm/bin /opt/llvm/lib
-          tar -xJf /tmp/llvm.tar.xz -C /opt/llvm --strip-components=1 --wildcards \
-            "LLVM-${LLVM_VERSION}-Linux-X64/lib/clang" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/clang*" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/ld.lld" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/lld*" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/wasm-ld" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-ar" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-ranlib" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-nm" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-objcopy" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-strip" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-objdump" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-readelf" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-strings" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-size" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-config" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-profdata" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-cov" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-symbolizer" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-addr2line" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-cxxfilt" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-undname" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-dwarfdump" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-rc" \
-            "LLVM-${LLVM_VERSION}-Linux-X64/bin/llvm-mt"
+          tar -xJf /tmp/llvm.tar.xz -C /opt/llvm --strip-components=1 \
+            "LLVM-${LLVM_VERSION}-Linux-X64/bin" \
+            "LLVM-${LLVM_VERSION}-Linux-X64/lib/clang"
           rm -f /tmp/llvm.tar.xz
           for tool in clang clang++ ld.lld llvm-ar llvm-ranlib llvm-nm llvm-strip; do
             if [ ! -x "/opt/llvm/bin/$tool" ]; then
@@ -125,6 +108,7 @@ jobs:
               exit 1
             fi
           done
+          /opt/llvm/bin/ld.lld --version
           # the build resolves its tools through this directory (and skips the
           # clang version check with it — the pin IS the version)
           echo "BUN_TOOLCHAIN_LLVM=/opt/llvm" >> "$GITHUB_ENV"
@@ -224,6 +208,67 @@ jobs:
       - name: Check
         run: bun run check
 
+      # The native-addon probe. tfm rasterizes its SVG icons with the
+      # resvg-js napi addon, loaded through a sync require-dlopen. A
+      # compiled bun has to carry the .node file and dlopen it at runtime;
+      # if the AOT build drops it, every icon silently degrades to a text
+      # glyph and the app still "works". A tiny program that renders one
+      # SVG proves the addon survives — in the AOT build AND in the JIT
+      # baseline (the baseline is the control: if it fails there too, the
+      # probe is broken, not the AOT build).
+      - name: The resvg native addon survives the AOT build
+        run: |
+          mkdir -p dist/probe dist/logs
+          cat > dist/probe/probe-resvg.ts <<'TS'
+          import { Resvg } from "@resvg/resvg-js";
+
+          const svg =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+            '<path d="M3 5 H9 L11 7.5 H21 V19 H3 Z" fill="#cdd6f4"/></svg>';
+          const r = new Resvg(svg, { logLevel: "off", font: { loadSystemFonts: false } });
+          const png = r.render().asPng();
+          console.log(`resvg png bytes: ${png.length}`);
+          if (png.length < 100) {
+            console.error("the rasterized png is suspiciously small");
+            process.exit(1);
+          }
+          TS
+          # The JIT baseline is the CONTROL: if it cannot load the addon, the
+          # probe itself is broken and the comparison would be meaningless.
+          ./bin/bun build --compile dist/probe/probe-resvg.ts \
+            --outfile dist/probe/probe-jit 2>&1 | tee dist/logs/probe-jit-build.log
+          if ! jit_out=$(./dist/probe/probe-jit 2>&1); then
+            echo "the JIT baseline cannot load the resvg addon — the probe is broken"
+            echo "jit-broken" > dist/logs/probe-jit.out
+            exit 1
+          fi
+          echo "$jit_out" > dist/logs/probe-jit.out
+          echo "jit: $jit_out"
+
+          # The AOT build is the SUBJECT: a failure here is a finding about
+          # AOT, not a broken test — so it is recorded and carried to the
+          # report instead of failing this step (the rest of the experiment
+          # still measures what it can).
+          set +e
+          ./bin/bun build --compile --aot dist/probe/probe-resvg.ts \
+            --outfile dist/probe/probe-aot 2>&1 | tee dist/logs/probe-aot-build.log
+          build_rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$build_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT compiler could not build the resvg probe"
+            echo "aot-build-failed" > dist/logs/probe-aot.out
+          elif ! aot_out=$(./dist/probe/probe-aot 2>&1); then
+            echo "PROBE FAILURE: the AOT executable cannot load the resvg addon"
+            echo "aot-run-failed" > dist/logs/probe-aot.out
+          elif [ "$aot_out" != "$jit_out" ]; then
+            echo "PROBE FAILURE: the AOT build rasterized differently than the JIT baseline"
+            echo "aot-mismatch: $aot_out" > dist/logs/probe-aot.out
+          else
+            echo "$aot_out" > dist/logs/probe-aot.out
+            echo "aot: $aot_out"
+          fi
+          echo "probe result (aot): $(cat dist/logs/probe-aot.out)"
+
       # The AOT build: --aot compiles the program to machine code, and
       # --define flips the plugin gate (an AOT executable may not load a
       # plugin file from disk). EVERY compiler finding is captured — the
@@ -259,6 +304,8 @@ jobs:
             dist/tfm-jit.gz
             dist/logs/aot-build.log
             dist/logs/jit-build.log
+            dist/logs/probe-aot.out
+            dist/logs/probe-jit.out
           if-no-files-found: error
 
   # ─── 3. boot both, measure, report ───────────────────────────────────────
@@ -327,6 +374,22 @@ jobs:
           fi
           if [ "$aot_hits" -lt 50 ]; then
             echo "the AOT binary carries no embedded SVGs — the icon assets were dropped"
+            exit 1
+          fi
+
+      # The native-addon probe, carried over from the build job: the resvg
+      # napi addon is what rasterizes the SVG icons. If it does not load in
+      # the AOT executable, every icon silently degrades to a text glyph.
+      - name: The resvg native addon works in the AOT build
+        run: |
+          echo "probe (jit): $(cat dist/logs/probe-jit.out)"
+          echo "probe (aot): $(cat dist/logs/probe-aot.out)"
+          if ! grep -q "^resvg png bytes:" dist/logs/probe-aot.out; then
+            echo "the AOT build cannot load the resvg native addon — the icons would degrade to text glyphs"
+            exit 1
+          fi
+          if [ "$(cat dist/logs/probe-aot.out)" != "$(cat dist/logs/probe-jit.out)" ]; then
+            echo "the AOT build rasterized differently than the JIT baseline"
             exit 1
           fi
 
