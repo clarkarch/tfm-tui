@@ -8,9 +8,9 @@ name: Release
 # Version must match package.json (checked below) so --version never lies.
 #
 # The binaries are compiled AHEAD OF TIME. Bun's AOT compiler
-# (oven-sh/bun#45631) is in NO release, so the release builds that Bun
-# first — from the commit pinned in bun-aot.ref, cached by that commit — and
-# then compiles tfm with it. An ahead-of-time executable may only run code
+# (`bun build --compile --aot`) is in NO release, so the release builds that
+# Bun first — from the commit pinned in bun-aot.ref, cached by that commit —
+# and then compiles tfm with it. An ahead-of-time executable may only run code
 # that was compiled INTO it, which is why the plugin loader is gated off
 # (src/plugins/plugin-gate.ts) and why the gates below ask the binary
 # whether it still finds its icons, still rasterizes them, and still refuses

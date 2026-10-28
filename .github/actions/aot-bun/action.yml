@@ -1,9 +1,9 @@
 # Builds the Bun that can compile ahead of time, and caches it.
 #
-# Bun's AOT compiler (oven-sh/bun#45631) is in no release: the Bun that can
-# run `bun build --compile --aot` has to be BUILT from the PR's head. The
-# binary is ~130 MB and the build takes ~30-60 min, so it is cached by the
-# pinned SHA: only the first release (or a SHA bump) pays for it.
+# Bun's AOT compiler (`bun build --compile --aot`) is in no release: the Bun
+# that can run it has to be BUILT from the pinned commit. The binary is
+# ~130 MB and the build takes ~30-60 min, so it is cached by the pinned SHA:
+# only the first release (or a SHA bump) pays for it.
 #
 # The toolchain is Bun's own release CI pin (scripts/build/ci-images/spec.ts):
 # clang must be of the 23.1 series AND share its major version with rustc's

@@ -1,12 +1,12 @@
 # The Bun that can compile tfm ahead of time.
 #
-# Bun's ahead-of-time compiler (oven-sh/bun#45631) is in NO release yet: the
-# latest Bun (1.4.4) has no `bun build --compile --aot`. The compiler lives in
-# the PR's head, so a release that ships an AOT binary has to build that Bun
+# Bun's ahead-of-time compiler (`bun build --compile --aot`) is in NO release
+# yet: the latest Bun (1.4.4) has no such flag. The compiler was merged into
+# Bun's main, so a release that ships an AOT binary has to build that Bun
 # first — about an hour on a runner, with the pinned toolchain below.
 #
-# `sha` is the PR head. Bump it when the PR moves; the release workflow
-# builds that exact commit.
+# `sha` is the commit that carries the compiler. Bump it when Bun's main
+# moves on; the release workflow builds that exact commit.
 #
 # The build flags matter:
 #

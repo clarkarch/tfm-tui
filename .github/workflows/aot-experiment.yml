@@ -1,7 +1,7 @@
 name: AOT experiment
 
-# Bun's ahead-of-time compiler (oven-sh/bun#45631) is in NO release yet: the
-# bun that can run `bun build --compile --aot` has to be BUILT from the PR.
+# Bun's ahead-of-time compiler (`bun build --compile --aot`) is in NO release
+# yet: the bun that can run it has to be BUILT from a pinned commit.
 # This workflow builds that bun, builds tfm with it (the AOT executable plus a
 # JIT baseline from the SAME bun, so the comparison is apples to apples),
 # boots both and reports the numbers the go/no-go gates ask for.
@@ -51,7 +51,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # the PR head that carries the AOT compiler (oven-sh/bun#45631)
+  # the commit that carries the AOT compiler
   BUN_AOT_SHA: 4f7f658ed173fc23500de183b3713a8ddc18ba33
   # the toolchain pins bun's own release CI uses (scripts/build/ci-images/spec.ts):
   # clang has to be of the 23.1 series AND share its major version with rustc's

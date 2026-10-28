@@ -4,11 +4,12 @@ Status: shipped. The release workflow (`.github/workflows/release.yml`)
 compiles tfm ahead of time for both architectures; this page is the
 evaluation behind that decision.
 
-Bun's ahead-of-time compiler ([oven-sh/bun#45631](https://github.com/oven-sh/bun/pull/45631))
-is in **no released Bun yet** (latest: 1.4.4). The compiler lives in the PR's
-head `4f7f658ed173fc23500de183b3713a8ddc18ba33`, so evaluating it means
-building that Bun first — about an hour on a GitHub runner, and it needs a
-pinned LLVM, a pinned Rust nightly and the WebKit prebuilt tarball.
+Bun's ahead-of-time compiler (`bun build --compile --aot`) is in **no released
+Bun yet** (latest: 1.4.4). It was merged into Bun's main, so evaluating it
+means building that Bun from a pinned commit
+(`4f7f658ed173fc23500de183b3713a8ddc18ba33`) first — about an hour on a
+GitHub runner, and it needs a pinned LLVM, a pinned Rust nightly and the
+WebKit prebuilt tarball.
 
 The experiment: build that Bun, compile tfm with it, boot the result, and
 compare it against a **JIT executable built by the same Bun** (so the two
@@ -231,11 +232,12 @@ the opentui fork's plugin path, which AOT disables.
 
 The three caveats, and what each one costs:
 
-* **Bun AOT is an open PR** — every release of tfm ships a Bun that the
-  project pins itself, built from a PR head with a pinned LLVM/Rust
-  toolchain. The pin lives in `bun-aot.ref` next to the opentui fork's
-  pin, the binary is cached by that pin, and the release workflow builds
-  it from scratch when the pin moves.
+* **Bun AOT is in no release yet** — it was merged into Bun's main, but no
+  release carries it, so every release of tfm ships a Bun that the project
+  pins itself, built from that commit with a pinned LLVM/Rust toolchain. The
+  pin lives in `bun-aot.ref` next to the opentui fork's pin, the binary is
+  cached by that pin, and the release workflow builds it from scratch when
+  the pin moves.
 * **Plugins do not work in an AOT build** — the plugin system is the first
   thing users will miss. The release notes say so, the README says so, and
   a build from source still has plugins.
