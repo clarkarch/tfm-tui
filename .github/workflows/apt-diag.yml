@@ -1,0 +1,40 @@
+name: apt-diag
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: the sources
+        run: |
+          cat /etc/apt/sources.list 2>/dev/null || true
+          cat /etc/apt/sources.list.d/* 2>/dev/null || true
+          echo "=== dpkg arch ==="
+          dpkg --print-architecture
+          echo "=== libxml2 state ==="
+          dpkg -l | grep -i "libxml2\|libicu" || echo "neither installed"
+          echo "=== libxml2 policy ==="
+          apt-cache policy libxml2 || true
+          echo "=== apt-cache madison ==="
+          apt-cache madison libxml2 || true
+      - name: the llvm install
+        run: |
+          sudo apt-get update -qq
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          echo "=== policy after the llvm repo ==="
+          apt-cache policy libxml2 || true
+          echo "=== dry run ==="
+          sudo apt-get install -y --dry-run llvm-23 clang-23 lld-23 2>&1 | tail -30 || true
