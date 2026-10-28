@@ -410,6 +410,29 @@ jobs:
           fi
           echo "probe (aot): $(cat dist/logs/probe-disk-aot.out)"
 
+      # The runtime features tfm leans on, asked of the compiled binaries:
+      # the file system, a child process, a PTY, a worker, a timer. The boot
+      # smoke test only paints a grid — this touches the paths the app uses
+      # and the boot does not.
+      - name: The runtime features survive the AOT build
+        run: |
+          mkdir -p dist/logs
+          set +e
+          ./bin/bun scripts/aot-probe-features.ts jit \
+            > dist/logs/probe-features-jit.out 2> dist/logs/probe-features-jit.log
+          jit_rc=$?
+          ./bin/bun scripts/aot-probe-features.ts aot \
+            > dist/logs/probe-features-aot.out 2> dist/logs/probe-features-aot.log
+          aot_rc=$?
+          set -e
+          if [ "$jit_rc" != "0" ] || [ "$aot_rc" != "0" ]; then
+            echo "PROBE FAILURE: the feature probe did not run"
+            cat dist/logs/probe-features-jit.log dist/logs/probe-features-aot.log
+            echo "feature-probe-failed" > dist/logs/probe-features-aot.out
+          fi
+          echo "probe (jit):"; cat dist/logs/probe-features-jit.out
+          echo "probe (aot):"; cat dist/logs/probe-features-aot.out
+
       # The AOT build: the compiler turns the program into machine code, and
       # the define flips the plugin gate (an AOT executable may not load a
       # plugin file from disk). EVERY compiler finding is captured — the
@@ -550,6 +573,57 @@ jobs:
             echo "the JIT baseline did not load code from disk — the probe is broken"
             exit 1
           fi
+
+      # The runtime features, compared: the AOT build has to answer like the
+      # JIT baseline. One difference is known at this PR head: a Worker
+      # started from an embedded FILE cannot run in an AOT executable ("only
+      # an entry point of the build can run"), and opentui's tree-sitter
+      # parser worker is such a file. tfm does not use that worker today
+      # (its preview is plain text), so that difference is reported, not
+      # failed — every other difference is a lost feature.
+      - name: The runtime features survive the AOT build
+        run: |
+          echo "probe (jit): $(cat dist/logs/probe-features-jit.out)"
+          echo "probe (aot): $(cat dist/logs/probe-features-aot.out)"
+          bun -e '
+            const read = async (p) => (await Bun.file(p).text()).trim().split("\n").map((l) => l.trim()).filter(Boolean);
+            const statuses = (lines) => {
+              const out = {};
+              for (const line of lines) {
+                const i = line.indexOf(":");
+                if (i < 0) continue;
+                const name = line.slice(0, i).trim();
+                const rest = line.slice(i + 1).trim();
+                out[name] = rest.startsWith("ok") ? "ok" : "FAILED";
+              }
+              return out;
+            };
+            const jit = statuses(await read("dist/logs/probe-features-jit.out"));
+            const aot = statuses(await read("dist/logs/probe-features-aot.out"));
+            // the worker difference is the documented AOT limitation
+            const known = new Set(["worker"]);
+            let bad = 0;
+            for (const [name, value] of Object.entries(jit)) {
+              if (!(name in aot)) {
+                console.log(`FAIL  ${name} — the AOT build does not report it at all`);
+                bad++;
+              } else if (aot[name] === value) {
+                console.log(`PASS  ${name} — ${value}`);
+              } else if (known.has(name)) {
+                console.log(`INFO  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value} (a worker from an embedded file cannot run in an AOT executable)`);
+              } else {
+                console.log(`FAIL  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value}`);
+                bad++;
+              }
+            }
+            for (const name of Object.keys(aot)) {
+              if (!(name in jit)) {
+                console.log(`FAIL  ${name} — only the AOT build reports it`);
+                bad++;
+              }
+            }
+            if (bad) process.exit(1);
+          '
 
       # The icon assets are embedded in the executable (Bun.embeddedFiles).
       # If the AOT build dropped them, every icon silently falls back to a
