@@ -175,6 +175,9 @@ runs:
       with:
         path: ${{ github.workspace }}/dist/bun
         key: bun-aot-v1-${{ inputs.sha }}-${{ inputs.arch }}
+        # a miss is the normal case every 90 days (the cache expires): the
+        # Bun is built from source below. Only the SAVE refuses to fail.
+        fail-on-cache-miss: false
 
     - name: Build bun
       if: steps.cache.outputs.cache-hit != 'true'
@@ -242,4 +245,3 @@ runs:
       with:
         path: ${{ github.workspace }}/dist/bun
         key: bun-aot-v1-${{ inputs.sha }}-${{ inputs.arch }}
-        fail-on-cache-miss: false
