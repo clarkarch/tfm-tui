@@ -11,10 +11,14 @@ name: AOT experiment
 # The gates it measures:
 #   * the native renderer boots and paints (alternate screen, first frame)
 #   * the icon assets are still embedded in the AOT executable
-#   * the AOT build needs no --aot-allow-code-from-disk (no transpiler
-#     embedded, no code loaded from disk)
+#   * the AOT build loads no code from disk (no transpiler in it)
 #   * the gzip size delta vs the JIT build stays under 10 MB
 #   * time-to-first-paint is at least 10% faster than the JIT build
+#
+# The AOT build comes in two sizes: the plain one and the trimmed one (the
+# AOT compiler removes the Bun and Node.js APIs the program never calls —
+# the only size lever it has). The gates judge the smallest variant that
+# boots and paints every run: that is the binary a release would ship.
 
 on:
   workflow_dispatch:
@@ -61,7 +65,9 @@ jobs:
   build-aot-bun:
     name: build bun with the AOT compiler
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # the trimmable link links twice and checks the result: the build takes
+    # hours, and the trimmable one takes longer than the plain one
+    timeout-minutes: 300
     steps:
       # the standard runner has ~14 GB of disk; the build needs the WebKit
       # prebuilt, an LLVM and the object files. Free the image's fat first.
@@ -175,9 +181,13 @@ jobs:
           # --aot is on by default in this tree; it is spelled out because the
           # whole point of the job is the compiler. --webkit=prebuilt fetches
           # the matching WebKit (the "-aot" tarball) instead of building it.
+          # --trimmable=on links the executable with the trim table: it is
+          # what lets `bun build --compile --trim` remove the Bun and Node.js
+          # APIs the program never calls — the only size lever the AOT
+          # compiler has.
           set -o pipefail
           bun scripts/build.ts --profile=release --aot=on --webkit=prebuilt \
-            --lto=${{ inputs.lto || 'off' }} 2>&1 | tee build.log
+            --trimmable=on --lto=${{ inputs.lto || 'off' }} 2>&1 | tee build.log
           ls -l build/release/
 
       # One place for the binary, whatever produced it: the artifact then
@@ -418,11 +428,47 @@ jobs:
           set -o pipefail
           ./bin/bun scripts/aot-build.ts jit dist/tfm-jit 2>&1 | tee dist/logs/jit-build.log
 
+      # The size variants. --trim removes the Bun and Node.js APIs the
+      # program never calls from the executable — the only size lever the
+      # AOT compiler has — and --no-function-source leaves each function's
+      # source code out. They need a bun that carries the trim table (the
+      # build job links one); a bun without it says so, and that is a
+      # finding about the toolchain, not a broken test.
+      - name: Build the trimmed AOT executables
+        run: |
+          mkdir -p dist/logs
+          for variant in trim lean; do
+            case "$variant" in
+              trim) flags="--trim" ;;
+              lean) flags="--trim --no-function-source" ;;
+            esac
+            set +e
+            ./bin/bun scripts/aot-build.ts aot "dist/tfm-aot-$variant" $flags \
+              2>&1 | tee "dist/logs/aot-$variant-build.log"
+            build_rc=${PIPESTATUS[0]}
+            set -e
+            if [ "$build_rc" != "0" ]; then
+              echo "the $variant AOT build failed — this bun has no trim table?"
+              echo "$variant-build-failed" > "dist/logs/aot-$variant-build.out"
+              rm -f "dist/tfm-aot-$variant"
+            else
+              echo "$variant-build-ok" > "dist/logs/aot-$variant-build.out"
+              ls -l "dist/tfm-aot-$variant"
+            fi
+          done
+
       - name: Report the sizes
         run: |
           ls -l dist/tfm-aot dist/tfm-jit
           gzip -kf dist/tfm-aot && gzip -kf dist/tfm-jit
           ls -l dist/tfm-aot.gz dist/tfm-jit.gz
+          # the variants, if they were built
+          for variant in trim lean; do
+            if [ -f "dist/tfm-aot-$variant" ]; then
+              gzip -kf "dist/tfm-aot-$variant"
+              ls -l "dist/tfm-aot-$variant" "dist/tfm-aot-$variant.gz"
+            fi
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -432,8 +478,14 @@ jobs:
             dist/tfm-jit
             dist/tfm-aot.gz
             dist/tfm-jit.gz
+            dist/tfm-aot-trim
+            dist/tfm-aot-trim.gz
+            dist/tfm-aot-lean
+            dist/tfm-aot-lean.gz
             dist/logs/aot-build.log
             dist/logs/jit-build.log
+            dist/logs/aot-trim-build.log
+            dist/logs/aot-lean-build.log
             dist/logs/aot-check.log
             dist/logs/probe-aot.out
             dist/logs/probe-jit.out
@@ -462,7 +514,7 @@ jobs:
           path: dist
 
       - name: Make the binaries executable
-        run: chmod +x dist/tfm-aot dist/tfm-jit
+        run: chmod +x dist/tfm-aot dist/tfm-jit dist/tfm-aot-trim dist/tfm-aot-lean 2>/dev/null || true
 
       # The gate the whole plugin change exists for: an AOT build refuses the
       # plugin subcommands (a plugin is code from disk), a normal build does
@@ -546,47 +598,96 @@ jobs:
             exit 1
           fi
 
-      - name: Boot both binaries
+      - name: Boot the binaries
         run: |
           bun scripts/aot-measure.ts dist/tfm-aot ${{ inputs.runs || '5' }} aot | tee /tmp/aot.json
           bun scripts/aot-measure.ts dist/tfm-jit ${{ inputs.runs || '5' }} jit | tee /tmp/jit.json
+          # the size variants, if they were built
+          for variant in trim lean; do
+            if [ -x "dist/tfm-aot-$variant" ]; then
+              bun scripts/aot-measure.ts "dist/tfm-aot-$variant" ${{ inputs.runs || '5' }} "$variant" \
+                | tee "/tmp/aot-$variant.json"
+            fi
+          done
 
+      # The gates. Every AOT variant that was built has to boot and paint
+      # every run; the CANDIDATE (the smallest variant that does) has to meet
+      # the size and speed targets. A FAIL fails the step: the pipefail is
+      # there so that `| tee report.txt` cannot swallow the exit code.
       - name: The gates
         run: |
+          set -o pipefail
           bun -e '
-            const aot = await Bun.file("/tmp/aot.json").json();
             const jit = await Bun.file("/tmp/jit.json").json();
             const gzip = async (p) => (await Bun.file(p).arrayBuffer()).byteLength;
-            const aotGz = await gzip("dist/tfm-aot.gz");
             const jitGz = await gzip("dist/tfm-jit.gz");
             const lines = [];
             const gate = (name, ok, detail) => lines.push(`${ok ? "PASS" : "FAIL"}  ${name} — ${detail}`);
             const info = (name, detail) => lines.push(`INFO  ${name} — ${detail}`);
             const pctOf = (a, b) => (b ? Math.round(((a ?? 0) - b) / b * 1000) / 10 : 0);
             const showPct = (p) => `${p > 0 ? "+" : ""}${p}%`;
-            gate("aot boots", aot.booted === aot.runs, `${aot.booted}/${aot.runs} runs entered the alternate screen`);
+            const mb = (n) => (n / 1048576).toFixed(1);
+            const deltaOf = (gz) => Math.round((gz - jitGz) / 1048576 * 10) / 10;
+
             gate("jit boots", jit.booted === jit.runs, `${jit.booted}/${jit.runs} runs entered the alternate screen`);
-            gate("aot paints", aot.painted === aot.runs, `${aot.painted}/${aot.runs} runs completed the first full paint`);
             gate("jit paints", jit.painted === jit.runs, `${jit.painted}/${jit.runs} runs completed the first full paint`);
-            // first paint = process start → the first full frame (the metric a
-            // user feels). ready = process start → the first line of app code
-            // (the module graph load — what the AOT compiler removes).
-            const paintPct = pctOf(aot.medianPaintMs, jit.medianPaintMs);
-            gate("first paint is at least 10% faster", paintPct <= -10,
-              `aot ${aot.medianPaintMs}ms vs jit ${jit.medianPaintMs}ms (${showPct(paintPct)})`);
-            const readyPct = pctOf(aot.medianReadyMs, jit.medianReadyMs);
-            info("startup to first code", `aot ${aot.medianReadyMs}ms vs jit ${jit.medianReadyMs}ms (${showPct(readyPct)})`);
-            const appPct = pctOf(aot.medianAppMs, jit.medianAppMs);
-            info("app-reported boot", `aot ${aot.medianAppMs}ms vs jit ${jit.medianAppMs}ms (${showPct(appPct)})`);
-            const altPct = pctOf(aot.medianAltMs, jit.medianAltMs);
-            info("renderer up", `aot ${aot.medianAltMs}ms vs jit ${jit.medianAltMs}ms (${showPct(altPct)})`);
-            const delta = Math.round((aotGz - jitGz) / 1048576 * 10) / 10;
-            gate("gzip size delta under 10 MB", delta <= 10, `aot ${(aotGz / 1048576).toFixed(1)}MB vs jit ${(jitGz / 1048576).toFixed(1)}MB (${delta > 0 ? "+" : ""}${delta}MB)`);
-            info("rss at first paint", `aot ${aot.medianRssKb}KB vs jit ${jit.medianRssKb}KB`);
-            info("images drawn", `aot ${aot.medianImages} vs jit ${jit.medianImages}`);
-            info("crashes at teardown", `aot ${aot.crashed} vs jit ${jit.crashed}`);
+
+            // every AOT variant that was built: the plain one and the size ones
+            const variants = [];
+            for (const [name, json, bin] of [
+              ["aot", "/tmp/aot.json", "dist/tfm-aot"],
+              ["aot-trim", "/tmp/aot-trim.json", "dist/tfm-aot-trim"],
+              ["aot-lean", "/tmp/aot-lean.json", "dist/tfm-aot-lean"],
+            ]) {
+              if (!(await Bun.file(json).exists())) continue;
+              variants.push({ name, json: await Bun.file(json).json(), gz: await gzip(`${bin}.gz`) });
+            }
+            if (variants.length === 0) {
+              console.log("FAIL  no AOT binary was measured");
+              process.exit(1);
+            }
+
+            for (const v of variants) {
+              gate(`${v.name} boots`, v.json.booted === v.json.runs, `${v.json.booted}/${v.json.runs} runs entered the alternate screen`);
+              gate(`${v.name} paints`, v.json.painted === v.json.runs, `${v.json.painted}/${v.json.runs} runs completed the first full paint`);
+              const d = deltaOf(v.gz);
+              info(`${v.name} gzip size`, `${mb(v.gz)}MB vs jit ${mb(jitGz)}MB (${d > 0 ? "+" : ""}${d}MB)`);
+              // first paint = process start → the first full frame (the metric a
+              // user feels). ready = process start → the first line of app code
+              // (the module graph load — what the AOT compiler removes).
+              const paintPct = pctOf(v.json.medianPaintMs, jit.medianPaintMs);
+              info(`${v.name} first paint`, `${v.json.medianPaintMs}ms vs jit ${jit.medianPaintMs}ms (${showPct(paintPct)})`);
+              const readyPct = pctOf(v.json.medianReadyMs, jit.medianReadyMs);
+              info(`${v.name} startup to first code`, `${v.json.medianReadyMs}ms vs jit ${jit.medianReadyMs}ms (${showPct(readyPct)})`);
+              const appPct = pctOf(v.json.medianAppMs, jit.medianAppMs);
+              info(`${v.name} app-reported boot`, `${v.json.medianAppMs}ms vs jit ${jit.medianAppMs}ms (${showPct(appPct)})`);
+              const altPct = pctOf(v.json.medianAltMs, jit.medianAltMs);
+              info(`${v.name} renderer up`, `${v.json.medianAltMs}ms vs jit ${jit.medianAltMs}ms (${showPct(altPct)})`);
+              info(`${v.name} rss at first paint`, `${v.json.medianRssKb}KB vs jit ${jit.medianRssKb}KB`);
+              info(`${v.name} images drawn`, `${v.json.medianImages} vs jit ${jit.medianImages}`);
+              info(`${v.name} crashes at teardown`, `${v.json.crashed} vs jit ${jit.crashed}`);
+            }
+
+            // the candidate: the smallest AOT variant that boots and paints
+            // every run — the binary a release would ship
+            const usable = variants
+              .filter((v) => v.json.booted === v.json.runs && v.json.painted === v.json.runs)
+              .sort((a, b) => a.gz - b.gz);
+            if (usable.length === 0) {
+              console.log(lines.join("\n"));
+              console.log("FAIL  no AOT variant booted and painted every run");
+              process.exit(1);
+            }
+            const candidate = usable[0];
+            const delta = deltaOf(candidate.gz);
+            gate(`gzip size delta under 10 MB (${candidate.name})`, delta <= 10,
+              `${candidate.name} ${mb(candidate.gz)}MB vs jit ${mb(jitGz)}MB (${delta > 0 ? "+" : ""}${delta}MB)`);
+            const candPaint = pctOf(candidate.json.medianPaintMs, jit.medianPaintMs);
+            gate(`first paint is at least 10% faster (${candidate.name})`, candPaint <= -10,
+              `${candidate.name} ${candidate.json.medianPaintMs}ms vs jit ${jit.medianPaintMs}ms (${showPct(candPaint)})`);
+
             console.log(lines.join("\n"));
-            console.log("JSON " + JSON.stringify({ aot, jit, aotGz, jitGz }));
+            console.log("JSON " + JSON.stringify({ variants, jit, jitGz, candidate: candidate.name }));
             if (lines.some((l) => l.startsWith("FAIL"))) process.exit(1);
           ' | tee report.txt
 
@@ -597,4 +698,6 @@ jobs:
             report.txt
             /tmp/aot.json
             /tmp/jit.json
+            /tmp/aot-trim.json
+            /tmp/aot-lean.json
           if-no-files-found: warn
