@@ -19,6 +19,7 @@ import { KEY_SCHEMA } from "../config/config-schema";
 import { keySpecEqual } from "../config/keyspec";
 import { flattenPluginCommands, getPluginCommandBinds, isPluginEnabled, type PluginApi } from "../plugins/plugin-api";
 import { makePluginRegistry, makePluginStore, pluginsDir } from "../plugins/plugins";
+import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
 
@@ -225,7 +226,13 @@ export const wirePlugins = async (deps: {
     api,
     warn,
     registerSlots: (name, slots) => slotRegistry.register({ id: name, slots: slots as never }),
+    // AOT builds cannot run a plugin file from disk — the loader stays off
+    // there (the gate folds to a constant, so this branch never executes)
+    enabled: PLUGINS_ENABLED,
   });
+  if (!PLUGINS_ENABLED) {
+    dlog("plugins: disabled in this build (ahead-of-time executable — plugin files are code from disk)");
+  }
   // [ui] lazy-startup on: the scan (readdir + per-plugin hash + cpSync +
   // import + 10s-capped activate) runs concurrently with the remaining wiring
   // and the first renderAll — registry.plugins is the live array, so the

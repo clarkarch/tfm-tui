@@ -380,8 +380,14 @@ export const makePluginRegistry = (deps: {
   // bridge a plugin's `slots` contribution into the OpenTUI slot registry.
   // Returns an unregister fn stored as LoadedPlugin.disposeSlots.
   registerSlots?: (name: string, slots: Record<string, unknown>) => () => void;
+  // the loader can be switched OFF for a build that may not run code from
+  // disk (AOT: the executable only carries what was compiled into it). A
+  // disabled registry never touches the plugins dir, so no plugin file is
+  // ever imported. Default: on.
+  enabled?: boolean;
 }): PluginRegistry => {
   const { dir, api, warn, registerSlots } = deps;
+  const enabled = deps.enabled ?? true;
   const plugins: LoadedPlugin[] = [];
   const errors: string[] = [];
   // main-path -> last-seen version; warned keys dedupe repeat toasts across
@@ -804,6 +810,10 @@ export const makePluginRegistry = (deps: {
   // in-flight pass; a rejection is delivered to all of them and the slot frees.
   let scanning: Promise<PluginScanDiff> | null = null;
   const scan = (): Promise<PluginScanDiff> => {
+    // disabled build: the loader never reaches the plugins dir, so no plugin
+    // file is imported (an AOT executable could not run one anyway) and the
+    // diff stays empty on every scan
+    if (!enabled) return Promise.resolve({ added: [], removed: [], changed: [], errors: [] });
     if (scanning) return scanning;
     scanning = doScan().finally(() => {
       scanning = null;

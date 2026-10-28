@@ -397,6 +397,39 @@ describe("loadPlugins", () => {
     expect(plugins).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  // The AOT build gates the loader off: an ahead-of-time executable may only
+  // run code that was compiled INTO it, so a plugin file on disk must never
+  // be imported. The module-level side effect is the observable — it proves
+  // the file was never IMPORTED, not merely never activated.
+  test("a disabled registry never imports a plugin file", async () => {
+    const dir = mkDir();
+    (globalThis as unknown as { __tfmPluginImported: boolean }).__tfmPluginImported = false;
+    try {
+      writePlugin(
+        dir,
+        "aaa.ts",
+        `globalThis.__tfmPluginImported = true;\nexport default { name: "aaa", activate: () => ({ rows: [] }) };\n`,
+      );
+      const notes: string[] = [];
+      const reg = makePluginRegistry({
+        dir,
+        api: mkApi(dir, notes),
+        warn: (m) => notes.push(m),
+        enabled: false,
+      });
+      const diff = await reg.scan();
+      expect(diff).toEqual({ added: [], removed: [], changed: [], errors: [] });
+      expect(reg.plugins).toEqual([]);
+      expect((globalThis as unknown as { __tfmPluginImported: boolean }).__tfmPluginImported).toBe(false);
+      // a rescan stays empty — the gate is not a one-shot
+      await reg.scan();
+      expect(reg.plugins).toEqual([]);
+    } finally {
+      delete (globalThis as unknown as { __tfmPluginImported?: boolean }).__tfmPluginImported;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("makePluginStore", () => {

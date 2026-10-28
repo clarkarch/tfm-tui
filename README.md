@@ -65,7 +65,7 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 - Open privileged files with sudo prompt.
 - Command palette to search and run any action.
 - Customizable themes, settings GUI, keybinds.
-- Plugin support with hot reload.
+- Plugin support with hot reload (source builds only — see [Plugins](#plugins)).
 - …and many more.
 
 ## Requirements
@@ -160,6 +160,10 @@ tfm plugins add <url|id>
 tfm plugins new my-plugin
 ```
 See [docs/plugins.md](docs/plugins.md).
+
+> The release binaries are compiled ahead of time, so they carry no JavaScript
+> interpreter for a plugin to run in — `tfm plugins` says so and the plugin
+> commands are off. A build from source (below) still has plugins.
 
 ## Notes
 

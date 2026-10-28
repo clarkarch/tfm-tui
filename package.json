@@ -1,11 +1,13 @@
 {
   "name": "tfm-tui",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "compile": "bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm",
+    "compile:aot": "bun scripts/aot-build.ts aot dist/tfm-aot --trim",
+    "compile:aot:plain": "bun scripts/aot-build.ts aot dist/tfm-aot",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "typecheck": "tsgo --noEmit",
