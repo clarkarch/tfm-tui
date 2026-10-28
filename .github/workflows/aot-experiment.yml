@@ -146,11 +146,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p bin
-          gh run download "${{ inputs.bun_run_id }}" --name bun-aot --dir bin
-          chmod +x bin/bun
-          ls -l bin/bun
-          ./bin/bun --version
+          mkdir -p artifacts dist
+          gh run download "${{ inputs.bun_run_id }}" --name bun-aot --dir artifacts
+          # the artifact carries the binary at its root; an older one carried
+          # the tree it was uploaded from — take whichever is there
+          found=""
+          for cand in artifacts/bun artifacts/bin/bun artifacts/bun/build/release/bun; do
+            if [ -f "$cand" ]; then found="$cand"; break; fi
+          done
+          if [ -z "$found" ]; then
+            echo "no bun binary in the artifact:"
+            find artifacts -type f | head -20
+            exit 1
+          fi
+          cp "$found" dist/bun
+          chmod +x dist/bun
+          ls -l dist/bun
+          ./dist/bun --version
 
       - name: Build bun
         if: ${{ inputs.bun_run_id == '' }}
@@ -165,22 +177,33 @@ jobs:
             --lto=${{ inputs.lto || 'off' }} 2>&1 | tee build.log
           ls -l build/release/
 
+      # One place for the binary, whatever produced it: the artifact then
+      # carries a single file at its root (a multi-path upload keeps the
+      # whole tree, and the download lands in a directory).
+      - name: Collect the bun binary
+        run: |
+          mkdir -p dist
+          if [ ! -f dist/bun ] && [ -f bun/build/release/bun ]; then
+            cp bun/build/release/bun dist/bun
+          fi
+          if [ ! -f dist/bun ]; then
+            echo "no bun binary to collect"
+            exit 1
+          fi
+          chmod +x dist/bun
+          ls -l dist/bun
+
       # The compiler has to be IN the binary: a trivial program is compiled
       # ahead of time and run. (Without --aot the flag does not exist and the
       # build fails right here.)
       - name: Check the AOT compiler is in there
         run: |
-          if [ -x bin/bun ]; then
-            bun_bin=bin/bun
-          else
-            bun_bin=bun/build/release/bun
-          fi
-          "$bun_bin" --version
+          ./dist/bun --version
           printf 'console.log("aot ok")\n' > /tmp/aot-probe.ts
-          "$bun_bin" build --compile --aot /tmp/aot-probe.ts --outfile /tmp/aot-probe-bin
+          ./dist/bun build --compile --aot /tmp/aot-probe.ts --outfile /tmp/aot-probe-bin
           /tmp/aot-probe-bin
           # the runtime features tfm leans on: a PTY (the embedded terminal)
-          "$bun_bin" -e '
+          ./dist/bun -e '
             const p = Bun.spawn(["echo", "pty-ok"], { terminal: { cols: 80, rows: 24, data() {} } });
             await p.exited;
             console.log("pty ok");
@@ -189,9 +212,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: bun-aot
-          path: |
-            bun/build/release/bun
-            bin/bun
+          path: dist/bun
           if-no-files-found: error
 
   # ─── 2. tfm, compiled ahead of time and on the JIT (same bun) ─────────────
