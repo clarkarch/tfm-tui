@@ -114,9 +114,12 @@ jobs:
 
       # The stock Bun builds the dependencies and runs the tests. The AOT Bun
       # (when it exists) compiles the binary.
+      - name: Read the pinned Bun
+        run: echo "BUN_VERSION=$(sed -n 's/^bun_version *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Version matches package.json
         if: github.event_name == 'push'
