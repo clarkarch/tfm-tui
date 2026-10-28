@@ -466,7 +466,7 @@ jobs:
               lean) flags="--trim --no-function-source" ;;
             esac
             set +e
-            ./bin/bun scripts/aot-build.ts aot "dist/tfm-aot-$variant" $flags \
+            ./bin/bun scripts/aot-build.ts aot "dist/tfm-aot-$variant" $flags --explain-trim \
               2>&1 | tee "dist/logs/aot-$variant-build.log"
             build_rc=${PIPESTATUS[0]}
             set -e
