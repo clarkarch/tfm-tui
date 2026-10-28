@@ -291,6 +291,39 @@ describe("icons", () => {
     expect(map.has("disc")).toBe(false);
   });
 
+  test("embedded index reads plain (un-hashed) asset names", async () => {
+    // an ahead-of-time build may keep the asset name as it is on disk
+    // ("folder.svg") instead of the compiled build's "folder-<hash>.svg".
+    // The name must map back to the icon name all the same.
+    const fake = [
+      { name: "folder.svg", text: async () => "<svg>FOLDER</svg>" },
+      { name: "file-document.svg", text: async () => "<svg>DOC</svg>" },
+      { name: "disc.svg", text: async () => "<svg>DISC</svg>" },
+    ];
+    const map = await loadEmbeddedIcons(fake);
+    expect(map.get("folder")).toBe("<svg>FOLDER</svg>");
+    // "file-document.svg" reads as the icon "file" with the hash "document"
+    // — the plain name wins, or the icon would be filed under "file"
+    expect(map.get("file-document")).toBe("<svg>DOC</svg>");
+    expect(map.has("file")).toBe(false);
+    expect(map.get("disc")).toBe("<svg>DISC</svg>");
+    expect(map.size).toBe(3);
+  });
+
+  test("embedded index picks the naming mode from the whole set", async () => {
+    // a set that mostly carries the hash suffix is a compiled build: the
+    // suffix is stripped. One plain name in it keeps its plain name.
+    const fake = [
+      { name: "folder-abcdef12.svg", text: async () => "<svg>FOLDER</svg>" },
+      { name: "file-document-abcdef12.svg", text: async () => "<svg>DOC</svg>" },
+      { name: "disc.svg", text: async () => "<svg>DISC</svg>" },
+    ];
+    const map = await loadEmbeddedIcons(fake);
+    expect(map.get("folder")).toBe("<svg>FOLDER</svg>");
+    expect(map.get("file-document")).toBe("<svg>DOC</svg>");
+    expect(map.get("disc")).toBe("<svg>DISC</svg>");
+  });
+
   test.skipIf(!hasMagick && !hasSvgRenderer)("thumbPng rasterizes a file onto a bg", async () => {
     clearIconCaches();
     const svg =

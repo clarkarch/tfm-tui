@@ -322,6 +322,48 @@ jobs:
       # plugin file from disk). EVERY compiler finding is captured — the
       # warning about code from disk is expected (the loader stays in the
       # bundle, unreachable), anything else is a finding of its own.
+      # The embedded assets, asked of the build itself. A compiled binary
+      # names an embedded file "<name>-<hash>.svg"; an AOT build may keep
+      # the plain "<name>.svg" instead. The probe uses tfm's OWN index
+      # function, so it answers the question that matters: does the app
+      # still find its icons (an empty index = every icon degrades to a
+      # text glyph, and the app looks fine while being wrong).
+      - name: The embedded icon assets survive the AOT build
+        run: |
+          mkdir -p dist/probe
+          cat > dist/probe/probe-assets.ts <<'TS'
+          import { loadEmbeddedIcons } from "../../src/ui/icons";
+
+          const files = Bun.embeddedFiles ?? [];
+          const names = files.map((f) => f.name).filter((n): n is string => typeof n === "string");
+          const svgs = names.filter((n) => n.toLowerCase().endsWith(".svg"));
+          console.log(`embedded files: ${names.length}, svg assets: ${svgs.length}`);
+          console.log(`sample asset names: ${svgs.slice(0, 3).join(", ")}`);
+          const map = await loadEmbeddedIcons(files);
+          console.log(`resolved icons: ${map.size}`);
+          console.log(`sample icons: ${[...map.keys()].slice(0, 5).join(", ")}`);
+          if (map.size < 50) {
+            console.error("the embedded icon index is nearly empty — every icon would degrade to a glyph");
+            process.exit(1);
+          }
+          TS
+          set +e
+          ./bin/bun build --compile --aot dist/probe/probe-assets.ts assets/icons/*.svg \
+            --outfile dist/probe/probe-assets-aot 2>&1 | tee dist/logs/probe-assets-aot-build.log
+          build_rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$build_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT compiler could not build the asset probe"
+            echo "aot-build-failed" > dist/logs/probe-assets-aot.out
+          elif ! aot_out=$(./dist/probe/probe-assets-aot 2>&1); then
+            echo "PROBE FAILURE: the AOT executable cannot read its embedded assets"
+            echo "aot-run-failed" > dist/logs/probe-assets-aot.out
+          else
+            echo "$aot_out" > dist/logs/probe-assets-aot.out
+            echo "aot: $aot_out"
+          fi
+          echo "probe result (aot): $(cat dist/logs/probe-assets-aot.out)"
+
       - name: Build the AOT executable
         run: |
           mkdir -p dist/logs
@@ -355,6 +397,7 @@ jobs:
             dist/logs/aot-check.log
             dist/logs/probe-aot.out
             dist/logs/probe-jit.out
+            dist/logs/probe-assets-aot.out
           if-no-files-found: error
 
   # ─── 3. boot both, measure, report ───────────────────────────────────────
@@ -439,6 +482,20 @@ jobs:
           fi
           if [ "$(cat dist/logs/probe-aot.out)" != "$(cat dist/logs/probe-jit.out)" ]; then
             echo "the AOT build rasterized differently than the JIT baseline"
+            exit 1
+          fi
+
+      # The embedded assets, asked of the AOT build itself.
+      - name: The embedded icon assets survive the AOT build
+        run: |
+          echo "probe (aot): $(cat dist/logs/probe-assets-aot.out)"
+          if ! grep -q "^resolved icons: " dist/logs/probe-assets-aot.out; then
+            echo "the AOT build lost its embedded icon assets"
+            exit 1
+          fi
+          resolved=$(sed -n 's/^resolved icons: //p' dist/logs/probe-assets-aot.out)
+          if [ "${resolved:-0}" -lt 50 ]; then
+            echo "the AOT build resolved only $resolved icons — the icons would degrade to text glyphs"
             exit 1
           fi
 
