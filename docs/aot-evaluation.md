@@ -17,11 +17,11 @@ differ in exactly one thing: whether the code was compiled ahead of time).
 
 Everything below is measured by `.github/workflows/aot-experiment.yml`.
 
-**Result in one line: the AOT build starts much faster than the JIT build and
-ships about the same size** — 30–39 % faster to the first painted frame than a
-JIT binary built by the same Bun, 53.2 MiB gzipped against the 50.9 MiB of
-v1.1.0 — but it needs a Bun that nobody ships yet, and it takes the plugin
-system with it.
+**Result in one line: the AOT build starts about 1.5× faster than the JIT
+binary it replaces and ships about the same size** — 302 ms vs 475 ms to the
+first painted frame on the release runner, 53.2 MiB gzipped against the
+50.9 MiB of v1.1.0 — but it needs a Bun that nobody ships yet, and it takes
+the plugin system with it.
 
 ## What had to change in tfm
 
@@ -67,7 +67,7 @@ whether the code was compiled ahead of time; the stock Bun that ships today
 builds a different (and bigger) JIT binary, and "the size story" below puts
 the two side by side. And every size in the table was measured **before the
 debug symbols were stripped out of the staged native library** — the release
-strips them, which takes 5.9 MiB off every column.
+strips them, which takes about 6 MiB off every column.
 
 The **candidate** — the smallest variant that boots and paints every run — is
 the last column: **19.2 MiB smaller gzipped than the JIT build and 30–39 %
@@ -88,19 +88,30 @@ is ~16 MiB smaller (96 632 KB → 79 736 KB).
 ### The size story: what ships, and against what
 
 The table above compares two builds made by the same Bun. What a user
-downloads is a different question, and the honest answer needs three numbers:
+downloads is a different question, and the honest answer needs three numbers
+per architecture — the release, the release before it, and the fallback:
 
 | release artifact | raw | gzip |
 | --- | --- | --- |
-| v1.1.0 — JIT, stock Bun 1.4.0 | 130.9 MiB | 50.9 MiB |
-| **v1.2.0 — AOT, `--trim`** | **123.6 MiB** | **53.2 MiB** |
-| v1.2.0 fallback — JIT, stock Bun 1.4.4 | 133.9 MiB | 59.3 MiB |
+| v1.1.0 x86_64 — JIT, stock Bun 1.4.0 | 130.9 MiB | 50.9 MiB |
+| **v1.2.0 x86_64 — AOT, `--trim`** | **123.6 MiB** | **53.2 MiB** |
+| v1.1.0 aarch64 — JIT, stock Bun 1.4.0 | 129.3 MiB | 50.2 MiB |
+| **v1.2.0 aarch64 — AOT, `--trim`** | **125.9 MiB** | **52.2 MiB** |
+| v1.2.0 fallback (x86_64) — JIT, stock Bun 1.4.4 | 133.9 MiB | 59.3 MiB |
 
-So the AOT release is **2.3 MiB bigger than v1.1.0** — and it starts about
-**2.7× faster**: against the JIT binary that ships today, measured on the
-same machine, median of five boots, 1008 ms → 373 ms to the first painted
-frame (the runner numbers above say 500 ms → 302 ms, −39 %, against the JIT
-binary built by the *same* Bun).
+So the AOT release is **2.0–2.4 MiB bigger than v1.1.0** — and it starts
+**about 1.5× faster**. The release measures both on the runner that builds
+it (median of three boots, the numbers the release notes print):
+
+| | AOT first paint | JIT baseline first paint | |
+| --- | --- | --- | --- |
+| x86_64 | 302 ms | 475 ms | 1.57× |
+| aarch64 | 295 ms | 444 ms | 1.51× |
+
+(On a slower machine the gap grows: on the machine this was written on, the
+same comparison is 373 ms vs 1008 ms — 2.7×. The faster the machine, the
+less there is to win: the AOT binary skips the compilation work, not the
+I/O.)
 
 The AOT executable is smaller than a JIT binary built by the same Bun (the
 AOT one does not carry the JIT compiler — the code is machine code instead),
@@ -113,14 +124,14 @@ Every compiled binary **embeds the native library it loads** — twice: the
 patched `libopentui` that `scripts/sync-opentui-lib.sh` stages, and the npm
 one that comes with the platform package. The fork's prebuilt library keeps
 its debug symbols: 28.5 MB per target, of which 5.3 MB is code. Staged as it
-was, **23 MB of symbols went into every binary** — and 5.9 MiB into every
+was, **23 MB of symbols went into every binary** — and about 6 MiB into every
 gzipped download.
 
 The staging script now strips the copy it stages (`strip --strip-unneeded`,
 which keeps the dynamic symbols — the ABI — and drops the rest). The fork
 keeps its own file intact, so its debugging is not affected. On the x86_64
 binary: 28 456 600 → 5 301 144 bytes, and the release artifact went from
-59.2 MiB to 53.2 MiB gzipped.
+59.2 MiB to 53.2 MiB gzipped (aarch64: 58.0 MiB → 52.2 MiB).
 
 ### The size lever: `--trim`, and the Bun it needs
 
@@ -276,11 +287,10 @@ the opentui fork's plugin path, which AOT disables.
 **Go.** The release binary is compiled ahead of time:
 
 * about the same size as v1.1.0: 53.2 MiB gzipped against 50.9 MiB
-  (+2.3 MiB) — and 23 MB smaller than the same build without the debug
+  (+2.4 MiB) — and 23 MB smaller than the same build without the debug
   symbols stripped
-* faster: 302 ms to the first frame vs 500 ms against a JIT binary built by
-  the same Bun (−39 %), 373 ms vs 1008 ms against the JIT binary that ships
-  today (2.7×)
+* faster: 302 ms to the first frame vs 475 ms for the JIT binary the
+  release replaces (1.57×, measured on the release runner)
 * the plugin loader is gated off, the code is still in the tree
 * no transpiler in the binary, no code from disk, icons and the native
   rasterizer intact
