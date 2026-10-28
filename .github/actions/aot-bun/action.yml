@@ -111,7 +111,7 @@ runs:
             exit 1
             ;;
         esac
-        for tool in clang clang++ ld.lld llvm-ar llvm-ranlib llvm-nm llvm-strip llvm-mt; do
+        for tool in clang clang++ ld.lld llvm-ar llvm-ranlib llvm-nm llvm-strip; do
           if [ ! -x "/usr/lib/llvm-${llvm_major}/bin/$tool" ]; then
             echo "the LLVM install ships no $tool — the toolchain is incomplete"
             exit 1
