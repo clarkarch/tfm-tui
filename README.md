@@ -87,12 +87,12 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 ```
 
-### dev build
+### build from source
 
-Latest dev branch, needs git and Bun 1.4 or newer:
+The main branch, built on your machine — needs git and Bun 1.4 or newer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
+curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/source.sh | bash
 ```
 
 Or manually build from source:
