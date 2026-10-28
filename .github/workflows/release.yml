@@ -34,43 +34,6 @@ on:
         default: false
 
 jobs:
-  # ─── 0. scratch: what does apt have? (temporary) ─────────────────────────
-  diag:
-    name: apt diag (${{ matrix.arch }})
-    strategy:
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            arch: x64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - name: the sources
-        run: |
-          cat /etc/apt/sources.list 2>/dev/null || true
-          cat /etc/apt/sources.list.d/* 2>/dev/null || true
-          echo "=== dpkg arch ==="
-          dpkg --print-architecture
-          echo "=== libxml2 state ==="
-          dpkg -l | grep -i "libxml2\|libicu" || echo "neither installed"
-          echo "=== libxml2 policy ==="
-          apt-cache policy libxml2 || true
-          echo "=== apt-cache madison ==="
-          apt-cache madison libxml2 || true
-      - name: the llvm install
-        run: |
-          sudo apt-get update -qq
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm.list
-          sudo apt-get update
-          echo "=== policy after the llvm repo ==="
-          apt-cache policy libxml2 || true
-          echo "=== dry run ==="
-          sudo apt-get install -y --dry-run llvm-23 clang-23 lld-23 2>&1 | tail -30 || true
-
   # ─── 1. the bun that can compile ahead of time ─────────────────────────────
   # A separate job from the one that builds tfm, for two reasons: the Bun
   # build takes ~30-60 min and its binary is cached by the pinned SHA (the
@@ -82,7 +45,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
+          # ubuntu-24.04, NOT ubuntu-latest: as of October 2026 ubuntu-latest
+          # is Ubuntu 26.04 ("resolute"), where the package libxml2 was
+          # renamed libxml2-16. apt.llvm.org's LLVM 23 is built for noble and
+          # depends on the old name, so it cannot be installed there
+          # ("libllvm23:amd64 Depends libxml2 (>= 2.7.4) ... [no choices]").
+          # The arm runner is noble already — this makes the two the same OS.
+          - runner: ubuntu-24.04
             bun_arch: x64
           - runner: ubuntu-24.04-arm
             bun_arch: arm64
@@ -134,7 +103,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
+          # the same OS as the Bun build above — see the comment there
+          - runner: ubuntu-24.04
             arch: x86_64-linux
             bun_arch: x64
             bun_target: bun-linux-x64
@@ -170,6 +140,19 @@ jobs:
         with:
           name: bun-aot-${{ matrix.bun_arch }}
           path: dist
+
+      # The artifact service does not keep the executable bit: the binary
+      # comes back as an ordinary file. Without this the compile step finds
+      # no executable at dist/bun and silently ships the JIT build instead.
+      - name: Make the AOT Bun runnable
+        run: |
+          if [ -f dist/bun ]; then
+            chmod +x dist/bun
+            ls -l dist/bun
+            ./dist/bun --version
+          else
+            echo "::warning::no AOT bun artifact for ${{ matrix.bun_arch }} — the JIT build will be used"
+          fi
 
       # The patched opentui fork must sit BESIDE the checkout: package.json
       # depends on file:../opentui-fork/packages/core/dist. Its prebuilt dist is
