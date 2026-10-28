@@ -171,6 +171,20 @@ See [docs/plugins.md](docs/plugins.md).
 - Mouse on the Linux console (TTY) needs `gpm` running.
 - Custom kitty themes can misbehave.
 
+## Development
+
+One long-lived branch, `main`, plus a branch per piece of work:
+
+```bash
+git switch -c my-change main
+# … work, commit, push …
+gh pr create --base main --head my-change
+```
+
+`main` is protected: changes land through a pull request and CI has to pass.
+Releases are cut by tagging `main` — `git tag v1.2.1 && git push origin v1.2.1`
+— and the tag's version must match `package.json`, so `--version` never lies.
+
 ## License
 
 [MIT](LICENSE)
