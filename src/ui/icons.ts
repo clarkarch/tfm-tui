@@ -33,16 +33,36 @@ const home = os.homedir();
 // callers resolve against a half-filled index during the await loop.
 type EmbeddedFile = { name?: unknown; text: () => Promise<string> };
 
+// A compiled binary names an embedded asset "<name>-<hash>.svg". An
+// ahead-of-time build may keep the plain "<name>.svg" instead (the same
+// build keeps an embedded native addon's name). Which one it is shows in
+// the WHOLE set: every asset carries the hash suffix, or none does — so
+// the mode is decided per set, not per file. It has to be: the hash
+// pattern alone is ambiguous ("file-document.svg" reads as the icon "file"
+// with the hash "document"), and picking wrong keys every icon.
+const HASHED_SVG_NAME = /^(.+)-[a-z0-9]{8}\.svg$/i;
+
 export const loadEmbeddedIcons = (files: readonly EmbeddedFile[]): Promise<Map<string, string>> =>
   (async () => {
     const map = new Map<string, string>();
+    // the names first: the naming mode is a property of the whole set
+    const entries: { file: EmbeddedFile; name: string }[] = [];
     for (const f of files) {
+      const raw = typeof f === "object" && f !== null && "name" in f ? f.name : undefined;
+      if (typeof raw === "string" && raw.toLowerCase().endsWith(".svg")) {
+        entries.push({ file: f, name: raw });
+      }
+    }
+    const hashedCount = entries.filter((e) => HASHED_SVG_NAME.test(e.name)).length;
+    const hashed = hashedCount * 2 > entries.length;
+    for (const e of entries) {
       // per-entry guard: one unreadable blob must not abort the whole index
       // (every later icon would fall back to a Nerd-Font glyph forever)
       try {
-        const raw = typeof f === "object" && f !== null && "name" in f ? f.name : undefined;
-        const iconName = typeof raw === "string" ? raw.match(/^(.+)-[a-z0-9]{8}\.svg$/i)?.[1] : undefined;
-        if (iconName) map.set(iconName, await f.text());
+        const iconName = hashed
+          ? (e.name.match(HASHED_SVG_NAME)?.[1] ?? e.name.replace(/\.svg$/i, ""))
+          : e.name.replace(/\.svg$/i, "");
+        if (iconName) map.set(iconName, await e.file.text());
       } catch (err) {
         // one unreadable blob used to vanish silently; the symptom is every
         // later icon falling back to a glyph with no hint of the cause

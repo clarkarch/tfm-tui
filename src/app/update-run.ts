@@ -42,7 +42,7 @@ export type InstallInfo = {
   installedAt: string | null;
 };
 
-export const installInfoPath = (): string => path.join(xdgDataHome(), "tfm", "install.json");
+export const installInfoPath = (dataHome = xdgDataHome()): string => path.join(dataHome, "tfm", "install.json");
 
 export const readInstallInfo = (file = installInfoPath()): InstallInfo | null => {
   try {

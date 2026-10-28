@@ -669,6 +669,14 @@ describe("settingGroups shape", () => {
     }
   });
 
+  // A build with plugins disabled (AOT) shows NO Plugins entry at all — the
+  // installer category included, since installing a plugin that can never
+  // load would be a trap.
+  test("pluginsDisabled hides every plugin group (installer included)", () => {
+    const h = mk(() => [mkPlugin({ name: "demo", description: "d" })], { pluginsDisabled: true });
+    expect(h.model.pluginGroups()).toEqual([]);
+  });
+
   test("plugin commands get remappable keybind rows (persisted in own store)", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-model-plugins-"));
     try {

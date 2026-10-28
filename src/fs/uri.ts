@@ -18,6 +18,10 @@ export const xdgDataHome = (): string => process.env.XDG_DATA_HOME ?? path.join(
 
 export const xdgStateHome = (): string => process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state");
 
+export const xdgConfigHome = (): string => process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
+
+export const xdgCacheHome = (): string => process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache");
+
 // XBEL timestamps are ISO-8601; Date.parse handles them
 export const parseIso = (s: string): number => {
   const t = Date.parse(s);

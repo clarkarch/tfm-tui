@@ -65,7 +65,7 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 - Open privileged files with sudo prompt.
 - Command palette to search and run any action.
 - Customizable themes, settings GUI, keybinds.
-- Plugin support with hot reload.
+- Plugin support with hot reload (source builds only — see [Plugins](#plugins)).
 - …and many more.
 
 ## Requirements
@@ -87,12 +87,12 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/install.sh | bash
 ```
 
-### dev build
+### build from source
 
-Latest dev branch, needs git and Bun 1.4 or newer:
+The main branch, built on your machine — needs git and Bun 1.4 or newer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
+curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/source.sh | bash
 ```
 
 Or manually build from source:
@@ -113,6 +113,17 @@ bun run compile && cp dist/tfm ~/.local/bin/
 tfm update
 ```
 `--tag v1.0.0` pins a release, `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings.
+
+## Uninstall
+
+```bash
+tfm uninstall
+```
+
+It removes the binary and its `terminal-file-manager` name, the desktop entry
+and icons, the D-Bus activator, the PATH line the installer added, and the
+install record. It asks whether to keep your settings, plugins and caches,
+then asks you to confirm. Works offline.
 
 ## Keys
 
@@ -149,6 +160,10 @@ tfm plugins add <url|id>
 tfm plugins new my-plugin
 ```
 See [docs/plugins.md](docs/plugins.md).
+
+> The release binaries are compiled ahead of time, so they carry no JavaScript
+> interpreter for a plugin to run in — `tfm plugins` says so and the plugin
+> commands are off. A build from source (below) still has plugins.
 
 ## Notes
 

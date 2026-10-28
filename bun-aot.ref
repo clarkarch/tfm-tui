@@ -1,0 +1,62 @@
+# The Bun that can compile tfm ahead of time.
+#
+# Bun's ahead-of-time compiler (`bun build --compile --aot`) is in NO release
+# yet: the latest Bun (1.4.4, released 2026-10-22) has no such flag. The
+# compiler was merged into Bun's main on 2026-10-27, so a release that ships
+# an AOT binary has to build that Bun first — about an hour on a runner,
+# with the pinned toolchain below.
+#
+# The pinned commit is the branch upstream merged, one commit behind its tip;
+# the one commit between them touches AOT test files only. So the compiler
+# in the shipped binary is upstream's own, as merged — not a fork of it.
+#
+# `sha` is the commit that carries the compiler. Bump it when Bun's main
+# moves on; the release workflow builds that exact commit.
+#
+# ─── WHEN AN OFFICIAL BUN CARRIES THE COMPILER ─────────────────────────────
+# Upstream's own release build already turns the compiler on by default
+# (`aot: partial.aot ?? true` in scripts/build/config.ts) and links the trim
+# table on the release profile (`trimmable: true` in
+# scripts/build/profiles.ts), so the next official Bun will have BOTH. The
+# switch is then:
+#
+#   1. delete the `sha` line and the toolchain pins below — they exist only
+#      to build Bun from source;
+#   2. set `bun_version` to that release;
+#   3. teach .github/actions/aot-bun to download the release instead of
+#      building it (the action currently always builds);
+#   4. run the release without publishing and re-check the numbers in
+#      docs/aot-evaluation.md — an official Bun is built with LTO on by
+#      default, so the binary will likely come out SMALLER than ours.
+#
+# Until then: the build is cached by the pinned SHA, and if it fails the
+# release ships the stock-Bun JIT binary instead (see .github/workflows/
+# release.yml). A release never breaks over the unreleased compiler.
+#
+# The build flags matter:
+#
+#   --aot=on         the AOT compiler is IN the binary (it is on by default in
+#                    that tree; it is spelled out because it is the point)
+#   --trimmable=on   links the executable with the trim table. Without it
+#                    `bun build --compile --trim` says "this build of Bun
+#                    doesn't support --trim (NoTrimTable)" — and the plain
+#                    AOT build comes out BIGGER than the JIT one. The table
+#                    is baked in at Bun's LINK time, so there is no way
+#                    around it from tfm's side.
+#   --webkit=prebuilt  fetches the matching WebKit instead of building it
+#
+# The toolchain pins are Bun's own release CI pins
+# (scripts/build/ci-images/spec.ts): clang has to be of the 23.1 series AND
+# share its major version with rustc's.
+#
+# llvm_version is the SERIES, not a patch: Bun's own check accepts any
+# >=23.1.0 <23.1.99 (scripts/build/tools.ts), and apt.llvm.org — which
+# serves both amd64 and arm64, unlike the GitHub tarball's ICU 70 — ships
+# the 23.1 branch as 23.1.x.
+sha = 4f7f658ed173fc23500de183b3713a8ddc18ba33
+bun_version = 1.4.4
+llvm_version = 23.1.1
+rust_toolchain = nightly-2026-09-15
+cmake_version = 3.30.5
+cmake_sha256_x64 = 83de8839f3fb0d9caf982a0435da3fa8c4fbe2c817dfec99def310dc7e6a8404
+cmake_sha256_arm64 = 93c3b8920379585dece1314f113c6c9008eaedfe56023c78d856fc86dad5b8e2

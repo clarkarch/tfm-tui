@@ -1,0 +1,818 @@
+name: AOT experiment
+
+# Bun's ahead-of-time compiler (`bun build --compile --aot`) is in NO release
+# yet: the bun that can run it has to be BUILT from a pinned commit.
+# This workflow builds that bun, builds tfm with it (the AOT executable plus a
+# JIT baseline from the SAME bun, so the comparison is apples to apples),
+# boots both and reports the numbers the go/no-go gates ask for.
+#
+# It is an experiment, not a release path: nothing here publishes anything.
+#
+# The gates it measures:
+#   * the native renderer boots and paints (alternate screen, first frame)
+#   * the icon assets are still embedded in the AOT executable
+#   * the AOT build loads no code from disk (no transpiler in it)
+#   * the gzip size delta vs the JIT build stays under 10 MB
+#   * time-to-first-paint is at least 10% faster than the JIT build
+#
+# The AOT build comes in two sizes: the plain one and the trimmed one (the
+# AOT compiler removes the Bun and Node.js APIs the program never calls —
+# the only size lever it has). The gates judge the smallest variant that
+# boots and paints every run: that is the binary a release would ship.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lto:
+        description: "link bun with LTO (slow, lots of RAM) or without"
+        type: choice
+        default: "off"
+        options: ["off", "on"]
+      runs:
+        description: "boot runs per binary"
+        type: string
+        default: "5"
+      bun_run_id:
+        description: "reuse the bun from an earlier run (its build takes hours) — empty = build it"
+        type: string
+        default: ""
+  push:
+    branches: ["exp/aot-bun"]
+    paths:
+      - ".github/workflows/aot-experiment.yml"
+      - "src/**"
+      - "scripts/**"
+      - "package.json"
+      - "bun.lock"
+      - "assets/icons/**"
+
+concurrency:
+  group: aot-experiment-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # the commit that carries the AOT compiler
+  BUN_AOT_SHA: 4f7f658ed173fc23500de183b3713a8ddc18ba33
+  # the toolchain pins bun's own release CI uses (scripts/build/ci-images/spec.ts):
+  # clang has to be of the 23.1 series AND share its major version with rustc's
+  BUN_VERSION: 1.4.4
+  LLVM_VERSION: 23.1.1
+  RUST_TOOLCHAIN: nightly-2026-09-15
+  CMAKE_VERSION: 3.30.5
+
+jobs:
+  # ─── 1. the bun that can compile ahead of time ─────────────────────────────
+  build-aot-bun:
+    name: build bun with the AOT compiler
+    runs-on: ubuntu-latest
+    # the trimmable link links twice and checks the result: the build takes
+    # hours, and the trimmable one takes longer than the plain one
+    timeout-minutes: 300
+    steps:
+      # the standard runner has ~14 GB of disk; the build needs the WebKit
+      # prebuilt, an LLVM and the object files. Free the image's fat first.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift /usr/local/share/boost
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          df -h /
+
+      - uses: actions/checkout@v4
+        if: ${{ inputs.bun_run_id == '' }}
+        with:
+          repository: oven-sh/bun
+          ref: ${{ env.BUN_AOT_SHA }}
+          path: bun
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        if: ${{ inputs.bun_run_id == '' }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential ninja-build nasm pkg-config python3 libtool \
+            zlib1g-dev libicu-dev libssl-dev curl unzip xz-utils ccache
+          # cmake: the pinned release (the runner's is older)
+          curl -fsSL -o /tmp/cmake.sh \
+            "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh"
+          sudo sh /tmp/cmake.sh --skip-license --prefix=/usr/local
+          rm -f /tmp/cmake.sh
+          # LLVM: the pinned release. The bin/ tools and the clang resource
+          # dir are what bun's build looks for (the CI image installs the same
+          # subset). The release's lld/llvm-mt link against ICU 70 — Ubuntu
+          # 22.04's — so that .deb comes with them (same pin as
+          # scripts/build/ci-images/spec.ts).
+          curl -fsSL -o /tmp/libicu70.deb \
+            "http://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu70_70.1-2_amd64.deb"
+          echo "58a154f6307289813da2276f900498ef536ae7c0522d2cf31a3c3c5cf62dfd9a  /tmp/libicu70.deb" | sha256sum -c -
+          sudo dpkg -i /tmp/libicu70.deb || sudo dpkg -i --force-depends /tmp/libicu70.deb
+          rm -f /tmp/libicu70.deb
+          curl -fsSL -o /tmp/llvm.tar.xz \
+            "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/LLVM-${LLVM_VERSION}-Linux-X64.tar.xz"
+          mkdir -p /opt/llvm/bin /opt/llvm/lib
+          tar -xJf /tmp/llvm.tar.xz -C /opt/llvm --strip-components=1 \
+            "LLVM-${LLVM_VERSION}-Linux-X64/bin" \
+            "LLVM-${LLVM_VERSION}-Linux-X64/lib/clang"
+          rm -f /tmp/llvm.tar.xz
+          for tool in clang clang++ ld.lld llvm-ar llvm-ranlib llvm-nm llvm-strip; do
+            if [ ! -x "/opt/llvm/bin/$tool" ]; then
+              echo "the pinned LLVM release ships no $tool — the toolchain is incomplete"
+              exit 1
+            fi
+          done
+          /opt/llvm/bin/ld.lld --version
+          # the build resolves its tools through this directory (and skips the
+          # clang version check with it — the pin IS the version)
+          echo "BUN_TOOLCHAIN_LLVM=/opt/llvm" >> "$GITHUB_ENV"
+          echo "/opt/llvm/bin" >> "$GITHUB_PATH"
+          df -h /
+
+      - name: Install rust
+        if: ${{ inputs.bun_run_id == '' }}
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # the pinned channel only (minimal profile + rust-src): the full
+          # rust-toolchain.toml list would pull clippy, miri and 11 target
+          # std trees — ~2.4 GB the runner cannot spare. RUSTUP_TOOLCHAIN
+          # pins every cargo/rustup call to it, so nothing installs the rest.
+          rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal --component rust-src
+          echo "RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}" >> "$GITHUB_ENV"
+
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ inputs.bun_run_id == '' }}
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # The bun build is the long pole (hours). When a tfm-side fix needs a
+      # new run, the bun from an earlier run is reused instead: its artifact
+      # lives for 90 days and carries the exact binary the earlier run built.
+      - name: Reuse the bun from an earlier run
+        if: ${{ inputs.bun_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts dist
+          # --repo: this job checks out nothing (the bun repo is not needed
+          # to reuse a binary), and gh would look for the repo in git
+          gh run download "${{ inputs.bun_run_id }}" --repo "${{ github.repository }}" \
+            --name bun-aot --dir artifacts
+          # the artifact carries the binary at its root; an older one carried
+          # the tree it was uploaded from — take whichever is there
+          found=""
+          for cand in artifacts/bun artifacts/bin/bun artifacts/bun/build/release/bun; do
+            if [ -f "$cand" ]; then found="$cand"; break; fi
+          done
+          if [ -z "$found" ]; then
+            echo "no bun binary in the artifact:"
+            find artifacts -type f | head -20
+            exit 1
+          fi
+          cp "$found" dist/bun
+          chmod +x dist/bun
+          ls -l dist/bun
+          ./dist/bun --version
+
+      - name: Build bun
+        if: ${{ inputs.bun_run_id == '' }}
+        working-directory: bun
+        run: |
+          bun install --frozen-lockfile
+          # --aot is on by default in this tree; it is spelled out because the
+          # whole point of the job is the compiler. --webkit=prebuilt fetches
+          # the matching WebKit (the "-aot" tarball) instead of building it.
+          # --trimmable=on links the executable with the trim table: it is
+          # what lets `bun build --compile --trim` remove the Bun and Node.js
+          # APIs the program never calls — the only size lever the AOT
+          # compiler has.
+          set -o pipefail
+          bun scripts/build.ts --profile=release --aot=on --webkit=prebuilt \
+            --trimmable=on --lto=${{ inputs.lto || 'off' }} 2>&1 | tee build.log
+          ls -l build/release/
+
+      # One place for the binary, whatever produced it: the artifact then
+      # carries a single file at its root (a multi-path upload keeps the
+      # whole tree, and the download lands in a directory).
+      - name: Collect the bun binary
+        run: |
+          mkdir -p dist
+          if [ ! -f dist/bun ] && [ -f bun/build/release/bun ]; then
+            cp bun/build/release/bun dist/bun
+          fi
+          if [ ! -f dist/bun ]; then
+            echo "no bun binary to collect"
+            exit 1
+          fi
+          chmod +x dist/bun
+          ls -l dist/bun
+
+      # The compiler has to be IN the binary: a trivial program is compiled
+      # ahead of time and run. (Without --aot the flag does not exist and the
+      # build fails right here.)
+      - name: Check the AOT compiler is in there
+        run: |
+          ./dist/bun --version
+          printf 'console.log("aot ok")\n' > /tmp/aot-probe.ts
+          ./dist/bun build --compile --aot /tmp/aot-probe.ts --outfile /tmp/aot-probe-bin
+          /tmp/aot-probe-bin
+          # the runtime features tfm leans on: a PTY (the embedded terminal)
+          ./dist/bun -e '
+            const p = Bun.spawn(["echo", "pty-ok"], { terminal: { cols: 80, rows: 24, data() {} } });
+            await p.exited;
+            console.log("pty ok");
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bun-aot
+          path: dist/bun
+          if-no-files-found: error
+
+  # ─── 2. tfm, compiled ahead of time and on the JIT (same bun) ─────────────
+  build-tfm:
+    name: build tfm (AOT + JIT baseline)
+    needs: build-aot-bun
+    runs-on: ubuntu-latest
+    # the AOT compile type checks the whole program (TS7) and compiles every
+    # reachable function — it is slow, and it has no cache
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Download the AOT bun
+        uses: actions/download-artifact@v4
+        with:
+          name: bun-aot
+          path: bin
+
+      - name: Make the bun executable
+        run: chmod +x bin/bun
+
+      # The patched opentui fork must sit BESIDE the checkout: package.json
+      # depends on file:../opentui-fork/packages/core/dist.
+      - name: Fetch the opentui fork
+        run: |
+          url=$(sed -n 's/^url *= *//p' opentui-fork.ref | head -n 1)
+          ref=$(sed -n 's/^ref *= *//p' opentui-fork.ref | head -n 1)
+          git clone --depth 1 --single-branch --branch "$ref" "$url" ../opentui-fork
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Stage the fork's patched libopentui over the UNPATCHED npm platform
+      # package, so the compiled binary embeds it.
+      - name: Stage the patched libopentui
+        run: |
+          ln -sfn "$(readlink -f node_modules)" ../opentui-fork/node_modules
+          sh scripts/sync-opentui-lib.sh
+
+      - name: Check
+        run: bun run check
+
+      # The AOT build type checks the program (TS7) and a type error stops it.
+      # `bun check --aot` reports what the build would report, without
+      # building — so the answer arrives in seconds instead of after the
+      # compile. It is INFORMATIONAL: the build removes code it can prove
+      # dead (the plugin loader) and does not report errors in it, while
+      # the check may. The build below is the authority.
+      - name: What the AOT type check says
+        run: |
+          mkdir -p dist/logs
+          set +e
+          ./bin/bun check --aot src/index.ts > dist/logs/aot-check.log 2>&1
+          check_rc=$?
+          set -e
+          echo "bun check --aot exit=$check_rc"
+          tail -40 dist/logs/aot-check.log
+          echo "(full log: dist/logs/aot-check.log)"
+
+      # The native-addon probe. tfm rasterizes its SVG icons with the
+      # resvg-js napi addon, loaded through a sync require-dlopen. A
+      # compiled bun has to carry the .node file and dlopen it at runtime;
+      # if the AOT build drops it, every icon silently degrades to a text
+      # glyph and the app still "works". A tiny program that renders one
+      # SVG proves the addon survives — in the AOT build AND in the JIT
+      # baseline (the baseline is the control: if it fails there too, the
+      # probe is broken, not the AOT build).
+      - name: The resvg native addon survives the AOT build
+        run: |
+          mkdir -p dist/probe dist/logs
+          cat > dist/probe/probe-resvg.ts <<'TS'
+          import { Resvg } from "@resvg/resvg-js";
+
+          const svg =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+            '<path d="M3 5 H9 L11 7.5 H21 V19 H3 Z" fill="#cdd6f4"/></svg>';
+          const r = new Resvg(svg, { logLevel: "off", font: { loadSystemFonts: false } });
+          const png = r.render().asPng();
+          console.log(`resvg png bytes: ${png.length}`);
+          if (png.length < 100) {
+            console.error("the rasterized png is suspiciously small");
+            process.exit(1);
+          }
+          TS
+          # The JIT baseline is the CONTROL: if it cannot load the addon, the
+          # probe itself is broken and the comparison would be meaningless.
+          ./bin/bun build --compile --tsconfig-override tsconfig.json dist/probe/probe-resvg.ts \
+            --outfile dist/probe/probe-jit 2>&1 | tee dist/logs/probe-jit-build.log
+          if ! jit_out=$(./dist/probe/probe-jit 2>&1); then
+            echo "the JIT baseline cannot load the resvg addon — the probe is broken"
+            echo "jit-broken" > dist/logs/probe-jit.out
+            exit 1
+          fi
+          echo "$jit_out" > dist/logs/probe-jit.out
+          echo "jit: $jit_out"
+
+          # The AOT build is the SUBJECT: a failure here is a finding about
+          # AOT, not a broken test — so it is recorded and carried to the
+          # report instead of failing this step (the rest of the experiment
+          # still measures what it can).
+          set +e
+          ./bin/bun build --compile --aot --tsconfig-override tsconfig.json dist/probe/probe-resvg.ts \
+            --outfile dist/probe/probe-aot 2>&1 | tee dist/logs/probe-aot-build.log
+          build_rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$build_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT compiler could not build the resvg probe"
+            echo "aot-build-failed" > dist/logs/probe-aot.out
+          elif ! aot_out=$(./dist/probe/probe-aot 2>&1); then
+            echo "PROBE FAILURE: the AOT executable cannot load the resvg addon"
+            echo "aot-run-failed" > dist/logs/probe-aot.out
+          elif [ "$aot_out" != "$jit_out" ]; then
+            echo "PROBE FAILURE: the AOT build rasterized differently than the JIT baseline"
+            echo "aot-mismatch: $aot_out" > dist/logs/probe-aot.out
+          else
+            echo "$aot_out" > dist/logs/probe-aot.out
+            echo "aot: $aot_out"
+          fi
+          echo "probe result (aot): $(cat dist/logs/probe-aot.out)"
+
+      # The embedded assets, asked of the build itself. A compiled binary
+      # names an embedded file "<name>-<hash>.svg"; an AOT build may keep
+      # the plain "<name>.svg" instead. The probe uses tfm's OWN index
+      # function, so it answers the question that matters: does the app
+      # still find its icons (an empty index = every icon degrades to a
+      # text glyph, and the app looks fine while being wrong).
+      - name: The embedded icon assets survive the AOT build
+        run: |
+          set +e
+          ./bin/bun scripts/aot-probe-assets.ts aot 2>&1 | tee dist/logs/probe-assets-aot.log
+          probe_rc=${PIPESTATUS[0]}
+          set -e
+          # the lines the measure job reads
+          grep -E "^(embedded files|sample asset names|resolved icons|sample icons):" \
+            dist/logs/probe-assets-aot.log > dist/logs/probe-assets-aot.out || true
+          if [ "$probe_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT build lost its embedded icon assets"
+            echo "aot-probe-failed" > dist/logs/probe-assets-aot.out
+          fi
+          echo "probe result (aot): $(cat dist/logs/probe-assets-aot.out)"
+
+      # The transpiler check. An ahead-of-time executable may not load code
+      # from disk: the transpiler is not in it. The probe imports a file it
+      # writes at run time — the AOT build must refuse it, the JIT baseline
+      # (the control) must load it. That is the proof; a grep of the build
+      # log cannot give it, because the expected warning ("this import path
+      # isn't a constant") mentions the flag the build does NOT use.
+      #
+      # The probe's path is unique per run and its specifier is assembled at
+      # run time, so the compiler can neither find the file on disk while it
+      # builds nor resolve the import to a constant.
+      - name: The AOT executable carries no transpiler
+        run: |
+          mkdir -p dist/logs
+          # the JIT baseline is the CONTROL: if it cannot load code from
+          # disk, the probe itself is broken and the proof is meaningless
+          if ! ./bin/bun scripts/aot-probe-disk-code.ts jit \
+            > dist/logs/probe-disk-jit.out 2> dist/logs/probe-disk-jit.log; then
+            echo "the JIT baseline could not run the disk-code probe — the probe is broken"
+            cat dist/logs/probe-disk-jit.out dist/logs/probe-disk-jit.log
+            exit 1
+          fi
+          echo "probe (jit): $(cat dist/logs/probe-disk-jit.out)"
+
+          # the AOT build is the SUBJECT: a failure here is a finding about
+          # AOT, not a broken test — so it is recorded and carried to the
+          # report instead of failing this step
+          set +e
+          ./bin/bun scripts/aot-probe-disk-code.ts aot \
+            > dist/logs/probe-disk-aot.out 2> dist/logs/probe-disk-aot.log
+          probe_rc=$?
+          set -e
+          if [ "$probe_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT disk-code probe did not run"
+            cat dist/logs/probe-disk-aot.out dist/logs/probe-disk-aot.log
+            echo "aot-probe-failed" > dist/logs/probe-disk-aot.out
+          fi
+          echo "probe (aot): $(cat dist/logs/probe-disk-aot.out)"
+
+      # The runtime features tfm leans on, asked of the compiled binaries:
+      # the file system, a child process, a PTY, a worker, a timer. The boot
+      # smoke test only paints a grid — this touches the paths the app uses
+      # and the boot does not.
+      - name: The runtime features survive the AOT build
+        run: |
+          mkdir -p dist/logs
+          set +e
+          ./bin/bun scripts/aot-probe-features.ts jit \
+            > dist/logs/probe-features-jit.out 2> dist/logs/probe-features-jit.log
+          jit_rc=$?
+          ./bin/bun scripts/aot-probe-features.ts aot \
+            > dist/logs/probe-features-aot.out 2> dist/logs/probe-features-aot.log
+          aot_rc=$?
+          set -e
+          if [ "$jit_rc" != "0" ] || [ "$aot_rc" != "0" ]; then
+            echo "PROBE FAILURE: the feature probe did not run"
+            cat dist/logs/probe-features-jit.log dist/logs/probe-features-aot.log
+            echo "feature-probe-failed" > dist/logs/probe-features-aot.out
+          fi
+          echo "probe (jit):"; cat dist/logs/probe-features-jit.out
+          echo "probe (aot):"; cat dist/logs/probe-features-aot.out
+
+      # The AOT build: the compiler turns the program into machine code, and
+      # the define flips the plugin gate (an AOT executable may not load a
+      # plugin file from disk). EVERY compiler finding is captured — the
+      # warning about code from disk is expected (the loader stays in the
+      # bundle, unreachable), anything else is a finding of its own.
+      - name: Build the AOT executable
+        run: |
+          mkdir -p dist/logs
+          set -o pipefail
+          ./bin/bun scripts/aot-build.ts aot dist/tfm-aot 2>&1 | tee dist/logs/aot-build.log
+
+      # The baseline: the SAME bun, without the AOT compiler — a JIT
+      # executable, exactly what a release ships today.
+      - name: Build the JIT baseline
+        run: |
+          set -o pipefail
+          ./bin/bun scripts/aot-build.ts jit dist/tfm-jit 2>&1 | tee dist/logs/jit-build.log
+
+      # The size variants. --trim removes the Bun and Node.js APIs the
+      # program never calls from the executable — the only size lever the
+      # AOT compiler has — and --no-function-source leaves each function's
+      # source code out. They need a bun that carries the trim table (the
+      # build job links one); a bun without it says so, and that is a
+      # finding about the toolchain, not a broken test.
+      - name: Build the trimmed AOT executables
+        run: |
+          mkdir -p dist/logs
+          for variant in trim lean; do
+            case "$variant" in
+              trim) flags="--trim" ;;
+              lean) flags="--trim --no-function-source" ;;
+            esac
+            set +e
+            ./bin/bun scripts/aot-build.ts aot "dist/tfm-aot-$variant" $flags --explain-trim \
+              2>&1 | tee "dist/logs/aot-$variant-build.log"
+            build_rc=${PIPESTATUS[0]}
+            set -e
+            if [ "$build_rc" != "0" ]; then
+              echo "the $variant AOT build failed — this bun has no trim table?"
+              echo "$variant-build-failed" > "dist/logs/aot-$variant-build.out"
+              rm -f "dist/tfm-aot-$variant"
+            else
+              echo "$variant-build-ok" > "dist/logs/aot-$variant-build.out"
+              ls -l "dist/tfm-aot-$variant"
+            fi
+          done
+
+      # The trimmed build keeps the JavaScript interpreter — the trim report
+      # says the program can reach eval() and a dynamic import(), so the
+      # trimmed executable keeps the transpiler as well. The question "does
+      # it load code from disk?" therefore has to be asked of the trimmed
+      # build too: it is the candidate a release would ship.
+      - name: The trimmed AOT executable carries no transpiler
+        run: |
+          mkdir -p dist/logs
+          if [ ! -f "dist/tfm-aot-trim" ]; then
+            echo "no trimmed build — the probe has nothing to ask"
+            echo "skipped: no trimmed build" > dist/logs/probe-disk-trim.out
+            exit 0
+          fi
+          set +e
+          ./bin/bun scripts/aot-probe-disk-code.ts aot dist/probe/probe-disk-code-trim --trim \
+            > dist/logs/probe-disk-trim.out 2> dist/logs/probe-disk-trim.log
+          probe_rc=$?
+          set -e
+          cat dist/logs/probe-disk-trim.out
+          if [ "$probe_rc" != "0" ] || ! grep -q "code from disk: refused" dist/logs/probe-disk-trim.out; then
+            echo "PROBE FAILURE: the trimmed AOT executable did not refuse code from disk"
+            cat dist/logs/probe-disk-trim.log
+            exit 1
+          fi
+
+      - name: Report the sizes
+        run: |
+          ls -l dist/tfm-aot dist/tfm-jit
+          gzip -kf dist/tfm-aot && gzip -kf dist/tfm-jit
+          ls -l dist/tfm-aot.gz dist/tfm-jit.gz
+          # the variants, if they were built
+          for variant in trim lean; do
+            if [ -f "dist/tfm-aot-$variant" ]; then
+              gzip -kf "dist/tfm-aot-$variant"
+              ls -l "dist/tfm-aot-$variant" "dist/tfm-aot-$variant.gz"
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfm-binaries
+          path: |
+            dist/tfm-aot
+            dist/tfm-jit
+            dist/tfm-aot.gz
+            dist/tfm-jit.gz
+            dist/tfm-aot-trim
+            dist/tfm-aot-trim.gz
+            dist/tfm-aot-lean
+            dist/tfm-aot-lean.gz
+            dist/logs/aot-build.log
+            dist/logs/jit-build.log
+            dist/logs/aot-trim-build.log
+            dist/logs/aot-lean-build.log
+            dist/logs/aot-check.log
+            dist/logs/probe-aot.out
+            dist/logs/probe-jit.out
+            dist/logs/probe-assets-aot.out
+            dist/logs/probe-disk-aot.out
+            dist/logs/probe-disk-jit.out
+            dist/logs/probe-disk-trim.out
+            dist/logs/probe-features-aot.out
+            dist/logs/probe-features-jit.out
+            dist/logs/probe-features-aot.log
+            dist/logs/probe-features-jit.log
+          if-no-files-found: error
+
+  # ─── 3. boot both, measure, report ───────────────────────────────────────
+  measure:
+    name: smoke + measure
+    needs: build-tfm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Download the binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: tfm-binaries
+          path: dist
+
+      - name: Make the binaries executable
+        run: chmod +x dist/tfm-aot dist/tfm-jit dist/tfm-aot-trim dist/tfm-aot-lean 2>/dev/null || true
+
+      # The gate the whole plugin change exists for: an AOT build refuses the
+      # plugin subcommands (a plugin is code from disk), a normal build does
+      # not. A build where the define did NOT land would still list plugins.
+      - name: The plugin gate is off in the AOT build
+        run: |
+          set +e
+          ./dist/tfm-aot plugins list > /tmp/aot-plugins.out 2> /tmp/aot-plugins.err
+          aot_rc=$?
+          ./dist/tfm-jit plugins list > /tmp/jit-plugins.out 2> /tmp/jit-plugins.err
+          jit_rc=$?
+          set -e
+          echo "aot rc=$aot_rc: $(cat /tmp/aot-plugins.err)"
+          echo "jit rc=$jit_rc: $(cat /tmp/jit-plugins.out)"
+          if [ "$aot_rc" != "1" ]; then
+            echo "the AOT build did not refuse the plugin subcommands — the define did not land"
+            exit 1
+          fi
+          grep -q "plugins are disabled in this build" /tmp/aot-plugins.err
+
+      # The transpiler check, carried over from the build job: the AOT
+      # executable refuses to load code from disk, the JIT baseline loads
+      # it. That is the proof that the AOT binary carries no transpiler.
+      - name: The AOT executable carries no transpiler
+        run: |
+          echo "probe (jit): $(cat dist/logs/probe-disk-jit.out)"
+          echo "probe (aot): $(cat dist/logs/probe-disk-aot.out)"
+          if ! grep -q "code from disk: refused" dist/logs/probe-disk-aot.out; then
+            echo "the AOT executable loaded code from disk — it carries a transpiler"
+            exit 1
+          fi
+          if ! grep -q "code from disk: LOADED" dist/logs/probe-disk-jit.out; then
+            echo "the JIT baseline did not load code from disk — the probe is broken"
+            exit 1
+          fi
+          # the trimmed build keeps the interpreter, so it gets its own probe
+          echo "probe (aot --trim): $(cat dist/logs/probe-disk-trim.out)"
+          if grep -q "skipped" dist/logs/probe-disk-trim.out; then
+            echo "no trimmed build — nothing to check"
+          elif ! grep -q "code from disk: refused" dist/logs/probe-disk-trim.out; then
+            echo "the trimmed AOT executable loaded code from disk — it carries a transpiler"
+            exit 1
+          fi
+
+      # The runtime features, compared: the AOT build has to answer like the
+      # JIT baseline. One difference is known at this PR head: a Worker
+      # started from an embedded FILE cannot run in an AOT executable ("only
+      # an entry point of the build can run"), and opentui's tree-sitter
+      # parser worker is such a file. tfm does not use that worker today
+      # (its preview is plain text), so that difference is reported, not
+      # failed — every other difference is a lost feature.
+      - name: The runtime features survive the AOT build
+        run: |
+          echo "probe (jit): $(cat dist/logs/probe-features-jit.out)"
+          echo "probe (aot): $(cat dist/logs/probe-features-aot.out)"
+          bun -e '
+            const read = async (p) => (await Bun.file(p).text()).trim().split("\n").map((l) => l.trim()).filter(Boolean);
+            const statuses = (lines) => {
+              const out = {};
+              for (const line of lines) {
+                const i = line.indexOf(":");
+                if (i < 0) continue;
+                const name = line.slice(0, i).trim();
+                const rest = line.slice(i + 1).trim();
+                out[name] = rest.startsWith("ok") ? "ok" : "FAILED";
+              }
+              return out;
+            };
+            const jit = statuses(await read("dist/logs/probe-features-jit.out"));
+            const aot = statuses(await read("dist/logs/probe-features-aot.out"));
+            // the worker difference is the documented AOT limitation; the
+            // eval one is documented too (the AOT executable keeps an
+            // interpreter, so eval may work there and not in the trimmed
+            // build — tfm uses neither)
+            const known = new Set(["worker", "eval"]);
+            let bad = 0;
+            for (const [name, value] of Object.entries(jit)) {
+              if (!(name in aot)) {
+                console.log(`FAIL  ${name} — the AOT build does not report it at all`);
+                bad++;
+              } else if (aot[name] === value) {
+                console.log(`PASS  ${name} — ${value}`);
+              } else if (known.has(name)) {
+                console.log(`INFO  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value} (${name === "worker" ? "a worker from an embedded file cannot run in an AOT executable" : "the AOT executable keeps a JavaScript interpreter"})`);
+              } else {
+                console.log(`FAIL  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value}`);
+                bad++;
+              }
+            }
+            for (const name of Object.keys(aot)) {
+              if (!(name in jit)) {
+                console.log(`FAIL  ${name} — only the AOT build reports it`);
+                bad++;
+              }
+            }
+            if (bad) process.exit(1);
+          '
+
+      # The icon assets are embedded in the executable (Bun.embeddedFiles).
+      # If the AOT build dropped them, every icon silently falls back to a
+      # text glyph — the binary would look fine and be wrong.
+      - name: The icon assets are embedded in both binaries
+        run: |
+          jit_hits=$(grep -ac "<svg" dist/tfm-jit || true)
+          aot_hits=$(grep -ac "<svg" dist/tfm-aot || true)
+          echo "embedded svg marker hits — jit: ${jit_hits}, aot: ${aot_hits}"
+          if [ "$jit_hits" -lt 50 ]; then
+            echo "the JIT baseline carries no embedded SVGs — the check itself is broken"
+            exit 1
+          fi
+          if [ "$aot_hits" -lt 50 ]; then
+            echo "the AOT binary carries no embedded SVGs — the icon assets were dropped"
+            exit 1
+          fi
+
+      # The native-addon probe, carried over from the build job: the resvg
+      # napi addon is what rasterizes the SVG icons. If it does not load in
+      # the AOT executable, every icon silently degrades to a text glyph.
+      - name: The resvg native addon works in the AOT build
+        run: |
+          echo "probe (jit): $(cat dist/logs/probe-jit.out)"
+          echo "probe (aot): $(cat dist/logs/probe-aot.out)"
+          if ! grep -q "^resvg png bytes:" dist/logs/probe-aot.out; then
+            echo "the AOT build cannot load the resvg native addon — the icons would degrade to text glyphs"
+            exit 1
+          fi
+          if [ "$(cat dist/logs/probe-aot.out)" != "$(cat dist/logs/probe-jit.out)" ]; then
+            echo "the AOT build rasterized differently than the JIT baseline"
+            exit 1
+          fi
+
+      # The embedded assets, asked of the AOT build itself.
+      - name: The embedded icon assets survive the AOT build
+        run: |
+          echo "probe (aot): $(cat dist/logs/probe-assets-aot.out)"
+          if ! grep -q "^resolved icons: " dist/logs/probe-assets-aot.out; then
+            echo "the AOT build lost its embedded icon assets"
+            exit 1
+          fi
+          resolved=$(sed -n 's/^resolved icons: //p' dist/logs/probe-assets-aot.out)
+          if [ "${resolved:-0}" -lt 50 ]; then
+            echo "the AOT build resolved only $resolved icons — the icons would degrade to text glyphs"
+            exit 1
+          fi
+
+      - name: Boot the binaries
+        run: |
+          bun scripts/aot-measure.ts dist/tfm-aot ${{ inputs.runs || '5' }} aot | tee /tmp/aot.json
+          bun scripts/aot-measure.ts dist/tfm-jit ${{ inputs.runs || '5' }} jit | tee /tmp/jit.json
+          # the size variants, if they were built
+          for variant in trim lean; do
+            if [ -x "dist/tfm-aot-$variant" ]; then
+              bun scripts/aot-measure.ts "dist/tfm-aot-$variant" ${{ inputs.runs || '5' }} "$variant" \
+                | tee "/tmp/aot-$variant.json"
+            fi
+          done
+
+      # The gates. Every AOT variant that was built has to boot and paint
+      # every run; the CANDIDATE (the smallest variant that does) has to meet
+      # the size and speed targets. A FAIL fails the step: the pipefail is
+      # there so that `| tee report.txt` cannot swallow the exit code.
+      - name: The gates
+        run: |
+          set -o pipefail
+          bun -e '
+            const jit = await Bun.file("/tmp/jit.json").json();
+            const gzip = async (p) => (await Bun.file(p).arrayBuffer()).byteLength;
+            const jitGz = await gzip("dist/tfm-jit.gz");
+            const lines = [];
+            const gate = (name, ok, detail) => lines.push(`${ok ? "PASS" : "FAIL"}  ${name} — ${detail}`);
+            const info = (name, detail) => lines.push(`INFO  ${name} — ${detail}`);
+            const pctOf = (a, b) => (b ? Math.round(((a ?? 0) - b) / b * 1000) / 10 : 0);
+            const showPct = (p) => `${p > 0 ? "+" : ""}${p}%`;
+            const mb = (n) => (n / 1048576).toFixed(1);
+            const deltaOf = (gz) => Math.round((gz - jitGz) / 1048576 * 10) / 10;
+
+            gate("jit boots", jit.booted === jit.runs, `${jit.booted}/${jit.runs} runs entered the alternate screen`);
+            gate("jit paints", jit.painted === jit.runs, `${jit.painted}/${jit.runs} runs completed the first full paint`);
+
+            // every AOT variant that was built: the plain one and the size ones
+            const variants = [];
+            for (const [name, json, bin] of [
+              ["aot", "/tmp/aot.json", "dist/tfm-aot"],
+              ["aot-trim", "/tmp/aot-trim.json", "dist/tfm-aot-trim"],
+              ["aot-lean", "/tmp/aot-lean.json", "dist/tfm-aot-lean"],
+            ]) {
+              if (!(await Bun.file(json).exists())) continue;
+              variants.push({ name, json: await Bun.file(json).json(), gz: await gzip(`${bin}.gz`) });
+            }
+            if (variants.length === 0) {
+              console.log("FAIL  no AOT binary was measured");
+              process.exit(1);
+            }
+
+            for (const v of variants) {
+              gate(`${v.name} boots`, v.json.booted === v.json.runs, `${v.json.booted}/${v.json.runs} runs entered the alternate screen`);
+              gate(`${v.name} paints`, v.json.painted === v.json.runs, `${v.json.painted}/${v.json.runs} runs completed the first full paint`);
+              const d = deltaOf(v.gz);
+              info(`${v.name} gzip size`, `${mb(v.gz)}MB vs jit ${mb(jitGz)}MB (${d > 0 ? "+" : ""}${d}MB)`);
+              // first paint = process start → the first full frame (the metric a
+              // user feels). ready = process start → the first line of app code
+              // (the module graph load — what the AOT compiler removes).
+              const paintPct = pctOf(v.json.medianPaintMs, jit.medianPaintMs);
+              info(`${v.name} first paint`, `${v.json.medianPaintMs}ms vs jit ${jit.medianPaintMs}ms (${showPct(paintPct)})`);
+              const readyPct = pctOf(v.json.medianReadyMs, jit.medianReadyMs);
+              info(`${v.name} startup to first code`, `${v.json.medianReadyMs}ms vs jit ${jit.medianReadyMs}ms (${showPct(readyPct)})`);
+              const appPct = pctOf(v.json.medianAppMs, jit.medianAppMs);
+              info(`${v.name} app-reported boot`, `${v.json.medianAppMs}ms vs jit ${jit.medianAppMs}ms (${showPct(appPct)})`);
+              const altPct = pctOf(v.json.medianAltMs, jit.medianAltMs);
+              info(`${v.name} renderer up`, `${v.json.medianAltMs}ms vs jit ${jit.medianAltMs}ms (${showPct(altPct)})`);
+              info(`${v.name} rss at first paint`, `${v.json.medianRssKb}KB vs jit ${jit.medianRssKb}KB`);
+              info(`${v.name} images drawn`, `${v.json.medianImages} vs jit ${jit.medianImages}`);
+              info(`${v.name} crashes at teardown`, `${v.json.crashed} vs jit ${jit.crashed}`);
+            }
+
+            // the candidate: the smallest AOT variant that boots and paints
+            // every run — the binary a release would ship
+            const usable = variants
+              .filter((v) => v.json.booted === v.json.runs && v.json.painted === v.json.runs)
+              .sort((a, b) => a.gz - b.gz);
+            if (usable.length === 0) {
+              console.log(lines.join("\n"));
+              console.log("FAIL  no AOT variant booted and painted every run");
+              process.exit(1);
+            }
+            const candidate = usable[0];
+            const delta = deltaOf(candidate.gz);
+            gate(`gzip size delta under 10 MB (${candidate.name})`, delta <= 10,
+              `${candidate.name} ${mb(candidate.gz)}MB vs jit ${mb(jitGz)}MB (${delta > 0 ? "+" : ""}${delta}MB)`);
+            const candPaint = pctOf(candidate.json.medianPaintMs, jit.medianPaintMs);
+            gate(`first paint is at least 10% faster (${candidate.name})`, candPaint <= -10,
+              `${candidate.name} ${candidate.json.medianPaintMs}ms vs jit ${jit.medianPaintMs}ms (${showPct(candPaint)})`);
+
+            console.log(lines.join("\n"));
+            console.log("JSON " + JSON.stringify({ variants, jit, jitGz, candidate: candidate.name }));
+            if (lines.some((l) => l.startsWith("FAIL"))) process.exit(1);
+          ' | tee report.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aot-report
+          path: |
+            report.txt
+            /tmp/aot.json
+            /tmp/jit.json
+            /tmp/aot-trim.json
+            /tmp/aot-lean.json
+          if-no-files-found: warn

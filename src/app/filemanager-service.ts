@@ -187,13 +187,9 @@ export const openPlanWithEntry = (
 // service-file management (user bus, opt-in): install writes the activator
 // pointing at THIS binary; remove deletes it. The bus picks new service
 // files up on the next activation — no daemon reload needed.
-export const fileManagerServiceFile = (): string =>
-  path.join(
-    process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"),
-    "dbus-1",
-    "services",
-    `${SERVICE_NAME}.service`,
-  );
+export const fileManagerServiceFile = (
+  dataHome = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"),
+): string => path.join(dataHome, "dbus-1", "services", `${SERVICE_NAME}.service`);
 
 export const fileManagerServiceEntry = (execPath: string): string =>
   `[D-BUS Service]\nName=${SERVICE_NAME}\nExec=${execPath} --filemanager-service\n`;

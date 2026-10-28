@@ -1,0 +1,245 @@
+# Builds the Bun that can compile ahead of time, and caches it.
+#
+# Bun's AOT compiler (`bun build --compile --aot`) is in no release: the Bun
+# that can run it has to be BUILT from the pinned commit. The binary is
+# ~130 MB and the build takes ~30-60 min, so it is cached by the pinned SHA:
+# only the first release (or a SHA bump) pays for it.
+#
+# The toolchain is Bun's own release CI pin (scripts/build/ci-images/spec.ts):
+# clang must be of the 23.1 series AND share its major version with rustc's
+# LLVM. apt.llvm.org serves llvm-23 for both amd64 and arm64, which is why
+# it is used here instead of the GitHub release tarball — the tarball's tools
+# link against ICU 70, and Ubuntu ships no arm64 build of that. Bun's own
+# check accepts any 23.1.x (scripts/build/tools.ts: LLVM_VERSION_RANGE), and
+# apt.llvm.org's 23.1 branch is exactly that series.
+#
+# Inputs:
+#   sha            the Bun commit to build (the AOT compiler's PR head)
+#   arch           x64 | arm64 — which binary to produce
+#   bun_version    the stock Bun used to install bun's own dependencies
+#   llvm_version   the pinned LLVM version (23.1.1 — the SERIES, not a patch)
+#   rust_toolchain the pinned Rust nightly
+#   cmake_version  the pinned CMake release
+#   cmake_sha256   the pinned CMake installer's checksum (per architecture)
+#
+# Outputs:
+#   bun_path       the path of the AOT-capable Bun
+
+name: Build the AOT Bun
+description: Build (and cache) the Bun that can compile ahead of time
+
+inputs:
+  sha:
+    description: The Bun commit to build
+    required: true
+  arch:
+    description: x64 | arm64
+    required: true
+  bun_version:
+    description: The stock Bun version
+    required: true
+  llvm_version:
+    description: The pinned LLVM version
+    required: true
+  rust_toolchain:
+    description: The pinned Rust toolchain
+    required: true
+  cmake_version:
+    description: The pinned CMake version
+    required: true
+  cmake_sha256:
+    description: The pinned CMake installer's sha256
+    required: true
+
+outputs:
+  bun_path:
+    description: The path of the AOT-capable Bun
+    value: ${{ steps.collect.outputs.bun_path }}
+
+runs:
+  using: composite
+  steps:
+    # The Bun build needs far more disk than the runner has free: the
+    # WebKit prebuilt, an LLVM and the object files do not fit next to the
+    # image's toolchains. Free the fat first (the same list Bun's own CI
+    # images prune).
+    - name: Free disk space
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/share/swift /usr/local/share/boost
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/*
+        df -h /
+
+    - name: Install build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq build-essential ninja-build nasm pkg-config python3 libtool \
+          zlib1g-dev libicu-dev libssl-dev curl unzip xz-utils ccache gnupg
+        df -h /
+
+    # LLVM: apt.llvm.org serves the 23.x series for amd64 AND arm64, and its
+    # tools link against the system ICU (the GitHub tarball's link against
+    # ICU 70, which Ubuntu ships for amd64 only).
+    #
+    # The pin is the 23.1 SERIES, not a patch: Bun's own check accepts
+    # >=23.1.0 <23.1.99 (scripts/build/tools.ts), and apt.llvm.org's 23.1
+    # branch serves exactly that. The package is named after the MAJOR.
+    - name: Install LLVM ${{ inputs.llvm_version }}
+      shell: bash
+      run: |
+        llvm_major="${LLVM_VERSION%%.*}"
+        llvm_series="${LLVM_VERSION%.*}"
+        curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+          | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-${llvm_major} main" \
+          | sudo tee /etc/apt/sources.list.d/llvm.list
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq "llvm-${llvm_major}" "clang-${llvm_major}" "lld-${llvm_major}"
+        # bun resolves its tools through this directory (and skips its clang
+        # version check with it — the directory is the pin). The series is
+        # checked HERE instead, so a wrong snapshot cannot slip in.
+        echo "BUN_TOOLCHAIN_LLVM=/usr/lib/llvm-${llvm_major}" >> "$GITHUB_ENV"
+        echo "/usr/lib/llvm-${llvm_major}/bin" >> "$GITHUB_PATH"
+        clang_version="$(/usr/lib/llvm-${llvm_major}/bin/clang --version | head -n 1)"
+        echo "$clang_version"
+        case "$clang_version" in
+          *"clang version ${llvm_series}."*) ;;
+          *)
+            echo "the installed clang is not of the pinned ${llvm_series} series"
+            exit 1
+            ;;
+        esac
+        for tool in clang clang++ ld.lld llvm-ar llvm-ranlib llvm-nm llvm-strip; do
+          if [ ! -x "/usr/lib/llvm-${llvm_major}/bin/$tool" ]; then
+            echo "the LLVM install ships no $tool — the toolchain is incomplete"
+            exit 1
+          fi
+        done
+      env:
+        LLVM_VERSION: ${{ inputs.llvm_version }}
+
+    # cmake: the pinned release (the runner's is older). Kitware ships one
+    # installer per architecture; the checksum is Bun's own pin.
+    - name: Install cmake ${{ inputs.cmake_version }}
+      shell: bash
+      run: |
+        case "${{ inputs.arch }}" in
+          x64) asset="cmake-${{ inputs.cmake_version }}-linux-x86_64.sh" ;;
+          arm64) asset="cmake-${{ inputs.cmake_version }}-linux-aarch64.sh" ;;
+          *) echo "unknown arch ${{ inputs.arch }}"; exit 1 ;;
+        esac
+        curl -fsSL -o /tmp/cmake.sh \
+          "https://github.com/Kitware/CMake/releases/download/v${{ inputs.cmake_version }}/${asset}"
+        echo "${{ inputs.cmake_sha256 }}  /tmp/cmake.sh" | sha256sum -c -
+        sudo sh /tmp/cmake.sh --skip-license --prefix=/usr/local
+        rm -f /tmp/cmake.sh
+        cmake --version
+
+    # rust: the pinned channel only (minimal profile + rust-src) — the full
+    # rust-toolchain.toml list would pull clippy, miri and a dozen target
+    # std trees. RUSTUP_TOOLCHAIN pins every cargo/rustup call to it.
+    - name: Install rust
+      shell: bash
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        rustup toolchain install "${{ inputs.rust_toolchain }}" --profile minimal --component rust-src
+        echo "RUSTUP_TOOLCHAIN=${{ inputs.rust_toolchain }}" >> "$GITHUB_ENV"
+
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun_version }}
+
+    # The bun checkout: only the pinned commit. The source tree is NOT cached
+    # (it is gigabytes); only the BINARY is, below.
+    - name: Fetch the bun source
+      uses: actions/checkout@v4
+      with:
+        repository: oven-sh/bun
+        ref: ${{ inputs.sha }}
+        path: bun-aot-src
+        fetch-depth: 1
+
+    # The binary itself: restored from the cache when the pinned SHA has not
+    # changed, built otherwise. The cache holds the BINARY, not the build
+    # tree — a build tree is gigabytes, a binary is 130 MB.
+    #
+    # The restore and the save are separate steps on purpose: the cache is
+    # written only AFTER the binary passed the checks below, so a broken bun
+    # can never be restored by the next release.
+    - name: Restore the cached Bun
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ github.workspace }}/dist/bun
+        key: bun-aot-v1-${{ inputs.sha }}-${{ inputs.arch }}
+
+    - name: Build bun
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ github.workspace }}/bun-aot-src
+      run: |
+        set -o pipefail
+        bun install --frozen-lockfile
+        # --aot is on by default in this tree; it is spelled out because the
+        # whole point of the job is the compiler. --webkit=prebuilt fetches
+        # the matching WebKit (the "-aot" tarball) instead of building it —
+        # both architectures ship one (bun-webkit-linux-{amd64,arm64}-aot).
+        # --trimmable=on links the executable with the trim table: it is what
+        # lets `bun build --compile --trim` remove the Bun and Node.js APIs
+        # the program never calls — and it is what makes the plain AOT build
+        # smaller than the JIT one.
+        bun scripts/build.ts --profile=release --aot=on --webkit=prebuilt \
+          --trimmable=on --lto=off 2>&1 | tee build.log
+        ls -l build/release/
+
+    - name: Collect the Bun
+      id: collect
+      shell: bash
+      run: |
+        src="$GITHUB_WORKSPACE/bun-aot-src"
+        mkdir -p "$GITHUB_WORKSPACE/dist"
+        if [ ! -f "$GITHUB_WORKSPACE/dist/bun" ] && [ -f "$src/build/release/bun" ]; then
+          cp "$src/build/release/bun" "$GITHUB_WORKSPACE/dist/bun"
+        fi
+        if [ ! -f "$GITHUB_WORKSPACE/dist/bun" ]; then
+          echo "no bun binary to collect"
+          exit 1
+        fi
+        chmod +x "$GITHUB_WORKSPACE/dist/bun"
+        ls -l "$GITHUB_WORKSPACE/dist/bun"
+        echo "bun_path=$GITHUB_WORKSPACE/dist/bun" >> "$GITHUB_OUTPUT"
+
+    # The compiler has to be IN the binary: a trivial program is compiled
+    # ahead of time and run. (Without --aot the flag does not exist and
+    # the build fails right here.)
+    - name: Check the AOT compiler is in there
+      shell: bash
+      run: |
+        "$GITHUB_WORKSPACE/dist/bun" --version
+        printf 'console.log("aot ok")\n' > /tmp/aot-probe.ts
+        "$GITHUB_WORKSPACE/dist/bun" build --compile --aot /tmp/aot-probe.ts --outfile /tmp/aot-probe-bin
+        /tmp/aot-probe-bin
+        # and the trim table: --trim must work, or the binary is not the one
+        # the release needs
+        "$GITHUB_WORKSPACE/dist/bun" build --compile --trim /tmp/aot-probe.ts --outfile /tmp/aot-probe-trim
+        /tmp/aot-probe-trim
+        # and the runtime features tfm leans on: a PTY (the embedded terminal)
+        "$GITHUB_WORKSPACE/dist/bun" -e '
+          const p = Bun.spawn(["echo", "pty-ok"], { terminal: { cols: 80, rows: 24, data() {} } });
+          await p.exited;
+          console.log("pty ok");
+        '
+
+    # The cache is written here — after the checks, never before. A cache
+    # that cannot be written is not a reason to fail anything.
+    - name: Save the Bun to the cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ github.workspace }}/dist/bun
+        key: bun-aot-v1-${{ inputs.sha }}-${{ inputs.arch }}
+        fail-on-cache-miss: false

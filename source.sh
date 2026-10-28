@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# tfm dev kit — build a branch from source and install it exactly like a release.
+# tfm source kit — build a branch from source and install it exactly like a release.
 #
-#   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/dev/source.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/clarkarch/tfm-tui/main/source.sh | bash
 #
 # The build itself lives in install.sh (TFM_SOURCE=<ref>), so there is one
 # installer, one output style, and one place where PATH/replace/checksum policy
 # is decided. This file only pins the branch and fetches the real script.
 #
 # env:
-#   TFM_BRANCH         branch to build (default dev)
+#   TFM_BRANCH         branch to build (default main)
 #   TFM_INSTALLER_REF  branch to fetch install.sh from (default TFM_BRANCH)
 #   TFM_INSTALLER_URL  full installer URL (file:// allowed, for local testing)
 #   plus everything install.sh understands: TFM_INSTALL_DIR, TFM_SRC_DIR,
 #   TFM_MIRROR/TFM_REMOTE, TFM_NO_SMOKE, ...
 set -euo pipefail
 
-BRANCH="${TFM_BRANCH:-dev}"
+BRANCH="${TFM_BRANCH:-main}"
 REF="${TFM_SOURCE:-$BRANCH}"
 URL="${TFM_INSTALLER_URL:-https://raw.githubusercontent.com/clarkarch/tfm-tui/${TFM_INSTALLER_REF:-$BRANCH}/install.sh}"
 

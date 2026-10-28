@@ -59,6 +59,11 @@ export const parseArgs = (argv: string[]): CliOptions => {
     opts.command = { name: "update", args: args.slice(1) };
     return opts;
   }
+  // ...and for `tfm uninstall` (remove the installed program, no TUI boot)
+  if (args[0] === "uninstall") {
+    opts.command = { name: "uninstall", args: args.slice(1) };
+    return opts;
+  }
 
   const fail = (msg: string): CliOptions => {
     opts.error = msg;
@@ -134,6 +139,8 @@ Commands:
   plugins [list|search|add|remove|update|new]   manage plugins (see 'tfm plugins help')
   update [--tag VERSION] [--force]
                                           install the newest tfm (see 'tfm update help')
+  uninstall
+                                          remove tfm (see 'tfm uninstall help')
   default-filemanager [status|set|unset|forget|service-install|service-remove]
                                           default file manager opt-in (see 'tfm default-filemanager help')
 `;

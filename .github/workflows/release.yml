@@ -4,34 +4,155 @@ name: Release
 # plus a .sha256 sidecar each. Video thumbnails use the SYSTEM ffmpeg (an
 # optional runtime dep install.sh suggests), so nothing ffmpeg-shaped ships
 # here. Tag a version to ship it:
-#   git tag v1.0.0 && git push origin v1.0.0
+#   git tag v1.2.0 && git push origin v1.2.0
 # Version must match package.json (checked below) so --version never lies.
+#
+# The binaries are compiled AHEAD OF TIME. Bun's AOT compiler
+# (`bun build --compile --aot`) is in NO release, so the release builds that
+# Bun first — from the commit pinned in bun-aot.ref, cached by that commit —
+# and then compiles tfm with it. An ahead-of-time executable may only run code
+# that was compiled INTO it, which is why the plugin loader is gated off
+# (src/plugins/plugin-gate.ts) and why the gates below ask the binary
+# whether it still finds its icons, still rasterizes them, and still refuses
+# code from disk.
+#
+# If the AOT build fails on an architecture, that architecture falls back to
+# the JIT build (what ships today). A release never breaks over it, and the
+# fallback is loud: in the log, in the release notes, and in the artifact's
+# build-mode file.
+#
+# A dispatch run builds and gates the binaries WITHOUT publishing them.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "publish the release (off = build and gate only)"
+        type: boolean
+        default: false
 
 jobs:
-  build:
+  # ─── 1. the bun that can compile ahead of time ─────────────────────────────
+  # A separate job from the one that builds tfm, for two reasons: the Bun
+  # build takes ~30-60 min and its binary is cached by the pinned SHA (the
+  # cache is saved when THIS job succeeds — a later gate must not throw the
+  # hour away), and a failure here must degrade to the JIT build instead of
+  # failing the release. That is what continue-on-error is for.
+  build-aot-bun:
+    name: build the aot bun (${{ matrix.bun_arch }})
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest
-            target: bun-linux-x64
-            arch: x86_64-linux
+          # ubuntu-24.04, NOT ubuntu-latest: as of October 2026 ubuntu-latest
+          # is Ubuntu 26.04 ("resolute"), where the package libxml2 was
+          # renamed libxml2-16. apt.llvm.org's LLVM 23 is built for noble and
+          # depends on the old name, so it cannot be installed there
+          # ("libllvm23:amd64 Depends libxml2 (>= 2.7.4) ... [no choices]").
+          # The arm runner is noble already — this makes the two the same OS.
+          - runner: ubuntu-24.04
+            bun_arch: x64
           - runner: ubuntu-24.04-arm
-            target: bun-linux-arm64
-            arch: aarch64-linux
+            bun_arch: arm64
     runs-on: ${{ matrix.runner }}
+    # the Bun build is the long pole (an hour on a good runner, longer on
+    # arm); it is cached, so only the first release pays for it
+    timeout-minutes: 300
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
+      # The Bun that can compile ahead of time: its commit and its toolchain
+      # pins live in bun-aot.ref, next to the opentui fork's pin.
+      - name: Read the pinned Bun
+        run: |
+          echo "BUN_AOT_SHA=$(sed -n 's/^sha *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+          echo "BUN_VERSION=$(sed -n 's/^bun_version *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+          echo "LLVM_VERSION=$(sed -n 's/^llvm_version *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+          echo "RUST_TOOLCHAIN=$(sed -n 's/^rust_toolchain *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+          echo "CMAKE_VERSION=$(sed -n 's/^cmake_version *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+          echo "CMAKE_SHA_X64=$(sed -n 's/^cmake_sha256_x64 *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+          echo "CMAKE_SHA_ARM64=$(sed -n 's/^cmake_sha256_arm64 *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+          cat bun-aot.ref
+
+      - name: Build the AOT Bun
+        uses: ./.github/actions/aot-bun
+        with:
+          sha: ${{ env.BUN_AOT_SHA }}
+          arch: ${{ matrix.bun_arch }}
+          bun_version: ${{ env.BUN_VERSION }}
+          llvm_version: ${{ env.LLVM_VERSION }}
+          rust_toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cmake_version: ${{ env.CMAKE_VERSION }}
+          cmake_sha256: ${{ matrix.bun_arch == 'x64' && env.CMAKE_SHA_X64 || env.CMAKE_SHA_ARM64 }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bun-aot-${{ matrix.bun_arch }}
+          path: dist/bun
+          if-no-files-found: error
+
+  # ─── 2. tfm, compiled ahead of time (or on the JIT) ───────────────────────
+  build:
+    name: build tfm (${{ matrix.arch }})
+    needs: build-aot-bun
+    # the bun job may have failed (that is the fallback case) — this job
+    # still runs, and ships the JIT binary
+    if: ${{ !cancelled() }}
+    strategy:
+      matrix:
+        include:
+          # the same OS as the Bun build above — see the comment there
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            bun_arch: x64
+            bun_target: bun-linux-x64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64-linux
+            bun_arch: arm64
+            bun_target: bun-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    # the AOT compile type checks the whole program and compiles every
+    # reachable function — it is slow, and it has no cache
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The stock Bun builds the dependencies and runs the tests. The AOT Bun
+      # (when it exists) compiles the binary.
+      - name: Read the pinned Bun
+        run: echo "BUN_VERSION=$(sed -n 's/^bun_version *= *//p' bun-aot.ref | head -n 1)" >> "$GITHUB_ENV"
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Version matches package.json
+        if: github.event_name == 'push'
         run: test "v$(bun -e 'console.log(require("./package.json").version)')" = "${{ github.ref_name }}"
+
+      # The AOT Bun: present when the build job above succeeded, absent when
+      # it failed — which is the fallback case, not a broken release.
+      - name: Download the AOT Bun
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: bun-aot-${{ matrix.bun_arch }}
+          path: dist
+
+      # The artifact service does not keep the executable bit: the binary
+      # comes back as an ordinary file. Without this the compile step finds
+      # no executable at dist/bun and silently ships the JIT build instead.
+      - name: Make the AOT Bun runnable
+        run: |
+          if [ -f dist/bun ]; then
+            chmod +x dist/bun
+            ls -l dist/bun
+            ./dist/bun --version
+          else
+            echo "::warning::no AOT bun artifact for ${{ matrix.bun_arch }} — the JIT build will be used"
+          fi
 
       # The patched opentui fork must sit BESIDE the checkout: package.json
       # depends on file:../opentui-fork/packages/core/dist. Its prebuilt dist is
@@ -50,6 +171,10 @@ jobs:
       # through its real path, so the compile looks the platform packages up in
       # the fork — point it at the ones installed here first. Fails loudly when
       # the fork ships no prebuilt lib for this runner's architecture.
+      #
+      # The staged library is stripped: the fork's prebuilt carries 23 MB of
+      # debug symbols, and a compiled binary embeds the library it loads — the
+      # symbols would ship to every user.
       - name: Stage the patched libopentui
         run: |
           # bun resolves the file: dependency's dist through its real path, so
@@ -68,19 +193,172 @@ jobs:
           bun run check
           bun run test
 
-      - name: Compile
-        run: bun build --compile --target=${{ matrix.target }} src/index.ts assets/icons/*.svg --outfile dist/tfm-${{ matrix.arch }}
+      # The ahead-of-time build. It goes through the JavaScript API, not the
+      # command line: the AOT compiler reads every entry point as CODE unless
+      # a loader says otherwise, and the icon assets are entry points (that
+      # is how a compiled binary carries them). --trim removes the Bun and
+      # Node.js APIs the program never calls (it needs the Bun that carries
+      # the trim table — the one built above).
+      #
+      # Two levels, so that a release never breaks over an unreleased
+      # compiler: the AOT build, then the JIT build with the stock bun (what
+      # ships today, and the most travelled path in this repository).
+      - name: Compile ahead of time
+        id: compile
+        run: |
+          mkdir -p dist/logs
+          arch="${{ matrix.arch }}"
+          binary="dist/tfm-$arch"
+          mode=""
+          set +e
+          set -o pipefail
+
+          if [ -x dist/bun ]; then
+            echo "the AOT bun is here — compiling ahead of time"
+            ./dist/bun scripts/aot-build.ts aot "$binary" --trim 2>&1 \
+              | tee dist/logs/aot-build.log
+            build_rc=${PIPESTATUS[0]}
+            if [ "$build_rc" = "0" ]; then
+              mode=aot
+            else
+              echo "::warning::the ahead-of-time build failed on $arch — falling back to the JIT build"
+              echo "the AOT build failed (exit $build_rc) — falling back to the JIT build" \
+                | tee -a dist/logs/aot-build.log
+            fi
+          else
+            echo "::warning::no AOT bun for $arch — shipping the JIT build"
+          fi
+          set -e
+
+          if [ -z "$mode" ]; then
+            # the fallback: the stock bun's own compile — the build that ships
+            # today. The AOT bun is NOT used for it: an unreleased runtime is
+            # the last thing to ship when something already went wrong.
+            bun build --compile --target=${{ matrix.bun_target }} src/index.ts assets/icons/*.svg \
+              --outfile "$binary"
+            mode=jit
+          fi
+
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "$mode" > "dist/build-mode-$arch.txt"
+          ls -l "$binary"
+
+      # The gates. A binary that boots but lost its icons, or that can load
+      # code from disk, or that still tries to load plugins, is NOT shippable.
+      - name: Gates
+        run: |
+          mkdir -p dist/logs
+          arch="${{ matrix.arch }}"
+          binary="dist/tfm-$arch"
+          mode="$(cat "dist/build-mode-$arch.txt")"
+          echo "build mode: $mode"
+
+          # it answers
+          "$binary" --version
+
+          # the icon assets are in it (an app without them falls back to text
+          # glyphs and still "looks fine")
+          hits=$(grep -ac "<svg" "$binary" || true)
+          echo "embedded svg marker hits: $hits"
+          if [ "$hits" -lt 50 ]; then
+            echo "the binary carries no embedded SVGs — the icon assets were dropped"
+            exit 1
+          fi
+
+          # it boots, enters the alternate screen and paints a full frame
+          bun scripts/aot-measure.ts "$binary" 3 "release-$arch" \
+            | tee "dist/logs/measure-$arch.json"
+          ARCH="$arch" bun -e '
+            const m = await Bun.file(`dist/logs/measure-${process.env.ARCH}.json`).json();
+            const ok = m.booted === m.runs && m.painted === m.runs && m.crashed === 0;
+            console.log(`booted ${m.booted}/${m.runs}, painted ${m.painted}/${m.runs}, crashed ${m.crashed}, first paint ${m.medianPaintMs}ms`);
+            if (!ok) process.exit(1);
+          '
+
+          # the native rasterizer still works: the icons are SVG, and a build
+          # that lost the addon degrades every icon to a text glyph. The probe
+          # is built with the SAME bun that built the binary — the AOT one
+          # when there is one.
+          probe_bun="bun"
+          if [ -x dist/bun ]; then probe_bun="./dist/bun"; fi
+          "$probe_bun" scripts/aot-probe-resvg.ts jit | tee dist/logs/probe-resvg-jit.out
+          if ! grep -q "^resvg png bytes:" dist/logs/probe-resvg-jit.out; then
+            echo "the build cannot load the resvg native addon — the icons would degrade to text glyphs"
+            exit 1
+          fi
+
+          if [ "$mode" = "aot" ]; then
+            # the plugin gate is on: an AOT executable may not load a plugin
+            # file from disk, so it must say so instead of trying
+            set +e
+            "$binary" plugins list > /tmp/plugins.out 2> /tmp/plugins.err
+            plugins_rc=$?
+            set -e
+            echo "plugins rc=$plugins_rc: $(cat /tmp/plugins.err)"
+            if [ "$plugins_rc" != "1" ]; then
+              echo "the AOT build did not refuse the plugin subcommands — the define did not land"
+              exit 1
+            fi
+            grep -q "plugins are disabled in this build" /tmp/plugins.err
+
+            # tfm's OWN icon index still finds the icons
+            "$probe_bun" scripts/aot-probe-assets.ts aot | tee dist/logs/probe-assets.out
+            resolved=$(sed -n 's/^resolved icons: //p' dist/logs/probe-assets.out)
+            if [ "${resolved:-0}" -lt 50 ]; then
+              echo "the AOT build resolved only ${resolved:-0} icons — the icons would degrade to text glyphs"
+              exit 1
+            fi
+
+            # the AOT build rasterizes the same bytes as the JIT baseline
+            "$probe_bun" scripts/aot-probe-resvg.ts aot | tee dist/logs/probe-resvg-aot.out
+            if ! grep -q "^resvg png bytes:" dist/logs/probe-resvg-aot.out; then
+              echo "the AOT build cannot load the resvg native addon — the icons would degrade to text glyphs"
+              exit 1
+            fi
+            if [ "$(cat dist/logs/probe-resvg-aot.out)" != "$(cat dist/logs/probe-resvg-jit.out)" ]; then
+              echo "the AOT build rasterized differently than the JIT baseline"
+              exit 1
+            fi
+
+            # and it loads no code from disk: there is no transpiler in it.
+            # The shipped binary is the TRIMMED one, so the probe is trimmed
+            # too — that is the variant that keeps an interpreter.
+            "$probe_bun" scripts/aot-probe-disk-code.ts aot dist/probe/probe-disk-code --trim \
+              | tee dist/logs/probe-disk-code.out
+            if ! grep -q "code from disk: refused" dist/logs/probe-disk-code.out; then
+              echo "the AOT executable loaded code from disk — it carries a transpiler"
+              exit 1
+            fi
+          fi
+
+      # The JIT baseline: the build the fallback would ship, built and booted
+      # on every release. Two jobs at once — the release notes can then say
+      # how much faster the shipped binary is than the one it replaces (a
+      # measured number, not a guess), and the fallback path is exercised by
+      # every release instead of only by the ones that need it.
+      #
+      # It never blocks a release: the baseline is information, not a gate.
+      - name: Build + measure the JIT baseline
+        continue-on-error: true
+        run: |
+          mkdir -p dist/logs
+          arch="${{ matrix.arch }}"
+          bun build --compile --target=${{ matrix.bun_target }} src/index.ts assets/icons/*.svg \
+            --outfile dist/tfm-jit-baseline
+          bun scripts/aot-measure.ts dist/tfm-jit-baseline 3 "jit-baseline-$arch" \
+            | tee "dist/logs/measure-jit-$arch.json"
 
       - name: Package + checksum
         run: |
-          gzip -kf dist/tfm-${{ matrix.arch }}
-          (cd dist && sha256sum tfm-${{ matrix.arch }}.gz > tfm-${{ matrix.arch }}.gz.sha256)
+          gzip -kf "dist/tfm-${{ matrix.arch }}"
+          (cd dist && sha256sum "tfm-${{ matrix.arch }}.gz" > "tfm-${{ matrix.arch }}.gz.sha256")
           # desktop entry sidecar (arch-independent, same bytes every build):
           # install.sh fetches it for pipe installs that carry no checkout
           cp assets/tfm.desktop dist/tfm.desktop
           (cd dist && sha256sum tfm.desktop > tfm.desktop.sha256)
           cp assets/icons/tfm.svg dist/tfm-icon.svg
           (cd dist && sha256sum tfm-icon.svg > tfm-icon.svg.sha256)
+          ls -l dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -89,13 +367,27 @@ jobs:
           path: |
             dist/tfm-${{ matrix.arch }}.gz
             dist/tfm-${{ matrix.arch }}.gz.sha256
+            dist/build-mode-${{ matrix.arch }}.txt
             dist/tfm.desktop
             dist/tfm.desktop.sha256
             dist/tfm-icon.svg
             dist/tfm-icon.svg.sha256
+            dist/logs/aot-build.log
+            dist/logs/measure-${{ matrix.arch }}.json
+            dist/logs/measure-jit-${{ matrix.arch }}.json
+            dist/logs/probe-assets.out
+            dist/logs/probe-resvg-aot.out
+            dist/logs/probe-resvg-jit.out
+            dist/logs/probe-disk-code.out
+          if-no-files-found: error
 
+  # ─── 3. publish ───────────────────────────────────────────────────────────
   release:
     needs: build
+    # a dispatch run validates the build without publishing — and a build
+    # that failed never publishes anything (an `if` replaces the default
+    # success() condition, so it has to say it itself)
+    if: ${{ (github.event_name == 'push' || inputs.publish == true) && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -108,9 +400,75 @@ jobs:
       - name: Verify checksums
         run: (cd dist && sha256sum -c *.sha256)
 
+      # The release notes say which architectures got the ahead-of-time
+      # binary: an AOT binary cannot load plugins, and a user on the other
+      # architecture should know what they got. The speedup is measured, not
+      # claimed: the build job measures the JIT baseline next to the binary it
+      # ships (see "Build + measure the JIT baseline").
+      - name: Describe the build
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY' > /tmp/notes.md || true
+          import json, os, pathlib
+
+          arches = ["x86_64-linux", "aarch64-linux"]
+
+
+          def paint(path):
+              try:
+                  return int(json.loads(pathlib.Path(path).read_text())["medianPaintMs"])
+              except Exception:
+                  return None
+
+
+          modes = []
+          ratios = []
+          print(f"## tfm {os.environ['TAG']}")
+          print()
+          print("| arch | build | plugins | first paint |")
+          print("| --- | --- | --- | --- |")
+          for arch in arches:
+              mode = "unknown"
+              path = pathlib.Path(f"dist/build-mode-{arch}.txt")
+              if path.exists():
+                  mode = path.read_text().strip()
+              modes.append(mode)
+              aot = paint(f"dist/logs/measure-{arch}.json")
+              jit = paint(f"dist/logs/measure-jit-{arch}.json")
+              first = "—"
+              if aot is not None:
+                  first = f"{aot} ms"
+                  if jit:
+                      first += f" (JIT baseline {jit} ms)"
+                      ratios.append(jit / aot)
+              plugins = "off" if mode == "aot" else "on"
+              print(f"| {arch} | {mode} | {plugins} | {first} |")
+          print()
+          if ratios:
+              print(f"> The ahead-of-time binaries start about **{max(ratios):.1f}× faster** than")
+              print("> the JIT build they replace — measured on this runner, median of three")
+              print("> boots each. They cannot load plugins — `tfm plugins` says so. A build")
+              print("> from source still has plugins.")
+          elif "aot" in modes:
+              print("> The ahead-of-time binaries start faster and cannot load plugins —")
+              print("> `tfm plugins` says so. A build from source still has plugins.")
+          if "jit" in modes:
+              print("> One or more architectures fell back to the JIT build: their binaries load")
+              print("> plugins and start a little slower.")
+          PY
+          if [ -s /tmp/notes.md ]; then
+            cp /tmp/notes.md dist/notes.md
+          else
+            printf '## tfm %s\n' "${{ github.ref_name }}" > dist/notes.md
+          fi
+          cat dist/notes.md
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          body_path: dist/notes.md
           files: |
             dist/tfm-x86_64-linux.gz
             dist/tfm-x86_64-linux.gz.sha256

@@ -47,6 +47,10 @@ export type SettingsModelCtx = {
   // model renders one category PER PLUGIN (never inside core groups), each
   // led by a core-built on/off toggle over the plugin's own store.
   plugins?: () => LoadedPlugin[];
+  // this build cannot load plugins at all (AOT: an executable may only run
+  // code compiled into it). The Plugins entry disappears entirely — the
+  // installer category included, since a plugin could never load.
+  pluginsDisabled?: boolean;
   // fired after the on/off toggle writes the store: the wiring re-registers or
   // drops the plugin's UI slots and repaints (the store flag alone only feeds
   // the action-surface filters, which read it lazily). Optional for tests.
@@ -625,83 +629,87 @@ export const makeSettingModel = (ctx: SettingsModelCtx) => {
     },
   ];
 
-  const pluginGroups = (): SettingGroup[] => [
-    installGroup(),
-    ...loadedPlugins().map((p) => {
-      const enabledRow: SettingRow = {
-        kind: "toggle",
-        label: "enabled",
-        repaint: true,
-        get: () => safeEnabled(p),
-        set: (v) => {
-          guardedRun(`plugin ${p.name} store failed`, () => {
-            p.store.set("enabled", v);
-            ctx.onPluginEnabledChanged?.(p.name, v);
-          });
-        },
-      };
-      let rows: SettingRow[];
-      try {
-        rows = safeEnabled(p) ? p.rows : [];
-      } catch {
-        rows = [];
-      }
-      // one remappable keybind row per plugin command (persisted in the
-      // plugin's own store under keys:<id>, never in config.toml).
-      let keyRows: SettingRow[] = [];
-      try {
-        if (safeEnabled(p) && p.commands.length) {
-          keyRows = p.commands.map(
-            (c): SettingRow => ({
-              kind: "keybind",
-              label: `${c.title} (key)`,
-              get: () => getPluginCommandBinds(p, c.id),
-              set: (v): undefined => {
-                // every rejection warns through the guarded helper (a
-                // throwing warn must never escape a row setter)
-                const reject = (message: string): void => {
-                  try {
-                    ctx.warn(message, "keybind conflict");
-                  } catch {}
-                };
-                for (const spec of v) {
-                  const problem = validateKeybindSpec(spec);
-                  if (problem) {
-                    reject(`"${spec}" invalid: ${problem}`);
-                    return;
-                  }
-                  // core owns its binds — plugins remap around them
-                  for (const row of KEY_SCHEMA) {
-                    for (const owned of ctx.config.keys[row.action] ?? []) {
-                      if (keySpecEqual(owned, spec)) {
-                        reject(`"${spec}" is already used by: ${row.label}`);
-                        return;
+  const pluginGroups = (): SettingGroup[] => {
+    // plugins disabled in this build: no Plugins entry at all
+    if (ctx.pluginsDisabled) return [];
+    return [
+      installGroup(),
+      ...loadedPlugins().map((p) => {
+        const enabledRow: SettingRow = {
+          kind: "toggle",
+          label: "enabled",
+          repaint: true,
+          get: () => safeEnabled(p),
+          set: (v) => {
+            guardedRun(`plugin ${p.name} store failed`, () => {
+              p.store.set("enabled", v);
+              ctx.onPluginEnabledChanged?.(p.name, v);
+            });
+          },
+        };
+        let rows: SettingRow[];
+        try {
+          rows = safeEnabled(p) ? p.rows : [];
+        } catch {
+          rows = [];
+        }
+        // one remappable keybind row per plugin command (persisted in the
+        // plugin's own store under keys:<id>, never in config.toml).
+        let keyRows: SettingRow[] = [];
+        try {
+          if (safeEnabled(p) && p.commands.length) {
+            keyRows = p.commands.map(
+              (c): SettingRow => ({
+                kind: "keybind",
+                label: `${c.title} (key)`,
+                get: () => getPluginCommandBinds(p, c.id),
+                set: (v): undefined => {
+                  // every rejection warns through the guarded helper (a
+                  // throwing warn must never escape a row setter)
+                  const reject = (message: string): void => {
+                    try {
+                      ctx.warn(message, "keybind conflict");
+                    } catch {}
+                  };
+                  for (const spec of v) {
+                    const problem = validateKeybindSpec(spec);
+                    if (problem) {
+                      reject(`"${spec}" invalid: ${problem}`);
+                      return;
+                    }
+                    // core owns its binds — plugins remap around them
+                    for (const row of KEY_SCHEMA) {
+                      for (const owned of ctx.config.keys[row.action] ?? []) {
+                        if (keySpecEqual(owned, spec)) {
+                          reject(`"${spec}" is already used by: ${row.label}`);
+                          return;
+                        }
                       }
                     }
+                    // other plugins (and sibling commands) own theirs too
+                    const siblingOwner = pluginBindOwner(spec, { plugin: p, id: c.id });
+                    if (siblingOwner) {
+                      reject(`"${spec}" is already used by: ${siblingOwner}`);
+                      return;
+                    }
                   }
-                  // other plugins (and sibling commands) own theirs too
-                  const siblingOwner = pluginBindOwner(spec, { plugin: p, id: c.id });
-                  if (siblingOwner) {
-                    reject(`"${spec}" is already used by: ${siblingOwner}`);
-                    return;
-                  }
-                }
-                guardedRun(`plugin ${p.name} store failed`, () => setPluginCommandBinds(p, c.id, v));
-              },
-            }),
-          );
+                  guardedRun(`plugin ${p.name} store failed`, () => setPluginCommandBinds(p, c.id, v));
+                },
+              }),
+            );
+          }
+        } catch {
+          keyRows = [];
         }
-      } catch {
-        keyRows = [];
-      }
-      // manifest metadata in the category header: name · version · author · description
-      const meta = [p.version, p.author, p.description.slice(0, 40)].filter(Boolean).join(" · ");
-      return {
-        header: meta ? `${p.name} · ${meta}` : p.name,
-        rows: [enabledRow, ...rows, ...keyRows, ...lifecycleRows(p)],
-      };
-    }),
-  ];
+        // manifest metadata in the category header: name · version · author · description
+        const meta = [p.version, p.author, p.description.slice(0, 40)].filter(Boolean).join(" · ");
+        return {
+          header: meta ? `${p.name} · ${meta}` : p.name,
+          rows: [enabledRow, ...rows, ...keyRows, ...lifecycleRows(p)],
+        };
+      }),
+    ];
+  };
 
   return { settingGroups, pluginGroups, resetToDefaults };
 };
