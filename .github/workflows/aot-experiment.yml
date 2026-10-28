@@ -147,7 +147,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p artifacts dist
-          gh run download "${{ inputs.bun_run_id }}" --name bun-aot --dir artifacts
+          # --repo: this job checks out nothing (the bun repo is not needed
+          # to reuse a binary), and gh would look for the repo in git
+          gh run download "${{ inputs.bun_run_id }}" --repo "${{ github.repository }}" \
+            --name bun-aot --dir artifacts
           # the artifact carries the binary at its root; an older one carried
           # the tree it was uploaded from — take whichever is there
           found=""
