@@ -1,6 +1,8 @@
 # Bun AOT for tfm — evaluation
 
-Status: experiment (branch `exp/aot-bun`). Nothing here is a release path.
+Status: shipped. The release workflow (`.github/workflows/release.yml`)
+compiles tfm ahead of time for both architectures; this page is the
+evaluation behind that decision.
 
 Bun's ahead-of-time compiler ([oven-sh/bun#45631](https://github.com/oven-sh/bun/pull/45631))
 is in **no released Bun yet** (latest: 1.4.4). The compiler lives in the PR's
@@ -217,10 +219,9 @@ the opentui fork's plugin path, which AOT disables.
    trim, and it also makes the plain AOT build bigger than the JIT one — the
    size conclusion only holds with the right Bun.
 
-## Go / no-go
+## The decision
 
-**Go, with caveats** — if a release is willing to ship a Bun that no release
-carries yet:
+**Go.** The release binary is compiled ahead of time:
 
 * smaller: 58.4 MiB gzipped vs 77.6 MiB for the JIT build (−19.2 MiB)
 * faster: 306 ms to the first frame vs 500 ms (−30…39 %)
@@ -228,24 +229,39 @@ carries yet:
 * no transpiler in the binary, no code from disk, icons and the native
   rasterizer intact
 
-**No-go today**, because of the caveats and not the numbers:
+The three caveats, and what each one costs:
 
-* Bun AOT is an open PR — every release of tfm would have to ship a Bun that
-  the project pins itself, built from a PR head with a pinned LLVM/Rust
-  toolchain. That is a maintenance burden of its own.
-* plugins do not work in an AOT build, and the plugin system is the first
-  thing users will miss
-* a Worker from an embedded file cannot run — the tree-sitter preview would
-  hang if it were ever switched on
+* **Bun AOT is an open PR** — every release of tfm ships a Bun that the
+  project pins itself, built from a PR head with a pinned LLVM/Rust
+  toolchain. The pin lives in `bun-aot.ref` next to the opentui fork's
+  pin, the binary is cached by that pin, and the release workflow builds
+  it from scratch when the pin moves.
+* **Plugins do not work in an AOT build** — the plugin system is the first
+  thing users will miss. The release notes say so, the README says so, and
+  a build from source still has plugins.
+* **A Worker from an embedded file cannot run** — the tree-sitter worker
+  is exactly such a file. The code preview still works (as plain text, no
+  syntax highlighting), and opentui's client gives up on the worker after
+  10 s instead of hanging forever.
 
-The sensible next step is not "adopt AOT" but "keep the plugin gate": the
-define costs nothing in a normal build, and it makes the AOT build possible
-later without touching the tree again.
+**The fallback**: if the AOT build fails on an architecture, that
+architecture ships the JIT binary instead — the same bytes that ship
+today, so nobody regresses. The fallback is loud: a warning in the log,
+a row in the release notes, and `dist/build-mode-<arch>.txt` in the
+artifact. A release never breaks over an unreleased compiler.
+
+**The tree-sitter worker**: the AOT preview is plain text. If a later
+version wants highlighting back, the worker has to become an entry point
+of the build (Bun runs an entry point as a worker) — a change in the
+opentui fork, not in tfm.
 
 ## Reproducing
 
 ```sh
-# the bun that can compile ahead of time (hours; needs the pinned toolchain)
+# the release path: build the binaries and gate them, without publishing
+gh workflow run release.yml --ref dev -f publish=false
+
+# the experiment behind the numbers (hours; needs the pinned toolchain)
 gh workflow run aot-experiment.yml --ref exp/aot-bun
 
 # or reuse the bun of an earlier run (its artifact lives for 90 days)
@@ -262,4 +278,5 @@ bun scripts/aot-measure.ts dist/tfm-aot 5 aot     # boot it and measure
 `scripts/aot-probe-assets.ts` asks a compiled binary for its embedded icons,
 `scripts/aot-probe-disk-code.ts` asks it whether it can load code from disk,
 `scripts/aot-probe-features.ts` asks it for the file system, a child process,
-a PTY, a worker, a timer and `eval`.
+a PTY, a worker, a timer and `eval`, and `scripts/aot-probe-resvg.ts` asks
+it whether the native rasterizer still works.
