@@ -384,7 +384,7 @@ opentui fork, not in tfm.
 
 ```sh
 # the release path: build the binaries and gate them, without publishing
-gh workflow run release.yml --ref dev -f publish=false
+gh workflow run release.yml --ref main -f publish=false
 
 # the experiment behind the numbers (hours; needs the pinned toolchain)
 gh workflow run aot-experiment.yml --ref exp/aot-bun
