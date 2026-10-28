@@ -18,10 +18,10 @@ differ in exactly one thing: whether the code was compiled ahead of time).
 Everything below is measured by `.github/workflows/aot-experiment.yml`.
 
 **Result in one line: the AOT build starts about 1.5× faster than the JIT
-binary it replaces and ships about the same size** — 302 ms vs 475 ms to the
-first painted frame on the release runner, 53.2 MiB gzipped against the
-50.9 MiB of v1.1.0 — but it needs a Bun that nobody ships yet, and it takes
-the plugin system with it.
+binary it replaces, browses about twice as fast in a large directory, and
+ships about the same size** — 302 ms vs 475 ms to the first painted frame on
+the release runner, 53.2 MiB gzipped against the 50.9 MiB of v1.1.0 — but it
+needs a Bun that nobody ships yet, and it takes the plugin system with it.
 
 ## What had to change in tfm
 
@@ -205,6 +205,60 @@ compiled into it"* from the plain **and** from the trimmed build. The
 workflow asks both, because the trimmed build is the candidate a release
 would ship.
 
+## Runtime performance: browsing, not just booting
+
+The startup numbers above are the headline, but a file manager is used for
+*browsing*. The question that matters after the first frame is: does the
+ahead-of-time binary navigate faster, or only start faster?
+
+**Answer: yes, on a directory big enough to notice — about twice as fast.**
+Measured on the machine this was written on (Linux, 7.2 GB of RAM, a slow
+box: the absolute numbers are worse than the runner's, the ratios are what
+matters), in a directory with **12 000 files**. The app writes its own
+timings to its debug log: `list` is the directory read plus the sort,
+`build` is the layout and the paint of the grid. The binaries were driven
+through a PTY (a plain pipe delivers no keys), and the numbers are medians of
+three runs.
+
+| build | first listing (boot) | navigation into a subdirectory |
+| --- | --- | --- |
+| **AOT (the shipping artifact)** | 62 ms list + 56 ms build | **59 ms list + 36 ms build = 96 ms** |
+| JIT, same pipeline (JS API, same Bun) | 139 ms list + 150 ms build | 82 ms list + 113 ms build = 195 ms |
+| JIT, stock Bun 1.4.4 (the fallback build) | 113 ms list + 136 ms build | 80 ms list + 133 ms build = 213 ms |
+
+**The navigation rebuild is about twice as fast** — 86–96 ms against
+192–213 ms, whichever JIT baseline is used. The effect does not depend on the
+order the binaries run in (JIT first: 192 ms, AOT second: 86 ms), so it is not
+a warm-up artifact.
+
+Two caveats, both measured:
+
+* **A small directory shows nothing.** With 100 files the navigation costs
+  0–1 ms in *every* build — the difference is below the noise floor, and only
+  the startup still separates them (344 ms vs 624 ms). The win is real when
+  there is enough work to do.
+* The JIT baselines are stock Bun **1.4.4**; v1.1.0 shipped 1.4.0.
+
+### Where the win comes from — and where it does not
+
+Two synthetic workloads, compiled the same way, five runs each:
+
+| workload | JIT | AOT | |
+| --- | --- | --- | --- |
+| sort + regex filter + string formatting + JSON (200 000 items) | 101 ms | 94 ms | 1.07× |
+| 12 000 items, six small helpers called per item (the shape of the grid build) | 42 ms | 24 ms | **1.75×** |
+
+The pattern is the mechanism: the AOT binary is faster where the work is
+**JavaScript the JIT would have had to compile at run time** — many small
+functions, called many times — and it is a wash where the work is **already
+native** (`Array.prototype.sort`, `RegExp.test`, `JSON.stringify`; the JIT
+never compiled those either, they are C++ inside Bun).
+
+tfm's grid build is the second shape: it asks a dozen small helpers (format
+the size, format the date, take the extension, decide the icon) for every
+entry in the directory, and then lays out a tile for each. That is the work
+the AOT build does at machine-code speed.
+
 ## Correctness (all gates pass)
 
 * the AOT executable boots and paints: 5/5 runs enter the alternate screen
@@ -291,6 +345,8 @@ the opentui fork's plugin path, which AOT disables.
   symbols stripped
 * faster: 302 ms to the first frame vs 475 ms for the JIT binary the
   release replaces (1.57×, measured on the release runner)
+* faster after the first frame too: the navigation rebuild in a 12 000-file
+  directory takes 96 ms against 213 ms for the fallback build (about 2×)
 * the plugin loader is gated off, the code is still in the tree
 * no transpiler in the binary, no code from disk, icons and the native
   rasterizer intact
