@@ -171,6 +171,10 @@ jobs:
       # through its real path, so the compile looks the platform packages up in
       # the fork — point it at the ones installed here first. Fails loudly when
       # the fork ships no prebuilt lib for this runner's architecture.
+      #
+      # The staged library is stripped: the fork's prebuilt carries 23 MB of
+      # debug symbols, and a compiled binary embeds the library it loads — the
+      # symbols would ship to every user.
       - name: Stage the patched libopentui
         run: |
           # bun resolves the file: dependency's dist through its real path, so
@@ -196,9 +200,9 @@ jobs:
       # Node.js APIs the program never calls (it needs the Bun that carries
       # the trim table — the one built above).
       #
-      # Three levels, so that a release never breaks over an unreleased
-      # compiler: the AOT build, then the JIT build with the same bun, then
-      # the JIT build with the stock bun (what ships today).
+      # Two levels, so that a release never breaks over an unreleased
+      # compiler: the AOT build, then the JIT build with the stock bun (what
+      # ships today, and the most travelled path in this repository).
       - name: Compile ahead of time
         id: compile
         run: |
@@ -220,12 +224,6 @@ jobs:
               echo "::warning::the ahead-of-time build failed on $arch — falling back to the JIT build"
               echo "the AOT build failed (exit $build_rc) — falling back to the JIT build" \
                 | tee -a dist/logs/aot-build.log
-              ./dist/bun scripts/aot-build.ts jit "$binary" 2>&1 \
-                | tee dist/logs/jit-build.log
-              build_rc=${PIPESTATUS[0]}
-              if [ "$build_rc" = "0" ]; then
-                mode=jit
-              fi
             fi
           else
             echo "::warning::no AOT bun for $arch — shipping the JIT build"
@@ -233,7 +231,9 @@ jobs:
           set -e
 
           if [ -z "$mode" ]; then
-            # the last resort: the stock bun's own compile (what ships today)
+            # the fallback: the stock bun's own compile — the build that ships
+            # today. The AOT bun is NOT used for it: an unreleased runtime is
+            # the last thing to ship when something already went wrong.
             bun build --compile --target=${{ matrix.bun_target }} src/index.ts assets/icons/*.svg \
               --outfile "$binary"
             mode=jit
@@ -267,9 +267,9 @@ jobs:
 
           # it boots, enters the alternate screen and paints a full frame
           bun scripts/aot-measure.ts "$binary" 3 "release-$arch" \
-            | tee dist/logs/measure.json
-          bun -e '
-            const m = await Bun.file("dist/logs/measure.json").json();
+            | tee "dist/logs/measure-$arch.json"
+          ARCH="$arch" bun -e '
+            const m = await Bun.file(`dist/logs/measure-${process.env.ARCH}.json`).json();
             const ok = m.booted === m.runs && m.painted === m.runs && m.crashed === 0;
             console.log(`booted ${m.booted}/${m.runs}, painted ${m.painted}/${m.runs}, crashed ${m.crashed}, first paint ${m.medianPaintMs}ms`);
             if (!ok) process.exit(1);
@@ -331,6 +331,23 @@ jobs:
             fi
           fi
 
+      # The JIT baseline: the build the fallback would ship, built and booted
+      # on every release. Two jobs at once — the release notes can then say
+      # how much faster the shipped binary is than the one it replaces (a
+      # measured number, not a guess), and the fallback path is exercised by
+      # every release instead of only by the ones that need it.
+      #
+      # It never blocks a release: the baseline is information, not a gate.
+      - name: Build + measure the JIT baseline
+        continue-on-error: true
+        run: |
+          mkdir -p dist/logs
+          arch="${{ matrix.arch }}"
+          bun build --compile --target=${{ matrix.bun_target }} src/index.ts assets/icons/*.svg \
+            --outfile dist/tfm-jit-baseline
+          bun scripts/aot-measure.ts dist/tfm-jit-baseline 3 "jit-baseline-$arch" \
+            | tee "dist/logs/measure-jit-$arch.json"
+
       - name: Package + checksum
         run: |
           gzip -kf "dist/tfm-${{ matrix.arch }}"
@@ -356,7 +373,8 @@ jobs:
             dist/tfm-icon.svg
             dist/tfm-icon.svg.sha256
             dist/logs/aot-build.log
-            dist/logs/measure.json
+            dist/logs/measure-${{ matrix.arch }}.json
+            dist/logs/measure-jit-${{ matrix.arch }}.json
             dist/logs/probe-assets.out
             dist/logs/probe-resvg-aot.out
             dist/logs/probe-resvg-jit.out
@@ -384,30 +402,66 @@ jobs:
 
       # The release notes say which architectures got the ahead-of-time
       # binary: an AOT binary cannot load plugins, and a user on the other
-      # architecture should know what they got.
+      # architecture should know what they got. The speedup is measured, not
+      # claimed: the build job measures the JIT baseline next to the binary it
+      # ships (see "Build + measure the JIT baseline").
       - name: Describe the build
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          {
-            echo "## tfm ${{ github.ref_name }}"
-            echo
-            echo "| arch | build | plugins |"
-            echo "| --- | --- | --- |"
-            for arch in x86_64-linux aarch64-linux; do
-              mode="unknown"
-              [ -f "dist/build-mode-$arch.txt" ] && mode=$(cat "dist/build-mode-$arch.txt")
-              if [ "$mode" = "aot" ]; then plugins="off"; else plugins="on"; fi
-              echo "| $arch | $mode | $plugins |"
-            done
-            echo
-            if grep -qs "^aot$" dist/build-mode-*.txt; then
-              echo "> The ahead-of-time binaries start about a third faster and cannot load"
-              echo "> plugins — \`tfm plugins\` says so. A build from source still has plugins."
-            fi
-            if grep -qs "^jit$" dist/build-mode-*.txt; then
-              echo "> One or more architectures fell back to the JIT build: their binaries load"
-              echo "> plugins and start a little slower."
-            fi
-          } > dist/notes.md
+          python3 - <<'PY' > /tmp/notes.md || true
+          import json, os, pathlib
+
+          arches = ["x86_64-linux", "aarch64-linux"]
+
+
+          def paint(path):
+              try:
+                  return int(json.loads(pathlib.Path(path).read_text())["medianPaintMs"])
+              except Exception:
+                  return None
+
+
+          modes = []
+          ratios = []
+          print(f"## tfm {os.environ['TAG']}")
+          print()
+          print("| arch | build | plugins | first paint |")
+          print("| --- | --- | --- | --- |")
+          for arch in arches:
+              mode = "unknown"
+              path = pathlib.Path(f"dist/build-mode-{arch}.txt")
+              if path.exists():
+                  mode = path.read_text().strip()
+              modes.append(mode)
+              aot = paint(f"dist/logs/measure-{arch}.json")
+              jit = paint(f"dist/logs/measure-jit-{arch}.json")
+              first = "—"
+              if aot is not None:
+                  first = f"{aot} ms"
+                  if jit:
+                      first += f" (JIT baseline {jit} ms)"
+                      ratios.append(jit / aot)
+              plugins = "off" if mode == "aot" else "on"
+              print(f"| {arch} | {mode} | {plugins} | {first} |")
+          print()
+          if ratios:
+              print(f"> The ahead-of-time binaries start about **{max(ratios):.1f}× faster** than")
+              print("> the JIT build they replace — measured on this runner, median of three")
+              print("> boots each. They cannot load plugins — `tfm plugins` says so. A build")
+              print("> from source still has plugins.")
+          elif "aot" in modes:
+              print("> The ahead-of-time binaries start faster and cannot load plugins —")
+              print("> `tfm plugins` says so. A build from source still has plugins.")
+          if "jit" in modes:
+              print("> One or more architectures fell back to the JIT build: their binaries load")
+              print("> plugins and start a little slower.")
+          PY
+          if [ -s /tmp/notes.md ]; then
+            cp /tmp/notes.md dist/notes.md
+          else
+            printf '## tfm %s\n' "${{ github.ref_name }}" > dist/notes.md
+          fi
           cat dist/notes.md
 
       - name: Publish GitHub release
