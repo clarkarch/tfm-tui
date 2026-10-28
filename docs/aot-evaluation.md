@@ -17,7 +17,7 @@ differ in exactly one thing: whether the code was compiled ahead of time).
 Everything below is measured by `.github/workflows/aot-experiment.yml`.
 
 **Result in one line: the AOT build is both faster and smaller than the JIT
-build** — 30–39 % faster to the first painted frame, 19 MiB smaller gzipped —
+build** — 30–39 % faster to the first painted frame, 18 MiB smaller gzipped —
 but it needs a Bun that nobody ships yet, and it takes the plugin system with
 it.
 
@@ -223,8 +223,8 @@ the opentui fork's plugin path, which AOT disables.
 
 **Go.** The release binary is compiled ahead of time:
 
-* smaller: 58.4 MiB gzipped vs 77.6 MiB for the JIT build (−19.2 MiB)
-* faster: 306 ms to the first frame vs 500 ms (−30…39 %)
+* smaller: 59.2 MiB gzipped vs 77.6 MiB for the JIT build (−18.4 MiB)
+* faster: 302 ms to the first frame vs 500 ms (−39 %)
 * the plugin loader is gated off, the code is still in the tree
 * no transpiler in the binary, no code from disk, icons and the native
   rasterizer intact
