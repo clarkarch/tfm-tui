@@ -276,6 +276,11 @@ const runs = Math.max(1, Number(runsArg ?? "3") || 3);
 const sandbox = mkdtempSync(path.join(os.tmpdir(), "tfm-aot-measure-"));
 const results: Run[] = [];
 try {
+  // A warm-up boot, not counted: the first run of a binary pays for the
+  // page cache (the executable is ~100 MB), the reads of the shared
+  // libraries and the icon raster cache. Every binary gets the same
+  // warm-up, so neither is measured against a cold cache.
+  await bootOnce(bin, sandbox);
   for (let i = 0; i < runs; i++) {
     results.push(await bootOnce(bin, sandbox));
   }
