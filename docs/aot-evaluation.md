@@ -17,10 +17,11 @@ differ in exactly one thing: whether the code was compiled ahead of time).
 
 Everything below is measured by `.github/workflows/aot-experiment.yml`.
 
-**Result in one line: the AOT build is both faster and smaller than the JIT
-build** — 30–39 % faster to the first painted frame, 18 MiB smaller gzipped —
-but it needs a Bun that nobody ships yet, and it takes the plugin system with
-it.
+**Result in one line: the AOT build starts much faster than the JIT build and
+ships about the same size** — 30–39 % faster to the first painted frame than a
+JIT binary built by the same Bun, 53.2 MiB gzipped against the 50.9 MiB of
+v1.1.0 — but it needs a Bun that nobody ships yet, and it takes the plugin
+system with it.
 
 ## What had to change in tfm
 
@@ -60,6 +61,14 @@ the sizes are not):
 | kitty images drawn | 4 | 4 | 4 | 4 |
 | crashes at teardown | 0 | 0 | 0 | 0 |
 
+Two things about this table. Its **JIT baseline is a JIT binary built by the
+AOT Bun** — the apples-to-apples comparison, where the only difference is
+whether the code was compiled ahead of time; the stock Bun that ships today
+builds a different (and bigger) JIT binary, and "the size story" below puts
+the two side by side. And every size in the table was measured **before the
+debug symbols were stripped out of the staged native library** — the release
+strips them, which takes 5.9 MiB off every column.
+
 The **candidate** — the smallest variant that boots and paints every run — is
 the last column: **19.2 MiB smaller gzipped than the JIT build and 30–39 %
 faster to the first frame** (the three green runs measured −30.2 %, −37.4 %
@@ -75,6 +84,43 @@ program reaches its first line of app code in ~30 ms instead of ~150 ms
 (−80 %), and the whole frame is painted ~195 ms earlier. The runtime it does
 not need is also not in the executable, so the resident set at the first frame
 is ~16 MiB smaller (96 632 KB → 79 736 KB).
+
+### The size story: what ships, and against what
+
+The table above compares two builds made by the same Bun. What a user
+downloads is a different question, and the honest answer needs three numbers:
+
+| release artifact | raw | gzip |
+| --- | --- | --- |
+| v1.1.0 — JIT, stock Bun 1.4.0 | 130.9 MiB | 50.9 MiB |
+| **v1.2.0 — AOT, `--trim`** | **123.6 MiB** | **53.2 MiB** |
+| v1.2.0 fallback — JIT, stock Bun 1.4.4 | 133.9 MiB | 59.3 MiB |
+
+So the AOT release is **2.3 MiB bigger than v1.1.0** — and it starts about
+**2.7× faster**: against the JIT binary that ships today, measured on the
+same machine, median of five boots, 1008 ms → 373 ms to the first painted
+frame (the runner numbers above say 500 ms → 302 ms, −39 %, against the JIT
+binary built by the *same* Bun).
+
+The AOT executable is smaller than a JIT binary built by the same Bun (the
+AOT one does not carry the JIT compiler — the code is machine code instead),
+but Bun itself grew between 1.4.0 and 1.4.4 (77 MiB → 102 MiB for the
+runtime), and that eats the difference.
+
+#### The 23 MB of debug symbols
+
+Every compiled binary **embeds the native library it loads** — twice: the
+patched `libopentui` that `scripts/sync-opentui-lib.sh` stages, and the npm
+one that comes with the platform package. The fork's prebuilt library keeps
+its debug symbols: 28.5 MB per target, of which 5.3 MB is code. Staged as it
+was, **23 MB of symbols went into every binary** — and 5.9 MiB into every
+gzipped download.
+
+The staging script now strips the copy it stages (`strip --strip-unneeded`,
+which keeps the dynamic symbols — the ABI — and drops the rest). The fork
+keeps its own file intact, so its debugging is not affected. On the x86_64
+binary: 28 456 600 → 5 301 144 bytes, and the release artifact went from
+59.2 MiB to 53.2 MiB gzipped.
 
 ### The size lever: `--trim`, and the Bun it needs
 
@@ -195,7 +241,7 @@ One runtime hazard the compiler reports: `TS100014` — `globalThis[key] ??= {}`
 throws in a compiled executable (built-in objects are read-only). It sits in
 the opentui fork's plugin path, which AOT disables.
 
-## Four things that are not obvious
+## Five things that are not obvious
 
 1. **The build goes through the JavaScript API** (`Bun.build`), not
    `bun build --compile` on the command line. The AOT compiler reads every
@@ -219,13 +265,22 @@ the opentui fork's plugin path, which AOT disables.
    Bun's *link*, not about tfm's build. A Bun without the trim table cannot
    trim, and it also makes the plain AOT build bigger than the JIT one — the
    size conclusion only holds with the right Bun.
+5. **A compiled binary embeds the native library it loads — symbols and
+   all.** `libopentui` is 28.5 MB with its debug symbols and 5.3 MB without
+   them, and the binary ships whatever the staged file holds. That is 23 MB
+   per binary, and it is invisible in the build log: the compile succeeds
+   either way.
 
 ## The decision
 
 **Go.** The release binary is compiled ahead of time:
 
-* smaller: 59.2 MiB gzipped vs 77.6 MiB for the JIT build (−18.4 MiB)
-* faster: 302 ms to the first frame vs 500 ms (−39 %)
+* about the same size as v1.1.0: 53.2 MiB gzipped against 50.9 MiB
+  (+2.3 MiB) — and 23 MB smaller than the same build without the debug
+  symbols stripped
+* faster: 302 ms to the first frame vs 500 ms against a JIT binary built by
+  the same Bun (−39 %), 373 ms vs 1008 ms against the JIT binary that ships
+  today (2.7×)
 * the plugin loader is gated off, the code is still in the tree
 * no transpiler in the binary, no code from disk, icons and the native
   rasterizer intact
@@ -247,8 +302,10 @@ The three caveats, and what each one costs:
   10 s instead of hanging forever.
 
 **The fallback**: if the AOT build fails on an architecture, that
-architecture ships the JIT binary instead — the same bytes that ship
-today, so nobody regresses. The fallback is loud: a warning in the log,
+architecture ships the JIT binary instead — built by the stock Bun, the build
+that ships today, so nobody regresses. The unreleased AOT Bun is deliberately
+NOT used for it: an unreleased runtime is the last thing to ship when
+something already went wrong. The fallback is loud: a warning in the log,
 a row in the release notes, and `dist/build-mode-<arch>.txt` in the
 artifact. A release never breaks over an unreleased compiler.
 
