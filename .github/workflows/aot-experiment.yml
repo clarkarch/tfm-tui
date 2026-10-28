@@ -515,6 +515,10 @@ jobs:
             dist/logs/probe-assets-aot.out
             dist/logs/probe-disk-aot.out
             dist/logs/probe-disk-jit.out
+            dist/logs/probe-features-aot.out
+            dist/logs/probe-features-jit.out
+            dist/logs/probe-features-aot.log
+            dist/logs/probe-features-jit.log
           if-no-files-found: error
 
   # ─── 3. boot both, measure, report ───────────────────────────────────────
