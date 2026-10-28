@@ -1,12 +1,37 @@
 # The Bun that can compile tfm ahead of time.
 #
 # Bun's ahead-of-time compiler (`bun build --compile --aot`) is in NO release
-# yet: the latest Bun (1.4.4) has no such flag. The compiler was merged into
-# Bun's main, so a release that ships an AOT binary has to build that Bun
-# first — about an hour on a runner, with the pinned toolchain below.
+# yet: the latest Bun (1.4.4, released 2026-10-22) has no such flag. The
+# compiler was merged into Bun's main on 2026-10-27, so a release that ships
+# an AOT binary has to build that Bun first — about an hour on a runner,
+# with the pinned toolchain below.
+#
+# The pinned commit is the branch upstream merged, one commit behind its tip;
+# the one commit between them touches AOT test files only. So the compiler
+# in the shipped binary is upstream's own, as merged — not a fork of it.
 #
 # `sha` is the commit that carries the compiler. Bump it when Bun's main
 # moves on; the release workflow builds that exact commit.
+#
+# ─── WHEN AN OFFICIAL BUN CARRIES THE COMPILER ─────────────────────────────
+# Upstream's own release build already turns the compiler on by default
+# (`aot: partial.aot ?? true` in scripts/build/config.ts) and links the trim
+# table on the release profile (`trimmable: true` in
+# scripts/build/profiles.ts), so the next official Bun will have BOTH. The
+# switch is then:
+#
+#   1. delete the `sha` line and the toolchain pins below — they exist only
+#      to build Bun from source;
+#   2. set `bun_version` to that release;
+#   3. teach .github/actions/aot-bun to download the release instead of
+#      building it (the action currently always builds);
+#   4. run the release without publishing and re-check the numbers in
+#      docs/aot-evaluation.md — an official Bun is built with LTO on by
+#      default, so the binary will likely come out SMALLER than ours.
+#
+# Until then: the build is cached by the pinned SHA, and if it fails the
+# release ships the stock-Bun JIT binary instead (see .github/workflows/
+# release.yml). A release never breaks over the unreleased compiler.
 #
 # The build flags matter:
 #
