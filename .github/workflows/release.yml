@@ -390,21 +390,22 @@ jobs:
           {
             echo "## tfm ${{ github.ref_name }}"
             echo
-            echo "| arch | build |"
-            echo "| --- | --- |"
+            echo "| arch | build | plugins |"
+            echo "| --- | --- | --- |"
             for arch in x86_64-linux aarch64-linux; do
               mode="unknown"
               [ -f "dist/build-mode-$arch.txt" ] && mode=$(cat "dist/build-mode-$arch.txt")
-              echo "| $arch | $mode |"
+              if [ "$mode" = "aot" ]; then plugins="off"; else plugins="on"; fi
+              echo "| $arch | $mode | $plugins |"
             done
             echo
-            if grep -qs "^jit$" dist/build-mode-*.txt; then
-              echo "> One or more architectures fell back to the JIT build: their binaries load plugins"
-              echo "> and start a little slower."
-            fi
             if grep -qs "^aot$" dist/build-mode-*.txt; then
-              echo "> The ahead-of-time binaries start instantly and cannot load plugins"
-              echo "> (\`tfm plugins\` says so)."
+              echo "> The ahead-of-time binaries start about a third faster and cannot load"
+              echo "> plugins — \`tfm plugins\` says so. A build from source still has plugins."
+            fi
+            if grep -qs "^jit$" dist/build-mode-*.txt; then
+              echo "> One or more architectures fell back to the JIT build: their binaries load"
+              echo "> plugins and start a little slower."
             fi
           } > dist/notes.md
           cat dist/notes.md
