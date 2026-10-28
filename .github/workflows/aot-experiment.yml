@@ -368,40 +368,37 @@ jobs:
       # (the control) must load it. That is the proof; a grep of the build
       # log cannot give it, because the expected warning ("this import path
       # isn't a constant") mentions the flag the build does NOT use.
+      #
+      # The probe's path is unique per run and its specifier is assembled at
+      # run time, so the compiler can neither find the file on disk while it
+      # builds nor resolve the import to a constant.
       - name: The AOT executable carries no transpiler
         run: |
-          cat > dist/probe/probe-disk-code.ts <<'TS'
-          const file = "/tmp/aot-code-from-disk.js";
-          await Bun.write(file, "export const fromDisk = 42;\n");
-          let refused = false;
-          let detail = "";
-          try {
-            const m = await import(file);
-            detail = `loaded ${String((m as { fromDisk?: number }).fromDisk)}`;
-          } catch (err) {
-            refused = true;
-            detail = String((err as Error)?.message ?? err).slice(0, 120);
-          }
-          console.log(`code from disk: ${refused ? "refused" : "LOADED"} — ${detail}`);
-          TS
-          ./bin/bun build --compile --tsconfig-override tsconfig.json dist/probe/probe-disk-code.ts \
-            --outfile dist/probe/probe-disk-jit 2>&1 | tee dist/logs/probe-disk-jit-build.log
-          jit_out=$(./dist/probe/probe-disk-jit)
-          echo "jit: $jit_out"
-          echo "$jit_out" > dist/logs/probe-disk-jit.out
-          set +e
-          ./bin/bun build --compile --aot --tsconfig-override tsconfig.json dist/probe/probe-disk-code.ts \
-            --outfile dist/probe/probe-disk-aot 2>&1 | tee dist/logs/probe-disk-aot-build.log
-          build_rc=${PIPESTATUS[0]}
-          set -e
-          if [ "$build_rc" != "0" ]; then
-            echo "PROBE FAILURE: the AOT compiler could not build the disk-code probe"
-            echo "aot-build-failed" > dist/logs/probe-disk-aot.out
-          else
-            aot_out=$(./dist/probe/probe-disk-aot)
-            echo "aot: $aot_out"
-            echo "$aot_out" > dist/logs/probe-disk-aot.out
+          mkdir -p dist/logs
+          # the JIT baseline is the CONTROL: if it cannot load code from
+          # disk, the probe itself is broken and the proof is meaningless
+          if ! ./bin/bun scripts/aot-probe-disk-code.ts jit \
+            > dist/logs/probe-disk-jit.out 2> dist/logs/probe-disk-jit.log; then
+            echo "the JIT baseline could not run the disk-code probe — the probe is broken"
+            cat dist/logs/probe-disk-jit.out dist/logs/probe-disk-jit.log
+            exit 1
           fi
+          echo "probe (jit): $(cat dist/logs/probe-disk-jit.out)"
+
+          # the AOT build is the SUBJECT: a failure here is a finding about
+          # AOT, not a broken test — so it is recorded and carried to the
+          # report instead of failing this step
+          set +e
+          ./bin/bun scripts/aot-probe-disk-code.ts aot \
+            > dist/logs/probe-disk-aot.out 2> dist/logs/probe-disk-aot.log
+          probe_rc=$?
+          set -e
+          if [ "$probe_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT disk-code probe did not run"
+            cat dist/logs/probe-disk-aot.out dist/logs/probe-disk-aot.log
+            echo "aot-probe-failed" > dist/logs/probe-disk-aot.out
+          fi
+          echo "probe (aot): $(cat dist/logs/probe-disk-aot.out)"
 
       # The AOT build: the compiler turns the program into machine code, and
       # the define flips the plugin gate (an AOT executable may not load a
