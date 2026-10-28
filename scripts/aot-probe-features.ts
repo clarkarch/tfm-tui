@@ -14,6 +14,7 @@
 //   * a PTY             — the embedded terminal
 //   * a worker          — opentui's parser runs in one
 //   * a timer           — the render loop
+//   * eval              — the AOT executable keeps an interpreter
 //
 // Every check prints one line: "<name>: ok" or "<name>: FAILED — <reason>".
 // The lines of the AOT build and of the JIT baseline have to be the same —
@@ -99,6 +100,18 @@ await check("worker", async () => {
 await check("timer", async () => {
   await Bun.sleep(5);
   return "slept";
+});
+
+await check("eval", () => {
+  // an AOT executable keeps a JavaScript interpreter: the compiler needs
+  // one for the regular expressions it cannot compile, and eval rides
+  // along with it. The trimmed build keeps it too (the trim report says
+  // the program can reach eval) — so "trim removes eval" does not hold
+  // for tfm.
+  const f = new Function("return 41 + 1");
+  const value = f();
+  if (value !== 42) throw new Error(\`got \${String(value)}\`);
+  return "42";
 });
 `,
 );

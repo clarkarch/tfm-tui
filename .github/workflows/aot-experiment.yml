@@ -480,6 +480,31 @@ jobs:
             fi
           done
 
+      # The trimmed build keeps the JavaScript interpreter — the trim report
+      # says the program can reach eval() and a dynamic import(), so the
+      # trimmed executable keeps the transpiler as well. The question "does
+      # it load code from disk?" therefore has to be asked of the trimmed
+      # build too: it is the candidate a release would ship.
+      - name: The trimmed AOT executable carries no transpiler
+        run: |
+          mkdir -p dist/logs
+          if [ ! -f "dist/tfm-aot-trim" ]; then
+            echo "no trimmed build — the probe has nothing to ask"
+            echo "skipped: no trimmed build" > dist/logs/probe-disk-trim.out
+            exit 0
+          fi
+          set +e
+          ./bin/bun scripts/aot-probe-disk-code.ts aot dist/probe/probe-disk-code-trim --trim \
+            > dist/logs/probe-disk-trim.out 2> dist/logs/probe-disk-trim.log
+          probe_rc=$?
+          set -e
+          cat dist/logs/probe-disk-trim.out
+          if [ "$probe_rc" != "0" ] || ! grep -q "code from disk: refused" dist/logs/probe-disk-trim.out; then
+            echo "PROBE FAILURE: the trimmed AOT executable did not refuse code from disk"
+            cat dist/logs/probe-disk-trim.log
+            exit 1
+          fi
+
       - name: Report the sizes
         run: |
           ls -l dist/tfm-aot dist/tfm-jit
@@ -515,6 +540,7 @@ jobs:
             dist/logs/probe-assets-aot.out
             dist/logs/probe-disk-aot.out
             dist/logs/probe-disk-jit.out
+            dist/logs/probe-disk-trim.out
             dist/logs/probe-features-aot.out
             dist/logs/probe-features-jit.out
             dist/logs/probe-features-aot.log
@@ -577,6 +603,14 @@ jobs:
             echo "the JIT baseline did not load code from disk — the probe is broken"
             exit 1
           fi
+          # the trimmed build keeps the interpreter, so it gets its own probe
+          echo "probe (aot --trim): $(cat dist/logs/probe-disk-trim.out)"
+          if grep -q "skipped" dist/logs/probe-disk-trim.out; then
+            echo "no trimmed build — nothing to check"
+          elif ! grep -q "code from disk: refused" dist/logs/probe-disk-trim.out; then
+            echo "the trimmed AOT executable loaded code from disk — it carries a transpiler"
+            exit 1
+          fi
 
       # The runtime features, compared: the AOT build has to answer like the
       # JIT baseline. One difference is known at this PR head: a Worker
@@ -604,8 +638,11 @@ jobs:
             };
             const jit = statuses(await read("dist/logs/probe-features-jit.out"));
             const aot = statuses(await read("dist/logs/probe-features-aot.out"));
-            // the worker difference is the documented AOT limitation
-            const known = new Set(["worker"]);
+            // the worker difference is the documented AOT limitation; the
+            // eval one is documented too (the AOT executable keeps an
+            // interpreter, so eval may work there and not in the trimmed
+            // build — tfm uses neither)
+            const known = new Set(["worker", "eval"]);
             let bad = 0;
             for (const [name, value] of Object.entries(jit)) {
               if (!(name in aot)) {
@@ -614,7 +651,7 @@ jobs:
               } else if (aot[name] === value) {
                 console.log(`PASS  ${name} — ${value}`);
               } else if (known.has(name)) {
-                console.log(`INFO  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value} (a worker from an embedded file cannot run in an AOT executable)`);
+                console.log(`INFO  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value} (${name === "worker" ? "a worker from an embedded file cannot run in an AOT executable" : "the AOT executable keeps a JavaScript interpreter"})`);
               } else {
                 console.log(`FAIL  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value}`);
                 bad++;

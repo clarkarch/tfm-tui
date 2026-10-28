@@ -1,6 +1,6 @@
 // Asks a compiled tfm whether it can load code from disk.
 //
-//   bun scripts/aot-probe-disk-code.ts aot [outfile]
+//   bun scripts/aot-probe-disk-code.ts aot [outfile] [--trim]
 //   bun scripts/aot-probe-disk-code.ts jit [outfile]
 //
 // An ahead-of-time executable carries no transpiler: it may not load a
@@ -14,6 +14,12 @@
 // so the compiler can neither find the file on disk while it builds the
 // executable nor resolve the import to a constant: the module exists
 // only while the program runs.
+//
+// The --trim flag builds the probe the way the trimmed tfm build is built:
+// the trim report says the program can reach eval() and a dynamic import(),
+// so the trimmed executable KEEPS the JavaScript interpreter and the
+// transpiler — and may therefore load code from disk after all. The probe
+// is the only way to know.
 
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -25,6 +31,7 @@ type CompileOptions = Exclude<Parameters<typeof Bun.build>[0]["compile"], boolea
 const root = path.resolve(import.meta.dir, "..");
 const mode = process.argv[2] === "jit" ? "jit" : "aot";
 const outfile = path.resolve(root, process.argv[3] ?? `dist/probe/probe-disk-code-${mode}`);
+const trim = process.argv.includes("--trim");
 
 // the program that does the asking
 const entry = path.resolve(root, "dist/probe/probe-disk-code-entry.ts");
@@ -53,7 +60,7 @@ console.log(\`code from disk: \${refused ? "refused" : "LOADED"} — \${detail}\
 const result = await Bun.build({
   entrypoints: [entry],
   tsconfig: path.join(root, "tsconfig.json"),
-  compile: { outfile, aot: mode === "aot" } as CompileOptions,
+  compile: { outfile, aot: mode === "aot", trim } as CompileOptions,
 });
 
 if (!result.success) {
