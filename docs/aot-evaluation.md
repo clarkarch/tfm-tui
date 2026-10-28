@@ -15,7 +15,7 @@ differ in exactly one thing: whether the code was compiled ahead of time).
 Everything below is measured by `.github/workflows/aot-experiment.yml`.
 
 **Result in one line: the AOT build is both faster and smaller than the JIT
-build** — 30–37 % faster to the first painted frame, 19 MiB smaller gzipped —
+build** — 30–39 % faster to the first painted frame, 19 MiB smaller gzipped —
 but it needs a Bun that nobody ships yet, and it takes the plugin system with
 it.
 
@@ -38,37 +38,40 @@ folds to a constant and the loader is dead code in the AOT binary.
 ## What the AOT build costs and buys
 
 Measured on a GitHub runner, 5 boots per binary (run
-[40631228427](https://github.com/clarkarch/tfm-tui/actions/runs/40631228427),
-every gate green; the sizes are byte-identical to the earlier run
+[40633106092](https://github.com/clarkarch/tfm-tui/actions/runs/40633106092),
+every gate green; the sizes are byte-identical across the three green runs
 [40622551742](https://github.com/clarkarch/tfm-tui/actions/runs/40622551742),
-whose timings were 1–7 % worse):
+[40631228427](https://github.com/clarkarch/tfm-tui/actions/runs/40631228427)
+and this one, whose timings differ by a few percent — the runner is noisy,
+the sizes are not):
 
 | | JIT baseline | AOT | AOT `--trim` | AOT `--trim --no-function-source` |
 | --- | --- | --- | --- | --- |
 | gzip size | 77.6 MiB | 64.8 MiB | 59.2 MiB | **58.4 MiB** |
 | raw size | 180.6 MiB | 157.7 MiB | 145.7 MiB | 142.1 MiB |
-| startup → first app code | 137 ms | 29 ms | 31 ms | 27 ms |
-| startup → renderer up | 162 ms | 42 ms | 41 ms | 41 ms |
-| startup → first paint | 481 ms | 305 ms | 306 ms | **301 ms** |
-| app-reported boot | 389 ms | 298 ms | 299 ms | 295 ms |
-| RSS at first paint | 94 328 KB | 82 468 KB | 79 608 KB | 79 596 KB |
+| startup → first app code | 153 ms | 35 ms | 28 ms | 30 ms |
+| startup → renderer up | 181 ms | 61 ms | 41 ms | 41 ms |
+| startup → first paint | 500 ms | 311 ms | 302 ms | **306 ms** |
+| app-reported boot | 394 ms | 304 ms | 296 ms | 298 ms |
+| RSS at first paint | 96 632 KB | 82 144 KB | 79 576 KB | 79 736 KB |
 | kitty images drawn | 4 | 4 | 4 | 4 |
 | crashes at teardown | 0 | 0 | 0 | 0 |
 
 The **candidate** — the smallest variant that boots and paints every run — is
-the last column: **19.2 MiB smaller gzipped than the JIT build and 30–37 %
-faster to the first frame.** Both gates of the experiment pass:
+the last column: **19.2 MiB smaller gzipped than the JIT build and 30–39 %
+faster to the first frame** (the three green runs measured −30.2 %, −37.4 %
+and −38.8 %). Both gates of the experiment pass:
 
 ```
 PASS  gzip size delta under 10 MB (aot-lean) — aot-lean 58.4MB vs jit 77.6MB (-19.2MB)
-PASS  first paint is at least 10% faster (aot-lean) — aot-lean 301ms vs jit 481ms (-37.4%)
+PASS  first paint is at least 10% faster (aot-lean) — aot-lean 306ms vs jit 500ms (-38.8%)
 ```
 
 What the AOT build buys at run time: the module graph is machine code, so the
-program reaches its first line of app code in 27 ms instead of 137 ms (−80 %),
-and the whole frame is painted ~180 ms earlier. The runtime it does not need is
-also not in the executable, so the resident set at the first frame is ~14 MiB
-smaller (94 328 KB → 79 596 KB).
+program reaches its first line of app code in ~30 ms instead of ~150 ms
+(−80 %), and the whole frame is painted ~195 ms earlier. The runtime it does
+not need is also not in the executable, so the resident set at the first frame
+is ~16 MiB smaller (96 632 KB → 79 736 KB).
 
 ### The size lever: `--trim`, and the Bun it needs
 
@@ -220,7 +223,7 @@ the opentui fork's plugin path, which AOT disables.
 carries yet:
 
 * smaller: 58.4 MiB gzipped vs 77.6 MiB for the JIT build (−19.2 MiB)
-* faster: 301 ms to the first frame vs 481 ms (−30…37 %)
+* faster: 306 ms to the first frame vs 500 ms (−30…39 %)
 * the plugin loader is gated off, the code is still in the tree
 * no transpiler in the binary, no code from disk, icons and the native
   rasterizer intact
