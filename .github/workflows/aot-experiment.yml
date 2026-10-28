@@ -307,7 +307,7 @@ jobs:
           TS
           # The JIT baseline is the CONTROL: if it cannot load the addon, the
           # probe itself is broken and the comparison would be meaningless.
-          ./bin/bun build --compile dist/probe/probe-resvg.ts \
+          ./bin/bun build --compile --tsconfig-override tsconfig.json dist/probe/probe-resvg.ts \
             --outfile dist/probe/probe-jit 2>&1 | tee dist/logs/probe-jit-build.log
           if ! jit_out=$(./dist/probe/probe-jit 2>&1); then
             echo "the JIT baseline cannot load the resvg addon — the probe is broken"
@@ -322,7 +322,7 @@ jobs:
           # report instead of failing this step (the rest of the experiment
           # still measures what it can).
           set +e
-          ./bin/bun build --compile --aot dist/probe/probe-resvg.ts \
+          ./bin/bun build --compile --aot --tsconfig-override tsconfig.json dist/probe/probe-resvg.ts \
             --outfile dist/probe/probe-aot 2>&1 | tee dist/logs/probe-aot-build.log
           build_rc=${PIPESTATUS[0]}
           set -e
@@ -341,11 +341,6 @@ jobs:
           fi
           echo "probe result (aot): $(cat dist/logs/probe-aot.out)"
 
-      # The AOT build: --aot compiles the program to machine code, and
-      # --define flips the plugin gate (an AOT executable may not load a
-      # plugin file from disk). EVERY compiler finding is captured — the
-      # warning about code from disk is expected (the loader stays in the
-      # bundle, unreachable), anything else is a finding of its own.
       # The embedded assets, asked of the build itself. A compiled binary
       # names an embedded file "<name>-<hash>.svg"; an AOT build may keep
       # the plain "<name>.svg" instead. The probe uses tfm's OWN index
@@ -354,53 +349,77 @@ jobs:
       # text glyph, and the app looks fine while being wrong).
       - name: The embedded icon assets survive the AOT build
         run: |
-          mkdir -p dist/probe
-          cat > dist/probe/probe-assets.ts <<'TS'
-          import { loadEmbeddedIcons } from "../../src/ui/icons";
-
-          const files = Bun.embeddedFiles ?? [];
-          const names = files.map((f) => f.name).filter((n): n is string => typeof n === "string");
-          const svgs = names.filter((n) => n.toLowerCase().endsWith(".svg"));
-          console.log(`embedded files: ${names.length}, svg assets: ${svgs.length}`);
-          console.log(`sample asset names: ${svgs.slice(0, 3).join(", ")}`);
-          const map = await loadEmbeddedIcons(files);
-          console.log(`resolved icons: ${map.size}`);
-          console.log(`sample icons: ${[...map.keys()].slice(0, 5).join(", ")}`);
-          if (map.size < 50) {
-            console.error("the embedded icon index is nearly empty — every icon would degrade to a glyph");
-            process.exit(1);
-          }
-          TS
           set +e
-          ./bin/bun build --compile --aot dist/probe/probe-assets.ts assets/icons/*.svg \
-            --outfile dist/probe/probe-assets-aot 2>&1 | tee dist/logs/probe-assets-aot-build.log
-          build_rc=${PIPESTATUS[0]}
+          ./bin/bun scripts/aot-probe-assets.ts aot 2>&1 | tee dist/logs/probe-assets-aot.log
+          probe_rc=${PIPESTATUS[0]}
           set -e
-          if [ "$build_rc" != "0" ]; then
-            echo "PROBE FAILURE: the AOT compiler could not build the asset probe"
-            echo "aot-build-failed" > dist/logs/probe-assets-aot.out
-          elif ! aot_out=$(./dist/probe/probe-assets-aot 2>&1); then
-            echo "PROBE FAILURE: the AOT executable cannot read its embedded assets"
-            echo "aot-run-failed" > dist/logs/probe-assets-aot.out
-          else
-            echo "$aot_out" > dist/logs/probe-assets-aot.out
-            echo "aot: $aot_out"
+          # the lines the measure job reads
+          grep -E "^(embedded files|sample asset names|resolved icons|sample icons):" \
+            dist/logs/probe-assets-aot.log > dist/logs/probe-assets-aot.out || true
+          if [ "$probe_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT build lost its embedded icon assets"
+            echo "aot-probe-failed" > dist/logs/probe-assets-aot.out
           fi
           echo "probe result (aot): $(cat dist/logs/probe-assets-aot.out)"
 
+      # The transpiler check. An ahead-of-time executable may not load code
+      # from disk: the transpiler is not in it. The probe imports a file it
+      # writes at run time — the AOT build must refuse it, the JIT baseline
+      # (the control) must load it. That is the proof; a grep of the build
+      # log cannot give it, because the expected warning ("this import path
+      # isn't a constant") mentions the flag the build does NOT use.
+      - name: The AOT executable carries no transpiler
+        run: |
+          cat > dist/probe/probe-disk-code.ts <<'TS'
+          const file = "/tmp/aot-code-from-disk.js";
+          await Bun.write(file, "export const fromDisk = 42;\n");
+          let refused = false;
+          let detail = "";
+          try {
+            const m = await import(file);
+            detail = `loaded ${String((m as { fromDisk?: number }).fromDisk)}`;
+          } catch (err) {
+            refused = true;
+            detail = String((err as Error)?.message ?? err).slice(0, 120);
+          }
+          console.log(`code from disk: ${refused ? "refused" : "LOADED"} — ${detail}`);
+          TS
+          ./bin/bun build --compile --tsconfig-override tsconfig.json dist/probe/probe-disk-code.ts \
+            --outfile dist/probe/probe-disk-jit 2>&1 | tee dist/logs/probe-disk-jit-build.log
+          jit_out=$(./dist/probe/probe-disk-jit)
+          echo "jit: $jit_out"
+          echo "$jit_out" > dist/logs/probe-disk-jit.out
+          set +e
+          ./bin/bun build --compile --aot --tsconfig-override tsconfig.json dist/probe/probe-disk-code.ts \
+            --outfile dist/probe/probe-disk-aot 2>&1 | tee dist/logs/probe-disk-aot-build.log
+          build_rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$build_rc" != "0" ]; then
+            echo "PROBE FAILURE: the AOT compiler could not build the disk-code probe"
+            echo "aot-build-failed" > dist/logs/probe-disk-aot.out
+          else
+            aot_out=$(./dist/probe/probe-disk-aot)
+            echo "aot: $aot_out"
+            echo "$aot_out" > dist/logs/probe-disk-aot.out
+          fi
+
+      # The AOT build: the compiler turns the program into machine code, and
+      # the define flips the plugin gate (an AOT executable may not load a
+      # plugin file from disk). EVERY compiler finding is captured — the
+      # warning about code from disk is expected (the loader stays in the
+      # bundle, unreachable), anything else is a finding of its own.
       - name: Build the AOT executable
         run: |
           mkdir -p dist/logs
           set -o pipefail
-          ./bin/bun build --compile --aot --define __TFM_BUILD_AOT__=true \
-            src/index.ts assets/icons/*.svg --outfile dist/tfm-aot 2>&1 | tee dist/logs/aot-build.log
+          ./bin/bun scripts/aot-build.ts aot dist/tfm-aot 2>&1 | tee dist/logs/aot-build.log
 
-      # The baseline: the SAME bun, without --aot — a JIT executable, exactly
-      # what a release ships today.
+      # The baseline: the SAME bun, without the AOT compiler — a JIT
+      # executable, exactly what a release ships today.
       - name: Build the JIT baseline
         run: |
           set -o pipefail
-          ./bin/bun build --compile src/index.ts assets/icons/*.svg --outfile dist/tfm-jit 2>&1 | tee dist/logs/jit-build.log
+          ./bin/bun scripts/aot-build.ts jit dist/tfm-jit 2>&1 | tee dist/logs/jit-build.log
 
       - name: Report the sizes
         run: |
@@ -422,6 +441,8 @@ jobs:
             dist/logs/probe-aot.out
             dist/logs/probe-jit.out
             dist/logs/probe-assets-aot.out
+            dist/logs/probe-disk-aot.out
+            dist/logs/probe-disk-jit.out
           if-no-files-found: error
 
   # ─── 3. boot both, measure, report ───────────────────────────────────────
@@ -465,16 +486,21 @@ jobs:
           fi
           grep -q "plugins are disabled in this build" /tmp/aot-plugins.err
 
-      # No --aot-allow-code-from-disk: the build log must not mention it, and
-      # the "code from disk" finding (the plugin loader's dynamic import) is
-      # the expected one.
-      - name: The AOT build did not embed a transpiler
+      # The transpiler check, carried over from the build job: the AOT
+      # executable refuses to load code from disk, the JIT baseline loads
+      # it. That is the proof that the AOT binary carries no transpiler.
+      - name: The AOT executable carries no transpiler
         run: |
-          if grep -q "aot-allow-code-from-disk" dist/logs/aot-build.log; then
-            echo "the build log mentions --aot-allow-code-from-disk"
+          echo "probe (jit): $(cat dist/logs/probe-disk-jit.out)"
+          echo "probe (aot): $(cat dist/logs/probe-disk-aot.out)"
+          if ! grep -q "code from disk: refused" dist/logs/probe-disk-aot.out; then
+            echo "the AOT executable loaded code from disk — it carries a transpiler"
             exit 1
           fi
-          grep -n "TS100064\|code from disk\|from disk" dist/logs/aot-build.log || echo "(no code-from-disk finding in the log)"
+          if ! grep -q "code from disk: LOADED" dist/logs/probe-disk-jit.out; then
+            echo "the JIT baseline did not load code from disk — the probe is broken"
+            exit 1
+          fi
 
       # The icon assets are embedded in the executable (Bun.embeddedFiles).
       # If the AOT build dropped them, every icon silently falls back to a
