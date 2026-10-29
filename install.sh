@@ -389,6 +389,12 @@ hdr_length() { # hdr_length < headers
   case "$len" in '' | *[!0-9]*) printf '' ;; *) printf '%s' "$len" ;; esac
 }
 
+# The LAST HTTP status in a headers dump: a redirect chain writes every hop
+# (302 then 404), and the final hop is the answer. Empty when there is none.
+hdr_status() { # hdr_status < headers
+  tr -d '\r' | awk '/^HTTP\//{code=$2} END{printf "%s", code}'
+}
+
 # ── steps ───────────────────────────────────────────────────────────────────
 # One line per step, printed once, when its outcome is known. While a step runs
 # we draw a dim pending line WITHOUT a newline and replace it in place, so a
@@ -849,6 +855,23 @@ step_download() {
   step_begin "download"
   # the bar paints this step's own row while curl runs in the background
   if ! fetch_with_bar "$BASE/tfm-$ARCH.gz" "$WORK/tfm.gz" "$WORK/tfm.hdr"; then
+    # A 404 is not a network problem: the release (or the asset for this
+    # architecture) does not exist. Saying "check your internet connection"
+    # sends the user down the wrong path, so name the missing release.
+    local code
+    code=$(hdr_status <"$WORK/tfm.hdr")
+    if [ "$code" = "404" ]; then
+      if [ "$VERSION" = "latest" ]; then
+        fail_at download "no such release" \
+          "The latest release has no tfm-$ARCH.gz." \
+          "Check the published releases at https://github.com/$REPO/releases." \
+          "Nothing was installed."
+      fi
+      fail_at download "no such release" \
+        "There's no tfm-$ARCH.gz in release $VERSION." \
+        "Check the published releases at https://github.com/$REPO/releases." \
+        "Nothing was installed."
+    fi
     fail_at download "download failed" \
       "Couldn't download tfm right now." \
       "Check your internet connection and run the same command again." \

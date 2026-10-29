@@ -19,6 +19,19 @@ export const UPDATE_REPO = "clarkarch/tfm-tui";
 // shared addresses, which would quietly turn everyone's check into "unknown".
 export const UPDATE_LATEST_URL = `https://github.com/${UPDATE_REPO}/releases/latest`;
 
+// A published release has a page under /releases/tag/<tag>; a tag that was
+// never released 404s. One HEAD reads that with no API token and no rate
+// limit — the same trick as /releases/latest above.
+export const UPDATE_RELEASE_TAG_URL = (tag: string): string => `https://github.com/${UPDATE_REPO}/releases/tag/${tag}`;
+
+// The releases page (where a user looks for a version to install).
+export const UPDATE_RELEASES_URL = `https://github.com/${UPDATE_REPO}/releases`;
+
+// The releases ATOM feed lists every published release, newest first. It is
+// on github.com (not api.github.com), so it carries no per-IP rate limit —
+// the API path is what made the check fail on shared addresses.
+export const UPDATE_RELEASES_FEED_URL = `https://github.com/${UPDATE_REPO}/releases.atom`;
+
 // The installer the user already trusts (the documented one-liner). `tfm
 // update` delegates to it instead of re-implementing download/verify/swap:
 // one place decides replace + checksum policy, so the two paths cannot drift.
