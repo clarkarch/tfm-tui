@@ -307,6 +307,24 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     }
   };
 
+  // root-row icon specs, by index — the hover AND keyboard repaints flip them
+  // in lockstep with the row bg. A baked raster carries its own bg, so
+  // highlighting only the row left the icon showing a stale sidebarBg square.
+  // Lives at factory scope (not inside buildMenuContent) so the keyboard
+  // cursor can repaint a root row without rebuilding the panel.
+  const rootSpecs: (IconSpec | undefined)[] = [];
+  const paintRootAt = (index: number, on: boolean): void => {
+    const c = menuC;
+    setOnId(`tfm-root-row-${index}`, (n) => {
+      n.backgroundColor = on ? c.accentBg : undefined;
+    });
+    setOnId(`tfm-root-rowl-${index}`, (n) => {
+      n.fg = c.white;
+    });
+    const spec = rootSpecs[index];
+    if (spec) ctx.setIconState(spec, on ? IconStateIdx.Active : IconStateIdx.Rest);
+  };
+
   // repaint ONE category's hover/active highlight by id — no rebuild, and it
   // never switches the active category (hover is visual feedback only)
   const paintCatAt = (gi: number, on: boolean): void => {
@@ -604,6 +622,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const buildMenuContent = (c: Theme, panel: NodeLike, view: "root" | "settings" | "plugins" | "help" | "about") => {
     menuC = c;
     const panelView = view !== "root";
+    // the root rows are rebuilt from scratch here: drop the previous build's
+    // icon specs so a stale one can never be flipped by a later repaint
+    rootSpecs.length = 0;
     // the help view uses its own wide poster width, about its narrow brand
     // width; settings/plugins fill the terminal the same way
     // (settingsPanelWidth clamps small terminals)
@@ -647,21 +668,6 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     );
 
     if (!panelView) {
-      // root-row icon specs, by index — the hover repaint flips them in lockstep
-      // with the row bg. A baked raster carries its own bg, so highlighting only
-      // the row left the icon showing a stale sidebarBg square; the settings
-      // categories have always flipped both, this brings the root view in line.
-      const rootSpecs: (IconSpec | undefined)[] = [];
-      const paintRootAt = (index: number, on: boolean): void => {
-        setOnId(`tfm-root-row-${index}`, (n) => {
-          n.backgroundColor = on ? c.accentBg : undefined;
-        });
-        setOnId(`tfm-root-rowl-${index}`, (n) => {
-          n.fg = c.white;
-        });
-        const spec = rootSpecs[index];
-        if (spec) ctx.setIconState(spec, on ? IconStateIdx.Active : IconStateIdx.Rest);
-      };
       const hoverSelect = (index: number) => () => {
         // position truth (pointer) before change truth (highlight): the
         // keyboard cursor may already sit here, in which case no repaint
@@ -903,8 +909,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (!inPanelView()) {
       const count = rootMenuItems().length;
       if (count === 0) return;
+      const prev = st.menuIdx;
       st.menuIdx = advanceCursor(st.menuIdx, delta, count);
-      renderMenuContent();
+      // the root rows are already on screen: repaint the two rows in place.
+      // A rebuild per keypress churned ~20 native nodes for nothing.
+      if (prev >= 0 && prev !== st.menuIdx) paintRootAt(prev, false);
+      paintRootAt(st.menuIdx, true);
       return;
     }
     if (st.pane === "cats") {
@@ -921,15 +931,28 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const first = flat[0];
     const last = flat[flat.length - 1];
     if (first === undefined || last === undefined) return;
+    const prev = st.menuIdx;
     if (st.menuIdx < 0 || !flat.includes(st.menuIdx)) {
       st.menuIdx = delta >= 0 ? first : last;
     } else {
       const pos = visiblePos(flat, st.menuIdx);
       st.menuIdx = flat[(pos + delta + flat.length) % flat.length] ?? first;
     }
+    const prevScroll = st.scrollOff;
     ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, st.menuIdx));
     paintDesc(fitDescText(descText(rowsOf(st.catIdx)[st.menuIdx]), settingsPanelWidth(ctx.renderer().terminalWidth)));
-    renderMenuContent();
+    // Moving the cursor is a REPAINT, not a rebuild: the rows are already on
+    // screen. Rebuilding them per keypress churned ~60 native nodes (one
+    // TextBuffer each) — at 30 key repeats/s that is ~1800 allocations/s,
+    // which piles up until the allocator fails ("the menu vanishes") and
+    // burns a core (the "very slow and laggy" report in issue #6). Only a
+    // SCROLL needs new rows: the visible window moved, so rebuild then.
+    if (st.scrollOff !== prevScroll) {
+      renderMenuContent();
+      return;
+    }
+    if (prev >= 0 && prev !== st.menuIdx) paintRowAt(prev, false);
+    paintRowAt(st.menuIdx, true);
   };
 
   return {
