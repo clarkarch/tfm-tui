@@ -51,6 +51,7 @@ https://github.com/user-attachments/assets/b47c7136-642c-4c85-8b2a-dcab1bd0b37b
 - Drag and drop between panes and from other apps.
 - Trash, restore, delete forever, empty trash.
 - Undo / redo file operations.
+- Notifications that grow with the message — click a cut one to read the rest.
 - Preview text, code, images, videos, folders.
 - Open files + Open With app picker.
 - Properties dialog with permissions editing.
