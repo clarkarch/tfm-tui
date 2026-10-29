@@ -476,12 +476,20 @@ describe("installer download bar", () => {
   // waits for anything.
   const stubCurl = (
     dir: string,
-    o: { bytes: number; hold?: boolean; status?: number; noLength?: boolean; headFails?: boolean },
+    o: {
+      bytes: number;
+      hold?: boolean;
+      status?: number;
+      noLength?: boolean;
+      headFails?: boolean;
+      httpStatus?: number;
+    },
   ) => {
     const half = Math.floor(o.bytes / 2);
+    const code = o.httpStatus ?? 200;
     const header = o.noLength
-      ? "printf 'HTTP/2 200\\r\\ntransfer-encoding: chunked\\r\\n'"
-      : `printf 'HTTP/2 200\\r\\nContent-Length: ${o.bytes}\\r\\n'`;
+      ? `printf 'HTTP/2 ${code}\\r\\ntransfer-encoding: chunked\\r\\n'`
+      : `printf 'HTTP/2 ${code}\\r\\nContent-Length: ${o.bytes}\\r\\n'`;
     const script = [
       "#!/bin/sh",
       'out=""; hdr=""; head=0',
@@ -647,6 +655,34 @@ describe("installer download bar", () => {
       env: withStub(stubs),
     });
     expect(code).toBe(22);
+  });
+
+  // A 404 is a missing release, not a broken network: telling the user to
+  // "check your internet connection" sends them down the wrong path.
+  test("a 404 names the missing release instead of blaming the network", () => {
+    const { stubs, run } = sandbox();
+    stubCurl(stubs, { bytes: 4096, status: 22, httpStatus: 404 });
+    const { out, code } = run(`BASE="https://example.invalid/r"\nVERSION=v1.0.1\nstep_download`, {
+      env: withStub(stubs),
+    });
+    expect(code).toBe(1);
+    expect(out).toContain("no such release");
+    expect(out).toContain("v1.0.1");
+    expect(out).toContain("github.com/clarkarch/tfm-tui/releases");
+    expect(out).not.toContain("internet connection");
+  });
+
+  test("a network failure still blames the network", () => {
+    const { stubs, run } = sandbox();
+    // no headers at all: the connection never happened
+    stubCurl(stubs, { bytes: 4096, status: 7, headFails: true });
+    const { out, code } = run(`BASE="https://example.invalid/r"\nVERSION=v1.0.1\nstep_download`, {
+      env: withStub(stubs),
+    });
+    expect(code).toBe(1);
+    expect(out).toContain("download failed");
+    expect(out).toContain("internet connection");
+    expect(out).not.toContain("no such release");
   });
 });
 

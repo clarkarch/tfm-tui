@@ -13,6 +13,8 @@ import {
   UPDATE_INSTALLER_URL,
   UPDATE_INSTALL_TIMEOUT_MS,
   UPDATE_LATEST_URL,
+  UPDATE_RELEASES_FEED_URL,
+  UPDATE_RELEASE_TAG_URL,
   UPDATE_TIMEOUT_MS,
 } from "./update";
 
@@ -94,6 +96,55 @@ export const fetchLatestTag = async (
       signal: deps.signal ?? AbortSignal.timeout(UPDATE_TIMEOUT_MS),
     });
     return tagFromRedirect(res.headers.get("location"));
+  } catch {
+    return null;
+  }
+};
+
+// Does a release with this tag exist? true = yes, false = no (404),
+// null = couldn't ask (offline, rate limited, a status we don't read as an
+// answer). The caller must treat null as "unknown", NOT as "no": the
+// installer still tries, and it reports a missing release in its own words.
+export const releaseExists = async (
+  tag: string,
+  deps: { fetch?: UpdateFetch; signal?: AbortSignal } = {},
+): Promise<boolean | null> => {
+  const f = deps.fetch ?? defaultFetch;
+  try {
+    const res = await f(UPDATE_RELEASE_TAG_URL(tag), {
+      method: "HEAD",
+      signal: deps.signal ?? AbortSignal.timeout(UPDATE_TIMEOUT_MS),
+    });
+    if (res.status === 404) return false;
+    if (res.ok) return true;
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+// The published release tags, newest first (the ATOM feed). Null when the
+// feed can't be read — the caller then points at the releases page instead.
+export const fetchReleaseTags = async (
+  deps: { fetch?: UpdateFetch; signal?: AbortSignal } = {},
+): Promise<string[] | null> => {
+  const f = deps.fetch ?? defaultFetch;
+  try {
+    const res = await f(UPDATE_RELEASES_FEED_URL, {
+      method: "GET",
+      signal: deps.signal ?? AbortSignal.timeout(UPDATE_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = await res.text();
+    const tags: string[] = [];
+    const re = /releases\/tag\/([^"<]+)/g;
+    let m: RegExpExecArray | null = re.exec(body);
+    while (m) {
+      const tag = m[1];
+      if (tag && !tags.includes(tag)) tags.push(tag);
+      m = re.exec(body);
+    }
+    return tags.length > 0 ? tags : null;
   } catch {
     return null;
   }

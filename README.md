@@ -112,7 +112,7 @@ bun run compile && cp dist/tfm ~/.local/bin/
 ```bash
 tfm update
 ```
-`--tag v1.0.0` pins a release, `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings.
+`--tag v1.0.0` pins a release — a version that was never published is named up front, with the published ones listed — and `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings.
 
 ## Uninstall
 

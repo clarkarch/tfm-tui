@@ -6,12 +6,14 @@
 
 import pkg from "../../package.json";
 import { errMessage } from "../lib/uiutil";
-import { isNewer, parseTag, tagFor, UPDATE_LATEST_URL } from "./update";
+import { isNewer, parseTag, tagFor, UPDATE_LATEST_URL, UPDATE_RELEASES_URL } from "./update";
 import {
   fetchLatestTag,
+  fetchReleaseTags,
   installDirOf,
   isDevBuild,
   readInstallInfo,
+  releaseExists,
   runInstaller,
   type InstallInfo,
   type InstallerResult,
@@ -137,12 +139,35 @@ export const runUpdateCli = async (args: string[], deps: UpdateCliDeps = {}): Pr
     return 1;
   }
 
-  // resolve the target: a pinned --tag skips the network entirely
+  // resolve the target: a pinned --tag skips the "what's the latest" question
   let latest: string | null = parsed.tag;
   if (latest === null) {
     latest = await fetchLatestTag(deps.fetch ? { fetch: deps.fetch } : {});
     if (latest === null) {
       err(`tfm: couldn't reach ${new URL(UPDATE_LATEST_URL).host}, check your connection`);
+      return 1;
+    }
+  }
+  // A pinned tag must name a release that EXISTS. Without this check the
+  // user confirms a downgrade and then watches the installer fail with a raw
+  // curl 404 — and the installer's "check your internet connection" is wrong
+  // for a version that was never published. One HEAD answers it; when the
+  // answer is unknown (offline) the install still runs and reports itself.
+  if (parsed.tag !== null) {
+    const tag = tagFor(latest);
+    const exists = await releaseExists(tag, deps.fetch ? { fetch: deps.fetch } : {});
+    if (exists === false) {
+      err(`tfm: there's no release ${tag}`);
+      const tags = await fetchReleaseTags(deps.fetch ? { fetch: deps.fetch } : {});
+      // stable versions first — the alphas are noise for someone who typed
+      // "1.0.1" and meant a released version
+      const stable = (tags ?? []).filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
+      const list = stable.length > 0 ? stable : (tags ?? []);
+      err(
+        list.length > 0
+          ? `published releases: ${list.slice(0, 8).join(", ")}`
+          : `see ${UPDATE_RELEASES_URL} for the published versions`,
+      );
       return 1;
     }
   }

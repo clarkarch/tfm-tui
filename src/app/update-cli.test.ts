@@ -149,17 +149,83 @@ describe("runUpdateCli", () => {
     expect(h.installs).toHaveLength(0);
   });
 
-  test("--tag installs exactly that release, no network call", async () => {
-    let fetched = 0;
+  test("--tag installs exactly that release (the check asks about THAT tag only)", async () => {
+    const urls: string[] = [];
     const h = harness({
-      fetch: async () => {
-        fetched++;
-        throw new Error("should not be called");
+      fetch: async (url) => {
+        urls.push(url);
+        // the release exists
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "",
+        };
       },
     });
     expect(await runUpdateCli(["--tag", "v0.9.0"], h.deps)).toBe(0);
-    expect(fetched).toBe(0);
+    // one HEAD about the pinned tag — never the "what's the latest" question
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("/releases/tag/v0.9.0");
     expect(h.installs).toEqual([{ tag: "v0.9.0", installDir: "/home/u/.local/bin", capture: false }]);
+  });
+
+  test("--tag for a release that does not exist says so, and never installs", async () => {
+    const h = harness({
+      fetch: async (url) => {
+        if (url.includes("/releases/tag/")) {
+          return { ok: false, status: 404, headers: { get: () => null }, text: async () => "" };
+        }
+        // the releases feed: what IS published
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () =>
+            '<feed><entry><link href="https://github.com/clarkarch/tfm-tui/releases/tag/v1.2.0"/></entry>' +
+            '<entry><link href="https://github.com/clarkarch/tfm-tui/releases/tag/v1.1.0"/></entry></feed>',
+        };
+      },
+    });
+    expect(await runUpdateCli(["--tag", "1.0.1"], h.deps)).toBe(1);
+    const said = h.err.join("\n");
+    expect(said).toContain("no release v1.0.1");
+    // the published ones are named, so the next try is one keystroke away
+    expect(said).toContain("v1.2.0");
+    expect(said).toContain("v1.1.0");
+    expect(h.installs).toHaveLength(0);
+  });
+
+  test("a pinned tag that can't be checked (offline) still tries the install", async () => {
+    const h = harness({
+      current: "1.2.0",
+      fetch: async () => {
+        throw new Error("ENOTFOUND");
+      },
+    });
+    expect(await runUpdateCli(["--tag", "1.0.0"], h.deps)).toBe(0);
+    expect(h.installs).toHaveLength(1);
+  });
+
+  test("a downgrade to an older published release is allowed", async () => {
+    const h = harness({
+      current: "1.2.0",
+      fetch: async (url) => {
+        if (url.includes("/releases/tag/")) {
+          // the release exists
+          return { ok: true, status: 200, headers: { get: () => null }, text: async () => "" };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "",
+        };
+      },
+    });
+    expect(await runUpdateCli(["--tag", "1.0.0"], h.deps)).toBe(0);
+    expect(h.out[0]).toBe("tfm 1.2.0 → 1.0.0");
+    expect(h.installs).toEqual([{ tag: "v1.0.0", installDir: "/home/u/.local/bin", capture: false }]);
   });
 
   test("--tag for the version already installed is a no-op unless --force", async () => {
