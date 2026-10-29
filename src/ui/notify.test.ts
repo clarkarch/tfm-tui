@@ -4,8 +4,11 @@ import { createTestRenderer } from "@opentui/core/testing";
 import {
   MAX_TOAST_LINES,
   TOAST_H,
+  TOAST_MAX_BODY_LINES,
   TOAST_PAD_Y,
+  TOAST_TEXT_BUDGET,
   makeNotify,
+  toastHeightFor,
   toastLevelMeta,
   truncateToastText,
   wrapToastText,
@@ -148,15 +151,18 @@ describe("notify stacking", () => {
     expect(removed).toContain("tfm-toast-2");
   });
 
-  test("long warnings ellipsize to ONE body line (strict 2-row toasts)", async () => {
+  test("a long message grows the toast, and the follower tiles below it", async () => {
     const { ctx, nodes } = makeFake();
     const { notify } = makeNotify(ctx);
-    // strict 2-row content: a long message never grows the toast — it folds
-    // into one ellipsized line, so the follower tiles at a fixed offset.
-    notify("clone failed: Repository not found on this remote host today ok");
+    // the description is READABLE: the toast grows to fit the message (up to
+    // TOAST_MAX_BODY_LINES body rows), so the follower starts lower instead of
+    // covering a message that was cut to one line.
+    const message = "clone failed: Repository not found on this remote host today ok";
+    const bodyRows = wrapToastText(message, TOAST_TEXT_BUDGET, TOAST_MAX_BODY_LINES).length;
+    notify(message);
     expect(nodes.get("tfm-toast-1").top).toBe(1);
     notify("next");
-    expect(nodes.get("tfm-toast-2").top).toBe(1 + 4 + 1);
+    expect(nodes.get("tfm-toast-2").top).toBe(1 + toastHeightFor(bodyRows) + 1);
   });
 
   test("each level queues its raster icon slot with the level tint", () => {
@@ -422,9 +428,10 @@ describe("notify layout (B1: big icon column)", () => {
     }
   });
 
-  test("long messages ellipsize to one body line (fixed height)", async () => {
-    // strict 2 rows: a long message must NOT grow the toast — it folds into a
-    // single ellipsized body line, keeping every notification the same height.
+  test("a long message grows the toast and shows every line", async () => {
+    // the description is READABLE: the toast grows to fit the message instead
+    // of folding it into one cut line — the old contract made a long error
+    // unreadable, and nothing else on screen carried the text.
     const r = await createTestRenderer({ width: 80, height: 24 });
     try {
       const { notify } = makeNotify({
@@ -452,7 +459,8 @@ describe("notify layout (B1: big icon column)", () => {
         stripSelectable: () => {},
         durationMs: () => 10000,
       });
-      notify("clone failed: Repository not found on this remote host today ok", "tfm");
+      const message = "clone failed: Repository not found on this remote host today ok";
+      notify(message, "tfm");
       const slideIn = Date.now() + 3000;
       while (Date.now() < slideIn) {
         await r.renderOnce();
@@ -466,14 +474,184 @@ describe("notify layout (B1: big icon column)", () => {
       const bodyRow = rows.findIndex((row) => row.includes("clone failed"));
       expect(titleRow).toBeGreaterThanOrEqual(0);
       expect(bodyRow).toBe(titleRow + 1);
-      // the body folded into ONE ellipsized line — and the row below it is the
-      // blank bottom gutter, never a second body line
-      expect(rows[bodyRow]!.includes("…")).toBe(true);
+      // the message runs onto a second body row — the toast grew to fit it
+      const secondBodyRow = rows.findIndex((row) => row.includes("this remote host"));
+      expect(secondBodyRow).toBe(bodyRow + 1);
+      const bodyRows = wrapToastText(message, TOAST_TEXT_BUDGET, TOAST_MAX_BODY_LINES).length;
       const toast = r.renderer.root.findDescendantById("tfm-toast-1") as any;
-      expect(toast.height).toBe(TOAST_H);
-      expect(rows[bodyRow + 1]!.slice(toast.left, toast.left + toast.width).trim()).toBe("");
+      expect(toast.height).toBe(toastHeightFor(bodyRows));
+      // the row below the LAST body line is the blank bottom gutter, never a
+      // clipped body row
+      const lastBodyRow = bodyRow + bodyRows - 1;
+      expect(rows[lastBodyRow]!.slice(toast.left, toast.left + toast.width).trim()).not.toBe("");
+      expect(rows[lastBodyRow + 1]!.slice(toast.left, toast.left + toast.width).trim()).toBe("");
     } finally {
       await r.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+});
+
+describe("notify expansion (a cut message is clickable)", () => {
+  // A message longer than the toast's body budget cannot be shown at once.
+  // It is cut with a "…" and the toast is CLICKABLE: the click reveals the
+  // rest and holds the toast still, so the text can actually be read.
+  const LONG =
+    "Create failed · ENOSPC: no space left on device, open '/home/clark/Projects/vibecoded/js/tfm-tui-aot/dist/bun'";
+
+  // the real renderer ctx (the mouse events need mounted nodes)
+  const realCtx = (r: any, durationMs = 10000): NotifyCtx => ({
+    rootAdd: (node: any) => r.renderer.root.add(node),
+    remove: (node: any) => {
+      try {
+        (node.parent ?? r.renderer.root).remove(node);
+      } catch {}
+    },
+    byId: (id: string) => r.renderer.root.findDescendantById(id),
+    termW: () => 80,
+    termH: () => 24,
+    accentBg: () => "#1a1b26",
+    white: () => "#ffffff",
+    sidebarFgMuted: () => "#666666",
+    makeIconSlot: (name: string, _states: any, heightCells = 1) =>
+      ({
+        el: Box(
+          { id: `tfm-icon-test-${name}`, width: Math.round(heightCells * 2), height: heightCells },
+          Text({ content: name }),
+        ),
+        slotId: `tfm-icon-test-${name}`,
+        spec: {},
+      }) as unknown as IconSlotHandle,
+    drainIconQueue: () => {},
+    stripSelectable: () => {},
+    durationMs: () => durationMs,
+  });
+
+  // fire a synthetic mouse event at a mounted node (the escHintBtn pattern)
+  const fire = (node: any, type: string) => {
+    const ev: any = {
+      type,
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+      propagationStopped: false,
+      stopPropagation() {
+        ev.propagationStopped = true;
+      },
+    };
+    return node?.processMouseEvent(ev);
+  };
+
+  test("a cut message shows the ellipsis, and a click reveals the rest", async () => {
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify(realCtx(r));
+      notify(LONG, "create failed", "error");
+      await settleSlide(r);
+      await r.renderOnce();
+      const toast = r.renderer.root.findDescendantById("tfm-toast-1") as any;
+      // the compact view: the body budget, the last row marked as cut
+      expect(toast.height).toBe(toastHeightFor(TOAST_MAX_BODY_LINES));
+      const compact = r.captureCharFrame().split("\n");
+      expect(compact.some((row) => row.includes("…"))).toBe(true);
+      expect(compact.some((row) => row.includes("dist/bun'"))).toBe(false);
+
+      // the click expands it: the full text is there and the toast grew
+      fire(toast, "down");
+      await r.renderOnce();
+      expect(toast.height).toBeGreaterThan(toastHeightFor(TOAST_MAX_BODY_LINES));
+      const expanded = r.captureCharFrame().split("\n");
+      expect(expanded.some((row) => row.includes("dist/bun'"))).toBe(true);
+      // the cut row now shows its full text (the "…" is gone)
+      expect(expanded.some((row) => row.includes("…"))).toBe(false);
+
+      // a second click collapses it back to the cut view
+      fire(toast, "down");
+      await r.renderOnce();
+      expect(toast.height).toBe(toastHeightFor(TOAST_MAX_BODY_LINES));
+      expect(
+        r
+          .captureCharFrame()
+          .split("\n")
+          .some((row) => row.includes("…")),
+      ).toBe(true);
+    } finally {
+      await r.dispose();
+    }
+  });
+
+  test("an expanded toast holds still, and the collapse puts it back on the clock", async () => {
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify(realCtx(r, 150));
+      // an INFO toast takes the configured duration (an error one always
+      // lingers 5s), so the clock is short enough to watch
+      notify(LONG, "create failed");
+      const toast = r.renderer.root.findDescendantById("tfm-toast-1") as any;
+      // expand before the timer runs out: an expanded message is READ, not
+      // raced against a 3s countdown
+      fire(toast, "down");
+      await Bun.sleep(400);
+      await r.renderOnce();
+      expect(r.renderer.root.findDescendantById("tfm-toast-1")).toBeTruthy();
+
+      // collapsed, the toast is back on its clock and goes away
+      fire(toast, "down");
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && r.renderer.root.findDescendantById("tfm-toast-1")) {
+        await r.renderOnce();
+        await Bun.sleep(20);
+      }
+      expect(r.renderer.root.findDescendantById("tfm-toast-1")).toBeFalsy();
+    } finally {
+      await r.dispose();
+    }
+  });
+
+  test("the pointer leaving an EXPANDED toast does not put it back on the clock", async () => {
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify(realCtx(r, 150));
+      notify(LONG, "create failed");
+      const toast = r.renderer.root.findDescendantById("tfm-toast-1") as any;
+      // hover, then expand: the pointer goes away while the message is still
+      // expanded. The toast must stay — the countdown may only restart when
+      // the message is folded back.
+      fire(toast, "move");
+      fire(toast, "down");
+      fire(toast, "out");
+      await Bun.sleep(400);
+      await r.renderOnce();
+      expect(r.renderer.root.findDescendantById("tfm-toast-1")).toBeTruthy();
+      expect(toast.height).toBeGreaterThan(toastHeightFor(TOAST_MAX_BODY_LINES));
+    } finally {
+      await r.dispose();
+    }
+  });
+
+  test("the pointer on a toast holds it still (the click is never a race)", async () => {
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify(realCtx(r, 150));
+      notify("short message", "tfm");
+      const toast = r.renderer.root.findDescendantById("tfm-toast-1") as any;
+      // hovering pauses the auto-dismiss: a message must not be yanked away
+      // while it is being read
+      fire(toast, "move");
+      await Bun.sleep(400);
+      await r.renderOnce();
+      expect(r.renderer.root.findDescendantById("tfm-toast-1")).toBeTruthy();
+
+      // leaving puts it back on the clock
+      fire(toast, "out");
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && r.renderer.root.findDescendantById("tfm-toast-1")) {
+        await r.renderOnce();
+        await Bun.sleep(20);
+      }
+      expect(r.renderer.root.findDescendantById("tfm-toast-1")).toBeFalsy();
+    } finally {
+      await r.dispose();
     }
   });
 });

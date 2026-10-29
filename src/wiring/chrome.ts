@@ -416,6 +416,9 @@ export const wireChrome = async (deps: {
     },
     byId,
     termW: () => renderer.terminalWidth,
+    // the toast grows to fit its message; the terminal height caps how far an
+    // expanded toast may go
+    termH: () => renderer.terminalHeight,
     accentBg: () => core.colors.accentBg,
     white: () => core.colors.white,
     sidebarFgMuted: () => core.colors.sidebarFgMuted,
@@ -425,6 +428,8 @@ export const wireChrome = async (deps: {
     drainIconQueue: core.slots.drainIconQueue,
     stripSelectable: core.lookup.stripSelectable,
     durationMs: () => core.config.ui.toastDurationMs,
+    // a clickable toast (a message that did not fit) shows the pointer
+    setPointer,
   });
 
   // string-shaped sticky toast (no OpenTUI imports at the call site)
