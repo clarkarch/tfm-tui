@@ -422,6 +422,66 @@ describe("settings view", () => {
     expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]); // initial row cleared
   });
 
+  // The keyboard cursor move must NOT rebuild the panel: a rebuild churned
+  // ~60 native nodes (one TextBuffer each) per keypress, so a held arrow key
+  // (30 repeats/s) piled up ~1800 native allocations/s until the allocator
+  // failed ("the menu vanishes") and burned a core (issue #6). The rows are
+  // already on screen — the move is a repaint, exactly like the mouse hover.
+  test("a keyboard cursor move repaints the rows by id WITHOUT a rebuild", async () => {
+    await openSettings();
+    const row0 = t.renderer.root.findDescendantById("tfm-set-row-0");
+    const row1 = t.renderer.root.findDescendantById("tfm-set-row-1");
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    const kids = [...panel.getChildren()].length;
+    menu.moveMenu(1); // cursor: row 0 -> row 1
+    await t.renderOnce();
+    // the SAME nodes are still mounted — nothing was destroyed and rebuilt
+    expect(t.renderer.root.findDescendantById("tfm-set-row-0")).toBe(row0);
+    expect(t.renderer.root.findDescendantById("tfm-set-row-1")).toBe(row1);
+    expect([...panel.getChildren()].length).toBe(kids);
+    // and the highlight moved with the cursor
+    expect(bgInts("tfm-set-row-0")).toEqual([0, 0, 0, 0]);
+    expect(bgInts("tfm-set-row-1")).toEqual(hexInts(colors.accentBg));
+  });
+
+  test("the root view: a keyboard cursor move repaints by id WITHOUT a rebuild", async () => {
+    menu.closeMenu();
+    await t.renderOnce();
+    menu.openMenu();
+    await t.renderOnce();
+    const row0 = t.renderer.root.findDescendantById("tfm-root-row-0");
+    const panel: any = t.renderer.root.findDescendantById("tfm-menu-panel");
+    const kids = [...panel.getChildren()].length;
+    menu.moveMenu(1); // the root opens with no cursor: down fills row 0
+    await t.renderOnce();
+    expect(t.renderer.root.findDescendantById("tfm-root-row-0")).toBe(row0);
+    expect([...panel.getChildren()].length).toBe(kids);
+    expect(bgInts("tfm-root-row-0")).toEqual(hexInts(colors.accentBg));
+    menu.moveMenu(1); // row 0 -> row 1
+    await t.renderOnce();
+    expect(t.renderer.root.findDescendantById("tfm-root-row-0")).toBe(row0);
+    expect([...panel.getChildren()].length).toBe(kids);
+    expect(bgInts("tfm-root-row-0")).toEqual([0, 0, 0, 0]);
+    expect(bgInts("tfm-root-row-1")).toEqual(hexInts(colors.accentBg));
+  });
+
+  test("a cursor move that scrolls the window DOES rebuild (the rows changed)", async () => {
+    // the 20-row behavior category overflows the 12-row window: walking the
+    // cursor past the edge needs NEW rows, so the panel is rebuilt there
+    await openSettings();
+    menu.menuTab();
+    menu.adjustSelectedSetting(1); // -> the behavior category (20 rows)
+    await t.renderOnce();
+    const row11 = t.renderer.root.findDescendantById("tfm-set-row-11");
+    for (let i = 0; i < 12; i++) menu.moveMenu(1); // walk past the window edge
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("knob-12");
+    expect(t.captureCharFrame()).not.toContain("knob-0");
+    // the window moved, so the panel was rebuilt — even the row that stayed
+    // visible is a NEW node (a rebuild replaces them all)
+    expect(t.renderer.root.findDescendantById("tfm-set-row-11")).not.toBe(row11);
+  });
+
   test("settings rows + cats set pointer per motion, even with no cursor change", async () => {
     await openSettings();
     // openSettings closes the previous test's menu first (a correct
