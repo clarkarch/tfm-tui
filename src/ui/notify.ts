@@ -1,7 +1,8 @@
 import { Box, Text } from "@opentui/core";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
-import type { IconSlotHandle, SlotElement } from "./ui-slots";
+import type { PointerStyle } from "../lib/pointer";
+import { hoverEvents, type IconSlotHandle, type SlotElement } from "./ui-slots";
 
 // --- Toast notifications (top-right stack, animated slide-in + fade-out).
 // THE single toast stack: plain auto-dismiss toasts AND the sticky transfer
@@ -16,6 +17,8 @@ export type NotifyCtx = {
   remove(node: unknown): void;
   byId(id: string): MaybeNode;
   termW(): number;
+  // terminal height — caps how far an expanded toast may grow
+  termH?(): number;
   accentBg(): string;
   white(): string;
   sidebarFgMuted(): string;
@@ -30,6 +33,9 @@ export type NotifyCtx = {
   stripSelectable(): void;
   // config knob [ui] toast-duration-ms (default 3000)
   durationMs?(): number;
+  // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter) — a
+  // clickable toast shows the pointer, a plain one keeps the default shape
+  setPointer?(style: PointerStyle): void;
 };
 
 // error toasts linger so the failure is actually read; a longer configured
@@ -79,12 +85,45 @@ export const TOAST_GAP = 1;
 // the strings and the flex layout from drifting apart.
 export const TOAST_TEXT_BUDGET = TOAST_W - TOAST_PAD_X * 2 - TOAST_ICON_W - TOAST_GAP;
 
-// strict 2-row content (title row + ONE wrapped description line) so every
-// notification is the same height — a consistent stack. The body ellipsizes
-// past the single line instead of growing the toast.
+// The smallest content block: the title row + ONE body row. A toast whose
+// message fits in a single line stays exactly this tall, so the common
+// stack is the stack it always was.
 export const TOAST_CONTENT_ROWS = TOAST_ICON_CELLS;
 // total toast height: the content block plus the symmetric top/bottom gutter.
 export const TOAST_H = TOAST_CONTENT_ROWS + TOAST_PAD_Y * 2;
+
+// Body rows a toast shows WITHOUT a click. The description used to be folded
+// into ONE ellipsized line (29 cells), so a long error ("Create failed ·
+// ENOSPC: no space left on device, open '/…'") was unreadable and nothing
+// else on screen carried the text. The toast now GROWS to fit its message up
+// to this many body rows; past it, the toast is clickable (see TOAST_EXPAND).
+export const TOAST_MAX_BODY_LINES = 3;
+// The most an expanded toast ever shows — the terminal height caps it lower.
+export const TOAST_EXPAND_MAX_LINES = 12;
+// How long an expanded toast stays expanded before it folds back and goes
+// back on its clock. An expanded toast is held still (it is being READ), but
+// it must not live on the screen forever if nobody clicks it again.
+export const TOAST_EXPANDED_HOLD_MS = 30000;
+
+// content rows = title + body rows (the title always has its own row)
+export const toastContentRows = (bodyLines: number): number => 1 + bodyLines;
+// the toast's total height for a message of that many body rows
+export const toastHeightFor = (bodyLines: number): number => toastContentRows(bodyLines) + TOAST_PAD_Y * 2;
+
+// How many body rows an expanded toast may show: the cap, bounded by half the
+// terminal (a toast must never eat the screen it reports on). A terminal too
+// small for that keeps the visible cap.
+export const expandCapFor = (termH?: number): number => {
+  if (!termH || termH <= 0) return TOAST_EXPAND_MAX_LINES;
+  const room = Math.floor(termH / 2) - toastContentRows(0) - TOAST_PAD_Y * 2;
+  return Math.max(TOAST_MAX_BODY_LINES, Math.min(TOAST_EXPAND_MAX_LINES, room));
+};
+
+// the "there is more" mark on the last visible row of a cut message
+export const ellipsizeToastLine = (line: string, budget: number): string => {
+  const tail = `${line}…`;
+  return tail.length > budget ? truncateToastText(tail, budget) : tail;
+};
 
 // truncate with an ellipsis instead of a hard cut
 export const truncateToastText = (s: string, budget: number): string =>
@@ -126,13 +165,42 @@ export const wrapToastText = (s: string, budget: number, maxLines: number = MAX_
   return kept;
 };
 
+// The click-to-expand state of one toast. The description is pre-wrapped, so
+// "expanding" is a HEIGHT change: the text column grows (its own overflow
+// clips the rows past it) and the shell follows. The one line that differs
+// between the two views is the cut one, so it carries its own id.
+type ToastExpand = {
+  // the text column whose height is the visible row count
+  columnId: string;
+  // the cut line: its id, the compact text (with the "…") and the full text
+  lineId: string;
+  compactLine: string;
+  fullLine: string;
+  // body rows: now, and when expanded
+  compactBody: number;
+  expandedBody: number;
+  expanded: boolean;
+};
+
 type ToastEntry = {
   id: number;
   nodeId: string;
   height: number;
   sticky: boolean;
   // auto-dismiss handle; null while a sticky toast waits for an explicit close
+  // or while the toast is held still (hovered / expanded)
   timer: ReturnType<typeof setTimeout> | null;
+  // safety net for the expanded state: an expanded toast is held still, but
+  // not FOREVER — after this it collapses and goes back on its clock
+  holdTimer: ReturnType<typeof setTimeout> | null;
+  // when the toast expires, and the ms that were left when it was paused
+  deadline: number;
+  remaining: number;
+  paused: boolean;
+  // the pointer is on the toast: it is held still while it is read
+  hovered: boolean;
+  // click-to-expand; null = the message fits, there is nothing to expand
+  expand: ToastExpand | null;
 };
 
 // shared slide-in animation (slide-out is just the reverse direction)
@@ -159,7 +227,7 @@ export const makeNotify = (
   let toastSeq = 0;
 
   // slot grid: entries stack downward with a 1-row gap, each at the running
-  // sum of the heights above it — every notify is the same TOAST_H, the
+  // sum of the heights above it — a toast is as tall as its message, the
   // progress toast rides the same slot math, so they tile without overlap
   const slotTop = (i: number): number => {
     let y = 1;
@@ -174,6 +242,12 @@ export const makeNotify = (
       try {
         clearTimeout(entry.timer);
       } catch {}
+    }
+    if (entry.holdTimer) {
+      try {
+        clearTimeout(entry.holdTimer);
+      } catch {}
+      entry.holdTimer = null;
     }
     const node = ctx.byId(entry.nodeId);
     try {
@@ -209,6 +283,12 @@ export const makeNotify = (
       } catch {}
       entry.timer = null;
     }
+    if (entry.holdTimer) {
+      try {
+        clearTimeout(entry.holdTimer);
+      } catch {}
+      entry.holdTimer = null;
+    }
     const real = ctx.byId(entry.nodeId);
     if (!real) {
       removeEntry(id);
@@ -226,20 +306,106 @@ export const makeNotify = (
     fade();
   };
 
+  // --- the auto-dismiss clock ---
+  // ONE deadline, so a pause (the pointer is on the toast, or the toast is
+  // expanded) resumes with the time that was LEFT instead of restarting the
+  // whole window — a message must not be yanked away while it is read.
+  const startTimer = (entry: ToastEntry, ms: number): void => {
+    if (entry.sticky) return;
+    entry.remaining = ms;
+    entry.deadline = Date.now() + ms;
+    entry.timer = setTimeout(() => fadeOut(entry.id), ms);
+  };
+
+  const pauseTimer = (entry: ToastEntry): void => {
+    if (entry.sticky || !entry.timer) return;
+    entry.remaining = Math.max(0, entry.deadline - Date.now());
+    try {
+      clearTimeout(entry.timer);
+    } catch {}
+    entry.timer = null;
+    entry.paused = true;
+  };
+
+  const resumeTimer = (entry: ToastEntry): void => {
+    if (entry.sticky || entry.timer || !entry.paused) return;
+    entry.paused = false;
+    startTimer(entry, entry.remaining);
+  };
+
+  // Release the clock only when NOTHING holds the toast: the pointer may
+  // still be on it, and it may still be expanded. (A hover-out while the
+  // toast is expanded must not put it back on the countdown — the message
+  // would vanish while it is being read.)
+  const releaseTimer = (entry: ToastEntry): void => {
+    if (entry.hovered || entry.expand?.expanded) return;
+    resumeTimer(entry);
+  };
+
+  // grow/shrink a toast in place: the text column's height is the visible row
+  // count (its own overflow clips the rest), the shell follows, and the stack
+  // reflows around it
+  const setExpanded = (entry: ToastEntry, on: boolean): void => {
+    const ex = entry.expand;
+    if (!ex) return;
+    const body = on ? ex.expandedBody : ex.compactBody;
+    ex.expanded = on;
+    // the cut line shows its full text while expanded
+    const line = ctx.byId(ex.lineId);
+    try {
+      if (line) line.content = on ? ex.fullLine : ex.compactLine;
+    } catch {}
+    const col = ctx.byId(ex.columnId);
+    try {
+      if (col) col.height = toastContentRows(body);
+    } catch {}
+    const shell = ctx.byId(entry.nodeId);
+    try {
+      if (shell) shell.height = toastHeightFor(body);
+    } catch {}
+    entry.height = toastHeightFor(body);
+    restack();
+    // an expanded toast holds still until it is collapsed again
+    if (on) {
+      pauseTimer(entry);
+      // ...but not forever: an expanded toast folds itself back and goes on
+      // its clock if nobody touches it
+      if (entry.holdTimer) {
+        try {
+          clearTimeout(entry.holdTimer);
+        } catch {}
+      }
+      entry.holdTimer = setTimeout(() => {
+        entry.holdTimer = null;
+        setExpanded(entry, false);
+      }, TOAST_EXPANDED_HOLD_MS);
+    } else {
+      if (entry.holdTimer) {
+        try {
+          clearTimeout(entry.holdTimer);
+        } catch {}
+        entry.holdTimer = null;
+      }
+      releaseTimer(entry);
+    }
+  };
+
   const pushToast = (
+    id: number,
     width: number,
     height: number,
     children: SlotElement[],
     sticky: boolean,
     duration?: number,
+    expand?: ToastExpand | null,
   ): ToastHandle | null => {
     // toasts fire from all over (incl. error paths during native memory
     // pressure — see the OOM note in AGENTS.md); a missing toast must never
     // take the app down, so the whole build is guarded
     try {
-      const id = ++toastSeq;
       const nodeId = `tfm-toast-${id}`;
       const y = slotTop(toasts.length);
+      const entryOf = (): ToastEntry | undefined => toasts.find((t) => t.id === id);
       const node = Box(
         {
           id: nodeId,
@@ -255,9 +421,33 @@ export const makeNotify = (
           // touch the right edge (and the icon column needs the left one)
           paddingLeft: TOAST_PAD_X,
           paddingRight: TOAST_PAD_X,
-          // matching vertical gutter so the 2-row content block is centered
+          // matching vertical gutter so the content block is centered
           paddingTop: TOAST_PAD_Y,
           paddingBottom: TOAST_PAD_Y,
+          // a clickable toast grows/shrinks on a click; every toast holds
+          // still while the pointer is on it, so the click is never a race
+          // against the auto-dismiss
+          ...(expand
+            ? {
+                onMouseDown: () => {
+                  const entry = entryOf();
+                  if (entry?.expand) setExpanded(entry, !entry.expand.expanded);
+                },
+              }
+            : {}),
+          ...hoverEvents(
+            (on) => {
+              const entry = entryOf();
+              if (!entry) return;
+              entry.hovered = on;
+              if (on) pauseTimer(entry);
+              else releaseTimer(entry);
+            },
+            // only a clickable toast shows the pointer. A plain toast writes
+            // NO pointer shape at all: the sticky progress toast has buttons
+            // of its own, and a toast-level "default" would fight them.
+            ctx.setPointer && expand ? (style: PointerStyle) => ctx.setPointer?.(style) : undefined,
+          ),
         },
         ...children,
       );
@@ -280,11 +470,21 @@ export const makeNotify = (
       } catch {}
       const targetX = Math.max(0, ctx.termW() - width - 2);
       animateLeft(real, ctx.termW() + 2, targetX, 180);
-      const entry: ToastEntry = { id, nodeId, height, sticky, timer: null };
+      const entry: ToastEntry = {
+        id,
+        nodeId,
+        height,
+        sticky,
+        timer: null,
+        holdTimer: null,
+        deadline: 0,
+        remaining: 0,
+        paused: false,
+        hovered: false,
+        expand: expand ?? null,
+      };
       toasts.push(entry);
-      if (!sticky) {
-        entry.timer = setTimeout(() => fadeOut(id), duration ?? ctx.durationMs?.() ?? 3000);
-      }
+      startTimer(entry, duration ?? ctx.durationMs?.() ?? 3000);
       return {
         id,
         nodeId,
@@ -303,10 +503,6 @@ export const makeNotify = (
       // toast instead of taking the reporting call site down with it
       try {
         const w = TOAST_W;
-        // strict 2-row content: title + exactly ONE description line (long
-        // messages ellipsize rather than growing the toast), so every notify
-        // is the same height.
-        const lines = wrapToastText(message, TOAST_TEXT_BUDGET, TOAST_CONTENT_ROWS - 1);
         const meta = toastLevelMeta(
           level,
           {
@@ -317,6 +513,21 @@ export const makeNotify = (
           },
           ctx.durationMs?.() ?? 3000,
         );
+        // The description is READABLE, not folded into one line: it wraps to
+        // as many rows as it needs (the terminal caps the expansion) and the
+        // toast GROWS to fit. A message past TOAST_MAX_BODY_LINES is cut
+        // with a "…" and the toast is clickable — the click shows the rest
+        // and holds the toast still.
+        const cap = expandCapFor(ctx.termH?.());
+        const full = wrapToastText(message, TOAST_TEXT_BUDGET, cap);
+        const truncated = full.length > TOAST_MAX_BODY_LINES;
+        const visible = truncated ? TOAST_MAX_BODY_LINES : full.length;
+        // the cut row: the same line, marked as cut in the compact view
+        const cutIdx = truncated ? visible - 1 : -1;
+        const compactLine = truncated ? ellipsizeToastLine(full[cutIdx] ?? "", TOAST_TEXT_BUDGET) : "";
+        const id = ++toastSeq;
+        const columnId = `tfm-toast-txt-${id}`;
+        const lineId = `tfm-toast-line-${id}`;
         // the level icon is a 2-row raster slot that owns the toast's left
         // column (B1 media-object layout); the drain swaps the fallback glyph
         // for the tinted raster async. The toast shell is a floating layer
@@ -326,29 +537,69 @@ export const makeNotify = (
         // other float icon — it is decoration, so it has no hover state.
         const slot = ctx.makeIconSlot(meta.icon, [{ fg: meta.titleFg, bg: ctx.accentBg() }], TOAST_ICON_CELLS);
         pushToast(
+          id,
           w,
-          // every notify is exactly TOAST_H rows: 2-row content + the
-          // symmetric vertical gutter, so the stack never zigzags in height
-          TOAST_H,
+          // the toast is as tall as its message: the content block (title +
+          // body rows) plus the symmetric vertical gutter
+          toastHeightFor(visible),
           [
-            // B1: icon column + text column. The title and the single wrapped
-            // body line share the text column, so the description hangs
-            // INDENTED under the title (both start at TOAST_PAD_X + icon +
-            // gap), not at the toast edge. The icon is 2 rows tall and the
-            // content block is 2 rows, so it fills the block; `alignItems`
-            // keeps it centered if a body ever renders shorter.
+            // B1: icon column + text column. The title and the body lines
+            // share the text column, so the description hangs INDENTED under
+            // the title (both start at TOAST_PAD_X + icon + gap), not at the
+            // toast edge. The icon is 2 rows tall and sits at the TOP of the
+            // block, next to the title — `flex-start`, because a taller body
+            // would push a centered icon into the middle of the message.
             Box(
-              { flexDirection: "row", columnGap: TOAST_GAP, alignItems: "center" },
+              { flexDirection: "row", columnGap: TOAST_GAP, alignItems: "flex-start" },
               slot.el,
               Box(
-                { flexDirection: "column" },
-                Text({ content: truncateToastText(title, TOAST_TEXT_BUDGET), fg: meta.titleFg }),
-                ...lines.map((line) => Text({ content: line, fg: meta.bodyFg })),
+                {
+                  id: columnId,
+                  flexDirection: "column",
+                  // the text column owns the rest of the toast's width: the
+                  // lines are pre-wrapped to it, so the column does not change
+                  // width when the toast expands
+                  width: TOAST_TEXT_BUDGET,
+                  // an explicit width turns flex-shrink OFF, and the icon slot
+                  // is re-rastered at the terminal's own cell aspect (it can
+                  // come back 1 cell wider than the 4 the build reserved) —
+                  // the column shrinks instead of pushing the text past the
+                  // toast's edge
+                  flexShrink: 1,
+                  // the column's height IS the visible row count: its own
+                  // overflow clips the rows past it, so growing the column is
+                  // what reveals them
+                  height: toastContentRows(visible),
+                  overflow: "hidden",
+                },
+                Text({ content: truncateToastText(title, TOAST_TEXT_BUDGET), fg: meta.titleFg, flexShrink: 0 }),
+                ...full.map((line, i) =>
+                  Text({
+                    id: i === cutIdx ? lineId : undefined,
+                    content: i === cutIdx ? compactLine : line,
+                    fg: meta.bodyFg,
+                    // a Text shrinks by default, and a shrunk row paints OVER
+                    // the one above it — the rows must keep their height so
+                    // the column's overflow clips them instead
+                    flexShrink: 0,
+                  }),
+                ),
               ),
             ),
           ],
           false,
           meta.duration,
+          truncated
+            ? {
+                columnId,
+                lineId,
+                compactLine,
+                fullLine: full[cutIdx] ?? "",
+                compactBody: visible,
+                expandedBody: full.length,
+                expanded: false,
+              }
+            : null,
         );
       } catch {
         return;
@@ -365,7 +616,7 @@ export const makeNotify = (
       } catch {}
     },
     notifySticky(children, opts) {
-      return pushToast(opts?.width ?? TOAST_W, opts?.height ?? TOAST_H, children, true);
+      return pushToast(++toastSeq, opts?.width ?? TOAST_W, opts?.height ?? TOAST_H, children, true);
     },
   };
 };
