@@ -3,10 +3,13 @@ import { Box, Text } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import {
   MAX_TOAST_LINES,
+  TOAST_EXPAND_MAX_LINES,
   TOAST_H,
   TOAST_MAX_BODY_LINES,
   TOAST_PAD_Y,
   TOAST_TEXT_BUDGET,
+  ellipsizeToastLine,
+  expandCapFor,
   makeNotify,
   toastHeightFor,
   toastLevelMeta,
@@ -133,6 +136,34 @@ describe("wrapToastText", () => {
     expect(lines[1]!.length).toBeLessThanOrEqual(7);
     // default cap applies without the arg
     expect(wrapToastText(Array.from({ length: 20 }, (_, i) => `w${i}`).join(" "), 10)).toHaveLength(MAX_TOAST_LINES);
+  });
+});
+
+describe("expandCapFor", () => {
+  test("an expanded toast never eats more than half the terminal", () => {
+    // 24 rows: the toast may take 12 of them (the title + 9 body rows + the
+    // gutters above and below)
+    expect(expandCapFor(24)).toBe(9);
+    expect(toastHeightFor(expandCapFor(24))).toBe(12);
+    // a tall terminal still stops at the hard cap
+    expect(expandCapFor(100)).toBe(TOAST_EXPAND_MAX_LINES);
+    expect(toastHeightFor(expandCapFor(100))).toBe(15);
+  });
+
+  test("a tiny terminal keeps the rows a toast shows without a click", () => {
+    // 10 rows: there is no room to grow, so the toast stays what it is
+    expect(expandCapFor(10)).toBe(TOAST_MAX_BODY_LINES);
+    // an unknown terminal height falls back to the hard cap
+    expect(expandCapFor()).toBe(TOAST_EXPAND_MAX_LINES);
+    expect(expandCapFor(0)).toBe(TOAST_EXPAND_MAX_LINES);
+  });
+});
+
+describe("ellipsizeToastLine", () => {
+  test("the cut row is marked as cut, and never grows past the budget", () => {
+    expect(ellipsizeToastLine("abc", 10)).toBe("abc…");
+    expect(ellipsizeToastLine("abcdef", 4)).toBe("abc…");
+    expect(ellipsizeToastLine("abcdef", 4).length).toBeLessThanOrEqual(4);
   });
 });
 
