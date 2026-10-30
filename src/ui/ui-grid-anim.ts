@@ -20,7 +20,8 @@ import type { HoverLiftOpts, Theme, TransparentBgMode, UiStyle } from "../config
 import type { SelTileRef } from "../input/selection";
 import { TileVisual } from "../input/grid-input";
 import { tileSurface } from "./style";
-import { IconStateIdx, type IconSpec } from "./ui-slots";
+
+import { IconStateIdx } from "../lib/icon-state";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 
 export type FileAnimStyle = "off" | "fade" | "slide" | "stagger" | "stagger-slide";
@@ -36,6 +37,7 @@ export type SlideDir = "up" | "down" | "left" | "right";
 export const MAX_PER_NODE_ANIM = 1000;
 
 import { clamp01 } from "../lib/uiutil";
+import type { IconSpec } from "../lib/icon-state";
 
 const outQuad = (p: number): number => p * (2 - p);
 const smoothstep = (p: number): number => p * p * (3 - 2 * p);

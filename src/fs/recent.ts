@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { mimeForExt } from "./filetype";
 import { parseIso, pathToUri, uriToPath, xdgDataHome, xdgStateHome } from "./uri";
-import { swallow } from "../app/log";
+import { swallow } from "../lib/log";
 
 // --- Recent files (freedesktop recently-used.xbel) + tfm's starred registry.
 // Persistence only: read/write these two registries, nothing else. Batching

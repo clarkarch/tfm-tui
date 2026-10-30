@@ -5,7 +5,8 @@ import { advanceCursor, destroyChildren } from "../lib/uiutil";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
-import type { IconSlotHandle } from "./ui-slots";
+import type { MakeIconSlot } from "./ui-slots";
+import type { ListEntry } from "../lib/menu-entry";
 
 // --- Floating menu widget: right-click context menu + the file-menu panel row
 // renderer. Ids tfm-filemenu / tfm-filemenu-panel stay byte-identical for
@@ -22,17 +23,7 @@ import type { IconSlotHandle } from "./ui-slots";
 // passes it to both), so the two menus measure alike
 export const MENU_W = 36;
 
-export type ListEntry = {
-  icon?: string;
-  label: string;
-  hint?: string;
-  hintIcon?: string;
-  action: () => void;
-  sep?: boolean;
-  // nested flyout items; a parent row stays directly clickable (its action
-  // fires on click/enter, the flyout opens on hover / →)
-  submenu?: ListEntry[];
-};
+export type { ListEntry };
 
 type MenuCtx = {
   byId(id: string): MaybeNode;
@@ -48,13 +39,7 @@ type MenuCtx = {
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
-  makeIconSlot(
-    name: string,
-    states: { fg: string; bg: string }[],
-    heightCells?: number,
-    initialState?: number,
-    onMouseDown?: (ev: MouseEvent) => void,
-  ): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
 };
 
 type MenuState = {

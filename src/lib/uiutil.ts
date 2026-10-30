@@ -16,7 +16,7 @@ const isChildHost = (v: unknown): v is ChildHost =>
 
 // Teardown that also DESTROYS the removed children. OpenTUI renderables own
 // native memory (TextBuffers, images) freed by a bun finalizer, and bun only
-// GCs on JS-heap pressure — never on native pressure (see app/mem-hygiene).
+// GCs on JS-heap pressure — never on native pressure (see lib/mem-hygiene).
 // Detaching without destroy() therefore defers the free to the next 10s poke;
 // a rebuild/resize/theme-flip storm outruns it and the native allocator grows
 // until small allocations fail (the documented "Failed to create TextBuffer" /

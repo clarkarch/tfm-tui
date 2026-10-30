@@ -17,7 +17,6 @@ const pointers: string[] = [];
 
 const mkPrompt = (t: TestRendererSetup, floats: ReturnType<typeof makeFloats>) =>
   makePrompt({
-    renderer: () => t.renderer,
     byId: (id: string) => t.renderer.root.findDescendantById(id),
     rootAdd: (n: unknown) => t.renderer.root.add(n as never),
     stripSelectable: () => {},

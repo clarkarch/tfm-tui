@@ -62,6 +62,7 @@ describe("tileLabelFor", () => {
 describe("makeRename (renderer)", () => {
   let t: TestRendererSetup;
   let dir: string;
+  let cwdDir: string;
   let calls: string[];
   let pointers: string[];
   let ctx: RenameCtx;
@@ -94,6 +95,7 @@ describe("makeRename (renderer)", () => {
   beforeAll(async () => {
     t = await createTestRenderer({ width: 80, height: 12 });
     dir = mkdtempSync(path.join(os.tmpdir(), "tfm-rename-widget-"));
+    cwdDir = dir;
     calls = [];
     pointers = [];
 
@@ -117,7 +119,7 @@ describe("makeRename (renderer)", () => {
       notify: (msg, title, level) => calls.push(`notify:${title}:${level}:${msg}`),
       isVirtualCwd: () => false,
       inTrashView: () => false,
-      cwd: () => dir,
+      cwd: () => cwdDir,
       focusKeys: () => [path.join(dir, "Untitled.txt")],
       selectTileAt: () => true,
       setPointer: (s) => void pointers.push(s),
@@ -174,6 +176,39 @@ describe("makeRename (renderer)", () => {
     expect(readFileSync(path.join(dir, "taken.txt"), "utf8")).toBe("precious");
     expect(existsSync(path.join(dir, "taken (copy).txt"))).toBe(true);
     expect(calls).toContain("notify:create:success:Created taken (copy).txt");
+  });
+
+  test("committing a create with a path-like name aborts instead of escaping the folder", async () => {
+    // "../escaped.txt" is not a NAME: path.join(dir, value) would resolve it
+    // into the PARENT, so the create would land a file outside the folder it
+    // was created in. The create boundary rejects it like an empty name.
+    calls.length = 0;
+    const nest = path.join(dir, "nest");
+    mkdirSync(nest, { recursive: true });
+    cwdDir = nest;
+    try {
+      const anchor = path.join(dir, "anchor.txt");
+      await mountRow(anchor);
+      rename.startInlineCreate("file");
+      const created = path.join(nest, "Untitled.txt");
+      ctx.tileRefs.set(created, ctx.tileRefs.get(anchor)!);
+      const deadline = Date.now() + 2000;
+      while (!t.renderer.root.findDescendantById("tfm-rename-input") && Date.now() < deadline) await Bun.sleep(5);
+      await t.renderOnce();
+      const input = t.renderer.root.findDescendantById("tfm-rename-input") as any;
+      expect(input).toBeTruthy();
+      input.value = "../escaped.txt";
+      rename.finishInlineRename(true);
+      await Bun.sleep(30);
+      await t.renderOnce();
+      expect(existsSync(path.join(dir, "escaped.txt"))).toBe(false); // never left the folder
+      expect(calls.some((c) => c.startsWith("notify:create:error:"))).toBe(true);
+      expect(calls.some((c) => c.startsWith("undo:"))).toBe(false); // the create never landed
+      expect(existsSync(created)).toBe(false); // placeholder dropped: the create aborted
+    } finally {
+      cwdDir = dir;
+      rmSync(path.join(dir, "escaped.txt"), { force: true });
+    }
   });
 
   test("cancelling a rename restores the label at its ORIGINAL row index (not the end)", async () => {

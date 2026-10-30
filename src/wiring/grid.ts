@@ -26,8 +26,8 @@ import { rasterSigOf } from "../ui/tty";
 import { activeFacade } from "../app/panes";
 import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir, canReadSync } from "../fs/fsutil";
-import { dlog } from "../app/log";
-import type { ListEntry } from "../ui/ui-menu";
+import { dlog } from "../lib/log";
+import type { ListEntry } from "../lib/menu-entry";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, NavWiring } from "./types";
 import type { PluginsWiring } from "./plugins";
@@ -202,7 +202,7 @@ export const wireGrid = (deps: {
       hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
       modalOpen: () => core.floats.hasModal(),
       setPointer,
-      log: (msg: string) => dlog(msg),
+      log: dlog,
     };
   };
   const gridCtxs = [makePaneGridCtx(0), makePaneGridCtx(1)] as const;
@@ -357,14 +357,7 @@ export const wireGrid = (deps: {
       // raster-affecting state the grid rebuild keys off (force-glyph/icons/
       // tty mode/transparent-bg flips must rebuild even though the listing
       // is unchanged)
-      rasterSig: () =>
-        rasterSigOf(
-          core.config.ui.icons,
-          core.isTtyMode(),
-          core.config.ui.forceGlyph,
-          core.config.ui.iconStyle,
-          core.config.ui.transparentBg,
-        ),
+      rasterSig: () => rasterSigOf(core.config.ui, core.isTtyMode()),
       wrapMode: () => core.config.ui.wrapMode,
       reservedRight: () => core.geometry.previewEff,
       availW: paneAvailW,
@@ -377,7 +370,7 @@ export const wireGrid = (deps: {
       drainThumbs: core.slots.drainThumbs,
       stripSelectable,
       setTextOnId: core.lookup.setTextOnId,
-      log: (msg) => dlog(msg),
+      log: dlog,
       fileAnim: (target) => fileAnims[pane].play(target),
       fileAnimVisibleOnly: () => core.config.ui.fileAnimationVisibleOnly,
       fileAnimScrollRevealDelayMs: () => core.config.ui.fileAnimationScrollRevealDelayMs,

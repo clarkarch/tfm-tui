@@ -7,6 +7,7 @@ import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type SlotElement } from "./ui-slots";
+import type { ConflictChoice } from "../lib/file-op-protocol";
 
 // --- Shared skeleton for the centered floating dialogs (conflict / props /
 // yesno): full-screen dimmed scrim + a chrome panel that swallows clicks,
@@ -173,7 +174,7 @@ export const makeDialogs = (ctx: DialogsCtx) => {
 // State + promise plumbing live here; when the choice should apply to the
 // whole remaining batch ("…all") the policy is remembered until resetPolicy.
 
-export type ConflictChoice = "replace" | "keepBoth" | "skip";
+export type { ConflictChoice };
 
 type ConflictCtx = {
   colors(): Theme;

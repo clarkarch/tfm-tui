@@ -1,4 +1,4 @@
-import { Box, type MouseEvent, Text } from "@opentui/core";
+import { Box, Text } from "@opentui/core";
 import { lstatSync, type Stats } from "node:fs";
 import path from "node:path";
 import { execBun, type ExecBunResult } from "../fs/exec-bun";
@@ -6,17 +6,19 @@ import { applySurface, btnSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
-import type { IconSlotHandle, IconSpec, IconState, SlotElement, ThumbJob } from "./ui-slots";
+import type { MakeIconSlot, SlotElement, ThumbJob } from "./ui-slots";
 import { dirWalkStats, fmtBytes, fmtDate, inodeKey, mimeLabelFor } from "../fs/propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
-import type { ListEntry } from "./ui-menu";
+import type { ListEntry } from "../lib/menu-entry";
 import { FLOAT_Z, type Floats } from "./floats";
-import { hoverEvents, IconStateIdx, toggleIconState } from "./ui-slots";
+import { hoverEvents, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
+import { IconStateIdx, type IconState } from "../lib/icon-state";
+import type { IconSpec } from "../lib/icon-state";
 
 // --- Properties dialog (floating, right-click -> Properties…): star/bookmark
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
@@ -53,14 +55,7 @@ type PropsCtx = {
   uiStyle(): UiStyle;
   colors(): Theme;
   home: string;
-  makeIconSlot(
-    name: string,
-    states: IconState[],
-    heightCells?: number,
-    initialState?: number,
-    onMouseDown?: (ev: MouseEvent) => void,
-    statesFactory?: () => IconState[],
-  ): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };

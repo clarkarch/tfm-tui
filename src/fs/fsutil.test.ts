@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { atomicWriteFile } from "../lib/atomic-write";
 import {
   trashDir,
   fsErrText,
@@ -24,7 +25,6 @@ import {
   xdgTrashMove,
   deviceOf,
   crossDevice,
-  atomicWriteFile,
   claimTmp,
   encodeTrashPath,
   rmTrashInfoForPath,

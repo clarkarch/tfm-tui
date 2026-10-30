@@ -15,11 +15,11 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { makeFileOps, type FileOpsCtx } from "./fileops";
-import type { UndoJournalData } from "../app/undo";
+import type { UndoJournalData } from "./undo-steps";
 import { archiveUri } from "./archive-scheme";
 import { trashDir } from "./fsutil";
 import type { ArchiveRun, ToolSpec } from "./archive";
-import type { ProgressState } from "../ui/ui-progress";
+import type { ProgressState } from "../lib/file-op-protocol";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
 
 // runTransfer is the only path copies/moves take — these tests pin the wiring:
@@ -831,6 +831,46 @@ describe("human-friendly statuses and labels", () => {
     await h.ops.performRename(src, "new-name.txt");
     expect(h.calls).toContain("notify:rename:success:Renamed old-name.txt");
     expect(h.calls.some((c) => c.startsWith("undo:rename old-name.txt → new-name.txt:1:"))).toBe(true);
+  });
+
+  // A rename target is a NAME, not a path. path.join(dir, "sub/x") would
+  // silently MOVE the file into sub/ and "../x" would move it OUT of the
+  // folder, while the toast reported the old basename — the file changed
+  // directory and the user was told it was renamed.
+  test("performRename refuses a name containing a path separator", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "sep-name.txt");
+    W(src, "data");
+    await h.ops.performRename(src, "sub/moved.txt");
+    expect(h.calls.some((c) => c.startsWith("notify:rename:error:"))).toBe(true);
+    expect(existsSync(src)).toBe(true);
+    expect(existsSync(path.join(ROOT, "sub", "moved.txt"))).toBe(false);
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("performRename refuses a name that escapes the folder", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "escape-name.txt");
+    W(src, "data");
+    // clean the target first: an earlier run of the BUGGY build really did
+    // move the file out of ROOT, and a leftover would fail this assertion
+    const escaped = path.join(ROOT, "..", "escaped.txt");
+    rmSync(escaped, { force: true });
+    await h.ops.performRename(src, "../escaped.txt");
+    expect(h.calls.some((c) => c.startsWith("notify:rename:error:"))).toBe(true);
+    expect(existsSync(src)).toBe(true);
+    expect(existsSync(escaped)).toBe(false);
+    expect(h.calls.some((c) => c.startsWith("undo:"))).toBe(false);
+  });
+
+  test("performRename refuses an empty name and a bare dot name", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "empty-name.txt");
+    W(src, "data");
+    await h.ops.performRename(src, "   ");
+    await h.ops.performRename(src, "..");
+    expect(h.calls.filter((c) => c.startsWith("notify:rename:error:")).length).toBe(2);
+    expect(existsSync(src)).toBe(true);
   });
 
   test("moveInto a dir into itself reports Already here, no transfer", async () => {

@@ -4,7 +4,7 @@
 // cancels, validation errors render in the footer and keep the modal open.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, type MouseEvent, Text } from "@opentui/core";
+import { Box, Input, type MouseEvent, Text } from "@opentui/core";
 import path from "node:path";
 import { applySurface, btnSurface, floatSurface } from "./style";
 import { makeModalScrim } from "./ui-dialogs";
@@ -18,7 +18,6 @@ import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type SlotElement } from "./ui-slots";
 
 type BulkRenameCtx = {
-  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: unknown): void;
   destroyChildren(node: unknown): void;

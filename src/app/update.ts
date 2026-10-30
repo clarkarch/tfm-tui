@@ -7,7 +7,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { atomicWriteFile } from "../fs/fsutil";
+import { atomicWriteFile } from "../lib/atomic-write";
 import type { NotifyLevel } from "../lib/notify-level";
 
 export const UPDATE_REPO = "clarkarch/tfm-tui";

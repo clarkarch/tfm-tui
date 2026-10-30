@@ -9,7 +9,7 @@ import { errMessage } from "../lib/uiutil";
 import { stickyClose } from "../ui/notify";
 import path from "node:path";
 import pkg from "../../package.json";
-import { dlog } from "../app/log";
+import { dlog } from "../lib/log";
 import type { Command } from "../lib/command";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
@@ -70,7 +70,13 @@ export const wirePlugins = async (deps: {
   const { core, nav, chrome, gridFoundation, getKeymap, getPick, getConfirm, getPrompt } = deps;
   // must run before the first external plugin import (registry.scan) so plugin
   // files can import @opentui/core against THIS process's singleton
-  installPluginRuntimeSupport();
+  if (!installPluginRuntimeSupport()) {
+    // the support failed: a plugin that imports @opentui/core then gets a
+    // SECOND instance, so its renderables never integrate with tfm's
+    // renderer. Otherwise silent — the plugin loads and its nodes simply do
+    // nothing.
+    dlog("plugin runtime support unavailable: plugins importing @opentui/core will not integrate");
+  }
   const dir = pluginsDir();
   // UI-extension host: plugins returning `slots` render real OpenTUI nodes
   // into tfm's statusbar / sidebar-footer. Context is a stable ref with live
@@ -83,11 +89,11 @@ export const wirePlugins = async (deps: {
     cwd: () => core.state.cwd,
     selection: () => gridFoundation.selection.selPaths().map((s) => s.path),
   };
-  const slotRegistry = makePluginSlots({ renderer: chrome.renderer, context: slotContext, log: (m) => dlog(m) });
+  const slotRegistry = makePluginSlots({ renderer: chrome.renderer, context: slotContext, log: dlog });
   const api: PluginApi = {
     notify: (message, title) => chrome.notify(message, title ?? "tfm"),
     setStatusMsg: nav.setStatusMsg,
-    log: (message) => dlog(message),
+    log: dlog,
     store: (name) => makePluginStore(dir, name),
     // live reads — selection/cwd resolve at call time, so a plugin action
     // run minutes later still sees the current state, never a stale capture

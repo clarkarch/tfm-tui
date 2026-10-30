@@ -8,23 +8,14 @@
 
 import { Box, type CliRenderer, type ColorInput, ImageRenderable, type MouseEvent, Text } from "@opentui/core";
 import { iconPng, brandPng, svgAspect, thumbPng } from "./icons";
-import { swallow } from "../app/log";
+import { swallow } from "../lib/log";
 import type { IconMode, IconStyle, Theme } from "../config/config";
 import { intToHex } from "../config/color";
 import { applySurface, btnSurface, iconTransparent, slotBg, type UiStyle } from "./style";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { destroyChildren } from "../lib/uiutil";
-
-export type IconState = { fg: string; bg: string };
-
-// Icon raster indices shared by every slot. Three slot families share one
-// index space:
-// - select slots (tiles, sidebar rows): Rest/Hover/Selected (+ Cut for tiles)
-// - toggle slots (star, crumbs, hover buttons): Off/On + HoverOffset
-// - nav slots (back/fwd): Enabled/Disabled + HoverOffset (note: Enabled=0,
-//   Disabled=1 — the inverse sense of a toggle, hence the separate helper)
-export const IconStateIdx = { Rest: 0, Active: 1, Selected: 2, Cut: 3, HoverOffset: 2 } as const;
+import { IconStateIdx, type IconSpec, type IconState } from "../lib/icon-state";
 
 /** Toggle slot (off/on × normal/hover): star, crumbs, hover buttons, esc hint. */
 export const toggleIconState = (on: boolean, hover: boolean): number =>
@@ -135,21 +126,6 @@ export const makePointerSetter = (deps: {
   };
 };
 
-export type IconSpec = {
-  slotId: string;
-  name: string;
-  heightCells: number;
-  states: IconState[];
-  // slots that survive renderAll rebuilds (nav/search/sort) must derive fresh
-  // state colors on every re-raster, or a runtime theme swap leaves them stale
-  statesFactory?: () => IconState[];
-  initialState: number;
-  done?: boolean;
-  // faithful brand art (the About logo): drains through brandPng (no fg tint)
-  // instead of iconPng. States still carry fg/bg for the glyph fallback.
-  faithful?: boolean;
-};
-
 // Whatever the widgets nest inside their Box()/Text() calls — which is exactly
 // the row/slot builders' return type. Derived from Box()'s own children param
 // instead of a hand-written union of the VNode instantiations in use, so a new
@@ -159,6 +135,21 @@ export type SlotElement = Parameters<typeof Box>[1];
 // makeIconSlot's contract: the mountable element, the id the theme/scrim paths
 // look it up by, and the spec setIconState later mutates.
 export type IconSlotHandle = { el: SlotElement; slotId: string; spec: IconSpec };
+
+// makeIconSlot's SIGNATURE — ONE spelling, shared by every ctx that takes it.
+// The ctx types used to re-spell it (a dozen places) and most of them dropped
+// the trailing `opts` (the faithful-brand-art switch), so a widget could not
+// ask for a multi-color raster through its ctx, and every signature change
+// had to be mirrored by hand in each copy.
+export type MakeIconSlot = (
+  name: string,
+  states: IconState[],
+  heightCells?: number,
+  initialState?: number,
+  onMouseDown?: (ev: MouseEvent) => void,
+  statesFactory?: () => IconState[],
+  opts?: { faithful?: boolean },
+) => IconSlotHandle;
 
 export type ThumbJob = {
   slotId: string;
@@ -320,7 +311,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return { cellW, cellH, aspect: cellH > 0 ? cellH / cellW : 2 };
   };
 
-  const makeIconSlot = (
+  const makeIconSlot: MakeIconSlot = (
     name: string,
     states: IconState[],
     heightCells = 1,

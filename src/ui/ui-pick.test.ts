@@ -65,7 +65,6 @@ const mkPick = (
   getColors: () => Theme = () => colors,
 ) =>
   makePick({
-    renderer: () => t.renderer,
     byId: (id) => t.renderer.root.findDescendantById(id),
     rootAdd: (n) => t.renderer.root.add(n),
     // the ctx hands over a real node, so the REAL teardown is the honest fake

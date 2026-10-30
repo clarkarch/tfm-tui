@@ -6,12 +6,14 @@ import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle
 import { buildSections, loadSystemPlaces, type EjectSpec, type Place, type SidebarVisibility } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
-import { tabTitle, type Tab } from "../app/tabs";
-import { gridDrag, type ClipItem } from "../input/grid-input";
+import type { Tab } from "../fs/session";
+import { gridDrag } from "../input/grid-input";
+import type { ClipItem } from "../lib/file-op-protocol";
 import { hoverEvents, selectIconState, toggleIconState } from "./ui-slots";
 import type { Theme } from "../config/config";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { ListEntry } from "./ui-menu";
+import type { ListEntry } from "../lib/menu-entry";
+import { parseArchiveUri } from "../fs/archive-scheme";
 
 // --- Places sidebar rows + tab strip + divider — rebuilt from scratch each
 // render; ctx-seamed like ui-term. tfm-* ids (tfm-place-N / tfm-place-N-label
@@ -20,13 +22,31 @@ import type { ListEntry } from "./ui-menu";
 
 // shared icon-slot types come from ./ui-slots (their queue) — the old
 // byte-identical structural mirrors drifted when ui-slots gained a field
-import type { IconSlotHandle, IconState, IconSpec, SlotElement } from "./ui-slots";
+import type { MakeIconSlot, SlotElement } from "./ui-slots";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
+import type { IconState } from "../lib/icon-state";
+import type { IconSpec } from "../lib/icon-state";
 
 export const TAB_CHIP_MAX_W = 24; // roomy width, kept whenever the strip fits
 export const TAB_CHIP_MIN_W = 6; // pad + 1-2 title cells + close; below this the tail clips
 export const TAB_NEW_BTN_W = 3; // the plus button (toolbar hoverBtn width)
+
+// chip label: basename of the tab's current cwd, virtual places by name.
+// This lives with the chip RENDERER (its only consumer) rather than in
+// app/tabs.ts: it is a presentation rule, and app/tabs.ts is the tab state
+// MACHINE — keeping it there made that machine depend on fs/uri and
+// fs/archive-scheme for a label it never draws.
+export const tabTitle = (t: Tab): string => {
+  const cwd = t.history[t.histIdx] ?? t.history[0] ?? "";
+  if (cwd === RECENT_URI) return "Recent";
+  if (cwd === STARRED_URI) return "Starred";
+  // an archive cwd is `archive://<enc-file>!/<inner>`: name the chip after the
+  // archive file (basename of the URI is percent-encoded garbage)
+  const archive = parseArchiveUri(cwd);
+  const base = archive ? path.basename(archive.file) : path.basename(cwd) || cwd || "/";
+  return base.length > 16 ? `${base.slice(0, 15)}…` : base;
+};
 
 // --- Tab chip shrink: N chips + the plus button share one availW row with a
 // 1-cell gap between items (N+1 items = N gaps). Each chip is capped so the
@@ -115,14 +135,7 @@ type ChromeCtx = {
   hoverBtn(pane: 0 | 1, id: string, iconName: string, onMouseDown: (ev: MouseEvent) => void): SlotElement;
   stripSelectable(): void;
   drainIconQueue(): void;
-  makeIconSlot(
-    name: string,
-    states: IconState[],
-    heightCells?: number,
-    initialState?: number,
-    onMouseDown?: (ev: MouseEvent) => void,
-    statesFactory?: () => IconState[],
-  ): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   stateCwd(): string; // live state.cwd
   // user feedback for mount/eject (wiring's notify). Optional so old fakes

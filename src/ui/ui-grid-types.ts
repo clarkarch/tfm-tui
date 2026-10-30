@@ -12,7 +12,7 @@ import type { Selection } from "../input/selection";
 import type { SortMode } from "../lib/sort";
 import type { Scheduler } from "../lib/uiutil";
 import type { FileAnimMode } from "./ui-grid-anim";
-import type { IconSlotHandle, IconState, ThumbJob } from "./ui-slots";
+import type { MakeIconSlot, ThumbJob } from "./ui-slots";
 import type { UiStyle } from "./style";
 
 export type GridState = {
@@ -73,7 +73,7 @@ export type GridRendererCtx = {
   tileIdPrefix?: string;
   // ui-slots
   cellMetrics(): { cellW: number; cellH: number; aspect: number };
-  makeIconSlot(name: string, states: IconState[], heightCells?: number, initialState?: number): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   pushThumbJob(job: ThumbJob): void;
   nextIconId(): string;
   drainIconQueue(): void | Promise<void>;

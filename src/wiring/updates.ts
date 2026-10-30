@@ -58,7 +58,7 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
   const now = ctx.now ?? (() => Date.now());
   const cache = ctx.cache ?? {
     read: () => readUpdateCache(),
-    write: (c: UpdateCache) => writeUpdateCache(c),
+    write: writeUpdateCache,
   };
   const fetchTag = ctx.fetchTag ?? ((o: { signal?: AbortSignal }) => fetchLatestTag(o));
   const install = ctx.install ?? runInstaller;

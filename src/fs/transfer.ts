@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { errCode, claimTmp, fileIdMatches, fileIdOf, fsyncPath, type FileId } from "./fsutil";
-import { swallow } from "../app/log";
+import { swallow } from "../lib/log";
 
 // --- Copy engine: tree walking, pre-scan and streamed file copy with
 // pause/cancel/progress. UI-agnostic: callers inject a TransferSink wired to

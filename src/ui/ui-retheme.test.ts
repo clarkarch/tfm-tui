@@ -465,6 +465,25 @@ describe("applyConfig", () => {
     expect(ctx.calls.renderAll).toBe(1);
   });
 
+  test("applyConfig converges the pane state BEFORE it repaints", () => {
+    // the repaint must paint the NEW sort/hidden state: the convergence hooks
+    // run before renderAll, or the grid rebuilds with the old order/filter
+    // and the setting looks like it did nothing.
+    const ctx = mkCtx();
+    const order: string[] = [];
+    const retheme = makeRetheme({
+      ...ctx,
+      syncSortMode: () => order.push("sort"),
+      syncShowHidden: () => order.push("hidden"),
+      renderAll: () => order.push("render"),
+    } as any);
+    const fresh = clone(defaultConfig);
+    fresh.ui.sortMode = "size";
+    fresh.ui.showHidden = true;
+    retheme.applyConfig(fresh);
+    expect(order).toEqual(["sort", "hidden", "render"]);
+  });
+
   test("applyConfig converges pane hidden state through the syncShowHidden hook", () => {
     // the grid reads per-pane AppState.showHidden, not config — an external
     // config.toml edit (live reload) that flips show-hidden must re-seed state
@@ -663,7 +682,6 @@ describe("open-float repaints", () => {
       const floats = makeFloats();
       const live: Record<string, string> = { ...defaultConfig.theme };
       const pick = makePick({
-        renderer: () => t.renderer,
         byId: (id) => t.renderer.root.findDescendantById(id),
         rootAdd: (n) => t.renderer.root.add(n),
         destroyChildren: (node: any) => {

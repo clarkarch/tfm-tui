@@ -7,7 +7,7 @@
 // lists over arbitrary items for free.
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, Text } from "@opentui/core";
+import { Box, Input, Text } from "@opentui/core";
 import { applySurface, floatSurface } from "./style";
 import { makeModalScrim } from "./ui-dialogs";
 import { advanceCursor, invokeIsolated } from "../lib/uiutil";
@@ -25,7 +25,6 @@ export type PickItem = {
 };
 
 type PickCtx = {
-  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: unknown): void;
   destroyChildren(node: unknown): void;

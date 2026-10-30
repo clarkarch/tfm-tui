@@ -1,27 +1,13 @@
-import path from "node:path";
-import { RECENT_URI, STARRED_URI } from "../fs/uri";
-import { parseArchiveUri } from "../fs/archive-scheme";
-
 // --- Tabs model: a browser-style tab list, ONE PER PANE. Each pane owns its
 // own model instance; `state.history/histIdx` are ALWAYS this pane's active
 // tab (sync via syncTabFromState()/adoptTab() — navigate reassigns `history`,
 // so refs must be copied, not values). Pure data machine — rendering/session
 // I/O stay in the wiring layer. ---
 
-export type Tab = { history: string[]; histIdx: number };
-export type TabStateRef = { history: string[]; histIdx: number; cwd: string };
+import type { Tab } from "../fs/session";
 
-// chip label: basename of the tab's current cwd, virtual places by name
-export const tabTitle = (t: Tab): string => {
-  const cwd = t.history[t.histIdx] ?? t.history[0] ?? "";
-  if (cwd === RECENT_URI) return "Recent";
-  if (cwd === STARRED_URI) return "Starred";
-  // an archive cwd is `archive://<enc-file>!/<inner>`: name the chip after the
-  // archive file (basename of the URI is percent-encoded garbage)
-  const archive = parseArchiveUri(cwd);
-  const base = archive ? path.basename(archive.file) : path.basename(cwd) || cwd || "/";
-  return base.length > 16 ? `${base.slice(0, 15)}…` : base;
-};
+export type { Tab };
+export type TabStateRef = { history: string[]; histIdx: number; cwd: string };
 
 export type TabsHooks = {
   onChanged: () => void; // repaint chrome (renderAll)

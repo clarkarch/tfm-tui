@@ -22,7 +22,7 @@ import { makePointerSetter, makeSlots } from "../ui/ui-slots";
 import { SCRIM_FILL_ID, rasterDimPlan, scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
-import { appendLog } from "../app/log";
+import { appendLog } from "../lib/log";
 import { activeFacade, activeState, makePanePair, otherState, setActivePane, togglePane } from "../app/panes";
 
 export type CoreWiring = ReturnType<typeof wireCore>;
@@ -87,7 +87,7 @@ export const wireCore = (deps: {
   // here is what keeps the two from disagreeing — a per-call-site gate could
   // never latch across the whole app. Lazy renderer getter (TDZ seam rule).
   const resolutionGate = makeResolutionGate(() => deps.renderer(), {
-    log: (msg) => appendLog(msg),
+    log: appendLog,
     // no rasters here (the console, or a terminal with broken kitty graphics) —
     // cell pixels would never be read, so the boot wait is skipped entirely
     rasterless: () => isTtyMode() || config.ui.forceGlyph,
@@ -115,6 +115,43 @@ export const wireCore = (deps: {
       } catch {}
     }
   };
+
+  // --- Mouse pointer shapes (OSC 22): ONE tty-guarded, deduping sink for
+  // the whole app, shared by every widget ctx. Per-cluster instances were
+  // tried first and diverged: each kept its own `last`, so cluster A
+  // emitting `default` left cluster B believing `pointer` and skipping the
+  // re-set — the shape stuck wrong across widget boundaries depending on
+  // the approach path. Arrows defer renderer access (pre-boot safe).
+  const setPointer = makePointerSetter({
+    setMousePointer: (s) => deps.renderer().setMousePointer(s),
+    isTtyMode,
+  });
+
+  // --- Icon slots / thumbs — widget lives in ./ui-slots.
+  // Called before the renderer boots: every ctx field the drain path needs is
+  // an arrow wrapper (post-boot evaluation), per the widget-seam rules.
+  // Created BEFORE the floats layer on purpose: the modal dim (applyModalDim)
+  // shades the icon rasters through `slots.setRasterDim`, and a slot factory
+  // built later left that call in the TDZ — a SILENT no-op (the dim's
+  // try/catch swallows the ReferenceError), not a crash. ---
+  const slots = makeSlots({
+    renderer: () => deps.renderer(),
+    byId: lookup.byId,
+    colors: themeGet,
+    uiStyle: () => config.ui.uiStyle,
+    iconsMode: () => config.ui.icons,
+    // TTY-guarded like the terminal pane's own seam (no alpha on the Linux
+    // console — without this a TTY+force run clears the X while its header
+    // keeps its fill). The icon drain early-returns under TTY before ever
+    // reading this, so the guard only affects the new button path.
+    transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
+    iconStyle: () => config.ui.iconStyle,
+    iconCells: () => geometry.iconCells,
+    glyphFor: ttyGlyphFor,
+    isTtyMode,
+    forceGlyph,
+    setPointer,
+  });
 
   // Dim the whole app behind a modal. `dim` fades the app-content node's
   // opacity; `fill` toggles the classic full-screen overlay node
@@ -144,44 +181,9 @@ export const wireCore = (deps: {
 
   // --- Floating layers: THE single source of truth for which modal/cursor
   // layer is open + the dismiss-others policy. Pure module, created before any
-  // widget (makeSlots reads its escmenu state through a getter). Modal
-  // open/close dims the app content via `applyModalDim`; `slots` is TDZ here —
-  // the callback fires post-construction only.
+  // widget. Modal open/close dims the app content via `applyModalDim`.
   const floats = makeFloats({
-    onModalChange: (open) => applyModalDim(open),
-  });
-
-  // --- Mouse pointer shapes (OSC 22): ONE tty-guarded, deduping sink for
-  // the whole app, shared by every widget ctx. Per-cluster instances were
-  // tried first and diverged: each kept its own `last`, so cluster A
-  // emitting `default` left cluster B believing `pointer` and skipping the
-  // re-set — the shape stuck wrong across widget boundaries depending on
-  // the approach path. Arrows defer renderer access (pre-boot safe).
-  const setPointer = makePointerSetter({
-    setMousePointer: (s) => deps.renderer().setMousePointer(s),
-    isTtyMode,
-  });
-
-  // --- Icon slots / thumbs — widget lives in ./ui-slots.
-  // Called before the renderer boots: every ctx field the drain path needs is
-  // an arrow wrapper (post-boot evaluation), per the widget-seam rules. ---
-  const slots = makeSlots({
-    renderer: () => deps.renderer(),
-    byId: lookup.byId,
-    colors: themeGet,
-    uiStyle: () => config.ui.uiStyle,
-    iconsMode: () => config.ui.icons,
-    // TTY-guarded like the terminal pane's own seam (no alpha on the Linux
-    // console — without this a TTY+force run clears the X while its header
-    // keeps its fill). The icon drain early-returns under TTY before ever
-    // reading this, so the guard only affects the new button path.
-    transparentForce: () => config.ui.transparentBg === "force" && !isTtyMode(),
-    iconStyle: () => config.ui.iconStyle,
-    iconCells: () => geometry.iconCells,
-    glyphFor: ttyGlyphFor,
-    isTtyMode,
-    forceGlyph,
-    setPointer,
+    onModalChange: applyModalDim,
   });
 
   // --- App state & history (type + boot-state factory live in ./nav with the

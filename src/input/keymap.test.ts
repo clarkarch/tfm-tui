@@ -3,6 +3,7 @@ import { makeKeyRouter, type KeyRouterCtx } from "./keymap";
 import { archiveUri } from "../fs/archive-scheme";
 import { makeSelection, type SelectionCtx } from "./selection";
 import { defaultConfig } from "../config/config-schema";
+import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
 
 const COLORS: any = {
   bg: "#111111",
@@ -30,6 +31,7 @@ const makeSelectionForTest = () => {
     viewH: () => 4,
     rowHInit: () => 3,
     renderPreview: () => {},
+    paintTile: () => {},
   };
   return makeSelection(ctx);
 };
@@ -70,7 +72,6 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
   const bulkState = { open: false };
 
   const ctx: KeyRouterCtx = {
-    byId: () => undefined,
     state,
     keybinds: (action) => binds[action] ?? [],
     quit: rec("quit"),
@@ -1074,6 +1075,27 @@ describe("command table (everything is a command)", () => {
     expect(h.router.commands().map((c) => c.id)).toEqual(KEY_SCHEMA.map((r) => r.action));
   });
 
+  test("every default-bound action is dispatched by the keypress chain", async () => {
+    // A KEY_SCHEMA row with a default bind but no hit() branch means the key
+    // silently does NOTHING, while the palette still lists the action — the
+    // drift is invisible from the outside. The chain is internal, so the rule
+    // is enforced structurally: every default-bound action must appear in a
+    // hit()/hitDir() dispatch. (An action with NO default bind — checkUpdates,
+    // restoreFromTrash, … — is palette-only until the user binds it, so it
+    // is deliberately outside the rule.)
+    const { KEY_SCHEMA } = await import("../config/config-schema");
+    const src = (await Bun.file(`${import.meta.dir}/keymap.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    const dispatched = new Set<string>();
+    for (const m of src.matchAll(/\bhit(?:Dir)?\(\s*ev\s*,\s*"([A-Za-z]+)"(?:\s*,\s*"([A-Za-z]+)")?/g)) {
+      dispatched.add(m[1]!);
+      if (m[2]) dispatched.add(m[2]);
+    }
+    const missing = KEY_SCHEMA.filter((r) => r.def.length > 0 && !dispatched.has(r.action)).map((r) => r.action);
+    expect(missing).toEqual([]);
+  });
+
   test("palette app actions act on the live selection/focus", () => {
     const h = makeHarness();
     // an archive tile beyond the seeded files (extract filters by canExtract)
@@ -1549,6 +1571,33 @@ describe("consumed keys are marked handled so a focused scrollable can't self-sc
     expect(h.key("a")).toBe(false);
     expect(h.key("down")).toBe(false);
     expect(h.calls).toContain("prompt:a");
+  });
+
+  test("every editor float kind owns the keyboard (typing is never dead-lettered)", () => {
+    // EDITOR_FLOAT_KINDS (src/lib/float-kind.ts) is the ONE list of the float
+    // kinds that host a focused Input; the router's switch over it is
+    // compiler-checked for exhaustiveness (a new kind does not compile until
+    // the router knows how to ask about it). The BEHAVIOR is pinned here per
+    // kind: the router must NOT mark the key handled, or the Input never
+    // receives the typing ("typing does nothing in the overlay").
+    const openEditor = (kind: EditorFloatKind): Harness => {
+      if (kind === "pick") {
+        const h = makeHarness();
+        h.pickState.open = true;
+        return h;
+      }
+      if (kind === "bulkrename") {
+        const h = makeHarness();
+        h.bulkState.open = true;
+        return h;
+      }
+      return makeHarness({ prompt: { isOpen: () => true, handleKey: () => {} } });
+    };
+    for (const kind of EDITOR_FLOAT_KINDS) {
+      const h = openEditor(kind);
+      expect(h.key("a"), `${kind} must not mark the key handled`).toBe(false);
+      expect(h.key("down"), `${kind} must not mark the key handled`).toBe(false);
+    }
   });
 
   test("bulk rename owns typing: keys stay unmarked", () => {

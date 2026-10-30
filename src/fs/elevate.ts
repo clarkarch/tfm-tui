@@ -3,6 +3,7 @@
 // callers inject prompt/notify/exec seams so tests never touch real sudo. ---
 import { errCode } from "./fsutil";
 import { errMessage } from "../lib/uiutil";
+import { whichLive } from "./which";
 
 export const isPrivilegeError = (err: unknown): boolean => {
   const code = errCode(err);
@@ -14,7 +15,7 @@ export const isPrivilegeError = (err: unknown): boolean => {
   return false;
 };
 
-export const sudoAvailable = (which: (bin: string) => string | null = Bun.which): boolean => which("sudo") !== null;
+export const sudoAvailable = (which: (bin: string) => string | null = whichLive): boolean => which("sudo") !== null;
 
 export const sudoCpArgv = (src: string, dest: string): string[] => ["sudo", "-n", "cp", "-a", "--", src, dest];
 export const sudoMvArgv = (src: string, dest: string): string[] => ["sudo", "-n", "mv", "--", src, dest];

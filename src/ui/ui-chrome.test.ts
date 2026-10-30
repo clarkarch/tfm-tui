@@ -5,13 +5,13 @@ import path from "node:path";
 import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { MouseButtons } from "@opentui/core/testing";
-import { makeChrome, tabChipMaxWidth } from "./ui-chrome";
+import { makeChrome, tabChipMaxWidth, tabTitle } from "./ui-chrome";
 import { gridDrag } from "../input/grid-input";
 import { defaultConfig } from "../config/config-schema";
 import { loadSystemPlaces } from "../fs/places";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
-import type { Tab } from "../app/tabs";
+import type { Tab } from "../fs/session";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // places sidebar + tab strip: row mounting with byte-identical ids, selection
@@ -1307,5 +1307,31 @@ describe("eject / mount", () => {
     expect(notifies.length).toBe(1);
     expect(notifies[0]![2]).toBe("error");
     ejectChrome.dispose();
+  });
+});
+
+describe("tabTitle", () => {
+  test("uses the tab's current cwd basename", () => {
+    expect(tabTitle({ history: ["/home/clark/Projects"], histIdx: 0 })).toBe("Projects");
+  });
+
+  test("follows histIdx through the history", () => {
+    expect(tabTitle({ history: ["/a", "/b/c"], histIdx: 1 })).toBe("c");
+  });
+
+  test("virtual places get their friendly names", () => {
+    expect(tabTitle({ history: ["recent://"], histIdx: 0 })).toBe("Recent");
+    expect(tabTitle({ history: ["starred://"], histIdx: 0 })).toBe("Starred");
+  });
+
+  test("an archive cwd titles the chip after the archive file, not the URI", () => {
+    const uri = `archive://${encodeURIComponent("/home/u/game.tar.gz")}!/inner`;
+    expect(tabTitle({ history: [uri], histIdx: 0 })).toBe("game.tar.gz");
+  });
+
+  test("long names truncate at 16 with an ellipsis; empty falls back to /", () => {
+    const long = "a-very-long-folder-name";
+    expect(tabTitle({ history: [`/x/${long}`], histIdx: 0 })).toBe(`${long.slice(0, 15)}…`);
+    expect(tabTitle({ history: [], histIdx: 0 })).toBe("/");
   });
 });

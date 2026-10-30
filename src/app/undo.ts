@@ -1,29 +1,13 @@
-import { existsSync } from "node:fs";
-import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
-import {
-  failSuffix,
-  fsErrText,
-  rmTrashInfo,
-  rmTrashInfoForPath,
-  safeRestoreMove,
-  trashIfSameFile,
-  xdgTrashMove,
-} from "../fs/fsutil";
-import { copyTreeProgress, type TransferSink } from "../fs/transfer";
+import { failSuffix, fsErrText } from "../fs/fsutil";
 import { sharedOpQueue } from "../lib/op-queue";
 import type { NotifyLevel } from "../lib/notify-level";
-
-// progress-less sink for journal redo copies (no toast to report into)
-const nullSink: TransferSink = {
-  checkpoint: async () => {},
-  paused: () => false,
-  cancelled: () => false,
-  addBytes: () => {},
-  fileDone: () => {},
-  setStream: () => {},
-  clearStream: () => {},
-  repaint: () => {},
-};
+import {
+  MAX_UNDO_BATCHES,
+  stepToUnit,
+  type UndoBatchData,
+  type UndoJournalData,
+  type UndoUnit,
+} from "../fs/undo-steps";
 
 // --- Undo/redo stack. Pure state machine — no renderer/state imports; the
 // app surfaces results through an injected UndoSink (same seam as
@@ -38,35 +22,7 @@ const nullSink: TransferSink = {
 // a closure. Batches pushed without data are session-only (still fully
 // undoable in memory, just not restorable after a restart). ---
 
-export type UndoUnit = () => Promise<void> | void;
 type OpBatch = { label: string; units: UndoUnit[]; redos: UndoUnit[] };
-
-// --- Serializable undo steps: every undo/redo closure in the app is one of
-// these fs operations (moves, trashes, renames, creates). Conditional (-if-)
-// steps never throw — they encode redo guards (`if (!existsSync(t)) …`).
-// Unconditional steps throw so the outer handler reports them like today. ---
-export type UndoStep =
-  | { op: "trash"; path: string; dev?: number; ino?: number; born?: number }
-  | { op: "trash-if-exists"; path: string }
-  | { op: "restore-move"; from: string; to: string }
-  | { op: "rename"; from: string; to: string }
-  | { op: "rename-if"; from: string; to: string }
-  | { op: "copy-tree-if-missing"; src: string; dest: string }
-  | { op: "rm"; path: string }
-  | { op: "mkdir-if-missing"; path: string }
-  | { op: "write-empty-if-missing"; path: string }
-  | { op: "rm-trashinfo"; name: string; path?: string };
-
-export type UndoBatchData = {
-  label: string;
-  /** epoch ms — the journal drops entries older than the max age */
-  at: number;
-  units: UndoStep[];
-  redos: UndoStep[];
-};
-
-// journal payload carried alongside a push (the data mirror of units/redos)
-export type UndoJournalData = { units: UndoStep[]; redos: UndoStep[] };
 
 export type UndoSink = {
   notify: (message: string, title?: string, level?: NotifyLevel) => void;
@@ -74,77 +30,6 @@ export type UndoSink = {
   // plugin event fan-out: fires ONLY on an actual pop (empty stacks and the
   // in-flight guard are silent no-ops, never events). Never throws into undo.
   onEvent?: (op: "undo" | "redo", label: string) => void;
-};
-
-export const MAX_UNDO_BATCHES = 30;
-
-// interpret one journal step back into a live closure. `log` mirrors the
-// catch-and-log the original inline closures carry (redos especially).
-export const stepToUnit = (step: UndoStep, log: (msg: string) => void = () => {}): UndoUnit => {
-  switch (step.op) {
-    case "trash":
-      // idempotent: undoing a copy whose target the user already deleted is
-      // already at the desired end-state (path absent) — report success, not
-      // FAILED. A path reoccupied since the op (dev+ino mismatch) is skipped,
-      // never trashed: the stranger isn't ours. Present paths still trash
-      // loudly on real errors.
-      return () =>
-        trashIfSameFile(
-          step.path,
-          step.dev !== undefined && step.ino !== undefined
-            ? { dev: step.dev, ino: step.ino, ...(step.born !== undefined ? { born: step.born } : {}) }
-            : null,
-          log,
-        );
-    case "trash-if-exists":
-      return async () => {
-        try {
-          if (existsSync(step.path)) await xdgTrashMove(step.path);
-        } catch (err) {
-          log(`redo trash ${step.path}: ${fsErrText(err)}`);
-        }
-      };
-    case "restore-move":
-      return () => safeRestoreMove(step.from, step.to).then(() => undefined);
-    case "rename":
-      // bump to "name (copy)" instead of clobbering whatever now occupies the
-      // original name (same guard every other undo inverse uses)
-      return () => safeRestoreMove(step.from, step.to).then(() => undefined);
-    case "rename-if":
-      return async () => {
-        try {
-          if (existsSync(step.from) && !existsSync(step.to)) await fsRename(step.from, step.to);
-        } catch (err) {
-          log(`redo rename ${step.to}: ${fsErrText(err)}`);
-        }
-      };
-    case "copy-tree-if-missing":
-      return async () => {
-        try {
-          if (!existsSync(step.dest)) await copyTreeProgress(step.src, step.dest, nullSink);
-        } catch (err) {
-          log(`redo copy ${step.dest}: ${fsErrText(err)}`);
-        }
-      };
-    case "rm":
-      return () => rm(step.path, { recursive: true });
-    case "mkdir-if-missing":
-      return async () => {
-        try {
-          if (!existsSync(step.path)) await mkdir(step.path, { recursive: true });
-        } catch {}
-      };
-    case "write-empty-if-missing":
-      return async () => {
-        try {
-          // O_EXCL create, not check-then-write: a raced occupant between
-          // existsSync and writeFile would be silently truncated otherwise
-          if (!existsSync(step.path)) await writeFile(step.path, "", { flag: "wx" });
-        } catch {}
-      };
-    case "rm-trashinfo":
-      return () => (step.path ? rmTrashInfoForPath(step.path, log) : rmTrashInfo(step.name, log));
-  }
 };
 
 const dataToBatch = (data: UndoBatchData, log: (msg: string) => void = () => {}): OpBatch => ({

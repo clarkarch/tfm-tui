@@ -128,10 +128,13 @@ const bootStart = performance.now();
 // one Promise.all, not 10 serial awaits: the construction order below is
 // load-bearing, the module loading isn't (all wire* expose side-effect-free
 // factory fns). ~250ms serial transpile/parse becomes one parallel window.
-// app/log loads FIRST and alone: it registers the crash handlers, which must
-// exist before any other module (e.g. a failing @opentui/core native load)
-// can throw — under Promise.all evaluation order isn't guaranteed.
-const { appendLog, isDebug } = await import("./app/log");
+// lib/log loads FIRST and alone: the crash handlers must exist before any
+// other module (e.g. a failing @opentui/core native load) can throw — under
+// Promise.all evaluation order isn't guaranteed. The handlers are installed
+// by an EXPLICIT call, not as an import side effect: a side effect made the
+// "handlers first" requirement an invisible accident of module order.
+const { appendLog, installCrashHandlers, isDebug } = await import("./lib/log");
+installCrashHandlers();
 const [
   { wireCore },
   { wireNav },

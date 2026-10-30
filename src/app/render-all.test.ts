@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeRenderAll, type RenderAllCtx } from "./render-all";
+import { makeRenderAll, RENDER_STEP_ORDER, type RenderAllCtx } from "./render-all";
 import type { AppState } from "./nav";
 
 const mkState = (cwd: string): AppState => ({
@@ -21,7 +21,7 @@ const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
 };
 
 describe("makeRenderAll", () => {
-  test("runs tab-sync first, steps in insertion order, session-save last", () => {
+  test("runs tab-sync first, steps in the canonical order, session-save last", () => {
     const order: string[] = [];
     const state = mkState("/a");
     const ctx: RenderAllCtx = {
@@ -46,6 +46,48 @@ describe("makeRenderAll", () => {
     };
     makeRenderAll(ctx)();
     expect(order).toEqual(["syncTab", "cwdWatcher", "tabbar", "grid", "preview", "save"]);
+  });
+
+  test("the step order is the canonical one, NOT the record's key order", () => {
+    // The order was the KEY ORDER of the steps record — reordering the
+    // literal silently changed the paint order (sidebar before grid before
+    // preview is load-bearing). The order is data now: a record written
+    // backwards still paints in the canonical order.
+    const order: string[] = [];
+    makeRenderAll({
+      state: mkState("/a"),
+      syncTabFromState: () => {},
+      scheduleSaveSession: () => {},
+      log: () => {},
+      steps: {
+        preview: () => {
+          order.push("preview");
+        },
+        grid: () => {
+          order.push("grid");
+        },
+        sidebar: () => {
+          order.push("sidebar");
+        },
+        tabbar: () => {
+          order.push("tabbar");
+        },
+      },
+    })();
+    expect(order).toEqual(["tabbar", "sidebar", "grid", "preview"]);
+  });
+
+  test("the canonical order keeps the load-bearing painting sequence", () => {
+    const at = (name: string): number => RENDER_STEP_ORDER.indexOf(name as never);
+    // the sidebar paints before the grid (the grid reads the sidebar's
+    // effective width), the grid before the preview (the preview renders
+    // against the listing the grid just built), and the icon drain before
+    // both (the slots the grid asks for must be queued first)
+    expect(at("sidebar")).toBeLessThan(at("grid"));
+    expect(at("grid")).toBeLessThan(at("preview"));
+    expect(at("iconQueue")).toBeLessThan(at("grid"));
+    // the session write sees the settled state
+    expect(at("stripSelectable")).toBe(RENDER_STEP_ORDER.length - 1);
   });
 
   test("syncs state.cwd from history[histIdx] before the steps run", () => {

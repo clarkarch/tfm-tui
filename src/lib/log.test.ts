@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 // log.ts bakes isDebug from argv and the paths from env AT IMPORT, and other
-// test files (nav.test.ts -> nav.ts -> ./log) cache the module first — so
+// test files (nav.test.ts -> nav.ts -> ../lib/log) cache the module first — so
 // every assertion here runs in a fresh subprocess against env-redirected
 // logs (never the real /tmp files; AGENTS.md: no hardcoded tmp paths).
 
@@ -16,6 +16,11 @@ writeFileSync(
   `const l = await import(${JSON.stringify(logUrl)});
 if (process.argv[2] === "paths") {
   process.stdout.write(JSON.stringify({ isDebug: l.isDebug, DEBUG_LOG: l.DEBUG_LOG, DND_LOG: l.DND_LOG }));
+} else if (process.argv[2] === "handlers") {
+  const before = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
+  l.installCrashHandlers();
+  const after = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
+  process.stdout.write(JSON.stringify({ before, after }));
 } else {
   l.appendLog("first");
   l.appendLog("second");
@@ -104,6 +109,25 @@ describe("with --debug / -d", () => {
     const r = run("endopts", "write", ["--", "--debug"]);
     expect(r.text).toBe("false");
     expect(lines(r.dbg).length).toBe(2); // appendLog only, no debug lines
+  });
+});
+
+describe("crash handlers", () => {
+  // The handlers used to be registered as an IMPORT SIDE EFFECT. That made
+  // "handlers first" an invisible accident of module-evaluation order, and
+  // every leaf that imported `swallow` (fs/fsutil, fs/transfer, fs/fileops,
+  // fs/recent, fs/undo-journal, ui/icons, ui/ui-slots) installed
+  // process-wide handlers in the shared `bun test` process — where one
+  // uncaughtException could exit the whole suite instead of failing one
+  // test. Installation is now an explicit call from src/index.ts.
+  test("importing log.ts registers NO process handlers", () => {
+    const p = JSON.parse(run("handlers-import", "handlers", []).text);
+    expect(p.before).toBe(0);
+  });
+
+  test("installCrashHandlers() registers both handlers", () => {
+    const p = JSON.parse(run("handlers-install", "handlers", []).text);
+    expect(p.after).toBe(2);
   });
 });
 

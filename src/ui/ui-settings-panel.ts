@@ -10,10 +10,12 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { errMessage } from "../lib/uiutil";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
-import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
+import type { MakeIconSlot, SlotElement } from "./ui-slots";
+import { IconStateIdx } from "../lib/icon-state";
 import type { Theme } from "../config/config";
 import type { NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
+import type { IconSpec } from "../lib/icon-state";
 
 export type SettingsPanelState = {
   catIdx: number;
@@ -43,7 +45,7 @@ type SettingsPanelHooks = {
   // visible row count for the right pane (panel chrome takes ~6 rows)
   visRows(): number;
   setOnId(id: string, fn: (n: NodeLike) => void): void;
-  makeIconSlot(name: string, states: IconState[], heightCells?: number, initialState?: number): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   // flip a slot's pre-rastered state (visibility only, no rebuild) — used by
   // the category hover highlight
   setIconState(spec: IconSpec, stateIdx: number): void;

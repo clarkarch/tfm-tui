@@ -3,7 +3,19 @@ import { makeForceQuit, makeQuit, type QuitCtx } from "./quit";
 
 const mkCtx = (
   calls: string[],
-  fail?: "drops" | "release" | "destroy" | "session" | "terminal" | "gpm" | "onQuit" | "watchers" | "config",
+  fail?:
+    | "drops"
+    | "release"
+    | "destroy"
+    | "session"
+    | "terminal"
+    | "gpm"
+    | "chrome"
+    | "updates"
+    | "devices"
+    | "onQuit"
+    | "watchers"
+    | "config",
 ): QuitCtx & { codes: number[] } => {
   const codes: number[] = [];
   return {
@@ -30,9 +42,15 @@ const mkCtx = (
     },
     stopChromeTimers: () => {
       calls.push("chrome");
+      if (fail === "chrome") throw new Error("chrome timer clear failed");
     },
     stopDevices: () => {
       calls.push("devices");
+      if (fail === "devices") throw new Error("device poller close failed");
+    },
+    stopUpdates: () => {
+      calls.push("updates");
+      if (fail === "updates") throw new Error("update fetch abort failed");
     },
     stopWatchers: () => {
       calls.push("watchers");
@@ -58,7 +76,7 @@ const mkCtx = (
 };
 
 describe("makeQuit", () => {
-  test("teardown order: drops -> release -> session -> terminal -> gpm -> chrome -> devices -> watchers -> config -> onQuit -> destroy -> exit(0)", () => {
+  test("teardown order: drops -> release -> session -> terminal -> gpm -> chrome -> devices -> updates -> watchers -> config -> onQuit -> destroy -> exit(0)", () => {
     const calls: string[] = [];
     makeQuit(mkCtx(calls))();
     expect(calls).toEqual([
@@ -69,6 +87,7 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "updates",
       "watchers",
       "config",
       "onQuit",
@@ -88,6 +107,7 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "updates",
       "watchers",
       "config",
       "onQuit",
@@ -107,6 +127,7 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "updates",
       "watchers",
       "config",
       "onQuit",
@@ -126,6 +147,7 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "updates",
       "watchers",
       "config",
       "onQuit",
@@ -163,6 +185,9 @@ describe("makeQuit", () => {
       "session",
       "terminal",
       "gpm",
+      "chrome",
+      "updates",
+      "devices",
       "watchers",
       "config",
       "onQuit",
@@ -192,6 +217,7 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "updates",
       "watchers",
       "config",
       "onQuit",
@@ -207,6 +233,7 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "updates",
       "watchers",
       "config",
       "onQuit",
@@ -268,6 +295,7 @@ describe("makeQuit", () => {
       "gpm",
       "chrome",
       "devices",
+      "updates",
       "watchers",
       "config",
       "onQuit",

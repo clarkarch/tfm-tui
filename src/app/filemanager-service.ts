@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { errMessage } from "../lib/uiutil";
 import { planShowFolders, planShowItems, type ShowPlan } from "../dnd/filemanager1";
+import { whichLive } from "../fs/which";
 
 // --- `tfm --filemanager-service`: D-Bus org.freedesktop.FileManager1 daemon.
 // Browsers/apps call ShowItems ("show in folder") over D-Bus FIRST and only
@@ -198,7 +199,7 @@ export const fileManagerServiceEntry = (execPath: string): string =>
 // (dev runs would otherwise point the bus at the bun interpreter)
 export const resolveServiceExec = (): string => {
   try {
-    return Bun.which("tfm") ?? process.execPath;
+    return whichLive("tfm") ?? process.execPath;
   } catch {
     return process.execPath;
   }

@@ -9,7 +9,7 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { splitStemExt } from "./fsutil";
+import { invalidFileName, splitStemExt } from "./fsutil";
 
 export type BulkRenameItem = { path: string };
 export type BulkRenamePair = { from: string; to: string };
@@ -39,9 +39,10 @@ export const planBulkRename = (
   exists: (p: string) => boolean = existsSync,
 ): BulkRenamePlan => {
   const base = stem.trim();
-  if (!base) return { ok: false, error: "Name can't be empty" };
-  if (base === "." || base === "..") return { ok: false, error: `Invalid name: ${base}` };
-  if (base.includes("/") || base.includes("\0")) return { ok: false, error: `Invalid name: ${base}` };
+  // the SAME rule the single-rename path enforces (fsutil.invalidFileName) —
+  // the two entry points used to disagree about what a legal name is
+  const badName = invalidFileName(base);
+  if (badName) return { ok: false, error: badName };
   const names = bulkRenameNames(items, base, style);
   // current basenames of the whole selection: a generated name landing on one
   // of them would clobber a sibling mid-batch (swap/chain) — reject up front

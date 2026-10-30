@@ -11,26 +11,26 @@ export type QuitCtx = {
   releaseShiftCapture(): void;
   // kill the embedded PTY pane — it would otherwise rely on EIO from the
   // dead master and a shell with a foreground child can linger
-  closeTerminal?(): void;
+  closeTerminal(): void;
   // close the gpm client socket (Linux text console only) so the daemon
   // doesn't re-point it at a default console after we're gone
-  stopGpm?(): void;
+  stopGpm(): void;
   // clear pending chrome timers (sidebar device-reload) so they can't fire
   // loadSystemPlaces+renderAll into a destroyed renderer post-teardown
-  stopChromeTimers?(): void;
+  stopChromeTimers(): void;
   // aborts an in-flight update check (a pending fetch pins the event loop)
-  stopUpdates?(): void;
+  stopUpdates(): void;
   // stop the USB device poller (same reason: a poll landing post-teardown
   // re-lists + re-renders into the destroyed renderer)
-  stopDevices?(): void;
+  stopDevices(): void;
   // close the cwd watchers (both panes hold an inotify watch that pins the
   // event loop — without this a SIGHUP-destroyed renderer still never exits)
-  stopWatchers?(): void;
+  stopWatchers(): void;
   // close the live config watcher (same pin as above)
-  stopConfigWatch?(): void;
+  stopConfigWatch(): void;
   // synchronous final session write — process.exit kills pending async IO,
   // so the debounced 400ms save loses the last navigation
-  flushSession?(): void;
+  flushSession(): void;
   destroy(): void;
   exit(code: number): void;
   // 0.6.0: destroy() returns at once but the terminal restoration + remaining
@@ -47,6 +47,22 @@ export type QuitCtx = {
   onBusy?: () => void;
 };
 
+// --- teardown + destroy, shared by quit and force-quit. One sequence, one
+// honest exit code: a step that threw makes the exit code 1, and a throwing
+// destroy additionally skips the closed wait (upstream arms closed only past
+// destroy's internal arming, so waiting would hang instead of exiting 1). ---
+const teardownAndDestroy = (ctx: QuitCtx): { failed: boolean; destroyThrew: boolean } => {
+  let failed = runTeardownSteps(ctx);
+  let destroyThrew = false;
+  try {
+    ctx.destroy();
+  } catch {
+    failed = true;
+    destroyThrew = true;
+  }
+  return { failed, destroyThrew };
+};
+
 export const makeQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
@@ -56,17 +72,7 @@ export const makeQuit =
       } catch {}
       return;
     }
-    let failed = runTeardownSteps(ctx);
-    let destroyThrew = false;
-    try {
-      ctx.destroy();
-    } catch {
-      failed = true;
-      destroyThrew = true;
-    }
-    // a throwing destroy never arms closed upstream (the close settles only
-    // past destroy's internal arming) — waiting would hang forever instead
-    // of exiting 1, so bypass the wait on that path
+    const { failed, destroyThrew } = teardownAndDestroy(ctx);
     exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew);
   };
 
@@ -81,46 +87,8 @@ export const FORCE_QUIT_CLOSE_TIMEOUT_MS = 2000;
 export const makeForceQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
-    let failed = runTeardownSteps(ctx);
-    let destroyThrew = false;
-    try {
-      ctx.destroy();
-    } catch {
-      failed = true;
-      destroyThrew = true;
-    }
-    if (!ctx.closed || destroyThrew) {
-      exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew);
-      return;
-    }
-    let closed: Promise<void>;
-    try {
-      closed = ctx.closed();
-    } catch {
-      try {
-        ctx.exit(1);
-      } catch {}
-      return;
-    }
-    void Promise.race([
-      closed,
-      new Promise<void>((_, reject) => {
-        const t = setTimeout(() => reject(new Error("force-quit close timeout")), FORCE_QUIT_CLOSE_TIMEOUT_MS);
-        // a lingering timer pins the loop the teardown just drained — unref it
-        (t as unknown as { unref?: () => void }).unref?.();
-      }),
-    ]).then(
-      () => {
-        try {
-          ctx.exit(failed ? 1 : 0);
-        } catch {}
-      },
-      () => {
-        try {
-          ctx.exit(1);
-        } catch {}
-      },
-    );
+    const { failed, destroyThrew } = teardownAndDestroy(ctx);
+    exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew, FORCE_QUIT_CLOSE_TIMEOUT_MS);
   };
 
 // --- 0.6.0 destroy() returns at once while the terminal restore + remaining
@@ -129,9 +97,16 @@ export const makeForceQuit =
 // failed mid-teardown) exits 1, never throws. No `closed` seam (fakes) = exit
 // synchronously. Quit/restart fire from sync contexts, so the wait chains.
 // skipWait (destroy threw before arming closed) exits 1 at once — waiting
-// would hang forever. The exit calls are guarded: a throwing exit inside the
-// chain would otherwise become an unhandled rejection on the derived promise.
-export const exitAfterClosed = (ctx: Pick<QuitCtx, "closed" | "exit">, code: number, skipWait = false): void => {
+// would hang forever. capMs bounds the wait (force-quit: a deleted pts can
+// stall the native close on EIO). The exit calls are guarded: a throwing exit
+// inside the chain would otherwise become an unhandled rejection on the
+// derived promise.
+export const exitAfterClosed = (
+  ctx: Pick<QuitCtx, "closed" | "exit">,
+  code: number,
+  skipWait = false,
+  capMs?: number,
+): void => {
   if (!ctx.closed || skipWait) {
     try {
       ctx.exit(skipWait ? 1 : code);
@@ -147,7 +122,18 @@ export const exitAfterClosed = (ctx: Pick<QuitCtx, "closed" | "exit">, code: num
     } catch {}
     return;
   }
-  void closed.then(
+  const wait =
+    capMs === undefined
+      ? closed
+      : Promise.race([
+          closed,
+          new Promise<void>((_, reject) => {
+            const t = setTimeout(() => reject(new Error("force-quit close timeout")), capMs);
+            // a lingering timer pins the loop the teardown just drained — unref it
+            (t as unknown as { unref?: () => void }).unref?.();
+          }),
+        ]);
+  void wait.then(
     () => {
       try {
         ctx.exit(code);
@@ -163,7 +149,17 @@ export const exitAfterClosed = (ctx: Pick<QuitCtx, "closed" | "exit">, code: num
 
 // --- The pre-destroy teardown steps, shared with restart (which runs them,
 // then waits out the child, and only destroys/exits once it's gone). Order is
-// load-bearing (see makeQuit) — keep the sequence here, not at call sites. ---
+// load-bearing (see makeQuit) — keep the sequence here, not at call sites.
+//
+// Every step here is REQUIRED on QuitCtx on purpose. These are the
+// event-loop pins: the PTY child, the gpm socket, the chrome timers, the
+// in-flight update fetch, the device poller, the inotify watchers and the
+// config watcher. When they were optional, a wiring typo or a renamed field
+// silently skipped them (`?.`) and the process stayed alive after quit — the
+// orphan-process class AGENTS records for the terminal-close bug. Optional
+// meant "nobody proved this runs": the quit test's fake omitted stopUpdates
+// and the expected order never mentioned it, so the step could vanish with a
+// green suite. Required = the compiler and the fake both have to carry it. ---
 export const runTeardownSteps = (ctx: QuitCtx): boolean => {
   let failed = false;
   try {
@@ -177,42 +173,42 @@ export const runTeardownSteps = (ctx: QuitCtx): boolean => {
     failed = true;
   }
   try {
-    ctx.flushSession?.();
+    ctx.flushSession();
   } catch {
     failed = true;
   }
   try {
-    ctx.closeTerminal?.();
+    ctx.closeTerminal();
   } catch {
     failed = true;
   }
   try {
-    ctx.stopGpm?.();
+    ctx.stopGpm();
   } catch {
     failed = true;
   }
   try {
-    ctx.stopChromeTimers?.();
+    ctx.stopChromeTimers();
   } catch {
     failed = true;
   }
   try {
-    ctx.stopDevices?.();
+    ctx.stopDevices();
   } catch {
     failed = true;
   }
   try {
-    ctx.stopUpdates?.();
+    ctx.stopUpdates();
   } catch {
     failed = true;
   }
   try {
-    ctx.stopWatchers?.();
+    ctx.stopWatchers();
   } catch {
     failed = true;
   }
   try {
-    ctx.stopConfigWatch?.();
+    ctx.stopConfigWatch();
   } catch {
     failed = true;
   }

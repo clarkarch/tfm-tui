@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box } from "@opentui/core";
 import { createTestRenderer, MouseButtons, type TestRendererSetup } from "@opentui/core/testing";
-import { makeMenu, type ListEntry } from "./ui-menu";
+import { makeMenu } from "./ui-menu";
+import type { ListEntry } from "../lib/menu-entry";
 import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";

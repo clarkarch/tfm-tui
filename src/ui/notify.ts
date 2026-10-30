@@ -2,7 +2,7 @@ import { Box, Text } from "@opentui/core";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
-import { hoverEvents, type IconSlotHandle, type SlotElement } from "./ui-slots";
+import { hoverEvents, type MakeIconSlot, type SlotElement } from "./ui-slots";
 
 // --- Toast notifications (top-right stack, animated slide-in + fade-out).
 // THE single toast stack: plain auto-dismiss toasts AND the sticky transfer
@@ -28,7 +28,7 @@ export type NotifyCtx = {
   ansi2?(): string;
   // raster level icon: single-state slot (fg = level color on the toast bg);
   // the async drain swaps the fallback glyph for the tinted raster
-  makeIconSlot(name: string, states: { fg: string; bg: string }[], heightCells?: number): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   drainIconQueue(): unknown;
   stripSelectable(): void;
   // config knob [ui] toast-duration-ms (default 3000)

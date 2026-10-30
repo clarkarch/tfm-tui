@@ -6,13 +6,15 @@
 // icon states) still flows through ctx — no renderer imports. ---
 import { readdir } from "node:fs/promises";
 import { lstatSync } from "node:fs";
-import { applySurface, tileSurface, type UiStyle } from "../ui/style";
+import type { UiStyle } from "../config/config-schema";
 import { fmtBytes, inodeKey } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
-import type { ClipItem } from "./grid-input";
+import type { ClipItem } from "../lib/file-op-protocol";
 import { TileVisual, type TileVisualMode } from "./grid-input";
-import { IconStateIdx, type IconSpec } from "../ui/ui-slots";
+import { IconStateIdx } from "../lib/icon-state";
+
 import type { MaybeNode, ScrollerLike } from "../lib/node-like";
+import type { IconSpec } from "../lib/icon-state";
 
 export type SelTileRef = {
   iconSpec?: IconSpec;
@@ -46,6 +48,11 @@ export type SelectionCtx = {
   // bar or emit plugin selection events (the active pane owns those). Absent =
   // always active (single-pane callers / tests).
   isActive?: () => boolean;
+  // paint the tile surface for a visual state. The surface RULES (solid vs
+  // outline, rest/hover/selected/cut, transparent-bg force) live in ui/style.ts;
+  // they arrive through ctx so input/ never imports the ui/ PAINT layer
+  // upward. input/ owns the selection STATE, ui/ owns the look.
+  paintTile(node: MaybeNode, state: "rest" | "hover" | "selected" | "cut"): void;
 };
 
 export type Selection = ReturnType<typeof makeSelection>;
@@ -94,10 +101,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
     if (tileReal) {
       const state =
         mode === TileVisual.Selected ? "selected" : mode === TileVisual.Hover ? "hover" : cut ? "cut" : "rest";
-      applySurface(
-        tileReal,
-        tileSurface(ctx.uiStyle(), ctx.colors(), state, ctx.transparentForce?.() ? "force" : undefined),
-      );
+      ctx.paintTile(tileReal, state);
     }
   };
 

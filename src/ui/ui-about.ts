@@ -10,7 +10,7 @@ import { Box, Text, bold, t, type CliRenderer, type MouseEvent } from "@opentui/
 import pkg from "../../package.json";
 import { PLUGIN_API_VERSION } from "../plugins/plugin-api";
 import type { Theme } from "../config/config";
-import { hoverEvents, type IconSlotHandle, type IconState } from "./ui-slots";
+import { hoverEvents, type MakeIconSlot } from "./ui-slots";
 import { truncateToastText } from "./notify";
 import type { NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
@@ -19,15 +19,7 @@ export type AboutDetail = "credits" | null;
 
 export type AboutDeps = {
   renderer(): CliRenderer;
-  makeIconSlot(
-    name: string,
-    states: IconState[],
-    heightCells?: number,
-    initialState?: number,
-    onMouseDown?: (ev: MouseEvent) => void,
-    statesFactory?: () => IconState[],
-    opts?: { faithful?: boolean },
-  ): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   onOpenUrl(url: string): void;
   detail: AboutDetail;
   onOpenDetail(key: Exclude<AboutDetail, null>): void;

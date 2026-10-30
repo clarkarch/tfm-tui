@@ -45,7 +45,8 @@ import {
   uriListPayload,
 } from "./osc72";
 import { fileUriToPath } from "../fs/uri";
-import { gridDrag, TileVisual, type ClipItem, type GridTileRef, type TileVisualMode } from "../input/grid-input";
+import { gridDrag, TileVisual, type GridTileRef, type TileVisualMode } from "../input/grid-input";
+import type { ClipItem } from "../lib/file-op-protocol";
 import { splitStemExt, trashDir } from "../fs/fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
 

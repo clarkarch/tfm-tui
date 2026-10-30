@@ -20,8 +20,9 @@ import { syncSortState } from "../lib/sort";
 import { clearFailedThumbs } from "../ui/icons";
 import { cancelBand } from "../input/grid-input";
 import { destroyChildren, errMessage } from "../lib/uiutil";
-import { dlog } from "../app/log";
+import { dlog } from "../lib/log";
 import { makeUrlOpener } from "../fs/open-url";
+import { whichLive } from "../fs/which";
 import {
   makeDefaultFileManagerOrchestration,
   makeDefaultFileManagerPrompt,
@@ -117,7 +118,7 @@ export const wireSettings = (deps: {
     installBusy = true;
     void (async () => {
       try {
-        if (!Bun.which("git")) {
+        if (!whichLive("git")) {
           chrome.notify("git not found · install git", "plugins");
           return;
         }
@@ -244,7 +245,7 @@ export const wireSettings = (deps: {
     colors: core.colors,
     applyConfig: (fresh) => getRetheme().applyConfig(fresh),
     scheduleSaveConfig: () => getRetheme().scheduleSaveConfig(),
-    log: (message) => dlog(message),
+    log: dlog,
     isTtyMode: core.isTtyMode,
     // the boot resolve bypasses applyConfig (nothing mounted yet), so its
     // plugin `theme` event is emitted here instead of onConfigApplied
@@ -325,7 +326,7 @@ export const wireSettings = (deps: {
         throw err;
       }
     },
-    log: (msg) => dlog(msg),
+    log: dlog,
   });
   // boot entry: the guarded step calls this (asks only on "ask")
   const promptDefaultFileManager = (): void => {
@@ -370,7 +371,7 @@ export const wireSettings = (deps: {
   // About link rows open in the desktop browser (failure toasts, never throws)
   const urlOpener = makeUrlOpener({
     notify: (message, title, level) => chrome.notify(message, title ?? "tfm", level),
-    log: (message) => dlog(message),
+    log: dlog,
   });
 
   const escMenu = makeEscMenu({
@@ -394,7 +395,7 @@ export const wireSettings = (deps: {
     pluginGroups: () => pluginGroups(),
     reloadPlugins: () => plugins.reloadPlugins(),
     warn: (message, title) => chrome.notify(message, title ?? "tfm"),
-    log: (message) => dlog(message),
+    log: dlog,
     quit: nav.quitApp,
     openUrl: (url) => urlOpener.openUrl(url),
     // About's update row: live value + the check its click runs. The check may

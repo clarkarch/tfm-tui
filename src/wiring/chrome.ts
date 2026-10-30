@@ -11,6 +11,7 @@ import { PassThrough } from "node:stream";
 import { startGpmInput } from "../fs/gpm";
 import { readdir } from "node:fs/promises";
 import { spawnSafe } from "../fs/spawn-safe";
+import { whichLive } from "../fs/which";
 import { loadSystemPlaces } from "../fs/places";
 import { buildMountArgs, buildUnmountArgs, gvfsRoot, takeGioPrompt, type GioPrompt } from "../fs/network";
 import { makeNetworkActions, type GioResult } from "../fs/netmount";
@@ -34,7 +35,7 @@ import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
 import { destroyChildren, errMessage } from "../lib/uiutil";
-import { dlog } from "../app/log";
+import { dlog } from "../lib/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
 
@@ -67,6 +68,41 @@ export const wireChrome = async (deps: {
   // wireCore — per-cluster instances diverged and stuck the shape across
   // widget boundaries, so every ctx here takes core.setPointer.
   const setPointer = core.setPointer;
+
+  // --- Notifications — its consumers (recent-open, undo, fileops, terminal,
+  // trashops, settings, dnd72) take `notify` directly; the sticky transfer
+  // progress toast lives in the same stack via notifySticky, so every
+  // survivor reflows uniformly and two toasts never share a slot.
+  // Built HERE, above every consumer, so no ctx needs a `notify: (m, t, l) =>
+  // notify(m, t, l)` passthrough (the symbol was defined below them, so the
+  // wrappers only deferred a TDZ read). The renderer is still created
+  // further down — every renderer-touching field is an arrow, the same seam
+  // the file menu below uses. ---
+  const { notify, notifySticky } = makeNotify({
+    rootAdd: (node) => renderer.root.add(node),
+    remove: (node) => {
+      const n = node as NodeLike;
+      // the toast's own parent, or the root when it was never re-parented
+      const p = (n.parent ?? renderer.root) as NodeLike;
+      p.remove(n);
+    },
+    byId,
+    termW: () => renderer.terminalWidth,
+    // the toast grows to fit its message; the terminal height caps how far an
+    // expanded toast may go
+    termH: () => renderer.terminalHeight,
+    accentBg: () => core.colors.accentBg,
+    white: () => core.colors.white,
+    sidebarFgMuted: () => core.colors.sidebarFgMuted,
+    ansi1: () => core.colors.ansi1,
+    ansi2: () => core.colors.ansi2,
+    makeIconSlot: core.slots.makeIconSlot,
+    drainIconQueue: core.slots.drainIconQueue,
+    stripSelectable: core.lookup.stripSelectable,
+    durationMs: () => core.config.ui.toastDurationMs,
+    // a clickable toast (a message that did not fit) shows the pointer
+    setPointer,
+  });
 
   // --- File context menu (right-click a tile) — widget lives in ./ui-menu.
   // Hoisted above chrome/toolbar/conflict/grid-ctx, which all consume
@@ -133,14 +169,7 @@ export const wireChrome = async (deps: {
       core.config.ui.dualPane
         ? Math.floor((renderer.terminalWidth - core.geometry.sidebarEff - core.geometry.previewEff - 1) / 2)
         : renderer.terminalWidth - core.geometry.sidebarEff - core.geometry.previewEff,
-    rasterSig: () =>
-      rasterSigOf(
-        core.config.ui.icons,
-        core.isTtyMode(),
-        core.config.ui.forceGlyph,
-        core.config.ui.iconStyle,
-        core.config.ui.transparentBg,
-      ),
+    rasterSig: () => rasterSigOf(core.config.ui, core.isTtyMode()),
     renderAll: nav.renderAll,
     navigate: nav.navigate,
     blurTerminal: () => getFileops().terminal.blurTerminal(),
@@ -148,7 +177,7 @@ export const wireChrome = async (deps: {
     openContextMenu: menu.openContextMenu,
     sidebarEntriesFor: (place, x, y) => getGrid().menuEntries.sidebarEntriesFor(place, x, y),
     finishDrag: deps.finishDrag,
-    dlog: (msg) => dlog(msg),
+    dlog,
     trashPaths: (paths) => getFileops().trash.trashPaths(paths),
     moveInto: (dest, items) => getFileops().fileops.moveInto(dest, items),
     kbActive: () => getKeyRouter().sidebarActive(),
@@ -165,7 +194,7 @@ export const wireChrome = async (deps: {
     makeIconSlot,
     setIconState,
     stateCwd: () => state.cwd,
-    notify: (m, t, l) => notify(m, t, l),
+    notify,
     home: () => home,
     connectServer,
     hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
@@ -233,8 +262,7 @@ export const wireChrome = async (deps: {
       blurTerminal: () => getFileops().terminal.blurTerminal(),
       focusPane: () => getGrid().focusPane(pane),
       navigate: nav.navigate,
-      // arrow wrapper: notify is declared below (TDZ seam rule)
-      notify: (m, t, l) => notify(m, t, l),
+      notify,
       // the toolbar shows ITS pane's history, not the focused pane's: `state`
       // is the active-pane facade, so read the real per-pane state here
       canBack: () => core.panes.states[pane].histIdx > 0,
@@ -283,7 +311,7 @@ export const wireChrome = async (deps: {
   const gpmStream = new PassThrough();
   const gpmInput = startGpmInput({
     onBytes: (s) => gpmStream.write(s),
-    log: (m) => dlog(m),
+    log: dlog,
   });
   if (gpmInput) {
     process.stdin.pipe(gpmStream);
@@ -402,36 +430,6 @@ export const wireChrome = async (deps: {
     makeDirBarAnim(0),
     makeDirBarAnim(1),
   ];
-  // --- Notifications — its consumers (recent-open, undo, fileops, terminal,
-  // trashops, settings, dnd72) take `notify` directly; the sticky transfer
-  // progress toast lives in the same stack via notifySticky, so every
-  // survivor reflows uniformly and two toasts never share a slot. ---
-  const { notify, notifySticky } = makeNotify({
-    rootAdd: (node) => renderer.root.add(node),
-    remove: (node) => {
-      const n = node as NodeLike;
-      // the toast's own parent, or the root when it was never re-parented
-      const p = (n.parent ?? renderer.root) as NodeLike;
-      p.remove(n);
-    },
-    byId,
-    termW: () => renderer.terminalWidth,
-    // the toast grows to fit its message; the terminal height caps how far an
-    // expanded toast may go
-    termH: () => renderer.terminalHeight,
-    accentBg: () => core.colors.accentBg,
-    white: () => core.colors.white,
-    sidebarFgMuted: () => core.colors.sidebarFgMuted,
-    ansi1: () => core.colors.ansi1,
-    ansi2: () => core.colors.ansi2,
-    makeIconSlot: core.slots.makeIconSlot,
-    drainIconQueue: core.slots.drainIconQueue,
-    stripSelectable: core.lookup.stripSelectable,
-    durationMs: () => core.config.ui.toastDurationMs,
-    // a clickable toast (a message that did not fit) shows the pointer
-    setPointer,
-  });
-
   // string-shaped sticky toast (no OpenTUI imports at the call site)
   const notifyStickyText = (message: string, width = 36): { close(): void } | null =>
     notifySticky([Text({ content: message, fg: core.colors.white })], { width, height: 2 });
@@ -445,14 +443,14 @@ export const wireChrome = async (deps: {
   const openAsRoot = makeOpenAsRoot({
     ensureSudo: ensureSudoChrome,
     notify,
-    log: (msg) => dlog(msg),
+    log: dlog,
   });
   // same gate scope for Open With… on unreadable files: the picker lists the
   // handlers, the chosen one launches elevated after the password prompt.
   const launchAppAsRoot = makeLaunchAppAsRoot({
     ensureSudo: ensureSudoChrome,
     notify,
-    log: (msg) => dlog(msg),
+    log: dlog,
   });
 
   // --- Recent-files recording + default open: batching/toast logic lives in
@@ -474,7 +472,7 @@ export const wireChrome = async (deps: {
     },
     appForFile,
     openAsRoot,
-    isExecutable: (p) => classifyPath(p),
+    isExecutable: classifyPath,
     askExecutable: (p, info, openAnyway) => getGrid().askExecutable(p, info, openAnyway),
   });
 
@@ -600,13 +598,13 @@ export const wireChrome = async (deps: {
         notify(m, t, l);
       } catch {}
     },
-    log: (m) => dlog(m),
+    log: dlog,
   });
 
   connectServerImpl = async (raw?: string): Promise<void> => {
     // fail fast when gio is absent (minimal/container distros) — otherwise
     // the URL prompt opens first and only the mount spawn fails afterwards
-    if (!Bun.which("gio")) {
+    if (!whichLive("gio")) {
       notify("Can't connect · gio missing", "network", "error");
       return;
     }
@@ -628,7 +626,7 @@ export const wireChrome = async (deps: {
   };
 
   disconnectServerImpl = async (mountPath: string): Promise<void> => {
-    if (!Bun.which("gio")) {
+    if (!whichLive("gio")) {
       notify("Can't disconnect · gio missing", "network", "error");
       return;
     }

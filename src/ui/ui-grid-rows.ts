@@ -20,8 +20,9 @@ import { FILE_GLYPH, glyph } from "./glyphs";
 import { canThumbVideo } from "./icons";
 import { sidePadDelta } from "./style";
 import type { GridRendererCtx } from "./ui-grid-types";
-import type { IconSpec, SlotElement } from "./ui-slots";
+import type { SlotElement } from "./ui-slots";
 import { visibleTileCap } from "./ui-grid-window";
+import type { IconSpec } from "../lib/icon-state";
 
 // thumbnail raster cap: files over this keep their icon (thumbPlanFor).
 // Module scope so thumbStatsChanged can mirror the same predicate.

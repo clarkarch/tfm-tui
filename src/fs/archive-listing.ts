@@ -4,6 +4,7 @@
 
 import { detectArchiveFormat, listArchiveMembers, selectArchiveLane, type ArchiveRun, type WhichFn } from "./archive";
 import { archiveUri, parseArchiveUri } from "./archive-scheme";
+import { whichLive } from "./which";
 
 // structurally an Entry (listing.ts owns that type; a shared type import would
 // make a cycle listing -> archive-listing -> listing, which imports.test.ts
@@ -26,7 +27,7 @@ export const listArchiveDir = async (
   if (!parsed) throw new Error("bad archive path");
   const fmt = detectArchiveFormat(parsed.file);
   if (!fmt) throw new Error("not an archive");
-  const which = deps?.which ?? Bun.which;
+  const which = deps?.which ?? whichLive;
   if (selectArchiveLane(fmt, "extract", which) !== "spawn") throw new Error("no tar/unzip/7z to list this archive");
   const members = await listArchiveMembers(fmt, parsed.file, deps?.run, which);
   if (!members) throw new Error("can't list this archive");

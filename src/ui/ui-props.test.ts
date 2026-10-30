@@ -20,7 +20,7 @@ import { makeDialogs } from "./ui-dialogs";
 import { makeFloats } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
-import type { ListEntry } from "./ui-menu";
+import type { ListEntry } from "../lib/menu-entry";
 
 // Headless widget test (createTestRenderer pilot: ui-menu.test.ts). Pins the
 // properties dialog through the PUBLIC makeProps surface: single-file layout

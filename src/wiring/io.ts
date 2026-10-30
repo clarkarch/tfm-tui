@@ -21,13 +21,13 @@ import { gridDrag } from "../input/grid-input";
 import { mergedMapFacade } from "../app/panes";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces, listMounts } from "../fs/places";
-import { startMemHygiene, type NativeStatsReach } from "../app/mem-hygiene";
+import { startMemHygiene, type NativeStatsReach } from "../lib/mem-hygiene";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { RESOLUTION_LAZY_SETTLE_MS } from "../ui/ui-lookup";
 import { configPath } from "../config/config";
 import { describeKeybindConflicts } from "../config/config-schema";
-import type { ListEntry } from "../ui/ui-menu";
-import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../app/log";
+import type { ListEntry } from "../lib/menu-entry";
+import { debugLog, dlog, isDebug, DEBUG_LOG, DND_LOG } from "../lib/log";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring } from "./types";
 
@@ -110,7 +110,7 @@ export const wireDeviceWatcher = (deps: { nav: NavWiring; chrome: ChromeWiring; 
       refresh();
     },
     onChange: refresh,
-    log: (msg) => dlog(msg),
+    log: dlog,
   });
   return { stopDeviceWatcher: stop };
 };
@@ -379,7 +379,7 @@ export const wireDnd = (deps: {
     gridFoundation.selections[1].tileRefs,
   ]);
   const { enableDrops, disableDrops } = makeDnd72({
-    log: (msg) => dlog(msg),
+    log: dlog,
     writeFrame: (s) => {
       try {
         process.stdout.write(s);
@@ -500,6 +500,6 @@ export const wireHoverDrawer = (deps: {
       // gate) — render it now so it shows the focused file instead of blank
       void grid.renderPreview();
     },
-    log: (msg) => dlog(msg),
+    log: dlog,
   });
 };

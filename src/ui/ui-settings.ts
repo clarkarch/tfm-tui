@@ -15,12 +15,13 @@ import { advanceCursor, errMessage, invokeIsolated } from "../lib/uiutil";
 import type { UiStyle } from "../config/config-schema";
 import { makeModalScrim } from "./ui-dialogs";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
-import { IconStateIdx, type IconSlotHandle, type IconState, type IconSpec, type SlotElement } from "./ui-slots";
+import type { MakeIconSlot, SlotElement } from "./ui-slots";
+import { IconStateIdx } from "../lib/icon-state";
 import type { Theme } from "../config/config";
 import { type KeyEventLike, keySpecFromEvent, validateKeybindSpec } from "../config/keyspec";
 import type { NodeLike } from "../lib/node-like";
 import { FLOAT_Z, type Floats } from "./floats";
-import { pokeGc, type NativeStatsReach } from "../app/mem-hygiene";
+import { pokeGc, type NativeStatsReach } from "../lib/mem-hygiene";
 import {
   clampToVisible,
   descText,
@@ -42,6 +43,7 @@ import { aboutPanelWidth, renderAboutPanel, type AboutDetail } from "./ui-about"
 import type { KeyAction, KeybindSetResult } from "../config/config-schema";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
+import type { IconSpec } from "../lib/icon-state";
 
 type EscMenuCtx = {
   renderer(): CliRenderer;
@@ -49,15 +51,7 @@ type EscMenuCtx = {
   destroyChildren(node: unknown): void;
   stripSelectable(): void;
   escHintBtn(id: string, onClose: () => void): SlotElement;
-  makeIconSlot(
-    name: string,
-    states: IconState[],
-    heightCells?: number,
-    initialState?: number,
-    onMouseDown?: (ev: MouseEvent) => void,
-    statesFactory?: () => IconState[],
-    opts?: { faithful?: boolean },
-  ): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   setIconState(spec: IconSpec, stateIdx: number): void;
   drainIconQueue(): void | Promise<void>;
   // a modal must kill any in-flight rubber-band (grid-input owns the gesture)

@@ -15,6 +15,7 @@ import {
 } from "./config-schema";
 import { presetKeys } from "./keymap-presets";
 import { keySpecEqual, validateKeybindSpec } from "./keyspec";
+import { RENDER_EXEMPT } from "./render-exempt";
 import { readFileSync } from "node:fs";
 
 describe("parseConfigDoc", () => {
@@ -331,9 +332,39 @@ describe("schema invariants", () => {
     expect(new Set(tomlKeys).size).toBe(tomlKeys.length);
   });
 
-  test("defaultConfig covers every schema prop", () => {
-    expect(Object.keys(defaultConfig.ui).length).toBe(UI_SCHEMA.length);
-    expect(Object.keys(defaultConfig.keys).length).toBe(KEY_SCHEMA.length);
+  test("defaultConfig carries exactly the schema's props", () => {
+    // defaultConfig is BUILT from the rows, so a value check would be
+    // tautological — the real invariant is the KEY SET: no duplicate prop
+    // (fromEntries would collapse it) and no key the schema does not know.
+    expect(Object.keys(defaultConfig.ui).sort()).toEqual(UI_SCHEMA.map((r) => r.prop).sort());
+    expect(Object.keys(defaultConfig.keys).sort()).toEqual(KEY_SCHEMA.map((r) => r.prop).sort());
+  });
+
+  test("every row's default is a legal value for its own row", () => {
+    // A default outside the row's own bounds (or outside its enum) is an
+    // illegal state the app STARTS in: the parser clamps it on the first
+    // read, so "the value in the file" and "the value the app boots with"
+    // disagree, and the settings stepper shows something the config never
+    // held.
+    for (const row of UI_SCHEMA) {
+      if (row.kind === "int") {
+        expect(row.def, `ui.${row.prop} below min`).toBeGreaterThanOrEqual(row.min);
+        expect(row.def, `ui.${row.prop} above max`).toBeLessThanOrEqual(row.max);
+      } else if (row.kind === "enum") {
+        expect(row.values, `ui.${row.prop} default not in values`).toContain(row.def);
+      } else if (row.kind === "bool") {
+        expect(typeof row.def, `ui.${row.prop} default not a boolean`).toBe("boolean");
+      }
+    }
+  });
+
+  test("RENDER_EXEMPT names are real [ui] keys (a typo exempts nothing)", () => {
+    // A name that is not a config key silently exempts NOTHING: the knob
+    // rebuilds the world on every stepper click (native-alloc churn) and the
+    // exemption reads as "it works" in the code.
+    const known = new Set(UI_SCHEMA.map((r) => r.prop));
+    const unknown = [...RENDER_EXEMPT].filter((k) => !known.has(k));
+    expect(unknown).toEqual([]);
   });
 
   test("no two default actions share a bind (one key = one action)", () => {

@@ -21,7 +21,7 @@ import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
 import { isNetworkPath } from "./network";
 import { isArchiveUri } from "./uri";
-import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
+import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
 
 // --- Trash operations: trash / restore / delete-forever / empty. The fs
 // primitives come from fsutil; UI feedback (leveled toast notifications,

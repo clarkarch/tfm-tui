@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { PLUGIN_NAME_RE } from "./plugin-api";
+import type { ExecFn } from "../lib/exec-fn";
 
 type ParsedGitUrl = { url: string; ref?: string; subdir?: string };
 
@@ -141,8 +142,7 @@ export const findPluginMains = (root: string): string[] => {
   return out;
 };
 
-type ExecResult = { exit: number; output: string };
-export type ExecFn = (cmd: string, args: string[], opts?: { cwd?: string }) => Promise<ExecResult>;
+export type { ExecFn };
 
 // production spawn: array argv (no shell), piped output, 120s kill cap.
 // Never throws — failures arrive as non-zero exit (callers surface output).

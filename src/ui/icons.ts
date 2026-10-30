@@ -13,11 +13,11 @@ import path from "node:path";
 // parse time on every boot while only ICO/TIFF thumbs ever touch them
 // (jpg/png ride Bun.Image; heic-decode was already a lazy import).
 import type * as UtifType from "utif2";
-import { atomicWriteFile } from "../fs/fsutil";
+import { atomicWriteFile } from "../lib/atomic-write";
 import { extOf } from "../fs/filetype";
 import { resetVideoBin, videoBin } from "../fs/videobin";
 import { errMessage } from "../lib/uiutil";
-import { swallow } from "../app/log";
+import { swallow } from "../lib/log";
 import type { IconStyle } from "../config/config-schema";
 
 const home = os.homedir();
@@ -530,9 +530,11 @@ const spawnPng = (bin: string, args: string[], tool: string): Promise<Uint8Array
 // (the in-process resvg-js addon; magick is the addon-failure last resort —
 // and the photo/video paths' renderer anyway). In-process fit-inside
 // (dims <= target), same as the icon path.
-const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): string[] => [
-  "-density",
-  "192",
+// magick's shared cover-crop tail: auto-orient, flatten onto bg, thumbnail
+// into the box with ^ (cover), then -extent to the exact box. Both lanes end
+// in it — the vector lane prefixes a `-density 192` (SVG rasterization), the
+// raster lane a `jpeg:size` decode hint — so the tail lives in one place.
+const magickCoverTail = (p: string, pxW: number, pxH: number, bg: string): string[] => [
   p,
   "-auto-orient",
   "-background",
@@ -544,6 +546,11 @@ const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): stri
   "-extent",
   `${pxW}x${pxH}`,
   "png:-",
+];
+const magickVectorArgs = (p: string, pxW: number, pxH: number, bg: string): string[] => [
+  "-density",
+  "192",
+  ...magickCoverTail(p, pxW, pxH, bg),
 ];
 const renderVectorPng = (p: string, pxW: number, pxH: number, bg: string): Promise<Uint8Array> => {
   // Text-bearing SVGs render glyphless in-process (fonts-off, probed: the
@@ -678,17 +685,7 @@ const renderRasterPng = (p: string, pxW: number, pxH: number, bg: string): Promi
         // (~95 of ~108ms measured on 12MP); the hint is a no-op for PNG input.
         "-define",
         `jpeg:size=${pxW * 2}x${pxH * 2}`,
-        p,
-        "-auto-orient",
-        "-background",
-        bg,
-        "-thumbnail",
-        `${pxW}x${pxH}^`,
-        "-gravity",
-        "center",
-        "-extent",
-        `${pxW}x${pxH}`,
-        "png:-",
+        ...magickCoverTail(p, pxW, pxH, bg),
       ],
       "magick",
     );

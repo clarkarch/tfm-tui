@@ -6,7 +6,7 @@ import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse } from "smol-toml";
-import { atomicWriteFile } from "../fs/fsutil";
+import { atomicWriteFile } from "../lib/atomic-write";
 import { parseConfigDoc, serializeConfig, type Config } from "./config-schema";
 
 export { defaultConfig } from "./config-schema";

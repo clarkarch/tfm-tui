@@ -3,7 +3,7 @@ import { accessSync, constants, existsSync, lstatSync, readdirSync, readFileSync
 import os from "node:os";
 import path from "node:path";
 import { pathToUri } from "./uri";
-import { swallow } from "../app/log";
+import { swallow } from "../lib/log";
 
 // --- Deterministic fs+path operations: the primitives runTransfer, trash and
 // undo sit on. No prompts, no UI, no state — callers own decisions; these own
@@ -214,6 +214,26 @@ export const errCode = (err: unknown): unknown => {
 export const splitStemExt = (base: string): { stem: string; ext: string } => {
   const dot = base.lastIndexOf(".");
   return dot > 0 ? { stem: base.slice(0, dot), ext: base.slice(dot) } : { stem: base, ext: "" };
+};
+
+// A filesystem NAME (one path segment), not a path. The rename + create
+// inputs take free text, and `path.join(dir, value)` silently turns "sub/x"
+// into a move INTO sub/ and "../x" into a move OUT of the folder — the file
+// changes directory while the toast reports the old basename, so the user is
+// told it was renamed and it wasn't.
+//
+// Validate at the BOUNDARY (the fs-facing API), not at each call site: the
+// inline rename, the create path and any plugin-driven caller all go through
+// it, and a per-site check is exactly what let the two rename entry points
+// disagree about what a legal name is (the bulk-rename planner already had
+// its own copy of this rule).
+export const invalidFileName = (name: string): string | null => {
+  // whitespace-only is as empty as empty (the rename input trims, but this
+  // is the fs-facing boundary and must not depend on the caller trimming)
+  if (!name.trim()) return "Name can't be empty";
+  if (name === "." || name === "..") return `Invalid name: ${name}`;
+  if (name.includes("/") || name.includes("\0")) return `Invalid name: ${name}`;
+  return null;
 };
 
 // nautilus naming for an OCCUPIED name: first suggestion is " (copy)", then
@@ -527,20 +547,6 @@ export const trashIfSameFile = async (p: string, id: FileId | null, log?: (msg: 
     return;
   }
   await xdgTrashMove(p);
-};
-
-// tmp+rename write: a crash or EDQUOT mid-write never leaves a truncated
-// file at the target path. Used for caches keyed by content version — a
-// partial write there would be served as a valid hit forever.
-export const atomicWriteFile = async (p: string, data: Uint8Array | string): Promise<void> => {
-  const tmp = `${p}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, data);
-  try {
-    await fsRename(tmp, p);
-  } catch (err) {
-    await rm(tmp, { force: true }).catch(() => {});
-    throw err;
-  }
 };
 
 // Crash-orphan temp name — the orphan sweep regex in fileops anchors to this

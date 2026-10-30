@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { ExecFn } from "../plugins/plugin-install";
+import type { ExecFn } from "../lib/exec-fn";
 
 // --- "Make tfm the default file manager?" Yes/No/Ask-again opt-in. The
 // user's answer lives in a marker file under $XDG_STATE_HOME/tfm/ (next to

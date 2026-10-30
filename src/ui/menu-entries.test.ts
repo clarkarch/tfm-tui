@@ -4,7 +4,8 @@ import { makeMenuEntries, pasteLabel, type MenuEntriesCtx } from "./menu-entries
 import type { SortMode } from "../lib/sort";
 import { trashDir } from "../fs/fsutil";
 import { archiveUri } from "../fs/archive-scheme";
-import type { ClipItem, GridTileRef } from "../input/grid-input";
+import type { GridTileRef } from "../input/grid-input";
+import type { ClipItem } from "../lib/file-op-protocol";
 import type { Place } from "../fs/places";
 import type { LoadedPlugin } from "../plugins/plugin-api";
 

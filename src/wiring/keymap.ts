@@ -19,7 +19,7 @@ import { isVirtualUri } from "../fs/uri";
 import { isTrashFilesDir } from "../fs/fsutil";
 import { isBookmarked, loadSystemPlaces, setBookmarked } from "../fs/places";
 import { isNetworkPath } from "../fs/network";
-import { dlog } from "../app/log";
+import { dlog } from "../lib/log";
 import type { Command } from "../lib/command";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, FileopsWiring, GridFoundationWiring, GridWiring, NavWiring, SettingsWiring } from "./types";
@@ -54,8 +54,7 @@ export const wireKeymap = (deps: {
   // wireCore (see there for why per-cluster instances diverged).
   const setPointer = core.setPointer;
   const pick = makePick({
-    renderer: () => chrome.renderer,
-    byId,
+    byId: core.lookup.byId,
     rootAdd: (node) => chrome.renderer.root.add(node),
     destroyChildren,
     stripSelectable: core.lookup.stripSelectable,
@@ -80,8 +79,7 @@ export const wireKeymap = (deps: {
   // typing rule as pick; the router delegates to it above pick so pasting a
   // URL never leaks keys into the grid or type-to-search. ---
   const prompt = makePrompt({
-    renderer: () => chrome.renderer,
-    byId,
+    byId: core.lookup.byId,
     rootAdd: (node) => chrome.renderer.root.add(node),
     stripSelectable: core.lookup.stripSelectable,
     escHintBtn: core.slots.escHintBtn,
@@ -119,7 +117,6 @@ export const wireKeymap = (deps: {
   };
 
   const keyRouter = makeKeyRouter({
-    byId,
     state,
     keybinds: (action) => core.config.keys[action] ?? [],
     quit: nav.quitApp,

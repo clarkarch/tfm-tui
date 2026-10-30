@@ -5,6 +5,7 @@
 // deferred arrows into it (TDZ seam rule). ---
 
 import { makeSelection, type SelTileRef, type Selection } from "../input/selection";
+import { applySurface, tileSurface } from "../ui/style";
 import { makeRename } from "../ui/ui-rename";
 import { makeBulkRename } from "../ui/ui-bulk-rename";
 import { destroyChildren } from "../lib/uiutil";
@@ -37,6 +38,19 @@ export const wireGridFoundation = (deps: {
       renderPreview: () => getGrid().renderPreview(),
       onSelection: (paths) => sharedPluginEvents().emit("selection", { paths }),
       isActive: () => core.panes.active === pane,
+      // the surface RULES live in ui/style.ts; input/selection.ts only knows
+      // the four visual states, so the paint decision crosses the seam here
+      paintTile: (node, state) => {
+        applySurface(
+          node,
+          tileSurface(
+            core.config.ui.uiStyle,
+            core.themeGet(),
+            state,
+            core.config.ui.transparentBg === "force" ? "force" : undefined,
+          ),
+        );
+      },
     });
 
   // two independent selections; `selection` is a stable facade over the active
@@ -85,7 +99,6 @@ export const wireGridFoundation = (deps: {
   // --- bulk rename: F2 on a multi-selection edits names one-per-line in a
   // modal (widget + planner); apply is ONE undo batch via fileops ---
   const bulkRename = makeBulkRename({
-    renderer: () => chrome.renderer,
     byId: core.lookup.byId,
     rootAdd: (node) => chrome.renderer.root.add(node),
     destroyChildren,

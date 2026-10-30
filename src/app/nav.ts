@@ -13,7 +13,7 @@ import type { Config } from "../config/config";
 import type { Tab } from "./tabs";
 import { debounced } from "../lib/uiutil";
 import { readRestoredSession, saveSession, type PaneTabs } from "../fs/session";
-import { debugLog } from "./log";
+import { debugLog } from "../lib/log";
 
 export type AppState = {
   cwd: string;

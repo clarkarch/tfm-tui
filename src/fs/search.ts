@@ -8,6 +8,7 @@ import { lstat, readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
 import type { Entry } from "./listing";
+import { whichLive } from "./which";
 
 export const DEFAULT_SEARCH_LIMIT = 200;
 
@@ -125,7 +126,7 @@ export const searchTree = async (root: string, query: string, opts: SearchOpts =
   if (!q || opts.signal?.aborted) return [];
   const limit = opts.limit ?? DEFAULT_SEARCH_LIMIT;
   const hidden = opts.hidden ?? false;
-  const bin = opts.fdBin !== undefined ? opts.fdBin : (Bun.which("fd") ?? Bun.which("fdfind"));
+  const bin = opts.fdBin !== undefined ? opts.fdBin : (whichLive("fd") ?? whichLive("fdfind"));
   let paths: string[] | null = null;
   if (bin) {
     const out = await (opts.runFd ?? defaultRunFd)(bin, fdArgs(query, hidden, limit), root, opts.signal);

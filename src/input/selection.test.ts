@@ -5,7 +5,8 @@ import path from "node:path";
 import { makeSelection, type SelTileRef, type SelectionCtx } from "./selection";
 import { fmtBytes } from "../fs/propsinfo";
 import { TileVisual } from "./grid-input";
-import type { IconSpec } from "../ui/ui-slots";
+import type { IconSpec } from "../lib/icon-state";
+import { applySurface, tileSurface } from "../ui/style";
 
 const COLORS: any = {
   bg: "#111111",
@@ -31,6 +32,9 @@ const makeHarness = () => {
   const scrolls: any[] = [];
   const cutKeys = new Set<string>();
   let scroller: any = null;
+  // the real painter's transparent-bg knob is flipped by a test AFTER the ctx
+  // is built, so the fake reads it live through the same seam
+  let forceTransparent = false;
 
   const ctx: SelectionCtx = {
     colors: () => COLORS,
@@ -49,6 +53,12 @@ const makeHarness = () => {
     rowHInit: () => 3,
     renderPreview: () => {
       previews.push(1);
+    },
+    // mirror the PRODUCTION painter (wiring/grid-foundation): these tests
+    // assert the tile's background/fill, so a no-op fake would make the
+    // selection INVISIBLE to the assertion
+    paintTile: (node, state) => {
+      applySurface(node, tileSurface("solid", COLORS, state, forceTransparent ? "force" : undefined));
     },
   };
   const sel = makeSelection(ctx);
@@ -82,6 +92,10 @@ const makeHarness = () => {
     scrolls,
     cutKeys,
     addTile,
+    // flipped by the transparent-bg test to drive the fake painter
+    set forceTransparent(v: boolean) {
+      forceTransparent = v;
+    },
     setScroller: (s: any) => {
       scroller = s;
     },
@@ -288,6 +302,7 @@ describe("setTileVisual", () => {
   test("transparent-bg force clears the rest fill (terminal shows through)", () => {
     const h = makeHarness();
     (h.ctx as SelectionCtx).transparentForce = () => true;
+    h.forceTransparent = true;
     h.addTile("a");
     h.sel.setTileVisual("a", TileVisual.Rest);
     expect(h.nodes.get("tile:a").backgroundColor).toBe("transparent");

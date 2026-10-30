@@ -3,7 +3,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "./uri";
-import type { Tab } from "../app/tabs";
 
 // --- Session persistence: each pane's tab list survives restarts, plus which
 // pane was focused. Pure read/write of the session document; the caller owns
@@ -13,6 +12,12 @@ import type { Tab } from "../app/tabs";
 
 export const sessionFile = (): string =>
   path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local/state"), "tfm", "session.json");
+
+// One tab's navigation history. This is the PERSISTED session shape, so it
+// belongs here next to the document that stores it — it used to live in
+// app/tabs.ts, which forced this file (the LOWEST layer) to import UP into
+// app/ for a type.
+export type Tab = { history: string[]; histIdx: number };
 
 export type PaneTabs = { tabs: Tab[]; activeTab: number };
 export type RestoredSession = { panes: [PaneTabs, PaneTabs]; activePane: 0 | 1 };

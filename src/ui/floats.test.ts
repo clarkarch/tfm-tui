@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { FLOAT_Z, makeFloats, type FloatKind } from "./floats";
+import { FLOAT_Z, makeFloats } from "./floats";
+import type { FloatKind } from "../lib/float-kind";
 
 const makeTracked = () => {
   const closed: string[] = [];

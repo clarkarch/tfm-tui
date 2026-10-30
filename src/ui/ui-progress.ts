@@ -1,7 +1,6 @@
-import { Box, type MouseEvent, Text } from "@opentui/core";
-import type { ReadStream } from "node:fs";
+import { Box, Text } from "@opentui/core";
 import { fmtBytes } from "../fs/propsinfo";
-import { hoverEvents, toggleIconState, type IconSlotHandle, type IconSpec, type SlotElement } from "./ui-slots";
+import { hoverEvents, toggleIconState, type MakeIconSlot, type SlotElement } from "./ui-slots";
 import { sleep } from "./ui-lookup";
 import type { Theme } from "../config/config";
 import {
@@ -16,6 +15,8 @@ import {
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { applySurface, islandSurface } from "./style";
+import type { ProgressState } from "../lib/file-op-protocol";
+import type { IconSpec } from "../lib/icon-state";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
 // Owns the `prog` state the transfer engine reports into, the throttled
@@ -29,14 +30,7 @@ export type ProgressCtx = {
   stripSelectable(): void;
   // live theme — always read through the getter, never captured
   colors(): Theme;
-  makeIconSlot(
-    name: string,
-    states: { fg: string; bg: string }[],
-    heightCells?: number,
-    initialState?: number,
-    onMouseDown?: (ev: MouseEvent) => void,
-    statesFactory?: () => { fg: string; bg: string }[],
-  ): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   drainIconQueue(): unknown;
   // toast shell — owned by ./notify (single stack)
@@ -44,26 +38,6 @@ export type ProgressCtx = {
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
-};
-
-export type ProgressState = {
-  active: boolean;
-  verb: string;
-  doneFiles: number;
-  totalFiles: number;
-  bytes: number;
-  totalBytes: number;
-  paused: boolean;
-  cancelled: boolean;
-  // pre-scan "counting" mode: totals are still unknown, so paintProgress shows
-  // an indeterminate `counting N files…` (nautilus' "Preparing" counter)
-  counting?: boolean;
-  currentRs: ReadStream | null;
-  toastUp: boolean;
-  // external-process controls (archive tools): cancel/pause hooks the toast
-  // buttons invoke when no ReadStream is live
-  processCancel?: (() => void) | null;
-  processPause?: (() => void) | null;
 };
 
 export const pctOf = (bytes: number, totalBytes: number): number =>

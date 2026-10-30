@@ -5,6 +5,7 @@ import { lstat, readdir, readlink } from "node:fs/promises";
 import { errMessage } from "../lib/uiutil";
 import path from "node:path";
 import { spawnSafe, type SpawnSafeOpts } from "./spawn-safe";
+import { whichLive } from "./which";
 
 // --- Archive engine: extension -> format detection, exact argv for tar/unzip/
 // zip/7z, listing for a total count, and a line-streaming child runner. Pure
@@ -157,7 +158,7 @@ export const extractPlan = (
   fmt: ArchiveFormat,
   file: string,
   destDir: string,
-  which: WhichFn = Bun.which,
+  which: WhichFn = whichLive,
 ): ToolSpec => {
   const def = defOf(fmt);
   if (def.kind === "tar")
@@ -180,7 +181,7 @@ export const extractPlan = (
     : { tool: "7z", args: ["x", "-bb1", "-bso2", "-y", `-o${destDir}`, file] };
 };
 
-export const listArgs = (fmt: ArchiveFormat, file: string, which: WhichFn = Bun.which): string[] => {
+export const listArgs = (fmt: ArchiveFormat, file: string, which: WhichFn = whichLive): string[] => {
   const def = defOf(fmt);
   if (def.kind === "tar") return ["-t", ...def.filter, "-f", file];
   if (def.kind === "7z") return ["l", "-ba", file];
@@ -197,7 +198,7 @@ export const compressPlan = (
   outFile: string,
   names: string[],
   parent: string,
-  which: WhichFn = Bun.which,
+  which: WhichFn = whichLive,
 ): ToolSpec => {
   const def = defOf(fmt);
   // a name starting with "-" would otherwise be parsed as an option (tar -v,
@@ -220,7 +221,7 @@ export const compressPlan = (
   return { tool: "7z", args: ["a", "-bb1", "-bso2", "-tzip", "-y", outFile, "--", ...zipNames] };
 };
 
-export const availableCompressionFormats = (which: WhichFn = Bun.which): CompressionFormat[] =>
+export const availableCompressionFormats = (which: WhichFn = whichLive): CompressionFormat[] =>
   // tar/tar.gz/zip always show: the js fallback covers a tool-less machine
   // (7z and exotic tar filters still need their binaries and hide without).
   // rar is read-only (7z can't create it) so it never appears as a target.
@@ -229,7 +230,7 @@ export const availableCompressionFormats = (which: WhichFn = Bun.which): Compres
       d.fmt !== "rar" && (canCreate(d, which) || JS_FORMATS.has(d.fmt)),
   ).map((d) => d.fmt);
 
-export const canExtract = (file: string, which: WhichFn = Bun.which): boolean => {
+export const canExtract = (file: string, which: WhichFn = whichLive): boolean => {
   const fmt = detectArchiveFormat(file);
   if (!fmt) return false;
   return canExtractFmt(defOf(fmt), which) || JS_FORMATS.has(fmt);
@@ -248,7 +249,7 @@ const JS_FORMATS: ReadonlySet<ArchiveFormat> = new Set(["tar", "tar.gz", "zip"])
 export const selectArchiveLane = (
   fmt: ArchiveFormat,
   mode: "create" | "extract",
-  which: WhichFn = Bun.which,
+  which: WhichFn = whichLive,
 ): ArchiveLane => {
   const def = defOf(fmt);
   if (mode === "create" ? canCreate(def, which) : canExtractFmt(def, which)) return "spawn";
@@ -478,7 +479,7 @@ export const listArchiveEntries = async (
   fmt: ArchiveFormat,
   file: string,
   run: ArchiveRun = runArchiveTool,
-  which: WhichFn = Bun.which,
+  which: WhichFn = whichLive,
 ): Promise<number> => {
   let n = 0;
   const res = await run({ tool: listTool(fmt, which), args: listArgs(fmt, file, which) }, { onLine: () => n++ });
@@ -494,7 +495,7 @@ export const listArchiveEntries = async (
 
 export type ArchiveMember = { name: string; dir: boolean; size?: number };
 
-export const listMembersPlan = (fmt: ArchiveFormat, file: string, which: WhichFn = Bun.which): ToolSpec => {
+export const listMembersPlan = (fmt: ArchiveFormat, file: string, which: WhichFn = whichLive): ToolSpec => {
   const def = defOf(fmt);
   if (def.kind === "tar") return { tool: "tar", args: ["-t", ...def.filter, "-f", file] };
   // -slt: structured `Path = …` / `Attributes = D …` / `Size = …` blocks (the
@@ -509,7 +510,7 @@ export const listArchiveMembers = async (
   fmt: ArchiveFormat,
   file: string,
   run: ArchiveRun = runArchiveTool,
-  which: WhichFn = Bun.which,
+  which: WhichFn = whichLive,
 ): Promise<ArchiveMember[] | null> => {
   const spec = listMembersPlan(fmt, file, which);
   const members: ArchiveMember[] = [];
@@ -583,7 +584,7 @@ export const countArchiveEntries = async (
   fmt: ArchiveFormat,
   file: string,
   run: ArchiveRun = runArchiveTool,
-  which: WhichFn = Bun.which,
+  which: WhichFn = whichLive,
 ): Promise<number> => {
   if (selectArchiveLane(fmt, "extract", which) !== "js") return listArchiveEntries(fmt, file, run, which);
   try {
@@ -978,7 +979,7 @@ const runJsArchive = (task: ArchiveTask, opts: ArchiveRunOpts): Promise<ArchiveR
 // `run`/`which` are injectable so tests never shell out; fileops passes its
 // ctx seam + archiveWhich through.
 export const runArchiveTask: ArchiveTaskRun = async (task, opts = {}) => {
-  const which = opts.which ?? Bun.which;
+  const which = opts.which ?? whichLive;
   const lane = selectArchiveLane(task.fmt, task.op === "extract" ? "extract" : "create", which);
   if (lane === "spawn") {
     const spec =

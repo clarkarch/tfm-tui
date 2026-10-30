@@ -6,7 +6,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { errMessage } from "../lib/uiutil";
 import path from "node:path";
-import { installPlugin, removePluginDir, updatePlugin, type ExecFn } from "../plugins/plugin-install";
+import { installPlugin, removePluginDir, updatePlugin } from "../plugins/plugin-install";
+import type { ExecFn } from "../lib/exec-fn";
 import { pluginsDir } from "../plugins/plugins";
 import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import { PLUGIN_API_VERSION, PLUGIN_NAME_RE } from "../plugins/plugin-api";

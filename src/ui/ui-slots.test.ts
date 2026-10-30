@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box, type CliRenderer } from "@opentui/core";
@@ -822,5 +822,27 @@ describe("makePointerSetter", () => {
     set("default");
     await Promise.resolve();
     expect(seen).toEqual(["pointer", "default"]);
+  });
+});
+
+describe("no-drift rule: one home for the icon-slot contract", () => {
+  // makeIconSlot's signature used to be re-spelled in a dozen ctx types, and
+  // most of them dropped the trailing `opts` (the faithful-brand-art switch)
+  // — so a widget could not ask for a multi-color raster through its ctx, and
+  // every signature change had to be mirrored by hand in each copy. The
+  // contract now lives in ONE type (MakeIconSlot, here in ui-slots); a
+  // method-style re-spelling may not come back.
+  test("no module declares its own makeIconSlot parameter list", async () => {
+    const dir = import.meta.dir;
+    const offenders: string[] = [];
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".ts") || name.endsWith(".test.ts")) continue;
+      const src = (await Bun.file(`${dir}/${name}`).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+      // a method-style declaration — `makeIconSlot(` opening a parameter list.
+      // Calls never match: they are `const slot = makeIconSlot(` or
+      // `ctx.makeIconSlot(`.
+      if (/^\s*makeIconSlot\(/m.test(src)) offenders.push(name);
+    }
+    expect(offenders).toEqual([]);
   });
 });

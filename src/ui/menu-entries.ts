@@ -8,8 +8,9 @@ import { setBookmarked, loadSystemPlaces, type EjectSpec, type Place } from "../
 import { RECENT_URI, STARRED_URI, isArchiveUri, isVirtualUri } from "../fs/uri";
 import { archiveBrowseUri } from "../fs/archive-scheme";
 import type { CompressionFormat } from "../fs/archive";
-import type { ListEntry } from "./ui-menu";
-import type { ClipItem, GridTileRef } from "../input/grid-input";
+import type { ListEntry } from "../lib/menu-entry";
+import type { GridTileRef } from "../input/grid-input";
+import type { ClipItem } from "../lib/file-op-protocol";
 import type { LoadedPlugin, PluginFileMenuEntry } from "../plugins/plugin-api";
 import { invokeIsolated } from "../lib/uiutil";
 import type { SortMode } from "../lib/sort";
@@ -180,50 +181,58 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     },
   });
 
+  // The "Open" row for a directory, shared by the sidebar, the archive-member
+  // view and the normal file menu: the click opens the dir, the flyout carries
+  // the variants. The terminal row is omitted where the target is not a real
+  // fs dir (virtual sidebar URIs, archive:// members — a shell cannot cd
+  // there), so the omission is an explicit flag, not a third copy of the rows.
+  const openDirEntry = (target: string, opts: { terminal: boolean }): ListEntry => ({
+    icon: "folder",
+    label: "Open",
+    action: () => {
+      ctx.closeFileMenu();
+      ctx.navigate(target);
+    },
+    submenu: [
+      {
+        icon: "plus",
+        label: "Open in New Tab",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.newTab(target);
+        },
+      },
+      {
+        icon: "border-vertical",
+        label: "Open in New Pane",
+        action: () => {
+          ctx.closeFileMenu();
+          ctx.openInOtherPane(target);
+        },
+      },
+      ...(opts.terminal
+        ? [
+            {
+              icon: "terminal",
+              label: "Open Terminal Here",
+              action: () => {
+                ctx.closeFileMenu();
+                ctx.openTerminalHere(target);
+              },
+            },
+          ]
+        : []),
+    ],
+  });
+
   const sidebarEntriesFor = (place: Place, _x: number, _y: number): ListEntry[] => {
     const target = place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : place.path;
     const entries: ListEntry[] = [];
     if (target) {
       // the parent row opens directly; the flyout holds the variants
-      const openSub: ListEntry[] = [
-        {
-          icon: "plus",
-          label: "Open in New Tab",
-          action: () => {
-            ctx.closeFileMenu();
-            ctx.newTab(target);
-          },
-        },
-        {
-          icon: "border-vertical",
-          label: "Open in New Pane",
-          action: () => {
-            ctx.closeFileMenu();
-            ctx.openInOtherPane(target);
-          },
-        },
-      ];
       // terminal needs a real fs dir: virtual URIs are not shell cwds
       // (openTerminalHere only falls back to home on its no-arg path)
-      if (!place.scheme) {
-        openSub.push({
-          icon: "terminal",
-          label: "Open Terminal Here",
-          action: () => {
-            ctx.closeFileMenu();
-            ctx.openTerminalHere(target);
-          },
-        });
-      }
-      entries.push({
-        icon: "folder",
-        label: "Open",
-        action: () => {
-          ctx.closeFileMenu();
-          ctx.navigate(target);
-        },
-        submenu: openSub,
-      });
+      entries.push(openDirEntry(target, { terminal: !place.scheme }));
       // paste into real places (not virtual views, not the trash)
       if (!place.scheme && target !== trashFiles()) {
         entries.push({
@@ -365,32 +374,9 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
       const inSel = !!ctx.tileRefs.get(targetPath)?.selected;
       const targets: ClipItem[] = inSel && ctx.selPaths().length > 1 ? ctx.selPaths() : [{ path: targetPath, isDir }];
       if (isDir) {
-        entries.push({
-          icon: "folder",
-          label: "Open",
-          action: () => {
-            ctx.closeFileMenu();
-            ctx.navigate(targetPath);
-          },
-          submenu: [
-            {
-              icon: "plus",
-              label: "Open in New Tab",
-              action: () => {
-                ctx.closeFileMenu();
-                ctx.newTab(targetPath);
-              },
-            },
-            {
-              icon: "border-vertical",
-              label: "Open in New Pane",
-              action: () => {
-                ctx.closeFileMenu();
-                ctx.openInOtherPane(targetPath);
-              },
-            },
-          ],
-        });
+        // an archive member dir: no terminal row (a shell cannot cd into a
+        // member), but the tab/pane variants still apply
+        entries.push(openDirEntry(targetPath, { terminal: false }));
       } else {
         // a member file can't be opened yet (per-entry extract is deferred):
         // openFileDefault refuses an archive URI with an honest toast
@@ -411,40 +397,7 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
     // browser/editor) — hover reveals Run in Terminal + Open With….
     const isExec = !isDir && ctx.isExecutable(targetPath);
     if (isDir) {
-      entries.push({
-        icon: "folder",
-        label: "Open",
-        action: () => {
-          ctx.closeFileMenu();
-          ctx.navigate(targetPath);
-        },
-        submenu: [
-          {
-            icon: "plus",
-            label: "Open in New Tab",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.newTab(targetPath);
-            },
-          },
-          {
-            icon: "border-vertical",
-            label: "Open in New Pane",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.openInOtherPane(targetPath);
-            },
-          },
-          {
-            icon: "terminal",
-            label: "Open Terminal Here",
-            action: () => {
-              ctx.closeFileMenu();
-              ctx.openTerminalHere(targetPath);
-            },
-          },
-        ],
-      });
+      entries.push(openDirEntry(targetPath, { terminal: true }));
     } else if (isExec) {
       entries.push({
         icon: "play",

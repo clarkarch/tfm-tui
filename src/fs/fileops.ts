@@ -9,10 +9,11 @@ import path from "node:path";
 import type { Subprocess } from "bun";
 import { existsSync } from "node:fs";
 import { mkdir, lstat, readdir, readlink, rm, rename as fsRename } from "node:fs/promises";
-import { swallow } from "../app/log";
+import { swallow } from "../lib/log";
 import {
   errCode,
   failSuffix,
+  invalidFileName,
   type FileId,
   fileIdMatches,
   fileIdOf,
@@ -56,14 +57,13 @@ import {
   type WhichFn,
 } from "./archive";
 import { publishPathsToSystemClipboard, readCopiedFilesFromSystemClipboard } from "./clipboard";
+import { whichLive } from "./which";
 import { isArchiveUri } from "./uri";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
-import type { ConflictChoice } from "../ui/ui-dialogs";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { ProgressState } from "../ui/ui-progress";
-import type { UndoJournalData, UndoStep, UndoUnit } from "../app/undo";
-import type { ClipItem } from "../input/grid-input";
+import type { ClipItem, ConflictChoice, ProgressState } from "../lib/file-op-protocol";
+import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
 
 export type FileOpsCtx = {
   conflict: {
@@ -121,7 +121,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const { prog, conflict } = ctx;
   const queue = sharedOpQueue();
   const runArchive: ArchiveRun = ctx.runArchive ?? runArchiveTool;
-  const archiveWhich = ctx.archiveWhich ?? Bun.which;
+  const archiveWhich = ctx.archiveWhich ?? whichLive;
   const listArchive =
     ctx.listArchive ?? ((fmt: ArchiveFormat, file: string) => countArchiveEntries(fmt, file, runArchive, archiveWhich));
   // one task call per archive op: spawn when tools exist, in-process fallback
@@ -809,6 +809,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const performRename = (p: string, v: string): Promise<void> => {
     if (isArchiveUri(p)) {
       ctx.notify("Archive contents are read-only", "rename", "error");
+      return Promise.resolve();
+    }
+    // a rename target is a NAME, not a path: "sub/x" would silently move the
+    // file into sub/ and "../x" out of the folder, while the toast reported
+    // the old basename. Validated HERE (the fs-facing boundary) so every
+    // caller — inline rename, create, plugins — is covered by one rule.
+    const badName = invalidFileName(v);
+    if (badName) {
+      ctx.notify(badName, "rename", "error");
       return Promise.resolve();
     }
     const dest = path.join(path.dirname(p), v);

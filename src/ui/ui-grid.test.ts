@@ -15,6 +15,7 @@ import { makeSelection } from "../input/selection";
 import type { Entry } from "../fs/listing";
 import type { TileMouseHandlers } from "../input/grid-input";
 import type { IconSlotHandle } from "./ui-slots";
+import { applySurface, tileSurface } from "./style";
 import { defaultConfig } from "../config/config-schema";
 import type { HoverLiftOpts, WrapMode } from "../config/config-schema";
 import type { Theme } from "../config/config";
@@ -188,6 +189,12 @@ beforeAll(async () => {
     viewH: () => TERM_H - 3,
     rowHInit: () => TILE_H,
     renderPreview: () => {},
+    // mirror the production painter (wiring/grid-foundation): the grid tests
+    // assert a selected tile's background differs from its sibling's, so a
+    // no-op fake would make the selection INVISIBLE to the assertion
+    paintTile: (node, state) => {
+      applySurface(node, tileSurface("solid", colors, state));
+    },
   });
 
   // the grid reads scroller.scrollTop to place its viewport window; a fresh
@@ -227,7 +234,7 @@ beforeAll(async () => {
       return tilePrefix;
     },
     cellMetrics: () => ({ cellW: 10, cellH: 20, aspect: ASPECT }),
-    makeIconSlot: (name: string, states: any, heightCells: number, initialState: number) => {
+    makeIconSlot: (name: string, states: any, heightCells = 1, initialState = 0) => {
       iconSlots.push({ name, heightCells, initialState });
       const slotId = `fake-slot-${iconSeq++}`;
       return { el: null, slotId, spec: { slotId, name, heightCells, states, initialState } };
@@ -547,6 +554,7 @@ describe("renderGrid (grid tiles)", () => {
       viewH: () => TERM_H - 3,
       rowHInit: () => TILE_H,
       renderPreview: () => {},
+      paintTile: () => {},
     });
     const { renderGrid: bootRender } = makeGridRenderer({
       termW: () => TERM_W,

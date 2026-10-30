@@ -11,7 +11,7 @@ import { chromeSurface, type UiStyle } from "./style";
 import { SCRIM_FILL_ID, SCRIM_FILL_RGBA, SCRIM_FILL_Z } from "./scrim";
 import type { MaybeNode } from "../lib/node-like";
 import type { SlotElement } from "./ui-slots";
-import type { ListEntry } from "./ui-menu";
+import type { ListEntry } from "../lib/menu-entry";
 import type { Theme } from "../config/config";
 import type { SidebarTitleMode } from "../config/config-schema";
 import {

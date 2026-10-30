@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeTabs, nextTab, prevTab, tabTitle, type TabStateRef, type TabsHooks } from "./tabs";
+import { makeTabs, nextTab, prevTab, type TabStateRef, type TabsHooks } from "./tabs";
 
 const mkState = (cwd = "/tmp/a"): TabStateRef => ({ cwd, history: [cwd], histIdx: 0 });
 
@@ -120,31 +120,5 @@ describe("makeTabs", () => {
     expect(tabs.active).toBe(2);
     prevTab(tabs);
     expect(tabs.active).toBe(1);
-  });
-});
-
-describe("tabTitle", () => {
-  test("uses the tab's current cwd basename", () => {
-    expect(tabTitle({ history: ["/home/clark/Projects"], histIdx: 0 })).toBe("Projects");
-  });
-
-  test("follows histIdx through the history", () => {
-    expect(tabTitle({ history: ["/a", "/b/c"], histIdx: 1 })).toBe("c");
-  });
-
-  test("virtual places get their friendly names", () => {
-    expect(tabTitle({ history: ["recent://"], histIdx: 0 })).toBe("Recent");
-    expect(tabTitle({ history: ["starred://"], histIdx: 0 })).toBe("Starred");
-  });
-
-  test("an archive cwd titles the chip after the archive file, not the URI", () => {
-    const uri = `archive://${encodeURIComponent("/home/u/game.tar.gz")}!/inner`;
-    expect(tabTitle({ history: [uri], histIdx: 0 })).toBe("game.tar.gz");
-  });
-
-  test("long names truncate at 16 with an ellipsis; empty falls back to /", () => {
-    const long = "a-very-long-folder-name";
-    expect(tabTitle({ history: [`/x/${long}`], histIdx: 0 })).toBe(`${long.slice(0, 15)}…`);
-    expect(tabTitle({ history: [], histIdx: 0 })).toBe("/");
   });
 });

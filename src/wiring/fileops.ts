@@ -12,7 +12,7 @@ import { makeFileOps } from "../fs/fileops";
 import { makeTerminal } from "../ui/ui-term";
 import { makeTrashOps, makeTrashConfirms } from "../fs/trashops";
 import { shouldToast } from "../fs/fsutil";
-import { appendLog, dlog } from "../app/log";
+import { appendLog, dlog } from "../lib/log";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
 import type { ChromeWiring, GridFoundationWiring, NavWiring } from "./types";
@@ -60,7 +60,7 @@ export const wireFileops = (deps: {
         } catch {}
       },
     },
-    { log: (msg) => dlog(msg), onChange: syncUndoJournal },
+    { log: dlog, onChange: syncUndoJournal },
   );
   if (core.config.ui.persistUndo) {
     const restored = readUndoJournal();
@@ -119,7 +119,7 @@ export const wireFileops = (deps: {
     home,
     refreshCutVisuals: gridFoundation.refreshCutVisuals,
     ensureSudo,
-    log: (msg) => dlog(msg),
+    log: dlog,
     onFileOp: (op, paths, dest, outcome) =>
       sharedPluginEvents().emit("file-op", { op, paths, ...(dest ? { dest } : {}), ...(outcome ? { outcome } : {}) }),
   });
@@ -144,7 +144,7 @@ export const wireFileops = (deps: {
     virtualCwd: core.isVirtualCwd,
     home,
     finishDrag: deps.finishDrag,
-    dlog: (msg) => dlog(msg),
+    dlog,
     setPointer,
   });
 

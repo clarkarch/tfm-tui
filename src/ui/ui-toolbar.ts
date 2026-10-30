@@ -13,21 +13,14 @@ import type { Theme } from "../config/config";
 import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import { archiveUri, parseArchiveUri } from "../fs/archive-scheme";
 import { stripControlChars } from "../lib/uiutil";
-import type { IconSlotHandle, IconSpec, IconState, SlotElement } from "./ui-slots";
+import type { MakeIconSlot, SlotElement } from "./ui-slots";
+import type { IconState } from "../lib/icon-state";
 import { hoverEvents, navIconState, toggleIconState } from "./ui-slots";
-import type { ListEntry } from "./ui-menu";
+import type { ListEntry } from "../lib/menu-entry";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
-
-type MakeIconSlotFn = (
-  name: string,
-  states: IconState[],
-  heightCells?: number,
-  initialState?: number,
-  onMouseDown?: (ev: MouseEvent) => void,
-  statesFactory?: () => IconState[],
-) => IconSlotHandle;
+import type { IconSpec } from "../lib/icon-state";
 
 type ToolbarCtx = {
   // per-pane id prefix ("tfm-p0-"/"tfm-p1-") — dual pane builds one toolbar
@@ -42,7 +35,7 @@ type ToolbarCtx = {
   uiStyle(): UiStyle;
   // live theme — always read through the getter, never captured
   colors(): Theme;
-  makeIconSlot: MakeIconSlotFn;
+  makeIconSlot: MakeIconSlot;
   setIconState(spec: IconSpec, index: number): void;
   closeFileMenu(): void;
   blurTerminal(): void;

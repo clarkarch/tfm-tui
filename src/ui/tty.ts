@@ -22,17 +22,29 @@ export const resolveTtyMode = (mode: TtyMode | string, term?: string | null): bo
   return isTtyTerm(term ?? process.env.TERM);
 };
 
+// The knobs that decide raster vs glyph — ONE list, so a new paint knob is
+// added here once and both surfaces pick it up. The effective tty mode rides
+// alongside (it is NOT a plain config read: the config value is
+// auto/on/off, the EFFECTIVE mode is resolved from TERM).
+export const RASTER_PROPS = ["icons", "iconStyle", "transparentBg", "forceGlyph"] as const;
+
+// the config shape rasterSigOf reads — structural, so this leaf keeps its
+// no-imports property
+export type RasterSigUi = {
+  icons: string;
+  iconStyle: string;
+  transparentBg: string;
+  forceGlyph: boolean;
+};
+
 // rebuild signature over everything that decides raster vs glyph. Grid AND
 // sidebar key off this through their own `rasterSig` ctx fields, and both
 // wirings must call THIS (never an inline JSON) so the two surfaces cannot
-// drift into disagreeing about what a graphics-mode flip rebuilds.
-export const rasterSigOf = (
-  icons: string,
-  ttyMode: boolean,
-  forceGlyph: boolean,
-  iconStyle = "filled",
-  transparentBg = "off",
-): string => JSON.stringify([icons, ttyMode, forceGlyph, iconStyle, transparentBg]);
+// drift into disagreeing about what a graphics-mode flip rebuilds. The knobs
+// arrive as the config object (not as five positional arguments — the call
+// sites spelled the list out twice, so a new knob meant editing both).
+export const rasterSigOf = (ui: RasterSigUi, ttyMode: boolean): string =>
+  JSON.stringify([...RASTER_PROPS.map((p) => ui[p]), ttyMode]);
 
 // --- 16-color console palettes ---
 // OpenTUI emits 48;2/38;2 truecolor unconditionally (ansi.ts), which the Linux

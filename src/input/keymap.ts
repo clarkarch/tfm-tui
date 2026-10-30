@@ -25,9 +25,9 @@ import type { SortMode } from "../lib/sort";
 import type { Command } from "../lib/command";
 import { advanceCursor, invokeIsolated } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
+import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
 import type { Selection } from "./selection";
 import { TileVisual } from "./grid-input";
-import type { MaybeNode } from "../lib/node-like";
 
 // Keypress shape the router actually reads. The renderer hands a richer
 // object (scan codes, text, meta); dispatch only touches name + modifiers.
@@ -49,7 +49,6 @@ type KeyState = {
 };
 
 export type KeyRouterCtx = {
-  byId(id: string): MaybeNode;
   state: KeyState;
   // live keybind lookup — reads config.keys so remaps apply without rebuilds
   keybinds(action: KeyAction): string[];
@@ -957,10 +956,31 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // so marking the key handled would starve the Input / EmbeddedTerminal that
   // receives it natively. Snapshot BEFORE routing — a branch may close the very
   // surface it was decided on (esc clears the search box).
+  //
+  // The editor FLOATS are asked through EDITOR_FLOAT_KINDS (the canonical
+  // list, next to the FloatKind vocabulary): the switch below is
+  // exhaustiveness-checked, so a new editor-ish float kind is a COMPILE error
+  // here until the router knows how to ask about it. A float that misses the
+  // list DEAD-LETTERS every typed character ("typing does nothing in the
+  // overlay").
+  const editorFloatOpen = (kind: EditorFloatKind): boolean => {
+    switch (kind) {
+      case "pick":
+        return ctx.pick.isOpen();
+      case "prompt":
+        return ctx.prompt?.isOpen() === true;
+      case "bulkrename":
+        return ctx.bulkRename.isOpen();
+      default: {
+        // never: a kind added to EDITOR_FLOAT_KINDS without a case here does
+        // not compile (the assignment only type-checks while kind is never)
+        const unhandled: never = kind;
+        return unhandled;
+      }
+    }
+  };
   const focusedEditorOwnsKeys = (): boolean =>
-    ctx.prompt?.isOpen() === true ||
-    ctx.bulkRename.isOpen() ||
-    ctx.pick.isOpen() ||
+    EDITOR_FLOAT_KINDS.some((kind) => editorFloatOpen(kind)) ||
     ctx.isRenaming() ||
     ctx.searchVisible() ||
     ctx.pathInputVisible() ||

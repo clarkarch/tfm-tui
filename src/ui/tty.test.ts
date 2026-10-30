@@ -49,13 +49,14 @@ describe("resolveTtyMode", () => {
 
 describe("rasterSigOf", () => {
   test("any raster-affecting knob moves the signature", () => {
-    const base = rasterSigOf("opaque", false, false);
-    expect(rasterSigOf("transparent", false, false)).not.toBe(base);
-    expect(rasterSigOf("opaque", true, false)).not.toBe(base);
-    expect(rasterSigOf("opaque", false, true)).not.toBe(base);
-    expect(rasterSigOf("opaque", false, false, "outline")).not.toBe(base);
-    expect(rasterSigOf("opaque", false, false, "filled", "force")).not.toBe(base);
-    expect(rasterSigOf("opaque", false, false)).toBe(base);
+    const base = { icons: "opaque", iconStyle: "filled", transparentBg: "off", forceGlyph: false };
+    const sig = rasterSigOf(base, false);
+    expect(rasterSigOf({ ...base, icons: "transparent" }, false)).not.toBe(sig);
+    expect(rasterSigOf(base, true)).not.toBe(sig);
+    expect(rasterSigOf({ ...base, forceGlyph: true }, false)).not.toBe(sig);
+    expect(rasterSigOf({ ...base, iconStyle: "outline" }, false)).not.toBe(sig);
+    expect(rasterSigOf({ ...base, transparentBg: "force" }, false)).not.toBe(sig);
+    expect(rasterSigOf(base, false)).toBe(sig);
   });
 });
 

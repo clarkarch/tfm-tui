@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_UNDO_BATCHES, type UndoBatchData, type UndoStep } from "../app/undo";
-import { swallow } from "../app/log";
+import { MAX_UNDO_BATCHES, type UndoBatchData, type UndoStep } from "./undo-steps";
+import { swallow } from "../lib/log";
 
 // --- Undo journal persistence: the journalable tail of the undo stack as
 // JSON, next to session.json. Writes are synchronous + atomic (tmp+rename)

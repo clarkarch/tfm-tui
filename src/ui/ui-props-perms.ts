@@ -7,11 +7,11 @@ import { applySurface, rowSurface, slotBg, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { idName, permWords } from "../fs/propsinfo";
 import { fsErrText } from "../fs/fsutil";
-import type { ListEntry } from "./ui-menu";
+import type { ListEntry } from "../lib/menu-entry";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
-import { hoverEvents, type IconSlotHandle, type SlotElement } from "./ui-slots";
+import { hoverEvents, type MakeIconSlot, type SlotElement } from "./ui-slots";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
 // class row to pick access (cursor popup via openContextMenu), the checkbox
@@ -29,12 +29,7 @@ type PermsCtx = {
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   uiStyle(): UiStyle;
   colors(): Theme;
-  makeIconSlot(
-    name: string,
-    states: { fg: string; bg: string }[],
-    heightCells?: number,
-    initialState?: number,
-  ): IconSlotHandle;
+  makeIconSlot: MakeIconSlot;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;

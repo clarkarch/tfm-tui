@@ -7,7 +7,7 @@
 // Everything renderer-coupled arrives as an injected step so the sequence is
 // testable with fakes. ---
 
-import { debugLog } from "./log";
+import { debugLog } from "../lib/log";
 
 export type BootCtx = {
   waitForResolution(): Promise<void>;

@@ -8,7 +8,7 @@
 // pick via the floats modal policy (depth stays 1).
 // Widget-extraction seam (see ui-dialogs.ts): all live deps arrive via ctx. ---
 
-import { Box, type CliRenderer, Input, type MouseEvent, Text } from "@opentui/core";
+import { Box, Input, type MouseEvent, Text } from "@opentui/core";
 import type { Theme } from "../config/config";
 import { makeModalScrim } from "./ui-dialogs";
 import type { UiStyle } from "../config/config-schema";
@@ -19,7 +19,6 @@ import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type SlotElement } from "./ui-slots";
 
 type PromptCtx = {
-  renderer(): CliRenderer;
   byId(id: string): MaybeNode;
   rootAdd(node: unknown): void;
   stripSelectable(): void;

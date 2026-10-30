@@ -18,7 +18,7 @@
 //
 // Pure module: no renderer imports. z-order table exported for the widgets. ---
 
-export type FloatKind = "filemenu" | "props" | "conflict" | "yesno" | "escmenu" | "pick" | "prompt" | "bulkrename";
+import type { FloatKind } from "../lib/float-kind";
 
 // z-order of the floating layers — the one table documenting which layer
 // renders above which. Outside the stack: band rect 2500 (gesture), progress

@@ -10,7 +10,7 @@ import {
   saveUndoJournal,
   undoJournalFile,
 } from "./undo-journal";
-import type { UndoBatchData } from "../app/undo";
+import type { UndoBatchData } from "./undo-steps";
 
 const oldStateHome = process.env.XDG_STATE_HOME;
 const sandbox = (): string => {

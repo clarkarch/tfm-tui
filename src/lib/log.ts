@@ -45,7 +45,10 @@ export const debugLog = (msg: string): void => {
 // them here just adds noise. This is for failures nobody asked for.
 //
 // Lives with the log because that is the one diagnostic sink; log.ts imports
-// only node:fs, so fs/ and ui/ modules may pull it in without a cycle.
+// only node:fs, so fs/ and ui/ modules may pull it in without a cycle. It
+// lives in lib/ (not app/) because it is a LEAF: app/ is the top layer, so
+// fs/ and ui/ importing it upward was a layering inversion that eight files
+// paid for.
 export const swallow = (what: string, err: unknown): void => {
   if (!isDebug) return;
   let detail: string;
@@ -71,19 +74,37 @@ export const dlog = (msg: string): void => {
   if (isDebug) appendLog(`[dnd] ${msg}`);
 };
 
-process.on("uncaughtException", (err) => {
-  appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
-  try {
-    process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`);
-  } catch {}
-  process.exit(1);
-});
-process.on("unhandledRejection", (reason) => {
-  appendLog(`UNHANDLED REJECTION: ${reason instanceof Error ? reason.stack : String(reason)}`);
-  // the app keeps running by design (a rejected fire-and-forget must not
-  // kill the TUI), but staying silent leaves a zombie nobody notices — the
-  // crash path above already announces itself on stderr, mirror that here
-  try {
-    process.stderr.write(`[tfm] unhandled rejection — see ${DEBUG_LOG}\n`);
-  } catch {}
-});
+// --- Crash handlers. INSTALLED EXPLICITLY, not as an import side effect.
+//
+// This used to register `process.on(...)` at module scope. That made the
+// handler's installation an accident of module-evaluation order: the app
+// needed it registered BEFORE any other module could throw (a failing
+// @opentui/core native load), which src/index.ts tried to guarantee with a
+// dedicated first import — invisible, fragile, and easy to "optimize" away.
+// It also meant every LEAF that imported `swallow` (fs/fsutil, fs/transfer,
+// fs/fileops, fs/recent, fs/undo-journal, ui/icons, ui/ui-slots) installed
+// process-wide handlers in the shared `bun test` process, where an
+// uncaughtException in one test file could exit the whole suite instead of
+// failing one test.
+//
+// installCrashHandlers() is called once, from src/index.ts, before the app
+// graph loads. Nothing else may call it (a second registration would double
+// every crash report).
+export const installCrashHandlers = (): void => {
+  process.on("uncaughtException", (err) => {
+    appendLog(`UNCAUGHT EXCEPTION: ${err?.stack ?? err}`);
+    try {
+      process.stderr.write(`[tfm] crash — see ${DEBUG_LOG}\n`);
+    } catch {}
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    appendLog(`UNHANDLED REJECTION: ${reason instanceof Error ? reason.stack : String(reason)}`);
+    // the app keeps running by design (a rejected fire-and-forget must not
+    // kill the TUI), but staying silent leaves a zombie nobody notices — the
+    // crash path above already announces itself on stderr, mirror that here
+    try {
+      process.stderr.write(`[tfm] unhandled rejection — see ${DEBUG_LOG}\n`);
+    } catch {}
+  });
+};

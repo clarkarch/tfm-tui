@@ -4,7 +4,7 @@
 // later-built widgets through the injected getters — the same TDZ seam rule
 // the old flat wiring used, just parameterized. ---
 
-import { makeRenderAll } from "../app/render-all";
+import { makeRenderAll, type RenderStepName } from "../app/render-all";
 import { makeForceQuit, makeQuit } from "../app/quit";
 import { makeRestart, restartArgs } from "../app/restart";
 import { sharedOpQueue } from "../lib/op-queue";
@@ -13,7 +13,7 @@ import { makeNav, makeSessionSync } from "../app/nav";
 import { saveSessionSync, type PaneTabs } from "../fs/session";
 import { makeTabs, nextTab as cycleNextTab, prevTab as cyclePrevTab } from "../app/tabs";
 import { makeSearch } from "../input/search";
-import { appendLog } from "../app/log";
+import { appendLog } from "../lib/log";
 import { xtShiftEscapeFrame } from "../ui/ui-term";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
@@ -52,7 +52,36 @@ export const wireNav = (deps: {
     deps;
 
   // --- renderAll orchestration lives in ./render-all (tested): tab-sync +
-  // cwd-sync, then the named steps in insertion order, each guarded. ---
+  // cwd-sync, then the named steps in the CANONICAL order (render-all.ts),
+  // each guarded. The steps record is typed against that order, so a missing,
+  // misspelled or extra step is a COMPILE error, not a silent paint-order
+  // change. ---
+  const steps: Record<RenderStepName, () => void | Promise<void>> = {
+    cwdWatcher: () => getWatcher().syncCwdWatcher(),
+    tabbar: () => {
+      getChrome().chrome.renderTabbar(0);
+      getChrome().chrome.renderTabbar(1);
+    },
+    nav: () => {
+      for (const t of getChrome().toolbars) t.refreshNav();
+    },
+    crumbs: () => {
+      for (const t of getChrome().toolbars) t.renderCrumbs();
+    },
+    sidebar: () => getChrome().chrome.renderSidebar(),
+    iconQueue: () => {
+      void core.slots.drainIconQueue();
+    },
+    grid: () => {
+      void getGrid().renderGrid();
+    },
+    paneFocus: () => core.refreshPaneFocus(),
+    preview: () => {
+      void getGrid().renderPreview();
+    },
+    pluginSlots: () => getPlugins?.().refreshSlots?.(),
+    stripSelectable: () => core.lookup.stripSelectable(),
+  };
   const renderAll = makeRenderAll({
     state: core.state,
     syncTabFromState: () => syncTabsFromState(),
@@ -60,33 +89,8 @@ export const wireNav = (deps: {
     syncPaneCwds: () => {
       for (const s of core.panes.states) s.cwd = s.history[s.histIdx] ?? s.cwd;
     },
-    log: (msg) => appendLog(msg),
-    steps: {
-      cwdWatcher: () => getWatcher().syncCwdWatcher(),
-      tabbar: () => {
-        getChrome().chrome.renderTabbar(0);
-        getChrome().chrome.renderTabbar(1);
-      },
-      nav: () => {
-        for (const t of getChrome().toolbars) t.refreshNav();
-      },
-      crumbs: () => {
-        for (const t of getChrome().toolbars) t.renderCrumbs();
-      },
-      sidebar: () => getChrome().chrome.renderSidebar(),
-      iconQueue: () => {
-        void core.slots.drainIconQueue();
-      },
-      grid: () => {
-        void getGrid().renderGrid();
-      },
-      paneFocus: () => core.refreshPaneFocus(),
-      preview: () => {
-        void getGrid().renderPreview();
-      },
-      pluginSlots: () => getPlugins?.().refreshSlots?.(),
-      stripSelectable: () => core.lookup.stripSelectable(),
-    },
+    log: appendLog,
+    steps,
   });
 
   // --- Quit: the single teardown path lives in ./quit (tested). closeTerminal

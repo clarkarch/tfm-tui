@@ -6,8 +6,8 @@ import { type CliRenderer, InputRenderable, type KeyEvent, Text } from "@opentui
 import { existsSync } from "node:fs";
 import { link, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../app/undo";
-import { errCode, fsErrText, splitStemExt, uniqueTarget } from "../fs/fsutil";
+import { stepToUnit, type UndoJournalData, type UndoStep, type UndoUnit } from "../fs/undo-steps";
+import { errCode, fsErrText, invalidFileName, splitStemExt, uniqueTarget } from "../fs/fsutil";
 import { isArchiveUri } from "../fs/uri";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
@@ -69,6 +69,19 @@ export const makeRename = (ctx: RenameCtx) => {
     );
   };
 
+  // the placeholder an inline create made: dropping it aborts the create.
+  // The file is empty and ours, so nothing of the user's is lost.
+  const dropPlaceholder = (key: string): void => {
+    void rm(key, { recursive: true })
+      .then(() => ctx.renderAll())
+      .catch(() => {
+        // surface it: a silent rejection left the half-created entry on
+        // disk AND on screen with no error and no repaint
+        ctx.notify("Delete failed", "create failed", "error");
+        void ctx.renderAll();
+      });
+  };
+
   // restores the plain label node; commit=true runs performRename afterwards
   const finishInlineRename = (commit: boolean): void => {
     const edit = renameEdit;
@@ -112,19 +125,21 @@ export const makeRename = (ctx: RenameCtx) => {
     }
     ctx.stripSelectable();
     if (!commit || !value) {
-      if (edit.createKind) {
-        void rm(edit.key, { recursive: true })
-          .then(() => ctx.renderAll())
-          .catch(() => {
-            // surface it: a silent rejection left the half-created entry on
-            // disk AND on screen with no error and no repaint
-            ctx.notify("Delete failed", "create failed", "error");
-            void ctx.renderAll();
-          });
-      }
+      if (edit.createKind) dropPlaceholder(edit.key);
       return;
     }
     if (edit.createKind) {
+      // a create target is a NAME, not a path: path.join(dir, "../x") would
+      // land the file in the PARENT of the folder it was created in — the
+      // same rule the rename path enforces (fsutil.invalidFileName), so
+      // both rename entry points agree on what a legal name is.
+      const badName = invalidFileName(value);
+      if (badName) {
+        // same outcome as an empty name: the create never lands
+        ctx.notify(badName, "create", "error");
+        dropPlaceholder(edit.key);
+        return;
+      }
       // the whole create is ONE user action: land the final name right here
       // (no performRename detour — that would push a second "rename" undo
       // batch and report "Renamed to …" for a file the user just made) and

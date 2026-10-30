@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeUndo, MAX_UNDO_BATCHES, stepToUnit, type UndoBatchData, type UndoSink } from "./undo";
+import { makeUndo, type UndoSink } from "./undo";
+import { MAX_UNDO_BATCHES, stepToUnit, type UndoBatchData } from "../fs/undo-steps";
 import { sharedOpQueue } from "../lib/op-queue";
 import { fileIdOf } from "../fs/fsutil";
 
