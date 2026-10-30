@@ -154,7 +154,9 @@ describe("makeRename (renderer)", () => {
     const input = t.renderer.root.findDescendantById("tfm-rename-input") as any;
     input.value = "notes.txt";
     rename.finishInlineRename(true);
-    await Bun.sleep(30);
+    // the create → land → undo-batch chain is fire-and-forget: poll for the
+    // observable (the undo batch) instead of a fixed sleep
+    await settleUntil(() => calls.some((c) => c.startsWith("undo:")));
     await t.renderOnce();
     const undoCalls = calls.filter((c) => c.startsWith("undo:"));
     expect(undoCalls).toEqual(["undo:new file notes.txt:1:1"]); // single batch, final name

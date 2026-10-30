@@ -849,10 +849,11 @@ describe("no-drift rule: one home for the icon-slot contract", () => {
   // directory, so a re-spelling planted in src/wiring/ or src/input/ slipped
   // through). Two spellings count as a re-spelling:
   //   - the CALL form: the identifier opens a parameter list of its own in a
-  //     member position — `makeIconSlot(name: string, ...): Handle`. A CALL
-  //     never looks like that (calls go through `ctx.makeIconSlot(...)`, and
-  //     a destructured local is always assigned first), so the member-position
-  //     anchor is what separates the two.
+  //     member position — `makeIconSlot(name: string, ...): Handle`. The
+  //     return-type annotation is what separates a DECLARATION from a CALL
+  //     (a call is followed by `;`/`,`/`)`, a declaration by `): Type`), so
+  //     `const slot = makeIconSlot(...)` and `ctx.makeIconSlot(...)` are not
+  //     mistaken for one.
   //   - the BARE REFERENCE form: the identifier is a property whose value is
   //     an inline parameter list — `makeIconSlot: (name: string) => Handle`.
   // The legal spellings never match: the `MakeIconSlot` type reference,
@@ -868,8 +869,11 @@ describe("no-drift rule: one home for the icon-slot contract", () => {
       if (file === leaf) continue;
       const src = (await Bun.file(file).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
       const rel = path.relative(root, file);
-      if (/(?:^|[{;])\s*makeIconSlot\s*\(/m.test(src)) offenders.push({ file: rel, form: "call form" });
-      else if (/\bmakeIconSlot\s*:\s*\(/.test(src)) offenders.push({ file: rel, form: "bare reference" });
+      if (/(?:^|[{;,])[ \t]*makeIconSlot\s*\((?:[^()]|\([^()]*\))*?\)\s*:\s*[A-Za-z_$]/m.test(src)) {
+        offenders.push({ file: rel, form: "call form" });
+      } else if (/\bmakeIconSlot\s*:\s*\(/.test(src)) {
+        offenders.push({ file: rel, form: "bare reference" });
+      }
     }
     expect(offenders).toEqual([]);
   });
