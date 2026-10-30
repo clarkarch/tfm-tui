@@ -113,18 +113,12 @@ bun run compile && cp dist/tfm ~/.local/bin/
 ```bash
 tfm update
 ```
-`--tag v1.0.0` pins a release — a version that was never published is named up front, with the published ones listed — and `--force` reinstalls anyway; `update notices` (off by default) is in advanced settings.
 
 ## Uninstall
 
 ```bash
 tfm uninstall
 ```
-
-It removes the binary and its `terminal-file-manager` name, the desktop entry
-and icons, the D-Bus activator, the PATH line the installer added, and the
-install record. It asks whether to keep your settings, plugins and caches,
-then asks you to confirm. Works offline.
 
 ## Keys
 
@@ -171,20 +165,6 @@ See [docs/plugins.md](docs/plugins.md).
 - Cross-app drag & drop is kitty-only.
 - Mouse on the Linux console (TTY) needs `gpm` running.
 - Custom kitty themes can misbehave.
-
-## Development
-
-One long-lived branch, `main`, plus a branch per piece of work:
-
-```bash
-git switch -c my-change main
-# … work, commit, push …
-gh pr create --base main --head my-change
-```
-
-`main` is protected: changes land through a pull request and CI has to pass.
-Releases are cut by tagging `main` — `git tag v1.2.1 && git push origin v1.2.1`
-— and the tag's version must match `package.json`, so `--version` never lies.
 
 ## License
 
