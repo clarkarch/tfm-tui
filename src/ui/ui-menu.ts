@@ -23,8 +23,6 @@ import type { ListEntry } from "../lib/menu-entry";
 // passes it to both), so the two menus measure alike
 export const MENU_W = 36;
 
-export type { ListEntry };
-
 type MenuCtx = {
   byId(id: string): MaybeNode;
   rootAdd(node: unknown): void;

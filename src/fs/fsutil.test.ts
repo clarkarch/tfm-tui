@@ -225,6 +225,31 @@ describe("xdgTrashMove", () => {
     }
   });
 
+  test("an orphaned trash entry (file, no .trashinfo) is never overwritten", async () => {
+    // The repo can produce this state: the info-write rollback removes the
+    // .trashinfo but leaves the file in Trash/files. rename(2) REPLACES the
+    // target, so a name collision there would DESTROY the old trashed file's
+    // bytes — a file the user already threw away, with no restore mapping
+    // left to notice the loss.
+    rmSync(path.join(SANDBOX, "Trash"), { recursive: true, force: true });
+    const files = mktmp("tfm-trash-orphan-");
+    try {
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      W(path.join(trashDir(), "files", "orphan.txt"), "OLD TRASHED CONTENT");
+      // deliberately NO info/orphan.txt.trashinfo beside it
+      W(path.join(files, "orphan.txt"), "NEW CONTENT");
+      const loc = await xdgTrashMove(path.join(files, "orphan.txt"));
+      expect(loc).toBe(path.join(trashDir(), "files", "orphan.txt.2"));
+      expect(readFileSync(path.join(trashDir(), "files", "orphan.txt"), "utf8")).toBe("OLD TRASHED CONTENT");
+      expect(readFileSync(path.join(trashDir(), "files", "orphan.txt.2"), "utf8")).toBe("NEW CONTENT");
+      // the new entry owns a restore mapping
+      expect(existsSync(path.join(trashDir(), "info", "orphan.txt.2.trashinfo"))).toBe(true);
+    } finally {
+      rmSync(files, { recursive: true, force: true });
+    }
+  });
+
   test("creates the trash tree on demand when absent", async () => {
     rmSync(path.join(SANDBOX, "Trash"), { recursive: true, force: true });
     const files = mktmp("tfm-trash-src3-");

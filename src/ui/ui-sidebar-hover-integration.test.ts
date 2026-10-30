@@ -9,7 +9,7 @@ import { makeSidebarHover } from "./ui-sidebar-hover";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 
-import type { Tab } from "../app/tabs";
+import type { Tab } from "../fs/session";
 import type { IconSpec } from "../lib/icon-state";
 
 // End-to-end stuck-lift guard: the recording-stub test in ui-chrome.test.ts only

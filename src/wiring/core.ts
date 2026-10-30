@@ -131,9 +131,10 @@ export const wireCore = (deps: {
   // Called before the renderer boots: every ctx field the drain path needs is
   // an arrow wrapper (post-boot evaluation), per the widget-seam rules.
   // Created BEFORE the floats layer on purpose: the modal dim (applyModalDim)
-  // shades the icon rasters through `slots.setRasterDim`, and a slot factory
-  // built later left that call in the TDZ — a SILENT no-op (the dim's
-  // try/catch swallows the ReferenceError), not a crash. ---
+  // shades the icon rasters through `slots.setRasterDim`, so the slot factory
+  // must already exist when the dim is wired — a slot factory built later
+  // would leave that call reading a not-yet-initialized binding (the dim's
+  // try/catch would swallow the ReferenceError as a SILENT no-op). ---
   const slots = makeSlots({
     renderer: () => deps.renderer(),
     byId: lookup.byId,

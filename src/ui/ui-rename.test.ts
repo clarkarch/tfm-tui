@@ -14,6 +14,15 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// the create → renderGrid → rename chain is fire-and-forget, so async
+// assertions POLL an observable state instead of sleeping a fixed window
+// (a sleep races the real fs work under suite load)
+const settleUntil = async (cond: () => boolean, ms = 2000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await Bun.sleep(5);
+  if (!cond()) throw new Error("settleUntil timeout");
+};
+
 describe("uniqueUntitledName", () => {
   test("base name is free -> returned as-is", () => {
     expect(uniqueUntitledName(dir, "Untitled folder")).toBe("Untitled folder");
@@ -199,7 +208,9 @@ describe("makeRename (renderer)", () => {
       expect(input).toBeTruthy();
       input.value = "../escaped.txt";
       rename.finishInlineRename(true);
-      await Bun.sleep(30);
+      // the placeholder drop is async (rm → renderAll): poll the observable
+      // (the placeholder is gone) instead of assuming a tick
+      await settleUntil(() => !existsSync(created));
       await t.renderOnce();
       expect(existsSync(path.join(dir, "escaped.txt"))).toBe(false); // never left the folder
       expect(calls.some((c) => c.startsWith("notify:create:error:"))).toBe(true);

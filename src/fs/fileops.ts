@@ -814,7 +814,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // a rename target is a NAME, not a path: "sub/x" would silently move the
     // file into sub/ and "../x" out of the folder, while the toast reported
     // the old basename. Validated HERE (the fs-facing boundary) so every
-    // caller — inline rename, create, plugins — is covered by one rule.
+    // caller — inline rename, inline create, bulk rename — is covered by one
+    // rule.
     const badName = invalidFileName(v);
     if (badName) {
       ctx.notify(badName, "rename", "error");
@@ -970,6 +971,19 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const failWhy = new Set<string>();
     let bulkSudoOk: boolean | null = null;
     for (const { from, to } of pairs) {
+      // the same fs boundary as the single rename: a rename target is a NAME
+      // in the SAME directory. A `to` that carries a path segment would make
+      // the rename a MOVE (the file changes directory while the toast
+      // reports a rename) — the planner builds same-directory targets, so
+      // anything else is a caller that skipped the rule.
+      const badTarget =
+        invalidFileName(path.basename(to)) ??
+        (path.dirname(to) === path.dirname(from) ? null : "Invalid rename target");
+      if (badTarget) {
+        failed++;
+        failWhy.add(badTarget);
+        continue;
+      }
       const recordBulk = (): void => {
         units.push(() => safeRestoreMove(to, from).then(() => undefined));
         dUnits.push({ op: "rename", from: to, to: from });

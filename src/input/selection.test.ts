@@ -6,7 +6,6 @@ import { makeSelection, type SelTileRef, type SelectionCtx } from "./selection";
 import { fmtBytes } from "../fs/propsinfo";
 import { TileVisual } from "./grid-input";
 import type { IconSpec } from "../lib/icon-state";
-import { applySurface, tileSurface } from "../ui/style";
 
 const COLORS: any = {
   bg: "#111111",
@@ -17,6 +16,26 @@ const COLORS: any = {
   sidebarFgMuted: "#666666",
   white: "#ffffff",
 };
+
+// input/ may not import the ui/ PAINT layer — that is the whole point of the
+// ctx.paintTile seam (the surface RULES live in ui/style.ts, input/ only
+// knows the four visual states). So this file mirrors the production painter's
+// OBSERVABLE contract locally (wiring/grid-foundation.ts -> ui/style.ts's
+// tileSurface + applySurface): rest/cut paint the canvas bg, hover the hover
+// bg, selected the accent bg, and transparent-bg force clears the rest/cut
+// fill so the terminal shows through. The assertions below read BOTH the
+// surface the fake applies and the state the seam received, so a drift in
+// either is visible.
+const TILE_BG = {
+  rest: COLORS.bg as string,
+  hover: COLORS.hoverBg as string,
+  selected: COLORS.accentBg as string,
+  cut: COLORS.bg as string,
+};
+type TilePaintState = keyof typeof TILE_BG;
+
+const fakeTileBg = (state: TilePaintState, forceTransparent: boolean): string =>
+  forceTransparent && (state === "rest" || state === "cut") ? "transparent" : TILE_BG[state];
 
 const settleUntil = async (cond: () => boolean): Promise<void> => {
   const deadline = Date.now() + 2000;
@@ -35,10 +54,12 @@ const makeHarness = () => {
   // the real painter's transparent-bg knob is flipped by a test AFTER the ctx
   // is built, so the fake reads it live through the same seam
   let forceTransparent = false;
+  // what the ctx.paintTile seam was handed, per call — the seam contract
+  // (the visual state) is part of what selection.ts owns
+  const paintCalls: Array<{ id: string; state: TilePaintState; bg: string }> = [];
 
   const ctx: SelectionCtx = {
     colors: () => COLORS,
-    uiStyle: () => "solid",
     byId,
     setText: (id, text) => {
       const n = nodes.get(id);
@@ -58,7 +79,9 @@ const makeHarness = () => {
     // assert the tile's background/fill, so a no-op fake would make the
     // selection INVISIBLE to the assertion
     paintTile: (node, state) => {
-      applySurface(node, tileSurface("solid", COLORS, state, forceTransparent ? "force" : undefined));
+      const bg = fakeTileBg(state, forceTransparent);
+      paintCalls.push({ id: node?.id ?? "", state, bg });
+      if (node) node.backgroundColor = bg;
     },
   };
   const sel = makeSelection(ctx);
@@ -91,6 +114,7 @@ const makeHarness = () => {
     previews,
     scrolls,
     cutKeys,
+    paintCalls,
     addTile,
     // flipped by the transparent-bg test to drive the fake painter
     set forceTransparent(v: boolean) {
@@ -289,6 +313,8 @@ describe("setTileVisual", () => {
     expect(h.iconEvents).toEqual([]);
     expect(h.nodes.get("slot:thumb.png").opacity).toBe(0.45);
     expect(h.nodes.get("label:thumb.png").fg).toBe(COLORS.sidebarFgMuted);
+    // the seam got the CUT state (not "rest") and the canvas fill
+    expect(h.paintCalls).toEqual([{ id: "tile:thumb.png", state: "cut", bg: COLORS.bg }]);
   });
 
   test("selected mode tints the label accent and fills the tile", () => {
@@ -297,11 +323,12 @@ describe("setTileVisual", () => {
     h.sel.setTileVisual("a", TileVisual.Selected);
     expect(h.nodes.get("label:a").fg).toBe(COLORS.accent);
     expect(h.nodes.get("tile:a").backgroundColor).toBe(COLORS.accentBg);
+    // the seam got the SELECTED state and the accent fill
+    expect(h.paintCalls).toEqual([{ id: "tile:a", state: "selected", bg: COLORS.accentBg }]);
   });
 
   test("transparent-bg force clears the rest fill (terminal shows through)", () => {
     const h = makeHarness();
-    (h.ctx as SelectionCtx).transparentForce = () => true;
     h.forceTransparent = true;
     h.addTile("a");
     h.sel.setTileVisual("a", TileVisual.Rest);
@@ -309,6 +336,11 @@ describe("setTileVisual", () => {
     // selection keeps its fill under force
     h.sel.setTileVisual("a", TileVisual.Selected);
     expect(h.nodes.get("tile:a").backgroundColor).toBe(COLORS.accentBg);
+    // the fake painter saw the force knob live: rest cleared, selected kept
+    expect(h.paintCalls).toEqual([
+      { id: "tile:a", state: "rest", bg: "transparent" },
+      { id: "tile:a", state: "selected", bg: COLORS.accentBg },
+    ]);
   });
 });
 

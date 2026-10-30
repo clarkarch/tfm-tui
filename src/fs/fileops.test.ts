@@ -668,6 +668,33 @@ describe("performBulkRename", () => {
     expect(existsSync(b)).toBe(true);
     expect(h.calls.some((c) => c.includes("already exists"))).toBe(true);
   });
+
+  test("a target outside the source's directory is refused — a rename never moves", async () => {
+    // the fs boundary: `to` must be a legal NAME in the SAME directory. A
+    // `to` carrying a path segment would make the rename a MOVE (the file
+    // changes directory while the toast reports a rename) — the exact bug the
+    // single-rename boundary refuses.
+    const h = makeHarness();
+    const a = path.join(ROOT, "bulk-move-a.txt");
+    const sub = path.join(ROOT, "bulk-move-sub");
+    W(a, "A");
+    mkdirSync(sub, { recursive: true });
+    await h.ops.performBulkRename([{ from: a, to: path.join(sub, "bulk-move-a.txt") }]);
+    expect(existsSync(a)).toBe(true);
+    expect(existsSync(path.join(sub, "bulk-move-a.txt"))).toBe(false);
+    expect(h.calls.some((c) => c.includes("FAILED"))).toBe(true);
+  });
+
+  test("an illegal target name is refused at the boundary", async () => {
+    const h = makeHarness();
+    const a = path.join(ROOT, "bulk-bad-a.txt");
+    W(a, "A");
+    // a whitespace-only NAME is illegal on every fs-facing entry point
+    await h.ops.performBulkRename([{ from: a, to: path.join(ROOT, " ") }]);
+    expect(existsSync(a)).toBe(true);
+    expect(existsSync(path.join(ROOT, " "))).toBe(false);
+    expect(h.calls.some((c) => c.includes("FAILED"))).toBe(true);
+  });
 });
 
 describe("duplicate", () => {
@@ -853,10 +880,14 @@ describe("human-friendly statuses and labels", () => {
     const src = path.join(ROOT, "escape-name.txt");
     W(src, "data");
     // clean the target first: an earlier run of the BUGGY build really did
-    // move the file out of ROOT, and a leftover would fail this assertion
-    const escaped = path.join(ROOT, "..", "escaped.txt");
+    // move the file out of ROOT, and a leftover would fail this assertion.
+    // The name is UNIQUE per run, so this cleanup can only ever remove THIS
+    // test's own leftover — a fixed name would delete an unrelated file in
+    // the tmpdir that happened to share it.
+    const escapedName = `escaped-${process.pid}-${Date.now()}.txt`;
+    const escaped = path.join(ROOT, "..", escapedName);
     rmSync(escaped, { force: true });
-    await h.ops.performRename(src, "../escaped.txt");
+    await h.ops.performRename(src, `../${escapedName}`);
     expect(h.calls.some((c) => c.startsWith("notify:rename:error:"))).toBe(true);
     expect(existsSync(src)).toBe(true);
     expect(existsSync(escaped)).toBe(false);
@@ -2153,14 +2184,16 @@ describeNonRoot("sudo escalation", () => {
   });
 
   test("bulk sudo retry refuses a target created after the gate (no silent overwrite)", async () => {
-    const dirA = path.join(ROOT, "sudo-race-a");
-    const dirB = path.join(ROOT, "sudo-race-b");
-    mkdirSync(dirA, { recursive: true });
-    mkdirSync(dirB, { recursive: true });
-    W(path.join(dirA, "a.txt"), "A");
-    W(path.join(dirB, "b2.txt"), "INNOCENT");
+    // ONE read-only dir: the pair renames IN PLACE (the planner's shape — a
+    // bulk rename never moves a file, so a cross-directory pair is not a
+    // shape production produces). The dir is read-only, so a rename would
+    // need the sudo gate — the target exists, so it must be refused instead.
+    const dir = path.join(ROOT, "sudo-race");
+    mkdirSync(dir, { recursive: true });
+    W(path.join(dir, "a.txt"), "A");
+    W(path.join(dir, "b2.txt"), "INNOCENT");
     const { chmodSync } = await import("node:fs");
-    chmodSync(dirB, 0o555);
+    chmodSync(dir, 0o555);
     try {
       const seen: string[][] = [];
       const h = makeHarness({
@@ -2170,13 +2203,13 @@ describeNonRoot("sudo escalation", () => {
           return fakeSudoExec(argv);
         },
       });
-      await h.ops.performBulkRename([{ from: path.join(dirA, "a.txt"), to: path.join(dirB, "b2.txt") }]);
+      await h.ops.performBulkRename([{ from: path.join(dir, "a.txt"), to: path.join(dir, "b2.txt") }]);
       expect(seen.some((a) => a[2] === "mv")).toBe(false);
-      expect(readFileSync(path.join(dirB, "b2.txt"), "utf8")).toBe("INNOCENT");
-      expect(existsSync(path.join(dirA, "a.txt"))).toBe(true);
+      expect(readFileSync(path.join(dir, "b2.txt"), "utf8")).toBe("INNOCENT");
+      expect(existsSync(path.join(dir, "a.txt"))).toBe(true);
       expect(h.calls.some((c) => c.includes("already exists"))).toBe(true);
     } finally {
-      chmodSync(dirB, 0o755);
+      chmodSync(dir, 0o755);
     }
   });
 

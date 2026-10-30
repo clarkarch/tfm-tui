@@ -224,6 +224,109 @@ describe("wireUpdates", () => {
     expect(fetches).toBe(1);
   });
 
+  test("a manual check during an in-flight check still asks the network and answers", async () => {
+    // the boot check holds the request; a MANUAL check must not reuse it —
+    // "a manual check always hits the network and always answers"
+    let fetches = 0;
+    let release: ((t: string | null) => void) | null = null;
+    let reached: (() => void) | null = null;
+    const inFlight = new Promise<void>((r) => {
+      reached = r;
+    });
+    const h = harness({
+      fetchTag: () =>
+        new Promise<string | null>((r) => {
+          fetches++;
+          release = r;
+          reached?.();
+        }),
+    });
+    const u = wireUpdates(h.ctx);
+    const boot = u.checkOnBoot();
+    await inFlight;
+    const manual = u.checkNow({ toast: "always" });
+    (release as unknown as (t: string | null) => void)("1.1.0");
+    await boot;
+    h.notes.length = 0; // only the manual check's own answer matters now
+    await settleUntil(() => fetches === 2);
+    (release as unknown as (t: string | null) => void)("1.1.0");
+    await manual;
+    expect(fetches).toBe(2);
+    expect(h.notes.length).toBe(1);
+  });
+
+  test("stop() during the cache read starts no fetch and repaints nothing", async () => {
+    // the generation used to be captured AFTER the cache read, so a stop()
+    // that landed during the read compared the new generation with itself:
+    // the fetch started anyway and its answer painted into a dead renderer
+    let fetches = 0;
+    const repaints: string[] = [];
+    let release: (() => void) | null = null;
+    let reached: (() => void) | null = null;
+    const reading = new Promise<void>((r) => {
+      reached = r;
+    });
+    const h = harness({
+      repaint: () => repaints.push("repaint"),
+      fetchTag: async () => {
+        fetches++;
+        return "1.1.0";
+      },
+      cache: {
+        read: async () => {
+          reached?.();
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          return null;
+        },
+        write: async () => {},
+      },
+    });
+    const u = wireUpdates(h.ctx);
+    const pending = u.checkOnBoot();
+    await reading;
+    const painted = repaints.length;
+    u.stop();
+    (release as unknown as () => void)();
+    await pending;
+    expect(fetches).toBe(0);
+    expect(repaints.length).toBe(painted);
+  });
+
+  test("a fresh-cache check that lands after stop() repaints nothing", async () => {
+    // the fresh-cache branch had NO generation guard at all: it published
+    // (and repainted the About row) no matter whether stop() had run
+    const repaints: string[] = [];
+    let release: (() => void) | null = null;
+    let reached: (() => void) | null = null;
+    const reading = new Promise<void>((r) => {
+      reached = r;
+    });
+    const h = harness({
+      repaint: () => repaints.push("repaint"),
+      now: () => 1_000_000,
+      cache: {
+        read: async () => {
+          reached?.();
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          return { checkedAt: 1_000_000, latest: "1.1.0", notified: null };
+        },
+        write: async () => {},
+      },
+    });
+    const u = wireUpdates(h.ctx);
+    const pending = u.checkOnBoot();
+    await reading;
+    const painted = repaints.length;
+    u.stop();
+    (release as unknown as () => void)();
+    await pending;
+    expect(repaints.length).toBe(painted);
+  });
+
   test("the row repaints once the check settles", async () => {
     const repaints: string[] = [];
     const h = harness({ repaint: () => repaints.push("repaint") });

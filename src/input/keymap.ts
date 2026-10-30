@@ -17,7 +17,6 @@ import path from "node:path";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { archiveBrowseUri, archiveUri, parseArchiveUri } from "../fs/archive-scheme";
 import { canExtract } from "../fs/archive";
-import { loadSystemPlaces } from "../fs/places";
 import type { KeyAction } from "../config/config-schema";
 import { KEY_SCHEMA } from "../config/config-schema";
 import { type KeyEventLike, keyMatch, parseKeySpec } from "../config/keyspec";
@@ -60,6 +59,11 @@ export type KeyRouterCtx = {
   // ask github (through the cached check) whether a newer release exists and
   // report the verdict; never installs anything on its own
   checkUpdates(): void;
+  // reload the places sidebar (system dirs/bookmarks/mounts) and repaint.
+  // A SEAM: the router used to call the real loadSystemPlaces() itself, so a
+  // unit test's ctrl+r loaded THIS MACHINE's XDG dirs into the module-global
+  // and every later test in the process read them.
+  reloadPlaces(): void;
   // --- modal layers (precedence order) ---
   conflict: { isOpen(): boolean; closeConflict(policy: "skip"): void };
   yesNo: { isOpen(): boolean; close(): void; moveFocus(delta: number): void; submit(): void };
@@ -908,7 +912,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       action: "toggleHidden",
       run: () => ctx.toggleHidden(),
     },
-    { action: "reloadPlaces", run: () => void loadSystemPlaces().then(() => ctx.renderAll()) },
+    { action: "reloadPlaces", run: () => ctx.reloadPlaces() },
     { action: "togglePreview", run: () => ctx.togglePreview() },
     { action: "toggleView", run: () => ctx.toggleViewMode() },
     { action: "cycleSort", run: () => ctx.cycleSort() },
@@ -963,6 +967,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // here until the router knows how to ask about it. A float that misses the
   // list DEAD-LETTERS every typed character ("typing does nothing in the
   // overlay").
+  //
+  // The probes are PURE reads (each surface reports its own open flag), so
+  // the order they run in does not change the answer — the list is the
+  // vocabulary, not a priority order.
   const editorFloatOpen = (kind: EditorFloatKind): boolean => {
     switch (kind) {
       case "pick":

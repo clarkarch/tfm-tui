@@ -178,7 +178,6 @@ beforeAll(async () => {
 
   selection = makeSelection({
     colors: () => colors,
-    uiStyle: () => "solid",
     byId: (id) => t.renderer.root.findDescendantById(id),
     setText: () => {},
     setIconState: (spec, idx) => {
@@ -545,7 +544,6 @@ describe("renderGrid (grid tiles)", () => {
     let bootSeq = 0;
     const bootSelection = makeSelection({
       colors: () => colors,
-      uiStyle: () => "solid",
       byId: (id) => t.renderer.root.findDescendantById(id),
       setText: () => {},
       setIconState: () => {},

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +8,7 @@ import { MouseButtons } from "@opentui/core/testing";
 import { makeChrome, tabChipMaxWidth, tabTitle } from "./ui-chrome";
 import { gridDrag } from "../input/grid-input";
 import { defaultConfig } from "../config/config-schema";
-import { loadSystemPlaces } from "../fs/places";
+import { loadSystemPlaces, resetSystemPlaces } from "../fs/places";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { Theme } from "../config/config";
 import type { Tab } from "../fs/session";
@@ -218,7 +218,17 @@ beforeAll(async () => {
   });
 });
 
+// The sidebar reads the places module's loaded state, and the eject tests
+// below load THIS MACHINE's real places into it. Reset before every test so
+// the file's premise ("the defaults are deterministic") holds whatever ran
+// before, and after the file so the real places do not leak into the next
+// test file in the process.
+beforeEach(() => {
+  resetSystemPlaces();
+});
+
 afterAll(async () => {
+  resetSystemPlaces();
   if (savedXdgData === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = savedXdgData;
   gridDrag.keys = null;

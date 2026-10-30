@@ -19,8 +19,8 @@ import {
   parseGitUrl,
   removePluginDir,
   updatePlugin,
-  type ExecFn,
 } from "./plugin-install";
+import type { ExecFn } from "../lib/exec-fn";
 
 // Installer contract: paste-a-git-URL -> validated -> cloned -> normalized
 // into plugins/<name>/<name>.ts. No network here: the git spawn is injected

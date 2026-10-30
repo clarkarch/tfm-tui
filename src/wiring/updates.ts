@@ -66,6 +66,9 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
   // null until something asked: the About row shows a plain "check for updates"
   let status: UpdateStatus | null = null;
   let inFlight: Promise<UpdateStatus> | null = null;
+  // whether the in-flight check asked the NETWORK (force) or may answer from
+  // the cache — a manual check may share a network request, never a cached one
+  let inFlightForced = false;
   let applying = false;
   // generation guard: a check that lands after quit/stop must not toast or
   // write state into a torn-down renderer
@@ -88,17 +91,23 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
   };
 
   const run = async (force: boolean): Promise<UpdateStatus> => {
+    // The generation is captured BEFORE the first await: a stop() that lands
+    // during the cache read must be visible to the guard below. It used to be
+    // captured after the read, so the guard compared the NEW generation with
+    // itself — the fetch started anyway and its answer painted into a
+    // renderer that was already torn down.
+    const myGen = gen;
     const current = ctx.current;
     if (isDev) return publish({ kind: "dev", current });
     let cached: UpdateCache | null = null;
     try {
       cached = await cache.read();
     } catch {}
+    if (myGen !== gen) return status ?? { kind: "idle" };
     let latest: string | null;
     if (!force && cacheFresh(cached, now())) {
       latest = cached?.latest ?? null;
     } else {
-      const myGen = gen;
       aborter = new AbortController();
       latest = await fetchTag({ signal: aborter.signal });
       if (myGen !== gen) return status ?? { kind: "idle" };
@@ -106,17 +115,31 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
         await cache.write({ checkedAt: now(), latest, notified: cached?.notified ?? null });
       } catch {}
     }
+    // the fresh-cache branch has no fetch to guard, so the publish needs its
+    // own check — otherwise a settled cache check repainted the About row
+    // after stop()
+    if (myGen !== gen) return status ?? { kind: "idle" };
     return publish(statusFor({ current, latest, isDev }));
   };
 
   const check = async (mode: ToastMode, force: boolean): Promise<UpdateStatus> => {
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      // A MANUAL check always asks the network and always answers. It may
+      // share an in-flight request that already asked the network (two manual
+      // checks are one request), but never a CACHED one — the boot's cached
+      // question would swallow the user's ask, and the manual check would
+      // answer from a cache instead of the network.
+      if (!force || inFlightForced) return inFlight;
+      await inFlight.catch(() => {});
+    }
     const myGen = gen;
     if (mode !== "never") publish({ kind: "checking" });
     const p = run(force).finally(() => {
       inFlight = null;
+      inFlightForced = false;
     });
     inFlight = p;
+    inFlightForced = force;
     const s = await p;
     if (myGen !== gen) return s;
     if (mode === "always") say(s);
@@ -194,6 +217,7 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
   const stop = (): void => {
     gen++;
     inFlight = null;
+    inFlightForced = false;
     try {
       aborter?.abort();
     } catch {}

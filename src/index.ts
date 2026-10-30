@@ -34,6 +34,16 @@ if (cli.error) {
 }
 if (cli.config) process.env.TFM_CONFIG = path.resolve(cli.config);
 
+// lib/log loads FIRST and alone: the crash handlers must exist before ANY
+// other module can throw — a headless CLI branch below, or a failing
+// @opentui/core native load. The handlers are installed by an EXPLICIT call,
+// not as an import side effect: a side effect made the "handlers first"
+// requirement an invisible accident of module order — and it left the
+// HEADLESS branches below (which return before the app graph loads) with no
+// handlers at all.
+const { appendLog, installCrashHandlers, isDebug } = await import("./lib/log");
+installCrashHandlers();
+
 // headless subcommand (`tfm plugins …`) — answers before the TUI graph loads
 if (cli.command?.name === "plugins") {
   const { runPluginsCli } = await import("./app/plugins-cli");
@@ -128,13 +138,7 @@ const bootStart = performance.now();
 // one Promise.all, not 10 serial awaits: the construction order below is
 // load-bearing, the module loading isn't (all wire* expose side-effect-free
 // factory fns). ~250ms serial transpile/parse becomes one parallel window.
-// lib/log loads FIRST and alone: the crash handlers must exist before any
-// other module (e.g. a failing @opentui/core native load) can throw — under
-// Promise.all evaluation order isn't guaranteed. The handlers are installed
-// by an EXPLICIT call, not as an import side effect: a side effect made the
-// "handlers first" requirement an invisible accident of module order.
-const { appendLog, installCrashHandlers, isDebug } = await import("./lib/log");
-installCrashHandlers();
+// The crash handlers are already installed above (lib/log loads first, alone).
 const [
   { wireCore },
   { wireNav },

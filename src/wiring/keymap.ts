@@ -141,6 +141,11 @@ export const wireKeymap = (deps: {
       submit: fileops.yesNo.submit,
     },
     typeToSearchEnabled: () => core.config.ui.typeToSearch,
+    // reload the places sidebar: the real loader lives HERE (the router only
+    // asks for it), so a unit test never touches this machine's XDG dirs
+    reloadPlaces: () => {
+      void loadSystemPlaces().then(() => nav.renderAll());
+    },
     // startSearch re-arms the filter (yazi preset leaves it off) through the
     // single applyConfig -> save path like every other config flip
     enableTypeToSearch: () => {

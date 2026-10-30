@@ -10,8 +10,6 @@ import type { PointerStyle } from "../lib/pointer";
 import type { ListEntry } from "../lib/menu-entry";
 import type { ClipItem } from "../lib/file-op-protocol";
 
-export type { ClipItem };
-
 // What makeEntryMouseHandlers hands the grid to spread onto a tile: the tile
 // mouse pipeline, typed so a misspelled handler name is a compile error.
 export type TileMouseHandlers = {

@@ -218,6 +218,27 @@ describe("setDefaultFileManager", () => {
     expect(calls).toEqual([]);
   });
 
+  test("unset restores a stashed ABSOLUTE path to a desktop file", async () => {
+    // mimeapps.list may legitimately store a PATH instead of a desktop id.
+    // The old guard only accepted a bare id, so a path-style previous handler
+    // was stashed but could NEVER be restored — the user's old file manager
+    // was stranded with no way back.
+    const dir = sandbox();
+    const prev = path.join(dir, "prev");
+    const handler = "/usr/share/applications/org.gnome.Nautilus.desktop";
+    writeFileSync(prev, `${handler}\n`);
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    const out = await setDefaultFileManager("unset", {
+      exec: async (cmd: string, args: string[]) => {
+        calls.push({ cmd, args });
+        return { exit: 0, output: "" };
+      },
+      prevFile: () => prev,
+    });
+    expect(calls).toEqual([{ cmd: "xdg-mime", args: ["default", handler, DIRECTORY_MIME] }]);
+    expect(out.ok).toBe(true);
+  });
+
   test("unset with no stashed previous refuses instead of clearing the default", async () => {
     const dir = sandbox();
     const calls: Array<{ cmd: string; args: string[] }> = [];

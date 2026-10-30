@@ -222,7 +222,16 @@ export const probeNameOwned = async (): Promise<boolean | null> => {
         "s",
         SERVICE_NAME,
       ],
-      { stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: 3000 },
+      {
+        stdout: "pipe",
+        stderr: "ignore",
+        stdin: "ignore",
+        timeout: 3000,
+        // the live PATH — Bun.spawn resolves the binary against the PATH it
+        // cached at process start unless the env is passed fresh (same class
+        // as Bun.which: src/fs/which.ts passes { PATH } for this reason)
+        env: { ...process.env },
+      },
     );
     const out = (await new Response(proc.stdout).text()).trim();
     await proc.exited;

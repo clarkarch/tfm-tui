@@ -6,15 +6,13 @@
 // icon states) still flows through ctx — no renderer imports. ---
 import { readdir } from "node:fs/promises";
 import { lstatSync } from "node:fs";
-import type { UiStyle } from "../config/config-schema";
 import { fmtBytes, inodeKey } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ClipItem } from "../lib/file-op-protocol";
 import { TileVisual, type TileVisualMode } from "./grid-input";
-import { IconStateIdx } from "../lib/icon-state";
+import { IconStateIdx, type IconSpec } from "../lib/icon-state";
 
 import type { MaybeNode, ScrollerLike } from "../lib/node-like";
-import type { IconSpec } from "../lib/icon-state";
 
 export type SelTileRef = {
   iconSpec?: IconSpec;
@@ -31,11 +29,7 @@ export type SelTileRef = {
 
 export type SelectionCtx = {
   colors(): Theme;
-  uiStyle(): UiStyle;
   byId(id: string): MaybeNode;
-  // transparent-bg force: rest fills clear so the terminal shows through.
-  // Optional so test fakes stay light; absent = opaque/transparent behavior.
-  transparentForce?(): boolean;
   setText(id: string, s: string): void;
   setIconState(spec: IconSpec | undefined, mode: number): void;
   isCutKey(key: string): boolean;

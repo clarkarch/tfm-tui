@@ -6,7 +6,6 @@
 
 import type { Tab } from "../fs/session";
 
-export type { Tab };
 export type TabStateRef = { history: string[]; histIdx: number; cwd: string };
 
 export type TabsHooks = {

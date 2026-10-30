@@ -128,7 +128,7 @@ export const exitAfterClosed = (
       : Promise.race([
           closed,
           new Promise<void>((_, reject) => {
-            const t = setTimeout(() => reject(new Error("force-quit close timeout")), capMs);
+            const t = setTimeout(() => reject(new Error("renderer close timeout")), capMs);
             // a lingering timer pins the loop the teardown just drained — unref it
             (t as unknown as { unref?: () => void }).unref?.();
           }),

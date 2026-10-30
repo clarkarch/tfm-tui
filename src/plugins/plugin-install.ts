@@ -142,8 +142,6 @@ export const findPluginMains = (root: string): string[] => {
   return out;
 };
 
-export type { ExecFn };
-
 // production spawn: array argv (no shell), piped output, 120s kill cap.
 // Never throws — failures arrive as non-zero exit (callers surface output).
 const defaultExec: ExecFn = async (cmd, args, opts) => {

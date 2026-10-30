@@ -22,7 +22,6 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
 const makeSelectionForTest = () => {
   const ctx: SelectionCtx = {
     colors: () => COLORS,
-    uiStyle: () => "solid",
     byId: () => undefined,
     setText: () => {},
     setIconState: () => {},
@@ -200,6 +199,11 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
     duplicate: (paths) => calls.push(`duplicate:${paths.join(",")}`),
     isVirtualCwd: () => false,
     pasteSmart: (d) => calls.push(`paste:${d}`),
+    // mirrors the wiring: reload the places, THEN re-render
+    reloadPlaces: () => {
+      calls.push("reload:places");
+      calls.push("renderAll");
+    },
     notify: (m, t, l) => calls.push(`notify:${t}:${l}:${m}`),
     undoLast: rec("undo"),
     redoLast: rec("redo"),
@@ -1461,6 +1465,16 @@ describe("dual-pane actions", () => {
     // NOTE: reloadPlaces (ctrl+r) carries the same guard but isn't unit-
     // observable — doReloadPlaces is async real-fs (loadSystemPlaces), so a
     // synchronous calls assertion can't see it either way.
+  });
+
+  test("reloadPlaces goes through the ctx seam — the router never reads the real machine", () => {
+    // the router used to call the REAL loadSystemPlaces(): a unit test's
+    // ctrl+r loaded this machine's XDG dirs into the module-global, and every
+    // later test in the process read them (the sidebar then showed the real
+    // Desktop/Documents/… instead of the deterministic defaults)
+    const h = makeHarness();
+    h.key("r", { ctrl: true });
+    expect(h.calls).toContain("reload:places");
   });
 
   test("autorepeat never starts cross-pane work (op-flood guard)", () => {

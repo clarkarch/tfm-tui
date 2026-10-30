@@ -174,8 +174,6 @@ export const makeDialogs = (ctx: DialogsCtx) => {
 // State + promise plumbing live here; when the choice should apply to the
 // whole remaining batch ("…all") the policy is remembered until resetPolicy.
 
-export type { ConflictChoice };
-
 type ConflictCtx = {
   colors(): Theme;
   uiStyle(): UiStyle;

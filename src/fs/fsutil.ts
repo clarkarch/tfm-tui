@@ -223,10 +223,10 @@ export const splitStemExt = (base: string): { stem: string; ext: string } => {
 // told it was renamed and it wasn't.
 //
 // Validate at the BOUNDARY (the fs-facing API), not at each call site: the
-// inline rename, the create path and any plugin-driven caller all go through
-// it, and a per-site check is exactly what let the two rename entry points
-// disagree about what a legal name is (the bulk-rename planner already had
-// its own copy of this rule).
+// inline rename, the inline create and the bulk-rename planner all go
+// through it, and a per-site check is exactly what let the two rename entry
+// points disagree about what a legal name is (the bulk-rename planner
+// already had its own copy of this rule).
 export const invalidFileName = (name: string): string | null => {
   // whitespace-only is as empty as empty (the rename input trims, but this
   // is the fs-facing boundary and must not depend on the caller trimming)
@@ -439,18 +439,29 @@ export const xdgTrashMoveToRoot = async (
   let name = base;
   for (let i = 2; ; i++) {
     const infoPath = path.join(infoDir, `${name}.trashinfo`);
+    const finalPath = path.join(filesDir, name);
+    // An ORPHANED trash entry — the file is in Trash/files but its
+    // .trashinfo is not — must never be overwritten: rename(2) REPLACES the
+    // target, so the old trashed file's bytes would be destroyed (and the
+    // repo can produce that state itself: the info-write rollback removes the
+    // .trashinfo while leaving the file behind). The check sits BEFORE the
+    // claim on purpose — inside the claim's catch it only ran when the info
+    // claim failed, so a file without an info was silently clobbered.
+    if (existsSync(finalPath)) {
+      name = `${base}.${i}`;
+      continue;
+    }
     // atomic claim: fails with EEXIST when another trasher owns this name
     try {
       await writeFile(infoPath, `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`, { flag: "wx" });
     } catch (err) {
-      if (errCode(err) === "EEXIST" || existsSync(path.join(filesDir, name))) {
+      if (errCode(err) === "EEXIST") {
         name = `${base}.${i}`;
         continue;
       }
       throw err;
     }
     // claimed — now move, then finalize the info (overwrite placeholder)
-    const finalPath = path.join(filesDir, name);
     try {
       await move(absSrc, finalPath);
     } catch (moveErr) {

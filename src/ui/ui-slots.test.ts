@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box, type CliRenderer } from "@opentui/core";
@@ -23,6 +23,18 @@ const hasInproc = await import("@resvg/resvg-js").then(() => true).catch(() => f
 const hasMagick = Bun.which("magick") !== null;
 const hasSvgRenderer = hasInproc || hasMagick;
 // brand/faithful rasters are in-process only (no CLI fallback, same as iconPng)
+
+// recursive walk over a source tree — the no-drift rule below scans ALL of
+// src/, not just the flat src/ui/ directory (same model as fs/which.test.ts)
+const collectTsFiles = (dir: string): string[] => {
+  const out: string[] = [];
+  for (const name of readdirSync(dir)) {
+    const p = path.join(dir, name);
+    if (statSync(p).isDirectory()) out.push(...collectTsFiles(p));
+    else if (name.endsWith(".ts")) out.push(p);
+  }
+  return out;
+};
 
 // The registry must cover every RASTERED slot, including ones whose raster
 // finished before a modal opened: resetIconQueue re-queues drained slots for
@@ -832,16 +844,32 @@ describe("no-drift rule: one home for the icon-slot contract", () => {
   // every signature change had to be mirrored by hand in each copy. The
   // contract now lives in ONE type (MakeIconSlot, here in ui-slots); a
   // method-style re-spelling may not come back.
+  //
+  // The scan covers ALL of src/ (the old rule walked only the FLAT src/ui/
+  // directory, so a re-spelling planted in src/wiring/ or src/input/ slipped
+  // through). Two spellings count as a re-spelling:
+  //   - the CALL form: the identifier opens a parameter list of its own in a
+  //     member position — `makeIconSlot(name: string, ...): Handle`. A CALL
+  //     never looks like that (calls go through `ctx.makeIconSlot(...)`, and
+  //     a destructured local is always assigned first), so the member-position
+  //     anchor is what separates the two.
+  //   - the BARE REFERENCE form: the identifier is a property whose value is
+  //     an inline parameter list — `makeIconSlot: (name: string) => Handle`.
+  // The legal spellings never match: the `MakeIconSlot` type reference,
+  // `ctx.makeIconSlot(...)` calls, and the `makeIconSlot: ctx.makeIconSlot`
+  // forwards.
   test("no module declares its own makeIconSlot parameter list", async () => {
-    const dir = import.meta.dir;
-    const offenders: string[] = [];
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith(".ts") || name.endsWith(".test.ts")) continue;
-      const src = (await Bun.file(`${dir}/${name}`).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-      // a method-style declaration — `makeIconSlot(` opening a parameter list.
-      // Calls never match: they are `const slot = makeIconSlot(` or
-      // `ctx.makeIconSlot(`.
-      if (/^\s*makeIconSlot\(/m.test(src)) offenders.push(name);
+    const root = path.resolve(import.meta.dir, "..");
+    const leaf = path.join(root, "ui", "ui-slots.ts");
+    const offenders: Array<{ file: string; form: string }> = [];
+    for (const file of collectTsFiles(root)) {
+      if (file.endsWith(".test.ts")) continue;
+      // the leaf owns the one legal spelling of the contract
+      if (file === leaf) continue;
+      const src = (await Bun.file(file).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+      const rel = path.relative(root, file);
+      if (/(?:^|[{;])\s*makeIconSlot\s*\(/m.test(src)) offenders.push({ file: rel, form: "call form" });
+      else if (/\bmakeIconSlot\s*:\s*\(/.test(src)) offenders.push({ file: rel, form: "bare reference" });
     }
     expect(offenders).toEqual([]);
   });

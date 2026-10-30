@@ -278,7 +278,15 @@ export const defaultFileManagerPrev = (deps: { prevFile?: () => string } = {}): 
 
 const defaultExec: ExecFn = async (cmd, args) => {
   try {
-    const proc = Bun.spawn([cmd, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    // env: the live PATH — Bun.spawn resolves the binary against the PATH it
+    // cached at process start unless the env is passed fresh (same class as
+    // Bun.which: src/fs/which.ts passes { PATH } for exactly this reason)
+    const proc = Bun.spawn([cmd, ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+      env: { ...process.env },
+    });
     const [out, err, exit] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -300,11 +308,28 @@ type MimeDeps = {
   entryInstalled?: () => boolean;
 };
 
-// a stashed handler becomes xdg-mime argv, so it must look like a desktop id
-// (same class parseGitUrl guards: a dash-leading value parses as a flag).
-// Array-argv kills shell injection; this kills option injection.
-const isSafeDesktopId = (s: string): boolean =>
-  s.length <= 255 && /^[A-Za-z0-9_@.+-]+\.desktop$/.test(s) && !s.startsWith("-");
+// A stashed handler becomes xdg-mime argv, so it must look like something
+// xdg-mime understands: a desktop id, or an ABSOLUTE path to a .desktop file
+// (mimeapps.list may legitimately store a path — refusing it stranded the
+// user's previous handler with no way back). Array-argv kills shell
+// injection; this kills OPTION injection (a dash-leading value parses as a
+// flag) and keeps the value free of control characters.
+const hasControlChar = (s: string): boolean => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return true;
+  }
+  return false;
+};
+
+const isSafeDesktopRef = (s: string): boolean => {
+  if (!s || s.startsWith("-")) return false;
+  if (!s.endsWith(".desktop")) return false;
+  // a bare desktop id
+  if (/^[A-Za-z0-9_@.+-]+\.desktop$/.test(s)) return s.length <= 255;
+  // an absolute path to a .desktop file
+  return s.length <= 4096 && s.startsWith("/") && !hasControlChar(s);
+};
 
 // set = become the default (stash the replaced handler first so unset can
 // restore it); unset = restore the stash, refusing when nothing was stashed
@@ -340,7 +365,7 @@ export const setDefaultFileManager = async (
   }
   const prev = defaultFileManagerPrev({ ...(deps.prevFile ? { prevFile: deps.prevFile } : {}) });
   if (!prev) return fail("No previous file manager recorded · unchanged");
-  if (!isSafeDesktopId(prev)) return fail("Previous file manager unsafe · unchanged");
+  if (!isSafeDesktopRef(prev)) return fail("Previous file manager unsafe · unchanged");
   const res = await exec("xdg-mime", ["default", prev, DIRECTORY_MIME]);
   if (res.exit !== 0) return fail(`Couldn't restore ${prev} · ${res.output || `exit ${res.exit}`}`);
   return { ok: true, message: `${prev} is the default file manager again` };
@@ -355,6 +380,8 @@ export const probeDefaultFileManagerSync = (): string => {
       stdout: "pipe",
       stderr: "ignore",
       stdin: "ignore",
+      // the live PATH — see defaultExec above
+      env: { ...process.env },
     });
     if (proc.exitCode !== 0) return "";
     return proc.stdout.toString().trim();

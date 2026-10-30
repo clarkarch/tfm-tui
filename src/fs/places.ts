@@ -80,6 +80,21 @@ let sysBookmarks: BookmarkEntry[] = [];
 let sysMounts: MountEntry[] = [];
 let sysNetwork: NetworkMount[] = [];
 
+// Put the loaded state back to the deterministic defaults (Home/Recent/
+// Starred/Trash, no devices, no network). The module OWNS the loaded state —
+// that is the design, so callers re-run loadSystemPlaces() to refresh it —
+// but a TEST that loads the real system state needs a way back: without this
+// the machine's Desktop/Documents/… stayed in the module-global and every
+// later test in the process read them (the sidebar then rendered the real
+// places instead of the defaults, and the section titles overflowed the
+// viewport).
+export const resetSystemPlaces = (): void => {
+  sysUserDirs = [];
+  sysBookmarks = [];
+  sysMounts = [];
+  sysNetwork = [];
+};
+
 export const loadSystemPlaces = async (opts?: { skipMounts?: boolean }): Promise<void> => {
   // four independent sources — await them concurrently so the sidebar load costs
   // the slowest one, not their sum. lsblk is ~20ms typical but measured 218ms

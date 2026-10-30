@@ -10,9 +10,8 @@ import { isVirtualUri } from "../fs/uri";
 import type { SortMode } from "../lib/sort";
 import { naturalAscFor } from "../lib/sort";
 import type { Config } from "../config/config";
-import type { Tab } from "./tabs";
 import { debounced } from "../lib/uiutil";
-import { readRestoredSession, saveSession, type PaneTabs } from "../fs/session";
+import { readRestoredSession, saveSession, type PaneTabs, type Tab } from "../fs/session";
 import { debugLog } from "../lib/log";
 
 export type AppState = {
