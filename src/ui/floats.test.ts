@@ -13,7 +13,7 @@ describe("floats policy", () => {
     const f = makeFloats();
     const { closed, closer } = makeTracked();
     f.open("props", closer("props"));
-    f.open("filemenu", closer("perm-menu")); // popup inside props
+    f.open("filemenu", closer("perm-menu"), { keepModalBelow: true }); // popup inside props
     expect(f.depth()).toBe(2);
     f.open("conflict", closer("conflict"));
     // both dismissed top-down, conflict is the only layer left
@@ -24,12 +24,29 @@ describe("floats policy", () => {
     expect(f.isOpen("filemenu")).toBe(false);
   });
 
-  test("opening the popup keeps the modal below and replaces an existing popup", () => {
+  test("a DESKTOP popup clears the whole desktop — one floating UI at a time", () => {
+    const f = makeFloats();
+    const { closed, closer } = makeTracked();
+    f.open("escmenu", closer("escmenu"));
+    f.open("filemenu", closer("menu"));
+    // the right-click context menu REPLACES the modal below it. A right-click
+    // that lands in the same frame as the modal opens slips past the modal's
+    // scrim (the scrim has no layout yet), and keeping the modal would leave
+    // BOTH on screen — the esc menu with the context menu drawn over it.
+    expect(closed).toEqual(["escmenu"]);
+    expect(f.isOpen("escmenu")).toBe(false);
+    expect(f.isOpen("filemenu")).toBe(true);
+    expect(f.depth()).toBe(1);
+    expect(f.top()).toBe("filemenu");
+  });
+
+  test("a NESTED popup keeps the modal below it and replaces an existing popup", () => {
     const f = makeFloats();
     const { closed, closer } = makeTracked();
     f.open("props", closer("props1"));
-    f.open("filemenu", closer("menu1"));
-    f.open("filemenu", closer("menu2")); // re-right-click: old popup replaced
+    // the properties dialog's permission menu is a popup INSIDE the dialog
+    f.open("filemenu", closer("menu1"), { keepModalBelow: true });
+    f.open("filemenu", closer("menu2"), { keepModalBelow: true }); // re-click: old popup replaced
     expect(closed).toEqual(["menu1"]);
     expect(f.depth()).toBe(2);
     expect(f.top()).toBe("filemenu");
@@ -43,7 +60,7 @@ describe("floats policy", () => {
     const f = makeFloats();
     const { closed, closer } = makeTracked();
     f.open("props", closer("props"));
-    f.open("filemenu", closer("perm-menu"));
+    f.open("filemenu", closer("perm-menu"), { keepModalBelow: true });
     f.close("props");
     // the permission popup must not outlive its dialog (the stuck-menu leak)
     expect(closed).toEqual(["perm-menu", "props"]);
@@ -54,7 +71,7 @@ describe("floats policy", () => {
     const f = makeFloats();
     const { closed, closer } = makeTracked();
     f.open("props", closer("props"));
-    f.open("filemenu", closer("perm-menu"));
+    f.open("filemenu", closer("perm-menu"), { keepModalBelow: true });
     f.close("yesno"); // never open
     f.close("escmenu"); // never open
     expect(closed).toEqual([]);
@@ -79,7 +96,7 @@ describe("floats policy", () => {
     f.closeAll();
     const { closed, closer } = makeTracked();
     f.open("yesno", closer("yesno"));
-    f.open("filemenu", closer("menu"));
+    f.open("filemenu", closer("menu"), { keepModalBelow: true });
     f.closeAll();
     expect(closed).toEqual(["menu", "yesno"]);
     expect(f.depth()).toBe(0);
@@ -101,7 +118,7 @@ describe("floats policy", () => {
     expect(states).toEqual([]);
     f.open("props", noop); // modal up
     expect(states).toEqual([true]);
-    f.open("filemenu", noop); // popup INSIDE the modal — still modal, silent
+    f.open("filemenu", noop, { keepModalBelow: true }); // popup INSIDE the modal — still modal, silent
     expect(states).toEqual([true]);
     f.close("filemenu");
     expect(states).toEqual([true]);

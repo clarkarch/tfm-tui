@@ -11,7 +11,7 @@ import { dirWalkStats, fmtBytes, fmtDate, inodeKey, mimeLabelFor } from "../fs/p
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
 import type { ListEntry } from "../lib/menu-entry";
-import { FLOAT_Z, type Floats } from "./floats";
+import { FLOAT_Z, type FloatOpenOpts, type Floats } from "./floats";
 import { hoverEvents, toggleIconState } from "./ui-slots";
 import { mountPermsEditor } from "./ui-props-perms";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -48,7 +48,9 @@ type PropsCtx = {
   nextIconId(): string;
   escHintBtn(id: string, onClose: () => void): SlotElement;
   closeFileMenu(): void;
-  openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
+  // the permission-menu popup INSIDE this dialog — the wiring opens it as a
+  // nested popup (the dialog stays open underneath it)
+  openContextMenu(x: number, y: number, title: string, entries: ListEntry[], opts?: FloatOpenOpts): void;
   floats: Floats;
   renderAll(): void;
   notify(msg: string, title?: string, level?: NotifyLevel): void;

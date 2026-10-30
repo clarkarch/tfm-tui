@@ -12,6 +12,7 @@ import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { hoverEvents, type MakeIconSlot, type SlotElement } from "./ui-slots";
+import type { FloatOpenOpts } from "./floats";
 
 // --- Nautilus-style permissions editor for the properties dialog: click a
 // class row to pick access (cursor popup via openContextMenu), the checkbox
@@ -24,7 +25,9 @@ type PermsCtx = {
   byId(id: string): MaybeNode;
   setTextOnId(nodeId: string, s: string): void;
   setOnId(id: string, fn: (n: NodeLike) => void): void;
-  openContextMenu(x: number, y: number, title: string, entries: ListEntry[]): void;
+  // the perm-class popup is a NESTED popup: it lives inside the properties
+  // dialog, so the dialog stays open underneath it (keepModalBelow)
+  openContextMenu(x: number, y: number, title: string, entries: ListEntry[], opts?: FloatOpenOpts): void;
   closeFileMenu(): void;
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   uiStyle(): UiStyle;
@@ -99,7 +102,9 @@ export const mountPermsEditor = (ctx: PermsCtx, deps: PermsDeps): void => {
         flexDirection: "row",
         paddingLeft: 1,
         ...rowSurface(ctx.uiStyle(), colors, "rest"),
-        onMouseDown: (ev: MouseEvent) => ctx.openContextMenu(ev.x, ev.y, "", permClassMenu(shift)),
+        // nested popup: the dialog stays open underneath it
+        onMouseDown: (ev: MouseEvent) =>
+          ctx.openContextMenu(ev.x, ev.y, "", permClassMenu(shift), { keepModalBelow: true }),
         ...hoverEvents(
           (on) =>
             ctx.setOnId(rowId, (n) =>

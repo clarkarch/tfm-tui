@@ -2,7 +2,7 @@ import { Box, type MouseEvent, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
 import { advanceCursor, destroyChildren } from "../lib/uiutil";
-import { FLOAT_Z, type Floats } from "./floats";
+import { FLOAT_Z, type FloatOpenOpts, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { MakeIconSlot } from "./ui-slots";
@@ -271,10 +271,13 @@ export const makeMenu = (ctx: MenuCtx) => {
   };
 
   // small unscoped box spawned at the cursor — no scrim. floats.open replaces
-  // any open popup (the raw teardown removes the old node first)
-  const openContextMenu = (x: number, y: number, _title: string, entries: ListEntry[]): void => {
+  // any open popup (the raw teardown removes the old node first) and clears
+  // the desktop: a DESKTOP context menu replaces whatever was open (one
+  // floating UI at a time). `opts.keepModalBelow` marks the popup as
+  // belonging to the modal underneath it (the props permission menu).
+  const openContextMenu = (x: number, y: number, _title: string, entries: ListEntry[], opts?: FloatOpenOpts): void => {
     const colors = ctx.colors();
-    ctx.floats.open("filemenu", rawCloseMenu);
+    ctx.floats.open("filemenu", rawCloseMenu, opts);
     const w = ctx.menuW;
     const h = entries.length + 2;
     let px = x,

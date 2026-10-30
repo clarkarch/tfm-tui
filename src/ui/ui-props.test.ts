@@ -17,7 +17,7 @@ import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeProps } from "./ui-props";
 import { makeDialogs } from "./ui-dialogs";
-import { makeFloats } from "./floats";
+import { makeFloats, type FloatOpenOpts } from "./floats";
 import { defaultConfig } from "../config/config-schema";
 import type { Theme } from "../config/config";
 import type { ListEntry } from "../lib/menu-entry";
@@ -43,7 +43,7 @@ let saved: Record<string, string | undefined>;
 let floats: ReturnType<typeof makeFloats>;
 let props: ReturnType<typeof makeProps>;
 let iconStates: Array<{ spec: any; idx: number }>;
-let contextMenus: Array<{ title: string; entries: ListEntry[] }>;
+let contextMenus: Array<{ title: string; entries: ListEntry[]; opts?: FloatOpenOpts }>;
 let statusMsgs: string[];
 let renderAllCount: number;
 let thumbJobs: Array<{ slotId: string; [k: string]: unknown }> = [];
@@ -156,8 +156,8 @@ beforeAll(async () => {
     nextIconId: () => `icon-${++iconIdSeq}`,
     escHintBtn: (id) => Box({ id, width: 3, height: 1 }),
     closeFileMenu: () => {},
-    openContextMenu: (_x, _y, title, entries) => {
-      contextMenus.push({ title, entries });
+    openContextMenu: (_x, _y, title, entries, opts) => {
+      contextMenus.push({ title, entries, opts });
     },
     floats,
     renderAll: () => {
@@ -300,6 +300,9 @@ describe("single-file properties", () => {
     await t.renderOnce();
     down("tfm-props-perm-owner");
     expect(contextMenus.length).toBe(1);
+    // the perm menu is a popup INSIDE the dialog: the dialog stays open
+    // underneath it (a desktop context menu would replace it instead)
+    expect(contextMenus[0]!.opts?.keepModalBelow).toBe(true);
     const labels = contextMenus[0]!.entries.map((e) => e.label);
     expect(labels.some((l) => l!.includes("read & write"))).toBe(true);
     expect(labels.some((l) => l!.includes("read-only"))).toBe(true);

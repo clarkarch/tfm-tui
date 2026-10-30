@@ -152,6 +152,40 @@ describe("close + floats policy", () => {
     menu.closeFileMenu();
     await t.renderOnce();
   });
+  test("a right-click that lands as a modal opens replaces the modal — one floating UI", async () => {
+    // a right-click in the same frame as a modal open slips past the modal's
+    // scrim (the scrim has no layout yet): the context menu must REPLACE the
+    // modal, not stack on top of it (two floating UIs on screen at once)
+    let modalClosed = false;
+    floats.open("escmenu", () => {
+      modalClosed = true;
+    });
+    menu.openContextMenu(4, 4, "", mkEntries(2));
+    await t.renderOnce();
+    expect(modalClosed).toBe(true);
+    expect(floats.isOpen("escmenu")).toBe(false);
+    expect(floats.isOpen("filemenu")).toBe(true);
+    expect(floats.depth()).toBe(1);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+  test("a NESTED popup (the props permission menu) keeps the modal below it", async () => {
+    let modalClosed = false;
+    floats.open("props", () => {
+      modalClosed = true;
+    });
+    menu.openContextMenu(4, 4, "", mkEntries(2), { keepModalBelow: true });
+    await t.renderOnce();
+    expect(modalClosed).toBe(false);
+    expect(floats.isOpen("props")).toBe(true);
+    expect(floats.isOpen("filemenu")).toBe(true);
+    expect(floats.depth()).toBe(2);
+    menu.closeFileMenu();
+    await t.renderOnce();
+    expect(floats.isOpen("props")).toBe(true);
+    floats.close("props");
+    await t.renderOnce();
+  });
 });
 
 describe("flyout submenus", () => {

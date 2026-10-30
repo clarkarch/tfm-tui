@@ -428,7 +428,7 @@ export const wireGrid = (deps: {
     nextIconId: core.slots.nextIconId,
     escHintBtn: core.slots.escHintBtn,
     closeFileMenu: chrome.menu.closeFileMenu,
-    openContextMenu: (x, y, title, entries) => chrome.menu.openContextMenu(x, y, title, entries),
+    openContextMenu: (x, y, title, entries, opts) => chrome.menu.openContextMenu(x, y, title, entries, opts),
     renderAll: nav.renderAll,
     notify: chrome.notify,
     uiStyle,

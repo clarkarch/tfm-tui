@@ -10,7 +10,12 @@
 //
 // Policy (lives here, nowhere else):
 // - opening a modal clears the whole desktop (popup + any other modal) first;
-// - opening the popup replaces an existing popup and keeps the modal below;
+// - opening a DESKTOP popup (the right-click context menu) clears the whole
+//   desktop too — ONE floating UI at a time. A right-click that lands in the
+//   same frame as a modal opens slips past the modal's scrim (the scrim has
+//   no layout yet), and keeping the modal would leave both on screen;
+// - a NESTED popup (keepModalBelow — the permission menu inside the
+//   properties dialog) replaces an existing popup and keeps the modal below;
 // - closing a layer also closes everything opened above it (closing props
 //   takes its permission popup with it);
 // - closers are raw teardowns captured at open time — they must never call
@@ -43,8 +48,15 @@ export const FLOAT_Z: Record<FloatKind, number> = {
 };
 
 export type Floats = {
-  /** register a layer as open; `closer` is its raw teardown */
-  open(kind: FloatKind, closer: () => void): void;
+  /**
+   * register a layer as open; `closer` is its raw teardown.
+   *
+   * `keepModalBelow` marks a popup that BELONGS to the modal underneath it
+   * (the properties dialog's permission menu): it replaces an existing popup
+   * but leaves that modal open. A desktop popup (the right-click context
+   * menu) omits it and clears the whole desktop instead.
+   */
+  open(kind: FloatKind, closer: () => void, opts?: FloatOpenOpts): void;
   /** close `kind` and everything opened above it; no-op when not open */
   close(kind: FloatKind): void;
   /** close everything, top-down */
@@ -55,6 +67,12 @@ export type Floats = {
   /** any layer above the filemenu popup is a modal (the popup may live
    * inside one — props + its permission menu). Used for the raster scrim. */
   hasModal(): boolean;
+};
+
+// how a popup relates to the modal below it — see Floats.open.
+export type FloatOpenOpts = {
+  /** the popup belongs to the modal underneath (the props permission menu) */
+  keepModalBelow?: boolean;
 };
 
 // `onModalChange` fires on every 0<->1 modal transition (the background
@@ -83,8 +101,12 @@ export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {
     } catch {}
   };
 
-  const open = (kind: FloatKind, closer: () => void): void => {
-    if (kind === "filemenu") {
+  const open = (kind: FloatKind, closer: () => void, opts?: FloatOpenOpts): void => {
+    // a popup that belongs to the modal below it (the props permission menu)
+    // keeps that modal; everything else — a modal, or a DESKTOP popup — clears
+    // the whole desktop, so only ONE floating UI is ever on screen.
+    const nested = kind === "filemenu" && opts?.keepModalBelow === true;
+    if (nested) {
       const old = stack.filter((e) => e.kind === "filemenu");
       stack = stack.filter((e) => e.kind !== "filemenu");
       runClosers(old);
