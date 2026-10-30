@@ -16,7 +16,7 @@ import { makeHitTargetAt } from "../dnd/hit-target";
 import { localMachineId } from "../dnd/machine-id";
 import { debounced } from "../lib/uiutil";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
-import { makeGridWheelHandler } from "../ui/ui-smooth-scroll";
+import { installGridWheelHandler } from "../ui/ui-smooth-scroll";
 import { gridDrag } from "../input/grid-input";
 import { mergedMapFacade } from "../app/panes";
 import { loadGlobs2 } from "../fs/filetype";
@@ -273,12 +273,14 @@ export const wireBoot = (deps: {
       // setter (ScrollBox exposes no scroll event)
       hookScrollerScroll(scrollers[0], () => grid.syncWindowPane(0));
       hookScrollerScroll(scrollers[1], () => grid.syncWindowPane(1));
-      // [ui] smooth-scrolling: intercept the wheel on the scroller CONTENT
-      // (below ScrollBox in the bubble path) so a consumed tick never reaches
-      // the native instant jump — the stepper spreads it over time instead.
-      // Shift+wheel (horizontal) and the scrollbar's own wheel stay native.
-      scrollers[0].content.onMouseScroll = makeGridWheelHandler(grid.pushWheel)(0);
-      scrollers[1].content.onMouseScroll = makeGridWheelHandler(grid.pushWheel)(1);
+      // [ui] smooth-scrolling: intercept the wheel on the scroller itself.
+      // OpenTUI 0.8.0 moved the wheel handling INTO the ScrollBox and turned
+      // `content` into a facade (no listener to hang on), so the handler
+      // rides the typed `onMouseScroll` listener and suppresses the box's own
+      // step for a consumed tick. Shift+wheel (horizontal) and the scrollbar's
+      // own wheel stay native.
+      installGridWheelHandler(scrollers[0], 0, grid.pushWheel);
+      installGridWheelHandler(scrollers[1], 1, grid.pushWheel);
       // the hover drawer's construction-time collapse wrote to no nodes (they
       // only mount here) — re-apply its panel states now that they exist
       try {

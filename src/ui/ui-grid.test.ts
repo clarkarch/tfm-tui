@@ -2318,6 +2318,43 @@ describe("hookScrollerScroll", () => {
     sc.verticalScrollBar._onChange(42);
     expect(seen).toEqual(["orig:42", "notify"]);
   });
+
+  test("the 0.8.0 scrollbar's onChange accessor is installed (the wheel never touches the setter)", () => {
+    // Since OpenTUI 0.8.0 the wheel and the thumb drag call the box's
+    // private `_scrollAxis`, never the `scrollTop` setter — so the bar's
+    // change callback is the ONLY way the windowed grid learns about them.
+    // The bar exposes `onChange` (its setter writes the private `_onChange`);
+    // assigning it also switches the native SCROLL request on.
+    const seen: Array<string | number> = [];
+    let assigned: ((p: number) => void) | undefined;
+    const sc = {
+      scrollTop: 0,
+      verticalScrollBar: {
+        get onChange() {
+          return assigned;
+        },
+        set onChange(v: ((p: number) => void) | undefined) {
+          assigned = v;
+        },
+      },
+    } as any;
+    expect(hookScrollerScroll(sc, () => seen.push("notify"))).toBe(true);
+    expect(assigned).toBeTruthy();
+    assigned!(42);
+    expect(seen).toEqual(["notify"]);
+  });
+
+  test("an existing bar onChange is chained, not replaced", () => {
+    const seen: Array<string | number> = [];
+    const orig = (p: number) => seen.push(`orig:${p}`);
+    const sc = {
+      scrollTop: 0,
+      verticalScrollBar: { onChange: orig },
+    } as any;
+    expect(hookScrollerScroll(sc, () => seen.push("notify"))).toBe(true);
+    sc.verticalScrollBar.onChange(7);
+    expect(seen).toEqual(["orig:7", "notify"]);
+  });
 });
 
 // --- [ui] loading-delay-ms ---------------------------------------------------

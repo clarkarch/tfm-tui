@@ -220,19 +220,24 @@ export const scrollbarTrackColors = (colors: Theme): { backgroundColor: string; 
   foregroundColor: colors.sidebarFgMuted,
 });
 export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, ScrollBoxRenderable] => {
-  // NEVER keyboard-focusable (scroller + BOTH bars). OpenTUI's autoFocus
-  // focuses the nearest focusable ancestor on ANY left click, and a focused
-  // ScrollBox/ScrollBar turns arrows/j/k/pgup/pgdn/home/end into a 1/5-of-
-  // viewport self-scroll: it fought the selection scroll and kept scrolling the
-  // listing behind an open modal (focus survives under a float). tfm owns every
-  // grid key — the router also marks consumed keys handled; the wheel needs no
-  // focus (it is hitTest-routed).
+  // NEVER keyboard-focusable (the scroller). OpenTUI's autoFocus focuses the
+  // nearest focusable ancestor on ANY left click, and a focused ScrollBox turns
+  // arrows/j/k/pgup/pgdn/home/end into a 1/5-of-viewport self-scroll: it fought
+  // the selection scroll and kept scrolling the listing behind an open modal
+  // (focus survives under a float). tfm owns every grid key — the router also
+  // marks consumed keys handled; the wheel needs no focus (it is
+  // hitTest-routed).
   //
   // Set through the SETTER, not the option: `options.focusable` is only honored
   // by classes whose default is already false (BoxRenderable's ctor does
   // `if (options.focusable === true) this._focusable = true`, and Renderable's
-  // never reads it), so `focusable: false` is silently ignored on a ScrollBox /
-  // ScrollBar whose `defaultFocusable` is true (probed on this fork).
+  // never reads it), so `focusable: false` is silently ignored on a ScrollBox
+  // whose `defaultFocusable` is true (probed on this fork).
+  //
+  // The BARS need no such treatment: since OpenTUI 0.8.0 the scrollbars are
+  // native-drawn parts of the ScrollBox (a `ScrollBoxBar` is an EventEmitter,
+  // not a Renderable), so there is no focusable Slider node left to disable —
+  // and the bar's key handling is reached only through the ScrollBox itself.
   const makeScroller = (id: string, pane: number): ScrollBoxRenderable => {
     const scroller = new ScrollBoxRenderable(ctx.renderer, {
       id,
@@ -274,8 +279,6 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
       onMouseDrop: () => ctx.dropIntoPane(pane),
     });
     scroller.focusable = false;
-    scroller.verticalScrollBar.focusable = false;
-    scroller.horizontalScrollBar.focusable = false;
     return scroller;
   };
 

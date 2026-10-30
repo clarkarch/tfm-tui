@@ -280,13 +280,27 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     tile.add(tileBox);
 
     const label = entry.name.length > TILE_W - 2 ? `${entry.name.slice(0, TILE_W - 5)}…` : entry.name;
-    // No parity padding here: odd lengths floor a half cell left (Yoga, same
-    // as the native floor for wrapped lines) and that uniform lean is the
-    // final state. A leading space was tried — it flips odds to a half cell
-    // right, but only single-line names can take it (wrapped lines break
-    // inside native code), leaving short names leaning right while long
-    // names lean left. Mixed reads worse than uniform.
-    // Off (none) = today's single cut line.
+    // Centering: the label always centers under the (centered) icon, and it
+    // always leans the SAME way as the wrapped lines — a uniform half-cell
+    // lean reads as intentional, a mixed one reads as broken.
+    //
+    // The native text renderer FLOORS the odd remainder (a 7-char name in a
+    // 10-wide box starts one column left of a 6-char one). Yoga's own
+    // centering used to floor too, but since OpenTUI 0.8.0 it rounds the
+    // half cell UP — an intrinsic-width label would lean RIGHT while the
+    // wrapped lines (native centering) still lean LEFT. So every label gets
+    // an explicit box and lets the NATIVE renderer center it: the floor is
+    // then the single source of truth for both paths.
+    //
+    // The single-line box is the FULL tile width (the label is at most
+    // TILE_W-2 chars, so it always fits); the wrapped box is TILE_W-2 wide
+    // because that is the wrap width. The two agree: for a text of width w
+    // (<= TILE_W-2), floor((TILE_W-w)/2) == 1 + floor((TILE_W-2-w)/2), and
+    // the narrow box starts one column right — the same column.
+    //
+    // No parity padding: a leading space flips the lean, a trailing space
+    // only shifts odd names (and breaks on wide glyphs). Off (none) = today's
+    // single cut line.
     const labelText = Text({
       id: labelId,
       content: wrapOn ? entry.name : label,
@@ -294,7 +308,12 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       // wrapped lines center under the (centered) icon: the label box is
       // TILE_W-2 wide but flush-left text read as "icon right of the name"
       textAlign: "center",
-      ...(wrapOn && labelWrap ? { width: TILE_W - 2, height: maxLabelLines, truncate: true, wrapMode: labelWrap } : {}),
+      ...(wrapOn && labelWrap
+        ? { width: TILE_W - 2, height: maxLabelLines, truncate: true, wrapMode: labelWrap }
+        : // single line: a full-width box (native centering floors the odd
+          // remainder) and no wrapping — the name is pre-cut to TILE_W-2
+          // chars, so it fits unless it carries double-width glyphs.
+          { width: TILE_W, wrapMode: "none" }),
     });
     tile.add(labelText);
 

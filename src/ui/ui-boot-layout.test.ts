@@ -130,10 +130,13 @@ describe("grid scrollbar theming", () => {
     });
     await t.renderOnce();
     for (const s of [s0, s1]) {
-      const slider = (s as any).verticalScrollBar?.slider as any;
-      expect(slider).toBeTruthy();
-      expect([...slider.backgroundColor.toInts()]).toEqual(hexInts(theme.bg));
-      expect([...slider.foregroundColor.toInts()]).toEqual(hexInts(theme.sidebarFgMuted));
+      // Since OpenTUI 0.8.0 the scrollbar is a native-drawn part of the
+      // ScrollBox, so the track/thumb colors live on the part itself (there
+      // is no inner Slider renderable to reach into any more).
+      const bar = (s as any).verticalScrollBar as any;
+      expect(bar).toBeTruthy();
+      expect([...bar.trackBackground.toInts()]).toEqual(hexInts(theme.bg));
+      expect([...bar.trackForeground.toInts()]).toEqual(hexInts(theme.sidebarFgMuted));
     }
   });
 });
@@ -293,7 +296,9 @@ describe("grid scrollers are not keyboard-focusable", () => {
     await t.renderOnce();
 
     expect((s0 as any).focusable).toBe(false);
-    expect((s0 as any).verticalScrollBar.focusable).toBe(false);
+    // The bars are native-drawn parts (not focusable renderables) since
+    // OpenTUI 0.8.0, so there is no slider node left to disable.
+    expect((s0 as any).verticalScrollBar.focusable).toBeUndefined();
 
     // click INSIDE the scroller's own layout — earlier tests leave stray nodes
     // in the renderer root, so a hardcoded cell can land outside this pane

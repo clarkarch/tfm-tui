@@ -46,6 +46,10 @@ export type NodeLike = {
   left?: number | "auto" | `${number}%`;
   top?: number | "auto" | `${number}%`;
   scrollTop?: number;
+  // the node's flex axis: "row" for a list row, "column" for a grid tile.
+  // Read by the inline-rename restore so it rebuilds the label with the same
+  // centering box the row/tile builder used.
+  primaryAxis?: "row" | "column";
   // screen-space geometry, read by the drag ghost/band positioning. Required:
   // Renderable declares all four as plain number getters.
   x: number;

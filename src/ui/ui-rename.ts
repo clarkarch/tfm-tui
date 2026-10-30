@@ -105,6 +105,14 @@ export const makeRename = (ctx: RenameCtx) => {
         id: refs.labelId,
         content: tileLabelFor(path.basename(edit.key), ctx.tileW()),
         fg: refs.baseFg,
+        // The grid's labels center inside a full-width box (the native
+        // renderer floors the odd remainder — see ui-grid-rows); the list's
+        // names sit flush-left in a row, so they keep the intrinsic width.
+        // Rebuilding without this would leave a cancelled rename's label one
+        // column off its neighbours.
+        ...(tile.primaryAxis === "column"
+          ? { textAlign: "center" as const, width: ctx.tileW(), wrapMode: "none" as const }
+          : {}),
       });
       // restore at the label's ORIGINAL index, not via add(): in list rows
       // (icon | name | … | size | date) an append drops the name after the

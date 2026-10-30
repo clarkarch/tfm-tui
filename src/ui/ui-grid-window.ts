@@ -3,9 +3,14 @@
 // the geometry can be read (and tested) without the renderable builders: this
 // module imports nothing, touches no renderer, and holds no state. ---
 
-// ScrollBox's scrollbar holds its change callback privately; the thumb drag
-// writes the position field raw and then calls it, bypassing scrollTop's setter.
-type ScrollBarHookable = { _onChange?: (position: number) => void };
+// ScrollBox's scrollbar owns the scroll notification since OpenTUI 0.8.0: the
+// wheel and the thumb drag call the box's private `_scrollAxis`, never the
+// `scrollTop` setter, so the accessor hook alone cannot see them. The bar
+// exposes an `onChange` accessor (its setter writes the private `_onChange`).
+type ScrollBarHookable = {
+  _onChange?: (position: number) => void;
+  onChange?: ((position: number) => void) | undefined;
+};
 type ScrollBarHost = { verticalScrollBar?: ScrollBarHookable };
 
 // ONE viewport window for both the thumbnail drain ranking and the file
@@ -54,18 +59,26 @@ export const windowRange = (
   };
 };
 
-// wrap a scroller's `scrollTop` accessor AND its vertical scrollbar's onChange
-// so every scroll path notifies the windowed grid. The setter covers wheel
-// (ScrollBox does `scrollTop += n`), drag auto-scroll and programmatic
-// scrollTo, but a THUMB DRAG bypasses it entirely (ScrollBar's slider writes
-// its `_scrollPosition` field raw, then calls the bar's `_onChange` closure
-// — ScrollBox.ts wires that to content.translateY only). By `_onChange` run
-// time the scrollTop GETTER already reads the new position, so the chained
-// callback sees the same value every path does. ScrollBox exposes no scroll
-// event; this beats per-frame polling. A single notch can fire onScroll 2-3x
-// (setter + the slider re-entrancy in updateSliderFromScrollState + the
-// slide's own offset-restore write) — the callback MUST be idempotent;
+// wrap a scroller's `scrollTop` accessor AND its vertical scrollbar's change
+// callback so every scroll path notifies the windowed grid.
+//
+// Two paths exist and both are needed since OpenTUI 0.8.0:
+//
+//   * The SETTER covers tfm's own programmatic writes (`scroller.scrollTop =
+//     n`) and anything else that assigns the property.
+//   * The BAR's change callback covers the paths that never touch the
+//     setter: the wheel and the thumb drag both call the box's private
+//     `_scrollAxis`, and the native's own scroll reporting (a content resize
+//     clamping the offset) arrives the same way. Assigning `onChange` also
+//     switches the native SCROLL request on, so those report too.
+//
+// By the time the change callback runs, the box's scroll state already holds
+// the new offset, so the callback sees the same value every path does.
+// ScrollBox exposes no scroll event; this beats per-frame polling. A single
+// notch can fire onScroll 2-3x (the setter write, the bar's change callback
+// and the slide's own offset-restore write) — the callback MUST be idempotent;
 // syncWindow's range-equality guard makes the repeats free.
+//
 // `object` (not GridScroller): the hook probes for a scrollTop accessor and
 // rejects anything else, so a bare object is a legitimate argument.
 export const hookScrollerScroll = (scroller: object, onScroll: () => void): boolean => {
@@ -92,14 +105,27 @@ export const hookScrollerScroll = (scroller: object, onScroll: () => void): bool
   } catch {}
   try {
     const bar = (scroller as ScrollBarHost).verticalScrollBar;
-    if (bar && typeof bar._onChange === "function") {
-      const orig = bar._onChange.bind(bar);
-      bar._onChange = (position: number) => {
-        orig(position);
-        try {
-          onScroll();
-        } catch {}
-      };
+    if (bar) {
+      // The bar keeps its callback privately; the public `onChange` accessor
+      // is the supported way in (0.8.0). An older bar shape without that
+      // accessor still exposes `_onChange`, so chain that one directly.
+      if ("onChange" in bar) {
+        const orig = typeof bar.onChange === "function" ? bar.onChange : undefined;
+        bar.onChange = (position: number) => {
+          orig?.(position);
+          try {
+            onScroll();
+          } catch {}
+        };
+      } else {
+        const orig = typeof bar._onChange === "function" ? bar._onChange : undefined;
+        bar._onChange = (position: number) => {
+          orig?.(position);
+          try {
+            onScroll();
+          } catch {}
+        };
+      }
       hooked = true;
     }
   } catch {}

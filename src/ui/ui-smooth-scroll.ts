@@ -301,29 +301,91 @@ export const makeWheelSmoother = (ctx: {
   return { push, stop };
 };
 
-// --- Content-level wheel interception: the handler wiring/io installs on each
-// grid scroller's CONTENT node. Content sits below ScrollBox in the bubble
-// path (tile → row → inner → content → scroller) and user listeners run
-// before a node's own onMouseEvent — so stopPropagation() here kills the
-// native instant jump while Shift+wheel (horizontal) and other directions
-// bubble on untouched. The event shape is structural (all-optional) so tests
-// can drive it with fakes; the real MouseEvent satisfies it. ---
+// --- Wheel interception: the handler wiring/io installs on each grid scroller.
+//
+// OpenTUI 0.8.0 moved the wheel handling INTO the ScrollBox (its own
+// `onMouseEvent` → `scrollByWheel`) and turned `content` into a facade over
+// native state — a facade, not a renderable, so there is no `onMouseScroll`
+// listener left to hang on. The typed `onMouseScroll` listener still runs
+// BEFORE the node's own `onMouseEvent` (Renderable.processMouseEvent), so the
+// handler marks the event as taken and the wrapper below skips the box's own
+// step: the same "a consumed tick never reaches the native instant jump"
+// contract the old content-level listener had.
+//
+// Shift+wheel (horizontal) and the scrollbar's own wheel stay native.
+//
+// The event shape is structural (all-optional) so tests can drive it with
+// fakes; the real MouseEvent satisfies it. ---
 export type WheelEventLike = {
   scroll?: { direction?: string; delta?: number } | null;
   modifiers?: { shift?: boolean } | null;
   stopPropagation?: () => void;
 };
 
+// Decides whether a wheel tick belongs to the smoother. Returns true when the
+// tick was consumed (the caller must then suppress the box's own step).
 export const makeGridWheelHandler =
   (pushWheel: (pane: 0 | 1, dir: 1 | -1, cells: number) => boolean) =>
   (pane: 0 | 1) =>
-  (ev: WheelEventLike): void => {
+  (ev: WheelEventLike): boolean => {
     try {
       const dir = ev.scroll?.direction;
-      if (dir !== "up" && dir !== "down") return;
-      if (ev.modifiers?.shift) return;
+      if (dir !== "up" && dir !== "down") return false;
+      if (ev.modifiers?.shift) return false;
       const cells = Math.max(1, Math.round(Math.abs(ev.scroll?.delta ?? 1)));
-      if (!Number.isFinite(cells)) return;
-      if (pushWheel(pane, dir === "down" ? 1 : -1, cells)) ev.stopPropagation?.();
-    } catch {}
+      if (!Number.isFinite(cells)) return false;
+      if (!pushWheel(pane, dir === "down" ? 1 : -1, cells)) return false;
+      // keep the tick from reaching anything outside this scroller (an outer
+      // scroller would otherwise take it) — the box's OWN handling is stopped
+      // by the wrapper below, not by this call.
+      ev.stopPropagation?.();
+      return true;
+    } catch {
+      return false;
+    }
   };
+
+// Installs the wheel interception on a grid scroller: the typed scroll
+// listener decides, the wrapper around the box's own mouse handler suppresses
+// the instant jump when the tick was consumed.
+export const installGridWheelHandler = (
+  scroller: object,
+  pane: 0 | 1,
+  pushWheel: (pane: 0 | 1, dir: 1 | -1, cells: number) => boolean,
+): void => {
+  try {
+    const target = scroller as {
+      onMouseScroll?: (ev: WheelEventLike) => void;
+      onMouseEvent?: (ev: { type?: string }) => void;
+    };
+    const handler = makeGridWheelHandler(pushWheel)(pane);
+    let consumed = false;
+    target.onMouseScroll = (ev: WheelEventLike) => {
+      consumed = handler(ev);
+    };
+    // The box's own handler runs right after the typed listener, so the flag
+    // is fresh by then. Only a "scroll" event is ever suppressed: the box's
+    // handler does nothing else for that event type.
+    //
+    // `onMouseEvent` is `protected` in TS but an ordinary prototype method at
+    // runtime; it may sit several levels up the chain (ScrollBox declares its
+    // own, Box/Renderable declare the base), so WALK the chain instead of
+    // reading one level.
+    let orig: ((ev: unknown) => void) | undefined;
+    for (let p = Object.getPrototypeOf(scroller); p; p = Object.getPrototypeOf(p)) {
+      const fn = (p as { onMouseEvent?: unknown }).onMouseEvent;
+      if (typeof fn === "function") {
+        orig = fn as (ev: unknown) => void;
+        break;
+      }
+    }
+    if (typeof orig === "function") {
+      target.onMouseEvent = function (ev: { type?: string }) {
+        const skip = consumed && ev?.type === "scroll";
+        consumed = false;
+        if (skip) return;
+        orig.call(this, ev);
+      };
+    }
+  } catch {}
+};

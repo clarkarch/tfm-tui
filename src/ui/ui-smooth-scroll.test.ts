@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Box, getTimelineEngine } from "@opentui/core";
+import { Box, getTimelineEngine, MouseEvent } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
   glideDelta,
   glideOffsetAt,
-  makeGridWheelHandler,
+  installGridWheelHandler,
   makeSmoothGlide,
   makeWheelSmoother,
   MIN_GLIDE_CELLS,
@@ -349,11 +349,11 @@ describe("makeGridWheelHandler (interception over a real ScrollBox)", () => {
         },
         sched: clock.sched,
       });
-      scroller.content.onMouseScroll = makeGridWheelHandler((_pane, dir, cells) => {
+      installGridWheelHandler(scroller, 0, (_pane, dir, cells) => {
         pushed.push({ dir, cells });
         smoother.push(dir * cells, 160);
         return true;
-      })(0);
+      });
 
       await t.mockMouse.scroll(5, 5, "down");
       await t.renderOnce();
@@ -384,18 +384,22 @@ describe("makeGridWheelHandler (interception over a real ScrollBox)", () => {
         },
         sched: clock.sched,
       });
-      const handler = makeGridWheelHandler((_pane, dir, cells) => {
+      installGridWheelHandler(scroller, 0, (_pane, dir, cells) => {
         smoother.push(dir * cells, 160);
         return true;
-      })(0);
-      scroller.content.onMouseScroll = handler;
+      });
 
       // a 3-cell tick (fast flick) beats out 1-2-3 — never 3+3 native double
-      handler({
-        scroll: { direction: "down", delta: 3 },
-        modifiers: {},
-        stopPropagation: () => {},
-      });
+      scroller.processMouseEvent(
+        new MouseEvent(scroller, {
+          type: "scroll",
+          button: 0,
+          x: 5,
+          y: 5,
+          modifiers: { shift: false, alt: false, ctrl: false },
+          scroll: { direction: "down", delta: 3 },
+        }),
+      );
       await t.renderOnce();
       expect(scroller.scrollTop).toBe(0);
       clock.fire();
@@ -415,11 +419,10 @@ describe("makeGridWheelHandler (interception over a real ScrollBox)", () => {
     const scroller = await buildScroller();
     try {
       let pushCalls = 0;
-      const handler = makeGridWheelHandler(() => {
+      installGridWheelHandler(scroller, 0, () => {
         pushCalls++;
         return false; // master off: don't consume
-      })(0);
-      scroller.content.onMouseScroll = handler;
+      });
 
       await t.mockMouse.scroll(5, 5, "down");
       await t.renderOnce();
@@ -428,11 +431,16 @@ describe("makeGridWheelHandler (interception over a real ScrollBox)", () => {
       expect(scroller.scrollTop).toBe(1);
 
       // sideways ticks never even reach pushWheel (horizontal stays native)
-      handler({
-        scroll: { direction: "left", delta: 3 },
-        modifiers: {},
-        stopPropagation: () => {},
-      });
+      scroller.processMouseEvent(
+        new MouseEvent(scroller, {
+          type: "scroll",
+          button: 0,
+          x: 5,
+          y: 5,
+          modifiers: { shift: false, alt: false, ctrl: false },
+          scroll: { direction: "left", delta: 3 },
+        }),
+      );
       expect(pushCalls).toBe(1);
     } finally {
       await teardownScroller(scroller);
