@@ -53,6 +53,11 @@ export type BootCtx = {
   debugTrace(): void;
   launchToast(): void;
   startHygiene(): void;
+  // --debug paint trace: one line per frame that REPAINTED (the native's own
+  // counters — what it cleared and why it took the full repaint path). The
+  // step is debug-only: the subscription reads the renderer's stats on every
+  // presented frame, which is not a production cost. Absent = no trace.
+  startPaintTrace?(): void;
   wireSearchInput(): void;
   // a step threw (native OOM in buildLayout, globs2, …): log + notify so a
   // partial boot renders and reports instead of a blank-but-alive TUI
@@ -126,6 +131,9 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   if (ctx.isDebug || ctx.showLaunchTime()) await guard(ctx, "launchToast", () => ctx.launchToast());
   if (ctx.lazyBoot === true) await guard(ctx, "promptDefaultFileManager", () => ctx.promptDefaultFileManager?.());
   await guard(ctx, "startHygiene", () => ctx.startHygiene());
+  // the paint trace is a --debug diagnostic (it reads the renderer's stats on
+  // every presented frame), so it only runs when the debug log is on
+  if (ctx.isDebug) await guard(ctx, "startPaintTrace", () => ctx.startPaintTrace?.());
   await guard(ctx, "wireSearchInput", () => ctx.wireSearchInput());
   // updates LAST: a network question must never delay the first frame, the
   // launch report or the default-file-manager prompt (and it never blocks:

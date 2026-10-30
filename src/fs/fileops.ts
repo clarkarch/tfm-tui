@@ -62,7 +62,7 @@ import { isArchiveUri } from "./uri";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
-import type { ClipItem, ConflictChoice, ProgressState } from "../lib/file-op-protocol";
+import { shouldNotifyTerminal, type ClipItem, type ConflictChoice, type ProgressState } from "../lib/file-op-protocol";
 import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
 
 export type FileOpsCtx = {
@@ -115,11 +115,23 @@ export type FileOpsCtx = {
   // Always fires on completion — including cancel/failure, with the outcome
   // attached — so plugins can't mistake a cancelled op for a success.
   onFileOp?: (op: string, paths: string[], dest?: string, outcome?: { cancelled: boolean; failed: number }) => void;
+  // terminal notification for a finished op (OSC 99 / OSC 777 / OSC 9 — the
+  // renderer negotiates the protocol with the terminal). Optional: absent =
+  // no notification. Fires only for a LONG successful op (see
+  // shouldNotifyTerminal): the in-app toast covers the quick ones.
+  notifyTerminal?: (message: string, title: string) => void;
+  // clock for the "was the user away?" gate (tests inject a fake clock)
+  now?: () => number;
 };
 
 export const makeFileOps = (ctx: FileOpsCtx) => {
   const { prog, conflict } = ctx;
   const queue = sharedOpQueue();
+  // the clock the "was the user away?" gate reads (tests inject a fake one)
+  const now = ctx.now ?? (() => Date.now());
+  // when the CURRENT queued op started — stamped by guardOp, read by the
+  // shared op-summary tail to decide whether a terminal notification is due
+  let opStartedAt = 0;
   const runArchive: ArchiveRun = ctx.runArchive ?? runArchiveTool;
   const archiveWhich = ctx.archiveWhich ?? whichLive;
   const listArchive =
@@ -188,6 +200,15 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     if (cancelled) ctx.notify(msg, `${op} cancelled`, "info");
     else if (failed > 0) ctx.notify(msg, `${op} failed`, "error");
     else ctx.notify(msg, op, "success");
+    // A LONG op that succeeded may have finished while the user was elsewhere:
+    // the toast is on screen, but a desktop notification is what reaches them
+    // in another window. Quick ops skip it (the toast is still up), and a
+    // cancelled/failed op NEVER notifies — that would claim a done that isn't.
+    if (shouldNotifyTerminal(now() - opStartedAt, cancelled, failed)) {
+      try {
+        ctx.notifyTerminal?.(msg, "tfm");
+      } catch {}
+    }
     try {
       ctx.onFileOp?.(op, paths, dest, { cancelled, failed });
     } catch {}
@@ -287,6 +308,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // toast — a silent failure. Every queued op funnels through here so the
   // returned promise never rejects: unexpected throws log + toast + repaint.
   const guardOp = async (noun: string, fn: () => Promise<void>): Promise<void> => {
+    opStartedAt = now();
     try {
       await fn();
     } catch (err) {

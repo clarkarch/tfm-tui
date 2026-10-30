@@ -38,6 +38,11 @@ export type ProgressCtx = {
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
+  // the app's shared animation clock (OpenTUI 0.8.0's renderer.onAnimationTick):
+  // the spinner rides it instead of owning a private timer, so it cannot
+  // drift from the frames it paints and it stops with the renderer.
+  // Absent = a local interval (tests, old fakes).
+  onTick?(fps: number, cb: () => void): () => void;
 };
 
 export const pctOf = (bytes: number, totalBytes: number): number =>
@@ -117,6 +122,8 @@ export const makeProgress = (ctx: ProgressCtx) => {
   let progLastPaint = 0;
   let progSpinIdx = 0;
   let progSpinTimer: ReturnType<typeof setTimeout> | null = null;
+  // the shared-clock ticker (see ctx.onTick) — released when the toast ends
+  let progSpinStop: (() => void) | null = null;
   let lingerTimer: ReturnType<typeof setTimeout> | null = null;
 
   const progSetText = (nodeId: string, s: string): void => {
@@ -165,8 +172,13 @@ export const makeProgress = (ctx: ProgressCtx) => {
     activeHandle?.close();
     activeHandle = null;
     // ...and stop its spinner: that close path does not go through
-    // finishProgressToast, so without this a re-show left a second 100ms
-    // interval repainting a detached node forever
+    // finishProgressToast, so without this a re-show left a second ticker
+    // repainting a detached node forever (a local interval, or — worse — a
+    // shared-clock ticker that kept the renderer at 10fps for the session)
+    if (progSpinStop) {
+      progSpinStop();
+      progSpinStop = null;
+    }
     if (progSpinTimer) {
       clearInterval(progSpinTimer);
       progSpinTimer = null;
@@ -290,10 +302,20 @@ export const makeProgress = (ctx: ProgressCtx) => {
     ctx.stripSelectable();
     setPauseVisual(); // play slot ships visible — hide until actually paused
     void ctx.drainIconQueue();
-    progSpinTimer = setInterval(() => {
+    // The spinner rides the app's SHARED animation clock (OpenTUI 0.8.0's
+    // renderer.onAnimationTick): the ticker lives in the render loop, so the
+    // spinner is painted in the same frame it advances and it stops with the
+    // renderer. A ctx without the seam (tests, old fakes) falls back to a
+    // local interval.
+    const spin = (): void => {
       progSpinIdx = (progSpinIdx + 1) % SPIN_FRAMES.length;
       paintProgress(true);
-    }, 100);
+    };
+    if (ctx.onTick) {
+      progSpinStop = ctx.onTick(10, spin);
+    } else {
+      progSpinTimer = setInterval(spin, 100);
+    }
   };
 
   // swap to a terminal state (✓/✗ passed in title), linger briefly, then close
@@ -303,6 +325,10 @@ export const makeProgress = (ctx: ProgressCtx) => {
     // the buttons are gone with the toast — their out never fires, restore
     ctx.setPointer?.("default");
     const doneHandle = activeHandle;
+    if (progSpinStop) {
+      progSpinStop();
+      progSpinStop = null;
+    }
     if (progSpinTimer) {
       clearInterval(progSpinTimer);
       progSpinTimer = null;

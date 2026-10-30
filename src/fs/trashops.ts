@@ -19,6 +19,7 @@ import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
+import { shouldNotifyTerminal } from "../lib/file-op-protocol";
 import { isNetworkPath } from "./network";
 import { isArchiveUri } from "./uri";
 import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
@@ -67,6 +68,13 @@ export type TrashOpsSink = {
   // vocabulary — trash/restore/delete-forever/empty, never method names).
   // Never throws into the op.
   onEvent?(op: TrashOpName, paths: string[]): void;
+  // terminal notification for a finished op (OSC 99 / OSC 777 / OSC 9 — the
+  // renderer negotiates the protocol with the terminal). Optional: absent =
+  // no notification. Only the irreversible deletes raise one, and only when
+  // they took long enough that the user plausibly looked away.
+  notifyTerminal?(message: string, title: string): void;
+  // clock for the "was the user away?" gate (tests inject a fake clock)
+  now?(): number;
   // sudo escalation seams (wiring injects the prompt-backed impl; tests fake).
   // Only the irreversible deletes escalate: trash/restore stay unprivileged
   // by design (a sudo-trashed file is root-owned in the user's trash, and the
@@ -120,11 +128,23 @@ const parseTrashOrig = (raw: string): string | null => {
 export const makeTrashOps = (sink: TrashOpsSink) => {
   const queue = sharedOpQueue();
   const sudoExec = sink.sudoExec ?? defaultSudoExec;
+  // the clock the "was the user away?" gate reads (tests inject a fake one)
+  const now = sink.now ?? (() => Date.now());
   // one password gate per op (memoized per call below via needSudo closures)
   const sudoRm = (p: string): Promise<void> => runSudoTool(sudoExec, sudoRmArgv(p));
   const emit = (op: TrashOpName, paths: string[]): void => {
     try {
       sink.onEvent?.(op, [...paths]);
+    } catch {}
+  };
+  // A LONG irreversible delete may have finished while the user was elsewhere:
+  // the toast is on screen, but a desktop notification is what reaches them in
+  // another window. A cancelled/failed delete NEVER notifies — that would
+  // claim a done that isn't.
+  const notifyDone = (summary: string, elapsedMs: number, cancelled: boolean, failed: number): void => {
+    if (!shouldNotifyTerminal(elapsedMs, cancelled, failed)) return;
+    try {
+      sink.notifyTerminal?.(summary, "tfm");
     } catch {}
   };
   // plugin veto channel: a beforeFileOp hook can block trash/restore/delete
@@ -353,6 +373,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   const deleteForever = (paths: string[]): Promise<void> => {
     if (vetoedByPlugin("delete-forever", paths)) return Promise.resolve();
     const run = queue.enqueue(async () => {
+      const startedAt = now();
       const dp = sink.deleteProgress;
       // pre-scan so the toast has honest totals; a vanished path scans as 0
       if (dp) await scanTotals(paths, dp);
@@ -369,6 +390,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       if (cancelled) sink.notify(summary, "delete cancelled", "info");
       else if (failed > 0) sink.notify(summary, "delete failed", "error");
       else sink.notify(summary, "delete", "success");
+      notifyDone(summary, now() - startedAt, cancelled, failed);
       emit("delete-forever", paths);
     });
     return run.catch(() => {});
@@ -377,6 +399,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   const emptyTrash = (): Promise<void> => {
     if (vetoedByPlugin("empty", [])) return Promise.resolve();
     const run = queue.enqueue(async () => {
+      const startedAt = now();
       const homeFiles = path.join(trashDir(), "files");
       let names: string[];
       try {
@@ -435,6 +458,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       // irreversible by design — no undo batch; say so explicitly.
       const summary = `Emptied ${n} item${n === 1 ? "" : "s"} · cannot be undone`;
       sink.notify(summary, "empty", "success");
+      notifyDone(summary, now() - startedAt, cancelled, failed);
       emit("empty", []);
     });
     // fire-and-forget safe: outcomes are reported via sink, never thrown

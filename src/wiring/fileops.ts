@@ -98,6 +98,9 @@ export const wireFileops = (deps: {
     drainIconQueue,
     notifySticky: chrome.notifySticky,
     setPointer,
+    // the spinner rides the renderer's shared animation clock (OpenTUI 0.8.0)
+    // instead of owning a private interval
+    onTick: (fps, cb) => chrome.renderer.onAnimationTick(fps, () => cb()),
   });
 
   // --- File operations: runTransfer/performRename/paste/clipboard
@@ -122,6 +125,14 @@ export const wireFileops = (deps: {
     log: dlog,
     onFileOp: (op, paths, dest, outcome) =>
       sharedPluginEvents().emit("file-op", { op, paths, ...(dest ? { dest } : {}), ...(outcome ? { outcome } : {}) }),
+    // a finished long op raises a TERMINAL notification (OSC 99 / OSC 777 /
+    // OSC 9 — the renderer negotiates the protocol with the terminal and
+    // silently does nothing on a terminal that has none)
+    notifyTerminal: (message, title) => {
+      try {
+        chrome.renderer.triggerNotification(message, title);
+      } catch {}
+    },
   });
 
   // --- Embedded terminal pane — widget lives in ./ui-term ---
@@ -196,6 +207,14 @@ export const wireFileops = (deps: {
       },
     },
     log: (msg) => appendLog(`trashops: ${msg}`),
+    // a finished long op raises a TERMINAL notification (OSC 99 / OSC 777 /
+    // OSC 9 — the renderer negotiates the protocol with the terminal and
+    // silently does nothing on a terminal that has none)
+    notifyTerminal: (message, title) => {
+      try {
+        chrome.renderer.triggerNotification(message, title);
+      } catch {}
+    },
     // plugin event fan-out through the sink seam (no method wrapping — the
     // op names are the stable vocabulary, never the method names).
     onEvent: (op, paths) => {

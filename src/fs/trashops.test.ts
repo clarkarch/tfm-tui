@@ -270,6 +270,58 @@ describe("deleteForever / emptyTrash", () => {
   });
 });
 
+// An irreversible delete that took long enough that the user plausibly
+// looked away raises a TERMINAL notification (OSC 99 / OSC 777 / OSC 9 — the
+// renderer negotiates the protocol). A quick delete does not (the toast is
+// still up), and a failed/cancelled one NEVER does — a desktop notification
+// that claims "done" for a half-finished delete is a lie.
+describe("terminal notification for a finished delete", () => {
+  // a fake clock: every read advances by stepMs, so the op's elapsed time is
+  // whatever the test wants without sleeping
+  const fakeClock = (stepMs: number) => {
+    let t = 0;
+    return () => (t += stepMs);
+  };
+
+  test("a long delete notifies the terminal", async () => {
+    const root = sandbox();
+    try {
+      const target = path.join(root, "doomed.txt");
+      writeFileSync(target, "bye");
+      const notices: Array<{ message: string; title: string }> = [];
+      const sink: TrashOpsSink = {
+        ...recordingSink(),
+        now: fakeClock(10_000),
+        notifyTerminal: (message, title) => notices.push({ message, title }),
+      };
+      await makeTrashOps(sink).deleteForever([target]);
+      expect(notices.length).toBe(1);
+      expect(notices[0]!.message).toContain("Deleted 1 item");
+      expect(notices[0]!.title).toBe("tfm");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a quick delete does NOT notify", async () => {
+    const root = sandbox();
+    try {
+      const target = path.join(root, "doomed-quick.txt");
+      writeFileSync(target, "bye");
+      const notices: Array<{ message: string; title: string }> = [];
+      const sink: TrashOpsSink = {
+        ...recordingSink(),
+        now: fakeClock(1),
+        notifyTerminal: (message, title) => notices.push({ message, title }),
+      };
+      await makeTrashOps(sink).deleteForever([target]);
+      expect(notices.length).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("makeTrashConfirms", () => {
   type Confirmed = { message: string; yesLabel: string; danger?: boolean };
   const mkEnv = () => {

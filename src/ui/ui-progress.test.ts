@@ -165,6 +165,61 @@ describe("makeProgress gates", () => {
     expect(prog.toastUp).toBe(false);
   });
 
+  test("the spinner rides the app's shared animation clock", () => {
+    // OpenTUI 0.8.0's onAnimationTick: the ticker lives in the render loop,
+    // so the spinner cannot drift from the frames it paints (and it stops
+    // with the renderer). A private setInterval cannot.
+    const ticks: Array<() => void> = [];
+    let unsubscribed = 0;
+    const nodes = new Map<string, { content: string }>();
+    for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
+    const { ctx } = stubCtx({
+      byId: (id: string) => nodes.get(id) as unknown as MaybeNode,
+      onTick: (_fps, cb) => {
+        ticks.push(cb);
+        return () => {
+          unsubscribed++;
+        };
+      },
+    });
+    const { prog, showProgressToast, finishProgressToast } = makeProgress(ctx);
+    prog.active = true;
+    showProgressToast();
+    expect(ticks.length).toBe(1);
+    // the clock drives the spinner
+    ticks[0]?.();
+    expect(nodes.get("tfm-prog-title")!.content).not.toBe("");
+    // and finishing the toast releases the ticker
+    finishProgressToast("✓ done");
+    expect(unsubscribed).toBe(1);
+  });
+
+  test("a re-show releases the previous ticker (a leaked one pins the renderer at 10fps)", () => {
+    // The re-show path does NOT go through finishProgressToast — it closes the
+    // stale handle itself, so it must stop the stale spinner too. The toast
+    // going down without finishProgressToast is the case that leaves a live
+    // spinner behind (the stack closed it, not the op).
+    const ticks: Array<() => void> = [];
+    let unsubscribed = 0;
+    const { ctx } = stubCtx({
+      onTick: (_fps, cb) => {
+        ticks.push(cb);
+        return () => {
+          unsubscribed++;
+        };
+      },
+    });
+    const { prog, showProgressToast } = makeProgress(ctx);
+    prog.active = true;
+    showProgressToast();
+    expect(ticks.length).toBe(1);
+    prog.toastUp = false; // the toast vanished without finishProgressToast
+    showProgressToast();
+    expect(ticks.length).toBe(2);
+    // the FIRST ticker was released by the re-show
+    expect(unsubscribed).toBe(1);
+  });
+
   test("show opens one sticky shell; finish closes it after the linger", async () => {
     // the shell belongs to ./notify — progress only drives the handle:
     // no close during the linger (notifies must keep stacking below),

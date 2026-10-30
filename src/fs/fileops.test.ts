@@ -788,6 +788,72 @@ describe("onFileOp fan-out", () => {
   });
 });
 
+// A finished op that took long enough that the user plausibly looked away
+// raises a TERMINAL notification (OSC 99 / OSC 777 / OSC 9 — the renderer
+// negotiates the protocol). The in-app toast is enough for a quick op, and a
+// cancelled or failed op NEVER notifies: a desktop notification that claims
+// "done" for a half-finished op is a lie.
+describe("terminal notification for a finished op", () => {
+  // a fake clock: every read advances by stepMs, so the op's elapsed time is
+  // whatever the test wants without sleeping
+  const fakeClock = (stepMs: number) => {
+    let t = 0;
+    return () => (t += stepMs);
+  };
+  const notices: Array<{ message: string; title: string }> = [];
+  const notifyTerminal = (message: string, title: string) => {
+    notices.push({ message, title });
+  };
+
+  test("a long successful copy notifies the terminal", async () => {
+    notices.length = 0;
+    const h = makeHarness({ now: fakeClock(10_000), notifyTerminal });
+    const src = path.join(ROOT, "notify-src");
+    const destDir = path.join(ROOT, "notify-dest");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+
+    expect(notices.length).toBe(1);
+    expect(notices[0]!.message).toContain("Copied");
+    expect(notices[0]!.title).toBe("tfm");
+  });
+
+  test("a quick op does NOT notify (the toast is still on screen)", async () => {
+    notices.length = 0;
+    const h = makeHarness({ now: fakeClock(1), notifyTerminal });
+    const src = path.join(ROOT, "notify-quick-src");
+    const destDir = path.join(ROOT, "notify-quick-dest");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+
+    expect(notices.length).toBe(0);
+  });
+
+  test("a cancelled op never notifies", async () => {
+    notices.length = 0;
+    const h = makeHarness({
+      now: fakeClock(10_000),
+      notifyTerminal,
+      crossDevice: (a, b) => a.includes("dev-a") !== b.includes("dev-a"),
+      paintProgress: () => {
+        h.prog.cancelled = true;
+      },
+    });
+    const src = path.join(ROOT, "dev-a", "notify-cancel-tree");
+    const destDir = path.join(ROOT, "dev-b-notify-cancel");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("move", destDir, [src], "move cancelled");
+
+    expect(notices.length).toBe(0);
+  });
+});
+
 describe("trash guards", () => {
   test("pasteSmart into Trash/files refuses with a status, moves nothing", () => {
     // dest-based (not view-based): pasting onto a real place while viewing

@@ -22,6 +22,7 @@ import { mergedMapFacade } from "../app/panes";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces, listMounts } from "../fs/places";
 import { startMemHygiene, type NativeStatsReach } from "../lib/mem-hygiene";
+import { startPaintTrace } from "../lib/frame-stats";
 import { xtShiftEscapeFrame, kittyDeleteAllImages } from "../ui/ui-term";
 import { RESOLUTION_LAZY_SETTLE_MS } from "../ui/ui-lookup";
 import { configPath } from "../config/config";
@@ -334,6 +335,32 @@ export const wireBoot = (deps: {
           }
         },
         debugLog: isDebug ? (msg) => debugLog(msg) : undefined,
+      }),
+    // --debug paint trace: one line per frame that repainted. The counters are
+    // the RENDERER's own (OpenTUI 0.8.0 `getNativeStats().frameWork`) — the
+    // ground truth for "how much did this frame cost", and the only way to
+    // see WHY a frame took the full repaint path (a kitty thumbnail on screen
+    // forces it on every frame).
+    startPaintTrace: () =>
+      startPaintTrace({
+        subscribe: (onFrame) => {
+          chrome.renderer.on(CliRenderEvents.FRAME, onFrame);
+          return () => chrome.renderer.off(CliRenderEvents.FRAME, onFrame);
+        },
+        source: () => {
+          try {
+            const w = chrome.renderer.getNativeStats().frameWork;
+            return {
+              damageRows: w.damageRows,
+              fullPathReasons: w.fullPathReasons,
+              rowsDiffed: w.rowsDiffed,
+              workFrameId: w.workFrameId,
+            };
+          } catch {
+            return null;
+          }
+        },
+        log: (msg) => debugLog(msg),
       }),
     wireSearchInput: () => nav.wireSearchInput(),
     reportBootError: (name, err) => {

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box, type Renderable } from "@opentui/core";
+import { Box, type Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { loadingLabel, loadingLine, makeGridRenderer, SPIN_FRAMES_ASCII, SPIN_FRAMES_BRAILLE } from "./ui-grid";
 import { hookScrollerScroll } from "./ui-grid-window";
@@ -2274,6 +2274,140 @@ describe("renderGrid (windowed grid)", () => {
       windowedGridOn = false;
       scroller.scrollTop = 0;
       gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+});
+
+describe("renderGrid (native repaint scope)", () => {
+  // The native renderer's own work counters are the ground truth for "what
+  // did this frame cost" (OpenTUI 0.8.0 `renderer.getNativeStats().frameWork`):
+  //
+  //   damageRows       terminal rows the frame cleared and repainted
+  //                    (0 = the frame painted nothing at all)
+  //   fullPathReasons  WHY a frame took the full repaint path instead of
+  //                    the damage-only one (images/tainted/screen/...)
+  //   viewPreparations text views the frame had to set up — the number of
+  //                    nodes it built, which is what the windowed grid's
+  //                    incremental slide actually saves
+  //   membersPainted   members whose paint record changed
+  //
+  // tfm's windowed grid claims "only the entering rows repaint". That used
+  // to be a WALL-CLOCK claim (load-dependent, noisy, and it cannot tell a
+  // cheap rebuild from an expensive one). These assertions pin it with the
+  // renderer's own counters.
+  //
+  // tmp is assigned in beforeAll — describe bodies run at collection time,
+  // so every path derives lazily inside the tests.
+  const bigDir = (): string => path.join(tmp, "repaint-dir");
+  const bigFile = (i: number): string => path.join(bigDir(), `w${String(i).padStart(4, "0")}.txt`);
+  const ensureBig = (): void => {
+    mkdirSync(bigDir(), { recursive: true });
+    for (let i = 1; i <= 500; i++) writeFileSync(bigFile(i), "x");
+  };
+  const work = () => t.renderer.getNativeStats().frameWork;
+
+  test("an unchanged grid frame paints nothing", async () => {
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      // the first frame after a build has nothing to compare with (the native
+      // reports UNRETAINED and repaints everything); the SECOND one is the
+      // first frame that can be judged
+      const first = work();
+      expect(first.damageRows).toBeGreaterThan(0); // the grid really is on screen
+      await t.renderOnce();
+      const idle = work();
+      expect(idle.damageRows).toBe(0);
+      expect(idle.membersPainted).toBe(0);
+      expect(idle.viewPreparations).toBe(0);
+
+      // a RE-render with nothing changed must take the fast path and rebuild
+      // nothing — the stats-only-tick loop that rebuilt the grid on every
+      // watcher event ("stats-only ticks must not rebuild the grid") re-queued
+      // every icon slot through its fallback glyph each time.
+      //
+      // The native counters CANNOT see a redundant rebuild whose content is
+      // identical (the renderer dedupes the unchanged paint records), so the
+      // guard is tfm's OWN work: a rebuild builds new tiles, and every tile
+      // asks for a fresh icon slot.
+      const slotsBefore = iconSlots.length;
+      await renderGrid();
+      await t.renderOnce();
+      expect(iconSlots.length).toBe(slotsBefore); // no rebuild = no new slots
+      const rerendered = work();
+      expect(rerendered.damageRows).toBe(0);
+      expect(rerendered.membersPainted).toBe(0);
+      expect(rerendered.viewPreparations).toBe(0);
+    } finally {
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("an incremental slide sets up a fraction of the views a full rebuild does", async () => {
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    const prevScroller = scroller;
+    windowedGridOn = true;
+    // The fake scroller has no viewport and no translation, so a window move
+    // shifts the content out of sight and EVERY row changes — the counters
+    // then measure the fake, not tfm. The REAL ScrollBox is what tfm ships:
+    // it translates the content, so the slide's saving is visible.
+    const real = new ScrollBoxRenderable(t.renderer, {
+      id: "tfm-scroll-repaint",
+      width: TERM_W,
+      height: TERM_H,
+      scrollY: true,
+      viewportCulling: true,
+      contentOptions: { flexDirection: "column" },
+    });
+    try {
+      // the fake content host leaves the root, or it would share the screen
+      t.renderer.root.remove(content);
+      t.renderer.root.add(real);
+      await t.renderOnce();
+      scroller = real as unknown as ScrollerLike;
+
+      gridState.cwd = bigDir();
+      real.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      await t.renderOnce(); // settle
+
+      // TWO rows down: the window moves (a ONE-row notch stays inside the
+      // overscan and builds nothing), so the INCREMENTAL slide reaps the
+      // leaving row and builds the entering one
+      real.scrollTop = 12;
+      syncWindow();
+      await t.renderOnce();
+      const incremental = work();
+
+      // a FLING past the built window takes the fallback path: the whole
+      // window is destroyed and rebuilt
+      real.scrollTop = 3000;
+      syncWindow();
+      await t.renderOnce();
+      const rebuilt = work();
+
+      // the slide's whole point: it must NOT cost what the rebuild costs
+      expect(incremental.viewPreparations).toBeLessThan(rebuilt.viewPreparations);
+    } finally {
+      scroller = prevScroller;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      try {
+        t.renderer.root.remove(real);
+      } catch {}
+      t.renderer.root.add(content);
       await renderGrid();
     }
   });

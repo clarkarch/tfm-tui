@@ -42,3 +42,21 @@ export type ProgressState = {
   processCancel?: (() => void) | null;
   processPause?: (() => void) | null;
 };
+
+// --- Terminal notifications for finished operations.
+//
+// The in-app toast is enough for a quick op: the user is watching. A DESKTOP
+// notification (OSC 99 / OSC 777 / OSC 9 — the renderer negotiates the
+// protocol with the terminal) is the channel for an op that finished while
+// the user was somewhere else, and the only signal we have for "somewhere
+// else" is that the op took a while.
+//
+// 5s is the line: below it the toast is still on screen when the op ends, so
+// a notification would only duplicate it; above it the user has plausibly
+// switched away. A cancelled or failed op never notifies — the toast carries
+// the honest outcome and a desktop notification that says "done" for a
+// half-finished op would be a lie.
+export const OP_NOTIFY_MIN_MS = 5000;
+
+export const shouldNotifyTerminal = (elapsedMs: number, cancelled: boolean, failed: number): boolean =>
+  !cancelled && failed === 0 && elapsedMs >= OP_NOTIFY_MIN_MS;
