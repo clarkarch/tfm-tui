@@ -106,6 +106,10 @@ bun run check && bun test
 bun run compile && cp dist/tfm ~/.local/bin/
 ```
 
+tfm runs a patched [OpenTUI](https://github.com/anomalyco/opentui) fork. It is
+published to npm as [`@clarkarch/opentui-fork`](https://www.npmjs.com/package/@clarkarch/opentui-fork)
+and pulled in as a normal dependency — there is nothing extra to clone or build.
+
 ## Update
 
 `esc` → About or:

@@ -66,8 +66,8 @@ AOT Bun** — the apples-to-apples comparison, where the only difference is
 whether the code was compiled ahead of time; the stock Bun that ships today
 builds a different (and bigger) JIT binary, and "the size story" below puts
 the two side by side. And every size in the table was measured **before the
-debug symbols were stripped out of the staged native library** — the release
-strips them, which takes about 6 MiB off every column.
+debug symbols were stripped out of the native library** — the release ships
+the stripped one, which takes about 6 MiB off every column.
 
 The **candidate** — the smallest variant that boots and paints every run — is
 the last column: **19.2 MiB smaller gzipped than the JIT build and 30–39 %
@@ -120,18 +120,24 @@ runtime), and that eats the difference.
 
 #### The 23 MB of debug symbols
 
-Every compiled binary **embeds the native library it loads** — twice: the
-patched `libopentui` that `scripts/sync-opentui-lib.sh` stages, and the npm
-one that comes with the platform package. The fork's prebuilt library keeps
-its debug symbols: 28.5 MB per target, of which 5.3 MB is code. Staged as it
-was, **23 MB of symbols went into every binary** — and about 6 MiB into every
-gzipped download.
+Every compiled binary **embeds the native library it loads**. The library is
+28.5 MB with its debug symbols and 5.3 MB without them, and the binary ships
+whatever file it loads — the difference is invisible in the build log: the
+compile succeeds either way.
 
-The staging script now strips the copy it stages (`strip --strip-unneeded`,
-which keeps the dynamic symbols — the ABI — and drops the rest). The fork
-keeps its own file intact, so its debugging is not affected. On the x86_64
-binary: 28 456 600 → 5 301 144 bytes, and the release artifact went from
-59.2 MiB to 53.2 MiB gzipped (aarch64: 58.0 MiB → 52.2 MiB).
+While the fork was consumed as a sibling checkout, tfm embedded **two** copies
+of it: the patched `libopentui` that the staging script put in place, and the
+npm one that came with the platform package. The staged copy kept its debug
+symbols, so **23 MB of symbols went into every binary** — and about 6 MiB into
+every gzipped download.
+
+The fork is published to npm now (`@clarkarch/opentui-fork`, plus one package
+per platform), and the published platform packages carry the **stripped**
+library — `strip --strip-unneeded`, which keeps the dynamic symbols (the ABI)
+and drops the rest. The fork's own checkout keeps its unstripped file for its
+debugging, and tfm never sees it. So the binary embeds one stripped library
+and the 23 MB is gone: 28 456 600 → 5 301 144 bytes, and the release artifact
+went from 59.2 MiB to 53.2 MiB gzipped (aarch64: 58.0 MiB → 52.2 MiB).
 
 ### The size lever: `--trim`, and the Bun it needs
 
@@ -332,9 +338,11 @@ the opentui fork's plugin path, which AOT disables.
    size conclusion only holds with the right Bun.
 5. **A compiled binary embeds the native library it loads — symbols and
    all.** `libopentui` is 28.5 MB with its debug symbols and 5.3 MB without
-   them, and the binary ships whatever the staged file holds. That is 23 MB
-   per binary, and it is invisible in the build log: the compile succeeds
-   either way.
+   them, and the binary ships whatever file it loads. That was 23 MB per
+   binary while the fork was staged from a sibling checkout; the npm platform
+   package carries the stripped library now, so the binary embeds the 5.3 MB
+   one. It is invisible in the build log either way: the compile succeeds
+   with either file.
 
 ## The decision
 
@@ -356,9 +364,8 @@ The three caveats, and what each one costs:
 * **Bun AOT is in no release yet** — it was merged into Bun's main, but no
   release carries it, so every release of tfm ships a Bun that the project
   pins itself, built from that commit with a pinned LLVM/Rust toolchain. The
-  pin lives in `bun-aot.ref` next to the opentui fork's pin, the binary is
-  cached by that pin, and the release workflow builds it from scratch when
-  the pin moves.
+  pin lives in `bun-aot.ref`, the binary is cached by that pin, and the release
+  workflow builds it from scratch when the pin moves.
 * **Plugins do not work in an AOT build** — the plugin system is the first
   thing users will miss. The release notes say so, the README says so, and
   a build from source still has plugins.

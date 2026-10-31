@@ -252,23 +252,8 @@ jobs:
       - name: Make the bun executable
         run: chmod +x bin/bun
 
-      # The patched opentui fork must sit BESIDE the checkout: package.json
-      # depends on file:../opentui-fork/packages/core/dist.
-      - name: Fetch the opentui fork
-        run: |
-          url=$(sed -n 's/^url *= *//p' opentui-fork.ref | head -n 1)
-          ref=$(sed -n 's/^ref *= *//p' opentui-fork.ref | head -n 1)
-          git clone --depth 1 --single-branch --branch "$ref" "$url" ../opentui-fork
-
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      # Stage the fork's patched libopentui over the UNPATCHED npm platform
-      # package, so the compiled binary embeds it.
-      - name: Stage the patched libopentui
-        run: |
-          ln -sfn "$(readlink -f node_modules)" ../opentui-fork/node_modules
-          sh scripts/sync-opentui-lib.sh
 
       - name: Check
         run: bun run check

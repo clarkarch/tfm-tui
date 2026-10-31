@@ -15,25 +15,8 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      # package.json depends on file:../opentui-fork/packages/core/dist, so the
-      # patched fork must sit BESIDE the checkout. url/ref come from
-      # opentui-fork.ref so this can't drift from the installer/release.
-      - name: Fetch the opentui fork
-        run: |
-          url=$(sed -n 's/^url *= *//p' opentui-fork.ref | head -n 1)
-          ref=$(sed -n 's/^ref *= *//p' opentui-fork.ref | head -n 1)
-          git clone --depth 1 --single-branch --branch "$ref" "$url" ../opentui-fork
-
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      # The npm platform package is UNPATCHED: stage the fork's libopentui (the
-      # renderer tests and the compile need it) and link our node_modules into
-      # the fork — bun resolves the file: dep through its real path.
-      - name: Stage the opentui lib
-        run: |
-          ln -sfn "$(readlink -f node_modules)" ../opentui-fork/node_modules
-          sh scripts/sync-opentui-lib.sh
 
       - name: Check (lint + format + strict typecheck)
         run: bun run check

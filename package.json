@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@humanwhocodes/ico-to-png": "^1.1.0",
-    "@opentui/core": "file:../opentui-fork/packages/core/dist",
+    "@opentui/core": "npm:@clarkarch/opentui-fork@0.8.0-fork.3",
     "dbus-next": "^0.10.2",
     "debug": "^4.4.3",
     "fflate": "^0.8.3",
