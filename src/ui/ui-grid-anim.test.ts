@@ -613,11 +613,16 @@ describe("makeFileAnim (engine)", () => {
     const byId = (id: string) => t.renderer.root.findDescendantById(id);
     const anim = makeFileAnim({ renderer: t.renderer, byId, opts: () => opts({ style: "stagger-slide", ms: 300 }) });
     anim.play({ tiles: ["g3-tile-0", "g3-tile-1", "g3-tile-2", "g3-tile-3"], inner: "g3-inner" });
+    // The engine is stepped BY HAND: the assertion below looks at the exact
+    // moment the first tile reaches rest, and a wall-clock sampler can step
+    // over that window when the machine is loaded (then the last tile has
+    // already settled too and the cascade is invisible). Stepping keeps the
+    // window observable, and the values are read straight after the step — the
+    // animator writes them in the timeline's own update.
     const samples: number[][] = [];
     let t0Rest = -1;
     for (let i = 0; i < 120 && t0Rest < 0; i++) {
-      await Bun.sleep(5);
-      await t.renderOnce();
+      step(5);
       const row = [0, 1, 2, 3].map((k) => (byId(`g3-tile-${k}`) as any).translateY);
       samples.push(row);
       // per-tile translate must stay on whole cells (image child coords)
