@@ -248,7 +248,14 @@ export const uniqueTarget = (dir: string, base: string): string => {
   }
 };
 
-export const fsMove = async (src: string, dest: string): Promise<void> => {
+// A copy implementation for the EXDEV fallback (see fsMove below). The seam
+// exists so a caller that owns a progress sink can route the cross-device
+// copy through it — the default `cp` reports neither progress nor cancel, so
+// a big cross-device move (a USB stick into the home trash) ran in silence.
+// The seam copies the CONTENT only: fsMove removes the source afterwards.
+export type CrossDeviceCopy = (src: string, dest: string) => Promise<void>;
+
+export const fsMove = async (src: string, dest: string, copy?: CrossDeviceCopy): Promise<void> => {
   try {
     await fsRename(src, dest);
   } catch (err: unknown) {
@@ -261,22 +268,28 @@ export const fsMove = async (src: string, dest: string): Promise<void> => {
     // durable tmp+rename engine with progress + half-copy cleanup — this
     // fallback is for single renames that unexpectedly hit EXDEV (bind
     // mounts). Remove source only after the copy succeeded.
-    const srcStat = lstatSync(src);
-    const tmp = await claimTmp(dest, srcStat.isDirectory());
-    try {
-      await cp(src, tmp, { recursive: true, preserveTimestamps: true });
-      // cp merges into the claimed dir instead of creating it, so the root
-      // keeps mkdir-default mode — restore the source's explicitly
-      if (srcStat.isDirectory()) {
-        try {
-          // eslint-disable-next-line no-bitwise
-          await chmod(tmp, srcStat.mode & 0o7777);
-        } catch {}
+    if (copy) {
+      // the caller's engine owns the staging + the bar (it lands dest
+      // atomically on its own), so the tmp dance below is not needed
+      await copy(src, dest);
+    } else {
+      const srcStat = lstatSync(src);
+      const tmp = await claimTmp(dest, srcStat.isDirectory());
+      try {
+        await cp(src, tmp, { recursive: true, preserveTimestamps: true });
+        // cp merges into the claimed dir instead of creating it, so the root
+        // keeps mkdir-default mode — restore the source's explicitly
+        if (srcStat.isDirectory()) {
+          try {
+            // eslint-disable-next-line no-bitwise
+            await chmod(tmp, srcStat.mode & 0o7777);
+          } catch {}
+        }
+        await fsRename(tmp, dest);
+      } catch (copyErr) {
+        await rm(tmp, { recursive: true, force: true }).catch(() => {});
+        throw copyErr;
       }
-      await fsRename(tmp, dest);
-    } catch (copyErr) {
-      await rm(tmp, { recursive: true, force: true }).catch(() => {});
-      throw copyErr;
     }
     try {
       await rm(src, { recursive: true });
@@ -292,11 +305,32 @@ export const fsMove = async (src: string, dest: string): Promise<void> => {
 // rename() silently overwrites on Linux, so a file created between the original
 // op and ctrl+z would be destroyed. Bump to "name (copy)" instead. Returns
 // the final destination (== dest unless it was occupied).
-export const safeRestoreMove = async (src: string, dest: string): Promise<string> => {
+//
+// `opts.copy` is the cross-device seam (see fsMove): it copies the content
+// through the caller's engine (progress bar + cancel) and the source is
+// dropped afterwards — a plain `cp` fallback showed the user NOTHING while a
+// multi-GB file crossed the boundary.
+//
+// `opts.crossDevice` says the caller KNOWS the move crosses a filesystem
+// boundary (it probed the devices itself). Without it the seam only runs if
+// the rename actually fails with EXDEV — the probe is what makes the
+// progress-aware path reachable (and testable) BEFORE the slow copy starts.
+export const safeRestoreMove = async (
+  src: string,
+  dest: string,
+  opts?: { copy?: CrossDeviceCopy; crossDevice?: boolean },
+): Promise<string> => {
   let d = dest;
   if (existsSync(d)) d = uniqueTarget(path.dirname(d), path.basename(d));
   await mkdir(path.dirname(d), { recursive: true });
-  await fsMove(src, d);
+  if (opts?.copy && opts.crossDevice) {
+    // copy first, drop the source after: a failed copy leaves the source
+    // intact (the move's mirror), never a half-restored file
+    await opts.copy(src, d);
+    await rm(src, { recursive: true });
+    return d;
+  }
+  await fsMove(src, d, opts?.copy);
   return d;
 };
 
@@ -407,15 +441,25 @@ const trashRootsFor = (target: string): string[] => {
 // Then the file moves, then the placeholder is overwritten with the real
 // Path=/DeletionDate=. If the move fails the placeholder is removed (no
 // orphan entry); if the final info write fails the move rolls back.
-export const xdgTrashMove = async (p: string): Promise<string> => {
+// A full move (the source is GONE afterwards) — the seam the trash op uses
+// so a cross-device trash can go through the progress-aware copy engine.
+export type MoveFn = (src: string, dest: string) => Promise<void>;
+
+export const xdgTrashMove = async (
+  p: string,
+  opts?: { move?: MoveFn; isCancelled?: () => boolean },
+): Promise<string> => {
   const absSrc = path.resolve(p);
   const roots = trashRootsFor(absSrc);
   let lastErr: unknown = null;
   for (const root of roots) {
     try {
-      return await xdgTrashMoveToRoot(absSrc, root);
+      return await xdgTrashMoveToRoot(absSrc, root, opts?.move);
     } catch (err) {
       lastErr = err;
+      // a cancelled op must NOT fall through to the next trash root: the
+      // fallback would start the whole copy again against the user's ✕
+      if (opts?.isCancelled?.()) break;
       // topdir may be read-only/unwritable — fall through to home trash
     }
   }
@@ -520,6 +564,31 @@ export const crossDevice = (a: string, b: string): boolean => {
   const da = deviceOf(a),
     db = deviceOf(b);
   return da !== null && db !== null && da !== db;
+};
+
+// st_dev of the nearest EXISTING ancestor of a path. The path itself often
+// does not exist yet — a trash destination is CREATED by the move, and the
+// original path of a restore was freed by the trash — so a plain lstat on it
+// says "unknown" and a device probe built on it would answer "same device"
+// for exactly the cross-device case that needs the slow, progress-aware copy.
+export const deviceOfAncestor = (p: string): number | null => {
+  let cur = path.resolve(p);
+  for (;;) {
+    const d = deviceOf(cur);
+    if (d !== null) return d;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+};
+
+// cross-device probe for a destination that may not exist yet: compare the
+// source's device with the nearest existing ancestor of the destination.
+export const crossDeviceTo = (a: string, b: string): boolean => {
+  const da = deviceOf(a);
+  if (da === null) return false;
+  const db = deviceOfAncestor(b);
+  return db !== null && da !== db;
 };
 
 // identity of a live file for undo guards: undo closures trash/restore by

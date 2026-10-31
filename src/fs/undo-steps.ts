@@ -16,7 +16,8 @@
 import { existsSync } from "node:fs";
 import { mkdir, rename as fsRename, rm, writeFile } from "node:fs/promises";
 import { fsErrText, rmTrashInfo, rmTrashInfoForPath, safeRestoreMove, trashIfSameFile, xdgTrashMove } from "./fsutil";
-import { copyTreeProgress, type TransferSink } from "./transfer";
+import { copyTreeProgress } from "./transfer";
+import type { TransferSink } from "../lib/file-op-protocol";
 
 // progress-less sink for journal redo copies (no toast to report into)
 const nullSink: TransferSink = {

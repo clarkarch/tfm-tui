@@ -7,7 +7,7 @@
 
 import path from "node:path";
 import type { Subprocess } from "bun";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, lstat, readdir, readlink, rm, rename as fsRename } from "node:fs/promises";
 import { swallow } from "../lib/log";
 import {
@@ -42,14 +42,17 @@ import {
   sudoRmArgv,
   type SudoExecFn,
 } from "./elevate";
-import { copyTreeProgress, scanTree, type TransferSink } from "./transfer";
+import { copyTreeProgress, scanTree } from "./transfer";
 import {
   commonParent,
   compressionExt,
+  compressByteProgress,
   countArchiveEntries,
   detectArchiveFormat,
+  isTarFormat,
   runArchiveTask,
   runArchiveTool,
+  tarSupportsByteProgress,
   uniqueArchiveTarget,
   type ArchiveFormat,
   type ArchiveRun,
@@ -62,7 +65,13 @@ import { isArchiveUri } from "./uri";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
-import { shouldNotifyTerminal, type ClipItem, type ConflictChoice, type ProgressState } from "../lib/file-op-protocol";
+import {
+  shouldNotifyTerminal,
+  type ClipItem,
+  type ConflictChoice,
+  type ProgressState,
+  type TransferSink,
+} from "../lib/file-op-protocol";
 import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
 
 export type FileOpsCtx = {
@@ -136,18 +145,34 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const archiveWhich = ctx.archiveWhich ?? whichLive;
   const listArchive =
     ctx.listArchive ?? ((fmt: ArchiveFormat, file: string) => countArchiveEntries(fmt, file, runArchive, archiveWhich));
+  // Is the installed tar GNU (does it have the --checkpoint byte counter)?
+  // One probe per app, memoized: the answer only changes when the user swaps
+  // the binary, and a compress must not spawn `tar --version` every time.
+  let tarByteProbe: Promise<boolean> | null = null;
+  const tarHasByteProgress = async (): Promise<boolean> => {
+    if (!tarByteProbe) tarByteProbe = tarSupportsByteProgress(runArchive, archiveWhich);
+    return tarByteProbe;
+  };
   // one task call per archive op: spawn when tools exist, in-process fallback
   // otherwise. Cooperative hooks (no child to signal on the js lane — ✕/pause
   // flow through prog like the spawn path).
   const runArchiveOp = (
     task: Parameters<typeof runArchiveTask>[0],
-    opts: { onLine?: (line: string) => void; cwd?: string; onLoss?: (loss: { exec: number; links: number }) => void },
+    opts: {
+      onLine?: (line: string) => void;
+      onMemberDone?: (finished: number) => void;
+      onBytes?: (bytes: number) => void;
+      cwd?: string;
+      onLoss?: (loss: { exec: number; links: number }) => void;
+    },
   ): Promise<{ code: number; stdout: string; stderr: string }> =>
     runArchiveTask(task, {
       run: runArchive,
       which: archiveWhich,
       cwd: opts.cwd,
       onLine: opts.onLine,
+      onMemberDone: opts.onMemberDone,
+      onBytes: opts.onBytes,
       onChild: onArchiveChild,
       isCancelled: () => prog.cancelled,
       pauseGate: () => ctx.pauseGate(),
@@ -173,8 +198,12 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     prog.totalFiles = totalFiles;
     prog.totalBytes = totalBytes;
   };
-  const armProgressToast = (): void => {
-    if (shouldToast(prog.totalBytes, prog.totalFiles)) {
+  const armProgressToast = (bytes = prog.totalBytes): void => {
+    // `bytes` is the op's REAL size — the archive bars keep prog.totalBytes
+    // at 0 (their tools report member names, not bytes), but the arming
+    // decision still needs the true size: one 5 GB video is ONE member, so
+    // the member count alone said "tiny" and the op ran in total silence.
+    if (shouldToast(bytes, prog.totalFiles)) {
       prog.active = true;
       ctx.showProgressToast();
       ctx.paintProgress(true);
@@ -220,12 +249,18 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // never pay a toast flicker. `armed` tells the caller the toast is already
   // up: keep it for the transfer even if the totals later look toastless
   // (slow disk + small tree is exactly when the user needs to see liveness).
+  //
+  // The scan reports three sizes, each with its own reader:
+  //   files   — what the copy/delete bars count (a directory is not a file)
+  //   bytes   — the op's real size; the arming decision's "is this big?" signal
+  //   members — files + dirs, what the ARCHIVE bars count (the tools report
+  //             one line per member, and a directory is a member of its own)
   const preScan = async (
     srcs: string[],
-    withBytes: boolean,
-  ): Promise<{ files: number; bytes: number; armed: boolean }> => {
+  ): Promise<{ files: number; bytes: number; dirs: number; members: number; armed: boolean }> => {
     let files = 0,
       bytes = 0,
+      dirs = 0,
       armed = false;
     const t0 = Date.now();
     prog.counting = true;
@@ -247,14 +282,18 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             if (armed) ctx.paintProgress(true);
           });
           files += r.files;
-          if (withBytes) bytes += r.bytes;
+          // the bytes come from the SAME lstat the scan already did — counting
+          // them is free, and they are the only honest "is this op big?"
+          // signal for a selection with few members
+          bytes += r.bytes;
+          dirs += r.dirs;
         } catch {}
       }
     } finally {
       prog.counting = false;
       prog.doneFiles = 0;
     }
-    return { files, bytes, armed };
+    return { files, bytes, dirs, members: files + dirs, armed };
   };
   // register the live child so the toast's ✕ kills it (SIGKILL, SIGCONT first
   // when paused) and the pause button stops/resumes it (SIGSTOP/SIGCONT) —
@@ -280,6 +319,17 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const clearArchiveChild = (): void => {
     prog.processCancel = null;
     prog.processPause = null;
+  };
+
+  // the archive's own byte size — the honest "is this extract big?" signal.
+  // The MEMBER count alone said "tiny" for a one-member archive, and the op
+  // then ran for minutes with no bar, no cancel, nothing at all.
+  const archiveSize = (f: string): number => {
+    try {
+      return statSync(f, { throwIfNoEntry: false })?.size ?? 0;
+    } catch {
+      return 0;
+    }
   };
 
   // first actionable stderr line of a failure. 7z -bso2 moved its whole entry
@@ -374,6 +424,44 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   };
   const copyTreeProgressWired = (src: string, dest: string): Promise<FileId | null> =>
     copyTreeProgress(src, dest, transferSink);
+  // a copy that runs with the bar up: the pre-scan gives honest totals, the
+  // toast is armed only when the op is worth one, and the terminal state
+  // ALWAYS lands (✓/✗) — a copy that died must never read as a success.
+  // Used by the redo of a copy and by the undo/redo of a cross-device move
+  // (the plain `cp` fallback showed the user NOTHING while a multi-GB file
+  // crossed the boundary).
+  const copyWithProgress = async (src: string, dest: string, verb: string, okMsg: string): Promise<void> => {
+    resetProg();
+    prog.verb = verb;
+    const scan = await preScan([src]);
+    prog.totalFiles = scan.files || 1;
+    prog.totalBytes = scan.bytes;
+    const armed = scan.armed || shouldToast(prog.totalBytes, prog.totalFiles);
+    if (armed) {
+      prog.active = true;
+      ctx.showProgressToast();
+      ctx.paintProgress(true);
+    }
+    let landed = false;
+    try {
+      await copyTreeProgressWired(src, dest);
+      landed = true;
+    } catch (err) {
+      ctx.log(`${verb} ${src} → ${dest}: ${fsErrText(err)}`);
+      throw err;
+    } finally {
+      if (armed) {
+        prog.active = false;
+        ctx.finishProgressToast(landed ? okMsg : prog.cancelled ? "✗ Copy cancelled" : "✗ Copy failed");
+      }
+    }
+  };
+  // the copy seam safeRestoreMove takes: it copies the content only — the
+  // caller drops the source afterwards (a move's mirror).
+  const progressCopy =
+    (verb: string, okMsg: string) =>
+    (src: string, dest: string): Promise<void> =>
+      copyWithProgress(src, dest, verb, okMsg);
   const isCrossDevice = (a: string, b: string): boolean => (ctx.crossDevice ?? fsCrossDevice)(a, b);
   const removeTree = ctx.removeTree ?? ((p: string) => rm(p, { recursive: true }));
   const sudoExec = ctx.sudoExec ?? defaultSudoExec;
@@ -574,7 +662,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const withProgress = op === "copy" || srcs.some((s) => isCrossDevice(s, destDir));
     if (withProgress) {
       prog.verb = op === "copy" ? "copying" : "moving";
-      const r = await preScan(srcs, true);
+      const r = await preScan(srcs);
       prog.totalFiles = r.files || Math.max(1, total);
       prog.totalBytes = r.bytes;
       if (r.armed || shouldToast(prog.totalBytes, prog.totalFiles)) {
@@ -669,6 +757,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         // `target` is the only complete data — the sudo retry must only retry
         // the removal, never rm/recopy the complete copy (total data loss).
         let sourceRemovalFailed = false;
+        // did THIS move cross a filesystem boundary? The undo/redo below
+        // needs the answer: a rename cannot cross devices, so putting the
+        // file back is a COPY — and that copy must carry the bar.
+        const crossed = isCrossDevice(src, destDir);
         const recordSuccess = (): void => {
           const t = target,
             s = src;
@@ -677,21 +769,39 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             units.push(() => trashIfSameFile(t, tid, ctx.log));
             dUnits.push({ op: "trash", path: t, ...(tid ?? {}) });
             redos.push(async () => {
-              try {
-                if (!existsSync(t)) await copyTreeProgressWired(src, t);
-              } catch (err) {
-                ctx.log(`redo copy ${t}: ${fsErrText(err)}`);
-              }
+              if (existsSync(t)) return;
+              // the redo re-runs the copy engine, so it needs the SAME toast
+              // the original op used: the sink's repaint is a no-op while no
+              // toast is up, and a big redo copied in total silence
+              await copyWithProgress(src, t, "copying", "✓ Redone");
             });
             dRedos.push({ op: "copy-tree-if-missing", src, dest: t });
           } else {
-            units.push(() => safeRestoreMove(t, s).then(() => undefined));
+            // undo of a move: put the file back where it came from. A move
+            // that crossed a filesystem boundary needs a COPY — with the bar,
+            // because the plain `cp` fallback showed the user NOTHING while a
+            // multi-GB file crossed back.
+            units.push(() =>
+              safeRestoreMove(t, s, {
+                copy: progressCopy("restoring", "✓ Restored"),
+                crossDevice: crossed,
+              }).then(() => undefined),
+            );
             dUnits.push({ op: "restore-move", from: t, to: s });
             redos.push(async () => {
               try {
-                if (existsSync(s) && !existsSync(t)) await fsMove(s, t);
+                if (existsSync(s) && !existsSync(t)) {
+                  if (crossed) {
+                    // cross-device: copy with the bar, then drop the source
+                    await copyWithProgress(s, t, "moving", "✓ Moved");
+                    await rm(s, { recursive: true });
+                  } else await fsMove(s, t);
+                }
               } catch (err) {
+                // same honesty rule as the copy redo: a failed redo is
+                // reported as failed, never swallowed into a fake success
                 ctx.log(`redo move ${t}: ${fsErrText(err)}`);
+                throw err;
               }
             });
             dRedos.push({ op: "rename-if", from: s, to: t });
@@ -1311,12 +1421,19 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     try {
       // one total across all archives so the bar doesn't reset per file
       let totalFiles = 0;
+      let totalBytes = 0;
       for (const f of files) {
         const fmt = detectArchiveFormat(f);
-        if (fmt && existsSync(f)) totalFiles += await listArchive(fmt, f);
+        if (fmt && existsSync(f)) {
+          totalFiles += await listArchive(fmt, f);
+          totalBytes += archiveSize(f);
+        }
       }
       setProgVerb("extracting", totalFiles);
-      armProgressToast();
+      // the bar counts MEMBERS (the tools report names); the archive's own
+      // size is what says whether the op is big enough to deserve a bar — a
+      // one-member archive of 5 GB used to extract in total silence
+      armProgressToast(totalBytes);
       for (const file of files) {
         if (cancelled || prog.cancelled) {
           cancelled = true;
@@ -1342,8 +1459,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         const res = await runArchiveOp(
           { op: "extract", fmt, file, destDir: stage },
           {
-            onLine: () => {
-              prog.doneFiles++;
+            // FINISHED members: tar/7z print the name when the member
+            // STARTS, so the count lags by one — the bar may never read as
+            // complete before the extraction really is
+            onMemberDone: (finished) => {
+              prog.doneFiles = finished;
               ctx.paintProgress();
             },
           },
@@ -1541,13 +1661,34 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       }
     }
     const tmp = tmpName(out);
-    const scan = await preScan(srcs, false);
-    prog.totalBytes = 0;
-    setProgVerb("compressing", scan.files);
+    const scan = await preScan(srcs);
+    // The BYTE lane: GNU tar can report the bytes it has consumed (the
+    // --checkpoint counter), so the bar answers "how far through the source
+    // are we" instead of "how many members did we start". The denominator is
+    // the input size — the one total the app knows for sure.
+    //
+    // The member lane stays the fallback (zip/7z have no byte counter, and
+    // the tar lane is refused when the tar overhead could outrun the content
+    // — see compressByteProgress).
+    const byteLane = isTarFormat(format)
+      ? compressByteProgress(format, scan.members, scan.bytes, await tarHasByteProgress())
+      : false;
+    if (byteLane) {
+      // a byte bar: no member total (the title reads the bytes instead)
+      setProgVerb("compressing", 0, scan.bytes);
+    } else {
+      // archive tools report entry NAMES, not bytes → the bar is a MEMBER
+      // count (barLineFiles), so the progress state's byte total stays 0. The
+      // scanned bytes still decide whether the toast arms: a single 5 GB
+      // video is ONE member, so the member count alone said "tiny" and the
+      // compress ran in total silence (no bar, no cancel, nothing until the
+      // end).
+      setProgVerb("compressing", scan.members);
+    }
     if (scan.armed) {
       prog.active = true;
       ctx.paintProgress(true);
-    } else armProgressToast();
+    } else armProgressToast(scan.bytes);
     try {
       // tar-family fallback create drops exec bits and follows symlinks
       // (Bun.Archive's input is content-only) — the lane reports what it saw
@@ -1556,11 +1697,19 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       // note (the fflate lane preserves both and never fires onLoss).
       let loss = { exec: 0, links: 0 };
       const res = await runArchiveOp(
-        { op: "compress", fmt: format, outFile: tmp, names, parent },
+        { op: "compress", fmt: format, outFile: tmp, names, parent, byteProgress: byteLane },
         {
           cwd: parent,
-          onLine: () => {
-            prog.doneFiles++;
+          // FINISHED members (the archive layer knows when each tool's line
+          // completes: tar/7z print the name when the member STARTS, so the
+          // count lags by one — the bar may never read as complete before
+          // the op really is)
+          onMemberDone: (finished) => {
+            prog.doneFiles = finished;
+            ctx.paintProgress();
+          },
+          onBytes: (bytes) => {
+            prog.bytes = bytes;
             ctx.paintProgress();
           },
           onLoss: (l) => {

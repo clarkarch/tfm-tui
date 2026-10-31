@@ -17,6 +17,7 @@ import {
   availableCompressionFormats,
   canExtract,
   commonParent,
+  compressByteProgress,
   compressPlan,
   compressionExt,
   compressionHint,
@@ -28,11 +29,14 @@ import {
   isArchiveEntryLine,
   listArchiveEntries,
   makeLineCounter,
+  parseTarByteLine,
   parseToolLine,
   runArchiveTask,
   runArchiveTool,
   selectArchiveLane,
+  tarSupportsByteProgress,
   uniqueArchiveTarget,
+  type ArchiveRun,
 } from "./archive";
 
 // Fake child mirroring the Bun Subprocess surface runArchiveTool consumes:
@@ -383,6 +387,14 @@ describe("isArchiveEntryLine", () => {
     expect(isArchiveEntryLine("tar.gz", "src/")).toBe(true);
     expect(isArchiveEntryLine("tar.gz", "src/f0.bin")).toBe(true);
   });
+
+  test("tar: its own diagnostics are not members", () => {
+    // "file changed as we read it" is a warning, not a member — counting it
+    // would advance the bar past the real total
+    expect(isArchiveEntryLine("tar.gz", "tar: ./out.txt: file changed as we read it")).toBe(false);
+    expect(isArchiveEntryLine("tar.gz", "tar: TFMCP 100")).toBe(false);
+    expect(isArchiveEntryLine("tar.gz", "tar: ./a: Cannot stat: No such file or directory")).toBe(false);
+  });
 });
 
 describe("runArchiveTask progress filtering", () => {
@@ -525,6 +537,142 @@ describe("runArchiveTool", () => {
     expect(res.code).toBe(-1);
     expect(res.stderr).toContain("timed out");
     expect(proc.killed).toContain("SIGKILL");
+  });
+});
+
+// --- byte progress: the tar family's own counter -----------------------------
+// The member-count bar was LYING: tar prints the -v member name when the
+// member STARTS (probed: the name lands 30 ms into a 12 s compression), so
+// "1/1" meant "the only member started", not "the work is done". GNU tar
+// can report the bytes it consumed instead — that is a TRUE bar.
+describe("tar byte progress", () => {
+  test("parses the checkpoint line into the bytes consumed", () => {
+    // 100 blocks × 10,240 bytes (the default blocking factor: 20 × 512)
+    expect(parseTarByteLine("tar: TFMCP 100")).toBe(1024000);
+    expect(parseTarByteLine("TFMCP 1")).toBeNull();
+    // a normal line is not a counter
+    expect(parseTarByteLine("tar: big.bin")).toBeNull();
+    expect(parseTarByteLine("adding: big.bin (deflated 63%)")).toBeNull();
+    // a MEMBER that happens to be named like the marker is not a counter
+    expect(parseTarByteLine("TFMCP 100")).toBeNull();
+    expect(parseTarByteLine("+ TFMCP 100")).toBeNull();
+  });
+
+  test("the byte lane puts the checkpoint flags FIRST (tar stops parsing options after an operand)", () => {
+    const plan = compressPlan("tar.gz", "/out/a.tar.gz", ["foo"], "/src", which("tar", "gzip"), {
+      byteProgress: true,
+    });
+    expect(plan.args.slice(0, 3)).toEqual([
+      "--checkpoint=32",
+      "--blocking-factor=20",
+      "--checkpoint-action=echo=TFMCP %u",
+    ]);
+    // the flags must precede -c/-f/-C and the operands
+    expect(plan.args.indexOf("--checkpoint=32")).toBeLessThan(plan.args.indexOf("-c"));
+    expect(plan.args.indexOf("--checkpoint=32")).toBeLessThan(plan.args.indexOf("-C"));
+  });
+
+  test("without the byte lane the plan carries no checkpoint flags", () => {
+    const plan = compressPlan("tar.gz", "/out/a.tar.gz", ["foo"], "/src", which("tar", "gzip"));
+    expect(plan.args.some((a) => a.startsWith("--checkpoint"))).toBe(false);
+  });
+
+  test("the probe asks the installed tar whether it is GNU (bsdtar has no --checkpoint)", async () => {
+    const gnu: ArchiveRun = async () => ({ code: 0, stdout: "tar (GNU tar) 1.35\n", stderr: "" });
+    expect(await tarSupportsByteProgress(gnu, which("tar"))).toBe(true);
+    const bsd: ArchiveRun = async () => ({ code: 0, stdout: "bsdtar 3.7.3\n", stderr: "" });
+    expect(await tarSupportsByteProgress(bsd, which("tar"))).toBe(false);
+    // a failing probe = no byte lane (never a broken op)
+    const broken: ArchiveRun = async () => ({ code: 1, stdout: "", stderr: "boom" });
+    expect(await tarSupportsByteProgress(broken, which("tar"))).toBe(false);
+    // no tar at all
+    expect(await tarSupportsByteProgress(gnu, which())).toBe(false);
+  });
+
+  test("the byte lane is refused when the tar overhead could outrun the content", () => {
+    // one big member: the stream is the content → the counter is honest
+    expect(compressByteProgress("tar.gz", 1, 5 * 1024 * 1024, true)).toBe(true);
+    // 1000 tiny members: the stream is 1000 headers + padding, so the
+    // counter would pass the content total long before the work is done
+    expect(compressByteProgress("tar.gz", 1000, 1024, true)).toBe(false);
+    // not a tar format / no GNU tar / nothing to compress
+    expect(compressByteProgress("zip", 1, 5 * 1024 * 1024, true)).toBe(false);
+    expect(compressByteProgress("tar.gz", 1, 5 * 1024 * 1024, false)).toBe(false);
+    expect(compressByteProgress("tar.gz", 1, 0, true)).toBe(false);
+  });
+
+  test("the counter line is progress, not error output", async () => {
+    const proc = fakeProc();
+    const bytes: number[] = [];
+    const lines: string[] = [];
+    const res = await runArchiveTool(
+      { tool: "tar", args: [] },
+      {
+        spawn: (() => {
+          setTimeout(() => {
+            proc.err("tar: TFMCP 100\n");
+            proc.err("tar: cannot read: No such file\n");
+            proc.end();
+            proc.settleExit(2);
+          }, 0);
+          return proc.child;
+        }) as never,
+        onLine: (l) => lines.push(l),
+        onBytes: (b) => bytes.push(b),
+      },
+    );
+    expect(bytes).toEqual([1024000]);
+    // the counter must not pollute the error capture (it would eat the
+    // 256 KB cap and push the real error out of the summary)
+    expect(res.stderr).toBe("tar: cannot read: No such file\n");
+    expect(res.stderr).not.toContain("TFMCP");
+    // and it is not a member line either
+    expect(lines).toEqual(["tar: cannot read: No such file"]);
+  });
+});
+
+// --- member accounting: FINISHED members, not started ones ------------------
+// tar/7z/unzip print the member name when the member STARTS, so a count of
+// those lines reaches the total while the last member is still being
+// written — the bar said "1/1" while the op ran on.
+describe("member accounting", () => {
+  const tarRun = (lines: string[]) => {
+    const run: ArchiveRun = async (_spec, opts) => {
+      for (const l of lines) opts?.onLine?.(l);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    return run;
+  };
+
+  test("the tar lane counts FINISHED members (the last one is still in flight)", async () => {
+    const counts: number[] = [];
+    await runArchiveTask(
+      { op: "compress", fmt: "tar.gz", outFile: "/out/a.tar.gz", names: ["a"], parent: "/src" },
+      { run: tarRun(["a", "b", "c"]), which: which("tar", "gzip"), onMemberDone: (n) => counts.push(n) },
+    );
+    // three names seen → two members finished, the third is in flight
+    expect(counts).toEqual([0, 1, 2]);
+  });
+
+  test("the zip lane counts members as they finish (Info-ZIP prints the name after compressing)", async () => {
+    const counts: number[] = [];
+    await runArchiveTask(
+      { op: "compress", fmt: "zip", outFile: "/out/a.zip", names: ["a"], parent: "/src" },
+      { run: tarRun(["adding: a (deflated 63%)"]), which: which("zip"), onMemberDone: (n) => counts.push(n) },
+    );
+    expect(counts).toEqual([1]);
+  });
+
+  test("the unzip lane counts members as they finish (the line is terminated when the member ends)", async () => {
+    // probed: unzip writes "  inflating: name" at the member's START but only
+    // terminates the line when the member ENDS — so the reader sees it late,
+    // and the count is honest
+    const counts: number[] = [];
+    await runArchiveTask(
+      { op: "extract", fmt: "zip", file: "/x/a.zip", destDir: "/stage" },
+      { run: tarRun(["  inflating: /stage/a  "]), which: which("unzip"), onMemberDone: (n) => counts.push(n) },
+    );
+    expect(counts).toEqual([1]);
   });
 });
 

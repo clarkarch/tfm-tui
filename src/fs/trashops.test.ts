@@ -5,6 +5,7 @@ import path from "node:path";
 import { trashDir } from "./fsutil";
 import { makeTrashConfirms, makeTrashOps, trashOrigPath, trashOrigPathForFile, type TrashOpsSink } from "./trashops";
 import { archiveUri } from "./archive-scheme";
+import type { OpProgress, TransferSink } from "../lib/file-op-protocol";
 
 const oldDataHome = process.env.XDG_DATA_HOME;
 const oldHome = process.env.HOME;
@@ -44,6 +45,40 @@ const recordingSink = (): TrashOpsSink & {
     notify: (msg, title, level) => notes.push(`notify:${title ?? ""}:${level ?? ""}:${msg}`),
     renderAll: () => notes.push("renderAll"),
   };
+};
+
+// A progress driver fake: it records the lifecycle (start → finish) the way
+// the wiring's driver does and can be cancelled mid-copy — the ✕ button sets
+// the flag and the engine's next checkpoint throws.
+const progressFake = (opts: { cancelAtCheckpoint?: number } = {}) => {
+  const events: string[] = [];
+  let cancelled = false;
+  let checkpoints = 0;
+  const sink: TransferSink = {
+    checkpoint: async () => {
+      checkpoints++;
+      if (opts.cancelAtCheckpoint !== undefined && checkpoints >= opts.cancelAtCheckpoint) {
+        cancelled = true;
+        throw new Error("cancelled");
+      }
+    },
+    paused: () => false,
+    cancelled: () => cancelled,
+    addBytes: () => {},
+    fileDone: () => {},
+    setStream: () => {},
+    clearStream: () => {},
+    repaint: () => {},
+  };
+  const dp: OpProgress = {
+    sink,
+    start: (files, bytes, verb) => events.push(`start:${verb ?? ""}:${files}:${bytes}`),
+    counting: (files) => events.push(`counting:${files}`),
+    cancelled: () => cancelled,
+    finish: (msg) => events.push(`finish:${msg}`),
+    stop: () => events.push("stop"),
+  };
+  return { dp, events };
 };
 
 describe("trashPaths", () => {
@@ -169,6 +204,97 @@ describe("trashOrigPath", () => {
       mkdirSync(path.join(mnt, "info"), { recursive: true });
       writeFileSync(path.join(mnt, "files", "clash.txt"), "usb-data");
       expect(await trashOrigPathForFile(path.join(mnt, "files", "clash.txt"))).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// A file that lives on another filesystem (a USB stick) falls back to the
+// HOME trash — so trashing it COPIES the bytes across the boundary. That
+// copy used to run through node's `cp`: no bar, no cancel, minutes of
+// silence. The cross-device path now goes through the transfer engine.
+describe("cross-device trash / restore progress", () => {
+  test("a cross-device trash copies with the bar up", async () => {
+    const root = sandbox();
+    try {
+      const file = path.join(root, "usb.bin");
+      writeFileSync(file, "x".repeat(1024));
+      const sink = recordingSink();
+      const p = progressFake();
+      const ops = makeTrashOps({ ...sink, trashProgress: p.dp, crossDevice: () => true });
+      await ops.trashPaths([file]);
+      expect(p.events.some((e) => e.startsWith("start:trashing:"))).toBe(true);
+      expect(p.events.some((e) => e.startsWith("finish:"))).toBe(true);
+      // the file really moved (copy + drop the source)
+      expect(existsSync(file)).toBe(false);
+      expect(existsSync(path.join(trashDir(), "files", "usb.bin"))).toBe(true);
+      expect(sink.notes.some((n) => n === "notify:trash:success:Trashed 1 item")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a cancelled cross-device trash leaves the source intact and no trash entry", async () => {
+    const root = sandbox();
+    try {
+      const dir = path.join(root, "usb-tree");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "a.bin"), "a");
+      writeFileSync(path.join(dir, "b.bin"), "b");
+      const sink = recordingSink();
+      // the ✕ lands on the second checkpoint — one file copied, the rest not
+      const p = progressFake({ cancelAtCheckpoint: 2 });
+      const ops = makeTrashOps({ ...sink, trashProgress: p.dp, crossDevice: () => true });
+      await ops.trashPaths([dir]);
+      // the source survived: a cancelled copy never drops the original
+      expect(existsSync(path.join(dir, "a.bin"))).toBe(true);
+      expect(existsSync(path.join(dir, "b.bin"))).toBe(true);
+      // and nothing landed in the trash (the staged copy was cleaned up)
+      expect(existsSync(path.join(trashDir(), "files", "usb-tree"))).toBe(false);
+      expect(existsSync(path.join(trashDir(), "info", "usb-tree.trashinfo"))).toBe(false);
+      // the outcome reads as CANCELLED, not as a failure
+      expect(sink.notes.some((n) => n.includes("Trash cancelled"))).toBe(true);
+      expect(p.events).toContain("finish:✗ Trash cancelled");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a cross-device restore copies with the bar up", async () => {
+    const root = sandbox();
+    try {
+      const origDir = path.join(root, "orig");
+      mkdirSync(origDir, { recursive: true });
+      mkdirSync(path.join(trashDir(), "files"), { recursive: true });
+      mkdirSync(path.join(trashDir(), "info"), { recursive: true });
+      const trashFile = path.join(trashDir(), "files", "usb.bin");
+      writeFileSync(trashFile, "payload");
+      writeFileSync(path.join(trashDir(), "info", "usb.bin.trashinfo"), `[Trash Info]\nPath=${origDir}/usb.bin\n`);
+      const sink = recordingSink();
+      const p = progressFake();
+      const ops = makeTrashOps({ ...sink, trashProgress: p.dp, crossDevice: () => true });
+      await ops.restoreFromTrash([trashFile]);
+      expect(p.events.some((e) => e.startsWith("start:restoring:"))).toBe(true);
+      expect(existsSync(path.join(origDir, "usb.bin"))).toBe(true);
+      expect(existsSync(trashFile)).toBe(false);
+      expect(sink.notes.some((n) => n === "notify:restore:success:Restored 1 item")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a same-device trash never arms the bar (an instant rename needs none)", async () => {
+    const root = sandbox();
+    try {
+      const file = path.join(root, "local.txt");
+      writeFileSync(file, "bye");
+      const sink = recordingSink();
+      const p = progressFake();
+      const ops = makeTrashOps({ ...sink, trashProgress: p.dp, crossDevice: () => false });
+      await ops.trashPaths([file]);
+      expect(p.events.some((e) => e.startsWith("start:"))).toBe(false);
+      expect(existsSync(path.join(trashDir(), "files", "local.txt"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

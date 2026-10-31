@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream, type ReadStream, type Stats } from "node:fs";
+import { createReadStream, createWriteStream, type Stats } from "node:fs";
 import {
   chmod,
   link,
@@ -16,6 +16,7 @@ import {
 import path from "node:path";
 import { errCode, claimTmp, fileIdMatches, fileIdOf, fsyncPath, type FileId } from "./fsutil";
 import { swallow } from "../lib/log";
+import type { TransferSink } from "../lib/file-op-protocol";
 
 // --- Copy engine: tree walking, pre-scan and streamed file copy with
 // pause/cancel/progress. UI-agnostic: callers inject a TransferSink wired to
@@ -29,32 +30,26 @@ import { swallow } from "../lib/log";
 // `.tfm-part-*` orphan but never a half-visible dest. Directories stage the
 // whole tree and claim the destination before renaming it into place. ---
 
-export type TransferSink = {
-  // gate between files AND before each entry: waits while paused, throws
-  // Error("cancelled") when the transfer was cancelled
-  checkpoint: () => Promise<void>;
-  // mid-stream queries: the data handler pauses/destroys the live stream
-  paused: () => boolean;
-  cancelled: () => boolean;
-  addBytes: (n: number) => void;
-  fileDone: () => void;
-  // mid-stream cancel path: the toast's cancel button destroys the current
-  // stream, so the sink owns the "which stream is live" bookkeeping
-  setStream: (rs: ReadStream) => void;
-  clearStream: (rs: ReadStream) => void;
-  repaint: (full?: boolean) => void;
-};
+// The sink contract lives in ../lib/file-op-protocol (the leaf both sides of
+// the protocol share) — this module only implements against it.
 
 // onTick (optional) fires every SCAN_TICK_FILES found files — nautilus updates
 // its "Preparing…" counter at the same rate so a huge-source scan never looks
 // dead. Callback is sync-only; callers must not await inside it.
+//
+// `dirs` counts the DIRECTORY members the archiver writes ("sub/" is a member
+// of its own, next to its contents). The copy/delete bars count files only
+// (a directory is not copied "as a file"), but the archive bars must count
+// members — a total built from files alone undercounts the archive by one per
+// directory and the bar hits 100% before the last member is written.
 const SCAN_TICK_FILES = 100;
 export const scanTree = async (
   root: string,
   onTick?: (files: number) => void,
-): Promise<{ files: number; bytes: number }> => {
+): Promise<{ files: number; bytes: number; dirs: number }> => {
   let files = 0,
-    bytes = 0;
+    bytes = 0,
+    dirs = 0;
   const stack = [root];
   while (stack.length) {
     const d = stack.pop() as string;
@@ -75,6 +70,9 @@ export const scanTree = async (
       if (onTick && files % SCAN_TICK_FILES === 0) onTick(files);
       continue;
     }
+    // the scanned root counts as a directory member too: "tar -c sub" stores
+    // "sub/" plus its contents
+    dirs++;
     let kids: string[];
     try {
       kids = await readdir(d);
@@ -83,7 +81,7 @@ export const scanTree = async (
     }
     for (const k of kids) stack.push(path.join(d, k));
   }
-  return { files, bytes };
+  return { files, bytes, dirs };
 };
 
 const fsyncParentDir = (p: string): Promise<void> =>

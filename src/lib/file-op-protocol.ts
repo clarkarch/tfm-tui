@@ -43,6 +43,42 @@ export type ProgressState = {
   processPause?: (() => void) | null;
 };
 
+// The progress seam the copy/delete engines report into. It lives in this leaf
+// (not in fs/transfer.ts) because BOTH sides need it: the fs engines define
+// the contract, the ui widgets implement it, and the driver below wires one to
+// the other — a leaf keeps the import graph acyclic in both directions.
+export type TransferSink = {
+  // gate between files AND before each entry: waits while paused, throws
+  // Error("cancelled") when the transfer was cancelled
+  checkpoint: () => Promise<void>;
+  // mid-stream queries: the data handler pauses/destroys the live stream
+  paused: () => boolean;
+  cancelled: () => boolean;
+  addBytes: (n: number) => void;
+  fileDone: () => void;
+  // mid-stream cancel path: the toast's cancel button destroys the current
+  // stream, so the sink owns the "which stream is live" bookkeeping
+  setStream: (rs: ReadStream) => void;
+  clearStream: (rs: ReadStream) => void;
+  repaint: (full?: boolean) => void;
+};
+
+// A progress DRIVER: the fs side asks it to start an op, reports into its
+// sink, and asks it for the outcome. The ui side owns the toast; the driver
+// is the bridge (see ui/ui-progress.ts's makeOpProgress).
+export type OpProgress = {
+  sink: TransferSink;
+  /** reset counters, set totals, arm the toast when it's worth showing */
+  start(totalFiles: number, totalBytes: number, verb?: string): void;
+  /** pre-scan tick (optional): live "counting N files…" before totals exist */
+  counting?: (files: number) => void;
+  cancelled(): boolean;
+  /** swap the live toast for the final state (no-op when none showed) */
+  finish(msg: string): void;
+  /** clear the active flag */
+  stop(): void;
+};
+
 // --- Terminal notifications for finished operations.
 //
 // The in-app toast is enough for a quick op: the user is watching. A DESKTOP

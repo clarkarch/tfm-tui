@@ -7,11 +7,10 @@
 import { makeUndo } from "../app/undo";
 import { clearUndoJournal, readUndoJournal, saveUndoJournal } from "../fs/undo-journal";
 import { makeConflict, makeYesNo } from "../ui/ui-dialogs";
-import { makeProgress } from "../ui/ui-progress";
+import { makeOpProgress, makeProgress } from "../ui/ui-progress";
 import { makeFileOps } from "../fs/fileops";
 import { makeTerminal } from "../ui/ui-term";
 import { makeTrashOps, makeTrashConfirms } from "../fs/trashops";
-import { shouldToast } from "../fs/fsutil";
 import { appendLog, dlog } from "../lib/log";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import type { CoreWiring } from "./core";
@@ -103,6 +102,13 @@ export const wireFileops = (deps: {
     onTick: (fps, cb) => chrome.renderer.onAnimationTick(fps, () => cb()),
   });
 
+  // --- progress driver for the ops that MOVE bytes but do NOT run through
+  // the fileops transfer engine (the deletes, and the cross-device
+  // trash/restore copy). The driver lives in ./ui-progress (it owns the prog
+  // state + the toast): every byte-moving op has ONE bar with ONE
+  // pause/cancel pair — and an op that moves bytes can never run without a
+  // status. ---
+
   // --- File operations: runTransfer/performRename/paste/clipboard
   // orchestration lives in ./fileops; the copy engine is ./transfer (pure,
   // sink-injected), the progress toast is ./ui-progress. ---
@@ -164,48 +170,14 @@ export const wireFileops = (deps: {
     notify: chrome.notify,
     renderAll: nav.renderAll,
     ensureSudo,
-    // delete progress: the driver maps trashops' calls onto the SAME prog
-    // state + toast transfers use (pause/cancel included). Flags reset at
-    // start so a stale cancel from an earlier op can't abort the delete.
-    deleteProgress: {
-      sink: fileops.progressSink,
-      counting: (files) => {
-        const p = progress.prog;
-        p.counting = true;
-        p.verb = "deleting";
-        p.doneFiles = files;
-        if (!p.toastUp) {
-          p.active = true;
-          progress.showProgressToast();
-        }
-        progress.paintProgress(true);
-      },
-      start: (totalFiles, totalBytes) => {
-        const p = progress.prog;
-        // a counting toast armed mid-scan stays up even when the final
-        // totals look toastless (slow disk + small tree needs liveness most)
-        const armed = p.toastUp;
-        p.counting = false;
-        p.paused = false;
-        p.cancelled = false;
-        p.doneFiles = 0;
-        p.bytes = 0;
-        p.totalFiles = totalFiles;
-        p.totalBytes = totalBytes;
-        p.verb = "deleting";
-        if (armed || shouldToast(totalBytes, totalFiles)) {
-          p.active = true;
-          progress.showProgressToast();
-          progress.paintProgress(true);
-        }
-      },
-      cancelled: () => progress.prog.cancelled,
-      finish: (msg) => progress.finishProgressToast(msg),
-      stop: () => {
-        progress.prog.active = false;
-        progress.prog.counting = false;
-      },
-    },
+    // progress driver factory: every op that MOVES bytes reports into the
+    // SAME prog state + toast transfers use (pause/cancel included). The
+    // verb is the default; the cross-device trash/restore copy passes its
+    // own at start() time ("trashing" / "restoring").
+    // Flags reset at start so a stale cancel from an earlier op can't abort
+    // the next one.
+    deleteProgress: makeOpProgress(progress, "deleting"),
+    trashProgress: makeOpProgress(progress, "trashing"),
     log: (msg) => appendLog(`trashops: ${msg}`),
     // a finished long op raises a TERMINAL notification (OSC 99 / OSC 777 /
     // OSC 9 — the renderer negotiates the protocol with the terminal and

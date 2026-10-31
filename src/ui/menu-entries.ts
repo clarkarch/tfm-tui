@@ -9,6 +9,7 @@ import { RECENT_URI, STARRED_URI, isArchiveUri, isVirtualUri } from "../fs/uri";
 import { archiveBrowseUri } from "../fs/archive-scheme";
 import type { CompressionFormat } from "../fs/archive";
 import type { ListEntry } from "../lib/menu-entry";
+import type { NotifyLevel } from "../lib/notify-level";
 import type { GridTileRef } from "../input/grid-input";
 import type { ClipItem } from "../lib/file-op-protocol";
 import type { LoadedPlugin, PluginFileMenuEntry } from "../plugins/plugin-api";
@@ -17,6 +18,9 @@ import type { SortMode } from "../lib/sort";
 
 export type MenuEntriesCtx = {
   closeFileMenu(): void;
+  // leveled toast notification — every row that performs an op reports its
+  // outcome (the status bar is selection info only)
+  notify(msg: string, title?: string, level?: NotifyLevel): void;
   navigate(dir: string): void;
   newTab(dir: string): void;
   // open a folder in the inactive pane (enables dual-pane when off)
@@ -259,9 +263,13 @@ export const makeMenuEntries = (ctx: MenuEntriesCtx) => {
           label: "Remove bookmark",
           action: () => {
             ctx.closeFileMenu();
+            // the outcome is reported: a silent failure here left the user
+            // believing the bookmark was gone (and an unhandled rejection)
             void setBookmarked(target, false)
               .then(() => loadSystemPlaces())
-              .then(() => ctx.renderAll());
+              .then(() => ctx.renderAll())
+              .then(() => ctx.notify("Bookmark removed", "bookmark", "success"))
+              .catch(() => ctx.notify("Bookmark failed", "bookmark", "error"));
           },
         });
       }

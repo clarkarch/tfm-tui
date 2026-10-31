@@ -39,6 +39,14 @@ export type ArchiveRunOpts = {
   // every line of stdout AND stderr, for progress (both pipes are streamed;
   // tar -v and unzip write entry names to stdout, 7z -bso2 to stderr)
   onLine?: (line: string) => void;
+  // the number of FINISHED members (the archive layer owns the per-tool
+  // semantics — see MEMBER_LINE_MEANS_STARTED: tar/7z print the name when
+  // the member STARTS, so their count lags by one member; that lag is what
+  // keeps the bar from reading as complete before the op is)
+  onMemberDone?: (finished: number) => void;
+  // live byte progress (the tar family's --checkpoint counter): the bytes
+  // the tool has consumed so far
+  onBytes?: (bytes: number) => void;
   // the live child, so the caller can register cancel (SIGTERM) / pause
   // (SIGSTOP/SIGCONT)
   onChild?: (child: Subprocess) => void;
@@ -61,6 +69,92 @@ export type ArchiveRunOpts = {
 export type ArchiveRun = (spec: ToolSpec, opts?: ArchiveRunOpts) => Promise<ArchiveRunResult>;
 type SpawnFn = (cmd: string, args: string[], opts: SpawnSafeOpts, onFail: (err: Error) => void) => Subprocess | null;
 export type WhichFn = (bin: string) => string | null;
+
+// --- byte progress: the tar family's own byte counter ---
+//
+// GNU tar can report how much it has consumed: --checkpoint=N fires every N
+// blocks and --checkpoint-action=echo prints the block count to stderr. With
+// the default blocking factor (20) a block is 20 × 512 = 10,240 bytes, so
+// count × 10,240 is the input consumed — probed: a 300,000,000-byte file ends
+// at 29,298 blocks = 300,011,520 bytes (the tar STREAM: the header and the
+// per-member padding included).
+export const TAR_BLOCK_BYTES = 10240;
+// the marker is ours — tar prefixes its action output with "tar: ", and the
+// anchor keeps a MEMBER named "TFMCP 123" from being read as a counter
+const TAR_BYTE_MARKER = "TFMCP";
+const TAR_BYTE_RE = new RegExp(`^tar:\\s+${TAR_BYTE_MARKER}\\s+(\\d+)$`);
+// The flags go FIRST in the argv: GNU tar stops parsing options after the
+// first operand (and after -C), so a trailing --checkpoint is silently
+// ignored — probed: the extract lane printed no counter at all.
+export const TAR_BYTE_FLAGS = [
+  "--checkpoint=32",
+  "--blocking-factor=20",
+  `--checkpoint-action=echo=${TAR_BYTE_MARKER} %u`,
+];
+
+// parse a checkpoint line → the bytes consumed (null when it is not one)
+export const parseTarByteLine = (line: string): number | null => {
+  const m = line.match(TAR_BYTE_RE);
+  if (!m) return null;
+  const blocks = Number(m[1]);
+  return Number.isFinite(blocks) ? blocks * TAR_BLOCK_BYTES : null;
+};
+
+// the tar family — the only lane with a byte counter
+export const isTarFormat = (fmt: ArchiveFormat): boolean => defOf(fmt).kind === "tar";
+
+// GNU tar has --checkpoint; bsdtar does not (it would fail the whole op on
+// the unknown flag). One probe decides — the caller memoizes it, so this
+// stays a pure question about the installed binary.
+export const tarSupportsByteProgress = async (
+  run: ArchiveRun = runArchiveTool,
+  which: WhichFn = whichLive,
+): Promise<boolean> => {
+  if (!which("tar")) return false;
+  try {
+    const res = await run({ tool: "tar", args: ["--version"] }, {});
+    return res.code === 0 && /GNU tar/i.test(`${res.stdout}${res.stderr}`);
+  } catch {
+    return false;
+  }
+};
+
+// Can this compress report TRUE byte progress? The checkpoint counter counts
+// the tar STREAM (a 512-byte header + padding per member), so the byte bar
+// is only honest when that overhead cannot move the bar: with many tiny
+// members the counter outruns the content and the bar would hit 100% while
+// the work continues — the exact lie the byte lane exists to kill.
+// Pure: the caller owns the probe (and memoizes it — one `tar --version`
+// per app, not one per op).
+export const compressByteProgress = (
+  fmt: CompressionFormat,
+  members: number,
+  bytes: number,
+  tarByteProgress: boolean,
+): boolean => {
+  if (!tarByteProgress) return false;
+  if (defOf(fmt).kind !== "tar") return false;
+  if (bytes <= 0) return false;
+  // the tar overhead may claim at most 2% of the content
+  return (members + 1) * 1024 <= bytes * 0.02;
+};
+
+// WHEN each tool's member line COMPLETES (probed 2026-10-31, piped stdout
+// and stderr — the line is only handed to the reader when it is newline
+// terminated, so what matters is when the LAST byte of the line lands):
+//   tar -v        → "name\n" at the member's START → the member is in flight
+//   7z -bb1       → "+ name\n" at the member's START → in flight
+//   unzip         → "  inflating: name" is written at the START but the line
+//                   is only terminated when the member ENDS → DONE
+//   Info-ZIP zip  → "  adding: name (deflated N%)" — the name lands at the
+//                   START, the ratio (and the newline) at the END → DONE
+//   the js lanes  → an entry after writing it → DONE
+// The bar counts FINISHED members, so a "starts" lane lags by one member
+// (the last one is still in flight when the tool exits).
+const MEMBER_LINE_MEANS_STARTED: Record<string, boolean> = {
+  tar: true,
+  "7z": true,
+};
 
 type CompressionDef = {
   fmt: ArchiveFormat;
@@ -159,6 +253,7 @@ export const extractPlan = (
   file: string,
   destDir: string,
   which: WhichFn = whichLive,
+  opts?: { byteProgress?: boolean },
 ): ToolSpec => {
   const def = defOf(fmt);
   if (def.kind === "tar")
@@ -168,7 +263,17 @@ export const extractPlan = (
     // the escape snapshot below catches any tool that doesn't)
     return {
       tool: "tar",
-      args: ["-x", "-v", ...def.filter, "-f", file, "-C", destDir, "--no-same-owner"],
+      args: [
+        ...(opts?.byteProgress ? TAR_BYTE_FLAGS : []),
+        "-x",
+        "-v",
+        ...def.filter,
+        "-f",
+        file,
+        "-C",
+        destDir,
+        "--no-same-owner",
+      ],
     };
   // -bb1: one line per entry — plain `7z x` emits a fixed header no matter
   // the entry count, freezing the file-count bar at 0 (same class as tar -v).
@@ -199,12 +304,27 @@ export const compressPlan = (
   names: string[],
   parent: string,
   which: WhichFn = whichLive,
+  opts?: { byteProgress?: boolean },
 ): ToolSpec => {
   const def = defOf(fmt);
   // a name starting with "-" would otherwise be parsed as an option (tar -v,
   // --files-from=…): tar/7z get an explicit `--`, zip an escaped "./" operand
   if (def.kind === "tar")
-    return { tool: "tar", args: ["-c", ...def.filter, "-v", "-f", outFile, "-C", parent, "--", ...names] };
+    return {
+      tool: "tar",
+      args: [
+        ...(opts?.byteProgress ? TAR_BYTE_FLAGS : []),
+        "-c",
+        ...def.filter,
+        "-v",
+        "-f",
+        outFile,
+        "-C",
+        parent,
+        "--",
+        ...names,
+      ],
+    };
   // -bb1: one `+ name` line per added file — `zip -r` is chatty by default
   // but 7z is not, and without it the file-count bar never advances.
   // -bso2: same piped-stdout freeze as extract (entry log to stderr, live).
@@ -344,7 +464,14 @@ export const parseToolLine = (line: string): string | null => {
 // lines) and both shapes are accepted. tar -v/-t emit members only, no headers.
 export const isArchiveEntryLine = (fmt: ArchiveFormat, line: string): boolean => {
   const def = defOf(fmt);
-  if (def.kind === "tar") return true;
+  if (def.kind === "tar") {
+    // tar -v prints the member name bare; its own diagnostics are prefixed
+    // with "tar: " (and the byte-progress counter is "tar: TFMCP n", already
+    // filtered before it gets here). A warning must NOT advance the member
+    // count — "file changed as we read it" is not a member.
+    if (line.startsWith("tar: ")) return false;
+    return true;
+  }
   if (line.startsWith("+ ") || line.startsWith("- ")) return true; // 7z -bb1 members (a/x)
   if (def.kind === "zip") return /^\s*(adding|updating|creating|inflating|extracting):\s/.test(line);
   return false; // 7z banners, scan summaries, totals
@@ -395,7 +522,19 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
       resolve({ code, stdout, stderr });
     };
     const stdoutCounter = makeLineCounter((l) => opts.onLine?.(l));
-    const stderrCounter = makeLineCounter((l) => opts.onLine?.(l));
+    // the stderr capture is LINE-based: the tar byte-progress counter is not
+    // an error, and a chunk-based capture would let those lines eat the
+    // 256 KB cap (a big archive emits thousands of them) and push the real
+    // error text out of the summary.
+    const stderrCounter = makeLineCounter((l) => {
+      const bytes = parseTarByteLine(l);
+      if (bytes !== null) {
+        opts.onBytes?.(bytes);
+        return;
+      }
+      stderr = appendCapped(stderr, `${l}\n`);
+      opts.onLine?.(l);
+    });
     let child: Subprocess | null;
     try {
       child = spawnFn(spec.tool, spec.args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] }, (err) => {
@@ -443,8 +582,9 @@ export const runArchiveTool = (spec: ToolSpec, opts: ArchiveRunOpts = {}): Promi
           const { done, value } = await reader.read();
           if (done) break;
           const s = Buffer.from(value).toString();
-          if (isErr) stderr = appendCapped(stderr, s);
-          else stdout = appendCapped(stdout, s);
+          // stderr is captured per LINE by the counter above (the byte
+          // progress lines must not count as error output)
+          if (!isErr) stdout = appendCapped(stdout, s);
           push(s);
         }
       } catch (err) {
@@ -571,8 +711,15 @@ export const listArchiveMembers = async (
 export const JS_ARCHIVE_MEMORY_LIMIT = 512 * 1024 * 1024;
 
 export type ArchiveTask =
-  | { op: "extract"; fmt: ArchiveFormat; file: string; destDir: string }
-  | { op: "compress"; fmt: CompressionFormat; outFile: string; names: string[]; parent: string };
+  | { op: "extract"; fmt: ArchiveFormat; file: string; destDir: string; byteProgress?: boolean }
+  | {
+      op: "compress";
+      fmt: CompressionFormat;
+      outFile: string;
+      names: string[];
+      parent: string;
+      byteProgress?: boolean;
+    };
 export type ArchiveTaskRun = (
   task: ArchiveTask,
   opts?: ArchiveRunOpts & { run?: ArchiveRun; which?: WhichFn },
@@ -984,16 +1131,25 @@ export const runArchiveTask: ArchiveTaskRun = async (task, opts = {}) => {
   if (lane === "spawn") {
     const spec =
       task.op === "extract"
-        ? extractPlan(task.fmt, task.file, task.destDir, which)
-        : compressPlan(task.fmt, task.outFile, task.names, task.parent, which);
+        ? extractPlan(task.fmt, task.file, task.destDir, which, { byteProgress: task.byteProgress })
+        : compressPlan(task.fmt, task.outFile, task.names, task.parent, which, { byteProgress: task.byteProgress });
     // count entry lines only — the raw tool log carries banners/summaries that
-    // would otherwise advance the file-count bar (isArchiveEntryLine)
+    // would otherwise advance the file-count bar (isArchiveEntryLine).
+    // The COUNT is of FINISHED members: tar/7z print the name when the member
+    // STARTS, so their last member is still in flight — the bar may never
+    // read as complete before the op really is.
     const inner = opts.onLine;
-    const onLine = inner
-      ? (line: string): void => {
-          if (isArchiveEntryLine(task.fmt, line)) inner(line);
-        }
-      : undefined;
+    const startedMeansInFlight = MEMBER_LINE_MEANS_STARTED[spec.tool] === true;
+    let started = 0;
+    const onLine =
+      inner || opts.onMemberDone
+        ? (line: string): void => {
+            if (!isArchiveEntryLine(task.fmt, line)) return;
+            started++;
+            inner?.(line);
+            opts.onMemberDone?.(startedMeansInFlight ? Math.max(0, started - 1) : started);
+          }
+        : undefined;
     const run = opts.run ?? runArchiveTool;
     const res = await run(spec, { ...opts, onLine });
     // the stdbuf shim is only a buffering wrapper: if its own spawn fails
@@ -1007,7 +1163,21 @@ export const runArchiveTask: ArchiveTaskRun = async (task, opts = {}) => {
     }
     return res;
   }
-  if (lane === "js") return runJsArchive(task, opts);
+  if (lane === "js") {
+    // the js lanes report an entry AFTER writing it → every line is a
+    // FINISHED member (no start-lag)
+    const inner = opts.onLine;
+    let done = 0;
+    const onLine =
+      inner || opts.onMemberDone
+        ? (line: string): void => {
+            inner?.(line);
+            done++;
+            opts.onMemberDone?.(done);
+          }
+        : undefined;
+    return runJsArchive(task, { ...opts, onLine });
+  }
   const need =
     task.fmt === "7z" ? "7z" : defOf(task.fmt).need.length ? defOf(task.fmt).need.join(", ") : "zip/unzip/7z";
   return { code: 127, stdout: "", stderr: `cannot handle .${task.fmt} archives (missing ${need})` };

@@ -9,6 +9,7 @@ import {
   statSync,
   writeFileSync,
   chmodSync,
+  cpSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -153,6 +154,50 @@ describe("fsMove / safeRestoreMove", () => {
       W(path.join(dir, "src.txt"), "deep");
       await safeRestoreMove(path.join(dir, "src.txt"), path.join(dir, "x/y/z/dst.txt"));
       expect(readFileSync(path.join(dir, "x/y/z/dst.txt"), "utf8")).toBe("deep");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a known cross-device restore copies through the seam and drops the source", async () => {
+    // the copy is the slow part of a cross-device move — the caller hands in
+    // its own engine (progress bar + cancel) so the user sees something
+    const dir = mktmp("tfm-mv-");
+    try {
+      W(path.join(dir, "src.txt"), "restored");
+      const seen: string[][] = [];
+      await safeRestoreMove(path.join(dir, "src.txt"), path.join(dir, "dst.txt"), {
+        copy: async (src, dest) => {
+          seen.push([src, dest]);
+          cpSync(src, dest);
+        },
+        crossDevice: true,
+      });
+      expect(seen.length).toBe(1);
+      expect(seen[0]![0]).toBe(path.join(dir, "src.txt"));
+      expect(seen[0]![1]).toBe(path.join(dir, "dst.txt"));
+      expect(readFileSync(path.join(dir, "dst.txt"), "utf8")).toBe("restored");
+      // the source goes only AFTER the copy landed (a move's mirror)
+      expect(existsSync(path.join(dir, "src.txt"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a same-device restore never uses the copy seam (the rename stays instant)", async () => {
+    const dir = mktmp("tfm-mv-");
+    try {
+      W(path.join(dir, "src.txt"), "restored");
+      let used = false;
+      await safeRestoreMove(path.join(dir, "src.txt"), path.join(dir, "dst.txt"), {
+        copy: async () => {
+          used = true;
+        },
+        crossDevice: false,
+      });
+      expect(used).toBe(false);
+      expect(readFileSync(path.join(dir, "dst.txt"), "utf8")).toBe("restored");
+      expect(existsSync(path.join(dir, "src.txt"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

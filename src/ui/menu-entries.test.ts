@@ -48,6 +48,7 @@ const baseCtx = (): MenuEntriesCtx & {
     tileRefs,
     sortState: sort,
     closeFileMenu: () => calls.push("close"),
+    notify: (msg, title, level) => calls.push(`notify:${title ?? ""}:${level ?? ""}:${msg}`),
     connectServer: (raw) => calls.push(`connect:${raw ?? ""}`),
     disconnectServer: (p) => calls.push(`disconnect:${p}`),
     navigate: (d) => calls.push(`navigate:${d}`),

@@ -347,6 +347,43 @@ describe("runTransfer: cross-device move", () => {
     expect(existsSync(path.join(src, "f1.txt"))).toBe(true);
     expect(h.calls).toContain("toast:show");
   });
+
+  test("the undo of a cross-device move copies with the bar up", async () => {
+    // putting the file back means a COPY (a rename cannot cross devices) —
+    // that copy used to run through node's `cp`: no bar, no cancel, minutes
+    // of silence for a big tree
+    const h = makeHarness({ crossDevice: fakeSplit });
+    const src = path.join(ROOT, "dev-a", "undo-move-tree");
+    const destDir = path.join(ROOT, "dev-b-undo");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("move", destDir, [src], "move to dev-b-undo");
+    h.calls.length = 0;
+
+    await h.undoUnits()[0]!();
+
+    expect(h.calls).toContain("toast:show");
+    // the tree is back where it came from, and the copy is gone
+    expect(readFileSync(path.join(src, "f1.txt"), "utf8")).toBe("content-1");
+    expect(existsSync(path.join(destDir, "undo-move-tree"))).toBe(false);
+  });
+
+  test("the undo of a same-device move stays instant (no bar for a rename)", async () => {
+    const h = makeHarness();
+    const src = path.join(ROOT, "samefs-undo-src");
+    const destDir = path.join(ROOT, "samefs-undo-dest");
+    seedTree(src);
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("move", destDir, [src], "move to samefs-undo-dest");
+    h.calls.length = 0;
+
+    await h.undoUnits()[0]!();
+
+    expect(h.calls).not.toContain("toast:show");
+    expect(existsSync(path.join(src, "f1.txt"))).toBe(true);
+  });
 });
 
 describe("runTransfer: raced destinations", () => {
@@ -1071,6 +1108,111 @@ const fakeArchive = (opts: { entries?: Record<string, string>; stdout?: string; 
   return { runArchive, runs };
 };
 
+// --- the compress bar must not lie ------------------------------------------
+// tar prints the -v member name when the member STARTS (probed: the name
+// lands 30 ms into a 12 s compression), so counting those lines made the bar
+// read "1/1" while the op was still running. The tar family can report the
+// bytes it consumed instead (--checkpoint) — a TRUE bar.
+const fakeTarProgress = (opts: { gnu?: boolean; members?: string[]; bytes?: number[] }) => {
+  const runs: ToolSpec[] = [];
+  const runArchive: ArchiveRun = async (spec, o) => {
+    runs.push(spec);
+    // the byte lane probes the installed tar once
+    if (spec.args[0] === "--version") {
+      return {
+        code: 0,
+        stdout: opts.gnu === false ? "bsdtar 3.7.3\n" : "tar (GNU tar) 1.35\n",
+        stderr: "",
+      };
+    }
+    for (const m of opts.members ?? []) o?.onLine?.(m);
+    for (const b of opts.bytes ?? []) o?.onBytes?.(b);
+    const out = spec.args[spec.args.indexOf("-f") + 1];
+    if (out) writeFileSync(out, "archive-bytes");
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  return { runArchive, runs };
+};
+
+describe("compress progress honesty", () => {
+  test("a tar compress reports the bytes it consumed (a true byte bar)", async () => {
+    // the bar answered "1/1" while the tool was still working: one member
+    // line, printed when the member STARTS
+    const { runArchive, runs } = fakeTarProgress({ bytes: [1024000, 2048000] });
+    const h = makeHarness({ runArchive });
+    const a = path.join(ROOT, "byte-src", "big.bin");
+    W(a, "x".repeat(5 * 1024 * 1024));
+    const destDir = path.join(ROOT, "byte-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.compressPaths([a], "tar.gz", destDir);
+
+    // the byte lane: the denominator is the INPUT size, the counter is what
+    // the tool consumed
+    expect(h.prog.totalBytes).toBe(5 * 1024 * 1024);
+    expect(h.prog.totalFiles).toBe(0);
+    expect(h.prog.bytes).toBe(2048000);
+    // the tool got the checkpoint flags
+    expect(runs.some((r) => r.args.includes("--checkpoint=32"))).toBe(true);
+  });
+
+  test("the member count lags by one — the bar never claims the last member is done", async () => {
+    // a non-GNU tar (no byte counter): the member count is all we have, so it
+    // must count FINISHED members (the last one is still in flight)
+    const { runArchive } = fakeTarProgress({ gnu: false, members: ["a", "b", "c"] });
+    const h = makeHarness({ runArchive });
+    const dir = path.join(ROOT, "lag-src");
+    seedTree(dir);
+    const destDir = path.join(ROOT, "lag-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.compressPaths([dir], "tar.gz", destDir);
+
+    // three names seen → two members finished
+    expect(h.prog.doneFiles).toBe(2);
+    expect(h.prog.totalFiles).toBe(7); // 6 files + the directory member
+  });
+});
+
+describe("redo of a copy", () => {
+  test("a big redo arms the progress toast (the redo re-runs the copy engine)", async () => {
+    // the redo closure called the copy engine with the transfer sink but
+    // never showed the toast — the sink's repaint is a no-op while no toast
+    // is up, so redoing a 2 GB copy ran in total silence
+    const h = makeHarness();
+    const src = path.join(ROOT, "redo-src");
+    W(src, "x".repeat(5 * 1024 * 1024));
+    const destDir = path.join(ROOT, "redo-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+    await h.undoUnits()[0]!(); // the copy is trashed again
+    h.calls.length = 0;
+
+    await h.redoUnits()[0]!();
+
+    expect(h.calls).toContain("toast:show");
+    expect(existsSync(path.join(destDir, "redo-src"))).toBe(true);
+  });
+
+  test("a failed redo reports the failure instead of claiming success", async () => {
+    // the closure swallowed its error, so undo.ts counted the step as done
+    // and the user saw "Redid paste 1 item" for a copy that never happened
+    const h = makeHarness();
+    const src = path.join(ROOT, "redo-fail-src");
+    W(src, "x");
+    const destDir = path.join(ROOT, "redo-fail-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.runTransfer("copy", destDir, [src], "paste");
+    await h.undoUnits()[0]!();
+    rmSync(src, { force: true }); // the source vanished before the redo
+    h.calls.length = 0;
+
+    await expect(h.redoUnits()[0]!()).rejects.toThrow();
+  });
+});
+
 describe("rename undo / replace-stash guards", () => {
   test("undo of a rename bumps to (copy) instead of clobbering a recreated file", async () => {
     const h = makeHarness();
@@ -1146,6 +1288,25 @@ describe("rename undo / replace-stash guards", () => {
 });
 
 describe("extractArchive", () => {
+  test("a big single-member archive arms the progress toast (the byte size decides)", async () => {
+    // the total used to be the MEMBER count, so extracting one huge archive
+    // (a single member) armed nothing: the op ran for minutes with no bar,
+    // no cancel, nothing but the final toast
+    const { runArchive } = fakeArchive();
+    const h = makeHarness({ runArchive, listArchive: async () => 1 });
+    const destDir = path.join(ROOT, "x-big-dest");
+    mkdirSync(destDir, { recursive: true });
+    const archive = path.join(ROOT, "x-big.tar.gz");
+    W(archive, "x".repeat(5 * 1024 * 1024));
+
+    await h.ops.extractArchive([archive], destDir);
+
+    expect(h.calls).toContain("toast:show");
+    // the bar stays a MEMBER count (the tools report names, not bytes)
+    expect(h.prog.totalFiles).toBe(1);
+    expect(h.prog.totalBytes).toBe(0);
+  });
+
   test("stages, moves entries in, cleans staging, one undo batch", async () => {
     const { runArchive, runs } = fakeArchive();
     const h = makeHarness({ runArchive, listArchive: async () => 1 });
@@ -1383,6 +1544,43 @@ describe("extractArchive", () => {
 });
 
 describe("compressPaths", () => {
+  test("a big single-file compress arms the progress toast (the byte size decides)", async () => {
+    // the old compress pre-scanned WITHOUT bytes, so the toast armed only when
+    // the selection had >4 members — compressing ONE 5 GB video ran in total
+    // silence: no bar, no cancel, nothing until the final toast
+    const { runArchive } = fakeArchive();
+    const h = makeHarness({ runArchive });
+    const a = path.join(ROOT, "c-big-src", "big.bin");
+    W(a, "x".repeat(5 * 1024 * 1024));
+    const destDir = path.join(ROOT, "c-big-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.compressPaths([a], "tar.gz", destDir);
+
+    expect(h.calls).toContain("toast:show");
+    // the bar stays a MEMBER count (the tools report names, not bytes)
+    expect(h.prog.totalFiles).toBe(1);
+    expect(h.prog.totalBytes).toBe(0);
+  });
+
+  test("the member total counts directories too — it must match what the tool reports", async () => {
+    // tar -v prints "sub/" and then its files, so a total built from files
+    // alone hits 100% before the last member is written (and the bar's
+    // denominator contradicts the count the tool streams)
+    const { runArchive } = fakeArchive();
+    const h = makeHarness({ runArchive });
+    const dir = path.join(ROOT, "c-members-src", "sub");
+    W(path.join(dir, "a.txt"), "a");
+    W(path.join(dir, "deep", "b.txt"), "b");
+    const destDir = path.join(ROOT, "c-members-dest");
+    mkdirSync(destDir, { recursive: true });
+
+    await h.ops.compressPaths([dir], "tar.gz", destDir);
+
+    // members: "sub/", "sub/deep/", "sub/a.txt", "sub/deep/b.txt"
+    expect(h.prog.totalFiles).toBe(4);
+  });
+
   test("writes a temp then renames it into place, one undo batch", async () => {
     const { runArchive, runs } = fakeArchive();
     const h = makeHarness({ runArchive });
@@ -1534,7 +1732,10 @@ describe("compressPaths", () => {
   test.skipIf(!Bun.which("7z"))("compress progress counts entries, not tool headers", async () => {
     // the 7z entry log (-bso2) is wrapped in ~10 header/trailer lines; only
     // the `+ ` member lines may advance doneFiles or the bar pins at 100%
-    // while files are still being added
+    // while files are still being added.
+    // The count is of FINISHED members: 7z prints the name when the member
+    // STARTS (probed), so the last one is still in flight — the bar must
+    // not read as complete while the tool is still adding files.
     const { runArchive } = fakeArchive();
     const h = makeHarness({
       runArchive: (spec, opts) => {
@@ -1566,7 +1767,8 @@ describe("compressPaths", () => {
       destDir,
     );
 
-    expect(h.prog.doneFiles).toBe(6);
+    // six names seen → five members finished, the sixth is still in flight
+    expect(h.prog.doneFiles).toBe(5);
     expect(h.prog.totalFiles).toBe(6);
     expect(h.calls).toContain("toast:show");
   });

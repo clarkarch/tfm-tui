@@ -174,11 +174,19 @@ export const makeProps = (ctx: PropsCtx) => {
     let bmHover = false;
     let bookmarked = isBookmarked(targetPath);
     const bmSlot = ctx.makeIconSlot("bookmark", propsToggleStates(), 1, toggleIconState(bookmarked, false), () => {
-      bookmarked = !bookmarked;
+      const next = !bookmarked;
+      bookmarked = next;
       propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, bmHover);
-      void setBookmarked(targetPath, bookmarked)
+      void setBookmarked(targetPath, next)
         .then(() => loadSystemPlaces())
-        .then(() => ctx.renderAll());
+        .then(() => ctx.renderAll())
+        .catch(() => {
+          // the write failed — put the icon back where it was and say so
+          // (a silent failure here leaves a bookmark the user never made)
+          bookmarked = !next;
+          propsTogglePaint("tfm-props-bm", bmSlot.spec, bookmarked, bmHover);
+          ctx.notify("Bookmark failed", "bookmark", "error");
+        });
     });
     panel.add(
       Box(

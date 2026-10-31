@@ -14,14 +14,8 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  copyFileProgress,
-  copyTreeProgress,
-  landCopiedFile,
-  rmTreeProgress,
-  scanTree,
-  type TransferSink,
-} from "./transfer";
+import { copyFileProgress, copyTreeProgress, landCopiedFile, rmTreeProgress, scanTree } from "./transfer";
+import type { TransferSink } from "../lib/file-op-protocol";
 
 // mkdtemp only creates the last segment — the parent must be a dir that
 // exists everywhere (CI runners choke on a hardcoded /tmp/opencode)
@@ -100,7 +94,22 @@ describe("scanTree", () => {
   test("unreadable entries are skipped, not fatal", async () => {
     W(path.join(dir, "ok.txt"), "x");
     const r = await scanTree(path.join(dir, "does-not-exist"));
-    expect(r).toEqual({ files: 0, bytes: 0 });
+    expect(r).toEqual({ files: 0, bytes: 0, dirs: 0 });
+  });
+
+  test("counts directories too — the archiver stores each one as its own member", async () => {
+    // tar/zip/7z all write "sub/" as a member of their own, so a member
+    // count built from files alone undercounts the archive by one per
+    // directory (the progress bar's denominator must match what the tool
+    // reports, or the bar hits 100% before the last member is written)
+    W(path.join(dir, "a.txt"), "12345");
+    W(path.join(dir, "sub", "b.txt"), "123456");
+    const r = await scanTree(dir);
+    expect(r.files).toBe(2);
+    expect(r.dirs).toBe(2); // "sub" + the scanned root itself
+    // a plain file has no directory member
+    const one = await scanTree(path.join(dir, "a.txt"));
+    expect(one).toEqual({ files: 1, bytes: 5, dirs: 0 });
   });
 
   test("onTick reports every 100th file (Preparing counter)", async () => {

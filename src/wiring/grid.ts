@@ -588,6 +588,7 @@ export const wireGrid = (deps: {
 
   const menuEntries = makeMenuEntries({
     closeFileMenu: chrome.menu.closeFileMenu,
+    notify: chrome.notify,
     navigate: nav.navigate,
     newTab: nav.newTab,
     openInOtherPane,

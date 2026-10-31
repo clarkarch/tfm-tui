@@ -15,7 +15,7 @@ import {
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { applySurface, islandSurface } from "./style";
-import type { ProgressState } from "../lib/file-op-protocol";
+import type { ProgressState, OpProgress, TransferSink } from "../lib/file-op-protocol";
 import type { IconSpec } from "../lib/icon-state";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
@@ -75,7 +75,8 @@ export const barCellsFor = (budget: number, numer: string, denom: string): numbe
 // tiny transfers don't need a toast — canonical predicate lives in
 // ./fsutil (the transfer pre-scan shares it); re-exported here so the
 // widget's existing import surface doesn't move.
-export { shouldToast } from "../fs/fsutil";
+import { shouldToast } from "../fs/fsutil";
+export { shouldToast };
 
 // "counting N files…" — the pre-scan has no honest total yet, so the toast
 // must not print a fake `N/0 (0%)` bar. Pure so it's testable without a renderer.
@@ -85,8 +86,11 @@ export const countingLine = (files: number): string => `counting ${files} file${
 // (same B1 shape as notify). Unknown verbs fall back to the copy glyph.
 export const progressIconFor = (verb: string): string => {
   const v = verb.toLowerCase();
-  if (v.includes("delet")) return "trash-can";
-  if (v.includes("move") || v.includes("mov")) return "content-cut";
+  // trashing + deleting share the bin glyph; restoring is a MOVE back out of
+  // the trash, so it wears the move glyph (never the copy one — a restore
+  // does not duplicate anything).
+  if (v.includes("delet") || v.includes("trash")) return "trash-can";
+  if (v.includes("restor") || v.includes("move") || v.includes("mov")) return "content-cut";
   if (v.includes("extract")) return "zip-box";
   if (v.includes("compress")) return "package";
   return "content-copy";
@@ -147,20 +151,27 @@ export const makeProgress = (ctx: ProgressCtx) => {
       return;
     }
     const filesMode = prog.totalBytes <= 0 && prog.totalFiles > 0;
-    const pct = filesMode ? pctOfFiles(prog.doneFiles, prog.totalFiles) : pctOf(prog.bytes, prog.totalBytes);
-    progSetText(
-      PROG_T_TITLE,
-      truncateToastText(`${spin} ${prog.verb} ${prog.doneFiles}/${prog.totalFiles} (${pct}%)`, PROG_TITLE_BUDGET),
-    );
+    // the byte counter may overshoot the total by the tool's own overhead
+    // (the tar checkpoint counts the STREAM: headers + padding), so the
+    // readout never shows more than the promise
+    const shownBytes = prog.totalBytes > 0 ? Math.min(prog.bytes, prog.totalBytes) : prog.bytes;
+    const pct = filesMode ? pctOfFiles(prog.doneFiles, prog.totalFiles) : pctOf(shownBytes, prog.totalBytes);
+    // The title carries the MEMBER count when the op has one (the bar carries
+    // the bytes); a byte-only op (the tar byte lane — no member total) keeps
+    // the title short and lets the BAR row carry the byte numbers: the title
+    // column is narrower than the numbers, so "2.0 MB/5.0 MB" there would be
+    // cut to a lie ("2.0 MB/5…").
+    const title = prog.totalFiles > 0 ? `${prog.doneFiles}/${prog.totalFiles} (${pct}%)` : `(${pct}%)`;
+    progSetText(PROG_T_TITLE, truncateToastText(`${spin} ${prog.verb} ${title}`, PROG_TITLE_BUDGET));
     // size the bar to the numbers so the totals are never cut off
     const barCells = filesMode
       ? barCellsFor(PROG_BAR_BUDGET, String(Math.min(prog.doneFiles, prog.totalFiles)), String(prog.totalFiles))
-      : barCellsFor(PROG_BAR_BUDGET, fmtBytes(prog.bytes), fmtBytes(prog.totalBytes));
+      : barCellsFor(PROG_BAR_BUDGET, fmtBytes(shownBytes), fmtBytes(prog.totalBytes));
     progSetText(
       PROG_T_BAR,
       filesMode
         ? barLineFiles(prog.doneFiles, prog.totalFiles, barCells)
-        : barLine(prog.bytes, prog.totalBytes, barCells),
+        : barLine(shownBytes, prog.totalBytes, barCells),
     );
   };
 
@@ -390,5 +401,88 @@ export const makeProgress = (ctx: ProgressCtx) => {
     pauseGate,
     isOpen: (): boolean => activeHandle !== null,
     repaint,
+  };
+};
+
+// The handle the driver factory drives (the makeProgress return shape, minus
+// the widget-only extras).
+export type ProgressHandle = {
+  prog: ProgressState;
+  paintProgress(full?: boolean): void;
+  showProgressToast(): void;
+  finishProgressToast(msg: string): void;
+  pauseGate(): Promise<void>;
+};
+
+// A progress DRIVER for the ops that move bytes OUTSIDE the transfer engine
+// (the deletes, the cross-device trash/restore copy): it reports into the
+// SAME state + toast the transfers use, so every byte-moving op has ONE bar
+// with ONE pause/cancel pair — and an op that moves bytes can never run
+// without a status.
+//
+// The fs side owns the protocol (OpProgress in lib/file-op-protocol); this is
+// the ui half of it.
+export const makeOpProgress = (progress: ProgressHandle, defaultVerb: string): OpProgress => {
+  const prog = progress.prog;
+  const sink: TransferSink = {
+    checkpoint: async () => {
+      await progress.pauseGate();
+      if (prog.cancelled) throw new Error("cancelled");
+    },
+    paused: () => prog.paused,
+    cancelled: () => prog.cancelled,
+    addBytes: (n) => {
+      prog.bytes += n;
+    },
+    fileDone: () => {
+      prog.doneFiles++;
+    },
+    setStream: (rs) => {
+      prog.currentRs = rs;
+    },
+    clearStream: (rs) => {
+      if (prog.currentRs === rs) prog.currentRs = null;
+    },
+    repaint: progress.paintProgress,
+  };
+  return {
+    sink,
+    start: (totalFiles, totalBytes, verb) => {
+      // reset the shared flags: a stale ✕ from an earlier op must never abort
+      // the next one (the "Moved 0 items" bug)
+      prog.paused = false;
+      prog.cancelled = false;
+      prog.counting = false;
+      prog.doneFiles = 0;
+      prog.bytes = 0;
+      prog.verb = verb ?? defaultVerb;
+      prog.totalFiles = totalFiles;
+      prog.totalBytes = totalBytes;
+      prog.active = true;
+      // the toast arms only when the op is worth a bar (the canonical rule
+      // lives in fsutil: >4MB or >4 files)
+      if (shouldToast(totalBytes, totalFiles)) progress.showProgressToast();
+      progress.paintProgress(true);
+    },
+    counting: (files) => {
+      // the pre-scan has no honest total yet — show nautilus' "counting N
+      // files…" instead of a fake 0/0 bar, and arm the toast so a long scan
+      // never looks dead
+      prog.counting = true;
+      prog.doneFiles = files;
+      prog.active = true;
+      progress.showProgressToast();
+      progress.paintProgress(true);
+    },
+    cancelled: () => prog.cancelled,
+    finish: (msg) => {
+      prog.active = false;
+      prog.counting = false;
+      progress.finishProgressToast(msg);
+    },
+    stop: () => {
+      prog.active = false;
+      prog.counting = false;
+    },
   };
 };

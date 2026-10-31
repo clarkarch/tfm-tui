@@ -6,16 +6,19 @@ import {
   barLine,
   barLineFiles,
   countingLine,
+  makeOpProgress,
   makeProgress,
   pctOf,
   pctOfFiles,
   progressIconFor,
   shouldToast,
   type ProgressCtx,
+  type ProgressHandle,
 } from "./ui-progress";
 import type { ToastHandle } from "./notify";
 import type { MaybeNode } from "../lib/node-like";
 import type { IconSlotHandle } from "./ui-slots";
+import type { ProgressState } from "../lib/file-op-protocol";
 
 const MB = 1024 * 1024;
 
@@ -113,6 +116,115 @@ describe("progressIconFor", () => {
     // unknown verbs fall back to the copy glyph (never an unverified asset)
     expect(progressIconFor("teleporting")).toBe("content-copy");
   });
+
+  test("trashing wears the bin, restoring wears the move glyph", () => {
+    // a trash is a delete (the bin), a restore is a move back out of the
+    // trash (the move glyph — never the copy one: nothing is duplicated)
+    expect(progressIconFor("trashing")).toBe("trash-can");
+    expect(progressIconFor("restoring")).toBe("content-cut");
+  });
+});
+
+// The driver for the ops that move bytes OUTSIDE the transfer engine (the
+// deletes, the cross-device trash/restore copy). It owns the arming rule and
+// the flag reset — an op that moves bytes must never run without a status.
+describe("makeOpProgress", () => {
+  const fakeHandle = (): { handle: ProgressHandle; calls: string[]; prog: ProgressState } => {
+    const calls: string[] = [];
+    const prog: ProgressState = {
+      active: false,
+      verb: "copying",
+      doneFiles: 0,
+      totalFiles: 0,
+      bytes: 0,
+      totalBytes: 0,
+      paused: false,
+      cancelled: false,
+      currentRs: null,
+      toastUp: false,
+    };
+    const handle: ProgressHandle = {
+      prog,
+      paintProgress: () => calls.push("paint"),
+      showProgressToast: () => {
+        prog.toastUp = true;
+        calls.push("toast:show");
+      },
+      finishProgressToast: (msg: string) => {
+        prog.toastUp = false;
+        calls.push(`toast:finish:${msg}`);
+      },
+      pauseGate: async () => {},
+    };
+    return { handle, calls, prog };
+  };
+
+  test("a big op arms the toast and clears the stale cancel flag", () => {
+    const { handle, calls, prog } = fakeHandle();
+    // a ✕ from an earlier op left the flag set — it must never abort the
+    // next one (the "Moved 0 items" bug)
+    prog.cancelled = true;
+    prog.paused = true;
+    const dp = makeOpProgress(handle, "deleting");
+    dp.start(1, 5 * MB, "deleting");
+    expect(prog.cancelled).toBe(false);
+    expect(prog.paused).toBe(false);
+    expect(prog.verb).toBe("deleting");
+    expect(prog.totalFiles).toBe(1);
+    expect(prog.totalBytes).toBe(5 * MB);
+    expect(calls).toContain("toast:show");
+  });
+
+  test("a tiny op stays toastless (no toast flicker on every delete)", () => {
+    const { handle, calls } = fakeHandle();
+    const dp = makeOpProgress(handle, "deleting");
+    dp.start(1, 1024, "deleting");
+    expect(calls).not.toContain("toast:show");
+  });
+
+  test("the default verb is used when the op names none", () => {
+    const { handle, prog } = fakeHandle();
+    const dp = makeOpProgress(handle, "trashing");
+    dp.start(1, 1024);
+    expect(prog.verb).toBe("trashing");
+  });
+
+  test("counting arms the toast so a long pre-scan never looks dead", () => {
+    const { handle, calls, prog } = fakeHandle();
+    const dp = makeOpProgress(handle, "trashing");
+    dp.counting?.(120);
+    expect(calls).toContain("toast:show");
+    expect(prog.counting).toBe(true);
+    expect(prog.doneFiles).toBe(120);
+  });
+
+  test("the sink reports bytes and files into the live state", async () => {
+    const { handle, prog } = fakeHandle();
+    const dp = makeOpProgress(handle, "trashing");
+    dp.start(2, 100, "trashing");
+    dp.sink.addBytes(40);
+    dp.sink.fileDone();
+    expect(prog.bytes).toBe(40);
+    expect(prog.doneFiles).toBe(1);
+    expect(dp.cancelled()).toBe(false);
+  });
+
+  test("the sink's checkpoint throws once the op was cancelled", async () => {
+    const { handle, prog } = fakeHandle();
+    const dp = makeOpProgress(handle, "trashing");
+    dp.start(2, 100, "trashing");
+    prog.cancelled = true;
+    expect(dp.cancelled()).toBe(true);
+    await expect(dp.sink.checkpoint()).rejects.toThrow("cancelled");
+  });
+
+  test("finish swaps the live toast for the terminal state", () => {
+    const { handle, calls } = fakeHandle();
+    const dp = makeOpProgress(handle, "deleting");
+    dp.start(1, 5 * MB, "deleting");
+    dp.finish("✓ Deleted 1");
+    expect(calls).toContain("toast:finish:✓ Deleted 1");
+  });
 });
 
 describe("shouldToast", () => {
@@ -154,6 +266,58 @@ describe("makeProgress gates", () => {
     prog.active = true;
     prog.toastUp = true;
     expect(() => paintProgress(true)).not.toThrow();
+  });
+
+  test("a byte op reads the BYTES on the bar row (the title column is too narrow)", () => {
+    // the tar byte lane: totalFiles is 0, so the bar answers "how far through
+    // the source are we". The title carries the percent only — the byte
+    // numbers would be cut to "2.0 MB/5…" there.
+    const nodes = new Map<string, { content: string }>();
+    for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
+    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
+    const { prog, paintProgress } = makeProgress(ctx);
+    prog.active = true;
+    prog.toastUp = true;
+    prog.verb = "compressing";
+    prog.totalFiles = 0;
+    prog.totalBytes = 5 * MB;
+    prog.bytes = 2 * MB;
+    paintProgress(true);
+    expect(nodes.get("tfm-prog-title")!.content).toContain("compressing (40%)");
+    expect(nodes.get("tfm-prog-bar")!.content).toContain("2.0 MB/5.0 MB");
+  });
+
+  test("the byte readout never shows more than the promise (the tool's own overhead)", () => {
+    // the tar checkpoint counts the STREAM (headers + padding), so the counter
+    // can outrun the content total — the bar must not read 6 MB of 5 MB
+    const nodes = new Map<string, { content: string }>();
+    for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
+    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
+    const { prog, paintProgress } = makeProgress(ctx);
+    prog.active = true;
+    prog.toastUp = true;
+    prog.verb = "compressing";
+    prog.totalFiles = 0;
+    prog.totalBytes = 5 * MB;
+    prog.bytes = 6 * MB;
+    paintProgress(true);
+    expect(nodes.get("tfm-prog-bar")!.content).toContain("5.0 MB/5.0 MB");
+    expect(nodes.get("tfm-prog-bar")!.content).not.toContain("6.0 MB");
+  });
+
+  test("a member op still reads the member count", () => {
+    const nodes = new Map<string, { content: string }>();
+    for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
+    const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
+    const { prog, paintProgress } = makeProgress(ctx);
+    prog.active = true;
+    prog.toastUp = true;
+    prog.verb = "compressing";
+    prog.totalFiles = 7;
+    prog.doneFiles = 2;
+    paintProgress(true);
+    expect(nodes.get("tfm-prog-title")!.content).toContain("2/7");
+    expect(nodes.get("tfm-prog-bar")!.content).toContain("2/7");
   });
 
   test("showProgressToast builds with stub ctx; finish clears the spinner", () => {

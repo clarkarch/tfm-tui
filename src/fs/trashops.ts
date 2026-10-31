@@ -5,21 +5,24 @@ import {
   allTrashFilesDirs,
   failSuffix,
   countTrashItems,
+  crossDeviceTo,
   fileIdOf,
   fsErrText,
+  fsMove,
   rmTrashInfoForPath,
   trashDir,
   trashIfSameFile,
   trashInfoPathForTrashFile,
   xdgTrashMove,
   safeRestoreMove,
+  type CrossDeviceCopy,
 } from "./fsutil";
 import { defaultSudoExec, isPrivilegeError, runSudoTool, sudoRmArgv } from "./elevate";
-import { rmTreeProgress, scanTree, type TransferSink } from "./transfer";
+import { copyTreeProgress, rmTreeProgress, scanTree } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
-import { shouldNotifyTerminal } from "../lib/file-op-protocol";
+import { shouldNotifyTerminal, type OpProgress } from "../lib/file-op-protocol";
 import { isNetworkPath } from "./network";
 import { isArchiveUri } from "./uri";
 import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
@@ -36,28 +39,19 @@ import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
 
 type TrashOpName = "trash" | "restore" | "delete-forever" | "empty";
 
-// delete-progress driver (optional; the wiring supplies the prog/toast glue,
-// which lives in ui-progress). When present, deleteForever/emptyTrash pre-scan
-// for totals and stream per-file checkpoints through `sink`, so the toast
-// shows counts and cancel stops mid-tree. Absent = plain rm (headless callers).
-export type DeleteProgress = {
-  sink: TransferSink;
-  /** reset counters, set totals, arm the toast when it's worth showing */
-  start(totalFiles: number, totalBytes: number): void;
-  /** pre-scan tick (optional): live "counting N files…" before totals exist */
-  counting?: (files: number) => void;
-  cancelled(): boolean;
-  /** swap the live toast for the final state (no-op when none showed) */
-  finish(msg: string): void;
-  /** clear the active flag */
-  stop(): void;
-};
-
 export type TrashOpsSink = {
   /** push a completed undo batch (already paired with redos) */
   pushUndoBatch(label: string, units: UndoUnit[], redos: UndoUnit[], data?: UndoJournalData): void;
-  /** optional delete-progress driver (see DeleteProgress) */
-  deleteProgress?: DeleteProgress;
+  /** optional progress driver for the deletes (see OpProgress) */
+  deleteProgress?: OpProgress;
+  /** optional progress driver for the cross-device trash/restore copy */
+  trashProgress?: OpProgress;
+  /**
+   * device split probe — tests inject a fake to force the cross-device path.
+   * The default walks up to the nearest EXISTING ancestor of the destination
+   * (the trash destination does not exist yet — it is created by the move).
+   */
+  crossDevice?(a: string, b: string): boolean;
   /** leveled toast notification (the status bar is selection info only) */
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   /** schedule a grid refresh */
@@ -151,6 +145,53 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
   const vetoedByPlugin = (op: TrashOpName, paths: string[]): boolean =>
     checkPluginVeto(sharedPluginHooks(), sink.notify, op, paths);
 
+  // The cross-device copy: the trash root can live on another filesystem (a
+  // USB stick's files fall back to the home trash when the per-mount trash
+  // is not writable), and that copy used to run through node's `cp` — no bar,
+  // no cancel, minutes of silence. Route it through the transfer engine
+  // instead: the SAME progress toast the deletes use, with the same cancel.
+  const isCrossDevice = (a: string, b: string): boolean => (sink.crossDevice ?? crossDeviceTo)(a, b);
+
+  // full move for the trash: same-device → an instant rename; cross-device →
+  // the progress-aware copy, and the source goes only AFTER the copy landed.
+  const trashMove = async (src: string, dest: string): Promise<void> => {
+    const dp = sink.trashProgress;
+    if (!dp || !isCrossDevice(src, dest)) return fsMove(src, dest);
+    // the pre-scan has no honest total yet — count in the open so a big tree
+    // never looks dead
+    const scan = await scanTree(src, (f) => dp.counting?.(f));
+    dp.start(scan.files || 1, scan.bytes, "trashing");
+    try {
+      // the engine stages + lands atomically: a cancel leaves no half-written
+      // trash entry behind, and the source is untouched
+      await copyTreeProgress(src, dest, dp.sink);
+    } catch (err) {
+      dp.finish(dp.cancelled() ? "✗ Trash cancelled" : "✗ Trash failed");
+      throw err;
+    }
+    // the copy landed — now drop the source (the move's mirror)
+    await rm(src, { recursive: true, force: true });
+    dp.finish("✓ Trashed");
+  };
+
+  // copy-only seam for safeRestoreMove (it removes the source itself):
+  // absent without a driver → the default `cp` path, no bar.
+  const restoreCopy = (verb: string): CrossDeviceCopy | undefined => {
+    const dp = sink.trashProgress;
+    if (!dp) return undefined;
+    return async (src, dest) => {
+      const scan = await scanTree(src, (f) => dp.counting?.(f));
+      dp.start(scan.files || 1, scan.bytes, verb);
+      try {
+        await copyTreeProgress(src, dest, dp.sink);
+      } catch (err) {
+        dp.finish(dp.cancelled() ? "✗ Restore cancelled" : "✗ Restore failed");
+        throw err;
+      }
+      dp.finish("✓ Restored");
+    };
+  };
+
   const trashPaths = (paths: string[]): Promise<void> => {
     // network shares have no usable trash: xdgTrashMove would write a LOCAL
     // .trashinfo pointing at a FUSE path that dies on unmount (unrestorable,
@@ -171,17 +212,29 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const dUnits: UndoStep[] = [];
       const dRedos: UndoStep[] = [];
       let ok = 0;
+      let cancelled = false;
       const failWhy = new Set<string>();
       for (const p of paths) {
         // always trash via our own xdg path: we control the final name, so the
         // undo unit pairs deterministically (a before/after listing diff could
         // mis-pair when something else trashes a similar name concurrently)
         try {
-          const loc = await xdgTrashMove(p);
+          const loc = await xdgTrashMove(p, {
+            move: trashMove,
+            // a cancelled copy must not fall through to the next trash root
+            isCancelled: () => sink.trashProgress?.cancelled() === true,
+          });
           const hit = path.basename(loc);
           const from = path.join(path.dirname(loc), hit);
           units.push(async () => {
-            await safeRestoreMove(from, p);
+            // undo of a trash = move the file back to where it came from. A
+            // trashed file from another device lives in the HOME trash, so
+            // this restore crosses the boundary — that copy gets the bar too
+            // (the plain `cp` fallback showed nothing for minutes).
+            await safeRestoreMove(from, p, {
+              copy: restoreCopy("restoring"),
+              crossDevice: isCrossDevice(from, p),
+            });
             await rmTrashInfoForPath(from, sink.log?.bind(sink));
           });
           dUnits.push({ op: "restore-move", from, to: p });
@@ -196,6 +249,12 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           dRedos.push({ op: "trash-if-exists", path: p });
           ok++;
         } catch (err) {
+          // the toast's ✕ during a cross-device copy: the source survived and
+          // nothing landed — say "cancelled", not "FAILED"
+          if (sink.trashProgress?.cancelled()) {
+            cancelled = true;
+            break;
+          }
           failWhy.add(fsErrText(err));
         }
       }
@@ -205,10 +264,14 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const failed = paths.length - ok;
       // full success omits the total (it equals ok); partial failures read
       // "ok of N"
-      const summary = failed
-        ? `Trashed ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
-        : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
-      if (failed > 0) sink.notify(summary, "trash failed", "error");
+      const summary = cancelled
+        ? `Trash cancelled · ${ok} of ${paths.length} moved`
+        : failed
+          ? `Trashed ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
+          : `Trashed ${ok} item${ok === 1 ? "" : "s"}`;
+      sink.trashProgress?.finish(cancelled ? "✗ Trash cancelled" : failed ? "✗ Trash failed" : `✓ Trashed ${ok}`);
+      if (cancelled) sink.notify(summary, "trash cancelled", "info");
+      else if (failed > 0) sink.notify(summary, "trash failed", "error");
       else sink.notify(summary, "trash", "success");
       emit("trash", paths);
     });
@@ -229,6 +292,7 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
       const dUnits: UndoStep[] = [];
       const dRedos: UndoStep[] = [];
       let ok = 0;
+      let cancelled = false;
       const failWhy = new Set<string>();
       for (const src of paths) {
         const orig = await trashOrigPathForFile(src);
@@ -238,8 +302,14 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         }
         try {
           // safeRestoreMove owns the occupied-target bump (never clobbers)
-          // and returns the final dest for the journal + cleanup below
-          const restoredDest = await safeRestoreMove(src, orig);
+          // and returns the final dest for the journal + cleanup below.
+          // The copy seam runs when the restore crosses a filesystem boundary
+          // (a USB stick trashed into the home trash) — that copy used to run
+          // through `cp` with no bar and no cancel.
+          const restoredDest = await safeRestoreMove(src, orig, {
+            copy: restoreCopy("restoring"),
+            crossDevice: isCrossDevice(src, orig),
+          });
           await rmTrashInfoForPath(src, sink.log?.bind(sink));
           // undo = send it back to trash (same-file only: a stranger
           // reoccupying the restored path is skipped, never trashed);
@@ -260,7 +330,10 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
               const loc = await xdgTrashMove(restoredDest).catch(() => null);
               if (loc) {
                 const back = await trashOrigPathForFile(loc);
-                await safeRestoreMove(loc, back ?? restoredDest);
+                await safeRestoreMove(loc, back ?? restoredDest, {
+                  copy: restoreCopy("restoring"),
+                  crossDevice: isCrossDevice(loc, back ?? restoredDest),
+                });
                 await rmTrashInfoForPath(loc, sink.log?.bind(sink));
               }
             } catch (err) {
@@ -269,6 +342,12 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
           });
           ok++;
         } catch (err) {
+          // the toast's ✕ during a cross-device restore: nothing landed and
+          // the trash copy is intact — say "cancelled", not "FAILED"
+          if (sink.trashProgress?.cancelled()) {
+            cancelled = true;
+            break;
+          }
           failWhy.add(fsErrText(err));
         }
       }
@@ -279,10 +358,15 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
         });
       sink.renderAll();
       const failed = paths.length - ok;
-      const base = failed
-        ? `Restored ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
-        : `Restored ${ok} item${ok === 1 ? "" : "s"}`;
-      sink.notify(base, failed ? "restore failed" : "restore", failed ? "error" : "success");
+      const base = cancelled
+        ? `Restore cancelled · ${ok} of ${paths.length} restored`
+        : failed
+          ? `Restored ${ok} of ${paths.length} · ${failSuffix(failed, failWhy)}`
+          : `Restored ${ok} item${ok === 1 ? "" : "s"}`;
+      sink.trashProgress?.finish(cancelled ? "✗ Restore cancelled" : failed ? "✗ Restore failed" : `✓ Restored ${ok}`);
+      if (cancelled) sink.notify(base, "restore cancelled", "info");
+      else if (failed) sink.notify(base, "restore failed", "error");
+      else sink.notify(base, "restore", "success");
       emit("restore", paths);
     });
     return run.catch(() => {});
