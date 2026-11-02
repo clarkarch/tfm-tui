@@ -204,6 +204,38 @@ describe("app content dim target", () => {
     content.opacity = 0.45;
     expect(content.opacity).toBe(0.45);
   });
+
+  test("the content starts transparent when the boot hides it (burst startup)", async () => {
+    // The boot paints the app in ONE burst: the content node is mounted
+    // transparent and the boot reveals it once the first frame is complete.
+    // `visible:false` would be display:none — the grid's viewport would
+    // collapse, so the hide rides the opacity.
+    const theme = { ...defaultConfig.theme };
+    t.renderer.root.findDescendantById("tfm-content")?.destroy?.();
+    t.renderer.root.add(
+      buildAppContainer({
+        sw: 26,
+        sideInnerW: 24,
+        colors: theme,
+        uiStyle: "solid",
+        tabBarVisible: true,
+        previewWidth: 40,
+        previewEnabled: false,
+        dualPane: false,
+        contentOpacity: 0,
+        title: buildTitle({ width: 24, colors: theme }),
+        toolbarShells: [Box({}), Box({})] as any,
+      }),
+    );
+    await t.renderOnce();
+    const content: any = t.renderer.root.findDescendantById("tfm-content");
+    expect(content).toBeTruthy();
+    expect(content.opacity).toBe(0);
+    // the reveal is a plain opacity write — the layout never changed
+    content.opacity = 1;
+    await t.renderOnce();
+    expect(content.opacity).toBe(1);
+  });
 });
 
 describe("scrim fill overlay", () => {

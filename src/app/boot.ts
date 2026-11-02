@@ -27,7 +27,10 @@ export type BootCtx = {
   loadGlobs2(): Promise<void>;
   restoreSession(): void;
   loadSystemPlaces(): Promise<void>;
-  renderAll(): void;
+  // the first paint: sync + async steps (the grid build). May return a promise
+  // — the boot awaits it so the app is revealed only once the frame is
+  // COMPLETE (the "burst" startup).
+  renderAll(): void | Promise<void>;
   // lazy mounts refresh: boot skips the ~200ms lsblk for first paint and this
   // fills the Devices rows in right after (optional — absent in old fakes)
   refreshMounts?(): void;
@@ -37,6 +40,12 @@ export type BootCtx = {
   // cold-boot-only top bar intro (same module): plays right after the sidebar
   // intro, so both staged frame-0s land before the first presented frame
   playTopbarIntro?(): void;
+  // reveal the app: the content node is transparent until the first frame is
+  // COMPLETE, so the user never watches tfm assemble itself (the title +
+  // background first, then the sidebar, then the grid, then the icons). Runs
+  // AFTER the intros staged their frame-0 and BEFORE the default-file-manager
+  // prompt dims the app. Absent = the app was never hidden.
+  revealApp?(): void;
   // cold-boot-only default-file-manager opt-in (Yes/No/Ask-again): fires
   // after the intros so the user sees tfm first, before being asked to make
   // it the default. Absent = never asked (old fakes keep working). The verdict
@@ -121,6 +130,8 @@ export const runBoot = async (ctx: BootCtx): Promise<void> => {
   await guard(ctx, "refreshMounts", () => ctx.refreshMounts?.());
   await guard(ctx, "playSidebarIntro", () => ctx.playSidebarIntro?.());
   await guard(ctx, "playTopbarIntro", () => ctx.playTopbarIntro?.());
+  // the reveal: the app content is transparent until now (the burst startup)
+  await guard(ctx, "revealApp", () => ctx.revealApp?.());
   // lazy startup: the sync verdict probe (~200ms of blocked event loop) is not
   // needed for the first frame or first input — run it after the launch report
   // so boot finishes and the app is interactive sooner. Classic keeps it here

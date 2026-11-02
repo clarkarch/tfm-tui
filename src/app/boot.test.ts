@@ -140,6 +140,54 @@ describe("runBoot", () => {
     expect(calls.indexOf("defmgr")).toBeLessThan(calls.indexOf("hygiene"));
   });
 
+  test("the app is revealed after the intros, before the default-file-manager prompt", async () => {
+    const calls: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        playSidebarIntro: () => {
+          calls.push("sidebar-intro");
+        },
+        playTopbarIntro: () => {
+          calls.push("topbar-intro");
+        },
+        revealApp: () => {
+          calls.push("reveal");
+        },
+        promptDefaultFileManager: () => {
+          calls.push("defmgr");
+        },
+      }),
+    );
+    // the reveal is what makes the app visible at all (the boot hides the
+    // content so the FIRST painted frame is the whole app), so it must land
+    // after the intros staged their frame 0 and before the prompt dims it
+    expect(calls.indexOf("topbar-intro")).toBeLessThan(calls.indexOf("reveal"));
+    expect(calls.indexOf("reveal")).toBeLessThan(calls.indexOf("defmgr"));
+  });
+
+  test("absent reveal step changes nothing (old fakes keep working)", async () => {
+    const calls: string[] = [];
+    await runBoot(mkCtx(calls));
+    expect(calls).not.toContain("reveal");
+  });
+
+  test("a throwing reveal is reported but the sequence continues", async () => {
+    const calls: string[] = [];
+    const reported: string[] = [];
+    await runBoot(
+      mkCtx(calls, {
+        revealApp: () => {
+          throw new Error("reveal-boom");
+        },
+        reportBootError: (name) => {
+          reported.push(name);
+        },
+      }),
+    );
+    expect(reported).toEqual(["revealApp"]);
+    expect(calls).toContain("hygiene");
+  });
+
   test("lazy startup defers the default-file-manager probe past the launch report", async () => {
     const calls: string[] = [];
     await runBoot(

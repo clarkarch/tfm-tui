@@ -14,7 +14,7 @@ import { isNetworkPath } from "../fs/network";
 import { makeDnd72 } from "../dnd/dnd72";
 import { makeHitTargetAt } from "../dnd/hit-target";
 import { localMachineId } from "../dnd/machine-id";
-import { debounced } from "../lib/uiutil";
+import { debounced, withTimeout } from "../lib/uiutil";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { installGridWheelHandler } from "../ui/ui-smooth-scroll";
 import { gridDrag } from "../input/grid-input";
@@ -164,6 +164,81 @@ export const runBootMountsRefresh = (ctx: BootMountsCtx): void => {
     .catch(() => {});
 };
 
+// --- The first paint ([ui] lazy-startup): the app is painted in ONE burst
+// when lazy startup is OFF. The render has an async tail (the grid build
+// lists the folder and builds the tiles) and the icon rasters land after it
+// — so a boot that only waits for the sync tail shows tfm assembling itself:
+// the title + background first, then the sidebar, then the grid, then the
+// icons. This seam waits for BOTH before the boot reveals the app (wiring/core
+// setBootHidden). With lazy startup ON there is no wait and no hide: the app
+// paints right away and the rest arrives in the background (the progressive
+// arrival IS the lazy feature). ---
+
+// The wait is BOUNDED: a listing that never returns (a hung network mount)
+// must not leave the app invisible forever — the reveal goes ahead and the
+// grid shows its own loading placeholder until the listing lands.
+export const BOOT_RENDER_BUDGET_MS = 3000;
+
+export type BootRenderCtx = {
+  renderAll(): void;
+  // flips the lazy plugin-scan repaint gate: a scan that settles BEFORE the
+  // first paint needs no repaint (the paint includes it)
+  markBootRendered?(): void;
+  // resolves when the async render steps (the grid build) have settled
+  renderAllSettled(): Promise<void>;
+  // the icon rasters: the grid queues its own (fire-and-forget) — the boot
+  // drains once more so the first painted frame carries rasters, not glyphs
+  drainIcons(): Promise<void> | void;
+  // the burst startup (lazy startup OFF): wait for the complete first frame
+  // before the app is revealed. Absent/false = lazy startup ON (paint now).
+  burst?: boolean;
+  // the budget for the whole wait (tests use a small one)
+  budgetMs?: number;
+  // diagnostics: a budget expiry or a failed drain is reported here
+  log?(msg: string): void;
+};
+
+export const runBootRender = async (ctx: BootRenderCtx): Promise<void> => {
+  ctx.renderAll();
+  ctx.markBootRendered?.();
+  // lazy startup: the app is NOT hidden, so there is nothing to wait for —
+  // the grid build and the rasters land in the background, as they always did
+  if (!ctx.burst) return;
+  // the completion path never rejects: the timeout below is the ONLY failure
+  // it reports, and a failed drain must not become an unhandled rejection
+  const complete = async (): Promise<void> => {
+    try {
+      await ctx.renderAllSettled();
+      await ctx.drainIcons();
+    } catch (err) {
+      ctx.log?.(`boot render failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  try {
+    await withTimeout(complete(), ctx.budgetMs ?? BOOT_RENDER_BUDGET_MS);
+  } catch {
+    // the budget expired — the render keeps running in the background, the
+    // app is revealed with what is painted so far (the grid's loading
+    // placeholder covers the missing listing)
+    ctx.log?.(`boot render budget expired after ${ctx.budgetMs ?? BOOT_RENDER_BUDGET_MS}ms`);
+  }
+};
+
+// The reveal (the burst startup): the app becomes visible in ONE frame. The
+// renderer's clear color goes back to tfm's bg FIRST (it matched the
+// TERMINAL's bg during the boot, so the intermediate frame was invisible)
+// and the content's opacity follows — both writes land in the same tick, so
+// the app appears with its bg AND its widgets in one go.
+export type BootRevealCtx = {
+  restoreBackgroundColor(): void;
+  setBootHidden(hidden: boolean): void;
+};
+
+export const runBootReveal = (ctx: BootRevealCtx): void => {
+  ctx.restoreBackgroundColor();
+  ctx.setBootHidden(false);
+};
+
 // --- Boot sequence (order + toast gating live in ./boot, tested): resolution
 // wait, fixed nodes, globs2, session restore, places, first render, hygiene,
 // search wiring. Fire-and-forget, exactly like the old flat wiring. ---
@@ -230,7 +305,14 @@ export const wireBoot = (deps: {
     // class of terminal) will never be answered — the single biggest launch
     // cost the lazy path can remove.
     waitForResolution: () => core.resolutionGate.settle(lazyBootFlag ? RESOLUTION_LAZY_SETTLE_MS : undefined),
-    applyBootSystemTheme: () => deps.applyBootSystemTheme?.() ?? Promise.resolve(false),
+    // the system theme's boot apply sets the renderer's bg to the DERIVED
+    // theme's bg — the burst startup needs the boot frame to keep matching
+    // the TERMINAL's bg (invisible), so re-apply the hide right after
+    applyBootSystemTheme: async () => {
+      const applied = await (deps.applyBootSystemTheme?.() ?? Promise.resolve(false));
+      chrome.applyBootBackground();
+      return applied;
+    },
     // restart child only: the waiting parent never destroyed, so its kitty
     // placements are still on screen under ours — delete-all once, first.
     // Fresh boots skip this so other programs' images are never nuked. The
@@ -297,16 +379,27 @@ export const wireBoot = (deps: {
     // Off (default) = classic fully-loaded first paint. Branches tested via
     // runBootMountsLoad/Refresh (same file) — this closure only binds prod deps.
     loadSystemPlaces: () => runBootMountsLoad(mountsCtx),
-    renderAll: () => {
-      nav.renderAll();
-      // flip the lazy-scan gate right after the first paint (only on success —
-      // a throwing render leaves the app in a degraded state where a later
-      // repaint is the safer default)
-      deps.markBootRendered?.();
-    },
+    renderAll: () =>
+      runBootRender({
+        renderAll: () => nav.renderAll(),
+        markBootRendered: () => deps.markBootRendered?.(),
+        renderAllSettled: () => nav.renderAllSettled(),
+        drainIcons: () => core.slots.drainIconQueue(),
+        // lazy startup OFF = the burst startup: wait for the complete first
+        // frame before the app is revealed
+        burst: core.burstStartup,
+        log: (msg) => debugLog(msg),
+      }),
     refreshMounts: () => runBootMountsRefresh(mountsCtx),
     playSidebarIntro: () => deps.playSidebarIntro?.(),
     playTopbarIntro: () => deps.playTopbarIntro?.(),
+    // the app content is transparent until the first frame is COMPLETE (the
+    // burst startup) — this is the one write that makes it visible
+    revealApp: () =>
+      runBootReveal({
+        restoreBackgroundColor: () => chrome.restoreBackgroundColor(),
+        setBootHidden: (hidden) => core.setBootHidden(hidden),
+      }),
     promptDefaultFileManager: () => deps.promptDefaultFileManager?.(),
     checkUpdates: () => deps.checkUpdates?.(),
     lazyBoot: lazyBootFlag,

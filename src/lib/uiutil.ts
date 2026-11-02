@@ -153,16 +153,23 @@ const errDetail = (err: unknown): unknown => {
   return err;
 };
 
+// Runs one render step, isolated: a throw (or an async rejection) is logged
+// and NEVER escapes — one broken widget must not blank the rest. The
+// promise is RETURNED so a caller that needs the step to be DONE (the boot
+// waits for the async grid build before it reveals the app) can await it;
+// the returned promise never rejects (the error is logged).
 export const safeRenderStep = (
   name: string,
   fn: () => void | Promise<void>,
   log: (msg: string) => void = () => {},
-): void => {
+): Promise<void> | void => {
   try {
     const r = fn();
-    if (r instanceof Promise) r.catch((err) => log(`render ${name} (async): ${errDetail(err)}`));
+    if (r instanceof Promise) return r.catch((err) => log(`render ${name} (async): ${errDetail(err)}`));
+    return undefined;
   } catch (err: unknown) {
     log(`render ${name}: ${errDetail(err)}`);
+    return undefined;
   }
 };
 

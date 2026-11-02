@@ -23,7 +23,7 @@ import { warmEmbeddedIcons, warmSvgRenderer, shouldWarmBootCaches } from "../ui/
 import type { NodeLike } from "../lib/node-like";
 import { makeNotify } from "../ui/notify";
 import { rasterSigOf } from "../ui/tty";
-import { backgroundClearColor } from "../ui/scrim";
+import { backgroundClearColor, bootClearColor } from "../ui/scrim";
 import { makeSidebarAnim, makeTopbarAnim } from "../ui/ui-sidebar-anim";
 import { makeSidebarHover } from "../ui/ui-sidebar-hover";
 import type { SidebarHoverDirection } from "../config/config-schema";
@@ -299,6 +299,13 @@ export const wireChrome = async (deps: {
     previewWidth: core.config.ui.previewWidth,
     previewEnabled: core.config.ui.previewEnabled,
     dualPane: core.config.ui.dualPane,
+    // With lazy startup OFF the app paints in ONE burst: the content starts
+    // transparent and the boot reveals it once the first frame is COMPLETE
+    // (the grid built, the icons rastered). Without the hide the user
+    // watches tfm assemble itself — the title + background first, then the
+    // sidebar, then the grid, then the icons. With lazy startup ON the app
+    // paints immediately (the progressive arrival IS the feature).
+    contentOpacity: core.burstStartup ? 0 : 1,
     title: buildTitle({ width: core.sideInnerW(), colors: core.colors, mode: core.config.ui.sidebarTitle }),
     toolbarShells: [toolbars[0].makeToolbarShell(), toolbars[1].makeToolbarShell()],
   });
@@ -342,7 +349,22 @@ export const wireChrome = async (deps: {
   }
   // opencode-style: global bg lives on the renderer, not per-box — transparent
   // modes stay transparent here (the old unconditional reset re-opaqued boot)
-  renderer.setBackgroundColor(backgroundClearColor(core.config.ui.transparentBg, core.colors.bg, core.isTtyMode()));
+  const applyRendererBg = (): void => {
+    renderer.setBackgroundColor(backgroundClearColor(core.config.ui.transparentBg, core.colors.bg, core.isTtyMode()));
+  };
+  // The burst startup ([ui] lazy-startup OFF): the app is hidden until its
+  // first frame is COMPLETE, so the renderer's clear color is the TERMINAL's
+  // own background ("transparent" = the terminal's default bg shows through).
+  // The intermediate frame is then INVISIBLE — the user sees their terminal
+  // bg, not a tfm-colored screen that fills in a beat later. The reveal
+  // restores tfm's bg (restoreBackgroundColor) in the same tick as the
+  // content's opacity, so the app lands in ONE frame.
+  const applyBootBg = (): void => {
+    if (!core.burstStartup) return;
+    renderer.setBackgroundColor(bootClearColor(true, core.config.ui.transparentBg, core.colors.bg, core.isTtyMode()));
+  };
+  applyRendererBg();
+  applyBootBg();
 
   // --- Sidebar startup intro (cold-boot-only): one reused timeline over the
   // places sidebar, played by the playSidebarIntro boot step after the first
@@ -650,6 +672,12 @@ export const wireChrome = async (deps: {
     markIntroPlayed: () => {
       introPlayedAt = Date.now();
     },
+    // the burst startup's reveal: the renderer's clear color goes back to
+    // tfm's bg (the boot frame matched the TERMINAL's bg so it was invisible)
+    restoreBackgroundColor: applyRendererBg,
+    // the burst startup's hide: the clear color matches the TERMINAL's bg
+    // again (the system theme's boot step sets tfm's bg — re-apply the hide)
+    applyBootBackground: applyBootBg,
     topbarIntro,
     toolbars,
     activeToolbar: () => toolbars[core.panes.active],

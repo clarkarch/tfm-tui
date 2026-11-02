@@ -1,5 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { backgroundClearColor, rasterDimPlan, scrimPlan } from "./scrim";
+import { appContentOpacity, backgroundClearColor, bootClearColor, rasterDimPlan, scrimPlan } from "./scrim";
+
+describe("bootClearColor", () => {
+  test("the hidden boot paints the TERMINAL's bg (the intermediate frame is invisible)", () => {
+    // The renderer presents one frame while the app is still hidden (the boot
+    // is async). With tfm's own bg that frame is a visible color fill — the
+    // user saw "bg first, then the app". The terminal's default bg makes it
+    // invisible: the alt screen already looks like that.
+    expect(bootClearColor(true, "off", "#0b0b10", false)).toBe("transparent");
+  });
+
+  test("the revealed app paints tfm's own bg", () => {
+    expect(bootClearColor(false, "off", "#0b0b10", false)).toBe("#0b0b10");
+    // transparent-bg modes keep the terminal showing through, as before
+    expect(bootClearColor(false, "on", "#0b0b10", false)).toBe("transparent");
+    expect(bootClearColor(false, "off", "#0b0b10", true)).toBe("#0b0b10");
+  });
+});
 
 describe("scrimPlan", () => {
   test("dim fades the content by the configured amount (opacity = 1 - dim%)", () => {
@@ -17,6 +34,26 @@ describe("scrimPlan", () => {
 
   test("none leaves the content fully opaque", () => {
     expect(scrimPlan("none", 35)).toEqual({ contentOpacity: 1, fill: false });
+  });
+});
+
+describe("appContentOpacity", () => {
+  const plan = { contentOpacity: 0.65, fill: false };
+
+  test("the boot-hidden app is fully transparent (the burst startup)", () => {
+    // The boot hides the app until the first frame is COMPLETE — the user
+    // must not watch a half-built app assemble itself (title, then sidebar,
+    // then the grid). Opacity is the only hide that keeps the layout alive.
+    expect(appContentOpacity({ bootHidden: true, modalOpen: false, plan })).toBe(0);
+  });
+
+  test("a modal never un-hides the booting app", () => {
+    expect(appContentOpacity({ bootHidden: true, modalOpen: true, plan })).toBe(0);
+  });
+
+  test("a revealed app is opaque, or dimmed while a modal is up", () => {
+    expect(appContentOpacity({ bootHidden: false, modalOpen: false, plan })).toBe(1);
+    expect(appContentOpacity({ bootHidden: false, modalOpen: true, plan })).toBe(0.65);
   });
 });
 

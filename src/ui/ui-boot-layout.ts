@@ -86,11 +86,17 @@ type AppContainerOpts = {
   title: SlotElement;
   // one toolbar shell per pane (ids already prefixed by the toolbar factory)
   toolbarShells: [SlotElement, SlotElement];
+  // the boot hides the app until the first frame is COMPLETE (the "burst"
+  // startup): the content node starts transparent and the boot reveals it
+  // (wiring/core setBootHidden). Opacity, not visible:false — display:none
+  // would collapse the grid's viewport and the windowed grid would build an
+  // empty window.
+  contentOpacity?: number;
 };
 
 export const buildAppContainer = (o: AppContainerOpts): SlotElement =>
   Box(
-    { id: "tfm-content", width: "100%", height: "100%", flexDirection: "row" },
+    { id: "tfm-content", width: "100%", height: "100%", flexDirection: "row", opacity: o.contentOpacity ?? 1 },
     Box(
       {
         id: "tfm-sidebar-root",

@@ -43,6 +43,9 @@ import type { ExecutableInfo } from "../fs/executable";
 
 export type NavWiring = {
   renderAll: ReturnType<typeof makeRenderAll>;
+  // the boot waits for the async render steps (the grid build) so the first
+  // painted frame is the COMPLETE app
+  renderAllSettled: () => Promise<void>;
   quitApp: ReturnType<typeof makeQuit>;
   quitAppForce: ReturnType<typeof makeQuit>;
   restartApp: ReturnType<typeof makeRestart>;
@@ -63,6 +66,12 @@ export type ChromeWiring = {
   chrome: ReturnType<typeof makeChrome>;
   sidebarIntro: ReturnType<typeof makeSidebarAnim>;
   markIntroPlayed: () => void;
+  // the burst startup's reveal: restore the renderer's clear color to tfm's
+  // bg (the boot frame matched the TERMINAL's bg so it was invisible)
+  restoreBackgroundColor: () => void;
+  // the burst startup's hide: the clear color matches the TERMINAL's bg
+  // (re-applied after the system theme's boot step sets tfm's bg)
+  applyBootBackground: () => void;
   topbarIntro: ReturnType<typeof makeTopbarAnim>;
   toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>];
   activeToolbar: () => ReturnType<typeof makeToolbar>;

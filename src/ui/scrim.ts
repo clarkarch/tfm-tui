@@ -17,6 +17,18 @@ export type ScrimPlan = {
   fill: boolean;
 };
 
+// The app content node's opacity: ONE owner for the whole node, two factors.
+// - bootHidden: the boot paints the app in ONE burst — the content starts
+//   transparent and the boot reveals it once the first frame is COMPLETE, so
+//   the user never watches tfm assemble itself (title, then sidebar, then
+//   the grid, then the icons). `visible:false` would be display:none — the
+//   grid's viewport would collapse — so the hide rides the opacity.
+// - modalOpen: a modal dims the app behind it (the scrim plan).
+export const appContentOpacity = (opts: { bootHidden: boolean; modalOpen: boolean; plan: ScrimPlan }): number => {
+  if (opts.bootHidden) return 0;
+  return opts.modalOpen ? opts.plan.contentOpacity : 1;
+};
+
 // `fill` reproduces the old RGBA(0,0,0,150) overlay's darkening as a fixed
 // content fade (the overlay itself is gone: it deleted the rasters it covered).
 const FILL_CONTENT_OPACITY = 1 - 150 / 255;
@@ -73,3 +85,16 @@ export const rasterDimPlan = (mode: ScrimMode, contentOpacity: number): RasterDi
 // restore can't drift.
 export const backgroundClearColor = (transparentBg: TransparentBgMode, bg: string, isTty: boolean): string =>
   transparentBg !== "off" && !isTty ? "transparent" : bg;
+
+// The renderer's clear color DURING the boot hide (the burst startup): the
+// TERMINAL's own background ("transparent" = the terminal's default bg shows
+// through), so the intermediate frame — the one the renderer presents while
+// the app is still hidden — is INVISIBLE. The user sees their terminal bg,
+// not a tfm-colored screen that fills in a beat later. The reveal restores
+// the app's own clear color (backgroundClearColor) in the same tick.
+export const bootClearColor = (
+  hidden: boolean,
+  transparentBg: TransparentBgMode,
+  bg: string,
+  isTty: boolean,
+): string => (hidden ? "transparent" : backgroundClearColor(transparentBg, bg, isTty));

@@ -149,6 +149,46 @@ describe("makeRenderAll", () => {
     expect(logs[0]).toContain("kaboom");
   });
 
+  test("settled() waits for the async steps (the grid build is async)", async () => {
+    // The boot reveals the app after settled(): a render that only waits for
+    // the sync tail paints a half-built app (the grid arrives a frame later).
+    let built = false;
+    const renderAll = makeRenderAll({
+      state: mkState("/a"),
+      syncTabFromState: () => {},
+      scheduleSaveSession: () => {},
+      log: () => {},
+      steps: {
+        grid: async () => {
+          await new Promise((r) => setTimeout(r, 20));
+          built = true;
+        },
+      },
+    });
+    renderAll();
+    expect(built).toBe(false);
+    await renderAll.settled();
+    expect(built).toBe(true);
+  });
+
+  test("settled() survives a rejected async step (the error is logged, not rethrown)", async () => {
+    const logs: string[] = [];
+    const renderAll = makeRenderAll({
+      state: mkState("/a"),
+      syncTabFromState: () => {},
+      scheduleSaveSession: () => {},
+      log: (m) => logs.push(m),
+      steps: {
+        grid: async () => {
+          throw new Error("late kaboom");
+        },
+      },
+    });
+    renderAll();
+    await renderAll.settled();
+    expect(logs.some((l) => l.includes("late kaboom"))).toBe(true);
+  });
+
   test("an async step rejection is logged without blocking the sync tail", async () => {
     const logs: string[] = [];
     let resolved = false;

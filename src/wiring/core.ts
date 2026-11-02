@@ -19,7 +19,7 @@ import { isTrashFilesDir } from "../fs/fsutil";
 import { isCutKeyFor } from "../fs/clipboard";
 import { makeLookup, makeResolutionGate } from "../ui/ui-lookup";
 import { makePointerSetter, makeSlots } from "../ui/ui-slots";
-import { SCRIM_FILL_ID, rasterDimPlan, scrimPlan } from "../ui/scrim";
+import { SCRIM_FILL_ID, appContentOpacity, rasterDimPlan, scrimPlan } from "../ui/scrim";
 import { makeFloats } from "../ui/floats";
 import { initialAppState } from "../app/nav";
 import { appendLog } from "../lib/log";
@@ -46,6 +46,18 @@ export const wireCore = (deps: {
   const ttyMode = resolveTtyMode(config.ui.ttyMode, process.env.TERM);
   const colors = ttyMode ? ttyStaticTheme<Theme>(config.theme) : deriveColors(config.theme, config.ui.transparentBg);
   const themeGet = (): Theme => colors;
+
+  // --- [ui] lazy-startup: the ONE switch between the two startup shapes.
+  // OFF (classic, the default): the app paints in ONE burst — the content
+  // starts transparent and the boot reveals it once the first frame is
+  // COMPLETE (the grid built, the icons rastered). The user never watches
+  // tfm assemble itself (title + background first, then the sidebar, then
+  // the grid, then the icons).
+  // ON: the app paints IMMEDIATELY and the rest lands in the background —
+  // the progressive arrival IS the feature (a fast first paint).
+  // Read ONCE: lazy-startup is restart-required (a live flip would change
+  // the boot's shape mid-session).
+  const burstStartup = config.ui.lazyStartup !== true;
 
   // --- Geometry applyConfig() rewrites through this cell — never bake into consts ---
   const geometry = {
@@ -161,11 +173,18 @@ export const wireCore = (deps: {
   // the icon rasters keep their placement opaque and instead have their baked
   // pixels shaded (rasterDimPlan), so they darken along with the text without
   // the translucent `icons = transparent` look.
+  //
+  // The content node's opacity has TWO owners: this modal dim AND the boot's
+  // reveal (setBootHidden). With lazy startup OFF the app starts transparent
+  // so the FIRST painted frame is the complete app (the "burst" startup)
+  // instead of a title block that fills in a beat later. With lazy startup ON
+  // the app is never hidden (the progressive arrival is the feature).
+  let bootHidden = burstStartup;
   const applyModalDim = (open: boolean): void => {
     try {
       const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
       const content = lookup.byId("tfm-content");
-      if (content) content.opacity = open ? plan.contentOpacity : 1;
+      if (content) content.opacity = appContentOpacity({ bootHidden, modalOpen: open, plan });
       const fill = lookup.byId(SCRIM_FILL_ID);
       if (fill) fill.visible = open && plan.fill;
       const rasters = open
@@ -177,6 +196,20 @@ export const wireCore = (deps: {
       // closing must repaint it back to the hover/kb highlight, and opening
       // must drop it (the kb-focused row otherwise stayed highlighted).
       runModalHooks();
+    } catch {}
+  };
+
+  // The boot's reveal: the app content goes from transparent to visible once
+  // the first frame is COMPLETE (see wiring/io.ts runBootRender). A modal
+  // open at that moment still dims it — the boot hide and the modal dim are
+  // two factors of ONE opacity (appContentOpacity).
+  const setBootHidden = (hidden: boolean): void => {
+    bootHidden = hidden;
+    try {
+      const plan = scrimPlan(config.ui.scrimMode, config.ui.scrimDim);
+      const content = lookup.byId("tfm-content");
+      if (!content) return;
+      content.opacity = appContentOpacity({ bootHidden, modalOpen: floats.hasModal(), plan });
     } catch {}
   };
 
@@ -261,6 +294,10 @@ export const wireCore = (deps: {
     // re-apply the modal dim after a config change (scrim mode flip / theme
     // change while a modal is open) — no-op when no modal is up
     reapplyModalDim: () => applyModalDim(floats.hasModal()),
+    // the boot's reveal: with lazy startup OFF the app content is transparent
+    // until the first frame is complete (the "burst" startup)
+    burstStartup,
+    setBootHidden,
     // widgets that own transient hover state register a dropper here
     registerModalOpen,
     slots,

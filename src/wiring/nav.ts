@@ -69,15 +69,16 @@ export const wireNav = (deps: {
       for (const t of getChrome().toolbars) t.renderCrumbs();
     },
     sidebar: () => getChrome().chrome.renderSidebar(),
-    iconQueue: () => {
-      void core.slots.drainIconQueue();
-    },
-    grid: () => {
-      void getGrid().renderGrid();
-    },
+    // the async steps RETURN their promise: the boot waits for them (the
+    // grid build lists the folder and re-rasterizes the tiles) so the first
+    // painted frame is the complete app
+    iconQueue: () => core.slots.drainIconQueue(),
+    grid: () => getGrid().renderGrid(),
     paneFocus: () => core.refreshPaneFocus(),
     preview: () => {
-      void getGrid().renderPreview();
+      // the preview pane debounces its read (60ms) and returns nothing to
+      // await — it fills in right after the reveal
+      getGrid().renderPreview();
     },
     pluginSlots: () => getPlugins?.().refreshSlots?.(),
     stripSelectable: () => core.lookup.stripSelectable(),
@@ -266,6 +267,8 @@ export const wireNav = (deps: {
 
   return {
     renderAll,
+    // the boot's "wait for the first paint to be COMPLETE" seam
+    renderAllSettled: () => renderAll.settled(),
     quitApp,
     quitAppForce,
     restartApp,
