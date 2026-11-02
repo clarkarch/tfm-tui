@@ -346,8 +346,10 @@ export const wireSettings = (deps: {
     // console mode: the theme row is display-only (static palette paints)
     isTtyMode: core.isTtyMode,
     plugins: () => plugins.plugins,
-    // AOT builds cannot load a plugin file from disk — the Plugins entry
-    // disappears instead of offering an install that could never run
+    // a build that did not opt in to running code from disk (an
+    // ahead-of-time build without --aot-allow-code-from-disk) — the Plugins
+    // entry disappears instead of offering an install the build will not
+    // run
     pluginsDisabled: !PLUGINS_ENABLED,
     // on/off toggle: register or drop the plugin's slots right away, then
     // repaint so the change is visible without a navigation

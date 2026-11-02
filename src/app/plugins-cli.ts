@@ -9,7 +9,7 @@ import path from "node:path";
 import { installPlugin, removePluginDir, updatePlugin } from "../plugins/plugin-install";
 import type { ExecFn } from "../lib/exec-fn";
 import { pluginsDir } from "../plugins/plugins";
-import { PLUGINS_ENABLED } from "../plugins/plugin-gate";
+import { PLUGINS_DISABLED_REASON, PLUGINS_ENABLED } from "../plugins/plugin-gate";
 import { PLUGIN_API_VERSION, PLUGIN_NAME_RE } from "../plugins/plugin-api";
 import {
   findIndexEntry,
@@ -105,8 +105,9 @@ type PluginsCliDeps = {
   err?: (line: string) => void;
   // index loader override (tests never hit the network)
   fetchIndex?: () => Promise<unknown>;
-  // this build cannot load plugins at all (AOT: an executable may only run
-  // code compiled into it). Defaults to the build-time gate.
+  // this build does not load plugins at all (an ahead-of-time build that
+  // was not given --aot-allow-code-from-disk: the build did not opt in to
+  // running code from disk). Defaults to the build-time gate.
   pluginsEnabled?: boolean;
 };
 
@@ -127,11 +128,19 @@ export const runPluginsCli = async (args: string[], deps: PluginsCliDeps = {}): 
     return 2;
   }
 
-  // plugins disabled in this build (AOT): a plugin file is code from disk,
-  // which such an executable may not run — every plugin subcommand is
-  // refused (help still answers, so the command stays discoverable)
+  // plugins disabled in this build: a plugin file is code from disk, and
+  // this build did not opt in to running code from disk. Every plugin
+  // subcommand is refused (help still answers, so the command stays
+  // discoverable). The message names WHY: an ahead-of-time build that was
+  // not given --aot-allow-code-from-disk is a different binary from one that
+  // was, and the user cannot tell them apart from the outside. It does NOT
+  // claim the binary is incapable of loading code from disk — the AOT seal
+  // covers the runtime's own disk path, and a plugin that serves the source
+  // bypasses it (the gate is a policy, not a capability limit).
   if (parsed.cmd !== "help" && !(deps.pluginsEnabled ?? PLUGINS_ENABLED)) {
-    err("tfm: plugins are disabled in this build");
+    // a caller that overrides the gate knows its own reason (or has none)
+    const reason = deps.pluginsEnabled === false ? null : PLUGINS_DISABLED_REASON;
+    err(`tfm: plugins are disabled in this build${reason ? ` — ${reason}` : ""}`);
     return 1;
   }
 

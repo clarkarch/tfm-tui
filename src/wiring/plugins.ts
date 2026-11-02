@@ -232,12 +232,16 @@ export const wirePlugins = async (deps: {
     api,
     warn,
     registerSlots: (name, slots) => slotRegistry.register({ id: name, slots: slots as never }),
-    // AOT builds cannot run a plugin file from disk — the loader stays off
-    // there (the gate folds to a constant, so this branch never executes)
+    // an ahead-of-time build WITHOUT --aot-allow-code-from-disk did not
+    // opt in to running code from disk — the loader stays off there (the
+    // gate folds to a constant, so this branch never executes). With the
+    // flag the loader is on and the scan below loads plugins normally.
     enabled: PLUGINS_ENABLED,
   });
   if (!PLUGINS_ENABLED) {
-    dlog("plugins: disabled in this build (ahead-of-time executable — plugin files are code from disk)");
+    dlog(
+      "plugins: disabled in this build (ahead-of-time executable without --aot-allow-code-from-disk — the build did not opt in to running code from disk)",
+    );
   }
   // [ui] lazy-startup on: the scan (readdir + per-plugin hash + cpSync +
   // import + 10s-capped activate) runs concurrently with the remaining wiring
