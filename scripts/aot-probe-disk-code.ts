@@ -1,14 +1,21 @@
 // Asks a compiled tfm whether it can load code from disk.
 //
-//   bun scripts/aot-probe-disk-code.ts aot [outfile] [--trim]
-//   bun scripts/aot-probe-disk-code.ts jit [outfile]
+//   bun scripts/aot-probe-disk-code.ts <variant> [outfile] [--trim]
 //
-// An ahead-of-time executable carries no transpiler: it may not load a
-// module from disk. The probe writes a module to a file and imports it —
-// the AOT build must refuse it, the JIT baseline (the control) must load
-// it. That is a run-time proof; a grep of the build log cannot give it,
-// because the compiler's finding about a dynamic import mentions the
-// flag the build does NOT use.
+// The variants are the ones scripts/aot-build.ts knows: jit, aot, aot-trim,
+// aot-disk, aot-disk-trim, ….
+//
+// The RUNTIME'S OWN disk-code path is sealed in an ahead-of-time
+// executable: it may not load a module from disk. The probe writes a
+// module to a file and imports it — the AOT build must refuse it, the JIT
+// baseline (the control) must load it. That is a run-time proof; a grep
+// of the build log cannot give it, because the compiler's finding about a
+// dynamic import mentions the flag the build does NOT use.
+//
+// The refusal is not a property of the whole program: a Bun plugin that
+// SERVES the source bypasses it (see scripts/aot-probe-plugin-seal.ts).
+// This probe measures the runtime's own path, which is the one the
+// release build relies on.
 //
 // The path is unique per run and the specifier is assembled at run time,
 // so the compiler can neither find the file on disk while it builds the
@@ -20,18 +27,42 @@
 // so the trimmed executable KEEPS the JavaScript interpreter and the
 // transpiler — and may therefore load code from disk after all. The probe
 // is the only way to know.
+//
+// --aot-allow-code-from-disk lifts the seal: the executable may load code
+// the build has not seen (Bun interprets it). The probe answers that too.
 
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 type CompileOptions = Exclude<Parameters<typeof Bun.build>[0]["compile"], boolean | string> & {
   aot?: boolean;
+  allowCodeFromDisk?: boolean;
+};
+
+type Variant = { aot: boolean; allowCodeFromDisk: boolean; trim: boolean };
+
+const VARIANTS: Record<string, Variant> = {
+  jit: { aot: false, allowCodeFromDisk: false, trim: false },
+  aot: { aot: true, allowCodeFromDisk: false, trim: false },
+  "aot-trim": { aot: true, allowCodeFromDisk: false, trim: true },
+  "aot-lean": { aot: true, allowCodeFromDisk: false, trim: true },
+  "aot-disk": { aot: true, allowCodeFromDisk: true, trim: false },
+  "aot-disk-trim": { aot: true, allowCodeFromDisk: true, trim: true },
+  "aot-disk-lean": { aot: true, allowCodeFromDisk: true, trim: true },
 };
 
 const root = path.resolve(import.meta.dir, "..");
-const mode = process.argv[2] === "jit" ? "jit" : "aot";
-const outfile = path.resolve(root, process.argv[3] ?? `dist/probe/probe-disk-code-${mode}`);
-const trim = process.argv.includes("--trim");
+const mode = process.argv[2] ?? "jit";
+const base = VARIANTS[mode];
+if (!base) {
+  console.error(`unknown variant ${JSON.stringify(mode)}`);
+  console.error(`known variants: ${Object.keys(VARIANTS).join(", ")}`);
+  process.exit(2);
+}
+const flags = process.argv.slice(3);
+const outfile = path.resolve(root, flags.find((a) => !a.startsWith("--")) ?? `dist/probe/probe-disk-code-${mode}`);
+const trim = base.trim || flags.includes("--trim");
+const allowCodeFromDisk = base.allowCodeFromDisk || flags.includes("--allow-code-from-disk");
 
 // the program that does the asking
 const entry = path.resolve(root, "dist/probe/probe-disk-code-entry.ts");
@@ -60,7 +91,12 @@ console.log(\`code from disk: \${refused ? "refused" : "LOADED"} — \${detail}\
 const result = await Bun.build({
   entrypoints: [entry],
   tsconfig: path.join(root, "tsconfig.json"),
-  compile: { outfile, aot: mode === "aot", trim } as CompileOptions,
+  compile: {
+    outfile,
+    aot: base.aot,
+    trim,
+    ...(allowCodeFromDisk ? { allowCodeFromDisk: true } : {}),
+  } as CompileOptions,
 });
 
 if (!result.success) {
