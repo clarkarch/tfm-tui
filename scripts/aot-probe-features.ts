@@ -82,8 +82,12 @@ await check("pty", async () => {
 });
 
 await check("worker", async () => {
-  // the fixture is embedded as a file (the loader map below says so), so the
-  // worker runs from the executable itself — the way opentui's parser does
+  // the fixture is embedded as a FILE (the import attribute says so), so
+  // the worker runs from the executable itself — the way opentui's parser
+  // does. The shape matters: a build-wide \`loader: { ".js": "file" }\`
+  // map (what this probe used to use) is a shape the AOT compiler cannot
+  // follow, and it made the AOT build report a worker failure that Bun
+  // does not have — see scripts/aot-probe-worker.ts for the full matrix
   const mod = (await import("./probe-worker-fixture.js", { with: { type: "file" } })) as { default: string };
   const worker = new Worker(mod.default);
   const reply = await new Promise<string>((resolve, reject) => {
@@ -127,12 +131,15 @@ writeFileSync(
 );
 
 const result = await Bun.build({
-  entrypoints: [entry, fixture],
-  // the worker fixture is CODE, but it has to travel as a FILE: the worker
-  // is started from a path, and the executable reads it from itself. The
-  // probe imports nothing else from disk, so the .js loader map is safe
-  // here (the app's build uses .svg for the same reason).
-  loader: { ".js": "file" },
+  // ONLY the entry point: the worker fixture is embedded as a file through
+  // its import attribute, not listed as an entry point. Both halves
+  // matter — a build-wide `loader: { ".js": "file" }` map is a shape the
+  // AOT compiler cannot follow (the worker never answers there), and a
+  // fixture that is BOTH an entry point and an embedded file loses its
+  // default export in a JIT build. The shape that works in every build is
+  // the one opentui's tree-sitter worker uses: the import attribute, and
+  // nothing else.
+  entrypoints: [entry],
   tsconfig: path.join(root, "tsconfig.json"),
   compile: { outfile, aot: mode === "aot" } as CompileOptions,
 });

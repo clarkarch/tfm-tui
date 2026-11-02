@@ -740,12 +740,19 @@ jobs:
           fi
 
       # The runtime features, compared: the AOT build has to answer like the
-      # JIT baseline. One difference is known at this PR head: a Worker
-      # started from an embedded FILE cannot run in an AOT executable ("only
-      # an entry point of the build can run"), and opentui's tree-sitter
-      # parser worker is such a file. tfm does not use that worker today
-      # (its preview is plain text), so that difference is reported, not
-      # failed — every other difference is a lost feature.
+      # JIT baseline. Every difference is a lost feature.
+      #
+      # One difference is known and documented: the AOT executable keeps a
+      # JavaScript interpreter, so `eval` may work there and not in the
+      # trimmed build — tfm uses neither, so it is reported, not failed.
+      #
+      # The WORKER is not on that list: a Worker from an embedded file or
+      # from an entry point of the build runs fine in an AOT executable
+      # (scripts/aot-probe-worker.ts measures the whole matrix). The old
+      # claim here ("a worker from an embedded file cannot run in an AOT
+      # executable") was false — it came from a probe whose shape the AOT
+      # compiler cannot follow, and it would have hidden a real worker
+      # regression.
       - name: The runtime features survive the AOT build
         run: |
           echo "probe (jit): $(cat dist/logs/probe-features-jit.out)"
@@ -765,11 +772,9 @@ jobs:
             };
             const jit = statuses(await read("dist/logs/probe-features-jit.out"));
             const aot = statuses(await read("dist/logs/probe-features-aot.out"));
-            // the worker difference is the documented AOT limitation; the
-            // eval one is documented too (the AOT executable keeps an
-            // interpreter, so eval may work there and not in the trimmed
-            // build — tfm uses neither)
-            const known = new Set(["worker", "eval"]);
+            // the eval difference is documented (the AOT executable keeps a
+            // JavaScript interpreter); everything else is a lost feature
+            const known = new Set(["eval"]);
             let bad = 0;
             for (const [name, value] of Object.entries(jit)) {
               if (!(name in aot)) {
@@ -778,7 +783,7 @@ jobs:
               } else if (aot[name] === value) {
                 console.log(`PASS  ${name} — ${value}`);
               } else if (known.has(name)) {
-                console.log(`INFO  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value} (${name === "worker" ? "a worker from an embedded file cannot run in an AOT executable" : "the AOT executable keeps a JavaScript interpreter"})`);
+                console.log(`INFO  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value} (the AOT executable keeps a JavaScript interpreter)`);
               } else {
                 console.log(`FAIL  ${name} — the AOT build: ${aot[name]}, the JIT baseline: ${value}`);
                 bad++;
