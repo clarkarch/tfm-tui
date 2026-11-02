@@ -160,9 +160,11 @@ tfm plugins new my-plugin
 ```
 See [docs/plugins.md](docs/plugins.md).
 
-> The release binaries are compiled ahead of time, so they carry no JavaScript
-> interpreter for a plugin to run in — `tfm plugins` says so and the plugin
-> commands are off. A build from source (below) still has plugins.
+> The release binaries are compiled ahead of time **without**
+> `--aot-allow-code-from-disk`, so tfm does not offer plugins there:
+> `tfm plugins` says so and the plugin commands are off. A build from
+> source (below) still has plugins. The reason is a policy, not a limit
+> of the binary — see [docs/aot-evaluation.md](docs/aot-evaluation.md).
 
 ## Notes
 

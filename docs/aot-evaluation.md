@@ -2,390 +2,373 @@
 
 Status: shipped. The release workflow (`.github/workflows/release.yml`)
 compiles tfm ahead of time for both architectures; this page is the
-evaluation behind that decision.
+evaluation behind that decision — and behind the plugin gate that goes
+with it.
 
-Bun's ahead-of-time compiler (`bun build --compile --aot`) is in **no released
-Bun yet** (latest: 1.4.4). It was merged into Bun's main, so evaluating it
-means building that Bun from a pinned commit
-(`4f7f658ed173fc23500de183b3713a8ddc18ba33`) first — about an hour on a
-GitHub runner, and it needs a pinned LLVM, a pinned Rust nightly and the
-WebKit prebuilt tarball.
+Bun's ahead-of-time compiler (`bun build --compile --aot`) is in **no
+released Bun yet** (latest: 1.4.4). It was merged into Bun's main, so
+evaluating it means building that Bun from a pinned commit
+(`4f7f658ed173fc23500de183b3713a8ddc18ba33`, which reports itself as
+`1.4.4-canary.1+17faecf82`) first — about an hour on a GitHub runner,
+and it needs a pinned LLVM, a pinned Rust nightly and the WebKit prebuilt
+tarball.
 
 The experiment: build that Bun, compile tfm with it, boot the result, and
 compare it against a **JIT executable built by the same Bun** (so the two
 differ in exactly one thing: whether the code was compiled ahead of time).
 
-Everything below is measured by `.github/workflows/aot-experiment.yml`.
+Everything below is measured by `.github/workflows/aot-experiment.yml`,
+and the probes it runs are in `scripts/aot-probe-*.ts`.
 
-**Result in one line: the AOT build starts about 1.5× faster than the JIT
-binary it replaces, browses about twice as fast in a large directory, and
-ships about the same size** — 302 ms vs 475 ms to the first painted frame on
-the release runner, 53.2 MiB gzipped against the 50.9 MiB of v1.1.0 — but it
-needs a Bun that nobody ships yet, and it takes the plugin system with it.
+**Result in one line: the AOT build starts about 2.5× faster than the JIT
+binary it replaces and is about 12–18 MiB smaller gzipped — and the
+"closed world" it was supposed to be is not closed: an AOT build can load
+a plugin from disk anyway, because a Bun plugin that *serves* the source
+bypasses the seal. The plugin gate is therefore a policy, and it says
+so.**
 
 ## What had to change in tfm
 
-One thing: the plugin loader. A plugin is a TypeScript file on disk that the
-loader imports at run time; an AOT executable may only run code that was
-compiled **into** it. The loader is gated off at build time
-(`src/plugins/plugin-gate.ts`), the code stays in the tree, and a normal build
-is unaffected:
+One thing: the plugin loader. A plugin is a TypeScript file on disk that
+the loader imports at run time. Whether the loader may run it depends on
+what the **build opted in to**, not on whether the build asked for
+ahead-of-time compilation:
 
-| | `tfm plugins` | `tfm plugins --help` |
+| build | `tfm plugins` | `tfm plugins --help` |
 | --- | --- | --- |
-| JIT build | lists the installed plugins (exit 0) | answers (exit 0) |
-| AOT build | `tfm: plugins are disabled in this build` (exit 1) | answers (exit 0) |
+| JIT | lists the installed plugins (exit 0) | answers (exit 0) |
+| AOT **without** `--aot-allow-code-from-disk` | `tfm: plugins are disabled in this build — it was not built with --aot-allow-code-from-disk (the build did not opt in to running code from disk)` (exit 1) | answers (exit 0) |
+| AOT **with** `--aot-allow-code-from-disk` | lists the installed plugins (exit 0) | answers (exit 0) |
 
-The gate is a bundler `define` (`__TFM_BUILD_AOT__`), so the disabled path
-folds to a constant and the loader is dead code in the AOT binary.
+The gate is a bundler `define` pair (`__TFM_BUILD_AOT__` and
+`__TFM_BUILD_AOT_DISK_CODE__`), so the disabled path folds to a constant
+and is **never executed**. (The loader's own code is still *in* the
+bundle: the AOT compiler keeps the dynamic import and warns about it —
+`TS100064`, *"this import path isn't a constant … or build with
+--aot-allow-code-from-disk"* — so "free of dead weight" means "the path
+does not run", not "the bytes are gone".) The decision is a pure function
+(`pluginsEnabledFor(aot, allowsCodeFromDisk)` in
+`src/plugins/plugin-gate.ts`), pinned by `plugin-gate.test.ts`.
 
-## What the AOT build costs and buys
+**The message is load-bearing.** It names the *flag* — "it was not built
+with `--aot-allow-code-from-disk`" — and it must never say "this build
+cannot load code from disk", because that is **not true**: see *The seal*
+below. A sealed AOT build *can* load a plugin; the release build chooses
+not to offer one, and says exactly that.
 
-Measured on a GitHub runner, 5 boots per binary (run
-[40633106092](https://github.com/clarkarch/tfm-tui/actions/runs/40633106092),
-every gate green; the sizes are byte-identical across the three green runs
-[40622551742](https://github.com/clarkarch/tfm-tui/actions/runs/40622551742),
-[40631228427](https://github.com/clarkarch/tfm-tui/actions/runs/40631228427)
-and this one, whose timings differ by a few percent — the runner is noisy,
-the sizes are not):
+## The measurement
 
-| | JIT baseline | AOT | AOT `--trim` | AOT `--trim --no-function-source` |
-| --- | --- | --- | --- | --- |
-| gzip size | 77.6 MiB | 64.8 MiB | 59.2 MiB | **58.4 MiB** |
-| raw size | 180.6 MiB | 157.7 MiB | 145.7 MiB | 142.1 MiB |
-| startup → first app code | 153 ms | 35 ms | 28 ms | 30 ms |
-| startup → renderer up | 181 ms | 61 ms | 41 ms | 41 ms |
-| startup → first paint | 500 ms | 311 ms | 302 ms | **306 ms** |
-| app-reported boot | 394 ms | 304 ms | 296 ms | 298 ms |
-| RSS at first paint | 96 632 KB | 82 144 KB | 79 576 KB | 79 736 KB |
-| kitty images drawn | 4 | 4 | 4 | 4 |
-| crashes at teardown | 0 | 0 | 0 | 0 |
+Measured on the machine this was written on (Linux, 2 CPUs, 7.2 GiB of
+RAM, a loaded box: the absolute numbers are worse than a runner's, the
+ratios are what matters), 5 boots per binary, medians, all seven
+variants built by the **same** AOT Bun. Every variant booted and painted
+5/5 and crashed 0/5 times.
 
-Two things about this table. Its **JIT baseline is a JIT binary built by the
-AOT Bun** — the apples-to-apples comparison, where the only difference is
-whether the code was compiled ahead of time; the stock Bun that ships today
-builds a different (and bigger) JIT binary, and "the size story" below puts
-the two side by side. And every size in the table was measured **before the
-debug symbols were stripped out of the native library** — the release ships
-the stripped one, which takes about 6 MiB off every column.
+| | JIT control | AOT | AOT `--trim` | AOT +disk | AOT +disk `--trim` | AOT +disk `--trim --no-function-source` |
+| --- | --- | --- | --- | --- | --- | --- |
+| gzip size | 71.9 MiB | 59.7 MiB | 54.1 MiB | 60.0 MiB | 54.9 MiB | **54.0 MiB** |
+| raw size | 159.3 MiB | 137.4 MiB | 125.4 MiB | 137.8 MiB | 128.3 MiB | 124.6 MiB |
+| startup → first app code | 351 ms | **49 ms** | 49 ms | 49 ms | 48 ms | 49 ms |
+| startup → renderer up | 422 ms | 82 ms | 83 ms | 63 ms | 82 ms | 85 ms |
+| startup → first paint | 972 ms | 378 ms | 374 ms | 375 ms | 369 ms | **372 ms** |
+| app-reported boot | 754 ms | 362 ms | 362 ms | 363 ms | 356 ms | 360 ms |
+| RSS at first paint | 81 096 KB | 67 804 KB | 67 612 KB | 68 092 KB | 67 500 KB | 66 468 KB |
+| kitty images drawn | 4 | 4 | 4 | 4 | 4 | 4 |
+| crashes at teardown | 0 | 0 | 0 | 0 | 0 | 0 |
 
-The **candidate** — the smallest variant that boots and paints every run — is
-the last column: **19.2 MiB smaller gzipped than the JIT build and 30–39 %
-faster to the first frame** (the three green runs measured −30.2 %, −37.4 %
-and −38.8 %). Both gates of the experiment pass:
+Read it as: **the AOT build reaches its first line of app code in 49 ms
+against the JIT control's 351 ms (−86 %), and paints its first frame in
+~370 ms against ~970 ms (−62 %).** The resident set at the first paint is
+13–14 MB smaller.
 
-```
-PASS  gzip size delta under 10 MB (aot-lean) — aot-lean 58.4MB vs jit 77.6MB (-19.2MB)
-PASS  first paint is at least 10% faster (aot-lean) — aot-lean 306ms vs jit 500ms (-38.8%)
-```
+Two caveats about this table, both load-bearing:
 
-What the AOT build buys at run time: the module graph is machine code, so the
-program reaches its first line of app code in ~30 ms instead of ~150 ms
-(−80 %), and the whole frame is painted ~195 ms earlier. The runtime it does
-not need is also not in the executable, so the resident set at the first frame
-is ~16 MiB smaller (96 632 KB → 79 736 KB).
+* These are **local-machine** numbers. The release runner's numbers (the
+  ones the release notes print) are faster in absolute terms; the ratios
+  are the comparable part.
+* The **absolute sizes are not comparable with the 2026-10-28 table** that
+  used to live here. tfm's source has moved since (the plugin gate, the
+  OpenTUI fork bump, the paint-burst change), so both ends of the
+  comparison moved. Only this table's internal ratios are meaningful.
 
-### The size story: what ships, and against what
+The JIT control is a **JIT binary built by the AOT Bun** — the
+apples-to-apples comparison, where the only difference is whether the code
+was compiled ahead of time; the stock Bun that ships today builds a
+different (and bigger) JIT binary.
 
-The table above compares two builds made by the same Bun. What a user
-downloads is a different question, and the honest answer needs three numbers
-per architecture — the release, the release before it, and the fallback:
+## What `--trim` costs and buys
 
-| release artifact | raw | gzip |
+`--trim` removes the Bun and Node.js APIs the program never calls; it
+needs a Bun built with `--trimmable=on` (the trim table is baked in at
+Bun's *link* time, so there is no way around it from the tfm side).
+`--no-function-source` on top of it is worth ~0.8 MiB gzipped — noise.
+
+**The old claim ("`--trim` is worth ~5.6 MiB") was measured on a sealed
+build and is only true there.** Re-measured on both sides of the seal:
+
+| | gzip | raw |
 | --- | --- | --- |
-| v1.1.0 x86_64 — JIT, stock Bun 1.4.0 | 130.9 MiB | 50.9 MiB |
-| **v1.2.0 x86_64 — AOT, `--trim`** | **123.6 MiB** | **53.2 MiB** |
-| v1.1.0 aarch64 — JIT, stock Bun 1.4.0 | 129.3 MiB | 50.2 MiB |
-| **v1.2.0 aarch64 — AOT, `--trim`** | **125.9 MiB** | **52.2 MiB** |
-| v1.2.0 fallback (x86_64) — JIT, stock Bun 1.4.4 | 133.9 MiB | 59.3 MiB |
+| `--trim` on a **sealed** build (aot → aot-trim) | **5.64 MiB** | 11.96 MiB |
+| `--trim` on an **open** build (aot+disk → aot+disk+trim) | **5.10 MiB** | 9.44 MiB |
+| what survives | 90.4 % of the gzip win | 78.9 % of the raw win |
 
-So the AOT release is **2.0–2.4 MiB bigger than v1.1.0** — and it starts
-**about 1.5× faster**. The release measures both on the runner that builds
-it (median of three boots, the numbers the release notes print):
+So the trim win is real in both worlds, and an open build gives up about
+a tenth of it.
 
-| | AOT first paint | JIT baseline first paint | |
+The cost of the open seal itself (`--aot-allow-code-from-disk`):
+
+| | gzip | raw |
+| --- | --- | --- |
+| plain AOT → AOT+disk | **+0.25 MiB** | +0.38 MiB |
+| `--trim` AOT → `--trim` AOT+disk | **+0.79 MiB** | +2.89 MiB |
+
+The flag is cheap: **under a megabyte gzipped**, and it costs nothing
+measurable at boot (the first paint is 375 ms sealed against 375 ms open
+— the difference is inside the noise of a loaded machine).
+
+`--trim` does **not** take eval away from tfm. The trim report says so
+explicitly: *"kept eval, new Function and the JavaScript interpreter
+(interpreter)"* — the program can reach `eval`/`new Function`, so the
+interpreter stays in the binary. The 5.6 MiB `--trim` saves is the
+Bun/Node API surface, not the engine.
+
+## What the plugin path costs
+
+A plugin is not compiled ahead of time in an AOT build — **Bun
+interprets it** (Bun's own words: *"`--aot-allow-code-from-disk`: a path
+that is known only at run time may name a file with code that the build
+has not seen. Bun interprets it."* — `src/options_types/aot_options.rs:87`).
+The measurement is a tight numeric loop, run identically in the host
+program (compiled into the binary) and in the plugin (loaded from disk):
+
+| build | host loop | plugin loop | plugin vs host |
 | --- | --- | --- | --- |
-| x86_64 | 302 ms | 475 ms | 1.57× |
-| aarch64 | 295 ms | 444 ms | 1.51× |
+| JIT | 24.7 ms | 25.0 ms | 1.01× |
+| AOT +disk | 86.3 ms | 137.0 ms | **1.59×** |
+| AOT (sealed, plugin served by a Bun plugin) | 88.4 ms | 137.8 ms | **1.56×** |
 
-(On a slower machine the gap grows: on the machine this was written on, the
-same comparison is 373 ms vs 1008 ms — 2.7×. The faster the machine, the
-less there is to win: the AOT binary skips the compilation work, not the
-I/O.)
+Two things to read here, and one to be careful about:
 
-The AOT executable is smaller than a JIT binary built by the same Bun (the
-AOT one does not carry the JIT compiler — the code is machine code instead),
-but Bun itself grew between 1.4.0 and 1.4.4 (77 MiB → 102 MiB for the
-runtime), and that eats the difference.
+* **Plugin code is interpreted, and it does not tier up.** Repeated calls
+  of a plugin function in an AOT build stay flat (140, 151, 146, 192,
+  174, 152, 169, 137, 143, 164, 158, 131 ms), while the same function in
+  the JIT build tiers up (31.8 → 24.4 ms). The plugin code is running in
+  the interpreter, always.
+* **The same plugin code is 5.5× slower in an AOT build than in a JIT
+  one** (137 ms against 25 ms for the identical loop). This is the price
+  of "plugins in a release binary": they work, and they are slow.
+* Careful: for *this particular* loop, the AOT **host** code was also
+  slower than the JIT host code (86 ms against 25 ms) — it is a
+  float-to-uint conversion (`>>>` on a double) that the AOT compiler
+  handles badly. So "plugin vs host" is a **within-build** ratio, and
+  the honest cross-build statement is the 5.5× one above.
 
-#### The 23 MB of debug symbols
+## Workers and tree-sitter
 
-Every compiled binary **embeds the native library it loads**. The library is
-28.5 MB with its debug symbols and 5.3 MB without them, and the binary ships
-whatever file it loads — the difference is invisible in the build log: the
-compile succeeds either way.
+The old claim in this document was *"a Worker started from an embedded
+file never answers in an AOT executable"* and *"the tree-sitter preview
+of a file would hang in an AOT build"*. **Both were wrong**, and the
+reason the first one was wrong is a bug in the probe, not in Bun.
 
-While the fork was consumed as a sibling checkout, tfm embedded **two** copies
-of it: the patched `libopentui` that the staging script put in place, and the
-npm one that came with the platform package. The staged copy kept its debug
-symbols, so **23 MB of symbols went into every binary** — and about 6 MiB into
-every gzipped download.
+Bun's AOT compiler **tracks the code a Worker runs** (`src/aot/load/
+worker_files.rs:34`: *"Code that the program starts a Worker with: a file
+that it embeds with the `file` loader, a file that it names by a path, or
+a text that it holds"*), and it can follow the shapes listed at
+`worker_files.rs:267` — `import path from "./worker.js" with { type:
+"file" }; new Worker(path)`, `new Worker("./worker.js")`,
+`new Worker("data:text/javascript,..")` — plus the dynamic form
+`(await import("./worker.js", { with: { type: "file" } })).default`
+(`worker_files.rs:1125`).
 
-The fork is published to npm now (`@clarkarch/opentui-fork`, plus one package
-per platform), and the published platform packages carry the **stripped**
-library — `strip --strip-unneeded`, which keeps the dynamic symbols (the ABI)
-and drops the rest. The fork's own checkout keeps its unstripped file for its
-debugging, and tfm never sees it. So the binary embeds one stripped library
-and the 23 MB is gone: 28 456 600 → 5 301 144 bytes, and the release artifact
-went from 59.2 MiB to 53.2 MiB gzipped (aarch64: 58.0 MiB → 52.2 MiB).
+Measured matrix (`scripts/aot-probe-worker.ts`):
 
-### The size lever: `--trim`, and the Bun it needs
-
-The AOT compiler can remove the Bun and Node.js APIs the program never calls
-(`--trim`), and leave each function's source code out
-(`--no-function-source`). `--no-function-source` on top of `--trim` is worth
-~0.8 MiB gzipped — noise. `--trim` is worth ~5.6 MiB on top of the plain AOT
-build.
-
-`--trim` needs a Bun that carries the **trim table**, which only a Bun built
-with `--trimmable=on` has; a Bun without it says
-`this build of Bun doesn't support --trim (NoTrimTable)`. The trim table is
-baked in at Bun's **link** time, so the Bun has to be built with the flag —
-there is no way around it from the tfm side. The same Bun also makes the
-*plain* AOT build smaller (its linker trims what the program does not use:
-95.7 MiB → 64.8 MiB gzipped), so a stock Bun build is not a fair baseline for
-the AOT numbers either.
-
-The experiment therefore builds its own Bun:
-
-```
-bun scripts/build.ts --profile=release --aot=on --webkit=prebuilt \
-  --trimmable=on --lto=off
-```
-
-and reuses that binary for every later run (the artifact `bun-aot` lives for
-90 days; the workflow takes a `bun_run_id` input to point at it).
-
-### What `--trim` actually removes
-
-The build can explain itself: `--explain-trim` prints the report. For tfm it
-says **63 feature groups removed, 167 kept, and 27 "blocked" reasons** —
-features the compiler could not remove because some path might reach them:
-
-| blocked by | count | why |
-| --- | --- | --- |
-| eval | 11 | the program can reach `eval`/`new Function` — `AsyncGeneratorFunction` at `src/app/nav.ts:70`, `new Function` in the opentui fork |
-| dynamic-import | 11 | `require()` with a computed path (opentui, the plugin loader, `fflate`, `bindings`) |
-| native-code | 3 | `dlopen` of the resvg addon and of the x11 helper |
-| runtime-code | 2 | `Bun.plugin` and `Bun.serve` |
-
-What it removed: the development server and the bundler (`Bun.build`), the
-package manager (`bun install`, `bunx`), the test runner (`bun:test`), the
-linter and formatter, `bun:sqlite`, Redis, cron, Markdown, TOML, YAML, XML,
-JSON5/JSONC, `node:http2`, `node:quic`, `node:vm`, `node:v8`, `node:repl`,
-`undici`, the hash and crypto classes that nothing names, the `--watch`/`--hot`
-spawn paths, the run-time loading of `package.json`/`tsconfig.json`, most of
-`Intl` and `Temporal`, **the ahead-of-time compiler itself** — and dozens more
-Bun and Node.js API groups.
-
-What it had to keep: `node:os`, `node:path`, `node:zlib`, `node:net`,
-`node:util`, `Bun.serve`, `Bun.ffi`, the native addon loader, **and the whole
-JavaScript interpreter** — the report says so explicitly: *"kept eval, new
-Function and the JavaScript interpreter (interpreter)"*.
-
-**So `--trim` does not take eval away from tfm** — the program can reach it,
-and the interpreter stays in the binary. Two things follow:
-
-* eval works in the AOT executable, plain and trimmed alike (the feature
-  probe asks: `eval: ok (42)` in both). The "AOT has no JavaScript" picture
-  is wrong: the compiler needs an interpreter for the regular expressions it
-  cannot compile (15 × TS100058), and eval rides along with it.
-* the trimmed binary is *bigger* than it needs to be because of it. The
-  5.6 MiB `--trim` saves is the Bun/Node API surface, not the engine.
-
-The interesting part: **the trimmed build still refuses to load code from
-disk.** The interpreter is in the binary, but the AOT runtime only runs code
-that was compiled into the executable — the probe that writes a module and
-imports it gets *"it isn't in this executable, which only runs code that was
-compiled into it"* from the plain **and** from the trimmed build. The
-workflow asks both, because the trimmed build is the candidate a release
-would ship.
-
-## Runtime performance: browsing, not just booting
-
-The startup numbers above are the headline, but a file manager is used for
-*browsing*. The question that matters after the first frame is: does the
-ahead-of-time binary navigate faster, or only start faster?
-
-**Answer: yes, on a directory big enough to notice — about twice as fast.**
-Measured on the machine this was written on (Linux, 7.2 GB of RAM, a slow
-box: the absolute numbers are worse than the runner's, the ratios are what
-matters), in a directory with **12 000 files**. The app writes its own
-timings to its debug log: `list` is the directory read plus the sort,
-`build` is the layout and the paint of the grid. The binaries were driven
-through a PTY (a plain pipe delivers no keys), and the numbers are medians of
-three runs.
-
-| build | first listing (boot) | navigation into a subdirectory |
-| --- | --- | --- |
-| **AOT (the shipping artifact)** | 62 ms list + 56 ms build | **59 ms list + 36 ms build = 96 ms** |
-| JIT, same pipeline (JS API, same Bun) | 139 ms list + 150 ms build | 82 ms list + 113 ms build = 195 ms |
-| JIT, stock Bun 1.4.4 (the fallback build) | 113 ms list + 136 ms build | 80 ms list + 133 ms build = 213 ms |
-
-**The navigation rebuild is about twice as fast** — 86–96 ms against
-192–213 ms, whichever JIT baseline is used. The effect does not depend on the
-order the binaries run in (JIT first: 192 ms, AOT second: 86 ms), so it is not
-a warm-up artifact.
-
-Two caveats, both measured:
-
-* **A small directory shows nothing.** With 100 files the navigation costs
-  0–1 ms in *every* build — the difference is below the noise floor, and only
-  the startup still separates them (344 ms vs 624 ms). The win is real when
-  there is enough work to do.
-* The JIT baselines are stock Bun **1.4.4**; v1.1.0 shipped 1.4.0.
-
-### Where the win comes from — and where it does not
-
-Two synthetic workloads, compiled the same way, five runs each:
-
-| workload | JIT | AOT | |
+| shape | JIT | AOT | AOT +disk |
 | --- | --- | --- | --- |
-| sort + regex filter + string formatting + JSON (200 000 items) | 101 ms | 94 ms | 1.07× |
-| 12 000 items, six small helpers called per item (the shape of the grid build) | 42 ms | 24 ms | **1.75×** |
+| embedded file, static `with { type: "file" }` import | ok | **ok** | ok |
+| embedded file, dynamic import | ok | **ok** | ok |
+| entry point of the build, named by a literal path | ok | **ok** | ok |
+| a file on disk the build never saw (computed path) | ok | **FAILED** | **FAILED** |
+| Blob URL | ok | ok | ok |
+| data: URL | ok | ok | ok |
 
-The pattern is the mechanism: the AOT binary is faster where the work is
-**JavaScript the JIT would have had to compile at run time** — many small
-functions, called many times — and it is a wash where the work is **already
-native** (`Array.prototype.sort`, `RegExp.test`, `JSON.stringify`; the JIT
-never compiled those either, they are C++ inside Bun).
+The one that fails is the one that cannot work: a Worker started from a
+path the build never saw is not in the image, and
+`--aot-allow-code-from-disk` does **not** help it (the flag opens the
+runtime's own disk-code path, not the worker-file table).
 
-tfm's grid build is the second shape: it asks a dozen small helpers (format
-the size, format the date, take the extension, decide the icon) for every
-entry in the directory, and then lays out a tile for each. That is the work
-the AOT build does at machine-code speed.
+The first version of that probe loaded the fixture with a build-wide
+`loader: { ".js": "file" }` and reached it through a `const` — a shape
+the compiler cannot follow. That made the embedded-file case look broken
+and produced the false claim this section now corrects. The probe now
+uses the import attribute, which is the shape OpenTUI uses.
 
-## Correctness (all gates pass)
+**OpenTUI's tree-sitter worker works in an AOT build.** It is the
+embedded-file shape (`await import("./parser.worker.js", { with: { type:
+"file" } })`), so the compiler tracks it. Measured with OpenTUI's own
+client (`scripts/aot-probe-tree-sitter.ts`):
 
-* the AOT executable boots and paints: 5/5 runs enter the alternate screen
-  and complete the first full frame — for the plain, the trimmed and the lean
-  build alike
-* the 97 SVG icons are still embedded (99 embedded files), and tfm's own icon
-  index resolves all 97 of them (an empty index would degrade every icon to a
-  text glyph while the app still "looked fine")
-* the resvg native addon loads in the AOT executable and rasterizes the same
-  SVG to the same 174 bytes as the JIT baseline
-* the AOT executable **refuses to load code from disk** (proved at run time:
-  it writes a module and imports it; the AOT build refuses, the JIT control
-  loads it) — there is no transpiler in it, in the trimmed build either
-* the runtime features tfm leans on survive: file system, directory read,
-  child process, PTY, timer, eval
+| build | client init | highlight |
+| --- | --- | --- |
+| JIT | ok (70 ms) | ok (15 ranges) |
+| AOT | **ok (22 ms)** | **ok (15 ranges)** |
+| AOT +disk | ok | ok (15 ranges) |
+
+The AOT build initializes the highlighter *faster* than the JIT one
+(22 ms against 70 ms): the worker is compiled code there, while the JIT
+build has to transpile it at run time.
+
+## The seal: what it actually covers
+
+This is the finding that changed the design, and it is worth stating
+precisely, because the intuitive picture ("an AOT executable only runs
+code that was compiled into it") is wrong in a way that matters.
+
+**The seal is the runtime's own disk-code path — not a property of the
+whole program.**
+
+* The refusal lives in Bun's compiled-module loader:
+  `createNotInExecutableError` (`src/jsc/bindings/BunCompiledModules.cpp:629-648`)
+  raises *"Cannot load '…': it isn't in this executable, which only runs
+  code that was compiled into it. Pass the file to bun compile as another
+  entry point, or build with `--aot-allow-code-from-disk`."* It is
+  reached through `errorIfCodeOutsideImageIsRefused` → `AOT::refusesCodeOutsideImage`
+  (`:637-647`), and the flag flips it through
+  `Bun__AOT__loadsCodeOutsideImage` → `ImageFlag::LoadsCodeOutsideImage`
+  (`src/jsc/bindings/BunAOTRuntime.cpp:184-188`,
+  `src/jsc/compiled_program.rs:140-143`). The build sets that flag from
+  `options.loads_code_from_disk` (`src/aot/engine.rs:162-164`).
+* **A Bun plugin that serves the source never goes through that path.**
+  The runtime never reads the file — the plugin hands it over, and the
+  runtime compiles what it is given. The AOT loader asks the plugins
+  first (`src/aot/load/host.rs`: `plugins.read(...)` at `:347` and `:685`,
+  `plugin_loader` at `:320`, `is_read_by_plugin` at `:693`;
+  `src/aot/load/plugin_modules.rs` holds the plugin answers).
+* **OpenTUI's runtime-module support is exactly such a plugin.** It
+  registers a resolve hook for *every* specifier and a load hook that
+  reads the file with `Bun.file(...).text()` and returns
+  `{ contents, loader }` — `packages/core/src/runtime-plugin.ts:633-679`
+  (the catch-all `onResolve`) and `:502-539` (`installRewriteLoader`).
+* **tfm installs that plugin at boot**, in every build:
+  `src/wiring/plugins.ts` calls `installPluginRuntimeSupport()` before
+  the first plugin import (it is what lets a plugin import
+  `@opentui/core` and share tfm's renderer).
+
+Measured, all three builds, by `scripts/aot-probe-plugin-seal.ts`:
+
+| | JIT | AOT (sealed) | AOT +disk |
+| --- | --- | --- | --- |
+| the runtime's own disk path | LOADED | **REFUSED** | LOADED |
+| tfm's loader, nothing serving the source | ok | **FAILED** | ok |
+| tfm's loader, once a plugin serves the source | ok | **ok** | ok |
+
+So: **the sealed AOT build loads a plugin.** The gate is a policy — the
+release build does not opt in to running code from disk, so it does not
+offer plugins — and the message names the flag rather than claiming a
+capability the binary does not lack.
+
+(One more detail, for the record: the refusal is *per path*. A plugin
+that serves **one** file does not open the disk to the program; what
+bypasses the seal is the serving plugin's own answer, and a build that
+installs no such plugin keeps the refusal.)
+
+## The silent-fallback trap
+
+**A Bun without the AOT compiler accepts `--aot` and ignores it.** The
+build succeeds, the binary is a plain JIT binary, and it still loads code
+from disk — so a project can believe it ships AOT while shipping JIT.
+Measured with stock Bun 1.4.4: `bun build --compile --aot` exits 0,
+produces a binary, and that binary **LOADS** a module it writes at run
+time.
+
+A grep of the build log cannot catch this (the compiler's finding about
+a dynamic import mentions the flag the build does *not* use), so the
+check has to be a run-time proof. `scripts/aot-build.ts` therefore builds
+a tiny program that writes a module and imports it, and **refuses to
+produce a binary** unless the probe answers `REFUSED` (`assertAotCompiler`).
+The probe is built without `--aot-allow-code-from-disk` on purpose: the
+flag lifts the seal, so a probe built with it could not tell an AOT
+binary from a JIT one.
+
+## Correctness
+
+* the AOT executable boots and paints: 5/5 runs enter the alternate
+  screen and complete the first full frame — for every variant
+* the SVG icons are still embedded, and tfm's own icon index resolves
+  them (an empty index would degrade every icon to a text glyph while the
+  app still "looked fine")
+* the resvg native addon loads in the AOT executable and rasterizes the
+  same SVG to the same bytes as the JIT baseline
+* the AOT executable **refuses to load code from disk on the runtime's
+  own path** — proved at run time (it writes a module and imports it;
+  the AOT build refuses, the JIT control loads it), in the plain **and**
+  the trimmed build
+* the tree-sitter worker (the preview pane's highlighter) starts and
+  highlights in the AOT build
 * no crashes at teardown, the same number of kitty images drawn
 
 ## What does not survive
 
-**A Worker started from an embedded file never answers in an AOT executable.**
-Bun's docs are explicit: only an *entry point* of the build can run as a
-worker, a file that is merely embedded cannot ("blocked by dynamic-import").
-opentui's tree-sitter parser worker is exactly such a file, so the tree-sitter
-preview of a file would hang in an AOT build. tfm does not use that worker
-today (its preview is plain text), so nothing breaks today — but it is a
-landmine for the first feature that wants it.
-
-**Plugins are gone in the AOT build** (by design, see above).
-
-**Nothing else was lost** — every runtime feature the app uses answers the
-same way in the AOT build as in the JIT baseline.
-
-## The compiler's findings (warnings, not errors)
-
-54 findings on the AOT build, all warnings:
-
-| count | code | what |
-| --- | --- | --- |
-| 32 | TS100150 | missing resvg bindings for other platforms (only the host one exists) |
-| 15 | TS100058 | a regular expression runs in the interpreter |
-| 6 | TS100064 | a dynamic `import()`/`require()` of code from disk — the plugin loader, which the gate disables |
-| 1 | TS100151 | `supports-color` missing from `debug` |
-
-One runtime hazard the compiler reports: `TS100014` — `globalThis[key] ??= {}`
-throws in a compiled executable (built-in objects are read-only). It sits in
-the opentui fork's plugin path, which AOT disables.
-
-## Five things that are not obvious
-
-1. **The build goes through the JavaScript API** (`Bun.build`), not
-   `bun build --compile` on the command line. The AOT compiler reads every
-   entry point as *code* unless a loader says otherwise, and the icon assets
-   are entry points (that is how a compiled binary carries them). Without
-   `loader: { ".svg": "file" }` the compiler parses an SVG as TSX and stops
-   with `Could not resolve: "react/jsx-dev-runtime"`. There is no CLI flag
-   for it; the API has one.
-2. **One tsconfig for the whole build** (`tsconfig: "tsconfig.json"`). The
-   AOT compiler checks every file it reaches with the *nearest*
-   `tsconfig.json`, and the opentui fork's built files are checked with the
-   fork's (module: NodeNext), which reads them as CommonJS — `export` in a
-   CommonJS file is an error under `verbatimModuleSyntax` (4× TS1287). The
-   error is about the fork's build output, not about tfm's code.
-3. **The transpiler proof has to be a run-time proof.** A grep of the build
-   log cannot show it: the expected finding ("this import path isn't a
-   constant") mentions the flag the build does *not* use. And the probe's
-   path must be unique per run — a constant path that exists while the
-   compiler runs gets embedded, and the AOT executable then loads it.
-4. **The Bun has to be built with `--trimmable=on`**, and the flag is about
-   Bun's *link*, not about tfm's build. A Bun without the trim table cannot
-   trim, and it also makes the plain AOT build bigger than the JIT one — the
-   size conclusion only holds with the right Bun.
-5. **A compiled binary embeds the native library it loads — symbols and
-   all.** `libopentui` is 28.5 MB with its debug symbols and 5.3 MB without
-   them, and the binary ships whatever file it loads. That was 23 MB per
-   binary while the fork was staged from a sibling checkout; the npm platform
-   package carries the stripped library now, so the binary embeds the 5.3 MB
-   one. It is invisible in the build log either way: the compile succeeds
-   with either file.
+* **A Worker started from a path the build never saw** (a file the
+  program computes at run time) does not run in an AOT build — with or
+  without `--aot-allow-code-from-disk`. A Worker from an *embedded* file
+  or from an *entry point* of the build runs fine.
+* **Plugin code is interpreted**, so it is ~5.5× slower than the same
+  plugin in a JIT build.
+* Nothing else was lost — every runtime feature the app uses answers the
+  same way in the AOT build as in the JIT baseline.
 
 ## The decision
 
-**Go.** The release binary is compiled ahead of time:
+**Go.** The release binary is compiled ahead of time, trimmed:
 
-* about the same size as v1.1.0: 53.2 MiB gzipped against 50.9 MiB
-  (+2.4 MiB) — and 23 MB smaller than the same build without the debug
-  symbols stripped
-* faster: 302 ms to the first frame vs 475 ms for the JIT binary the
-  release replaces (1.57×, measured on the release runner)
-* faster after the first frame too: the navigation rebuild in a 12 000-file
-  directory takes 96 ms against 213 ms for the fallback build (about 2×)
-* the plugin loader is gated off, the code is still in the tree
-* no transpiler in the binary, no code from disk, icons and the native
-  rasterizer intact
+* faster: ~370 ms to the first frame against ~970 ms for the JIT binary
+  the release replaces, on the machine above (−62 %; the release runner
+  measured −30 % to −39 % on 2026-10-28, and the runner is faster in
+  absolute terms)
+* smaller: 54.1 MiB gzipped against 71.9 MiB for the JIT control built
+  by the same Bun (−17.1 MiB for the plugin-capable variant)
+* the plugin loader is gated off unless the build opts in with
+  `--aot-allow-code-from-disk` — and the gate says why
+* the tree-sitter highlighter, the icons and the native rasterizer are
+  all intact
 
 The three caveats, and what each one costs:
 
-* **Bun AOT is in no release yet** — it was merged into Bun's main, but no
-  release carries it, so every release of tfm ships a Bun that the project
-  pins itself, built from that commit with a pinned LLVM/Rust toolchain. The
-  pin lives in `bun-aot.ref`, the binary is cached by that pin, and the release
-  workflow builds it from scratch when the pin moves.
-* **Plugins do not work in an AOT build** — the plugin system is the first
-  thing users will miss. The release notes say so, the README says so, and
-  a build from source still has plugins.
-* **A Worker from an embedded file cannot run** — the tree-sitter worker
-  is exactly such a file. The code preview still works (as plain text, no
-  syntax highlighting), and opentui's client gives up on the worker after
-  10 s instead of hanging forever.
+* **Bun AOT is in no release yet** — it was merged into Bun's main, but
+  no release carries it, so every release of tfm ships a Bun that the
+  project pins itself, built from that commit with a pinned
+  LLVM/Rust toolchain. The pin lives in `bun-aot.ref`, the binary is
+  cached by that pin, and the release workflow builds it from scratch
+  when the pin moves.
+* **Plugins do not work in the release build** — by policy. The release
+  build is not given `--aot-allow-code-from-disk`, so tfm does not offer
+  plugins; a build from source still has them.
+* **Plugin code would be interpreted** even where it works, so it is
+  ~5.5× slower than in a JIT build.
 
 **The fallback**: if the AOT build fails on an architecture, that
-architecture ships the JIT binary instead — built by the stock Bun, the build
-that ships today, so nobody regresses. The unreleased AOT Bun is deliberately
-NOT used for it: an unreleased runtime is the last thing to ship when
-something already went wrong. The fallback is loud: a warning in the log,
-a row in the release notes, and `dist/build-mode-<arch>.txt` in the
-artifact. A release never breaks over an unreleased compiler.
+architecture ships the JIT binary instead — built by the stock Bun, the
+build that ships today, so nobody regresses. The unreleased AOT Bun is
+deliberately NOT used for it: an unreleased runtime is the last thing to
+ship when something already went wrong. The fallback is loud: a warning
+in the log, a row in the release notes, and `dist/build-mode-<arch>.txt`
+in the artifact. A release never breaks over an unreleased compiler.
 
-**The tree-sitter worker**: the AOT preview is plain text. If a later
-version wants highlighting back, the worker has to become an entry point
-of the build (Bun runs an entry point as a worker) — a change in the
-opentui fork, not in tfm.
+## Recommended build flags (for another Bun project)
+
+The flags this evaluation supports, in the order they matter:
+
+| flag | what it does | cost |
+| --- | --- | --- |
+| `--aot` | compiles the program ahead of time | the big startup win; needs a Bun with the AOT compiler |
+| `--trim` | removes the Bun/Node APIs the program never calls | **−5.1 to −5.6 MiB** gzipped; needs a Bun built with `--trimmable=on` |
+| `--no-function-source` | leaves function sources out of the binary | ~0.8 MiB gzipped — noise, but free |
+| `--aot-allow-code-from-disk` | lets the binary load code the build never saw (interpreted) | **+0.25 MiB** gzipped plain, **+0.79 MiB** with `--trim` |
+
+So: `--aot --trim --no-function-source` for a project that needs no
+runtime plugins, and add `--aot-allow-code-from-disk` only if it must
+load code from disk — and then measure the plugin path, because that
+code runs interpreted.
 
 ## Reproducing
 
@@ -404,11 +387,25 @@ gh workflow run aot-experiment.yml --ref exp/aot-bun \
 bun scripts/aot-build.ts aot  dist/tfm-aot        # the AOT executable
 bun scripts/aot-build.ts jit  dist/tfm-jit        # the JIT baseline
 bun scripts/aot-build.ts aot  dist/tfm-aot-trim --trim --explain-trim
+bun scripts/aot-build.ts aot-disk dist/tfm-aot-disk   # may load code from disk
 bun scripts/aot-measure.ts dist/tfm-aot 5 aot     # boot it and measure
 ```
 
-`scripts/aot-probe-assets.ts` asks a compiled binary for its embedded icons,
-`scripts/aot-probe-disk-code.ts` asks it whether it can load code from disk,
-`scripts/aot-probe-features.ts` asks it for the file system, a child process,
-a PTY, a worker, a timer and `eval`, and `scripts/aot-probe-resvg.ts` asks
-it whether the native rasterizer still works.
+The probes:
+
+* `scripts/aot-probe-assets.ts` — asks a compiled binary for its embedded
+  icons
+* `scripts/aot-probe-disk-code.ts` — asks it whether it can load code
+  from disk on the runtime's own path
+* `scripts/aot-probe-plugins.ts` — loads a real plugin through tfm's own
+  loader with nothing serving the source (the raw seal), and measures the
+  host-vs-plugin loop ratio
+* `scripts/aot-probe-plugin-seal.ts` — measures what the seal actually
+  covers: the runtime's own path, the loader with nothing serving the
+  source, and the loader once a plugin serves it
+* `scripts/aot-probe-worker.ts` — the worker matrix
+* `scripts/aot-probe-tree-sitter.ts` — OpenTUI's tree-sitter client, asked
+  to initialize and to highlight
+* `scripts/aot-probe-features.ts` — the file system, a child process, a
+  PTY, a worker, a timer and `eval`
+* `scripts/aot-probe-resvg.ts` — the native rasterizer
