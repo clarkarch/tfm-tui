@@ -20,12 +20,14 @@ differ in exactly one thing: whether the code was compiled ahead of time).
 Everything below is measured by `.github/workflows/aot-experiment.yml`,
 and the probes it runs are in `scripts/aot-probe-*.ts`.
 
-**Result in one line: the AOT build starts about 2.5× faster than the JIT
-binary it replaces and is about 12–18 MiB smaller gzipped — and the
-"closed world" it was supposed to be is not closed: an AOT build can load
-a plugin from disk anyway, because a Bun plugin that *serves* the source
-bypasses the seal. The plugin gate is therefore a policy, and it says
-so.**
+**Result in one line: the AOT build reaches its first line of app code
+about 7× faster than the JIT binary it replaces and paints its first
+frame 1.6–2.6× faster (the runner and this box disagree; the ratio to
+the first line of app code does not), and it is 12–18 MiB smaller
+gzipped — and the "closed world" it was supposed to be is not closed: an
+AOT build can load a plugin from disk anyway, because a Bun plugin that
+*serves* the source bypasses the seal. The plugin gate is therefore a
+policy, and it says so.**
 
 ## What had to change in tfm
 
@@ -58,11 +60,37 @@ not to offer one, and says exactly that.
 
 ## The measurement
 
-Measured on the machine this was written on (Linux, 2 CPUs, 7.2 GiB of
-RAM, a loaded box: the absolute numbers are worse than a runner's, the
-ratios are what matters), 5 boots per binary, medians, all seven
-variants built by the **same** AOT Bun. Every variant booted and painted
-5/5 and crashed 0/5 times.
+Two measurements of the same thing, both with 5 boots per binary and
+medians, every variant built by the **same** AOT Bun
+(`1.4.4-canary.1+17faecf82`, from the pinned commit
+`4f7f658ed173fc23500de183b3713a8ddc18ba33`):
+
+* **on a GitHub runner** (run `41446122109`, 2026-11-02) — the
+  authoritative numbers, the ones the CI gates judge;
+* **on the box this was written on** (Linux, 2 CPUs, 7.2 GiB of RAM, a
+  loaded machine) — the numbers the probes below were developed against.
+
+Every variant booted and painted 5/5 and crashed 0/5 times in both.
+
+### On the GitHub runner (run `41446122109`)
+
+| | JIT control | AOT | AOT `--trim` | AOT `--trim --no-function-source` | AOT +disk | AOT +disk `--trim` | AOT +disk `--trim --no-function-source` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| gzip size | 71.9 MiB | 59.7 MiB | 54.1 MiB | **53.2 MiB** | 60.0 MiB | 54.9 MiB | 54.0 MiB |
+| startup → first app code | 138 ms | **19 ms** | 19 ms | 19 ms | 22 ms | 20 ms | 19 ms |
+| startup → renderer up | 162 ms | 41 ms | 41 ms | 41 ms | 41 ms | 41 ms | 41 ms |
+| startup → first paint | 475 ms | 296 ms | 294 ms | **293 ms** | 297 ms | 294 ms | 293 ms |
+| app-reported boot | 380 ms | 290 ms | 288 ms | 288 ms | 290 ms | 288 ms | 288 ms |
+| RSS at first paint | 97 000 KB | 83 900 KB | 81 392 KB | 81 392 KB | 83 912 KB | 81 848 KB | 81 672 KB |
+| kitty images drawn | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
+| crashes at teardown | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Read it as: **the AOT build reaches its first line of app code in 19 ms
+against the JIT control's 138 ms (−86 %), and paints its first frame in
+293–297 ms against 475 ms (−38 %).** The resident set at the first paint
+is 13–15 MB smaller.
+
+### On this box
 
 | | JIT control | AOT | AOT `--trim` | AOT +disk | AOT +disk `--trim` | AOT +disk `--trim --no-function-source` |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -76,20 +104,25 @@ variants built by the **same** AOT Bun. Every variant booted and painted
 | kitty images drawn | 4 | 4 | 4 | 4 | 4 | 4 |
 | crashes at teardown | 0 | 0 | 0 | 0 | 0 | 0 |
 
-Read it as: **the AOT build reaches its first line of app code in 49 ms
-against the JIT control's 351 ms (−86 %), and paints its first frame in
-~370 ms against ~970 ms (−62 %).** The resident set at the first paint is
-13–14 MB smaller.
+Same read, a slower box: **49 ms against 351 ms to the first line of app
+code (−86 %), and ~370 ms against ~970 ms to the first frame (−62 %).**
+The percentages are what travel; the absolute times are the machine's.
 
-Two caveats about this table, both load-bearing:
+Three caveats, all load-bearing:
 
-* These are **local-machine** numbers. The release runner's numbers (the
-  ones the release notes print) are faster in absolute terms; the ratios
-  are the comparable part.
+* **The sizes are the same measurement on both machines** — same commit,
+  same Bun, and the runner's gzip sizes agree with this box's to the
+  MiB. The *times* are not comparable across machines: the runner is
+  about twice as fast as this loaded box, which is why its first-paint
+  delta (−38 %) is smaller than this box's (−62 %). Same ratio to the
+  first line of app code (−86 %) on both.
 * The **absolute sizes are not comparable with the 2026-10-28 table** that
   used to live here. tfm's source has moved since (the plugin gate, the
   OpenTUI fork bump, the paint-burst change), so both ends of the
-  comparison moved. Only this table's internal ratios are meaningful.
+  comparison moved. Only these tables' internal ratios are meaningful.
+* The local table has no sealed `--no-function-source` variant: it was
+  built and measured on the runner only (53.2 MiB gzip — the smallest
+  sealed binary of the seven).
 
 The JIT control is a **JIT binary built by the AOT Bun** — the
 apples-to-apples comparison, where the only difference is whether the code
@@ -111,6 +144,7 @@ build and is only true there.** Re-measured on both sides of the seal:
 | `--trim` on a **sealed** build (aot → aot-trim) | **5.64 MiB** | 11.96 MiB |
 | `--trim` on an **open** build (aot+disk → aot+disk+trim) | **5.10 MiB** | 9.44 MiB |
 | what survives | 90.4 % of the gzip win | 78.9 % of the raw win |
+| the same, measured on the runner | **5.64 MiB** / 5.11 MiB | 11.96 MiB / 9.47 MiB |
 
 So the trim win is real in both worlds, and an open build gives up about
 a tenth of it.
@@ -121,10 +155,12 @@ The cost of the open seal itself (`--aot-allow-code-from-disk`):
 | --- | --- | --- |
 | plain AOT → AOT+disk | **+0.25 MiB** | +0.38 MiB |
 | `--trim` AOT → `--trim` AOT+disk | **+0.79 MiB** | +2.89 MiB |
+| the same, measured on the runner | **+0.25 MiB** / **+0.79 MiB** | +0.38 MiB / +2.86 MiB |
 
 The flag is cheap: **under a megabyte gzipped**, and it costs nothing
 measurable at boot (the first paint is 375 ms sealed against 375 ms open
-— the difference is inside the noise of a loaded machine).
+on this box, 296 ms against 297 ms on the runner — the difference is
+inside the noise of a loaded machine).
 
 `--trim` does **not** take eval away from tfm. The trim report says so
 explicitly: *"kept eval, new Function and the JavaScript interpreter
@@ -143,9 +179,12 @@ program (compiled into the binary) and in the plugin (loaded from disk):
 
 | build | host loop | plugin loop | plugin vs host |
 | --- | --- | --- | --- |
-| JIT | 24.7 ms | 25.0 ms | 1.01× |
-| AOT +disk | 86.3 ms | 137.0 ms | **1.59×** |
-| AOT (sealed, plugin served by a Bun plugin) | 88.4 ms | 137.8 ms | **1.56×** |
+| JIT — this box | 24.7 ms | 25.0 ms | 1.01× |
+| JIT — runner | 21.2 ms | 20.6 ms | 0.97× |
+| AOT +disk — this box | 86.3 ms | 137.0 ms | **1.59×** |
+| AOT +disk — runner | 51.4 ms | 68.9 ms | **1.34×** |
+| AOT (sealed, plugin served by a Bun plugin) — this box | 88.4 ms | 137.8 ms | **1.56×** |
+| AOT (sealed, plugin served by a Bun plugin) — runner | 50.7 ms | 69.1 ms | **1.36×** |
 
 Two things to read here, and one to be careful about:
 
@@ -154,14 +193,19 @@ Two things to read here, and one to be careful about:
   174, 152, 169, 137, 143, 164, 158, 131 ms), while the same function in
   the JIT build tiers up (31.8 → 24.4 ms). The plugin code is running in
   the interpreter, always.
-* **The same plugin code is 5.5× slower in an AOT build than in a JIT
-  one** (137 ms against 25 ms for the identical loop). This is the price
-  of "plugins in a release binary": they work, and they are slow.
+* **The same plugin code is slower in an AOT build than in a JIT one**:
+  **5.5× on this box** (137 ms against 25 ms for the identical loop),
+  **3.3× on the runner** (69 ms against 21 ms). The ratio is the price
+  of "plugins in a release binary": they work, and they are slow. The
+  two machines disagree on how slow — the gap between an interpreted
+  loop and a JIT-compiled one depends on the CPU — so quote the number
+  with the machine it came from.
 * Careful: for *this particular* loop, the AOT **host** code was also
-  slower than the JIT host code (86 ms against 25 ms) — it is a
-  float-to-uint conversion (`>>>` on a double) that the AOT compiler
-  handles badly. So "plugin vs host" is a **within-build** ratio, and
-  the honest cross-build statement is the 5.5× one above.
+  slower than the JIT host code (86 ms against 25 ms here, 51 ms against
+  21 ms on the runner) — it is a float-to-uint conversion (`>>>` on a
+  double) that the AOT compiler handles badly. So "plugin vs host" is a
+  **within-build** ratio, and the honest cross-build statement is the
+  5.5×/3.3× one above.
 
 ## Workers and tree-sitter
 
@@ -180,7 +224,8 @@ a text that it holds"*), and it can follow the shapes listed at
 `(await import("./worker.js", { with: { type: "file" } })).default`
 (`worker_files.rs:1125`).
 
-Measured matrix (`scripts/aot-probe-worker.ts`):
+Measured matrix (`scripts/aot-probe-worker.ts`) — the runner
+(run `41446122109`) answers the same in every cell:
 
 | shape | JIT | AOT | AOT +disk |
 | --- | --- | --- | --- |
@@ -202,20 +247,40 @@ the compiler cannot follow. That made the embedded-file case look broken
 and produced the false claim this section now corrects. The probe now
 uses the import attribute, which is the shape OpenTUI uses.
 
+**The feature probe used to use that broken shape**, and it reported
+`worker: FAILED` for the AOT build: `scripts/aot-probe-features.ts`
+embedded its fixture through a build-wide `loader: { ".js": "file" }` map.
+Measured side by side on this box (the same fixture, the same import
+attribute; the only difference being the build-wide loader map):
+
+| build | build-wide `.js → file` map | import attribute only |
+| --- | --- | --- |
+| JIT | worker ok | worker ok |
+| AOT | **worker FAILED** | **worker ok** |
+
+So the failure was a **shape the AOT compiler cannot follow**, not a limit
+on Workers. The probe now uses the import attribute — and does not list
+the fixture as an entry point either (a file that is *both* an entry
+point and an embedded file loses its default export in a JIT build).
+The workflow's worker difference is now a **gate**, not a tolerated
+difference: a worker regression in an AOT build fails the build instead
+of being explained away.
+
 **OpenTUI's tree-sitter worker works in an AOT build.** It is the
 embedded-file shape (`await import("./parser.worker.js", { with: { type:
 "file" } })`), so the compiler tracks it. Measured with OpenTUI's own
 client (`scripts/aot-probe-tree-sitter.ts`):
 
-| build | client init | highlight |
-| --- | --- | --- |
-| JIT | ok (70 ms) | ok (15 ranges) |
-| AOT | **ok (22 ms)** | **ok (15 ranges)** |
-| AOT +disk | ok | ok (15 ranges) |
+| build | client init (this box) | client init (runner) | highlight |
+| --- | --- | --- | --- |
+| JIT | ok (70 ms) | ok (22 ms) | ok (15 ranges) |
+| AOT | **ok (22 ms)** | **ok (10 ms)** | **ok (15 ranges)** |
+| AOT +disk | ok | ok (12 ms) | ok (15 ranges) |
 
-The AOT build initializes the highlighter *faster* than the JIT one
-(22 ms against 70 ms): the worker is compiled code there, while the JIT
-build has to transpile it at run time.
+The AOT build initializes the highlighter *faster* than the JIT one on
+both machines (22 ms against 70 ms here, 10 ms against 22 ms on the
+runner): the worker is compiled code there, while the JIT build has to
+transpile it at run time.
 
 ## The seal: what it actually covers
 
@@ -313,7 +378,7 @@ binary from a JIT one.
   without `--aot-allow-code-from-disk`. A Worker from an *embedded* file
   or from an *entry point* of the build runs fine.
 * **Plugin code is interpreted**, so it is ~5.5× slower than the same
-  plugin in a JIT build.
+  plugin in a JIT build on this box, ~3.3× on the runner.
 * Nothing else was lost — every runtime feature the app uses answers the
   same way in the AOT build as in the JIT baseline.
 
@@ -321,12 +386,15 @@ binary from a JIT one.
 
 **Go.** The release binary is compiled ahead of time, trimmed:
 
-* faster: ~370 ms to the first frame against ~970 ms for the JIT binary
-  the release replaces, on the machine above (−62 %; the release runner
-  measured −30 % to −39 % on 2026-10-28, and the runner is faster in
-  absolute terms)
+* faster: **293–297 ms to the first frame against 475 ms** for the JIT
+  binary the release replaces, on the GitHub runner (−38 %; on this box
+  ~370 ms against ~970 ms, −62 % — the runner is faster in absolute
+  terms, the ratios differ)
+* faster to the first line of app code: **19 ms against 138 ms** on the
+  runner (−86 %; 49 ms against 351 ms on this box — the same −86 %)
 * smaller: 54.1 MiB gzipped against 71.9 MiB for the JIT control built
-  by the same Bun (−17.1 MiB for the plugin-capable variant)
+  by the same Bun (−17.1 MiB for the plugin-capable variant; the smallest
+  sealed binary of the seven is 53.2 MiB)
 * the plugin loader is gated off unless the build opts in with
   `--aot-allow-code-from-disk` — and the gate says why
 * the tree-sitter highlighter, the icons and the native rasterizer are
@@ -344,7 +412,7 @@ The three caveats, and what each one costs:
   build is not given `--aot-allow-code-from-disk`, so tfm does not offer
   plugins; a build from source still has them.
 * **Plugin code would be interpreted** even where it works, so it is
-  ~5.5× slower than in a JIT build.
+  ~5.5× slower than in a JIT build on this box (~3.3× on the runner).
 
 **The fallback**: if the AOT build fails on an architecture, that
 architecture ships the JIT binary instead — built by the stock Bun, the
@@ -379,9 +447,10 @@ gh workflow run release.yml --ref main -f publish=false
 # the experiment behind the numbers (hours; needs the pinned toolchain)
 gh workflow run aot-experiment.yml --ref exp/aot-bun
 
-# or reuse the bun of an earlier run (its artifact lives for 90 days)
-gh workflow run aot-experiment.yml --ref exp/aot-bun \
-  -f bun_run_id=40622551742 -f runs=5 -f lto=off
+# or reuse the bun of an earlier run (its artifact lives for 90 days) —
+# this is how the numbers above were produced (run 41446122109)
+gh workflow run aot-experiment.yml --ref feat/aot-plugins \
+  -f bun_run_id=40633106092 -f runs=5 -f lto=off
 
 # the tfm side, with such a bun in hand
 bun scripts/aot-build.ts aot  dist/tfm-aot        # the AOT executable
