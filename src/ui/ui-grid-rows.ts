@@ -327,6 +327,7 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       tileId,
       labelId,
       isDir: entry.isDir,
+      renameWidth: TILE_W - 2,
       hoverLift,
     });
 
@@ -424,6 +425,9 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
       tileId: rowId,
       labelId,
       isDir: entry.isDir,
+      // The inline editor follows the list's name column. It must not inherit
+      // [ui] tile-width, which only describes grid tiles.
+      renameWidth: nameMax,
     });
     if (stat) {
       ctx.pushThumbJob({

@@ -22,6 +22,10 @@ export type SelTileRef = {
   tileId: string;
   labelId: string;
   isDir: boolean;
+  // Width available to the inline rename editor for this entry. Grid tiles
+  // publish their label width; list rows publish their name-column width so
+  // the editor never inherits the unrelated grid tile-width setting.
+  renameWidth?: number;
   // grid tiles with room for the configured hover distance/direction move
   // their icon on hover (rest layout untouched); the rest keep the highlight.
   hoverLift?: boolean;

@@ -333,6 +333,8 @@ describe("renderGrid (grid tiles)", () => {
     const keys = [...selection.tileRefs.keys()];
     expect(selection.focusKeys()).toEqual(keys);
     expect(keys.every((k) => k.startsWith(tmp))).toBe(true);
+    // grid tiles keep the existing inline-rename width (tile width - padding)
+    expect([...selection.tileRefs.values()].every((r) => r.renameWidth === TILE_W - 2)).toBe(true);
 
     // col math: floor((80 - 20 - 0 - 3) / 10) = 5; row height = TILE_H
     expect(selection.colsAtBuild()).toBe(5);
@@ -1110,6 +1112,23 @@ describe("renderGrid (list view)", () => {
     expect(selection.colsAtBuild()).toBe(1);
     expect(selection.rowHAtBuild()).toBe(2);
     viewMode = "grid";
+  });
+
+  test("list rows publish the name-column width for inline rename", async () => {
+    // The inline editor must follow the list layout, not [ui] tile-width:
+    // availW=60, solid-style slack=3, icon=1 -> name column=60-3-27-1=29.
+    const key = path.join(tmp, "rename-width.txt");
+    writeFileSync(key, "x");
+    viewMode = "list";
+    try {
+      await renderGrid();
+      await t.renderOnce();
+      expect(selection.tileRefs.get(key)!.renameWidth).toBe(29);
+    } finally {
+      rmSync(key, { force: true });
+      viewMode = "grid";
+      await renderGrid();
+    }
   });
 
   test("stats-only tick repaints size/date in place: no rebuild, no fileAnim replay", async () => {

@@ -78,7 +78,7 @@ describe("makeRename (renderer)", () => {
   let rename: ReturnType<typeof makeRename>;
   let rowSeq = 0;
 
-  const mountRow = async (key: string): Promise<void> => {
+  const mountRow = async (key: string, opts?: { labelContent?: string; renameWidth?: number }): Promise<void> => {
     const id = `tfm-tile-${rowSeq++}`;
     const labelId = `${id}-label`;
     writeFileSync(key, "");
@@ -92,12 +92,17 @@ describe("makeRename (renderer)", () => {
       paddingLeft: 1,
     });
     row.add(Box({ id: `${id}-icon`, width: 3, height: 1 }));
-    row.add(Text({ id: labelId, content: path.basename(key) }));
+    row.add(Text({ id: labelId, content: opts?.labelContent ?? path.basename(key) }));
     row.add(Box({ flexGrow: 1 }));
     row.add(Text({ content: "     0 B" }));
     row.add(Text({ content: "2026-09-04 09:00" }));
     t.renderer.root.add(row);
-    ctx.tileRefs.set(key, { tileId: id, labelId, baseFg: "#fff" });
+    ctx.tileRefs.set(key, {
+      tileId: id,
+      labelId,
+      baseFg: "#fff",
+      ...(opts?.renameWidth !== undefined ? { renameWidth: opts.renameWidth } : {}),
+    });
     await t.renderOnce();
   };
 
@@ -237,6 +242,26 @@ describe("makeRename (renderer)", () => {
     expect(ids.indexOf(ctx.tileRefs.get(key)!.labelId)).toBe(1); // after the icon, before spacer/size/date
     expect(ids[ids.length - 1]).not.toBe(ctx.tileRefs.get(key)!.labelId);
   });
+  test("list rename editor uses the row name-column width, not the grid tile width", async () => {
+    const key = path.join(dir, "wide-list-name.txt");
+    await mountRow(key, { renameWidth: 40 });
+    rename.startInlineRename(key);
+    await t.renderOnce();
+    const input = t.renderer.root.findDescendantById("tfm-rename-input") as any;
+    expect(input.width).toBe(40);
+    rename.finishInlineRename(false);
+  });
+
+  test("cancelling a list rename restores the original label text", async () => {
+    const key = path.join(dir, "a-long-list-name.txt");
+    const labelContent = "a-long-list-name.txt";
+    await mountRow(key, { labelContent, renameWidth: 40 });
+    rename.startInlineRename(key);
+    rename.finishInlineRename(false);
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain(labelContent);
+  });
+
   test("start sets the text pointer, finish restores default", async () => {
     pointers.length = 0;
     const key = path.join(dir, "ptr.txt");
