@@ -259,10 +259,117 @@ const renderInproc = (svg: string, pxW: number, pxH: number, bg?: string): Uint8
   return new Uint8Array(r.render().asPng());
 };
 
-// Fit-inside (aspect-preserving ≤ the cell box) — the slot's ImageRenderable
-// `fit` absorbs the rest. Transparent mode omits the background (keep alpha);
-// the flattened path bakes bg in because kitty alpha on icon rasters proved
-// unreliable (tint/fringe) — see [ui] icons.
+// --- Exact-canvas icon raster ---------------------------------------------
+// The icon slot's PIXEL box is rarely square: foot's 7x18 cells make a
+// 1-cell-tall icon box 21x18 (3 cells wide), kitty's 10x20 cells make it
+// 20x20. A placement's source is drawn INTO that box, and a source whose
+// dims differ from the box's gets SCALED to it: Sixel resizes the payload
+// (an area filter — a resample), Kitty transmits a small placement's bitmap
+// as-is and lets the terminal scale it into the cell rect. Either way the
+// art was distorted (a square icon in foot's 21x18 box came out 16.7% too
+// wide) and softened by the resample.
+//
+// OpenTUI's fit math sizes the placement's box from the SOURCE's aspect,
+// but a fit-INSIDE raster is the art's own size, which is smaller than the
+// box whenever the art is not as wide as the box is tall. That mismatch is
+// the whole bug.
+//
+// So the raster's canvas IS the box: render the art fit-inside a canvas of
+// exactly the box's size, centered. The source's dims then EQUAL the
+// placement's pixel dims, so nothing rescales — no stretch, no resample —
+// and the margin around the art is part of the image. (A writer-side
+// letterbox instead — the fork's OT_IMAGE_DRAW_PRESERVE_ASPECT — leaves
+// TRANSPARENT margins, and Sixel drops alpha < 128 pixels: the 1px-left /
+// 2px-right margin of a 21px box became a hole, which read as a vertical
+// line on the icon's right edge in foot.)
+//
+// The art is placed through a nested <svg> viewport that keeps the original
+// root's viewBox + preserveAspectRatio: the pixels are the same fit-inside
+// render as before, just centered on a canvas of the box's size.
+//
+// The fork's aspect-preserving placement is the fallback for a source whose
+// aspect still differs from the box (a vector thumbnail, whose
+// ImageRenderable is fit:"fit"): it letterboxes rather than stretches. The
+// icon lane does not need it — its canvas now matches the box exactly.
+//
+// The thumb lane does NOT use the exact canvas (its ImageRenderable is
+// fit:"cover", which crops the art to the box — a letterboxed thumb would
+// shrink inside its padding).
+export type LetterboxPlan = {
+  /** the rewritten SVG: a canvas-sized outer <svg> around the art viewport */
+  svg: string;
+  /** the art's size in px inside the canvas */
+  artW: number;
+  artH: number;
+  /** the art's offset in px inside the canvas */
+  offsetX: number;
+  offsetY: number;
+};
+
+const SVG_ROOT_OPEN = /<svg\b([^>]*)>/i;
+const SVG_GEOMETRY_ATTR = /\s*\b(?:x|y|width|height|viewBox|preserveAspectRatio)\s*=\s*(?:"[^"]*"|'[^']*')/gi;
+
+export const planLetterboxedSvg = (
+  svg: string,
+  probeW: number,
+  probeH: number,
+  pxW: number,
+  pxH: number,
+): LetterboxPlan | null => {
+  if (!(probeW > 0 && probeH > 0 && pxW > 0 && pxH > 0)) return null;
+  const zoom = Math.min(pxW / probeW, pxH / probeH);
+  const artW = probeW * zoom;
+  const artH = probeH * zoom;
+  // the art already fills the box — the plain fit-inside render IS the box
+  if (Math.abs(artW - pxW) < 0.01 && Math.abs(artH - pxH) < 0.01) return null;
+  const open = svg.match(SVG_ROOT_OPEN);
+  if (!open || open.index === undefined) return null;
+  const attrs = open[1] ?? "";
+  const close = svg.lastIndexOf("</svg>");
+  if (close < open.index + open[0].length) return null;
+  const inner = svg.slice(open.index + open[0].length, close);
+  // keep the original root attributes (xmlns, class, style, ...) but replace
+  // the geometry ones — the art viewport owns them now
+  const kept = attrs.replace(SVG_GEOMETRY_ATTR, "").trim();
+  const viewBox = attrs.match(/\bviewBox\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+  const par = attrs.match(/\bpreserveAspectRatio\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+  const vb = (viewBox?.[1] ?? viewBox?.[2])?.trim() || `0 0 ${probeW} ${probeH}`;
+  const aspect = (par?.[1] ?? par?.[2])?.trim() || "xMidYMid meet";
+  const offsetX = (pxW - artW) / 2;
+  const offsetY = (pxH - artH) / 2;
+  const nested =
+    `<svg${kept ? ` ${kept}` : ""} x="${offsetX}" y="${offsetY}" width="${artW}" height="${artH}"` +
+    ` viewBox="${vb}" preserveAspectRatio="${aspect}">${inner}</svg>`;
+  return {
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${pxW}" height="${pxH}" viewBox="0 0 ${pxW} ${pxH}">${nested}</svg>`,
+    artW,
+    artH,
+    offsetX,
+    offsetY,
+  };
+};
+
+// The icon/brand lane renders into the EXACT box (see planLetterboxedSvg);
+// the thumb lane keeps the plain fit-inside render (cover-crop handles the
+// box there).
+const renderInprocExact = (svg: string, pxW: number, pxH: number, bg?: string): Uint8Array => {
+  const R = loadInprocResvg();
+  if (!R) throw new Error("resvg-js addon unavailable");
+  const probe = new R(svg, { logLevel: "off", font: { loadSystemFonts: false } });
+  const plan = planLetterboxedSvg(svg, probe.width, probe.height, pxW, pxH);
+  if (!plan) return renderInproc(svg, pxW, pxH, bg);
+  const r = new R(plan.svg, {
+    logLevel: "off",
+    font: { loadSystemFonts: false },
+    ...(bg === undefined ? {} : { background: bg }),
+  });
+  return new Uint8Array(r.render().asPng());
+};
+
+// The icon lane renders into the EXACT box (renderInprocExact; the art is
+// fit inside it) — see the exact-canvas note above. Transparent mode omits
+// the background (keep alpha); the flattened path bakes bg in because kitty
+// alpha on icon rasters proved unreliable (tint/fringe) — see [ui] icons.
 const rasterizeSvg = async (
   name: string,
   fg: string,
@@ -276,7 +383,7 @@ const rasterizeSvg = async (
   const tinted = /#[0-9a-fA-F]{6}/.test(svg)
     ? svg.replace(/#[0-9a-fA-F]{6}/g, fg)
     : svg.replace(/<svg\b/, `<svg fill="${fg}"`);
-  return renderInproc(tinted, pxW, pxH, transparent ? undefined : bg);
+  return renderInprocExact(tinted, pxW, pxH, transparent ? undefined : bg);
 };
 
 const iconCache = new Map<string, Uint8Array>();
@@ -317,7 +424,11 @@ const THUMB_CACHE_MAX = 200;
 // of the key.
 // v4: SVG icons rasterize via resvg when installed (pixels differ from the
 // librsvg path), so v3 entries must regenerate.
-const ICON_DISK_VER = "v4";
+// v5: icons render into the EXACT cell box (the art fit inside it) — a
+// fit-inside canvas did not match the placement's pixel box, so the writer
+// scaled the raster to it: distorted on sixel, and resampled (blurry)
+// everywhere.
+const ICON_DISK_VER = "v5";
 // renderer identity is part of the salt: installing/switching the rasterizer
 // must invalidate whatever the OTHER one cached (a flat version bump only
 // covers the upgrade itself, not a later install)
@@ -419,7 +530,7 @@ export const brandPng = async (name: string, pxW: number, pxH: number, bg?: stri
     try {
       if (!svgRenderer()) throw new Error("no SVG rasterizer available (bun add @resvg/resvg-js)");
       const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
-      const bytes = renderInproc(svg, pxW, pxH, bg);
+      const bytes = renderInprocExact(svg, pxW, pxH, bg);
       lruSet(brandCache, key, bytes, BRAND_CACHE_MAX);
       // path captured NOW (same write-behind race as the icon cache above)
       const diskPath = iconDiskPath(key);

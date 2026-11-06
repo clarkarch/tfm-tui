@@ -20,6 +20,7 @@ import {
   lruGet,
   lruSet,
   pickSvgRenderer,
+  planLetterboxedSvg,
   pngFromProc,
   rasterFileTooLarge,
   rasterLaneFor,
@@ -199,16 +200,42 @@ describe("icons", () => {
     clearIconCaches();
   });
 
-  test.skipIf(!hasInproc)("non-square requests keep aspect (fit-inside)", async () => {
+  test.skipIf(!hasInproc)("icon raster fills the requested box; the art inside keeps its aspect", async () => {
     clearIconCaches();
-    // the in-process zoom render fit-insides (aspect-preserving): the square
-    // 24x24 folder glyph in an 18x16 box shrinks to 16x16 — an exact-box
-    // stretch would return 18x16, so the dims pin the behavior.
+    // WHY the canvas is the BOX: a placement's source is SCALED to the
+    // placement's pixel box (Sixel resizes the payload; Kitty transmits the
+    // bitmap and lets the terminal scale it into the cell rect), so a
+    // fit-inside raster came out 16.7% too wide in foot's 21x18 box — and
+    // softened by the resample. The raster now IS the box, with the art
+    // fit-inside it — the art's shape must not depend on the box's width.
     const bytes = await iconPng("folder", "#c0caf5", "#1a1b26", 18, 16);
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    expect(dv.getUint32(16)).toBe(16); // IHDR width
-    expect(dv.getUint32(20)).toBe(16); // IHDR height
+    expect(dv.getUint32(16)).toBe(18); // IHDR width == the box
+    expect(dv.getUint32(20)).toBe(16); // IHDR height == the box
+    // the art keeps the fit-inside size (the same glyph in a square box is
+    // the same size): a stretched raster would scale the art with the box
+    const boxArt = pngAlphaBbox(await iconPng("folder", "#c0caf5", "#1a1b26", 18, 16, { transparent: true }));
+    const squareArt = pngAlphaBbox(await iconPng("folder", "#c0caf5", "#1a1b26", 16, 16, { transparent: true }));
+    expect(Math.abs(boxArt.w - squareArt.w)).toBeLessThanOrEqual(1);
+    expect(Math.abs(boxArt.h - squareArt.h)).toBeLessThanOrEqual(1);
     clearIconCaches();
+  });
+
+  test("planLetterboxedSvg centers the art on a canvas of the exact box", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0 H24 V24 H0 Z"/></svg>';
+    const plan = planLetterboxedSvg(svg, 24, 24, 21, 18);
+    expect(plan).not.toBeNull();
+    // the art stays square (fit-inside), the canvas carries the box's aspect
+    expect(plan?.artW).toBeCloseTo(18, 5);
+    expect(plan?.artH).toBeCloseTo(18, 5);
+    expect(plan?.offsetX).toBeCloseTo(1.5, 5);
+    expect(plan?.offsetY).toBeCloseTo(0, 5);
+    expect(plan?.svg).toContain('width="21"');
+    expect(plan?.svg).toContain('height="18"');
+    // an art that already fills the box needs no rewrite
+    expect(planLetterboxedSvg(svg, 24, 24, 24, 24)).toBeNull();
+    // a source without a parseable root keeps the old fit-inside render
+    expect(planLetterboxedSvg("not an svg", 24, 24, 21, 18)).toBeNull();
   });
 
   test("renderer precedence: the in-process addon or nothing", () => {
@@ -884,6 +911,27 @@ const pngAlphaMin = (bytes: Uint8Array): number => {
   let min = 255;
   for (let i = 3; i < px.length; i += 4) if (px[i]! < min) min = px[i]!;
   return min;
+};
+
+// the drawn shape's bounding box inside a transparent PNG (the icon's art,
+// without the flattened background)
+const pngAlphaBbox = (bytes: Uint8Array): { x: number; y: number; w: number; h: number } => {
+  const { width, height, px } = decodePngRgba(bytes);
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (px[(y * width + x) * 4 + 3]! <= 8) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return { x: 0, y: 0, w: 0, h: 0 };
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
 };
 
 // count of strongly blue-dominant opaque pixels (brand-asset probe: the tfm
