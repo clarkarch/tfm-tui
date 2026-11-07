@@ -377,9 +377,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     selection.tileRefs.forEach((r, k) => {
       if (r.selected) prevSel.add(k);
     });
-    const prevFocusKey = selection.focusKeys()[selection.focusIdx()] ?? null;
-    const anchorIdx = selection.selAnchor();
-    const prevAnchorKey = anchorIdx === null ? null : (selection.focusKeys()[anchorIdx] ?? null);
+    // the focus is a FILE: the snapshot survives a listing that is replaced
+    // WHILE this render awaits the resolution — and the restore never
+    // overwrites a focus that was claimed in the meantime (a click during the
+    // park owns the keyboard)
+    const focusSnap = selection.captureFocus();
     const isList = ctx.viewMode() === "list";
     // a rebuild destroys the edit input; dropped once we actually rebuild (a
     // skipped render leaves an in-progress rename/edit alone)
@@ -721,10 +723,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           selection.setTileVisual(key, TileVisual.Selected);
         }
       });
-      const focusKeyIdx = prevFocusKey ? selection.focusKeys().indexOf(prevFocusKey) : -1;
-      selection.setFocusIdx(focusKeyIdx);
-      const anchorNewIdx = prevAnchorKey === null ? -1 : selection.focusKeys().indexOf(prevAnchorKey);
-      selection.setSelAnchor(anchorNewIdx < 0 ? null : anchorNewIdx);
+      // restore the focus/anchor by FILE — only when nothing claimed it
+      // while this render awaited the resolution (a click during the park
+      // wins over the pre-rebuild snapshot)
+      selection.restoreFocus(focusSnap);
       selection.setCols(cols);
       selection.setRowH(isList ? rowH() : TILE_H);
       // one-shot launch-file highlight (`tfm some/file.txt`): after the first

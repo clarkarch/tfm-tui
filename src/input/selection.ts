@@ -55,18 +55,128 @@ export type SelectionCtx = {
 
 export type Selection = ReturnType<typeof makeSelection>;
 
+// --- the focus state: ONE explicit record ---
+//
+// The focus used to be an INDEX into `focusKeys` (an array replaced wholesale
+// on every rebuild) plus a SECOND sentinel (`selAnchor: number | null`) that
+// two different call sites resolved with two different policies. Both are now
+// PATHS — stable identities that survive a re-sort — and the navigable index
+// is DERIVED from them, so it can never point past the end of the listing.
+
+/** Where the keyboard focus is. */
+export type FocusState =
+  /** no tile holds the focus; a range origin may still be remembered */
+  | { kind: "none"; anchorPath: string | null }
+  /** a tile holds the focus; `anchorPath` is the range-extend origin */
+  | { kind: "focused"; path: string; anchorPath: string | null };
+
+/**
+ * A snapshot of the focus, taken before a rebuild that may span an await.
+ *
+ * The restore re-applies it ONLY when nothing else claimed the focus in the
+ * meantime — a click during the park owns the keyboard, the pre-rebuild
+ * snapshot must not steal it back.
+ */
+export type FocusSnapshot = {
+  readonly focusPath: string | null;
+  readonly anchorPath: string | null;
+};
+
 export const makeSelection = (ctx: SelectionCtx) => {
   const tileRefs = new Map<string, SelTileRef>();
 
   // keyboard focus over tiles
   let focusKeys: string[] = [];
-  let focusIdx = -1;
+  let focus: FocusState = { kind: "none", anchorPath: null };
   let colsAtBuild = 1;
   // per-row height of the last build (TILE_H for grid, 1 for list) — keyboard
   // scrolling uses it to page by the right amount in either view mode
   let rowHAtBuild = ctx.rowHInit();
-  // anchor tile for shift+click range selection (index into focusKeys)
-  let selAnchor: number | null = null;
+  // the DERIVED focus index — cached, invalidated by every focus/keys write
+  // (the listing can hold thousands of entries; the index is read per keypress)
+  let focusIdxCache = -1;
+  let focusIdxDirty = true;
+
+  const invalidateFocusIdx = (): void => {
+    focusIdxDirty = true;
+  };
+
+  // the navigable index of the focused tile (-1 = no focus in this listing)
+  const currentFocusIdx = (): number => {
+    if (!focusIdxDirty) return focusIdxCache;
+    focusIdxCache = focus.kind === "focused" ? focusKeys.indexOf(focus.path) : -1;
+    focusIdxDirty = false;
+    return focusIdxCache;
+  };
+
+  // The listing is replaced wholesale on every rebuild: the focus and the
+  // range origin follow their FILES (an index would point at a DIFFERENT
+  // file after a re-sort), and a file that left the listing drops them.
+  const setFocusKeys = (keys: string[]): void => {
+    focusKeys = keys;
+    const anchorPath = focus.anchorPath !== null && keys.includes(focus.anchorPath) ? focus.anchorPath : null;
+    focus =
+      focus.kind === "focused" && keys.includes(focus.path)
+        ? { kind: "focused", path: focus.path, anchorPath }
+        : { kind: "none", anchorPath };
+    invalidateFocusIdx();
+  };
+
+  // Move the focus to a FILE. A plain move re-anchors the range origin (the
+  // mouse press does too); a range-extend keeps its own origin.
+  const setFocusPath = (path: string | null, opts?: { keepAnchor?: boolean }): void => {
+    if (path === null) {
+      focus = { kind: "none", anchorPath: focus.anchorPath };
+    } else {
+      focus = { kind: "focused", path, anchorPath: opts?.keepAnchor ? focus.anchorPath : path };
+    }
+    invalidateFocusIdx();
+  };
+
+  // Pin (or clear) the range origin. It is independent of the focus: a range
+  // origin outlives the focused file (the file was deleted mid-range).
+  const setAnchorPath = (path: string | null): void => {
+    focus = focus.kind === "focused" ? { ...focus, anchorPath: path } : { kind: "none", anchorPath: path };
+  };
+
+  // THE anchor default — ONE rule for every site: the pinned origin, else
+  // the focus, else the first tile. The resolved origin is PINNED so it
+  // survives the focus moving away from it (the old code had two policies:
+  // some sites defaulted to the focus, others to null).
+  const ensureAnchor = (): number => {
+    const pinned = focus.anchorPath !== null ? focusKeys.indexOf(focus.anchorPath) : -1;
+    if (pinned >= 0) return pinned;
+    if (focus.kind === "focused") {
+      const focused = focusKeys.indexOf(focus.path);
+      if (focused >= 0) {
+        focus = { ...focus, anchorPath: focus.path };
+        return focused;
+      }
+    }
+    const first = focusKeys[0];
+    if (first !== undefined) focus = { ...focus, anchorPath: first };
+    return 0;
+  };
+
+  // A snapshot of the focus, taken before a rebuild that may span an await.
+  const captureFocus = (): FocusSnapshot => ({
+    focusPath: focus.kind === "focused" ? focus.path : null,
+    anchorPath: focus.anchorPath,
+  });
+
+  // Re-apply a snapshot after a rebuild that spanned an await. It NEVER
+  // overwrites a live focus: a click during the park owns the keyboard, and
+  // the pre-rebuild snapshot must not steal it back. A file that vanished
+  // while the rebuild ran is not restored either.
+  const restoreFocus = (snap: FocusSnapshot): boolean => {
+    if (focus.kind === "focused") return false;
+    if (snap.focusPath === null) return false;
+    if (!focusKeys.includes(snap.focusPath)) return false;
+    const anchorPath = snap.anchorPath !== null && focusKeys.includes(snap.anchorPath) ? snap.anchorPath : null;
+    focus = { kind: "focused", path: snap.focusPath, anchorPath };
+    invalidateFocusIdx();
+    return true;
+  };
 
   const setTileVisual = (key: string, mode: TileVisualMode): void => {
     const refs = tileRefs.get(key);
@@ -226,10 +336,9 @@ export const makeSelection = (ctx: SelectionCtx) => {
       refs.selected = true;
       setTileVisual(key, TileVisual.Selected);
     }
-    focusIdx = idx;
     // a plain move re-anchors (the mouse press does too); range-extend passes
-    // keepAnchor so its own anchor survives the focus jump
-    if (!keepAnchor) selAnchor = idx;
+    // keepAnchor so its own origin survives the focus jump
+    setFocusPath(key, { keepAnchor });
     void ctx.renderPreview();
     const scroller = ctx.scroller();
     if (scroller) {
@@ -246,9 +355,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
 
   const moveFocus = (dx: number, dy: number): boolean => {
     if (focusKeys.length === 0) return false;
-    let next = focusIdx === -1 ? 0 : focusIdx + dx + dy * colsAtBuild;
+    const current = currentFocusIdx();
+    let next = current === -1 ? 0 : current + dx + dy * colsAtBuild;
     next = Math.max(0, Math.min(focusKeys.length - 1, next));
-    if (next === focusIdx) return false;
+    if (next === current) return false;
     return selectTileAt(next);
   };
 
@@ -258,9 +368,10 @@ export const makeSelection = (ctx: SelectionCtx) => {
     if (focusKeys.length === 0) return false;
     const rows = Math.max(1, Math.floor(ctx.viewH() / Math.max(1, rowHAtBuild)));
     const step = rows * Math.max(1, colsAtBuild);
-    const base = focusIdx === -1 ? (dir > 0 ? -1 : focusKeys.length) : focusIdx;
+    const current = currentFocusIdx();
+    const base = current === -1 ? (dir > 0 ? -1 : focusKeys.length) : current;
     const next = Math.max(0, Math.min(focusKeys.length - 1, base + dir * step));
-    if (next === focusIdx) return false;
+    if (next === current) return false;
     return selectTileAt(next);
   };
 
@@ -270,8 +381,8 @@ export const makeSelection = (ctx: SelectionCtx) => {
       setTileVisual(k, TileVisual.Selected);
     });
     // re-anchor to the focus: a later shift+arrow must extend from here, not
-    // from a stale pre-selectAll anchor
-    selAnchor = focusIdx >= 0 ? focusIdx : null;
+    // from a stale pre-selectAll origin
+    setAnchorPath(focus.kind === "focused" ? focus.path : null);
     updateSelectionStatusReal();
   };
 
@@ -281,15 +392,16 @@ export const makeSelection = (ctx: SelectionCtx) => {
       r.selected = !r.selected;
       setTileVisual(k, r.selected ? TileVisual.Selected : TileVisual.Rest);
     });
-    selAnchor = focusIdx >= 0 ? focusIdx : null;
+    setAnchorPath(focus.kind === "focused" ? focus.path : null);
     updateSelectionStatusReal();
   };
 
   // flip the focused tile only, focus stays put (yazi space toggles; unlike
   // yazi there is no auto-advance — repeat space walks with arrows)
   const toggleFocused = (): boolean => {
-    if (focusIdx < 0 || focusIdx >= focusKeys.length) return false;
-    const key = focusKeys[focusIdx];
+    const idx = currentFocusIdx();
+    if (idx < 0 || idx >= focusKeys.length) return false;
+    const key = focusKeys[idx];
     if (key === undefined) return false;
     const refs = tileRefs.get(key);
     if (!refs) return false;
@@ -323,9 +435,14 @@ export const makeSelection = (ctx: SelectionCtx) => {
       setTileVisual(k, TileVisual.Selected);
       if (firstIdx < 0) firstIdx = i;
     }
-    // focus/anchor always follow the new selection (-1/null when nothing matched)
-    focusIdx = firstIdx;
-    selAnchor = firstIdx < 0 ? null : firstIdx;
+    // focus/anchor always follow the new selection (none when nothing matched)
+    if (firstIdx >= 0) {
+      const key = focusKeys[firstIdx];
+      if (key !== undefined) setFocusPath(key);
+    } else {
+      setFocusPath(null);
+      setAnchorPath(null);
+    }
     if (firstIdx >= 0) {
       void ctx.renderPreview();
       const scroller = ctx.scroller();
@@ -354,13 +471,22 @@ export const makeSelection = (ctx: SelectionCtx) => {
     // let accessors — renderGrid (ui-grid) writes at every rebuild tail, the
     // keyboard router reads for paging/extend; never snapshot these
     focusKeys: (): string[] => focusKeys,
-    setFocusKeys: (keys: string[]): void => {
-      focusKeys = keys;
-    },
-    focusIdx: (): number => focusIdx,
-    setFocusIdx: (v: number): void => {
-      focusIdx = v;
-    },
+    setFocusKeys,
+    // the focus state — ONE record: the focused FILE and the range origin.
+    // The navigable index is derived, so it can never point past the end of
+    // the listing.
+    focusState: (): FocusState => focus,
+    focusPath: (): string | null => (focus.kind === "focused" ? focus.path : null),
+    focusIdx: (): number => currentFocusIdx(),
+    anchorPath: (): string | null => focus.anchorPath,
+    anchorIdx: (): number => (focus.anchorPath !== null ? focusKeys.indexOf(focus.anchorPath) : -1),
+    // THE anchor default (one rule for every site) — resolves AND pins it
+    ensureAnchor,
+    setFocusPath,
+    setAnchorPath,
+    // the rebuild protocol: capture before an await, restore after
+    captureFocus,
+    restoreFocus,
     colsAtBuild: (): number => colsAtBuild,
     setCols: (v: number): void => {
       colsAtBuild = v;
@@ -368,10 +494,6 @@ export const makeSelection = (ctx: SelectionCtx) => {
     rowHAtBuild: (): number => rowHAtBuild,
     setRowH: (v: number): void => {
       rowHAtBuild = v;
-    },
-    selAnchor: (): number | null => selAnchor,
-    setSelAnchor: (v: number | null): void => {
-      selAnchor = v;
     },
     // methods
     setTileVisual,

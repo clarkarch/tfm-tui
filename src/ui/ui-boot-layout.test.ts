@@ -309,7 +309,7 @@ describe("grid scrollers are not keyboard-focusable", () => {
         setTileVisual: noop,
         updateSelectionStatusReal: noop,
         renderPreview: noop,
-        setSelAnchor: noop,
+        setAnchorPath: noop,
       },
       focusPane: noop,
       dropIntoPane: noop,

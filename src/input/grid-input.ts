@@ -61,10 +61,10 @@ export type GridSelectionDeps = {
   renderPreview(): void | Promise<void>;
   clearTileSelection(): void;
   selectRange(from: number, to: number): void;
-  getSelAnchor(): number | null;
-  setSelAnchor(v: number | null): void;
-  getFocusIdx(): number;
-  setFocusIdx(v: number): void;
+  // the focus is a FILE, not an index: the range origin is resolved (and
+  // pinned) by ONE rule, and a move names the file it lands on
+  ensureAnchor(): number;
+  setFocusPath(path: string, opts?: { keepAnchor?: boolean }): void;
   selPaths(): ClipItem[];
 };
 /** Context menu + inline rename (owned by the menu/rename widgets). */
@@ -203,7 +203,8 @@ export type BandCtx = {
   setTileVisual(key: string, mode: TileVisualMode): void;
   updateSelectionStatusReal(): void;
   renderPreview(): void | Promise<void>;
-  setSelAnchor(v: number | null): void;
+  // the band clears the range origin: the next extend starts fresh
+  setAnchorPath(path: string | null): void;
 };
 
 export const BAND_ID = "tfm-band";
@@ -233,7 +234,7 @@ export const updateBandRect = (ctx: BandCtx, ev: { x: number; y: number }): void
 export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void => {
   const start = bandStart;
   bandStart = null;
-  ctx.setSelAnchor(null);
+  ctx.setAnchorPath(null);
   const b = ctx.byId(BAND_ID);
   if (b) {
     try {
@@ -352,12 +353,13 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
     const handleRangePress = (ev: TileMouseEvent): boolean => {
       const mods = ev.modifiers ?? {};
       if (!(mods.shift || mods.alt)) return false;
-      const anchor = ctx.getSelAnchor() ?? (ctx.getFocusIdx() >= 0 ? ctx.getFocusIdx() : 0);
-      ctx.setSelAnchor(anchor);
+      // ONE anchor rule (the pinned origin, else the focus, else the first
+      // tile) — it is pinned here so the focus jump below keeps it
+      const anchor = ctx.ensureAnchor();
       ctx.selectRange(anchor, idx);
       // the keyboard extend endpoint must follow the clicked tile, or the next
-      // shift+arrow extends from a stale focusIdx and collapses the range
-      ctx.setFocusIdx(idx);
+      // shift+arrow extends from a stale focus and collapses the range
+      ctx.setFocusPath(key, { keepAnchor: true });
       ctx.updateSelectionStatusReal();
       void ctx.renderPreview();
       armDragPayload(ev, ctx.selPaths(), false);
@@ -368,8 +370,8 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       const prevSel = ctx.selPaths();
       const wasSelected = !!ctx.tileRefs.get(key)?.selected;
       ctx.clearTileSelection();
-      ctx.setSelAnchor(idx);
-      ctx.setFocusIdx(idx);
+      // a plain press moves the focus AND re-anchors the range origin
+      ctx.setFocusPath(key);
       const ref = ctx.tileRefs.get(key);
       if (ref) {
         if (wasSelected && prevSel.length > 1) {

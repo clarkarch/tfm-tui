@@ -207,16 +207,16 @@ describe("moveFocus", () => {
       h.addTile(k);
     });
     h.sel.selectTileAt(1);
-    expect(h.sel.selAnchor()).toBe(1);
+    expect(h.sel.anchorPath()).toBe("b");
     h.sel.moveFocus(0, 1); // plain nav 1 -> 2
     expect(h.sel.focusIdx()).toBe(2);
     // extend now measures from the moved focus (was 1, jumping to 2..3)
-    expect(h.sel.selAnchor()).toBe(2);
-    h.sel.selectRange(h.sel.selAnchor()!, 3);
+    expect(h.sel.anchorPath()).toBe("c");
+    h.sel.selectRange(h.sel.ensureAnchor(), 3);
     expect(h.sel.selPaths().map((p) => p.path)).toEqual(["c", "d"]);
-    // range-extend keeps its own anchor across the focus jump
+    // range-extend keeps its own origin across the focus jump
     h.sel.selectTileAt(0, true);
-    expect(h.sel.selAnchor()).toBe(2);
+    expect(h.sel.anchorPath()).toBe("c");
   });
 });
 
@@ -295,6 +295,134 @@ describe("toggleFocused / invertSelection", () => {
     ).toEqual(["b", "c"]);
     h.sel.invertSelection();
     expect(h.sel.selPaths().map((p) => p.path)).toEqual(["a"]);
+  });
+});
+
+// --- the focus state: ONE explicit record, no magic sentinels ---
+//
+// The focus used to be an INDEX into an array that is replaced wholesale on
+// every rebuild, plus a SECOND sentinel (a null anchor) with TWO different
+// "no anchor yet" policies. The focus and the range origin are now PATHS —
+// stable identities that survive a re-sort — and the navigable index is
+// DERIVED from them, so it can never point past the end of the listing.
+
+describe("the focus state", () => {
+  test("emptying the focus keys clears the focus (no index into a dead listing)", () => {
+    const h = makeHarness();
+    const keys = ["a", "b", "c"];
+    h.sel.setFocusKeys(keys);
+    keys.forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(2);
+    expect(h.sel.focusIdx()).toBe(2);
+    // the listing is replaced by an empty one (the loading/empty/error panes
+    // do exactly this) — the focus must not keep pointing into it
+    h.sel.setFocusKeys([]);
+    expect(h.sel.focusIdx()).toBe(-1);
+    // ... and the focus is CLEARED, not just left dangling: a rebuild's
+    // restore must be able to put a focus back
+    expect(h.sel.focusState().kind).toBe("none");
+    expect(h.sel.focusPath()).toBeNull();
+  });
+
+  test("the anchor follows its FILE, not its index, when the listing is replaced", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a", "b", "c"]);
+    ["a", "b", "c"].forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(0); // focus a
+    h.sel.setAnchorPath("c"); // the range origin is c
+    // the listing comes back in a different order (a re-sort): an index-based
+    // anchor would now point at a DIFFERENT file
+    h.sel.setFocusKeys(["c", "b", "a"]);
+    expect(h.sel.anchorPath()).toBe("c");
+    expect(h.sel.anchorIdx()).toBe(0);
+    expect(h.sel.focusPath()).toBe("a");
+    expect(h.sel.focusIdx()).toBe(2);
+  });
+
+  test("the anchor is dropped when its file disappears", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a", "b", "c"]);
+    ["a", "b", "c"].forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(0);
+    h.sel.setAnchorPath("c");
+    h.sel.setFocusKeys(["a", "b"]); // c vanished
+    expect(h.sel.anchorPath()).toBeNull();
+    // the focus survives — it is its own file
+    expect(h.sel.focusPath()).toBe("a");
+    expect(h.sel.focusIdx()).toBe(0);
+  });
+
+  test("one anchor default: the anchor, else the focus, else the first tile", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a", "b", "c"]);
+    ["a", "b", "c"].forEach((k) => {
+      h.addTile(k);
+    });
+    // nothing focused, no anchor → the range starts at the first tile
+    expect(h.sel.ensureAnchor()).toBe(0);
+    expect(h.sel.anchorPath()).toBe("a");
+    // a focus with no anchor → the focus IS the anchor (ONE rule, every site)
+    h.sel.setFocusPath("b");
+    h.sel.setAnchorPath(null);
+    expect(h.sel.ensureAnchor()).toBe(1);
+    expect(h.sel.anchorPath()).toBe("b");
+    // an explicit anchor wins
+    h.sel.setAnchorPath("c");
+    expect(h.sel.ensureAnchor()).toBe(2);
+  });
+
+  test("a rebuild restores the focus when nothing else claimed it", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a", "b"]);
+    ["a", "b"].forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(0);
+    const snap = h.sel.captureFocus();
+    // the loading placeholder replaces the listing with an empty one — the
+    // focus is dropped with it
+    h.sel.setFocusKeys([]);
+    expect(h.sel.focusIdx()).toBe(-1);
+    // the real listing arrives...
+    h.sel.setFocusKeys(["a", "b"]);
+    // ... and the restore puts the focus back
+    expect(h.sel.restoreFocus(snap)).toBe(true);
+    expect(h.sel.focusPath()).toBe("a");
+    expect(h.sel.focusIdx()).toBe(0);
+  });
+
+  test("a focus claimed during the rebuild is NOT overwritten by the restore", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a", "b"]);
+    ["a", "b"].forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(0);
+    const snap = h.sel.captureFocus();
+    h.sel.setFocusKeys([]);
+    // a click during the rebuild's await claims the focus
+    h.sel.setFocusPath("b");
+    expect(h.sel.restoreFocus(snap)).toBe(false);
+    expect(h.sel.focusPath()).toBe("b");
+  });
+
+  test("the restore is refused when the focused file vanished", () => {
+    const h = makeHarness();
+    h.sel.setFocusKeys(["a", "b"]);
+    ["a", "b"].forEach((k) => {
+      h.addTile(k);
+    });
+    h.sel.selectTileAt(0);
+    const snap = h.sel.captureFocus();
+    h.sel.setFocusKeys(["b"]); // a vanished
+    expect(h.sel.restoreFocus(snap)).toBe(false);
+    expect(h.sel.focusPath()).toBeNull();
   });
 });
 

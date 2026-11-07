@@ -341,7 +341,7 @@ describe("renderGrid (grid tiles)", () => {
     expect(selection.rowHAtBuild()).toBe(TILE_H);
     // keyboard state reset at rebuild tail
     expect(selection.focusIdx()).toBe(-1);
-    expect(selection.selAnchor()).toBeNull();
+    expect(selection.anchorPath()).toBeNull();
 
     // dirs get the folder icon, files their classifier icon; render order is
     // listDir's (dirs first, then files — compareEntries)
@@ -989,15 +989,16 @@ describe("renderGrid (grid tiles)", () => {
   test("re-render preserves selection, focus and anchor by path", async () => {
     const aIdx = selection.focusKeys().indexOf(path.join(tmp, "a.txt"));
     selection.selectTileAt(aIdx);
-    selection.setSelAnchor(0);
+    selection.setAnchorPath(selection.focusKeys()[0]!);
     const focusKey = selection.focusKeys()[selection.focusIdx()]!;
+    const anchorKey = selection.anchorPath();
     iconStateCalls.length = 0;
     await renderGrid(true); // force a rebuild: same listing, selection must survive
     await t.renderOnce();
     const ref = selection.tileRefs.get(path.join(tmp, "a.txt"))!;
     expect(ref.selected).toBe(true);
     expect(selection.focusKeys()[selection.focusIdx()]).toBe(focusKey);
-    expect(selection.selAnchor()).toBe(0);
+    expect(selection.anchorPath()).toBe(anchorKey);
     // repainted as Selected (icon state 2) after the rebuild
     expect(iconStateCalls.some((c) => c.idx === 2)).toBe(true);
   });
@@ -1528,6 +1529,41 @@ describe("renderGrid (superseded renders)", () => {
       await parked;
       await t.renderOnce();
       expect(t.captureCharFrame()).toContain("c.txt");
+    } finally {
+      waits.open();
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
+
+  test("a click during the resolution park is not overwritten by the restore", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-click-park-"));
+    const waits = parkWaits();
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      writeFileSync(path.join(dir, "b.txt"), "b");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      // the user focuses a.txt
+      selection.selectTileAt(selection.focusKeys().indexOf(path.join(dir, "a.txt")));
+      // only the rebuild under test parks
+      waitForResolutionImpl = waits.impl;
+
+      const parked = renderGrid(true);
+      await settleUntil(() => waits.count() >= 1);
+      // the user clicks b.txt while the rebuild waits for the resolution
+      selection.setFocusPath(path.join(dir, "b.txt"));
+      waits.open();
+      await parked;
+      await t.renderOnce();
+      // the CLICK wins: the restore must not put the focus back on a.txt
+      expect(selection.focusPath()).toBe(path.join(dir, "b.txt"));
     } finally {
       waits.open();
       waitForResolutionImpl = () => Promise.resolve();

@@ -129,8 +129,9 @@ export const wireGrid = (deps: {
     setTileVisual: selection.setTileVisual,
     updateSelectionStatusReal: selection.updateSelectionStatusReal,
     renderPreview,
-    setSelAnchor: (v: number | null) => {
-      selection.setSelAnchor(v);
+    // the band clears the range origin: the next extend starts fresh
+    setAnchorPath: (v: string | null) => {
+      selection.setAnchorPath(v);
     },
   };
 
@@ -177,13 +178,11 @@ export const wireGrid = (deps: {
       renderPreview,
       clearTileSelection: s.clearTileSelection,
       selectRange: s.selectRange,
-      getSelAnchor: () => s.selAnchor(),
-      setSelAnchor: (v: number | null) => {
-        s.setSelAnchor(v);
-      },
-      getFocusIdx: () => s.focusIdx(),
-      setFocusIdx: (v: number) => {
-        s.setFocusIdx(v);
+      // the focus is a FILE: the range origin is resolved by ONE rule and a
+      // move names the file it lands on
+      ensureAnchor: () => s.ensureAnchor(),
+      setFocusPath: (path: string, opts?: { keepAnchor?: boolean }) => {
+        s.setFocusPath(path, opts);
       },
       selPaths: s.selPaths,
       dblClickMs: () => core.config.ui.doubleClickMs,

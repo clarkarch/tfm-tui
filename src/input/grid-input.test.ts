@@ -27,6 +27,7 @@ const makeCtx = (): GridInputCtx & {
   blurSidebarCalls: { n: number };
   hoverCalls: [string, boolean][];
   pointers: string[];
+  focusState: { path: string | null; anchorPath: string | null };
 } => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
@@ -49,8 +50,11 @@ const makeCtx = (): GridInputCtx & {
   const blurSidebarCalls = { n: 0 };
   const hoverCalls: [string, boolean][] = [];
   const pointers: string[] = [];
-  let anchor: number | null = null;
-  let focused = 0;
+  // the focus is a FILE (the real selection module's contract): the fake
+  // mirrors it — the anchor is resolved AND pinned by ONE rule, a plain move
+  // re-anchors, a range move keeps its own origin
+  const focusState = { path: null as string | null, anchorPath: null as string | null };
+  const keys = (): string[] => [...refs.keys()];
   return {
     visuals,
     statuses,
@@ -63,6 +67,7 @@ const makeCtx = (): GridInputCtx & {
     blurSidebarCalls,
     hoverCalls,
     pointers,
+    focusState,
     setPointer: (s) => void pointers.push(s),
     byId: () => null,
     termW: () => 80,
@@ -92,13 +97,23 @@ const makeCtx = (): GridInputCtx & {
         }
       }
     },
-    getSelAnchor: () => anchor,
-    setSelAnchor: (v) => {
-      anchor = v;
+    ensureAnchor: () => {
+      const pinned = focusState.anchorPath !== null ? keys().indexOf(focusState.anchorPath) : -1;
+      if (pinned >= 0) return pinned;
+      if (focusState.path !== null) {
+        const focused = keys().indexOf(focusState.path);
+        if (focused >= 0) {
+          focusState.anchorPath = focusState.path;
+          return focused;
+        }
+      }
+      const first = keys()[0];
+      if (first !== undefined) focusState.anchorPath = first;
+      return 0;
     },
-    getFocusIdx: () => focused,
-    setFocusIdx: (v) => {
-      focused = v;
+    setFocusPath: (path, opts) => {
+      focusState.path = path;
+      if (!opts?.keepAnchor) focusState.anchorPath = path;
     },
     selPaths: () => [...refs.entries()].filter(([, r]) => r.selected).map(([p, r]) => ({ path: p, isDir: r.isDir })),
     dblClickMs: () => 500,
@@ -288,7 +303,7 @@ describe("selection model", () => {
     const ctx = makeCtx();
     const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/c.txt", 2);
     press(h, { x: 3, y: 3 });
-    expect(ctx.getFocusIdx()).toBe(2);
+    expect(ctx.focusState.path).toBe("/w/c.txt");
   });
 
   test("shift+click range moves the keyboard focus to the clicked tile", () => {
@@ -296,7 +311,9 @@ describe("selection model", () => {
     const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/c.txt", 2);
     press(h, { modifiers: { shift: true } });
     // the next shift+down computes its endpoint from THIS tile, not a stale idx
-    expect(ctx.getFocusIdx()).toBe(2);
+    expect(ctx.focusState.path).toBe("/w/c.txt");
+    // the range origin stays at the first tile (the focus was nowhere before)
+    expect(ctx.focusState.anchorPath).toBe("/w/a.txt");
   });
   test("plain click on selected tile of a multi-selection keeps the group", () => {
     const ctx = makeCtx();

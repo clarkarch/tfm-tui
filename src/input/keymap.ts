@@ -289,10 +289,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   const extendFromAnchor = (next: number): void => {
-    // resolve once: the anchor is seeded when unset, then reused for the range
-    // (the original re-read it here and asserted non-null)
-    const anchor = selection.selAnchor() ?? (selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-    selection.setSelAnchor(anchor);
+    // ONE anchor rule (the pinned origin, else the focus, else the first
+    // tile) — ensureAnchor resolves AND pins it, so the origin survives the
+    // focus jump below
+    const anchor = selection.ensureAnchor();
     if (next === selection.focusIdx() || next < 0 || next >= selection.focusKeys().length) return;
     selection.selectTileAt(next, true);
     selection.selectRange(anchor, next);
@@ -426,7 +426,6 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // bind (consumed either way, even on an empty listing).
   const extendBy = (next: number): void => {
     if (!selection.focusKeys().length) return;
-    if (selection.selAnchor() === null) selection.setSelAnchor(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
     extendFromAnchor(next);
   };
   const handleShiftExtend = (ev: KeyPressEvent): boolean => {
