@@ -402,8 +402,13 @@ settings.systemTheme.followSystemTheme();
 // screen — the LEAVE frame lands — yet never reaches a process listener, so
 // a signal handler alone still orphans). destroy() ALWAYS runs there, so when
 // the native close settles without any quit having started it, run the same
-// force teardown instead of lingering with a dead renderer. Quit/restart/
-// signal paths all mark rendererTornDown in their destroy step and skip. ---
+// force teardown instead of lingering with a dead renderer.
+//
+// The teardown lifecycle has ONE owner (nav.teardown): the force quit's
+// compare-and-swap refuses a second teardown, so this fallback cannot double
+// the teardown even when it races a real quit. `rendererTornDown` only marks
+// "the renderer is already gone" (it is set by the destroy step) — it is NOT
+// the teardown's owner. ---
 const onRendererClosed = (): void => {
   if (rendererTornDown) return;
   rendererTornDown = true;
@@ -422,4 +427,5 @@ const { wireSignalQuit } = await import("./app/signals");
 wireSignalQuit({
   on: (event, cb) => process.on(event, cb),
   quit: nav.quitAppForce,
+  teardown: nav.teardown,
 });

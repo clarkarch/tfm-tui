@@ -3,8 +3,13 @@
 // destroy()s the renderer (no process.exit, no PTY kill, no watcher close),
 // so the orphaned process lived on with PPID 1 and deleted /dev/pts/N fds.
 // This wires both signals to the FORCE quit (no isBusy refusal: the toast
-// is invisible and refusing re-orphans). Re-entry guarded: two signals = one
-// teardown.
+// is invisible and refusing re-orphans).
+//
+// The re-entry guard is the SHARED teardown state (src/lib/teardown-state.ts)
+// — the ONE owner of "the app is shutting down". The handler used to keep a
+// private `quitOnce` boolean: a second state machine for the same fact, which
+// could disagree with the quit path's own guard (the quit path's CAS wins,
+// the handler's boolean was a separate copy of the same knowledge).
 //
 // NOTE: this handler is best-effort, not the whole fix. Probed live: JS
 // signal delivery past OpenTUI's native core is unreliable — the first
@@ -12,13 +17,23 @@
 // handler (a repeat then works). The RELIABLE path is the renderer-closed
 // fallback in index.ts, which runs the same force quit whenever destroy()
 // completes without a quit having started it. ---
+import type { TeardownState } from "../lib/teardown-state";
+
 export const SIGNAL_QUIT_EVENTS = ["SIGHUP", "SIGTERM"] as const;
 
-export const wireSignalQuit = (deps: { on: (event: string, cb: () => void) => void; quit: () => void }): void => {
-  let quitOnce = false;
+export const wireSignalQuit = (deps: {
+  on: (event: string, cb: () => void) => void;
+  quit: () => void;
+  // the app-wide teardown state — the ONE owner of "is the app shutting down"
+  teardown: TeardownState;
+}): void => {
   const fire = (): void => {
-    if (quitOnce) return;
-    quitOnce = true;
+    // READ-ONLY check: the force quit's own compare-and-swap is what claims
+    // the transition, so the handler must never claim it here (a claimed
+    // transition would make the quit's CAS refuse and NOTHING would tear
+    // down). This check only avoids ASKING for a teardown that is already
+    // running — two signals must not queue two teardowns.
+    if (deps.teardown.get() !== "live") return;
     try {
       deps.quit();
     } catch {}

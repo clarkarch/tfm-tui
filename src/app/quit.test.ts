@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeForceQuit, makeQuit, type QuitCtx } from "./quit";
+import { makeTeardownState } from "../lib/teardown-state";
 
 const mkCtx = (
   calls: string[],
@@ -20,6 +21,7 @@ const mkCtx = (
   const codes: number[] = [];
   return {
     codes,
+    teardown: makeTeardownState(),
     disableDrops: () => {
       calls.push("drops");
       if (fail === "drops") throw new Error("osc write failed");
@@ -320,5 +322,72 @@ describe("makeQuit", () => {
     while (ctx.codes.length === 0 && Date.now() - t0 < 5000) await Bun.sleep(25);
     expect(ctx.codes).toEqual([1]);
     expect(Date.now() - t0).toBeLessThan(5000);
+  });
+});
+
+// The teardown lifecycle has ONE owner. Before this, "the app is shutting
+// down" had no state variable at all: a HELD ctrl+q (the quit action has no
+// autorepeat guard, unlike the restart action next to it) ran the whole
+// 11-step teardown N times — two renderer.destroy() calls, two exit chains.
+describe("teardown ownership", () => {
+  test("a second quit runs NOTHING (the teardown steps run once)", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    const quit = makeQuit(ctx);
+    quit();
+    quit();
+    // exactly ONE pass through the teardown, and exactly ONE exit
+    expect(calls.filter((c) => c === "drops")).toHaveLength(1);
+    expect(calls.filter((c) => c === "destroy")).toHaveLength(1);
+    expect(calls.filter((c) => c.startsWith("exit:"))).toHaveLength(1);
+    expect(ctx.codes).toEqual([0]);
+  });
+
+  test("force quit still CASes: a quit after a force quit runs nothing", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    makeForceQuit(ctx)();
+    makeQuit(ctx)();
+    expect(calls.filter((c) => c === "drops")).toHaveLength(1);
+    expect(calls.filter((c) => c === "destroy")).toHaveLength(1);
+    expect(ctx.codes).toEqual([0]);
+  });
+
+  test("a quit after a force quit is refused even when a file op is running", () => {
+    // the busy refusal must not be reached a second time — the teardown is
+    // already owned, so the second call is a NO-OP (no second busy toast)
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    let busied = 0;
+    const busyCtx: QuitCtx & { codes: number[] } = {
+      ...ctx,
+      codes: ctx.codes,
+      isBusy: () => true,
+      onBusy: () => {
+        busied++;
+      },
+    };
+    makeForceQuit(busyCtx)();
+    makeQuit(busyCtx)();
+    expect(busied).toBe(0);
+    expect(calls.filter((c) => c === "destroy")).toHaveLength(1);
+  });
+
+  test("a busy refusal does NOT consume the teardown (a later quit still works)", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls);
+    let busy = true;
+    const busyCtx: QuitCtx & { codes: number[] } = {
+      ...ctx,
+      codes: ctx.codes,
+      isBusy: () => busy,
+      onBusy: () => {},
+    };
+    makeQuit(busyCtx)();
+    expect(calls).toEqual([]);
+    busy = false;
+    makeQuit(busyCtx)();
+    expect(calls).toContain("destroy");
+    expect(ctx.codes).toEqual([0]);
   });
 });

@@ -154,6 +154,75 @@ describe("makeFileManagerService", () => {
     expect(exits).toEqual([2]);
     expect(logged.join("\n")).toMatch(/disconnect/i);
   });
+
+  test("a disconnect + error pair exits the daemon ONCE", () => {
+    // the daemon's exit is a ONE-SHOT transition: error+disconnect often
+    // arrive together and a double exit races the teardown (the second
+    // process.exit would fire while the first is still unwinding)
+    const listeners = new Map<string, Array<() => void>>();
+    const bus = {
+      export: () => {},
+      requestName: async () => 1,
+      on: (ev: string, cb: () => void) => {
+        listeners.set(ev, [...(listeners.get(ev) ?? []), cb]);
+      },
+    } as never;
+    const exits: number[] = [];
+    makeFileManagerService({
+      bus,
+      openPlan: () => {},
+      log: () => {},
+      onExit: (code: number) => exits.push(code),
+    });
+    for (const cb of listeners.get("disconnect") ?? []) cb();
+    for (const cb of listeners.get("error") ?? []) cb();
+    expect(exits).toEqual([2]);
+  });
+
+  test("a NameLost for OUR name exits the daemon (a dead holder answers nothing)", () => {
+    const listeners = new Map<string, Array<(msg?: unknown) => void>>();
+    const bus = {
+      export: () => {},
+      requestName: async () => 1,
+      on: (ev: string, cb: (msg?: unknown) => void) => {
+        listeners.set(ev, [...(listeners.get(ev) ?? []), cb]);
+      },
+    } as never;
+    const exits: number[] = [];
+    makeFileManagerService({
+      bus,
+      openPlan: () => {},
+      log: () => {},
+      onExit: (code: number) => exits.push(code),
+    });
+    // dbus-next MessageType.SIGNAL = 4
+    for (const cb of listeners.get("message") ?? []) {
+      cb({ type: 4, member: "NameLost", body: [SERVICE_NAME] });
+    }
+    expect(exits).toEqual([2]);
+  });
+
+  test("a NameLost for ANOTHER name is none of our business", () => {
+    const listeners = new Map<string, Array<(msg?: unknown) => void>>();
+    const bus = {
+      export: () => {},
+      requestName: async () => 1,
+      on: (ev: string, cb: (msg?: unknown) => void) => {
+        listeners.set(ev, [...(listeners.get(ev) ?? []), cb]);
+      },
+    } as never;
+    const exits: number[] = [];
+    makeFileManagerService({
+      bus,
+      openPlan: () => {},
+      log: () => {},
+      onExit: (code: number) => exits.push(code),
+    });
+    for (const cb of listeners.get("message") ?? []) {
+      cb({ type: 4, member: "NameLost", body: ["org.example.Other"] });
+    }
+    expect(exits).toEqual([]);
+  });
 });
 
 describe("installFileManagerService", () => {

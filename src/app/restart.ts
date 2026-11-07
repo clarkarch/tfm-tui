@@ -100,6 +100,10 @@ export const makeRestart =
     const fail = (msg: string): void => {
       ctx.notify?.(msg, "restart", "error");
     };
+    // a teardown is ALREADY in flight (a quit won the race): refuse SILENTLY
+    // — the preflight is harmless, but the busy toast would land on a dying
+    // renderer, and the CAS below would refuse the transition anyway.
+    if (ctx.teardown.get() !== "live") return;
     // executable check BEFORE touching live state: teardown has one-way steps
     // (PTY kill, drops off), so a missing binary must never reach it
     try {
@@ -115,6 +119,11 @@ export const makeRestart =
       ctx.notify?.("Can't restart · file op running", "restart", "error");
       return;
     }
+    // ONE teardown owner: a restart that races a quit (or a held ctrl+q)
+    // must not run the teardown steps twice. The preflight and the busy
+    // refusal above happen BEFORE the transition, so a refused restart leaves
+    // the app fully alive.
+    if (!ctx.teardown.begin()) return;
     const preFailed = runTeardownSteps(ctx);
     let status: number | null;
     try {
@@ -130,6 +139,9 @@ export const makeRestart =
       if (res.error) throw res.error;
       status = res.status;
     } catch (err) {
+      // the teardown ran but the child never started: put the app back into
+      // "live" or the session could never be quit or restarted again.
+      ctx.teardown.abort();
       try {
         ctx.recover?.();
       } catch {}

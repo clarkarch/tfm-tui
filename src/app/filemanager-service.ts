@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { errMessage } from "../lib/uiutil";
+import { makeTeardownState } from "../lib/teardown-state";
 import { planShowFolders, planShowItems, type ShowPlan } from "../dnd/filemanager1";
 import { whichLive } from "../fs/which";
 
@@ -79,10 +80,15 @@ export const makeFileManagerService = (deps: ServiceDeps) => {
   // fresh daemon instead of landing on a name nobody answers (the "only the
   // first open works" bug class). Exit once — error+disconnect often arrive
   // together and a double exit races the teardown.
-  let exited = false;
+  //
+  // The ONE-SHOT exit uses the shared teardown lifecycle leaf
+  // (src/lib/teardown-state.ts) — the same vocabulary the TUI's quit path
+  // uses. The daemon is its OWN process (it never boots the TUI), so it gets
+  // its OWN instance; what it shares is the SHAPE: "live -> tearing-down" is
+  // claimed exactly once, and only the winner exits.
+  const teardown = makeTeardownState();
   const exitOnce = (why: string): void => {
-    if (exited) return;
-    exited = true;
+    if (!teardown.begin()) return;
     deps.log(`${why} — exiting so activation restarts a fresh daemon`);
     try {
       deps.onExit?.(2);

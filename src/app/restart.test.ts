@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { consumeRestartFlag, makeRestart, RESTART_ENV, restartArgs, type RestartCtx } from "./restart";
+import { makeQuit } from "./quit";
+import { makeTeardownState } from "../lib/teardown-state";
 
 const mkCtx = (
   calls: string[],
@@ -17,6 +19,7 @@ const mkCtx = (
   const codes: number[] = [];
   return {
     codes,
+    teardown: makeTeardownState(),
     execPath: "/usr/bin/tfm",
     argv: ["one", "two"],
     preflight: (p) => {
@@ -234,6 +237,45 @@ describe("makeRestart", () => {
     makeRestart(ctx)();
     await Bun.sleep(0);
     expect(ctx.codes).toEqual([1]);
+  });
+});
+
+// The teardown lifecycle has ONE owner: a restart that races a quit (or a
+// held ctrl+q) must not run the teardown steps twice — two renderer.destroy()
+// calls, two exit chains.
+describe("restart vs quit", () => {
+  test("a quit that wins the race means the restart runs NO teardown", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, { status: 0 });
+    const shared = ctx.teardown;
+    makeQuit(ctx)();
+    const after = calls.length;
+    makeRestart({ ...ctx, teardown: shared })();
+    // the restart refused outright: no preflight, no second teardown, no spawn
+    expect(calls.slice(after)).toEqual([]);
+    expect(calls.filter((c) => c === "destroy")).toHaveLength(1);
+  });
+
+  test("a restart that wins the race means a later quit runs NO teardown", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, { status: 0 });
+    const shared = ctx.teardown;
+    makeRestart(ctx)();
+    const after = calls.length;
+    makeQuit({ ...ctx, teardown: shared })();
+    expect(calls.slice(after)).toEqual([]);
+    expect(calls.filter((c) => c === "destroy")).toHaveLength(1);
+  });
+
+  test("a failed spawn puts the app back live (a later quit still works)", () => {
+    const calls: string[] = [];
+    const ctx = mkCtx(calls, { spawnThrow: true });
+    const shared = ctx.teardown;
+    makeRestart(ctx)();
+    expect(shared.get()).toBe("live");
+    // the app is alive again: a quit now runs the teardown
+    makeQuit({ ...ctx, teardown: shared })();
+    expect(calls.filter((c) => c === "destroy")).toHaveLength(1);
   });
 });
 

@@ -8,6 +8,7 @@ import { makeRenderAll, type RenderStepName } from "../app/render-all";
 import { makeForceQuit, makeQuit } from "../app/quit";
 import { makeRestart, restartArgs } from "../app/restart";
 import { sharedOpQueue } from "../lib/op-queue";
+import { makeTeardownState } from "../lib/teardown-state";
 import { makeStatus } from "../ui/ui-status";
 import { makeNav, makeSessionSync } from "../app/nav";
 import { saveSessionSync, type PaneTabs } from "../fs/session";
@@ -101,7 +102,12 @@ export const wireNav = (deps: {
   // the debounced save loses the last navigation). Both arrive as arrows —
   // they close over later-defined bindings. The same step object feeds restart
   // below (RestartCtx extends QuitCtx), so the two teardowns can't drift. ---
+  // ONE teardown lifecycle for the whole app: quit, force-quit (the signal
+  // path) and restart all compare-and-swap on this one instance, so a held
+  // ctrl+q — or a restart racing a quit — runs the teardown ONCE. ---
+  const teardown = makeTeardownState();
   const quitSteps = {
+    teardown,
     disableDrops: () => getDnd().disableDrops(),
     releaseShiftCapture: () => process.stdout.write(xtShiftEscapeFrame(false)),
     onQuit: () => {
@@ -149,7 +155,6 @@ export const wireNav = (deps: {
   // signal path (SIGHUP/SIGTERM): same steps, no isBusy refusal — the
   // terminal is gone so the busy toast is invisible and refusing re-orphans
   const quitAppForce = makeForceQuit(quitSteps);
-
   // --- Restart: same binary+args, parent WAITS (spawnSync) so the shell never
   // wakes mid-handoff — fire-and-forget left the child competing with the
   // shell for input (echoed mouse bytes, dead keys). Notify/recover arrive
@@ -269,6 +274,9 @@ export const wireNav = (deps: {
     renderAll,
     // the boot's "wait for the first paint to be COMPLETE" seam
     renderAllSettled: () => renderAll.settled(),
+    // the ONE teardown lifecycle — the signal handler and the renderer-closed
+    // fallback read it so "the app is shutting down" has a single owner
+    teardown,
     quitApp,
     quitAppForce,
     restartApp,

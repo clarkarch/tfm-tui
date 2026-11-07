@@ -6,7 +6,17 @@
 // but the exit code stays honest: 0 clean, 1 when any step threw (a masked
 // teardown failure used to exit 0, hiding broken shutdowns from scripts). ---
 
+import type { TeardownState } from "../lib/teardown-state";
+
 export type QuitCtx = {
+  // ONE owner for the teardown lifecycle (live -> tearing-down -> exited).
+  // Required on purpose: the teardown steps are required for the same reason
+  // — "optional" meant "nobody proved this runs". The quit action had no
+  // autorepeat guard while the restart action next to it did, so a HELD
+  // ctrl+q ran the whole 11-step teardown N times (two renderer.destroy()
+  // calls, two exit chains). The compare-and-swap makes exactly one caller
+  // the teardown's owner.
+  teardown: TeardownState;
   disableDrops(): void;
   releaseShiftCapture(): void;
   // kill the embedded PTY pane — it would otherwise rely on EIO from the
@@ -66,12 +76,18 @@ const teardownAndDestroy = (ctx: QuitCtx): { failed: boolean; destroyThrew: bool
 export const makeQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
+    // a teardown is ALREADY in flight: a second quit is a COMPLETE no-op —
+    // not even the busy toast (the toast would land on a dying renderer)
+    if (ctx.teardown.get() !== "live") return;
     if (ctx.isBusy?.()) {
       try {
         ctx.onBusy?.();
       } catch {}
       return;
     }
+    // the busy refusal must NOT consume the teardown transition — a refused
+    // quit leaves the app fully alive, so a later quit must still work.
+    if (!ctx.teardown.begin()) return;
     const { failed, destroyThrew } = teardownAndDestroy(ctx);
     exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew);
   };
@@ -87,6 +103,9 @@ export const FORCE_QUIT_CLOSE_TIMEOUT_MS = 2000;
 export const makeForceQuit =
   (ctx: QuitCtx): (() => void) =>
   () => {
+    // no isBusy refusal here (the toast is invisible and refusing re-orphans)
+    // — but the compare-and-swap still applies: ONE teardown, whoever asks.
+    if (!ctx.teardown.begin()) return;
     const { failed, destroyThrew } = teardownAndDestroy(ctx);
     exitAfterClosed(ctx, failed ? 1 : 0, destroyThrew, FORCE_QUIT_CLOSE_TIMEOUT_MS);
   };
@@ -102,7 +121,7 @@ export const makeForceQuit =
 // inside the chain would otherwise become an unhandled rejection on the
 // derived promise.
 export const exitAfterClosed = (
-  ctx: Pick<QuitCtx, "closed" | "exit">,
+  ctx: Pick<QuitCtx, "closed" | "exit" | "teardown">,
   code: number,
   skipWait = false,
   capMs?: number,
@@ -111,6 +130,7 @@ export const exitAfterClosed = (
     try {
       ctx.exit(skipWait ? 1 : code);
     } catch {}
+    ctx.teardown.finish();
     return;
   }
   let closed: Promise<void>;
@@ -120,6 +140,7 @@ export const exitAfterClosed = (
     try {
       ctx.exit(1);
     } catch {}
+    ctx.teardown.finish();
     return;
   }
   const wait =
@@ -138,11 +159,13 @@ export const exitAfterClosed = (
       try {
         ctx.exit(code);
       } catch {}
+      ctx.teardown.finish();
     },
     () => {
       try {
         ctx.exit(1);
       } catch {}
+      ctx.teardown.finish();
     },
   );
 };
