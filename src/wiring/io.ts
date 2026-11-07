@@ -333,7 +333,7 @@ export const wireBoot = (deps: {
         renderer: chrome.renderer,
         byId: core.lookup.byId,
         colors: core.colors,
-        bandCtx: grid.bandCtx,
+        bandCtxs: grid.bandCtxs,
         focusPane: (i) => grid.focusPane(i as 0 | 1),
         dropIntoPane: (i) => grid.dropIntoPane(i as 0 | 1),
         closeFileMenu: chrome.menu.closeFileMenu,

@@ -122,7 +122,8 @@ export type GridWiring = {
   focusPane: (pane: 0 | 1) => void;
   dropIntoPane: (pane: 0 | 1) => void;
   finishDrag: () => void;
-  bandCtx: BandCtx;
+  // one band ctx per PANE (the rubber-band gesture is per pane)
+  bandCtxs: readonly [BandCtx, BandCtx];
   props: ReturnType<typeof makeProps>;
   menuEntries: ReturnType<typeof makeMenuEntries>;
   // app actions surfaced to the palette/keybinds (grid owns the menu-entry

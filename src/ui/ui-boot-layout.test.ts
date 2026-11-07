@@ -3,7 +3,7 @@ import { Box, Text } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { defaultConfig } from "../config/config-schema";
 import { buildAppContainer, buildBootLayout, buildTitle, scrollbarTrackColors } from "./ui-boot-layout";
-import { BAND_ID } from "../input/grid-input";
+import { BAND_ID, type BandCtx, type BandPhase } from "../input/grid-input";
 import { SCRIM_FILL_ID, SCRIM_FILL_Z } from "./scrim";
 
 // the grid scrollers' bars must wear the theme (not the upstream gray
@@ -24,6 +24,26 @@ const hexInts = (h: string): [number, number, number, number] => [
 ];
 
 const noop = () => {};
+
+// A band ctx fake that mirrors the REAL contract: the boot layout's gesture
+// fns write a phase cell, and the ROOT's mouseup ends every band — a `{}`
+// fake would throw on the first release.
+const fakeBandCtx = (): BandCtx => {
+  let phase: BandPhase = { kind: "idle" };
+  return {
+    byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
+    tileRefs: new Map(),
+    clearTileSelection: noop,
+    setTileVisual: noop,
+    updateSelectionStatusReal: noop,
+    renderPreview: noop,
+    setAnchorPath: noop,
+    bandPhase: () => phase,
+    setBandPhase: (p) => {
+      phase = p;
+    },
+  };
+};
 
 describe("tab strip containers", () => {
   test("both pane tabbars clip instead of bleeding over the grid", async () => {
@@ -114,7 +134,7 @@ describe("grid scrollbar theming", () => {
       renderer: t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
       colors: theme,
-      bandCtx: {} as any,
+      bandCtxs: [fakeBandCtx(), fakeBandCtx()],
       focusPane: noop,
       dropIntoPane: noop,
       closeFileMenu: noop,
@@ -155,7 +175,7 @@ describe("rubber-band selection node", () => {
       renderer: t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
       colors: theme,
-      bandCtx: {} as any,
+      bandCtxs: [fakeBandCtx(), fakeBandCtx()],
       focusPane: noop,
       dropIntoPane: noop,
       closeFileMenu: noop,
@@ -174,6 +194,75 @@ describe("rubber-band selection node", () => {
     expect(band).toBeTruthy();
     expect(band.border).toBe(true);
     expect(band.shouldFill).toBe(false);
+  });
+});
+
+describe("the rubber-band gesture wiring", () => {
+  // The band gesture is ONE phase per PANE (the scrollers are built per
+  // pane), and the release that ends it can land OUTSIDE the scroller: the
+  // scroller's own mouseup never fires then, so the marquee would stay on
+  // screen and the next press would inherit a stale origin. The root sees
+  // every release (the events bubble), so the root ends the band.
+  const makeBandCtx = () => {
+    const phase: { current: BandPhase } = { current: { kind: "idle" } };
+    const ctx: BandCtx = {
+      byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
+      tileRefs: new Map(),
+      clearTileSelection: noop,
+      setTileVisual: noop,
+      updateSelectionStatusReal: noop,
+      renderPreview: noop,
+      setAnchorPath: noop,
+      bandPhase: () => phase.current,
+      setBandPhase: (p) => {
+        phase.current = p;
+      },
+    };
+    return { ctx, phase };
+  };
+
+  test("a release outside the scroller ends the band", async () => {
+    const theme = { ...defaultConfig.theme };
+    // small panes: the rest of the root is empty space, so the release lands
+    // on the ROOT (outside every scroller)
+    t.renderer.root.add(Box({ id: "tfm-pane-0", width: 40, height: 10, flexDirection: "column" }));
+    t.renderer.root.add(Box({ id: "tfm-pane-1", width: 40, height: 10, flexDirection: "column" }));
+    const pane0 = makeBandCtx();
+    const pane1 = makeBandCtx();
+    const [s0, s1] = buildBootLayout({
+      renderer: t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
+      colors: theme,
+      bandCtxs: [pane0.ctx, pane1.ctx],
+      focusPane: noop,
+      dropIntoPane: noop,
+      closeFileMenu: noop,
+      clearSearch: noop,
+      blurTerminal: noop,
+      pathEditMode: () => false,
+      exitPathEdit: noop,
+      isRenaming: () => false,
+      finishInlineRename: noop,
+      clearTileSelection: noop,
+      openContextMenu: () => {},
+      emptyAreaEntries: () => [],
+    });
+    await t.renderOnce();
+
+    // the press lands inside the scroller: the band is armed
+    const sc = s0 as any;
+    await t.mockMouse.pressDown(sc.x + 2, sc.y + 2);
+    await t.renderOnce();
+    expect(pane0.phase.current.kind).toBe("armed");
+
+    // the release lands OUTSIDE that scroller — over the OTHER pane's
+    // scroller, which bubbles the event up to the root
+    const other = s1 as any;
+    await t.mockMouse.release(other.x + 2, other.y + 2);
+    await t.renderOnce();
+    expect(pane0.phase.current.kind).toBe("idle");
+    const band: any = t.renderer.root.findDescendantById(BAND_ID);
+    expect(band.visible).toBe(false);
   });
 });
 
@@ -247,7 +336,7 @@ describe("scrim fill overlay", () => {
       renderer: t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
       colors: theme,
-      bandCtx: {} as any,
+      bandCtxs: [fakeBandCtx(), fakeBandCtx()],
       focusPane: noop,
       dropIntoPane: noop,
       closeFileMenu: noop,
@@ -302,15 +391,7 @@ describe("grid scrollers are not keyboard-focusable", () => {
       renderer: t.renderer,
       byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
       colors: theme,
-      bandCtx: {
-        byId: (id: string) => t.renderer.root.findDescendantById(id) as any,
-        tileRefs: new Map(),
-        clearTileSelection: noop,
-        setTileVisual: noop,
-        updateSelectionStatusReal: noop,
-        renderPreview: noop,
-        setAnchorPath: noop,
-      },
+      bandCtxs: [fakeBandCtx(), fakeBandCtx()],
       focusPane: noop,
       dropIntoPane: noop,
       closeFileMenu: noop,

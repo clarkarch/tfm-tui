@@ -115,6 +115,10 @@ export type GridInputCtx = {
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
+  // end any live rubber band (the marquee of a gesture whose release never
+  // arrived — the pointer left the terminal and no up event came). A tile
+  // press stops propagation, so the scroller never sees it.
+  cancelBand?(): void;
 } & GridSelectionDeps &
   GridMenuDeps &
   GridNavDeps;
@@ -192,9 +196,27 @@ export const scheduleDragCleanup = (ctx: GridInputCtx): void => {
 };
 
 // --- Rubber-band selection (marquee over empty grid space) ---
-// Owns the band gesture state: the band NODE is created by the boot layout
-// (id: BAND_ID), this module only moves/hides it and commit-picks tiles.
-// Module-level state mirrors the drag state above.
+// The band NODE is created by the boot layout (id: BAND_ID); this module owns
+// the GESTURE and projects it onto the node.
+//
+// The gesture is ONE explicit phase, owned PER PANE: the scrollers are built
+// per pane, and the old module-global origin let a band begun in pane 0 be
+// finalized in pane 1 — a selection computed against pane 1's tiles but
+// anchored at pane 0's screen coordinates. The node's `visible` flag used to
+// be a SECOND truth (it could disagree with the gesture state); it is now
+// DERIVED from the phase.
+
+/** The marquee rectangle, in screen cells. */
+export type BandRect = { x: number; y: number; width: number; height: number };
+
+/** The band gesture phase — the ONE truth. */
+export type BandPhase =
+  /** no gesture */
+  | { kind: "idle" }
+  /** the button went down on empty pane space; the marquee is not shown yet */
+  | { kind: "armed"; origin: { x: number; y: number } }
+  /** the pointer moved: the marquee is shown and its rect is known */
+  | { kind: "dragging"; origin: { x: number; y: number }; rect: BandRect };
 
 export type BandCtx = {
   byId(id: string): MaybeNode;
@@ -205,47 +227,78 @@ export type BandCtx = {
   renderPreview(): void | Promise<void>;
   // the band clears the range origin: the next extend starts fresh
   setAnchorPath(path: string | null): void;
+  /** the gesture phase — the ONE truth (the node is its projection) */
+  bandPhase(): BandPhase;
+  setBandPhase(phase: BandPhase): void;
 };
 
 export const BAND_ID = "tfm-band";
 
-let bandStart: { x: number; y: number } | null = null;
-
-export const bandActive = (): boolean => bandStart !== null;
-
-export const beginBand = (ev: { x: number; y: number; button: number }): void => {
-  if (ev.button !== 0) return;
-  bandStart = { x: ev.x, y: ev.y };
-};
-
-export const updateBandRect = (ctx: BandCtx, ev: { x: number; y: number }): void => {
-  if (!bandStart) return;
+// The node is a PROJECTION of the phase: its geometry and its visible flag
+// are written from the phase, never set independently.
+const projectBand = (ctx: BandCtx, phase: BandPhase): void => {
   const b = ctx.byId(BAND_ID);
   if (!b) return;
   try {
-    b.x = Math.min(bandStart.x, ev.x);
-    b.y = Math.min(bandStart.y, ev.y);
-    b.width = Math.abs(ev.x - bandStart.x) + 1;
-    b.height = Math.abs(ev.y - bandStart.y) + 1;
-    b.visible = true;
+    if (phase.kind === "dragging") {
+      b.x = phase.rect.x;
+      b.y = phase.rect.y;
+      b.width = phase.rect.width;
+      b.height = phase.rect.height;
+      b.visible = true;
+    } else {
+      b.visible = false;
+    }
   } catch {}
 };
 
-export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void => {
-  const start = bandStart;
-  bandStart = null;
+const setPhase = (ctx: BandCtx, phase: BandPhase): void => {
+  ctx.setBandPhase(phase);
+  projectBand(ctx, phase);
+};
+
+// the marquee rectangle between the gesture's origin and a pointer position
+const rectFrom = (origin: { x: number; y: number }, ev: { x: number; y: number }): BandRect => ({
+  x: Math.min(origin.x, ev.x),
+  y: Math.min(origin.y, ev.y),
+  width: Math.abs(ev.x - origin.x) + 1,
+  height: Math.abs(ev.y - origin.y) + 1,
+});
+
+/** the button went down on empty pane space — arm the band */
+export const beginBand = (ctx: BandCtx, ev: { x: number; y: number; button: number }): void => {
+  if (ev.button !== 0) return;
+  setPhase(ctx, { kind: "armed", origin: { x: ev.x, y: ev.y } });
+};
+
+/** the pointer moved — the marquee is shown and its rect is known */
+export const updateBandRect = (ctx: BandCtx, ev: { x: number; y: number }): void => {
+  const phase = ctx.bandPhase();
+  if (phase.kind === "idle") return;
+  setPhase(ctx, { kind: "dragging", origin: phase.origin, rect: rectFrom(phase.origin, ev) });
+};
+
+/**
+ * The ONE end path — the mouseup AND the dragend both land here.
+ *
+ * A band that never MOVED commits nothing: an ordinary click on empty pane
+ * space must not sweep a selection out of the pane. A band that moved
+ * commits the tiles under its rect.
+ */
+export const endBand = (ctx: BandCtx, ev: { x: number; y: number }): void => {
+  const phase = ctx.bandPhase();
+  if (phase.kind === "idle") return;
+  // the RELEASE position is authoritative: the marquee ends where the button
+  // came up (the last drag event can be a cell behind it)
+  const rect = phase.kind === "dragging" ? rectFrom(phase.origin, ev) : null;
+  setPhase(ctx, { kind: "idle" });
+  // the range origin is cleared: the next extend starts fresh
   ctx.setAnchorPath(null);
-  const b = ctx.byId(BAND_ID);
-  if (b) {
-    try {
-      b.visible = false;
-    } catch {}
-  }
-  if (!start) return;
-  const x0 = Math.min(start.x, ev.x),
-    y0 = Math.min(start.y, ev.y);
-  const x1 = Math.max(start.x, ev.x),
-    y1 = Math.max(start.y, ev.y);
+  if (!rect) return;
+  const x0 = rect.x;
+  const y0 = rect.y;
+  const x1 = x0 + rect.width - 1;
+  const y1 = y0 + rect.height - 1;
   ctx.clearTileSelection();
   ctx.tileRefs.forEach((refs, key) => {
     const t = ctx.byId(refs.tileId);
@@ -265,15 +318,36 @@ export const finalizeBand = (ctx: BandCtx, ev: { x: number; y: number }): void =
   void ctx.renderPreview();
 };
 
+/**
+ * End the band from a release that may have landed OUTSIDE the scroller
+ * (the scroller's own mouseup never fires then, and the marquee would stay
+ * on screen with a stale origin).
+ *
+ * Only ONE pane can hold a live gesture (one pointer): the first live band
+ * ends, any other stale phase is dropped WITHOUT committing.
+ */
+export const endBands = (ctxs: readonly BandCtx[], ev: { x: number; y: number }): void => {
+  let ended = false;
+  for (const ctx of ctxs) {
+    if (ctx.bandPhase().kind === "idle") continue;
+    if (ended) {
+      setPhase(ctx, { kind: "idle" });
+      continue;
+    }
+    endBand(ctx, ev);
+    ended = true;
+  }
+};
+
 // modal menus kill any in-flight band so a stale rect can't commit later
 export const cancelBand = (ctx: BandCtx): void => {
-  bandStart = null;
-  const b = ctx.byId(BAND_ID);
-  if (b) {
-    try {
-      b.visible = false;
-    } catch {}
-  }
+  if (ctx.bandPhase().kind === "idle") return;
+  setPhase(ctx, { kind: "idle" });
+};
+
+/** cancel every pane's band */
+export const cancelBands = (ctxs: readonly BandCtx[]): void => {
+  for (const ctx of ctxs) cancelBand(ctx);
 };
 
 export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
@@ -433,6 +507,11 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         try {
           ev.stopPropagation?.();
         } catch {}
+        // a press ends any live rubber band: the marquee of a gesture whose
+        // release never arrived (the pointer left the terminal) would
+        // otherwise stay on screen — and the tile press stops propagation,
+        // so the scroller never gets the chance to end it
+        ctx.cancelBand?.();
         ctx.focusPane?.();
         ctx.blurTerminal?.();
         // the mouse takes the keyboard back from the sidebar

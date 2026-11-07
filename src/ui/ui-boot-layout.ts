@@ -17,9 +17,10 @@ import type { SidebarTitleMode } from "../config/config-schema";
 import {
   BAND_ID,
   DRAG_GHOST_ID,
-  bandActive,
   beginBand,
-  finalizeBand,
+  cancelBand,
+  endBand,
+  endBands,
   updateBandRect,
   type BandCtx,
 } from "../input/grid-input";
@@ -194,7 +195,9 @@ type BootLayoutCtx = {
   renderer: CliRenderer;
   byId: (id: string) => MaybeNode;
   colors: Theme; // eager object — see buildTitle
-  bandCtx: BandCtx;
+  // one band ctx per PANE: the rubber-band gesture is per pane (a shared
+  // origin let a band begun in one pane commit into the other)
+  bandCtxs: readonly [BandCtx, BandCtx];
   focusPane: (index: number) => void;
   // drop released over the pane's empty background = move into that pane's cwd
   dropIntoPane: (pane: number) => void;
@@ -244,7 +247,8 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
   // native-drawn parts of the ScrollBox (a `ScrollBoxBar` is an EventEmitter,
   // not a Renderable), so there is no focusable Slider node left to disable —
   // and the bar's key handling is reached only through the ScrollBox itself.
-  const makeScroller = (id: string, pane: number): ScrollBoxRenderable => {
+  const makeScroller = (id: string, pane: 0 | 1): ScrollBoxRenderable => {
+    const bandCtx = ctx.bandCtxs[pane];
     const scroller = new ScrollBoxRenderable(ctx.renderer, {
       id,
       flexGrow: 1,
@@ -271,14 +275,15 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
         // background menu WITHOUT cancelling the selection (Nautilus behavior)
         if (ev.button === 0) ctx.clearTileSelection();
         // band shows only once a drag actually moves the pointer
-        beginBand(ev);
+        // a new press ends any OTHER pane's band: one pointer, one gesture
+        for (const other of ctx.bandCtxs) if (other !== bandCtx) cancelBand(other);
+        beginBand(bandCtx, ev);
         if (ev.button === 2) ctx.openContextMenu(ev.x, ev.y, "", ctx.emptyAreaEntries(ev.x, ev.y));
       },
-      onMouseDrag: (ev: MouseEvent) => updateBandRect(ctx.bandCtx, ev),
-      onMouseDragEnd: (ev: MouseEvent) => finalizeBand(ctx.bandCtx, ev),
-      onMouseUp: (ev: MouseEvent) => {
-        if (bandActive()) finalizeBand(ctx.bandCtx, ev);
-      },
+      onMouseDrag: (ev: MouseEvent) => updateBandRect(bandCtx, ev),
+      // the mouseup AND the dragend are the SAME end path
+      onMouseDragEnd: (ev: MouseEvent) => endBand(bandCtx, ev),
+      onMouseUp: (ev: MouseEvent) => endBand(bandCtx, ev),
       // dropping onto the pane's background (no tile under the cursor) targets
       // the pane's current directory — otherwise an empty destination pane can
       // never receive a drag
@@ -292,6 +297,15 @@ export const buildBootLayout = (ctx: BootLayoutCtx): [ScrollBoxRenderable, Scrol
   const scroller1 = makeScroller("tfm-scroll-2", 1);
   ctx.byId("tfm-pane-0")?.add?.(scroller0);
   ctx.byId("tfm-pane-1")?.add?.(scroller1);
+
+  // A release that lands OUTSIDE the scroller never reaches the scroller's
+  // own mouseup: the band would stay armed, its marquee would stay on screen
+  // and the next press would inherit a stale origin. The root sees every
+  // release (the mouse events bubble up the tree), so the root ends the
+  // band — a no-op when no gesture is live.
+  ctx.renderer.root.onMouseUp = (ev: MouseEvent) => {
+    endBands(ctx.bandCtxs, ev);
+  };
 
   ctx.renderer.root.add(
     Box({

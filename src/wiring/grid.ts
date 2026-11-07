@@ -15,7 +15,13 @@ import { appsForFile, launchApp } from "../fs/apps";
 import { runSudo, sudoCatArgv } from "../fs/elevate";
 import type { makePick } from "../ui/ui-pick";
 import { makePreview } from "../ui/ui-preview";
-import { finishDragState, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
+import {
+  cancelBands,
+  finishDragState,
+  makeEntryMouseHandlers,
+  type BandCtx,
+  type BandPhase,
+} from "../input/grid-input";
 import { dragKeys, dragState } from "../lib/drag-state";
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
@@ -119,21 +125,31 @@ export const wireGrid = (deps: {
     },
   });
 
-  // Rubber-band gesture state + commit logic live in ./grid-input; this is the
-  // ctx object it renders through (built here because it closes over the live
-  // selection/preview state below).
-  const bandCtx: BandCtx = {
-    byId,
-    tileRefs: selection.tileRefs,
-    clearTileSelection: selection.clearTileSelection,
-    setTileVisual: selection.setTileVisual,
-    updateSelectionStatusReal: selection.updateSelectionStatusReal,
-    renderPreview,
-    // the band clears the range origin: the next extend starts fresh
-    setAnchorPath: (v: string | null) => {
-      selection.setAnchorPath(v);
-    },
+  // Rubber-band gesture state + commit logic live in ./grid-input; the phase
+  // is PER PANE (the scrollers are built per pane — a shared origin let a
+  // band begun in one pane commit a selection against the other pane's
+  // tiles). Built here because each ctx closes over its own pane's selection.
+  const makeBandCtx = (pane: 0 | 1): BandCtx => {
+    const s = selections[pane];
+    let phase: BandPhase = { kind: "idle" };
+    return {
+      byId,
+      tileRefs: s.tileRefs,
+      clearTileSelection: s.clearTileSelection,
+      setTileVisual: s.setTileVisual,
+      updateSelectionStatusReal: s.updateSelectionStatusReal,
+      renderPreview,
+      // the band clears the range origin: the next extend starts fresh
+      setAnchorPath: (v: string | null) => {
+        s.setAnchorPath(v);
+      },
+      bandPhase: () => phase,
+      setBandPhase: (p: BandPhase) => {
+        phase = p;
+      },
+    };
   };
+  const bandCtxs = [makeBandCtx(0), makeBandCtx(1)] as const;
 
   // Focus a pane on mouse press WITHOUT a full renderAll: a grid rebuild mid-
   // gesture would destroy the pressed tile's node and break the drag. Only the
@@ -209,6 +225,9 @@ export const wireGrid = (deps: {
       hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
       modalOpen: () => core.floats.hasModal(),
       setPointer,
+      // a tile press ends any live rubber band (the tile press stops
+      // propagation, so the scroller never sees it)
+      cancelBand: () => cancelBands(bandCtxs),
       log: dlog,
     };
   };
@@ -652,7 +671,7 @@ export const wireGrid = (deps: {
     focusPane,
     dropIntoPane,
     finishDrag: finishDragCtx,
-    bandCtx,
+    bandCtxs,
     props,
     menuEntries,
     openWith,

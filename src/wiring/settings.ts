@@ -18,7 +18,7 @@ import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { syncSortState } from "../lib/sort";
 import { clearFailedThumbs } from "../ui/icons";
-import { cancelBand } from "../input/grid-input";
+import { cancelBands } from "../input/grid-input";
 import { destroyChildren, errMessage } from "../lib/uiutil";
 import { dlog } from "../lib/log";
 import { makeUrlOpener } from "../fs/open-url";
@@ -387,7 +387,7 @@ export const wireSettings = (deps: {
     makeIconSlot: core.slots.makeIconSlot,
     setIconState: core.slots.setIconState,
     drainIconQueue: core.slots.drainIconQueue,
-    cancelBand: () => cancelBand(grid.bandCtx),
+    cancelBand: () => cancelBands(grid.bandCtxs),
     colors: core.themeGet,
     uiStyle: () => core.config.ui.uiStyle,
     menuW: () => MENU_W,

@@ -1,5 +1,17 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { commitPendingCtrlToggle, finishDragState, makeEntryMouseHandlers, type GridInputCtx } from "./grid-input";
+import {
+  BAND_ID,
+  beginBand,
+  cancelBands,
+  commitPendingCtrlToggle,
+  endBand,
+  finishDragState,
+  makeEntryMouseHandlers,
+  updateBandRect,
+  type BandCtx,
+  type BandPhase,
+  type GridInputCtx,
+} from "./grid-input";
 import { archiveUri } from "../fs/archive-scheme";
 import {
   dispatchDrag,
@@ -28,6 +40,7 @@ const makeCtx = (): GridInputCtx & {
   hoverCalls: [string, boolean][];
   pointers: string[];
   focusState: { path: string | null; anchorPath: string | null };
+  bandCancels: { n: number };
 } => {
   const visuals = new Map<string, number>();
   const refs = new Map<string, { selected: boolean; isDir: boolean }>();
@@ -54,6 +67,7 @@ const makeCtx = (): GridInputCtx & {
   // mirrors it — the anchor is resolved AND pinned by ONE rule, a plain move
   // re-anchors, a range move keeps its own origin
   const focusState = { path: null as string | null, anchorPath: null as string | null };
+  const bandCancels = { n: 0 };
   const keys = (): string[] => [...refs.keys()];
   return {
     visuals,
@@ -68,7 +82,11 @@ const makeCtx = (): GridInputCtx & {
     hoverCalls,
     pointers,
     focusState,
+    bandCancels,
     setPointer: (s) => void pointers.push(s),
+    cancelBand: () => {
+      bandCancels.n++;
+    },
     byId: () => null,
     termW: () => 80,
     termH: () => 24,
@@ -606,6 +624,16 @@ describe("mouse pointer shapes", () => {
     expect(ctx.selStatusRefreshes.n).toBe(0);
   });
 
+  test("a tile press ends a live rubber band (its release never arrived)", () => {
+    // the pointer left the terminal mid-marquee: no up event came, so the
+    // band is still live. A tile press stops propagation, so the scroller
+    // never sees it — the tile pipeline ends the band itself.
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, {});
+    expect(ctx.bandCancels.n).toBe(1);
+  });
+
   test("absent setPointer changes nothing (old fakes keep working)", () => {
     const ctx = makeCtx();
     delete (ctx as any).setPointer;
@@ -617,5 +645,119 @@ describe("mouse pointer shapes", () => {
       ["/w/a.txt", true],
       ["/w/a.txt", false],
     ]);
+  });
+});
+
+// --- the rubber-band gesture: ONE explicit phase per PANE ---
+//
+// The gesture used to live in a MODULE-GLOBAL `bandStart` while the handlers
+// are built PER PANE (one scroller per pane) → a band begun in pane 0 could
+// be finalized in pane 1, committing a selection computed against pane 1's
+// tiles but anchored at pane 0's screen coordinates. The band node's
+// `visible` flag was a SECOND truth: it could disagree with the gesture
+// state (a throw between the two writes left the state armed and the
+// marquee invisible).
+//
+// The phase is now per pane and the node is a PROJECTION of it.
+
+describe("the rubber-band gesture", () => {
+  const makeBandCtx = (tileKeys: string[]) => {
+    const phase: { current: BandPhase } = { current: { kind: "idle" } };
+    const bandNode = { x: 0, y: 0, width: 0, height: 0, visible: false };
+    const tileNodes = new Map<string, { screenX: number; screenY: number; width: number; height: number }>();
+    tileKeys.forEach((k, i) => {
+      tileNodes.set(k, { screenX: i * 10, screenY: 0, width: 10, height: 3 });
+    });
+    const anchorClears: (string | null)[] = [];
+    const ctx: BandCtx = {
+      byId: (id) => (id === BAND_ID ? (bandNode as any) : (tileNodes.get(id) as any)),
+      tileRefs: new Map(tileKeys.map((k) => [k, { selected: false, tileId: k }])),
+      clearTileSelection: () => {
+        for (const r of ctx.tileRefs.values()) r.selected = false;
+      },
+      setTileVisual: () => {},
+      updateSelectionStatusReal: () => {},
+      renderPreview: () => {},
+      setAnchorPath: (p) => {
+        anchorClears.push(p);
+      },
+      bandPhase: () => phase.current,
+      setBandPhase: (p) => {
+        phase.current = p;
+      },
+    };
+    const selected = (): string[] => [...ctx.tileRefs.entries()].filter(([, r]) => r.selected).map(([k]) => k);
+    return { ctx, bandNode, phase, selected, anchorClears };
+  };
+
+  test("a band begun in one pane does not commit into another pane", () => {
+    const pane0 = makeBandCtx(["/w/a.txt"]);
+    const pane1 = makeBandCtx(["/w/b.txt"]);
+    // the press lands in pane 0 and the pointer moves: the marquee is live
+    beginBand(pane0.ctx, { x: 1, y: 1, button: 0 });
+    updateBandRect(pane0.ctx, { x: 5, y: 5 });
+    expect(pane0.phase.current.kind).toBe("dragging");
+    // ...but the release is handled by the OTHER pane's scroller
+    endBand(pane1.ctx, { x: 6, y: 6 });
+    // pane 1 selected NOTHING (the gesture belonged to pane 0)
+    expect(pane1.selected()).toEqual([]);
+    // and pane 0's band is still live — it ends on ITS OWN release
+    expect(pane0.phase.current.kind).toBe("dragging");
+    endBand(pane0.ctx, { x: 6, y: 6 });
+    expect(pane0.selected()).toEqual(["/w/a.txt"]);
+  });
+
+  test("the band node's visible flag is DERIVED from the phase", () => {
+    const p = makeBandCtx(["/w/a.txt"]);
+    // idle: the node is hidden
+    expect(p.bandNode.visible).toBe(false);
+    // armed (the button is down): the marquee is NOT shown yet — it appears
+    // only once the pointer moves
+    beginBand(p.ctx, { x: 1, y: 1, button: 0 });
+    expect(p.phase.current.kind).toBe("armed");
+    expect(p.bandNode.visible).toBe(false);
+    // dragging: the node shows the rect
+    updateBandRect(p.ctx, { x: 5, y: 4 });
+    expect(p.phase.current.kind).toBe("dragging");
+    expect(p.bandNode.visible).toBe(true);
+    expect(p.bandNode.x).toBe(1);
+    expect(p.bandNode.y).toBe(1);
+    expect(p.bandNode.width).toBe(5);
+    expect(p.bandNode.height).toBe(4);
+    // ended: the node is hidden again
+    endBand(p.ctx, { x: 5, y: 4 });
+    expect(p.phase.current.kind).toBe("idle");
+    expect(p.bandNode.visible).toBe(false);
+  });
+
+  test("a band that never moved commits nothing", () => {
+    const p = makeBandCtx(["/w/a.txt"]);
+    // a press on empty pane space arms the band; the release lands far away
+    // (the pointer left the pane, so no drag event was delivered) — the stale
+    // origin must NOT sweep a selection across the pane
+    beginBand(p.ctx, { x: 1, y: 1, button: 0 });
+    endBand(p.ctx, { x: 6, y: 6 });
+    expect(p.selected()).toEqual([]);
+    expect(p.phase.current.kind).toBe("idle");
+  });
+
+  test("ending a band clears the range origin (the next extend starts fresh)", () => {
+    const p = makeBandCtx(["/w/a.txt"]);
+    beginBand(p.ctx, { x: 1, y: 1, button: 0 });
+    updateBandRect(p.ctx, { x: 5, y: 5 });
+    endBand(p.ctx, { x: 5, y: 5 });
+    expect(p.anchorClears).toEqual([null]);
+  });
+
+  test("cancelBands clears every pane's phase and hides the node", () => {
+    const pane0 = makeBandCtx(["/w/a.txt"]);
+    const pane1 = makeBandCtx(["/w/b.txt"]);
+    beginBand(pane0.ctx, { x: 1, y: 1, button: 0 });
+    updateBandRect(pane0.ctx, { x: 5, y: 5 });
+    beginBand(pane1.ctx, { x: 2, y: 2, button: 0 });
+    cancelBands([pane0.ctx, pane1.ctx]);
+    expect(pane0.phase.current.kind).toBe("idle");
+    expect(pane1.phase.current.kind).toBe("idle");
+    expect(pane0.bandNode.visible).toBe(false);
   });
 });
