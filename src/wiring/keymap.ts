@@ -162,8 +162,10 @@ export const wireKeymap = (deps: {
     closeProps: grid.props.closeProps,
     escMenu: { ...settings.escMenu, isOpen: () => floats.isOpen("escmenu") },
     termOwnsKeyboard: fileops.terminal.ownsKeyboard,
-    pathEditMode: () => chrome.activeToolbar().pathEditMode(),
-    pathInputVisible: () => !!byId(`tfm-p${core.panes.active}-path-input`)?.visible,
+    // ONE predicate for the inline path editor: the toolbar's edit mode OR
+    // the input being on screen (the old pair of booleans could disagree)
+    pathEditOpen: () =>
+      chrome.activeToolbar().pathEditMode() || !!byId(`tfm-p${core.panes.active}-path-input`)?.visible,
     searchQuery: () => nav.activeSearch().getQuery(),
     searchVisible: () => !!byId(`tfm-p${core.panes.active}-search`)?.visible,
     clearSearch: nav.clearSearch,

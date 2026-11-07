@@ -38,7 +38,7 @@ const makeSelectionForTest = () => {
 
 type Harness = ReturnType<typeof makeHarness>;
 
-const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
+const makeHarness = (over: Partial<KeyRouterCtx> | ((calls: string[]) => Partial<KeyRouterCtx>) = {}) => {
   const calls: string[] = [];
   const rec = (name: string) => () => {
     calls.push(name);
@@ -119,8 +119,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
       },
     },
     termOwnsKeyboard: () => false,
-    pathEditMode: () => false,
-    pathInputVisible: () => false,
+    pathEditOpen: () => false,
     searchVisible: () => false,
     searchQuery: () => "",
     clearSearch: rec("search:clear"),
@@ -214,7 +213,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> = {}) => {
         calls.push(`pick:${e.name}`);
       },
     },
-    ...over,
+    ...(typeof over === "function" ? over(calls) : over),
   };
   const router = makeKeyRouter(ctx);
   // returns whether the router marked the event handled (preventDefault) —
@@ -418,18 +417,157 @@ describe("precedence chain", () => {
   });
 
   test("path edit: esc exits, everything else swallowed", () => {
-    const h = makeHarness({ pathInputVisible: () => true });
+    const h = makeHarness({ pathEditOpen: () => true });
     h.key("a");
     expect(h.calls).toEqual([]);
     h.key("escape");
     expect(h.calls).toEqual(["pathedit:exit"]);
   });
 
-  test("pathEditMode (not just the visible input) also swallows", () => {
-    const h = makeHarness({ pathEditMode: () => true });
+  test("the path editor swallows the key even when only its input is on screen", () => {
+    // ONE predicate for ONE state: the toolbar's edit mode OR the input
+    // being on screen. The old pair of booleans could disagree — the
+    // router asked "is the input visible?" OR "is the mode on?", and each
+    // site picked its own answer.
+    const h = makeHarness({ pathEditOpen: () => true });
     h.key("down");
-    h.key("escape");
-    expect(h.calls).toEqual(["pathedit:exit"]);
+    expect(h.calls).toEqual([]);
+    expect(h.selection.focusIdx()).toBe(-1);
+  });
+});
+
+// --- the palette and the keypress must agree on the ACTIVE SURFACE ---
+//
+// The palette used to carry its OWN copy of the precedence chain, and the
+// copy had already drifted: it omitted the search, the path editor and the
+// terminal, so a palette "move down" moved the grid BEHIND a focused
+// terminal while the very same keypress did nothing. Both dispatchers now
+// ask ONE resolver (src/input/key-surface.ts).
+
+describe("palette / keypress surface agreement", () => {
+  const paletteMoveDown = (h: Harness): void => {
+    h.router
+      .commands()
+      .find((c) => c.id === "moveDown")!
+      .run();
+  };
+
+  test("the grid: both dispatchers move the grid focus", () => {
+    const h = makeHarness();
+    h.key("down");
+    expect(h.selection.focusIdx()).toBe(0);
+    const h2 = makeHarness();
+    paletteMoveDown(h2);
+    expect(h2.selection.focusIdx()).toBe(0);
+  });
+
+  test("the sidebar: both dispatchers move the sidebar row", () => {
+    const h = makeHarness();
+    h.router.setSidebarFocus(0);
+    h.key("down");
+    expect(cursorIndex(h.router.placeIdx())).toBe(1);
+    const h2 = makeHarness();
+    h2.router.setSidebarFocus(0);
+    paletteMoveDown(h2);
+    expect(cursorIndex(h2.router.placeIdx())).toBe(1);
+  });
+
+  test("the file menu: both dispatchers move the menu cursor", () => {
+    const mk = () => ({
+      cursor: NO_CURSOR,
+      flyout: CLOSED_FLYOUT,
+      entries: [{ action: () => {} }, { action: () => {} }],
+    });
+    const f1 = mk();
+    const h = makeHarness({ getFileMenuState: () => f1 });
+    h.key("down");
+    expect(cursorIndex(f1.cursor)).toBe(0);
+    const f2 = mk();
+    const h2 = makeHarness({ getFileMenuState: () => f2 });
+    paletteMoveDown(h2);
+    expect(cursorIndex(f2.cursor)).toBe(0);
+  });
+
+  test("the esc menu: both dispatchers move the menu cursor", () => {
+    const h = makeHarness();
+    h.escMenuState.open = true;
+    h.key("down");
+    expect(h.calls).toEqual(["escmenu:move:1"]);
+    const h2 = makeHarness();
+    h2.escMenuState.open = true;
+    paletteMoveDown(h2);
+    expect(h2.calls).toEqual(["escmenu:move:1"]);
+  });
+
+  // A surface that owns the key SWALLOWS it: the keypress goes to the
+  // surface, and the palette action must do NOTHING (it must not move the
+  // grid behind the modal/editor).
+  const SWALLOWED: Array<{
+    name: string;
+    over: (calls: string[]) => Partial<KeyRouterCtx>;
+    expected: string[];
+    bulk?: boolean;
+  }> = [
+    {
+      name: "the conflict modal",
+      over: (calls) => ({ conflict: { isOpen: () => true, closeConflict: (p) => calls.push(`conflict:close:${p}`) } }),
+      expected: [],
+    },
+    {
+      name: "the yes/no confirm",
+      over: (calls) => ({
+        yesNo: {
+          isOpen: () => true,
+          close: () => calls.push("yesno:close"),
+          moveFocus: (d) => calls.push(`yesno:move:${d}`),
+          submit: () => calls.push("yesno:submit"),
+        },
+      }),
+      // the confirm owns the arrows (they move ITS cursor)
+      expected: ["yesno:move:1"],
+    },
+    { name: "the inline rename", over: () => ({ isRenaming: () => true }), expected: [] },
+    { name: "the properties dialog", over: () => ({ propsIsOpen: () => true }), expected: [] },
+    {
+      name: "the prompt",
+      over: (calls) => ({ prompt: { isOpen: () => true, handleKey: (e) => calls.push(`prompt:${e.name}`) } }),
+      expected: ["prompt:down"],
+    },
+    { name: "the bulk rename", over: () => ({}), expected: ["bulk:down"], bulk: true },
+    {
+      name: "the embedded terminal",
+      over: () => ({ termOwnsKeyboard: () => true }),
+      expected: ["notify:terminal:info:Terminal owns keyboard"],
+    },
+    { name: "the path editor", over: () => ({ pathEditOpen: () => true }), expected: [] },
+    { name: "the search box", over: () => ({ searchVisible: () => true }), expected: [] },
+  ];
+
+  for (const c of SWALLOWED) {
+    test(`${c.name} owns the key: the palette action does nothing`, () => {
+      const h = makeHarness(c.over);
+      if (c.bulk) h.bulkState.open = true;
+      h.key("down");
+      expect(h.calls).toEqual(c.expected);
+      // the palette action must NOT act underneath the surface
+      h.calls.length = 0;
+      paletteMoveDown(h);
+      expect(h.calls).toEqual([]);
+      expect(h.selection.focusIdx()).toBe(-1);
+    });
+  }
+
+  test("the pick overlay: the palette acts on the surface BENEATH it", () => {
+    // the palette IS the pick overlay — its action runs after the pick
+    // closed, so it acts on the grid (the keypress went to the pick)
+    const h = makeHarness();
+    h.pickState.open = true;
+    h.key("down");
+    expect(h.calls).toEqual(["pick:down"]);
+    const h2 = makeHarness();
+    h2.pickState.open = true;
+    paletteMoveDown(h2);
+    expect(h2.selection.focusIdx()).toBe(0);
   });
 });
 
@@ -1597,7 +1735,7 @@ describe("consumed keys are marked handled so a focused scrollable can't self-sc
   });
 
   test("path edit owns typing: keys stay unmarked", () => {
-    const h = makeHarness({ pathEditMode: () => true });
+    const h = makeHarness({ pathEditOpen: () => true });
     expect(h.key("a")).toBe(false);
     expect(h.key("down")).toBe(false);
   });

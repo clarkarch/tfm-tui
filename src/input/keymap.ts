@@ -10,7 +10,9 @@
 // structural: esc-close, tab inside menus, and the type-to-search catch-all
 // (gated on the [ui] type-to-search knob — the yazi preset flips it off).
 // The order IS load-bearing — do not reorder; handleKey below is the canonical
-// sequence, this header mirrors it.
+// sequence, this header mirrors it. The chain's SURFACE part lives in ONE
+// ordered table (src/input/key-surface.ts): routeKey and the command palette
+// both ask that resolver, so the two dispatchers cannot drift apart.
 // Every remappable action ALSO lives in the commands() table (same closures)
 // so the pick overlay runs exactly what the keypress would. ---
 import path from "node:path";
@@ -34,6 +36,7 @@ import {
 } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
+import { resolveSurface, surfaceBelow, type KeySurface, type SurfaceReaders } from "./key-surface";
 import type { Selection } from "./selection";
 import { TileVisual } from "./grid-input";
 
@@ -109,8 +112,10 @@ export type KeyRouterCtx = {
     captureKey(e: KeyEventLike): boolean;
   };
   termOwnsKeyboard(): boolean;
-  pathEditMode(): boolean;
-  pathInputVisible(): boolean;
+  // the inline path editor is open (the toolbar's edit mode OR the input
+  // being on screen — ONE predicate for ONE state; the old pair of
+  // booleans could disagree)
+  pathEditOpen(): boolean;
   // --- search ---
   searchVisible(): boolean;
   searchQuery(): string;
@@ -301,80 +306,34 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // search > sidebar > grid > actions) — do not reorder; mirrors the module
   // header. ---
 
-  // Modal layers swallow everything while open (mostly mouse-driven dialogs).
-  // true modals that keep their keys even above the pick overlay: floats
-  // policy normally prevents modal+pick coexistence (opening one dismisses
-  // the other), but a confirm opened over pick — or any open race — must not
-  // leave esc dead. Called BEFORE the pick branch; handleModalKeys delegates.
-  const handleOverlayModalKeys = (ev: KeyPressEvent): boolean => {
-    // text prompt above everything (incl. pick): its Input owns typing, the
-    // router just delegates keys and swallows the rest
-    if (ctx.prompt?.isOpen()) {
-      ctx.prompt.handleKey(ev);
-      return true;
-    }
-    // bulk-rename modal: Textarea owns typing, esc closes (alt+enter reaches
-    // the textarea's native submit binding through the same dispatch)
-    if (ctx.bulkRename.isOpen()) {
-      ctx.bulkRename.handleKey(ev);
-      return true;
-    }
-    // override/conflict modal: esc = skip, everything else swallowed
-    if (ctx.conflict.isOpen()) {
-      if (ev.name === "escape") ctx.conflict.closeConflict("skip");
-      return true;
-    }
-    // yes/no confirm: esc = No, arrows move the No/Yes cursor (focus starts
-    // on No so a stray Enter is safe), openSelected activates it
-    if (ctx.yesNo.isOpen()) {
-      if (ev.name === "escape") ctx.yesNo.close();
-      else if (hitDir(ev, "moveUp", "extendUp") || hitDir(ev, "moveLeft", "extendLeft")) ctx.yesNo.moveFocus(-1);
-      else if (hitDir(ev, "moveDown", "extendDown") || hitDir(ev, "moveRight", "extendRight")) ctx.yesNo.moveFocus(1);
-      else if (hit(ev, "openSelected")) ctx.yesNo.submit();
-      return true;
-    }
-    // inline rename: the focused Input consumes typing; swallow everything
-    // else so arrows/shortcuts don't move grid focus mid-edit (esc/enter
-    // handled at the source via handleKeyPress / "enter")
-    if (ctx.isRenaming()) return true;
-    // floating properties dialog: esc/openSelected closes, else swallowed
-    if (ctx.propsIsOpen()) {
-      if (ev.name === "escape" || hit(ev, "openSelected")) ctx.closeProps();
-      return true;
-    }
-    return false;
+  // THE surface table: one reader per surface, in the canonical order
+  // (src/input/key-surface.ts). routeKey and the command palette both ask
+  // this resolver, so a surface that owns the key owns it for BOTH
+  // dispatchers — the palette used to carry its own copy of the chain and
+  // had already drifted (it omitted the search, the path editor and the
+  // terminal, so a palette "move down" moved the grid behind a focused
+  // terminal while the same keypress did nothing).
+  const surfaceReaders: SurfaceReaders = {
+    prompt: () => ctx.prompt?.isOpen() === true,
+    bulkrename: () => ctx.bulkRename.isOpen(),
+    conflict: () => ctx.conflict.isOpen(),
+    yesno: () => ctx.yesNo.isOpen(),
+    rename: () => ctx.isRenaming(),
+    props: () => ctx.propsIsOpen(),
+    pick: () => ctx.pick.isOpen(),
+    escmenu: () => ctx.escMenu.isOpen(),
+    terminal: () => ctx.termOwnsKeyboard(),
+    pathedit: () => ctx.pathEditOpen(),
+    filemenu: () => ctx.getFileMenuState() !== null,
+    search: () => ctx.searchVisible(),
+    sidebar: () => sidebarFocus.kind === "places",
+    grid: () => true,
   };
 
-  const handleModalKeys = (ev: KeyPressEvent): boolean => {
-    if (handleOverlayModalKeys(ev)) return true;
-    if (ctx.escMenu.isOpen()) {
-      if (ev.name === "escape") ctx.escMenu.closeMenu();
-      else if (hitDir(ev, "moveUp", "extendUp")) ctx.escMenu.moveMenu(-1);
-      else if (hitDir(ev, "moveDown", "extendDown")) ctx.escMenu.moveMenu(1);
-      else if (hitDir(ev, "moveLeft", "extendLeft")) ctx.escMenu.adjustSelectedSetting(-1);
-      else if (hitDir(ev, "moveRight", "extendRight")) ctx.escMenu.adjustSelectedSetting(1);
-      else if (ev.name === "tab") ctx.escMenu.menuTab();
-      else if (hit(ev, "toggleHelp")) ctx.escMenu.toggleHelp();
-      else if (hit(ev, "openSelected")) ctx.escMenu.menuActivate();
-      return true;
-    }
-    // embedded terminal owns the keyboard while focused — everything below is
-    // host UI. Toast once per focus visit, not per key, instead of
-    // dead-ending silently: users otherwise think the app hung.
-    if (ctx.termOwnsKeyboard()) {
-      if (!termHintShown) {
-        termHintShown = true;
-        ctx.notify("Terminal owns keyboard", "terminal", "info");
-      }
-      return true;
-    }
-    termHintShown = false;
-    if (ctx.pathInputVisible() || ctx.pathEditMode()) {
-      if (ev.name === "escape") ctx.exitPathEdit();
-      return true;
-    }
-    return false;
-  };
+  // The active surface. The palette asks for the one BENEATH itself (the
+  // palette IS the pick overlay — its action runs after the pick closed).
+  const activeSurface = (): KeySurface => resolveSurface(surfaceReaders);
+  const paletteSurface = (): KeySurface => resolveSurface(surfaceReaders, { beneath: "pick" });
 
   // File context menu: move*/openSelected navigate it (shared with the grid),
   // esc closes. A parent row's action fires on enter; its flyout opens on
@@ -762,110 +721,146 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     ctx.openInOtherPane(entry.path);
   };
   // --- context-aware nav dispatchers for the commands() table: the palette
-  // has no key event, so each run replicates the keypress precedence
-  // (file menu > esc menu > sidebar/search > grid) for its direction ---
+  // has no key event, so each run asks the SAME resolver the keypress path
+  // uses (beneath the palette itself) and acts on the surface that owns the
+  // key. The palette used to carry its OWN copy of the precedence, and the
+  // copy had already drifted: it omitted the search, the path editor and
+  // the terminal, so a palette "move down" moved the grid behind a focused
+  // terminal while the very same keypress did nothing. ---
   const doMoveUp = (): void => {
-    const fmenu = ctx.getFileMenuState();
-    if (fmenu) {
-      if (fmenu.flyout.kind === "open") ctx.moveFileSubmenu(-1);
-      else stepFileMenu(fmenu, -1);
-      return;
+    switch (paletteSurface()) {
+      case "filemenu": {
+        const fmenu = ctx.getFileMenuState();
+        if (fmenu?.flyout.kind === "open") ctx.moveFileSubmenu(-1);
+        else if (fmenu) stepFileMenu(fmenu, -1);
+        return;
+      }
+      case "escmenu":
+        ctx.escMenu.moveMenu(-1);
+        return;
+      case "sidebar":
+        if (sidebarFocus.kind === "places") setSidebarFocus(sidebarFocus.index - 1);
+        return;
+      case "grid":
+        selection.moveFocus(0, -1);
+        return;
+      default:
+        // a modal or an editor surface owns the key: the keypress path
+        // swallows it there, so the palette does nothing
+        return;
     }
-    if (ctx.escMenu.isOpen()) {
-      ctx.escMenu.moveMenu(-1);
-      return;
-    }
-    if (sidebarFocus.kind === "places") {
-      setSidebarFocus(sidebarFocus.index - 1);
-      return;
-    }
-    selection.moveFocus(0, -1);
   };
   const doMoveDown = (): void => {
-    const fmenu = ctx.getFileMenuState();
-    if (fmenu) {
-      if (fmenu.flyout.kind === "open") ctx.moveFileSubmenu(1);
-      else stepFileMenu(fmenu, 1);
-      return;
+    switch (paletteSurface()) {
+      case "filemenu": {
+        const fmenu = ctx.getFileMenuState();
+        if (fmenu?.flyout.kind === "open") ctx.moveFileSubmenu(1);
+        else if (fmenu) stepFileMenu(fmenu, 1);
+        return;
+      }
+      case "escmenu":
+        ctx.escMenu.moveMenu(1);
+        return;
+      case "sidebar":
+        if (sidebarFocus.kind === "places") setSidebarFocus(sidebarFocus.index + 1);
+        return;
+      case "grid":
+        selection.moveFocus(0, 1);
+        return;
+      default:
+        return;
     }
-    if (ctx.escMenu.isOpen()) {
-      ctx.escMenu.moveMenu(1);
-      return;
-    }
-    if (sidebarFocus.kind === "places") {
-      setSidebarFocus(sidebarFocus.index + 1);
-      return;
-    }
-    selection.moveFocus(0, 1);
   };
   const doMoveLeft = (): void => {
-    const fmenu = ctx.getFileMenuState();
-    if (fmenu) {
-      if (fmenu.flyout.kind === "open") ctx.closeFileSubmenu();
-      return;
+    switch (paletteSurface()) {
+      case "filemenu": {
+        const fmenu = ctx.getFileMenuState();
+        if (fmenu?.flyout.kind === "open") ctx.closeFileSubmenu();
+        return;
+      }
+      case "escmenu":
+        ctx.escMenu.adjustSelectedSetting(-1);
+        return;
+      case "sidebar":
+        leaveSidebarToGrid();
+        selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+        return;
+      case "grid": {
+        const atLeftEdge = selection.focusIdx() === -1 || selection.focusIdx() % selection.colsAtBuild() === 0;
+        if (atLeftEdge || selection.focusKeys().length === 0) enterSidebarFromGrid();
+        else selection.moveFocus(-1, 0);
+        return;
+      }
+      default:
+        return;
     }
-    if (ctx.escMenu.isOpen()) {
-      ctx.escMenu.adjustSelectedSetting(-1);
-      return;
-    }
-    if (sidebarFocus.kind === "places") {
-      leaveSidebarToGrid();
-      selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-      return;
-    }
-    const atLeftEdge = selection.focusIdx() === -1 || selection.focusIdx() % selection.colsAtBuild() === 0;
-    if (atLeftEdge || selection.focusKeys().length === 0) enterSidebarFromGrid();
-    else selection.moveFocus(-1, 0);
   };
   const doMoveRight = (): void => {
-    const fmenu = ctx.getFileMenuState();
-    if (fmenu) {
-      if (fmenu.flyout.kind === "closed" && fmenu.entries[cursorIndex(fmenu.cursor)]?.submenu) ctx.openFileSubmenu();
-      return;
+    switch (paletteSurface()) {
+      case "filemenu": {
+        const fmenu = ctx.getFileMenuState();
+        if (fmenu?.flyout.kind === "closed" && fmenu.entries[cursorIndex(fmenu.cursor)]?.submenu) ctx.openFileSubmenu();
+        return;
+      }
+      case "escmenu":
+        ctx.escMenu.adjustSelectedSetting(1);
+        return;
+      case "sidebar":
+        leaveSidebarToGrid();
+        selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
+        return;
+      case "grid":
+        selection.moveFocus(1, 0);
+        return;
+      default:
+        return;
     }
-    if (ctx.escMenu.isOpen()) {
-      ctx.escMenu.adjustSelectedSetting(1);
-      return;
-    }
-    if (sidebarFocus.kind === "places") {
-      leaveSidebarToGrid();
-      selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
-      return;
-    }
-    selection.moveFocus(1, 0);
   };
   const doOpenSelected = (): void => {
-    const fmenu = ctx.getFileMenuState();
-    if (fmenu) {
-      activateFileMenu(fmenu);
-      return;
+    switch (paletteSurface()) {
+      case "filemenu": {
+        const fmenu = ctx.getFileMenuState();
+        if (fmenu) activateFileMenu(fmenu);
+        return;
+      }
+      case "escmenu":
+        ctx.escMenu.menuActivate();
+        return;
+      case "search":
+        commitSearch();
+        return;
+      case "sidebar":
+        activateSidebarPlace();
+        return;
+      case "grid":
+        openFocusedTile();
+        return;
+      default:
+        return;
     }
-    if (ctx.escMenu.isOpen()) {
-      ctx.escMenu.menuActivate();
-      return;
-    }
-    if (ctx.searchVisible()) {
-      commitSearch();
-      return;
-    }
-    if (sidebarFocus.kind === "places") {
-      activateSidebarPlace();
-      return;
-    }
-    openFocusedTile();
+  };
+  // The extend/page/first/last actions are GRID-only on the keypress path
+  // (the sidebar and the menus own those keys there), so the palette must
+  // not extend the grid behind them either.
+  const gridOnly = (fn: () => void): void => {
+    if (paletteSurface() === "grid") fn();
   };
   const doExtendUp = (): void => {
-    extendBy(selection.focusIdx() < 0 ? 0 : selection.focusIdx() - selection.colsAtBuild());
+    gridOnly(() => extendBy(selection.focusIdx() < 0 ? 0 : selection.focusIdx() - selection.colsAtBuild()));
   };
   const doExtendDown = (): void => {
-    extendBy(selection.focusIdx() < 0 ? 0 : selection.focusIdx() + selection.colsAtBuild());
+    gridOnly(() => extendBy(selection.focusIdx() < 0 ? 0 : selection.focusIdx() + selection.colsAtBuild()));
   };
   const doExtendLeft = (): void => {
-    if (selection.focusKeys().length && selection.focusIdx() > 0) extendFromAnchor(selection.focusIdx() - 1);
+    gridOnly(() => {
+      if (selection.focusKeys().length && selection.focusIdx() > 0) extendFromAnchor(selection.focusIdx() - 1);
+    });
   };
   const doExtendRight = (): void => {
-    if (selection.focusKeys().length && selection.focusIdx() < selection.focusKeys().length - 1)
-      extendFromAnchor(selection.focusIdx() + 1);
+    gridOnly(() => {
+      if (selection.focusKeys().length && selection.focusIdx() < selection.focusKeys().length - 1)
+        extendFromAnchor(selection.focusIdx() + 1);
+    });
   };
 
   const labelOf = (action: KeyAction): string => KEY_SCHEMA.find((r) => r.action === action)?.label ?? action;
@@ -918,10 +913,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     { action: "moveLeft", run: doMoveLeft },
     { action: "moveRight", run: doMoveRight },
     { action: "openSelected", run: doOpenSelected },
-    { action: "pageUp", run: () => selection.pageBy(-1) },
-    { action: "pageDown", run: () => selection.pageBy(1) },
-    { action: "firstItem", run: () => selection.selectTileAt(0) },
-    { action: "lastItem", run: () => selection.selectTileAt(selection.focusKeys().length - 1) },
+    { action: "pageUp", run: () => gridOnly(() => selection.pageBy(-1)) },
+    { action: "pageDown", run: () => gridOnly(() => selection.pageBy(1)) },
+    { action: "firstItem", run: () => gridOnly(() => selection.selectTileAt(0)) },
+    { action: "lastItem", run: () => gridOnly(() => selection.selectTileAt(selection.focusKeys().length - 1)) },
     {
       action: "startSearch",
       run: () => {
@@ -1018,50 +1013,18 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     EDITOR_FLOAT_KINDS.some((kind) => editorFloatOpen(kind)) ||
     ctx.isRenaming() ||
     ctx.searchVisible() ||
-    ctx.pathInputVisible() ||
-    ctx.pathEditMode() ||
+    ctx.pathEditOpen() ||
     ctx.termOwnsKeyboard();
 
-  const routeKey = (ev: KeyPressEvent): boolean => {
-    const ctrl = !!ev.ctrl || !!ev.control;
-    // keybind capture in the settings panel is the ONE state above quit:
-    // recording ctrl+q must not quit the app mid-capture
-    if (ctx.escMenu.captureKey(ev)) return true;
-    // any non-copy key ends the ctrl+c streak (and re-arms the quit hint);
-    // the streak itself only advances at the copy dispatch below, so keys
-    // swallowed by modals/terminal/pick never count toward it
-    if (!hit(ev, "copy")) {
-      copyQuitStreak = 0;
-      quitHintShown = false;
-    }
-    if (hit(ev, "quit") && runAction("quit")) return true;
-    // held restart must not queue overlapping teardown/spawn pairs
-    if (hit(ev, "restart") && ev.repeated !== true && runAction("restart")) return true;
-    // a true modal open above the pick overlay keeps its keys (see
-    // handleOverlayModalKeys) — esc must reach a confirm opened over pick.
-    if (handleOverlayModalKeys(ev)) return true;
-    // pick overlay (command palette) open: it swallows everything below
-    // (typing reaches its focused Input natively, like type-to-search)
-    if (ctx.pick.isOpen()) {
-      ctx.pick.handleKey(ev);
-      return true;
-    }
-    // the command palette replaces the esc menu (its own layer) but is
-    // deliberately BELOW handleOverlayModalKeys above: a data-loss confirm
-    // (conflict/yes-no), prompt or rename keeps its keys.
-    if (hit(ev, "commandPalette") && runAction("commandPalette")) return true;
-    if (handleModalKeys(ev)) return true;
+  // --- the remappable action batches. The chain's ORDER is the precedence
+  // table; the two batches sit on either side of the sidebar/grid
+  // navigation. ---
 
-    // file context menu open: arrows/enter navigate it, esc closes.
-    // getFileMenuState() returns the LIVE state object — mutating fmenu.cursor
-    // below updates the menu module's state in place.
-    if (handleFileMenuKeys(ev)) return true;
-    if (handleSearchKeys(ev)) return true;
-
-    // --- remappable action keys that grid nav would otherwise swallow:
-    // handleGridNavKeys consumes bare arrows/return regardless of modifiers,
-    // so alt+arrows and alt+enter must dispatch BEFORE it (plain arrows and
-    // return are unaffected — they match no bind unless remapped onto one) ---
+  // remappable action keys that grid nav would otherwise swallow:
+  // handleGridNavKeys consumes bare arrows/return regardless of modifiers,
+  // so alt+arrows and alt+enter must dispatch BEFORE it (plain arrows and
+  // return are unaffected — they match no bind unless remapped onto one)
+  const dispatchPreNavActions = (ev: KeyPressEvent): boolean => {
     if (hit(ev, "histBack") && ev.repeated !== true && runAction("histBack")) return true;
     if (hit(ev, "histForward") && ev.repeated !== true && runAction("histForward")) return true;
     if (hit(ev, "goHome") && runAction("goHome")) return true;
@@ -1104,31 +1067,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (hit(ev, "copyToOtherPane") && ev.repeated !== true && runAction("copyToOtherPane")) return true;
     if (hit(ev, "moveToOtherPane") && ev.repeated !== true && runAction("moveToOtherPane")) return true;
     if (hit(ev, "startSearch") && runAction("startSearch")) return true;
+    return false;
+  };
 
-    // --- keyboard navigation: sidebar <-> grid ---
-    // sidebar focus swallows ALL keys — it must precede shift-extend or
-    // shift+arrows would mutate the grid selection while the sidebar is
-    // focused (it returns false when inactive, so grid extend is unchanged)
-    if (handleSidebarKeys(ev)) return true;
-    if (handleShiftExtend(ev)) return true;
-    if (handleGridNavKeys(ev)) return true;
-    if (hit(ev, "parentDir") && runAction("parentDir")) return true;
-    // type-to-search catch-all: gated on the [ui] knob (the yazi preset
-    // flips it off — bound bare keys already dispatched above regardless)
-    if (
-      ctx.typeToSearchEnabled() &&
-      !ctrl &&
-      !ev.shift &&
-      !ev.meta &&
-      !ev.option &&
-      typeof ev.name === "string" &&
-      ev.name.length === 1 &&
-      /[a-z0-9._-]/i.test(ev.name)
-    ) {
-      ctx.beginTypeToSearch(ev.name);
-      return true;
-    }
-
+  // the actions that run BELOW the sidebar/grid navigation
+  const dispatchPostNavActions = (ev: KeyPressEvent): boolean => {
     if (hit(ev, "openMenu") && runAction("openMenu")) return true;
     if (hit(ev, "toggleHelp") && runAction("toggleHelp")) return true;
     if (hit(ev, "toggleHidden") && ev.repeated !== true && runAction("toggleHidden")) return true;
@@ -1172,13 +1115,16 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (hit(ev, "paste") && !repeated && runAction("paste")) return true;
     if (hit(ev, "redo") && runAction("redo")) return true;
     if (hit(ev, "undo") && runAction("undo")) return true;
+    return false;
+  };
 
-    // --- plugin commands: LAST, after every core action — "core wins ties"
-    // means a plugin defaultBind colliding with ctrl+t/ctrl+c/ctrl+z must NOT
-    // swallow the core op. Nav keys (move*/openSelected) and structural keys
-    // (esc-close/tab/type-to-search) preempt above too: validateKeybindSpec
-    // accepts key NAMES like enter/arrows, so a plugin registering one is
-    // shadowed silently by the core bind — remap the core bind to free the key.
+  // --- plugin commands: LAST, after every core action — "core wins ties"
+  // means a plugin defaultBind colliding with ctrl+t/ctrl+c/ctrl+z must NOT
+  // swallow the core op. Nav keys (move*/openSelected) and structural keys
+  // (esc-close/tab/type-to-search) preempt above too: validateKeybindSpec
+  // accepts key NAMES like enter/arrows, so a plugin registering one is
+  // shadowed silently by the core bind — remap the core bind to free the key.
+  const dispatchPluginCommands = (ev: KeyPressEvent): boolean => {
     if (ctx.pluginCommands) {
       try {
         for (const cmd of ctx.pluginCommands()) {
@@ -1194,6 +1140,148 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       } catch {}
     }
     return false;
+  };
+
+  // type-to-search catch-all: gated on the [ui] knob (the yazi preset
+  // flips it off — bound bare keys already dispatched above regardless)
+  const typeToSearchCatchAll = (ev: KeyPressEvent): boolean => {
+    if (
+      ctx.typeToSearchEnabled() &&
+      !ev.ctrl &&
+      !ev.control &&
+      !ev.shift &&
+      !ev.meta &&
+      !ev.option &&
+      typeof ev.name === "string" &&
+      ev.name.length === 1 &&
+      /[a-z0-9._-]/i.test(ev.name)
+    ) {
+      ctx.beginTypeToSearch(ev.name);
+      return true;
+    }
+    return false;
+  };
+
+  const routeKey = (ev: KeyPressEvent): boolean => {
+    // keybind capture in the settings panel is the ONE state above quit:
+    // recording ctrl+q must not quit the app mid-capture
+    if (ctx.escMenu.captureKey(ev)) return true;
+    // any non-copy key ends the ctrl+c streak (and re-arms the quit hint);
+    // the streak itself only advances at the copy dispatch below, so keys
+    // swallowed by modals/terminal/pick never count toward it
+    if (!hit(ev, "copy")) {
+      copyQuitStreak = 0;
+      quitHintShown = false;
+    }
+    if (hit(ev, "quit") && runAction("quit")) return true;
+    // held restart must not queue overlapping teardown/spawn pairs
+    if (hit(ev, "restart") && ev.repeated !== true && runAction("restart")) return true;
+
+    // ONE resolver decides who owns the key. The order is the canonical
+    // precedence (src/input/key-surface.ts); the command palette asks the
+    // SAME resolver, so the two dispatchers cannot drift apart.
+    const surface = activeSurface();
+    // the command palette replaces the esc menu (its own layer) but is
+    // deliberately BELOW the overlay modals: a data-loss confirm
+    // (conflict/yes-no), prompt or rename keeps its keys. Its bind fires
+    // for every surface BELOW the pick.
+    if (surfaceBelow(surface, "pick") && hit(ev, "commandPalette") && runAction("commandPalette")) return true;
+
+    switch (surface) {
+      // text prompt above everything (incl. pick): its Input owns typing,
+      // the router just delegates keys and swallows the rest
+      case "prompt":
+        ctx.prompt?.handleKey(ev);
+        return true;
+      // bulk-rename modal: Textarea owns typing, esc closes (alt+enter
+      // reaches the textarea's native submit binding through the same
+      // dispatch)
+      case "bulkrename":
+        ctx.bulkRename.handleKey(ev);
+        return true;
+      // override/conflict modal: esc = skip, everything else swallowed
+      case "conflict":
+        if (ev.name === "escape") ctx.conflict.closeConflict("skip");
+        return true;
+      // yes/no confirm: esc = No, arrows move the No/Yes cursor (focus starts
+      // on No so a stray Enter is safe), openSelected activates it
+      case "yesno":
+        if (ev.name === "escape") ctx.yesNo.close();
+        else if (hitDir(ev, "moveUp", "extendUp") || hitDir(ev, "moveLeft", "extendLeft")) ctx.yesNo.moveFocus(-1);
+        else if (hitDir(ev, "moveDown", "extendDown") || hitDir(ev, "moveRight", "extendRight")) ctx.yesNo.moveFocus(1);
+        else if (hit(ev, "openSelected")) ctx.yesNo.submit();
+        return true;
+      // inline rename: the focused Input consumes typing; swallow everything
+      // else so arrows/shortcuts don't move grid focus mid-edit (esc/enter
+      // handled at the source via handleKeyPress / "enter")
+      case "rename":
+        return true;
+      // floating properties dialog: esc/openSelected closes, else swallowed
+      case "props":
+        if (ev.name === "escape" || hit(ev, "openSelected")) ctx.closeProps();
+        return true;
+      // pick overlay (command palette): it swallows everything below
+      // (typing reaches its focused Input natively, like type-to-search)
+      case "pick":
+        ctx.pick.handleKey(ev);
+        return true;
+      case "escmenu":
+        if (ev.name === "escape") ctx.escMenu.closeMenu();
+        else if (hitDir(ev, "moveUp", "extendUp")) ctx.escMenu.moveMenu(-1);
+        else if (hitDir(ev, "moveDown", "extendDown")) ctx.escMenu.moveMenu(1);
+        else if (hitDir(ev, "moveLeft", "extendLeft")) ctx.escMenu.adjustSelectedSetting(-1);
+        else if (hitDir(ev, "moveRight", "extendRight")) ctx.escMenu.adjustSelectedSetting(1);
+        else if (ev.name === "tab") ctx.escMenu.menuTab();
+        else if (hit(ev, "toggleHelp")) ctx.escMenu.toggleHelp();
+        else if (hit(ev, "openSelected")) ctx.escMenu.menuActivate();
+        return true;
+      // embedded terminal owns the keyboard while focused — everything below
+      // is host UI. Toast once per focus visit, not per key, instead of
+      // dead-ending silently: users otherwise think the app hung.
+      case "terminal":
+        if (!termHintShown) {
+          termHintShown = true;
+          ctx.notify("Terminal owns keyboard", "terminal", "info");
+        }
+        return true;
+      // inline path edit: esc exits, everything else swallowed
+      case "pathedit":
+        termHintShown = false;
+        if (ev.name === "escape") ctx.exitPathEdit();
+        return true;
+      // file context menu open: arrows/enter navigate it, esc closes.
+      // getFileMenuState() returns the LIVE state object — mutating fmenu.cursor
+      // below updates the menu module's state in place.
+      case "filemenu":
+        termHintShown = false;
+        return handleFileMenuKeys(ev);
+      case "search":
+        termHintShown = false;
+        return handleSearchKeys(ev);
+      // --- keyboard navigation: sidebar <-> grid ---
+      // sidebar focus swallows ALL keys — it must precede shift-extend or
+      // shift+arrows would mutate the grid selection while the sidebar is
+      // focused
+      case "sidebar":
+        termHintShown = false;
+        if (dispatchPreNavActions(ev)) return true;
+        return handleSidebarKeys(ev);
+      case "grid":
+        termHintShown = false;
+        if (dispatchPreNavActions(ev)) return true;
+        if (handleShiftExtend(ev)) return true;
+        if (handleGridNavKeys(ev)) return true;
+        if (hit(ev, "parentDir") && runAction("parentDir")) return true;
+        if (typeToSearchCatchAll(ev)) return true;
+        if (dispatchPostNavActions(ev)) return true;
+        return dispatchPluginCommands(ev);
+      default: {
+        // never: a surface added to the table without a case here does not
+        // compile (the assignment only type-checks while surface is never)
+        const unhandled: never = surface;
+        return unhandled;
+      }
+    }
   };
 
   const handleKey = (ev: KeyPressEvent): void => {
