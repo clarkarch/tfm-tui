@@ -10,6 +10,7 @@ import {
   writeFileSync,
   chmodSync,
   cpSync,
+  symlinkSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +25,7 @@ import {
   safeRestoreMove,
   uniqueTarget,
   xdgTrashMove,
+  xdgTrashMoveToRoot,
   deviceOf,
   crossDevice,
   claimTmp,
@@ -333,6 +335,78 @@ describe("xdgTrashMove", () => {
       chmodSync(infoDir, 0o755);
       rmSync(files, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the XDG trash rollback phase", () => {
+  // The claim → move → finalize sequence can fail in three different ways,
+  // and each failure has a DIFFERENT remedy. The nastiest one: the file
+  // moved into the trash root, the info write failed, and the ROLLBACK
+  // failed too — the file is then stranded in the trash root with no
+  // restore mapping. The old code swallowed that (the `rollbackFailed`
+  // marker was read NOWHERE), so the user only saw "FAILED" and never
+  // learned where their file went.
+
+  // A move seam whose FIRST call (into the trash root) succeeds and whose
+  // ROLLBACK call (back to the source) fails. The finalize write is made
+  // to fail by replacing the claimed .trashinfo with a symlink into a
+  // missing directory (writeFile → ENOENT) — the same "the info write
+  // failed" condition the production code rolls back for.
+  const strandedMove = (src: string) => {
+    return async (from: string, to: string): Promise<void> => {
+      if (from !== src) throw new Error("rollback refused");
+      await fsMove(from, to);
+      const root = path.dirname(path.dirname(to));
+      const infoPath = path.join(root, "info", `${path.basename(to)}.trashinfo`);
+      rmSync(infoPath, { force: true });
+      symlinkSync(path.join(root, "missing-dir", "info"), infoPath);
+    };
+  };
+
+  test("a failed rollback reports the STRANDED path", async () => {
+    const src = path.join(SANDBOX, "stranded.txt");
+    writeFileSync(src, "payload");
+    const root = path.join(SANDBOX, "stranded-root");
+    const trashPath = path.join(root, "files", "stranded.txt");
+    const infoPath = path.join(root, "info", "stranded.txt.trashinfo");
+    const err = await xdgTrashMoveToRoot(src, root, strandedMove(src)).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    // the error NAMES the stranded path — it is the user's only copy and
+    // they have to go fetch it by hand
+    expect((err as { strandedPath?: string }).strandedPath).toBe(trashPath);
+    expect(String((err as Error).message)).toContain(trashPath);
+    // the TOAST text carries the path too (fsErrText is what the op
+    // summaries quote) — a bare "FAILED" would hide the file
+    expect(fsErrText(err)).toContain(trashPath);
+    // the file really is in the trash root (stranded, not lost)
+    expect(existsSync(trashPath)).toBe(true);
+    expect(existsSync(src)).toBe(false);
+    // the untrustworthy info is gone: a half-written one would
+    // mis-attribute the entry (and the restore would restore the WRONG
+    // path)
+    expect(existsSync(infoPath)).toBe(false);
+  });
+
+  test("a stranded file does NOT fall through to the next trash root", async () => {
+    // The fall-through is for "this root is read-only" — the file is still
+    // at the source, so the next root can take it. A STRANDED file is the
+    // opposite: the source is GONE, so the next root would fail with
+    // ENOENT and MASK the real error (the user would never learn where
+    // their file is).
+    const src = path.join(SANDBOX, "fallthrough.txt");
+    writeFileSync(src, "payload");
+    const root1 = path.join(SANDBOX, "root1");
+    const root2 = path.join(SANDBOX, "root2");
+    const err = await xdgTrashMove(src, { roots: [root1, root2], move: strandedMove(src) }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as { strandedPath?: string }).strandedPath).toBe(path.join(root1, "files", "fallthrough.txt"));
+    // the SECOND root was never tried
+    expect(existsSync(path.join(root2, "files", "fallthrough.txt"))).toBe(false);
   });
 });
 

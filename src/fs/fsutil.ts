@@ -174,7 +174,27 @@ const FS_ERR_TEXT: Record<string, string> = {
   EMFILE: "too many open files",
 };
 
+// A trash move that could NOT be rolled back leaves the file in the trash
+// root with no usable .trashinfo: tfm can neither restore it (no mapping)
+// nor attribute it to the original path. The error NAMES the stranded path —
+// the file is the user's only copy, and a silent "FAILED" would hide it.
+// (The old code wrote a `rollbackFailed` marker on the ORIGINAL error and
+// read it NOWHERE, so the failure was invisible.)
+export class TrashStrandedError extends Error {
+  readonly strandedPath: string;
+  readonly rollbackError: unknown;
+  constructor(strandedPath: string, rollbackError: unknown) {
+    super(`file stranded in the trash root · ${strandedPath}`);
+    this.name = "TrashStrandedError";
+    this.strandedPath = strandedPath;
+    this.rollbackError = rollbackError;
+  }
+}
+
 export const fsErrText = (err: unknown): string => {
+  // a stranded trash file names its path — the whole message IS the report
+  // (the generic branch would cut it at the first colon)
+  if (err instanceof TrashStrandedError) return err.message;
   const code = errCode(err);
   if (typeof code === "string") return FS_ERR_TEXT[code] ?? code.toLowerCase();
   return err instanceof Error ? (err.message.split(":")[0]?.toLowerCase() ?? "unknown error") : "unknown error";
@@ -445,18 +465,51 @@ const trashRootsFor = (target: string): string[] => {
 // so a cross-device trash can go through the progress-aware copy engine.
 export type MoveFn = (src: string, dest: string) => Promise<void>;
 
+// The XDG trash move's ONE explicit phase. The claim → move → finalize
+// sequence fails in three different ways, and each failure has a DIFFERENT
+// remedy, so the phase says which one we are in — the error path picks the
+// remedy from the phase instead of guessing:
+//
+//   claimed    — the .trashinfo placeholder owns the name, the file is
+//                STILL at the source (a failure here only cleans up the
+//                placeholder; the source is intact)
+//   moved      — the file is in the trash root, the info is still the
+//                placeholder (a failure here must roll the file back)
+//   finalized  — the file is in the trash root and its info is durable
+type TrashPhase =
+  | { kind: "claimed"; infoPath: string; trashPath: string }
+  | { kind: "moved"; infoPath: string; trashPath: string }
+  | { kind: "finalized"; infoPath: string; trashPath: string };
+
+// drop a .trashinfo (best effort): a stale info file is an orphan entry —
+// tfm's trash view would list a file it cannot restore
+const dropTrashInfo = async (infoPath: string, what: string): Promise<void> => {
+  try {
+    await rm(infoPath, { force: true });
+  } catch (cleanupErr) {
+    swallow(what, cleanupErr);
+  }
+};
+
 export const xdgTrashMove = async (
   p: string,
-  opts?: { move?: MoveFn; isCancelled?: () => boolean },
+  opts?: { move?: MoveFn; isCancelled?: () => boolean; roots?: string[] },
 ): Promise<string> => {
   const absSrc = path.resolve(p);
-  const roots = trashRootsFor(absSrc);
+  // the candidate roots (default: the spec-derived ones — the home trash
+  // plus the topdir trash of another filesystem)
+  const roots = opts?.roots ?? trashRootsFor(absSrc);
   let lastErr: unknown = null;
   for (const root of roots) {
     try {
       return await xdgTrashMoveToRoot(absSrc, root, opts?.move);
     } catch (err) {
       lastErr = err;
+      // A STRANDED file is NOT a "try the next root" failure: the source is
+      // GONE (the file sits in this root's files dir), so the next root
+      // would fail with ENOENT and MASK the real error — the user would
+      // never learn where their file is.
+      if (err instanceof TrashStrandedError) throw err;
       // a cancelled op must NOT fall through to the next trash root: the
       // fallback would start the whole copy again against the user's ✕
       if (opts?.isCancelled?.()) break;
@@ -480,6 +533,7 @@ export const xdgTrashMoveToRoot = async (
   const base = path.basename(absSrc);
   const stamp = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const encoded = encodeTrashPath(absSrc);
+  const content = `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`;
   let name = base;
   for (let i = 2; ; i++) {
     const infoPath = path.join(infoDir, `${name}.trashinfo`);
@@ -497,7 +551,7 @@ export const xdgTrashMoveToRoot = async (
     }
     // atomic claim: fails with EEXIST when another trasher owns this name
     try {
-      await writeFile(infoPath, `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`, { flag: "wx" });
+      await writeFile(infoPath, content, { flag: "wx" });
     } catch (err) {
       if (errCode(err) === "EEXIST") {
         name = `${base}.${i}`;
@@ -505,20 +559,13 @@ export const xdgTrashMoveToRoot = async (
       }
       throw err;
     }
-    // claimed — now move, then finalize the info (overwrite placeholder)
+    // --- phase: claimed (the info placeholder owns the name) ---
+    let phase: TrashPhase = { kind: "claimed", infoPath, trashPath: finalPath };
     try {
       await move(absSrc, finalPath);
-    } catch (moveErr) {
-      try {
-        await rm(infoPath, { force: true });
-      } catch (cleanupErr) {
-        // a leftover .trashinfo for a file that never moved is an orphan entry
-        swallow("trash info cleanup after failed move", cleanupErr);
-      }
-      throw moveErr;
-    }
-    try {
-      await writeFile(infoPath, `[Trash Info]\nPath=${encoded}\nDeletionDate=${stamp}\n`);
+      // --- phase: moved (the file is in the trash root) ---
+      phase = { kind: "moved", infoPath, trashPath: finalPath };
+      await writeFile(infoPath, content);
       // best-effort durability: info + dir fsync so a crash doesn't lose the
       // restore mapping for a file that already moved
       try {
@@ -527,25 +574,36 @@ export const xdgTrashMoveToRoot = async (
         swallow("trash info fsync", syncErr);
       }
     } catch (err) {
-      // put the file back — a source-less trash entry is worse than no entry
+      // THE PHASE PICKS THE REMEDY:
+      if (phase.kind === "claimed") {
+        // the file never moved — the source is intact, so only the
+        // placeholder needs cleanup (no orphan entry)
+        await dropTrashInfo(phase.infoPath, "trash info cleanup after failed move");
+        throw err;
+      }
+      // phase: moved — the file IS in the trash root now, so put it back.
+      // The rollback is the only way out; if IT fails, the file is stranded
+      // and the error must say where it is.
       try {
-        await move(finalPath, absSrc);
+        await move(phase.trashPath, absSrc);
       } catch (undoErr) {
-        if (err instanceof Error) {
-          const e: Error & { rollbackFailed?: unknown } = err;
-          e.rollbackFailed = undoErr;
-        }
+        // THE ROLLBACK FAILED: the file stays in the trash root. Its
+        // .trashinfo is untrustworthy (the write that just failed may have
+        // truncated it), so drop it — a half-written info would
+        // mis-attribute the entry — and REPORT the stranded path. The
+        // orphan-name check keeps the file from being overwritten; the user
+        // moves it back by hand.
+        await dropTrashInfo(phase.infoPath, "trash info cleanup after failed rollback");
+        throw new TrashStrandedError(phase.trashPath, undoErr);
       }
-      try {
-        await rm(infoPath, { force: true });
-      } catch (cleanupErr) {
-        // failed rollback of the .trashinfo: the file is back but the entry
-        // would linger without this line in the log
-        swallow("trash info cleanup after failed write", cleanupErr);
-      }
+      // rolled back: the file is back at the source, so the info (which
+      // points into the trash) is invalid — drop it
+      await dropTrashInfo(phase.infoPath, "trash info cleanup after failed write");
       throw err;
     }
-    return finalPath;
+    // --- phase: finalized (the file is in the trash root, the info durable) ---
+    phase = { kind: "finalized", infoPath, trashPath: finalPath };
+    return phase.trashPath;
   }
 };
 
