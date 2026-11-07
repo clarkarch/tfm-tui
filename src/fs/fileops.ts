@@ -34,6 +34,15 @@ import {
   crossDevice as fsCrossDevice,
 } from "./fsutil";
 import {
+  mayRemoveTarget,
+  needsRemovalOnly,
+  noOutcome,
+  outcomeId,
+  outcomeLanded,
+  outcomeSourceRemovalFailed,
+  type TransferOutcome,
+} from "./transfer-outcome";
+import {
   defaultSudoExec,
   isPrivilegeError,
   runSudoTool,
@@ -748,27 +757,32 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             } else replaced++;
           }
         }
-        // per-iteration: did THIS src go through the streaming copy engine?
-        // (cross-device moves need the same half-copy cleanup real copies get)
-        let copiedHere = false;
-        let copyId: FileId | null = null;
+        // per-iteration state: did THIS src go through the streaming copy
+        // engine, and may the half-copy cleanup remove the target?
+        //
+        // ONE tagged value, not three parallel booleans: the old
+        // (copiedHere / copyId / sourceRemovalFailed) triple made "the copy
+        // landed AND the source removal failed AND the target may still be
+        // deleted" representable — and that combination is total data loss
+        // (after a partial rm(src) the target is the only complete copy).
+        let outcome: TransferOutcome = noOutcome();
         const stillOurCopy = async (): Promise<boolean> => {
-          if (!copyId) return false;
-          if (fileIdMatches(copyId, target)) return true;
+          const id = outcomeId(outcome);
+          if (!id) return false;
+          if (fileIdMatches(id, target)) return true;
           if (sudoOk !== true) return false;
           const current = await sudoFileIdOf(target).catch(() => null);
           return (
             !!current &&
-            current.dev === copyId.dev &&
-            current.ino === copyId.ino &&
-            (copyId.born === undefined || current.born === copyId.born)
+            current.dev === id.dev &&
+            current.ino === id.ino &&
+            (id.born === undefined || current.born === id.born)
           );
         };
 
         // cross-device move whose COPY landed but whose source removal failed:
         // `target` is the only complete data — the sudo retry must only retry
         // the removal, never rm/recopy the complete copy (total data loss).
-        let sourceRemovalFailed = false;
         // did THIS move cross a filesystem boundary? The undo/redo below
         // needs the answer: a rename cannot cross devices, so putting the
         // file back is a COPY — and that copy must carry the bar.
@@ -777,7 +791,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           const t = target,
             s = src;
           if (op === "copy") {
-            const tid = copyId;
+            const tid = outcomeId(outcome);
             units.push(() => trashIfSameFile(t, tid, ctx.log));
             dUnits.push({ op: "trash", path: t, ...(tid ?? {}) });
             redos.push(async () => {
@@ -822,13 +836,13 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         };
         try {
           if (op === "copy") {
-            copyId = await copyTreeProgressWired(src, target);
-            copiedHere = true;
-            if (!copyId || !fileIdMatches(copyId, target)) throw new Error("copy destination changed");
+            const id = await copyTreeProgressWired(src, target);
+            outcome = outcomeLanded(id);
+            if (!id || !fileIdMatches(id, target)) throw new Error("copy destination changed");
           } else if (isCrossDevice(src, destDir)) {
-            copyId = await copyTreeProgressWired(src, target);
-            copiedHere = true;
-            if (!copyId || !fileIdMatches(copyId, target)) throw new Error("copy destination changed");
+            const id = await copyTreeProgressWired(src, target);
+            outcome = outcomeLanded(id);
+            if (!id || !fileIdMatches(id, target)) throw new Error("copy destination changed");
 
             // cancel raced the final byte: copy completed but the source must
             // survive a cancelled move — surface as cancelled, drop the copy
@@ -839,9 +853,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               // source is partially deleted; the copy in `target` is now the
               // ONLY complete data — clearing it (the half-copy cleanup below)
               // would lose everything. Keep it and report loudly. The sudo
-              // retry is told to retry ONLY the removal (sourceRemovalFailed).
-              copiedHere = false;
-              sourceRemovalFailed = true;
+              // retry is told to retry ONLY the removal.
+              outcome = outcomeSourceRemovalFailed(outcomeId(outcome));
               throw new Error(`source partially removed: ${fsErrText(err)}`);
             }
           } else await fsMove(src, target);
@@ -857,7 +870,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             if (progressCancelled(prog)) failure = new Error("cancelled");
             else {
               try {
-                if (sourceRemovalFailed) {
+                if (needsRemovalOnly(outcome)) {
                   // the copy already landed — only the source needs privilege.
                   // NEVER touch `target` here: the source is partially deleted
                   // and `target` is the only complete copy (an rm+recopy of it
@@ -877,15 +890,16 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                     },
                   );
                   if (occupied) throw new Error(`already exists: ${path.basename(target)}`);
-                  copyId = await sudoCopy(src, target);
-                  copiedHere = true;
+                  outcome = outcomeLanded(await sudoCopy(src, target));
                   if (!(await stillOurCopy())) throw new Error("copy destination changed");
                   if (op === "move") {
                     if (progressCancelled(prog)) throw new Error("cancelled");
                     try {
                       await sudoRemove(src);
                     } catch (rmErr) {
-                      copiedHere = false;
+                      // the copy landed and the source could not be removed:
+                      // the target is now the only complete data — keep it
+                      outcome = outcomeSourceRemovalFailed(outcomeId(outcome));
                       throw new Error(`source partially removed: ${fsErrText(rmErr)}`);
                     }
                   }
@@ -897,7 +911,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               }
             }
           }
-          if (copiedHere && (await stillOurCopy())) {
+          if (mayRemoveTarget(outcome) && (await stillOurCopy())) {
             try {
               await rm(target, { recursive: true });
             } catch (cleanup) {
