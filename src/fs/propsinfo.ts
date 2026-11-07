@@ -82,7 +82,10 @@ export const mimeLabelFor = (name: string): string => {
 export const inodeKey = (st: { dev: number; ino: number }): string => `${st.dev}:${st.ino}`;
 
 // recursive dir totals; null when the tree is absurdly large
-export const dirWalkStats = async (root: string): Promise<{ bytes: number; files: number; folders: number } | null> => {
+// The aggregate on-disk cost of a folder tree (null = too large to scan).
+export type DirStats = { bytes: number; files: number; folders: number };
+
+export const dirWalkStats = async (root: string): Promise<DirStats | null> => {
   let bytes = 0,
     files = 0,
     folders = 0,

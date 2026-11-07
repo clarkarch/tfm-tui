@@ -19,6 +19,7 @@ import { makeProps } from "./ui-props";
 import { makeDialogs } from "./ui-dialogs";
 import { makeFloats, type FloatOpenOpts } from "./floats";
 import { defaultConfig } from "../config/config-schema";
+import { dirWalkStats, fmtBytes } from "../fs/propsinfo";
 import type { Theme } from "../config/config";
 import type { ListEntry } from "../lib/menu-entry";
 
@@ -53,6 +54,10 @@ const pointers: string[] = [];
 let fileA: string;
 let fileSh: string;
 let dirD: string;
+// the directory-walk seam the props dialog drives. Swapped per test so a
+// walk can be HELD OPEN — the generation guard is only observable when the
+// walk resolves AFTER the dialog moved on.
+let dirStatsImpl: typeof dirWalkStats = dirWalkStats;
 
 const byId = (id: string) => t.renderer.root.findDescendantById(id);
 const text = (id: string): string => {
@@ -192,6 +197,7 @@ beforeAll(async () => {
     },
     fallbackGlyphFor: () => "file",
     cellMetrics: () => ({ aspect: 0.5 }),
+    dirStats: (root) => dirStatsImpl(root),
     setPointer: (s) => void pointers.push(s),
   });
 });
@@ -589,5 +595,133 @@ describe("image hero centering", () => {
     props.closeProps();
     expect(() => props.repaint()).not.toThrow();
     expect(byId("tfm-props")).toBeFalsy();
+  });
+});
+
+describe("the properties dialog's generation guard", () => {
+  // The aggregate size of a folder arrives ASYNCHRONOUSLY. If the dialog is
+  // closed and reopened meanwhile, the FIRST dialog's counts must never land
+  // in the SECOND one — the old code guarded the single-target path with a
+  // counter the multi-target path never checked (and vice versa: the single
+  // path's counter was not bumped by a multi open, so a stale single walk
+  // painted into a multi dialog).
+  const heldWalk = (result: { bytes: number; files: number; folders: number }) => {
+    const real = dirStatsImpl;
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    dirStatsImpl = async () => {
+      await gate;
+      return result;
+    };
+    return {
+      release: () => release?.(),
+      restore: () => {
+        dirStatsImpl = real;
+      },
+    };
+  };
+
+  test("a stale multi-selection walk does not paint into a reopened dialog", async () => {
+    const dirWalk = path.join(sandbox, "walk-multi");
+    mkdirSync(dirWalk, { recursive: true });
+    writeFileSync(path.join(dirWalk, "blob"), "x".repeat(4096));
+    const walk = heldWalk({ bytes: 4096, files: 1, folders: 0 });
+    try {
+      // 1. a multi-selection whose folder walk is still in flight
+      props.openProperties([fileA, dirWalk]);
+      await t.renderOnce();
+      expect(text("tfm-props-size")).toContain("calculating");
+      // 2. the dialog is closed and a DIFFERENT one is opened
+      props.closeProps();
+      await t.renderOnce();
+      props.openProperties(fileSh);
+      await t.renderOnce();
+      // 3. the stale walk lands
+      walk.release();
+      await new Promise((r) => setTimeout(r, 30));
+      await t.renderOnce();
+      // the NEW dialog shows ITS OWN target's size
+      expect(text("tfm-props-size")).toContain(fmtBytes(lstatSync(fileSh).size));
+      expect(text("tfm-props-size")).not.toContain("4.0 KB");
+    } finally {
+      walk.restore();
+      props.closeProps();
+      await t.renderOnce();
+    }
+  });
+
+  test("a stale single-target walk does not paint into a reopened dialog", async () => {
+    const dirWalk = path.join(sandbox, "walk-single");
+    mkdirSync(dirWalk, { recursive: true });
+    writeFileSync(path.join(dirWalk, "blob"), "x".repeat(4096));
+    const walk = heldWalk({ bytes: 4096, files: 1, folders: 0 });
+    try {
+      // 1. a single folder whose walk is still in flight
+      props.openProperties(dirWalk);
+      await t.renderOnce();
+      expect(text("tfm-props-size")).toContain("calculating");
+      // 2. the dialog is closed and a MULTI dialog is opened
+      props.closeProps();
+      await t.renderOnce();
+      props.openProperties([fileA, fileSh]);
+      await t.renderOnce();
+      const mine = lstatSync(fileA).size + lstatSync(fileSh).size;
+      expect(text("tfm-props-size")).toContain(fmtBytes(mine));
+      // 3. the stale walk lands
+      walk.release();
+      await new Promise((r) => setTimeout(r, 30));
+      await t.renderOnce();
+      expect(text("tfm-props-size")).toContain(fmtBytes(mine));
+      expect(text("tfm-props-size")).not.toContain("4.0 KB");
+    } finally {
+      walk.restore();
+      props.closeProps();
+      await t.renderOnce();
+    }
+  });
+
+  test("a stale single-target walk does not paint into a reopened single dialog", async () => {
+    const dirWalk = path.join(sandbox, "walk-single2");
+    mkdirSync(dirWalk, { recursive: true });
+    writeFileSync(path.join(dirWalk, "blob"), "x".repeat(4096));
+    const walk = heldWalk({ bytes: 4096, files: 1, folders: 0 });
+    try {
+      props.openProperties(dirWalk);
+      await t.renderOnce();
+      props.closeProps();
+      await t.renderOnce();
+      props.openProperties(fileA);
+      await t.renderOnce();
+      walk.release();
+      await new Promise((r) => setTimeout(r, 30));
+      await t.renderOnce();
+      expect(text("tfm-props-size")).toContain(fmtBytes(lstatSync(fileA).size));
+      expect(text("tfm-props-size")).not.toContain("4.0 KB");
+    } finally {
+      walk.restore();
+      props.closeProps();
+      await t.renderOnce();
+    }
+  });
+
+  test("the CURRENT dialog's walk DOES paint", async () => {
+    const dirWalk = path.join(sandbox, "walk-current");
+    mkdirSync(dirWalk, { recursive: true });
+    writeFileSync(path.join(dirWalk, "blob"), "x".repeat(4096));
+    const walk = heldWalk({ bytes: 4096, files: 1, folders: 0 });
+    try {
+      props.openProperties(dirWalk);
+      await t.renderOnce();
+      walk.release();
+      await new Promise((r) => setTimeout(r, 30));
+      await t.renderOnce();
+      expect(text("tfm-props-size")).toContain("4.0 KB");
+    } finally {
+      walk.restore();
+      props.closeProps();
+      await t.renderOnce();
+    }
   });
 });

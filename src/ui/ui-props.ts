@@ -7,7 +7,7 @@ import type { Theme } from "../config/config";
 import { fileIconFor, fileIsImage, fileIsVideo } from "../fs/filetype";
 import { canThumbVideo } from "./icons";
 import type { MakeIconSlot, SlotElement, ThumbJob } from "./ui-slots";
-import { dirWalkStats, fmtBytes, fmtDate, inodeKey, mimeLabelFor } from "../fs/propsinfo";
+import { dirWalkStats, fmtBytes, fmtDate, inodeKey, mimeLabelFor, type DirStats } from "../fs/propsinfo";
 import { readStarredList, starredRegistryAdd, starredRegistryRemove } from "../fs/recent";
 import { isBookmarked, setBookmarked, loadSystemPlaces } from "../fs/places";
 import type { ListEntry } from "../lib/menu-entry";
@@ -24,6 +24,18 @@ import type { IconSpec } from "../lib/icon-state";
 // toggles, hero icon/thumbnail, nautilus-style permissions editor. Theme +
 // renderer arrive via ctx (same seam as ui-dialogs); every tfm-props-* id
 // must stay byte-identical for rethemeChrome. ---
+
+// The dialog's ONE explicit state. `closed` = no dialog on screen; `open` =
+// a dialog is mounted, `target` is the selection it shows (the repaint
+// rebuild uses it) and `gen` is the generation of THIS dialog.
+//
+// The generation is what makes the async size walks safe: a walk resolves
+// AFTER the user closed the dialog and opened another one, and the old code
+// painted the FIRST dialog's counts into the SECOND one (the multi path
+// never checked the counter at all, and the single path's counter was not
+// bumped by a multi open — a stale single walk painted into a multi dialog).
+// ONE counter, checked by EVERY settle, fixes both directions.
+type PropsState = { kind: "closed"; gen: number } | { kind: "open"; gen: number; target: string | string[] };
 
 // shared slot/thumb types live in ./ui-slots (the queue they feed) — the old
 // byte-identical local mirrors drifted when ui-slots gained a field
@@ -61,6 +73,11 @@ type PropsCtx = {
   setIconState(spec: IconSpec | undefined, stateIdx: number): boolean;
   fallbackGlyphFor(name: string): string;
   cellMetrics(): { aspect: number };
+  // the directory-walk seam: the aggregate size of a folder (and of a
+  // multi-selection that contains folders). It resolves ASYNCHRONOUSLY, so
+  // it is also the seam the generation guard is tested through — the real
+  // walk resolves on its own schedule, which no test can pin.
+  dirStats?(root: string): Promise<DirStats | null>;
   // tty mode (linux console): hero falls back to the icon slot, the thumb
   // raster could never land. force-glyph does the same for buggy kitty impls.
   // Optional so test fakes keep working.
@@ -78,15 +95,19 @@ const execGio = (args: string[]): Promise<ExecBunResult> => execBun("gio", args,
 export const makeProps = (ctx: PropsCtx) => {
   // --- Properties dialog (floating, right-click -> Properties…) ---
   const PROPS_W = 46;
-  let propsOpen = false;
-  let dirWalkGen = 0;
+  // the walk seam: the real dirWalkStats by default, the injected one in
+  // tests (the walk resolves on its own schedule, which no test can pin)
+  const statsFor = (root: string): Promise<DirStats | null> => (ctx.dirStats ? ctx.dirStats(root) : dirWalkStats(root));
+  let propsState: PropsState = { kind: "closed", gen: 0 };
 
   // raw teardown — registered with floats at open time; the public closeProps
   // is floats.close("props"), which also takes any popup spawned on top of
   // the dialog (the permission menu) with it
   const rawCloseProps = (): void => {
     ctx.closeDialog("tfm-props");
-    propsOpen = false;
+    // the generation SURVIVES the close: the next open is a NEW generation,
+    // so a walk still in flight from the closed dialog stays stale
+    propsState = { kind: "closed", gen: propsState.gen };
     // hovered toggles/rows have no out (their nodes are gone) — restore here
     ctx.setPointer?.("default");
   };
@@ -96,9 +117,12 @@ export const makeProps = (ctx: PropsCtx) => {
 
   // shared preamble: floats open + the (empty) dialog skeleton + panel
   // lookup — single and multi selection open the same shell
-  const openPropsDialog = (): MaybeNode => {
+  const openPropsDialog = (target: string | string[]): MaybeNode => {
+    // the state is set AFTER floats.open: opening props can dismiss a
+    // PREVIOUS props dialog, and that teardown writes the closed state
+    const gen = propsState.gen + 1;
     ctx.floats.open("props", rawCloseProps);
-    propsOpen = true;
+    propsState = { kind: "open", gen, target };
     ctx.openDialog({
       id: "tfm-props",
       zIndex: FLOAT_Z.props,
@@ -109,6 +133,11 @@ export const makeProps = (ctx: PropsCtx) => {
     });
     return ctx.byId("tfm-props-panel");
   };
+
+  // the generation of the dialog on screen — every async settle captures it
+  // and refuses to paint once the state moved on
+  const currentGen = (): number => propsState.gen;
+  const isCurrent = (gen: number): boolean => propsState.kind === "open" && propsState.gen === gen;
 
   const openSingle = (targetPath: string): void => {
     const colors = ctx.colors();
@@ -125,7 +154,7 @@ export const makeProps = (ctx: PropsCtx) => {
     }
     const isDirTarget = st.isDirectory();
 
-    const panel = openPropsDialog();
+    const panel = openPropsDialog(targetPath);
     if (!panel) return;
 
     // star & bookmark are on/off toggles AND hovers — 4 baked rasters each
@@ -329,30 +358,20 @@ export const makeProps = (ctx: PropsCtx) => {
     };
 
     if (isDirTarget) {
-      // generation guard: closing and reopening Properties on another target
-      // must not paint this walk's stats into the new dialog
-      const walkGen = ++dirWalkGen;
-      void dirWalkStats(targetPath).then((s) => {
-        if (walkGen !== dirWalkGen) return;
-        if (!propsOpen || !s) {
-          if (propsOpen) {
-            const n = ctx.byId("tfm-props-size");
-            if (n) {
-              try {
-                // dirWalkStats gives up past 200k entries (null) — say that
-                // instead of a bare word that reads like a bug
-                n.content = "200k+ entries · too large to scan";
-              } catch {}
-            }
-          }
-          return;
-        }
+      // generation guard: closing and reopening Properties must not paint
+      // THIS walk's stats into the new dialog (one counter, every path)
+      const walkGen = currentGen();
+      void statsFor(targetPath).then((s) => {
+        if (!isCurrent(walkGen)) return;
         const n = ctx.byId("tfm-props-size");
-        if (n) {
-          try {
-            n.content = `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`;
-          } catch {}
-        }
+        if (!n) return;
+        try {
+          n.content = s
+            ? `${fmtBytes(s.bytes)} · ${s.files} files · ${s.folders} folders`
+            : // dirWalkStats gives up past 200k entries (null) — say that
+              // instead of a bare word that reads like a bug
+              "200k+ entries · too large to scan";
+        } catch {}
       });
     }
     panel.add(row("type", isDirTarget ? "inode/directory" : mimeLabelFor(targetPath)));
@@ -385,9 +404,9 @@ export const makeProps = (ctx: PropsCtx) => {
   // list; no star/bookmark/perms (those are per-file semantics) ---
   const PROPS_LIST_MAX = 6;
 
-  const openMulti = (items: { path: string; st: Stats }[]): void => {
+  const openMulti = (items: { path: string; st: Stats }[], target: string | string[]): void => {
     const colors = ctx.colors();
-    const panel = openPropsDialog();
+    const panel = openPropsDialog(target);
     if (!panel) return;
 
     panel.add(
@@ -457,8 +476,11 @@ export const makeProps = (ctx: PropsCtx) => {
         nFiles++;
       }
     }
+    // the generation of THIS dialog — the walk below resolves long after the
+    // user may have closed it and opened another one
+    const walkGen = currentGen();
     const settle = (): void => {
-      if (!propsOpen) return;
+      if (!isCurrent(walkGen)) return;
       const n = ctx.byId("tfm-props-size");
       if (n) {
         const counts = dirPaths.length ? ` · ${nFiles} files · ${nFolders} folders` : ` · ${nFiles} files`;
@@ -468,7 +490,7 @@ export const makeProps = (ctx: PropsCtx) => {
       }
     };
     if (dirPaths.length) {
-      void Promise.all(dirPaths.map((d) => dirWalkStats(d))).then((walks) => {
+      void Promise.all(dirPaths.map((d) => statsFor(d))).then((walks) => {
         for (const s of walks) {
           if (s) {
             totalBytes += s.bytes;
@@ -509,11 +531,7 @@ export const makeProps = (ctx: PropsCtx) => {
     void ctx.drainIconQueue();
   };
 
-  // last target for theme-switch rebuilds (repaint re-opens, below)
-  let lastTarget: string | string[] | null = null;
-
   const openProperties = (target: string | string[]): void => {
-    lastTarget = target;
     if (!Array.isArray(target)) {
       openSingle(target);
       return;
@@ -529,7 +547,9 @@ export const makeProps = (ctx: PropsCtx) => {
       openSingle(only.path);
       return;
     }
-    if (stats.length > 1) openMulti(stats);
+    // the ORIGINAL selection is the retained target: the repaint re-filters
+    // it, so a path that vanished in the meantime simply drops out
+    if (stats.length > 1) openMulti(stats, target);
   };
 
   // theme-switch repaint while open: rebuild with the retained target (live
@@ -537,14 +557,15 @@ export const makeProps = (ctx: PropsCtx) => {
   // the dialog, so close+reopen loses nothing user-typed; the perm-class
   // cursor popup above it (if any) closes with the rebuild by floats policy.
   const repaint = (): void => {
-    if (!propsOpen || lastTarget === null) return;
+    if (propsState.kind !== "open") return;
+    const target = propsState.target;
     try {
       closeProps();
     } catch {}
     try {
-      openProperties(lastTarget);
+      openProperties(target);
     } catch {}
   };
 
-  return { openProperties, closeProps, isOpen: () => propsOpen, repaint };
+  return { openProperties, closeProps, isOpen: () => propsState.kind === "open", repaint };
 };
