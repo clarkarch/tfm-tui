@@ -592,6 +592,30 @@ describe("sidebar keyboard focus", () => {
     expect(h.calls).toContain("places:normalize");
   });
 
+  test("left on an EMPTY sidebar keeps the keyboard in the grid", () => {
+    // an empty sidebar cannot take the focus: the old code set the "active"
+    // flag BEFORE validating the index, so the sidebar swallowed EVERY key
+    // with nowhere to go (the whole keyboard went dead)
+    const h = makeHarness({ placesHost: [] });
+    h.key("left");
+    expect(h.router.sidebarActive()).toBe(false);
+    expect(cursorIndex(h.router.placeIdx())).toBe(-1);
+    // the grid still answers
+    const before = h.selection.focusIdx();
+    h.key("down");
+    expect(h.selection.focusIdx()).toBe(before + 1);
+  });
+
+  test("leaving the sidebar clears the place index", () => {
+    const h = makeHarness();
+    h.key("left");
+    expect(cursorIndex(h.router.placeIdx())).toBe(0);
+    h.router.leaveSidebarToGrid();
+    expect(h.router.sidebarActive()).toBe(false);
+    // the index is GONE with the focus — there is no "focused on nothing"
+    expect(cursorIndex(h.router.placeIdx())).toBe(-1);
+  });
+
   test("up/down move within bounds and stop at the ends", () => {
     const h = makeHarness();
     h.key("left");

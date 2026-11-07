@@ -216,10 +216,13 @@ export type KeyRouterCtx = {
 export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const { selection } = ctx;
 
-  // sidebar keyboard focus — the row cursor is an explicit value (NO cursor
-  // = the sidebar has no keyboard focus), not the `-1` sentinel
-  let sidebarActive = false;
-  let placeCursor: Cursor = NO_CURSOR;
+  // sidebar keyboard focus — ONE explicit value: the keyboard is either in
+  // the grid or on a place row. The old pair (a boolean "active" + a row
+  // cursor) could disagree — "active" with NO row — and that combination
+  // swallowed EVERY key (the sidebar handler returns true for anything).
+  // With one value the half-state is unrepresentable.
+  type SidebarFocus = { kind: "grid" } | { kind: "places"; index: number };
+  let sidebarFocus: SidebarFocus = { kind: "grid" };
   // terminal-hint throttle: the "click the grid to leave" status shows once
   // per terminal focus visit, not on every swallowed keypress
   let termHintShown = false;
@@ -264,14 +267,19 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   const setSidebarFocus = (idx: number): boolean => {
+    // an out-of-range index is REJECTED: the focus stays where it was. The
+    // old code set the "active" flag first and validated the index after,
+    // so a failed move left the sidebar swallowing every key with nowhere
+    // to go.
     if (idx < 0 || idx >= ctx.placesHost.length) return false;
-    placeCursor = cursorAt(idx);
+    sidebarFocus = { kind: "places", index: idx };
     ctx.normalizePlaces();
     return true;
   };
 
   const leaveSidebarToGrid = () => {
-    sidebarActive = false;
+    // the row index goes WITH the focus — there is no "focused on nothing"
+    sidebarFocus = { kind: "grid" };
     ctx.normalizePlaces();
   };
 
@@ -471,11 +479,12 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   const activateSidebarPlace = (): void => {
-    const rec = ctx.placesHost[cursorIndex(placeCursor)];
+    if (sidebarFocus.kind !== "places") return;
+    const rec = ctx.placesHost[sidebarFocus.index];
     if (!rec) return;
     ctx.closeFileMenu();
-    sidebarActive = false;
-    placeCursor = NO_CURSOR;
+    // the keyboard leaves the sidebar with the focus
+    sidebarFocus = { kind: "grid" };
     const target =
       rec.place.scheme === "recent" ? RECENT_URI : rec.place.scheme === "starred" ? STARRED_URI : rec.place.path;
     if (target) ctx.navigate(target);
@@ -485,9 +494,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // Sidebar keyboard focus (entered via moveLeft at the grid edge).
   // Returns true while sidebar focus is active (it swallows all keys).
   const handleSidebarKeys = (ev: KeyPressEvent): boolean => {
-    if (!sidebarActive) return false;
-    if (hitDir(ev, "moveUp", "extendUp")) setSidebarFocus(cursorIndex(placeCursor) - 1);
-    else if (hitDir(ev, "moveDown", "extendDown")) setSidebarFocus(cursorIndex(placeCursor) + 1);
+    if (sidebarFocus.kind !== "places") return false;
+    const idx = sidebarFocus.index;
+    if (hitDir(ev, "moveUp", "extendUp")) setSidebarFocus(idx - 1);
+    else if (hitDir(ev, "moveDown", "extendDown")) setSidebarFocus(idx + 1);
     else if (hitDir(ev, "moveLeft", "extendLeft") || hitDir(ev, "moveRight", "extendRight")) {
       leaveSidebarToGrid();
       selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
@@ -507,15 +517,17 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     }
   };
 
-  const enterSidebarFromGrid = (): void => {
+  const enterSidebarFromGrid = (): boolean => {
+    // an EMPTY sidebar cannot take the focus: entering it would swallow
+    // every key with nowhere to go, so the keyboard stays in the grid
+    if (ctx.placesHost.length === 0) return false;
     const selRec = ctx.placesHost.findIndex((place) => place.selected);
     const pressedKey = selection.focusIdx() >= 0 ? selection.focusKeys()[selection.focusIdx()] : undefined;
     if (pressedKey !== undefined) {
       const pressedRef = selection.tileRefs.get(pressedKey);
       if (pressedRef && !pressedRef.selected) selection.setTileVisual(pressedKey, TileVisual.Rest);
     }
-    sidebarActive = true;
-    setSidebarFocus(selRec >= 0 ? selRec : 0);
+    return setSidebarFocus(selRec >= 0 ? selRec : 0);
   };
 
   // Grid nav: move*/openSelected/page*/first/last binds. Returns true when the
@@ -763,8 +775,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       ctx.escMenu.moveMenu(-1);
       return;
     }
-    if (sidebarActive) {
-      setSidebarFocus(cursorIndex(placeCursor) - 1);
+    if (sidebarFocus.kind === "places") {
+      setSidebarFocus(sidebarFocus.index - 1);
       return;
     }
     selection.moveFocus(0, -1);
@@ -780,8 +792,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       ctx.escMenu.moveMenu(1);
       return;
     }
-    if (sidebarActive) {
-      setSidebarFocus(cursorIndex(placeCursor) + 1);
+    if (sidebarFocus.kind === "places") {
+      setSidebarFocus(sidebarFocus.index + 1);
       return;
     }
     selection.moveFocus(0, 1);
@@ -796,7 +808,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       ctx.escMenu.adjustSelectedSetting(-1);
       return;
     }
-    if (sidebarActive) {
+    if (sidebarFocus.kind === "places") {
       leaveSidebarToGrid();
       selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
       return;
@@ -815,7 +827,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       ctx.escMenu.adjustSelectedSetting(1);
       return;
     }
-    if (sidebarActive) {
+    if (sidebarFocus.kind === "places") {
       leaveSidebarToGrid();
       selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
       return;
@@ -836,7 +848,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       commitSearch();
       return;
     }
-    if (sidebarActive) {
+    if (sidebarFocus.kind === "places") {
       activateSidebarPlace();
       return;
     }
@@ -1193,8 +1205,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     handleKey,
     commands,
     // kb-focus highlight read by makeChrome
-    sidebarActive: (): boolean => sidebarActive,
-    placeIdx: (): Cursor => placeCursor,
+    sidebarActive: (): boolean => sidebarFocus.kind === "places",
+    placeIdx: (): Cursor => (sidebarFocus.kind === "places" ? cursorAt(sidebarFocus.index) : NO_CURSOR),
     setSidebarFocus,
     leaveSidebarToGrid,
   };

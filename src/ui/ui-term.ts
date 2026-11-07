@@ -257,8 +257,8 @@ export const makeTerminal = (ctx: TermCtx) => {
   };
 
   // release over the pane: paste the drag payload as quoted paths into the
-  // shell. Payload is read from the shared gridDrag singleton BEFORE cleanup
-  // (finishDragState nulls it), same order as the place/tab drop handlers.
+  // shell. Payload is read from the shared drag state BEFORE cleanup
+  // (finishDragState resets it), same order as the place/tab drop handlers.
   // Shared with the kitty self-drop path (plain drag onto the pane pastes
   // through pastePaths below) — one sink so the two can't drift.
   const termDropSink = (): TermDropSink => {

@@ -101,6 +101,11 @@ export type GridInputCtx = {
   // termFocused flag makes ownsKeyboard() swallow every key with a lying
   // "Terminal owns keyboard" toast
   blurTerminal?(): void;
+  // hand the keyboard back to the grid on any tile press: the sidebar
+  // swallows EVERY key while it holds keyboard focus, and clicking a file
+  // is what takes the focus back (without it, j/k/enter stayed dead in the
+  // grid after a keyboard focus of the sidebar)
+  blurSidebar?(): void;
   // animate the tile hover (instant highlight + one-cell lift, [ui] file-
   // hover-animation). Absent = today's instant paint via setTileVisual.
   hoverAnim?(key: string, hovered: boolean): void;
@@ -428,6 +433,8 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         } catch {}
         ctx.focusPane?.();
         ctx.blurTerminal?.();
+        // the mouse takes the keyboard back from the sidebar
+        ctx.blurSidebar?.();
         ctx.closeFileMenu();
         const rk = ctx.renameEditKey();
         if (rk && rk !== key) ctx.finishInlineRename(false);

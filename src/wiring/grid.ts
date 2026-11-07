@@ -44,10 +44,14 @@ export const wireGrid = (deps: {
   plugins: PluginsWiring;
   // pick overlay wires LAST (wiring/keymap) — lazy getter, action-time only
   getPick(): ReturnType<typeof makePick>;
+  // the key router (wiring/keymap) — a tile press hands the keyboard back
+  // from the sidebar. Lazy getter: keymap wires LAST, so the TDZ is settled
+  // by the first click (same seam as getPick above).
+  getKeyRouter(): { leaveSidebarToGrid(): void };
   // retheme wires after grid — lazy getter, action-time only (same seam)
   getRetheme: () => RethemeWiring;
 }) => {
-  const { core, nav, chrome, gridFoundation, fileops, plugins, getPick, getRetheme } = deps;
+  const { core, nav, chrome, gridFoundation, fileops, plugins, getPick, getKeyRouter, getRetheme } = deps;
   const { selection, selections, rename } = gridFoundation;
   const { byId, stripSelectable } = core.lookup;
   const { themeGet, home, state } = core;
@@ -200,6 +204,9 @@ export const wireGrid = (deps: {
       setStatusMsg: nav.setStatusMsg,
       focusPane: () => focusPane(pane),
       blurTerminal: () => fileops.terminal.blurTerminal(),
+      // the sidebar swallows every key while it holds keyboard focus — a
+      // click on a file takes the keyboard back
+      blurSidebar: () => getKeyRouter().leaveSidebarToGrid(),
       hoverAnim: (key: string, hovered: boolean) => hoverAnims[pane].playHover(key, hovered),
       modalOpen: () => core.floats.hasModal(),
       setPointer,
