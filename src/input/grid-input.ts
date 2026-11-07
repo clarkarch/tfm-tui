@@ -1,14 +1,24 @@
 // --- Grid input: the tile/row mouse pipeline (selection, deferred ctrl
 // toggle, internal drag state, drop targeting, drag ghost) as a factory with
-// injected UI callbacks. Owns the shared drag state singleton (`gridDrag`)
-// that the sidebar, OSC 72 bridge and keyboard paths read. No module-level
-// imports from the renderer — everything flows through ctx. ---
+// injected UI callbacks. The shared drag state lives in ../lib/drag-state —
+// this module DRIVES it (one reducer, no field writes) and every other
+// module only READS it. No module-level imports from the renderer —
+// everything flows through ctx. ---
 
 import { archiveBrowseUri } from "../fs/archive-scheme";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { ListEntry } from "../lib/menu-entry";
 import type { ClipItem } from "../lib/file-op-protocol";
+import {
+  dispatchDrag,
+  dragActive,
+  dragCtrl,
+  dragDropTarget,
+  dragKeys,
+  dragPending,
+  dragState,
+} from "../lib/drag-state";
 
 // What makeEntryMouseHandlers hands the grid to spread onto a tile: the tile
 // mouse pipeline, typed so a misspelled handler name is a compile error.
@@ -39,20 +49,8 @@ export type TileVisualMode = (typeof TileVisual)[keyof typeof TileVisual];
 // structural view of a tile ref — the full TileRefs in ./selection satisfies this
 export type GridTileRef = { selected: boolean; isDir: boolean };
 
-// shared drag state: one plain mutable object so the wiring closures and the
-// handlers here see the same fields without getter/setter plumbing
-export const gridDrag = {
-  keys: null as ClipItem[] | null,
-  ctrl: false, // ctrl+drag = internal move, plain drag = external OSC 72
-  active: false,
-  dropTarget: null as string | null,
-  startX: 0,
-  startY: 0,
-  // ctrl+press defers its toggle until we know it was a click, not a drag —
-  // toggling at mousedown unselected the pressed tile and emptied the payload
-  pendingKey: null as string | null,
-  pendingState: false,
-};
+// shared drag state: the union lives in ../lib/drag-state (ONE owner, ONE
+// reducer). This module drives it; nothing outside can write a field.
 
 // --- ctx sections (intersected below; runtime object stays flat) ---
 /** Selection state + visuals (owned by ./selection). */
@@ -119,13 +117,17 @@ export type GridInputCtx = {
 export const DRAG_GHOST_ID = "tfm-drag-ghost";
 
 export const commitPendingCtrlToggle = (ctx: GridInputCtx): void => {
-  const k = gridDrag.pendingKey;
-  gridDrag.pendingKey = null;
-  if (!k || gridDrag.active) return;
-  const refs = ctx.tileRefs.get(k);
+  // the deferred toggle exists ONLY while a press is armed — once the press
+  // became a drag the state carries no pending toggle at all, so the "never
+  // toggle a drag" rule is structural instead of a guard
+  const pending = dragPending(dragState());
+  if (!pending) return;
+  // consume it FIRST (a press whose tile vanished must not retry forever)
+  dispatchDrag({ type: "consume-pending" });
+  const refs = ctx.tileRefs.get(pending.key);
   if (!refs) return;
-  refs.selected = gridDrag.pendingState;
-  ctx.setTileVisual(k, gridDrag.pendingState ? TileVisual.Selected : TileVisual.Rest);
+  refs.selected = pending.state;
+  ctx.setTileVisual(pending.key, pending.state ? TileVisual.Selected : TileVisual.Rest);
   ctx.updateSelectionStatusReal();
   void ctx.renderPreview();
 };
@@ -134,7 +136,7 @@ const updateDragGhost = (ctx: GridInputCtx, x: number, y: number): void => {
   const g = ctx.byId(DRAG_GHOST_ID);
   if (!g) return;
   try {
-    const n = gridDrag.keys?.length ?? 0;
+    const n = dragKeys(dragState())?.length ?? 0;
     const label = `moving ${n} item${n === 1 ? "" : "s"}`;
     const t = ctx.byId(`${DRAG_GHOST_ID}-label`);
     if (t && t.content !== label) t.content = label;
@@ -155,18 +157,21 @@ const hideDragGhost = (ctx: GridInputCtx): void => {
 };
 
 export const finishDragState = (ctx: GridInputCtx): void => {
-  const wasActive = gridDrag.active;
-  ctx.log(`finishDragState active=${gridDrag.active} target=${gridDrag.dropTarget}`);
-  gridDrag.pendingKey = null;
+  const state = dragState();
+  // nothing to clean up: the drag is already over. Restoring the pointer here
+  // would clobber whatever the surface under the cursor asked for (the
+  // deferred cleanup lands a tick AFTER the drop, which already reset the
+  // drag — the tile's own "pointer" must survive it).
+  if (state.kind === "idle") return;
+  const wasActive = state.kind === "dragging" || (state.kind === "released" && state.wasDragging);
+  const dropTarget = dragDropTarget(state);
+  ctx.log(`finishDragState active=${wasActive} target=${dropTarget}`);
   hideDragGhost(ctx);
-  gridDrag.ctrl = false;
-  if (gridDrag.dropTarget) {
-    const r = ctx.tileRefs.get(gridDrag.dropTarget);
-    if (r && !r.selected) ctx.setTileVisual(gridDrag.dropTarget, TileVisual.Rest);
+  dispatchDrag({ type: "reset" });
+  if (dropTarget) {
+    const r = ctx.tileRefs.get(dropTarget);
+    if (r && !r.selected) ctx.setTileVisual(dropTarget, TileVisual.Rest);
   }
-  gridDrag.dropTarget = null;
-  gridDrag.active = false;
-  gridDrag.keys = null;
   // central pointer restore: every cleanup path (tile drop, pane-background
   // drop, sidebar drop, deferred release) heals through here; the tile drop
   // re-applies its own pointer afterwards
@@ -184,7 +189,7 @@ export const scheduleDragCleanup = (ctx: GridInputCtx): void => {
 // --- Rubber-band selection (marquee over empty grid space) ---
 // Owns the band gesture state: the band NODE is created by the boot layout
 // (id: BAND_ID), this module only moves/hides it and commit-picks tiles.
-// Module-level state mirrors the gridDrag singleton above.
+// Module-level state mirrors the drag state above.
 
 export type BandCtx = {
   byId(id: string): MaybeNode;
@@ -269,12 +274,15 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
   return (entry: { isDir: boolean }, key: string, idx: number) => {
     let lastClick = 0;
 
-    const armDragPayload = (ev: TileMouseEvent, keys: ClipItem[], internal: boolean): void => {
-      gridDrag.keys = keys;
-      gridDrag.active = false;
-      gridDrag.startX = ev.x;
-      gridDrag.startY = ev.y;
-      gridDrag.ctrl = internal;
+    const armDragPayload = (
+      ev: TileMouseEvent,
+      keys: ClipItem[],
+      internal: boolean,
+      pending: { key: string; state: boolean } | null = null,
+    ): void => {
+      // arming REPLACES the whole state — a pending toggle from an earlier
+      // gesture can never outlive the press that armed it
+      dispatchDrag({ type: "arm", keys, ctrl: internal, x: ev.x, y: ev.y, pending });
     };
 
     // Nautilus behavior: right-click selects the tile unless it's already
@@ -323,12 +331,13 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       if (!ev.modifiers?.ctrl) return false;
       const refs = ctx.tileRefs.get(key);
       const wasSelected = !!refs?.selected;
-      gridDrag.pendingKey = key;
-      gridDrag.pendingState = !wasSelected;
+      const payload = wasSelected ? ctx.selPaths() : [...ctx.selPaths(), { path: key, isDir: entry.isDir }];
       ctx.updateSelectionStatusReal();
       void ctx.renderPreview();
-      armDragPayload(ev, wasSelected ? ctx.selPaths() : [...ctx.selPaths(), { path: key, isDir: entry.isDir }], true);
-      ctx.log(`ctrl mousedown ${key} wasSel=${wasSelected} provisional=${gridDrag.keys?.length ?? 0}`);
+      // the deferred toggle rides along with the arm — it exists ONLY in the
+      // armed phase, so it cannot leak into a later gesture
+      armDragPayload(ev, payload, true, { key, state: !wasSelected });
+      ctx.log(`ctrl mousedown ${key} wasSel=${wasSelected} provisional=${payload.length}`);
       return true;
     };
 
@@ -375,35 +384,41 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       void ctx.renderPreview();
       armDragPayload(ev, wasSelected && prevSel.length > 1 ? prevSel : [{ path: key, isDir: entry.isDir }], false);
       ctx.log(
-        `tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${gridDrag.keys?.length ?? 0} ctrl=${gridDrag.ctrl}`,
+        `tile mousedown ${key} wasSel=${wasSelected} prevN=${prevSel.length} -> keys=${dragKeys(dragState())?.length ?? 0} ctrl=${dragCtrl(dragState())}`,
       );
     };
 
     // mouseup / drag-end without a drop: commit a deferred ctrl-toggle, then
     // schedule the shared cleanup (a real drop overwrites the status first).
     const releasePress = (why: string): void => {
-      if (!gridDrag.keys) return;
+      if (!dragKeys(dragState())) return;
       ctx.log(`tile ${why} -> cleanup scheduled`);
       commitPendingCtrlToggle(ctx);
+      // the gesture is over: the payload survives for the imminent drop, the
+      // ctrl flag does not
+      dispatchDrag({ type: "release" });
       scheduleDragCleanup(ctx);
     };
 
     // first motion past the threshold turns the press into an internal drag:
     // the click-toggle never happened, so select the payload for real.
     const tripDrag = (): void => {
-      gridDrag.active = true;
-      gridDrag.pendingKey = null; // it became a drag — the click-toggle never happened
+      const state = dragState();
+      if (state.kind !== "armed") return;
+      // the trip DROPS the pending toggle — the click-toggle never happened
+      dispatchDrag({ type: "trip" });
+      const keys = state.keys;
       // payload tiles must actually be selected or the visual state lies
-      for (const dragged of gridDrag.keys ?? []) {
+      for (const dragged of keys) {
         const ref = ctx.tileRefs.get(dragged.path);
         if (ref && !ref.selected) {
           ref.selected = true;
           ctx.setTileVisual(dragged.path, TileVisual.Selected);
         }
       }
-      ctx.log(`internal drag start n=${gridDrag.keys?.length ?? 0}`);
+      ctx.log(`internal drag start n=${keys.length}`);
       ctx.setPointer?.("grabbing");
-      ctx.setStatusMsg(`Dragging ${gridDrag.keys?.length ?? 0} item${gridDrag.keys?.length === 1 ? "" : "s"}…`);
+      ctx.setStatusMsg(`Dragging ${keys.length} item${keys.length === 1 ? "" : "s"}…`);
     };
 
     return {
@@ -427,20 +442,22 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
       onMouseUp: () => releasePress("mouseup"),
       onMouseDragEnd: () => releasePress("dragend"),
       onMouseDrag: (ev: TileMouseEvent) => {
-        if (!gridDrag.keys) return;
-        const thr = ctx.dragThresholdCells?.() ?? 1;
-        if (!gridDrag.active && (Math.abs(ev.x - gridDrag.startX) > thr || Math.abs(ev.y - gridDrag.startY) > thr)) {
-          tripDrag();
+        const state = dragState();
+        // the threshold is measured from the PRESS point — only an armed
+        // press can trip (a released gesture is over)
+        if (state.kind === "armed") {
+          const thr = ctx.dragThresholdCells?.() ?? 1;
+          if (Math.abs(ev.x - state.x) > thr || Math.abs(ev.y - state.y) > thr) tripDrag();
         }
-        if (gridDrag.active) updateDragGhost(ctx, ev.x, ev.y);
+        if (dragActive(dragState())) updateDragGhost(ctx, ev.x, ev.y);
       },
       onMouseDrop: () => {
-        const keys = gridDrag.keys;
+        const keys = dragKeys(dragState());
         // The drop is delivered to the tile UNDER THE CURSOR (its own `key`),
-        // so use that folder as the destination. Do NOT rely on
-        // gridDrag.dropTarget: over fires before the drag trips and doesn't
-        // re-fire while the pointer stays on one tile, so the hover-set proxy
-        // is frequently null at release (this is what broke cross-pane drops).
+        // so use that folder as the destination. Do NOT rely on the hover-set
+        // drop target: over fires before the drag trips and doesn't re-fire
+        // while the pointer stays on one tile, so the proxy is frequently null
+        // at release (this is what broke cross-pane drops).
         const dest = entry.isDir ? key : null;
         ctx.log(
           `tile drop keys=${keys?.length ?? -1}[${keys?.map((item) => item.path.split("/").pop()).join(",") ?? ""}] dest=${dest} isDir=${entry.isDir}`,
@@ -456,11 +473,12 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
           );
       },
       onMouseOver: () => {
-        if (gridDrag.active) {
-          const draggingSelf = !!gridDrag.keys?.some((item) => item.path === key);
+        const state = dragState();
+        if (state.kind === "dragging") {
+          const draggingSelf = state.keys.some((item) => item.path === key);
           if (entry.isDir && !draggingSelf) {
             ctx.log(`hover target set ${key}`);
-            gridDrag.dropTarget = key;
+            dispatchDrag({ type: "hover-target", key });
             ctx.setTileVisual(key, TileVisual.Selected);
             ctx.setPointer?.("grabbing");
           } else {
@@ -480,9 +498,10 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
         else ctx.setTileVisual(key, TileVisual.Hover);
       },
       onMouseOut: () => {
-        if (gridDrag.active) {
-          if (gridDrag.dropTarget === key) {
-            gridDrag.dropTarget = null;
+        const state = dragState();
+        if (state.kind === "dragging") {
+          if (state.dropTarget === key) {
+            dispatchDrag({ type: "hover-target", key: null });
             ctx.setTileVisual(key, TileVisual.Rest);
           }
           ctx.setPointer?.("grabbing");

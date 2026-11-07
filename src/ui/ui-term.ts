@@ -3,7 +3,7 @@ import path from "node:path";
 import { destroyChildren } from "../lib/uiutil";
 import { fsErrText } from "../fs/fsutil";
 import { applySurface, type UiStyle } from "./style";
-import { gridDrag } from "../input/grid-input";
+import { dragActive, dragKeys, dragState } from "../lib/drag-state";
 import type { Theme } from "../config/config";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
@@ -282,7 +282,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   };
 
   const handleTermDrop = (): void => {
-    const keys = gridDrag.keys;
+    const keys = dragKeys(dragState());
     const pty = termChild?.terminal ?? null;
     pasteDroppedPaths(pty ? (keys?.map((k) => k.path) ?? null) : null, termDropSink());
   };
@@ -482,11 +482,11 @@ export const makeTerminal = (ctx: TermCtx) => {
     const hostHover = hoverEvents((on) => {
       if (!on) {
         paintHeaderCue(false);
-        ctx.setPointer?.(gridDrag.active ? "grabbing" : "default");
+        ctx.setPointer?.(dragActive(dragState()) ? "grabbing" : "default");
         return;
       }
       // a drag owns the pointer — same rule as the sidebar rows
-      if (gridDrag.active) paintHeaderCue(true);
+      if (dragActive(dragState())) paintHeaderCue(true);
       else ctx.setPointer?.("pointer");
     });
     host.onMouseMove = hostHover.onMouseMove;

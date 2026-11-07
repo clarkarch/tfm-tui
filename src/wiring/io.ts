@@ -17,7 +17,7 @@ import { localMachineId } from "../dnd/machine-id";
 import { debounced, withTimeout } from "../lib/uiutil";
 import { makeHoverDrawer } from "../ui/ui-hover-drawer";
 import { installGridWheelHandler } from "../ui/ui-smooth-scroll";
-import { gridDrag } from "../input/grid-input";
+import { dragActive, dragState } from "../lib/drag-state";
 import { mergedMapFacade } from "../app/panes";
 import { loadGlobs2 } from "../fs/filetype";
 import { loadSystemPlaces, listMounts } from "../fs/places";
@@ -595,7 +595,7 @@ export const wireHoverDrawer = (deps: {
       core.floats.depth() > 0 ||
       chrome.activeToolbar().pathEditMode() ||
       gridFoundation.rename.isRenaming() ||
-      gridDrag.active,
+      dragActive(dragState()),
     setEffectiveSidebar: (n) => {
       core.geometry.sidebarEff = n;
     },

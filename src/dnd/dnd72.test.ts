@@ -14,7 +14,8 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { makeDnd72, splitOsc72Seq, type Dnd72Ctx } from "./dnd72";
-import { gridDrag } from "../input/grid-input";
+import { dispatchDrag, resetDragState } from "../lib/drag-state";
+import type { ClipItem } from "../lib/file-op-protocol";
 import { startDropFrame, uriListPayload } from "./osc72";
 import { trashDir } from "../fs/fsutil";
 
@@ -31,6 +32,16 @@ afterAll(() => {
   else process.env.XDG_DATA_HOME = oldDataHome;
   rmSync(XDG_ROOT, { recursive: true, force: true });
 });
+
+// the drag state is an explicit union now — the tests arm a gesture
+// (payload + ctrl flag) or clear it, never poke a field
+const armDrag = (keys: ClipItem[] | null, ctrl = false): void => {
+  if (!keys) {
+    resetDragState();
+    return;
+  }
+  dispatchDrag({ type: "arm", keys, ctrl, x: 0, y: 0, pending: null });
+};
 
 const baseCtx = () => {
   const tx: string[] = [];
@@ -119,49 +130,61 @@ describe("outgoing drag", () => {
   test("plain drag offer starts an OS drag session", () => {
     const { ctx, feed, tx, status, logs } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.ctrl = false;
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }], false);
     feed("t=o:x=64:y=10");
     expect(tx.some((s) => s.startsWith("\x1b]72;t=o:o=3"))).toBe(true); // agree
     expect(tx.some((s) => s.includes("t=p:x=0:m=0;"))).toBe(true); // present payload
     expect(tx.some((s) => s.startsWith("\x1b]72;t=P:x=-1"))).toBe(true); // start
     expect(status[0]).toContain("Dragging 1 item");
     expect(logs).toContain("finishDrag");
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("ctrl+drag (internal move) declines the offer", () => {
     const { ctx, feed, tx } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.ctrl = true;
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }], true);
     feed("t=o:x=64:y=10");
     expect(tx).toEqual([]);
-    gridDrag.ctrl = false;
-    gridDrag.keys = null;
+    armDrag(null);
+  });
+
+  test("the ctrl flag belongs to the gesture — it cannot outlive it", () => {
+    // the offer path reads the CURRENT gesture's ctrl flag. While the ctrl
+    // gesture is live the offer is declined (ctrl+drag = internal move);
+    // once the gesture ends the flag is gone with it, so a stale "this was a
+    // ctrl drag" can never decline a later offer
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    armDrag([{ path: "/d/a", isDir: false }], true);
+    feed("t=o:x=64:y=10");
+    expect(tx).toEqual([]);
+    dispatchDrag({ type: "release" });
+    tx.length = 0;
+    feed("t=o:x=64:y=10");
+    expect(tx.some((s) => s.startsWith("\x1b]72;t=o:o=3"))).toBe(true);
+    armDrag(null);
   });
 
   test("menu open declines the offer", () => {
     const { ctx, feed, tx } = baseCtx();
     ctx.escMenuOpen = () => true;
     makeDnd72(ctx);
-    gridDrag.ctrl = false;
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }], false);
     feed("t=o:x=64:y=10");
     expect(tx).toEqual([]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("bare E ack (empty payload) is not a drag error", () => {
     const { ctx, feed, notes } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.ctrl = false;
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }], false);
     feed("t=o:x=64:y=10");
     feed("t=E"); // kitty's StartDrag ack with an EMPTY payload
     feed("t=E", "OK"); // and the OK payload form
     expect(notes).toEqual([]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 });
 
@@ -246,27 +269,26 @@ describe("self drop", () => {
   test("hover over a folder tile agrees the drop (else kitty cancels it)", () => {
     const { ctx, feed, tx } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1"); // begin session
     feed("t=m:x=5:y=5"); // self hover onto /d/dest
     expect(tx.some((s) => s === "\x1b]72;t=m:o=2;text/uri-list\x1b\\")).toBe(true);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("hover over no target rejects the hover (no late session cancel)", () => {
     const { ctx, feed, tx } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=m:x=99:y=99"); // miss — hitTargetAt returns null
     expect(tx.some((s) => s === "\x1b]72;t=m:o=0\x1b\\")).toBe(true);
-    gridDrag.keys = null;
+    armDrag(null);
   });
   test("hover highlights the folder tile, drop moves into it", async () => {
     const { ctx, feed, logs, tx } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.ctrl = false;
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }], false);
     feed("t=o:x=1:y=1"); // begin session
     feed("t=m:x=5:y=5"); // self hover onto /d/dest
     expect(logs).toContain("visual:/d/dest:2");
@@ -277,67 +299,66 @@ describe("self drop", () => {
     const [dest, items] = ctx.moveIns[0]!;
     expect(dest).toBe("/d/dest");
     expect(items).toEqual([{ path: "/d/a", isDir: false }]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("drop onto a non-target rejects and reports cancel", async () => {
     const { ctx, feed, tx, status } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=M:x=99:y=99"); // miss
     await settleUntil(() => status.includes("drag cancelled"));
     expect(tx.some((s) => s.includes("t=r:o=0"))).toBe(true); // self drop reject
     expect(status).toContain("drag cancelled");
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("drop onto the trash place trashes instead of moving", async () => {
     const { ctx, feed } = baseCtx();
     ctx.hitTargetAt = () => ({ kind: "place", path: path.join(trashDir(), "files") });
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=M:x=5:y=5");
     await settleUntil(() => ctx.trashed.length > 0);
     expect(ctx.trashed).toEqual([["/d/a"]]);
     expect(ctx.moveIns).toEqual([]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("a completed self-drop does not paint 'drag cancelled' after the end event", async () => {
     const { ctx, feed, status } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.ctrl = false;
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }], false);
     feed("t=o:x=1:y=1");
     feed("t=M:x=5:y=5"); // self drop — moves /d/a into /d/dest
     await settleUntil(() => ctx.moveIns.length > 0);
     feed("t=e:x=4:y=1"); // kitty's canceled=true end event after every drop
     await settleUntil(() => status.length > 0);
     expect(status).not.toContain("drag cancelled");
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("hovering a folder clears a previous place hover (no lingering highlight)", () => {
     const { ctx, feed, logs } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=m:x=5:y=5"); // folder target
     expect(logs).toContain("clearHoverPlace");
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("self-drop clears the place hover highlight", async () => {
     const { ctx, feed, logs } = baseCtx();
     ctx.hitTargetAt = () => ({ kind: "place", path: "/places/Downloads" });
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=M:x=5:y=5");
     await settleUntil(() => logs.includes("clearHoverPlace"));
-    gridDrag.keys = null;
+    armDrag(null);
   });
 });
 
@@ -374,30 +395,30 @@ describe("self drop onto the embedded terminal", () => {
   test("hover over the open terminal agrees the drop and lights the cue", () => {
     const { ctx, feed, tx, cues } = termSetup();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=m:x=5:y=5");
     expect(tx.some((s) => s === "\x1b]72;t=m:o=2;text/uri-list\x1b\\")).toBe(true);
     expect(cues).toEqual([true]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("hover with the terminal closed rejects (never accepts into a dead pane)", () => {
     const { ctx, feed, tx, cues, setOpen } = termSetup();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     setOpen(false);
     feed("t=m:x=5:y=5");
     expect(tx.some((s) => s === "\x1b]72;t=m:o=0\x1b\\")).toBe(true);
     expect(cues).toEqual([]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("drop onto the open terminal pastes, never moves or copies", async () => {
     const { ctx, feed, tx, pasted } = termSetup();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=m:x=5:y=5");
     feed("t=M:x=5:y=5");
@@ -407,43 +428,43 @@ describe("self drop onto the embedded terminal", () => {
     expect(ctx.moveIns).toEqual([]);
     expect(ctx.runTransfers).toEqual([]);
     expect(ctx.trashed).toEqual([]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("moving the hover from the terminal to a folder clears the cue", () => {
     const { ctx, feed, cues } = termSetup();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=m:x=5:y=5");
     ctx.hitTargetAt = () => ({ kind: "folder", path: "/d/dest" });
     feed("t=m:x=5:y=5");
     expect(cues).toEqual([true, false]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("leaving the terminal clears the cue", () => {
     const { ctx, feed, cues } = termSetup();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=m:x=5:y=5");
     feed("t=m:x=-1:y=-1");
     expect(cues).toEqual([true, false]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("a completed terminal drop does not paint 'drag cancelled' after the end event", async () => {
     const { ctx, feed, status, pasted } = termSetup();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=M:x=5:y=5");
     await settleUntil(() => pasted.length > 0);
     feed("t=e:x=4:y=1");
     await Bun.sleep(50);
     expect(status).not.toContain("drag cancelled");
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("without the terminal seams an old fake still rejects the hover", () => {
@@ -451,11 +472,11 @@ describe("self drop onto the embedded terminal", () => {
     const { ctx, feed, tx } = baseCtx();
     ctx.hitTargetAt = () => ({ kind: "terminal", path: "" });
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=m:x=5:y=5");
     expect(tx.some((s) => s === "\x1b]72;t=m:o=0\x1b\\")).toBe(true);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 });
 
@@ -489,7 +510,7 @@ describe("remote drops", () => {
     feed("t=r:x=1:y=1", b64("AAA"));
     feed("t=r:x=1:y=1");
     await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=2\x1b\\"));
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("fetched file bytes land via runTransfer, finish handshake, staging cleaned", async () => {
@@ -759,7 +780,7 @@ describe("remote drops", () => {
     feed("t=M:x=1", "text/uri-list"); // second drop while fetching
     await Bun.sleep(100);
     expect(tx.filter((s) => s.startsWith("\x1b]72;t=m:o=1")).length).toBe(agrees);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("dotdot top-level entry aborts before any subidx request", async () => {
@@ -837,34 +858,34 @@ describe("external drag end", () => {
   test("released over another app (copy) notifies Sent", async () => {
     const { ctx, feed, notes } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=e:x=4:y=0"); // end, not canceled, no self drop handled
     await settleUntil(() => notes.some((n) => n.includes("Sent 1 item")), 3000); // 700ms-deferred epilogue
     expect(notes.some((n) => n.includes("Sent 1 item"))).toBe(true);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("external move semantics trash our copies", async () => {
     const { ctx, feed } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=e:x=2:y=2"); // op=move
     feed("t=e:x=4:y=0");
     await settleUntil(() => ctx.trashed.length > 0, 3000); // 700ms-deferred epilogue
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("a new drag starting inside the end window completes its own epilogue", async () => {
     const { ctx, feed, notes } = baseCtx();
     makeDnd72(ctx);
     // session A ends over another app (copy) — its epilogue is deferred 700ms
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=e:x=4:y=0");
     // session B starts inside that window and ends over another app too
-    gridDrag.keys = [{ path: "/d/b", isDir: false }];
+    armDrag([{ path: "/d/b", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=e:x=4:y=0");
     // both sessions must report "Sent" — the stale fire resetting the shared
@@ -872,18 +893,18 @@ describe("external drag end", () => {
     const deadline = Date.now() + 3000;
     while (notes.filter((n) => n.includes("Sent 1 item")).length < 2 && Date.now() < deadline) await Bun.sleep(10);
     expect(notes.filter((n) => n.includes("Sent 1 item")).length).toBe(2);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("stale copy-session epilogue never trashes sources because a new drag was a move", async () => {
     const { ctx, feed, notes } = baseCtx();
     makeDnd72(ctx);
     // A: copy drag, end over another app → deferred epilogue
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=e:x=4:y=0");
     // B: move drag begins inside A's window and announces op=move
-    gridDrag.keys = [{ path: "/d/b", isDir: false }];
+    armDrag([{ path: "/d/b", isDir: false }]);
     feed("t=o:x=1:y=1");
     feed("t=e:x=2:y=2");
     // the stale timer reads the snapshot (A was a copy), not the live op
@@ -895,7 +916,7 @@ describe("external drag end", () => {
     const deadline = Date.now() + 3000;
     while (ctx.trashed.length === 0 && Date.now() < deadline) await Bun.sleep(10);
     expect(ctx.trashed).toEqual([["/d/b"]]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 });
 
@@ -923,8 +944,7 @@ describe("remote serve (t=k)", () => {
     try {
       const { ctx, feed, tx } = baseCtx();
       makeDnd72(ctx);
-      gridDrag.ctrl = false;
-      gridDrag.keys = [{ path: path.join(dir, "a.txt"), isDir: false }];
+      armDrag([{ path: path.join(dir, "a.txt"), isDir: false }], false);
       feed("t=o:x=64:y=10");
       tx.length = 0;
       feed("t=k:x=1");
@@ -932,7 +952,7 @@ describe("remote serve (t=k)", () => {
       expect(frames.length).toBe(2); // data + empty EOF
       expect(Buffer.from(payloadOf(frames[0]!), "base64").toString("utf8")).toBe("serve-bytes");
       expect(payloadOf(frames[1]!)).toBe("");
-      gridDrag.keys = null;
+      armDrag(null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -943,12 +963,12 @@ describe("remote serve (t=k)", () => {
     try {
       const { ctx, feed, tx } = baseCtx();
       makeDnd72(ctx);
-      gridDrag.keys = [{ path: path.join(dir, "a.txt"), isDir: false }];
+      armDrag([{ path: path.join(dir, "a.txt"), isDir: false }]);
       feed("t=o:x=64:y=10");
       tx.length = 0;
       feed("t=k:x=5");
       expect(tx.some((s) => s.startsWith("\x1b]72;t=E;"))).toBe(true);
-      gridDrag.keys = null;
+      armDrag(null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -959,10 +979,10 @@ describe("remote serve (t=k)", () => {
     try {
       const { ctx, feed, tx } = baseCtx();
       makeDnd72(ctx);
-      gridDrag.keys = [
+      armDrag([
         { path: path.join(dir, "link"), isDir: false },
         { path: path.join(dir, "sub"), isDir: true },
-      ];
+      ]);
       feed("t=o:x=64:y=10");
       tx.length = 0;
       feed("t=k:x=1");
@@ -978,7 +998,7 @@ describe("remote serve (t=k)", () => {
       // the child is pushed with Y=handle:y=num and its own bytes + EOF
       const childData = tx.find((s) => s.includes(`Y=${handle}:y=1`) && payloadOf(s) !== "");
       expect(Buffer.from(payloadOf(childData!), "base64").toString("utf8")).toBe("inner");
-      gridDrag.keys = null;
+      armDrag(null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -989,7 +1009,7 @@ describe("remote serve (t=k)", () => {
     try {
       const { ctx, feed, tx } = baseCtx();
       makeDnd72(ctx);
-      gridDrag.keys = [{ path: path.join(dir, "big.bin"), isDir: false }];
+      armDrag([{ path: path.join(dir, "big.bin"), isDir: false }]);
       feed("t=o:x=64:y=10");
       tx.length = 0;
       feed("t=k:x=1");
@@ -1000,7 +1020,7 @@ describe("remote serve (t=k)", () => {
       const bytes = Buffer.concat(frames.slice(0, -1).map((f) => Buffer.from(payloadOf(f), "base64")));
       expect(bytes.equals(Buffer.alloc(4000, 7))).toBe(true);
       expect(payloadOf(frames[frames.length - 1]!)).toBe(""); // EOF
-      gridDrag.keys = null;
+      armDrag(null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1009,12 +1029,12 @@ describe("remote serve (t=k)", () => {
   test("vanished file answers t=E;ENOENT", () => {
     const { ctx, feed, tx } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.keys = [{ path: "/nonexistent-tfm-serve-target", isDir: false }];
+    armDrag([{ path: "/nonexistent-tfm-serve-target", isDir: false }]);
     feed("t=o:x=64:y=10");
     tx.length = 0;
     feed("t=k:x=1");
     expect(tx.some((s) => s.startsWith("\x1b]72;t=E;ENOENT"))).toBe(true);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 
   test("t=k with no session is ignored", () => {
@@ -1030,12 +1050,12 @@ describe("remote serve (t=k)", () => {
     try {
       const { ctx, feed, tx } = baseCtx();
       makeDnd72(ctx);
-      gridDrag.keys = [{ path: path.join(dir, "sub"), isDir: true }];
+      armDrag([{ path: path.join(dir, "sub"), isDir: true }]);
       feed("t=o:x=64:y=10");
       const present = tx.find((s) => s.includes("t=p:x=0:m=0;"))!;
       const uriList = Buffer.from(payloadOf(present), "base64").toString("utf8");
       expect(uriList.endsWith("/")).toBe(true);
-      gridDrag.keys = null;
+      armDrag(null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1062,13 +1082,12 @@ describe("wire errors", () => {
     // and the session continues normally — it must stay silent
     const { ctx, feed, notes, status } = baseCtx();
     makeDnd72(ctx);
-    gridDrag.ctrl = false;
-    gridDrag.keys = [{ path: "/d/a", isDir: false }];
+    armDrag([{ path: "/d/a", isDir: false }], false);
     feed("t=o:x=64:y=10");
     feed("t=E", "OK");
     expect(notes).toEqual([]);
     expect(status).toEqual(["Dragging 1 item · drop into another app or a folder"]);
-    gridDrag.keys = null;
+    armDrag(null);
   });
 });
 

@@ -1,22 +1,18 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import {
-  commitPendingCtrlToggle,
-  finishDragState,
-  gridDrag,
-  makeEntryMouseHandlers,
-  type GridInputCtx,
-} from "./grid-input";
+import { commitPendingCtrlToggle, finishDragState, makeEntryMouseHandlers, type GridInputCtx } from "./grid-input";
 import { archiveUri } from "../fs/archive-scheme";
+import {
+  dispatchDrag,
+  dragActive,
+  dragDropTarget,
+  dragKeys,
+  dragPending,
+  dragState,
+  resetDragState,
+} from "../lib/drag-state";
 
 beforeEach(() => {
-  gridDrag.keys = null;
-  gridDrag.ctrl = false;
-  gridDrag.active = false;
-  gridDrag.dropTarget = null;
-  gridDrag.startX = 0;
-  gridDrag.startY = 0;
-  gridDrag.pendingKey = null;
-  gridDrag.pendingState = false;
+  resetDragState();
 });
 
 const makeCtx = (): GridInputCtx & {
@@ -156,7 +152,7 @@ describe("dual-pane focus", () => {
   });
 });
 
-describe("cross-pane internal drag (shared gridDrag, per-pane ctxs)", () => {
+describe("cross-pane internal drag (shared drag state, per-pane ctxs)", () => {
   test("a file dragged from pane A drops into pane B's folder", () => {
     const src = makeCtx();
     const dst = makeCtx();
@@ -164,9 +160,9 @@ describe("cross-pane internal drag (shared gridDrag, per-pane ctxs)", () => {
     const hDst = makeEntryMouseHandlers(dst)({ isDir: true }, "/w/sub", 3);
     press(hSrc, {});
     hSrc.onMouseDrag({ x: 9, y: 9 } as any);
-    expect(gridDrag.active).toBe(true);
+    expect(dragActive(dragState())).toBe(true);
     // the drop lands on the target tile itself; the destination comes from that
-    // tile's own key, NOT from gridDrag.dropTarget (which over may never set)
+    // tile's own key, NOT from dragDropTarget(dragState()) (which over may never set)
     hDst.onMouseDrop();
     expect(dst.moved).toEqual([{ dest: "/w/sub", n: 1 }]);
   });
@@ -178,21 +174,21 @@ describe("plain click + drag", () => {
     const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
     press(h, { x: 5, y: 5 });
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
-    expect(gridDrag.keys).toEqual([{ path: "/w/a.txt", isDir: false }]);
+    expect(dragKeys(dragState())).toEqual([{ path: "/w/a.txt", isDir: false }]);
     // threshold is >1 cell — 1-cell jitter must NOT start the drag
     h.onMouseDrag({ x: 6, y: 5 } as any);
-    expect(gridDrag.active).toBe(false);
+    expect(dragActive(dragState())).toBe(false);
     h.onMouseDrag({ x: 8, y: 5 } as any);
-    expect(gridDrag.active).toBe(true);
+    expect(dragActive(dragState())).toBe(true);
     expect(ctx.statuses.at(-1)).toBe("Dragging 1 item…");
     // hover over a folder arms the drop target
     makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3).onMouseOver();
-    expect(gridDrag.dropTarget).toBe("/w/sub");
+    expect(dragDropTarget(dragState())).toBe("/w/sub");
     // drop fires on the TARGET tile's handler (isDir=true there), filtering the dest itself
     makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3).onMouseDrop();
     expect(ctx.moved).toEqual([{ dest: "/w/sub", n: 1 }]);
-    expect(gridDrag.keys).toBeNull();
-    expect(gridDrag.active).toBe(false);
+    expect(dragKeys(dragState())).toBeNull();
+    expect(dragActive(dragState())).toBe(false);
   });
 });
 
@@ -207,8 +203,8 @@ describe("deferred ctrl toggle (the moved-0-items regression)", () => {
     // toggle fires synchronously; drag-state cleanup is deferred a tick
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
     // settle the deferred cleanup via the observable state (never a bare sleep)
-    for (let i = 0; i < 50 && gridDrag.keys; i++) await Bun.sleep(1);
-    expect(gridDrag.keys).toBeNull();
+    for (let i = 0; i < 50 && dragKeys(dragState()); i++) await Bun.sleep(1);
+    expect(dragKeys(dragState())).toBeNull();
   });
 
   test("ctrl+press then drag: toggle is cancelled, payload keeps the pressed tile", async () => {
@@ -218,24 +214,59 @@ describe("deferred ctrl toggle (the moved-0-items regression)", () => {
     ctx.tileRefs.get("/w/c.txt")!.selected = true;
     const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
     press(h, { x: 5, y: 5, modifiers: { ctrl: true } });
-    expect(gridDrag.pendingKey).toBe("/w/a.txt");
+    expect(dragPending(dragState())).toEqual({ key: "/w/a.txt", state: true });
     h.onMouseDrag({ x: 9, y: 9 } as any); // past threshold -> becomes a drag
-    expect(gridDrag.pendingKey).toBeNull();
-    expect(gridDrag.active).toBe(true);
-    expect(gridDrag.keys!.map((k) => k.path).sort()).toEqual(["/w/a.txt", "/w/b.txt", "/w/c.txt"]);
+    // the trip DROPS the pending toggle — it became a drag
+    expect(dragPending(dragState())).toBeNull();
+    expect(dragActive(dragState())).toBe(true);
+    expect(
+      dragKeys(dragState())!
+        .map((k) => k.path)
+        .sort(),
+    ).toEqual(["/w/a.txt", "/w/b.txt", "/w/c.txt"]);
     // drag marked unselected payload tiles as selected
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
     h.onMouseUp();
     // toggle must NOT have fired
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
     // settle the deferred cleanup — a leaked timer would fire mid-next-test
-    // and clear the shared gridDrag singleton out from under it
-    for (let i = 0; i < 50 && gridDrag.keys; i++) await Bun.sleep(1);
-    expect(gridDrag.keys).toBeNull();
+    // and clear the shared drag state out from under it
+    for (let i = 0; i < 50 && dragKeys(dragState()); i++) await Bun.sleep(1);
+    expect(dragKeys(dragState())).toBeNull();
   });
 });
 
 describe("selection model", () => {
+  test("a ctrl+press whose mouseup never arrives does not leak its toggle into the next gesture", () => {
+    // the ctrl+press arms a DEFERRED toggle; if the release never reaches a
+    // tile (released over the sidebar/preview), the pending toggle used to
+    // survive and fire on the NEXT gesture's mouseup — toggling a file the
+    // user never clicked
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, { modifiers: { ctrl: true } });
+    // ... no mouseup for that press
+    const h2 = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/b.txt", 1);
+    press(h2, {});
+    h2.onMouseUp();
+    expect(ctx.tileRefs.get("/w/b.txt")!.selected).toBe(true);
+    expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(false);
+  });
+
+  test("a ctrl+press released without motion applies the toggle EXACTLY once", async () => {
+    const ctx = makeCtx();
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, { modifiers: { ctrl: true } });
+    // the press itself refreshes the status (provisional payload)
+    expect(ctx.selStatusRefreshes.n).toBe(1);
+    h.onMouseUp();
+    expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
+    // the toggle applied ONCE (one more status refresh, not two)
+    expect(ctx.selStatusRefreshes.n).toBe(2);
+    // settle the deferred cleanup — a leaked timer would fire mid-next-test
+    for (let i = 0; i < 50 && dragKeys(dragState()); i++) await Bun.sleep(1);
+  });
+
   test("plain click moves the keyboard focus (shift+arrow extends from the click)", () => {
     const ctx = makeCtx();
     const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/c.txt", 2);
@@ -323,31 +354,53 @@ describe("selection model", () => {
 });
 
 describe("commitPendingCtrlToggle / finishDragState", () => {
-  test("commit applies pendingState only when no drag became active", () => {
+  test("the pending toggle is applied only while a press is armed", () => {
     const ctx = makeCtx();
-    gridDrag.pendingKey = "/w/a.txt";
-    gridDrag.pendingState = true;
-    gridDrag.active = true; // mid-drag: never commit
+    // a press that became a drag carries NO pending toggle at all — the
+    // click-toggle never happened
+    dispatchDrag({
+      type: "arm",
+      keys: [{ path: "/w/a.txt", isDir: false }],
+      ctrl: true,
+      x: 0,
+      y: 0,
+      pending: { key: "/w/a.txt", state: true },
+    });
+    dispatchDrag({ type: "trip" });
     commitPendingCtrlToggle(ctx);
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(false);
-    // commit consumed the key even while active — a fresh press re-arms it
-    gridDrag.pendingKey = "/w/a.txt";
-    gridDrag.pendingState = true;
-    gridDrag.active = false;
+    // a fresh ARMED press carries one — and it is applied
+    dispatchDrag({
+      type: "arm",
+      keys: [{ path: "/w/a.txt", isDir: false }],
+      ctrl: true,
+      x: 0,
+      y: 0,
+      pending: { key: "/w/a.txt", state: true },
+    });
     commitPendingCtrlToggle(ctx);
     expect(ctx.tileRefs.get("/w/a.txt")!.selected).toBe(true);
+    // ... exactly once: the commit consumed it
+    commitPendingCtrlToggle(ctx);
+    expect(ctx.selStatusRefreshes.n).toBe(1);
   });
 
   test("finishDragState clears everything and un-highlights a non-selected target", () => {
     const ctx = makeCtx();
-    gridDrag.active = true;
-    gridDrag.dropTarget = "/w/sub";
-    gridDrag.keys = [{ path: "/w/a.txt", isDir: false }];
+    dispatchDrag({
+      type: "arm",
+      keys: [{ path: "/w/a.txt", isDir: false }],
+      ctrl: true,
+      x: 0,
+      y: 0,
+      pending: null,
+    });
+    dispatchDrag({ type: "trip" });
+    dispatchDrag({ type: "hover-target", key: "/w/sub" });
     finishDragState(ctx);
-    expect(gridDrag.active).toBe(false);
-    expect(gridDrag.keys).toBeNull();
-    expect(gridDrag.dropTarget).toBeNull();
-    expect(gridDrag.ctrl).toBe(false);
+    expect(dragState().kind).toBe("idle");
+    expect(dragKeys(dragState())).toBeNull();
+    expect(dragDropTarget(dragState())).toBeNull();
     expect(ctx.visuals.get("/w/sub")).toBe(0);
   });
 
@@ -359,8 +412,10 @@ describe("commitPendingCtrlToggle / finishDragState", () => {
     expect(ctx.statuses.at(-1)).toBe("Dragging 1 item…");
     ctx.selStatusRefreshes.n = 0;
     h.onMouseUp(); // cleanup is deferred a tick (scheduleDragCleanup) — poll, don't sleep
-    for (let i = 0; i < 50 && gridDrag.active; i++) await Bun.sleep(1);
-    expect(gridDrag.active).toBe(false);
+    // the release moves the state to `released` (the payload survives for the
+    // imminent drop); the deferred cleanup is what returns it to idle
+    for (let i = 0; i < 50 && dragState().kind !== "idle"; i++) await Bun.sleep(1);
+    expect(dragState().kind).toBe("idle");
     expect(ctx.selStatusRefreshes.n).toBe(1);
   });
 
@@ -370,7 +425,7 @@ describe("commitPendingCtrlToggle / finishDragState", () => {
     press(h, { x: 5, y: 5 });
     ctx.selStatusRefreshes.n = 0;
     h.onMouseUp();
-    for (let i = 0; i < 50 && gridDrag.keys; i++) await Bun.sleep(1); // settle deferred cleanup
+    for (let i = 0; i < 50 && dragKeys(dragState()); i++) await Bun.sleep(1); // settle deferred cleanup
     expect(ctx.selStatusRefreshes.n).toBe(0);
   });
 });
@@ -401,12 +456,19 @@ describe("hover animation routing", () => {
 
   test("an active drag's drop-target hover keeps the instant Selected paint", () => {
     const ctx = makeCtx();
-    gridDrag.active = true;
-    gridDrag.keys = [{ path: "/w/a.txt", isDir: false }];
+    dispatchDrag({
+      type: "arm",
+      keys: [{ path: "/w/a.txt", isDir: false }],
+      ctrl: false,
+      x: 0,
+      y: 0,
+      pending: null,
+    });
+    dispatchDrag({ type: "trip" });
     const h = makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3);
     h.onMouseOver();
     expect(ctx.hoverCalls).toEqual([]);
-    expect(gridDrag.dropTarget).toBe("/w/sub");
+    expect(dragDropTarget(dragState())).toBe("/w/sub");
     expect(ctx.visuals.get("/w/sub")).toBe(2); // Selected
     h.onMouseOut();
     expect(ctx.visuals.get("/w/sub")).toBe(0);
@@ -426,7 +488,7 @@ describe("hover animation routing", () => {
 // mouse pointer shapes (OSC 22): over always sets, out always restores —
 // unlike the highlight paint, which skips selected tiles, the pointer is an
 // affordance (draggable/clickable) that must never stick. Drag states own
-// the pointer while gridDrag.active (grabbing over valid targets,
+// the pointer while dragActive(dragState()) (grabbing over valid targets,
 // not-allowed over files/self); finishDragState restores default centrally
 // so every cleanup path (drop, pane-background drop, deferred release)
 // heals, and the tile drop then re-applies the tile pointer.
@@ -453,7 +515,7 @@ describe("mouse pointer shapes", () => {
     const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
     press(h, {});
     h.onMouseDrag({ x: 9, y: 9 } as any);
-    expect(gridDrag.active).toBe(true);
+    expect(dragActive(dragState())).toBe(true);
     expect(ctx.pointers).toContain("grabbing");
     finishDragState(ctx);
     expect(ctx.pointers.at(-1)).toBe("default");
@@ -466,7 +528,7 @@ describe("mouse pointer shapes", () => {
     const hFile = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/b.txt", 1);
     press(hSrc, {});
     hSrc.onMouseDrag({ x: 9, y: 9 } as any);
-    expect(gridDrag.active).toBe(true);
+    expect(dragActive(dragState())).toBe(true);
     hDir.onMouseOver();
     hFile.onMouseOver();
     expect(ctx.pointers).toContain("grabbing");
@@ -481,6 +543,33 @@ describe("mouse pointer shapes", () => {
     hSrc.onMouseDrag({ x: 9, y: 9 } as any);
     hDst.onMouseDrop();
     expect(ctx.pointers.at(-1)).toBe("pointer");
+  });
+
+  test("the deferred cleanup after a tile drop does not clobber the tile pointer", async () => {
+    const ctx = makeCtx();
+    const hSrc = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    const hDst = makeEntryMouseHandlers(ctx)({ isDir: true }, "/w/sub", 3);
+    press(hSrc, {});
+    hSrc.onMouseDrag({ x: 9, y: 9 } as any);
+    // the release fires on the SOURCE before the drop reaches the target, so
+    // the cleanup is deferred a tick — the drop lands first
+    hSrc.onMouseDragEnd();
+    hDst.onMouseDrop();
+    expect(ctx.pointers.at(-1)).toBe("pointer");
+    // when the deferred cleanup lands there is NOTHING left to clean up (the
+    // drop already reset the drag), so it must not restore the pointer —
+    // the cursor sits on the tile
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ctx.pointers.at(-1)).toBe("pointer");
+  });
+
+  test("finishDragState on an idle drag state touches nothing", () => {
+    // no drag owns the pointer, so a cleanup that "restores" it would
+    // clobber whatever the surface under the cursor asked for
+    const ctx = makeCtx();
+    finishDragState(ctx);
+    expect(ctx.pointers).toEqual([]);
+    expect(ctx.selStatusRefreshes.n).toBe(0);
   });
 
   test("absent setPointer changes nothing (old fakes keep working)", () => {

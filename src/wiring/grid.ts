@@ -15,7 +15,8 @@ import { appsForFile, launchApp } from "../fs/apps";
 import { runSudo, sudoCatArgv } from "../fs/elevate";
 import type { makePick } from "../ui/ui-pick";
 import { makePreview } from "../ui/ui-preview";
-import { finishDragState, gridDrag, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
+import { finishDragState, makeEntryMouseHandlers, type BandCtx } from "../input/grid-input";
+import { dragKeys, dragState } from "../lib/drag-state";
 import { makeGridRenderer } from "../ui/ui-grid";
 import { type EaseKey, fileAnimStyleFrom, makeFileAnim, makeTileHoverAnim, type SlideDir } from "../ui/ui-grid-anim";
 import { makeSmoothGlide, makeWheelSmoother } from "../ui/ui-smooth-scroll";
@@ -214,7 +215,7 @@ export const wireGrid = (deps: {
   // A drag released over a pane's EMPTY background moves into that pane's cwd
   // (the tile drop handles dropping onto a specific folder tile).
   const dropIntoPane = (pane: 0 | 1): void => {
-    const keys = gridDrag.keys;
+    const keys = dragKeys(dragState());
     if (!keys?.length) return;
     const dest = core.panes.states[pane].cwd;
     finishDragCtx();

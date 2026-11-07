@@ -7,7 +7,7 @@ import { buildSections, loadSystemPlaces, type EjectSpec, type Place, type Sideb
 import { trashDir } from "../fs/fsutil";
 import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import type { Tab } from "../fs/session";
-import { gridDrag } from "../input/grid-input";
+import { dragActive, dragKeys, dragState } from "../lib/drag-state";
 import type { ClipItem } from "../lib/file-op-protocol";
 import { hoverEvents, selectIconState, toggleIconState } from "./ui-slots";
 import type { Theme } from "../config/config";
@@ -389,7 +389,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
           else if (place.mountDevice) mountDevice(place.mountDevice, place.label);
         },
         onMouseDrop: () => {
-          const keys = gridDrag.keys;
+          const keys = dragKeys(dragState());
           ctx.finishDrag();
           const target = placeTarget();
           ctx.dlog(
@@ -421,7 +421,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
           normalizePlaces();
           // a drag owns the pointer (tiles show grabbing/not-allowed) — a
           // sidebar sweep mid-drag must not clobber it back to pointer
-          if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
+          if (!dragActive(dragState())) ctx.setPointer?.(on ? "pointer" : "default");
         }),
       },
       iconSlot.el,
@@ -530,8 +530,8 @@ export const makeChrome = (ctx: ChromeCtx) => {
     // a chip is a valid drop target only for a single dragged folder — dropping
     // navigates THAT tab to it (browser-style)
     const dragTabDir = (): string | null => {
-      if (!gridDrag.active) return null;
-      const keys = gridDrag.keys;
+      if (!dragActive(dragState())) return null;
+      const keys = dragKeys(dragState());
       const first = keys?.length === 1 ? keys[0] : undefined;
       return first?.isDir ? first.path : null;
     };
@@ -625,7 +625,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         if (!active) applySurface(n, tileSurface(ctx.uiStyle(), colors, on ? "hover" : "rest", tForce()));
         setCloseShown(on);
         // a drag owns the pointer — same rule as the sidebar rows
-        if (!gridDrag.active) ctx.setPointer?.(on ? "pointer" : "default");
+        if (!dragActive(dragState())) ctx.setPointer?.(on ? "pointer" : "default");
       });
       const chipHover = {
         onMouseMove: chipHoverBase.onMouseMove,
@@ -640,7 +640,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
         // signal is exactly this over (its move edge never fires), so the close
         // affordance must not appear under a shrunken folder.
         onMouseOver: () => {
-          if (!gridDrag.active) setCloseShown(true);
+          if (!dragActive(dragState())) setCloseShown(true);
         },
       };
       bar.add(
@@ -667,7 +667,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
               else ctx.switchTab(pane, i);
             },
             onMouseDrop: () => {
-              const keys = gridDrag.keys;
+              const keys = dragKeys(dragState());
               ctx.finishDrag();
               const first = keys?.length === 1 ? keys[0] : undefined;
               ctx.dlog(`tab drop pane=${pane} chip=${i} keys=${keys?.length ?? -1} dir=${first?.isDir ?? "-"}`);

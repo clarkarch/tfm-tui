@@ -6,7 +6,8 @@ import { Box } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { MouseButtons } from "@opentui/core/testing";
 import { makeChrome, tabChipMaxWidth, tabTitle } from "./ui-chrome";
-import { gridDrag } from "../input/grid-input";
+import { dispatchDrag, resetDragState } from "../lib/drag-state";
+import type { ClipItem } from "../lib/file-op-protocol";
 import { defaultConfig } from "../config/config-schema";
 import { loadSystemPlaces, resetSystemPlaces } from "../fs/places";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -63,6 +64,16 @@ let modalOpen: boolean;
 let notifies: Array<[string, string | undefined, NotifyLevel | undefined]>;
 let fakeHome: string;
 let spawns: string[][];
+// the drag state is an explicit union now — the tests arm a gesture
+// (payload + ctrl flag) or clear it, never poke a field
+const armDrag = (keys: ClipItem[] | null, ctrl = false): void => {
+  if (!keys) {
+    resetDragState();
+    return;
+  }
+  dispatchDrag({ type: "arm", keys, ctrl, x: 0, y: 0, pending: null });
+};
+
 // [ui] sidebar-section-titles: names each group in place of the dividers
 let sectionTitles: boolean;
 // fake icon-slot id sequence: the real makeIconSlot sequences ids (iconSeq), so
@@ -232,8 +243,7 @@ afterAll(async () => {
   resetSystemPlaces();
   if (savedXdgData === undefined) delete process.env.XDG_DATA_HOME;
   else process.env.XDG_DATA_HOME = savedXdgData;
-  gridDrag.keys = null;
-  gridDrag.active = false;
+  resetDragState();
   rmSync(trashSandbox, { recursive: true, force: true });
   await t.dispose(); // 0.6.0: destroy + await closed
 });
@@ -494,48 +504,48 @@ describe("place drops (OSC-72 / internal drag targets)", () => {
   };
 
   test("dropping files on Home moves them into it", () => {
-    gridDrag.keys = [
+    armDrag([
       { path: "/x/f1", isDir: false },
       { path: "/x/f2", isDir: false },
-    ];
+    ]);
     dropOn("tfm-place-0");
     expect(calls.moveInto.length).toBe(1);
     const [dest, items] = calls.moveInto[0]!;
     expect(dest).toBe(HOME);
     expect(items.map((i) => i.path)).toEqual(["/x/f1", "/x/f2"]);
     expect(calls.finishDrag).toBe(1);
-    gridDrag.keys = null;
+    resetDragState();
   });
 
   test("the dragged target itself is filtered out of its own drop payload", () => {
-    gridDrag.keys = [
+    armDrag([
       { path: HOME, isDir: true },
       { path: "/x/f2", isDir: false },
-    ];
+    ]);
     dropOn("tfm-place-0");
     const [, items] = calls.moveInto.at(-1)!;
     expect(items.map((i) => i.path)).toEqual(["/x/f2"]);
-    gridDrag.keys = null;
+    resetDragState();
   });
 
   test("dropping on the Trash place routes to trashPaths, never a plain move", () => {
     const trashFiles = path.join(trashSandbox, "Trash", "files");
-    gridDrag.keys = [{ path: "/x/f1", isDir: false }];
+    armDrag([{ path: "/x/f1", isDir: false }]);
     dropOn("tfm-place-3");
     expect(calls.trashPaths.length).toBe(1);
     expect(calls.trashPaths[0]).toEqual(["/x/f1"]);
     // a trash drop must never come back as a moveInto onto the trash dir
     const trashMoves = calls.moveInto.filter(([d]) => d === trashFiles);
     expect(trashMoves).toEqual([]);
-    gridDrag.keys = null;
+    resetDragState();
   });
 
   test("virtual places (Recent/Starred) accept no drops", () => {
     const movesBefore = calls.moveInto.length;
-    gridDrag.keys = [{ path: "/x/f1", isDir: false }];
+    armDrag([{ path: "/x/f1", isDir: false }]);
     dropOn("tfm-place-1");
     expect(calls.moveInto.length).toBe(movesBefore);
-    gridDrag.keys = null;
+    resetDragState();
   });
 });
 
@@ -680,8 +690,8 @@ describe("renderTabbar", () => {
         y: 0,
         modifiers: { shift: false, alt: false, ctrl: false },
       });
-    gridDrag.active = true;
-    gridDrag.keys = [{ path: "/x/dragdir", isDir: true }];
+    armDrag([{ path: "/x/dragdir", isDir: true }]);
+    dispatchDrag({ type: "trip" });
     try {
       // the drag's only chip signal is the over; the drop-target cue branch of
       // the move paint hides it too (a close ✕ under a dragged folder misfires)
@@ -690,8 +700,7 @@ describe("renderTabbar", () => {
       fire("move");
       expect(slotEl().visible).toBe(false);
     } finally {
-      gridDrag.active = false;
-      gridDrag.keys = null;
+      resetDragState();
       fire("out");
     }
     // drag over: the chip is a plain chip again and hovers normally
@@ -762,7 +771,7 @@ describe("renderTabbar", () => {
     tabModel = { list: mkTabs(2), active: 1 }; // previous test rendered a 1-tab bar
     chrome.renderTabbar(0);
     await t.renderOnce();
-    gridDrag.keys = [{ path: "/x/afolder", isDir: true }];
+    armDrag([{ path: "/x/afolder", isDir: true }]);
     (byId("tfm-p0-tab-1") as any).processMouseEvent({
       type: "drop",
       button: 0,
@@ -774,7 +783,7 @@ describe("renderTabbar", () => {
     expect(calls.navigate).toContain("/x/afolder");
     // a file (non-dir) never triggers chip navigation
     const navBefore = calls.navigate.length;
-    gridDrag.keys = [{ path: "/x/afile", isDir: false }];
+    armDrag([{ path: "/x/afile", isDir: false }]);
     (byId("tfm-p0-tab-1") as any).processMouseEvent({
       type: "drop",
       button: 0,
@@ -783,7 +792,7 @@ describe("renderTabbar", () => {
       modifiers: { shift: false, alt: false, ctrl: false },
     });
     expect(calls.navigate.length).toBe(navBefore);
-    gridDrag.keys = null;
+    resetDragState();
   });
 });
 
@@ -1015,7 +1024,7 @@ describe("eject / mount", () => {
     // give back real places state: the fake lsblk above replaced sysMounts
     // for the whole shared module cache — later files must see real devices
     await loadSystemPlaces();
-    gridDrag.keys = null;
+    resetDragState();
   });
 
   const resetSeams = () => {

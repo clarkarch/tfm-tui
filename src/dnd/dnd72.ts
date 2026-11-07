@@ -45,7 +45,8 @@ import {
   uriListPayload,
 } from "./osc72";
 import { fileUriToPath } from "../fs/uri";
-import { gridDrag, TileVisual, type GridTileRef, type TileVisualMode } from "../input/grid-input";
+import { TileVisual, type GridTileRef, type TileVisualMode } from "../input/grid-input";
+import { dragCtrl, dragKeys, dragState } from "../lib/drag-state";
 import type { ClipItem } from "../lib/file-op-protocol";
 import { splitStemExt, trashDir } from "../fs/fsutil";
 import type { NotifyLevel } from "../lib/notify-level";
@@ -698,12 +699,14 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     // middle-button drags go external (OS session + icon badge); left drags are
     // declined so the internal move flow keeps the pointer and its UI feedback
     if (t === "o" && x >= 0) {
-      const want = !gridDrag.ctrl && !!gridDrag.keys?.length && !ctx.escMenuOpen() && !ctx.fileMenuOpen();
+      const want =
+        !dragCtrl(dragState()) && !!dragKeys(dragState())?.length && !ctx.escMenuOpen() && !ctx.fileMenuOpen();
       ctx.log(
-        `drag offer x=${x} y=${y} ctrl=${gridDrag.ctrl} accept=${want} keys=${gridDrag.keys?.length ?? -1} menu=${ctx.escMenuOpen()} fmenu=${ctx.fileMenuOpen()}`,
+        `drag offer x=${x} y=${y} ctrl=${dragCtrl(dragState())} accept=${want} keys=${dragKeys(dragState())?.length ?? -1} menu=${ctx.escMenuOpen()} fmenu=${ctx.fileMenuOpen()}`,
       );
-      if (!want || !gridDrag.keys) return; // left-drag: kitty falls back to normal mouse events
-      beginDrag(gridDrag.keys);
+      const payload = dragKeys(dragState());
+      if (!want || !payload) return; // left-drag: kitty falls back to normal mouse events
+      beginDrag(payload);
       return;
     }
     if (t === "e") {
