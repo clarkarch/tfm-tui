@@ -52,6 +52,20 @@ export type UpdatesCtx = {
 // version, and the pre-step of a click says nothing extra
 type ToastMode = "always" | "once" | "never";
 
+// The check's ONE explicit phase. `forced` says whether the request asked
+// the NETWORK (a manual check) or may answer from the cache (the boot
+// question) — a manual check may share a network request, never a cached
+// one. `promise` is the flight token: the registration belongs to THIS
+// request, and only its own settle clears it.
+type CheckPhase = { kind: "idle" } | { kind: "checking"; forced: boolean; promise: Promise<UpdateStatus> };
+
+// The install's phase — a SEPARATE machine. The check and the install are
+// independent lifecycles (the About row may answer a manual check while an
+// installer runs), so folding them into one phase would let one of them
+// clobber the other's registration — the same class of bug this refactor
+// removes.
+type ApplyPhase = { kind: "idle" } | { kind: "applying" };
+
 export const wireUpdates = (ctx: UpdatesCtx) => {
   const isDev = isDevBuild(ctx.execPath);
   const installDir = ctx.installDir ?? installDirOf(ctx.execPath);
@@ -65,11 +79,10 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
 
   // null until something asked: the About row shows a plain "check for updates"
   let status: UpdateStatus | null = null;
-  let inFlight: Promise<UpdateStatus> | null = null;
-  // whether the in-flight check asked the NETWORK (force) or may answer from
-  // the cache — a manual check may share a network request, never a cached one
-  let inFlightForced = false;
-  let applying = false;
+  // the check's phase: idle, or checking with the flight's promise
+  let checkPhase: CheckPhase = { kind: "idle" };
+  // the install's phase: idle, or applying
+  let applyPhase: ApplyPhase = { kind: "idle" };
   // generation guard: a check that lands after quit/stop must not toast or
   // write state into a torn-down renderer
   let gen = 0;
@@ -123,24 +136,30 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
   };
 
   const check = async (mode: ToastMode, force: boolean): Promise<UpdateStatus> => {
-    if (inFlight) {
+    if (checkPhase.kind === "checking") {
       // A MANUAL check always asks the network and always answers. It may
       // share an in-flight request that already asked the network (two manual
       // checks are one request), but never a CACHED one — the boot's cached
       // question would swallow the user's ask, and the manual check would
       // answer from a cache instead of the network.
-      if (!force || inFlightForced) return inFlight;
-      await inFlight.catch(() => {});
+      if (!force || checkPhase.forced) return checkPhase.promise;
+      await checkPhase.promise.catch(() => {});
     }
     const myGen = gen;
     if (mode !== "never") publish({ kind: "checking" });
-    const p = run(force).finally(() => {
-      inFlight = null;
-      inFlightForced = false;
+    // the flight token: the settle clears ONLY this registration. An older
+    // request's settle used to null `inFlight` unconditionally, so a check
+    // that started after stop() lost its registration the moment the old
+    // request settled — the next manual check made a THIRD request instead
+    // of sharing the second one.
+    let promise: Promise<UpdateStatus>;
+    promise = run(force).finally(() => {
+      if (checkPhase.kind === "checking" && checkPhase.promise === promise) {
+        checkPhase = { kind: "idle" };
+      }
     });
-    inFlight = p;
-    inFlightForced = force;
-    const s = await p;
+    checkPhase = { kind: "checking", forced: force, promise };
+    const s = await promise;
     if (myGen !== gen) return s;
     if (mode === "always") say(s);
     if (mode === "once" && s.kind === "available") {
@@ -155,8 +174,8 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
   };
 
   const apply = async (target: string): Promise<void> => {
-    if (applying) return;
-    applying = true;
+    if (applyPhase.kind === "applying") return;
+    applyPhase = { kind: "applying" };
     const progress = ctx.sticky?.("Updating tfm…") ?? null;
     try {
       const res = await install({ tag: `v${target}`, installDir, capture: true });
@@ -178,7 +197,7 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
       try {
         progress?.close();
       } catch {}
-      applying = false;
+      applyPhase = { kind: "idle" };
     }
   };
 
@@ -216,8 +235,9 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
 
   const stop = (): void => {
     gen++;
-    inFlight = null;
-    inFlightForced = false;
+    // the flight is abandoned: its settle finds no matching registration and
+    // leaves a NEWER one alone
+    checkPhase = { kind: "idle" };
     try {
       aborter?.abort();
     } catch {}

@@ -224,6 +224,41 @@ describe("wireUpdates", () => {
     expect(fetches).toBe(1);
   });
 
+  test("stop() then a new check keeps the new check's in-flight registration", async () => {
+    // The OLD request's .finally() nulled `inFlight` unconditionally, so a
+    // check that started AFTER stop() lost its registration the moment the
+    // old request settled: the next manual check started a THIRD request
+    // instead of sharing the second one ("two manual checks are one request"
+    // stopped being true).
+    const releases: Array<(t: string | null) => void> = [];
+    let fetches = 0;
+    const h = harness({
+      fetchTag: () =>
+        new Promise<string | null>((r) => {
+          fetches++;
+          releases.push(r);
+        }),
+    });
+    const u = wireUpdates(h.ctx);
+    const first = u.checkNow({ toast: "never" });
+    await settleUntil(() => releases.length === 1);
+    u.stop();
+    const second = u.checkNow({ toast: "never" });
+    await settleUntil(() => releases.length === 2);
+    // the FIRST request lands now — its finally must not clear the SECOND
+    // request's registration
+    releases[0]!("1.1.0");
+    await first;
+    const third = u.checkNow({ toast: "never" });
+    // the third check SHARES the second request — it must not start a third
+    await Bun.sleep(30);
+    expect(fetches).toBe(2);
+    releases[1]!("1.1.0");
+    await Promise.all([second, third]);
+    // two manual checks, one network request
+    expect(fetches).toBe(2);
+  });
+
   test("a manual check during an in-flight check still asks the network and answers", async () => {
     // the boot check holds the request; a MANUAL check must not reuse it —
     // "a manual check always hits the network and always answers"
