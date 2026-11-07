@@ -10,7 +10,7 @@
 import { Box, Input, Text } from "@opentui/core";
 import { applySurface, floatSurface } from "./style";
 import { makeModalScrim } from "./ui-dialogs";
-import { advanceCursor, invokeIsolated } from "../lib/uiutil";
+import { advanceCursor, cursorAt, cursorIndex, invokeIsolated, NO_CURSOR, type Cursor } from "../lib/uiutil";
 import type { Theme } from "../config/config";
 import type { UiStyle } from "../config/config-schema";
 import type { Floats } from "./floats";
@@ -84,13 +84,14 @@ export const makePick = (ctx: PickCtx) => {
   let items: PickItem[] = [];
   let title = "";
   let query = "";
-  let idx = -1;
+  // the row cursor — an explicit value, not the `-1` sentinel
+  let cursor: Cursor = NO_CURSOR;
   let results: PickItem[] = [];
 
   const rawClose = (): void => {
     opened = false;
     query = "";
-    idx = -1;
+    cursor = NO_CURSOR;
     results = [];
     try {
       const input = ctx.byId("tfm-pick-input");
@@ -111,7 +112,11 @@ export const makePick = (ctx: PickCtx) => {
     if (!list) return;
     const colors = ctx.colors();
     results = filterItems(items, query).slice(0, MAX_ROWS);
-    if (idx >= results.length) idx = results.length - 1;
+    // clamp a cursor that the new filter pushed out of range; an EMPTY list
+    // leaves NO cursor (there is no row to point at)
+    const at = cursorIndex(cursor);
+    if (results.length === 0) cursor = NO_CURSOR;
+    else if (at >= results.length) cursor = cursorAt(results.length - 1);
     ctx.destroyChildren(list);
     if (!results.length) {
       list.add(
@@ -123,7 +128,7 @@ export const makePick = (ctx: PickCtx) => {
       return;
     }
     results.forEach((item, i) => {
-      const active = i === idx;
+      const active = i === cursorIndex(cursor);
       list.add(
         Box(
           {
@@ -143,8 +148,8 @@ export const makePick = (ctx: PickCtx) => {
             onMouseMove: () => {
               // position truth (pointer) before change truth (highlight)
               ctx.setPointer?.("pointer");
-              if (idx !== i) {
-                idx = i;
+              if (cursorIndex(cursor) !== i) {
+                cursor = cursorAt(i);
                 renderList();
               }
             },
@@ -167,7 +172,7 @@ export const makePick = (ctx: PickCtx) => {
     title = opts.title;
     items = opts.items ?? ctx.commands();
     query = "";
-    idx = -1;
+    cursor = NO_CURSOR;
     const colors = ctx.colors();
     const scrim = makeModalScrim(
       { uiStyle: ctx.uiStyle, colors: ctx.colors },
@@ -206,7 +211,7 @@ export const makePick = (ctx: PickCtx) => {
         try {
           query = String(input.value ?? "");
         } catch {}
-        idx = 0;
+        cursor = cursorAt(0);
         renderList();
       });
     }
@@ -222,12 +227,12 @@ export const makePick = (ctx: PickCtx) => {
 
   const move = (delta: number): void => {
     if (!results.length) return;
-    // idx -1 = no cursor yet: down fills the first row, up the last
-    idx = advanceCursor(idx, delta, results.length);
+    // NO cursor yet: down fills the first row, up the last
+    cursor = advanceCursor(cursor, delta, results.length);
     renderList();
   };
 
-  const activate = (i = idx): void => {
+  const activate = (i = cursorIndex(cursor)): void => {
     if (i < 0) return;
     const item = results[i];
     if (!item) return;
@@ -251,7 +256,7 @@ export const makePick = (ctx: PickCtx) => {
   };
 
   // theme-switch repaint while open: panel + input + title by id plus a
-  // list rebuild (live colors, same query/idx — the Input node itself is
+  // list rebuild (live colors, same query/cursor — the Input node itself is
   // untouched, so focus and typed text survive). No-op when closed.
   const repaint = (): void => {
     if (!opened) return;
@@ -288,7 +293,7 @@ export const makePick = (ctx: PickCtx) => {
     // test seam: drive the filter without Input events
     setFilter: (q: string): void => {
       query = q;
-      idx = -1;
+      cursor = NO_CURSOR;
       renderList();
     },
   };

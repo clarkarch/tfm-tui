@@ -175,13 +175,52 @@ export const safeRenderStep = (
 
 export const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+// --- Floating-list cursor: ONE vocabulary for "no row highlighted" and
+// "row N is highlighted" (context menu / submenu / pick / esc-menu /
+// settings rows / sidebar keyboard focus).
+//
+// `-1` was the implicit sentinel: every consumer re-implemented the
+// convention on its own, and a consumer that forgot the guard indexed
+// entries[-1] -> undefined -> a SILENT no-op. The union makes "no cursor"
+// a distinct VALUE, so the guard is a discriminant check rather than a
+// magic-number comparison that can drift. ---
+export type Cursor = { kind: "none" } | { kind: "row"; index: number };
+
+export const NO_CURSOR: Cursor = { kind: "none" };
+
+export const cursorAt = (index: number): Cursor => (index < 0 ? NO_CURSOR : { kind: "row", index });
+
+// the numeric view, for the places that must index an array with it
+export const cursorIndex = (cursor: Cursor): number => (cursor.kind === "row" ? cursor.index : -1);
+
+export const hasCursor = (cursor: Cursor): boolean => cursor.kind === "row";
+
+// A flyout (a context-menu submenu) is its OWN machine: it can be CLOSED,
+// or OPEN with no row highlighted yet (the first arrow/hover picks one), or
+// open on a row. The old encoding squeezed all three into ONE field with
+// two sentinels — `null` = closed and `-1` = open-with-no-cursor — so "is
+// the flyout open?" and "does the flyout have a cursor?" were the same
+// question asked with two different values.
+export type FlyoutCursor = { kind: "closed" } | { kind: "open"; cursor: Cursor };
+
+export const CLOSED_FLYOUT: FlyoutCursor = { kind: "closed" };
+
+export const openFlyout = (cursor: Cursor = NO_CURSOR): FlyoutCursor => ({ kind: "open", cursor });
+
+// the flyout's row cursor (NO cursor when the flyout is closed)
+export const flyoutCursor = (flyout: FlyoutCursor): Cursor => (flyout.kind === "open" ? flyout.cursor : NO_CURSOR);
+
 // Floating-list cursor advance (context menu / submenu / pick / esc-menu):
-// idx -1 = no cursor yet (down fills first, up fills last); `entries` given
-// means separators are skipped, bounded so an all-separator list can't spin.
-export const advanceCursor = (idx: number, delta: number, count: number, entries?: { sep?: boolean }[]): number => {
-  let i = idx < 0 ? (delta >= 0 ? 0 : count - 1) : (idx + delta + count) % count;
+// from NO cursor, down fills the first row and up the last; from a row it
+// wraps. `entries` given means separators are skipped, bounded so an
+// all-separator list can't spin. An EMPTY list yields NO cursor — it can
+// never point at a row.
+export const advanceCursor = (cursor: Cursor, delta: number, count: number, entries?: { sep?: boolean }[]): Cursor => {
+  if (count <= 0) return NO_CURSOR;
+  const from = cursorIndex(cursor);
+  let i = from < 0 ? (delta >= 0 ? 0 : count - 1) : (from + delta + count) % count;
   for (let n = 0; entries?.[i]?.sep && n < count; n++) i = (i + delta + count) % count;
-  return i;
+  return { kind: "row", index: i };
 };
 
 export const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);

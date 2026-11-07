@@ -10,6 +10,7 @@ import { gridDrag } from "../input/grid-input";
 import { defaultConfig } from "../config/config-schema";
 import { loadSystemPlaces, resetSystemPlaces } from "../fs/places";
 import type { NotifyLevel } from "../lib/notify-level";
+import { cursorAt, NO_CURSOR, type Cursor } from "../lib/uiutil";
 import type { Theme } from "../config/config";
 import type { Tab } from "../fs/session";
 
@@ -54,7 +55,7 @@ let availWVal: number; // 0 = seam absent (roomy 24-wide chips, today's look)
 let tabModel: { list: Tab[]; active: number };
 let tabModel1: { list: Tab[]; active: number };
 let kbActive: boolean;
-let kbIdx: number;
+let kbIdx: Cursor;
 let modalOpen: boolean;
 // eject/mount test seams: notify/home/spawn capture for a second chrome
 // instance, built in the eject describe's beforeAll so the shared fakes above
@@ -106,7 +107,7 @@ beforeAll(async () => {
   tabModel = { list: mkTabs(2), active: 1 };
   tabModel1 = { list: mkTabs(3), active: 2 };
   kbActive = false;
-  kbIdx = -1;
+  kbIdx = NO_CURSOR;
   modalOpen = false;
   sectionTitles = false;
   // eject/mount seams: written by the eject describe below; absent here so
@@ -431,7 +432,7 @@ describe("renderSidebar", () => {
         trashPaths: () => Promise.resolve(),
         moveInto: () => Promise.resolve(),
         kbActive: () => false,
-        kbIdx: () => -1,
+        kbIdx: () => NO_CURSOR,
         tabs: () => ({ list: mkTabs(1), active: 0 }),
         focusPane: () => {},
         closeTab: () => {},
@@ -801,12 +802,12 @@ describe("normalizePlaces (hover/kb focus)", () => {
   test("keyboard focus (kbActive) wins over mouse hover", () => {
     chrome.setMousePlace(2); // mouse on Starred
     kbActive = true;
-    kbIdx = 1;
+    kbIdx = cursorAt(1);
     chrome.renderSidebar(); // render path applies kb focus at rebuild tail
     expect(bgInts("tfm-place-1")).toEqual(hexInts(colors.hoverBg));
     expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.sidebarBg));
     kbActive = false;
-    kbIdx = -1;
+    kbIdx = NO_CURSOR;
     chrome.clearMousePlace();
   });
 
@@ -814,7 +815,7 @@ describe("normalizePlaces (hover/kb focus)", () => {
     cwd = HOME;
     chrome.renderSidebar();
     kbActive = true;
-    kbIdx = 1;
+    kbIdx = cursorAt(1);
     chrome.renderSidebar();
     expect(bgInts("tfm-place-1")).toEqual(hexInts(colors.hoverBg));
     // the menu opened: the kb-focused row must drop its highlight under the dim
@@ -826,7 +827,7 @@ describe("normalizePlaces (hover/kb focus)", () => {
     chrome.normalizePlaces();
     expect(bgInts("tfm-place-1")).toEqual(hexInts(colors.hoverBg));
     kbActive = false;
-    kbIdx = -1;
+    kbIdx = NO_CURSOR;
   });
 
   test("mouse move/out routes the row key to hoverRow (per-row nudge)", async () => {
@@ -984,7 +985,7 @@ describe("eject / mount", () => {
       trashPaths: () => Promise.resolve(),
       moveInto: () => Promise.resolve(),
       kbActive: () => false,
-      kbIdx: () => -1,
+      kbIdx: () => NO_CURSOR,
       tabs: (pane: 0 | 1) => (pane === 1 ? tabModel1 : tabModel),
       focusPane: () => {},
       closeTab: () => {},

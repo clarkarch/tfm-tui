@@ -1,7 +1,17 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { floatSurface, type UiStyle } from "./style";
 import type { Theme } from "../config/config";
-import { advanceCursor, destroyChildren } from "../lib/uiutil";
+import {
+  advanceCursor,
+  CLOSED_FLYOUT,
+  cursorAt,
+  cursorIndex,
+  destroyChildren,
+  NO_CURSOR,
+  openFlyout,
+  type Cursor,
+  type FlyoutCursor,
+} from "../lib/uiutil";
 import { FLOAT_Z, type FloatOpenOpts, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
@@ -41,10 +51,12 @@ type MenuCtx = {
 };
 
 type MenuState = {
-  idx: number;
+  // the MAIN panel's row cursor (an explicit value, not the `-1` sentinel)
+  cursor: Cursor;
   entries: ListEntry[];
-  // index into entries[idx].submenu while the flyout is open, else null
-  subIdx: number | null;
+  // the flyout's own machine: closed / open with no row / open on a row.
+  // The flyout hangs off the main cursor's row, so the two are separate.
+  flyout: FlyoutCursor;
   // anchor of the main panel; the flyout positions relative to it
   px: number;
   py: number;
@@ -71,7 +83,7 @@ export const makeMenu = (ctx: MenuCtx) => {
   };
 
   const subEntries = (): ListEntry[] | null =>
-    state && state.subIdx !== null ? (state.entries[state.idx]?.submenu ?? null) : null;
+    state && state.flyout.kind === "open" ? (state.entries[cursorIndex(state.cursor)]?.submenu ?? null) : null;
 
   // shared row builder for the main panel and its flyout
   const rowNode = (entry: ListEntry, active: boolean, onHover: () => void, onActivate: () => void) => {
@@ -142,7 +154,7 @@ export const makeMenu = (ctx: MenuCtx) => {
   const renderSubMenu = (): void => {
     removeSub();
     const items = subEntries();
-    if (!items || !state || state.subIdx === null) return;
+    if (!items || !state || state.flyout.kind !== "open") return;
     const colors = ctx.colors();
     const w = ctx.menuW;
     const h = items.length + 1; // divider + rows
@@ -150,7 +162,7 @@ export const makeMenu = (ctx: MenuCtx) => {
     let sx = state.px + w;
     if (sx + w > ctx.termW() - 1) sx = state.px - w;
     if (sx < 0 || sx + w > ctx.termW() - 1) sx = Math.max(0, ctx.termW() - w - 1);
-    let sy = state.py + 1 + state.idx;
+    let sy = state.py + 1 + cursorIndex(state.cursor);
     if (sy + h > ctx.termH() - 1) sy = Math.max(0, ctx.termH() - h - 1);
     const panel = Box({ id: "tfm-filemenu-sub-panel", width: "100%", flexDirection: "column" });
     const sub = Box(
@@ -176,18 +188,21 @@ export const makeMenu = (ctx: MenuCtx) => {
         Text({ content: ` ${"~".repeat(w - 2)}`, fg: colors.divider }),
       ),
     );
+    // capture the flyout's cursor for the row paints (the closure below
+    // cannot narrow `state` — it is a `let` that rawCloseMenu nulls out)
+    const flyCursor = state.flyout.cursor;
     items.forEach((e, i) => {
       livePanel.add(
         rowNode(
           e,
-          i === state?.subIdx,
+          i === cursorIndex(flyCursor),
           () => {
             // position truth (pointer) before change truth (highlight): the
             // keyboard cursor may already sit here, in which case no repaint
             // runs but the shape must still set
             ctx.setPointer?.("pointer");
-            if (state && state.subIdx !== i) {
-              state.subIdx = i;
+            if (state && state.flyout.kind === "open" && cursorIndex(state.flyout.cursor) !== i) {
+              state.flyout = openFlyout(cursorAt(i));
               renderSubMenu();
             }
           },
@@ -217,16 +232,18 @@ export const makeMenu = (ctx: MenuCtx) => {
       panel.add(
         rowNode(
           e,
-          i === state?.idx,
+          i === cursorIndex(state?.cursor ?? NO_CURSOR),
           () => {
             // position truth (pointer) before change truth (highlight) —
             // same rule as the submenu hover above. Hovering another row
             // swaps/closes the flyout; a freshly opened flyout has NO cursor
             // until the next move/hover
             ctx.setPointer?.("pointer");
-            if (state && state.idx !== i) {
-              state.idx = i;
-              state.subIdx = e.submenu ? -1 : null;
+            if (state && cursorIndex(state.cursor) !== i) {
+              state.cursor = cursorAt(i);
+              // hovering a parent row opens ITS flyout (no row highlighted
+              // yet); hovering a leaf closes whatever flyout was open
+              state.flyout = e.submenu ? openFlyout() : CLOSED_FLYOUT;
               renderFileMenu();
             }
           },
@@ -247,26 +264,27 @@ export const makeMenu = (ctx: MenuCtx) => {
   // keyboard ops the router calls (state stays internal; see getFileMenuState)
   const openSubmenu = (): void => {
     if (!state) return;
-    const subs = state.entries[state.idx]?.submenu;
+    const subs = state.entries[cursorIndex(state.cursor)]?.submenu;
     if (!subs?.length) return;
     // open with no cursor; the next arrow/hover selects
-    state.subIdx = -1;
+    state.flyout = openFlyout();
     renderFileMenu();
   };
   const closeSubmenu = (): void => {
-    if (!state || state.subIdx === null) return;
-    state.subIdx = null;
+    if (!state || state.flyout.kind === "closed") return;
+    state.flyout = CLOSED_FLYOUT;
     renderFileMenu();
   };
   const moveSub = (delta: number): void => {
     const items = subEntries();
-    if (!state || state.subIdx === null || !items || !items.length) return;
-    state.subIdx = advanceCursor(state.subIdx, delta, items.length, items);
+    if (state?.flyout.kind !== "open" || !items || !items.length) return;
+    state.flyout = openFlyout(advanceCursor(state.flyout.cursor, delta, items.length, items));
     renderSubMenu();
   };
   const activateSub = (): void => {
     const items = subEntries();
-    const it = items && state && state.subIdx !== null && state.subIdx >= 0 ? items[state.subIdx] : undefined;
+    const at = state && state.flyout.kind === "open" ? cursorIndex(state.flyout.cursor) : -1;
+    const it = at >= 0 ? items?.[at] : undefined;
     if (it && !it.sep) it.action();
   };
 
@@ -285,11 +303,12 @@ export const makeMenu = (ctx: MenuCtx) => {
     if (px + w > ctx.termW() - 1) px = Math.max(0, ctx.termW() - w - 1);
     if (py + h > ctx.termH() - 1) py = Math.max(0, ctx.termH() - h - 1);
     // no cursor on open — the first arrow/hover selects (Nautilus-style). The
-    // key router's step() treats idx -1 as "fill first (down) / last (up)".
+    // key router's step() advances from NO cursor to the first (down) / last
+    // (up) row.
     state = {
-      idx: -1,
+      cursor: NO_CURSOR,
       entries,
-      subIdx: null,
+      flyout: CLOSED_FLYOUT,
       px,
       py,
     };
@@ -314,7 +333,7 @@ export const makeMenu = (ctx: MenuCtx) => {
   };
 
   // fileMenuState() returns the LIVE mutable state object — ./keymap's
-  // keyboard nav mutates idx/subIdx in place (no setter) and calls
+  // keyboard nav mutates cursor/flyout in place (no setter) and calls
   // renderFileMenu() afterwards; do not snapshot it.
   return {
     closeFileMenu: () => ctx.floats.close("filemenu"),

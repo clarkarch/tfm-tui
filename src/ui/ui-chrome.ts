@@ -1,7 +1,7 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
-import { destroyChildren } from "../lib/uiutil";
+import { cursorIndex, destroyChildren, hasCursor, type Cursor } from "../lib/uiutil";
 import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
 import { buildSections, loadSystemPlaces, type EjectSpec, type Place, type SidebarVisibility } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
@@ -64,9 +64,15 @@ export const tabChipMaxWidth = (availW: number, nTabs: number): number => {
 // highlight under the dim, or the kb-focused row (which mousePlaceIdx can't
 // clear) stayed lit after a menu opened.
 export const placeRowHover = (
-  o: { selected: boolean; modalOpen: boolean; kbActive: boolean; kbIdx: number; mousePlaceIdx: number },
+  o: {
+    selected: boolean;
+    modalOpen: boolean;
+    kbActive: boolean;
+    kbIdx: Cursor;
+    mousePlaceIdx: number;
+  },
   i: number,
-): boolean => !o.selected && !o.modalOpen && (o.kbActive ? i === o.kbIdx : i === o.mousePlaceIdx);
+): boolean => !o.selected && !o.modalOpen && (o.kbActive ? i === cursorIndex(o.kbIdx) : i === o.mousePlaceIdx);
 
 type ChromeCtx = {
   byId(id: string): MaybeNode;
@@ -125,7 +131,7 @@ type ChromeCtx = {
   // connects straight to a saved connection
   connectServer(raw?: string): void;
   kbActive(): boolean; // sidebarActive
-  kbIdx(): number; // placeIdx
+  kbIdx(): Cursor; // the sidebar's keyboard row cursor (NO cursor = no kb focus)
   tabs(pane: 0 | 1): { list: Tab[]; active: number }; // live per-pane tab model
   // focus a pane (tab strip / chip press) before acting on it
   focusPane(pane: 0 | 1): void;
@@ -508,7 +514,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
     try {
       ctx.replaySidebarIntro?.();
     } catch {}
-    if (ctx.kbActive() && ctx.kbIdx() >= 0) {
+    if (ctx.kbActive() && hasCursor(ctx.kbIdx())) {
       normalizePlaces();
     }
   };

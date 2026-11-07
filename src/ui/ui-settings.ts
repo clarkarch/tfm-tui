@@ -11,7 +11,7 @@
 // cancels capture.
 
 import { Box, type CliRenderer, type MouseEvent, Text } from "@opentui/core";
-import { advanceCursor, errMessage, invokeIsolated } from "../lib/uiutil";
+import { advanceCursor, cursorAt, cursorIndex, errMessage, invokeIsolated, NO_CURSOR } from "../lib/uiutil";
 import type { UiStyle } from "../config/config-schema";
 import { makeModalScrim } from "./ui-dialogs";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
@@ -97,7 +97,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // panel cursor state — rendered by ./ui-settings-panel, mutated by the ops here
   const st: SettingsPanelState = {
     catIdx: 0,
-    menuIdx: 0,
+    cursor: cursorAt(0),
     pane: "rows",
     scrollOff: 0,
     hoverCat: -1,
@@ -134,7 +134,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (view === "about") aboutDetail = null;
     st.catIdx = 0;
     // no row cursor until the first arrow/hover (category highlight stays)
-    st.menuIdx = -1;
+    st.cursor = NO_CURSOR;
     st.pane = "rows";
     st.scrollOff = 0;
     st.capturing = null;
@@ -187,7 +187,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.catIdx = ((gi % n) + n) % n;
     // land on the first VISIBLE row — headers take the cursor now (they
     // collapse/expand), hidden children are never landed on
-    st.menuIdx = visOf(st.catIdx)[0] ?? -1;
+    st.cursor = cursorAt(visOf(st.catIdx)[0] ?? -1);
     st.pane = "rows";
     st.scrollOff = 0;
     renderMenuContent();
@@ -199,8 +199,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (st.collapsed.has(key)) st.collapsed.delete(key);
     else st.collapsed.add(key);
     const flat = visOf(st.catIdx);
-    if (st.menuIdx >= 0 && !flat.includes(st.menuIdx)) {
-      st.menuIdx = [...flat].reverse().find((i) => i <= st.menuIdx) ?? flat[0] ?? -1;
+    const at = cursorIndex(st.cursor);
+    if (at >= 0 && !flat.includes(at)) {
+      st.cursor = cursorAt([...flat].reverse().find((i) => i <= at) ?? flat[0] ?? -1);
     }
     renderMenuContent();
   };
@@ -215,7 +216,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       switchCategory(st.catIdx + dir);
       return;
     }
-    const row = rowsOf(st.catIdx)[st.menuIdx];
+    const row = rowsOf(st.catIdx)[cursorIndex(st.cursor)];
     if (!row) return;
     // headers collapse/expand: → opens, ← closes (enter toggles via rowActivate)
     if (row.kind === "header") {
@@ -233,7 +234,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // keypress handler — afterAdjust re-reads the row, so it sits in the SAME
     // try, not after it
     try {
-      if (applyAdjust(row, dir)) afterAdjust(st.menuIdx, row);
+      if (applyAdjust(row, dir)) afterAdjust(cursorIndex(st.cursor), row);
     } catch {}
   };
 
@@ -347,7 +348,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       // a gating master may have hidden rows at/below the cursor (its own
       // children): park on the nearest still-visible row BEFORE the rebuild
       // paints highlights, or the cursor strands on a vanished row
-      if (st.menuIdx >= 0) st.menuIdx = clampToVisible(visOf(st.catIdx), st.menuIdx);
+      if (cursorIndex(st.cursor) >= 0) st.cursor = cursorAt(clampToVisible(visOf(st.catIdx), cursorIndex(st.cursor)));
       renderMenuContent();
       return;
     }
@@ -364,7 +365,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     setOnId(`tfm-set-rowv-${index}`, (n) => {
       n.content = value;
       // selected rows keep white values; unselected toggles keep the on/accent cue
-      if (st.pane === "rows" && st.menuIdx === index) n.fg = menuC.white;
+      if (st.pane === "rows" && cursorIndex(st.cursor) === index) n.fg = menuC.white;
       else if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
     });
   };
@@ -537,11 +538,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         switchCategory(st.catIdx);
         return;
       }
-      rowActivate(st.menuIdx);
+      rowActivate(cursorIndex(st.cursor));
       return;
     }
     const items = rootMenuItems();
-    const it = items[st.menuIdx];
+    const it = items[cursorIndex(st.cursor)];
     if (!it) return;
     if (it.keepOpen) {
       it.action();
@@ -667,9 +668,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         // keyboard cursor may already sit here, in which case no repaint
         // runs but the shape must still set
         ctx.setPointer?.("pointer");
-        if (st.menuIdx === index) return;
-        const prev = st.menuIdx;
-        st.menuIdx = index;
+        if (cursorIndex(st.cursor) === index) return;
+        const prev = cursorIndex(st.cursor);
+        st.cursor = cursorAt(index);
         if (prev >= 0) paintRootAt(prev, false);
         paintRootAt(index, true);
       };
@@ -677,7 +678,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         try {
           ev?.stopPropagation?.();
         } catch {}
-        st.menuIdx = index;
+        st.cursor = cursorAt(index);
         menuActivate();
       };
       const rootRow = (
@@ -731,7 +732,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         );
       const items = rootMenuItems();
       items.forEach((it, i) => {
-        panel.add(rootRow(it.icon, it.label, it.hint, i === st.menuIdx, i, activateRow(i)));
+        panel.add(rootRow(it.icon, it.label, it.hint, i === cursorIndex(st.cursor), i, activateRow(i)));
       });
     } else if (view === "help") {
       // static cheat sheet (no cursor, no settings rows) in a bounded
@@ -838,7 +839,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.floats.open("escmenu", rawCloseMenu);
     menuOpen = true;
     menuView = "root";
-    st.menuIdx = -1;
+    st.cursor = NO_CURSOR;
     st.catIdx = 0;
     st.pane = "rows";
     st.scrollOff = 0;
@@ -883,7 +884,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   // the help view is cursorless but scrollable: arrows move the viewport
-  // (menuIdx stays -1, there is still no cursor), the wheel scrolls natively
+  // (the cursor stays empty, there is still no cursor), the wheel scrolls natively
   const scrollHelp = (delta: number): void => {
     const scroller = ctx.byId("tfm-help-scroll");
     if (!scroller || scroller.isDestroyed) return;
@@ -903,12 +904,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (!inPanelView()) {
       const count = rootMenuItems().length;
       if (count === 0) return;
-      const prev = st.menuIdx;
-      st.menuIdx = advanceCursor(st.menuIdx, delta, count);
+      const prev = cursorIndex(st.cursor);
+      st.cursor = advanceCursor(st.cursor, delta, count);
       // the root rows are already on screen: repaint the two rows in place.
       // A rebuild per keypress churned ~20 native nodes for nothing.
-      if (prev >= 0 && prev !== st.menuIdx) paintRootAt(prev, false);
-      paintRootAt(st.menuIdx, true);
+      const now = cursorIndex(st.cursor);
+      if (prev >= 0 && prev !== now) paintRootAt(prev, false);
+      paintRootAt(now, true);
       return;
     }
     if (st.pane === "cats") {
@@ -917,7 +919,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     }
     const flat = visOf(st.catIdx);
     if (!flat.length) return;
-    // idx -1 = no cursor yet: down fills the first VISIBLE row, up the last.
+    // NO cursor yet: down fills the first VISIBLE row, up the last.
     // Headers take the cursor (they collapse/expand); hidden children are
     // stepped over because the walk stays inside the visible projection.
     // flat is non-empty (checked above); bind head/tail once so the walk needs
@@ -925,16 +927,17 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const first = flat[0];
     const last = flat[flat.length - 1];
     if (first === undefined || last === undefined) return;
-    const prev = st.menuIdx;
-    if (st.menuIdx < 0 || !flat.includes(st.menuIdx)) {
-      st.menuIdx = delta >= 0 ? first : last;
+    const prev = cursorIndex(st.cursor);
+    if (prev < 0 || !flat.includes(prev)) {
+      st.cursor = cursorAt(delta >= 0 ? first : last);
     } else {
-      const pos = visiblePos(flat, st.menuIdx);
-      st.menuIdx = flat[(pos + delta + flat.length) % flat.length] ?? first;
+      const pos = visiblePos(flat, prev);
+      st.cursor = cursorAt(flat[(pos + delta + flat.length) % flat.length] ?? first);
     }
+    const now = cursorIndex(st.cursor);
     const prevScroll = st.scrollOff;
-    ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, st.menuIdx));
-    paintDesc(fitDescText(descText(rowsOf(st.catIdx)[st.menuIdx]), settingsPanelWidth(ctx.renderer().terminalWidth)));
+    ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, now));
+    paintDesc(fitDescText(descText(rowsOf(st.catIdx)[now]), settingsPanelWidth(ctx.renderer().terminalWidth)));
     // Moving the cursor is a REPAINT, not a rebuild: the rows are already on
     // screen. Rebuilding them per keypress churned ~60 native nodes (one
     // TextBuffer each) — at 30 key repeats/s that is ~1800 allocations/s,
@@ -945,8 +948,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       renderMenuContent();
       return;
     }
-    if (prev >= 0 && prev !== st.menuIdx) paintRowAt(prev, false);
-    paintRowAt(st.menuIdx, true);
+    if (prev >= 0 && prev !== now) paintRowAt(prev, false);
+    paintRowAt(now, true);
   };
 
   return {

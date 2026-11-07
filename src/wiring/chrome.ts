@@ -34,7 +34,7 @@ import { makeEnsureSudo } from "../fs/elevate";
 import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
-import { destroyChildren, errMessage } from "../lib/uiutil";
+import { destroyChildren, errMessage, type Cursor } from "../lib/uiutil";
 import { dlog } from "../lib/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
@@ -45,7 +45,7 @@ export const wireChrome = async (deps: {
   // late clusters — only read at runtime, post-boot
   getGrid: () => GridWiring;
   getFileops: () => FileopsWiring;
-  getKeyRouter: () => { sidebarActive(): boolean; placeIdx(): number };
+  getKeyRouter: () => { sidebarActive(): boolean; placeIdx(): Cursor };
   // network "Connect to Server…" prompt — prompt overlaps keymap, wired LAST
   getPrompt: () => {
     open(o: {

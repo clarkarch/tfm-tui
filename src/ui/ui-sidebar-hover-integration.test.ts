@@ -11,6 +11,7 @@ import type { Theme } from "../config/config";
 
 import type { Tab } from "../fs/session";
 import type { IconSpec } from "../lib/icon-state";
+import { NO_CURSOR } from "../lib/uiutil";
 
 // End-to-end stuck-lift guard: the recording-stub test in ui-chrome.test.ts only
 // proves normalizePlaces EMITS hoverRow(key,false) on a selection change. This
@@ -78,7 +79,7 @@ beforeAll(async () => {
     trashPaths: () => Promise.resolve(),
     moveInto: () => Promise.resolve(),
     kbActive: () => false,
-    kbIdx: () => -1,
+    kbIdx: () => NO_CURSOR,
     tabs: (): { list: Tab[]; active: number } => ({ list: mkTabs(1), active: 0 }),
     focusPane: noop,
     closeTab: noop,

@@ -8,7 +8,7 @@
 // AGENTS.md). ---
 
 import { Box, type MouseEvent, Text } from "@opentui/core";
-import { errMessage } from "../lib/uiutil";
+import { cursorAt, cursorIndex, errMessage, type Cursor } from "../lib/uiutil";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { MakeIconSlot, SlotElement } from "./ui-slots";
 import { IconStateIdx } from "../lib/icon-state";
@@ -19,7 +19,9 @@ import type { IconSpec } from "../lib/icon-state";
 
 export type SettingsPanelState = {
   catIdx: number;
-  menuIdx: number; // row cursor within the ACTIVE category (full-row index, never a hidden one)
+  // the row cursor within the ACTIVE category (full-row index, never a
+  // hidden one) — an explicit value, not the `-1` sentinel
+  cursor: Cursor;
   pane: "cats" | "rows";
   scrollOff: number; // offset into the VISIBLE-row projection (see flatVisible), not the full rows array
   // category currently under the mouse (highlight only — hovering never
@@ -197,7 +199,8 @@ export const renderSettingsPanel = (
   const header = cats[st.catIdx]?.header ?? "";
   const rows = cats[st.catIdx]?.rows ?? [];
   const flat = flatVisible(rows, header, st.collapsed);
-  ensureVisible(st, vis, flat.length, st.menuIdx < 0 ? -1 : visiblePos(flat, st.menuIdx));
+  const cur = cursorIndex(st.cursor);
+  ensureVisible(st, vis, flat.length, cur < 0 ? -1 : visiblePos(flat, cur));
   const canScroll = flat.length > vis;
   const wheelScroll = (ev: MouseEvent) => {
     if (!canScroll) return;
@@ -319,7 +322,7 @@ export const renderSettingsPanel = (
             ? swapOfferText(st.swapOffer.spec, st.swapOffer.ownerLabel)
             : st.capturing !== null
               ? "press a key…"
-              : descText(st.menuIdx < 0 ? undefined : rows[st.menuIdx]),
+              : descText(cursorIndex(st.cursor) < 0 ? undefined : rows[cursorIndex(st.cursor)]),
           panelW,
         ),
         fg: c.sidebarFgMuted,
@@ -339,7 +342,8 @@ const renderRowPane = (
   w: ReturnType<typeof settingsWidths>,
 ) => {
   const flat = flatVisible(rows, categoryHeader, st.collapsed);
-  ensureVisible(st, vis, flat.length, st.menuIdx < 0 ? -1 : visiblePos(flat, st.menuIdx));
+  const cur = cursorIndex(st.cursor);
+  ensureVisible(st, vis, flat.length, cur < 0 ? -1 : visiblePos(flat, cur));
   const canScroll = flat.length > vis;
   const start = Math.min(st.scrollOff, Math.max(0, flat.length - vis));
   const end = Math.min(flat.length, start + vis);
@@ -351,9 +355,9 @@ const renderRowPane = (
     onMouseMove: () => {
       // position truth before change truth (see the category rows)
       h.setPointer?.("pointer");
-      if (st.capturing !== null || (st.pane === "rows" && st.menuIdx === index)) return;
-      const prev = st.pane === "rows" ? st.menuIdx : -1;
-      st.menuIdx = index;
+      if (st.capturing !== null || (st.pane === "rows" && cursorIndex(st.cursor) === index)) return;
+      const prev = st.pane === "rows" ? cursorIndex(st.cursor) : -1;
+      st.cursor = cursorAt(index);
       st.pane = "rows";
       if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
       h.paintRowAt(index, true);
@@ -369,7 +373,7 @@ const renderRowPane = (
   // highlights it like any row. The rule fills the live row width (right pane
   // minus the row's own padding), so a wider panel draws a wider rule.
   const headerNode = (rowSpec: Extract<SettingRow, { kind: "header" }>, index: number) => {
-    const active = st.pane === "rows" && st.menuIdx === index;
+    const active = st.pane === "rows" && cursorIndex(st.cursor) === index;
     const key = sectionKey(categoryHeader, rowSpec.label);
     const shut = h.isCollapsed(key);
     const lead = ` ${shut ? "▶" : "▼"} ${rowSpec.label} `;
@@ -392,7 +396,7 @@ const renderRowPane = (
             h.cancelCapture();
             return;
           }
-          st.menuIdx = index;
+          st.cursor = cursorAt(index);
           st.pane = "rows";
           h.toggleSection(key);
         },
@@ -410,7 +414,7 @@ const renderRowPane = (
 
   const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) => {
     const tId = `tfm-chev-${index}-${dir}`;
-    const chevOn = (): boolean => st.pane === "rows" && st.menuIdx === index;
+    const chevOn = (): boolean => st.pane === "rows" && cursorIndex(st.cursor) === index;
     return Box(
       {
         width: 2,
@@ -427,10 +431,11 @@ const renderRowPane = (
           // handler (every other row path — keypress, click, stepper — guards)
           try {
             const changed = applyAdjust(rowSpec, dir);
-            if (!changed && st.menuIdx === index) return;
-            if (st.menuIdx !== index) {
-              if (st.pane === "rows") h.paintRowAt(st.menuIdx, false);
-              st.menuIdx = index;
+            const at = cursorIndex(st.cursor);
+            if (!changed && at === index) return;
+            if (at !== index) {
+              if (st.pane === "rows") h.paintRowAt(at, false);
+              st.cursor = cursorAt(index);
               st.pane = "rows";
               h.paintRowAt(index, true);
             }
@@ -461,7 +466,7 @@ const renderRowPane = (
   };
 
   const rowNode = (rowSpec: SettingRow, index: number) => {
-    const active = st.pane === "rows" && st.menuIdx === index;
+    const active = st.pane === "rows" && cursorIndex(st.cursor) === index;
     const capturingThis = st.capturing === index;
     const labelFg = c.white;
     let control: SlotElement;
@@ -469,7 +474,7 @@ const renderRowPane = (
       try {
         ev?.stopPropagation?.();
       } catch {}
-      st.menuIdx = index;
+      st.cursor = cursorAt(index);
       st.pane = "rows";
       h.paintDesc(fitDescText(descText(rowSpec), panelW));
       h.rowActivate(index);
@@ -531,7 +536,7 @@ const renderRowPane = (
           h.cancelCapture();
           return;
         }
-        st.menuIdx = index;
+        st.cursor = cursorAt(index);
         st.pane = "rows";
         try {
           applyAdjust(rowSpec, 1);

@@ -4,6 +4,7 @@ import { archiveUri } from "../fs/archive-scheme";
 import { makeSelection, type SelectionCtx } from "./selection";
 import { defaultConfig } from "../config/config-schema";
 import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
+import { CLOSED_FLYOUT, cursorAt, cursorIndex, NO_CURSOR, openFlyout } from "../lib/uiutil";
 
 const COLORS: any = {
   bg: "#111111",
@@ -436,8 +437,8 @@ describe("file menu keys", () => {
   test("down skips separators and wraps; return activates the live entry", () => {
     const calls: string[] = [];
     const fmenu = {
-      idx: 0,
-      subIdx: null as number | null,
+      cursor: cursorAt(0),
+      flyout: CLOSED_FLYOUT,
       entries: [
         { action: () => calls.push("act:A") },
         { sep: true, action: () => {} },
@@ -446,29 +447,31 @@ describe("file menu keys", () => {
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.key("down"); // 0 -> skips sep -> 2
-    expect(fmenu.idx).toBe(2);
+    expect(cursorIndex(fmenu.cursor)).toBe(2);
     h.key("down"); // wraps to 0
-    expect(fmenu.idx).toBe(0);
+    expect(cursorIndex(fmenu.cursor)).toBe(0);
     h.key("up"); // wraps backwards to 2
-    expect(fmenu.idx).toBe(2);
+    expect(cursorIndex(fmenu.cursor)).toBe(2);
     h.key("return");
     expect(calls).toEqual(["act:B"]);
     expect(h.calls).toContain("fmenu:render");
   });
 
   test("escape closes the menu", () => {
-    const h = makeHarness({ getFileMenuState: () => ({ idx: 0, subIdx: null, entries: [{ action: () => {} }] }) });
+    const h = makeHarness({
+      getFileMenuState: () => ({ cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => {} }] }),
+    });
     h.key("escape");
     expect(h.calls).toEqual(["fmenu:close"]);
   });
 
   test("right opens the submenu only on a parent row", () => {
     const parent = {
-      idx: 0,
-      subIdx: null as number | null,
+      cursor: cursorAt(0),
+      flyout: CLOSED_FLYOUT,
       entries: [{ action: () => {}, submenu: [{ action: () => {} }] }],
     };
-    const leaf = { idx: 0, subIdx: null as number | null, entries: [{ action: () => {} }] };
+    const leaf = { cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => {} }] };
     const h1 = makeHarness({ getFileMenuState: () => parent });
     h1.key("right");
     expect(h1.calls).toContain("fmenu:sub-open");
@@ -478,7 +481,11 @@ describe("file menu keys", () => {
   });
 
   test("with the flyout open, keys act on the submenu; left/esc close it", () => {
-    const open = { idx: 0, subIdx: 1 as number | null, entries: [{ action: () => {}, submenu: [{}] }] };
+    const open = {
+      cursor: cursorAt(0),
+      flyout: openFlyout(cursorAt(1)),
+      entries: [{ action: () => {}, submenu: [{}] }],
+    };
     const h = makeHarness({ getFileMenuState: () => open });
     h.key("down");
     expect(h.calls).toContain("fmenu:sub-move");
@@ -495,8 +502,8 @@ describe("file menu keys", () => {
   test("enter activates a parent row's own action (right opens its submenu)", () => {
     const calls: string[] = [];
     const fmenu = {
-      idx: 0,
-      subIdx: null as number | null,
+      cursor: cursorAt(0),
+      flyout: CLOSED_FLYOUT,
       entries: [{ action: () => calls.push("parent"), submenu: [{ action: () => {} }] }],
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
@@ -581,7 +588,7 @@ describe("sidebar keyboard focus", () => {
     const h = makeHarness();
     h.key("left");
     expect(h.router.sidebarActive()).toBe(true);
-    expect(h.router.placeIdx()).toBe(0);
+    expect(cursorIndex(h.router.placeIdx())).toBe(0);
     expect(h.calls).toContain("places:normalize");
   });
 
@@ -589,11 +596,11 @@ describe("sidebar keyboard focus", () => {
     const h = makeHarness();
     h.key("left");
     h.key("down");
-    expect(h.router.placeIdx()).toBe(1);
+    expect(cursorIndex(h.router.placeIdx())).toBe(1);
     h.key("down"); // past the end
-    expect(h.router.placeIdx()).toBe(1);
+    expect(cursorIndex(h.router.placeIdx())).toBe(1);
     h.key("up");
-    expect(h.router.placeIdx()).toBe(0);
+    expect(cursorIndex(h.router.placeIdx())).toBe(0);
   });
 
   test("return navigates to the highlighted place", () => {
@@ -637,7 +644,7 @@ describe("sidebar keyboard focus", () => {
     h.key("left"); // hand focus to the sidebar
     h.key("down", { shift: true });
     expect(h.router.sidebarActive()).toBe(true); // sidebar still focused
-    expect(h.router.placeIdx()).toBe(1); // sidebar focus moved
+    expect(cursorIndex(h.router.placeIdx())).toBe(1); // sidebar focus moved
     // NO extension: still just the original focus selection, not a.txt+b.txt
     expect(h.selection.selPaths().map((p) => p.path)).toEqual(["a.txt"]);
   });
@@ -1244,21 +1251,21 @@ describe("plugin commands (keybinds)", () => {
 });
 
 describe("file menu with no initial cursor", () => {
-  test("down/up from idx -1 fill first/last actionable; enter is a no-op", () => {
+  test("down/up from NO cursor fill first/last actionable; enter is a no-op", () => {
     const calls: string[] = [];
     const fmenu = {
-      idx: -1,
-      subIdx: null as number | null,
+      cursor: NO_CURSOR,
+      flyout: CLOSED_FLYOUT,
       entries: [{ action: () => calls.push("a") }, { sep: true, action: () => {} }, { action: () => calls.push("b") }],
     };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.key("return"); // no cursor -> nothing runs
     expect(calls).toEqual([]);
     h.key("down"); // first non-sep
-    expect(fmenu.idx).toBe(0);
-    fmenu.idx = -1;
+    expect(cursorIndex(fmenu.cursor)).toBe(0);
+    fmenu.cursor = NO_CURSOR;
     h.key("up"); // last non-sep
-    expect(fmenu.idx).toBe(2);
+    expect(cursorIndex(fmenu.cursor)).toBe(2);
   });
 });
 
@@ -1289,13 +1296,17 @@ describe("remappable grid + menu nav", () => {
   });
 
   test("file menu follows the remapped move binds", () => {
-    const fmenu = { idx: 0, subIdx: null as number | null, entries: [{ action: () => {} }, { action: () => {} }] };
+    const fmenu = {
+      cursor: cursorAt(0),
+      flyout: CLOSED_FLYOUT,
+      entries: [{ action: () => {} }, { action: () => {} }],
+    };
     const h = makeHarness({ getFileMenuState: () => fmenu });
     h.binds.moveDown = ["ctrl+n"];
     h.key("down");
-    expect(fmenu.idx).toBe(0);
+    expect(cursorIndex(fmenu.cursor)).toBe(0);
     h.key("n", { ctrl: true });
-    expect(fmenu.idx).toBe(1);
+    expect(cursorIndex(fmenu.cursor)).toBe(1);
   });
 
   test("esc menu follows the remapped move binds", () => {

@@ -22,7 +22,16 @@ import { KEY_SCHEMA } from "../config/config-schema";
 import { type KeyEventLike, keyMatch, parseKeySpec } from "../config/keyspec";
 import type { SortMode } from "../lib/sort";
 import type { Command } from "../lib/command";
-import { advanceCursor, invokeIsolated } from "../lib/uiutil";
+import {
+  advanceCursor,
+  CLOSED_FLYOUT,
+  cursorAt,
+  cursorIndex,
+  invokeIsolated,
+  NO_CURSOR,
+  type Cursor,
+  type FlyoutCursor,
+} from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
 import type { Selection } from "./selection";
@@ -128,9 +137,13 @@ export type KeyRouterCtx = {
   // home dir — backspace target inside virtual views (URIs have no fs parent)
   home: string;
   // --- file menu ---
+  // The LIVE menu state (ui-menu's own object — the router mutates
+  // `cursor`/`flyout` in place). `cursor` is an explicit value, not the
+  // `-1` sentinel; `flyout` is its own machine (closed / open-no-row /
+  // open-on-a-row).
   getFileMenuState(): {
-    idx: number;
-    subIdx: number | null;
+    cursor: Cursor;
+    flyout: FlyoutCursor;
     entries: Array<{ sep?: boolean; submenu?: unknown[]; action(): void }>;
   } | null;
   closeFileMenu(): void;
@@ -203,9 +216,10 @@ export type KeyRouterCtx = {
 export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const { selection } = ctx;
 
-  // sidebar keyboard focus
+  // sidebar keyboard focus — the row cursor is an explicit value (NO cursor
+  // = the sidebar has no keyboard focus), not the `-1` sentinel
   let sidebarActive = false;
-  let placeIdx = -1;
+  let placeCursor: Cursor = NO_CURSOR;
   // terminal-hint throttle: the "click the grid to leave" status shows once
   // per terminal focus visit, not on every swallowed keypress
   let termHintShown = false;
@@ -251,7 +265,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
 
   const setSidebarFocus = (idx: number): boolean => {
     if (idx < 0 || idx >= ctx.placesHost.length) return false;
-    placeIdx = idx;
+    placeCursor = cursorAt(idx);
     ctx.normalizePlaces();
     return true;
   };
@@ -362,26 +376,27 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const entries = fmenu.entries;
     const count = entries.length;
     if (count === 0) return;
-    fmenu.idx = advanceCursor(fmenu.idx, delta, count, entries);
-    fmenu.subIdx = null; // moving to another parent closes the flyout
+    fmenu.cursor = advanceCursor(fmenu.cursor, delta, count, entries);
+    fmenu.flyout = CLOSED_FLYOUT; // moving to another parent closes the flyout
     ctx.renderFileMenu();
   };
   const activateFileMenu = (fmenu: NonNullable<ReturnType<KeyRouterCtx["getFileMenuState"]>>): void => {
     const entries = fmenu.entries;
-    if (fmenu.subIdx !== null) {
+    if (fmenu.flyout.kind === "open") {
       ctx.activateFileSubmenu();
       return;
     }
-    if (fmenu.idx < 0) return; // no cursor yet: enter is a no-op
+    const at = cursorIndex(fmenu.cursor);
+    if (at < 0) return; // no cursor yet: enter is a no-op
     // parent rows are directly clickable — enter fires the action, → opens
     // the flyout for the variants
-    entries[fmenu.idx]?.action();
+    entries[at]?.action();
   };
   const handleFileMenuKeys = (ev: KeyPressEvent): boolean => {
     const fmenu = ctx.getFileMenuState();
     if (!fmenu) return false;
     const entries = fmenu.entries;
-    const inSub = fmenu.subIdx !== null;
+    const inSub = fmenu.flyout.kind === "open";
     if (ev.name === "escape") {
       if (inSub) ctx.closeFileSubmenu();
       else ctx.closeFileMenu();
@@ -392,7 +407,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       if (inSub) ctx.moveFileSubmenu(1);
       else stepFileMenu(fmenu, 1);
     } else if (hitDir(ev, "moveRight", "extendRight")) {
-      if (!inSub && entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
+      if (!inSub && entries[cursorIndex(fmenu.cursor)]?.submenu) ctx.openFileSubmenu();
     } else if (hitDir(ev, "moveLeft", "extendLeft")) {
       if (inSub) ctx.closeFileSubmenu();
     } else if (hit(ev, "openSelected")) {
@@ -456,11 +471,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   };
 
   const activateSidebarPlace = (): void => {
-    const rec = ctx.placesHost[placeIdx];
+    const rec = ctx.placesHost[cursorIndex(placeCursor)];
     if (!rec) return;
     ctx.closeFileMenu();
     sidebarActive = false;
-    placeIdx = -1;
+    placeCursor = NO_CURSOR;
     const target =
       rec.place.scheme === "recent" ? RECENT_URI : rec.place.scheme === "starred" ? STARRED_URI : rec.place.path;
     if (target) ctx.navigate(target);
@@ -471,8 +486,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // Returns true while sidebar focus is active (it swallows all keys).
   const handleSidebarKeys = (ev: KeyPressEvent): boolean => {
     if (!sidebarActive) return false;
-    if (hitDir(ev, "moveUp", "extendUp")) setSidebarFocus(placeIdx - 1);
-    else if (hitDir(ev, "moveDown", "extendDown")) setSidebarFocus(placeIdx + 1);
+    if (hitDir(ev, "moveUp", "extendUp")) setSidebarFocus(cursorIndex(placeCursor) - 1);
+    else if (hitDir(ev, "moveDown", "extendDown")) setSidebarFocus(cursorIndex(placeCursor) + 1);
     else if (hitDir(ev, "moveLeft", "extendLeft") || hitDir(ev, "moveRight", "extendRight")) {
       leaveSidebarToGrid();
       selection.selectTileAt(selection.focusIdx() >= 0 ? selection.focusIdx() : 0);
@@ -740,7 +755,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doMoveUp = (): void => {
     const fmenu = ctx.getFileMenuState();
     if (fmenu) {
-      if (fmenu.subIdx !== null) ctx.moveFileSubmenu(-1);
+      if (fmenu.flyout.kind === "open") ctx.moveFileSubmenu(-1);
       else stepFileMenu(fmenu, -1);
       return;
     }
@@ -749,7 +764,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
     if (sidebarActive) {
-      setSidebarFocus(placeIdx - 1);
+      setSidebarFocus(cursorIndex(placeCursor) - 1);
       return;
     }
     selection.moveFocus(0, -1);
@@ -757,7 +772,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doMoveDown = (): void => {
     const fmenu = ctx.getFileMenuState();
     if (fmenu) {
-      if (fmenu.subIdx !== null) ctx.moveFileSubmenu(1);
+      if (fmenu.flyout.kind === "open") ctx.moveFileSubmenu(1);
       else stepFileMenu(fmenu, 1);
       return;
     }
@@ -766,7 +781,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       return;
     }
     if (sidebarActive) {
-      setSidebarFocus(placeIdx + 1);
+      setSidebarFocus(cursorIndex(placeCursor) + 1);
       return;
     }
     selection.moveFocus(0, 1);
@@ -774,7 +789,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doMoveLeft = (): void => {
     const fmenu = ctx.getFileMenuState();
     if (fmenu) {
-      if (fmenu.subIdx !== null) ctx.closeFileSubmenu();
+      if (fmenu.flyout.kind === "open") ctx.closeFileSubmenu();
       return;
     }
     if (ctx.escMenu.isOpen()) {
@@ -793,7 +808,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doMoveRight = (): void => {
     const fmenu = ctx.getFileMenuState();
     if (fmenu) {
-      if (fmenu.subIdx === null && fmenu.entries[fmenu.idx]?.submenu) ctx.openFileSubmenu();
+      if (fmenu.flyout.kind === "closed" && fmenu.entries[cursorIndex(fmenu.cursor)]?.submenu) ctx.openFileSubmenu();
       return;
     }
     if (ctx.escMenu.isOpen()) {
@@ -1026,7 +1041,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (handleModalKeys(ev)) return true;
 
     // file context menu open: arrows/enter navigate it, esc closes.
-    // getFileMenuState() returns the LIVE state object — mutating fmenu.idx
+    // getFileMenuState() returns the LIVE state object — mutating fmenu.cursor
     // below updates the menu module's state in place.
     if (handleFileMenuKeys(ev)) return true;
     if (handleSearchKeys(ev)) return true;
@@ -1179,7 +1194,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     commands,
     // kb-focus highlight read by makeChrome
     sidebarActive: (): boolean => sidebarActive,
-    placeIdx: (): number => placeIdx,
+    placeIdx: (): Cursor => placeCursor,
     setSidebarFocus,
     leaveSidebarToGrid,
   };

@@ -2,13 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { BoxRenderable, TextRenderable } from "@opentui/core";
 import { createTestRenderer } from "@opentui/core/testing";
 import {
+  advanceCursor,
+  cursorAt,
+  cursorIndex,
   debounced,
   destroyChildren,
   destroyNode,
   invokeIsolated,
+  NO_CURSOR,
   safeRenderStep,
   stripControlChars,
   withTimeout,
+  type Cursor,
   type Scheduler,
 } from "./uiutil";
 
@@ -375,5 +380,53 @@ describe("stripControlChars", () => {
     // surrogates (D800-DFFF) are outside every drop band, so the pair
     // survives intact (no half-surrogate output)
     expect(stripControlChars("a\u{10000}b\u0085c")).toBe("a\u{10000}bc");
+  });
+});
+
+// --- The floating-list cursor: ONE vocabulary for "no row highlighted" and
+// "row N is highlighted". `-1` was the implicit sentinel every consumer
+// re-implemented on its own; a consumer that forgot the guard indexed
+// entries[-1] -> undefined -> a SILENT no-op. ---
+describe("Cursor", () => {
+  test("cursorAt/cursorIndex round-trip, and a negative index means NO cursor", () => {
+    expect(cursorAt(3)).toEqual({ kind: "row", index: 3 });
+    expect(cursorAt(-1)).toEqual({ kind: "none" });
+    expect(cursorIndex(NO_CURSOR)).toBe(-1);
+    expect(cursorIndex(cursorAt(2))).toBe(2);
+    // the NONE sentinel is a distinct value, never a magic -1 row
+    expect(NO_CURSOR.kind).toBe("none");
+  });
+
+  test("from NO cursor, down fills the FIRST row and up fills the LAST", () => {
+    expect(advanceCursor(NO_CURSOR, 1, 3)).toEqual({ kind: "row", index: 0 });
+    expect(advanceCursor(NO_CURSOR, -1, 3)).toEqual({ kind: "row", index: 2 });
+  });
+
+  test("from a row it wraps in both directions", () => {
+    expect(advanceCursor(cursorAt(2), 1, 3)).toEqual({ kind: "row", index: 0 });
+    expect(advanceCursor(cursorAt(0), -1, 3)).toEqual({ kind: "row", index: 2 });
+    expect(advanceCursor(cursorAt(0), 1, 3)).toEqual({ kind: "row", index: 1 });
+  });
+
+  test("separators are skipped (bounded — an all-separator list cannot spin)", () => {
+    const entries = [{ sep: true }, { sep: false }, { sep: true }];
+    expect(advanceCursor(NO_CURSOR, 1, 3, entries)).toEqual({ kind: "row", index: 1 });
+    expect(advanceCursor(cursorAt(1), 1, 3, entries)).toEqual({ kind: "row", index: 1 });
+    // every entry is a separator: the walk is bounded and lands somewhere
+    const allSep = [{ sep: true }, { sep: true }];
+    expect(advanceCursor(NO_CURSOR, 1, 2, allSep).kind).toBe("row");
+  });
+
+  test("an EMPTY list yields NO cursor — it can never point at a row", () => {
+    expect(advanceCursor(NO_CURSOR, 1, 0)).toEqual({ kind: "none" });
+    expect(advanceCursor(cursorAt(4), -1, 0)).toEqual({ kind: "none" });
+  });
+
+  test("a cursor is a VALUE, so a stale index can never be mistaken for a row", () => {
+    // the old sentinel made `idx` a number where -1 was "none" and every
+    // other number was "a row" — a consumer that forgot the guard indexed
+    // entries[-1] and got a silent no-op
+    const c: Cursor = NO_CURSOR;
+    expect(c.kind === "row").toBe(false);
   });
 });

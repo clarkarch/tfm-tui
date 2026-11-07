@@ -13,13 +13,14 @@ import {
   type SettingsPanelState,
 } from "./ui-settings-panel";
 import type { SettingRow } from "./settings";
+import { NO_CURSOR } from "../lib/uiutil";
 
 // Pure scroll-window math (the panel widget is pinned through makeEscMenu in
-// ui-settings.test.ts; this covers the no-cursor sentinel in isolation).
+// ui-settings.test.ts; this covers the no-cursor state in isolation).
 
 const panelState = (over: Partial<SettingsPanelState> = {}): SettingsPanelState => ({
   catIdx: 0,
-  menuIdx: -1,
+  cursor: NO_CURSOR,
   pane: "rows",
   scrollOff: 3,
   hoverCat: -1,
@@ -30,8 +31,8 @@ const panelState = (over: Partial<SettingsPanelState> = {}): SettingsPanelState 
 });
 
 describe("ensureVisible", () => {
-  test("ignores the no-cursor sentinel (never scrolls to -1)", () => {
-    const st = panelState({ menuIdx: -1, scrollOff: 3 });
+  test("ignores the no-cursor state (never scrolls to -1)", () => {
+    const st = panelState({ cursor: NO_CURSOR, scrollOff: 3 });
     ensureVisible(st, 5, 12, -1);
     expect(st.scrollOff).toBe(3);
   });
