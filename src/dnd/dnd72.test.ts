@@ -263,6 +263,24 @@ describe("incoming drop", () => {
     expect(ctx.runTransfers).toEqual([]);
     expect(ctx.trashed).toEqual([[`/home/u/a.txt`]]);
   });
+
+  test("a terminal-error drop does not wedge the NEXT drop", async () => {
+    // The busy guard refuses a second t=M while a drop is in flight. The
+    // error branch (t=R — the source gave up) used to leave the drop
+    // "in flight" forever, so every LATER drop was refused SILENTLY for
+    // the rest of the session (no frame, no message).
+    const { ctx, feed, notes, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=R", "the source gave up");
+    await settleUntil(() => notes.some((n) => n.includes("Drop failed")), 2000);
+    // the NEXT drop is accepted: its payload request goes out
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    await settleUntil(() => tx.filter((f) => f === startDropFrame(1)).length >= 2, 2000);
+    expect(tx.filter((f) => f === startDropFrame(1)).length).toBe(2);
+  });
 });
 
 describe("self drop", () => {
@@ -496,6 +514,25 @@ describe("remote drops", () => {
     const { enableDrops } = makeDnd72(ctx);
     enableDrops();
     expect(tx.some((s) => s.includes("t=a:x=1"))).toBe(false);
+  });
+
+  test("X=1 on a LATER chunk still marks the drop remote", async () => {
+    // The peer is not required to put the X=1 flag on the FIRST chunk: a
+    // payload whose flag arrives with a later chunk is still
+    // cross-machine. The old code only looked at the first chunk, so such
+    // a drop was treated as LOCAL — the remote URIs were pasted as local
+    // paths (a copy of a path that does not exist here).
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1", b64("file:///remote/a.txt")); // first chunk: no flag
+    feed("t=r:x=1:X=1"); // the EOF chunk carries the flag
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\") || ctx.runTransfers.length > 0, 2000);
+    // the remote path fetches each entry's bytes by subidx...
+    expect(tx).toContain("\x1b]72;t=r:x=1:y=1\x1b\\");
+    // ...and nothing landed as a bogus local path
+    expect(ctx.runTransfers).toEqual([]);
   });
 
   test("X=1 uri-list requests each entry by subidx", async () => {

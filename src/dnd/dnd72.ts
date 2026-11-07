@@ -134,11 +134,22 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   const disableDrops = (): void => write(dropDisableFrame(), "disable drop");
 
   // --- session state ---
-  let dropIdx = -1;
-  const arrive: Record<number, string> = {};
-  // X=1 on the uri-list response flags a cross-machine payload (only sent
-  // because enableDrops declared our id). Tracked per in-flight drop.
-  let dropRemote = false;
+  // The incoming drop's ONE explicit state. `null` = no drop in flight
+  // (the busy guard reads it directly — the old `dropIdx = -1` sentinel
+  // plus a separate `dropRemote` flag plus the `arrive` payload map could
+  // disagree, and the error branch forgot to clear them: the busy guard
+  // then refused EVERY later drop for the rest of the session).
+  //
+  // `remote` is set when ANY chunk carries X=1 (the flag is not guaranteed
+  // to ride the first chunk — a peer that marks it later is still remote,
+  // or its URIs are pasted as local paths).
+  type IncomingDrop = { idx: number; payload: string; remote: boolean };
+  let incoming: IncomingDrop | null = null;
+  // the drop is over — ONE place clears the record (the busy guard, the
+  // leave, the error branch and the finish all go through here)
+  const clearIncoming = (): void => {
+    incoming = null;
+  };
   let dragPaths: string[] | null = null;
   // entries behind the outgoing drag, in presented order — t=k serve requests
   // resolve their 1-based idx against this (cleared with dragPaths)
@@ -663,11 +674,17 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   };
 
   const finishDrop = async (idx: number): Promise<void> => {
-    const b64 = arrive[idx];
-    delete arrive[idx];
-    dropIdx = -1;
-    const remote = dropRemote;
-    dropRemote = false;
+    // only the drop THIS index belongs to may be finished — a stale finish
+    // for an older index must not clear the live drop's state (the old
+    // code reset the shared drop fields for ANY index)
+    if (!incoming || incoming.idx !== idx) {
+      write(finishDropFrame(), `finish drop idx=${idx} stale`);
+      return;
+    }
+    const drop = incoming;
+    clearIncoming();
+    const b64 = drop.payload;
+    const remote = drop.remote;
     if (!b64) {
       write(finishDropFrame(), `finish drop idx=${idx}`);
       return;
@@ -789,12 +806,10 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     // DropLeave
     if (t === "m" && x === -1 && y === -1) {
       ctx.log("leave");
-      dropIdx = -1;
-      dropRemote = false;
+      clearIncoming();
       // a drag leaving mid-fetch aborts it silently — the user dragged away,
       // there is nothing to report
       if (remoteFetch) abortRemoteFetch(null);
-      for (const k of Object.keys(arrive)) delete arrive[Number(k)];
       return;
     }
 
@@ -809,40 +824,43 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     if (t === "m" || t === "M") {
       const mimes = payload.split(/\s+/).filter(Boolean);
       const idx = mimes.indexOf("text/uri-list");
-      ctx.log(`${t === "M" ? "ready" : "enter"} mimes=[${mimes}] uriIdx=${idx} busy=${dropIdx >= 0}`);
+      ctx.log(`${t === "M" ? "ready" : "enter"} mimes=[${mimes}] uriIdx=${idx} busy=${incoming !== null}`);
       // one in-flight drop AND one in-flight remote fetch at most — a second
       // t=M while fetching would interleave indistinguishable responses
-      if (idx < 0 || dropIdx >= 0 || remoteFetch) return;
+      if (idx < 0 || incoming !== null || remoteFetch) return;
       write(agreeDropFrame(), "agree copy");
       if (t === "M") {
         // kitty's mime indices are 1-based (yazi requests ipairs index)
-        dropIdx = idx + 1;
-        arrive[dropIdx] = "";
-        write(startDropFrame(dropIdx), `start drop uriIdx=${idx} wire=${dropIdx}`);
+        incoming = { idx: idx + 1, payload: "", remote: false };
+        write(startDropFrame(incoming.idx), `start drop uriIdx=${idx} wire=${incoming.idx}`);
       }
       return;
     }
-    if (t === "r" && x === dropIdx) {
-      // first chunk of a response carries the full meta (continuation chunks
-      // may omit keys — those land in the branch below) — capture X=1 here.
-      // The slot is pre-initialized to "" at t=M time, so empty means no
-      // chunk has landed yet.
-      if (arrive[x] === "" && X === 1) dropRemote = true;
-      arrive[x] += payload;
+    if (t === "r" && incoming && x === incoming.idx) {
+      // X=1 flags a cross-machine payload (the terminal sends it because
+      // enableDrops declared our id). It can ride ANY chunk — the first one
+      // is not guaranteed to carry it.
+      if (X === 1) incoming.remote = true;
+      incoming.payload += payload;
       // presence of payload or m=1 means more chunks are coming
-      if (!payload && !m) void finishDrop(x);
+      if (!payload && !m) void finishDrop(incoming.idx);
       return;
     }
     // keyless continuation chunk (kitty sends `m=1;<data>` after the first
     // chunk): it extends the in-flight drop's reassembly. Without this a
-    // >3KB uri-list never completes and dropIdx wedges every later drop.
-    if (t === "" && dropIdx >= 0 && arrive[dropIdx] !== undefined) {
-      arrive[dropIdx] += payload;
-      if (!payload && !m) void finishDrop(dropIdx);
+    // >3KB uri-list never completes and the in-flight drop wedges every
+    // later drop.
+    if (t === "" && incoming) {
+      incoming.payload += payload;
+      if (!payload && !m) void finishDrop(incoming.idx);
       return;
     }
     if (t === "R") {
       ctx.log(`drop error: ${payload}`);
+      // the drop is OVER (the source gave up) — the record must be cleared
+      // here too, or the busy guard refuses every LATER drop for the rest
+      // of the session (silently: no frame, no message)
+      clearIncoming();
       const summary = `Drop failed (${shortReason(payload)})`;
       ctx.notify(summary, "drop failed", "error");
       return;
