@@ -81,15 +81,28 @@ export type Scheduler = {
   clearTimeout(handle: unknown): void;
 };
 
-export const debounced = (ms: number, fn: () => void, sched: Scheduler = globalThis): (() => void) => {
+// A debounced call with an explicit PENDING state: `cancel()` drops the
+// pending run. An operation that is CLEARED (a search box closed, a stale
+// async result discarded) must leave no work behind — the pending timer
+// would otherwise fire after the operation is gone.
+export type Debounced = (() => void) & { cancel(): void };
+
+export const debounced = (ms: number, fn: () => void, sched: Scheduler = globalThis): Debounced => {
   let t: unknown = null;
-  return () => {
-    if (t) sched.clearTimeout(t);
+  const run = () => {
+    if (t !== null) sched.clearTimeout(t);
     t = sched.setTimeout(() => {
       t = null;
       fn();
     }, ms);
   };
+  run.cancel = () => {
+    if (t !== null) {
+      sched.clearTimeout(t);
+      t = null;
+    }
+  };
+  return run;
 };
 
 // promise timeout with timer cleanup on BOTH paths: the timer that fires the

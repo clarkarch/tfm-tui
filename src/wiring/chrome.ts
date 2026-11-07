@@ -276,6 +276,9 @@ export const wireChrome = async (deps: {
       // guard): arrow-deferred, dirBarAnims is built post-renderer below
       // (TDZ seam)
       animateCrumbs: (ids: string[]) => dirBarAnims[pane].playIds(ids),
+      // the search button goes through the search module: it owns the open
+      // state (the router reads the module, not the input node)
+      toggleSearch: () => nav.searches[pane].toggleSearch(),
       home,
       setPointer,
     });

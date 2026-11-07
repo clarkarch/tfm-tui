@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readdirSync, statSync } from "node:fs";
+import path from "node:path";
 import { makeSearch } from "./search";
 import type { MaybeNode } from "../lib/node-like";
 
@@ -129,12 +131,14 @@ describe("makeSearch", () => {
     expect(h.el.focused).toBe(false); // THE fix
   });
 
-  test("clearSearch cancels the pending focus timer (no focus after hide)", () => {
+  test("clearSearch leaves the box unfocused (a closed search never steals the focus back)", () => {
     const h = makeHarness();
     h.search.beginTypeToSearch("x");
-    h.search.clearSearch(); // before the 10ms focus timer fires
+    expect(h.el.focused).toBe(true);
+    h.search.clearSearch();
+    expect(h.el.focused).toBe(false); // the close blurs it
     h.clock.advance(30);
-    expect(h.el.focused).toBe(false); // a hidden box must never steal focus
+    expect(h.el.focused).toBe(false); // and nothing focuses it again
   });
 
   test("missing/malformed search node never throws", () => {
@@ -154,12 +158,16 @@ describe("makeSearch", () => {
   test("wireSearchInput mirrors typed text into the query (debounced render)", () => {
     const h = makeHarness();
     h.search.wireSearchInput();
+    // the input only receives typed text while the search OWNS the keyboard,
+    // so the search is open first (the production sequence)
+    h.search.beginTypeToSearch("r");
+    const before = h.renders();
     h.el.value = "report";
     h.el.fire("input");
     expect(h.search.getQuery()).toBe("report");
-    expect(h.renders()).toBe(0); // debounced, not yet
+    expect(h.renders()).toBe(before); // debounced, not yet
     h.clock.advance(200);
-    expect(h.renders()).toBe(1);
+    expect(h.renders()).toBe(before + 1);
   });
 
   test("wireSearchInput without a node is a no-op", () => {
@@ -171,5 +179,108 @@ describe("makeSearch", () => {
       sched: makeClock(),
     });
     expect(() => search.wireSearchInput()).not.toThrow();
+  });
+});
+
+// --- the search's open state: ONE owner, in the MODULE ---
+//
+// "The search is open" used to be TWO truths: the module owned the QUERY,
+// while the router read the input NODE's `visible` flag (and the toolbar's
+// search button flipped that flag itself — a third writer). Worse, the
+// focus was DEFERRED by 10 ms: in that window the router believed the
+// search owned the keys (the box was visible) while the input did not have
+// the focus, so the first character typed after opening was swallowed and
+// lost.
+//
+// The module now owns the state; the node is its projection.
+
+describe("the search state", () => {
+  test("the input is focused SYNCHRONOUSLY (no window where the keys go nowhere)", () => {
+    const h = makeHarness();
+    h.search.beginTypeToSearch("a");
+    // NO clock advance: the focus must have landed already — a deferred
+    // focus leaves a window where the search swallows the keys and the
+    // input never sees them
+    expect(h.el.focused).toBe(true);
+  });
+
+  test("clearing the search cancels the pending re-render", () => {
+    const h = makeHarness();
+    h.search.wireSearchInput();
+    // the search owns the keyboard, so the typed text arms the debounced
+    // re-render of the filtered grid
+    h.search.beginTypeToSearch("r");
+    h.el.value = "report";
+    h.el.fire("input");
+    const before = h.renders();
+    h.search.clearSearch();
+    h.clock.advance(500);
+    expect(h.renders()).toBe(before); // the pending render was dropped
+  });
+
+  test("the open state is the module's, not the node's visible flag", () => {
+    const h = makeHarness();
+    // `isOpen` is the NEW reader (the module state). The optional call keeps
+    // this file loadable while the reader lands — the assertion below fails
+    // for the RIGHT reason (the reader does not exist yet), not with a
+    // module-load error.
+    const isOpen = (): boolean => (h.search as unknown as { isOpen?: () => boolean }).isOpen?.() ?? false;
+    expect(isOpen()).toBe(false);
+    h.search.beginTypeToSearch("a");
+    expect(isOpen()).toBe(true);
+    // the node's flag went stale (something hid the box) — the module still
+    // owns the search, so the router must not read the node
+    h.el.visible = false;
+    expect(isOpen()).toBe(true);
+    h.search.clearSearch();
+    expect(isOpen()).toBe(false);
+  });
+
+  test("a closed search ignores a stray input event", () => {
+    // the clear writes an empty value back into the node, which fires the
+    // input event — a closed search must not resurrect a query
+    const h = makeHarness();
+    h.search.wireSearchInput();
+    h.search.beginTypeToSearch("ab");
+    h.search.clearSearch();
+    h.el.value = "zzz";
+    h.el.fire("input");
+    expect(h.search.getQuery()).toBe("");
+  });
+});
+
+describe("no-drift rule", () => {
+  // The search's open state has ONE owner: the module (./search). The router
+  // used to READ the input node's visible flag (a second truth) and the
+  // toolbar's button WROTE it (a third writer) — with the module in charge,
+  // either one lets the router's view and the box on screen disagree.
+  //
+  // A behavioral test cannot catch that class (the wiring is a one-liner),
+  // so the rule is enforced structurally: the old forms may not come back.
+  const collectTsFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const name of readdirSync(dir)) {
+      const p = path.join(dir, name);
+      if (statSync(p).isDirectory()) out.push(...collectTsFiles(p));
+      else if (name.endsWith(".ts")) out.push(p);
+    }
+    return out;
+  };
+
+  test("no source file reads or writes the search input's visible flag", async () => {
+    const root = path.resolve(import.meta.dir, "..");
+    const offenders: string[] = [];
+    for (const file of collectTsFiles(root)) {
+      if (file.endsWith(".test.ts")) continue;
+      // the owner writes the flag (it is the projection of the state)
+      if (file === path.join(root, "input", "search.ts")) continue;
+      const src = (await Bun.file(file).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+      // the old READ: byId(`tfm-p${...}-search`)?.visible
+      const reads = /(tfm-p[01]-search|tfm-p\$\{[^}]*\}-search)[^;\n]*\)?\.visible/;
+      // the old WRITE: const el = byId(id("search")); ... el.visible = ...
+      const writes = /byId\(id\("search"\)\)\s*;[\s\S]{0,200}?\.visible\s*=/;
+      if (reads.test(src) || writes.test(src)) offenders.push(path.relative(root, file));
+    }
+    expect(offenders).toEqual([]);
   });
 });

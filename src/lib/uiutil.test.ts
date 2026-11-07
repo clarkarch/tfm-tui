@@ -219,6 +219,18 @@ describe("debounced", () => {
     expect(runs).toBe(1);
   });
 
+  test("cancel drops the pending run (a cleared operation leaves no work behind)", () => {
+    const { sched, advance, pending } = mkClock();
+    let runs = 0;
+    const run = debounced(20, () => runs++, sched);
+    run();
+    expect(pending()).toBe(1);
+    run.cancel();
+    expect(pending()).toBe(0);
+    advance(1000);
+    expect(runs).toBe(0); // the body never ran
+  });
+
   test("default scheduler still works against the real clock", async () => {
     let runs = 0;
     const run = debounced(5, () => runs++);

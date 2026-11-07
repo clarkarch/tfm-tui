@@ -62,6 +62,10 @@ type ToolbarCtx = {
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
+  // open/close THIS pane's search through the search module (./search) —
+  // the module owns the open state, so the button must not write the input
+  // node's visible flag itself (the router reads the module, not the node)
+  toggleSearch(): void;
 };
 
 // path-bar commit check: virtual places always navigate; real paths must be
@@ -441,12 +445,9 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       hoverBtn(id("search-btn"), "search", () => {
         ctx.closeFileMenu();
         ctx.blurTerminal();
-        const el = ctx.byId(id("search"));
-        if (!el) return;
-        el.visible = !el.visible;
-        // the input owns the keyboard while visible — text pointer until then
-        ctx.setPointer?.(el.visible ? "text" : "default");
-        if (el.visible) el.focus();
+        // the search module owns the open state (and the query) — the button
+        // only asks it to toggle
+        ctx.toggleSearch();
       }),
     );
     wrap.add(input);

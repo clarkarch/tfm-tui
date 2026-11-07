@@ -88,7 +88,11 @@ const mkToolbar = (
   t: TestRendererSetup,
   prefix: string,
   cwd: string,
-  hooks: { onAnimate?: (ids: string[]) => void; cwdOf?: () => string } = {},
+  hooks: {
+    onAnimate?: (ids: string[]) => void;
+    cwdOf?: () => string;
+    toggleSearch?: () => void;
+  } = {},
 ) =>
   makeToolbar({
     prefix,
@@ -116,6 +120,7 @@ const mkToolbar = (
     sortEntries: () => [],
     cwd: () => hooks.cwdOf?.() ?? cwd,
     animateCrumbs: hooks.onAnimate,
+    toggleSearch: hooks.toggleSearch ?? (() => {}),
     home: "/home/u",
   });
 
@@ -138,6 +143,38 @@ describe("makeToolbar (per pane)", () => {
     expect(t.renderer.root.findDescendantById("tfm-p0-crumbs")).toBeTruthy();
     expect(t.renderer.root.findDescendantById("tfm-p1-crumbs")).toBeTruthy();
     await t.dispose(); // 0.6.0: destroy + await closed
+  });
+});
+
+describe("the search button", () => {
+  // The button used to flip the input node's `visible` flag ITSELF — a
+  // second writer of "the search is open" (the router reads the module, and
+  // the module owns the query). The button goes through the module now, so
+  // the node's flag can never disagree with the router's view.
+  test("it opens the search through the module (one owner of the open state)", async () => {
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      let toggles = 0;
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
+        toggleSearch: () => {
+          toggles++;
+        },
+      });
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+      const btn = t.renderer.root.findDescendantById("tfm-p0-search-btn") as unknown as {
+        screenX: number;
+        screenY: number;
+      };
+      expect(btn).toBeTruthy();
+      await t.mockMouse.pressDown(btn.screenX + 1, btn.screenY);
+      expect(toggles).toBe(1);
+      // the button must NOT write the node's flag itself
+      const input = t.renderer.root.findDescendantById("tfm-p0-search") as unknown as { visible: boolean };
+      expect(input.visible).toBe(false);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
   });
 });
 
@@ -328,6 +365,7 @@ describe("renderCrumbs directory-change animation", () => {
         openContextMenu: () => {},
         sortEntries: () => [],
         cwd: () => cwd,
+        toggleSearch: () => {},
         home: "/home/u",
       });
       t.renderer.root.add(tb.makeToolbarShell());
