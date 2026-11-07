@@ -336,8 +336,19 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     reject: (err: Error) => void;
     timer: ReturnType<typeof setTimeout>;
   };
-  type RemoteFetchState = { stagingDir: string; stagedBytes: number; pending: RemotePending | null };
+  // The remote fetch's ONE explicit state. `null` = no fetch in flight.
+  // `token` identifies THIS fetch: a late settle or a late abort must
+  // never touch a NEWER fetch (the old code cleared the shared fields
+  // unconditionally, so an old fetch's cleanup could kill the next
+  // drop's fetch).
+  type RemoteFetchState = {
+    token: number;
+    stagingDir: string;
+    stagedBytes: number;
+    pending: RemotePending | null;
+  };
   let remoteFetch: RemoteFetchState | null = null;
+  let remoteToken = 0;
   // disk-staging cap (the /tmp tmpfs is small — a runaway terminal must not
   // fill it); the timeout bounds wall-clock, this bounds bytes
   const REMOTE_DROP_MAX_BYTES = 512 * 1024 * 1024;
@@ -350,13 +361,21 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     return null;
   };
 
-  const abortRemoteFetch = (reason: string | null): void => {
+  // Cancel the in-flight remote fetch. The pending request is REJECTED:
+  // before, it was only nulled, so the awaiting fetch hung FOREVER (a
+  // leaked promise, a drop nobody finished, and the one-in-flight-fetch
+  // rule broken — the next drop started while the old one was still
+  // alive). Exactly one of {EOF, timer, abort} settles the request.
+  // `token` scopes the cancel to THIS fetch: a newer one is left alone.
+  const abortRemoteFetch = (token: number, reason: string | null): void => {
     const st = remoteFetch;
+    if (!st || st.token !== token) return;
     remoteFetch = null;
-    if (!st) return;
     if (st.pending) {
-      clearTimeout(st.pending.timer);
+      const p = st.pending;
       st.pending = null;
+      clearTimeout(p.timer);
+      p.reject(new Error(reason ?? "drop aborted"));
     }
     try {
       rmSync(st.stagingDir, { recursive: true, force: true });
@@ -366,8 +385,8 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   };
 
   // send one fetch request and resolve with the reassembled bytes + kind when
-  // its EOF (empty payload, m=0) arrives; terminal errors and the timeout
-  // reject instead. Timer spans the whole request (all its chunks).
+  // its EOF (empty payload, m=0) arrives; terminal errors, the timeout and
+  // the abort reject instead. Timer spans the whole request (all its chunks).
   const awaitRemoteResponse = (frame: string, label: string, key: string): Promise<{ data: Buffer; X: number }> =>
     new Promise((resolve, reject) => {
       const st = remoteFetch;
@@ -375,8 +394,14 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
         reject(new Error("drop ended"));
         return;
       }
+      // the fetch this request belongs to — a settle must only clear ITS
+      // own pending (a newer fetch may own the state by then)
+      const token = st.token;
+      const clearOwnPending = (): void => {
+        if (remoteFetch?.token === token && remoteFetch.pending?.key === key) remoteFetch.pending = null;
+      };
       const timer = setTimeout(() => {
-        if (remoteFetch?.pending?.key === key) remoteFetch.pending = null;
+        clearOwnPending();
         reject(new Error("timed out waiting for the terminal"));
       }, ctx.remoteTimeoutMs?.() ?? 30000);
       st.pending = {
@@ -386,12 +411,12 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
         X: NaN,
         resolve: (data, X) => {
           clearTimeout(timer);
-          if (remoteFetch?.pending?.key === key) remoteFetch.pending = null;
+          clearOwnPending();
           resolve({ data, X });
         },
         reject: (err) => {
           clearTimeout(timer);
-          if (remoteFetch?.pending?.key === key) remoteFetch.pending = null;
+          clearOwnPending();
           reject(err);
         },
         timer,
@@ -493,7 +518,8 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     // stagingDir starts empty so a mkdtemp throw still routes through the
     // abort below (cancel frame + toast) instead of escaping as an unhandled
     // rejection out of the fire-and-forget finishDrop
-    remoteFetch = { stagingDir: "", stagedBytes: 0, pending: null };
+    const token = ++remoteToken;
+    remoteFetch = { token, stagingDir: "", stagedBytes: 0, pending: null };
     let stagingDir = "";
     try {
       stagingDir = mkdtempSync(path.join(os.tmpdir(), "tfm-remote-"));
@@ -516,9 +542,16 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       write(finishDropFrame(), "remote drop finished");
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      abortRemoteFetch(shortReason(reason));
+      // The fetch ENDED — exactly one of {EOF, timer, terminal error, abort}
+      // settled the pending request. This line is the proof that the
+      // awaiting fetch settled: before, an abort only NULLED the pending,
+      // so the awaiting fetch hung forever (a leaked promise, a staging
+      // dir nobody owned, a drop nobody finished).
+      ctx.log(`remote drop failed · ${shortReason(reason)}`);
+      abortRemoteFetch(token, shortReason(reason));
     } finally {
-      remoteFetch = null;
+      // only THIS fetch's record is cleared — a newer one may own it
+      if (remoteFetch?.token === token) remoteFetch = null;
       try {
         rmSync(stagingDir, { recursive: true, force: true });
       } catch {}
@@ -808,8 +841,9 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
       ctx.log("leave");
       clearIncoming();
       // a drag leaving mid-fetch aborts it silently — the user dragged away,
-      // there is nothing to report
-      if (remoteFetch) abortRemoteFetch(null);
+      // there is nothing to report. The abort REJECTS the pending request,
+      // so the awaiting fetch settles instead of hanging forever.
+      if (remoteFetch) abortRemoteFetch(remoteFetch.token, null);
       return;
     }
 

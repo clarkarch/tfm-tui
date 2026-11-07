@@ -717,6 +717,55 @@ describe("remote drops", () => {
     expect(tx.some((s) => s === "\x1b]72;t=r:o=0\x1b\\")).toBe(true);
   });
 
+  test("an aborted remote fetch SETTLES its pending request", async () => {
+    // The abort used to null the pending WITHOUT settling it: the awaiting
+    // fetch hung forever — a leaked promise, a staging dir nobody owned, a
+    // drop nobody finished. The settle is observable: the module says the
+    // remote drop ENDED (and why).
+    const { ctx, feed, tx, logs } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1"); // EOF → the remote fetch starts
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"), 2000);
+    // the user drags away mid-fetch
+    feed("t=m:x=-1:y=-1");
+    const deadline = Date.now() + 1000;
+    while (!logs.some((l) => l.includes("remote drop failed")) && Date.now() < deadline) await Bun.sleep(10);
+    expect(logs.some((l) => l.includes("remote drop failed"))).toBe(true);
+  });
+
+  test("an aborted fetch's late cleanup does not kill the NEXT remote fetch", async () => {
+    // The abort settles the old fetch, but the old fetch's own cleanup (its
+    // catch + finally) runs LATER — as microtasks, after the next drop has
+    // already claimed the one-in-flight-fetch slot. If that cleanup touched
+    // the SHARED state unconditionally, it would kill the NEW fetch: the
+    // new fetch's bytes would be dropped on the floor and the drop would
+    // hang until the timeout.
+    const { ctx, feed, tx } = baseCtx();
+    makeDnd72(ctx);
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/a.txt"));
+    feed("t=r:x=1"); // EOF → the first remote fetch starts
+    await settleUntil(() => tx.some((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\"), 2000);
+    // the user drags away AND a new drop arrives in the SAME turn (no await
+    // between the feeds — the new fetch claims the slot synchronously)
+    feed("t=m:x=-1:y=-1");
+    feed("t=m", "text/uri-list");
+    feed("t=M:x=1", "text/uri-list");
+    feed("t=r:x=1:X=1", b64("file:///remote/b.txt"));
+    feed("t=r:x=1");
+    // the NEW fetch asks for its entry's bytes...
+    await settleUntil(() => tx.filter((s) => s === "\x1b]72;t=r:x=1:y=1\x1b\\").length >= 2, 2000);
+    // ...and its bytes land
+    feed("t=r:x=1:y=1", b64("new remote"));
+    feed("t=r:x=1:y=1");
+    await settleUntil(() => ctx.runTransfers.length > 0, 3000);
+    expect(ctx.runTransfers.length).toBe(1);
+  });
+
   test("request timeout aborts and cleans staging", async () => {
     const { ctx, feed, notes, tx } = baseCtx();
     ctx.remoteTimeoutMs = () => 50;
