@@ -143,7 +143,12 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
   // entries behind the outgoing drag, in presented order — t=k serve requests
   // resolve their 1-based idx against this (cleared with dragPaths)
   let dragEntries: ClipItem[] | null = null;
-  let dragOp = 1; // 1 copy / 2 move
+  // The outgoing drag's operation, as announced by the terminal's op frame
+  // (t=e:x=2:y=1 copy / y=2 move). `null` = the terminal never announced
+  // one — "not announced" is NOT "copy": only an explicit MOVE may trash
+  // our sources (a copy drag's originals must survive).
+  type DragOp = "copy" | "move" | null;
+  let dragOp: DragOp = null;
   // dir-handle counter for served subtrees (0/1 are file/symlink, never handles)
   let serveHandle = 1;
   let selfTargetKey: string | null = null; // folder tile currently highlighted
@@ -193,7 +198,9 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     dragPaths = entries.map((e) => e.path);
     dragEntries = entries;
     serveHandle = 1;
-    dragOp = 1;
+    // a NEW session starts with NO announced op (the terminal sends the op
+    // frame when it knows the operation) — not with a stale one
+    dragOp = null;
     selfDropDoneSession = -1;
     ctx.finishDrag(); // pointer is about to be grabbed by the terminal
     write(agreeDragFrame(), "agree drag either");
@@ -711,13 +718,14 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
     }
     if (t === "e") {
       if (x === 2) {
-        dragOp = y === 2 ? 2 : 1;
-        ctx.log(`drag op=${dragOp === 2 ? "move" : "copy"}`);
+        // the terminal's op frame: y=2 is a move, everything else a copy
+        dragOp = y === 2 ? "move" : "copy";
+        ctx.log(`drag op=${dragOp}`);
       } else if (x === 3) {
-        ctx.log(`drag landed op=${dragOp}`);
+        ctx.log(`drag landed op=${dragOp ?? "unknown"}`);
       } else if (x === 4) {
         const canceled = y !== 0;
-        ctx.log(`drag end canceled=${canceled} op=${dragOp}`);
+        ctx.log(`drag end canceled=${canceled} op=${dragOp ?? "unknown"}`);
         // snapshot EVERYTHING the epilogue needs at end time — the timer may
         // fire after a newer session began, and the live values then belong
         // to that newer session
@@ -727,8 +735,10 @@ export const makeDnd72 = (ctx: Dnd72Ctx) => {
         const selfDoneAtEnd = selfDropDoneSession === seqAtEnd;
         const finishExternal = (): void => {
           if (!canceled && pathsAtEnd) {
-            // released over another app: honor move semantics by trashing our copies
-            if (opAtEnd === 2) void ctx.trashPaths(pathsAtEnd);
+            // released over another app: honor move semantics by trashing our
+            // copies — ONLY an announced move (an unannounced op stays
+            // "unknown" and never destroys the originals)
+            if (opAtEnd === "move") void ctx.trashPaths(pathsAtEnd);
             else
               ctx.notify(
                 `Sent ${pathsAtEnd.length} item${pathsAtEnd.length === 1 ? "" : "s"}`,

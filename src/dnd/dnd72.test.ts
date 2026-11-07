@@ -866,6 +866,25 @@ describe("external drag end", () => {
     armDrag(null);
   });
 
+  test("a drag whose op was NEVER announced does not trash the sources", async () => {
+    // The terminal announces the operation with an op frame (t=e:x=2). A
+    // drag that ends without one is NOT a move — "not announced" is not
+    // "copy" and certainly not "move": trashing the sources of a copy drag
+    // destroys the originals. The op is an explicit value ("copy" | "move"
+    // | null = unknown), and only an explicit move may trash.
+    const { ctx, feed, notes, logs } = baseCtx();
+    makeDnd72(ctx);
+    armDrag([{ path: "/d/a", isDir: false }]);
+    feed("t=o:x=1:y=1");
+    feed("t=e:x=4:y=0"); // end, not canceled — and NO op frame
+    await settleUntil(() => notes.some((n) => n.includes("Sent 1 item")), 3000); // 700ms-deferred epilogue
+    expect(ctx.trashed).toEqual([]);
+    // the log must not claim an operation the terminal never announced
+    // (it used to log the bare number 1, which reads as "copy")
+    expect(logs.some((l) => l.includes("op=unknown"))).toBe(true);
+    armDrag(null);
+  });
+
   test("external move semantics trash our copies", async () => {
     const { ctx, feed } = baseCtx();
     makeDnd72(ctx);
