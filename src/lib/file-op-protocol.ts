@@ -23,24 +23,88 @@ export type ClipItem = { path: string; isDir: boolean };
 
 // The live state of the progress toast that reports a running copy/move/
 // delete/archive op.
+//
+// ONE phase field replaces the old active/paused/cancelled/counting
+// booleans. Those four were independent flags: they formed a PRODUCT state
+// space (so "paused AND cancelled" was representable), and — worse — the
+// project had TWO reset routines that cleared DIFFERENT field sets
+// (fileops' resetProg and the driver's start). A reset that missed one flag
+// is how a stale ✕ from an earlier op poisoned the next one ("Moved 0
+// items"). A phase has exactly one legal value at a time, so the illegal
+// combinations are unrepresentable and there is only ONE reset.
+//
+// `toastUp` stays a separate field on purpose: the toast's visibility is
+// ORTHOGONAL to the op's phase (a small op runs with no toast at all, and a
+// finished op leaves its toast lingering its result). It is UI-owned
+// (src/ui/ui-progress.ts); the fs side only READS it.
+export type ProgressPhase =
+  /** no op running */
+  | "idle"
+  /** pre-scan: totals unknown, the bar is indeterminate */
+  | "counting"
+  /** op in flight */
+  | "running"
+  /** op in flight, the user paused it */
+  | "paused"
+  /** the user asked to cancel; the op is unwinding */
+  | "cancelling"
+  /** the op finished (the toast may still be lingering its result) */
+  | "done";
+
 export type ProgressState = {
-  active: boolean;
+  phase: ProgressPhase;
   verb: string;
   doneFiles: number;
   totalFiles: number;
   bytes: number;
   totalBytes: number;
-  paused: boolean;
-  cancelled: boolean;
-  // pre-scan "counting" mode: totals are still unknown, so paintProgress shows
-  // an indeterminate `counting N files…` (nautilus' "Preparing" counter)
-  counting?: boolean;
   currentRs: ReadStream | null;
+  /** the progress toast is on screen (UI-owned; the fs side only reads it) */
   toastUp: boolean;
   // external-process controls (archive tools): cancel/pause hooks the toast
   // buttons invoke when no ReadStream is live
   processCancel?: (() => void) | null;
   processPause?: (() => void) | null;
+};
+
+// The phase predicates. Every reader goes through one of these so the
+// mapping from phase to meaning lives in ONE place.
+export const progressActive = (p: ProgressState): boolean =>
+  p.phase === "counting" || p.phase === "running" || p.phase === "paused" || p.phase === "cancelling";
+export const progressPaused = (p: ProgressState): boolean => p.phase === "paused";
+export const progressCancelled = (p: ProgressState): boolean => p.phase === "cancelling";
+export const progressCounting = (p: ProgressState): boolean => p.phase === "counting";
+
+// The ONE reset for the OP-level fields. It clears every field the op owns:
+// the phase, the counters and the totals.
+//
+// It deliberately does NOT touch the three fields with a DIFFERENT owner and
+// a DIFFERENT lifetime:
+//   - `toastUp`      — the UI owns the toast's lifetime; a re-show during the
+//                      done-linger must REUSE the toast, not stack a second one.
+//   - `currentRs`    — the sink owns the live stream (`setStream`/`clearStream`).
+//   - `processCancel`/`processPause` — the archive layer owns the child hooks
+//                      (`onArchiveChild`/`clearArchiveChild`).
+// The stale-flag bug this replaces was always about the OP flags (a stale ✕
+// from an earlier op poisoning the next one — "Moved 0 items"), and the old
+// code had TWO reset routines clearing DIFFERENT field sets. There is now one.
+export const resetProgressState = (p: ProgressState): void => {
+  p.phase = "idle";
+  p.doneFiles = 0;
+  p.totalFiles = 0;
+  p.bytes = 0;
+  p.totalBytes = 0;
+};
+
+// End an op WITHOUT losing the "the user cancelled it" fact: the cancelled
+// flag was STICKY in the old boolean model (it stayed true until the next op
+// started), and some paths read it after the op unwound. `done`/`idle` mean
+// "not cancelled"; `cancelling` survives both.
+export const finishProgressPhase = (p: ProgressState): void => {
+  if (p.phase !== "cancelling") p.phase = "done";
+};
+export const stopProgressPhase = (p: ProgressState): void => {
+  if (p.phase !== "cancelling") p.phase = "idle";
 };
 
 // The progress seam the copy/delete engines report into. It lives in this leaf

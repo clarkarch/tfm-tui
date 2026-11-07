@@ -57,14 +57,12 @@ const W = (p: string, s = "x") => {
 const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
   const calls: string[] = [];
   const prog: ProgressState = {
-    active: false,
+    phase: "idle",
     verb: "copying",
     doneFiles: 0,
     totalFiles: 1,
     bytes: 0,
     totalBytes: 0,
-    paused: false,
-    cancelled: false,
     currentRs: null,
     toastUp: false,
     processCancel: null,
@@ -136,12 +134,12 @@ describe("runTransfer: same-fs move", () => {
   });
 
   test("stale cancelled flag from a past toast never blocks the next plain move", async () => {
-    // the toast's ✕ sets prog.cancelled=true; only toast-bearing transfers
-    // reset it — so a later plain (non-progress) move broke on iteration 1
-    // with "Moved 0 items" until some progress transfer happened to run
+    // the toast's ✕ sets the phase to "cancelling"; only toast-bearing
+    // transfers reset it — so a later plain (non-progress) move broke on
+    // iteration 1 with "Moved 0 items" until some progress transfer happened
+    // to run
     const h = makeHarness();
-    h.prog.cancelled = true;
-    h.prog.paused = true;
+    h.prog.phase = "cancelling";
     const src = path.join(ROOT, "stale-flag-src");
     const destDir = path.join(ROOT, "stale-flag-dest");
     W(src, "content");
@@ -195,7 +193,7 @@ describe("runTransfer: cross-device move", () => {
       // first progress repaint (during file 1's copy) flips the cancel flag —
       // the next checkpoint/epilogue sees it, no timing games needed
       paintProgress: () => {
-        h.prog.cancelled = true;
+        h.prog.phase = "cancelling";
       },
     });
     const src = path.join(ROOT, "dev-a", "cancel-tree");
@@ -420,7 +418,7 @@ describe("runTransfer: raced destinations", () => {
           replaced = true;
           rmSync(target);
           W(target, "STRANGER");
-          h.prog.cancelled = true;
+          h.prog.phase = "cancelling";
         }
       },
     });
@@ -800,7 +798,7 @@ describe("onFileOp fan-out", () => {
     const h = makeHarness({
       crossDevice: (a, b) => a.includes("dev-a") !== b.includes("dev-a"),
       paintProgress: () => {
-        h.prog.cancelled = true;
+        h.prog.phase = "cancelling";
       },
       onFileOp: (_op, _paths, _dest, outcome) => seen.push({ outcome }),
     });
@@ -877,7 +875,7 @@ describe("terminal notification for a finished op", () => {
       notifyTerminal,
       crossDevice: (a, b) => a.includes("dev-a") !== b.includes("dev-a"),
       paintProgress: () => {
-        h.prog.cancelled = true;
+        h.prog.phase = "cancelling";
       },
     });
     const src = path.join(ROOT, "dev-a", "notify-cancel-tree");
@@ -1408,7 +1406,7 @@ describe("extractArchive", () => {
         return runArchive(spec, opts);
       },
       paintProgress: () => {
-        h.prog.cancelled = true;
+        h.prog.phase = "cancelling";
       },
     });
     const destDir = path.join(ROOT, "x-cancel");
@@ -1432,7 +1430,7 @@ describe("extractArchive", () => {
       listArchive: async () => 1,
       runArchive: async (_spec, opts) => {
         opts?.onChild?.(child);
-        h.prog.cancelled = true;
+        h.prog.phase = "cancelling";
         h.prog.processCancel?.();
         return { code: -1, stdout: "", stderr: "" };
       },
@@ -1664,7 +1662,7 @@ describe("compressPaths", () => {
         return runArchive(spec, opts);
       },
       paintProgress: () => {
-        h.prog.cancelled = true;
+        h.prog.phase = "cancelling";
       },
     });
     const destDir = path.join(ROOT, "c-cancel");
@@ -1979,15 +1977,15 @@ describe("preScan counting", () => {
     h.ctx.showProgressToast = () => {
       if (h.prog.toastUp) return;
       h.prog.toastUp = true;
-      shown.push({ counting: !!h.prog.counting, totalFiles: h.prog.totalFiles });
+      shown.push({ counting: h.prog.phase === "counting", totalFiles: h.prog.totalFiles });
     };
     await h.ops.runTransfer("copy", destDir, [src], "paste");
     // the very first (and only) show happened mid-scan, while still counting —
     // the post-scan arm no-ops because the toast is up
     expect(shown.length).toBe(1);
     expect(shown[0]!.counting).toBe(true);
-    // the counting flag is gone by the time the transfer runs
-    expect(h.prog.counting).toBeFalsy();
+    // the counting phase is gone by the time the transfer runs
+    expect(h.prog.phase).not.toBe("counting");
     expect(h.prog.totalFiles).toBe(1100);
   }, 20000);
 
@@ -2005,7 +2003,7 @@ describe("preScan counting", () => {
     await h.ops.runTransfer("copy", destDir, [path.join(src, "f1.txt")], "paste");
     // one file = under the toast threshold: exactly one show (the real one)
     expect(shows).toBe(0);
-    expect(h.prog.counting).toBeFalsy();
+    expect(h.prog.phase).not.toBe("counting");
   });
 
   // ✕ during a long pre-scan must abort the SCAN (tick throw + loop break),
@@ -2021,10 +2019,10 @@ describe("preScan counting", () => {
     mkdirSync(destDir, { recursive: true });
     for (let i = 0; i < 5000; i++) W(path.join(src, `f${i}`), "x");
     h.ctx.paintProgress = () => {
-      h.prog.cancelled = true; // the toast ✕ lands on the first counting paint
+      h.prog.phase = "cancelling"; // the toast ✕ lands on the first counting paint
     };
     await h.ops.runTransfer("copy", destDir, [src], "paste");
-    expect(h.prog.counting).toBeFalsy();
+    expect(h.prog.phase).not.toBe("counting");
     expect(h.prog.totalFiles).toBe(1);
     expect(readdirSync(destDir).length).toBe(0);
     expect(h.calls.some((c) => c.startsWith("notify:copy cancelled"))).toBe(true);
@@ -2097,7 +2095,7 @@ describeNonRoot("sudo escalation", () => {
           chmodSync(destDir, 0o700);
           try {
             const result = Bun.spawnSync(argv.slice(2));
-            if (argv[2] === "mv" && result.exitCode === 0) h.prog.cancelled = true;
+            if (argv[2] === "mv" && result.exitCode === 0) h.prog.phase = "cancelling";
             return {
               status: result.exitCode,
               stderr: new TextDecoder().decode(result.stderr),
@@ -2398,7 +2396,7 @@ describeNonRoot("sudo escalation", () => {
       const h = makeHarness({
         // ✕ lands while the prompt is up: gate resolves, then aborts
         ensureSudo: async () => {
-          h.prog.cancelled = true;
+          h.prog.phase = "cancelling";
           return true;
         },
         sudoExec: async () => {

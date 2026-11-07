@@ -67,6 +67,10 @@ import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
 import {
   shouldNotifyTerminal,
+  finishProgressPhase,
+  progressCancelled,
+  progressPaused,
+  resetProgressState,
   type ClipItem,
   type ConflictChoice,
   type ProgressState,
@@ -174,7 +178,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       onMemberDone: opts.onMemberDone,
       onBytes: opts.onBytes,
       onChild: onArchiveChild,
-      isCancelled: () => prog.cancelled,
+      isCancelled: () => progressCancelled(prog),
       pauseGate: () => ctx.pauseGate(),
       onLoss: opts.onLoss,
       // hung-tool backstop (a wedged tar/7z holds the serial queue, and
@@ -186,12 +190,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   // archive progress helpers: reset shared flags per op (stale-cancel lesson),
   // arm the toast only when the total clears shouldToast
   const resetProg = (): void => {
-    prog.paused = false;
-    prog.cancelled = false;
-    prog.doneFiles = 0;
-    prog.bytes = 0;
-    prog.totalFiles = 0;
-    prog.totalBytes = 0;
+    // ONE reset for every op-level field. The old model had TWO reset
+    // routines clearing DIFFERENT field sets — the miss is exactly how a
+    // stale flag from an earlier op poisoned the next one.
+    resetProgressState(prog);
   };
   const setProgVerb = (verb: string, totalFiles: number, totalBytes = 0): void => {
     prog.verb = verb;
@@ -204,7 +206,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // decision still needs the true size: one 5 GB video is ONE member, so
     // the member count alone said "tiny" and the op ran in total silence.
     if (shouldToast(bytes, prog.totalFiles)) {
-      prog.active = true;
+      // the op is running — make the phase say so (the toast's presence is
+      // orthogonal: a small op runs with no toast at all)
+      if (prog.phase === "idle") prog.phase = "running";
       ctx.showProgressToast();
       ctx.paintProgress(true);
     }
@@ -263,20 +267,21 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       dirs = 0,
       armed = false;
     const t0 = Date.now();
-    prog.counting = true;
+    prog.phase = "counting";
     prog.doneFiles = 0;
     try {
       for (const s of srcs) {
         // ✕ during a long pre-scan must stop the scan, not just the later loop
-        if (prog.cancelled) break;
+        if (progressCancelled(prog)) break;
         const base = files;
         try {
           const r = await scanTree(s, (f) => {
-            if (prog.cancelled) throw new Error("cancelled");
+            if (progressCancelled(prog)) throw new Error("cancelled");
             prog.doneFiles = base + f;
             if (!armed && (prog.doneFiles >= 1000 || Date.now() - t0 > 400)) {
               armed = true;
-              prog.active = true;
+              // the phase is already "counting" — arming only means the TOAST
+              // comes up (the op's phase was never in doubt)
               ctx.showProgressToast();
             }
             if (armed) ctx.paintProgress(true);
@@ -290,7 +295,14 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         } catch {}
       }
     } finally {
-      prog.counting = false;
+      // the pre-scan is over: the phase goes back to the op proper. An armed
+      // scan keeps running (the toast stays up); an unarmed one leaves the
+      // op with no bar at all.
+      //
+      // ONLY a "counting" phase transitions out — a ✕ pressed during the
+      // scan set the phase to "cancelling", and wiping it here would make
+      // the op resume as if it had never been cancelled.
+      if (prog.phase === "counting") prog.phase = armed ? "running" : "idle";
       prog.doneFiles = 0;
     }
     return { files, bytes, dirs, members: files + dirs, armed };
@@ -312,7 +324,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     prog.processPause = () => {
       if (!child.pid) return;
       try {
-        process.kill(child.pid, prog.paused ? "SIGSTOP" : "SIGCONT");
+        process.kill(child.pid, progressPaused(prog) ? "SIGSTOP" : "SIGCONT");
       } catch {}
     };
   };
@@ -404,10 +416,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
   const transferSink: TransferSink = {
     checkpoint: async () => {
       await ctx.pauseGate();
-      if (prog.cancelled) throw new Error("cancelled");
+      if (progressCancelled(prog)) throw new Error("cancelled");
     },
-    paused: () => prog.paused,
-    cancelled: () => prog.cancelled,
+    paused: () => progressPaused(prog),
+    cancelled: () => progressCancelled(prog),
     addBytes: (n) => {
       prog.bytes += n;
     },
@@ -438,7 +450,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     prog.totalBytes = scan.bytes;
     const armed = scan.armed || shouldToast(prog.totalBytes, prog.totalFiles);
     if (armed) {
-      prog.active = true;
+      prog.phase = "running";
       ctx.showProgressToast();
       ctx.paintProgress(true);
     }
@@ -451,8 +463,10 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       throw err;
     } finally {
       if (armed) {
-        prog.active = false;
-        ctx.finishProgressToast(landed ? okMsg : prog.cancelled ? "✗ Copy cancelled" : "✗ Copy failed");
+        // the phase keeps the "cancelling" fact, so the message below still
+        // reads the cancel (finishProgressPhase never overwrites it)
+        finishProgressPhase(prog);
+        ctx.finishProgressToast(landed ? okMsg : progressCancelled(prog) ? "✗ Copy cancelled" : "✗ Copy failed");
       }
     }
   };
@@ -652,13 +666,11 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     // Same-device moves skip the toast deliberately: they are O(1) renames,
     // so even a thousand files finish before a toast would matter.
     // Stale toast flags must never outlive the transfer that set them: the ✕
-    // button sets cancelled=true and only toast-bearing transfers used to
-    // reset it, so every later plain move broke on iteration 1 ("Moved 0
-    // items") until some progress transfer happened to run. Reset always.
-    prog.paused = false;
-    prog.cancelled = false;
-    prog.doneFiles = 0;
-    prog.bytes = 0;
+    // button sets the phase to cancelling and only toast-bearing transfers
+    // used to reset it, so every later plain move broke on iteration 1
+    // ("Moved 0 items") until some progress transfer happened to run. Reset
+    // always — and ONE reset clears every op-level field.
+    resetProgressState(prog);
     const withProgress = op === "copy" || srcs.some((s) => isCrossDevice(s, destDir));
     if (withProgress) {
       prog.verb = op === "copy" ? "copying" : "moving";
@@ -666,7 +678,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       prog.totalFiles = r.files || Math.max(1, total);
       prog.totalBytes = r.bytes;
       if (r.armed || shouldToast(prog.totalBytes, prog.totalFiles)) {
-        prog.active = true;
+        prog.phase = "running";
         ctx.showProgressToast();
         ctx.paintProgress(true);
       }
@@ -674,7 +686,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     let cancelled = false;
     try {
       for (const src of srcs) {
-        if (cancelled || prog.cancelled) {
+        if (cancelled || progressCancelled(prog)) {
           cancelled = true;
           break;
         }
@@ -820,7 +832,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
 
             // cancel raced the final byte: copy completed but the source must
             // survive a cancelled move — surface as cancelled, drop the copy
-            if (prog.cancelled) throw new Error("cancelled");
+            if (progressCancelled(prog)) throw new Error("cancelled");
             try {
               await removeTree(src);
             } catch (err) {
@@ -840,9 +852,9 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           // filesystem boundary retry as sudo cp + sudo rm (rename can't
           // cross devices), preserving the partial-removal accounting below.
           let failure: unknown = err;
-          if (!prog.cancelled && isPrivilegeError(err) && (await needSudo())) {
+          if (!progressCancelled(prog) && isPrivilegeError(err) && (await needSudo())) {
             // ✕ landed while the password prompt was up: abort, don't exec
-            if (prog.cancelled) failure = new Error("cancelled");
+            if (progressCancelled(prog)) failure = new Error("cancelled");
             else {
               try {
                 if (sourceRemovalFailed) {
@@ -869,7 +881,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
                   copiedHere = true;
                   if (!(await stillOurCopy())) throw new Error("copy destination changed");
                   if (op === "move") {
-                    if (prog.cancelled) throw new Error("cancelled");
+                    if (progressCancelled(prog)) throw new Error("cancelled");
                     try {
                       await sudoRemove(src);
                     } catch (rmErr) {
@@ -899,7 +911,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
               }
             }
           }
-          if (prog.cancelled) {
+          if (progressCancelled(prog)) {
             cancelled = true;
             break;
           }
@@ -908,7 +920,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         }
       }
     } finally {
-      prog.active = false;
+      finishProgressPhase(prog);
     }
     // a fully-failed batch carries no units — pushing it pollutes the undo
     // stack with a redoable no-op ("Undid rename 0 items"); stashed victims
@@ -1435,7 +1447,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       // one-member archive of 5 GB used to extract in total silence
       armProgressToast(totalBytes);
       for (const file of files) {
-        if (cancelled || prog.cancelled) {
+        if (cancelled || progressCancelled(prog)) {
           cancelled = true;
           break;
         }
@@ -1468,7 +1480,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
             },
           },
         );
-        if (prog.cancelled) {
+        if (progressCancelled(prog)) {
           cancelled = true;
           break;
         }
@@ -1574,7 +1586,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       }
     } finally {
       clearArchiveChild();
-      prog.active = false;
+      finishProgressPhase(prog);
       for (const s of staging) {
         try {
           await rm(s, { recursive: true, force: true });
@@ -1686,7 +1698,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       setProgVerb("compressing", scan.members);
     }
     if (scan.armed) {
-      prog.active = true;
+      prog.phase = "running";
       ctx.paintProgress(true);
     } else armProgressToast(scan.bytes);
     try {
@@ -1717,7 +1729,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           },
         },
       );
-      if (prog.cancelled) {
+      if (progressCancelled(prog)) {
         cancelled = true;
       } else if (res.code !== 0 && res.code !== 1) {
         // exit 1 is a warning (some inputs skipped/changed) — the produced
@@ -1746,7 +1758,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
         swallow("compress temp cleanup", err);
       }
       clearArchiveChild();
-      prog.active = false;
+      finishProgressPhase(prog);
     }
     if (units.length) ctx.pushUndoBatch(`compress ${path.basename(out)}`, units, [], { units: dUnits, redos: [] });
     ctx.renderAll();

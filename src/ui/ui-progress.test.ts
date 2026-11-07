@@ -132,14 +132,12 @@ describe("makeOpProgress", () => {
   const fakeHandle = (): { handle: ProgressHandle; calls: string[]; prog: ProgressState } => {
     const calls: string[] = [];
     const prog: ProgressState = {
-      active: false,
+      phase: "idle",
       verb: "copying",
       doneFiles: 0,
       totalFiles: 0,
       bytes: 0,
       totalBytes: 0,
-      paused: false,
-      cancelled: false,
       currentRs: null,
       toastUp: false,
     };
@@ -161,14 +159,13 @@ describe("makeOpProgress", () => {
 
   test("a big op arms the toast and clears the stale cancel flag", () => {
     const { handle, calls, prog } = fakeHandle();
-    // a ✕ from an earlier op left the flag set — it must never abort the
-    // next one (the "Moved 0 items" bug)
-    prog.cancelled = true;
-    prog.paused = true;
+    // a ✕ from an earlier op left the phase on "cancelling" — it must never
+    // abort the next one (the "Moved 0 items" bug)
+    prog.phase = "cancelling";
     const dp = makeOpProgress(handle, "deleting");
     dp.start(1, 5 * MB, "deleting");
-    expect(prog.cancelled).toBe(false);
-    expect(prog.paused).toBe(false);
+    expect(prog.phase as string).toBe("running");
+    expect(dp.cancelled()).toBe(false);
     expect(prog.verb).toBe("deleting");
     expect(prog.totalFiles).toBe(1);
     expect(prog.totalBytes).toBe(5 * MB);
@@ -194,7 +191,7 @@ describe("makeOpProgress", () => {
     const dp = makeOpProgress(handle, "trashing");
     dp.counting?.(120);
     expect(calls).toContain("toast:show");
-    expect(prog.counting).toBe(true);
+    expect(prog.phase).toBe("counting");
     expect(prog.doneFiles).toBe(120);
   });
 
@@ -213,7 +210,7 @@ describe("makeOpProgress", () => {
     const { handle, prog } = fakeHandle();
     const dp = makeOpProgress(handle, "trashing");
     dp.start(2, 100, "trashing");
-    prog.cancelled = true;
+    prog.phase = "cancelling";
     expect(dp.cancelled()).toBe(true);
     await expect(dp.sink.checkpoint()).rejects.toThrow("cancelled");
   });
@@ -242,28 +239,27 @@ describe("shouldToast", () => {
 describe("makeProgress gates", () => {
   test("pauseGate blocks while paused and unblocks on resume", async () => {
     const { prog, pauseGate } = makeProgress(stubCtx().ctx);
-    prog.paused = true;
+    prog.phase = "paused";
     let released = false;
     const gate = pauseGate().then(() => {
       released = true;
     });
     await new Promise((r) => setTimeout(r, 120));
     expect(released).toBe(false);
-    prog.paused = false;
+    prog.phase = "running";
     await gate;
     expect(released).toBe(true);
   });
 
   test("pauseGate returns immediately when cancelled", async () => {
     const { prog, pauseGate } = makeProgress(stubCtx().ctx);
-    prog.paused = true;
-    prog.cancelled = true;
+    prog.phase = "cancelling";
     await pauseGate();
   });
 
   test("paintProgress is a safe no-op with no live nodes", () => {
     const { prog, paintProgress } = makeProgress(stubCtx().ctx);
-    prog.active = true;
+    prog.phase = "running";
     prog.toastUp = true;
     expect(() => paintProgress(true)).not.toThrow();
   });
@@ -276,7 +272,7 @@ describe("makeProgress gates", () => {
     for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
     const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
     const { prog, paintProgress } = makeProgress(ctx);
-    prog.active = true;
+    prog.phase = "running";
     prog.toastUp = true;
     prog.verb = "compressing";
     prog.totalFiles = 0;
@@ -294,7 +290,7 @@ describe("makeProgress gates", () => {
     for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
     const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
     const { prog, paintProgress } = makeProgress(ctx);
-    prog.active = true;
+    prog.phase = "running";
     prog.toastUp = true;
     prog.verb = "compressing";
     prog.totalFiles = 0;
@@ -310,7 +306,7 @@ describe("makeProgress gates", () => {
     for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
     const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
     const { prog, paintProgress } = makeProgress(ctx);
-    prog.active = true;
+    prog.phase = "running";
     prog.toastUp = true;
     prog.verb = "compressing";
     prog.totalFiles = 7;
@@ -322,7 +318,7 @@ describe("makeProgress gates", () => {
 
   test("showProgressToast builds with stub ctx; finish clears the spinner", () => {
     const { prog, showProgressToast, finishProgressToast } = makeProgress(stubCtx().ctx);
-    prog.active = true;
+    prog.phase = "running";
     showProgressToast();
     expect(prog.toastUp).toBe(true);
     finishProgressToast("✓ done");
@@ -347,7 +343,7 @@ describe("makeProgress gates", () => {
       },
     });
     const { prog, showProgressToast, finishProgressToast } = makeProgress(ctx);
-    prog.active = true;
+    prog.phase = "running";
     showProgressToast();
     expect(ticks.length).toBe(1);
     // the clock drives the spinner
@@ -374,7 +370,7 @@ describe("makeProgress gates", () => {
       },
     });
     const { prog, showProgressToast } = makeProgress(ctx);
-    prog.active = true;
+    prog.phase = "running";
     showProgressToast();
     expect(ticks.length).toBe(1);
     prog.toastUp = false; // the toast vanished without finishProgressToast
@@ -436,9 +432,9 @@ describe("counting pre-scan paint", () => {
     for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
     const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
     const { prog, paintProgress } = makeProgress(ctx);
-    prog.active = true;
+    prog.phase = "running";
     prog.toastUp = true;
-    prog.counting = true;
+    prog.phase = "counting";
     prog.doneFiles = 37;
     paintProgress(true);
     expect(nodes.get("tfm-prog-title")!.content).toContain("counting 37 files…");
@@ -450,13 +446,13 @@ describe("counting pre-scan paint", () => {
     for (const id of ["tfm-prog-title", "tfm-prog-bar"]) nodes.set(id, { content: "" });
     const { ctx } = stubCtx({ byId: (id: string) => nodes.get(id) as unknown as MaybeNode });
     const { prog, paintProgress } = makeProgress(ctx);
-    prog.active = true;
+    prog.phase = "running";
     prog.toastUp = true;
-    prog.counting = true;
+    prog.phase = "counting";
     prog.doneFiles = 5;
     paintProgress(true);
     expect(nodes.get("tfm-prog-title")!.content).toContain("counting");
-    prog.counting = false;
+    prog.phase = "running";
     prog.doneFiles = 2;
     prog.bytes = 10;
     prog.totalBytes = 20;
@@ -498,7 +494,7 @@ describe("progress repaint", () => {
         },
       });
       const { prog, showProgressToast, isOpen, repaint } = makeProgress(ctx);
-      prog.active = true;
+      prog.phase = "running";
       prog.verb = "copying";
       showProgressToast();
       await t.renderOnce();
@@ -540,7 +536,7 @@ describe("progress repaint", () => {
         },
       });
       const { prog, showProgressToast } = makeProgress(ctx);
-      prog.active = true;
+      prog.phase = "running";
       showProgressToast();
       await t.renderOnce();
       const pause = t.renderer.root.findDescendantById("tfm-prog-pause") as any;

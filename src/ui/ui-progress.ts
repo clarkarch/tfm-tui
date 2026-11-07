@@ -16,6 +16,15 @@ import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import { applySurface, islandSurface } from "./style";
 import type { ProgressState, OpProgress, TransferSink } from "../lib/file-op-protocol";
+import {
+  finishProgressPhase,
+  progressActive,
+  progressCancelled,
+  progressCounting,
+  progressPaused,
+  resetProgressState,
+  stopProgressPhase,
+} from "../lib/file-op-protocol";
 import type { IconSpec } from "../lib/icon-state";
 
 // --- live copy progress: floating toast (top-right) with pause/cancel ---
@@ -109,14 +118,12 @@ export const makeProgress = (ctx: ProgressCtx) => {
   const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
   const prog: ProgressState = {
-    active: false,
+    phase: "idle",
     verb: "copying",
     doneFiles: 0,
     totalFiles: 0,
     bytes: 0,
     totalBytes: 0,
-    paused: false,
-    cancelled: false,
     currentRs: null,
     toastUp: false,
   };
@@ -140,12 +147,12 @@ export const makeProgress = (ctx: ProgressCtx) => {
   };
 
   const paintProgress = (force = false): void => {
-    if (!prog.active || !prog.toastUp) return;
+    if (!progressActive(prog) || !prog.toastUp) return;
     const now = Date.now();
     if (!force && now - progLastPaint < 120) return;
     progLastPaint = now;
-    const spin = prog.paused ? "⏸" : SPIN_FRAMES[progSpinIdx];
-    if (prog.counting) {
+    const spin = progressPaused(prog) ? "⏸" : SPIN_FRAMES[progSpinIdx];
+    if (progressCounting(prog)) {
       progSetText(PROG_T_TITLE, truncateToastText(`${spin} ${countingLine(prog.doneFiles)}`, PROG_TITLE_BUDGET));
       progSetText(PROG_T_BAR, "");
       return;
@@ -204,10 +211,10 @@ export const makeProgress = (ctx: ProgressCtx) => {
       const p = ctx.byId(progPauseSpec.slotId);
       const l = ctx.byId(progPlaySpec.slotId);
       try {
-        if (p) p.visible = !prog.paused;
+        if (p) p.visible = !progressPaused(prog);
       } catch {}
       try {
-        if (l) l.visible = !!prog.paused;
+        if (l) l.visible = progressPaused(prog);
       } catch {}
     };
     // pause/play are different shapes → two slots stacked in one hit area.
@@ -254,8 +261,12 @@ export const makeProgress = (ctx: ProgressCtx) => {
           flexDirection: "row",
           ...islandSurface(ctx.colors(), false, ctx.colors().accentBg),
           onMouseDown: () => {
-            prog.paused = !prog.paused;
-            if (!prog.paused) {
+            // the phase owns the pause: a CANCELLING op cannot also be
+            // paused (that illegal pair was representable with the old
+            // independent booleans)
+            if (prog.phase === "running") prog.phase = "paused";
+            else if (prog.phase === "paused") prog.phase = "running";
+            if (!progressPaused(prog)) {
               try {
                 prog.currentRs?.resume();
               } catch {}
@@ -268,7 +279,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
             setPauseVisual();
           },
           ...hoverEvents(
-            (on) => progPaint(prog.paused ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", on),
+            (on) => progPaint(progressPaused(prog) ? progPlaySpec.spec : progPauseSpec.spec, "tfm-prog-pause", on),
             ctx.setPointer,
           ),
         },
@@ -283,7 +294,9 @@ export const makeProgress = (ctx: ProgressCtx) => {
           flexDirection: "row",
           ...islandSurface(ctx.colors(), false, ctx.colors().accentBg),
           onMouseDown: () => {
-            prog.cancelled = true;
+            // cancelling WINS over pause: the phase has one value, so the
+            // old "paused && cancelled" pair cannot exist
+            prog.phase = "cancelling";
             try {
               prog.currentRs?.destroy(new Error("cancelled"));
             } catch {}
@@ -366,7 +379,7 @@ export const makeProgress = (ctx: ProgressCtx) => {
 
   // pause/cancel gates used between files AND mid-stream
   const pauseGate = async (): Promise<void> => {
-    while (prog.paused && !prog.cancelled) await sleep(80);
+    while (progressPaused(prog)) await sleep(80);
   };
 
   // theme-switch repaint while a transfer toast is up: container + texts +
@@ -427,10 +440,10 @@ export const makeOpProgress = (progress: ProgressHandle, defaultVerb: string): O
   const sink: TransferSink = {
     checkpoint: async () => {
       await progress.pauseGate();
-      if (prog.cancelled) throw new Error("cancelled");
+      if (progressCancelled(prog)) throw new Error("cancelled");
     },
-    paused: () => prog.paused,
-    cancelled: () => prog.cancelled,
+    paused: () => progressPaused(prog),
+    cancelled: () => progressCancelled(prog),
     addBytes: (n) => {
       prog.bytes += n;
     },
@@ -449,16 +462,14 @@ export const makeOpProgress = (progress: ProgressHandle, defaultVerb: string): O
     sink,
     start: (totalFiles, totalBytes, verb) => {
       // reset the shared flags: a stale ✕ from an earlier op must never abort
-      // the next one (the "Moved 0 items" bug)
-      prog.paused = false;
-      prog.cancelled = false;
-      prog.counting = false;
-      prog.doneFiles = 0;
-      prog.bytes = 0;
+      // the next one (the "Moved 0 items" bug). ONE reset clears EVERY
+      // field — the old model had two reset routines clearing different
+      // field sets, which is how one of them missed the stale flag.
+      resetProgressState(prog);
       prog.verb = verb ?? defaultVerb;
       prog.totalFiles = totalFiles;
       prog.totalBytes = totalBytes;
-      prog.active = true;
+      prog.phase = "running";
       // the toast arms only when the op is worth a bar (the canonical rule
       // lives in fsutil: >4MB or >4 files)
       if (shouldToast(totalBytes, totalFiles)) progress.showProgressToast();
@@ -468,21 +479,18 @@ export const makeOpProgress = (progress: ProgressHandle, defaultVerb: string): O
       // the pre-scan has no honest total yet — show nautilus' "counting N
       // files…" instead of a fake 0/0 bar, and arm the toast so a long scan
       // never looks dead
-      prog.counting = true;
+      prog.phase = "counting";
       prog.doneFiles = files;
-      prog.active = true;
       progress.showProgressToast();
       progress.paintProgress(true);
     },
-    cancelled: () => prog.cancelled,
+    cancelled: () => progressCancelled(prog),
     finish: (msg) => {
-      prog.active = false;
-      prog.counting = false;
+      finishProgressPhase(prog);
       progress.finishProgressToast(msg);
     },
     stop: () => {
-      prog.active = false;
-      prog.counting = false;
+      stopProgressPhase(prog);
     },
   };
 };
