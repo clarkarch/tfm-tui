@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { linkSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { makeSelection, type SelTileRef, type SelectionCtx } from "./selection";
@@ -43,6 +44,11 @@ const settleUntil = async (cond: () => boolean): Promise<void> => {
   await Bun.sleep(10);
 };
 
+// Let every pending microtask finish (the async status body runs on the
+// microtask queue). The next event-loop turn is a DETERMINISTIC barrier —
+// not a sleep, so it cannot flake under load.
+const flushTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
 const makeHarness = () => {
   const nodes = new Map<string, any>();
   const byId = (id: string): any => nodes.get(id);
@@ -57,6 +63,11 @@ const makeHarness = () => {
   // what the ctx.paintTile seam was handed, per call — the seam contract
   // (the visual state) is part of what selection.ts owns
   const paintCalls: Array<{ id: string; state: TilePaintState; bg: string }> = [];
+  // the pane's activity: a FALSE pane must not drive the shared status label
+  let active = true;
+  // the directory reader behind the "N items" count — a test can take it
+  // over so the stale-async guard is decided by the test, not by an fs race
+  let dirReader: ((dir: string) => Promise<string[]>) | null = null;
 
   const ctx: SelectionCtx = {
     colors: () => COLORS,
@@ -75,6 +86,10 @@ const makeHarness = () => {
     renderPreview: () => {
       previews.push(1);
     },
+    // the active pane owns the (global) status label and the plugin
+    // selection events
+    isActive: () => active,
+    readDir: (dir: string) => (dirReader ? dirReader(dir) : readdir(dir)),
     // mirror the PRODUCTION painter (wiring/grid-foundation): these tests
     // assert the tile's background/fill, so a no-op fake would make the
     // selection INVISIBLE to the assertion
@@ -119,6 +134,15 @@ const makeHarness = () => {
     // flipped by the transparent-bg test to drive the fake painter
     set forceTransparent(v: boolean) {
       forceTransparent = v;
+    },
+    // the pane switch: the OLD pane goes inactive and the NEW pane owns the
+    // shared status label
+    set active(v: boolean) {
+      active = v;
+    },
+    // take over the directory reader (the async "N items" count)
+    set dirReader(fn: ((dir: string) => Promise<string[]>) | null) {
+      dirReader = fn;
     },
     setScroller: (s: any) => {
       scroller = s;
@@ -542,18 +566,21 @@ describe("updateSelectionStatusReal", () => {
     h.sel.setFocusKeys(["/a"]);
     h.sel.selectTileAt(0);
     h.sel.updateSelectionStatusReal();
-    expect(seen).toEqual([["/a"]]);
+    // the FIRST observation is emitted, even when the selection is empty:
+    // "nothing has been emitted yet" is not "the empty selection was
+    // emitted", so the stream starts with the state it is actually in
+    expect(seen).toEqual([[], ["/a"]]);
     // rebuilds/rubber-band moves re-call with unchanged paths — silent
     h.sel.updateSelectionStatusReal();
     h.sel.updateSelectionStatusReal();
-    expect(seen).toEqual([["/a"]]);
+    expect(seen).toEqual([[], ["/a"]]);
     // real changes fire (selectTileAt clears first — the empty intermediate
     // is a genuine change, not spam)
     h.addTile("/b");
     h.sel.setFocusKeys(["/a", "/b"]);
     h.sel.selectTileAt(1);
     h.sel.updateSelectionStatusReal();
-    expect(seen).toEqual([["/a"], [], ["/b"]]);
+    expect(seen).toEqual([[], ["/a"], [], ["/b"]]);
   });
 
   test("link+target total is on-disk cost (link bytes, not double target)", async () => {
@@ -624,6 +651,54 @@ describe("updateSelectionStatusReal", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // --- the stale-async status guard ---
+  //
+  // The status label ("tfm-status-label") is GLOBAL — both panes share it —
+  // and the "N items" count of a directory selection is ASYNC. A write can
+  // therefore land long after the request that asked for it: if the pane
+  // lost the focus in between, the stale count would paint over the NEW
+  // pane's status.
+
+  test("a status write after a pane switch is dropped", async () => {
+    const h = makeHarness();
+    h.nodes.set("tfm-status-label", { id: "tfm-status-label", content: "" });
+    // take over the directory reader: the count lands only when the test
+    // says so, so the pane switch happens while the count is in flight
+    let releaseDirs!: (names: string[]) => void;
+    const pending = new Promise<string[]>((resolve) => {
+      releaseDirs = resolve;
+    });
+    h.dirReader = () => pending;
+
+    const dir = path.join(os.tmpdir(), "tfm-sel-pane");
+    h.addTile(dir, true);
+    h.sel.setFocusKeys([dir]);
+    h.sel.selectTileAt(0);
+    h.sel.updateSelectionStatusReal(); // the async dir count starts
+
+    // the user switches panes: the old pane loses the focus and the new
+    // pane owns the shared status label
+    h.nodes.get("tfm-status-label").content = "new pane";
+    h.active = false;
+
+    releaseDirs(["a", "b"]); // the in-flight count lands
+    await flushTurn(); // let the async body finish
+
+    expect(h.nodes.get("tfm-status-label").content).toBe("new pane");
+  });
+
+  test("the first empty selection is emitted (never-emitted is not the empty selection)", () => {
+    const h = makeHarness();
+    const seen: string[][] = [];
+    (h.ctx as { onSelection?: (paths: string[]) => void }).onSelection = (paths) => seen.push(paths);
+    // nothing is selected and NOTHING has been emitted yet: the empty
+    // selection is a real state (the plugin stream has to learn it), so the
+    // first observation of it fires. The old "" initial value made it look
+    // like a repeat of an already-emitted empty selection.
+    h.sel.updateSelectionStatusReal();
+    expect(seen).toEqual([[]]);
   });
 });
 

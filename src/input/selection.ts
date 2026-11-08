@@ -46,6 +46,10 @@ export type SelectionCtx = {
   // bar or emit plugin selection events (the active pane owns those). Absent =
   // always active (single-pane callers / tests).
   isActive?: () => boolean;
+  // the directory listing behind the "N items" count. Injectable so the
+  // stale-async guard can be decided by a test instead of an fs race;
+  // absent = the real fs read.
+  readDir?: (dir: string) => Promise<string[]>;
   // paint the tile surface for a visual state. The surface RULES (solid vs
   // outline, rest/hover/selected/cut, transparent-bg force) live in ui/style.ts;
   // they arrive through ctx so input/ never imports the ui/ PAINT layer
@@ -84,6 +88,9 @@ export type FocusSnapshot = {
 
 export const makeSelection = (ctx: SelectionCtx) => {
   const tileRefs = new Map<string, SelTileRef>();
+  // the directory listing behind the "N items" count — the seam lets a test
+  // decide when the (async) count lands instead of racing the filesystem
+  const readDir = ctx.readDir ?? ((dir: string) => readdir(dir));
 
   // keyboard focus over tiles
   let focusKeys: string[] = [];
@@ -231,11 +238,31 @@ export const makeSelection = (ctx: SelectionCtx) => {
     return out;
   };
 
-  let selStatusGen = 0;
-  // last emitted selection (joined): rubber-band moves and rebuilds call
-  // updateSelectionStatusReal constantly with unchanged paths — plugins must
-  // not be spammed with identical events.
-  let lastEmittedSel = "";
+  // --- the status label: one writer, two guards ---
+  //
+  // The label ("tfm-status-label") is GLOBAL (both panes share it) and the
+  // "N items" count of a directory selection is ASYNC, so a write can land
+  // long after the request that asked for it. Two guards sit AT THE WRITE:
+  //
+  //   - the ticket: an opaque token, replaced by every newer request. Only
+  //     the CURRENT request may write. (The old bare integer counter said
+  //     the same thing, but an integer is easy to compare against the wrong
+  //     thing, and "no request yet" had no representation at all.)
+  //   - the pane: the label belongs to the ACTIVE pane, so a pane that lost
+  //     the focus while its count was in flight must not paint over the new
+  //     pane's status.
+  type StatusTicket = { readonly kind: "status-ticket" };
+  let statusTicket: StatusTicket | null = null;
+
+  // The last emitted selection signature (the paths joined): rubber-band
+  // moves and rebuilds call updateSelectionStatusReal constantly with
+  // unchanged paths — plugins must not be spammed with identical events.
+  // `null` = NOTHING has been emitted yet; `""` = the EMPTY selection was
+  // emitted. The two must not collide: with `""` as the initial value the
+  // first observation of an empty selection looked like a repeat, so the
+  // transition INTO the empty selection never reached the plugin stream.
+  let lastEmittedSel: string | null = null;
+
   const updateSelectionStatusReal = (): void => {
     // an inactive pane's selection never drives the shared status/events
     if (ctx.isActive && !ctx.isActive()) return;
@@ -247,13 +274,20 @@ export const makeSelection = (ctx: SelectionCtx) => {
         ctx.onSelection?.(paths);
       }
     } catch {}
-    const gen = ++selStatusGen;
+    // this request owns the label from here on
+    const ticket: StatusTicket = { kind: "status-ticket" };
+    statusTicket = ticket;
     const sel: { key: string; isDir: boolean }[] = [];
     tileRefs.forEach((r, k) => {
       if (r.selected) sel.push({ key: k, isDir: r.isDir });
     });
     const setStatus = (s: string) => {
-      if (gen !== selStatusGen) return;
+      // a newer request owns the label now
+      if (statusTicket !== ticket) return;
+      // the pane may have lost the focus while the directory count was in
+      // flight — the label is shared, so a stale write would land on the
+      // NEW pane's status
+      if (ctx.isActive && !ctx.isActive()) return;
       ctx.setText("tfm-status-label", s);
     };
     if (sel.length === 0) {
@@ -287,7 +321,7 @@ export const makeSelection = (ctx: SelectionCtx) => {
       await Promise.all(
         dirs.map(async (d) => {
           try {
-            contained += (await readdir(d.key)).length;
+            contained += (await readDir(d.key)).length;
           } catch {}
         }),
       );
