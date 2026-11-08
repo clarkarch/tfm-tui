@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { Box, type Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
-import { loadingLabel, loadingLine, makeGridRenderer, SPIN_FRAMES_ASCII, SPIN_FRAMES_BRAILLE } from "./ui-grid";
+import {
+  loadingLabel,
+  loadingLine,
+  makeGridRenderer,
+  makeRenderTicketIssuer,
+  SPIN_FRAMES_ASCII,
+  SPIN_FRAMES_BRAILLE,
+} from "./ui-grid";
 import { hookScrollerScroll } from "./ui-grid-window";
 import type { GridState } from "./ui-grid-types";
 import { fmtBytes } from "../fs/propsinfo";
@@ -1246,6 +1253,23 @@ describe("renderGrid (list view)", () => {
       await renderGrid();
     }
   });
+});
+
+test("a new ticket supersedes the old one and cancels its search", () => {
+  // the render's guard is ONE ticket: it answers "is this render still the
+  // current one?" and owns the render's in-flight recursive search, so a new
+  // render cancels the old walk in the same step that supersedes it
+  const tickets = makeRenderTicketIssuer();
+  const first = tickets.issue();
+  const signal = first.searchSignal();
+  expect(first.isCurrent()).toBe(true);
+  expect(signal.aborted).toBe(false);
+
+  const second = tickets.issue();
+  expect(first.isCurrent()).toBe(false);
+  expect(second.isCurrent()).toBe(true);
+  expect(signal.aborted).toBe(true); // the superseded walk is cancelled
+  expect(second.searchSignal().aborted).toBe(false);
 });
 
 test("rapid successive rebuilds coalesce to one wave (storm gate)", async () => {
@@ -3212,6 +3236,26 @@ describe("no-drift rule", () => {
     expect(/kind: "window"/.test(src)).toBe(true);
     // the shape gate is an IDENTITY comparison against the pads we built
     expect(/kids\[0\]\s*===\s*\w+\.topPad/.test(src)).toBe(true);
+  });
+
+  test("the render's guard is ONE ticket — no bare counter checks", async () => {
+    // The stale-async guard was a bare counter (`gridGen`) re-checked BY HAND
+    // at every await boundary (`gen !== gridGen`): a new await that forgot
+    // the check painted a superseded listing. The guard is ONE ticket now —
+    // `isCurrent()` is the only question a call site asks, and the render's
+    // in-flight search rides inside it (no separate abort slot).
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the bare counter and the separate search slot must not come back
+    expect(/gridGen/.test(src)).toBe(false);
+    expect(/searchAbort/.test(src)).toBe(false);
+    // ONE ticket API
+    expect(/type RenderTicket =/.test(src)).toBe(true);
+    expect(/isCurrent: \(\) => boolean/.test(src)).toBe(true);
+    // every await boundary asks the ticket (the old code had 10 hand-written
+    // counter comparisons — a dropped check must not slip back in)
+    expect((src.match(/isCurrent\(\)/g) ?? []).length).toBeGreaterThanOrEqual(8);
   });
 
   test("the storm gate is ONE record — no parallel scalars", async () => {

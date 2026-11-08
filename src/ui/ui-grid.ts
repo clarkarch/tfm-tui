@@ -1,7 +1,7 @@
 // --- Grid renderer: the async clear-and-rebuild of the file area plus the
 // windowed slide. The tile/list-row builders live in ./ui-grid-rows and the
 // pure window math in ./ui-grid-window; this module owns the REBUILD STATE
-// MACHINE that drives them (gen counter, paint signatures, animation storm
+// MACHINE that drives them (render ticket, paint signatures, animation storm
 // gate, deferred-reveal queue). Selection lives in ./selection and is
 // preserved by path across rebuilds (vanished files drop, surviving keys keep
 // their state). No module-level renderer imports — everything arrives via ctx
@@ -131,6 +131,46 @@ export type ListingContext = {
   paint: unknown[];
 };
 
+// The render's stale-async guard — ONE ticket per render. It answers the only
+// question a call site has ("is this render still the current one?") and owns
+// the render's in-flight recursive search, so a newer render cancels the old
+// walk in the SAME step that supersedes it. The guard used to be a bare counter
+// (`gridGen`) re-checked BY HAND at every await boundary (`gen !== gridGen`):
+// a new await that forgot the check painted a superseded listing, and the
+// search's abort controller lived in a SEPARATE slot that could disagree with
+// the counter (a live walk behind a "current" render, or an abort that
+// outlived the render that owned it).
+export type RenderTicket = {
+  // is this render still the current one?
+  isCurrent: () => boolean;
+  // the signal the render's recursive search rides (stable per ticket — the
+  // signal a caller holds is the one the supersede aborts)
+  searchSignal: () => AbortSignal;
+  // cancel the ticket's in-flight search
+  abort: () => void;
+};
+
+// The issuer — ONE owner of "which render is current". Issuing a ticket
+// supersedes the previous one: from that moment it answers `isCurrent() ===
+// false`, and its search is ABORTED (the old walk must not keep eating disk
+// behind a fresh query).
+export const makeRenderTicketIssuer = (): { issue: () => RenderTicket } => {
+  let current: RenderTicket | null = null;
+  return {
+    issue: (): RenderTicket => {
+      current?.abort();
+      const ac = new AbortController();
+      const ticket: RenderTicket = {
+        isCurrent: () => current === ticket,
+        searchSignal: () => ac.signal,
+        abort: () => ac.abort(),
+      };
+      current = ticket;
+      return ticket;
+    },
+  };
+};
+
 // the entries' paint signature: name + the stats the paint shows
 const entryPaintSig = (list: Entry[] | string): string | string[] =>
   typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`);
@@ -180,7 +220,10 @@ type WinState =
     };
 
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
-  let gridGen = 0;
+  // the render ticket issuer — ONE owner of "which render is current". Every
+  // render takes a ticket; a newer one supersedes it (and cancels its search)
+  // in a single step.
+  const tickets = makeRenderTicketIssuer();
   // Animation gate: rebuilds also fire for pure layout/geometry changes (hover
   // drawer collapse, dual-pane toggle, resize, theme flip) which must NOT replay
   // the entry animation — the tiles rebuilt for the same files, they didn't
@@ -220,9 +263,6 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // played" (the old pair of scalars made "never played" and "no context" two
   // separate nulls that could disagree).
   let lastPlay: { key: string; at: number } | null = null;
-  // in-flight recursive search; a newer render aborts it so stale keystroke
-  // walks don't keep eating disk while a fresh query runs
-  let searchAbort: AbortController | null = null;
   // the windowed build state (ONE tagged record — see WinState): the cached
   // entry list + row range syncWindow() slides against — a slide NEVER
   // re-lists, it rebuilds rows from this snapshot
@@ -393,8 +433,8 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // placeholder, not the listing the old sig described): the render that
   // eventually lands must still rebuild, and a render whose signature happens
   // to match the OLD listing must not early-out onto this screen.
-  const paintLoading = (gen: number, msg: string): void => {
-    if (gen !== gridGen || screen.kind === "placeholder") return;
+  const paintLoading = (ticket: RenderTicket, msg: string): void => {
+    if (!ticket.isCurrent() || screen.kind === "placeholder") return;
     // never yank a live inline rename/create edit for a placeholder
     if (ctx.isRenaming?.()) return;
     ctx.clearRenameEdit();
@@ -415,7 +455,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     let i = 0;
     const tick = (): void => {
       spinTimer = null;
-      if (screen.kind !== "placeholder" || gen !== gridGen) return;
+      if (screen.kind !== "placeholder" || !ticket.isCurrent()) return;
       i = (i + 1) % frames.length;
       ctx.setTextOnId?.(nodeId, loadingLine(frames[i] ?? first, msg, width));
       try {
@@ -434,12 +474,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // Arm (or, at delay 0, paint) the placeholder for a render whose listing
   // context no longer matches the screen. Absent seam = feature off (test fakes
   // keep the old "old tiles stay put" behavior).
-  const armLoading = (gen: number, cwd: string, q: string, recursive: boolean): void => {
+  const armLoading = (ticket: RenderTicket, cwd: string, q: string, recursive: boolean): void => {
     const delay = ctx.loadingDelayMs?.();
     if (delay === undefined || !Number.isFinite(delay) || delay > 60_000) return;
     const msg = loadingLabel(cwd, q, recursive);
     if (delay <= 0) {
-      paintLoading(gen, msg);
+      paintLoading(ticket, msg);
       return;
     }
     cancelLoadingTimers();
@@ -447,7 +487,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     try {
       loadingTimer = sched.setTimeout(() => {
         loadingTimer = null;
-        paintLoading(gen, msg);
+        paintLoading(ticket, msg);
       }, delay);
     } catch {
       loadingTimer = null;
@@ -485,11 +525,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const tStart = performance.now();
     const scroller = ctx.scroller();
     if (!scroller) return;
-    const gen = ++gridGen;
-    // cancel any in-flight recursive search: the previous query's fd walk must
-    // not keep running behind this render (navigate/clear/retype all land here)
-    searchAbort?.abort();
-    searchAbort = null;
+    const ticket = tickets.issue();
     const state = ctx.state;
     // selection must survive rebuilds by path — a busy cwd (and /tmp on this
     // box, which contains our own dnd log) re-renders constantly; wiping it
@@ -610,20 +646,19 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // the listing the delay to arrive, then swap the stale tiles for the
     // spinner placeholder. A same-context rebuild (watcher tick, hover-drawer
     // settle) needs none of this — the painted folder is already the right one.
-    if (screen.kind !== "placeholder" && ctxKey !== screenCtxKey()) armLoading(gen, state.cwd, q, recursive);
+    if (screen.kind !== "placeholder" && ctxKey !== screenCtxKey()) armLoading(ticket, state.cwd, q, recursive);
     let allEntries: Entry[];
     try {
       if (recursive) {
-        const ac = new AbortController();
-        searchAbort = ac;
-        // honor the show-hidden toggle: skipping hidden dirs keeps fd out of
-        // .git/.cache, which dominate the walk on large trees
+        // the walk rides the ticket's signal: a newer render aborts it in the
+        // same step that supersedes this one (the old query's fd walk must not
+        // keep eating disk behind a fresh query)
         allEntries = await (ctx.searchTree ?? searchTree)(state.cwd, q, {
+          // honor the show-hidden toggle: skipping hidden dirs keeps fd out of
+          // .git/.cache, which dominate the walk on large trees
           hidden: state.showHidden,
-          signal: ac.signal,
+          signal: ticket.searchSignal(),
         });
-        // release the slot only if a newer render didn't already replace it
-        if (searchAbort === ac) searchAbort = null;
         // subtree matches sort like a listing: the active sort mode, dirs
         // first (same comparator listDir uses — a hardcoded name order here
         // silently diverged from [ui] sort-mode)
@@ -637,7 +672,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       }
     } catch (err) {
       // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
-      if (gen !== gridGen) return;
+      if (!ticket.isCurrent()) return;
       const sig = sigOf(`err:${fsErrText(err)}`);
       // the pane shows the PLACEHOLDER (or another screen), not this error
       // pane, so a matching signature must still rebuild the screen
@@ -648,7 +683,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       // park BEFORE destroying the pane (see the main path): a render that gets
       // superseded inside this wait must bail with the old screen intact
       await ctx.waitForResolution();
-      if (gen !== gridGen) return;
+      if (!ticket.isCurrent()) return;
       ctx.clearRenameEdit();
       clearGrid();
       try {
@@ -675,7 +710,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     }
     const entries = q && !recursive ? allEntries.filter((e) => e.name.toLowerCase().includes(q)) : allEntries;
     const listMs = performance.now() - tStart;
-    if (gen !== gridGen) return;
+    if (!ticket.isCurrent()) return;
 
     if (entries.length === 0) {
       const sig = sigOf("empty");
@@ -685,7 +720,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       }
       // park BEFORE destroying the pane (see the main path)
       await ctx.waitForResolution();
-      if (gen !== gridGen) return;
+      if (!ticket.isCurrent()) return;
       ctx.clearRenameEdit();
       clearGrid();
       try {
@@ -722,7 +757,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // the fill is the one await between the listing and the signature: a newer
     // render inside it owns the refs and the pane (same rule as the entry
     // computation above and the park below)
-    if (gen !== gridGen) return;
+    if (!ticket.isCurrent()) return;
 
     const sig = sigOf(entries);
     if (!force && showsScreen("tiles", sig)) {
@@ -772,7 +807,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     const tPark = performance.now();
     await ctx.waitForResolution();
     const parkMs = performance.now() - tPark;
-    if (gen !== gridGen) return;
+    if (!ticket.isCurrent()) return;
     ctx.clearRenameEdit();
     clearGrid();
     const tBuild = performance.now();
@@ -855,10 +890,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       void ctx.drainIconQueue();
       void ctx.drainThumbs();
       selection.setFocusKeys([...selection.tileRefs.keys()]);
-      // restore the pre-rebuild selection/focus by path (stale gen = newer
-      // render owns the refs — never restore into it; unreachable while the block
-      // above stays synchronous, but a claim for an unbuilt pane must not survive)
-      if (gen !== gridGen) {
+      // restore the pre-rebuild selection/focus by path (a superseded ticket =
+      // a newer render owns the refs — never restore into it; unreachable while
+      // the block above stays synchronous, but a claim for an unbuilt pane must
+      // not survive)
+      if (!ticket.isCurrent()) {
         dropPaintClaim();
         return;
       }
@@ -900,7 +936,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       // dual-pane toggle, resize, theme flip) rebuilt the same files and must
       // not replay it. The very first build (lastContentSig null) IS content
       // appearing, so it animates — that's the boot intro.
-      if (gen === gridGen) {
+      if (ticket.isCurrent()) {
         const contentSig = contentSigOf(entries);
         const contentChanged = lastContentSig === null || contentSig !== lastContentSig;
         lastContentSig = contentSig;
