@@ -169,6 +169,9 @@ export const wrapToastText = (s: string, budget: number, maxLines: number = MAX_
 // "expanding" is a HEIGHT change: the text column grows (its own overflow
 // clips the rows past it) and the shell follows. The one line that differs
 // between the two views is the cut one, so it carries its own id.
+//
+// Whether the toast is expanded is NOT a field here: "expanded" is a HOLD
+// reason (see ToastHold), so the hold set is the only place that knows it.
 type ToastExpand = {
   // the text column whose height is the visible row count
   columnId: string;
@@ -179,26 +182,36 @@ type ToastExpand = {
   // body rows: now, and when expanded
   compactBody: number;
   expandedBody: number;
-  expanded: boolean;
+};
+
+// WHY a toast is held still. The set is the ONLY source of truth: an empty
+// set = nothing holds the toast = its clock runs.
+type ToastHold = "hover" | "expanded";
+
+// The auto-dismiss clock — ONE record. `state` is the fact ("running" = a
+// timer is armed, "paused" = held still) and `remaining` is the ms that were
+// LEFT when it was paused, so a pause resumes with the time that is left
+// instead of restarting the whole window.
+type ToastClock = {
+  state: "running" | "paused";
+  deadline: number;
+  remaining: number;
+  timer: ReturnType<typeof setTimeout> | null;
 };
 
 type ToastEntry = {
   id: number;
   nodeId: string;
   height: number;
-  sticky: boolean;
-  // auto-dismiss handle; null while a sticky toast waits for an explicit close
-  // or while the toast is held still (hovered / expanded)
-  timer: ReturnType<typeof setTimeout> | null;
+  // the auto-dismiss clock — null = this toast has NO clock: a sticky toast
+  // never auto-dismisses, and a dismissed toast's clock is gone for good (a
+  // hold released during the fade must not re-arm it)
+  clock: ToastClock | null;
   // safety net for the expanded state: an expanded toast is held still, but
   // not FOREVER — after this it collapses and goes back on its clock
   holdTimer: ReturnType<typeof setTimeout> | null;
-  // when the toast expires, and the ms that were left when it was paused
-  deadline: number;
-  remaining: number;
-  paused: boolean;
-  // the pointer is on the toast: it is held still while it is read
-  hovered: boolean;
+  // the reasons the toast is held still (empty = the clock runs)
+  holds: Set<ToastHold>;
   // click-to-expand; null = the message fits, there is nothing to expand
   expand: ToastExpand | null;
 };
@@ -235,14 +248,26 @@ export const makeNotify = (
     return y;
   };
 
+  // --- the auto-dismiss clock ---
+  // ONE record + ONE hold set. The clock runs exactly when NOTHING holds the
+  // toast, and a pause resumes with the time that was LEFT — a message must
+  // not be yanked away while it is read, and it must not get a fresh window
+  // when it is released.
+  const stopClock = (entry: ToastEntry): void => {
+    const clock = entry.clock;
+    if (!clock) return;
+    if (clock.timer) {
+      try {
+        clearTimeout(clock.timer);
+      } catch {}
+    }
+    entry.clock = null;
+  };
+
   const removeEntry = (id: number): void => {
     const entry = toasts.find((t) => t.id === id);
     if (!entry) return;
-    if (entry.timer) {
-      try {
-        clearTimeout(entry.timer);
-      } catch {}
-    }
+    stopClock(entry);
     if (entry.holdTimer) {
       try {
         clearTimeout(entry.holdTimer);
@@ -277,12 +302,9 @@ export const makeNotify = (
   const fadeOut = (id: number): void => {
     const entry = toasts.find((t) => t.id === id);
     if (!entry) return;
-    if (entry.timer) {
-      try {
-        clearTimeout(entry.timer);
-      } catch {}
-      entry.timer = null;
-    }
+    // the dismissal ends the clock FOR GOOD: a hold released while the toast
+    // fades must not re-arm a timer on a toast that is going away
+    stopClock(entry);
     if (entry.holdTimer) {
       try {
         clearTimeout(entry.holdTimer);
@@ -307,39 +329,45 @@ export const makeNotify = (
   };
 
   // --- the auto-dismiss clock ---
-  // ONE deadline, so a pause (the pointer is on the toast, or the toast is
-  // expanded) resumes with the time that was LEFT instead of restarting the
-  // whole window — a message must not be yanked away while it is read.
-  const startTimer = (entry: ToastEntry, ms: number): void => {
-    if (entry.sticky) return;
-    entry.remaining = ms;
-    entry.deadline = Date.now() + ms;
-    entry.timer = setTimeout(() => fadeOut(entry.id), ms);
+  // the clock follows the holds: running while the set is empty, paused while
+  // anything holds the toast. The remaining time is FROZEN while paused (it
+  // must not tick down while the toast is held).
+  const syncClock = (entry: ToastEntry): void => {
+    const clock = entry.clock;
+    if (!clock) return;
+    if (entry.holds.size > 0) {
+      if (clock.state === "paused") return;
+      clock.remaining = Math.max(0, clock.deadline - Date.now());
+      if (clock.timer) {
+        try {
+          clearTimeout(clock.timer);
+        } catch {}
+      }
+      clock.timer = null;
+      clock.state = "paused";
+      return;
+    }
+    if (clock.state === "running") return;
+    clock.state = "running";
+    clock.deadline = Date.now() + clock.remaining;
+    clock.timer = setTimeout(() => fadeOut(entry.id), clock.remaining);
   };
 
-  const pauseTimer = (entry: ToastEntry): void => {
-    if (entry.sticky || !entry.timer) return;
-    entry.remaining = Math.max(0, entry.deadline - Date.now());
-    try {
-      clearTimeout(entry.timer);
-    } catch {}
-    entry.timer = null;
-    entry.paused = true;
+  // arm the clock for a toast that auto-dismisses. A toast that is ALREADY
+  // held (the pointer landed on it while it mounted) starts paused.
+  const armClock = (entry: ToastEntry, ms: number): void => {
+    entry.clock = { state: "paused", deadline: Date.now() + ms, remaining: ms, timer: null };
+    syncClock(entry);
   };
 
-  const resumeTimer = (entry: ToastEntry): void => {
-    if (entry.sticky || entry.timer || !entry.paused) return;
-    entry.paused = false;
-    startTimer(entry, entry.remaining);
+  const hold = (entry: ToastEntry, reason: ToastHold): void => {
+    entry.holds.add(reason);
+    syncClock(entry);
   };
 
-  // Release the clock only when NOTHING holds the toast: the pointer may
-  // still be on it, and it may still be expanded. (A hover-out while the
-  // toast is expanded must not put it back on the countdown — the message
-  // would vanish while it is being read.)
-  const releaseTimer = (entry: ToastEntry): void => {
-    if (entry.hovered || entry.expand?.expanded) return;
-    resumeTimer(entry);
+  const release = (entry: ToastEntry, reason: ToastHold): void => {
+    if (!entry.holds.delete(reason)) return;
+    syncClock(entry);
   };
 
   // grow/shrink a toast in place: the text column's height is the visible row
@@ -349,7 +377,6 @@ export const makeNotify = (
     const ex = entry.expand;
     if (!ex) return;
     const body = on ? ex.expandedBody : ex.compactBody;
-    ex.expanded = on;
     // the cut line shows its full text while expanded
     const line = ctx.byId(ex.lineId);
     try {
@@ -367,7 +394,7 @@ export const makeNotify = (
     restack();
     // an expanded toast holds still until it is collapsed again
     if (on) {
-      pauseTimer(entry);
+      hold(entry, "expanded");
       // ...but not forever: an expanded toast folds itself back and goes on
       // its clock if nobody touches it
       if (entry.holdTimer) {
@@ -386,7 +413,7 @@ export const makeNotify = (
         } catch {}
         entry.holdTimer = null;
       }
-      releaseTimer(entry);
+      release(entry, "expanded");
     }
   };
 
@@ -395,7 +422,8 @@ export const makeNotify = (
     width: number,
     height: number,
     children: SlotElement[],
-    sticky: boolean,
+    // the auto-dismiss window in ms — OMITTED = the toast never auto-dismisses
+    // (the sticky progress toast: it waits for an explicit close)
     duration?: number,
     expand?: ToastExpand | null,
   ): ToastHandle | null => {
@@ -406,6 +434,18 @@ export const makeNotify = (
       const nodeId = `tfm-toast-${id}`;
       const y = slotTop(toasts.length);
       const entryOf = (): ToastEntry | undefined => toasts.find((t) => t.id === id);
+      // A hover can land BEFORE the entry joins the stack: the node mounts
+      // first, the entry is pushed a moment later. The hover state is
+      // captured here so it is not lost — a toast that expired under a
+      // stationary pointer was the bug.
+      let hovered = false;
+      const onHover = (on: boolean): void => {
+        hovered = on;
+        const entry = entryOf();
+        if (!entry) return;
+        if (on) hold(entry, "hover");
+        else release(entry, "hover");
+      };
       const node = Box(
         {
           id: nodeId,
@@ -431,18 +471,13 @@ export const makeNotify = (
             ? {
                 onMouseDown: () => {
                   const entry = entryOf();
-                  if (entry?.expand) setExpanded(entry, !entry.expand.expanded);
+                  if (!entry?.expand) return;
+                  setExpanded(entry, !entry.holds.has("expanded"));
                 },
               }
             : {}),
           ...hoverEvents(
-            (on) => {
-              const entry = entryOf();
-              if (!entry) return;
-              entry.hovered = on;
-              if (on) pauseTimer(entry);
-              else releaseTimer(entry);
-            },
+            onHover,
             // only a clickable toast shows the pointer. A plain toast writes
             // NO pointer shape at all: the sticky progress toast has buttons
             // of its own, and a toast-level "default" would fight them.
@@ -474,17 +509,16 @@ export const makeNotify = (
         id,
         nodeId,
         height,
-        sticky,
-        timer: null,
+        clock: null,
         holdTimer: null,
-        deadline: 0,
-        remaining: 0,
-        paused: false,
-        hovered: false,
+        holds: new Set<ToastHold>(),
         expand: expand ?? null,
       };
       toasts.push(entry);
-      startTimer(entry, duration ?? ctx.durationMs?.() ?? 3000);
+      // a hover that landed while the toast was mounting holds it from the
+      // start — the clock arms PAUSED, so it cannot expire under the pointer
+      if (hovered) hold(entry, "hover");
+      if (duration !== undefined) armClock(entry, duration);
       return {
         id,
         nodeId,
@@ -587,7 +621,6 @@ export const makeNotify = (
               ),
             ),
           ],
-          false,
           meta.duration,
           truncated
             ? {
@@ -597,7 +630,6 @@ export const makeNotify = (
                 fullLine: full[cutIdx] ?? "",
                 compactBody: visible,
                 expandedBody: full.length,
-                expanded: false,
               }
             : null,
         );
@@ -616,7 +648,8 @@ export const makeNotify = (
       } catch {}
     },
     notifySticky(children, opts) {
-      return pushToast(++toastSeq, opts?.width ?? TOAST_W, opts?.height ?? TOAST_H, children, true);
+      // no duration = no clock: a sticky toast waits for an explicit close
+      return pushToast(++toastSeq, opts?.width ?? TOAST_W, opts?.height ?? TOAST_H, children);
     },
   };
 };

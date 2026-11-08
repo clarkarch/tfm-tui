@@ -167,6 +167,22 @@ describe("ellipsizeToastLine", () => {
   });
 });
 
+// fire a synthetic mouse event at a mounted node (the escHintBtn pattern)
+const fire = (node: any, type: string) => {
+  const ev: any = {
+    type,
+    button: 0,
+    x: 0,
+    y: 0,
+    modifiers: { shift: false, alt: false, ctrl: false },
+    propagationStopped: false,
+    stopPropagation() {
+      ev.propagationStopped = true;
+    },
+  };
+  return node?.processMouseEvent(ev);
+};
+
 describe("notify stacking", () => {
   test("consecutive toasts stack at increasing y, never the same slot", async () => {
     const { ctx, nodes, removed } = makeFake();
@@ -557,22 +573,6 @@ describe("notify expansion (a cut message is clickable)", () => {
     durationMs: () => durationMs,
   });
 
-  // fire a synthetic mouse event at a mounted node (the escHintBtn pattern)
-  const fire = (node: any, type: string) => {
-    const ev: any = {
-      type,
-      button: 0,
-      x: 0,
-      y: 0,
-      modifiers: { shift: false, alt: false, ctrl: false },
-      propagationStopped: false,
-      stopPropagation() {
-        ev.propagationStopped = true;
-      },
-    };
-    return node?.processMouseEvent(ev);
-  };
-
   test("a cut message shows the ellipsis, and a click reveals the rest", async () => {
     const r = await createTestRenderer({ width: 80, height: 24 });
     try {
@@ -684,5 +684,104 @@ describe("notify expansion (a cut message is clickable)", () => {
     } finally {
       await r.dispose();
     }
+  });
+});
+
+describe("toast clock (one record, one hold set)", () => {
+  // The toast MOUNTS before it joins the stack: the node is added to the
+  // root first, the entry is pushed a moment later. A pointer that is
+  // already over the toast fires its move in that window — the hover used
+  // to be DROPPED there (the entry did not exist yet), so the toast expired
+  // UNDER the pointer.
+  const mountCtx = (r: any, durationMs: number, onMount?: (node: any) => void): NotifyCtx => ({
+    rootAdd: (node: any) => {
+      r.renderer.root.add(node);
+      onMount?.(r.renderer.root.findDescendantById("tfm-toast-1"));
+    },
+    remove: (node: any) => {
+      try {
+        (node.parent ?? r.renderer.root).remove(node);
+      } catch {}
+    },
+    byId: (id: string) => r.renderer.root.findDescendantById(id),
+    termW: () => 80,
+    termH: () => 24,
+    accentBg: () => "#1a1b26",
+    white: () => "#ffffff",
+    sidebarFgMuted: () => "#666666",
+    makeIconSlot: (name: string) =>
+      ({
+        el: Box({ id: `tfm-icon-test-${name}`, width: 2, height: 1 }, Text({ content: name })),
+        slotId: `tfm-icon-test-${name}`,
+        spec: {},
+      }) as unknown as IconSlotHandle,
+    drainIconQueue: () => {},
+    stripSelectable: () => {},
+    durationMs: () => durationMs,
+  });
+
+  test("a hover that lands while the toast mounts holds it still", async () => {
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify(
+        mountCtx(r, 150, (node) => {
+          // the pointer is already over the toast the moment it mounts
+          fire(node, "move");
+        }),
+      );
+      notify("short message", "tfm");
+      // well past the auto-dismiss window: a toast held under the pointer
+      // stays (a message must not be yanked away while it is being read)
+      await Bun.sleep(500);
+      await r.renderOnce();
+      expect(r.renderer.root.findDescendantById("tfm-toast-1")).toBeTruthy();
+    } finally {
+      await r.dispose();
+    }
+  });
+
+  test("a toast held under the pointer is dismissed once the pointer leaves", async () => {
+    const r = await createTestRenderer({ width: 80, height: 24 });
+    try {
+      const { notify } = makeNotify(
+        mountCtx(r, 150, (node) => {
+          fire(node, "move");
+        }),
+      );
+      notify("short message", "tfm");
+      const toast = r.renderer.root.findDescendantById("tfm-toast-1");
+      // the pointer leaves: the clock resumes with the time that was LEFT
+      fire(toast, "out");
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && r.renderer.root.findDescendantById("tfm-toast-1")) {
+        await r.renderOnce();
+        await Bun.sleep(20);
+      }
+      expect(r.renderer.root.findDescendantById("tfm-toast-1")).toBeFalsy();
+    } finally {
+      await r.dispose();
+    }
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the toast clock is ONE record plus ONE hold set", async () => {
+    // The old state spread "is the clock running" over FOUR fields (`timer`,
+    // `deadline`, `remaining`, `paused`) and the hold reasons over TWO more
+    // (`hovered`, `expand.expanded`) — so "paused with nothing holding it"
+    // and "running while the pointer is on it" were both representable. The
+    // clock is ONE record now and the holds are ONE set; the old parallel
+    // fields may not come back.
+    const src = (await Bun.file(`${import.meta.dir}/notify.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/paused:\s*boolean/.test(src)).toBe(false);
+    expect(/hovered:\s*boolean/.test(src)).toBe(false);
+    expect(/expanded:\s*boolean/.test(src)).toBe(false);
+    // ... and the two replacements are there
+    expect(/holds:\s*Set</.test(src)).toBe(true);
+    expect(/state:\s*"running"\s*\|\s*"paused"/.test(src)).toBe(true);
   });
 });
