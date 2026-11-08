@@ -15,7 +15,17 @@ import type { MaybeNode } from "../lib/node-like";
 import { stripControlChars } from "../lib/uiutil";
 import type { PointerStyle } from "../lib/pointer";
 
-type RenameEdit = { key: string; inputId: string; createKind?: "file" | "folder" };
+// The edit's MODE is a TAG, not an optional field's presence: "rename" and
+// "create" are different things (a create owns a placeholder file that must
+// be dropped when the edit is cancelled), and a record with a field MISSING
+// silently took the rename path.
+type RenameEdit =
+  | { kind: "rename"; key: string; inputId: string }
+  | { kind: "create"; key: string; inputId: string; createKind: "file" | "folder" };
+
+// what the caller asks for: the mode carries the destructive branch (create)
+// explicitly, so no entry point can leave it out.
+type RenameMode = { kind: "rename" } | { kind: "create"; createKind: "file" | "folder" };
 
 export type RenameCtx = {
   renderer(): CliRenderer;
@@ -111,10 +121,11 @@ export const makeRename = (ctx: RenameCtx) => {
     }
     ctx.stripSelectable();
     if (!commit || !value) {
-      if (edit.createKind) dropPlaceholder(edit.key);
+      // an aborted CREATE owns a placeholder file: dropping it is the abort
+      if (edit.kind === "create") dropPlaceholder(edit.key);
       return;
     }
-    if (edit.createKind) {
+    if (edit.kind === "create") {
       // a create target is a NAME, not a path: path.join(dir, "../x") would
       // land the file in the PARENT of the folder it was created in — the
       // same rule the rename path enforces (fsutil.invalidFileName), so
@@ -133,9 +144,8 @@ export const makeRename = (ctx: RenameCtx) => {
       // recreates it
       const k = edit.key;
       const dir = path.dirname(k);
+      const createKind = edit.createKind;
       if (value !== path.basename(k)) {
-        // captured for the .then closure, where the edit's narrowing is gone
-        const createKind = edit.createKind;
         // atomic landing: Linux rename would silently overwrite a raced
         // occupant, so the name is claimed with EEXIST-failing link(2)/mkdir(2)
         // instead of check-then-rename, retrying past collisions with the same
@@ -166,7 +176,7 @@ export const makeRename = (ctx: RenameCtx) => {
         };
         void landCreate()
           .then((target) => {
-            if (createKind) pushCreateBatch(createKind, target);
+            pushCreateBatch(createKind, target);
             const msg = `Created ${path.basename(target)}`;
             ctx.notify(msg, "create", "success");
             void ctx.renderAll();
@@ -178,7 +188,7 @@ export const makeRename = (ctx: RenameCtx) => {
           });
         return;
       }
-      pushCreateBatch(edit.createKind, k);
+      pushCreateBatch(createKind, k);
       const msg = `Created ${value}`;
       ctx.notify(msg, "create", "success");
       return;
@@ -188,11 +198,11 @@ export const makeRename = (ctx: RenameCtx) => {
     // input shows the STRIPPED name (control chars can't render), so an
     // untouched Enter must be a no-op — committing the display form would
     // rename the file to a name the user never typed.
-    if (!edit.createKind && value === stripControlChars(path.basename(edit.key))) return;
+    if (value === stripControlChars(path.basename(edit.key))) return;
     void ctx.performRename(edit.key, value);
   };
 
-  const startInlineRename = (key: string, createKind?: "file" | "folder"): void => {
+  const startEdit = (key: string, mode: RenameMode): void => {
     if (renameEdit) finishInlineRename(false);
     // archive members are URIs, not fs paths (existsSync would refuse anyway,
     // with a misleading "source gone")
@@ -244,7 +254,10 @@ export const makeRename = (ctx: RenameCtx) => {
       // exact node keeps the original text, truncation and centering intact.
       label.visible = false;
     } catch {}
-    renameEdit = { key, inputId, ...(createKind ? { createKind } : {}) };
+    renameEdit =
+      mode.kind === "create"
+        ? { kind: "create", key, inputId, createKind: mode.createKind }
+        : { kind: "rename", key, inputId };
     // the editor owns the keyboard now — text pointer until it lands
     ctx.setPointer?.("text");
     input.on?.("enter", () => finishInlineRename(true));
@@ -265,9 +278,9 @@ export const makeRename = (ctx: RenameCtx) => {
   };
 
   // nautilus-style: the entry is created immediately with a default name, then
-  // its label edits in place; esc/empty name deletes it again. createKind MUST
-  // ride along — without it the commit looked like a plain rename (a
-  // "Renamed to …" toast and a second undo batch for a file just created).
+  // its label edits in place; esc/empty name deletes it again. The CREATE
+  // mode MUST ride along — without it the commit looked like a plain rename
+  // (a "Renamed to …" toast and a second undo batch for a file just created).
   const startInlineCreate = (kind: "file" | "folder"): void => {
     if (renameEdit) finishInlineRename(false);
     // trash and virtual views are read-only workspaces, not creation targets
@@ -283,7 +296,7 @@ export const makeRename = (ctx: RenameCtx) => {
       .then(() => {
         const idx = ctx.focusKeys().indexOf(target);
         if (idx >= 0) ctx.selectTileAt(idx);
-        startInlineRename(target, kind);
+        startEdit(target, { kind: "create", createKind: kind });
       })
       .catch((err) => {
         const summary = `Create failed · ${fsErrText(err)}`;
@@ -291,11 +304,19 @@ export const makeRename = (ctx: RenameCtx) => {
       });
   };
 
+  // F2 on a tile: the plain rename mode.
+  const startInlineRename = (key: string): void => startEdit(key, { kind: "rename" });
+
   return {
     isRenaming: (): boolean => renameEdit !== null,
     renameEditKey: (): string | null => renameEdit?.key ?? null,
     clearRenameEdit: (): void => {
-      renameEdit = null;
+      // the grid rebuild's seam: it must run the REAL cancel path — the
+      // editor removed, the hidden label restored, the pointer reset — and a
+      // cancelled CREATE must drop its placeholder (the create is only named
+      // and only undoable at COMMIT time, so a state-drop left an unnamed
+      // "Untitled.txt" on disk that no undo batch could remove).
+      finishInlineRename(false);
     },
     finishInlineRename,
     startInlineRename,

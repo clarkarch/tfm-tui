@@ -1814,8 +1814,8 @@ describe("renderGrid (windowed grid)", () => {
 
   test("an in-progress rename/create edit survives a scroll (slide gated)", async () => {
     // the editor Input lives INSIDE the tile node — a slide during an edit
-    // would destroy the input and orphan a just-created file (clearRenameEdit
-    // is state-drop-only and skips the create cleanup), so the slide waits
+    // would destroy the editor mid-typing (and abort an inline create: the
+    // cancel path drops its placeholder), so the slide waits
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
     try {

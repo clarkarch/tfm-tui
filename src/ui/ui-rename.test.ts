@@ -300,6 +300,67 @@ describe("makeRename (renderer)", () => {
     expect(existsSync(key)).toBe(true);
     rename.finishInlineRename(false);
   });
+
+  // These two mount rows, so they run LAST: the renderer is 12 rows tall and
+  // each mounted row takes 2 — a row mounted before the frame-reading tests
+  // would push their labels off-screen (the rows stack in the root column).
+  test("a grid rebuild during an inline create removes the placeholder file", async () => {
+    // The inline create's placeholder is only NAMED (and only undoable) at
+    // commit time: a rebuild that drops the edit state must drop the
+    // placeholder too, or the user is left with an unnamed "Untitled.txt"
+    // that no undo batch can remove.
+    calls.length = 0;
+    const anchor = path.join(dir, "create-anchor.txt");
+    await mountRow(anchor);
+    const created = path.join(dir, uniqueUntitledName(dir, "Untitled.txt"));
+    ctx.tileRefs.set(created, ctx.tileRefs.get(anchor)!);
+    rename.startInlineCreate("file");
+    await settleUntil(() => existsSync(created));
+    await settleUntil(() => !!t.renderer.root.findDescendantById("tfm-rename-input"));
+    rename.clearRenameEdit(); // what a grid rebuild calls
+    await settleUntil(() => !existsSync(created));
+    expect(existsSync(created)).toBe(false);
+    expect(calls.some((c) => c.startsWith("undo:"))).toBe(false); // the create never landed
+    expect(rename.isRenaming()).toBe(false);
+  });
+
+  test("a grid rebuild during an inline rename closes the editor and restores the label", async () => {
+    // clearRenameEdit IS the grid rebuild's seam: it must run the REAL cancel
+    // path (the editor removed, the label back, the pointer restored) — not
+    // just drop the state and leave the editor orphaned in the tile
+    calls.length = 0;
+    pointers.length = 0;
+    const key = path.join(dir, "rebuild-rename.txt");
+    await mountRow(key);
+    rename.startInlineRename(key);
+    await t.renderOnce();
+    expect(t.renderer.root.findDescendantById("tfm-rename-input")).toBeTruthy();
+    const labelId = ctx.tileRefs.get(key)!.labelId;
+    expect((ctx.byId(labelId) as any).visible).toBe(false); // hidden while editing
+    rename.clearRenameEdit(); // what a grid rebuild calls
+    await t.renderOnce();
+    expect(t.renderer.root.findDescendantById("tfm-rename-input")).toBeFalsy();
+    expect((ctx.byId(labelId) as any).visible).toBe(true);
+    expect(pointers).toEqual(["text", "default"]);
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the inline edit's mode is a TAG, not an optional field's presence", async () => {
+    // The destructive branch (an inline CREATE: drop the placeholder) used to
+    // be selected by the PRESENCE of an optional `createKind` field — so
+    // "rename" and "create" were the SAME record with a field missing, and a
+    // record built without the field silently took the rename path. The mode
+    // is a tag now; the optional field may not come back.
+    const src = (await Bun.file(`${import.meta.dir}/ui-rename.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/createKind\?:/.test(src)).toBe(false);
+    expect(/kind:\s*"create"/.test(src)).toBe(true);
+    expect(/kind:\s*"rename"/.test(src)).toBe(true);
+  });
 });
 
 const defaultTheme = {
