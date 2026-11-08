@@ -250,4 +250,54 @@ describe("makeResolutionGate", () => {
     expect(clock.slept.length).toBe(2);
     expect(clock.slept.length).toBeLessThan(RESOLUTION_RENDER_MS / RESOLUTION_POLL_MS);
   });
+
+  test("a rasterless boot that later enables rasters waits for the resolution again", async () => {
+    // [ui] force-glyph can be turned OFF at runtime: the terminal then DOES
+    // report pixels. The rasterless skip must therefore NOT latch the gate —
+    // a latched gate leaves every raster computed from the 10x20 fallback
+    // cell metrics, with no error to show for it.
+    const clock = mkClock();
+    let rasterless = true;
+    const gate = makeResolutionGate(() => mkRenderer(() => null), {
+      sleep: clock.sleep,
+      now: clock.now,
+      rasterless: () => rasterless,
+    });
+    await gate.settle();
+    expect(clock.slept).toEqual([]); // rasterless → no park
+    rasterless = false; // the user turned force-glyph off
+    await gate.wait();
+    expect(clock.slept.length).toBe(RESOLUTION_RENDER_MS / RESOLUTION_POLL_MS);
+  });
+
+  test("a terminal that stays rasterless never parks (the skip is not a latch)", async () => {
+    // the flip side of the case above: while the terminal paints no rasters,
+    // every gate call must stay free (the console's leftover startup stall)
+    const clock = mkClock();
+    const gate = makeResolutionGate(() => mkRenderer(() => null), {
+      sleep: clock.sleep,
+      now: clock.now,
+      rasterless: () => true,
+    });
+    await gate.settle();
+    await gate.wait();
+    await gate.settle();
+    await gate.wait();
+    expect(clock.slept).toEqual([]);
+  });
+});
+
+describe("no-drift rule: the resolution gate latches ONLY on the timeout path", () => {
+  test("the rasterless skip must not latch the gate", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/ui-lookup.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // ONE latch, and it belongs to the TIMEOUT path (after the park) — the
+    // rasterless skip is a per-call decision, not a permanent one
+    expect((src.match(/neverReports\s*=\s*true/g) ?? []).length).toBe(1);
+    const latchIdx = src.indexOf("neverReports = true");
+    const parkIdx = src.indexOf("await park(budgetMs)");
+    expect(latchIdx).toBeGreaterThan(0);
+    expect(latchIdx).toBeGreaterThan(parkIdx);
+  });
 });

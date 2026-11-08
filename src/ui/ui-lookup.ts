@@ -102,9 +102,16 @@ export const makeResolutionGate = (
 ): ResolutionGate => {
   const sleepFn = deps?.sleep ?? sleep;
   const now = deps?.now ?? Date.now;
-  // latched by settle(): this terminal never answered the pixel query, so no
-  // render may park on it again (the console/tmux case). A pixel-reporting
-  // terminal never latches — its reply lands within milliseconds of boot.
+  // latched by the TIMEOUT path only: this terminal did not answer the pixel
+  // query within the budget, so no render may park on it again (the
+  // console/tmux case). A pixel-reporting terminal never latches — its reply
+  // lands within milliseconds of boot.
+  //
+  // The rasterless skip is NOT a latch: it is a per-call decision (this
+  // terminal paints no rasters RIGHT NOW). force-glyph can be turned OFF at
+  // runtime, and then the terminal does report pixels — a latched skip left
+  // every raster computed from the 10x20 fallback cell metrics, with no
+  // error to show for it.
   let neverReports = false;
   const park = async (budgetMs: number): Promise<void> => {
     const deadline = now() + budgetMs;
@@ -114,7 +121,6 @@ export const makeResolutionGate = (
     async settle(budgetMs = RESOLUTION_SETTLE_MS): Promise<void> {
       if (renderer().resolution || neverReports) return;
       if (deps?.rasterless?.()) {
-        neverReports = true;
         deps.log?.("resolution: skipped — this terminal paints no rasters (tty mode / force-glyph)");
         return;
       }
