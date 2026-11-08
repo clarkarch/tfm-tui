@@ -233,9 +233,10 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   let termHintShown = false;
   // ctrl+c is copy, never quit (exitOnCtrlC:false) — hammering it is the
   // SIGINT habit, so the third consecutive copy key hints at the quit bind
-  // once per streak; any other key resets the streak
+  // once per streak; any other key resets the streak. The streak IS the
+  // one-shot latch (the old `quitHintShown` boolean was exactly
+  // `copyQuitStreak >= 3` — two names for one fact, free to drift apart).
   let copyQuitStreak = 0;
-  let quitHintShown = false;
 
   // does this event match any configured bind for the action?
   const enterAlias = (name: string): string | null =>
@@ -1102,8 +1103,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     const isCopyKey = hit(ev, "copy");
     if (isCopyKey) {
       copyQuitStreak++;
-      if (copyQuitStreak >= 3 && !quitHintShown) {
-        quitHintShown = true;
+      // the streak IS the latch: it crosses 3 exactly once per streak
+      if (copyQuitStreak === 3) {
         const quitBinds = ctx.keybinds("quit").join(" ") || "ctrl+q";
         ctx.notify(`${quitBinds} to quit`, "quit", "info");
       }
@@ -1170,7 +1171,6 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // swallowed by modals/terminal/pick never count toward it
     if (!hit(ev, "copy")) {
       copyQuitStreak = 0;
-      quitHintShown = false;
     }
     if (hit(ev, "quit") && runAction("quit")) return true;
     // held restart must not queue overlapping teardown/spawn pairs

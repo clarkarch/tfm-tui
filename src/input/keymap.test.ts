@@ -1028,6 +1028,24 @@ describe("file operation keys", () => {
     expect(hints[0]).toContain("ctrl+x ctrl+q");
   });
 
+  test("the quit hint appears once per streak, and the next streak hints again", () => {
+    const h = makeHarness();
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toHaveLength(1);
+    // a longer streak does NOT hint again
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toHaveLength(1);
+    // any other key ends the streak — the NEXT streak hints again
+    h.key("a", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    h.key("c", { ctrl: true });
+    expect(h.calls.filter((c) => c.startsWith("notify:quit:"))).toHaveLength(2);
+  });
+
   test("ctrl+d duplicates the selection; empty selection is a no-op", () => {
     const h = makeHarness();
     h.key("d", { ctrl: true });
@@ -1799,5 +1817,24 @@ describe("consumed keys are marked handled so a focused scrollable can't self-sc
     const h = makeHarness({ termOwnsKeyboard: () => true });
     expect(h.key("a")).toBe(false);
     expect(h.key("down")).toBe(false);
+  });
+});
+
+describe("no-drift rule", () => {
+  // The quit hint has ONE state: the copy streak. The old `quitHintShown`
+  // latch was EXACTLY `copyQuitStreak >= 3` under the old code (both were
+  // reset together, and the latch was set precisely when the streak crossed
+  // 3) — two names for one fact, free to drift apart. A behavioral test
+  // cannot catch that class (the two agree today), so the rule is enforced
+  // structurally: the parallel latch may not come back.
+  test("the quit hint latch is not a second state beside the streak", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/keymap.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/quitHintShown/.test(src)).toBe(false);
+    // the one-shot condition IS the streak crossing 3
+    expect(/copyQuitStreak === 3/.test(src)).toBe(true);
   });
 });
