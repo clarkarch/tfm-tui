@@ -1624,6 +1624,58 @@ describe("renderGrid (superseded renders)", () => {
       await renderGrid();
     }
   });
+
+  test("a failed build blanks the pane; the next render rebuilds the SAME listing", async () => {
+    // The build throws AFTER the pane was cleared: the screen is empty while
+    // the claim still describes a listing. The next render for that SAME
+    // listing must rebuild — a claim that survived the failure would
+    // early-out onto the blank pane (the console's blank-list bug).
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-claim-"));
+    try {
+      writeFileSync(path.join(dir, "a.txt"), "a");
+      viewMode = "list";
+      gridState.cwd = dir;
+      await renderGrid();
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("a.txt");
+
+      // a second file moves the signature, so the render reaches the build —
+      // and the build throws AFTER the pane was cleared
+      const realAdd = content.add.bind(content);
+      let boom = true;
+      (content as any).add = (child: Renderable) => {
+        if (boom) {
+          boom = false;
+          throw new Error("native allocator refused");
+        }
+        return realAdd(child);
+      };
+      try {
+        writeFileSync(path.join(dir, "b.txt"), "b");
+        await renderGrid().catch(() => {});
+      } finally {
+        (content as any).add = realAdd;
+      }
+      await t.renderOnce();
+      expect(t.captureCharFrame()).not.toContain("a.txt"); // the pane was cleared
+
+      // the listing goes back to what the stale claim describes: a surviving
+      // claim would early-out here and leave the pane blank for good
+      rmSync(path.join(dir, "b.txt"));
+      await renderGrid();
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).toContain("a.txt");
+      expect(selection.tileRefs.size).toBe(1);
+    } finally {
+      waitForResolutionImpl = () => Promise.resolve();
+      viewMode = "grid";
+      gridState.cwd = tmp;
+      scroller.scrollTop = 0;
+      rmSync(dir, { recursive: true, force: true });
+      await renderGrid();
+    }
+  });
 });
 
 // --- [ui] windowed-grid: only the visible row window (+overscan) is built;
@@ -2955,6 +3007,29 @@ describe("renderGrid (loading placeholder)", () => {
       rmSync(root, { recursive: true, force: true });
       await renderGrid();
     }
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the pane's screen state is ONE record — no parallel scalars", async () => {
+    // The pane's "what is on screen" was FIVE parallel scalars (the listing
+    // sig, the structural sig, the entries snapshot, the painted listing
+    // context, the loading flag). Their COMBINATIONS could describe a screen
+    // NOBODY painted — a placeholder sitting on top of a stale listing claim
+    // — so every early-out had to carry a `!showingLoading` conjunct to
+    // compensate, and missing one landed the render ONTO the placeholder
+    // screen (the blank-pane class, "Painting is CLAIMED, never assumed").
+    // The state is ONE tagged record now, written through ONE setter.
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the survivors' NAMES, not the source: a failed match would
+    // dump the whole module into the test output)
+    const gone = ["lastSig", "lastStructuralSig", "lastEntries", "lastPaintedCtx", "showingLoading"];
+    expect(gone.filter((n) => src.includes(n))).toEqual([]);
+    // ONE tagged record replaces them
+    expect(/kind: "placeholder"/.test(src)).toBe(true);
+    expect(/kind: "tiles"/.test(src)).toBe(true);
   });
 });
 

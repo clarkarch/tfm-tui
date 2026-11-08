@@ -76,21 +76,51 @@ export const loadingLine = (frame: string, msg: string, width: number): string =
   return `${frame} ${text}`;
 };
 
+// What the grid pane is SHOWING. ONE tagged record, written through ONE
+// setter — it replaces the old set of parallel scalars (the listing sig, the
+// structural sig, the entries snapshot, the painted listing context, the
+// loading flag). Their COMBINATIONS could describe a screen NOBODY painted
+// (a placeholder sitting on top of a stale listing claim), so every
+// early-out had to carry a `!showingLoading` conjunct to compensate. The tag
+// makes those combinations unrepresentable.
+type GridScreen =
+  | { kind: "none" }
+  | { kind: "placeholder" }
+  | { kind: "tiles"; sig: string; structural: string; entries: Entry[]; ctxKey: string }
+  | { kind: "empty"; sig: string; structural: string; ctxKey: string }
+  | { kind: "error"; sig: string; structural: string; ctxKey: string };
+
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
-  // signature of the last painted tile set — an unchanged pane skips the
-  // clear+rebuild (renderAll repaints both panes on any navigation)
-  let lastSig = "";
   // Animation gate: rebuilds also fire for pure layout/geometry changes (hover
   // drawer collapse, dual-pane toggle, resize, theme flip) which must NOT replay
   // the entry animation — the tiles rebuilt for the same files, they didn't
   // appear. Only a content change (cwd/list/query/sort/view) animates.
   let lastContentSig: string | null = null;
-  // Stats-only fast path (busy-log dirs): membership+order without size/mtime,
-  // plus a stats snapshot for the thumb guard. A tick that moves only stats
-  // repaints the list stat cells in place — no clear+rebuild, no anim replay.
-  let lastStructuralSig: string | null = null;
-  let lastEntries: Entry[] | null = null;
+  // What the pane is SHOWING — the ONE claim. `setScreen` is its only writer.
+  let screen: GridScreen = { kind: "none" };
+  const setScreen = (next: GridScreen): void => {
+    screen = next;
+  };
+  // The pane ALREADY shows exactly this screen → the render may early-out. A
+  // placeholder (and "nothing painted yet") carries NO sig, so no early-out
+  // can match it: the gate the old `!showingLoading` conjunct spelled out is
+  // now structural.
+  const showsScreen = (kind: "tiles" | "empty" | "error", sig: string): boolean => {
+    switch (screen.kind) {
+      case "tiles":
+        return kind === "tiles" && screen.sig === sig;
+      case "empty":
+        return kind === "empty" && screen.sig === sig;
+      case "error":
+        return kind === "error" && screen.sig === sig;
+      default:
+        return false;
+    }
+  };
+  // the listing context the pane shows (null when it shows no listing)
+  const screenCtxKey = (): string | null =>
+    screen.kind === "tiles" || screen.kind === "empty" || screen.kind === "error" ? screen.ctxKey : null;
   // storm coalescing: a rebuild storm (rotation bursts on a slow VT) must not
   // restart the entry wave per rebuild — a wave that never completes reads as
   // invisible files. Plays inside the cooldown after the previous play are
@@ -197,26 +227,19 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // that no longer matches the screen — otherwise the pane stays empty until
   // the cwd/geometry moves the signature (the console's blank-list bug).
   const dropPaintClaim = (): void => {
-    lastSig = "";
-    lastStructuralSig = null;
-    lastEntries = null;
-    lastContentSig = null;
-    // the screen is NOT the claimed listing either — force the next render to
-    // re-decide, placeholder included (a blank pane plus a slow listing must
+    // "nothing painted" — no sig, no listing context: the next render
+    // re-decides, placeholder included (a blank pane plus a slow listing must
     // arm the placeholder again)
-    lastPaintedCtx = null;
-    showingLoading = false;
+    setScreen({ kind: "none" });
+    lastContentSig = null;
     cancelLoadingTimers();
   };
 
   // --- [ui] loading-delay-ms placeholder ------------------------------------
-  // `showingLoading` is the ONE piece of state that says the screen is not
-  // what lastSig describes: every early-out must honour it or the placeholder
-  // survives until the cwd moves (the blank-pane class, in a new shape).
-  let showingLoading = false;
-  // listing context of the pane the signatures describe (arm the placeholder
-  // exactly when the on-screen context stops matching the requested one)
-  let lastPaintedCtx: string | null = null;
+  // The placeholder is a SCREEN like any other: it replaces the claim, so no
+  // early-out can land on it (the old `showingLoading` conjunct had to be
+  // repeated at every early-out — miss one and the render early-outs ONTO the
+  // placeholder screen, the blank-pane class).
   let loadingTimer: unknown = null;
   let spinTimer: unknown = null;
 
@@ -268,16 +291,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     selection.tileRefs.clear();
   };
 
-  // Paint the placeholder. It writes NO claim (see claimPaint): the render that
+  // Paint the placeholder. It REPLACES the claim (the pane now shows the
+  // placeholder, not the listing the old sig described): the render that
   // eventually lands must still rebuild, and a render whose signature happens
   // to match the OLD listing must not early-out onto this screen.
   const paintLoading = (gen: number, msg: string): void => {
-    if (gen !== gridGen || showingLoading) return;
+    if (gen !== gridGen || screen.kind === "placeholder") return;
     // never yank a live inline rename/create edit for a placeholder
     if (ctx.isRenaming?.()) return;
     ctx.clearRenameEdit();
     clearGrid();
-    showingLoading = true;
+    setScreen({ kind: "placeholder" });
     const frames = ctx.isTtyMode?.() ? SPIN_FRAMES_ASCII : SPIN_FRAMES_BRAILLE;
     const width = (ctx.availW ? ctx.availW() : ctx.termW() - ctx.sw()) - 4;
     const first = frames[0] ?? "";
@@ -293,7 +317,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     let i = 0;
     const tick = (): void => {
       spinTimer = null;
-      if (!showingLoading || gen !== gridGen) return;
+      if (screen.kind !== "placeholder" || gen !== gridGen) return;
       i = (i + 1) % frames.length;
       ctx.setTextOnId?.(nodeId, loadingLine(frames[i] ?? first, msg, width));
       try {
@@ -438,12 +462,17 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // screen the pane isn't showing strands it until the cwd moves. NOTE: the
     // main path must NOT write lastContentSig here — the intro-wave gate below
     // compares it against the previous build.
-    const claimPaint = (s: string, structural: string, list: Entry[] | null): void => {
-      lastSig = s;
-      lastStructuralSig = structural;
-      lastEntries = list ? list.map((e) => ({ ...e })) : null;
-      lastPaintedCtx = ctxKey;
-      showingLoading = false;
+    const claimPaint = (
+      kind: "tiles" | "empty" | "error",
+      s: string,
+      structural: string,
+      list: Entry[] | null,
+    ): void => {
+      setScreen(
+        kind === "tiles"
+          ? { kind, sig: s, structural, entries: (list ?? []).map((e) => ({ ...e })), ctxKey }
+          : { kind, sig: s, structural, ctxKey },
+      );
       cancelLoadingTimers();
     };
     // a render that ends without painting: its armed placeholder must not fire
@@ -478,7 +507,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // the listing the delay to arrive, then swap the stale tiles for the
     // spinner placeholder. A same-context rebuild (watcher tick, hover-drawer
     // settle) needs none of this — the painted folder is already the right one.
-    if (!showingLoading && ctxKey !== lastPaintedCtx) armLoading(gen, state.cwd, q, recursive);
+    if (screen.kind !== "placeholder" && ctxKey !== screenCtxKey()) armLoading(gen, state.cwd, q, recursive);
     let allEntries: Entry[];
     try {
       if (recursive) {
@@ -507,9 +536,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       // restricted dir (/root, foreign 000 dirs): say why instead of a blank pane
       if (gen !== gridGen) return;
       const sig = sigOf(`err:${fsErrText(err)}`);
-      // `showingLoading` gate: the pane is the PLACEHOLDER, not the claimed
-      // listing, so a matching signature must still rebuild the screen
-      if (!force && sig === lastSig && !showingLoading) {
+      // the pane shows the PLACEHOLDER (or another screen), not this error
+      // pane, so a matching signature must still rebuild the screen
+      if (!force && showsScreen("error", sig)) {
         abandonPaint();
         return;
       }
@@ -525,7 +554,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           ctx.pathEditMode() ? "" : "edit the path above to go elsewhere",
         ]);
         // the claim is written only now that the pane actually shows it
-        claimPaint(sig, structOf(`err:${fsErrText(err)}`), null);
+        claimPaint("error", sig, structOf(`err:${fsErrText(err)}`), null);
         lastContentSig = contentSigOf(`err:${fsErrText(err)}`);
         ctx.stripSelectable();
         // no tiles to navigate: clear the old listing's nav geometry or arrows
@@ -547,7 +576,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
 
     if (entries.length === 0) {
       const sig = sigOf("empty");
-      if (!force && sig === lastSig && !showingLoading) {
+      if (!force && showsScreen("empty", sig)) {
         abandonPaint();
         return;
       }
@@ -567,7 +596,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
                 : "this folder is empty",
         ]);
         // the claim is written only now that the pane actually shows it
-        claimPaint(sig, structOf("empty"), null);
+        claimPaint("empty", sig, structOf("empty"), null);
         lastContentSig = contentSigOf("empty");
         // no tiles to navigate: drop the previous listing's focusKeys/cols/rowH
         selection.setFocusKeys([]);
@@ -593,7 +622,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     if (gen !== gridGen) return;
 
     const sig = sigOf(entries);
-    if (!force && sig === lastSig && !showingLoading) {
+    if (!force && showsScreen("tiles", sig)) {
       abandonPaint();
       return;
     }
@@ -604,11 +633,11 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // image/video changed stats (its raster keys on them — rebuild re-queues),
     // and under force (cut-clipboard dimming needs the rebuild).
     // ... and never while the pane shows the placeholder: the stat cells it
-    // would rewrite don't exist (no claim is written for a placeholder)
-    if (!force && !showingLoading && ctx.setTextOnId && lastStructuralSig !== null) {
+    // would rewrite don't exist (the placeholder carries no claim)
+    if (!force && screen.kind === "tiles" && ctx.setTextOnId) {
       const structural = structOf(entries);
-      if (structural === lastStructuralSig && !thumbStatsChanged(lastEntries, entries)) {
-        claimPaint(sig, structural, entries);
+      if (screen.structural === structural && !thumbStatsChanged(screen.entries, entries)) {
+        claimPaint("tiles", sig, structural, entries);
         lastContentSig = contentSigOf(entries);
         // later window slides build rows from this snapshot — carry the stats
         if (win) {
@@ -739,7 +768,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       }
       selection.updateSelectionStatusReal();
       // the pane now shows this listing — claim it (never before the paint)
-      claimPaint(sig, structOf(entries), entries);
+      claimPaint("tiles", sig, structOf(entries), entries);
       painted = true;
       // slow-navigation breadcrumb (always on, one line, only when slow): a
       // report of "it feels stuck" names its own culprit without --debug
