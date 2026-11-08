@@ -198,6 +198,28 @@ describe("icon slot registry", () => {
     await h.slots.drainIconQueue();
     expect(s.spec.done).toBe(true);
   });
+
+  test("a reset during a drain is not lost (the rerun re-rasterizes the spec)", async () => {
+    // a reset (theme flip / resize / icon-mode change) that lands while a
+    // pass is IN FLIGHT must re-raster. The old code asked for the rerun
+    // only when the drain PROMISE was already assigned — and during the
+    // pass's FIRST TICK it was not (the promise is assigned after the pass
+    // starts), so the reset's re-raster waited for the NEXT drain request,
+    // which may never come: the icons stay stale until a resize.
+    const h = makeHarness();
+    let calls = 0;
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0, undefined, () => {
+      calls++;
+      // the statesFactory runs in the pass's first tick — the reset lands
+      // exactly there
+      if (calls === 1) h.slots.resetIconQueue();
+      return [{ fg: FG, bg: BG }];
+    });
+    h.mountFakeSlot(s.spec);
+
+    await h.slots.drainIconQueue();
+    expect(calls).toBe(2);
+  });
 });
 
 // Two decisions hang off "is this slot inside a floating layer": the raster
@@ -876,5 +898,27 @@ describe("no-drift rule: one home for the icon-slot contract", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("the icon drain state is ONE record — no parallel flags", async () => {
+    // the drain's state was THREE closure vars (the running promise, a rerun
+    // flag, a force-redrain flag) whose combinations were never spelled out:
+    // a reset had to set two of them by hand, and a request during a pass
+    // had to remember the rerun flag — a request that landed in the pass's
+    // first tick (before the promise was assigned) lost the rerun. The state
+    // is ONE tagged record now, with ONE request path.
+    const src = (await Bun.file(`${import.meta.dir}/ui-slots.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the parallel vars must not come back
+    expect(/let\s+iconDrain\b/.test(src)).toBe(false);
+    expect(/let\s+iconDrainAgain\b/.test(src)).toBe(false);
+    expect(/let\s+iconForceRedrain\b/.test(src)).toBe(false);
+    // ONE tagged record replaces them
+    expect(/type\s+DrainState\s*=/.test(src)).toBe(true);
+    expect(/kind:\s*"idle"/.test(src)).toBe(true);
+    expect(/kind:\s*"running"/.test(src)).toBe(true);
+    // the record is the only truth about the drain
+    expect((src.match(/drain\.(kind|rerun|force)\b/g) ?? []).length).toBeGreaterThanOrEqual(5);
   });
 });

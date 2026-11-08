@@ -297,11 +297,16 @@ export const makeSlots = (ctx: SlotsCtx) => {
   // snapshot (taken at its own start) never revisited them, so the whole top
   // bar stuck on fallback glyphs until a resize/theme reset. One run at a time
   // with a rerun flag can't lose a spec.
-  let iconDrain: Promise<void> | null = null;
-  let iconDrainAgain = false;
-  // resetIconQueue (theme flip / resize / icon-mode change) marks every spec
-  // for a re-raster even if an in-flight pass already claimed it
-  let iconForceRedrain = false;
+  //
+  // The drain's state is ONE record. The old shape was THREE closure vars —
+  // the running promise, a rerun flag and a force-redrain flag — whose
+  // combinations were never spelled out: a reset had to set two of them by
+  // hand, and a request that landed in a pass's FIRST TICK (before the
+  // promise was assigned) lost the rerun and the re-raster with it.
+  type DrainState =
+    | { kind: "idle"; force: boolean }
+    | { kind: "running"; promise: Promise<void>; rerun: boolean; force: boolean };
+  let drain: DrainState = { kind: "idle", force: false };
 
   const cellMetrics = () => {
     const r = ctx.renderer();
@@ -522,14 +527,14 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return imgs;
   };
 
-  // ONE pass over the specs pending at its start (or every spec after a reset).
-  // Never runs concurrently with itself — drainIconQueue serializes it — so a
-  // spec marked done here always gets its rasters attached (or genuinely fails).
-  const runIconDrain = async (): Promise<void> => {
+  // ONE pass over the specs pending at its start (or every spec after a
+  // reset). Never runs concurrently with itself — the drain loop serializes
+  // it — so a spec marked done here always gets its rasters attached (or
+  // genuinely fails). `force` re-rasters EVERY registered spec (a reset).
+  const runIconDrain = async (force: boolean): Promise<void> => {
     const aspect = cellMetrics().aspect;
     const specs = [...allSpecs.values()];
-    const pending = iconForceRedrain ? specs : specs.filter((s) => !s.done);
-    iconForceRedrain = false;
+    const pending = force ? specs : specs.filter((s) => !s.done);
     // bounded pool (like drainThumbs): a resize/theme flip re-rasters EVERY
     // registered slot, and an unbounded Promise.all launched one job per slot
     let idx = 0;
@@ -600,26 +605,49 @@ export const makeSlots = (ctx: SlotsCtx) => {
     }
   };
 
-  // Serialized entry point: concurrent calls coalesce into the running pass
-  // plus at most one rerun, so a spec is never left done-but-unrastered (the
-  // old per-drain supersession token stranded exactly those).
-  const drainIconQueue = (): Promise<void> => {
+  // The drain loop: one pass at a time, plus at most one rerun per request.
+  // The record goes "running" BEFORE the first pass starts (the yield below
+  // hands the turn back to the caller), so a reset that lands in the pass's
+  // first tick sees a RUNNING drain and asks for the rerun — the old code
+  // checked a promise that was not assigned yet during that tick, so the
+  // reset's re-raster was lost.
+  const runDrainLoop = async (): Promise<void> => {
+    await Promise.resolve();
+    try {
+      for (;;) {
+        // the force flag (a reset) is consumed by the pass it arms
+        const force = drain.force;
+        drain.force = false;
+        await runIconDrain(force);
+        if (drain.kind !== "running" || !drain.rerun) break;
+        drain.rerun = false;
+      }
+    } finally {
+      drain = { kind: "idle", force: drain.force };
+    }
+  };
+
+  // ONE request path: ask for a drain pass. Concurrent calls coalesce into
+  // the running pass plus at most one rerun, so a spec is never left
+  // done-but-unrastered (the old per-drain supersession token stranded
+  // exactly those).
+  const requestDrain = (): Promise<void> => {
     if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return Promise.resolve();
     if (!ctx.renderer().resolution) return Promise.resolve();
-    iconDrainAgain = true;
-    if (!iconDrain) {
-      iconDrain = (async () => {
-        try {
-          while (iconDrainAgain) {
-            iconDrainAgain = false;
-            await runIconDrain();
-          }
-        } finally {
-          iconDrain = null;
-        }
-      })();
+    if (drain.kind === "running") {
+      drain.rerun = true;
+      return drain.promise;
     }
-    return iconDrain;
+    const promise = runDrainLoop();
+    drain = { kind: "running", promise, rerun: false, force: drain.force };
+    return promise;
+  };
+
+  // A reset (theme flip / resize / icon-mode change / scrim dim): every spec
+  // re-rasters, and a pass that is already running asks for the rerun.
+  const resetDrain = (): void => {
+    drain.force = true;
+    if (drain.kind === "running") drain.rerun = true;
   };
   // narrowed view of the byId seam (see ../lib/node-like): only the members
   // the scrim touches. `fg` is a ColorInput because the seam hands back the
@@ -656,8 +684,8 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // repainting fallback glyphs — the drain rebuilds them from the shaded
     // states anyway
     for (const s of allSpecs.values()) s.done = false;
-    iconForceRedrain = true;
-    void drainIconQueue();
+    resetDrain();
+    void requestDrain();
     // Already-rastered FLOAT thumbnails (the properties dialog): their slot is
     // never re-drained by a modal, so set the override in place. Content
     // thumbnails keep inheriting (they are under the overlay and should dim).
@@ -729,17 +757,17 @@ export const makeSlots = (ctx: SlotsCtx) => {
     makeIconSlot,
     setIconState,
     drainThumbs,
-    drainIconQueue,
+    drainIconQueue: requestDrain,
     setRasterDim,
     nextIconId: (): string => `tfm-icon-${iconSeq++}`,
     resetIconQueue: (): void => {
       // boot-baked slots may have already drained and left the pending set —
       // the registry keeps them reachable for theme/resize re-rasters (the
       // old second queue grew unbounded; allSpecs prunes by node-liveness).
-      // iconForceRedrain also covers a pass that is mid-flight right now: the
+      // The force flag also covers a pass that is mid-flight right now: the
       // rerun revisits EVERY spec even one the in-flight pass already claimed.
       for (const s of allSpecs.values()) s.done = false;
-      iconForceRedrain = true;
+      resetDrain();
       // an icon-style toggle also flips the fallback glyphs (shown pre-raster
       // and under the scrim): repaint mounted ones now so a failed/slow
       // raster can't strand the old style's glyph
@@ -751,7 +779,6 @@ export const makeSlots = (ctx: SlotsCtx) => {
           if (g) (g as { content?: unknown }).content = ctx.glyphFor(s.name);
         } catch {}
       }
-      if (iconDrain) iconDrainAgain = true;
     },
     pushThumbJob: (job: ThumbJob): void => {
       if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
