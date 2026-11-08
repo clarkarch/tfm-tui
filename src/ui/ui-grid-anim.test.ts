@@ -586,6 +586,88 @@ describe("makeFileAnim (engine)", () => {
     expect((byId("g-inner2") as any).translateY).toBe(0);
   });
 
+  test("a stop resets the wave's progress so the next wave can append", async () => {
+    // The wave's progress lives INSIDE the wave record. `stop()` used to reset
+    // the timeline/nodes/total but NOT the progress, so the NEXT wave's
+    // timeline captured a stale p=1 as its animation start value: the wave
+    // never moved again and the append gate (`p < 1`) stayed false forever —
+    // every notch RESTARTED the wave (the "reveal doesn't work" regression).
+    t.renderer.root.add(Box({ id: "wv-a", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "wv-b", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "wv-c", width: 40, height: 6 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger", ms: 1000 }),
+    });
+    anim.play({ tiles: ["wv-a"], total: 1 });
+    step(2000); // the wave runs to completion (p = 1)
+    anim.stop(); // the wave is gone — its progress dies WITH it
+    anim.play({ tiles: ["wv-b"], total: 1, enterFrom: "bottom" });
+    step(200);
+    const b1 = (byId("wv-b") as any).opacity;
+    expect(b1).toBeLessThan(1);
+    // the next play must APPEND to the running wave: the in-flight node keeps
+    // progressing (a restart would snap it to rest — 1 — mid-fade)
+    anim.play({ tiles: ["wv-c"], total: 1, enterFrom: "bottom" });
+    step(100);
+    const b2 = (byId("wv-b") as any).opacity;
+    expect(b2).toBeGreaterThan(b1);
+    expect(b2).toBeLessThan(1);
+    anim.stop();
+  });
+
+  test("a style change restarts the wave (the old set settles, the new style drives)", async () => {
+    // a running wave whose style differs from the new play's is NOT appended:
+    // the old set settles to rest at once and the new wave runs the new style
+    let style: "stagger" | "fade" = "stagger";
+    t.renderer.root.add(Box({ id: "sc-a", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "sc-b", width: 40, height: 6 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style, ms: 1000 }),
+    });
+    anim.play({ tiles: ["sc-a"], total: 1 });
+    step(300);
+    expect((byId("sc-a") as any).opacity).toBeLessThan(1);
+    style = "fade";
+    anim.play({ tiles: ["sc-b"], total: 1 });
+    // the style change RESTARTS: the old node rests immediately…
+    expect((byId("sc-a") as any).opacity).toBe(1);
+    // …and the new node runs the NEW style (a fade: no vertical offset)
+    step(200);
+    expect((byId("sc-b") as any).opacity).toBeLessThan(1);
+    expect((byId("sc-b") as any).translateY).toBe(0);
+    anim.stop();
+  });
+
+  test("an append keeps the running wave's style (the new nodes ride the old curve)", async () => {
+    // a "stagger-slide" wave (its nodes RISE) absorbs a new set: the appended
+    // node rises with the OLD curve instead of fading in place — the append
+    // must not retarget the wave's style
+    t.renderer.root.add(Box({ id: "aw-x", width: 40, height: 6 }));
+    t.renderer.root.add(Box({ id: "aw-y", width: 40, height: 6 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const anim = makeFileAnim({
+      renderer: t.renderer,
+      byId,
+      opts: () => opts({ style: "stagger-slide", ms: 1000, slideCells: 16 }),
+    });
+    anim.play({ tiles: ["aw-x"], total: 1, enterFrom: "bottom" });
+    step(200);
+    anim.play({ tiles: ["aw-y"], total: 1, enterFrom: "bottom" });
+    // the appended node is staged on the OLD curve (it rises) — a retargeted
+    // wave would fade it in place (translateY 0)
+    expect((byId("aw-y") as any).translateY).toBeGreaterThan(0);
+    anim.stop();
+  });
+
   test("horizontal slide moves translateX (whole cells), never translateY", async () => {
     t.renderer.root.add(Box({ id: "g4-inner", width: 40, height: 8, flexDirection: "column" }));
     await t.renderOnce();
@@ -676,6 +758,36 @@ describe("restTileBg", () => {
     expect(restTileBg("solid", colors, "force")).toBe("transparent");
     expect(restTileBg("solid", colors, "on")).toBe("#1a1b26");
     expect(restTileBg("solid", colors, "off")).toBe("#1a1b26");
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the wave is ONE record — no parallel scalars", async () => {
+    // The wave's state was SEVEN variables (tl, usedMs, holder, nodes, cfg,
+    // style, total) recomputed at one decision site. `stop()` reset all of
+    // them but the PROGRESS, so the next wave's timeline captured a stale
+    // p=1 and the append gate died with it (restart-per-notch). The wave is
+    // ONE tagged record now — its progress dies WITH it.
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid-anim.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the file animator's section only — the hover tween below owns its own
+    // timeline (a separate wave, a separate owner)
+    const anim = src.slice(0, src.indexOf("export const restTileBg"));
+    // the parallel scalars must not come back
+    expect(/let\s+tl\b/.test(anim)).toBe(false);
+    expect(/let\s+usedMs\b/.test(anim)).toBe(false);
+    expect(/let\s+nodes\b/.test(anim)).toBe(false);
+    expect(/let\s+cfg\b/.test(anim)).toBe(false);
+    expect(/let\s+style\b/.test(anim)).toBe(false);
+    expect(/let\s+total\b/.test(anim)).toBe(false);
+    expect(/const\s+holder\s*=\s*\{\s*p:\s*0\s*\}/.test(anim)).toBe(false);
+    // ONE tagged record replaces them
+    expect(/type\s+Wave\s*=/.test(anim)).toBe(true);
+    expect(/kind:\s*"idle"/.test(anim)).toBe(true);
+    expect(/kind:\s*"running"/.test(anim)).toBe(true);
+    // the progress lives INSIDE the record (the stale-p=1 bug lived outside)
+    expect(/holder:\s*\{\s*p:\s*number\s*\}/.test(anim)).toBe(true);
   });
 });
 

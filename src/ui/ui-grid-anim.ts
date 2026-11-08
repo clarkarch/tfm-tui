@@ -185,6 +185,30 @@ type FileAnimCtx = {
   opts(): FileAnimOpts;
 };
 
+// The wave — ONE record. It holds everything the animator needs to draw and
+// retarget a wave: the timeline, the progress, the style + curve config, the
+// node set and the cascade total. The seven parallel variables it replaces
+// (tl, usedMs, holder, nodes, cfg, style, total) could disagree: `stop()`
+// reset every one of them but the PROGRESS, so the next wave's timeline
+// captured a stale p=1 as its animation start value — the wave never moved
+// again and the append gate (`p < 1`) stayed false forever (restart-per-notch,
+// the "reveal doesn't work" regression). The progress dies WITH the wave now.
+type WaveRunning = {
+  kind: "running";
+  // the timeline that drives the wave (null only between the wave's creation
+  // and its timeline's — a synchronous window inside play())
+  tl: ReturnType<typeof createTimeline> | null;
+  // the animated progress (0..1): the wave's own clock, and the append gate's
+  // only question ("is this wave still running?")
+  holder: { p: number };
+  style: FileAnimStyle;
+  cfg: FileAnimCfg;
+  nodes: NodeLike[];
+  // full file count when `nodes` is a viewport-capped subset (0 = nodes.length)
+  total: number;
+};
+type Wave = { kind: "idle" } | WaveRunning;
+
 export const makeFileAnim = (ctx: FileAnimCtx) => {
   // 0.6.0: per-renderer timeline engine — the shared `engine` singleton is
   // driven by the last React/Solid render(), so imperative modules must own
@@ -195,14 +219,8 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
   try {
     if (typeof ctx.renderer?.setFrameCallback === "function") owner = getTimelineEngine(ctx.renderer);
   } catch {}
-  let tl: ReturnType<typeof createTimeline> | null = null;
-  let usedMs = -1;
-  const holder = { p: 0 };
-  let nodes: NodeLike[] = [];
-  let cfg: FileAnimCfg = {};
-  let style: FileAnimStyle = "fade";
-  // full file count when `nodes` is a viewport-capped subset (0 = use nodes.length)
-  let total = 0;
+  // the wave in flight — ONE record (idle = nothing is animating)
+  let wave: Wave = { kind: "idle" };
 
   const write = (node: NodeLike, f: { opacity: number; dx: number; dy: number }): void => {
     try {
@@ -215,61 +233,47 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
     } catch {}
   };
 
-  const apply = (raw: number): void => {
-    const n = total > 0 ? total : nodes.length;
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i];
+  // draw one frame of a wave. The wave is passed IN: a timeline's callback
+  // may only ever touch ITS OWN wave (a stale timeline settling the live
+  // wave's nodes would snap a running wave to rest).
+  const applyWave = (w: WaveRunning, raw: number): void => {
+    const n = w.total > 0 ? w.total : w.nodes.length;
+    for (let i = 0; i < w.nodes.length; i++) {
+      const node = w.nodes[i];
       if (!node) continue;
-      const f = fileAnimAt(style, raw, i, n, cfg);
+      const f = fileAnimAt(w.style, raw, i, n, w.cfg);
       write(node, f);
     }
   };
 
-  const settle = (): void => {
-    if (!nodes.length) return;
-    for (const node of nodes) if (node) write(node, { opacity: 1, dx: 0, dy: 0 });
+  // snap a wave's nodes back to rest
+  const settleWave = (w: WaveRunning): void => {
+    for (const node of w.nodes) if (node) write(node, { opacity: 1, dx: 0, dy: 0 });
     // NO Bun.gc here: a synchronous full GC inside the settle frame stalls the
     // render loop (visible hitch on image-heavy folders). The 10s mem-hygiene
     // poke reclaims native buffers; an animation is far less churn than a theme
     // flip, which is where the eager gc is actually needed.
   };
 
-  // cancel any running animation: unregister, snap the current nodes back to
-  // rest, and forget the timeline so the next play re-registers it
-  const stop = (): void => {
-    if (tl) {
-      try {
-        (owner ?? engine).unregister(tl);
-      } catch {}
-    }
-    tl = null;
-    usedMs = -1;
-    settle();
-    nodes = [];
-    total = 0;
+  // the LIVE wave's rest (the timeline callbacks settle their OWN wave)
+  const settle = (): void => {
+    if (wave.kind !== "running") return;
+    settleWave(wave);
   };
 
-  // one item, recreated only when the duration changes (duration is baked at
-  // add time); restart() retargets the node list without accumulating items
-  const ensure = (ms: number): void => {
-    if (tl && usedMs === ms) return;
-    if (tl) {
+  // cancel any running animation: unregister, snap the current nodes back to
+  // rest, and drop the wave — its progress dies WITH it (a stale p=1 would be
+  // captured by the next wave's timeline and freeze it)
+  const stop = (): void => {
+    if (wave.kind !== "running") return;
+    const w = wave;
+    if (w.tl) {
       try {
-        (owner ?? engine).unregister(tl);
+        (owner ?? engine).unregister(w.tl);
       } catch {}
     }
-    usedMs = ms;
-    // real renderer: register on the owner engine (per-renderer frame loop);
-    // fakes keep the legacy default-engine path (never attached, stepped via
-    // engine.update in tests)
-    tl = owner ? createTimeline({ autoplay: false }, ctx.renderer) : createTimeline({ autoplay: false });
-    tl.add(holder, {
-      p: 1,
-      duration: ms,
-      ease: "linear",
-      onUpdate: (a: JSAnimation) => apply(a.progress),
-      onComplete: settle,
-    });
+    settleWave(w);
+    wave = { kind: "idle" };
   };
 
   const play = (target: FileAnimTarget): FileAnimMode => {
@@ -344,32 +348,63 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
       // scroll (and froze any node missing from the new list). A finished
       // wave, a style flip or a slide-direction reversal settles the old set
       // first, then starts fresh — no half-faded node is left behind.
-      const running = !!tl && holder.p < 1 && style === rm.style && !(style === "stagger-slide" && cfg.dir !== rm.dir);
-      if (running) {
-        for (const node of resolved) if (!nodes.includes(node)) nodes.push(node);
+      if (
+        wave.kind === "running" &&
+        wave.holder.p < 1 &&
+        wave.style === rm.style &&
+        !(wave.style === "stagger-slide" && wave.cfg.dir !== rm.dir)
+      ) {
+        for (const node of resolved) if (!wave.nodes.includes(node)) wave.nodes.push(node);
         // indices only ever grow, so earlier nodes' staggerLocal(i/n) moves
         // FORWARD (never rewinds) as the wave absorbs the new set
-        total = Math.max(total, nodes.length);
+        wave.total = Math.max(wave.total, wave.nodes.length);
       } else {
         settle();
-        nodes = resolved;
-        // rows keep their own total so the cascade timing matches the real row
-        // count; tiles keep the full file count (viewport-capped list case);
-        // a reveal cascades across just the entering set
-        total = useRows ? Math.max(target?.rowsTotal ?? 0, nodes.length) : Math.max(target?.total ?? 0, nodes.length);
-        style = rm.style;
-        cfg = {
-          dist: Math.max(0, Math.round(o.slideCells)),
-          span: o.staggerPct / 100,
-          ease: o.ease,
-          dir: rm.dir,
+        // a FRESH wave: the old one leaves the engine, the new one starts at
+        // progress 0 — the timeline captures that as its animation start value
+        // (a stale p=1 would freeze the wave where it stood)
+        if (wave.kind === "running" && wave.tl) {
+          try {
+            (owner ?? engine).unregister(wave.tl);
+          } catch {}
+        }
+        const w: WaveRunning = {
+          kind: "running",
+          tl: null,
+          holder: { p: 0 },
+          style: rm.style,
+          cfg: {
+            dist: Math.max(0, Math.round(o.slideCells)),
+            span: o.staggerPct / 100,
+            ease: o.ease,
+            dir: rm.dir,
+          },
+          nodes: resolved,
+          // rows keep their own total so the cascade timing matches the real row
+          // count; tiles keep the full file count (viewport-capped list case);
+          // a reveal cascades across just the entering set
+          total: useRows
+            ? Math.max(target?.rowsTotal ?? 0, resolved.length)
+            : Math.max(target?.total ?? 0, resolved.length),
         };
-        ensure(o.ms);
-        tl?.restart();
+        wave = w;
+        // real renderer: register on the owner engine (per-renderer frame
+        // loop); fakes keep the legacy default-engine path (never attached,
+        // stepped via engine.update in tests)
+        const tl = owner ? createTimeline({ autoplay: false }, ctx.renderer) : createTimeline({ autoplay: false });
+        w.tl = tl;
+        tl.add(w.holder, {
+          p: 1,
+          duration: o.ms,
+          ease: "linear",
+          onUpdate: (a: JSAnimation) => applyWave(w, a.progress),
+          onComplete: () => settleWave(w),
+        });
+        tl.restart();
       }
       // stage frame 0 of the freshly added nodes synchronically — without
       // this they'd present one frame at full opacity before the first tick
-      apply(holder.p);
+      if (wave.kind === "running") applyWave(wave, wave.holder.p);
       return mode;
     } catch {
       stop();
@@ -379,7 +414,7 @@ export const makeFileAnim = (ctx: FileAnimCtx) => {
 
   // Renderer-owned engine attach already happened in getTimelineEngine()
   // above; a renderer without a frame loop (unit-test fakes) takes the
-  // default-engine path in ensure() and must never attach.
+  // default-engine path (the wave's timeline is never attached).
   return { play, stop };
 };
 
