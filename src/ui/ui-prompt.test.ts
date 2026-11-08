@@ -170,4 +170,93 @@ describe("prompt widget", () => {
       await t.dispose(); // 0.6.0: destroy + await closed
     }
   });
+
+  test("a pasted password is accepted", async () => {
+    // A bracketed PASTE arrives as a PASTE EVENT, not as key presses: in
+    // password mode there is no Input to receive it, so the router hands the
+    // whole text here. A pasted password MUST land (the sudo prompt's users
+    // paste — typing a password char by char is the alternative).
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const prompt = mkPrompt(t, floats);
+      const pending = prompt.open({ title: "Password", okLabel: "OK", password: true });
+      await t.renderOnce();
+      prompt.handlePaste("s3cret");
+      await t.renderOnce();
+      const frame = t.captureCharFrame();
+      expect(frame).not.toContain("s3cret");
+      expect(frame).toContain("••••••");
+      prompt.handleKey({ name: "return" });
+      await expect(pending).resolves.toBe("s3cret");
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("the secret takes a whole sequence, not one char", async () => {
+    // The old rule accepted a SINGLE char per key event — a multi-char
+    // sequence (a paste delivered as keys, an emoji) was dropped whole.
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const prompt = mkPrompt(t, floats);
+      const pending = prompt.open({ title: "Password", okLabel: "OK", password: true });
+      await t.renderOnce();
+      prompt.handleKey({ name: "p", sequence: "🔑" });
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("•"); // the char landed
+      prompt.handleKey({ name: "return" });
+      await expect(pending).resolves.toBe("🔑");
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a whitespace-only secret submits like a whitespace-only text value", async () => {
+    // ONE trimming rule: a whitespace-only value is EMPTY in BOTH modes — the
+    // text branch refuses it (the prompt stays open for a real value), so the
+    // password branch must refuse it too.
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const prompt = mkPrompt(t, floats);
+      // the text branch
+      const textPending = prompt.open({ title: "Add plugin", okLabel: "Clone" });
+      await t.renderOnce();
+      prompt.setValue("   ");
+      prompt.handleKey({ name: "return" });
+      expect(floats.isOpen("prompt")).toBe(true);
+      prompt.handleKey({ name: "escape" });
+      await expect(textPending).resolves.toBeNull();
+      // the password branch
+      const secretPending = prompt.open({ title: "Password", okLabel: "OK", password: true });
+      await t.renderOnce();
+      prompt.setValue("   ");
+      prompt.handleKey({ name: "return" });
+      expect(floats.isOpen("prompt")).toBe(true);
+      prompt.handleKey({ name: "escape" });
+      await expect(secretPending).resolves.toBeNull();
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the prompt mode is ONE tag (no parallel boolean or secret field)", async () => {
+    // The old state spread the widget SHAPE over a `passwordMode` boolean
+    // and the VALUE over a separate `secret` string — so "the shape is a
+    // masked Text but the value comes from the Input" was representable.
+    // The mode tag carries both now; the old fields may not come back.
+    const src = (await Bun.file(`${import.meta.dir}/ui-prompt.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/passwordMode/.test(src)).toBe(false);
+    expect(/let secret\b/.test(src)).toBe(false);
+    // ... and the replacement is there
+    expect(/kind:\s*"password";\s*secret:\s*string/.test(src)).toBe(true);
+  });
 });

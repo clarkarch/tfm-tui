@@ -371,6 +371,20 @@ describe("precedence chain", () => {
     expect(h.calls).toEqual(["prompt:g", "prompt:escape"]);
   });
 
+  test("a paste reaches the open prompt (the password prompt has no Input)", () => {
+    // A bracketed paste is a PASTE EVENT, not a keypress: the password prompt
+    // has no Input to receive it, so the router routes the text there.
+    const h = makeHarness((calls) => ({
+      prompt: {
+        isOpen: () => true,
+        handleKey: (e) => calls.push(`prompt:${e.name}`),
+        handlePaste: (text) => calls.push(`paste:${text}`),
+      },
+    }));
+    h.router.handlePaste("s3cret");
+    expect(h.calls).toEqual(["paste:s3cret"]);
+  });
+
   test("bulk-rename modal swallows every key (the textarea owns typing)", () => {
     const h = makeHarness();
     h.bulkState.open = true;

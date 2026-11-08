@@ -86,7 +86,9 @@ export type KeyRouterCtx = {
   pick: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void };
   // single-line prompt overlay (plugin git-URL entry): same Input-native
   // typing rule. Optional so older fakes read as closed; wiring always sets it.
-  prompt?: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void };
+  // handlePaste: the password mode has NO Input (its mask is a Text), so a
+  // bracketed paste — a PASTE EVENT, not a keypress — is routed here.
+  prompt?: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void; handlePaste?(text: string): void };
   // bulk-rename modal (F2 on a multi-selection): the focused Textarea owns
   // typing; esc cancels, alt+enter submits natively
   bulkRename: { isOpen(): boolean; handleKey(ev: KeyPressEvent): void };
@@ -1279,8 +1281,18 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     if (routeKey(ev) && !keepForEditor) ev.preventDefault?.();
   };
 
+  // A bracketed PASTE is a PASTE EVENT, not a keypress: every editor surface
+  // owns a focused Input and the renderer hands the paste to it directly —
+  // EXCEPT the prompt's password mode (its mask is a Text, there is no
+  // Input), so the router routes the pasted text there.
+  const handlePaste = (text: string): void => {
+    if (activeSurface() !== "prompt") return;
+    ctx.prompt?.handlePaste?.(text);
+  };
+
   return {
     handleKey,
+    handlePaste,
     commands,
     // kb-focus highlight read by makeChrome
     sidebarActive: (): boolean => sidebarFocus.kind === "places",

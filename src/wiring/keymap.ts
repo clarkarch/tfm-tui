@@ -7,7 +7,7 @@
 // prompt overlay (plugin git-URL entry). Last wiring step — everything it
 // reads exists by now. ---
 
-import type { KeyEvent } from "@opentui/core";
+import { decodePasteBytes, type KeyEvent, type PasteEvent } from "@opentui/core";
 import { makeKeyRouter } from "../input/keymap";
 import { makePick } from "../ui/ui-pick";
 import { makePrompt } from "../ui/ui-prompt";
@@ -374,6 +374,10 @@ export const wireKeymap = (deps: {
   coreCommands = () => keyRouter.commands();
 
   chrome.renderer.keyInput.on("keypress", (e: KeyEvent) => keyRouter.handleKey(e));
+  // a bracketed PASTE is not a keypress: the prompt's password mode has no
+  // Input to receive it (its mask is a Text), so the router routes the
+  // pasted text there.
+  chrome.renderer.keyInput.on("paste", (e: PasteEvent) => keyRouter.handlePaste(decodePasteBytes(e.bytes)));
 
   return { keyRouter, pick, prompt };
 };

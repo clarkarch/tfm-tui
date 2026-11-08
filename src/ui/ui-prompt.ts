@@ -34,37 +34,47 @@ type PromptCtx = {
 
 const PANEL_W = 62;
 
+// The prompt's MODE — ONE tag, not a boolean that swaps the widget shape:
+//   text     → an Input owns the keyboard (the renderer feeds it)
+//   password → a masked Text; the ROUTER owns every key (the secret is
+//              collected here and never rendered)
+export type PromptMode = { kind: "text" } | { kind: "password"; secret: string };
+
 export const makePrompt = (ctx: PromptCtx) => {
   let opened = false;
   let resolveFn: ((v: string | null) => void) | null = null;
   let focusTimer: ReturnType<typeof setTimeout> | null = null;
-  // password mode: no Input (OpenTUI can't mask one); the router feeds keys to
-  // handleKey, which keeps the secret private and paints bullets instead
-  let passwordMode = false;
-  let secret = "";
+  // the mode IS the widget shape + the value source — one fact, one owner
+  let mode: PromptMode = { kind: "text" };
 
   const paintMask = (): void => {
     try {
       const node = ctx.byId("tfm-prompt-mask");
       if (!node) return;
+      const secret = mode.kind === "password" ? mode.secret : "";
       node.content = secret ? "•".repeat(secret.length) : "Password";
       node.fg = secret ? ctx.colors().white : ctx.colors().sidebarFgMuted;
     } catch {}
   };
 
-  const readValue = (): string => {
-    if (passwordMode) return secret;
+  // the text branch's raw source (the Input node)
+  const inputValue = (): string => {
     try {
-      return String(ctx.byId("tfm-prompt-input")?.value ?? "").trim();
+      return String(ctx.byId("tfm-prompt-input")?.value ?? "");
     } catch {
       return "";
     }
   };
 
+  // ONE value accessor + ONE trimming rule: a whitespace-only value is EMPTY
+  // in BOTH modes (the text branch always trimmed; the password branch did
+  // not → a whitespace-only secret submitted while the text branch refused).
+  const value = (): string => (mode.kind === "password" ? mode.secret : inputValue()).trim();
+
   const rawClose = (): void => {
     opened = false;
-    passwordMode = false;
-    secret = "";
+    // the secret dies with the mode
+    mode = { kind: "text" };
     if (focusTimer !== null) {
       clearTimeout(focusTimer);
       focusTimer = null;
@@ -88,7 +98,7 @@ export const makePrompt = (ctx: PromptCtx) => {
   };
 
   const submit = (): void => {
-    const v = readValue();
+    const v = value();
     // empty submit keeps the prompt open (the caller re-prompts with a
     // validation toast instead of installing nothing)
     if (!v) return;
@@ -118,8 +128,8 @@ export const makePrompt = (ctx: PromptCtx) => {
       if (opened) close();
       ctx.floats.open("prompt", rawClose);
       opened = true;
-      passwordMode = !!opts.password;
-      secret = "";
+      // the mode decides the widget shape AND the value source — one fact
+      mode = opts.password ? { kind: "password", secret: "" } : { kind: "text" };
       resolveFn = resolve;
       // the input owns the keyboard now — text pointer until it settles
       ctx.setPointer?.("text");
@@ -166,7 +176,7 @@ export const makePrompt = (ctx: PromptCtx) => {
           // and the input paints underneath the next sibling (invisible
           // whenever that row paints anything) — auto height fits both
           { width: "100%", paddingLeft: 2, paddingRight: 2, paddingTop: 1 },
-          opts.password
+          mode.kind === "password"
             ? Text({ id: "tfm-prompt-mask", content: "Password", fg: c.sidebarFgMuted })
             : Input({
                 id: "tfm-prompt-input",
@@ -207,7 +217,7 @@ export const makePrompt = (ctx: PromptCtx) => {
       // pre-mount node is a silent no-op); the timer dies with the prompt
       // (hidden inputs keep renderer focus — see the clearSearch lesson).
       // Password mode has no Input to focus — the router feeds it keys.
-      if (!passwordMode) {
+      if (mode.kind === "text") {
         focusTimer = setTimeout(() => {
           focusTimer = null;
           try {
@@ -226,17 +236,18 @@ export const makePrompt = (ctx: PromptCtx) => {
   }): boolean => {
     if (ev.name === "escape") cancel();
     else if (ev.name === "return") submit();
-    else if (passwordMode) {
+    else if (mode.kind === "password") {
       // no Input in password mode — collect the masked secret here
       if (ev.name === "backspace" || ev.name === "delete") {
-        secret = secret.slice(0, -1);
+        mode = { kind: "password", secret: mode.secret.slice(0, -1) };
         paintMask();
       } else {
         const ctrl = !!ev.ctrl || !!ev.control;
         const seq = typeof ev.sequence === "string" ? ev.sequence : "";
-        const ch = seq.length === 1 && seq.charCodeAt(0) >= 0x20 ? seq : "";
-        if (ch && !ctrl && !ev.meta) {
-          secret += ch;
+        // the WHOLE sequence lands: the old rule took a single char, so a
+        // multi-char key event (an emoji is two code units) was dropped
+        if (seq && !ctrl && !ev.meta) {
+          mode = { kind: "password", secret: mode.secret + stripControlChars(seq) };
           paintMask();
         }
       }
@@ -251,10 +262,20 @@ export const makePrompt = (ctx: PromptCtx) => {
     close,
     handleKey,
     isOpen: (): boolean => opened,
+    // A bracketed PASTE is a PASTE EVENT, not a keypress: every editor
+    // surface owns a focused Input and the renderer hands the paste to it
+    // directly — EXCEPT the password mode (its mask is a Text, there is no
+    // Input), so the router hands the whole text here. A pasted password
+    // must never be dropped.
+    handlePaste: (text: string): void => {
+      if (mode.kind !== "password") return;
+      mode = { kind: "password", secret: mode.secret + stripControlChars(text) };
+      paintMask();
+    },
     // test seam: drive the value without Input events
     setValue: (v: string): void => {
-      if (passwordMode) {
-        secret = v;
+      if (mode.kind === "password") {
+        mode = { kind: "password", secret: stripControlChars(v) };
         paintMask();
         return;
       }
