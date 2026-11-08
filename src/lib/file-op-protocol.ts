@@ -18,6 +18,16 @@ import type { ReadStream } from "node:fs";
 // new name, or skip the item.
 export type ConflictChoice = "replace" | "keepBoth" | "skip";
 
+// The conflict prompt's ANSWER: the choice, plus the optional "apply this to
+// the rest of the batch" flag.
+//
+// The flag rides in the ANSWER instead of a module-level variable the dialog
+// remembers: the old policy was cleared by exactly THREE explicit
+// resetPolicy() calls, so a path that forgot one made the NEXT unrelated
+// collision auto-resolve as "replace" (data loss). The caller owns the batch
+// policy now — it lives in the op's own loop, so it cannot outlive the op.
+export type ConflictAnswer = { choice: ConflictChoice; applyToRest?: ConflictChoice };
+
 // One selected item in a clipboard/drag payload.
 export type ClipItem = { path: string; isDir: boolean };
 

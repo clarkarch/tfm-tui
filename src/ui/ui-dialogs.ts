@@ -9,7 +9,7 @@ import type { PointerStyle } from "../lib/pointer";
 import type { ConfirmOutcome } from "../lib/confirm-outcome";
 import type { NotifyLevel } from "../lib/notify-level";
 import { hoverEvents, type SlotElement } from "./ui-slots";
-import type { ConflictChoice } from "../lib/file-op-protocol";
+import type { ConflictAnswer, ConflictChoice } from "../lib/file-op-protocol";
 
 // --- Shared skeleton for the centered floating dialogs (conflict / props /
 // yesno): full-screen dimmed scrim + a chrome panel that swallows clicks,
@@ -173,8 +173,11 @@ export const makeDialogs = (ctx: DialogsCtx) => {
 };
 
 // --- Override/conflict prompt ("Replace …?") for transfer/rename collisions ---
-// State + promise plumbing live here; when the choice should apply to the
-// whole remaining batch ("…all") the policy is remembered until resetPolicy.
+// State + promise plumbing live here. The "…all" choice (apply this answer to
+// the whole remaining batch) rides in the ANSWER — the CALLER owns the batch
+// policy, so it can never outlive the operation (the old module-level policy
+// needed three manual resetPolicy() calls, and a path that forgot one made
+// the next unrelated collision auto-resolve as "replace").
 
 type ConflictCtx = {
   colors(): Theme;
@@ -188,40 +191,59 @@ type ConflictCtx = {
   setPointer?(style: PointerStyle): void;
 };
 
+// ONE explicit phase. The old state was three parallel fields
+// (`conflictPolicy`, `conflictOpen`, `conflictResolveFn`): `conflictOpen` was
+// cleared only INDIRECTLY (via floats.close → the raw teardown), so a
+// teardown that never ran — or one that threw halfway — left the prompt
+// "open" while its layer was gone. isOpen() gates the key router, so a stuck
+// true swallows EVERY key (a permanent keyboard deadlock).
+type ConflictState = { kind: "closed" } | { kind: "open"; resolve: (answer: ConflictAnswer) => void };
+
 export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: ConflictCtx) => {
   const { openDialog, closeDialog, dialogBtn } = dialogs;
 
   const CONFLICT_W = 48;
-  let conflictPolicy: ConflictChoice | null = null;
-  let conflictOpen = false;
-  let conflictResolveFn: ((c: ConflictChoice) => void) | null = null;
+  let state: ConflictState = { kind: "closed" };
 
   // raw teardown — registered with floats at open time; a floats-initiated
-  // close (policy dismissal / replace) resolves a pending prompt as "skip"
+  // close (policy dismissal / replace) resolves a pending prompt as "skip".
+  // The state is cleared FIRST and the pending prompt is resolved BEFORE the
+  // best-effort teardown work: a failing native remove must never leave the
+  // prompt "open" (isOpen() gates the key router — a stuck true swallows
+  // EVERY key) nor strand the pending op.
   const rawTeardown = (): void => {
-    const r = conflictResolveFn;
-    conflictResolveFn = null;
-    closeDialog("tfm-conflict");
-    conflictOpen = false;
+    const r = state.kind === "open" ? state.resolve : null;
+    state = { kind: "closed" };
+    r?.({ choice: "skip" });
+    try {
+      closeDialog("tfm-conflict");
+    } catch {}
     // hovered buttons have no out (their nodes are gone) — restore here
-    ctx.setPointer?.("default");
-    r?.("skip");
+    try {
+      ctx.setPointer?.("default");
+    } catch {}
   };
 
-  const closeConflict = (c: ConflictChoice): void => {
-    const r = conflictResolveFn;
-    conflictResolveFn = null;
-    r?.(c);
+  // settle the prompt with an answer and take the layer down. The state is
+  // cleared directly (not via the floats teardown) — closing a prompt whose
+  // layer is no longer on the stack must still clear it.
+  const settle = (answer: ConflictAnswer): void => {
+    const r = state.kind === "open" ? state.resolve : null;
+    state = { kind: "closed" };
+    r?.(answer);
     ctx.floats.close("conflict");
   };
 
-  const promptConflict = (destPath: string, remaining: number): Promise<ConflictChoice> =>
-    new Promise<ConflictChoice>((resolve) => {
+  const closeConflict = (choice: ConflictChoice, applyToRest?: ConflictChoice): void => {
+    settle(applyToRest ? { choice, applyToRest } : { choice });
+  };
+
+  const promptConflict = (destPath: string, remaining: number): Promise<ConflictAnswer> =>
+    new Promise<ConflictAnswer>((resolve) => {
       // floats.open dismisses every other floating layer (menu, props, …) —
       // the prompt must be the only thing on screen
       ctx.floats.open("conflict", rawTeardown);
-      conflictOpen = true;
-      conflictResolveFn = resolve;
+      state = { kind: "open", resolve };
       const c = ctx.colors();
       const name = path.basename(destPath);
       const parentName = path.basename(path.dirname(destPath)) || "/";
@@ -229,8 +251,7 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
       const mkBtn = (label: string, onPick: () => void): ReturnType<typeof Box> =>
         dialogBtn(`tfm-conflict-b${bseq++}`, label, c.white, onPick);
       const pick = (choice: ConflictChoice, all?: ConflictChoice) => {
-        if (all) conflictPolicy = all;
-        closeConflict(choice);
+        closeConflict(choice, all);
       };
       // hard-sliced names used to truncate silently — same-prefix files in
       // one folder were indistinguishable at the exact moment of choice
@@ -285,9 +306,9 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
 
   // theme-switch repaint while open: panel + texts by id, buttons back to
   // rest (hover repaints live on the next mouse move). No rebuild — the
-  // pending promise + remembered policy survive.
+  // pending promise survives.
   const repaintConflict = (): void => {
-    if (!conflictOpen) return;
+    if (state.kind !== "open") return;
     const c = ctx.colors();
     try {
       const panel = ctx.byId("tfm-conflict");
@@ -317,12 +338,8 @@ export const makeConflict = (dialogs: ReturnType<typeof makeDialogs>, ctx: Confl
   return {
     promptConflict,
     closeConflict,
-    isOpen: (): boolean => conflictOpen,
+    isOpen: (): boolean => state.kind === "open",
     repaint: repaintConflict,
-    policy: (): ConflictChoice | null => conflictPolicy,
-    resetPolicy: (): void => {
-      conflictPolicy = null;
-    },
   };
 };
 

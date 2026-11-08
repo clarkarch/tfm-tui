@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeDialogs, makeConflict, makeModalScrim, makeYesNo } from "./ui-dialogs";
 import { makeFloats, type Floats } from "./floats";
+import type { ConflictAnswer } from "../lib/file-op-protocol";
 
 // Floating-layer state lives in ./floats (single source of truth): the
 // conflict/yesno prompts register through it, so opening one dismisses the
@@ -287,6 +288,62 @@ describe("openDialog chokepoint", () => {
     }
   });
 
+  test("a conflict whose teardown throws still clears isOpen (a stuck true swallows every key)", async () => {
+    // isOpen() gates the key router: a conflict that stays "open" after its
+    // layer left the float stack swallows EVERY key (a permanent keyboard
+    // deadlock). The teardown is best-effort cleanup — a failing native
+    // remove must not leave the state stuck, nor strand the pending op.
+    const base = makeCtx();
+    const ctx = {
+      ...base.ctx,
+      byId: (): never => {
+        throw new Error("native remove failed");
+      },
+    };
+    const dialogs = makeDialogs(ctx);
+    const conflict = makeConflict(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: () => null,
+      drainIconQueue: () => {},
+      floats: base.floats,
+    });
+    const answers: ConflictAnswer[] = [];
+    const p = conflict.promptConflict("/a/b.txt", 0).then((a) => {
+      answers.push(a);
+    });
+    expect(conflict.isOpen()).toBe(true);
+    expect(() => conflict.closeConflict("skip")).not.toThrow();
+    expect(conflict.isOpen()).toBe(false);
+    // the pending op must not hang on the failing teardown
+    await p;
+    expect(answers).toEqual([{ choice: "skip" }]);
+  });
+
+  test("the '…all' choice rides in the answer (the dialog remembers no policy)", async () => {
+    // The old dialog kept a module-level policy that only THREE explicit
+    // resetPolicy() calls cleared — a path that forgot the reset made the
+    // NEXT unrelated collision auto-resolve as "replace" (data loss). The
+    // answer now carries "apply to the rest", so the CALLER owns the batch
+    // policy and it cannot outlive the operation.
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const conflict = makeConflict(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: () => null,
+      drainIconQueue: () => {},
+      floats,
+    });
+    const answers: ConflictAnswer[] = [];
+    const p = conflict.promptConflict("/a/b.txt", 3).then((a) => {
+      answers.push(a);
+    });
+    conflict.closeConflict("replace", "replace");
+    await p;
+    expect(answers).toEqual([{ choice: "replace", applyToRest: "replace" }]);
+  });
+
   test("scrim click routes to onClose (dismiss-by-click-away still works)", () => {
     const { ctx, lastAdded } = makeCtx();
     const { openDialog } = makeDialogs(ctx);
@@ -379,8 +436,8 @@ describe("dialog repaints", () => {
       const floats = makeFloats();
       let live: any = { ...makeCtx().ctx.colors() };
       const { conflict } = mkLive(t, floats, () => live);
-      let choice = "";
-      const p = conflict.promptConflict("/a/b.txt", 1).then((c) => (choice = c));
+      const answers: ConflictAnswer[] = [];
+      const p = conflict.promptConflict("/a/b.txt", 1).then((c) => answers.push(c));
       await t.renderOnce();
       expect(floats.isOpen("conflict")).toBe(true);
       live = { ...live, sidebarBg: "#101020", accentBg: "#303040", accent: "#ff0000", sidebarFg: "#f0f0f0" };
@@ -395,7 +452,7 @@ describe("dialog repaints", () => {
       // the pending prompt still resolves (no rebuild swallowed it)
       conflict.closeConflict("keepBoth");
       await p;
-      expect(choice).toBe("keepBoth");
+      expect(answers).toEqual([{ choice: "keepBoth" }]);
     } finally {
       await t.dispose(); // 0.6.0: destroy + await closed
     }

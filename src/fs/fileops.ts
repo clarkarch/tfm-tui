@@ -81,6 +81,7 @@ import {
   progressPaused,
   resetProgressState,
   type ClipItem,
+  type ConflictAnswer,
   type ConflictChoice,
   type ProgressState,
   type TransferSink,
@@ -88,10 +89,12 @@ import {
 import type { UndoJournalData, UndoStep, UndoUnit } from "./undo-steps";
 
 export type FileOpsCtx = {
+  // the conflict prompt answers with an ANSWER: the choice plus the
+  // optional "apply to the rest of the batch" flag. The batch policy lives
+  // in the op's own loop (the dialog remembers nothing), so it can never
+  // outlive the operation.
   conflict: {
-    resetPolicy(): void;
-    policy(): ConflictChoice | null;
-    promptConflict(destPath: string, remaining: number): Promise<ConflictChoice>;
+    promptConflict(destPath: string, remaining: number): Promise<ConflictAnswer>;
   };
   // live progress state — the transfer sink reports into it (stable object ref)
   prog: ProgressState;
@@ -620,7 +623,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     srcs: string[],
     label: string,
   ): Promise<void> => {
-    conflict.resetPolicy();
     // self-drops filter everything out upstream (moveInto) — landing here
     // with nothing to do would report a confusing "Moved 0 items"
     if (!srcs.length) {
@@ -662,6 +664,20 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       selfDrop = 0;
     const failWhy = new Set<string>();
     const total = srcs.length;
+    // The batch policy ("Replace all") lives HERE, in the op's own scope: it
+    // can never outlive the operation, so an unrelated collision can never
+    // inherit it. The old policy lived in the DIALOG (a module-level
+    // variable that only three explicit resetPolicy() calls cleared), so a
+    // path that forgot the reset made the next collision auto-resolve.
+    let batchPolicy: ConflictChoice | null = null;
+    // one collision → one choice. The "…all" answer sets the policy for the
+    // REST of THIS op.
+    const askConflict = async (target: string, remaining: number): Promise<ConflictChoice> => {
+      if (batchPolicy) return batchPolicy;
+      const answer = await ctx.conflict.promptConflict(target, remaining);
+      if (answer.applyToRest) batchPolicy = answer.applyToRest;
+      return answer.choice;
+    };
     // sudo gate memoized per op: one password prompt per batch, not per file.
     let sudoOk: boolean | null = null;
     const needSudo = async (): Promise<boolean> => {
@@ -727,7 +743,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           continue;
         } else if (existsSync(target)) {
           const done = ok + skipped;
-          const choice = conflict.policy() ?? (await conflict.promptConflict(target, Math.max(0, total - done - 1)));
+          const choice = await askConflict(target, Math.max(0, total - done - 1));
           if (choice === "skip") {
             skipped++;
             continue;
@@ -1005,8 +1021,8 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     };
     if (existsSync(finalDest)) {
       // single target: the bulk policy row never shows (promptConflict only
-      // offers "…all" when remaining > 0), so there is no policy to reset
-      const choice = await conflict.promptConflict(finalDest, 0);
+      // offers "…all" when remaining > 0), so there is no batch policy here
+      const choice = (await conflict.promptConflict(finalDest, 0)).choice;
       if (choice === "skip") return;
       if (choice === "keepBoth") {
         finalDest = uniqueTarget(path.dirname(finalDest), path.basename(finalDest));
@@ -1427,7 +1443,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.notify("Can't extract here", "extract", "error");
       return;
     }
-    conflict.resetPolicy();
     resetProg();
     const units: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
@@ -1554,7 +1569,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
           const src = path.join(stage, name);
           let target = path.join(destDir, name);
           if (existsSync(target)) {
-            const choice = conflict.policy() ?? (await conflict.promptConflict(target, 0));
+            const choice = (await conflict.promptConflict(target, 0)).choice;
             if (choice === "skip") {
               skipped++;
               continue;
@@ -1635,7 +1650,6 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
       ctx.notify("Nothing to compress", "compress", "info");
       return;
     }
-    conflict.resetPolicy();
     resetProg();
     const units: UndoUnit[] = [];
     const dUnits: UndoStep[] = [];
@@ -1661,7 +1675,7 @@ export const makeFileOps = (ctx: FileOpsCtx) => {
     const base = srcs.length === 1 && onlySrc !== undefined ? path.basename(onlySrc) : "archive";
     let out = path.join(destDir, `${base}${ext}`);
     if (existsSync(out)) {
-      const choice = conflict.policy() ?? (await conflict.promptConflict(out, 0));
+      const choice = (await conflict.promptConflict(out, 0)).choice;
       if (choice === "skip") {
         ctx.notify("Compress cancelled", "compress cancelled", "info");
         return;

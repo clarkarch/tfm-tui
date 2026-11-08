@@ -19,7 +19,7 @@ import type { UndoJournalData } from "./undo-steps";
 import { archiveUri } from "./archive-scheme";
 import { trashDir } from "./fsutil";
 import type { ArchiveRun, ToolSpec } from "./archive";
-import type { ProgressState } from "../lib/file-op-protocol";
+import type { ProgressState, ConflictAnswer } from "../lib/file-op-protocol";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
 
 // runTransfer is the only path copies/moves take — these tests pin the wiring:
@@ -75,11 +75,9 @@ const makeHarness = (over: Partial<FileOpsCtx> = {}) => {
   let lastData: UndoJournalData | null = null;
   const ctx: FileOpsCtx = {
     conflict: {
-      resetPolicy: () => calls.push("policy:reset"),
-      policy: () => null,
       promptConflict: async () => {
         calls.push("conflict:prompt");
-        return "skip" as const;
+        return { choice: "skip" as const };
       },
     },
     prog,
@@ -164,6 +162,47 @@ describe("runTransfer: same-fs move", () => {
 
     expect(existsSync(path.join(destDir, ".tfm-extract-1234-ab12cd34"))).toBe(false);
     expect(existsSync(path.join(destDir, "sweep-src.txt"))).toBe(true);
+  });
+});
+
+describe("conflict batch policy", () => {
+  test("a remembered '…all' policy does not leak into an unrelated conflict", async () => {
+    // The old policy lived in the DIALOG (a module-level variable that only
+    // THREE explicit resetPolicy() calls cleared) — a path that forgot the
+    // reset made the NEXT unrelated collision auto-resolve as "replace"
+    // (data loss). The policy now lives in the op's own loop: the dialog's
+    // ctx has no policy() / resetPolicy() at all, so there is nothing to
+    // forget.
+    const prompts: string[] = [];
+    const h = makeHarness({
+      conflict: {
+        promptConflict: async (destPath: string) => {
+          prompts.push(destPath);
+          return { choice: "keepBoth", applyToRest: "keepBoth" };
+        },
+      },
+    });
+    const srcDir = path.join(ROOT, "policy-src");
+    const destDir = path.join(ROOT, "policy-dest");
+    mkdirSync(srcDir, { recursive: true });
+    mkdirSync(destDir, { recursive: true });
+    W(path.join(srcDir, "a.txt"), "new-a");
+    W(path.join(srcDir, "b.txt"), "new-b");
+    W(path.join(destDir, "a.txt"), "old-a");
+    W(path.join(destDir, "b.txt"), "old-b");
+
+    // ONE op, two collisions: the first answer applies to the rest
+    await h.ops.runTransfer("copy", destDir, [path.join(srcDir, "a.txt"), path.join(srcDir, "b.txt")], "paste");
+    expect(prompts.length).toBe(1);
+    expect(readFileSync(path.join(destDir, "a (copy).txt"), "utf8")).toBe("new-a");
+    expect(readFileSync(path.join(destDir, "b (copy).txt"), "utf8")).toBe("new-b");
+
+    // an UNRELATED op must ask again — the policy died with the first op
+    const otherDest = path.join(ROOT, "policy-dest-2");
+    mkdirSync(otherDest, { recursive: true });
+    W(path.join(otherDest, "a.txt"), "old-a2");
+    await h.ops.runTransfer("copy", otherDest, [path.join(srcDir, "a.txt")], "paste again");
+    expect(prompts.length).toBe(2);
   });
 });
 
@@ -1230,7 +1269,7 @@ describe("rename undo / replace-stash guards", () => {
     // stash succeeds (unit recorded) but the rename itself fails — the stash's
     // restore unit must not be stranded with no undo entry
     const h = makeHarness({
-      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "replace" as const },
+      conflict: { promptConflict: async () => ({ choice: "replace" as const }) },
       stashVictim: async (_victim, units) => {
         units.push(async () => {});
         return true;
@@ -1249,7 +1288,7 @@ describe("rename undo / replace-stash guards", () => {
 
   test("a failed replace-stash aborts the copy (victim preserved)", async () => {
     const h = makeHarness({
-      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "replace" as const },
+      conflict: { promptConflict: async () => ({ choice: "replace" as const }) },
       stashVictim: async (_victim, _units, _d, onFail) => {
         onFail(new Error("disk full"));
         return false;
@@ -1268,7 +1307,7 @@ describe("rename undo / replace-stash guards", () => {
 
   test("a failed replace-stash aborts the rename (existing file preserved)", async () => {
     const h = makeHarness({
-      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "replace" as const },
+      conflict: { promptConflict: async () => ({ choice: "replace" as const }) },
       stashVictim: async (_victim, _units, _d, onFail) => {
         onFail(new Error("disk full"));
         return false;
@@ -1383,7 +1422,7 @@ describe("extractArchive", () => {
     const h = makeHarness({
       runArchive,
       listArchive: async () => 1,
-      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "keepBoth" },
+      conflict: { promptConflict: async () => ({ choice: "keepBoth" as const }) },
     });
     const destDir = path.join(ROOT, "x-keepboth");
     mkdirSync(destDir, { recursive: true });
@@ -1648,7 +1687,7 @@ describe("compressPaths", () => {
 
     const h2 = makeHarness({
       runArchive,
-      conflict: { resetPolicy: () => {}, policy: () => null, promptConflict: async () => "keepBoth" },
+      conflict: { promptConflict: async () => ({ choice: "keepBoth" as const }) },
     });
     await h2.ops.compressPaths([a], "tar.gz", destDir);
     expect(readFileSync(path.join(destDir, "only.txt (copy).tar.gz"), "utf8")).toBe("archive-bytes");
@@ -2354,9 +2393,7 @@ describeNonRoot("sudo escalation", () => {
     chmodSync(destDir, 0o555);
     const replaceCtx = () => ({
       conflict: {
-        resetPolicy: () => {},
-        policy: () => null,
-        promptConflict: async () => "replace" as const,
+        promptConflict: async () => ({ choice: "replace" as const }),
       },
     });
     try {
@@ -2431,9 +2468,7 @@ describeNonRoot("sudo escalation", () => {
         },
 
         conflict: {
-          resetPolicy: () => {},
-          policy: () => null,
-          promptConflict: async () => "replace" as const,
+          promptConflict: async () => ({ choice: "replace" as const }),
         },
         stashVictim: async (_victim, units) => {
           units.push(async () => {});
@@ -2523,9 +2558,7 @@ describeNonRoot("sudo escalation", () => {
       ensureSudo: async () => true,
       sudoExec: fakeSudoExec,
       conflict: {
-        resetPolicy: () => {},
-        policy: () => null,
-        promptConflict: async () => "replace" as const,
+        promptConflict: async () => ({ choice: "replace" as const }),
       },
       // normal stash always fails privileged; the sudo path must take over
       stashVictim: async (_victim, _units, _d, onFail) => {
@@ -2564,9 +2597,7 @@ describeNonRoot("sudo escalation", () => {
       ensureSudo: async () => true,
       sudoExec: fakeSudoExec,
       conflict: {
-        resetPolicy: () => {},
-        policy: () => null,
-        promptConflict: async () => "replace" as const,
+        promptConflict: async () => ({ choice: "replace" as const }),
       },
       stashVictim: async (_victim, _units, _d, onFail) => {
         onFail(Object.assign(new Error("permission denied"), { code: "EACCES" }));
@@ -2639,9 +2670,7 @@ describe("renames serialize behind live ops (busy guard sees them)", () => {
 
 describe("unexpected op failures never reject (fire-and-forget safe)", () => {
   const throwingConflict = () => ({
-    resetPolicy: () => {},
-    policy: () => null,
-    promptConflict: async (): Promise<"skip"> => {
+    promptConflict: async (): Promise<ConflictAnswer> => {
       throw new Error("dialog gone");
     },
   });
