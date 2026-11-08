@@ -789,6 +789,31 @@ describe("no-drift rule", () => {
     // the progress lives INSIDE the record (the stale-p=1 bug lived outside)
     expect(/holder:\s*\{\s*p:\s*number\s*\}/.test(anim)).toBe(true);
   });
+
+  test("the hover paint owner is ONE record — no parallel state", async () => {
+    // "who owns the hover paint" was THREE sources: the `current` lift owner,
+    // `refs.selected` and the feature on/off flag — and the "drop the lift we
+    // own" logic was duplicated in each branch, so a branch could release one
+    // owner and strand another (a lift owned for a different key survived a
+    // selection change). The owner is ONE tagged record now, with ONE release
+    // path.
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid-anim.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the hover animator's section only — the tween above owns its own
+    // timeline (a separate owner)
+    const hover = src.slice(src.indexOf("type HoverCur ="));
+    expect(hover.startsWith("type HoverCur =")).toBe(true);
+    // the parallel owner must not come back
+    expect(/let\s+current\b/.test(hover)).toBe(false);
+    // ONE tagged record replaces it
+    expect(/type\s+HoverOwner\s*=/.test(hover)).toBe(true);
+    expect(/kind:\s*"none"/.test(hover)).toBe(true);
+    expect(/kind:\s*"paint"/.test(hover)).toBe(true);
+    expect(/kind:\s*"selection"/.test(hover)).toBe(true);
+    // every release path reads the ONE record (not a second copy of the truth)
+    expect((hover.match(/\.kind\b/g) ?? []).length).toBeGreaterThanOrEqual(3);
+  });
 });
 
 // real renderer glue: the hover highlight repaints instantly, lifts a reserved
@@ -1198,5 +1223,72 @@ describe("makeTileHoverAnim (engine)", () => {
     expect((t.renderer.root.findDescendantById("tile-a-thumb") as any).overflow).toBe("visible");
     expect((t.renderer.root.findDescendantById("slot-a-thumb") as any).translateY).toBe(-1);
     expect((t.renderer.root.findDescendantById("lab-a-thumb") as any).translateY).toBe(0);
+  });
+
+  test("a selection change releases a lift owned for another key", async () => {
+    // "who owns the hover paint" is ONE record. A selection change on a
+    // DIFFERENT tile must release the lift we own for the old one: the
+    // feature-on selected branch used to return BEFORE the sweep, so the old
+    // tile kept its nudge until the pointer happened to leave it (which may
+    // never come — the click was the last gesture).
+    const { anim, refs, byId } = await setup("own");
+    anim.playHover("/w/a-own", true);
+    expect((byId("slot-a-own") as any).translateY).toBe(-1);
+    refs.get("/w/b-own")!.selected = true;
+    anim.playHover("/w/b-own", true);
+    expect((byId("slot-a-own") as any).translateY).toBe(0);
+    expect((byId("tile-a-own") as any).backgroundColor.toInts()).toEqual([...REST] as any);
+  });
+
+  test("turning the lift off while a tile is selected settles the nudge", async () => {
+    // the feature-off branch cleared the owner WITHOUT dropping the lift, so
+    // a tile lifted before the knob flipped kept its nudge forever
+    let enabled = true;
+    const refs = makeRefs("flip", undefined, true);
+    for (const [, r] of refs) {
+      t.renderer.root.add(Box({ id: r.tileId, width: 8, height: 5, backgroundColor: "#1a1b26" }));
+      t.renderer.root.add(Box({ id: r.iconSlotId, width: 4, height: 3 }));
+      t.renderer.root.add(Text({ id: r.labelId, content: "x", fg: r.baseFg }));
+    }
+    await t.renderOnce();
+    const anim = makeTileHoverAnim({
+      renderer: () => t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      tileRefs: () => refs,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
+      uiStyle: () => "solid" as const,
+      setIconState: () => {},
+      hoverLiftOpts: () => ({
+        enabled,
+        ms: 0,
+        slideCells: 1,
+        ease: "ease-out",
+        direction: "up",
+        includeLabel: false,
+      }),
+    });
+    anim.playHover("/w/a-flip", true);
+    const slot = t.renderer.root.findDescendantById("slot-a-flip") as any;
+    expect(slot.translateY).toBe(-1);
+    enabled = false;
+    refs.get("/w/a-flip")!.selected = true;
+    anim.playHover("/w/a-flip", true);
+    expect(slot.translateY).toBe(0);
+  });
+
+  test("a late mouse-out for another tile keeps the owner we still hover", async () => {
+    // the pointer moved A → B and the out for A landed AFTER the over for B:
+    // the out says nothing about B, so the owner record must survive it —
+    // otherwise releaseCurrent() (a modal takes the screen) can no longer
+    // settle B and its lift is stranded.
+    const { anim, byId } = await setup("late");
+    anim.playHover("/w/a-late", true);
+    anim.playHover("/w/b-late", true);
+    expect((byId("slot-b-late") as any).translateY).toBe(-1);
+    anim.playHover("/w/a-late", false); // the late out for A
+    expect((byId("slot-b-late") as any).translateY).toBe(-1);
+    anim.releaseCurrent();
+    expect((byId("slot-b-late") as any).translateY).toBe(0);
+    expect((byId("tile-b-late") as any).backgroundColor.toInts()).toEqual([...REST] as any);
   });
 });

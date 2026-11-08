@@ -571,12 +571,23 @@ type HoverCur = {
   key: string;
   refs: SelTileRef;
   node: MaybeNode;
-  slot: MaybeNode;
-  label: MaybeNode;
 };
 
+// WHO owns the hover visuals right now — ONE record, ONE release path:
+//   none      — we own nothing (the tile is at rest)
+//   paint     — we own this tile's hover paint (icon/label/bg + the lift)
+//   selection — the selection owns this tile's visuals; the hover never
+//               paints them (a selected tile keeps the selection's look)
+type HoverOwner = { kind: "none" } | { kind: "paint"; key: string; cur: HoverCur } | { kind: "selection"; key: string };
+
 export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
-  let current: HoverCur | null = null;
+  // ONE owner record. The old code had THREE sources of truth for "who owns
+  // the hover paint" (`current`, `refs.selected`, the feature on/off flag) and
+  // three copies of "drop the lift we own" — so a branch could release one
+  // owner and strand another (a lift owned for a DIFFERENT key survived a
+  // selection change; the feature-off branch cleared the owner without
+  // dropping the lift).
+  let owner: HoverOwner = { kind: "none" };
   // one reused tween drives the hover-in glide when duration > 0 (ms 0 = snap)
   const tween = makeHoverTween(ctx.renderer);
 
@@ -623,11 +634,10 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     }
   };
 
-  const dropLift = (cur: HoverCur | null): void => {
-    if (!cur) return;
-    const node = ownedNode(cur);
-    if (!node) return;
-    tween.stop();
+  // settle the nudge on a tile: the icon (and the label, when it rides) go
+  // back to rest. The slot/label are resolved by id, so a rebuilt tile's
+  // fresh nodes are the ones settled.
+  const settle = (cur: HoverCur): void => {
     const slot = ownedSlot(cur);
     const label = ownedLabel(cur);
     try {
@@ -640,6 +650,14 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
         label.translateY = 0;
       }
     } catch {}
+  };
+
+  const dropLift = (cur: HoverCur | null): void => {
+    if (!cur) return;
+    const node = ownedNode(cur);
+    if (!node) return;
+    tween.stop();
+    settle(cur);
   };
 
   // transparent-bg force as a surface-seam value (absent = today's behavior)
@@ -663,14 +681,32 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     dropLift(cur);
   };
 
+  // ONE release path: what we owned before this event that we no longer own.
+  // Returns true when the owner SURVIVES the event — a late mouse-out for a
+  // DIFFERENT tile says nothing about the tile we are still hovering, so the
+  // owner record must not be dropped (a lost owner strands the lift).
+  const releaseOwner = (prev: HoverOwner, key: string, hovered: boolean): boolean => {
+    if (prev.kind !== "paint") return false;
+    if (prev.key === key) {
+      // the same tile: only the LIFT goes — the paint below replaces the
+      // icon/bg (or the selection takes them over)
+      dropLift(prev.cur);
+      return false;
+    }
+    if (!hovered) return true; // a late out for another tile — the owner survives
+    // the pointer moved onto another tile: the old owner returns to rest
+    restPaint(prev.cur);
+    return false;
+  };
+
   // release any owned hover. wiring/grid calls this when a modal takes the
   // screen (floats onModalOpen): a tile hovered at that instant would otherwise
   // stay lifted/tinted behind the dim (the modal overlays it without an `out`
   // reaching the tile in every terminal/synthetic-over path).
   const releaseCurrent = (): void => {
-    if (!current) return;
-    const cur = current;
-    current = null;
+    if (owner.kind !== "paint") return;
+    const cur = owner.cur;
+    owner = { kind: "none" };
     restPaint(cur);
   };
 
@@ -680,102 +716,69 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       if (!refs) return;
       const node = ctx.byId(refs.tileId);
       if (!node) return;
-      const slot = refs.iconSlotId ? ctx.byId(refs.iconSlotId) : null;
-      const labNode = refs.labelId ? ctx.byId(refs.labelId) : null;
       const opts = ctx.hoverLiftOpts();
+      const selected = refs.selected === true;
+      const cur: HoverCur = { key, refs, node };
 
-      if (!opts.enabled) {
-        // feature off = today's instant snap, no lift. Track `current` so
-        // releaseCurrent() (modal takes the screen) can rest-paint the hovered
-        // tile; sweep a different previous tile first (the old direct-paint path
-        // owned no state and left it tinted).
-        if (current && current.key !== key) {
-          restPaint(current);
-          current = null;
-        }
-        if (refs.selected) {
-          if (current?.key === key) current = null;
-          return; // selection owns the icon/bg visuals
-        }
-        current = hovered ? { key, refs, node, slot, label: labNode } : null;
-        const offColors = ctx.colors();
-        const offHex = hovered ? offColors.hoverBg : restTileBg(ctx.uiStyle(), offColors, tForce());
-        try {
-          ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
-          // hover-in lifts the label to white (readable on the hover fill);
-          // hover-out restores the rest fg — same contract as setTileVisual
-          const lab = ctx.byId(refs.labelId);
-          if (lab) lab.fg = hovered ? offColors.white : restLabelFg(refs, key);
-          if (slot) {
-            slot.translateX = 0;
-            slot.translateY = 0;
-          }
-          if (labNode) {
-            labNode.translateX = 0;
-            labNode.translateY = 0;
-          }
-        } catch {}
-        writeBg(node, offHex);
+      // ONE release: the previous owner, before this event's paint
+      const kept = releaseOwner(owner, key, hovered);
+
+      if (selected) {
+        // the selection owns the icon/bg visuals — the hover never paints
+        // them, so a selected tile keeps the selection's look. A repaint that
+        // changes the hit grid re-fires a SYNTHETIC over on the stationary
+        // cursor (AGENTS OpenTUI rule), so this branch is also where a tile
+        // that just got selected settles its OWNED lift.
+        if (!kept) owner = { kind: "selection", key };
         return;
       }
 
-      // an out ALWAYS releases a lift we own — selection paints icon/bg but
-      // never translate, so a click that selected the tile still drops it
+      const colors = ctx.colors();
       if (!hovered) {
-        if (current?.key === key) {
-          dropLift(current);
-          current = null;
-        }
-        if (refs.selected) return; // selection owns the icon/bg visuals
-      } else if (refs.selected) {
-        // a repaint changing the hit grid re-fires a SYNTHETIC over on the
-        // STATIONARY cursor (AGENTS OpenTUI rule), so playHover(key, true) can
-        // arrive on a tile whose selection just flipped with NO out ever
-        // firing: the owned lift must be released here, or the selected tile
-        // stays nudged (the "hover stuck on select" bug) until the pointer
-        // leaves it — a mouse-out that may never come when the click is the
-        // last gesture before the user's eyes go to the preview/grid.
-        if (current?.key === key) {
-          dropLift(current);
-          current = null;
-        }
-        return; // selection owns the icon/bg visuals
+        // the tile returns to rest: cut-dim icon + label, the rest bg
+        if (!kept) owner = { kind: "none" };
+        try {
+          ctx.setIconState(refs.iconSpec, restIconIdx(refs, key));
+          // hover-out restores the rest fg — same contract as setTileVisual
+          const lab = ctx.byId(refs.labelId);
+          if (lab) lab.fg = restLabelFg(refs, key);
+        } catch {}
+        writeBg(node, restTileBg(ctx.uiStyle(), colors, tForce()));
+        settle(cur); // the nudge ends with the hover
+        return;
       }
 
-      const colors = ctx.colors();
-      const toHex = hovered ? colors.hoverBg : restTileBg(ctx.uiStyle(), colors, tForce());
-      // icon raster + label flip instantly (hover-in never dims — cut only
-      // applies at Rest, exactly like setTileVisual)
+      // hover-in: the icon/label/bg flip instantly (hover-in never dims — cut
+      // only applies at Rest, exactly like setTileVisual)
+      owner = { kind: "paint", key, cur };
       try {
-        ctx.setIconState(refs.iconSpec, hovered ? TileVisual.Hover : restIconIdx(refs, key));
+        ctx.setIconState(refs.iconSpec, TileVisual.Hover);
+        // hover-in lifts the label to white (readable on the hover fill)
         const lab = ctx.byId(refs.labelId);
-        if (lab) lab.fg = hovered ? colors.white : restLabelFg(refs, key);
+        if (lab) lab.fg = colors.white;
       } catch {}
-      writeBg(node, toHex);
+      writeBg(node, colors.hoverBg);
 
-      // sweep: the pointer moved to another tile without an out landing first
-      if (hovered && current && current.key !== key) restPaint(current);
-      const lift = hovered && refs.hoverLift === true;
+      // the lift rides the feature knob: off (or a tile without headroom)
+      // keeps today's instant snap with no motion
+      const lift = opts.enabled && refs.hoverLift === true;
       const off = lift ? hoverOffset(opts.direction, opts.slideCells) : { dx: 0, dy: 0 };
-      const nextCur: HoverCur | null = hovered ? { key, refs, node, slot, label: labNode } : null;
-      current = nextCur;
+      const withLabel = lift && opts.includeLabel === true;
       // writes the offset at hover progress p (whole cells; the label rides
       // only when include-label is on). p=1 is the settled hover, p=0 rest.
-      const writeAt = (cur: HoverCur | null, p: number): void => {
-        if (!cur) return;
-        const s = ownedSlot(cur);
-        const lab = ownedLabel(cur);
+      const writeAt = (p: number): void => {
         const dx = Math.round(off.dx * p);
         const dy = Math.round(off.dy * p);
         try {
+          const s = ownedSlot(cur);
           if (s) {
             s.translateX = dx;
             s.translateY = dy;
           }
+          const lab = ownedLabel(cur);
           if (lab) {
-            const wl = lift && opts.includeLabel;
-            lab.translateX = wl ? dx : 0;
-            lab.translateY = wl ? dy : 0;
+            lab.translateX = withLabel ? dx : 0;
+            lab.translateY = withLabel ? dy : 0;
           }
         } catch {}
       };
@@ -783,17 +786,17 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
       // duration glides in over `travel` cells (under a 1-cell travel the
       // whole-cell rounding makes the tween a snap too — pick travel > 1)
       if (lift && opts.ms > 0) {
-        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, (p) => writeAt(nextCur, p));
+        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, writeAt);
       } else {
         tween.stop();
-        writeAt(nextCur, 1);
+        writeAt(1);
       }
     } catch {
       // never strand a lifted tile when an unexpected lookup/paint fails
       try {
-        dropLift(current);
+        if (owner.kind === "paint") dropLift(owner.cur);
       } catch {}
-      current = null;
+      owner = { kind: "none" };
     }
   };
 
