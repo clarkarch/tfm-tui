@@ -457,6 +457,34 @@ describe("precedence chain", () => {
     expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard"]);
   });
 
+  test("the terminal hint shows again after a modal interrupted the focus", () => {
+    // The hint fires ONCE per terminal focus VISIT. The old latch was reset by
+    // FIVE scattered surfaces (path edit, file menu, search, sidebar, grid) —
+    // a modal interrupt (conflict/yes-no/props/prompt/pick/esc menu) reached
+    // NONE of them, so the NEXT visit was SILENT: the dead-end the hint exists
+    // to prevent (the user cannot tell the app swallowed their key).
+    let conflictOpen = false;
+    const h = makeHarness({
+      termOwnsKeyboard: () => true,
+      conflict: {
+        isOpen: () => conflictOpen,
+        closeConflict: (p) => h.calls.push(`conflict:close:${p}`),
+      },
+    });
+    h.key("x");
+    expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard"]);
+    // the conflict takes the keyboard — the hint must not fire again
+    h.calls.length = 0;
+    conflictOpen = true;
+    h.key("x");
+    expect(h.calls).toEqual([]);
+    // the modal is gone and the terminal owns the keyboard again — that is a
+    // NEW focus visit, so the hint shows AGAIN
+    conflictOpen = false;
+    h.key("x");
+    expect(h.calls).toEqual(["notify:terminal:info:Terminal owns keyboard"]);
+  });
+
   test("path edit: esc exits, everything else swallowed", () => {
     const h = makeHarness({ pathEditOpen: () => true });
     h.key("a");
@@ -1927,5 +1955,23 @@ describe("no-drift rule", () => {
     // ... and it goes through the menu's methods
     expect(/ctx\.moveFileMenu\(/.test(src)).toBe(true);
     expect(/ctx\.activateFileMenu\(/.test(src)).toBe(true);
+  });
+
+  test("the terminal hint latch is driven by the surface machine, not by scattered resets", async () => {
+    // The hint shows once per terminal focus VISIT. The old boolean
+    // (`termHintShown`) was reset by FIVE scattered surfaces (path edit, file
+    // menu, search, sidebar, grid) — a modal interrupt reached none of them,
+    // so the next visit was silent. The latch is now driven by the SURFACE
+    // machine: ONE owner, ONE transition, no scattered writes.
+    const src = (await Bun.file(`${import.meta.dir}/keymap.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans/count, not the source: a failed match would
+    // dump the whole module into the test output)
+    // the old parallel latch may not come back
+    expect(/termHintShown/.test(src)).toBe(false);
+    // ... and the hint state is written in exactly ONE place (the surface
+    // transition) — a per-case reset is the drift this rule guards
+    expect((src.match(/terminalHint\s*=/g) ?? []).length).toBe(1);
   });
 });

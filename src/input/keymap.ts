@@ -224,9 +224,25 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // With one value the half-state is unrepresentable.
   type SidebarFocus = { kind: "grid" } | { kind: "places"; index: number };
   let sidebarFocus: SidebarFocus = { kind: "grid" };
-  // terminal-hint throttle: the "click the grid to leave" status shows once
-  // per terminal focus visit, not on every swallowed keypress
-  let termHintShown = false;
+  // The terminal-hint machine: the hint shows ONCE per terminal focus VISIT.
+  // The old code carried a boolean (`termHintShown`) that FIVE scattered
+  // surfaces had to reset (path edit, file menu, search, sidebar, grid) — a
+  // modal interrupt (conflict/yes-no/props/prompt/pick/esc menu) reached NONE
+  // of them, so the NEXT visit was SILENT: the dead-end the hint exists to
+  // prevent. The latch is now driven by the SURFACE machine (the router's one
+  // resolver for "who owns this key") — ONE owner, ONE transition, no
+  // scattered resets.
+  type TerminalHint = { kind: "away" } | { kind: "shown" };
+  let terminalHint: TerminalHint = { kind: "away" };
+  // ONE transition: the active surface drives the latch. True when the
+  // surface just BECAME the terminal — a new focus visit, and the only moment
+  // the hint may fire.
+  const enterTerminalVisit = (surface: KeySurface): boolean => {
+    const visiting = surface === "terminal";
+    const entered = visiting && terminalHint.kind === "away";
+    terminalHint = visiting ? { kind: "shown" } : { kind: "away" };
+    return entered;
+  };
   // ctrl+c is copy, never quit (exitOnCtrlC:false) — hammering it is the
   // SIGINT habit, so the third consecutive copy key hints at the quit bind
   // once per streak; any other key resets the streak. The streak IS the
@@ -1165,6 +1181,11 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
     // for every surface BELOW the pick.
     if (surfaceBelow(surface, "pick") && hit(ev, "commandPalette") && runAction("commandPalette")) return true;
 
+    // the terminal hint fires ONCE per focus visit — the transition INTO the
+    // terminal surface. The latch is the surface machine's projection, so
+    // every surface (modal, editor, grid) re-arms it by construction.
+    if (enterTerminalVisit(surface)) ctx.notify("Terminal owns keyboard", "terminal", "info");
+
     switch (surface) {
       // text prompt above everything (incl. pick): its Input owns typing,
       // the router just delegates keys and swallows the rest
@@ -1214,38 +1235,29 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
         else if (hit(ev, "openSelected")) ctx.escMenu.menuActivate();
         return true;
       // embedded terminal owns the keyboard while focused — everything below
-      // is host UI. Toast once per focus visit, not per key, instead of
-      // dead-ending silently: users otherwise think the app hung.
+      // is host UI. The hint (once per focus visit) already fired above, on
+      // the transition into this surface.
       case "terminal":
-        if (!termHintShown) {
-          termHintShown = true;
-          ctx.notify("Terminal owns keyboard", "terminal", "info");
-        }
         return true;
       // inline path edit: esc exits, everything else swallowed
       case "pathedit":
-        termHintShown = false;
         if (ev.name === "escape") ctx.exitPathEdit();
         return true;
       // file context menu open: arrows/enter navigate it, esc closes.
       // The menu owns its cursor — the router asks it to move/activate and
       // only READS getFileMenuState() (is the flyout open?).
       case "filemenu":
-        termHintShown = false;
         return handleFileMenuKeys(ev);
       case "search":
-        termHintShown = false;
         return handleSearchKeys(ev);
       // --- keyboard navigation: sidebar <-> grid ---
       // sidebar focus swallows ALL keys — it must precede shift-extend or
       // shift+arrows would mutate the grid selection while the sidebar is
       // focused
       case "sidebar":
-        termHintShown = false;
         if (dispatchPreNavActions(ev)) return true;
         return handleSidebarKeys(ev);
       case "grid":
-        termHintShown = false;
         if (dispatchPreNavActions(ev)) return true;
         if (handleShiftExtend(ev)) return true;
         if (handleGridNavKeys(ev)) return true;
