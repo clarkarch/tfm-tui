@@ -10,8 +10,8 @@ import type { Theme } from "../config/config";
 
 // UI TDD pilot: the sanctioned pattern for renderer-coupled widgets is
 // @opentui/core/testing's createTestRenderer (headless native frame loop).
-// This pins the file-menu widget end-to-end: mount-by-id, the LIVE-state
-// keyboard-nav contract (keymap mutates fmenu.cursor in place, then repaints),
+// This pins the file-menu widget end-to-end: mount-by-id, the keyboard-nav
+// contract (the MENU owns the cursor — the router asks it to move/activate),
 // edge clamping, floats replacement policy and teardown.
 
 let t: TestRendererSetup;
@@ -92,20 +92,26 @@ describe("openContextMenu", () => {
   });
 });
 
-describe("keyboard nav contract (live state, no setter)", () => {
-  test("mutating fileMenuState().cursor + renderFileMenu repaints the highlight", async () => {
+describe("keyboard nav contract (the menu owns the cursor)", () => {
+  // The menu is the ONE owner of its cursor: the key router ASKS it to move
+  // or activate, it never writes the state. The router used to mutate the
+  // live state object in place — two owners for one cursor (the mouse path
+  // here, the keyboard path in the router), free to drift apart.
+  const moveDown = (times = 1): void => {
+    for (let i = 0; i < times; i++) menu.moveMain(1);
+  };
+  const ints = (r: any) => (r.backgroundColor ? [...r.backgroundColor.toInts()] : [0, 0, 0, 0]);
+
+  test("moveMain repaints the highlight on the cursor's row", async () => {
     menu.openContextMenu(2, 2, "", mkEntries(3));
     await t.renderOnce();
-    const st = menu.fileMenuState()!;
-    expect(cursorIndex(st.cursor)).toBe(-1);
+    expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(-1);
 
-    st.cursor = cursorAt(2); // exactly what the key router does
-    menu.renderFileMenu();
+    moveDown(3); // no cursor -> first row -> ... -> the third row
     await t.renderOnce();
 
     const rows = panelRows();
     // OpenTUI keeps bgs as parsed RGBA objects; unhighlighted rows are transparent
-    const ints = (r: any) => (r.backgroundColor ? [...r.backgroundColor.toInts()] : [0, 0, 0, 0]);
     expect(ints(rows[0])).toEqual([0, 0, 0, 0]);
     expect(ints(rows[1])).toEqual([0, 0, 0, 0]);
     expect(ints(rows[2])).not.toEqual([0, 0, 0, 0]);
@@ -113,13 +119,99 @@ describe("keyboard nav contract (live state, no setter)", () => {
     await t.renderOnce();
   });
 
-  test("fileMenuState returns the SAME object the widget renders from", () => {
+  test("the keyboard and the mouse agree on the cursor after a move", async () => {
+    menu.openContextMenu(2, 2, "", mkEntries(3));
+    await t.renderOnce();
+    // the mouse picks row 1: screen y = py(2) + divider(1) + index(1)
+    await t.mockMouse.moveTo(4, 4);
+    await t.renderOnce();
+    expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(1);
+
+    // the keyboard moves on to row 2 — ONE cursor, both paths land on it
+    moveDown();
+    await t.renderOnce();
+    expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(2);
+    expect(ints(panelRows()[2])).not.toEqual([0, 0, 0, 0]);
+
+    // the mouse arriving on the SAME row agrees (no snap-back, no second cursor)
+    await t.mockMouse.moveTo(4, 5);
+    await t.renderOnce();
+    expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(2);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
+  test("enter on an open flyout with no highlighted row does nothing VISIBLY", async () => {
+    const calls: string[] = [];
+    menu.openContextMenu(5, 5, "", [
+      {
+        label: "Open",
+        action: () => calls.push("parent"),
+        submenu: [{ label: "Open in New Tab", action: () => calls.push("sub") }],
+      },
+    ]);
+    await t.renderOnce();
+    moveDown(); // the cursor onto the parent row
+    await t.renderOnce();
+    menu.openSubmenu(); // the flyout opens with NO row highlighted
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.flyout).toEqual(openFlyout());
+
+    const before = t.captureCharFrame();
+    menu.activate(); // enter
+    await t.renderOnce();
+
+    // nothing ran: the flyout has no row, so enter has no target
+    expect(calls).toEqual([]);
+    // and nothing changed: the flyout is still open, still without a cursor
+    expect(menu.fileMenuState()!.flyout).toEqual(openFlyout());
+    const subPanel = t.renderer.root.findDescendantById("tfm-filemenu-sub-panel") as any;
+    for (const r of subPanel.getChildren().slice(1)) expect(ints(r)).toEqual([0, 0, 0, 0]);
+    expect(t.captureCharFrame()).toBe(before);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
+  test("fileMenuState returns the LIVE object the widget renders from", () => {
     menu.openContextMenu(2, 2, "", mkEntries(2));
     const st = menu.fileMenuState()!;
-    st.cursor = cursorAt(1);
+    menu.moveMain(1);
     expect(menu.fileMenuState()).toBe(st);
-    expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(1);
+    expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(0);
     menu.closeFileMenu();
+  });
+
+  test("enter fires the cursor's row action", async () => {
+    const calls: string[] = [];
+    menu.openContextMenu(5, 5, "", [
+      { label: "first", action: () => calls.push("first") },
+      { label: "second", action: () => calls.push("second") },
+    ]);
+    await t.renderOnce();
+    moveDown();
+    menu.activate();
+    expect(calls).toEqual(["first"]);
+    menu.closeFileMenu();
+    await t.renderOnce();
+  });
+
+  test("moving the main cursor closes the flyout", async () => {
+    const entries: ListEntry[] = [
+      { label: "Open", action: () => {}, submenu: [{ label: "Open in New Tab", action: () => {} }] },
+      { label: "Trash", action: () => {} },
+    ];
+    menu.openContextMenu(5, 5, "", entries);
+    await t.renderOnce();
+    menu.moveMain(1); // the parent row
+    menu.openSubmenu();
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.flyout.kind).toBe("open");
+    menu.moveMain(1); // onto the next row
+    await t.renderOnce();
+    expect(menu.fileMenuState()!.flyout).toEqual(CLOSED_FLYOUT);
+    expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeFalsy();
+    menu.closeFileMenu();
+    await t.renderOnce();
   });
 });
 
@@ -209,7 +301,7 @@ describe("flyout submenus", () => {
     expect(iconSlots).toContain("chevron-right");
     expect(menu.fileMenuState()!.flyout).toEqual(CLOSED_FLYOUT);
     // no cursor on open — the parent must be selected before a flyout opens
-    menu.fileMenuState()!.cursor = cursorAt(0);
+    menu.moveMain(1);
 
     menu.openSubmenu();
     await t.renderOnce();
@@ -230,7 +322,7 @@ describe("flyout submenus", () => {
     // px clamps to 80-36-1=43; right flyout (43+36+36) overflows -> flip left
     menu.openContextMenu(60, 5, "", entries);
     await t.renderOnce();
-    menu.fileMenuState()!.cursor = cursorAt(0);
+    menu.moveMain(1);
     menu.openSubmenu();
     await t.renderOnce();
     const sub = t.renderer.root.findDescendantById("tfm-filemenu-sub") as any;
@@ -261,7 +353,7 @@ describe("flyout submenus", () => {
     const entries: ListEntry[] = [{ label: "Open", action: () => {}, submenu: [{ label: "Open", action: () => {} }] }];
     menu.openContextMenu(3, 3, "", entries);
     await t.renderOnce();
-    menu.fileMenuState()!.cursor = cursorAt(0);
+    menu.moveMain(1);
     menu.openSubmenu();
     await t.renderOnce();
     expect(t.renderer.root.findDescendantById("tfm-filemenu-sub")).toBeTruthy();
@@ -294,8 +386,8 @@ describe("mouse pointer shapes (ctx seam sink)", () => {
     pointers.length = 0;
     menu.openContextMenu(2, 2, "", mkEntries(3));
     await t.renderOnce();
-    menu.fileMenuState()!.cursor = cursorAt(1); // exactly what the key router does
-    menu.renderFileMenu();
+    menu.moveMain(1); // the keyboard's path onto row 1
+    menu.moveMain(1);
     await t.renderOnce();
     await t.mockMouse.moveTo(4, 4);
     await t.renderOnce();
@@ -317,8 +409,7 @@ describe("hover vs arrow keys (stationary-mouse regression)", () => {
 
     // arrow nav to row 2, which rebuilds the panel (hit grid changes; the
     // renderer then re-fires synthetic "over" on the row under the mouse)
-    menu.fileMenuState()!.cursor = cursorAt(2);
-    menu.renderFileMenu();
+    menu.moveMain(1);
     await t.renderOnce();
     expect(cursorIndex(menu.fileMenuState()!.cursor)).toBe(2); // not snapped back to row 1
 

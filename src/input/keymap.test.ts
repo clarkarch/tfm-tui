@@ -4,7 +4,7 @@ import { archiveUri } from "../fs/archive-scheme";
 import { makeSelection, type SelectionCtx } from "./selection";
 import { defaultConfig } from "../config/config-schema";
 import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
-import { CLOSED_FLYOUT, cursorAt, cursorIndex, NO_CURSOR, openFlyout } from "../lib/uiutil";
+import { advanceCursor, CLOSED_FLYOUT, cursorAt, cursorIndex, NO_CURSOR, openFlyout } from "../lib/uiutil";
 
 const COLORS: any = {
   bg: "#111111",
@@ -139,11 +139,52 @@ const makeHarness = (over: Partial<KeyRouterCtx> | ((calls: string[]) => Partial
     home: "/home/u",
     getFileMenuState: () => null,
     closeFileMenu: rec("fmenu:close"),
-    renderFileMenu: rec("fmenu:render"),
-    openFileSubmenu: rec("fmenu:sub-open"),
-    closeFileSubmenu: rec("fmenu:sub-close"),
-    moveFileSubmenu: rec("fmenu:sub-move"),
-    activateFileSubmenu: rec("fmenu:sub-activate"),
+    // The MENU owns its cursor: the router asks it to move/activate, it never
+    // writes the state. These fakes mirror ui-menu's contract (the same
+    // guards, the same advanceCursor) so a router test still drives a REAL
+    // cursor move — the menu's own methods are pinned in ui-menu.test.ts.
+    openFileSubmenu: () => {
+      const st = ctx.getFileMenuState();
+      const subs = st ? st.entries[cursorIndex(st.cursor)]?.submenu : undefined;
+      if (!subs?.length) return; // only a parent row opens a flyout
+      if (st?.flyout.kind === "open") return; // already open — keep its cursor
+      if (st) st.flyout = openFlyout();
+      calls.push("fmenu:sub-open");
+    },
+    closeFileSubmenu: () => {
+      const st = ctx.getFileMenuState();
+      if (!st || st.flyout.kind === "closed") return;
+      st.flyout = CLOSED_FLYOUT;
+      calls.push("fmenu:sub-close");
+    },
+    moveFileSubmenu: (d) => {
+      const st = ctx.getFileMenuState();
+      if (st?.flyout.kind !== "open") return;
+      const items = st.entries[cursorIndex(st.cursor)]?.submenu ?? [];
+      if (!items.length) return;
+      st.flyout = openFlyout(advanceCursor(st.flyout.cursor, d, items.length, items));
+      calls.push("fmenu:sub-move");
+    },
+    moveFileMenu: (d) => {
+      const st = ctx.getFileMenuState();
+      if (!st) return;
+      const count = st.entries.length;
+      if (count === 0) return;
+      st.cursor = advanceCursor(st.cursor, d, count, st.entries);
+      st.flyout = CLOSED_FLYOUT; // moving to another row closes the flyout
+      calls.push("fmenu:move");
+    },
+    activateFileMenu: () => {
+      const st = ctx.getFileMenuState();
+      if (!st) return;
+      if (st.flyout.kind === "open") {
+        calls.push("fmenu:sub-activate");
+        return;
+      }
+      const at = cursorIndex(st.cursor);
+      if (at < 0) return; // no cursor yet: enter is a no-op
+      st.entries[at]?.action();
+    },
     nextTab: rec("tab:next"),
     prevTab: rec("tab:prev"),
     newTab: rec("tab:new"),
@@ -592,7 +633,7 @@ describe("file menu keys", () => {
     expect(cursorIndex(fmenu.cursor)).toBe(2);
     h.key("return");
     expect(calls).toEqual(["act:B"]);
-    expect(h.calls).toContain("fmenu:render");
+    expect(h.calls).toContain("fmenu:move"); // the router asked the menu to move
   });
 
   test("escape closes the menu", () => {
@@ -622,19 +663,23 @@ describe("file menu keys", () => {
     const open = {
       cursor: cursorAt(0),
       flyout: openFlyout(cursorAt(1)),
-      entries: [{ action: () => {}, submenu: [{}] }],
+      entries: [{ action: () => {}, submenu: [{ action: () => {} }] }],
     };
     const h = makeHarness({ getFileMenuState: () => open });
     h.key("down");
     expect(h.calls).toContain("fmenu:sub-move");
-    expect(h.calls).not.toContain("fmenu:render"); // parent didn't move
+    expect(h.calls).not.toContain("fmenu:move"); // the parent didn't move
     h.key("return");
     expect(h.calls).toContain("fmenu:sub-activate");
+    h.key("escape");
+    expect(h.calls).toContain("fmenu:sub-close");
+    expect(h.calls).not.toContain("fmenu:close"); // esc closed the FLYOUT, not the menu
+    // left closes it too — and with the flyout gone, esc closes the MENU
+    open.flyout = openFlyout(cursorAt(1));
     h.key("left");
     expect(h.calls).toContain("fmenu:sub-close");
     h.key("escape");
-    expect(h.calls).toContain("fmenu:sub-close");
-    expect(h.calls).not.toContain("fmenu:close");
+    expect(h.calls).toContain("fmenu:close");
   });
 
   test("enter activates a parent row's own action (right opens its submenu)", () => {
@@ -648,6 +693,35 @@ describe("file menu keys", () => {
     h.key("return");
     expect(calls).toEqual(["parent"]);
     expect(h.calls).not.toContain("fmenu:sub-open");
+  });
+
+  // The MENU owns its cursor. The router used to mutate the live state
+  // object in place (fmenu.cursor = …, fmenu.flyout = …) — a second owner
+  // for the mouse path's state, free to drift. The router asks instead.
+  test("the router asks the MENU to move — it never writes the menu's state", () => {
+    const asked: number[] = [];
+    const fmenu = { cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => {} }, { action: () => {} }] };
+    const h = makeHarness({
+      getFileMenuState: () => fmenu,
+      moveFileMenu: (d: number) => asked.push(d),
+    });
+    h.key("down");
+    expect(asked).toEqual([1]);
+    // the router did not touch the cursor itself
+    expect(cursorIndex(fmenu.cursor)).toBe(0);
+  });
+
+  test("the router asks the MENU to activate — it never fires the entry itself", () => {
+    const asked: string[] = [];
+    const fired: string[] = [];
+    const fmenu = { cursor: cursorAt(0), flyout: CLOSED_FLYOUT, entries: [{ action: () => fired.push("act") }] };
+    const h = makeHarness({
+      getFileMenuState: () => fmenu,
+      activateFileMenu: () => asked.push("activate"),
+    });
+    h.key("return");
+    expect(asked).toEqual(["activate"]);
+    expect(fired).toEqual([]); // the router did not run the entry's action
   });
 });
 
@@ -1836,5 +1910,22 @@ describe("no-drift rule", () => {
     expect(/quitHintShown/.test(src)).toBe(false);
     // the one-shot condition IS the streak crossing 3
     expect(/copyQuitStreak === 3/.test(src)).toBe(true);
+  });
+
+  test("the router never writes the menu's cursor or flyout", async () => {
+    // The MENU owns its cursor: the router asks it to move/activate. The
+    // router used to mutate the live state object in place — a second owner
+    // beside the mouse path, free to drift (the flyout's open/closed state
+    // was written from both sides). The rule is structural: the router may
+    // READ the menu's state, never assign to a cursor/flyout field.
+    const src = (await Bun.file(`${import.meta.dir}/keymap.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the boolean, not the source: a failed match would dump the
+    // whole module into the test output)
+    expect(/\.(?:cursor|flyout)\s*=[^=]/.test(src)).toBe(false);
+    // ... and it goes through the menu's methods
+    expect(/ctx\.moveFileMenu\(/.test(src)).toBe(true);
+    expect(/ctx\.activateFileMenu\(/.test(src)).toBe(true);
   });
 });

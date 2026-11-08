@@ -261,9 +261,19 @@ export const makeMenu = (ctx: MenuCtx) => {
     ctx.stripSelectable();
   };
 
-  // keyboard ops the router calls (state stays internal; see getFileMenuState)
+  // keyboard ops the router calls (the menu owns the cursor — the router
+  // asks, it never writes the state; see getFileMenuState)
+  const moveMain = (delta: number): void => {
+    if (!state) return;
+    const count = state.entries.length;
+    if (count === 0) return;
+    state.cursor = advanceCursor(state.cursor, delta, count, state.entries);
+    state.flyout = CLOSED_FLYOUT; // moving to another row closes the flyout
+    renderFileMenu();
+  };
   const openSubmenu = (): void => {
     if (!state) return;
+    if (state.flyout.kind === "open") return; // already open — keep its cursor
     const subs = state.entries[cursorIndex(state.cursor)]?.submenu;
     if (!subs?.length) return;
     // open with no cursor; the next arrow/hover selects
@@ -286,6 +296,21 @@ export const makeMenu = (ctx: MenuCtx) => {
     const at = state && state.flyout.kind === "open" ? cursorIndex(state.flyout.cursor) : -1;
     const it = at >= 0 ? items?.[at] : undefined;
     if (it && !it.sep) it.action();
+  };
+  // Enter: the flyout's row while the flyout is open, else the cursor's row.
+  // A flyout with NO highlighted row has no target — enter is a no-op (the
+  // first arrow picks a row).
+  const activate = (): void => {
+    if (!state) return;
+    if (state.flyout.kind === "open") {
+      activateSub();
+      return;
+    }
+    const at = cursorIndex(state.cursor);
+    if (at < 0) return; // no cursor yet: enter is a no-op
+    // parent rows are directly clickable — enter fires the action, → opens
+    // the flyout for the variants
+    state.entries[at]?.action();
   };
 
   // small unscoped box spawned at the cursor — no scrim. floats.open replaces
@@ -332,13 +357,15 @@ export const makeMenu = (ctx: MenuCtx) => {
     ctx.stripSelectable();
   };
 
-  // fileMenuState() returns the LIVE mutable state object — ./keymap's
-  // keyboard nav mutates cursor/flyout in place (no setter) and calls
-  // renderFileMenu() afterwards; do not snapshot it.
+  // fileMenuState() returns the LIVE state object — the router READS it (is
+  // the flyout open?) but never writes it: the menu is the ONE owner of the
+  // cursor (the router calls moveMain/activate). Do not snapshot it.
   return {
     closeFileMenu: () => ctx.floats.close("filemenu"),
     renderFileMenu,
     openContextMenu,
+    moveMain,
+    activate,
     openSubmenu,
     closeSubmenu,
     moveSub,

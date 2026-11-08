@@ -24,16 +24,7 @@ import { KEY_SCHEMA } from "../config/config-schema";
 import { type KeyEventLike, keyMatch, parseKeySpec } from "../config/keyspec";
 import type { SortMode } from "../lib/sort";
 import type { Command } from "../lib/command";
-import {
-  advanceCursor,
-  CLOSED_FLYOUT,
-  cursorAt,
-  cursorIndex,
-  invokeIsolated,
-  NO_CURSOR,
-  type Cursor,
-  type FlyoutCursor,
-} from "../lib/uiutil";
+import { cursorAt, invokeIsolated, NO_CURSOR, type Cursor, type FlyoutCursor } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import { EDITOR_FLOAT_KINDS, type EditorFloatKind } from "../lib/float-kind";
 import { resolveSurface, surfaceBelow, type KeySurface, type SurfaceReaders } from "./key-surface";
@@ -142,21 +133,26 @@ export type KeyRouterCtx = {
   // home dir — backspace target inside virtual views (URIs have no fs parent)
   home: string;
   // --- file menu ---
-  // The LIVE menu state (ui-menu's own object — the router mutates
-  // `cursor`/`flyout` in place). `cursor` is an explicit value, not the
-  // `-1` sentinel; `flyout` is its own machine (closed / open-no-row /
-  // open-on-a-row).
+  // The LIVE menu state (ui-menu's own object). The router READS it — it
+  // never writes it: the menu is the ONE owner of its cursor (it used to
+  // mutate `cursor`/`flyout` in place from here, a second owner beside the
+  // mouse path). `cursor` is an explicit value, not the `-1` sentinel;
+  // `flyout` is its own machine (closed / open-no-row / open-on-a-row).
   getFileMenuState(): {
     cursor: Cursor;
     flyout: FlyoutCursor;
-    entries: Array<{ sep?: boolean; submenu?: unknown[]; action(): void }>;
+    entries: Array<{
+      sep?: boolean;
+      submenu?: Array<{ sep?: boolean; action(): void }>;
+      action(): void;
+    }>;
   } | null;
   closeFileMenu(): void;
-  renderFileMenu(): void;
+  moveFileMenu(delta: number): void;
+  activateFileMenu(): void;
   openFileSubmenu(): void;
   closeFileSubmenu(): void;
   moveFileSubmenu(delta: number): void;
-  activateFileSubmenu(): void;
   // --- tabs ---
   nextTab(): void;
   prevTab(): void;
@@ -340,46 +336,29 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   // esc closes. A parent row's action fires on enter; its flyout opens on
   // right; while it is open, left/esc close it and up/down/enter act on it.
   // Returns true when the menu is open (it swallows all other keys while open).
-  const stepFileMenu = (fmenu: NonNullable<ReturnType<KeyRouterCtx["getFileMenuState"]>>, delta: number): void => {
-    const entries = fmenu.entries;
-    const count = entries.length;
-    if (count === 0) return;
-    fmenu.cursor = advanceCursor(fmenu.cursor, delta, count, entries);
-    fmenu.flyout = CLOSED_FLYOUT; // moving to another parent closes the flyout
-    ctx.renderFileMenu();
-  };
-  const activateFileMenu = (fmenu: NonNullable<ReturnType<KeyRouterCtx["getFileMenuState"]>>): void => {
-    const entries = fmenu.entries;
-    if (fmenu.flyout.kind === "open") {
-      ctx.activateFileSubmenu();
-      return;
-    }
-    const at = cursorIndex(fmenu.cursor);
-    if (at < 0) return; // no cursor yet: enter is a no-op
-    // parent rows are directly clickable — enter fires the action, → opens
-    // the flyout for the variants
-    entries[at]?.action();
-  };
+  // The MENU owns the cursor: the router asks it to move/activate and only
+  // READS its state (is the flyout open?).
   const handleFileMenuKeys = (ev: KeyPressEvent): boolean => {
     const fmenu = ctx.getFileMenuState();
     if (!fmenu) return false;
-    const entries = fmenu.entries;
     const inSub = fmenu.flyout.kind === "open";
     if (ev.name === "escape") {
       if (inSub) ctx.closeFileSubmenu();
       else ctx.closeFileMenu();
     } else if (hitDir(ev, "moveUp", "extendUp")) {
       if (inSub) ctx.moveFileSubmenu(-1);
-      else stepFileMenu(fmenu, -1);
+      else ctx.moveFileMenu(-1);
     } else if (hitDir(ev, "moveDown", "extendDown")) {
       if (inSub) ctx.moveFileSubmenu(1);
-      else stepFileMenu(fmenu, 1);
+      else ctx.moveFileMenu(1);
     } else if (hitDir(ev, "moveRight", "extendRight")) {
-      if (!inSub && entries[cursorIndex(fmenu.cursor)]?.submenu) ctx.openFileSubmenu();
+      // the menu decides: only a parent row opens a flyout, and an open
+      // flyout keeps its cursor
+      ctx.openFileSubmenu();
     } else if (hitDir(ev, "moveLeft", "extendLeft")) {
       if (inSub) ctx.closeFileSubmenu();
     } else if (hit(ev, "openSelected")) {
-      activateFileMenu(fmenu);
+      ctx.activateFileMenu();
     }
     return true;
   };
@@ -732,7 +711,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       case "filemenu": {
         const fmenu = ctx.getFileMenuState();
         if (fmenu?.flyout.kind === "open") ctx.moveFileSubmenu(-1);
-        else if (fmenu) stepFileMenu(fmenu, -1);
+        else if (fmenu) ctx.moveFileMenu(-1);
         return;
       }
       case "escmenu":
@@ -755,7 +734,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
       case "filemenu": {
         const fmenu = ctx.getFileMenuState();
         if (fmenu?.flyout.kind === "open") ctx.moveFileSubmenu(1);
-        else if (fmenu) stepFileMenu(fmenu, 1);
+        else if (fmenu) ctx.moveFileMenu(1);
         return;
       }
       case "escmenu":
@@ -798,8 +777,9 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doMoveRight = (): void => {
     switch (paletteSurface()) {
       case "filemenu": {
-        const fmenu = ctx.getFileMenuState();
-        if (fmenu?.flyout.kind === "closed" && fmenu.entries[cursorIndex(fmenu.cursor)]?.submenu) ctx.openFileSubmenu();
+        // the menu decides: only a parent row opens a flyout, and an open
+        // flyout keeps its cursor
+        ctx.openFileSubmenu();
         return;
       }
       case "escmenu":
@@ -819,8 +799,7 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
   const doOpenSelected = (): void => {
     switch (paletteSurface()) {
       case "filemenu": {
-        const fmenu = ctx.getFileMenuState();
-        if (fmenu) activateFileMenu(fmenu);
+        ctx.activateFileMenu();
         return;
       }
       case "escmenu":
@@ -1249,8 +1228,8 @@ export const makeKeyRouter = (ctx: KeyRouterCtx) => {
         if (ev.name === "escape") ctx.exitPathEdit();
         return true;
       // file context menu open: arrows/enter navigate it, esc closes.
-      // getFileMenuState() returns the LIVE state object — mutating fmenu.cursor
-      // below updates the menu module's state in place.
+      // The menu owns its cursor — the router asks it to move/activate and
+      // only READS getFileMenuState() (is the flyout open?).
       case "filemenu":
         termHintShown = false;
         return handleFileMenuKeys(ev);
