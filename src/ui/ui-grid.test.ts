@@ -2319,6 +2319,90 @@ describe("renderGrid (windowed grid)", () => {
     }
   });
 
+  test("a deferred reveal union that crossed both edges animates from the dominant edge", async () => {
+    // A settle window can collect crossings from BOTH edges (the user flicks
+    // down, then back up before the wave plays). The wave travels ONE way, so
+    // its direction must be DERIVED from the union — the edge that
+    // contributed the most rows — and NOT overwritten by the newest crossing
+    // (which would slide the MAJORITY of the rows in from the wrong side).
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+
+    revealDelayMs = 80;
+    revealClock.reset();
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      // down, down: rows 4 and 5 cross the BOTTOM edge
+      scroller.scrollTop = 6;
+      syncWindow();
+      scroller.scrollTop = 12;
+      syncWindow();
+      // back up: row 1 crosses the TOP edge — the union now holds both edges
+      scroller.scrollTop = 6;
+      syncWindow();
+      expect(fileAnimCalls).toEqual([]); // still deferred
+      revealClock.flush();
+      expect(fileAnimCalls.length).toBe(1);
+      const play = fileAnimCalls[0]!;
+      expect(play.rows).toEqual(["tfm-tile-row-4", "tfm-tile-row-5", "tfm-tile-row-1"]);
+      // two rows crossed at the bottom, one at the top → the wave comes from
+      // the bottom (the majority), not from the newest crossing
+      expect(play.enterFrom).toBe("bottom");
+    } finally {
+      revealDelayMs = 0;
+      revealClock.reset();
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a cancelled reveal restores the staged rows to full opacity", async () => {
+    // The rows staged at opacity 0 wait for a wave. Every exit that does NOT
+    // hand them to a wave must put them back to rest — a stranded row stays
+    // invisible until the next rebuild. The cancel path (a fling past the
+    // window drops the pending wave) releases them.
+    ensureBig();
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+
+    revealDelayMs = 80;
+    revealClock.reset();
+    scroller.viewport = { height: 20 };
+    try {
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+      fileAnimCalls.length = 0;
+      scroller.scrollTop = 6; // row 4 crosses, staged at 0
+      syncWindow();
+      await t.renderOnce();
+      const staged = byId("tfm-tile-row-4");
+      expect(staged.opacity).toBe(0); // staged, waiting for the wave
+      scroller.scrollTop = 540; // fling → the pending reveal is cancelled
+      syncWindow();
+      await t.renderOnce();
+      expect(staged.opacity).toBe(1); // released, not stranded invisible
+    } finally {
+      revealDelayMs = 0;
+      revealClock.reset();
+      scroller.viewport = undefined;
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
   test("flipping windowed-grid forces a rebuild and full build disables sliding", async () => {
     const prevCwd = gridState.cwd;
     windowedGridOn = true;
@@ -3093,6 +3177,27 @@ describe("no-drift rule", () => {
     expect(/kind: "window"/.test(src)).toBe(true);
     // the shape gate is an IDENTITY comparison against the pads we built
     expect(/kids\[0\]\s*===\s*\w+\.topPad/.test(src)).toBe(true);
+  });
+
+  test("the deferred reveal is ONE state record with ONE release", async () => {
+    // The reveal's phase was TWO vars (a timer + the pending set) PLUS a
+    // paint-level state (the rows staged at opacity 0) whose release logic
+    // was DUPLICATED in the two exits — the cancel path and the flush path
+    // could drift, and a missed release strands the rows invisible until the
+    // next rebuild. The state is ONE tagged record now (the timer rides
+    // inside it, so the two can never disagree) and the release is ONE
+    // function both exits call.
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the parallel vars must not come back
+    expect(/revealTimer/.test(src)).toBe(false);
+    expect(/pendingReveal/.test(src)).toBe(false);
+    // ONE tagged record replaces them
+    expect(/kind: "idle"/.test(src)).toBe(true);
+    expect(/kind: "armed"/.test(src)).toBe(true);
+    // ONE release: the opacity restore exists exactly once in the module
+    expect((src.match(/\.opacity = 1/g) ?? []).length).toBe(1);
   });
 });
 

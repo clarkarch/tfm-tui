@@ -50,6 +50,20 @@ export const SPIN_MS = 110;
 export const SPIN_FRAMES_BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 export const SPIN_FRAMES_ASCII = ["|", "/", "-", "\\"];
 
+// The wave's travel direction, DERIVED from the union of crossings: the edge
+// that contributed the MOST rows wins (the wave moves one way — the minority
+// slides in from the dominant side). A tie follows the newest crossing (the
+// user's current motion). Overwriting the direction with the newest crossing
+// instead would slide the MAJORITY of the rows in from the wrong side.
+export const revealDirection = (
+  edgeRows: { top: number; bottom: number },
+  lastEdge: "top" | "bottom",
+): "top" | "bottom" => {
+  if (edgeRows.bottom > edgeRows.top) return "bottom";
+  if (edgeRows.top > edgeRows.bottom) return "top";
+  return lastEdge;
+};
+
 // the placeholder's caption: WHICH folder is being opened (or that a recursive
 // search is walking, which has no listing to show until it finishes)
 export const loadingLabel = (cwd: string, q: string, recursive: boolean): string => {
@@ -167,53 +181,80 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // entry list + row range syncWindow() slides against — a slide NEVER
   // re-lists, it rebuilds rows from this snapshot
   let win: WinState = { kind: "full" };
-  // [ui] file-animation-scroll-reveal-delay-ms: deferred reveal state. A fast
-  // fling crosses a row per notch; playing every notch retriggers the wave
-  // mid-flight (nothing completes visibly) and pays native pushes per frame.
-  // Each slide MERGES its crossing into a pending set and re-arms a trailing
-  // timer — one play per pause, over the union. The timer is DROPPED (never
-  // flushed) on clearGrid/fallback, so a stale play can never stop() the new
-  // folder's intro wave after a navigate or a fling landing.
-  let revealTimer: unknown = null;
-  let pendingReveal: {
-    rows: string[];
-    tiles: string[];
-    from: "top" | "bottom";
-    staged: Renderable[];
-  } | null = null;
-  const cancelPendingReveal = (): void => {
-    const sched: Scheduler = ctx.sched ?? globalThis;
-    if (revealTimer) {
-      try {
-        sched.clearTimeout(revealTimer);
-      } catch {}
-      revealTimer = null;
-    }
-    // staged rows sit at frame-0 opacity waiting for a wave that will now
-    // never come — put them back to rest, or they stay invisible until the
-    // next rebuild. On fallback/clearGrid the nodes are already dead or
-    // dying; the try/catch makes that a harmless no-op.
-    const staged = pendingReveal?.staged ?? [];
-    pendingReveal = null;
+  // [ui] file-animation-scroll-reveal-delay-ms: the deferred reveal's ONE
+  // state record. A fast fling crosses a row per notch; playing every notch
+  // retriggers the wave mid-flight (nothing completes visibly) and pays
+  // native pushes per frame. Each slide MERGES its crossing into the pending
+  // union and re-arms a trailing timer — one play per pause, over the union.
+  // The timer rides INSIDE the record, so the two can never disagree (the old
+  // pair — a timer var + a pending var — could leave one armed without the
+  // other). The record is DROPPED (never flushed) on clearGrid/fallback, so a
+  // stale play can never stop() the new folder's intro wave after a navigate
+  // or a fling landing.
+  //
+  // The staged rows (painted at frame-0 opacity so the delayed wave is a
+  // continuation, not a rest-then-snap flash) are the PAINT-LEVEL half of the
+  // phase: every exit that does not hand them to a wave must release them —
+  // a stranded row stays invisible until the next rebuild.
+  type RevealState =
+    | { kind: "idle" }
+    | {
+        kind: "armed";
+        timer: unknown;
+        rows: string[];
+        tiles: string[];
+        // how many of the union's rows crossed each edge — the wave's
+        // direction is DERIVED from these counts (see revealDirection), never
+        // overwritten by the newest crossing
+        edgeRows: { top: number; bottom: number };
+        lastEdge: "top" | "bottom";
+        staged: Renderable[];
+      };
+  let reveal: RevealState = { kind: "idle" };
+  // the ONE release: put the staged rows back to rest. On the cancel path the
+  // nodes are already dying (the rebuild that follows destroys them), so the
+  // try/catch makes this a harmless no-op there.
+  const releaseStaged = (staged: Renderable[]): void => {
     for (const n of staged) {
       try {
         n.opacity = 1;
       } catch {}
     }
   };
+  const cancelReveal = (): void => {
+    const sched: Scheduler = ctx.sched ?? globalThis;
+    const armed = reveal;
+    reveal = { kind: "idle" };
+    if (armed.kind !== "armed") return;
+    if (armed.timer) {
+      try {
+        sched.clearTimeout(armed.timer);
+      } catch {}
+    }
+    releaseStaged(armed.staged);
+  };
   const flushReveal = (): void => {
-    revealTimer = null;
-    const p = pendingReveal;
-    pendingReveal = null;
-    if (!p || (p.rows.length === 0 && p.tiles.length === 0)) return;
+    const sched: Scheduler = ctx.sched ?? globalThis;
+    const armed = reveal;
+    reveal = { kind: "idle" };
+    if (armed.kind !== "armed") return;
+    if (armed.timer) {
+      try {
+        sched.clearTimeout(armed.timer);
+      } catch {}
+    }
+    if (armed.rows.length === 0 && armed.tiles.length === 0) {
+      releaseStaged(armed.staged);
+      return;
+    }
     let mode: FileAnimMode = null;
     try {
       mode = ctx.fileAnim({
-        tiles: p.tiles,
-        rows: p.rows,
-        rowsTotal: p.rows.length,
-        total: p.tiles.length,
-        enterFrom: p.from,
+        tiles: armed.tiles,
+        rows: armed.rows,
+        rowsTotal: armed.rows.length,
+        total: armed.tiles.length,
+        enterFrom: revealDirection(armed.edgeRows, armed.lastEdge),
       });
     } catch {}
     // Reconcile the mount-time ROW staging with the set the animator
@@ -224,13 +265,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // self-stage via play's frame-0 pass, same as the delay-0 path),
     // null = no wave at all (master off / maxFiles skip — without this
     // the rows would strand invisible until the next rebuild).
-    if (mode !== "rows") {
-      for (const n of p.staged) {
-        try {
-          n.opacity = 1;
-        } catch {}
-      }
-    }
+    if (mode !== "rows") releaseStaged(armed.staged);
   };
   const { selection } = ctx;
   // the builders own the tile/list-row/row constructors and the id + geometry
@@ -283,7 +318,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   const clearGrid = (): void => {
     // a pending deferred reveal belongs to the OLD listing — drop it before
     // anything else, or its late fire stops the new folder's intro wave
-    cancelPendingReveal();
+    cancelReveal();
     // same for the loading placeholder this pane may be showing: the screen is
     // about to be repainted for real
     cancelLoadingTimers();
@@ -928,7 +963,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         // destroying them (same use-after-destroy path as clearGrid); a fling
         // shows its landing spot instantly, unrevealed — and any deferred
         // reveal for the jumped-over rows is dropped, never flushed late
-        cancelPendingReveal();
+        cancelReveal();
         try {
           ctx.fileAnim({ tiles: [], inner: null });
         } catch {}
@@ -1039,23 +1074,39 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         } else {
           // defer: merge into the pending union (a row can cross, leave and
           // re-cross inside one settle window on zigzag) and re-arm the
-          // trailing timer — latest edge wins
-          if (!pendingReveal) pendingReveal = { rows: [], tiles: [], from, staged: [] };
-          const rowSet = new Set(pendingReveal.rows);
-          const tileSet = new Set(pendingReveal.tiles);
+          // trailing timer — the newest crossing does NOT overwrite the
+          // wave's direction (it is derived from the union's edge counts)
+          let armed = reveal.kind === "armed" ? reveal : null;
+          if (!armed) {
+            armed = {
+              kind: "armed",
+              timer: null,
+              rows: [],
+              tiles: [],
+              edgeRows: { top: 0, bottom: 0 },
+              lastEdge: from,
+              staged: [],
+            };
+            reveal = armed;
+          }
+          const rowSet = new Set(armed.rows);
+          const tileSet = new Set(armed.tiles);
           for (const id of rvRows) {
             if (!rowSet.has(id)) {
               rowSet.add(id);
-              pendingReveal.rows.push(id);
+              armed.rows.push(id);
             }
           }
           for (const id of rvTiles) {
             if (!tileSet.has(id)) {
               tileSet.add(id);
-              pendingReveal.tiles.push(id);
+              armed.tiles.push(id);
             }
           }
-          pendingReveal.from = from;
+          // the crossings' EDGES are counted, not overwritten: the wave's
+          // direction is derived from the union (the dominant edge wins)
+          armed.edgeRows[from] += crossing.length;
+          armed.lastEdge = from;
           // pre-stage the crossing rows at frame-0 opacity NOW: the wave
           // plays ~delay ms after they mount, and sitting at rest until
           // then snaps 1→0 on the first tick (visible → invisible →
@@ -1067,24 +1118,24 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
             const kidsNow = mounted.getChildren();
             for (const r of crossing) {
               const node = kidsNow[1 + (r - r0)];
-              if (!node || pendingReveal.staged.includes(node)) continue;
+              if (!node || armed.staged.includes(node)) continue;
               try {
                 node.opacity = 0;
               } catch {
                 continue;
               }
-              pendingReveal.staged.push(node);
+              armed.staged.push(node);
             }
           } catch {}
           const sched: Scheduler = ctx.sched ?? globalThis;
-          if (revealTimer) {
+          if (armed.timer) {
             try {
-              sched.clearTimeout(revealTimer);
+              sched.clearTimeout(armed.timer);
             } catch {}
-            revealTimer = null;
+            armed.timer = null;
           }
           try {
-            revealTimer = sched.setTimeout(flushReveal, delay);
+            armed.timer = sched.setTimeout(flushReveal, delay);
           } catch {}
         }
       }
