@@ -7,7 +7,7 @@
 // their state). No module-level renderer imports — everything arrives via ctx
 // (live getters for geometry). ---
 import path from "node:path";
-import { compareEntries, fillStatsInto, listDir, type Entry } from "../fs/listing";
+import { compareEntries, fillStatsInto, isHiddenName, listDir, type Entry } from "../fs/listing";
 import { searchTree } from "../fs/search";
 import { fsErrText, isTrashFilesDir } from "../fs/fsutil";
 import type { Renderable } from "@opentui/core";
@@ -23,6 +23,8 @@ import { fmtDateShort, loadingNodeId, makeGridBuilders, thumbStatsChanged } from
 import type { ScrollerLike } from "../lib/node-like";
 import type { GridRendererCtx } from "./ui-grid-types";
 import { visibleBottomRow, visibleTileCap, windowRange } from "./ui-grid-window";
+import type { SortMode } from "../lib/sort";
+import type { WrapMode } from "../config/config-schema";
 
 // Re-exported façade: the split moved these out, but they are part of this
 // module's public surface (wiring + the grid test import them from here).
@@ -103,6 +105,48 @@ type GridScreen =
   | { kind: "tiles"; sig: string; structural: string; entries: Entry[]; ctxKey: string }
   | { kind: "empty"; sig: string; structural: string; ctxKey: string }
   | { kind: "error"; sig: string; structural: string; ctxKey: string };
+
+// What the pane LISTS — ONE context object. Every signature derives from it:
+// the placeholder key (the whole context), the paint/structural signatures
+// (the context + the entries) and the wave's content signature + the storm
+// gate's key (the listing's IDENTITY + the stable entries). The listing used
+// to be encoded THREE ways with DIFFERENT field sets, so the gates could
+// disagree about what "the same listing" means.
+export type ListingContext = {
+  // the LISTING's identity: which files, ordered and shown how. The wave and
+  // the storm gate key off this — the hidden FILTER is deliberately NOT here
+  // (re-filtering the same listing is not a new listing).
+  identity: {
+    cwd: string;
+    query: string;
+    recursive: boolean;
+    sortBy: SortMode;
+    sortAsc: boolean;
+    view: "grid" | "list";
+    wrap: WrapMode;
+  };
+  // the VIEW filter over that listing
+  filter: { showHidden: boolean };
+  // the PAINT inputs: geometry/theme. They change the tiles, never the listing.
+  paint: unknown[];
+};
+
+// the entries' paint signature: name + the stats the paint shows
+const entryPaintSig = (list: Entry[] | string): string | string[] =>
+  typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`);
+// the entries' structural signature: membership + order + dir-ness
+const entryStructSig = (list: Entry[] | string): string | string[] =>
+  typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.isDir ? 1 : 0}`);
+// the listing's STABLE entries: the ones the hidden filter cannot change. The
+// wave's content signature tracks these, so revealing hidden files (a
+// re-filter of the SAME listing) never replays the intro wave. An empty
+// stable set signs like the empty pane, so the two agree.
+const stableEntrySig = (list: Entry[] | string): string | string[] => {
+  if (typeof list === "string") return list;
+  const stable = list.filter((e) => !isHiddenName(e.name));
+  if (stable.length === 0) return "empty";
+  return stable.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`);
+};
 
 // What the pane's WINDOWED BUILD holds — ONE tagged record:
 //   {kind:"full"}   — nothing slideable is mounted (a full build, a clear, or
@@ -465,50 +509,62 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // recursive search replaces the listing with subtree matches; virtual
     // places have no fs root to walk, so they keep the in-dir filter
     const recursive = q.length > 0 && ctx.recursiveSearch() && state.cwd !== RECENT_URI && state.cwd !== STARRED_URI;
-    // Signature of everything that affects the painted tiles. renderAll repaints
-    // BOTH panes on any navigation, so without this a move in one pane visibly
-    // rebuilds the other (and churns native buffers). Empty/error states sign
-    // separately; theme/geometry/search changes move the signature too.
-    const baseSigParts = (): unknown[] => [
-      state.cwd,
-      state.showHidden,
-      state.sortBy,
-      state.sortAsc,
-      ctx.viewMode(),
-      ctx.wrapMode(),
-      ctx.tileW(),
-      ctx.tileH(),
-      ctx.iconCells(),
-      (() => {
-        const o = ctx.hoverLiftOpts?.();
-        // includeLabel rides live in the animator — no rebuild needed
-        return JSON.stringify([o?.enabled ?? false, o?.direction ?? "up"]);
-      })(),
-      ctx.termW(),
-      ctx.termH(),
-      ctx.availW?.() ?? 0,
-      q,
-      recursive,
-      ctx.pathEditMode(),
-      ctx.tileIdPrefix ?? "",
-      state.pendingSelect ?? "",
-      // a windowed-grid flip changes which nodes exist — must rebuild; so
-      // does list-row-height (the list builders read rowH() live, and the
-      // win cache/anim window math must not lag it)
-      ctx.windowedGrid?.() ?? false,
-      ctx.listRowH(),
-      ctx.colors(),
-      ctx.rasterSig?.() ?? "",
-    ];
+    // ONE listing context: what the pane lists, plus the paint inputs that
+    // change the tiles WITHOUT changing the listing. Every signature derives
+    // from it — the listing used to be encoded THREE ways (the placeholder
+    // key, the content signature, the storm-gate key) with DIFFERENT field
+    // sets, so the gates disagreed about what "the same listing" means and a
+    // hidden-files toggle replayed (or suppressed) the intro wave wrongly.
+    const listing: ListingContext = {
+      // the LISTING's identity: which files, ordered and shown how. The
+      // wave's content signature and the storm gate's key both key off this.
+      identity: {
+        cwd: state.cwd,
+        query: q,
+        recursive,
+        sortBy: state.sortBy,
+        sortAsc: state.sortAsc,
+        view: ctx.viewMode(),
+        wrap: ctx.wrapMode(),
+      },
+      // the VIEW filter over that listing — a re-filter is the SAME listing
+      // (the files were always there), so it is NOT part of the identity
+      filter: { showHidden: state.showHidden },
+      // the PAINT inputs: geometry/theme. They change the tiles, never the
+      // listing, so they never belong in the wave's identity.
+      paint: [
+        ctx.tileW(),
+        ctx.tileH(),
+        ctx.iconCells(),
+        (() => {
+          const o = ctx.hoverLiftOpts?.();
+          // includeLabel rides live in the animator — no rebuild needed
+          return JSON.stringify([o?.enabled ?? false, o?.direction ?? "up"]);
+        })(),
+        ctx.termW(),
+        ctx.termH(),
+        ctx.availW?.() ?? 0,
+        ctx.pathEditMode(),
+        ctx.tileIdPrefix ?? "",
+        state.pendingSelect ?? "",
+        // a windowed-grid flip changes which nodes exist — must rebuild; so
+        // does list-row-height (the list builders read rowH() live, and the
+        // win cache/anim window math must not lag it)
+        ctx.windowedGrid?.() ?? false,
+        ctx.listRowH(),
+        ctx.colors(),
+        ctx.rasterSig?.() ?? "",
+      ],
+    };
     // listing CONTEXT of this render, no entry list: the placeholder is armed
     // exactly when the screen stops describing this request (cwd/query/sort/
     // geometry/raster mode — anything that makes the painted tiles wrong)
-    const ctxKey = JSON.stringify(baseSigParts());
-    const sigOf = (list: Entry[] | string): string =>
-      JSON.stringify([
-        ...baseSigParts(),
-        typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
-      ]);
+    const ctxKey = JSON.stringify(listing);
+    // the paint signature: the context + the listed files. renderAll repaints
+    // BOTH panes on any navigation, so without this a move in one pane visibly
+    // rebuilds the other (and churns native buffers). Empty/error states sign
+    // separately; theme/geometry/search changes move the signature too.
+    const sigOf = (list: Entry[] | string): string => JSON.stringify([listing, entryPaintSig(list)]);
     // The pane is showing THIS listing now — claim it. NEVER call before the
     // paint (see dropPaintClaim) and never from the placeholder: a claim for a
     // screen the pane isn't showing strands it until the cwd moves. NOTE: the
@@ -536,25 +592,18 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // signature never carried (a symlink retarget dir↔file with identical
     // stats wrongly skipped the rebuild before). A tick that moves this
     // rebuilds; one that moves only stats takes the in-place fast path.
-    const structOf = (list: Entry[] | string): string =>
-      JSON.stringify([
-        ...baseSigParts(),
-        typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.isDir ? 1 : 0}`),
-      ]);
-    // content-only signature: what the animation keys off (the listed files +
-    // how they're shown), WITHOUT geometry/theme — layout-only rebuilds keep it
-    const contentSigOf = (list: Entry[] | string): string =>
-      JSON.stringify([
-        state.cwd,
-        state.showHidden,
-        state.sortBy,
-        state.sortAsc,
-        ctx.viewMode(),
-        ctx.wrapMode(),
-        q,
-        recursive,
-        typeof list === "string" ? list : list.map((e) => `${e.name}\u0000${e.size ?? ""}\u0000${e.mtimeMs ?? ""}`),
-      ]);
+    const structOf = (list: Entry[] | string): string => JSON.stringify([listing, entryStructSig(list)]);
+    // content-only signature: what the animation keys off (the listing's
+    // identity + its STABLE entries), WITHOUT geometry/theme — layout-only
+    // rebuilds keep it. The stable entries are the ones the hidden filter
+    // cannot change: a hidden-files toggle RE-FILTERS the same listing (the
+    // files were always there), so it must not replay the intro wave — the
+    // revealed files simply appear.
+    const contentSigOf = (list: Entry[] | string): string => JSON.stringify([listing.identity, stableEntrySig(list)]);
+    // the storm gate's key: the listing's IDENTITY — the same context the
+    // content signature keys off, so the two gates can never disagree about
+    // what "the same listing" means.
+    const listingKey = JSON.stringify(listing.identity);
     // [ui] loading-delay-ms: the screen no longer matches this request. Give
     // the listing the delay to arrive, then swap the stale tiles for the
     // spinner placeholder. A same-context rebuild (watcher tick, hover-drawer
@@ -858,13 +907,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           // repaints but doesn't restart it — overlapping waves on a slow VT
           // never complete and read as invisible files. The stop call in
           // clearGrid above already ran, so nothing in-flight is stranded.
-          // A DIFFERENT listing context (navigation/query/sort/view) is a new
-          // intro, not a storm: it plays regardless of the cooldown.
-          const playKey = `${state.cwd}\u0000${q}\u0000${state.sortBy}\u0000${state.sortAsc}\u0000${state.showHidden ? 1 : 0}\u0000${ctx.viewMode()}\u0000${recursive ? 1 : 0}`;
+          // A DIFFERENT listing (navigation/query/sort/view) is a new intro,
+          // not a storm: it plays regardless of the cooldown.
           const t = ctx.now ? ctx.now() : Date.now();
-          if (playKey === lastPlayKey && lastPlayAt !== null && t - lastPlayAt < PLAY_COOLDOWN_MS) return;
+          if (listingKey === lastPlayKey && lastPlayAt !== null && t - lastPlayAt < PLAY_COOLDOWN_MS) return;
           lastPlayAt = t;
-          lastPlayKey = playKey;
+          lastPlayKey = listingKey;
           try {
             const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
             // visible-only: off-screen tiles are never seen animating but each

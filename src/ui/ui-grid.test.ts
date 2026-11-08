@@ -1320,6 +1320,41 @@ test("navigating to a different folder within the cooldown still plays its intro
   }
 });
 
+test("a hidden-files toggle does not replay the intro wave", async () => {
+  // the hidden filter RE-FILTERS the same listing: the files were always
+  // there, so revealing them is not a new listing and must not replay the
+  // folder's intro wave (the wave belongs to a NEW listing)
+  const plays = (): number => fileAnimCalls.filter((c) => c.tiles.length > 0).length;
+  const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-grid-hidden-"));
+  try {
+    writeFileSync(path.join(dir, "a.txt"), "a");
+    writeFileSync(path.join(dir, ".secret"), "s");
+    viewMode = "list";
+    gridState.cwd = dir;
+    gridState.showHidden = false;
+    stepClock();
+    fileAnimCalls.length = 0;
+    await renderGrid();
+    await t.renderOnce();
+    expect(plays()).toBe(1);
+
+    // past the storm cooldown: this is NOT a storm — the wave must still not
+    // replay, because the LISTING did not change, only its filter did
+    stepClock();
+    gridState.showHidden = true;
+    await renderGrid();
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain(".secret"); // the file IS shown
+    expect(plays()).toBe(1); // ...without a wave
+  } finally {
+    viewMode = "grid";
+    gridState.showHidden = false;
+    rmSync(dir, { recursive: true, force: true });
+    gridState.cwd = tmp;
+    await renderGrid();
+  }
+});
+
 test("a stats tick on a non-thumbnailable image takes the fast path (no rebuild)", async () => {
   // thumbStatsChanged must mirror thumbPlanFor: a 0-byte image never rasters,
   // so its mtime moving must not force the full clear+rebuild
@@ -3177,6 +3212,30 @@ describe("no-drift rule", () => {
     expect(/kind: "window"/.test(src)).toBe(true);
     // the shape gate is an IDENTITY comparison against the pads we built
     expect(/kids\[0\]\s*===\s*\w+\.topPad/.test(src)).toBe(true);
+  });
+
+  test("the listing context is ONE object — no parallel encodings", async () => {
+    // The listing used to be encoded THREE ways with DIFFERENT field sets: the
+    // placeholder/paint key (baseSigParts), the wave's content signature and
+    // the storm gate's playKey. The two gates could disagree about what "the
+    // same listing" means — a hidden-files toggle then replayed (or
+    // suppressed) the intro wave wrongly. ONE context object feeds every
+    // signature now: the paint/structural keys take the whole context, the
+    // wave's content signature and the storm gate's key take its IDENTITY.
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the parallel encodings must not come back
+    expect(/baseSigParts/.test(src)).toBe(false);
+    expect(/const playKey =/.test(src)).toBe(false);
+    // ONE context object
+    expect(/type ListingContext =/.test(src)).toBe(true);
+    expect(/const listing: ListingContext =/.test(src)).toBe(true);
+    // every signature derives from it
+    expect(/JSON\.stringify\(listing\)/.test(src)).toBe(true);
+    expect(/JSON\.stringify\(\[listing,/.test(src)).toBe(true);
+    expect(/JSON\.stringify\(\[listing\.identity,/.test(src)).toBe(true);
+    expect(/JSON\.stringify\(listing\.identity\)/.test(src)).toBe(true);
   });
 
   test("the deferred reveal is ONE state record with ONE release", async () => {

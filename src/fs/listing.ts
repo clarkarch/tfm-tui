@@ -213,6 +213,13 @@ const loadEntries = async (
   return entries.map((e) => ({ ...e }));
 };
 
+// the hidden-name rule, in ONE place: a dot-prefixed path SEGMENT is hidden.
+// The in-dir listing filters on the basename (its only segment); the grid's
+// wave signature tracks the listing's stable core (the entries this rule
+// cannot hide), so a hidden-files toggle re-filters the SAME listing instead
+// of reading as a new one.
+export const isHiddenName = (name: string): boolean => name.split("/").some((seg) => seg.startsWith("."));
+
 export const listDir = async (
   dir: string,
   showHidden: boolean,
@@ -243,7 +250,7 @@ export const listDir = async (
       ttlMs: opts?.ttlMs ?? LISTINGS_TTL_MS,
       fillStats: fillAtLoad && (sortBy === "size" || sortBy === "mtime"),
     });
-    out = showHidden ? all : all.filter((e) => !e.name.startsWith("."));
+    out = showHidden ? all : all.filter((e) => !isHiddenName(e.name));
   }
   if ((sortBy === "size" || sortBy === "mtime") && !fillAtLoad) {
     for (const e of out) {
