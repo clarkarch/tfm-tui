@@ -32,6 +32,34 @@ import type { MaybeNode } from "../lib/node-like";
 // gen-counter guards stale async file reads so a slow preview can't paint
 // over a newer one. tfm-preview-* ids stay byte-identical. ---
 
+// The theme dimensions the CACHED node bakes: the syntax style's own sig
+// (accent/white/sidebarFg/sidebarFgMuted/syntax*) PLUS the scrollbar bed
+// (bg). The syntax sig alone missed bg — a theme flip that touched only bg
+// left it unchanged, so the cache served the stale node (the old scrollbar
+// bed in a new theme).
+export const previewThemeSig = (colors: Theme): string => `${syntaxStyleSig(colors)}|${colors.bg}`;
+
+// The cached node's validity: ONE key, compared whole. The old shape was a
+// SIX-clause conjunction (file/mtime/size/wrap/viewW/viewH) PLUS a separate
+// style cache whose invalidation was ORDER-DEPENDENT (the style check had to
+// run BEFORE the cache check, or a stale themed node survived until some
+// OTHER file was previewed). Every dimension the node bakes joins the key,
+// so the cache decides on its own and a new dimension has ONE place to join.
+export type PreviewCacheParts = {
+  file: string;
+  mtimeMs: number;
+  size: number;
+  wrap: string;
+  viewW: number;
+  viewH: number;
+  themeSig: string;
+};
+
+export const previewCacheKey = (parts: PreviewCacheParts): string =>
+  // JSON, not a pipe join: a path may contain the separator, and two
+  // different dimension sets must never alias
+  JSON.stringify([parts.file, parts.mtimeMs, parts.size, parts.wrap, parts.viewW, parts.viewH, parts.themeSig]);
+
 type PreviewCtx = {
   renderer: CliRenderer;
   byId(id: string): MaybeNode;
@@ -85,9 +113,12 @@ export const makePreview = (ctx: PreviewCtx) => {
   // parser registration, filetype map, style builder) lives in ./syntax.ts ---
   let previewSyntaxStyle: InstanceType<typeof SyntaxStyle> | null = null;
   let previewSyntaxSig = "";
-  const getPreviewSyntaxStyle = () => {
+  // the sig is passed in: the CALLER owns the theme snapshot it renders with
+  // (the style and the cache key must agree on it — the style used to be
+  // rebuilt from a LIVE ctx.colors() read while the key was computed from an
+  // older snapshot).
+  const getPreviewSyntaxStyle = (sig: string) => {
     const colors = ctx.colors();
-    const sig = syntaxStyleSig(colors as Theme);
     if (!previewSyntaxStyle || previewSyntaxSig !== sig) {
       // Destroy the evicted node BEFORE the style: pane removal only detaches,
       // so an orphaned node with an in-flight highlight would otherwise call
@@ -104,19 +135,11 @@ export const makePreview = (ctx: PreviewCtx) => {
     return previewSyntaxStyle;
   };
   let previewCodeSeq = 0;
-  // reuse the (already-parsed/highlighted) node when the same file is previewed again
+  // reuse the (already-parsed/highlighted) node when the same file is previewed
+  // again — ONE key decides (see previewCacheKey), the node rides it
   let previewCodeCache: {
+    // every render dimension the node bakes, joined into ONE key
     key: string;
-    mtimeMs: number;
-    size: number;
-    // the wrap mode the node was built with — a toggle must not be served
-    // the stale wrap from the cache (key/mtime/size don't change on toggle)
-    wrap: string;
-    // body viewport the node was built for: the code body is padded to the
-    // viewport height and wraps to its width, so a resize or a preview-width
-    // change must rebuild instead of serving the old geometry
-    viewW: number;
-    viewH: number;
     // whichever renderable the last preview mounted — every body (code and
     // markdown) rides in a scrollbox, so the cached node is the scroller and
     // scroll position survives re-previews of one file.
@@ -301,13 +324,6 @@ export const makePreview = (ctx: PreviewCtx) => {
     }
     try {
       if (gen !== previewGen) return;
-      // Called BEFORE the cache check on purpose: it nulls previewCodeCache
-      // when the theme sig changed, so a stale styled node can't survive a
-      // re-preview of the same unchanged file (the cache-hit return below
-      // would otherwise keep painting the OLD theme until some OTHER file
-      // was previewed).
-      const syntaxStyle = getPreviewSyntaxStyle();
-      if (!syntaxStyle) return;
       const mtimeMs = st.mtimeMs ?? 0;
       const size = st.size ?? 0;
       // global wrap mode: code bodies and markdown blocks render in it.
@@ -321,25 +337,39 @@ export const makePreview = (ctx: PreviewCtx) => {
       const bodyW = Math.max(8, ctx.previewWidth() - 2);
       const bodyH = Math.max(1, ctx.termH() - 6);
       const ext = path.extname(key).slice(1).toLowerCase();
-      // the padding below is derived from the VIEWPORT, so a resize (or a
-      // preview-width change) must not be served the previous node — key the
-      // viewport alongside the file identity
-      if (
-        previewCodeCache &&
-        previewCodeCache.key === key &&
-        previewCodeCache.mtimeMs === mtimeMs &&
-        previewCodeCache.size === size &&
-        previewCodeCache.wrap === wrap &&
-        previewCodeCache.viewW === bodyW &&
-        previewCodeCache.viewH === bodyH
-      ) {
+      // the theme snapshot this render paints with — the style and the cache
+      // key MUST agree on it (the style used to be rebuilt from a LIVE
+      // ctx.colors() read while the key was computed from an older snapshot)
+      const syntaxSig = syntaxStyleSig(colors as Theme);
+      const themeSig = previewThemeSig(colors as Theme);
+      // ONE key, compared whole: file identity + content + wrap + viewport +
+      // the theme dimensions the node bakes. The padding below is derived
+      // from the VIEWPORT, so a resize (or a preview-width change) must not
+      // be served the previous node — the viewport rides the key.
+      const cacheKey = previewCacheKey({
+        file: key,
+        mtimeMs,
+        size,
+        wrap,
+        viewW: bodyW,
+        viewH: bodyH,
+        themeSig,
+      });
+      if (previewCodeCache && previewCodeCache.key === cacheKey) {
         pane.add(previewCodeCache.node);
         return;
       }
-      // cache miss on a DIFFERENT file: the old cached node was detached above
-      // (kept, not destroyed) and is about to be replaced — destroy it now so
-      // its native buffer frees here, not at the next GC poke
+      // cache miss: the old cached node was detached above (kept, not
+      // destroyed) and is about to be replaced — destroy it now so its
+      // native buffer frees here, not at the next GC poke
       destroyCachedNode();
+      // The style is built ONLY on a miss: the theme sig rides the key, so a
+      // cache hit means the style is current. The cache decision no longer
+      // depends on WHERE this call sits (it used to have to run BEFORE the
+      // cache check, or a stale themed node survived until some OTHER file
+      // was previewed).
+      const syntaxStyle = getPreviewSyntaxStyle(syntaxSig);
+      if (!syntaxStyle) return;
       // markdown gets the rich render (headings/lists/links, OSC-8
       // hyperlink chunks included) instead of a monochrome code dump.
       // The whole node — prose and fences — renders in the global mode;
@@ -362,7 +392,7 @@ export const makePreview = (ctx: PreviewCtx) => {
           scrollbarOptions: { trackOptions: scrollbarTrackColors(colors) },
         });
         scroller.add(mdNode);
-        previewCodeCache = { key, mtimeMs, size, wrap, viewW: bodyW, viewH: bodyH, node: scroller };
+        previewCodeCache = { key: cacheKey, node: scroller };
         pane.add(scroller);
         void ctx.drainIconQueue();
         return;
@@ -422,7 +452,7 @@ export const makePreview = (ctx: PreviewCtx) => {
       // constraints): in a scrollbox it scrolls in sync with the body
       // instead of running past short content — its designed use.
       scroller.add(gutter);
-      previewCodeCache = { key, mtimeMs, size, wrap, viewW: bodyW, viewH: bodyH, node: scroller };
+      previewCodeCache = { key: cacheKey, node: scroller };
       pane.add(scroller);
       void ctx.drainIconQueue();
     } catch {}

@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { defaultConfig, type Theme } from "../config/config";
 import type { WrapMode } from "../config/config-schema";
-import { makePreview } from "./ui-preview";
+import { makePreview, previewCacheKey, previewThemeSig } from "./ui-preview";
 import type { Scheduler } from "../lib/uiutil";
 
 // Manual clock: debounced clears its pending handle, so a coalescing test can
@@ -192,6 +192,26 @@ describe("preview theme awareness", () => {
     expect((codeNodes()[0] as any).syntaxStyle).not.toBe(oldStyle);
     // the evicted node is destroyed (not just detached), so its native
     // buffers release and any in-flight highlight bails on isDestroyed
+    expect(oldNode.isDestroyed).toBe(true);
+  });
+
+  test("a bg-only theme flip rebuilds the preview (the scrollbar bed rides the cached node)", async () => {
+    // the cached node bakes the scrollbar track colors (bg + sidebarFgMuted),
+    // but the SYNTAX style's sig does not carry bg: a theme flip that touched
+    // only bg left the syntax sig unchanged, so the cache served the stale
+    // node — the old scrollbar bed in a new theme. The cache key must carry
+    // every dimension the node bakes.
+    const file = path.join(tmpDir, "bgflip.js");
+    writeFileSync(file, "const q = 9;\n");
+    const { live, clock, p, codeNodes } = mkLivePreview(file);
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => codeNodes().length === 1)).toBe(true);
+    const oldNode = codeNodes()[0] as any;
+    Object.assign(live, { bg: "#010203" }); // bg only — the syntax sig is unchanged
+    p.renderPreview();
+    clock.flush();
+    expect(await settleUntil(t, () => codeNodes().length === 1 && (codeNodes()[0] as any) !== oldNode)).toBe(true);
     expect(oldNode.isDestroyed).toBe(true);
   });
 
@@ -699,5 +719,80 @@ describe("preview rich rendering", () => {
       expect(body).toBeTruthy();
       expect(body.wrapMode).toBe(mode);
     }
+  });
+});
+
+// --- the preview cache's validity: ONE key, compared whole -------------------
+// The node's validity used to be a SIX-clause conjunction (file/mtime/size/
+// wrap/viewW/viewH) PLUS a separate style cache whose invalidation was
+// ORDER-DEPENDENT (the style check had to run BEFORE the cache check, or a
+// stale themed node survived until some OTHER file was previewed). The key is
+// ONE string now: every dimension the node bakes joins it, and the cache
+// decides on its own.
+describe("preview cache key", () => {
+  const base = {
+    file: "/tmp/a.js",
+    mtimeMs: 1,
+    size: 2,
+    wrap: "none",
+    viewW: 40,
+    viewH: 20,
+    themeSig: "sig",
+  };
+
+  test("the same dimensions produce the same key", () => {
+    expect(previewCacheKey({ ...base })).toBe(previewCacheKey({ ...base }));
+  });
+
+  test("every render dimension changes the key", () => {
+    const key = previewCacheKey(base);
+    // one dimension at a time — a dimension the key forgets is a dimension
+    // that silently serves a stale node
+    expect(previewCacheKey({ ...base, file: "/tmp/b.js" })).not.toBe(key);
+    expect(previewCacheKey({ ...base, mtimeMs: 3 })).not.toBe(key);
+    expect(previewCacheKey({ ...base, size: 3 })).not.toBe(key);
+    expect(previewCacheKey({ ...base, wrap: "word" })).not.toBe(key);
+    expect(previewCacheKey({ ...base, viewW: 41 })).not.toBe(key);
+    expect(previewCacheKey({ ...base, viewH: 21 })).not.toBe(key);
+    expect(previewCacheKey({ ...base, themeSig: "other" })).not.toBe(key);
+  });
+
+  test("the key cannot collide on a delimiter (paths carry anything)", () => {
+    // a path with the separator inside must not alias another path
+    expect(previewCacheKey({ ...base, file: "/tmp/a|js" })).not.toBe(previewCacheKey({ ...base, file: "/tmp/a.js" }));
+  });
+
+  test("the theme sig covers the scrollbar bed (bg)", () => {
+    // the syntax style's sig does NOT carry bg, but the cached node bakes it
+    // (the scrollbar track) — the preview's own sig must
+    const theme = { ...defaultConfig.theme } as Theme;
+    const sig = previewThemeSig(theme);
+    expect(previewThemeSig({ ...theme, bg: "#010203" })).not.toBe(sig);
+    expect(previewThemeSig({ ...theme, white: "#010203" })).not.toBe(sig);
+  });
+});
+
+describe("no-drift rule: the preview cache validity is ONE key", () => {
+  test("no clause conjunction — the cache compares one key string", async () => {
+    const src = (await Bun.file(`${import.meta.dir}/ui-preview.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    expect(/export const previewCacheKey\s*=/.test(src)).toBe(true);
+    // the cache record carries the key + the node, nothing else
+    expect(/previewCodeCache\s*=\s*\{\s*key:\s*cacheKey,\s*node:/s.test(src)).toBe(true);
+    // the six-clause conjunction must not come back
+    expect(/previewCodeCache\.mtimeMs\s*===/.test(src)).toBe(false);
+    expect(/previewCodeCache\.size\s*===/.test(src)).toBe(false);
+    expect(/previewCodeCache\.wrap\s*===/.test(src)).toBe(false);
+    expect(/previewCodeCache\.viewW\s*===/.test(src)).toBe(false);
+    expect(/previewCodeCache\.viewH\s*===/.test(src)).toBe(false);
+    // the cache decision must NOT depend on the style call's position: the
+    // theme sig rides the key, so the style is only built on a miss
+    const renderRegion = src.slice(src.indexOf("const renderPreviewNow"));
+    const hitIdx = renderRegion.indexOf("previewCodeCache.key === cacheKey");
+    const styleIdx = renderRegion.indexOf("getPreviewSyntaxStyle(");
+    expect(hitIdx).toBeGreaterThan(0);
+    expect(styleIdx).toBeGreaterThan(0);
+    expect(hitIdx).toBeLessThan(styleIdx);
   });
 });
