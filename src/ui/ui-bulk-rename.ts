@@ -45,21 +45,56 @@ const trunc = (s: string, w: number): string => (s.length > w ? `${s.slice(0, w 
 export const makeBulkRename = (ctx: BulkRenameCtx) => {
   let opened = false;
   let items: Array<{ path: string }> = [];
-  let value = "";
   let style: BulkRenameStyle = "plain";
   let focusTimer: ReturnType<typeof setTimeout> | null = null;
+  // the error is a VARIABLE (the DOM is its projection): the repaint used to
+  // recover it by comparing the rendered node's content against the empty
+  // marker — a comparison that is ALWAYS true (the node's content is a chunk
+  // object, not a string), so the "is an error showing?" question never had
+  // an answer.
+  let errMsg: string | null = null;
+
+  // THE typed value: the Input node is the single source of truth. A mirror
+  // could drift — the field strips control chars (the user cannot type one),
+  // a mirror did not — and the rename would then apply a name the user never
+  // typed.
+  const currentValue = (): string => {
+    try {
+      return String(ctx.byId("tfm-bulkrename-input")?.value ?? "");
+    } catch {
+      return "";
+    }
+  };
+
+  // project the error state into the footer row
+  const paintError = (c: Theme): void => {
+    const el = ctx.byId("tfm-bulkrename-error");
+    if (!el) return;
+    el.content = errMsg ?? EMPTY_ERROR;
+    // the row's COLOR is theme state, not error state: it follows the theme
+    // whether or not an error is showing (a conditional paint left the next
+    // error wearing the color the row was built with)
+    el.fg = c.ansi1;
+  };
 
   const setError = (msg: string): void => {
-    const el = ctx.byId("tfm-bulkrename-error");
-    if (el) el.content = msg || EMPTY_ERROR;
+    errMsg = msg || null;
+    paintError(ctx.colors());
   };
 
   const renderPreview = (): void => {
+    const stem = currentValue().trim();
+    // the error is widget state, not a preview detail: compute it FIRST, so
+    // it lands even when the preview box is gone
+    if (!stem) setError("");
+    else {
+      const plan = planBulkRename(items, stem, style);
+      setError(plan.ok ? "" : plan.error);
+    }
     const box = ctx.byId("tfm-bulkrename-preview");
     if (!box) return;
     const c = ctx.colors();
     ctx.destroyChildren(box);
-    const stem = value.trim();
     const names = stem ? bulkRenameNames(items, stem, style) : [];
     const nameW = Math.floor((PANEL_W - 4 - 3 - 2) / 2);
     items.slice(0, MAX_PREVIEW).forEach((it, i) => {
@@ -93,11 +128,6 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
         ),
       );
     }
-    if (!stem) setError("");
-    else {
-      const plan = planBulkRename(items, stem, style);
-      setError(plan.ok ? "" : plan.error);
-    }
   };
 
   const repaintStyles = (): void => {
@@ -125,7 +155,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
   const rawClose = (): void => {
     opened = false;
     items = [];
-    value = "";
+    errMsg = null;
     if (focusTimer !== null) {
       clearTimeout(focusTimer);
       focusTimer = null;
@@ -144,7 +174,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
   };
 
   const apply = (): void => {
-    const plan = planBulkRename(items, value, style);
+    const plan = planBulkRename(items, currentValue(), style);
     if (!plan.ok) {
       setError(plan.error);
       return;
@@ -209,7 +239,6 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     items = paths.map((p) => ({ path: p }));
     // the input owns the keyboard now — text pointer until it settles
     ctx.setPointer?.("text");
-    value = "";
     style = "plain";
     const c = ctx.colors();
     const inputW = PANEL_W - 2 - 2 - LABEL_W - 1;
@@ -265,10 +294,9 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
     ctx.rootAdd(scrim);
     const input = ctx.byId("tfm-bulkrename-input");
     if (input?.on) {
+      // the node holds the value: the preview reads it from there (a mirror
+      // could drift from the field the user is looking at)
       input.on("input", () => {
-        try {
-          value = String(input.value ?? "");
-        } catch {}
         renderPreview();
       });
     }
@@ -314,8 +342,7 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
       } catch {}
     }
     try {
-      const err = ctx.byId("tfm-bulkrename-error");
-      if (err && err.content !== EMPTY_ERROR) err.fg = c.ansi1;
+      paintError(c);
     } catch {}
     try {
       repaintStyles();
@@ -338,7 +365,6 @@ export const makeBulkRename = (ctx: BulkRenameCtx) => {
         const input = ctx.byId("tfm-bulkrename-input");
         if (input) input.value = stripControlChars(v);
       } catch {}
-      value = v;
       renderPreview();
     },
   };

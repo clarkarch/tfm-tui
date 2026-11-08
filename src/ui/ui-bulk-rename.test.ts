@@ -181,6 +181,67 @@ describe("bulk rename widget", () => {
     }
   });
 
+  test("apply uses the value in the input field", async () => {
+    // The Input node is the source of truth. The field STRIPS control chars
+    // (the user cannot type one), so the applied names must be the ones the
+    // field SHOWS — a mirror could carry a different string and rename to a
+    // name the user never typed.
+    const t = await createTestRenderer({ width: 100, height: 26 });
+    try {
+      const floats = makeFloats();
+      const performed: Array<{ from: string; to: string }> = [];
+      const bulk = mkBulk(t, floats, performed);
+      bulk.open(TWO);
+      await t.renderOnce();
+      bulk.setValue("vaca\x01tion");
+      await t.renderOnce();
+      const input = t.renderer.root.findDescendantById("tfm-bulkrename-input") as any;
+      expect(input.value).toBe("vacation"); // the field shows the stripped form
+      bulk.handleKey({ name: "return" });
+      expect(performed).toEqual([
+        { from: "/tfm-bulk/IMG_001.jpg", to: "/tfm-bulk/vacation 1.jpg" },
+        { from: "/tfm-bulk/IMG_002.jpg", to: "/tfm-bulk/vacation 2.jpg" },
+      ]);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("an error raised after a theme switch wears the NEW theme's error color", async () => {
+    // The error row's color is the widget's THEME state, not something that
+    // depends on whether an error is showing: the row used to compare the
+    // rendered node's content against the empty marker (a comparison that is
+    // always true — the node's content is a chunk object, not a string) and
+    // painted the color by accident. The row's color must follow the theme
+    // either way, so an error raised AFTER a theme switch wears the new one.
+    const t = await createTestRenderer({ width: 100, height: 26 });
+    try {
+      const floats = makeFloats();
+      let live: Theme = { ...colors };
+      const bulk = mkBulk(t, floats, [], () => live);
+      bulk.open(TWO);
+      await t.renderOnce();
+      const hexInts = (hex: string): [number, number, number, number] => {
+        const n = Number.parseInt(hex.slice(1), 16);
+        return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+      };
+      const err = t.renderer.root.findDescendantById("tfm-bulkrename-error") as any;
+      live = { ...colors, ansi1: "#ff0000" };
+      bulk.repaint();
+      await t.renderOnce();
+      // the error row's COLOR is theme state: it is projected unconditionally
+      // (a conditional paint — "only while an error is showing" — would
+      // leave the row wearing the color it was built with)
+      expect([...err.fg.toInts()]).toEqual(hexInts("#ff0000"));
+      bulk.setValue("/"); // "/" is an illegal name -> the error appears
+      await t.renderOnce();
+      expect([...err.fg.toInts()]).toEqual(hexInts("#ff0000"));
+      expect(t.captureCharFrame()).toContain("Invalid name");
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
   test("re-open replaces the previous session (no stacked scrims)", async () => {
     const t = await createTestRenderer({ width: 100, height: 26 });
     try {
@@ -279,5 +340,29 @@ describe("bulk rename widget", () => {
     } finally {
       await t.dispose(); // 0.6.0: destroy + await closed
     }
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the typed value lives in the INPUT node, and the error in a VARIABLE", async () => {
+    // Two mirrored states, both recoverable from the wrong place:
+    //  - the typed value was MIRRORED into a `value` variable while the
+    //    Input node stayed the source of truth — the mirror drifted (the
+    //    field strips control chars, the mirror did not) and `apply` renamed
+    //    to a name the user never typed;
+    //  - the error lived ONLY in the DOM: the repaint recovered it by
+    //    comparing the rendered node's content against the empty marker (a
+    //    comparison that is ALWAYS true — the node's content is a chunk
+    //    object, not a string).
+    // The value is read from the node; the error is a variable.
+    const src = (await Bun.file(`${import.meta.dir}/ui-bulk-rename.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/err\.content/.test(src)).toBe(false); // no read-back out of the DOM
+    expect(/errMsg/.test(src)).toBe(true); // the error is a variable
+    expect(/let value\b/.test(src)).toBe(false); // no value mirror
+    expect(/currentValue\(\)/.test(src)).toBe(true); // one accessor reads the node
   });
 });
