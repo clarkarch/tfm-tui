@@ -3214,6 +3214,21 @@ describe("no-drift rule", () => {
     expect(/kids\[0\]\s*===\s*\w+\.topPad/.test(src)).toBe(true);
   });
 
+  test("the storm gate is ONE record — no parallel scalars", async () => {
+    // The storm gate's state was TWO scalars (the last play's time + the last
+    // play's key): `null` meant BOTH "never played" and "no context", and the
+    // pair could disagree (a time without a key, a key without a time). It is
+    // ONE record now — `null` means exactly "never played".
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the parallel scalars must not come back
+    expect(/lastPlayAt/.test(src)).toBe(false);
+    expect(/lastPlayKey/.test(src)).toBe(false);
+    // ONE record replaces them
+    expect(/lastPlay: \{ key: string; at: number \} \| null/.test(src)).toBe(true);
+  });
+
   test("the listing context is ONE object — no parallel encodings", async () => {
     // The listing used to be encoded THREE ways with DIFFERENT field sets: the
     // placeholder/paint key (baseSigParts), the wave's content signature and

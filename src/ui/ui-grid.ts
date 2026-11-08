@@ -31,9 +31,9 @@ import type { WrapMode } from "../config/config-schema";
 export { hookScrollerScroll } from "./ui-grid-window";
 
 // minimum gap between two entry-animation waves in the SAME listing context;
-// a faster rebuild still repaints, it just doesn't restart the wave (see
-// lastPlayAt). Keyed on cwd/query/sort/view — navigating to a different folder
-// is a new intro, not a storm, and must animate immediately.
+// a faster rebuild still repaints, it just doesn't restart the wave (see the
+// grid's `lastPlay` record). Keyed on the listing's identity — navigating to a
+// different folder is a new intro, not a storm, and must animate immediately.
 export const PLAY_COOLDOWN_MS = 500;
 
 // [ui] loading-delay-ms: how long a listing may take before the pane swaps its
@@ -214,10 +214,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // restart the entry wave per rebuild — a wave that never completes reads as
   // invisible files. Plays inside the cooldown after the previous play are
   // skipped (the grid still rebuilds; only the animation is dropped). Keyed on
-  // the listing CONTEXT (cwd/query/sort/view): navigating within the cooldown
-  // is a new folder intro, not a storm, and must animate.
-  let lastPlayAt: number | null = null;
-  let lastPlayKey: string | null = null;
+  // the listing's IDENTITY (the same context the content signature keys off):
+  // navigating within the cooldown is a new folder intro, not a storm, and
+  // must animate. The state is ONE record — `null` means exactly "never
+  // played" (the old pair of scalars made "never played" and "no context" two
+  // separate nulls that could disagree).
+  let lastPlay: { key: string; at: number } | null = null;
   // in-flight recursive search; a newer render aborts it so stale keystroke
   // walks don't keep eating disk while a fresh query runs
   let searchAbort: AbortController | null = null;
@@ -910,9 +912,8 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           // A DIFFERENT listing (navigation/query/sort/view) is a new intro,
           // not a storm: it plays regardless of the cooldown.
           const t = ctx.now ? ctx.now() : Date.now();
-          if (listingKey === lastPlayKey && lastPlayAt !== null && t - lastPlayAt < PLAY_COOLDOWN_MS) return;
-          lastPlayAt = t;
-          lastPlayKey = listingKey;
+          if (lastPlay !== null && listingKey === lastPlay.key && t - lastPlay.at < PLAY_COOLDOWN_MS) return;
+          lastPlay = { key: listingKey, at: t };
           try {
             const ids = [...selection.tileRefs.values()].map((r) => r.tileId);
             // visible-only: off-screen tiles are never seen animating but each
