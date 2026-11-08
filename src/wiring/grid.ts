@@ -202,6 +202,9 @@ export const wireGrid = (deps: {
       },
       selPaths: s.selPaths,
       dblClickMs: () => core.config.ui.doubleClickMs,
+      // the double-click window's clock — injected so the window is testable
+      // (a backwards step must re-arm, never open a file on one click)
+      now: () => Date.now(),
       dragThresholdCells: () => core.config.ui.dragThresholdCells,
       // --- nav deps (GridNavDeps) ---
       navigate: nav.navigate,

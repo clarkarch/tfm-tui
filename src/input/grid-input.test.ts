@@ -362,7 +362,7 @@ describe("selection model", () => {
     expect(ctx.menus).toEqual(["menu-/w/b.txt"]);
   });
 
-  test("double-click opens (dir navigates) and resets lastClick", () => {
+  test("double-click opens (dir navigates) and re-arms the window", () => {
     const ctx = makeCtx();
     const navigated: string[] = [];
     ctx.navigate = (d) => {
@@ -402,6 +402,52 @@ describe("selection model", () => {
     press(h, { x: 1, y: 1 });
     press(h, { x: 1, y: 1 });
     expect(opened).toEqual(["/w/a.txt"]);
+  });
+
+  test("the double-click window is decided by the injected clock", () => {
+    // The wall clock made the window untestable AND unsafe: `lastClick = 0`
+    // doubled as "never clicked" and as a real instant, and a backwards step
+    // (NTP) made the delta negative. The clock comes from the ctx now.
+    const ctx = makeCtx();
+    let now = 1000;
+    ctx.now = () => now;
+    const opened: string[] = [];
+    ctx.openFileDefault = (p) => opened.push(p);
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, { x: 1, y: 1 });
+    expect(opened).toEqual([]);
+    // the second click lands OUTSIDE the window (500ms) → no open, and the
+    // press re-arms the window
+    now += 1000;
+    press(h, { x: 1, y: 1 });
+    expect(opened).toEqual([]);
+    // the next click is inside the window → the double-click opens
+    now += 10;
+    press(h, { x: 1, y: 1 });
+    expect(opened).toEqual(["/w/a.txt"]);
+    // ... and the window is reset: the next press arms again
+    now += 10;
+    press(h, { x: 1, y: 1 });
+    expect(opened).toEqual(["/w/a.txt"]);
+  });
+
+  test("a backwards clock never turns a single click into an open", () => {
+    // A backwards step (NTP, a restored VM) makes the delta NEGATIVE. The old
+    // comparison (`now - lastClick >= window`) read that as "inside the
+    // window" → a single click launched the file. A negative delta re-arms
+    // instead: ONE click never opens.
+    const ctx = makeCtx();
+    let now = 5000;
+    ctx.now = () => now;
+    const opened: string[] = [];
+    ctx.openFileDefault = (p) => opened.push(p);
+    const h = makeEntryMouseHandlers(ctx)({ isDir: false }, "/w/a.txt", 0);
+    press(h, { x: 1, y: 1 });
+    expect(opened).toEqual([]);
+    // the clock jumps BACKWARDS between the two clicks
+    now -= 1000;
+    press(h, { x: 1, y: 1 });
+    expect(opened).toEqual([]);
   });
 });
 
@@ -759,5 +805,22 @@ describe("the rubber-band gesture", () => {
     expect(pane0.phase.current.kind).toBe("idle");
     expect(pane1.phase.current.kind).toBe("idle");
     expect(pane0.bandNode.visible).toBe(false);
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the double-click window is a named phase, not a timestamp sentinel", async () => {
+    // The old state was `lastClick = 0`: `0` doubled as "never clicked" AND
+    // as a real instant (a clock at the epoch made the FIRST click open the
+    // file), and the wall clock made the window untestable. The window is ONE
+    // tagged phase with ONE transition — the sentinel may not come back.
+    const src = (await Bun.file(`${import.meta.dir}/grid-input.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/lastClick/.test(src)).toBe(false);
+    // ... and the phase names its armed variant
+    expect(/kind:\s*"armed"/.test(src)).toBe(true);
   });
 });

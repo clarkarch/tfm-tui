@@ -87,6 +87,10 @@ export type GridInputCtx = {
   termW(): number;
   termH(): number;
   dblClickMs(): number;
+  // the clock for the double-click window (absent = the wall clock). It is
+  // injected so the window is TESTABLE, and so a backwards step (NTP, a
+  // restored VM) can be pinned instead of guessed at.
+  now?(): number;
   // config knob [ui] drag-threshold-cells (default 1); read live at drag time
   dragThresholdCells?(): number;
   setStatusMsg(msg: string): void;
@@ -350,9 +354,45 @@ export const cancelBands = (ctxs: readonly BandCtx[]): void => {
   for (const ctx of ctxs) cancelBand(ctx);
 };
 
+// --- the double-click window ---
+//
+// ONE explicit phase per tile. The old state was a bare `lastClick = 0`
+// timestamp, which carried TWO meanings: "no click yet" and "a click at the
+// epoch". The wall clock made it worse — the window could not be tested, and
+// a backwards step (NTP, a restored VM) turned the delta negative, which the
+// old comparison read as "inside the window" (a SINGLE click opened the
+// file).
+type DoubleClickPhase = { kind: "idle" } | { kind: "armed"; at: number };
+
+/**
+ * The double-click window's ONE transition.
+ *
+ * - idle → armed: the first click of a gesture (it never opens).
+ * - armed + a delta inside the window → idle + OPEN: the second click.
+ * - armed + a delta outside the window → armed: the click starts a NEW
+ *   gesture (the window is re-armed).
+ * - armed + a NEGATIVE delta (the clock went backwards) → armed: the click
+ *   starts a new gesture too. A backwards step must never open a file.
+ */
+const advanceDoubleClick = (
+  phase: DoubleClickPhase,
+  now: number,
+  windowMs: number,
+): { phase: DoubleClickPhase; open: boolean } => {
+  if (phase.kind !== "armed") return { phase: { kind: "armed", at: now }, open: false };
+  const delta = now - phase.at;
+  if (delta < 0 || delta >= windowMs) return { phase: { kind: "armed", at: now }, open: false };
+  return { phase: { kind: "idle" }, open: true };
+};
+
 export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
   return (entry: { isDir: boolean }, key: string, idx: number) => {
-    let lastClick = 0;
+    // The double-click window: ONE explicit phase per tile (a double-click
+    // is ONE tile's gesture). The old state was a bare `lastClick = 0`
+    // timestamp: `0` doubled as "never clicked" AND as a real instant — a
+    // clock at the epoch made the FIRST click open the file — and the WALL
+    // clock made the window untestable.
+    let dblClick: DoubleClickPhase = { kind: "idle" };
 
     const armDragPayload = (
       ev: TileMouseEvent,
@@ -385,20 +425,18 @@ export const makeEntryMouseHandlers = (ctx: GridInputCtx) => {
 
     const handleDoubleClick = (ev: TileMouseEvent): boolean => {
       // a modifier means toggle (ctrl) / range (shift/alt), never open: two
-      // fast ctrl-clicks must not launch the file. Don't touch lastClick, so
+      // fast ctrl-clicks must not launch the file. The phase is left alone, so
       // the modified press leaves the double-click clock as it was.
       const mods = ev.modifiers ?? {};
       if (mods.ctrl || mods.shift || mods.alt) return false;
-      const now = Date.now();
-      if (now - lastClick >= ctx.dblClickMs()) {
-        lastClick = now;
-        return false;
-      }
+      const now = ctx.now?.() ?? Date.now();
+      const next = advanceDoubleClick(dblClick, now, ctx.dblClickMs());
+      dblClick = next.phase;
+      if (!next.open) return false;
       const archive = archiveBrowseUri(key, entry.isDir);
       if (archive) ctx.navigate(archive);
       else if (entry.isDir) ctx.navigate(key);
       else ctx.openFileDefault(key);
-      lastClick = 0;
       return true;
     };
 
