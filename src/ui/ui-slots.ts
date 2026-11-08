@@ -280,16 +280,24 @@ export const makeSlots = (ctx: SlotsCtx) => {
   let rasterDim: number | null = null;
   let rasterShade = 1;
   let rasterBgShade = 1;
-  let thumbJobs: ThumbJob[] = [];
-  // per-slot ownership: pushThumbJob records the key of the job it queued for a
-  // slot, so a drain that resolves the slot later can tell whether ITS job still
-  // owns it. A rebuilt tile (new file, same `tfm-tile-N-thumb` id) re-pushes a
-  // job and overwrites the key, which is how a stale in-flight raster is
-  // rejected. This replaces the old "newer drain wins" generation bail, which
-  // DROPPED the losing drain's jobs outright: a grid folder's thumbnails stayed
+  let thumbJobs: ThumbOwner[] = [];
+  // per-slot ownership: ONE record per slot — the job that owns it, the key
+  // that identifies its file, and the node the owner paints into.
+  //   - the KEY is what a re-PUSH flips: a rebuilt slot pushes a new job, so
+  //     the previous file's in-flight raster is stale.
+  //   - the NODE is what a re-REGISTRATION changes: a rebuild that mounts a
+  //     NEW node under the same id and pushes NO job (the thumb plan changed
+  //     to "no thumbnail") leaves the old owner behind — the key still
+  //     matched, so the previous file's raster painted the wrong image into
+  //     the new slot. The ownership has to name the node it claimed.
+  // The registry is pruned (a slot that left the tree drops its owner), so it
+  // cannot grow without bound — the old key-only map never deleted an entry.
+  // This replaces the old "newer drain wins" generation bail, which DROPPED
+  // the losing drain's jobs outright: a grid folder's thumbnails stayed
   // blank until the cwd changed, because renderGrid early-outs on an unchanged
   // listing and never re-pushed them.
-  const thumbOwners = new Map<string, string>();
+  type ThumbOwner = { job: ThumbJob; key: string; node: MaybeNode };
+  const thumbOwners = new Map<string, ThumbOwner>();
   // icon drains are SERIALIZED instead of superseded: several renderAll steps
   // each fire drainIconQueue (sidebar, the iconQueue step, the grid), and a
   // supersession token stranded every spec a losing drain had already marked
@@ -388,22 +396,39 @@ export const makeSlots = (ctx: SlotsCtx) => {
   const ICON_WORKERS = 8;
 
   const drainThumbs = async () => {
-    const jobs = thumbJobs;
+    const owners = thumbJobs;
     thumbJobs = [];
+    // release an ownership nobody will honour (the job is dropped, or a newer
+    // push already took the slot over): the registry must not keep a record
+    // for a slot that is never rasterized
+    const release = (owner: ThumbOwner): void => {
+      if (thumbOwners.get(owner.job.slotId) === owner) thumbOwners.delete(owner.job.slotId);
+    };
     // drop the backlog (a rebuild re-queues what it needs if tty mode flips off)
-    if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
-    if (!ctx.renderer().resolution || jobs.length === 0) return;
+    if (ctx.isTtyMode?.() || ctx.forceGlyph?.() || !ctx.renderer().resolution || owners.length === 0) {
+      for (const owner of owners) release(owner);
+      return;
+    }
     // priority first, then visible tiles, then the off-screen backlog —
     // Array#sort is stable, so each class keeps its push order
-    jobs.sort((a, b) => thumbJobRank(a) - thumbJobRank(b));
+    owners.sort((a, b) => thumbJobRank(a.job) - thumbJobRank(b.job));
     const { cellW, cellH } = cellMetrics();
     let idx = 0;
     const worker = async () => {
-      while (idx < jobs.length) {
-        const j = jobs[idx++];
-        if (!j) continue;
+      while (idx < owners.length) {
+        const owner = owners[idx++];
+        if (!owner) continue;
+        const j = owner.job;
         let slot = ctx.byId(j.slotId);
-        if (!slot) continue;
+        // the slot must still be owned by a job for the SAME file: a newer
+        // push took it over, or the slot is gone (its tile was rebuilt)
+        if (!slot || thumbOwners.get(j.slotId)?.key !== owner.key) {
+          release(owner);
+          continue;
+        }
+        // claim the node this job paints into — a slot re-registered under the
+        // same id (a new node, no new job) is caught after the raster
+        owner.node = slot;
         const hCells = j.hCells ?? ctx.iconCells();
         const jobBg = j.bg ?? ctx.colors().bg;
         // 2px inset so kitty's cell->pixel rounding never bleeds onto neighbors
@@ -430,13 +455,17 @@ export const makeSlots = (ctx: SlotsCtx) => {
           // writing into it leaked a native image buffer and painted nowhere.
           // A same-id replacement is the live slot, so use the fresh lookup.
           slot = ctx.byId(j.slotId);
-          // stale guard: if the slot was rebuilt for another file, its re-pushed
-          // job overwrote our ownership key — drop this raster instead of
-          // painting the wrong thumbnail (or, worse, the old file's)
-          if (!slot || thumbOwners.get(j.slotId) !== thumbJobKey(j)) {
+          // stale guard: the slot must still be owned by a job for the same
+          // file AND still be the node that job claimed:
+          //   - a newer push for another file took the ownership over;
+          //   - the slot was re-registered under the same id (a new node, no
+          //     new job) — the previous file's raster must not paint into it.
+          const current = thumbOwners.get(j.slotId);
+          if (!slot || !current || current.key !== owner.key || owner.node !== slot) {
             try {
               img.destroy?.();
             } catch {}
+            release(owner);
             continue;
           }
           // destroy, not detach: the replaced node (fallback glyph or a stale
@@ -446,7 +475,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
         } catch {
           // `slot` is re-assigned inside the try above, so the catch sees the
           // unnarrowed type again — the optional chain re-establishes it
-          if (slot?.getChildren().length === 0) {
+          if (slot?.getChildren().length === 0 && thumbOwners.get(j.slotId)?.key === owner.key) {
             try {
               slot.add(Text({ content: j.fallbackGlyph, fg: ctx.colors().sidebarFgMuted }));
             } catch {}
@@ -455,7 +484,13 @@ export const makeSlots = (ctx: SlotsCtx) => {
         await new Promise((r) => setTimeout(r, 0));
       }
     };
-    await Promise.all(Array.from({ length: Math.min(THUMB_WORKERS, jobs.length) }, () => worker()));
+    await Promise.all(Array.from({ length: Math.min(THUMB_WORKERS, owners.length) }, () => worker()));
+    // prune dead owners: a slot that left the tree (the grid rebuilt, the row
+    // was reaped) leaves its record behind — the old registry never deleted an
+    // entry, so it grew for the whole session
+    for (const [slotId, owner] of thumbOwners) {
+      if (owner.node && isDeadSlot(owner.node)) thumbOwners.delete(slotId);
+    }
   };
 
   const rasterStatesInto = async (
@@ -670,6 +705,11 @@ export const makeSlots = (ctx: SlotsCtx) => {
     return false;
   };
 
+  // a slot node that left the tree is dead: OpenTUI nulls the parent when a
+  // node is removed or destroyed (Renderable.remove in the core), and a
+  // destroyed renderable reports isDestroyed
+  const isDeadSlot = (node: NonNullable<MaybeNode>): boolean => node.isDestroyed === true || node.parent === null;
+
   // scrim dim / fill: keep icon rasters opaque (placement opacity) and shade
   // their baked foreground so they darken with the rest of the content. Both
   // values are read by the drain, so the change re-queues every slot and
@@ -782,8 +822,12 @@ export const makeSlots = (ctx: SlotsCtx) => {
     },
     pushThumbJob: (job: ThumbJob): void => {
       if (ctx.isTtyMode?.() || ctx.forceGlyph?.()) return;
-      thumbOwners.set(job.slotId, thumbJobKey(job));
-      thumbJobs.push(job);
+      // the new job OWNS the slot from here on: an older in-flight raster for
+      // the same slot id is stale (the old registry held the key alone, in a
+      // map that never pruned an entry)
+      const owner: ThumbOwner = { job, key: thumbJobKey(job), node: null };
+      thumbOwners.set(job.slotId, owner);
+      thumbJobs.push(owner);
     },
   };
 };

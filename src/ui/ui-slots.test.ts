@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Box, type CliRenderer } from "@opentui/core";
+import { Box, type CliRenderer, type Renderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import {
   dimHex,
@@ -515,6 +515,35 @@ describe("thumbnail mount", () => {
     rmSync(svg.dir, { recursive: true, force: true });
   });
 
+  // A rebuild can RE-REGISTER a slot: the old tile is destroyed and a NEW
+  // node is mounted under the same slot id, while the thumb plan changed to
+  // "no thumbnail" — so NO new job is pushed for it. The old ownership (a
+  // key-only side map) still matched, so the previous file's in-flight raster
+  // PASSED the guard and painted the wrong image into the new slot. The
+  // ownership has to name the NODE it claimed.
+  test("a slot re-registered without a thumbnail rejects the in-flight raster of the previous file", async () => {
+    const slotId = "tfm-tile-rereg-thumb";
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+    await t.renderOnce();
+    const { dir, p } = writePng("rereg.png");
+    const slots = mkSlots();
+    openResolution();
+    slots.pushThumbJob({ slotId, path: p, mtimeMs: 1, size: 1, wCells: 4, vector: false, fallbackGlyph: "F" });
+
+    const drain = slots.drainThumbs(); // claims the slot; the raster is in flight
+    // the slot is re-registered: a NEW node under the same id, and NO new job
+    const old = t.renderer.root.findDescendantById(slotId) as unknown as Renderable;
+    t.renderer.root.remove(old);
+    t.renderer.root.add(Box({ id: slotId, width: 8, height: 8 }));
+
+    await drain;
+    await t.renderOnce();
+
+    // the previous file's raster must NOT have landed in the new slot
+    expect(t.renderer.root.findDescendantById(`${slotId}-t`)).toBeFalsy();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   // Regression: renderAll fires drainIconQueue from several steps (sidebar, the
   // iconQueue step, the grid). A per-drain supersession token made the losing
   // drain mark its specs done and then discard the rasters it had built, while
@@ -920,5 +949,31 @@ describe("no-drift rule: one home for the icon-slot contract", () => {
     expect(/kind:\s*"running"/.test(src)).toBe(true);
     // the record is the only truth about the drain
     expect((src.match(/drain\.(kind|rerun|force)\b/g) ?? []).length).toBeGreaterThanOrEqual(5);
+  });
+
+  test("the thumbnail ownership is ONE record — no parallel owner state", async () => {
+    // the ownership used to be a SIDE MAP keyed by a recyclable slot id
+    // (thumbOwners: Map<string,string>) that was never pruned: a re-push
+    // flipped the key, but a slot re-REGISTERED under the same id (a new
+    // node, no new job) kept the old key — so the previous file's in-flight
+    // raster passed the guard and painted the wrong image into the new slot.
+    // The ownership is ONE record now (the job + the node it claimed) in ONE
+    // registry.
+    const src = (await Bun.file(`${import.meta.dir}/ui-slots.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    expect(/type\s+ThumbOwner\s*=/.test(src)).toBe(true);
+    expect((src.match(/new Map<string,\s*ThumbOwner>/g) ?? []).length).toBe(1);
+    // the key-only side map must not come back
+    expect(/new Map<string,\s*string>\(\)/.test(src)).toBe(false);
+    // the record names the CLAIMED NODE — a key alone cannot see a
+    // re-registered slot
+    expect(/type\s+ThumbOwner\s*=\s*\{[^}]*\bnode:/s.test(src)).toBe(true);
+    // ONE registry owns the thumbnails: a parallel owner (a second map
+    // tracking the claimed node) is exactly the split state this record
+    // replaced
+    expect((src.match(/const\s+thumb[A-Za-z]*\s*=\s*new Map</g) ?? []).length).toBe(1);
+    const ownerRegion = src.slice(src.indexOf("type ThumbOwner ="));
+    expect((ownerRegion.match(/new Map</g) ?? []).length).toBe(1);
   });
 });
