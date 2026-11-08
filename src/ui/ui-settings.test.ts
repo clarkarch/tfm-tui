@@ -132,7 +132,14 @@ beforeAll(async () => {
       return {
         el: null,
         slotId,
-        spec: { slotId, name, heightCells: heightCells ?? 1, states, initialState: initialState ?? 0 },
+        spec: {
+          slotId,
+          name,
+          heightCells: heightCells ?? 1,
+          states,
+          initialState: initialState ?? 0,
+          phase: "pending",
+        },
       };
     },
     drainIconQueue: () => {},

@@ -105,7 +105,7 @@ const mkToolbar = (
     makeIconSlot: (name, states) => ({
       el: null,
       slotId: `s-${name}`,
-      spec: { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0 },
+      spec: { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0, phase: "pending" },
     }),
     setIconState: () => {},
     closeFileMenu: () => {},
@@ -351,7 +351,7 @@ describe("renderCrumbs directory-change animation", () => {
         makeIconSlot: (name, states) => ({
           el: null,
           slotId: `s-${name}`,
-          spec: { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0 },
+          spec: { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0, phase: "pending" },
         }),
         setIconState: () => {},
         closeFileMenu: () => {},

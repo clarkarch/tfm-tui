@@ -92,7 +92,14 @@ beforeAll(async () => {
     makeIconSlot: (name: string): { el: any; slotId: string; spec: IconSpec } => {
       const slotId = `int-icon-${seq++}`;
       const el = Box({ id: slotId, width: 1, height: 1 }, Box({ id: `${slotId}-s0`, width: 1, height: 1 }));
-      const spec = { slotId, name, heightCells: 1, states: [], initialState: 0, done: true } as unknown as IconSpec;
+      const spec = {
+        slotId,
+        name,
+        heightCells: 1,
+        states: [],
+        initialState: 0,
+        phase: "ready",
+      } as unknown as IconSpec;
       return { el, slotId, spec };
     },
     setIconState: () => true,

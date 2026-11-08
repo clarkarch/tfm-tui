@@ -215,6 +215,7 @@ beforeAll(async () => {
           heightCells: heightCells ?? 1,
           states,
           initialState: initialState ?? 0,
+          phase: "pending",
         },
       };
     },
@@ -454,7 +455,7 @@ describe("renderSidebar", () => {
         makeIconSlot: (name: string) => ({
           el: null,
           slotId: `intro-${name}`,
-          spec: { slotId: `intro-${name}`, name, heightCells: 1, states: [], initialState: 0 },
+          spec: { slotId: `intro-${name}`, name, heightCells: 1, states: [], initialState: 0, phase: "pending" },
         }),
         setIconState: () => true,
         stateCwd: () => HOME,

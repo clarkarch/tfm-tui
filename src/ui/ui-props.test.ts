@@ -195,7 +195,14 @@ beforeAll(async () => {
       return {
         el: Box({ id: `slot-${name}`, width: 2, height: heightCells ?? 1, onMouseDown }),
         slotId: `slot-${name}`,
-        spec: { slotId: `slot-${name}`, name, heightCells: heightCells ?? 1, states, initialState: initialState ?? 0 },
+        spec: {
+          slotId: `slot-${name}`,
+          name,
+          heightCells: heightCells ?? 1,
+          states,
+          initialState: initialState ?? 0,
+          phase: "pending",
+        },
       };
     },
     setIconState: (spec, idx) => {

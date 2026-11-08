@@ -243,7 +243,7 @@ beforeAll(async () => {
     makeIconSlot: (name: string, states: any, heightCells = 1, initialState = 0) => {
       iconSlots.push({ name, heightCells, initialState });
       const slotId = `fake-slot-${iconSeq++}`;
-      return { el: null, slotId, spec: { slotId, name, heightCells, states, initialState } };
+      return { el: null, slotId, spec: { slotId, name, heightCells, states, initialState, phase: "pending" } };
     },
     pushThumbJob: (job: any) => {
       thumbJobs.push(job);

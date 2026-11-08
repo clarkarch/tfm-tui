@@ -41,7 +41,8 @@ const collectTsFiles = (dir: string): string[] => {
 // theme-flip re-rasters, and setRasterDim repaints mounted state images for
 // the scrim. The drain's raster step is intentionally pointed at a missing
 // icon name — the raster fails cleanly without spawning anything,
-// but done+prune still run, which is exactly the regression path.
+// but the phase ("failed") + prune still run, which is exactly the regression
+// path.
 
 const FG = "#c0caf5";
 const BG = "#1a1b26";
@@ -113,9 +114,11 @@ describe("icon slot registry", () => {
     await h.slots.drainIconQueue();
     h.slots.resetIconQueue();
 
-    expect(s.spec.done).toBe(false);
+    expect(s.spec.phase).toBe("pending");
     await h.slots.drainIconQueue();
-    expect(s.spec.done).toBe(true);
+    // the raster failed (the icon name is bogus) — the spec is still
+    // REGISTERED, so the next reset can retry it
+    expect(s.spec.phase).toBe("failed");
   });
 
   test("resetIconQueue repaints mounted fallback glyphs for the active style", async () => {
@@ -174,12 +177,13 @@ describe("icon slot registry", () => {
 
     await h.slots.drainIconQueue();
     await h.slots.drainThumbs();
-    expect(s.spec.done).toBeFalsy();
+    expect(s.spec.phase).toBe("pending");
 
     // flipping back off resumes normal draining with the same registry
     h.setTtyMode(false);
     await h.slots.drainIconQueue();
-    expect(s.spec.done).toBe(true);
+    // the drain ran (the raster itself fails on the bogus icon name)
+    expect(s.spec.phase).toBe("failed");
   });
 
   test("force glyph drains nothing (buggy kitty impl) without forcing tty mode", async () => {
@@ -192,11 +196,12 @@ describe("icon slot registry", () => {
 
     await h.slots.drainIconQueue();
     await h.slots.drainThumbs();
-    expect(s.spec.done).toBeFalsy();
+    expect(s.spec.phase).toBe("pending");
 
     h.setForceGlyph(false);
     await h.slots.drainIconQueue();
-    expect(s.spec.done).toBe(true);
+    // the drain ran (the raster itself fails on the bogus icon name)
+    expect(s.spec.phase).toBe("failed");
   });
 
   test("a reset during a drain is not lost (the rerun re-rasterizes the spec)", async () => {
@@ -219,6 +224,41 @@ describe("icon slot registry", () => {
 
     await h.slots.drainIconQueue();
     expect(calls).toBe(2);
+  });
+
+  test("a failed icon raster is retried on reset", async () => {
+    // the drain's boolean could not tell a good raster from a failed one: a
+    // failed raster was marked DONE, so the spec looked finished and the
+    // slot kept its fallback glyph until a theme flip. The phase says
+    // "failed" — and a RESET re-arms it. A plain drain must NOT retry it:
+    // that would be a retry storm on every render.
+    const h = makeHarness();
+    let calls = 0;
+    let phaseDuringRaster: string | undefined;
+    const s = h.slots.makeIconSlot("no-such-icon-xyz", [{ fg: FG, bg: BG }], 1, 0, undefined, () => {
+      calls++;
+      // the attempt is not claimed before it resolves
+      phaseDuringRaster = s.spec.phase;
+      return [{ fg: FG, bg: BG }];
+    });
+    h.mountFakeSlot(s.spec);
+
+    await h.slots.drainIconQueue();
+    expect(calls).toBe(1);
+    expect(phaseDuringRaster).toBe("pending");
+    // the raster failed (the icon name is bogus) — NOT "ready"
+    expect(s.spec.phase).toBe("failed");
+
+    // a plain drain must not retry it
+    await h.slots.drainIconQueue();
+    expect(calls).toBe(1);
+
+    // a reset re-arms the failed spec
+    h.slots.resetIconQueue();
+    expect(s.spec.phase).toBe("pending");
+    await h.slots.drainIconQueue();
+    expect(calls).toBe(2);
+    expect(s.spec.phase).toBe("failed");
   });
 });
 
@@ -563,6 +603,22 @@ describe("thumbnail mount", () => {
     await t.renderOnce();
 
     expect(t.renderer.root.findDescendantById(`${slot.slotId}-s0`)).toBeTruthy();
+  });
+
+  // The phase must tell a LANDED raster from a failed one — the old boolean
+  // said "done" for both, so a failed icon was indistinguishable from a good
+  // one (and the slot kept its fallback glyph until a theme flip).
+  test.skipIf(!hasSvgRenderer)("a landed raster marks the spec ready", async () => {
+    const slots = mkSlots();
+    const slot = slots.makeIconSlot("home", [{ fg: FG, bg: BG }], 1, 0);
+    t.renderer.root.add(Box({ id: `${slot.slotId}-host`, width: 8, height: 1 }, slot.el));
+    await t.renderOnce();
+    openResolution();
+
+    await slots.drainIconQueue();
+    await t.renderOnce();
+
+    expect(slot.spec.phase).toBe("ready");
   });
 
   test.skipIf(!hasInproc)("faithful slots drain untinted while plain slots tint", async () => {
@@ -975,5 +1031,26 @@ describe("no-drift rule: one home for the icon-slot contract", () => {
     expect((src.match(/const\s+thumb[A-Za-z]*\s*=\s*new Map</g) ?? []).length).toBe(1);
     const ownerRegion = src.slice(src.indexOf("type ThumbOwner ="));
     expect((ownerRegion.match(/new Map</g) ?? []).length).toBe(1);
+  });
+
+  test("the icon raster phase is a TAG — not a boolean", async () => {
+    // "registered | pending | done | pruned" used to live in a Map + an
+    // OPTIONAL boolean: a spec whose raster FAILED was marked done, so it was
+    // indistinguishable from a good one (and the slot kept its fallback
+    // glyph until a theme flip). The phase is an explicit tag now.
+    const iconState = (await Bun.file(`${import.meta.dir}/../lib/icon-state.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    const slots = (await Bun.file(`${import.meta.dir}/ui-slots.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the vocabulary, in the leaf that owns it
+    expect(/export type IconPhase\s*=\s*"pending"\s*\|\s*"ready"\s*\|\s*"failed"/.test(iconState)).toBe(true);
+    // the spec carries the tag
+    expect(/phase:\s*IconPhase/.test(iconState)).toBe(true);
+    // the old optional boolean must not come back
+    expect(/\bdone\??:\s*boolean/.test(iconState)).toBe(false);
+    expect(/\bspec\.done\b/.test(slots)).toBe(false);
+    expect(/\bs\.done\b/.test(slots)).toBe(false);
   });
 });

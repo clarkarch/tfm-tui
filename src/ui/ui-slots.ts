@@ -341,6 +341,8 @@ export const makeSlots = (ctx: SlotsCtx) => {
       heightCells,
       states,
       initialState,
+      // never rastered yet — the drain moves it to "ready"/"failed"
+      phase: "pending",
       ...(statesFactory ? { statesFactory } : {}),
       ...(opts?.faithful ? { faithful: true } : {}),
     };
@@ -564,12 +566,15 @@ export const makeSlots = (ctx: SlotsCtx) => {
 
   // ONE pass over the specs pending at its start (or every spec after a
   // reset). Never runs concurrently with itself — the drain loop serializes
-  // it — so a spec marked done here always gets its rasters attached (or
-  // genuinely fails). `force` re-rasters EVERY registered spec (a reset).
+  // it — so a spec moved out of "pending" here always got its rasters
+  // attached (or genuinely failed). `force` re-rasters EVERY registered spec
+  // (a reset).
   const runIconDrain = async (force: boolean): Promise<void> => {
     const aspect = cellMetrics().aspect;
     const specs = [...allSpecs.values()];
-    const pending = force ? specs : specs.filter((s) => !s.done);
+    // a normal pass rasters the specs that were NEVER attempted; a failed
+    // one waits for the next RESET (retrying it per drain would be a storm)
+    const pending = force ? specs : specs.filter((s) => s.phase === "pending");
     // bounded pool (like drainThumbs): a resize/theme flip re-rasters EVERY
     // registered slot, and an unbounded Promise.all launched one job per slot
     let idx = 0;
@@ -577,9 +582,13 @@ export const makeSlots = (ctx: SlotsCtx) => {
       while (idx < pending.length) {
         const spec = pending[idx++];
         if (!spec) continue;
-        spec.done = true;
         const slot = ctx.byId(spec.slotId);
-        if (!slot) continue;
+        if (!slot) {
+          // the slot is gone (its tile was rebuilt): no raster can land here,
+          // and the spec must leave "pending" or the registry grows forever
+          spec.phase = "failed";
+          continue;
+        }
         if (spec.statesFactory) {
           try {
             spec.states = spec.statesFactory();
@@ -602,6 +611,10 @@ export const makeSlots = (ctx: SlotsCtx) => {
           "s",
           spec.faithful ?? false,
         );
+        // the phase is written AFTER the attempt resolves: the old boolean was
+        // set BEFORE the raster, so a spec whose raster FAILED looked done
+        // (indistinguishable from a good one)
+        spec.phase = imgs.length > 0 ? "ready" : "failed";
         if (imgs.length === 0) continue;
         slot.width = wCells;
         const kids = slot.getChildren();
@@ -634,9 +647,10 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // rebuilt by renderAll): their spec objects are dead weight and the
     // tile refs that kept them alive are gone too. Everything still
     // mounted stays in the registry — retheme re-rasters need it (see
-    // allSpecs above).
+    // allSpecs above). A spec that was never attempted stays: its slot may
+    // not be mounted yet.
     for (const [id, spec] of allSpecs) {
-      if (spec.done && !ctx.byId(id)) allSpecs.delete(id);
+      if (spec.phase !== "pending" && !ctx.byId(id)) allSpecs.delete(id);
     }
   };
 
@@ -723,7 +737,7 @@ export const makeSlots = (ctx: SlotsCtx) => {
     // same effect as resetIconQueue (mark every spec for a re-raster) without
     // repainting fallback glyphs — the drain rebuilds them from the shaded
     // states anyway
-    for (const s of allSpecs.values()) s.done = false;
+    for (const s of allSpecs.values()) s.phase = "pending";
     resetDrain();
     void requestDrain();
     // Already-rastered FLOAT thumbnails (the properties dialog): their slot is
@@ -806,7 +820,9 @@ export const makeSlots = (ctx: SlotsCtx) => {
       // old second queue grew unbounded; allSpecs prunes by node-liveness).
       // The force flag also covers a pass that is mid-flight right now: the
       // rerun revisits EVERY spec even one the in-flight pass already claimed.
-      for (const s of allSpecs.values()) s.done = false;
+      // Re-arm the phase: a FAILED raster is retried by the reset (a plain
+      // drain must not retry it — that would be a storm).
+      for (const s of allSpecs.values()) s.phase = "pending";
       resetDrain();
       // an icon-style toggle also flips the fallback glyphs (shown pre-raster
       // and under the scrim): repaint mounted ones now so a failed/slow

@@ -18,6 +18,16 @@ export type IconState = { fg: string; bg: string };
 //   Disabled=1 — the inverse sense of a toggle, hence the separate helper)
 export const IconStateIdx = { Rest: 0, Active: 1, Selected: 2, Cut: 3, HoverOffset: 2 } as const;
 
+// The raster's phase — a TAG, not a boolean:
+//   - "pending": the slot was never rastered (or the attempt is in flight);
+//   - "ready": the raster landed;
+//   - "failed": the attempt did not land (the slot keeps its fallback glyph
+//     until the next RESET re-arms it).
+// The old optional `done` boolean could not tell "ready" from "failed": a
+// failed raster was marked done, so the spec looked finished and the drain
+// never retried it.
+export type IconPhase = "pending" | "ready" | "failed";
+
 export type IconSpec = {
   slotId: string;
   name: string;
@@ -27,7 +37,7 @@ export type IconSpec = {
   // state colors on every re-raster, or a runtime theme swap leaves them stale
   statesFactory?: () => IconState[];
   initialState: number;
-  done?: boolean;
+  phase: IconPhase;
   // faithful brand art (the About logo): drains through brandPng (no fg tint)
   // instead of iconPng. States still carry fg/bg for the glyph fallback.
   faithful?: boolean;
