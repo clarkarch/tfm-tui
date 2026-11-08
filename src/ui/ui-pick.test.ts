@@ -320,3 +320,128 @@ describe("pick widget", () => {
     }
   });
 });
+
+describe("pick cursor", () => {
+  // type into the pick's filter — the Input emits "input" on a value change,
+  // which is exactly what the user's keystrokes do
+  const typeInto = (t: TestRendererSetup, text: string): void => {
+    const input = t.renderer.root.findDescendantById("tfm-pick-input") as any;
+    input.value = text;
+  };
+
+  test("typing in the pick does not select the first row", async () => {
+    // The filter narrows the list; it does not CHOOSE a row for the user —
+    // the cursor is the user's explicit choice (an arrow key or a hover).
+    // The owner's rule for the filtered list: "no cursor until the first
+    // move" (the same as the setFilter seam).
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let ran = "";
+      const pick = mkPick(t, floats, () => CMDS.map((c) => ({ ...c, run: () => (ran = c.label) })));
+      pick.open({ title: "Command palette" });
+      await t.renderOnce();
+      typeInto(t, "quit");
+      await t.renderOnce();
+      // no row is selected: Enter has no target
+      pick.handleKey({ name: "return" });
+      expect(ran).toBe("");
+      expect(floats.isOpen("pick")).toBe(true);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a stale cursor is cleared, not moved", async () => {
+    // The cursor names a POSITION in the current results: when the filter
+    // changes, the row it named is a different item → the cursor is DROPPED.
+    // Moving it onto another row would make Enter run a command the user
+    // never chose.
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let ran = "";
+      const pick = mkPick(t, floats, () => CMDS.map((c) => ({ ...c, run: () => (ran = c.label) })));
+      pick.open({ title: "Command palette" });
+      await t.renderOnce();
+      pick.move(1);
+      pick.move(1);
+      pick.move(1); // the cursor is on the last row
+      typeInto(t, "new"); // the list narrows to one row — the cursor is stale
+      await t.renderOnce();
+      pick.handleKey({ name: "return" });
+      expect(ran).toBe("");
+      expect(floats.isOpen("pick")).toBe(true);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a filter change that reorders the list drops the cursor", async () => {
+    // The cursor is a POSITION, not an item: a filter that REORDERS the
+    // results leaves the position in range but pointing at a DIFFERENT
+    // command. The cursor is dropped — Enter must not run that command.
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let ran = "";
+      const pick = mkPick(t, floats, () => CMDS.map((c) => ({ ...c, run: () => (ran = c.label) })));
+      pick.open({ title: "Command palette" });
+      await t.renderOnce();
+      pick.move(1); // the cursor is on row 0 ("new tab")
+      typeInto(t, "t"); // all three still match, but the best match is now first
+      await t.renderOnce();
+      pick.handleKey({ name: "return" });
+      expect(ran).toBe("");
+      expect(floats.isOpen("pick")).toBe(true);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("the filter seam and the input handler agree — neither picks a row", async () => {
+    // The two filter paths (the Input's "input" event and the test seam)
+    // must land on the SAME cursor state: a filter narrows the list, it
+    // never CHOOSES a row for the user.
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      let ran = "";
+      const pick = mkPick(t, floats, () => CMDS.map((c) => ({ ...c, run: () => (ran = c.label) })));
+      pick.open({ title: "Command palette" });
+      await t.renderOnce();
+      pick.move(1); // the cursor is on row 0
+      pick.setFilter("quit");
+      await t.renderOnce();
+      pick.handleKey({ name: "return" });
+      expect(ran).toBe("");
+      expect(floats.isOpen("pick")).toBe(true);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a replaced pick does not inherit the previous pick's deferred focus", async () => {
+    // The deferred focus is tracked: a pick that is replaced before its
+    // focus lands must not focus the NEW pick's input a second time (the new
+    // pick focuses its own input).
+    const t: TestRendererSetup = await createTestRenderer({ width: 90, height: 24 });
+    try {
+      const floats = makeFloats();
+      const pick = mkPick(t, floats, () => CMDS);
+      pick.open({ title: "First" });
+      pick.open({ title: "Second" }); // replaces the first pick
+      const input = t.renderer.root.findDescendantById("tfm-pick-input") as any;
+      let focuses = 0;
+      const orig = input.focus.bind(input);
+      input.focus = (): void => {
+        focuses++;
+        orig();
+      };
+      await Bun.sleep(60); // past the deferred focus
+      expect(focuses).toBe(1);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+});

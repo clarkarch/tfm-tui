@@ -87,12 +87,25 @@ export const makePick = (ctx: PickCtx) => {
   // the row cursor — an explicit value, not the `-1` sentinel
   let cursor: Cursor = NO_CURSOR;
   let results: PickItem[] = [];
+  // the deferred focus (the Input can only be focused after it is mounted)
+  // — TRACKED, so a pick that is closed or replaced before the focus lands
+  // cannot focus a node it no longer owns
+  let focusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const cancelFocusTimer = (): void => {
+    if (!focusTimer) return;
+    try {
+      clearTimeout(focusTimer);
+    } catch {}
+    focusTimer = null;
+  };
 
   const rawClose = (): void => {
     opened = false;
     query = "";
     cursor = NO_CURSOR;
     results = [];
+    cancelFocusTimer();
     try {
       const input = ctx.byId("tfm-pick-input");
       input?.blur?.();
@@ -111,12 +124,15 @@ export const makePick = (ctx: PickCtx) => {
     const list = ctx.byId("tfm-pick-list");
     if (!list) return;
     const colors = ctx.colors();
-    results = filterItems(items, query).slice(0, MAX_ROWS);
-    // clamp a cursor that the new filter pushed out of range; an EMPTY list
-    // leaves NO cursor (there is no row to point at)
-    const at = cursorIndex(cursor);
-    if (results.length === 0) cursor = NO_CURSOR;
-    else if (at >= results.length) cursor = cursorAt(results.length - 1);
+    const next = filterItems(items, query).slice(0, MAX_ROWS);
+    // The cursor names a POSITION in the CURRENT results. When the list
+    // changes, the row it named is a DIFFERENT item → the cursor is dropped
+    // (never silently moved onto another row: Enter would then run a
+    // command the user never chose). A cursor that points past the end is
+    // dropped the same way. ONE place reconciles the cursor with the list.
+    const changed = next.length !== results.length || next.some((item, i) => item !== results[i]);
+    results = next;
+    if (changed || cursorIndex(cursor) >= results.length) cursor = NO_CURSOR;
     ctx.destroyChildren(list);
     if (!results.length) {
       list.add(
@@ -211,13 +227,19 @@ export const makePick = (ctx: PickCtx) => {
         try {
           query = String(input.value ?? "");
         } catch {}
-        cursor = cursorAt(0);
+        // the filter changed — the cursor is reconciled by renderList (the
+        // row it named is a different item now). The handler never CHOOSES
+        // a row: the cursor is the user's explicit choice.
         renderList();
       });
     }
     // focus after mount (same deferred pattern as type-to-search: focusing a
-    // pre-mount node is a silent no-op); best-effort, never throws
-    setTimeout(() => {
+    // pre-mount node is a silent no-op); best-effort, never throws. The
+    // timer is TRACKED — a pick that is closed or replaced before it lands
+    // must not focus a node it no longer owns.
+    cancelFocusTimer();
+    focusTimer = setTimeout(() => {
+      focusTimer = null;
       try {
         ctx.byId("tfm-pick-input")?.focus?.();
       } catch {}
@@ -290,10 +312,11 @@ export const makePick = (ctx: PickCtx) => {
     handleKey,
     isOpen: (): boolean => opened,
     repaint,
-    // test seam: drive the filter without Input events
+    // test seam: drive the filter without Input events — the SAME path the
+    // input handler takes (the cursor is reconciled by renderList, never
+    // chosen here)
     setFilter: (q: string): void => {
       query = q;
-      cursor = NO_CURSOR;
       renderList();
     },
   };
