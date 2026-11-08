@@ -458,6 +458,7 @@ describe("makeTrashConfirms", () => {
       confirm: (message, yesLabel, cb, danger) => {
         asked.push({ message, yesLabel, danger });
         onYes = cb;
+        return { kind: "opened" };
       },
       emptyTrash: () => {
         fired.push("empty");

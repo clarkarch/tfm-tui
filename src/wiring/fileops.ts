@@ -207,6 +207,10 @@ export const wireFileops = (deps: {
     // makeConflict opens ungated for the same reason — dialogs mount on the
     // always-present renderer root.
     floats: core.floats,
+    // the refusal notice: a request that arrives while another question is
+    // up is refused (not declined) — the dialog owns that message, so no
+    // caller can swallow the request in silence
+    notify: (message, title, level) => chrome.notify(message, title, level),
     setPointer,
   });
 

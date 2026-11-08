@@ -111,7 +111,7 @@ describe("openDialog chokepoint", () => {
       yesNo.confirm("Empty Trash?", "Empty", () => {
         confirmed = true;
       }),
-    ).toBe(true);
+    ).toEqual({ kind: "opened" });
     expect(floats.top()).toBe("yesno");
     yesNo.moveFocus(1); // → Yes
     yesNo.submit();
@@ -157,7 +157,7 @@ describe("openDialog chokepoint", () => {
       yesNo.confirm("Make tfm the default file manager?", "Set as default", () => {
         confirmed = true;
       }),
-    ).toBe(true);
+    ).toEqual({ kind: "opened" });
     expect(floats.isOpen("escmenu")).toBe(false);
     expect(floats.top()).toBe("yesno");
     yesNo.moveFocus(1); // → Yes
@@ -210,6 +210,60 @@ describe("openDialog chokepoint", () => {
     yesNo.moveFocus(-1); // wraps No → Yes
     yesNo.submit();
     expect(confirmed).toBe(true);
+  });
+
+  test("a second confirm while one is open reports busy (not declined)", () => {
+    // The old confirm() answered a bare boolean, so "another question is
+    // already up" was indistinguishable from "the user pressed No": the
+    // trash + update callers dropped the boolean and the request vanished
+    // in silence while the first dialog stayed up.
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+    });
+    let answered = false;
+    expect(
+      yesNo.confirm("Empty Trash?", "Empty", () => {
+        answered = true;
+      }),
+    ).toEqual({ kind: "opened" });
+    // the SECOND request is refused — it is NOT a decline
+    expect(
+      yesNo.confirm("Delete forever?", "Delete", () => {
+        answered = true;
+      }),
+    ).toEqual({ kind: "busy" });
+    // the live question is still the FIRST one, and it is still answerable
+    expect(floats.top()).toBe("yesno");
+    yesNo.moveFocus(1); // → Yes
+    yesNo.submit();
+    expect(answered).toBe(true);
+  });
+
+  test("a refused confirm surfaces the refusal (the request is never swallowed in silence)", () => {
+    // The dialog is the ONE chokepoint every caller goes through, so it
+    // owns the refusal notice: a caller that ignores the outcome can never
+    // leave the user with a request that silently did nothing.
+    const notes: string[] = [];
+    const { ctx, floats } = makeCtx();
+    const dialogs = makeDialogs(ctx);
+    const yesNo = makeYesNo(dialogs, {
+      colors: ctx.colors,
+      uiStyle: ctx.uiStyle,
+      byId: ctx.byId,
+      floats,
+      notify: (message) => {
+        notes.push(message);
+      },
+    });
+    yesNo.confirm("Empty Trash?", "Empty", () => {});
+    expect(notes).toEqual([]); // the question that OPENED says nothing
+    yesNo.confirm("Delete forever?", "Delete", () => {});
+    expect(notes).toEqual(["A confirmation is already open · answer it first"]);
   });
 
   test("yesno shows the full delete message without slicing (two lines, buttons intact)", async () => {
@@ -403,7 +457,7 @@ describe("dialog repaints", () => {
         yesNo.confirm("Empty Trash?", "Empty", () => {
           confirmed = true;
         }),
-      ).toBe(true);
+      ).toEqual({ kind: "opened" });
       yesNo.moveFocus(1);
       yesNo.submit();
       expect(confirmed).toBe(true);
@@ -411,5 +465,25 @@ describe("dialog repaints", () => {
     } finally {
       await t.dispose(); // 0.6.0: destroy + await closed
     }
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the yes/no dialog is ONE explicit phase, not four parallel fields", async () => {
+    // The old state was four independent fields (`open`, `lastDanger`,
+    // `focusIdx`, `pendingYes`), so "a question is up but nothing is
+    // pending" was representable — and confirm() answered a bare boolean,
+    // which made "busy" look exactly like "declined". The four fields may
+    // not come back.
+    const src = (await Bun.file(`${import.meta.dir}/ui-dialogs.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/lastDanger/.test(src)).toBe(false);
+    expect(/pendingYes/.test(src)).toBe(false);
+    expect(/focusIdx/.test(src)).toBe(false);
+    // ... and the refusal has its own name
+    expect(/kind:\s*"busy"/.test(src)).toBe(true);
   });
 });

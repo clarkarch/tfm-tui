@@ -6,6 +6,7 @@
 
 import { errMessage } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { ConfirmOutcome } from "../lib/confirm-outcome";
 import {
   cacheFresh,
   readUpdateCache,
@@ -37,7 +38,10 @@ export type UpdatesCtx = {
   notify(msg: string, title?: string, level?: NotifyLevel): void;
   // indeterminate progress toast; null when the stack refuses to build one
   sticky?(msg: string): { close(): void } | null;
-  confirm(message: string, yesLabel: string, onYes: () => void): boolean;
+  // the request outcome: "busy" (another question is up) is NOT a decline.
+  // The dialog surfaces that refusal itself, so the update flow does not
+  // have to — but the type keeps the two apart.
+  confirm(message: string, yesLabel: string, onYes: () => void): ConfirmOutcome;
   // repaint the About view if it is open (row value changed)
   repaint(): void;
   now?(): number;
@@ -206,6 +210,8 @@ export const wireUpdates = (ctx: UpdatesCtx) => {
       void apply(s.latest);
     };
     try {
+      // a refused request (another question is up) is NOT a decline — the
+      // dialog surfaced the refusal itself, so the update flow stays quiet
       ctx.confirm(UPDATE_PROMPT_MESSAGE, updatePromptYesLabel(s.latest), yes);
     } catch (err) {
       ctx.log?.(`update prompt failed: ${errMessage(err)}`);

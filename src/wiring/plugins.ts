@@ -11,6 +11,7 @@ import path from "node:path";
 import pkg from "../../package.json";
 import { dlog } from "../lib/log";
 import type { Command } from "../lib/command";
+import type { ConfirmOutcome } from "../lib/confirm-outcome";
 import { sharedPluginEvents } from "../lib/plugin-events";
 import { sharedPluginHooks } from "../lib/plugin-hooks";
 import { installPluginRuntimeSupport } from "../ui/ui-plugin-runtime";
@@ -59,7 +60,7 @@ export const wirePlugins = async (deps: {
     open(opts: { title: string; items?: Array<{ label: string; hint?: string; run: () => void }> }): void;
   };
   getConfirm?: () => {
-    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): boolean;
+    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): ConfirmOutcome;
     isOpen(): boolean;
   };
   // single-line prompt (keymap wires LAST — lazy getter like getPick)
@@ -160,13 +161,16 @@ export const wirePlugins = async (deps: {
             resolve(v);
           };
           try {
-            const opened = c.confirm(
+            const outcome = c.confirm(
               opts.body ? `${opts.title}: ${opts.body}` : opts.title,
               "Yes",
               () => done(true),
               opts.danger ?? false,
             );
-            if (!opened) {
+            if (outcome.kind !== "opened") {
+              // "busy" = another question is up. The plugin API answers with
+              // a boolean, so the plugin sees "no" — but the dialog already
+              // told the USER why the question never came up.
               done(false);
               return;
             }

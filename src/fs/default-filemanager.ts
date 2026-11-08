@@ -123,9 +123,9 @@ export const makeDefaultFileManagerOrchestration = (
 // confirm, extracted so the verdict→open→record glue is unit-testable: the
 // wiring supplies the confirm dialog + sinks, the leaf owns the mapping.
 // Returns a promise of true when the question surfaced (confirm opened OR
-// fallback toast), false when it stayed silent — a verdict of "ask" must
-// NEVER end silent (that was the "no popup" bug class: swallowed throws
-// with no trace). Dismissing the confirm (No/esc/click-away) records
+// fallback toast OR the dialog refused it and said so), false when it stayed
+// silent — a verdict of "ask" must NEVER end silent (that was the "no popup"
+// bug class: swallowed throws with no trace). Dismissing the confirm (No/esc/click-away) records
 // nothing — the dialog only fires onYes — so dismissal asks again by
 // omission. There is deliberately no "later" write: the marker only ever
 // says yes or no.

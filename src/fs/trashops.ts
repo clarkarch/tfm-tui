@@ -22,6 +22,7 @@ import { copyTreeProgress, rmTreeProgress, scanTree } from "./transfer";
 import { sharedOpQueue } from "../lib/op-queue";
 import { checkPluginVeto, sharedPluginHooks } from "../lib/plugin-hooks";
 import type { NotifyLevel } from "../lib/notify-level";
+import type { ConfirmOutcome } from "../lib/confirm-outcome";
 import { shouldNotifyTerminal, type OpProgress } from "../lib/file-op-protocol";
 import { isNetworkPath } from "./network";
 import { isArchiveUri } from "./uri";
@@ -556,7 +557,10 @@ export const makeTrashOps = (sink: TrashOpsSink) => {
 // confirm dialog (both are destructive → danger styling). Extracted so the
 // exact prompts are testable without a renderer. ---
 type TrashConfirmsCtx = {
-  confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): void;
+  // the outcome is part of the contract: "busy" (another question is up) is
+  // NOT a decline. The dialog surfaces that refusal itself, so the wrappers
+  // below do not have to — but the type keeps the two apart.
+  confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): ConfirmOutcome;
   emptyTrash(): void;
   deleteForever(paths: string[]): void;
 };
@@ -567,6 +571,8 @@ export const makeTrashConfirms = (ctx: TrashConfirmsCtx) => {
     // names the count when known so "empty everything" isn't a blind click
     const n = countTrashItems();
     const what = n >= 0 ? `Empty Trash (${n} item${n === 1 ? "" : "s"})?` : "Empty Trash?";
+    // a refused request (another question is up) is NOT a decline — the
+    // dialog already told the user, so nothing fires here
     ctx.confirm(`${what} This cannot be undone.`, "Empty Trash", () => ctx.emptyTrash(), true);
   };
 

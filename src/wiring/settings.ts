@@ -16,6 +16,7 @@ import { makeEscMenu } from "../ui/ui-settings";
 import { makeRetheme } from "../ui/ui-retheme";
 import { scrollbarTrackColors } from "../ui/ui-boot-layout";
 import { sharedPluginEvents } from "../lib/plugin-events";
+import type { ConfirmOutcome } from "../lib/confirm-outcome";
 import { syncSortState } from "../lib/sort";
 import { clearFailedThumbs } from "../ui/icons";
 import { cancelBands } from "../input/grid-input";
@@ -62,7 +63,7 @@ export const wireSettings = (deps: {
   // yes/no confirm dialog wires in fileops (before settings) — the
   // default-file-manager prompt opens through it; boot calls it post-wiring
   getConfirm: () => {
-    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): boolean;
+    confirm(message: string, yesLabel: string, onYes: () => void, danger?: boolean): ConfirmOutcome;
     isOpen(): boolean;
   };
   // update checking wires AFTER settings (it needs this module's repaint), so
@@ -298,8 +299,12 @@ export const wireSettings = (deps: {
     },
     openConfirm: (opts: FileManagerConfirmItem) => {
       const c = getConfirm();
-      if (!c.confirm(opts.message, opts.yesLabel, opts.onYes)) {
-        throw new Error("confirm unavailable");
+      const outcome = c.confirm(opts.message, opts.yesLabel, opts.onYes);
+      if (outcome.kind === "busy") {
+        // another question is up: the dialog surfaced that refusal itself,
+        // so this path stays quiet (the sticky fallback would stack a
+        // SECOND message on the same action)
+        return;
       }
     },
     setDefault: (op) => defaultFileManagerOrchestration.set(op),

@@ -43,7 +43,7 @@ const harness = (over: Partial<UpdatesCtx> = {}, result?: InstallerResult): Harn
     confirm: (message, yesLabel, onYes) => {
       confirmations.push({ message, yesLabel });
       onYes();
-      return true;
+      return { kind: "opened" };
     },
     repaint: () => {},
     fetchTag: async () => {

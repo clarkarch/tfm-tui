@@ -6,6 +6,8 @@ import type { Theme } from "../config/config";
 import { FLOAT_Z, type Floats } from "./floats";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
+import type { ConfirmOutcome } from "../lib/confirm-outcome";
+import type { NotifyLevel } from "../lib/notify-level";
 import { hoverEvents, type SlotElement } from "./ui-slots";
 import type { ConflictChoice } from "../lib/file-op-protocol";
 
@@ -341,9 +343,35 @@ type YesNoCtx = {
   //
   // open/close orchestration + the dismiss-others policy live in ./floats
   floats: Floats;
+  // the refusal notice. A request that arrives while another question is up
+  // is REFUSED, not declined — the dialog says so ONCE, here: it is the only
+  // chokepoint every caller goes through, so a caller that ignores the
+  // outcome can never leave the user with a request that silently did
+  // nothing. Absent = no notice (old fakes keep working).
+  notify?(message: string, title?: string, level?: NotifyLevel): void;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes (old fakes keep working).
   setPointer?(style: PointerStyle): void;
+};
+
+// ONE explicit phase for the whole dialog. The old state was four parallel
+// fields (`open`, `lastDanger`, `focusIdx`, `pendingYes`), so "a question is
+// up but nothing is pending" was representable — and the request outcome was
+// a bare boolean, which made "another question is already up" look exactly
+// like "the user pressed No".
+type YesNoState = { kind: "closed" } | { kind: "open"; danger: boolean; focus: "no" | "yes"; onYes: () => void };
+
+// The ONE transition for a confirm REQUEST: a question can only be asked
+// while none is up. The refusal is explicit — "busy" is not "declined".
+const askYesNo = (
+  state: YesNoState,
+  req: { danger: boolean; onYes: () => void },
+): { state: YesNoState; outcome: ConfirmOutcome } => {
+  if (state.kind === "open") return { state, outcome: { kind: "busy" } };
+  return {
+    state: { kind: "open", danger: req.danger, focus: "no", onYes: req.onYes },
+    outcome: { kind: "opened" },
+  };
 };
 
 const YESNO_W = 48;
@@ -395,19 +423,12 @@ export const wrapYesNoMessage = (message: string, width: number = YESNO_W): stri
 export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx) => {
   const { openDialog, closeDialog, dialogBtn } = dialogs;
 
-  let open = false;
-  // danger flag of the pending confirm (drives the message fg on repaint)
-  let lastDanger = false;
-  // keyboard cursor over the two buttons (0 = No, 1 = Yes label). Defaults to
-  // No so an accidental Enter never confirms a destructive op.
-  let focusIdx = 0;
-  let pendingYes: (() => void) | null = null;
+  let state: YesNoState = { kind: "closed" };
 
   // raw teardown — registered with floats at open time
   const rawClose = (): void => {
     closeDialog("tfm-yesno");
-    open = false;
-    pendingYes = null;
+    state = { kind: "closed" };
     // hovered buttons have no out (their nodes are gone) — restore here
     ctx.setPointer?.("default");
   };
@@ -416,13 +437,17 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     ctx.floats.close("yesno");
   };
 
+  // the keyboard cursor's button index (0 = No, 1 = Yes)
+  const focusIndex = (): number => (state.kind === "open" && state.focus === "yes" ? 1 : 0);
+
   // keyboard cursor paint — same surface dialogBtn's hover uses, by id
   const paintFocus = (): void => {
     const c = ctx.colors();
+    const focused = focusIndex();
     for (let i = 0; i < 2; i++) {
       try {
         const node = ctx.byId(`tfm-yesno-b${i}`);
-        if (node) applySurface(node, btnSurface(ctx.uiStyle(), c, i === focusIdx, c.sidebarBg));
+        if (node) applySurface(node, btnSurface(ctx.uiStyle(), c, i === focused, c.sidebarBg));
       } catch {}
     }
   };
@@ -430,29 +455,30 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
   // arrows move the cursor between No/Yes; submit activates the focused one.
   // Focus defaults to No so a stray Enter never confirms a destructive op.
   const moveFocus = (delta: number): void => {
-    if (!open) return;
-    focusIdx = (focusIdx + delta + 2) % 2;
+    if (state.kind !== "open") return;
+    const next = (focusIndex() + delta + 2) % 2;
+    state = { ...state, focus: next === 1 ? "yes" : "no" };
     paintFocus();
   };
 
   const submit = (): void => {
-    if (!open) return;
-    if (focusIdx === 1) {
-      const cb = pendingYes;
-      close();
-      cb?.();
-    } else {
-      close();
-    }
+    if (state.kind !== "open") return;
+    const { focus, onYes } = state;
+    close();
+    if (focus === "yes") onYes();
   };
 
-  const confirm = (message: string, yesLabel: string, onYes: () => void, danger = false): boolean => {
-    if (open) return false;
+  const confirm = (message: string, yesLabel: string, onYes: () => void, danger = false): ConfirmOutcome => {
+    const next = askYesNo(state, { danger, onYes });
+    if (next.outcome.kind === "busy") {
+      // The refusal is SURFACED here, once: the dialog is the only
+      // chokepoint every caller goes through, so a caller that ignores the
+      // outcome can never swallow the request in silence.
+      ctx.notify?.("A confirmation is already open · answer it first");
+      return next.outcome;
+    }
     ctx.floats.open("yesno", rawClose);
-    open = true;
-    focusIdx = 0;
-    pendingYes = onYes;
-    lastDanger = danger;
+    state = next.state;
     const c = ctx.colors();
     const yesFg = danger ? c.ansi1 : c.accent;
     let bseq = 0;
@@ -488,13 +514,13 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
       ],
       onClose: () => close(),
     });
-    return true;
+    return next.outcome;
   };
 
   // theme-switch repaint while open: panel + texts by id, buttons through
   // the live focus paint. No rebuild — the pending confirm + cursor survive.
   const repaintYesNo = (): void => {
-    if (!open) return;
+    if (state.kind !== "open") return;
     const c = ctx.colors();
     try {
       const panel = ctx.byId("tfm-yesno");
@@ -503,7 +529,7 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     for (const id of ["tfm-yesno-msg", "tfm-yesno-msg2"]) {
       try {
         const msg = ctx.byId(id);
-        if (msg) msg.fg = lastDanger ? c.ansi1 : c.accent;
+        if (msg) msg.fg = state.danger ? c.ansi1 : c.accent;
       } catch {}
     }
     try {
@@ -511,5 +537,5 @@ export const makeYesNo = (dialogs: ReturnType<typeof makeDialogs>, ctx: YesNoCtx
     } catch {}
   };
 
-  return { confirm, close, isOpen: (): boolean => open, repaint: repaintYesNo, moveFocus, submit };
+  return { confirm, close, isOpen: (): boolean => state.kind === "open", repaint: repaintYesNo, moveFocus, submit };
 };
