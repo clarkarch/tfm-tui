@@ -90,6 +90,37 @@ type GridScreen =
   | { kind: "empty"; sig: string; structural: string; ctxKey: string }
   | { kind: "error"; sig: string; structural: string; ctxKey: string };
 
+// What the pane's WINDOWED BUILD holds — ONE tagged record:
+//   {kind:"full"}   — nothing slideable is mounted (a full build, a clear, or
+//                     a build whose pads could not be anchored)
+//   {kind:"window"} — a windowed build whose slide contract is LIVE
+// The slide's shape contract ([pad-top, row r0..r1, pad-bottom]) is verified
+// by NODE IDENTITY — the pads WE built must still be the inner's first and
+// last child. A child COUNT cannot verify it: a different inner with the same
+// number of children looks perfect to a count check, and the slide would then
+// reap and add rows at the WRONG child indices.
+type WinState =
+  | { kind: "full" }
+  | {
+      kind: "window";
+      entries: Entry[];
+      isList: boolean;
+      cols: number;
+      rowH: number;
+      rows: number;
+      r0: number;
+      r1: number;
+      // last synced VISIBLE row range (the build window leads it by the
+      // overscan row) — the scroll-reveal fires on rows crossing THIS, not the
+      // build edge, or every reveal would animate off-screen and arrive settled
+      vis: { top: number; bottom: number };
+      // last synced scrollTop — the scroll glide animates the delta from here
+      top: number;
+      // the pads this window was built with — the slide's identity anchor
+      topPad: Renderable;
+      botPad: Renderable;
+    };
+
 export const makeGridRenderer = (ctx: GridRendererCtx) => {
   let gridGen = 0;
   // Animation gate: rebuilds also fire for pure layout/geometry changes (hover
@@ -132,24 +163,10 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // in-flight recursive search; a newer render aborts it so stale keystroke
   // walks don't keep eating disk while a fresh query runs
   let searchAbort: AbortController | null = null;
-  // last windowed build (null = full build / nothing painted): the cached
+  // the windowed build state (ONE tagged record — see WinState): the cached
   // entry list + row range syncWindow() slides against — a slide NEVER
   // re-lists, it rebuilds rows from this snapshot
-  let win: {
-    entries: Entry[];
-    isList: boolean;
-    cols: number;
-    rowH: number;
-    rows: number;
-    r0: number;
-    r1: number;
-    // last synced VISIBLE row range (the build window leads it by the
-    // overscan row) — the scroll-reveal fires on rows crossing THIS, not the
-    // build edge, or every reveal would animate off-screen and arrive settled
-    vis: { top: number; bottom: number };
-    // last synced scrollTop — the scroll glide animates the delta from here
-    top: number;
-  } | null = null;
+  let win: WinState = { kind: "full" };
   // [ui] file-animation-scroll-reveal-delay-ms: deferred reveal state. A fast
   // fling crosses a row per notch; playing every notch retriggers the wave
   // mid-flight (nothing completes visibly) and pays native pushes per frame.
@@ -272,7 +289,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     cancelLoadingTimers();
     const scroller = ctx.scroller();
     if (!scroller) return;
-    win = null;
+    win = { kind: "full" };
     // stop any in-flight file animation BEFORE the nodes it targets are
     // destroyed — a frame callback writing opacity/translateY to a just-removed
     // renderable is the use-after-destroy path
@@ -640,7 +657,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         claimPaint("tiles", sig, structural, entries);
         lastContentSig = contentSigOf(entries);
         // later window slides build rows from this snapshot — carry the stats
-        if (win) {
+        if (win.kind === "window") {
           for (let i = 0; i < win.entries.length && i < entries.length; i++) {
             const we = win.entries[i];
             const e = entries[i];
@@ -710,19 +727,32 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
       // id is absolute so it resolves across slides
       const innerId = `${tilePrefix()}inner`;
       scroller.content.add(buildInner(entries, isList, cols, rowHgt, totalRows, r0, r1, visFirst, windowed));
-      win = windowed
-        ? {
-            entries,
-            isList,
-            cols,
-            rowH: rowHgt,
-            rows: totalRows,
-            r0,
-            r1,
-            vis: { top: firstRow, bottom: visibleBottomRow(scrollTop, visH(scroller), rowHgt, totalRows) },
-            top: scrollTop,
-          }
-        : null;
+      // the windowed build's pads — the slide's identity anchor. Read from the
+      // MOUNTED inner (a VNode proxy no-ops post-mount): the windowed shape is
+      // [pad-top, row r0..r1, pad-bottom], so the first and last child ARE the
+      // pads. A capture that fails leaves the pane with NO slideable window:
+      // every later scroll falls back to a full rebuild (correct, just slower)
+      // instead of sliding at wrong indices.
+      const mountedKids = scroller.content.getChildren()[0]?.getChildren() ?? [];
+      const topPad = mountedKids[0];
+      const botPad = mountedKids[mountedKids.length - 1];
+      win =
+        windowed && topPad && botPad && topPad !== botPad
+          ? {
+              kind: "window",
+              entries,
+              isList,
+              cols,
+              rowH: rowHgt,
+              rows: totalRows,
+              r0,
+              r1,
+              vis: { top: firstRow, bottom: visibleBottomRow(scrollTop, visH(scroller), rowHgt, totalRows) },
+              top: scrollTop,
+              topPad,
+              botPad,
+            }
+          : { kind: "full" };
       // grid-view ROW ids for the row-granularity cascade (see the handoff
       // below): the FULL absolute list — un-built windowed rows resolve to
       // nothing in the animator but keep the cascade timing aligned by index.
@@ -847,21 +877,33 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
   // full-list contract holds across slides. No-op while the last build was a
   // full one (nothing to slide).
   const syncWindow = (): void => {
-    if (!win) return;
+    if (win.kind !== "window") return;
     if (ctx.isRenaming?.()) return;
     const scroller = ctx.scroller();
     if (!scroller) return;
-    const { entries, isList, cols, rowH: rh, rows } = win;
-    const old = { r0: win.r0, r1: win.r1 };
+    // the windowed record this slide runs against (a snapshot — `win` is
+    // rewritten at the end of the slide)
+    const w = win;
+    const { entries, isList, cols, rowH: rh, rows } = w;
+    const old = { r0: w.r0, r1: w.r1 };
     const scrollTop = Math.max(0, scroller.scrollTop ?? 0);
-    const prevTop = Number.isFinite(win.top) ? win.top : scrollTop;
+    const prevTop = Number.isFinite(w.top) ? w.top : scrollTop;
     const { firstRow, r0, r1 } = windowRange(scrollTop, rh, rows, ctx.termH());
     const visFirst = isList ? firstRow : firstRow * cols;
     // operate on the MOUNTED nodes (VNode proxies no-op post-mount): content
     // holds exactly [inner], inner exactly [pad-top, old.r0..old.r1, pad-bottom]
     const mounted = scroller.content.getChildren()[0];
     const kids: Renderable[] | null = mounted && r0 <= old.r1 + 1 && r1 >= old.r0 - 1 ? mounted.getChildren() : null;
-    const slideable = !!kids && kids.length === old.r1 - old.r0 + 3;
+    // the shape contract, verified by IDENTITY: the pads WE built must still be
+    // the inner's first and last child. A count check cannot tell our inner
+    // from a different one with the same number of children — and a wrong
+    // inner slides at the WRONG child indices (rows reaped from the wrong
+    // slot, new rows added into it).
+    const slideable = !!kids && kids.length >= 2 && kids[0] === w.topPad && kids[kids.length - 1] === w.botPad;
+    // the pads the NEXT slide is anchored to — a fallback rebuild mounts NEW
+    // pads, so the anchor follows what is mounted
+    let nextTopPad = w.topPad;
+    let nextBotPad = w.botPad;
     const paint = (a: number, b: number): void => {
       if (a > b) return;
       const lo = isList ? a : a * cols;
@@ -896,6 +938,12 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         } catch {}
         destroyChildren(scroller.content);
         scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
+        // the rebuilt inner carries NEW pads — re-anchor the identity contract
+        // to them (keeping the stale anchor would make every later slide fall
+        // back again)
+        const rebuiltKids = scroller.content.getChildren()[0]?.getChildren() ?? [];
+        nextTopPad = rebuiltKids[0] ?? nextTopPad;
+        nextBotPad = rebuiltKids[rebuiltKids.length - 1] ?? nextBotPad;
         paint(r0, r1);
       }
     } else if (mounted && kids) {
@@ -955,7 +1003,7 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
     // dropped frames cost nothing visible.
     const visTop = firstRow;
     const visBottom = visibleBottomRow(scrollTop, visH(scroller), rh, rows);
-    const oldVis = win.vis;
+    const oldVis = w.vis;
     if (slideable && mounted) {
       const crossing: number[] = [];
       let from: "top" | "bottom" | null = null;
@@ -1041,7 +1089,15 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         }
       }
     }
-    win = { ...win, r0, r1, top: scrollTop, vis: { top: visTop, bottom: visBottom } };
+    win = {
+      ...w,
+      r0,
+      r1,
+      top: scrollTop,
+      vis: { top: visTop, bottom: visBottom },
+      topPad: nextTopPad,
+      botPad: nextBotPad,
+    };
     // A sub-row wheel step (no row entered/left the window) mounts nothing:
     // the ScrollBox's own content translate is the whole repaint, so the
     // post-rebuild work below (a full subtree walk for selectable stripping,

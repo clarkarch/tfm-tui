@@ -1826,6 +1826,48 @@ describe("renderGrid (windowed grid)", () => {
     }
   });
 
+  test("a mismatched inner shape falls back to a full rebuild", async () => {
+    // The slide's shape contract is [pad-top, row r0..r1, pad-bottom]. A
+    // CHILD COUNT cannot verify it: a different inner with the same number of
+    // children looks perfect to the count check, and the slide would then reap
+    // and add rows at the WRONG indices. The identity of the pads we built is
+    // the check — a mismatch falls back to a full rebuild.
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      ensureBig();
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      const innerNode = byId("tfm-tile-inner");
+      const kids = innerNode.getChildren();
+      // swap the top pad for a DIFFERENT node: the child count is unchanged,
+      // so a count-based check still calls the shape good
+      innerNode.remove(kids[0]);
+      innerNode.add(Box({ id: "tfm-tile-pad-top", height: 0 }), 0);
+
+      // two rows down: the window MOVES and the old/new ranges overlap (a
+      // fling would fall back on the range check alone, so it would prove
+      // nothing about the shape check)
+      scroller.scrollTop = 12;
+      syncWindow();
+      await t.renderOnce();
+      // the mismatch must fall back to a full rebuild: the inner is a NEW node
+      // (compare booleans, not nodes: a failed node assert dumps the whole
+      // renderable graph and takes seconds to serialize)
+      expect(byId("tfm-tile-inner") === innerNode).toBe(false);
+      expect(!!byId("tfm-tile-row-0")).toBe(false);
+      expect(!!byId("tfm-tile-row-1")).toBe(true);
+    } finally {
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
   test("a sub-row scroll step reads as no-op work: no row builds, no repaint tail", async () => {
     // Why it matters: the wheel drains 1 cell per tick and 4 of every 5 steps
     // (TILE_H 6) cross no row boundary — the ScrollBox's own content translate
@@ -3030,6 +3072,27 @@ describe("no-drift rule", () => {
     // ONE tagged record replaces them
     expect(/kind: "placeholder"/.test(src)).toBe(true);
     expect(/kind: "tiles"/.test(src)).toBe(true);
+  });
+
+  test("the windowed slide's phases are ONE tagged record — no null phases", async () => {
+    // The windowed build had FOUR phases encoded by `win === null` plus a
+    // runtime CHILD-COUNT check: full build / windowed / slideable / shape
+    // mismatch. `null` is a phase of its own, and the count check could not
+    // tell OUR inner from a different one with the same number of children —
+    // the slide then reaped and added rows at the WRONG child indices. The
+    // state is ONE tagged record now, and the shape contract is verified by
+    // the pads' NODE IDENTITY.
+    const src = (await Bun.file(`${import.meta.dir}/ui-grid.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // the old phase encoding must not come back
+    expect(/win\s*=\s*null/.test(src)).toBe(false);
+    expect(/if\s*\(\s*!win\s*\)/.test(src)).toBe(false);
+    // ONE tagged record replaces them
+    expect(/kind: "full"/.test(src)).toBe(true);
+    expect(/kind: "window"/.test(src)).toBe(true);
+    // the shape gate is an IDENTITY comparison against the pads we built
+    expect(/kids\[0\]\s*===\s*\w+\.topPad/.test(src)).toBe(true);
   });
 });
 
