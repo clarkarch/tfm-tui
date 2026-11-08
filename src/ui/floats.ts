@@ -82,7 +82,6 @@ export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {
   const { onModalChange } = opts;
   type Entry = { kind: FloatKind; closer: () => void };
   let stack: Entry[] = [];
-  let modalLast = false;
 
   // top-down so children tear down before their parents
   const runClosers = (entries: Entry[]): void => {
@@ -91,17 +90,30 @@ export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {
 
   const hasModal = (): boolean => stack.some((e) => e.kind !== "filemenu");
 
-  const syncModal = (): void => {
+  // The modal state is DERIVED from the stack — there is no cached copy of
+  // it. Each public operation captures the state it STARTED from and tells
+  // the subscriber only if the stack's state CHANGED when it ended, so the
+  // subscriber sees exactly one event per real 0<->1 transition.
+  //
+  // The intermediate "the stack was emptied" state is NOT a state the user
+  // ever sees: a modal that replaces another does it in ONE synchronous
+  // operation, so the dim never leaves. (The old stack-emptied dip fired
+  // off-then-on for that replacement — it un-dimmed and re-dimmed the
+  // background and re-queued EVERY icon raster for a re-raster, twice, for a
+  // transition that never happened. Its original reason — a closer that dimmed
+  // the background itself — is gone: the closers no longer touch the scrim,
+  // and `applyModalDim` is the dim's only owner.)
+  const notifyModal = (before: boolean): void => {
     if (!onModalChange) return;
     const now = hasModal();
-    if (now === modalLast) return;
-    modalLast = now;
+    if (now === before) return;
     try {
       onModalChange(now);
     } catch {}
   };
 
   const open = (kind: FloatKind, closer: () => void, opts?: FloatOpenOpts): void => {
+    const before = hasModal();
     // a popup that belongs to the modal below it (the props permission menu)
     // keeps that modal; everything else — a modal, or a DESKTOP popup — clears
     // the whole desktop, so only ONE floating UI is ever on screen.
@@ -114,29 +126,27 @@ export const makeFloats = (opts: { onModalChange?: (open: boolean) => void } = {
       const all = stack;
       stack = [];
       runClosers(all);
-      // stack-emptied dip: a modal the closer itself just cleared (e.g. a
-      // confirm opening over the esc-menu ran its content-dim(false)) must
-      // refire below, or the new modal paints with the background undimmed
-      syncModal();
     }
     stack.push({ kind, closer });
-    syncModal();
+    notifyModal(before);
   };
 
   const close = (kind: FloatKind): void => {
     const idx = stack.findIndex((e) => e.kind === kind);
     if (idx < 0) return;
+    const before = hasModal();
     const victims = stack.slice(idx); // kind + everything above it
     stack = stack.slice(0, idx);
     runClosers(victims);
-    syncModal();
+    notifyModal(before);
   };
 
   const closeAll = (): void => {
+    const before = hasModal();
     const all = stack;
     stack = [];
     runClosers(all);
-    syncModal();
+    notifyModal(before);
   };
 
   return {

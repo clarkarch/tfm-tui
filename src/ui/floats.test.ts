@@ -135,16 +135,54 @@ describe("floats policy", () => {
     expect(f.hasModal()).toBe(true);
   });
 
-  test("a modal replacing another refires off-then-on (scrim never sticks un-dimmed)", () => {
-    // a confirm/prompt over the Plugins-view esc-menu runs the esc closer
-    // (setScrim(false)) — without the stack-emptied dip sync the new modal
-    // paints with background rasters floating over it
+  test("a modal replacing another keeps the dim — the modal state never changed", () => {
+    // A confirm/prompt over the Plugins-view esc-menu REPLACES the modal
+    // below it in ONE synchronous operation: the modal state goes true -> true,
+    // so the dim must NOT churn. The old stack-emptied dip fired off-then-on,
+    // which un-dimmed and re-dimmed the background and re-queued EVERY icon
+    // raster for a re-raster — twice per replacement — for a state the user
+    // never saw. (The dip's original reason — a closer that dimmed the
+    // background itself — is gone: the closers no longer touch the scrim,
+    // `applyModalDim` is the dim's only owner.)
     const states: boolean[] = [];
     const f = makeFloats({ onModalChange: (open) => states.push(open) });
     const noop = () => {};
     f.open("escmenu", noop);
     f.open("yesno", noop);
-    expect(states).toEqual([true, false, true]);
+    expect(states).toEqual([true]);
     expect(f.hasModal()).toBe(true);
+  });
+
+  test("the modal change callback fires exactly once per transition", () => {
+    const states: boolean[] = [];
+    const f = makeFloats({ onModalChange: (open) => states.push(open) });
+    const noop = () => {};
+    f.open("filemenu", noop); // a popup is not a modal: silent
+    expect(states).toEqual([]);
+    f.open("props", noop); // modal up: ONE transition
+    expect(states).toEqual([true]);
+    f.open("filemenu", noop, { keepModalBelow: true }); // popup INSIDE the modal: silent
+    expect(states).toEqual([true]);
+    f.close("filemenu"); // the modal is still up: silent
+    expect(states).toEqual([true]);
+    f.open("yesno", noop); // a modal REPLACES a modal: the state never changed
+    expect(states).toEqual([true]);
+    f.close("yesno"); // modal down: ONE transition
+    expect(states).toEqual([true, false]);
+  });
+});
+
+describe("no-drift rule", () => {
+  test("the modal state is DERIVED from the stack — no mirrored cache", async () => {
+    // `modalLast` duplicated the stack's modal state in a variable that only
+    // the discipline of four call sites kept fresh. The state is now derived
+    // from the stack at the moment of the change, so no mirror can go stale.
+    const src = (await Bun.file(`${import.meta.dir}/floats.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    // (assert on the booleans, not the source: a failed match would dump
+    // the whole module into the test output)
+    expect(/modalLast/.test(src)).toBe(false); // no mirrored modal flag
+    expect(/hasModal\(\)/.test(src)).toBe(true); // the stack is the source of truth
   });
 });
