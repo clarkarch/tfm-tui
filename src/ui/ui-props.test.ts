@@ -75,6 +75,13 @@ const bgInts = (id: string): number[] => {
   const n: any = byId(id);
   return n?.backgroundColor ? [...n.backgroundColor.toInts()] : [0, 0, 0, 0];
 };
+// the execute row's SHOWN-ness (not its presence): the row is mounted for
+// every regular file so it can APPEAR when the file's mode changes, but it
+// is only shown for a file that can actually run
+const execRowVisible = (): boolean => {
+  const n: any = byId("tfm-props-exec");
+  return !!n && n.visible !== false;
+};
 const fire = (id: string, type: string) =>
   (byId(id) as any).processMouseEvent({
     type,
@@ -273,16 +280,43 @@ describe("single-file properties", () => {
     expect(statusMsgs).toContain("properties:error:Can't show properties");
   });
 
-  test("exec checkbox only exists for exec-capable files (shebang/ext/mode)", async () => {
+  test("the execute row is shown only for exec-capable files (shebang/ext/mode)", async () => {
     props.openProperties(fileA);
     await t.renderOnce();
-    expect(byId("tfm-props-exec")).toBeFalsy(); // .txt, 644, no shebang
+    // .txt, 644, no shebang -> not runnable -> the row stays hidden (it IS
+    // mounted: the mode can change under us, see the next test)
+    expect(execRowVisible()).toBe(false);
     props.closeProps();
     await t.renderOnce();
 
     props.openProperties(fileSh);
     await t.renderOnce();
-    expect(byId("tfm-props-exec")).toBeTruthy();
+    expect(execRowVisible()).toBe(true);
+  });
+
+  test("adding the exec bit to a non-exec file shows the checkbox", async () => {
+    // The execute row is DERIVED from the file's CURRENT mode, not from a
+    // mount-time snapshot: a chmod that lands while the dialog is open must
+    // make the row appear (and be unset-able) instead of leaving the UI
+    // blind to a bit that is really set.
+    const f = path.join(sandbox, "late-exec.txt");
+    writeFileSync(f, "hello");
+    chmodSync(f, 0o644);
+    props.openProperties(f);
+    await t.renderOnce();
+    expect(execRowVisible()).toBe(false);
+    // another process (a shell, another file manager) adds the exec bit
+    chmodSync(f, 0o755);
+    // the editor reads the CURRENT mode when the user touches its rows
+    down("tfm-props-perm-owner");
+    await settle(() => execRowVisible());
+    expect(execRowVisible()).toBe(true);
+    // ...and the row can now UNSET it: the click really clears the bits
+    down("tfm-props-exec");
+    await settle(() => !execRowVisible());
+    expect(lstatSync(f).mode & 0o111).toBe(0);
+    props.closeProps();
+    await t.renderOnce();
   });
 
   test("clicking the execute row chmods the real file and repaints the perm words", async () => {
@@ -301,7 +335,28 @@ describe("single-file properties", () => {
     await t.renderOnce();
   });
 
+  test("the execute checkbox reflects every exec bit, not just the owner's", async () => {
+    // The checkbox must claim what the file REALLY has: a file whose GROUP
+    // can execute it is runnable, even when the owner's bit is clear (the
+    // owner-bit-only rule painted it blank while the file was executable).
+    const f = path.join(sandbox, "group-exec.txt");
+    writeFileSync(f, "hello");
+    chmodSync(f, 0o010); // group-exec only
+    props.openProperties(f);
+    await t.renderOnce();
+    expect(execRowVisible()).toBe(true);
+    expect((byId("slot-checkbox-marked") as any)?.visible).toBe(true);
+    expect((byId("slot-checkbox-blank") as any)?.visible).toBe(false);
+    // clicking clears EVERY exec bit, so the claim stays honest
+    down("tfm-props-exec");
+    await settle(() => (lstatSync(f).mode & 0o111) === 0);
+    expect(lstatSync(f).mode & 0o111).toBe(0);
+    props.closeProps();
+    await t.renderOnce();
+  });
+
   test("perm class menu opens with the three access options and applies them", async () => {
+    contextMenus.length = 0; // the recorder is shared across the file
     props.openProperties(fileA);
     await t.renderOnce();
     down("tfm-props-perm-owner");

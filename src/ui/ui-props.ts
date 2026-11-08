@@ -393,7 +393,7 @@ export const makeProps = (ctx: PropsCtx) => {
         colors: () => colors,
         makeIconSlot: ctx.makeIconSlot,
       },
-      { panel, targetPath, st, isDirTarget, row },
+      { panel, targetPath, mode: st.mode, uid: st.uid, gid: st.gid, isDirTarget, row },
     );
     ctx.stripSelectable();
     void ctx.drainIconQueue();
