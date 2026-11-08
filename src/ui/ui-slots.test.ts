@@ -782,6 +782,38 @@ describe("hoverEvents", () => {
     h.onMouseOut();
     expect(calls).toEqual([]);
   });
+
+  test("a throwing paint does not strand the hover highlight", () => {
+    // the lit flag used to flip BEFORE the paint: a paint that threw (a
+    // native OOM, a destroyed node) left the flag saying "lit" while the
+    // screen was not — and the out-event then SKIPPED the un-paint, so the
+    // half-painted highlight stayed on screen forever.
+    const calls: boolean[] = [];
+    let fail = true;
+    const h = hoverEvents((on) => {
+      calls.push(on);
+      if (fail && on) throw new Error("paint failed");
+    });
+    expect(() => h.onMouseMove()).toThrow("paint failed");
+    fail = false;
+    h.onMouseOut();
+    expect(calls).toEqual([true, false]);
+  });
+
+  test("a failed paint is retried on the next move", () => {
+    // the phase must only claim "lit" AFTER the paint landed — otherwise the
+    // retry is swallowed by the guard and the row never lights up.
+    const calls: boolean[] = [];
+    let fail = true;
+    const h = hoverEvents((on) => {
+      calls.push(on);
+      if (fail && on) throw new Error("paint failed");
+    });
+    expect(() => h.onMouseMove()).toThrow("paint failed");
+    fail = false;
+    h.onMouseMove();
+    expect(calls).toEqual([true, true]);
+  });
 });
 
 // hoverEvents drives the mouse pointer shape alongside the paint: set on the
@@ -942,6 +974,31 @@ describe("makePointerSetter", () => {
     await Promise.resolve();
     expect(seen).toEqual(["pointer", "default"]);
   });
+
+  test("a failed pointer write does not skip the later restore", async () => {
+    // the setter used to record the style BEFORE the write, so a write that
+    // threw (a torn-down renderer) still claimed "default" — and the NEXT
+    // restore was skipped as a duplicate. The terminal kept the old shape
+    // (a stuck pointer) with no way left to ask for a restore.
+    const seen: string[] = [];
+    let fail = false;
+    const set = makePointerSetter({
+      setMousePointer: (s) => {
+        seen.push(s);
+        if (fail) throw new Error("renderer gone");
+      },
+      isTtyMode: () => false,
+    });
+    set("pointer");
+    fail = true;
+    set("default");
+    await Promise.resolve();
+    expect(seen).toEqual(["pointer", "default"]);
+    fail = false;
+    set("default"); // the restore must be attempted AGAIN
+    await Promise.resolve();
+    expect(seen).toEqual(["pointer", "default", "default"]);
+  });
 });
 
 describe("no-drift rule: one home for the icon-slot contract", () => {
@@ -1052,5 +1109,48 @@ describe("no-drift rule: one home for the icon-slot contract", () => {
     expect(/\bdone\??:\s*boolean/.test(iconState)).toBe(false);
     expect(/\bspec\.done\b/.test(slots)).toBe(false);
     expect(/\bs\.done\b/.test(slots)).toBe(false);
+  });
+
+  test("the hover phase is a TAG — and it is written AFTER the paint", async () => {
+    // the lit flag used to flip BEFORE the paint, so a throwing paint left
+    // the flag claiming "lit" while the screen was not (and the out-event
+    // skipped the un-paint → a stuck highlight). The phase is an explicit
+    // tag now, written only after the paint landed.
+    const src = (await Bun.file(`${import.meta.dir}/ui-slots.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    expect(/type\s+HoverState\s*=/.test(src)).toBe(true);
+    expect(/phase:\s*"rest"\s*\|\s*"lit"\s*\|\s*"failed"/.test(src)).toBe(true);
+    // the old bare flag must not come back
+    expect(/let\s+on\s*=\s*false/.test(src)).toBe(false);
+    // the move handler paints FIRST and only then claims "lit"
+    const moveRegion = src.slice(src.indexOf("onMouseMove"), src.indexOf("onMouseOut"));
+    expect(moveRegion.indexOf("paint(true)")).toBeGreaterThanOrEqual(0);
+    expect(moveRegion.indexOf("paint(true)")).toBeLessThan(moveRegion.indexOf('phase = "lit"'));
+  });
+
+  test("the pointer state is ONE record — no parallel flags", async () => {
+    // the pointer setter's three phases (unset / set / restore-pending) lived
+    // in TWO scalars (`last` + `pendingDefault`) whose combinations were
+    // never spelled out, and `last` was written BEFORE the write — so a
+    // failed write still claimed the style and the next restore was skipped
+    // as a duplicate (a stuck pointer shape). The state is ONE tagged record
+    // now.
+    const src = (await Bun.file(`${import.meta.dir}/ui-slots.ts`).text())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+    expect(/export type PointerState\s*=/.test(src)).toBe(true);
+    expect(/kind:\s*"none"/.test(src)).toBe(true);
+    expect(/kind:\s*"set"/.test(src)).toBe(true);
+    expect(/kind:\s*"restorePending"/.test(src)).toBe(true);
+    // the parallel scalars must not come back
+    const pointerRegion = src.slice(
+      src.indexOf("export const makePointerSetter"),
+      src.indexOf("export const thumbJobRank"),
+    );
+    expect(/let\s+last\b/.test(pointerRegion)).toBe(false);
+    expect(/let\s+pendingDefault\b/.test(pointerRegion)).toBe(false);
+    // the record is the only truth about the pointer
+    expect((pointerRegion.match(/state\.(kind|style)\b/g) ?? []).length).toBeGreaterThanOrEqual(6);
   });
 });

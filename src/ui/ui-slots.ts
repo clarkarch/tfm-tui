@@ -50,6 +50,19 @@ export const selectIconState = (selected: boolean, hover: boolean): number =>
 //   that swaps only the bg leaves the raster's own square on top; in glyph mode
 //   the raster doesn't exist at all and only the wrapper bg can highlight.
 //   See escHintBtn (ui-slots) for the reference implementation.
+// The hover wiring's own state: where is the highlight?
+//   - "rest": the hover is not engaged (never painted, or cleaned up).
+//   - "lit": the paint landed — the out must un-paint.
+//   - "failed": the paint THREW — the out must still clean up (the paint may
+//     have landed halfway: a wrapper lit, the icon not) and the next move
+//     must retry.
+// The phase is written AFTER the attempt: the old flag flipped BEFORE the
+// paint, so it claimed "lit" while the screen was not — and a two-value
+// phase ("rest" | "lit") cannot tell "never painted" from "the paint threw",
+// so the out-event skipped the cleanup and a half-painted highlight stayed on
+// screen forever.
+export type HoverState = { phase: "rest" | "lit" | "failed" };
+
 export const hoverEvents = (
   paint: (hover: boolean) => void,
   // mouse pointer shape alongside the paint: set on the guarded first move,
@@ -58,28 +71,53 @@ export const hoverEvents = (
   setPointer?: (style: PointerStyle) => void,
   pointer: PointerStyle = "pointer",
 ) => {
-  let on = false;
+  const state: HoverState = { phase: "rest" };
   return {
     onMouseMove: (): void => {
-      if (on) return;
-      on = true;
-      paint(true);
+      if (state.phase === "lit") return;
+      try {
+        paint(true);
+      } catch (err) {
+        state.phase = "failed"; // the paint may have landed halfway: the out still cleans up
+        throw err;
+      }
+      state.phase = "lit";
       setPointer?.(pointer);
     },
     onMouseOut: (): void => {
-      if (!on) return;
-      on = false;
-      paint(false);
+      if (state.phase === "rest") return;
+      try {
+        paint(false);
+      } catch (err) {
+        state.phase = "failed"; // the un-paint did not land: the next move retries
+        throw err;
+      }
+      state.phase = "rest";
       setPointer?.("default");
     },
   };
 };
 
+// The pointer sink's state: what does the TERMINAL show right now?
+//   - "none": we have not written anything — the terminal is at the boot
+//     default (the ground truth we assume until we write).
+//   - "set": we wrote `style` and the write landed.
+//   - "restorePending": a restore to "default" is queued (the leave waits a
+//     microtask); the terminal still shows `style`.
+// The state is ONE record: the old pair of scalars (`last` + `pendingDefault`)
+// spelled out three phases in combinations nobody wrote down, and `last` was
+// recorded BEFORE the write — so a write that threw still claimed the style
+// and the NEXT restore was skipped as a duplicate (a stuck pointer shape).
+export type PointerState =
+  | { kind: "none" }
+  | { kind: "set"; style: PointerStyle }
+  | { kind: "restorePending"; style: PointerStyle };
+
 // tty-guarded OSC 22 sink shared by every widget ctx: delegates exact
 // styles, dedupes repeats (a drag sweep crosses hundreds of tiles — one OSC
 // write, not N), and stays a silent no-op on the console where no shapes
 // exist (gpm draws its own pointer). One instance per process (built in
-// wireCore) keeps a single `last` across widget boundaries.
+// wireCore) keeps a single state across widget boundaries.
 // Leaves are LAZY, enters are eager: a `default` restore waits a microtask
 // and any re-enter first cancels it. Icon-edge crossings run out+move in one
 // synchronous turn (the move bubbles from the raster child to the hovered
@@ -90,39 +128,50 @@ export const makePointerSetter = (deps: {
   setMousePointer: (style: PointerStyle) => void;
   isTtyMode: () => boolean;
 }): ((style: PointerStyle) => void) => {
-  let last: PointerStyle | null = null;
-  let pendingDefault = false;
-  const emit = (style: PointerStyle): void => {
-    last = style;
+  let state: PointerState = { kind: "none" };
+  // writes the style and reports whether the terminal took it — a failed
+  // write leaves the state untouched (we do not know what the terminal
+  // shows), so the next request can still ask for a restore.
+  const emit = (style: PointerStyle): boolean => {
     try {
-      if (!deps.isTtyMode()) deps.setMousePointer(style);
-    } catch {}
+      if (deps.isTtyMode()) return true; // no shapes on the console
+      deps.setMousePointer(style);
+      return true;
+    } catch {
+      return false;
+    }
   };
   return (style) => {
     if (style === "default") {
-      if (last === "default") return;
-      // a restore is already queued — don't disturb it (recording `default`
-      // here without emitting would leave `last` ahead of the terminal)
-      if (pendingDefault) return;
-      // boot ground truth is default: record it without a write
-      if (last === null) {
-        last = "default";
-        return;
-      }
-      pendingDefault = true;
+      // the terminal is already at the default: nothing to write, and
+      // nothing to record (recording a style we never wrote is how the
+      // next restore used to be skipped).
+      if (state.kind === "none") return;
+      if (state.kind === "set" && state.style === "default") return;
+      if (state.kind === "restorePending") return; // a restore is already queued
+      const shown = state.style;
+      state = { kind: "restorePending", style: shown };
       queueMicrotask(() => {
-        // a same-turn re-enter clears pendingDefault first — the flush is
-        // then a no-op instead of emitting a stale restore
-        if (!pendingDefault) return;
-        pendingDefault = false;
-        if (last === "default") return;
-        emit("default");
+        // a same-turn re-enter clears the pending restore first — the flush
+        // is then a no-op instead of emitting a stale restore
+        if (state.kind !== "restorePending") return;
+        if (!emit("default")) {
+          state = { kind: "set", style: shown }; // the write failed: the terminal still shows it
+          return;
+        }
+        state = { kind: "set", style: "default" };
       });
       return;
     }
-    pendingDefault = false;
-    if (style === last) return;
-    emit(style);
+    // a non-default style: the terminal already shows it → nothing to write
+    if (state.kind === "set" && state.style === style) return;
+    if (state.kind === "restorePending" && state.style === style) {
+      // the queued restore is cancelled — the terminal already shows this
+      state = { kind: "set", style };
+      return;
+    }
+    if (!emit(style)) return; // the write failed: the state stays as it was
+    state = { kind: "set", style };
   };
 };
 
