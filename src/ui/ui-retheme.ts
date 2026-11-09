@@ -16,7 +16,7 @@ import { backgroundClearColor } from "./scrim";
 import { loadConfig, saveConfig, configPath, type Config, type Theme } from "../config/config";
 import { RENDER_EXEMPT } from "../config/render-exempt";
 import { describeKeybindConflicts, findKeybindConflicts } from "../config/config-schema";
-import { debounced } from "../lib/uiutil";
+import { debounced, errMessage, type Scheduler } from "../lib/uiutil";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode, NodeLike } from "../lib/node-like";
 
@@ -79,6 +79,14 @@ type RethemeCtx = {
   // repaints the live bars on a theme flip without rebuilding them.
   // Optional so tests stay light.
   restyleScrollbars?(): void;
+  // the config writer — injectable so a FAILED write is testable: a
+  // permission-based failure cannot be arranged as root, and the renderer
+  // swallows console.error, so the failure has to reach the user through the
+  // notify seam. Defaults to the real writer.
+  save?: (cfg: Config) => Promise<void>;
+  // the timer pair behind the debounced save + reload — tests drive a virtual
+  // clock (Bun has no fake timers).
+  sched?: Scheduler;
 };
 
 export const makeRetheme = (ctx: RethemeCtx) => {
@@ -225,7 +233,6 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       c.ui.forceGlyph,
     ]);
   };
-  let lastThemeSig = themeSig(ctx.config);
 
   // rebuild-relevant signature: all UI keys except the exempt ones, plus theme.
   // Tty mode ignores [theme] (static console palette), so it is excluded there
@@ -238,15 +245,33 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     if (resolveTtyMode(c.ui.ttyMode, process.env.TERM)) return JSON.stringify([ui, "console"]);
     return JSON.stringify([ui, c.theme]);
   };
-  let lastRenderSig = renderSig(ctx.config);
-  // force-glyph pairing nudge: fire once on the off->on edge (held-on applies
-  // stay silent; off->on reminds again). Boot never passes through here, so
-  // a config file with it already on doesn't spam.
-  let lastForceGlyph = ctx.config.ui.forceGlyph;
-  let lastFollowTerminalWarned = ctx.config.ui.followTerminal;
+  // ONE record of what this host has SEEN. Every "last seen" latch lives
+  // here, and each field is written in exactly ONE place — the transition
+  // that owns it. Seven loose `let`s let two latches claim the same fact,
+  // and the nudge latches sat NEXT TO the signature latches while being
+  // updated somewhere else entirely.
+  const seen = {
+    // the last APPLIED theme signature (raster invalidation + chrome repaint)
+    themeSig: themeSig(ctx.config),
+    // the last APPLIED render signature (the full repaint)
+    renderSig: renderSig(ctx.config),
+    // force-glyph pairing nudge: fire once on the off->on edge (held-on
+    // applies stay silent; off->on reminds again). Boot never passes through
+    // here, so a config file with it already on doesn't spam.
+    forceGlyph: ctx.config.ui.forceGlyph,
+    // follow-terminal is silently dead on the console (static palette wins) —
+    // say so once per rising edge, same one-shot shape as forceGlyph
+    followTerminalWarned: ctx.config.ui.followTerminal,
+    // the signature of the last file WE wrote (the watcher skips it, so our
+    // own save does not echo back as an external reload)
+    savedSig: "",
+    // conflict set of the last scan — the reload toast fires once per CHANGE,
+    // not per reload (a lingering file conflict must not nag on every save)
+    conflictSig: JSON.stringify(findKeybindConflicts(ctx.config)),
+  };
 
   const applyConfig = (fresh: Config): void => {
-    const themeChanged = lastThemeSig !== themeSig(fresh);
+    const themeChanged = seen.themeSig !== themeSig(fresh);
     Object.assign(ctx.config.ui, fresh.ui);
     Object.assign(ctx.config.theme, fresh.theme);
     Object.assign(ctx.config.keys, fresh.keys);
@@ -260,23 +285,23 @@ export const makeRetheme = (ctx: RethemeCtx) => {
       const effTransparent = ctx.config.ui.transparentBg !== "off";
       if (!effTransparent) ctx.colors.bg = bumpHex(ctx.colors.bg);
     }
-    lastThemeSig = themeSig(ctx.config);
-    const renderChanged = lastRenderSig !== renderSig(ctx.config);
-    lastRenderSig = renderSig(ctx.config);
-    if (ctx.config.ui.forceGlyph && !lastForceGlyph) {
+    seen.themeSig = themeSig(ctx.config);
+    const renderChanged = seen.renderSig !== renderSig(ctx.config);
+    seen.renderSig = renderSig(ctx.config);
+    if (ctx.config.ui.forceGlyph && !seen.forceGlyph) {
       try {
         ctx.notify("Force glyph on · use list view", "tty", "info");
       } catch {}
     }
-    lastForceGlyph = ctx.config.ui.forceGlyph;
+    seen.forceGlyph = ctx.config.ui.forceGlyph;
     // follow-terminal is silently dead on the console (static palette wins) —
     // say so once per rising edge, same one-shot shape as forceGlyph
-    if (ctx.config.ui.followTerminal && ctx.isTtyMode?.() && !lastFollowTerminalWarned) {
+    if (ctx.config.ui.followTerminal && ctx.isTtyMode?.() && !seen.followTerminalWarned) {
       try {
         ctx.notify("Console · static palette", "tty", "info");
       } catch {}
     }
-    lastFollowTerminalWarned = ctx.config.ui.followTerminal;
+    seen.followTerminalWarned = ctx.config.ui.followTerminal;
 
     ctx.setSw(ctx.config.ui.sidebarWidth);
     ctx.setTileW(ctx.config.ui.tileWidth);
@@ -361,50 +386,75 @@ export const makeRetheme = (ctx: RethemeCtx) => {
     if (renderChanged) ctx.renderAll();
   };
 
-  // signature of the last file WE wrote; the watcher skips it so saving
-  // doesn't re-enter applyConfig and churn the rasters
-  let lastSavedSig = "";
-  let saveWarned = false;
-  // conflict set of the last scan — the reload toast fires once per CHANGE,
-  // not per reload (a lingering file conflict must not nag on every save)
-  let lastConflictSig = JSON.stringify(findKeybindConflicts(ctx.config));
+  // --- the save path -------------------------------------------------------
+  // ONE write at a time. Two overlapping atomic writes can land OUT OF ORDER
+  // (the older tmp+rename lands last) → the file holds the OLD config and
+  // the newest change is silently lost. The chain keeps the writes
+  // serialized, in call order.
+  const save = ctx.save ?? saveConfig;
+  const sched = ctx.sched ?? globalThis;
+  let saveChain: Promise<void> = Promise.resolve();
 
-  const scheduleSaveConfig = debounced(500, () => {
-    saveConfig(ctx.config)
-      .then(async () => {
-        try {
-          lastSavedSig = JSON.stringify(loadConfig());
-        } catch {}
-      })
-      .catch(() => {
-        if (!saveWarned) {
-          saveWarned = true;
-          console.error(`[tfm] could not write config to ${configPath()}`);
-        }
-      });
-  });
+  const runSave = async (snapshot: Config): Promise<void> => {
+    try {
+      await save(snapshot);
+    } catch (err) {
+      // a FAILED save is USER-VISIBLE: the renderer swallows console.error,
+      // so the old path reported the failure to nobody (the setting looked
+      // applied and was not persisted). Report EVERY attempt — a later
+      // disk-full is a different problem from the first one.
+      try {
+        ctx.notify(`config not saved · ${errMessage(err)}`, "config", "error");
+      } catch {}
+      return;
+    }
+    // the write landed: name the file so the watcher skips it (our own save
+    // must not echo back as an external reload). The read-back is the
+    // watcher's OWN projection (the parsed file), so the two always agree.
+    try {
+      seen.savedSig = JSON.stringify(loadConfig());
+    } catch {}
+  };
+
+  const scheduleSaveConfig = debounced(
+    500,
+    () => {
+      // capture the snapshot NOW: the live config keeps mutating while the
+      // write is in flight, and the writer must persist what the user
+      // changed — not whatever the config looks like when the write lands.
+      const snapshot = structuredClone(ctx.config);
+      // runSave is total (the write error is caught and reported), but a
+      // rejected chain would silently disable EVERY later save — keep it alive.
+      saveChain = saveChain.then(() => runSave(snapshot)).catch(() => {});
+    },
+    sched,
+  );
 
   // --- live config reload (held so quit can close it — an open FSWatcher
   // pins the event loop and orphaned tfm after a terminal close; re-armed by
   // startConfigWatch after a failed restart recover, which shares the quit
   // teardown and would otherwise lose external-edit reloads) ---
   let configWatcher: { close(): void } | null = null;
-  const applyFreshConfig = debounced(250, () => {
-    try {
-      const fresh = loadConfig();
-      if (JSON.stringify(fresh) === lastSavedSig) return;
-      applyConfig(fresh);
-      ctx.notify("config reloaded", "config", "success");
-      // hand-edited dup binds shadow silently at dispatch — toast once per
-      // change (own saves are skipped above, so settings commits never echo)
-      const sig = JSON.stringify(findKeybindConflicts(fresh));
-      if (sig !== lastConflictSig) {
-        lastConflictSig = sig;
-        const text = describeKeybindConflicts(fresh);
-        if (text) ctx.notify(`${text} · Settings → keys`, "keybind conflict");
-      }
-    } catch {}
-  });
+  const applyFreshConfig = debounced(
+    250,
+    () => {
+      try {
+        const fresh = loadConfig();
+        if (JSON.stringify(fresh) === seen.savedSig) return;
+        applyConfig(fresh);
+        ctx.notify("config reloaded", "config", "success");
+        // hand-edited dup binds shadow silently at dispatch — toast once per
+        // change (own saves are skipped above, so settings commits never echo)
+        const sig = JSON.stringify(findKeybindConflicts(fresh));
+        if (sig !== seen.conflictSig) {
+          seen.conflictSig = sig;
+          const text = describeKeybindConflicts(fresh);
+          if (text) ctx.notify(`${text} · Settings → keys`, "keybind conflict");
+        }
+      } catch {}
+    },
+    sched,
+  );
   const armConfigWatch = (): void => {
     if (configWatcher) return;
     const cfgPath = configPath();

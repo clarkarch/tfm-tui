@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Box } from "@opentui/core";
@@ -11,6 +11,7 @@ import { bumpHex } from "../config/color";
 import { ANSI16, TTY_DARK_THEME, TTY_LIGHT_THEME } from "./tty";
 import { defaultConfig, type Config } from "../config/config-schema";
 import { loadConfig } from "../config/config";
+import type { Scheduler } from "../lib/uiutil";
 
 // applyConfig is THE single config-change path (mutate -> applyConfig ->
 // scheduleSaveConfig). Pins the contract: geometry setter rewrites, in-place
@@ -20,6 +21,43 @@ import { loadConfig } from "../config/config";
 // repaint set, and the debounced TOML save (TFM_CONFIG sandbox).
 
 const clone = (c: Config): Config => JSON.parse(JSON.stringify(c));
+
+// a virtual clock for the debounced save/reload — Bun has no fake timers.
+// The debounce is TRAILING: every call pushes the run `ms` back, so the
+// clock advances past the delay to fire it.
+const mkClock = () => {
+  let now = 0;
+  let seq = 0;
+  const timers = new Map<number, { at: number; fn: () => void }>();
+  const sched: Scheduler = {
+    setTimeout: (fn: () => void, ms: number) => {
+      const id = ++seq;
+      timers.set(id, { at: now + ms, fn });
+      return id;
+    },
+    clearTimeout: (handle: unknown) => {
+      timers.delete(handle as number);
+    },
+  };
+  const advance = (ms: number): void => {
+    now += ms;
+    for (const [id, t] of [...timers.entries()].sort((a, b) => a[1].at - b[1].at)) {
+      if (t.at > now) continue;
+      timers.delete(id);
+      t.fn();
+    }
+  };
+  return { sched, advance };
+};
+
+// poll on observable state — never a fixed sleep
+const settleUntil = async (cond: () => boolean, label: string): Promise<void> => {
+  const deadline = Date.now() + 4000;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${label}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
 
 let cfgSandbox: string;
 let cfgPath: string;
@@ -111,6 +149,22 @@ const mkCtx = () => {
     calls,
   };
   return ctx;
+};
+
+// a PRIVATE config path per test — the real writer must never touch the
+// shared sandbox file (a RED run of an unimplemented seam writes for real),
+// and the watcher only reacts to its own file's basename.
+const useConfigPath = (name: string): { file: string; restore: () => void } => {
+  const file = path.join(cfgSandbox, `${name}.toml`);
+  const saved = process.env.TFM_CONFIG;
+  process.env.TFM_CONFIG = file;
+  return {
+    file,
+    restore: () => {
+      if (saved === undefined) delete process.env.TFM_CONFIG;
+      else process.env.TFM_CONFIG = saved;
+    },
+  };
 };
 
 beforeAll(() => {
@@ -738,5 +792,131 @@ describe("scheduleSaveConfig", () => {
     expect(reloaded.ui.sidebarWidth).toBe(33);
     // serializer aligns values into columns — match the padded form
     expect(readFileSync(cfgPath, "utf8")).toMatch(/sidebar-width\s+= 33/);
+  });
+
+  test("a failed save tells the user it did not save (and never claims a reload)", async () => {
+    // the renderer swallows console.error, so the old path reported a failed
+    // write to nobody: the setting looked applied and was NOT persisted.
+    const cfg = useConfigPath("failed-save");
+    try {
+      const ctx = mkCtx();
+      const retheme = makeRetheme({
+        ...ctx,
+        save: async () => {
+          throw new Error("ENOSPC: no space left on device");
+        },
+      } as any);
+      retheme.scheduleSaveConfig();
+      await settleUntil(() => ctx.calls.notify.some(([m]) => /not saved/i.test(String(m))), "the save failure notice");
+      const failures = ctx.calls.notify.filter(([m]) => /not saved/i.test(String(m)));
+      expect(failures.length).toBe(1);
+      expect(failures[0]![2]).toBe("error");
+      expect(String(failures[0]![0])).toMatch(/no space left/i);
+      // nothing was written, so nothing reloaded either
+      expect(ctx.calls.notify.some(([m]) => /reloaded/i.test(String(m)))).toBe(false);
+    } finally {
+      cfg.restore();
+    }
+  });
+
+  test("every failed save attempt reports (the old permanent latch silenced the rest)", async () => {
+    // the old latch fired ONCE per session: a later disk-full (or a
+    // read-only mount) was swallowed in silence.
+    const cfg = useConfigPath("failed-save-twice");
+    try {
+      const ctx = mkCtx();
+      const clock = mkClock();
+      const retheme = makeRetheme({
+        ...ctx,
+        sched: clock.sched,
+        save: async () => {
+          throw new Error("EROFS: read-only file system");
+        },
+      } as any);
+      const failures = () => ctx.calls.notify.filter(([m]) => /not saved/i.test(String(m)));
+      retheme.scheduleSaveConfig();
+      clock.advance(500);
+      await settleUntil(() => failures().length === 1, "the first failure notice");
+      retheme.scheduleSaveConfig();
+      clock.advance(500);
+      await settleUntil(() => failures().length === 2, "the second failure notice");
+      expect(failures().length).toBe(2);
+    } finally {
+      cfg.restore();
+    }
+  });
+
+  test("a slow save does not overlap the next one (the newest change wins)", async () => {
+    // two overlapping atomic writes can land OUT OF ORDER (the older
+    // tmp+rename lands last) → the file holds the OLD config and the
+    // newest change is lost.
+    const cfg = useConfigPath("save-chain");
+    try {
+      const ctx = mkCtx();
+      const clock = mkClock();
+      const gates: Array<{ cfg: Config; resolve: () => void }> = [];
+      const retheme = makeRetheme({
+        ...ctx,
+        sched: clock.sched,
+        save: (c: Config) =>
+          new Promise<void>((resolve) => {
+            gates.push({ cfg: c, resolve });
+          }),
+      } as any);
+
+      ctx.config.ui.sidebarWidth = 21;
+      retheme.scheduleSaveConfig();
+      clock.advance(500);
+      await settleUntil(() => gates.length === 1, "the injected save to run");
+      expect(gates[0]!.cfg.ui.sidebarWidth).toBe(21);
+
+      // a second change lands while the first write is still in flight
+      ctx.config.ui.sidebarWidth = 34;
+      retheme.scheduleSaveConfig();
+      clock.advance(500);
+      // one write at a time: the second waits for the first to land
+      expect(gates.length).toBe(1);
+
+      gates[0]!.resolve();
+      await settleUntil(() => gates.length === 2, "the queued save to run");
+      // the queued write carries the NEWEST config, not a stale snapshot
+      expect(gates[1]!.cfg.ui.sidebarWidth).toBe(34);
+    } finally {
+      cfg.restore();
+    }
+  });
+
+  test("an external config edit still reloads (the watcher path survives the latch refactor)", async () => {
+    const cfg = useConfigPath("external-edit");
+    try {
+      const ctx = mkCtx();
+      makeRetheme(ctx as any);
+      writeFileSync(cfg.file, "[ui]\nsidebar-width = 44\n");
+      await settleUntil(() => ctx.calls.notify.some(([m]) => /reloaded/i.test(String(m))), "the reload toast");
+      expect(ctx.config.ui.sidebarWidth).toBe(44);
+    } finally {
+      cfg.restore();
+    }
+  });
+
+  test("a repeated reload with the SAME conflict set does not re-toast (the conflict latch)", async () => {
+    // the conflict toast fires once per CHANGE, not per reload — a lingering
+    // hand-edited clash must not nag on every save.
+    const cfg = useConfigPath("conflict-latch");
+    try {
+      const ctx = mkCtx();
+      makeRetheme(ctx as any);
+      const conflicts = () => ctx.calls.notify.filter(([, t]) => t === "keybind conflict");
+      const reloads = () => ctx.calls.notify.filter(([m]) => /reloaded/i.test(String(m)));
+      const conflicting = '[keys]\nquit = ["ctrl+q"]\ncopy = ["ctrl+q"]\n';
+      writeFileSync(cfg.file, conflicting);
+      await settleUntil(() => conflicts().length === 1, "the keybind conflict toast");
+      // the SAME conflicting file again: the reload fires, the conflict does not
+      writeFileSync(cfg.file, conflicting);
+      await settleUntil(() => reloads().length === 2, "the second reload toast");
+      expect(conflicts().length).toBe(1);
+    } finally {
+      cfg.restore();
+    }
   });
 });
