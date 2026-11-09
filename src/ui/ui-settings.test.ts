@@ -934,6 +934,103 @@ describe("keybind capture", () => {
     await t.renderOnce();
     expect((groups[0]!.rows.find((r) => r.kind === "keybind") as { get(): string[] }).get()).toEqual(binds);
   });
+
+  test("switching category during capture cancels the capture", async () => {
+    await openSettings();
+    for (let i = 0; i < 3; i++) menu.moveMenu(1);
+    menu.menuActivate(); // arm capture on the keybind row
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("press a key…");
+
+    // the capture's row index belongs to ONE category — a category switch
+    // must cancel it, or the prompt lands on an unrelated row of the NEW
+    // category (and every key stays swallowed by an invisible capture).
+    // The keymap's capture currently shields ←/→, so this drives the
+    // shell's own category switch: the invariant belongs to the shell.
+    menu.adjustSelectedSetting(1); // → switchCategory(+1)
+    await t.renderOnce();
+    expect(t.captureCharFrame()).not.toContain("press a key…");
+  });
+
+  test("a rescan that removes the captured row cancels the capture", async () => {
+    // the capture names ONE row: when that row disappears (a plugin is
+    // removed mid-capture), the capture must not stay armed on whatever row
+    // took its place — the prompt would paint on a non-keybind row and every
+    // key would stay swallowed with nothing to explain it.
+    plugGroups = [
+      {
+        header: "plug-a",
+        rows: [{ kind: "keybind", label: "plug-bind", get: () => [], set: () => {} }],
+      },
+    ];
+    let release!: () => void;
+    reloadImpl = () => new Promise<void>((r) => (release = r));
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      await t.renderOnce();
+      menu.moveMenu(1); // root: Settings
+      menu.moveMenu(1); // -> Plugins
+      menu.menuActivate();
+      await t.renderOnce();
+      menu.moveMenu(1); // -> the first row (the keybind)
+      menu.menuActivate(); // arm the capture
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("press a key…");
+
+      // the rescan lands: the captured row is gone (the group keeps another)
+      plugGroups = [
+        {
+          header: "plug-a",
+          rows: [{ kind: "toggle", label: "plug-toggle", get: () => false, set: () => {} }],
+        },
+      ];
+      release();
+      const deadline = Date.now() + 2000;
+      while (!t.captureCharFrame().includes("plug-toggle") && Date.now() < deadline) await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("plug-toggle"); // the new row is there
+      expect(t.captureCharFrame()).not.toContain("press a key…"); // the capture is not
+    } finally {
+      menu.closeMenu();
+      await t.renderOnce();
+      reloadImpl = async () => {
+        reloadCalls++;
+      };
+      plugGroups = [];
+    }
+  });
+
+  test("a capture whose target row changed under it is dropped, not written", async () => {
+    await openSettings();
+    for (let i = 0; i < 3; i++) menu.moveMenu(1);
+    menu.menuActivate(); // arm capture on the keybind row (index 3)
+    await t.renderOnce();
+    expect(t.captureCharFrame()).toContain("press a key…");
+
+    // the rows change UNDER the armed capture (a live config reload flips a
+    // master, no panel rebuild): the capture must be dropped — it must not
+    // write the bind to whatever row took the keybind's place, and it must
+    // not swallow the key either (a dead capture is inert).
+    const keep = groups;
+    const wrong = { on: false };
+    const toggle = (label: string): SettingRow => ({
+      kind: "toggle",
+      label,
+      get: () => wrong.on,
+      set: (v) => (wrong.on = v),
+    });
+    groups = [{ header: "general", rows: [toggle("a"), toggle("b"), toggle("c"), toggle("took the keybind's place")] }];
+    try {
+      expect(menu.captureKey({ name: "f", ctrl: true, shift: false, meta: false })).toBe(false);
+      expect(wrong.on).toBe(false); // nothing was written
+      await t.renderOnce();
+      expect(t.captureCharFrame()).not.toContain("press a key…"); // the prompt is gone
+    } finally {
+      groups = keep;
+      await t.renderOnce();
+    }
+  });
 });
 
 describe("keybind swap offer", () => {

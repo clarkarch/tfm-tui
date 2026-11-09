@@ -37,6 +37,26 @@ export type MenuFocus =
   // the ROWS pane owns the focus: `row` is the focused row (null = none yet)
   | { kind: "row"; cat: number; row: number | null };
 
+// the keybind capture's phase — ONE tagged record, owned by the shell. The
+// old code kept the recorded row (`capturing: number | null`) and the pending
+// conflict offer (`swapOffer: {...} | null`) as TWO nullable fields whose
+// pairing was a CONVENTION: an offer without a row was representable and the
+// two could disagree.
+//
+// `cat` is part of the record on purpose: a row index means NOTHING without
+// the category it belongs to — a category change (the ←/→ switch, a plugin
+// rescan clamping the cursor) leaves the index pointing at a DIFFERENT row.
+// Naming the category makes that checkable in ONE place instead of a
+// convention spread over the writers.
+export type Capture =
+  // no capture in flight
+  | { kind: "idle" }
+  // recording a new binding for `row` (a row index in category `cat`)
+  | { kind: "recording"; cat: number; row: number }
+  // a conflict offer: `spec` is owned by `ownerLabel` — enter steals it,
+  // esc returns to recording, any other key re-proposes
+  | { kind: "offer"; cat: number; row: number; spec: string; ownerLabel: string };
+
 // the panel's READ-ONLY view of the shell's state. The renderer never
 // mutates it — every change goes back through the shell's actions, so the
 // shell stays the ONE owner of the panel's state.
@@ -51,9 +71,8 @@ export type SettingsPanelView = {
   readonly scrollOff: number;
   // collapsed subsections, keyed by sectionKey(category header, subsection)
   readonly collapsed: ReadonlySet<string>;
-  // keybind capture: the row being recorded + the pending swap offer
-  readonly capturing: number | null;
-  readonly swapOffer: { spec: string; ownerLabel: string } | null;
+  // the keybind capture's phase (idle / recording / conflict offer)
+  readonly capture: Capture;
 };
 
 // the keybind-conflict swap offer, painted in the footer AND the capturing
@@ -286,7 +305,7 @@ export const renderSettingsPanel = (
             try {
               ev.stopPropagation?.();
             } catch {}
-            if (view.capturing !== null) {
+            if (view.capture.kind !== "idle") {
               h.cancelCapture();
               return;
             }
@@ -300,7 +319,7 @@ export const renderSettingsPanel = (
             // keyboard cursor may already sit here, in which case no repaint
             // runs but the shape must still set
             h.setPointer?.("pointer");
-            if (view.capturing !== null) return;
+            if (view.capture.kind !== "idle") return;
             h.hoverCat(key);
           },
           onMouseOut: () => {
@@ -346,9 +365,9 @@ export const renderSettingsPanel = (
       Text({
         id: "tfm-set-desc",
         content: fitDescText(
-          view.swapOffer
-            ? swapOfferText(view.swapOffer.spec, view.swapOffer.ownerLabel)
-            : view.capturing !== null
+          view.capture.kind === "offer"
+            ? swapOfferText(view.capture.spec, view.capture.ownerLabel)
+            : view.capture.kind === "recording"
               ? "press a key…"
               : descText(curRow === null ? undefined : rows[curRow]),
           panelW,
@@ -383,7 +402,7 @@ const renderRowPane = (
       // position truth before change truth (see the category rows)
       h.setPointer?.("pointer");
       // while a keybind is being recorded the mouse must not steal the focus
-      if (view.capturing !== null) return;
+      if (view.capture.kind !== "idle") return;
       // the shell owns the focus + the row paint (one owner)
       if (h.focusRow(index)) h.paintDesc(fitDescText(descText(rowSpec), panelW));
     },
@@ -416,7 +435,7 @@ const renderRowPane = (
           try {
             ev.stopPropagation?.();
           } catch {}
-          if (view.capturing !== null) {
+          if (view.capture.kind !== "idle") {
             h.cancelCapture();
             return;
           }
@@ -451,7 +470,7 @@ const renderRowPane = (
           try {
             ev.stopPropagation?.();
           } catch {}
-          if (view.capturing !== null) {
+          if (view.capture.kind !== "idle") {
             h.cancelCapture();
             return;
           }
@@ -490,7 +509,7 @@ const renderRowPane = (
 
   const rowNode = (rowSpec: SettingRow, index: number) => {
     const active = focus.kind === "row" && focus.row === index;
-    const capturingThis = view.capturing === index;
+    const capturingThis = view.capture.kind !== "idle" && view.capture.row === index;
     const labelFg = c.white;
     let control: SlotElement;
     let onClick: (ev?: MouseEvent) => void = (ev?: MouseEvent) => {
@@ -504,7 +523,7 @@ const renderRowPane = (
     };
 
     if (capturingThis) {
-      const offer = view.swapOffer;
+      const offer = view.capture.kind === "offer" ? view.capture : null;
       control = Box(
         { flexGrow: 1 },
         Text({
@@ -555,7 +574,7 @@ const renderRowPane = (
         try {
           ev?.stopPropagation?.();
         } catch {}
-        if (view.capturing !== null) {
+        if (view.capture.kind !== "idle") {
           h.cancelCapture();
           return;
         }

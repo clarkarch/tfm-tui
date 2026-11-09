@@ -36,6 +36,7 @@ import {
   SET_TOGGLE_W,
   SET_VAL_W,
   visiblePos,
+  type Capture,
   type MenuFocus,
   type SettingsPanelView,
 } from "./ui-settings-panel";
@@ -107,15 +108,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     hoverCat: string | null;
     scrollOff: number;
     collapsed: Set<string>;
-    capturing: number | null;
-    swapOffer: { spec: string; ownerLabel: string } | null;
+    // the keybind capture's phase — ONE tagged record (idle / recording /
+    // conflict offer). The old code kept the recorded row and the pending
+    // offer as TWO nullable fields whose pairing was a convention.
+    capture: Capture;
   } = {
     focus: { kind: "none" },
     hoverCat: null,
     scrollOff: 0,
     collapsed: new Set<string>(),
-    capturing: null,
-    swapOffer: null,
+    capture: { kind: "idle" },
   };
   // restart-toast dedupe: one "needs restart" toast per row per menu open —
   // holding ←/→ on a stepper otherwise floods the toast stack
@@ -139,6 +141,24 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // the root menu's item cursor (-1 = none)
   const activeItem = (): number => (st.focus.kind === "root" ? st.focus.item : -1);
 
+  // --- the capture's phase ---
+  // a capture names ONE row of ONE category: a category change (the ←/→
+  // switch, a plugin rescan clamping the cursor) or a vanished row (a
+  // plugin removed mid-capture) leaves the capture pointing at something
+  // else, so it is dropped. ONE check, so no writer can leave a stale
+  // capture behind. Returns true when it dropped one.
+  const dropStaleCapture = (): boolean => {
+    if (st.capture.kind === "idle") return false;
+    const cat = st.focus.kind === "row" || st.focus.kind === "cat" ? st.focus.cat : -1;
+    // the target must still be a keybind row of the focused category —
+    // otherwise the prompt would paint on whatever row took its place
+    if (st.capture.cat !== cat || rowsOf(cat)[st.capture.row]?.kind !== "keybind") {
+      st.capture = { kind: "idle" };
+      return true;
+    }
+    return false;
+  };
+
   // ONE reset for the menu's view state: the focus, the mouse hover and the
   // window offset. Every entry point that shows a FRESH view calls it (open,
   // close, view change) — the old code reset some fields in one place and
@@ -148,8 +168,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     st.focus = { kind: "none" };
     st.hoverCat = null;
     st.scrollOff = 0;
-    st.capturing = null;
-    st.swapOffer = null;
+    st.capture = { kind: "idle" };
   };
 
   // the help/about views are cursorless (static panels) — cursor ops no-op there
@@ -280,17 +299,17 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const cancelCapture = (): boolean => {
-    if (st.capturing === null) return false;
-    st.capturing = null;
-    st.swapOffer = null;
+    if (st.capture.kind === "idle") return false;
+    st.capture = { kind: "idle" };
     renderMenuContent();
     return true;
   };
 
   const startCapture = (rowIdx: number): void => {
-    const row = rowsOf(activeCat())[rowIdx];
+    const cat = activeCat();
+    const row = rowsOf(cat)[rowIdx];
     if (row?.kind !== "keybind") return;
-    st.capturing = rowIdx;
+    st.capture = { kind: "recording", cat, row: rowIdx };
     renderMenuContent();
   };
 
@@ -443,30 +462,33 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (st.focus.kind !== "cat" && st.focus.kind !== "row") {
       // not in a panel view: a category index means nothing here
       if (st.hoverCat !== null) st.hoverCat = null;
-      return;
-    }
-    if (n === 0) {
+    } else if (n === 0) {
       st.focus = { kind: "row", cat: 0, row: null };
       st.hoverCat = null;
       st.scrollOff = 0;
-      return;
+    } else {
+      const cat = Math.min(Math.max(0, st.focus.cat), n - 1);
+      const flat = visOf(cat);
+      // the focused row must still be VISIBLE (a plugin row can vanish, a
+      // section can collapse) — park it on the nearest visible row at or above
+      let row = st.focus.row;
+      if (row !== null && !flat.includes(row)) {
+        const parked = clampToVisible(flat, row);
+        row = parked < 0 ? null : parked;
+      }
+      st.focus = { kind: st.focus.kind, cat, row };
+      // the hovered category must still exist (a plugin group can vanish)
+      if (st.hoverCat !== null && catIndexOf(st.hoverCat) < 0) st.hoverCat = null;
+      // the window offset must fit the current rows and keep the focused row
+      // visible
+      const vis = visibleRows();
+      st.scrollOff = scrollFor(vis, flat.length, row === null ? -1 : visiblePos(flat, row), st.scrollOff);
     }
-    const cat = Math.min(Math.max(0, st.focus.cat), n - 1);
-    const flat = visOf(cat);
-    // the focused row must still be VISIBLE (a plugin row can vanish, a
-    // section can collapse) — park it on the nearest visible row at or above
-    let row = st.focus.row;
-    if (row !== null && !flat.includes(row)) {
-      const parked = clampToVisible(flat, row);
-      row = parked < 0 ? null : parked;
-    }
-    st.focus = { kind: st.focus.kind, cat, row };
-    // the hovered category must still exist (a plugin group can vanish)
-    if (st.hoverCat !== null && catIndexOf(st.hoverCat) < 0) st.hoverCat = null;
-    // the window offset must fit the current rows and keep the focused row
-    // visible
-    const vis = visibleRows();
-    st.scrollOff = scrollFor(vis, flat.length, row === null ? -1 : visiblePos(flat, row), st.scrollOff);
+    // the capture belongs to the FOCUSED category: a category change (the
+    // ←/→ switch, a rescan clamping the cursor above) leaves its row index
+    // pointing at a DIFFERENT row — the capture is dropped there. ONE check,
+    // every path.
+    dropStaleCapture();
   };
 
   // after applyAdjust on a value row: refresh JUST the value text by id.
@@ -527,7 +549,16 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // conflicting key opens an inline swap offer instead of rejecting: enter
   // steals the bind, esc returns to capture, any other key re-proposes.
   const captureKey = (e: KeyEventLike): boolean => {
-    if (st.capturing === null) return false;
+    if (st.capture.kind === "idle") return false;
+    // a capture whose target vanished (a category change, a rescan, a live
+    // reload that reshuffled the rows) is STALE — it is dropped here and
+    // repainted: a dead capture must not swallow the key, and its prompt
+    // must not stay on screen
+    if (dropStaleCapture()) {
+      renderMenuContent();
+      return false;
+    }
+    const cap = st.capture;
     // only an UNMODIFIED escape/return/tab cancels: ctrl+tab / ctrl+shift+tab
     // are next/prev-tab binds and must be recordable (they were unbindable
     // through the GUI — every tab chord cancelled capture)
@@ -535,28 +566,25 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // whether the key below drops an open offer: the unrecordable/invalid
     // early returns must repaint then, or a stale offer stays on screen
     let droppedOffer = false;
-    if (st.swapOffer !== null) {
+    if (cap.kind === "offer") {
       if (unmodified && e.name === "tab") {
-        st.capturing = null;
-        st.swapOffer = null;
+        st.capture = { kind: "idle" };
         renderMenuContent();
         return true;
       }
       if (unmodified && e.name === "escape") {
-        st.swapOffer = null;
+        st.capture = { kind: "recording", cat: cap.cat, row: cap.row };
         renderMenuContent();
         return true;
       }
       // OpenTUI reports Enter as "return" (see the capture comment below) —
       // the same spelling the cancel branch matches, so both agree
       if (unmodified && e.name === "return") {
-        const row = rowsOf(activeCat())[st.capturing];
-        const offer = st.swapOffer;
+        const row = rowsOf(cap.cat)[cap.row];
         if (row?.kind === "keybind" && row.swap) {
-          st.swapOffer = null;
-          st.capturing = null;
+          st.capture = { kind: "idle" };
           try {
-            row.swap(offer.spec);
+            row.swap(cap.spec);
           } catch {}
           renderMenuContent();
           return true;
@@ -568,10 +596,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         return true;
       }
       droppedOffer = true;
-      st.swapOffer = null; // re-propose with the key below
+      // re-propose with the key below (the offer's phase ends, the capture
+      // stays armed on the same row)
+      st.capture = { kind: "recording", cat: cap.cat, row: cap.row };
     }
     if (unmodified && (e.name === "escape" || e.name === "return" || e.name === "tab")) {
-      st.capturing = null;
+      st.capture = { kind: "idle" };
       renderMenuContent();
       return true;
     }
@@ -588,7 +618,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       if (droppedOffer) renderMenuContent();
       return true; // stay in capture so the user can retry
     }
-    const row = rowsOf(activeCat())[st.capturing];
+    const row = rowsOf(cap.cat)[cap.row];
     let outcome: unknown;
     try {
       if (row?.kind === "keybind") outcome = row.set([spec]);
@@ -596,7 +626,13 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       outcome = undefined;
     }
     if (isSwapOffer(outcome)) {
-      st.swapOffer = { spec: outcome.spec, ownerLabel: outcome.ownerLabel };
+      st.capture = {
+        kind: "offer",
+        cat: cap.cat,
+        row: cap.row,
+        spec: outcome.spec,
+        ownerLabel: outcome.ownerLabel,
+      };
       renderMenuContent();
       return true;
     }
@@ -604,14 +640,15 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       renderMenuContent();
       return true; // already warned — stay in capture so the user can retry
     }
-    st.capturing = null;
+    st.capture = { kind: "idle" };
     renderMenuContent();
     return true;
   };
 
   const rowActivate = (rowIdx: number): void => {
-    if (st.capturing !== null) {
-      if (st.capturing !== rowIdx) cancelCapture();
+    if (st.capture.kind !== "idle") {
+      // activating another row cancels the capture (the same row keeps it)
+      if (st.capture.cat !== activeCat() || st.capture.row !== rowIdx) cancelCapture();
       return;
     }
     const row = rowsOf(activeCat())[rowIdx];
@@ -696,7 +733,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const menuTab = (): void => {
-    if (!inPanelView() || st.capturing !== null) return;
+    if (!inPanelView() || st.capture.kind !== "idle") return;
     // the pane that owns the focus IS the focus's kind — the row the rows
     // pane had is remembered, so Tab back restores it
     if (st.focus.kind === "row") st.focus = { kind: "cat", cat: st.focus.cat, row: st.focus.row };
@@ -929,11 +966,8 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         get collapsed() {
           return st.collapsed;
         },
-        get capturing() {
-          return st.capturing;
-        },
-        get swapOffer() {
-          return st.swapOffer;
+        get capture() {
+          return st.capture;
         },
       };
       // the category specs are rebuilt with the panel — drop the old ones
@@ -1045,7 +1079,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         // capture — the scrim handler never sees inside clicks (the panel
         // stops propagation), so this is the only path for it
         panelMouseDown: () => {
-          if (st.capturing !== null) cancelCapture();
+          if (st.capture.kind !== "idle") cancelCapture();
         },
       },
     );
