@@ -2,7 +2,7 @@
 // inline path editor), sort + search buttons — as a factory with injected
 // callbacks (same seam as ui-chrome.ts). The search QUERY state lives in
 // ./search and the keyboard router in ./keymap; this module owns the
-// pathEditMode flag and the hover-button raster/surface plumbing. ---
+// path-edit state machine and the hover-button raster/surface plumbing. ---
 
 import path from "node:path";
 import os from "node:os";
@@ -21,6 +21,29 @@ import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { IconSpec } from "../lib/icon-state";
+
+// --- The inline path editor: ONE tagged machine.
+//
+// closed → armed (the first click of a double-click) → editing. The old
+// shape was a boolean (`pathEditMode`) PLUS a timestamp sentinel
+// (`crumbClickAt`): two fields for one machine, and the arm could outlive
+// the edit. The arm is a PHASE of the same record now, so leaving `editing`
+// drops it and no exit can leave a half-state behind.
+export type PathEditMode = { kind: "closed" } | { kind: "armed"; at: number } | { kind: "editing" };
+
+// why the editor closed — every exit names itself (the trace says which one
+// fired, and the closer is the ONLY writer that leaves `editing`)
+export type PathEditCloseReason = "commit" | "cancel" | "navigate" | "superseded";
+
+// One toolbar's LOCAL closer, published to the app-wide registry. The path
+// editor holds the keyboard focus, so cancelling it in ONE pane must cancel
+// it in the OTHER too: the external exits used to reach the ACTIVE pane
+// only, so pane 1's editor survived a navigation in pane 0 — its Input kept
+// the focus and swallowed every keystroke.
+export type PathEditPeer = {
+  isOpen(): boolean;
+  close(reason: PathEditCloseReason): void;
+};
 
 type ToolbarCtx = {
   // per-pane id prefix ("tfm-p0-"/"tfm-p1-") — dual pane builds one toolbar
@@ -66,6 +89,16 @@ type ToolbarCtx = {
   // the module owns the open state, so the button must not write the input
   // node's visible flag itself (the router reads the module, not the node)
   toggleSearch(): void;
+  // the app-wide path-editor registry: every toolbar appends its LOCAL
+  // closer here, so the ONE public closer cancels the editor in EVERY pane.
+  // Absent = a lone toolbar (single-pane fakes).
+  pathEditPeers?: PathEditPeer[];
+  // clock for the double-click window — injected so the window is testable
+  // without sleeping (absent = Date.now())
+  now?(): number;
+  // debug trace (the wiring passes the debug log); optional so fakes keep
+  // working
+  log?(msg: string): void;
 };
 
 // path-bar commit check: virtual places always navigate; real paths must be
@@ -233,8 +266,13 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   // --- breadcrumbs + inline path edit ---
   const crumbSep = () => Text({ content: " › ", fg: ctx.colors().sidebarFgMuted });
 
-  let pathEditMode = false;
-  let crumbClickAt = 0;
+  // the editor machine: closed → armed (the first click of a double-click) →
+  // editing. ONE record, so the arm cannot outlive the edit.
+  let pathEdit: PathEditMode = { kind: "closed" };
+  // the double-click window (the arm's lifetime)
+  const PATH_EDIT_DOUBLE_CLICK_MS = 350;
+  const nowMs = (): number => ctx.now?.() ?? Date.now();
+  const isEditing = (): boolean => pathEdit.kind === "editing";
   // per-navigate animation guard: the crumb TARGETS last built for. Null
   // until the first build (which only records — the startup intro covers
   // boot). On rebuild the shared target prefix stays put and only the suffix
@@ -243,28 +281,64 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   // watcher, search, path edit) stay instant.
   let lastCrumbTargets: string[] | null = null;
 
-  const exitPathEdit = () => {
-    if (!pathEditMode) return;
-    pathEditMode = false;
+  // the ONLY writer that leaves `editing`: every exit (commit, cancel,
+  // navigate) goes through it, so no exit can skip its side effects.
+  const closeLocal = (reason: PathEditCloseReason): void => {
+    if (!isEditing()) return;
+    pathEdit = { kind: "closed" };
+    ctx.log?.(`pathedit: closed (${reason})`);
     // the editor is gone — default (stale-until-move, same rule as menus)
     ctx.setPointer?.("default");
     renderCrumbs();
   };
 
+  // the ONE public closer: it cancels the editor in EVERY pane (the registry
+  // holds each toolbar's local close). The old route reached the ACTIVE
+  // pane only, so the other pane's editor survived — with its Input still
+  // focused, swallowing every keystroke.
+  const exitPathEdit = (reason: PathEditCloseReason = "cancel"): void => {
+    const peers = ctx.pathEditPeers;
+    if (!peers) {
+      closeLocal(reason);
+      return;
+    }
+    for (const peer of peers) peer.close(reason);
+  };
+
   const enterPathEdit = () => {
-    if (pathEditMode) return;
+    if (isEditing()) return;
     ctx.blurTerminal();
-    pathEditMode = true;
+    // one editor at a time: this pane's editor supersedes the other pane's
+    // (two focused Inputs = one of them is stale)
+    exitPathEdit("superseded");
+    pathEdit = { kind: "editing" };
     // the editor owns the keyboard now — text pointer until it lands
     ctx.setPointer?.("text");
     renderCrumbs();
   };
 
+  // the crumbs box: the first click ARMS the editor, the second (inside the
+  // window) opens it. The arm is a phase of the machine, not a separate
+  // timestamp that could survive the edit.
+  const armOrOpenPathEdit = (): void => {
+    if (isEditing()) return;
+    const at = nowMs();
+    if (pathEdit.kind === "armed" && at - pathEdit.at < PATH_EDIT_DOUBLE_CLICK_MS) {
+      pathEdit = { kind: "closed" };
+      enterPathEdit();
+      return;
+    }
+    pathEdit = { kind: "armed", at };
+  };
+
+  // publish this toolbar's LOCAL closer to the app-wide registry
+  ctx.pathEditPeers?.push({ isOpen: isEditing, close: closeLocal });
+
   const renderCrumbs = () => {
     const box = ctx.byId(id("crumbs"));
     if (!box) return;
 
-    if (pathEditMode) {
+    if (isEditing()) {
       ctx.destroyChildren(box);
       // resolve once and construct only on a miss: both branches share this
       // binding, and a `let` would lose its narrowing inside the enter handler
@@ -294,9 +368,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
             ctx.notify(`No such folder · ${target}`, "navigate", "error");
             return;
           }
-          pathEditMode = false;
-          ctx.setPointer?.("default");
-          renderCrumbs();
+          // the commit goes through the SAME closer as every other exit: a
+          // direct state write here skipped whatever the closer does (the
+          // trace, the other panes' editors, the arm reset)
+          exitPathEdit("commit");
           ctx.navigate(target);
         });
         // focused editors can consume keys before the global handler; intercept
@@ -304,7 +379,7 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
         const prevHandler = input.handleKeyPress?.bind(input);
         input.handleKeyPress = (key: KeyEvent) => {
           if (key?.name === "escape") {
-            exitPathEdit();
+            exitPathEdit("cancel");
             return true;
           }
           return prevHandler ? prevHandler(key) : false;
@@ -484,16 +559,10 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           columnGap: 1,
           overflow: "hidden",
           onMouseDown: () => {
-            const now = Date.now();
-            if (pathEditMode) return;
+            if (isEditing()) return;
             ctx.focusPane?.();
             ctx.closeFileMenu();
-            if (now - crumbClickAt < 350) {
-              crumbClickAt = 0;
-              enterPathEdit();
-            } else {
-              crumbClickAt = now;
-            }
+            armOrOpenPathEdit();
           },
         }),
       ),
@@ -509,6 +578,6 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
     hoverBtn,
     enterPathEdit,
     exitPathEdit,
-    pathEditMode: (): boolean => pathEditMode,
+    pathEditMode: isEditing,
   };
 };

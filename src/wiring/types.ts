@@ -84,6 +84,9 @@ export type ChromeWiring = {
   topbarIntro: ReturnType<typeof makeTopbarAnim>;
   toolbars: [ReturnType<typeof makeToolbar>, ReturnType<typeof makeToolbar>];
   activeToolbar: () => ReturnType<typeof makeToolbar>;
+  // is the inline path editor open in ANY pane? (the editor owns the
+  // keyboard focus app-wide — see the toolbar's path-edit registry)
+  anyPathEditOpen: () => boolean;
   notify: ReturnType<typeof makeNotify>["notify"];
   notifySticky: ReturnType<typeof makeNotify>["notifySticky"];
   ensureSudo: ReturnType<typeof makeEnsureSudo>;

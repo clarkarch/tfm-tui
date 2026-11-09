@@ -17,7 +17,7 @@ import { buildMountArgs, buildUnmountArgs, gvfsRoot, takeGioPrompt, type GioProm
 import { makeNetworkActions, type GioResult } from "../fs/netmount";
 import { makeMenu, MENU_W } from "../ui/ui-menu";
 import { makeChrome } from "../ui/ui-chrome";
-import { makeToolbar, toolbarItemIds, crumbItemIds } from "../ui/ui-toolbar";
+import { makeToolbar, toolbarItemIds, crumbItemIds, type PathEditPeer } from "../ui/ui-toolbar";
 import { buildAppContainer, buildTitle } from "../ui/ui-boot-layout";
 import { warmEmbeddedIcons, warmSvgRenderer, shouldWarmBootCaches } from "../ui/icons";
 import type { NodeLike } from "../lib/node-like";
@@ -35,7 +35,7 @@ import { upsertRecentXbel } from "../fs/recent";
 import { appForFile, makeLaunchAppAsRoot, makeOpenAsRoot } from "../fs/apps";
 import { makeDialogs } from "../ui/ui-dialogs";
 import { destroyChildren, errMessage, type Cursor } from "../lib/uiutil";
-import { dlog } from "../lib/log";
+import { dlog, debugLog } from "../lib/log";
 import type { CoreWiring } from "./core";
 import type { FileopsWiring, GridWiring, NavWiring } from "./types";
 
@@ -246,6 +246,11 @@ export const wireChrome = async (deps: {
   // --- Toolbars — widget lives in ./ui-toolbar (nav buttons, crumbs, inline
   // path edit, sort/search buttons). ONE PER PANE, each with its own id prefix
   // so the nodes can coexist in the renderable registry. ---
+  // The path editor is APP-WIDE: its Input holds the keyboard focus, so a
+  // navigation (or a grid click) in one pane must cancel the editor in the
+  // other too. The registry holds every toolbar's local closer; the ONE
+  // public closer fans out through it.
+  const pathEditPeers: PathEditPeer[] = [];
   const makePaneToolbar = (pane: 0 | 1) =>
     makeToolbar({
       prefix: `tfm-p${pane}-`,
@@ -279,6 +284,8 @@ export const wireChrome = async (deps: {
       // the search button goes through the search module: it owns the open
       // state (the router reads the module, not the input node)
       toggleSearch: () => nav.searches[pane].toggleSearch(),
+      pathEditPeers,
+      log: debugLog,
       home,
       setPointer,
     });
@@ -684,6 +691,10 @@ export const wireChrome = async (deps: {
     topbarIntro,
     toolbars,
     activeToolbar: () => toolbars[core.panes.active],
+    // is a path editor open in ANY pane? the editor owns the keyboard focus
+    // wherever it lives, so the router / the grid click / the hover drawer
+    // must treat it as open app-wide (not just in the focused pane)
+    anyPathEditOpen: () => pathEditPeers.some((peer) => peer.isOpen()),
     notify,
     notifySticky,
     notifyStickyText,

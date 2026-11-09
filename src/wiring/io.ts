@@ -339,8 +339,8 @@ export const wireBoot = (deps: {
         closeFileMenu: chrome.menu.closeFileMenu,
         clearSearch: nav.clearSearch,
         blurTerminal: fileops.terminal.blurTerminal,
-        pathEditMode: () => chrome.activeToolbar().pathEditMode(),
-        exitPathEdit: () => chrome.activeToolbar().exitPathEdit(),
+        pathEditMode: () => chrome.anyPathEditOpen(),
+        exitPathEdit: () => chrome.activeToolbar().exitPathEdit("navigate"),
         isRenaming: gridFoundation.rename.isRenaming,
         finishInlineRename: gridFoundation.rename.finishInlineRename,
         clearTileSelection: gridFoundation.selection.clearTileSelection,
@@ -593,7 +593,7 @@ export const wireHoverDrawer = (deps: {
     terminalFocused: () => fileops.terminal.ownsKeyboard(),
     blocked: () =>
       core.floats.depth() > 0 ||
-      chrome.activeToolbar().pathEditMode() ||
+      chrome.anyPathEditOpen() ||
       gridFoundation.rename.isRenaming() ||
       dragActive(dragState()),
     setEffectiveSidebar: (n) => {

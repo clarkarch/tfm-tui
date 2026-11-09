@@ -4,7 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { destroyChildren } from "../lib/uiutil";
-import { buildCrumbs, crumbItemIds, isNavigableTarget, makeToolbar, toolbarItemIds } from "./ui-toolbar";
+import {
+  buildCrumbs,
+  crumbItemIds,
+  isNavigableTarget,
+  makeToolbar,
+  type PathEditPeer,
+  toolbarItemIds,
+} from "./ui-toolbar";
 import { RECENT_URI } from "../fs/uri";
 import { archiveUri } from "../fs/archive-scheme";
 import type { MaybeNode } from "../lib/node-like";
@@ -92,6 +99,13 @@ const mkToolbar = (
     onAnimate?: (ids: string[]) => void;
     cwdOf?: () => string;
     toggleSearch?: () => void;
+    // the app-wide path-editor registry (both panes join the same one)
+    pathEditPeers?: PathEditPeer[];
+    // virtual clock for the double-click window
+    now?: () => number;
+    // debug trace sink (the wiring passes the debug log)
+    log?: (msg: string) => void;
+    navigate?: (dir: string) => void;
   } = {},
 ) =>
   makeToolbar({
@@ -110,7 +124,7 @@ const mkToolbar = (
     setIconState: () => {},
     closeFileMenu: () => {},
     blurTerminal: () => {},
-    navigate: () => {},
+    navigate: hooks.navigate ?? (() => {}),
     notify: () => {},
     canBack: () => false,
     canFwd: () => false,
@@ -121,6 +135,9 @@ const mkToolbar = (
     cwd: () => hooks.cwdOf?.() ?? cwd,
     animateCrumbs: hooks.onAnimate,
     toggleSearch: hooks.toggleSearch ?? (() => {}),
+    pathEditPeers: hooks.pathEditPeers,
+    now: hooks.now,
+    log: hooks.log,
     home: "/home/u",
   });
 
@@ -380,6 +397,121 @@ describe("renderCrumbs directory-change animation", () => {
       expect(input).toBeTruthy();
       // stripped re-seed, not the stale pre-tick path
       expect(input.value).toBe("/x/betagamma");
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+});
+
+// --- The inline path editor: ONE machine (closed → armed → editing) with ONE
+// closer. The old shape was a boolean plus a timestamp sentinel, and every
+// external exit was routed to the ACTIVE pane only: pane 1's editor kept the
+// keyboard focus and swallowed typing after a navigation in pane 0.
+
+describe("the inline path editor", () => {
+  // press the crumbs box (the empty area right of the crumbs — a crumb child
+  // would navigate, the box itself arms the double-click)
+  const pressCrumbs = async (t: TestRendererSetup, prefix: string): Promise<void> => {
+    const box = t.renderer.root.findDescendantById(`${prefix}crumbs`) as unknown as {
+      screenX: number;
+      screenY: number;
+    };
+    expect(box).toBeTruthy();
+    await t.mockMouse.pressDown(box.screenX + 60, box.screenY);
+  };
+
+  test("closing the path editor cancels it in EVERY pane", async () => {
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      // both panes join the SAME registry — the editor holds the keyboard
+      // focus, so cancelling it in one pane must cancel it in the other
+      const peers: PathEditPeer[] = [];
+      const tb0 = mkToolbar(t, "tfm-p0-", "/x/alpha", { pathEditPeers: peers });
+      const tb1 = mkToolbar(t, "tfm-p1-", "/x/beta", { pathEditPeers: peers });
+      t.renderer.root.add(tb0.makeToolbarShell());
+      t.renderer.root.add(tb1.makeToolbarShell());
+      await t.renderOnce();
+      tb1.enterPathEdit();
+      expect(tb1.pathEditMode()).toBe(true);
+      // what a navigation does: the ACTIVE pane's closer fires
+      tb0.exitPathEdit("navigate");
+      expect(tb1.pathEditMode()).toBe(false);
+      expect(tb0.pathEditMode()).toBe(false);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a committed path closes the editor through the SAME closer", async () => {
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-toolbar-"));
+    try {
+      const logs: string[] = [];
+      const navs: string[] = [];
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
+        log: (m) => logs.push(m),
+        navigate: (d) => navs.push(d),
+      });
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+      tb.renderCrumbs();
+      tb.enterPathEdit();
+      await t.renderOnce();
+      const input = t.renderer.root.findDescendantById("tfm-p0-path-input") as any;
+      expect(input).toBeTruthy();
+      input.value = dir;
+      input.submit();
+      expect(tb.pathEditMode()).toBe(false);
+      expect(navs).toEqual([dir]);
+      // the commit went through the ONE closer — a direct state write in the
+      // enter handler skipped it (and everything the closer does)
+      expect(logs).toContain("pathedit: closed (commit)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a committed path leaves no double-click arm behind", async () => {
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "tfm-toolbar-"));
+    try {
+      let clock = 1_000;
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", { now: () => clock, navigate: () => {} });
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+      // a double-click on the crumbs opens the editor
+      await pressCrumbs(t, "tfm-p0-");
+      clock += 10;
+      await pressCrumbs(t, "tfm-p0-");
+      expect(tb.pathEditMode()).toBe(true);
+      // commit → the editor closes
+      const input = t.renderer.root.findDescendantById("tfm-p0-path-input") as any;
+      expect(input).toBeTruthy();
+      input.value = dir;
+      input.submit();
+      expect(tb.pathEditMode()).toBe(false);
+      // the arm died with the edit: the next click must NOT re-open the
+      // editor (the old timestamp sentinel survived the commit)
+      await pressCrumbs(t, "tfm-p0-");
+      expect(tb.pathEditMode()).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a second click outside the double-click window does not open the editor", async () => {
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      let clock = 1_000;
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", { now: () => clock });
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+      await pressCrumbs(t, "tfm-p0-");
+      clock += 1_000; // the window (350ms) has passed
+      await pressCrumbs(t, "tfm-p0-");
+      expect(tb.pathEditMode()).toBe(false);
     } finally {
       await t.dispose(); // 0.6.0: destroy + await closed
     }

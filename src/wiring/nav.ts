@@ -205,7 +205,7 @@ export const wireNav = (deps: {
   const { canBack, canFwd, goBack, goFwd, navigate } = makeNav(core.state, {
     renderAll,
     clearSearch: () => clearSearch(),
-    exitPathEdit: () => getChrome().activeToolbar().exitPathEdit(),
+    exitPathEdit: () => getChrome().activeToolbar().exitPathEdit("navigate"),
     closeFileMenuIfOpen: () => {
       if (getChrome().menu.isFileMenuOpen()) getChrome().menu.closeFileMenu();
     },

@@ -163,15 +163,16 @@ export const wireKeymap = (deps: {
     escMenu: { ...settings.escMenu, isOpen: () => floats.isOpen("escmenu") },
     termOwnsKeyboard: fileops.terminal.ownsKeyboard,
     // ONE predicate for the inline path editor: the toolbar's edit mode OR
-    // the input being on screen (the old pair of booleans could disagree)
-    pathEditOpen: () =>
-      chrome.activeToolbar().pathEditMode() || !!byId(`tfm-p${core.panes.active}-path-input`)?.visible,
+    // the input being on screen (the old pair of booleans could disagree).
+    // App-WIDE: the editor owns the keyboard focus in whichever pane opened
+    // it, so the router must see it even when the other pane is focused.
+    pathEditOpen: () => chrome.anyPathEditOpen() || !!byId(`tfm-p${core.panes.active}-path-input`)?.visible,
     searchQuery: () => nav.activeSearch().getQuery(),
     // the search module owns the open state (the input node's visible flag
     // is its projection) — the router must never read the node
     searchVisible: () => nav.activeSearch().isOpen(),
     clearSearch: nav.clearSearch,
-    exitPathEdit: () => chrome.activeToolbar().exitPathEdit(),
+    exitPathEdit: () => chrome.activeToolbar().exitPathEdit("cancel"),
     beginTypeToSearch: nav.beginTypeToSearch,
     renderGrid: grid.renderGrid,
     renderPreview: grid.renderPreview,
