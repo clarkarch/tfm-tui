@@ -141,14 +141,12 @@ type ChromeCtx = {
   trashPaths(paths: string[]): Promise<void>;
   moveInto(destDir: string, items: ClipItem[]): Promise<void>;
   // per-row hover nudge (icon lift, see ui-sidebar-hover) — built in the
-  // chrome wiring; paint stays owned by normalizePlaces below. forgetStale
-  // drops hover ownership of pre-rebuild nodes (same rebuild path as above).
-  // Boolean seam: true = a real drop (dead nodes forgotten), false = nothing
-  // owned — lets tests tell a live-hover rebuild from a redundant call.
+  // chrome wiring; paint stays owned by normalizePlaces below. The animator
+  // reconciles its own ownership when a rebuild kills the row nodes, so no
+  // "forget the stale refs" call is needed here.
   hoverRow(key: string, hovered: boolean): void;
   // true while a modal owns the screen — no row hover paint behind the dim
   modalOpen?(): boolean;
-  forgetStaleHover?(): boolean;
   // replay the cold-boot sidebar intro (built in the chrome wiring): the lazy
   // mounts refresh rebuilds the sidebar right after the first render and its
   // fresh nodes never saw the intro's frame-0 staging. Optional so old fakes
@@ -543,11 +541,9 @@ export const makeChrome = (ctx: ChromeCtx) => {
     // First-render paranoia: renderSidebar runs during renderAll BEFORE the
     // boot intro ever played — replaySidebarIntro is a no-op until the intro
     // played once (tracked in the chrome wiring), so the boot wave isn't
-    // doubled and navigate-time rebuilds stay silent. Hover ownership of the
-    // dead nodes is forgotten first, or the fresh rows' lifts never release.
-    try {
-      ctx.forgetStaleHover?.();
-    } catch {}
+    // doubled and navigate-time rebuilds stay silent. The hover animator
+    // reconciles its own ownership (the row nodes it owned just died), so
+    // nothing has to be told about the rebuild from here.
     try {
       ctx.replaySidebarIntro?.();
     } catch {}

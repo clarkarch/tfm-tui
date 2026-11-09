@@ -401,28 +401,10 @@ describe("renderSidebar", () => {
       // Devices rows and rebuilds — the fresh nodes must cascade, not arrive
       // settled.
       const replays: number[] = [];
-      const staleDrops: number[] = [];
       // the wiring's guard: replaySidebarIntro is a no-op until the boot intro
       // played once (playedAt seam here) — the widget calls unconditionally
       // and the guard decides. First build replays nothing; a rebuild inside
       // the intro window replays once; later rebuilds stay silent.
-      // forgetStaleHover answers through a REAL animator (empty refs =
-      // nothing owned = false), so the test pins the call shape while
-      // ui-sidebar-hover.test.ts pins the behavior.
-      const { makeSidebarHover } = await import("./ui-sidebar-hover");
-      const staleHover = makeSidebarHover({
-        renderer: () => null as any,
-        byId: () => null,
-        rowRefs: () => new Map(),
-        hoverOpts: () => ({
-          enabled: true,
-          ms: 0,
-          slideCells: 1,
-          ease: "ease-out",
-          direction: "left",
-          includeLabel: false,
-        }),
-      });
       let playedAt = 0;
       let sigNow = "intro-replay";
       const hostId = "tfm-places-intro-replay";
@@ -468,11 +450,6 @@ describe("renderSidebar", () => {
         stateCwd: () => HOME,
         connectServer: () => {},
         hoverRow: () => {},
-        forgetStaleHover: () => {
-          const dropped = staleHover.forgetStale();
-          if (dropped) staleDrops.push(1);
-          return dropped;
-        },
         replaySidebarIntro: () => {
           if (playedAt) replays.push(1);
         },
@@ -481,19 +458,15 @@ describe("renderSidebar", () => {
       await rt.renderOnce();
       expect(replays.length).toBe(0); // first build: the boot step hasn't played yet
       // the boot intro plays; mounts land inside the window: exactly one replay.
-      // nothing is hovered here, so the stale-hover forget stays a silent
-      // no-op (its true path is pinned in ui-sidebar-hover.test.ts).
       playedAt = 1;
       sigNow = "intro-replay-2";
       introChrome.renderSidebar();
       await rt.renderOnce();
       expect(replays).toHaveLength(1);
-      expect(staleDrops).toHaveLength(0);
       // same sig again: fast path, no replay, no storm
       introChrome.renderSidebar();
       await rt.renderOnce();
       expect(replays).toHaveLength(1);
-      expect(staleDrops).toHaveLength(0);
     } finally {
       await rt.dispose(); // 0.6.0: destroy + await closed
     }

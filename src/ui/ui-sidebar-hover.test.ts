@@ -141,11 +141,12 @@ describe("makeSidebarHover", () => {
     expect(refs.get("tfm-place-0")!.rowId).toBe("tfm-place-0");
   });
 
-  test("forgetStale drops ownership of dead nodes so the fresh row's out releases", () => {
+  test("a rebuild drops the stale ownership so the fresh row lifts and releases", () => {
     // the mounts-refresh race: hover owns the old row, the sidebar rebuilds,
-    // renderSidebar forgets the stale ownership — then the synthetic over on
-    // the fresh row lifts it and the mouse-out releases it. Without the
-    // forget, the out no-ops against the dead refs and the fresh lift sticks.
+    // and the animator notices the rebuild ITSELF (no external "forget" call)
+    // — then the synthetic over on the fresh row lifts it and the mouse-out
+    // releases it. Without the reconciliation the out no-ops against the
+    // dead refs and the fresh lift sticks.
     const { hover, nodes } = setup();
     hover.playHover("tfm-place-0", true);
     // rebuild: fresh nodes under the same ids
@@ -154,7 +155,8 @@ describe("makeSidebarHover", () => {
     nodes.set("tfm-place-0", { id: "tfm-place-0" });
     nodes.set("tfm-place-0-icon", freshIcon);
     nodes.set("tfm-place-0-label", freshLabel);
-    expect(hover.forgetStale()).toBe(true);
+    // the mouse-out after the rebuild — the stale ownership must not swallow it
+    hover.playHover("tfm-place-0", false);
     hover.playHover("tfm-place-0", true);
     expect(freshIcon.translateX).toBe(-1);
     hover.playHover("tfm-place-0", false);
@@ -162,18 +164,17 @@ describe("makeSidebarHover", () => {
     expect(freshLabel.translateX).toBe(0);
   });
 
-  test("forgetStale keeps live ownership (a repaint without a rebuild changes nothing)", () => {
+  test("a repaint without a rebuild keeps the lift (the synthetic over does not settle it)", () => {
+    // the reconcile only drops a DEAD ownership: a live row keeps its lift
+    // when the repaint re-fires the over on the stationary cursor
     const { hover, nodes } = setup();
     hover.playHover("tfm-place-0", true);
-    expect(hover.forgetStale()).toBe(false);
+    expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(-1);
+    hover.playHover("tfm-place-0", true);
+    expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(-1);
     // still owned: the out releases the lift
     hover.playHover("tfm-place-0", false);
     expect((nodes.get("tfm-place-0-icon") as any).translateX).toBe(0);
-  });
-
-  test("forgetStale with nothing owned is a silent no-op", () => {
-    const { hover } = setup();
-    expect(hover.forgetStale()).toBe(false);
   });
 });
 
@@ -245,5 +246,57 @@ describe("makeSidebarHover (engine)", () => {
     expect((byId("sg-icon") as any).translateX).toBe(-2);
     step(50);
     expect((byId("sg-icon") as any).translateX).toBe(-4);
+  });
+
+  test("a rebuild releases the stale lift without an external call", async () => {
+    // the animator must notice the rebuild ITSELF: the sidebar rebuilds under
+    // the pointer, the row nodes are replaced under the SAME ids, and the
+    // gliding lift must not land on the FRESH row. A stale write strands the
+    // nudge — nothing releases it, because the fresh row's own out never
+    // arrives (the old row node is gone, so ITS out never fires either).
+    // Nothing external may be required to release the stale lift.
+    t.renderer.root.add(Box({ id: "sr-row", width: 20, height: 1 }));
+    t.renderer.root.add(Box({ id: "sr-icon", width: 2, height: 1 }));
+    await t.renderOnce();
+    const byId = (id: string) => t.renderer.root.findDescendantById(id);
+    const refs = new Map<string, SidebarRowRef>([
+      ["sr-row", { rowId: "sr-row", iconSlotId: "sr-icon", labelId: "sr-label", selected: false }],
+    ]);
+    const hover = makeSidebarHover({
+      renderer: () => t.renderer,
+      byId,
+      rowRefs: () => refs,
+      hoverOpts: () => ({
+        enabled: true,
+        ms: 100,
+        slideCells: 4,
+        ease: "linear",
+        direction: "left",
+        includeLabel: false,
+      }),
+    });
+    hover.playHover("sr-row", true);
+    // the sidebar rebuilds: the old row nodes die, fresh ones take their ids
+    const oldRow = byId("sr-row");
+    const oldIcon = byId("sr-icon");
+    t.renderer.root.remove(oldRow!);
+    t.renderer.root.remove(oldIcon!);
+    t.renderer.root.add(Box({ id: "sr-row", width: 20, height: 1 }));
+    t.renderer.root.add(Box({ id: "sr-icon", width: 2, height: 1 }));
+    await t.renderOnce();
+    // the pointer leaves the row: the out must not be swallowed by the stale
+    // ownership (no external "forget" call — the animator owns the rebuild)
+    hover.playHover("sr-row", false);
+    // the stale glide ticks: it must not nudge the FRESH row
+    getTimelineEngine(t.renderer).update(50);
+    await t.renderOnce();
+    expect((byId("sr-icon") as any).translateX).toBe(0);
+    // the stale ownership is gone: the fresh row lifts and releases normally
+    hover.playHover("sr-row", true);
+    getTimelineEngine(t.renderer).update(100); // the glide runs to its end
+    await t.renderOnce();
+    expect((byId("sr-icon") as any).translateX).toBe(-4);
+    hover.playHover("sr-row", false);
+    expect((byId("sr-icon") as any).translateX).toBe(0);
   });
 });

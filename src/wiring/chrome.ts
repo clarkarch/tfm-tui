@@ -198,9 +198,6 @@ export const wireChrome = async (deps: {
     home: () => home,
     connectServer,
     hoverRow: (key, hovered) => hoverRowImpl(key, hovered),
-    // boolean seam: only a REAL drop (dead nodes forgotten) counts — a
-    // redundant call stays silent, so tests can tell rebuild from no-op
-    forgetStaleHover: () => sidebarHover.forgetStale(),
     // mounts-refresh rebuild (below) replays the boot intro on fresh nodes
     replaySidebarIntro: () => replaySidebarIntro(),
     setPointer,

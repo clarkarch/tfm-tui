@@ -6,9 +6,13 @@
 // and today's instant snap is untouched.
 //
 // Synchronous, one lifted row at a time (a new over settles the abandoned
-// row); every node write is try/catch and node identity is re-checked via
-// byId, so a sidebar rebuild under a stationary cursor can never write to a
-// dead row. No timeline: a whole-cell translate cannot tween. ---
+// row). ONE state record ("none" | "lifted") + ONE liveness rule: the
+// animator reconciles its own ownership when a sidebar rebuild kills the
+// row nodes — the fresh rows take the SAME ids, so a write that is not
+// guarded by "do we still own a LIVE row?" lands on the NEW row and strands
+// the nudge (nothing releases it: the old row's out never fires, the fresh
+// row was never lifted). No external "a rebuild happened" call is needed.
+// No timeline: a whole-cell translate cannot tween. ---
 
 import { hoverOffset, makeHoverTween, type EaseKey } from "./ui-grid-anim";
 import type { SidebarHoverOpts } from "../config/config-schema";
@@ -31,28 +35,43 @@ type SidebarHoverCtx = {
   hoverOpts(): SidebarHoverOpts;
 };
 
-type HoverCur = { key: string; refs: SidebarRowRef; node: MaybeNode };
+// ONE state record. The old code had a nullable `current` + a separate
+// node-identity probe + an EXTERNAL obligation ("a rebuild happened, forget
+// your refs") that every rebuild path had to remember — and a path that
+// forgot it stranded the nudge.
+type SidebarHoverState = { kind: "none" } | { kind: "lifted"; key: string; refs: SidebarRowRef; node: MaybeNode };
 
 export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
-  let current: HoverCur | null = null;
+  let state: SidebarHoverState = { kind: "none" };
   // one reused tween drives the hover-in glide when duration > 0 (ms 0 = snap)
   const tween = makeHoverTween(ctx.renderer);
 
-  // A row copied from a previous build may have been destroyed by a sidebar
-  // rebuild, so only touch the node refs when byId still resolves to them.
-  const ownedNode = (cur: HoverCur | null): MaybeNode => {
-    if (!cur) return null;
+  // is the owned row still the LIVE one? A sidebar rebuild replaces the row
+  // nodes under the same ids, so the identity check IS the rebuild probe.
+  const ownedLive = (st: SidebarHoverState): boolean => {
+    if (st.kind !== "lifted") return false;
     try {
-      const node = ctx.byId(cur.refs.rowId);
-      return node === cur.node ? node : null;
+      return ctx.byId(st.refs.rowId) === st.node;
     } catch {
-      return null;
+      return false;
     }
   };
 
+  // The animator notices a rebuild ITSELF: the owned row node dies with the
+  // rebuild (the fresh rows take the same ids), so the stale ownership is
+  // reconciled away right here. Returns whether the ownership is still LIVE:
+  // every write asks first — a stale write would land on the fresh row.
+  const reconcile = (): boolean => {
+    if (state.kind !== "lifted") return false;
+    if (ownedLive(state)) return true;
+    state = { kind: "none" };
+    return false;
+  };
+
   // one write, dx/dy per node (the lift path passes the delta, the release
-  // passes 0/0 — includeLabel handled at the lift site)
-  const writeLift = (refs: SidebarRowRef, dx: number, dy: number): void => {
+  // passes 0/0 — includeLabel handled at the lift site). The nodes are
+  // resolved LIVE, so the caller must own a live row (see reconcile).
+  const writeLift = (refs: SidebarRowRef, dx: number, dy: number, rideLabel: boolean): void => {
     try {
       const slot = refs.iconSlotId ? ctx.byId(refs.iconSlotId) : null;
       if (slot) {
@@ -61,21 +80,28 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
       }
       const label = refs.labelId ? ctx.byId(refs.labelId) : null;
       if (label) {
-        label.translateX = dx;
-        label.translateY = dy;
+        label.translateX = rideLabel ? dx : 0;
+        label.translateY = rideLabel ? dy : 0;
       }
     } catch {}
   };
 
-  const dropLift = (cur: HoverCur | null): void => {
-    if (!cur) return;
-    if (!ownedNode(cur)) return;
+  // drop the lift we own: stop the glide (ALWAYS — a stale glide must not
+  // keep running) and put the row back at rest.
+  const dropLift = (st: SidebarHoverState): void => {
+    if (st.kind !== "lifted") return;
     tween.stop();
-    writeLift(cur.refs, 0, 0);
+    // a dead row has nothing to write (its nodes are gone; the fresh row was
+    // never lifted by us)
+    if (!ownedLive(st)) return;
+    writeLift(st.refs, 0, 0, true);
   };
 
   const playHover = (key: string, hovered: boolean): void => {
     try {
+      // a rebuild under the pointer invalidates the ownership — the animator
+      // sees it (the owned row node is dead), so no external call is needed
+      reconcile();
       const refs = ctx.rowRefs().get(key);
       if (!refs) return;
       const node = ctx.byId(refs.rowId);
@@ -85,18 +111,18 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
       // feature off = today's instant snap (normalizePlaces paints); a lift
       // owned while it was on is still released so no row strands shifted
       if (!opts.enabled) {
-        if (current) {
-          dropLift(current);
-          current = null;
+        if (state.kind === "lifted") {
+          dropLift(state);
+          state = { kind: "none" };
         }
         return;
       }
 
       // an out always releases a lift we own
       if (!hovered) {
-        if (current?.key === key) {
-          dropLift(current);
-          current = null;
+        if (state.kind === "lifted" && state.key === key) {
+          dropLift(state);
+          state = { kind: "none" };
         }
         return;
       }
@@ -106,80 +132,54 @@ export const makeSidebarHover = (ctx: SidebarHoverCtx) => {
       // over on the stationary cursor after the row's selection flipped with
       // no out event, and the lift must not survive into the selected state
       if (refs.selected) {
-        if (current?.key === key) {
-          dropLift(current);
-          current = null;
+        if (state.kind === "lifted" && state.key === key) {
+          dropLift(state);
+          state = { kind: "none" };
         }
         return;
       }
 
       // sweep: the pointer moved to another row without an out landing first
-      if (current && current.key !== key) {
-        dropLift(current);
-        current = null;
+      if (state.kind === "lifted" && state.key !== key) {
+        dropLift(state);
+        state = { kind: "none" };
       }
       const off = hoverOffset(opts.direction, opts.slideCells);
-      const nextCur: HoverCur = { key, refs, node };
-      current = nextCur;
+      state = { kind: "lifted", key, refs, node };
       // writes the offset at hover progress p; the label rides only when
-      // include-label is on. p=1 settled hover, p=0 rest.
-      const writeAt = (cur: HoverCur | null, p: number): void => {
-        if (!cur) return;
-        try {
-          const slot = cur.refs.iconSlotId ? ctx.byId(cur.refs.iconSlotId) : null;
-          if (slot) {
-            slot.translateX = Math.round(off.dx * p);
-            slot.translateY = Math.round(off.dy * p);
-          }
-          const label = cur.refs.labelId ? ctx.byId(cur.refs.labelId) : null;
-          if (label) {
-            const wl = opts.includeLabel;
-            label.translateX = wl ? Math.round(off.dx * p) : 0;
-            label.translateY = wl ? Math.round(off.dy * p) : 0;
-          }
-        } catch {}
+      // include-label is on. p=1 settled hover, p=0 rest. The glide asks the
+      // animator first: a rebuild kills the owned row, and a stale write on
+      // the fresh row strands the nudge.
+      const writeAt = (p: number): void => {
+        if (!reconcile()) return;
+        const st = state;
+        if (st.kind !== "lifted") return;
+        writeLift(st.refs, Math.round(off.dx * p), Math.round(off.dy * p), opts.includeLabel);
       };
       if (opts.ms > 0) {
-        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, (p) => writeAt(nextCur, p));
+        tween.run(opts.ms, opts.ease as EaseKey, 0, 1, (p) => writeAt(p));
       } else {
         tween.stop();
-        writeAt(nextCur, 1);
+        writeAt(1);
       }
     } catch {
       // never strand a lifted row when an unexpected lookup fails
       try {
-        dropLift(current);
+        dropLift(state);
       } catch {}
-      current = null;
+      state = { kind: "none" };
     }
-  };
-
-  // the hover drawer / mounts refresh / watcher rebuild rows under a live
-  // hover: rowRefs re-resolve to FRESH nodes while `current` still owns the
-  // dead ones. ownedNode identity-checks the write, so a repaint can never
-  // touch a destroyed row — but the stale ownership must ALSO be forgotten,
-  // or the next out/sweep no-ops against the dead refs and the fresh row's
-  // lift (re-applied by the synthetic over after the rebuild) is never
-  // released. Called by renderSidebar after every rebuild. Returns whether
-  // anything was actually forgotten (lets callers — and tests — tell a real
-  // rebuild from a redundant call).
-  const forgetStale = (): boolean => {
-    if (!current) return false;
-    if (!ownedNode(current)) {
-      current = null;
-      return true;
-    }
-    return false;
   };
 
   // release any owned lift. wiring/chrome calls this when a modal takes the
   // screen so a row hovered at that instant can't stay nudged behind the dim.
   const release = (): void => {
-    if (!current) return;
-    const cur = current;
-    current = null;
-    dropLift(cur);
+    reconcile();
+    if (state.kind !== "lifted") return;
+    const st = state;
+    state = { kind: "none" };
+    dropLift(st);
   };
 
-  return { playHover, forgetStale, release };
+  return { playHover, release };
 };
