@@ -9,7 +9,7 @@ import { makeChrome, tabChipMaxWidth, tabTitle } from "./ui-chrome";
 import { dispatchDrag, resetDragState } from "../lib/drag-state";
 import type { ClipItem } from "../lib/file-op-protocol";
 import { defaultConfig } from "../config/config-schema";
-import { loadSystemPlaces, resetSystemPlaces } from "../fs/places";
+import { loadSystemPlaces, resetSystemPlaces, type SidebarVisibility } from "../fs/places";
 import type { NotifyLevel } from "../lib/notify-level";
 import { cursorAt, NO_CURSOR, type Cursor } from "../lib/uiutil";
 import type { Theme } from "../config/config";
@@ -76,6 +76,9 @@ const armDrag = (keys: ClipItem[] | null, ctrl = false): void => {
 
 // [ui] sidebar-section-titles: names each group in place of the dividers
 let sectionTitles: boolean;
+// [ui] sidebar-show-*: which groups the sidebar renders. A hidden group
+// shifts every row below it — the rebuild the hover must survive.
+let sidebarSections: SidebarVisibility = {};
 // fake icon-slot id sequence: the real makeIconSlot sequences ids (iconSeq), so
 // a constant one would resolve the FIRST tab's element for every tab
 let iconSlots = 0;
@@ -121,6 +124,7 @@ beforeAll(async () => {
   kbIdx = NO_CURSOR;
   modalOpen = false;
   sectionTitles = false;
+  sidebarSections = {};
   // eject/mount seams: written by the eject describe below; absent here so
   // the shared fakes keep today's ctx shape
   notifies = [];
@@ -145,6 +149,8 @@ beforeAll(async () => {
     tabBar: () => tabBar,
     // [ui] sidebar-section-titles (absent in the old fakes = dividers only)
     sectionTitles: () => sectionTitles,
+    // [ui] sidebar-show-*: a hidden group shifts the rows below it
+    sidebarSections: () => sidebarSections,
     availW: () => availWVal,
     rasterSig: () => rasterSig,
     renderAll: () => {},
@@ -238,6 +244,7 @@ beforeAll(async () => {
 // test file in the process.
 beforeEach(() => {
   resetSystemPlaces();
+  sidebarSections = {};
 });
 
 afterAll(async () => {
@@ -798,6 +805,37 @@ describe("renderTabbar", () => {
 });
 
 describe("normalizePlaces (hover/kb focus)", () => {
+  // the row a place renders in — the sidebar's row ids are index-keyed, so
+  // the id MOVES when the list changes
+  const rowIdOf = (label: string): string => chrome.placesHost.find((r) => r.place.label === label)?.rowId ?? "";
+
+  test("a sidebar rebuild keeps the hover on the SAME place", async () => {
+    // the hover used to be an INDEX into a list that is destroyed and
+    // rebuilt while the index survives: after a rebuild the tint landed on
+    // whatever row took that index — a DIFFERENT place
+    cwd = HOME;
+    chrome.renderSidebar();
+    await t.renderOnce();
+    // hover the Starred row
+    chrome.setMousePlace(2);
+    const starredBefore = rowIdOf("Starred");
+    expect(starredBefore).toBeTruthy();
+    expect(bgInts(starredBefore)).toEqual(hexInts(colors.hoverBg));
+
+    // the places list changes: hiding "Recent" shifts every row below it
+    sidebarSections = { showRecent: false };
+    chrome.renderSidebar();
+    await t.renderOnce();
+    const starredAfter = rowIdOf("Starred");
+    // the row really moved
+    expect(starredAfter).not.toBe(starredBefore);
+    // … and the hover followed the PLACE, not the index
+    expect(bgInts(starredAfter)).toEqual(hexInts(colors.hoverBg));
+    // the row that took the old index is NOT hovered
+    expect(bgInts("tfm-place-2")).toEqual(hexInts(colors.sidebarBg));
+    chrome.clearMousePlace();
+  });
+
   test("setMousePlace lights exactly one non-selected row and clearMousePlace restores it", async () => {
     cwd = HOME;
     chrome.renderSidebar();

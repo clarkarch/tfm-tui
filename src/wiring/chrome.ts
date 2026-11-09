@@ -236,8 +236,8 @@ export const wireChrome = async (deps: {
   });
   hoverRowImpl = (key, hovered) => sidebarHover.playHover(key, hovered);
   // a modal taking the screen must drop sidebar hover state: the row nudge
-  // (release) AND the hover Bg, which normalizePlaces keys off mousePlaceIdx
-  // (clearMousePlace resets it + repaints), or the row stays tinted behind the dim
+  // (release) AND the hover Bg, which normalizePlaces keys off the hovered
+  // PLACE (clearMousePlace resets it + repaints), or the row stays tinted behind the dim
   core.registerModalOpen(() => {
     sidebarHover.release();
     chrome.clearMousePlace();

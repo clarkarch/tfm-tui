@@ -1,7 +1,7 @@
 import { Box, type MouseEvent, Text } from "@opentui/core";
 import { spawnSafe } from "../fs/spawn-safe";
 import path from "node:path";
-import { cursorIndex, destroyChildren, hasCursor, type Cursor } from "../lib/uiutil";
+import { cursorIndex, destroyChildren, type Cursor } from "../lib/uiutil";
 import { applySurface, btnSurface, rowSurface, slotBg, tileSurface, type UiStyle } from "./style";
 import { buildSections, loadSystemPlaces, type EjectSpec, type Place, type SidebarVisibility } from "../fs/places";
 import { trashDir } from "../fs/fsutil";
@@ -59,20 +59,47 @@ export const tabChipMaxWidth = (availW: number, nTabs: number): number => {
   return Math.max(TAB_CHIP_MIN_W, Math.min(TAB_CHIP_MAX_W, per));
 };
 
+// A place's stable identity. The mouse hover is keyed by it — NOT by the
+// row's index: the sidebar list is DESTROYED AND REBUILT whenever the
+// places change (a USB stick appears, a section toggles), and the row ids
+// are index-keyed, so an index-keyed hover ends up on a DIFFERENT place.
+// The icon + label are part of the key: two rows can share a path (a
+// bookmark and the XDG user dir it points at) and the hover must light ONE
+// row.
+export const placeKey = (place: Place): string => {
+  const what = place.scheme
+    ? `scheme:${place.scheme}`
+    : place.action
+      ? `action:${place.action}`
+      : place.networkUri
+        ? `net:${place.networkUri}`
+        : place.path
+          ? `path:${place.path}`
+          : place.device
+            ? `dev:${place.device}`
+            : `label:${place.label}`;
+  return `${what}|${place.icon}|${place.label}`;
+};
+
 // Sidebar row highlight source: the mouse hover, or the keyboard cursor when
 // the sidebar holds kb focus. A modal owns the screen — NO row may show a
-// highlight under the dim, or the kb-focused row (which mousePlaceIdx can't
-// clear) stayed lit after a menu opened.
+// highlight under the dim, or the kb-focused row (which the mouse hover
+// can't clear) stayed lit after a menu opened.
+//
+// Both sources are compared as PLACE KEYS: the mouse hover is keyed by the
+// place (it must survive a rebuild — see placeKey), and the kb cursor stays
+// index-based (the keymap owns it) but its index is resolved to the row's
+// key at paint time, so both branches compare the same thing.
 export const placeRowHover = (
   o: {
     selected: boolean;
     modalOpen: boolean;
     kbActive: boolean;
-    kbIdx: Cursor;
-    mousePlaceIdx: number;
+    kbKey: string | null;
+    hoveredKey: string | null;
   },
-  i: number,
-): boolean => !o.selected && !o.modalOpen && (o.kbActive ? i === cursorIndex(o.kbIdx) : i === o.mousePlaceIdx);
+  rowKey: string,
+): boolean => !o.selected && !o.modalOpen && (o.kbActive ? rowKey === o.kbKey : rowKey === o.hoveredKey);
 
 type ChromeCtx = {
   byId(id: string): MaybeNode;
@@ -167,11 +194,17 @@ export const makeChrome = (ctx: ChromeCtx) => {
     row: ReturnType<typeof Box>;
     rowId: string;
     labelId: string;
+    // the place's stable identity — the mouse hover is keyed by it (the row
+    // ids are index-keyed and MOVE when the list is rebuilt)
+    key: string;
     specs: IconSpec[];
     selected: boolean;
     place: Place;
   }[] = [];
-  let mousePlaceIdx = -1;
+  // the hovered PLACE (null = no row hovered). It was an INDEX into a list
+  // that is destroyed and rebuilt while the index survives — after a rebuild
+  // the tint landed on whatever row took that index (a different place).
+  let hoveredPlaceKey: string | null = null;
   // signature of the last rendered places list (labels/paths/theme/geometry).
   // renderSidebar rebuilds only when it changes — otherwise a pane-focus or
   // navigation would clear and recreate every icon slot, flashing the fallback
@@ -332,6 +365,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
 
   const makeRow = (place: Place): ReturnType<typeof Box> => {
     const idx = placesHost.length;
+    const key = placeKey(place);
     const placeTarget = (): string | null =>
       place.scheme === "recent" ? RECENT_URI : place.scheme === "starred" ? STARRED_URI : place.path;
     const selected = isPlaceSelected(place);
@@ -416,8 +450,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
         ...hoverEvents((on) => {
           if (on && ctx.modalOpen?.()) return;
           ctx.hoverRow(`tfm-place-${idx}`, on);
-          if (on) mousePlaceIdx = idx;
-          else if (mousePlaceIdx === idx) mousePlaceIdx = -1;
+          // the hover names the PLACE, not the row's index — the list is
+          // rebuilt under the pointer and an index would point elsewhere
+          if (on) hoveredPlaceKey = key;
+          else if (hoveredPlaceKey === key) hoveredPlaceKey = null;
           normalizePlaces();
           // a drag owns the pointer (tiles show grabbing/not-allowed) — a
           // sidebar sweep mid-drag must not clobber it back to pointer
@@ -437,6 +473,7 @@ export const makeChrome = (ctx: ChromeCtx) => {
       row: rowNode,
       rowId: `tfm-place-${idx}`,
       labelId: `tfm-place-${idx}-label`,
+      key,
       specs: ejectSlot ? [iconSlot.spec, ejectSlot.spec] : [iconSlot.spec],
       selected,
       place,
@@ -514,11 +551,12 @@ export const makeChrome = (ctx: ChromeCtx) => {
     try {
       ctx.replaySidebarIntro?.();
     } catch {}
-    if (ctx.kbActive() && hasCursor(ctx.kbIdx())) {
-      normalizePlaces();
-    }
+    // the fresh rows are painted at build time (selected/rest) — repaint them
+    // through the ONE paint truth so the hovered PLACE keeps its tint and
+    // the kb cursor keeps its highlight (the row ids moved: the hover is
+    // keyed by the place, not by the index)
+    normalizePlaces();
   };
-
   // --- Tab strip: one clickable chip per open tab + a new-tab button. One
   // strip PER PANE (ids `tfm-p0-tabbar` / `tfm-p1-tabbar`). ---
   const renderTabbar = (pane: 0 | 1): void => {
@@ -727,7 +765,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
   // one keyboard-hover highlight; wipes any stray styles deterministically
   const normalizePlaces = () => {
     const colors = ctx.colors();
-    placesHost.forEach((rec, i) => {
+    // the kb cursor is index-based (the keymap owns it): resolve its row's
+    // key here so both highlight sources compare the same thing
+    const kbKey = ctx.kbActive() ? (placesHost[cursorIndex(ctx.kbIdx())]?.key ?? null) : null;
+    placesHost.forEach((rec) => {
       // recompute from the live cwd: the focused pane can change between
       // renders without the places list changing (rebuild is skipped then)
       rec.selected = isPlaceSelected(rec.place);
@@ -744,10 +785,10 @@ export const makeChrome = (ctx: ChromeCtx) => {
           selected: isSel,
           modalOpen: !!ctx.modalOpen?.(),
           kbActive: ctx.kbActive(),
-          kbIdx: ctx.kbIdx(),
-          mousePlaceIdx,
+          kbKey,
+          hoveredKey: hoveredPlaceKey,
         },
-        i,
+        rec.key,
       );
       const row = ctx.byId(rec.rowId);
       const label = ctx.byId(rec.labelId);
@@ -774,11 +815,13 @@ export const makeChrome = (ctx: ChromeCtx) => {
     // otherwise fire loadSystemPlaces+renderAll into a destroyed renderer
     dispose: clearReloadTimer,
     setMousePlace: (idx: number) => {
-      mousePlaceIdx = idx;
+      // the index is resolved to the PLACE at the call boundary — the stored
+      // state is the place's key, so a rebuild cannot move the hover
+      hoveredPlaceKey = placesHost[idx]?.key ?? null;
       normalizePlaces();
     },
     clearMousePlace: () => {
-      mousePlaceIdx = -1;
+      hoveredPlaceKey = null;
       normalizePlaces();
     },
   };
