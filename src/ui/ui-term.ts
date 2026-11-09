@@ -171,6 +171,32 @@ export const pasteDroppedPaths = (paths: string[] | null | undefined, sink: Term
 
 type PtyScreenState = { mouse: boolean; alt: boolean };
 
+// --- The pane's state (ONE record) ---
+// The pane used to keep "open" and "focused" in parallel scalars (term /
+// termChild / termFocused / headerHot). Their combinations described states
+// nobody painted: an "open" pane whose shell never started, a focused pane
+// whose node was already gone, a header cue latched before it was painted.
+// ONE record owns the pane: the phase tag says whether the pane is closed,
+// opening (the VT is mounted, the shell has not started) or open (the shell
+// is live); the session carries the per-pane facts.
+type PaneSession = {
+  term: EmbeddedTerminalRenderable;
+  // our own focus flag — the pane can hold the keyboard WITHOUT it (a click
+  // inside the pane focuses the node natively), so it is a hint, not the truth
+  focused: boolean;
+  // the drag-hover cue latch — follows the PAINT, never the request
+  headerHot: boolean;
+  ptyScreen: PtyScreenState;
+  ptyScanTail: string; // DECSET sequences can split across PTY chunks
+  termProbeTail: string; // DA/DSR probes can split across PTY chunks
+  downCell: { x: number; y: number } | null; // click vs drag for the prompt bridge
+};
+
+type PaneState =
+  | { kind: "closed" }
+  | { kind: "opening"; session: PaneSession }
+  | { kind: "open"; session: PaneSession; child: TermChild };
+
 // scan PTY output for DECSET/DECRST 1000/1002/1003 (mouse reporting) and 1049
 // (alt screen). Sequences may split across chunks — the caller carries `tail`.
 export const ptyScreenState = (chunk: string, prev: PtyScreenState): { state: PtyScreenState; tail: string } => {
@@ -206,13 +232,8 @@ export const promptClickArrows = (
 };
 
 export const makeTerminal = (ctx: TermCtx) => {
-  let term: EmbeddedTerminalRenderable | null = null;
-  let termChild: TermChild | null = null;
-  let termFocused = false;
-  let headerHot = false; // drag-hover cue latched — avoids redundant repaints
-  let ptyScreen: PtyScreenState = { mouse: false, alt: false };
-  let ptyScanTail = ""; // DECSET sequences can split across PTY chunks
-  let downCell: { x: number; y: number } | null = null; // click vs drag for the prompt bridge
+  // ONE pane state — the only truth about "open" and "focused"
+  let state: PaneState = { kind: "closed" };
 
   // PTY spawn seam — default is the real Bun.spawn PTY; tests inject a fake
   // child so the open path can be driven without a shell process.
@@ -231,16 +252,36 @@ export const makeTerminal = (ctx: TermCtx) => {
         },
       }));
 
+  // the pane's node (null while closed)
+  const paneTerm = (): EmbeddedTerminalRenderable | null => (state.kind === "closed" ? null : state.session.term);
+
+  // the live shell (null while closed or still opening)
+  const paneChild = (): TermChild | null => (state.kind === "open" ? state.child : null);
+
+  // take the keyboard: the flag is only set when OUR focus() call landed
+  const focusTerminal = (): void => {
+    const st = state;
+    if (st.kind !== "open") return;
+    try {
+      st.session.term.focus();
+      st.session.focused = true;
+    } catch {}
+  };
+
   // the flag can lag reality (click-refocus inside the pane bypasses our focus()
   // call) — ask the renderer who owns the keyboard before acting on keys
-  const termHasFocus = (): boolean => !!term && ctx.renderer.currentFocusedRenderable === term;
+  const termHasFocus = (): boolean => {
+    const st = state;
+    return st.kind === "open" && ctx.renderer.currentFocusedRenderable === st.session.term;
+  };
 
   // drop-target cue: light the header while an internal drag hovers the pane
   // (rest fill follows the ui-style seam — none in outline mode — and under
   // transparent-bg force the rest fill is the terminal bg itself)
   const paintHeaderCue = (hot: boolean): void => {
-    if (hot === headerHot) return;
-    headerHot = hot;
+    const st = state;
+    if (st.kind !== "open") return;
+    if (hot === st.session.headerHot) return;
     const header = ctx.byId("tfm-term-header");
     if (!header) return;
     try {
@@ -253,6 +294,9 @@ export const makeTerminal = (ctx: TermCtx) => {
             ? { backgroundColor: colors.sidebarBg }
             : {},
       );
+      // the latch follows the PAINT: a header that was not mounted yet (or a
+      // write that threw) must not claim the cue is already showing
+      st.session.headerHot = hot;
     } catch {}
   };
 
@@ -262,19 +306,14 @@ export const makeTerminal = (ctx: TermCtx) => {
   // Shared with the kitty self-drop path (plain drag onto the pane pastes
   // through pastePaths below) — one sink so the two can't drift.
   const termDropSink = (): TermDropSink => {
-    const pty = termChild?.terminal ?? null;
+    const pty = paneChild()?.terminal ?? null;
     return {
       ptyWrite: (s) => {
         try {
           pty?.write(new TextEncoder().encode(s));
         } catch {}
       },
-      focusTerm: () => {
-        try {
-          term?.focus();
-          termFocused = true;
-        } catch {}
-      },
+      focusTerm: () => focusTerminal(),
       finishDrag: ctx.finishDrag,
       paintCue: paintHeaderCue,
       log: (m) => ctx.dlog(m),
@@ -283,7 +322,7 @@ export const makeTerminal = (ctx: TermCtx) => {
 
   const handleTermDrop = (): void => {
     const keys = dragKeys(dragState());
-    const pty = termChild?.terminal ?? null;
+    const pty = paneChild()?.terminal ?? null;
     pasteDroppedPaths(pty ? (keys?.map((k) => k.path) ?? null) : null, termDropSink());
   };
 
@@ -292,8 +331,10 @@ export const makeTerminal = (ctx: TermCtx) => {
   // arrows (what kitty's OSC 133 click_events does for fish). Skipped while a
   // mouse-aware program owns the input — those get real mouse bytes from the VT.
   const bridgePromptClick = (ev: MouseEvent): void => {
-    if (!term || !termChild || ev.button !== 0) return;
-    if (ptyScreen.mouse || ptyScreen.alt) return;
+    const st = state;
+    if (st.kind !== "open" || ev.button !== 0) return;
+    if (st.session.ptyScreen.mouse || st.session.ptyScreen.alt) return;
+    const term = st.session.term;
     const screen = term.screen();
     if (!screen.cursor.visible) return;
     const clickX = ev.x - term.screenX;
@@ -307,16 +348,21 @@ export const makeTerminal = (ctx: TermCtx) => {
     );
     if (!bytes) return;
     try {
-      termChild?.terminal?.write(new TextEncoder().encode(bytes));
+      st.child.terminal?.write(new TextEncoder().encode(bytes));
     } catch {}
   };
 
+  // The pane can hold the keyboard WITHOUT our focus flag (a click inside the
+  // pane focuses the node natively), so the blur must NOT be gated on the
+  // flag — the grid click has to take the keyboard back, or every key stays
+  // swallowed by the shell.
   const blurTerminal = (): void => {
-    if (!termFocused) return;
+    const st = state;
+    if (st.kind !== "open") return;
     try {
-      term?.blur();
+      st.session.term.blur();
     } catch {}
-    termFocused = false;
+    st.session.focused = false;
   };
 
   // make the embedded terminal match the tfm theme: OSC 4 sets the 16-color
@@ -325,12 +371,13 @@ export const makeTerminal = (ctx: TermCtx) => {
   // force switch: applyConfig calls this on every theme/transparent flip
   // (both ride themeSig), so the open pane flips without close/reopen.
   const syncTerminalTheme = (): void => {
+    const st = state;
+    if (st.kind !== "open") return;
+    const term = st.session.term;
     const force = ctx.transparentForce?.() ?? false;
-    if (term) {
-      try {
-        term.transparentBackground = force;
-      } catch {}
-    }
+    try {
+      term.transparentBackground = force;
+    } catch {}
     const header = ctx.byId("tfm-term-header");
     if (header) {
       try {
@@ -347,7 +394,6 @@ export const makeTerminal = (ctx: TermCtx) => {
         applySurface(escBtn, ctx.uiStyle() === "solid" && !force ? { backgroundColor: colors.sidebarBg } : {});
       } catch {}
     }
-    if (!term) return;
     const colors = ctx.colors();
     try {
       const enc = new TextEncoder();
@@ -371,7 +417,7 @@ export const makeTerminal = (ctx: TermCtx) => {
   // host from live config on refresh. The layout change flows into
   // onTerminalResize, which resizes the PTY. No-op while closed.
   const syncTerminalHeight = (): void => {
-    let node: MaybeNode = term;
+    let node: MaybeNode = paneTerm();
     if (!node) {
       try {
         node = ctx.byId("tfm-term");
@@ -387,6 +433,12 @@ export const makeTerminal = (ctx: TermCtx) => {
   };
 
   const closeTerminalPane = (): void => {
+    const st = state;
+    // clear FIRST: a late callback (the shell's exit, the focus timer, a PTY
+    // chunk) must see a closed pane, never the one it belonged to
+    state = { kind: "closed" };
+    const term = st.kind === "closed" ? null : st.session.term;
+    const child = st.kind === "open" ? st.child : null;
     try {
       term?.blur();
     } catch {}
@@ -394,24 +446,14 @@ export const makeTerminal = (ctx: TermCtx) => {
     // here or a keyboard-close while hovering sticks the pointer
     ctx.setPointer?.("default");
     try {
-      termChild?.kill();
+      child?.kill();
     } catch {}
     try {
-      termChild?.terminal?.close();
+      child?.terminal?.close();
     } catch {}
-    termChild = null;
     try {
       term?.destroy();
     } catch {}
-    term = null;
-    termFocused = false;
-    headerHot = false;
-    ptyScreen = { mouse: false, alt: false };
-    ptyScanTail = "";
-    // stale probe-tail bytes from the dead shell would corrupt the first
-    // DA/DSR reply of the next session
-    termProbeTail = "";
-    downCell = null;
     const host = ctx.byId("tfm-term-host");
     if (host) {
       // destroy (not detach): the header/hero nodes own TextBuffers, and a
@@ -433,28 +475,32 @@ export const makeTerminal = (ctx: TermCtx) => {
   };
 
   const termProbeEnc = new TextEncoder();
-  let termProbeTail = "";
-  const answerTerminalProbes = (data: Uint8Array): void => {
+  const answerTerminalProbes = (session: PaneSession, data: Uint8Array): void => {
     try {
-      const pty = termChild?.terminal;
+      const st = state;
+      const pty = st.kind === "open" && st.session === session ? st.child.terminal : null;
       if (!pty) return;
-      const buf = termProbeTail + new TextDecoder().decode(data);
+      const buf = session.termProbeTail + new TextDecoder().decode(data);
       const { resp, tail } = terminalProbeReply(buf);
       if (resp) pty.write(termProbeEnc.encode(resp));
-      termProbeTail = tail;
+      session.termProbeTail = tail;
     } catch {}
   };
 
   // every PTY chunk in one place (probe replies, DECSET sniffing, VT write) so
-  // the spawnPty seam above only has to forward bytes
-  const handlePtyData = (data: Uint8Array): void => {
-    answerTerminalProbes(data);
+  // the spawnPty seam above only has to forward bytes. The session is the
+  // identity guard: a chunk from a dead pane's shell must not touch the pane
+  // that replaced it.
+  const handlePtyData = (session: PaneSession, data: Uint8Array): void => {
+    const st = state;
+    if (st.kind === "closed" || st.session !== session) return;
+    answerTerminalProbes(session, data);
     // sniff mouse-mode/alt-screen DECSETs (split-safe) for the bridge
-    const scan = ptyScreenState(ptyScanTail + new TextDecoder().decode(data), ptyScreen);
-    ptyScreen = scan.state;
-    ptyScanTail = scan.tail;
+    const scan = ptyScreenState(session.ptyScanTail + new TextDecoder().decode(data), session.ptyScreen);
+    session.ptyScreen = scan.state;
+    session.ptyScanTail = scan.tail;
     try {
-      term?.write(data);
+      session.term.write(data);
     } catch {}
   };
 
@@ -466,13 +512,14 @@ export const makeTerminal = (ctx: TermCtx) => {
     // no `terminal ·` header ever paints). The pane is pure text; the mounted
     // host node is the real post-boot readiness signal (findDescendantById
     // resolves post-mount only).
-    if (term) {
-      try {
-        term.focus();
-      } catch {}
-      termFocused = true;
+    const st = state;
+    if (st.kind === "open") {
+      focusTerminal();
       return;
     }
+    // an open is already in flight (the pane exists, the shell has not
+    // started) — never start a second one
+    if (st.kind === "opening") return;
     const host = ctx.byId("tfm-term-host");
     if (!host) return;
     // the host box is the pane's drop target: the shared hover wiring gives the
@@ -492,96 +539,129 @@ export const makeTerminal = (ctx: TermCtx) => {
     host.onMouseMove = hostHover.onMouseMove;
     host.onMouseOut = hostHover.onMouseOut;
     host.onMouseDrop = handleTermDrop;
-    const colors = ctx.colors();
-    const cwd = dir ?? (ctx.virtualCwd() ? ctx.home : ctx.cwd());
-    const termH = ctx.termH(); // live [ui] terminal-height — sizes this new pane
-    host.height = termH + 1;
-    const header = Box(
-      {
-        id: "tfm-term-header",
-        width: "100%",
-        height: 1,
-        flexDirection: "row",
-        paddingLeft: 1,
-        // same condition as rethemeChrome's tfm-term-header repaint: solid
-        // without transparent-bg force keeps the fill, otherwise bare
-        ...(ctx.uiStyle() === "solid" && !ctx.transparentForce?.() ? { backgroundColor: colors.sidebarBg } : {}),
-      },
-      Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
-      Box({ flexGrow: 1 }),
-      ctx.escHintBtn("tfm-esc-term", closeTerminalPane, { chrome: true }),
-    );
-    term = new EmbeddedTerminalRenderable(ctx.renderer, {
-      id: "tfm-term",
-      width: "100%",
-      height: termH,
-      cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
-      rows: termH,
-      maxScrollback: 20_000,
-      // the pane opts into the terminal showing through only under
-      // transparent-bg force (`on` keeps panels painted, so the VT stays
-      // opaque there) — default-bg cells compose as terminal-default.
-      transparentBackground: ctx.transparentForce?.() ?? false,
-      onData: (data: Uint8Array) => {
-        // the only PTY write without a guard — a keystroke landing between
-        // shell death and the exited callback nulling termChild threw
-        // inside the renderer callback (uncaughtException → exit(1))
-        try {
-          termChild?.terminal?.write(data);
-        } catch {}
-      },
-      onTerminalResize: (cols: number, rows: number) => {
-        try {
-          termChild?.terminal?.resize(cols, rows);
-        } catch {}
-      },
-      // the bridge tracks press→release movement itself (a plain click still
-      // reports isDragging on up — Selection defaults it to true)
-      onMouseDown: (ev: MouseEvent) => {
-        downCell = { x: ev.x, y: ev.y };
-      },
-      onMouseUp: (ev: MouseEvent) => {
-        const wasClick = !!downCell && downCell.x === ev.x && downCell.y === ev.y;
-        downCell = null;
-        if (wasClick) bridgePromptClick(ev);
-      },
-    });
-    host.add(header);
-    host.add(term);
-    ctx.stripSelectable();
-    const shell = process.env.SHELL || "/bin/bash";
     try {
-      termChild = spawnPty({
+      const colors = ctx.colors();
+      const cwd = dir ?? (ctx.virtualCwd() ? ctx.home : ctx.cwd());
+      const termH = ctx.termH(); // live [ui] terminal-height — sizes this new pane
+      host.height = termH + 1;
+      const header = Box(
+        {
+          id: "tfm-term-header",
+          width: "100%",
+          height: 1,
+          flexDirection: "row",
+          paddingLeft: 1,
+          // same condition as rethemeChrome's tfm-term-header repaint: solid
+          // without transparent-bg force keeps the fill, otherwise bare
+          ...(ctx.uiStyle() === "solid" && !ctx.transparentForce?.() ? { backgroundColor: colors.sidebarBg } : {}),
+        },
+        Text({ content: ` terminal · ${cwd}`, fg: colors.sidebarFgMuted }),
+        Box({ flexGrow: 1 }),
+        ctx.escHintBtn("tfm-esc-term", closeTerminalPane, { chrome: true }),
+      );
+      let term!: EmbeddedTerminalRenderable;
+      // the session that owns THIS node — a stale node (one whose destroy
+      // failed) must not write into the pane that replaced it
+      const ownSession = (): PaneSession | null => {
+        const cur = state;
+        if (cur.kind === "closed") return null;
+        return cur.session.term === term ? cur.session : null;
+      };
+      const ownChild = (): TermChild | null => {
+        const cur = state;
+        if (cur.kind !== "open" || cur.session.term !== term) return null;
+        return cur.child;
+      };
+      term = new EmbeddedTerminalRenderable(ctx.renderer, {
+        id: "tfm-term",
+        width: "100%",
+        height: termH,
+        cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
+        rows: termH,
+        maxScrollback: 20_000,
+        // the pane opts into the terminal showing through only under
+        // transparent-bg force (`on` keeps panels painted, so the VT stays
+        // opaque there) — default-bg cells compose as terminal-default.
+        transparentBackground: ctx.transparentForce?.() ?? false,
+        onData: (data: Uint8Array) => {
+          // the only PTY write without a guard — a keystroke landing between
+          // shell death and the exited callback nulling the child threw
+          // inside the renderer callback (uncaughtException → exit(1))
+          try {
+            ownChild()?.terminal?.write(data);
+          } catch {}
+        },
+        onTerminalResize: (cols: number, rows: number) => {
+          try {
+            ownChild()?.terminal?.resize(cols, rows);
+          } catch {}
+        },
+        // the bridge tracks press→release movement itself (a plain click still
+        // reports isDragging on up — Selection defaults it to true)
+        onMouseDown: (ev: MouseEvent) => {
+          const session = ownSession();
+          if (!session) return;
+          session.downCell = { x: ev.x, y: ev.y };
+        },
+        onMouseUp: (ev: MouseEvent) => {
+          const session = ownSession();
+          if (!session) return;
+          const wasClick = !!session.downCell && session.downCell.x === ev.x && session.downCell.y === ev.y;
+          session.downCell = null;
+          if (wasClick) bridgePromptClick(ev);
+        },
+      });
+      const session: PaneSession = {
+        term,
+        focused: false,
+        headerHot: false,
+        ptyScreen: { mouse: false, alt: false },
+        ptyScanTail: "",
+        termProbeTail: "",
+        downCell: null,
+      };
+      // the pane EXISTS from here on — but it is NOT open until the shell is
+      // live. A throw in between must never read as "open" (the old code
+      // assigned the node before the child, so isOpen() lied).
+      state = { kind: "opening", session };
+      host.add(header);
+      host.add(term);
+      ctx.stripSelectable();
+      const shell = process.env.SHELL || "/bin/bash";
+      const child = spawnPty({
         argv: [shell],
         cwd,
         env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
         cols: Math.max(20, ctx.renderer.terminalWidth - ctx.sw()),
         rows: termH,
-        onData: handlePtyData,
+        onData: (data) => handlePtyData(session, data),
       });
+      state = { kind: "open", session, child };
+      child.exited
+        .then(() => {
+          // the exit belongs to THIS shell — a dead pane's exit must never
+          // close the pane that replaced it
+          if (state.kind === "open" && state.child === child) closeTerminalPane();
+        })
+        .catch(() => {});
+      syncTerminalTheme();
+      void ctx.drainIconQueue();
+      ctx.renderAll();
+      setTimeout(() => {
+        // the pane may be gone (or replaced) by now
+        if (state.kind !== "open" || state.session !== session) return;
+        focusTerminal();
+        // early prompt bytes can compose before first layout — force a full redraw
+        try {
+          session.term.invalidate();
+        } catch {}
+      }, 30);
     } catch (err) {
+      // no zombie pane: the half-built one is torn down, the user gets the
+      // reason, and isOpen() stays false
       ctx.notify(`Terminal failed · ${fsErrText(err)}`, "terminal", "error");
       closeTerminalPane();
-      return;
     }
-    termChild.exited
-      .then(() => {
-        if (termChild) closeTerminalPane();
-      })
-      .catch(() => {});
-    syncTerminalTheme();
-    void ctx.drainIconQueue();
-    ctx.renderAll();
-    setTimeout(() => {
-      try {
-        term?.focus();
-        termFocused = true;
-      } catch {}
-      // early prompt bytes can compose before first layout — force a full redraw
-      try {
-        term?.invalidate();
-      } catch {}
-    }, 30);
   };
 
   return {
@@ -591,7 +671,7 @@ export const makeTerminal = (ctx: TermCtx) => {
     // through the same sink as the internal ctrl+drag mouse drop above.
     // A closed pane answers false so the sender rejects instead of accepting
     // into nothing.
-    pastePaths: (paths: string[]): boolean => pasteDroppedPaths(termChild?.terminal ? paths : null, termDropSink()),
+    pastePaths: (paths: string[]): boolean => pasteDroppedPaths(paneChild()?.terminal ? paths : null, termDropSink()),
     // self-drop hover cue: latched through paintHeaderCue, so repeated
     // hover frames are no-ops and mouse hover shares the same state
     setDropCue: paintHeaderCue,
@@ -601,21 +681,23 @@ export const makeTerminal = (ctx: TermCtx) => {
     // the user would type. Absolute quoting keeps spaces/quotes safe.
     execInTerminal: (targetPath: string): void => {
       openTerminalHere(path.dirname(targetPath));
-      const pty = termChild?.terminal;
-      if (!pty) return;
+      const st = state;
+      if (st.kind !== "open") return;
       try {
-        pty.write(new TextEncoder().encode(`${shellQuotePaths([targetPath])}\n`));
+        st.child.terminal?.write(new TextEncoder().encode(`${shellQuotePaths([targetPath])}\n`));
       } catch {}
-      try {
-        term?.focus();
-        termFocused = true;
-      } catch {}
+      focusTerminal();
     },
     syncTerminalHeight,
     syncTerminalTheme,
     termHasFocus,
     blurTerminal,
-    isOpen: () => term !== null,
-    ownsKeyboard: () => termFocused || termHasFocus(),
+    // the pane is open only when the SHELL is live — a pane whose shell
+    // failed to start is not open
+    isOpen: () => state.kind === "open",
+    ownsKeyboard: () => {
+      const st = state;
+      return st.kind === "open" && (st.session.focused || termHasFocus());
+    },
   };
 };

@@ -502,3 +502,205 @@ describe("openTerminalHere", () => {
     fac.closeTerminalPane();
   });
 });
+
+// D3.1: the pane's "open"/"focused" truth must live in ONE record. The old
+// parallel scalars (term / termChild / termFocused / headerHot) could not hold
+// these contracts: a throw between the VT mount and the shell spawn left an
+// "open" pane with no shell, a native click-focus was never blurred by the
+// grid click, a dead shell's exit closed the NEXT pane, and the header cue
+// latched before the paint it claimed.
+describe("terminal pane state", () => {
+  let t: TestRendererSetup;
+  let spawnCalls: TermSpawnOpts[];
+  let child: TermChild;
+
+  const mkChild = (): TermChild => ({
+    terminal: { write: () => {}, resize: () => {}, close: () => {} },
+    kill: () => {},
+    // never resolves: the pane must not auto-close under the test
+    exited: new Promise<void>(() => {}),
+  });
+
+  // a child whose exit the test can trigger (the old pane's shell dying)
+  const mkExitingChild = (): { child: TermChild; exit: () => void } => {
+    let resolveExit!: () => void;
+    const exited = new Promise<void>((r) => {
+      resolveExit = r;
+    });
+    return {
+      child: {
+        terminal: { write: () => {}, resize: () => {}, close: () => {} },
+        kill: () => {},
+        exited,
+      },
+      exit: () => resolveExit(),
+    };
+  };
+
+  const mkTerm = (overrides: Record<string, unknown> = {}) =>
+    makeTerminal({
+      renderer: t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      uiStyle: () => "solid",
+      colors: () => ({
+        sidebarBg: "#0000aa",
+        sidebarFgMuted: "#555555",
+        bg: "#aaaaaa",
+        white: "#ffffff",
+        accent: "#ffffff",
+        hoverBg: "#00aa00",
+      }),
+      sw: () => 26,
+      termH: () => 9,
+      escHintBtn: (id: string) => Box({ id, width: 3, height: 1 }),
+      stripSelectable: () => {},
+      drainIconQueue: () => {},
+      notify: () => {},
+      renderAll: () => {},
+      cwd: () => "/tmp",
+      virtualCwd: () => false,
+      home: "/tmp",
+      finishDrag: () => {},
+      dlog: () => {},
+      spawnPty: (o: TermSpawnOpts) => {
+        spawnCalls.push(o);
+        return child;
+      },
+      ...overrides,
+    } as any);
+
+  beforeAll(async () => {
+    t = await createTestRenderer({ width: 80, height: 24 });
+    t.renderer.root.add(Box({ id: "tfm-term-host", width: "100%", height: 0, flexDirection: "column" }));
+    await t.renderOnce();
+  });
+
+  afterAll(async () => {
+    await t.dispose();
+  });
+
+  beforeEach(() => {
+    spawnCalls = [];
+    child = mkChild();
+  });
+
+  test("a pane whose shell failed to start is not reported as open", () => {
+    const notices: string[] = [];
+    const fac = mkTerm({
+      // the open path throws between the VT mount and the shell spawn
+      stripSelectable: () => {
+        throw new Error("boom");
+      },
+      notify: (m: string) => notices.push(m),
+    });
+    const host = t.renderer.root.findDescendantById("tfm-term-host") as any;
+    const restHeight = host.height;
+    expect(() => fac.openTerminalHere("/tmp")).not.toThrow();
+    expect(fac.isOpen()).toBe(false);
+    expect(fac.ownsKeyboard()).toBe(false);
+    expect(notices.length).toBeGreaterThan(0);
+    // no half-built pane is left behind
+    expect(host.getChildren().length).toBe(0);
+    expect(host.height).toBe(restHeight);
+  });
+
+  test("a pane whose shell has not started yet is not open", () => {
+    const seen: boolean[] = [];
+    const fac = mkTerm({
+      // the open path runs between the VT mount and the shell spawn
+      stripSelectable: () => {
+        seen.push(fac.isOpen());
+      },
+    });
+    fac.openTerminalHere("/tmp");
+    expect(seen).toEqual([false]);
+    expect(fac.isOpen()).toBe(true);
+    fac.closeTerminalPane();
+  });
+
+  test("a shell that cannot be spawned reports the error and leaves no pane behind", () => {
+    const notices: string[] = [];
+    const fac = mkTerm({
+      spawnPty: () => {
+        throw new Error("no shell");
+      },
+      notify: (m: string) => notices.push(m),
+    });
+    fac.openTerminalHere("/tmp");
+    expect(fac.isOpen()).toBe(false);
+    expect(notices.join(" ")).toContain("no shell");
+    const host = t.renderer.root.findDescendantById("tfm-term-host") as any;
+    expect(host.getChildren().length).toBe(0);
+  });
+
+  test("clicking the grid blurs the terminal", async () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    const vt = t.renderer.root.findDescendantById("tfm-term") as any;
+    // the user clicked INSIDE the pane: the renderer focuses the node
+    // natively, our own focus flag never sees it
+    vt.focus();
+    expect(t.renderer.currentFocusedRenderable).toBe(vt);
+    expect(fac.ownsKeyboard()).toBe(true);
+    // ...then clicked the grid
+    fac.blurTerminal();
+    expect(t.renderer.currentFocusedRenderable).not.toBe(vt);
+    expect(fac.ownsKeyboard()).toBe(false);
+    fac.closeTerminalPane();
+  });
+
+  test("a dead shell's exit does not close the pane opened after it", async () => {
+    const first = mkExitingChild();
+    child = first.child;
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    fac.closeTerminalPane();
+    child = mkChild();
+    fac.openTerminalHere("/tmp");
+    expect(fac.isOpen()).toBe(true);
+    first.exit();
+    await Promise.resolve();
+    await Promise.resolve();
+    // the old shell's exit belongs to the OLD pane, not to this one
+    expect(fac.isOpen()).toBe(true);
+    fac.closeTerminalPane();
+  });
+
+  test("a dead pane's shell never writes into the next pane's shell", () => {
+    const fac = mkTerm();
+    fac.openTerminalHere("/tmp");
+    const deadOpts = spawnCalls[0]!;
+    fac.closeTerminalPane();
+    child = mkChild();
+    fac.openTerminalHere("/tmp");
+    const written: string[] = [];
+    child.terminal!.write = (d: Uint8Array) => {
+      written.push(new TextDecoder().decode(d));
+    };
+    // the DEAD shell sends a probe — the reply belongs to the dead pane
+    deadOpts.onData(new TextEncoder().encode("\x1b[0c"));
+    expect(written.join("")).toBe("");
+    fac.closeTerminalPane();
+  });
+
+  test("a header cue set before the header exists is not latched away", async () => {
+    let headerVisible = false;
+    const fac = mkTerm({
+      byId: (id: string) => {
+        if (id === "tfm-term-header") return headerVisible ? t.renderer.root.findDescendantById(id) : null;
+        return t.renderer.root.findDescendantById(id);
+      },
+    });
+    fac.openTerminalHere("/tmp");
+    await t.renderOnce();
+    fac.setDropCue(true);
+    headerVisible = true;
+    // the cue still has to land — the latch follows the PAINT, not the request
+    fac.setDropCue(true);
+    await t.renderOnce();
+    const header = t.renderer.root.findDescendantById("tfm-term-header") as any;
+    expect([...header.backgroundColor.toInts()]).toEqual([0, 170, 0, 255]);
+    fac.closeTerminalPane();
+  });
+});
