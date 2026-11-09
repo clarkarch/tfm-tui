@@ -21,10 +21,6 @@ import { IconStateIdx, type IconSpec, type IconState } from "../lib/icon-state";
 export const toggleIconState = (on: boolean, hover: boolean): number =>
   (on ? IconStateIdx.Active : IconStateIdx.Rest) + (hover ? IconStateIdx.HoverOffset : 0);
 
-/** Nav slot (enabled/disabled × normal/hover): back/fwd buttons. */
-export const navIconState = (enabled: boolean, hover: boolean): number =>
-  (enabled ? IconStateIdx.Rest : IconStateIdx.Active) + (hover ? IconStateIdx.HoverOffset : 0);
-
 /** Select slot (rest/hover/selected): tiles, sidebar rows. */
 export const selectIconState = (selected: boolean, hover: boolean): number =>
   selected ? IconStateIdx.Selected : hover ? IconStateIdx.Active : IconStateIdx.Rest;

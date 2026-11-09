@@ -14,13 +14,12 @@ import { RECENT_URI, STARRED_URI, isVirtualUri } from "../fs/uri";
 import { archiveUri, parseArchiveUri } from "../fs/archive-scheme";
 import { stripControlChars } from "../lib/uiutil";
 import type { MakeIconSlot, SlotElement } from "./ui-slots";
-import type { IconState } from "../lib/icon-state";
-import { hoverEvents, navIconState, toggleIconState } from "./ui-slots";
+import { hoverEvents, toggleIconState } from "./ui-slots";
+import { IconStateIdx, type IconState, type IconSpec } from "../lib/icon-state";
 import type { ListEntry } from "../lib/menu-entry";
 import type { NotifyLevel } from "../lib/notify-level";
 import type { MaybeNode } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
-import type { IconSpec } from "../lib/icon-state";
 
 // --- The inline path editor: ONE tagged machine.
 //
@@ -195,22 +194,51 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   // coexist in the global renderable registry
   const id = (name: string): string => `${ctx.prefix}${name}`;
 
-  // --- nav buttons: 4 baked rasters each (enabled/disabled × normal/hover;
-  // bg baked into the png so the wrapper box bg must swap in lockstep) ---
-  const navSpecs: Record<string, IconSpec | undefined> = {
-    [id("nav-back")]: undefined,
-    [id("nav-fwd")]: undefined,
+  // --- nav buttons: ONE record per button, owned by the button ---
+  //
+  // The record holds everything the button's paint reads: the raster spec,
+  // the ENABLED source (the wiring's canBack/canFwd seam), the cached
+  // enabled flag and the hover flag. The old shape was TWO toolbar-level
+  // maps (`navSpecs` + `navHover`) that OUTLIVED the button they belonged
+  // to: a rebuilt button inherited the DEAD button's hover (a stale raster
+  // index AND a stale hover bg — the theme flip re-read the stale flag).
+  // The map below holds only the CURRENTLY MOUNTED button's record, and a
+  // rebuild replaces it.
+  type NavButtonState = {
+    id: string;
+    spec: IconSpec;
+    // where the enabled flag comes from (the wiring seam)
+    isEnabled(): boolean;
+    // the cached enabled flag (refreshed by refreshNav)
+    enabled: boolean;
+    hovered: boolean;
   };
-  const navHover: Record<string, boolean> = {};
+  const navButtons = new Map<string, NavButtonState>();
 
-  const navBtnBg = (btnId: string) => {
+  // the nav raster index: enabled/disabled × normal/hover. It lives HERE
+  // (its only consumer) because the index and the hover flag are ONE state
+  // — the record's paint reads both.
+  const navIconState = (enabled: boolean, hovered: boolean): number =>
+    (enabled ? IconStateIdx.Rest : IconStateIdx.Active) + (hovered ? IconStateIdx.HoverOffset : 0);
+
+  // the paint: BOTH halves of a button (the baked raster state AND the
+  // wrapper box surface) read the ONE record.
+  const paintNavButton = (btn: NavButtonState): void => {
+    // a stale record (its button was rebuilt) must not paint the new button
+    if (navButtons.get(btn.id) !== btn) return;
+    setIconState(btn.spec, navIconState(btn.enabled, btn.hovered));
     try {
-      const n = ctx.byId(btnId);
-      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId], undefined, tForce()));
+      const n = ctx.byId(btn.id);
+      if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), btn.hovered, undefined, tForce()));
     } catch {}
   };
 
-  const makeNavButton = (key: "nav-back" | "nav-fwd", iconName: string, onActivate: () => void) => {
+  const makeNavButton = (
+    key: "nav-back" | "nav-fwd",
+    iconName: string,
+    onActivate: () => void,
+    isEnabled: () => boolean,
+  ) => {
     const btnId = id(key);
     const states = (): IconState[] => [
       { fg: ctx.colors().sidebarFg, bg: ctx.colors().bg },
@@ -219,7 +247,17 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       { fg: ctx.colors().sidebarFgMuted, bg: ctx.colors().hoverBg },
     ];
     const slot = makeIconSlot(iconName, states(), 1, 0, undefined, states);
-    navSpecs[btnId] = slot.spec;
+    // the record is OWNED by this button: a rebuild (a fresh shell) makes a
+    // NEW record and REPLACES the dead button's one, so the dead button's
+    // hover cannot survive.
+    const btn: NavButtonState = {
+      id: btnId,
+      spec: slot.spec,
+      isEnabled,
+      enabled: isEnabled(),
+      hovered: false,
+    };
+    navButtons.set(btnId, btn);
     return Box(
       {
         id: btnId,
@@ -233,8 +271,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
           onActivate();
         },
         ...hoverEvents((on) => {
-          navHover[btnId] = on;
-          refreshNav();
+          btn.hovered = on;
+          paintNavButton(btn);
         }, ctx.setPointer),
       },
       slot.el,
@@ -242,23 +280,26 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
   };
 
   const refreshNav = () => {
-    const setBtn = (btnId: string, on: boolean) => {
-      const spec = navSpecs[btnId];
-      if (!spec) return;
-      setIconState(spec, navIconState(on, !!navHover[btnId]));
-      navBtnBg(btnId);
-    };
-    setBtn(id("nav-back"), ctx.canBack());
-    setBtn(id("nav-fwd"), ctx.canFwd());
+    for (const btn of navButtons.values()) {
+      btn.enabled = btn.isEnabled();
+      paintNavButton(btn);
+    }
   };
 
   // retheme helper: box bg must track the new palette between raster swaps
   const repaintButtons = (): void => {
-    for (const key of ["nav-back", "nav-fwd", "search-btn", "sort-btn"]) {
-      const btnId = id(key);
+    // the nav buttons paint their hover half from their OWN record
+    for (const btn of navButtons.values()) {
       try {
-        const n = ctx.byId(btnId);
-        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), !!navHover[btnId], undefined, tForce()));
+        const n = ctx.byId(btn.id);
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), btn.hovered, undefined, tForce()));
+      } catch {}
+    }
+    // the generic hover buttons (search/sort) keep their rest surface
+    for (const key of ["search-btn", "sort-btn"]) {
+      try {
+        const n = ctx.byId(id(key));
+        if (n) applySurface(n, btnSurface(ctx.uiStyle(), ctx.colors(), false, undefined, tForce()));
       } catch {}
     }
   };
@@ -548,8 +589,8 @@ export const makeToolbar = (ctx: ToolbarCtx) => {
       },
       Box(
         { height: 1, flexGrow: 1, flexBasis: 0, overflow: "hidden", flexDirection: "row", columnGap: 1 },
-        makeNavButton("nav-back", "chevron-left", ctx.goBack),
-        makeNavButton("nav-fwd", "chevron-right", ctx.goFwd),
+        makeNavButton("nav-back", "chevron-left", ctx.goBack, ctx.canBack),
+        makeNavButton("nav-fwd", "chevron-right", ctx.goFwd, ctx.canFwd),
         Box({
           id: id("crumbs"),
           flexGrow: 1,

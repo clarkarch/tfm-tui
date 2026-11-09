@@ -15,6 +15,7 @@ import {
 import { RECENT_URI } from "../fs/uri";
 import { archiveUri } from "../fs/archive-scheme";
 import type { MaybeNode } from "../lib/node-like";
+import type { IconSpec } from "../lib/icon-state";
 
 describe("isNavigableTarget", () => {
   test("real dirs pass, files and missing paths fail", () => {
@@ -99,6 +100,13 @@ const mkToolbar = (
     onAnimate?: (ids: string[]) => void;
     cwdOf?: () => string;
     toggleSearch?: () => void;
+    // the nav buttons' enabled source (the wiring's canBack/canFwd)
+    canBack?: () => boolean;
+    canFwd?: () => boolean;
+    // the icon-slot state sink: the raster index painted for a slot
+    onIconState?: (spec: IconSpec, index: number) => void;
+    // the icon-slot factory sink: every slot this toolbar builds
+    onSlot?: (name: string, spec: IconSpec) => void;
     // the app-wide path-editor registry (both panes join the same one)
     pathEditPeers?: PathEditPeer[];
     // virtual clock for the double-click window
@@ -116,18 +124,18 @@ const mkToolbar = (
     stripSelectable: () => {},
     uiStyle: () => "solid",
     colors: () => COLORS,
-    makeIconSlot: (name, states) => ({
-      el: null,
-      slotId: `s-${name}`,
-      spec: { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0, phase: "pending" },
-    }),
-    setIconState: () => {},
+    makeIconSlot: (name, states) => {
+      const spec: IconSpec = { slotId: `s-${name}`, name, heightCells: 1, states, initialState: 0, phase: "pending" };
+      hooks.onSlot?.(name, spec);
+      return { el: null, slotId: spec.slotId, spec };
+    },
+    setIconState: (spec, index) => hooks.onIconState?.(spec, index),
     closeFileMenu: () => {},
     blurTerminal: () => {},
     navigate: hooks.navigate ?? (() => {}),
     notify: () => {},
-    canBack: () => false,
-    canFwd: () => false,
+    canBack: hooks.canBack ?? (() => false),
+    canFwd: hooks.canFwd ?? (() => false),
     goBack: () => {},
     goFwd: () => {},
     openContextMenu: () => {},
@@ -189,6 +197,151 @@ describe("the search button", () => {
       // the button must NOT write the node's flag itself
       const input = t.renderer.root.findDescendantById("tfm-p0-search") as unknown as { visible: boolean };
       expect(input.visible).toBe(false);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+});
+
+describe("the nav buttons", () => {
+  // The hover flag used to live in a TOOLBAR-level map that OUTLIVED the
+  // button it belonged to: a rebuilt button inherited the old button's hover
+  // (a stale hover raster AND a stale hover bg — the theme flip re-read the
+  // stale flag). The state is ONE record owned by the button now, so a
+  // rebuild REPLACES it.
+  const bgOf = (node: any): string => {
+    const c = node?.backgroundColor;
+    if (!c) return "none";
+    const ints = c.toInts?.();
+    return ints ? ints.join(",") : String(c);
+  };
+  const hexInts = (hex: string): string => {
+    const h = hex.replace("#", "");
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 255].join(",");
+  };
+
+  test("a rebuilt nav button has no stale hover", async () => {
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      // the painted raster index per slot
+      const painted = new Map<string, number>();
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
+        canBack: () => true,
+        onIconState: (spec, index) => painted.set(spec.slotId, index),
+      });
+      const shell = tb.makeToolbarShell();
+      t.renderer.root.add(shell);
+      await t.renderOnce();
+
+      // the rest state (the wiring paints it on every render)
+      tb.refreshNav();
+      const rest = painted.get("s-chevron-left");
+      expect(rest).toBeDefined();
+
+      // hover the back button → its own raster index
+      const back = t.renderer.root.findDescendantById("tfm-p0-nav-back") as unknown as {
+        screenX: number;
+        screenY: number;
+      };
+      expect(back).toBeTruthy();
+      await t.mockMouse.moveTo(back.screenX + 1, back.screenY);
+      const hovered = painted.get("s-chevron-left");
+      expect(hovered).not.toBe(rest);
+      // the paint covers BOTH halves: the wrapper box surface too (the
+      // raster bakes its bg into the png — a wrapper that misses the swap
+      // leaves a stale square around it)
+      const lit = t.renderer.root.findDescendantById("tfm-p0-nav-back") as any;
+      expect(bgOf(lit)).toBe(hexInts(COLORS.hoverBg));
+
+      // the toolbar shell is rebuilt: the hovered button dies (a destroyed
+      // node never gets its mouse-out) and a fresh one takes its id
+      const shellNode = t.renderer.root.findDescendantById("tfm-p0-toolbar") as any;
+      expect(shellNode).toBeTruthy();
+      destroyChildren(shellNode);
+      t.renderer.root.remove(shellNode);
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+      tb.refreshNav();
+
+      // the fresh button must NOT inherit the dead button's hover
+      expect(painted.get("s-chevron-left")).toBe(rest);
+      // the theme flip repaints the button surfaces (rethemeChrome →
+      // repaintButtons) — it must not resurrect the dead hover either
+      tb.repaintButtons();
+      const fresh = t.renderer.root.findDescendantById("tfm-p0-nav-back") as any;
+      expect(bgOf(fresh)).toBe(hexInts(COLORS.bg));
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("the enabled flag is re-read from its source on every refresh", async () => {
+    // the record CACHES the enabled flag, but the cache is fed by the
+    // wiring's source (canBack/canFwd) — a frozen value would keep the
+    // button disabled forever
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      const painted = new Map<string, number>();
+      let canBack = false;
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
+        canBack: () => canBack,
+        onIconState: (spec, index) => painted.set(spec.slotId, index),
+      });
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+
+      tb.refreshNav();
+      const disabled = painted.get("s-chevron-left");
+      expect(disabled).toBeDefined();
+      // the source flips (the user navigated back) → the next refresh follows
+      canBack = true;
+      tb.refreshNav();
+      expect(painted.get("s-chevron-left")).not.toBe(disabled);
+    } finally {
+      await t.dispose(); // 0.6.0: destroy + await closed
+    }
+  });
+
+  test("a dead button's late mouse-out paints nothing", async () => {
+    // the old button's record is STALE after a rebuild: a late mouse-out
+    // (the pointer leaves the dead node) must not paint the fresh button
+    // with the dead record's raster spec
+    const t = await createTestRenderer({ width: 200, height: 6 });
+    try {
+      const calls: { spec: IconSpec; index: number }[] = [];
+      const specs: IconSpec[] = [];
+      const tb = mkToolbar(t, "tfm-p0-", "/x/alpha", {
+        canBack: () => true,
+        onIconState: (spec, index) => calls.push({ spec, index }),
+        onSlot: (name, spec) => {
+          if (name === "chevron-left") specs.push(spec);
+        },
+      });
+      const shell = tb.makeToolbarShell();
+      t.renderer.root.add(shell);
+      await t.renderOnce();
+
+      // hover the back button → the old record paints
+      const back = t.renderer.root.findDescendantById("tfm-p0-nav-back") as unknown as {
+        screenX: number;
+        screenY: number;
+      };
+      expect(back).toBeTruthy();
+      await t.mockMouse.moveTo(back.screenX + 1, back.screenY);
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.at(-1)?.spec).toBe(specs[0]);
+
+      // the shell is rebuilt: the old button is DETACHED (it stays alive, so
+      // the renderer still fires its mouse-out), the fresh one takes its id
+      const shellNode = t.renderer.root.findDescendantById("tfm-p0-toolbar") as any;
+      expect(shellNode).toBeTruthy();
+      t.renderer.root.remove(shellNode);
+      t.renderer.root.add(tb.makeToolbarShell());
+      await t.renderOnce();
+
+      // the dead record painted NOTHING
+      expect(calls.length).toBe(1);
+      expect(specs).toHaveLength(2);
     } finally {
       await t.dispose(); // 0.6.0: destroy + await closed
     }
