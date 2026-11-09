@@ -12,6 +12,10 @@
 // - Suppress while a modal/drag/rename is active so a drag to the edge does
 //   not pop the drawer.
 // - Terminal auto-hide must NOT touch the PTY: it clips the host box height.
+// - The grid's column budget is the panel's EFFECTIVE width, and it must
+//   follow the PAINTED width (the tween's tracked value) — not the logical
+//   state. Publishing the FINAL width the moment a slide starts makes the
+//   column math disagree with the paint for the whole slide.
 
 import {
   type CliRenderer,
@@ -59,13 +63,80 @@ export const collapsedSize = (style: string): number => {
 // pure: collapsed height for the terminal pane ("header" keeps the title row)
 export const collapsedHeight = (style: string): number => (style === "header" ? 1 : 0);
 
-type Tween = { run(target: number, ms: number, onDone?: () => void): void };
+type Timer = ReturnType<typeof setTimeout>;
+
+// The panel's ONE state record.
+//
+// The old code carried three loose fields next to the tween's own tracked
+// width: `open` (the logical state), `initialized` ("has the drawer applied a
+// state since the panel became enabled") and `timer` (the armed transition).
+// Their combinations could describe panels nobody sees — `open` flipped
+// BEFORE the slide finished, so the published effective width (the grid's
+// column budget) disagreed with the PAINTED width mid-slide, and
+// `initialized` was an unnamed phase of its own.
+//
+// The phase names the logical state and the slide in flight; the armed timer
+// rides INSIDE it (the panel owns its pending transition — "armed" is not a
+// second truth about the panel).
+export type PanelPhase =
+  // the drawer has not applied a state since the panel became enabled (it
+  // just came back, or it was disabled): the first mouse move SNAPS (no
+  // slide) — a terminal opening sets its own height and must be reclaimed,
+  // not drifted. `open` remembers the last logical state so a
+  // disable→enable round trip restores that side, not the other one.
+  | { kind: "fresh"; open: boolean; timer: Timer | null }
+  // closed and settled
+  | { kind: "closed"; timer: Timer | null }
+  // the opening slide is in flight (the logical state is already "open")
+  | { kind: "opening"; timer: Timer | null }
+  // open and settled
+  | { kind: "open"; timer: Timer | null }
+  // the closing slide is in flight (the logical state is already "closed")
+  | { kind: "closing"; timer: Timer | null };
+
+// the phase's logical openness — what the hysteresis compares against
+export const phaseOpen = (ph: PanelPhase): boolean => {
+  switch (ph.kind) {
+    case "open":
+    case "opening":
+      return true;
+    case "fresh":
+      return ph.open;
+    default:
+      return false;
+  }
+};
+
+// the phase with a different armed timer (the timer rides in the record)
+const withTimer = (ph: PanelPhase, timer: Timer | null): PanelPhase => {
+  switch (ph.kind) {
+    case "fresh":
+      return { kind: "fresh", open: ph.open, timer };
+    case "closed":
+      return { kind: "closed", timer };
+    case "opening":
+      return { kind: "opening", timer };
+    case "open":
+      return { kind: "open", timer };
+    case "closing":
+      return { kind: "closing", timer };
+  }
+};
+
+type Tween = {
+  run(target: number, ms: number, onDone?: () => void): void;
+  // the value WE last wrote — the PAINTED width. The node's getter lies for a
+  // hidden panel (display:none keeps the last laid-out width), so the tracked
+  // value is the only honest source.
+  value(): number;
+};
 
 const makeTween = (
   getNode: () => MaybeNode,
   axis: "width" | "height",
   renderer: CliRenderer,
   owner: Pick<ReturnType<typeof getTimelineEngine>, "register" | "unregister"> | null,
+  onWrite?: (v: number) => void,
 ): Tween => {
   let tl: ReturnType<typeof createTimeline> | null = null;
   let usedMs = -1;
@@ -87,6 +158,9 @@ const makeTween = (
   };
   const write = (v: number): void => {
     current = v;
+    // the drawer publishes the effective width from the PAINTED value — the
+    // panel's column budget must track the slide, not jump to its target
+    onWrite?.(v);
     const n = getNode();
     if (!n) return;
     try {
@@ -142,6 +216,7 @@ const makeTween = (
       ensure(ms);
       tl?.restart();
     },
+    value: () => read(),
   };
 };
 
@@ -173,22 +248,13 @@ type Panel = {
   collapsed(): number;
   size(): number;
   restore(): void;
-  // width this panel occupies for grid column math (width panels only; -1 = n/a)
-  effective(open: boolean): number;
   // only width panels (sidebar/preview) change how many columns the grid fits
   rebuildsGrid: boolean;
-  // last published effective width — a settle only rebuilds when it changed
-  lastEff: number;
   // a "hidden" collapse must toggle `visible` — width 0 + overflow:hidden does
   // NOT push a scissor rect (OpenTUI requires width > 0), so fixed-width
   // children paint through a zero-width parent
   applyVisible(open: boolean): void;
-  open: boolean;
-  // false until the drawer has applied a state to this panel since it became
-  // enabled — a terminal opening (which sets its own height) must snap, not
-  // drift, on the next near-edge move
-  initialized: boolean;
-  timer: ReturnType<typeof setTimeout> | null;
+  phase: PanelPhase;
   tween: Tween;
 };
 
@@ -218,8 +284,57 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     }
   };
 
+  // the width a panel occupies RIGHT NOW — the grid's column budget. With
+  // auto-hide on this is the PAINTED width (the tween's tracked value): the
+  // logical state would publish the slide's TARGET while the panel is still
+  // moving, and the grid's column math would then disagree with the paint.
+  const effectiveWidth = (p: Panel): number => {
+    const ui = ctx.ui();
+    if (p.key === "sidebar") return ui.sidebarAutoHide ? p.tween.value() : ui.sidebarWidth;
+    if (p.key === "preview") {
+      if (!ui.previewEnabled) return 0;
+      return ui.previewAutoHide ? p.tween.value() : ui.previewWidth;
+    }
+    // the terminal's height never changes the column budget
+    return -1;
+  };
+
+  // the width a panel takes when the drawer does NOT manage it (auto-hide
+  // off): the full configured width (a disabled preview shows nothing).
+  const shownWidth = (p: Panel): number => {
+    const ui = ctx.ui();
+    if (p.key === "sidebar") return ui.sidebarWidth;
+    if (p.key === "preview") return ui.previewEnabled ? ui.previewWidth : 0;
+    return ui.terminalHeight + 1;
+  };
+
+  // publish a panel's effective width (the grid's column budget)
+  const publishEffective = (p: Panel): void => {
+    const eff = effectiveWidth(p);
+    if (p.key === "sidebar") ctx.setEffectiveSidebar(eff);
+    else if (p.key === "preview") ctx.setEffectivePreview(eff);
+  };
+
+  const makePanel = (spec: Omit<Panel, "phase" | "tween">): Panel => {
+    const p = {
+      ...spec,
+      phase: { kind: "fresh", open: false, timer: null } as PanelPhase,
+      tween: null as unknown as Tween,
+    };
+    // every painted value republishes the effective width — the column
+    // budget follows the slide
+    p.tween = makeTween(
+      () => getNode(spec.nodeId),
+      spec.axis,
+      ctx.renderer,
+      owner,
+      () => publishEffective(p),
+    );
+    return p;
+  };
+
   const panels: Panel[] = [
-    {
+    makePanel({
       key: "sidebar",
       edge: "left",
       nodeId: "tfm-sidebar-root",
@@ -237,10 +352,6 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
           } catch {}
         }
       },
-      effective: (open) => {
-        const ui = ctx.ui();
-        return ui.sidebarAutoHide ? (open ? ui.sidebarWidth : collapsedSize(ui.sidebarCollapseStyle)) : ui.sidebarWidth;
-      },
       applyVisible: (open) => {
         const ui = ctx.ui();
         const n = getNode("tfm-sidebar-root");
@@ -251,13 +362,8 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
         }
       },
       rebuildsGrid: true,
-      lastEff: -1,
-      open: false,
-      initialized: false,
-      timer: null,
-      tween: makeTween(() => getNode("tfm-sidebar-root"), "width", ctx.renderer, owner),
-    },
-    {
+    }),
+    makePanel({
       key: "preview",
       edge: "right",
       nodeId: "tfm-preview",
@@ -274,11 +380,6 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
           } catch {}
         }
       },
-      effective: (open) => {
-        const ui = ctx.ui();
-        if (!ui.previewEnabled) return 0;
-        return ui.previewAutoHide ? (open ? ui.previewWidth : collapsedSize(ui.previewCollapseStyle)) : ui.previewWidth;
-      },
       applyVisible: (open) => {
         const ui = ctx.ui();
         const n = getNode("tfm-preview");
@@ -289,13 +390,8 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
         }
       },
       rebuildsGrid: true,
-      lastEff: -1,
-      open: false,
-      initialized: false,
-      timer: null,
-      tween: makeTween(() => getNode("tfm-preview"), "width", ctx.renderer, owner),
-    },
-    {
+    }),
+    makePanel({
       key: "terminal",
       edge: "bottom",
       nodeId: "tfm-term-host",
@@ -314,26 +410,10 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
           } catch {}
         }
       },
-      effective: () => -1,
       applyVisible: () => {},
       rebuildsGrid: false,
-      lastEff: -1,
-      open: false,
-      initialized: false,
-      timer: null,
-      tween: makeTween(() => getNode("tfm-term-host"), "height", ctx.renderer, owner),
-    },
+    }),
   ];
-
-  // publish a panel's effective width and report whether it changed
-  const writeEffective = (p: Panel): boolean => {
-    const eff = p.effective(p.open);
-    if (p.key === "sidebar") ctx.setEffectiveSidebar(eff);
-    else if (p.key === "preview") ctx.setEffectivePreview(eff);
-    const changed = eff !== p.lastEff;
-    p.lastEff = eff;
-    return changed;
-  };
 
   // coalesce rebuild requests from both width panels into ONE grid rebuild
   // (rapid pane toggling used to wave a full clear+rebuild per toggle, which is
@@ -350,10 +430,28 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     }, 80);
   };
 
+  // drop the panel's armed transition (the phase owns its pending timer)
+  const clearArmed = (p: Panel): void => {
+    const t = p.phase.timer;
+    if (t) {
+      try {
+        clearTimeout(t);
+      } catch {}
+    }
+    p.phase = withTimer(p.phase, null);
+  };
+
   const apply = (p: Panel, open: boolean, animate: boolean): void => {
-    p.open = open;
+    // an apply supersedes any armed transition — the timer is CLEARED, not
+    // just dropped from the record (a stray timeout would apply a second
+    // time, long after the panel settled)
+    clearArmed(p);
+    // the width the grid assumes right now — the settle compares against it
+    const before = effectiveWidth(p);
     const target = open ? p.expanded() : p.collapsed();
-    const widthChanged = writeEffective(p);
+    // the phase names the slide in flight; the logical state IS the target
+    // from here on (the old `open` field flipped here too)
+    p.phase = open ? { kind: "opening", timer: null } : { kind: "closing", timer: null };
     // Reveal BEFORE an open slide. A close does NOT hide immediately: a
     // `hidden` collapse must stay visible for the whole slide and hide on
     // settle, or the collapse is never seen (it just blinks away). At width 0
@@ -364,13 +462,18 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
       if (p.key === "sidebar") setTitleVisible(true);
     }
     p.tween.run(target, animate ? ctx.ui().hoverAnimMs : 0, () => {
-      if (!p.open) {
+      // the slide settled — the phase is the settled state now. An armed
+      // transition (the mouse left mid-slide) SURVIVES the settle: the
+      // pending close still belongs to the panel.
+      const armed = p.phase.timer;
+      p.phase = open ? { kind: "open", timer: armed } : { kind: "closed", timer: armed };
+      if (!open) {
         p.applyVisible(false);
         if (p.key === "sidebar") setTitleVisible(false);
       }
       // rebuild the grid only when a width panel actually changed the column
       // budget, and only once the slide settled
-      if (animate && p.rebuildsGrid && widthChanged) requestSettle();
+      if (animate && p.rebuildsGrid && effectiveWidth(p) !== before) requestSettle();
     });
   };
 
@@ -383,28 +486,25 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     // a keyboard-focused terminal never collapses: drop the close (and any
     // armed close timer) instead of scheduling it — opens proceed normally
     if (!wants && keepOpen(p)) {
-      if (p.timer) {
-        clearTimeout(p.timer);
-        p.timer = null;
-      }
+      clearArmed(p);
       return;
     }
-    if (wants === p.open) {
-      if (p.timer) {
-        clearTimeout(p.timer);
-        p.timer = null;
-      }
+    if (wants === phaseOpen(p.phase)) {
+      clearArmed(p);
       return;
     }
-    if (p.timer) clearTimeout(p.timer);
+    clearArmed(p);
     const ui = ctx.ui();
     const delay = wants ? ui.hoverOpenDelayMs : ui.hoverCloseDelayMs;
-    p.timer = setTimeout(() => {
-      p.timer = null;
+    const timer = setTimeout(() => {
+      // the timer fired — it is the phase's own, so drop it before acting
+      if (p.phase.timer === timer) p.phase = withTimer(p.phase, null);
       if (ctx.blocked() || !p.enabled()) return;
       apply(p, wants, true);
       log(`${p.key} ${wants ? "open" : "close"}`);
     }, delay);
+    // the timer rides in the phase record — "armed" is not a second truth
+    p.phase = withTimer(p.phase, timer);
   };
 
   const onMove = (ev: MouseEvent): void => {
@@ -412,7 +512,12 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
     const ui = ctx.ui();
     for (const p of panels) {
       if (!p.enabled()) {
-        p.initialized = false;
+        // the drawer does not manage this panel: drop the armed transition
+        // and the applied state (the next move snaps instead of sliding)
+        if (p.phase.kind !== "fresh") {
+          clearArmed(p);
+          p.phase = { kind: "fresh", open: phaseOpen(p.phase), timer: null };
+        }
         continue;
       }
       const wants = drawerWantsOpen({
@@ -420,13 +525,12 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
         pos: p.edge === "bottom" ? ev.y : ev.x,
         size: p.size(),
         expanded: p.expanded(),
-        open: p.open,
+        open: phaseOpen(p.phase),
         zone: ui.hoverZoneCells,
       });
-      // first move after enable: snap to the correct state (a terminal sets its
-      // own height on open; the drawer must reclaim it, not drift)
-      if (!p.initialized) {
-        p.initialized = true;
+      if (p.phase.kind === "fresh") {
+        // first move after enable: snap to the correct state (a terminal sets
+        // its own height on open; the drawer must reclaim it, not drift)
         apply(p, wants || keepOpen(p), false);
         continue;
       }
@@ -439,24 +543,22 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
   // states without animation, and restore panels that just got disabled.
   const refresh = (): void => {
     for (const p of panels) {
-      if (p.timer) {
-        clearTimeout(p.timer);
-        p.timer = null;
-      }
+      clearArmed(p);
       if (!p.enabled()) {
-        p.initialized = false;
+        // the drawer stops managing this panel — restore it and forget the
+        // applied state (a later enable snaps instead of drifting)
+        p.phase = { kind: "fresh", open: phaseOpen(p.phase), timer: null };
         try {
           p.restore();
         } catch {}
         // a panel that just got disabled must be restored to its shown width
         // HERE — the drawer owns panel widths, so it can't rely on applyConfig
         // having reset the node (a width-panel left collapsed would stick)
-        if (p.rebuildsGrid) p.tween.run(p.effective(true), 0);
-        writeEffective(p);
+        if (p.rebuildsGrid) p.tween.run(shownWidth(p), 0);
+        publishEffective(p);
         continue;
       }
-      apply(p, p.open || keepOpen(p), false);
-      p.initialized = true;
+      apply(p, phaseOpen(p.phase) || keepOpen(p), false);
     }
   };
 
@@ -465,11 +567,10 @@ export const makeHoverDrawer = (ctx: HoverDrawerCtx) => {
   for (const p of panels) {
     if (p.enabled()) {
       apply(p, false, false);
-      p.initialized = true;
     } else {
-      p.applyVisible(p.open);
-      if (p.rebuildsGrid) p.tween.run(p.effective(true), 0);
-      writeEffective(p);
+      p.applyVisible(false);
+      if (p.rebuildsGrid) p.tween.run(shownWidth(p), 0);
+      publishEffective(p);
     }
   }
 

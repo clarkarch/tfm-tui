@@ -231,6 +231,125 @@ describe("makeHoverDrawer (headless)", () => {
     }
   });
 
+  test("the effective width tracks the painted width during a slide", async () => {
+    // The grid's column budget is the panel's EFFECTIVE width. It must
+    // follow the PAINTED width, not the logical state: the old code
+    // published the FINAL width the moment the slide started, so the column
+    // math disagreed with the paint for the whole slide (the grid reserved
+    // room for a panel that was still growing).
+    const ui = {
+      ...defaultConfig.ui,
+      sidebarAutoHide: true,
+      sidebarCollapseStyle: "rail",
+      hoverZoneCells: 2,
+      hoverOpenDelayMs: 0,
+      hoverCloseDelayMs: 0,
+      hoverAnimMs: 400,
+    };
+    eff = { sidebar: -1, preview: -1 };
+    settles = 0;
+    mkDrawer(ui);
+    const node = () => t.renderer.root.findDescendantById("tfm-sidebar-root") as any;
+    await t.renderOnce();
+    expect(eff.sidebar).toBe(collapsedSize("rail"));
+
+    t.renderer.start();
+    try {
+      await t.mockMouse.moveTo(0, 3);
+      const seen: Array<{ painted: number; published: number }> = [];
+      for (let i = 0; i < 60; i++) {
+        await Bun.sleep(8);
+        seen.push({ painted: node().width, published: eff.sidebar });
+      }
+      // the slide really ran (an intermediate frame proves it)
+      const mid = seen.filter((s) => s.painted > collapsedSize("rail") && s.painted < ui.sidebarWidth);
+      expect(mid.length).toBeGreaterThan(0);
+      for (const s of mid) {
+        // the published width never ran AHEAD of the paint (the tween writes
+        // a frame before the layout catches up — a couple of cells is the
+        // whole tolerance; the old code published the FINAL width at once)
+        expect(s.published - s.painted).toBeLessThanOrEqual(6);
+      }
+      // ... and it grew WITH the slide instead of snapping to the final width
+      const published = new Set(mid.map((s) => s.published).filter((v) => v < ui.sidebarWidth));
+      expect(published.size).toBeGreaterThan(2);
+      // ... and it settled on the final width
+      expect(eff.sidebar).toBe(ui.sidebarWidth);
+    } finally {
+      t.renderer.pause();
+    }
+    // the settle still asks the grid to re-column (the width changed)
+    await settleUntil(() => settles > 0);
+  });
+
+  test("the panel's phase names the slide in flight and settles on the open state", async () => {
+    // the panel's state is ONE record: the logical state and the slide in
+    // flight are named by the phase (the old code carried `open` +
+    // `initialized` + a loose timer, and `open` flipped before the slide
+    // even started)
+    const ui = {
+      ...defaultConfig.ui,
+      sidebarAutoHide: true,
+      sidebarCollapseStyle: "rail",
+      hoverZoneCells: 2,
+      hoverOpenDelayMs: 0,
+      hoverCloseDelayMs: 0,
+      hoverAnimMs: 400,
+    };
+    eff = { sidebar: -1, preview: -1 };
+    settles = 0;
+    const drawer = mkDrawer(ui);
+    const sidebar = drawer.panels.find((p) => p.key === "sidebar");
+    expect(sidebar?.phase.kind).toBe("closed");
+
+    t.renderer.start();
+    try {
+      await t.mockMouse.moveTo(0, 3);
+      const kinds: string[] = [];
+      for (let i = 0; i < 60; i++) {
+        await Bun.sleep(8);
+        kinds.push(sidebar?.phase.kind ?? "");
+      }
+      // the slide was named while it ran ...
+      expect(kinds).toContain("opening");
+      // ... and the phase settled on the open state
+      expect(sidebar?.phase.kind).toBe("open");
+    } finally {
+      t.renderer.pause();
+    }
+  });
+
+  test("the phase owns the pending transition — leaving the zone drops it", async () => {
+    // the armed timer rides INSIDE the phase (the panel owns its pending
+    // transition); a mouse that leaves the zone before the delay elapses must
+    // cancel it — the panel stays collapsed
+    const ui = {
+      ...defaultConfig.ui,
+      sidebarAutoHide: true,
+      sidebarCollapseStyle: "rail",
+      hoverZoneCells: 2,
+      hoverOpenDelayMs: 200,
+      hoverCloseDelayMs: 200,
+      hoverAnimMs: 0,
+    };
+    eff = { sidebar: -1, preview: -1 };
+    settles = 0;
+    const drawer = mkDrawer(ui);
+    const sidebar = drawer.panels.find((p) => p.key === "sidebar");
+    const node = () => t.renderer.root.findDescendantById("tfm-sidebar-root") as any;
+    await t.renderOnce();
+    expect(node().width).toBe(collapsedSize("rail"));
+
+    await t.mockMouse.moveTo(0, 3); // near the edge → the open is armed
+    expect(sidebar?.phase.timer).not.toBeNull();
+    await t.mockMouse.moveTo(40, 3); // away again → the armed open is dropped
+    expect(sidebar?.phase.timer).toBeNull();
+
+    await Bun.sleep(300); // past the open delay
+    await t.renderOnce();
+    expect(node().width).toBe(collapsedSize("rail"));
+  });
+
   test("refresh applies collapse-style and auto-hide changes live", async () => {
     // the settings GUI / live config reload path: mutate ui() then refresh()
     const ui = {
@@ -379,6 +498,45 @@ describe("terminal auto-hide follows ui().terminalHeight (headless)", () => {
     drawer.refresh();
     await t2.renderOnce();
     expect(host().height).toBe(10);
+  });
+
+  test("a terminal that opens at runtime is reclaimed by a snap, not a drift", async () => {
+    // the drawer's phase is "fresh" for a panel it has not applied yet (the
+    // terminal pane set its own height when it opened): the first mouse move
+    // SNAPS it — a scheduled transition would slide from the terminal's own
+    // height instead, and the pane would drift for the whole slide
+    const ui = {
+      ...defaultConfig.ui,
+      terminalHeight: 9,
+      terminalAutoHide: true,
+      terminalCollapseStyle: "hidden",
+      hoverZoneCells: 2,
+      hoverOpenDelayMs: 0,
+      hoverCloseDelayMs: 0,
+      hoverAnimMs: 400,
+    };
+    let open = false;
+    makeHoverDrawer({
+      renderer: t2.renderer,
+      byId: (id) => t2.renderer.root.findDescendantById(id),
+      ui: () => ui,
+      terminalOpen: () => open,
+      terminalFocused: () => false,
+      blocked: () => false,
+      setEffectiveSidebar: () => {},
+      setEffectivePreview: () => {},
+    });
+    const host = () => t2.renderer.root.findDescendantById("tfm-term-host") as any;
+    // the terminal pane owns its height while the drawer does not manage it
+    host().height = 10;
+    await t2.renderOnce();
+    expect(host().height).toBe(10);
+
+    open = true; // the terminal opens at runtime
+    await t2.mockMouse.moveTo(40, 3); // far from the bottom edge
+    await t2.renderOnce();
+    // snapped to the collapsed height, not sliding down from 10
+    expect(host().height).toBeLessThanOrEqual(1);
   });
 
   test("a keyboard-focused terminal never collapses under auto-hide", async () => {
