@@ -42,12 +42,21 @@ export type TfmSlotData = { cwd: string; selection: string[] };
 // what a plugin may return from activate() under `slots`
 export type TfmSlotContribution = CorePlugin<TfmSlotName, TfmSlotContext, TfmSlotData>["slots"];
 
+// "live" = the OpenTUI slot registry is available; "disabled" = the host
+// degraded to a no-op (a renderer without a slot-registry store). The state
+// is a FIELD, not a different object: a consumer must be able to tell "this
+// host cannot host anything" from "this host is live but not mounted yet"
+// (both look like no-ops through the methods alone).
+export type PluginSlotsStatus = "disabled" | "live";
+
 export type PluginSlots = {
+  readonly status: PluginSlotsStatus;
+  // true while the slot regions are mounted (a live host only)
+  readonly mounted: boolean;
   register(plugin: { id: string; order?: number; slots: TfmSlotContribution }): () => void;
   mount(byId: (id: string) => MaybeNode): void;
   refresh(): void;
   dispose(): void;
-  isMounted(): boolean;
 };
 
 export const makePluginSlots = (opts: {
@@ -64,15 +73,6 @@ export const makePluginSlots = (opts: {
     opts.log?.(`plugin slots disabled: ${errMessage(err)}`);
     registry = null;
   }
-  if (!registry) {
-    return {
-      register: () => () => {},
-      mount: () => {},
-      refresh: () => {},
-      dispose: () => {},
-      isMounted: () => false,
-    };
-  }
   const live = registry;
   const mounted: SlotRenderable<TfmSlotName, TfmSlotContext, TfmSlotData>[] = [];
   // Each registration gets a unique registry id. The loader loads the NEW
@@ -81,35 +81,16 @@ export const makePluginSlots = (opts: {
   // would throw "already registered" and silently drop the slots on every
   // hot-reload. The returned cleanup removes only its own generation.
   let regSeq = 0;
-  // skip work when nothing a contribution reads has changed (avoids native
-  // node churn on every renderAll in this OOM-sensitive app)
-  let lastSig = "\u0000";
+  // The pushed-data cache: the CONTENT signature of the data the mounted slots
+  // last received (null = nothing pushed yet). Skipping the push when nothing
+  // a contribution reads has changed avoids native node churn on every
+  // renderAll in this OOM-sensitive app.
+  let lastSig: string | null = null;
 
-  const sig = (): string => {
-    let cwd = "";
-    let selection: string[] = [];
-    try {
-      cwd = opts.context.cwd();
-    } catch {}
-    try {
-      selection = opts.context.selection();
-    } catch {}
-    return `${cwd}\u0000${selection.join("\u0001")}`;
-  };
-
-  const refresh = (): void => {
-    const s = sig();
-    if (s === lastSig) return;
-    lastSig = s;
-    const d = data();
-    for (const slot of mounted) {
-      try {
-        slot.data = d; // the setter reconciles mounted contributions
-      } catch {}
-    }
-  };
-
-  const data = (): TfmSlotData => {
+  // ONE read of the context: the data AND its signature come from the SAME
+  // snapshot. Reading cwd and selection twice could mix a pre-navigation cwd
+  // with a post-navigation selection.
+  const currentData = (): TfmSlotData => {
     let cwd = "";
     let selection: string[] = [];
     try {
@@ -120,15 +101,40 @@ export const makePluginSlots = (opts: {
     } catch {}
     return { cwd, selection };
   };
+  const sigOf = (d: TfmSlotData): string => `${d.cwd}\u0000${d.selection.join("\u0001")}`;
 
-  const mountInto = (parent: MaybeNode, name: TfmSlotName, layout: Record<string, unknown>): void => {
-    if (!parent) return;
+  // Push the current data into the mounted slots. `force` re-pushes even when
+  // the content is unchanged — a NEW registration must be handed a snapshot
+  // taken NOW. The SlotRenderable re-renders a contribution only when the
+  // data OBJECT changed, so a contribution that inherits the previous
+  // generation's object keeps the old cwd/selection (a selection change does
+  // not run a renderAll, so the host's last push can be stale).
+  const push = (force: boolean): void => {
+    const d = currentData();
+    const s = sigOf(d);
+    if (!force && s === lastSig) return;
+    lastSig = s;
+    for (const slot of mounted) {
+      try {
+        slot.data = d; // the setter reconciles mounted contributions
+      } catch {}
+    }
+  };
+
+  const mountInto = (
+    registry: CoreSlotRegistry<TfmSlotName, TfmSlotContext, TfmSlotData>,
+    parent: MaybeNode,
+    name: TfmSlotName,
+    layout: Record<string, unknown>,
+    d: TfmSlotData,
+  ): boolean => {
+    if (!parent) return false;
     try {
       const slot = new SlotRenderable<TfmSlotName, TfmSlotContext, TfmSlotData>(opts.renderer, {
         id: `tfm-plugin-slot-${name}`,
-        registry: live,
+        registry,
         name,
-        data: data(),
+        data: d,
         mode: "append",
         ...layout,
         // a contribution that throws shows nothing rather than crashing the pane
@@ -136,26 +142,52 @@ export const makePluginSlots = (opts: {
       });
       parent.add(slot);
       mounted.push(slot);
+      return true;
     } catch (err) {
       opts.log?.(`plugin slot ${name} mount failed: ${errMessage(err)}`);
+      return false;
     }
   };
 
   return {
+    status: live ? "live" : "disabled",
+    get mounted(): boolean {
+      return mounted.length > 0;
+    },
     register: (plugin) => {
+      if (!live) return () => {};
       const id = `${plugin.id}#${++regSeq}`;
+      // Push BEFORE the registration: the new contribution then renders ONCE,
+      // with a snapshot of the CURRENT data. (Registering first would render
+      // it with the object the previous generation left behind, and the push
+      // that follows would render every contribution a second time.)
+      push(true);
       return registerCorePlugin(live, { ...plugin, id });
     },
     mount: (byId) => {
+      if (!live) return;
       if (mounted.length) return;
+      // ONE data object for both regions: the SlotRenderable renders its
+      // contributions with the data it was constructed with, so handing it a
+      // different object afterwards would render every contribution TWICE.
+      const d = currentData();
+      let allMounted = true;
       // statusbar: a 1-row segment row; contributions append after the label
-      mountInto(byId("tfm-status"), "statusbar", { height: 1, flexDirection: "row", columnGap: 1 });
+      if (!mountInto(live, byId("tfm-status"), "statusbar", { height: 1, flexDirection: "row", columnGap: 1 }, d)) {
+        allMounted = false;
+      }
       // sidebar-footer: a full-width stack under the places list
-      mountInto(byId("tfm-sidebar-root"), "sidebar-footer", { width: "100%", flexDirection: "column" });
-      lastSig = "\u0000";
-      refresh();
+      if (!mountInto(live, byId("tfm-sidebar-root"), "sidebar-footer", { width: "100%", flexDirection: "column" }, d)) {
+        allMounted = false;
+      }
+      // the mounted slots already carry `d` → the cache claims that push; a
+      // region that failed to mount gets the next refresh's push instead
+      lastSig = allMounted ? sigOf(d) : null;
     },
-    refresh,
+    refresh: () => {
+      if (!live) return;
+      push(false);
+    },
     dispose: () => {
       for (const slot of mounted.splice(0)) {
         try {
@@ -163,9 +195,10 @@ export const makePluginSlots = (opts: {
         } catch {}
       }
       try {
-        live.clear();
+        live?.clear();
       } catch {}
+      // a disposed host holds no "pushed" claim — the next mount starts clean
+      lastSig = null;
     },
-    isMounted: () => mounted.length > 0,
   };
 };
