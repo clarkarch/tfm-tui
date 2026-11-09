@@ -2,6 +2,36 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeSidebarAnim, sidebarFrameAt, sidebarStyleFrom, type SidebarAnimOpts } from "./ui-sidebar-anim";
+import type { Scheduler } from "../lib/uiutil";
+
+// virtual clock: the start gate + the intro's safety net are timing units —
+// no wall-clock sleeps
+const makeClock = () => {
+  const jobs: { at: number; fn: () => void }[] = [];
+  let now = 0;
+  return {
+    setTimeout(cb: () => void, ms: number): unknown {
+      const job = { at: now + ms, fn: cb };
+      jobs.push(job);
+      return job;
+    },
+    clearTimeout(handle: unknown): void {
+      const i = jobs.indexOf(handle as { at: number; fn: () => void });
+      if (i >= 0) jobs.splice(i, 1);
+    },
+    advance(ms: number): void {
+      const end = now + ms;
+      for (;;) {
+        jobs.sort((a, b) => a.at - b.at);
+        const next = jobs[0];
+        if (!next || next.at > end) break;
+        now = next.at;
+        jobs.shift()!.fn();
+      }
+      now = end;
+    },
+  };
+};
 
 const opts = (over: Partial<SidebarAnimOpts> = {}): SidebarAnimOpts => ({
   enabled: true,
@@ -29,7 +59,7 @@ const fakeNodes = () => {
   };
 };
 
-const fakeCtx = (o: SidebarAnimOpts, ids: { root: string; rows: string[]; title?: string }) => {
+const fakeCtx = (o: SidebarAnimOpts, ids: { root: string; rows: string[]; title?: string }, sched?: Scheduler) => {
   const nodes = fakeNodes();
   nodes.add(ids.root);
   for (const r of ids.rows) nodes.add(r);
@@ -44,6 +74,7 @@ const fakeCtx = (o: SidebarAnimOpts, ids: { root: string; rows: string[]; title?
     rootId: () => ids.root,
     rowIds: () => ids.rows,
     titleId: () => titleId,
+    sched,
   });
   return { anim, byId: nodes.byId };
 };
@@ -196,6 +227,92 @@ describe("makeSidebarAnim (synchronous paths)", () => {
     anim.stop();
     expect((nodes.byId("sb-re-0") as any).opacity).toBe(1);
     expect((nodes.byId("sb-re-2") as any).opacity).toBe(1);
+  });
+
+  test("a staged intro that never starts restores full opacity", () => {
+    // the intro stages frame 0 (opacity 0) BEFORE anything guarantees a
+    // start: if the start gate passes but the engine never ticks (a dead
+    // renderer, a terminal that never presents a frame), the sidebar must
+    // not stay INVISIBLE — the intro is settled instead.
+    const clock = makeClock();
+    const { anim, byId } = fakeCtx(opts({ style: "fade" }), { root: "sb-never", rows: [] }, clock);
+    try {
+      anim.play();
+      expect((byId("sb-never") as any).opacity).toBe(0); // staged
+      // the start gate passes, the engine never advances
+      clock.advance(2000);
+      expect((byId("sb-never") as any).opacity).toBe(1); // restored to rest
+      expect((byId("sb-never") as any).translateX).toBe(0);
+    } finally {
+      anim.stop();
+    }
+  });
+
+  test("the phase names the intro's state (idle → armed → running → idle)", () => {
+    // the phase is ONE named state (the old code encoded idle/staged/armed/
+    // running in eight parallel variables with no name)
+    const clock = makeClock();
+    const { anim } = fakeCtx(opts({ style: "fade" }), { root: "sb-phase", rows: [] }, clock);
+    try {
+      expect(anim.phase()).toBe("idle");
+      anim.play();
+      expect(anim.phase()).toBe("armed"); // the start gate is pending
+      clock.advance(100); // the fallback consumes the gate
+      expect(anim.phase()).toBe("running");
+      clock.advance(1000); // the safety net settles an intro that never advances
+      expect(anim.phase()).toBe("idle");
+    } finally {
+      anim.stop();
+    }
+  });
+
+  test("the start gate fires once (a repeated frame callback cannot restart the intro)", async () => {
+    // the gate is ONE record: the frame callback and the timeout fallback are
+    // armed and cancelled TOGETHER. A renderer that never removes the frame
+    // callback would call it again after the intro started — a second start
+    // would restart the timeline AND re-arm the watchdog, so a stuck intro
+    // could never be settled.
+    const clock = makeClock();
+    const nodes = fakeNodes();
+    nodes.add("sb-gate");
+    let frameCb: ((dt: number) => Promise<void>) | null = null;
+    // a renderer WITHOUT removeFrameCallback: the callback stays registered
+    const renderer = {
+      setFrameCallback: (fn: (dt: number) => Promise<void>) => {
+        frameCb = fn;
+      },
+      hasFrameCallback: () => frameCb !== null,
+    } as unknown as CliRenderer;
+    const anim = makeSidebarAnim({
+      renderer,
+      byId: nodes.byId,
+      opts: () => opts({ style: "fade" }),
+      rootId: () => "sb-gate",
+      rowIds: () => [],
+      titleId: () => "sb-gate-title",
+      sched: clock,
+    });
+    const fire = async (): Promise<void> => {
+      const fn = frameCb;
+      if (fn) await fn(16);
+    };
+    try {
+      anim.play();
+      expect(anim.phase()).toBe("armed");
+      await fire(); // frame 1 — the gate waits for the 2nd presented frame
+      expect(anim.phase()).toBe("armed");
+      await fire(); // frame 2 — the gate fires
+      expect(anim.phase()).toBe("running");
+      // a LATE frame callback (the renderer never removed it) must not start
+      // the intro again — the watchdog keeps its original deadline
+      clock.advance(100);
+      await fire();
+      clock.advance(170); // the watchdog's deadline (120ms intro + 150ms slack)
+      expect((nodes.byId("sb-gate") as any).opacity).toBe(1); // settled
+      expect(anim.phase()).toBe("idle");
+    } finally {
+      anim.stop();
+    }
   });
 });
 

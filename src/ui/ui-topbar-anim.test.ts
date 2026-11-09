@@ -2,6 +2,36 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Box, type CliRenderer } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { makeTopbarAnim, type TopbarAnimOpts } from "./ui-sidebar-anim";
+import type { Scheduler } from "../lib/uiutil";
+
+// virtual clock: the start gate + the intro's safety net are timing units —
+// no wall-clock sleeps
+const makeClock = () => {
+  const jobs: { at: number; fn: () => void }[] = [];
+  let now = 0;
+  return {
+    setTimeout(cb: () => void, ms: number): unknown {
+      const job = { at: now + ms, fn: cb };
+      jobs.push(job);
+      return job;
+    },
+    clearTimeout(handle: unknown): void {
+      const i = jobs.indexOf(handle as { at: number; fn: () => void });
+      if (i >= 0) jobs.splice(i, 1);
+    },
+    advance(ms: number): void {
+      const end = now + ms;
+      for (;;) {
+        jobs.sort((a, b) => a.at - b.at);
+        const next = jobs[0];
+        if (!next || next.at > end) break;
+        now = next.at;
+        jobs.shift()!.fn();
+      }
+      now = end;
+    },
+  };
+};
 
 const opts = (over: Partial<TopbarAnimOpts> = {}): TopbarAnimOpts => ({
   enabled: true,
@@ -28,7 +58,7 @@ const fakeNodes = () => {
   };
 };
 
-const fakeCtx = (o: TopbarAnimOpts, entries: string[]) => {
+const fakeCtx = (o: TopbarAnimOpts, entries: string[], sched?: Scheduler) => {
   const nodes = fakeNodes();
   for (const b of entries) nodes.add(b);
   const anim = makeTopbarAnim({
@@ -36,6 +66,7 @@ const fakeCtx = (o: TopbarAnimOpts, entries: string[]) => {
     byId: nodes.byId,
     opts: () => o,
     barIds: () => entries,
+    sched,
   });
   return { anim, byId: nodes.byId };
 };
@@ -150,6 +181,44 @@ describe("makeTopbarAnim (synchronous paths)", () => {
     anim.playIds(["tb-d0"]);
     expect((nodes.byId("tb-d0") as any).opacity).toBe(1);
     anim.stop();
+  });
+
+  test("a staged intro that never starts restores full opacity", () => {
+    // the intro stages frame 0 (opacity 0) BEFORE anything guarantees a
+    // start: if the start gate passes but the engine never ticks (a dead
+    // renderer, a terminal that never presents a frame), the top bar must
+    // not stay INVISIBLE — the intro is settled instead. The topbar runs the
+    // SAME machine as the sidebar, so it inherits the safety net.
+    const clock = makeClock();
+    const { anim, byId } = fakeCtx(opts({ style: "fade" }), ["tb-never-0", "tb-never-1"], clock);
+    try {
+      anim.play();
+      expect((byId("tb-never-0") as any).opacity).toBe(0); // staged
+      expect((byId("tb-never-1") as any).opacity).toBe(0);
+      // the start gate passes, the engine never advances
+      clock.advance(2000);
+      expect((byId("tb-never-0") as any).opacity).toBe(1); // restored to rest
+      expect((byId("tb-never-1") as any).opacity).toBe(1);
+      expect((byId("tb-never-0") as any).translateY).toBe(0);
+    } finally {
+      anim.stop();
+    }
+  });
+
+  test("the phase names the intro's state (idle → armed → running → idle)", () => {
+    const clock = makeClock();
+    const { anim } = fakeCtx(opts({ style: "fade" }), ["tb-phase-0"], clock);
+    try {
+      expect(anim.phase()).toBe("idle");
+      anim.play();
+      expect(anim.phase()).toBe("armed"); // the start gate is pending
+      clock.advance(100); // the fallback consumes the gate
+      expect(anim.phase()).toBe("running");
+      clock.advance(1000); // the safety net settles an intro that never advances
+      expect(anim.phase()).toBe("idle");
+    } finally {
+      anim.stop();
+    }
   });
 });
 
