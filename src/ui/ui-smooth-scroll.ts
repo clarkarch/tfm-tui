@@ -56,6 +56,17 @@ export const glideOffsetAt = (start: number, p: number): number => {
   return q === 0 ? 0 : q;
 };
 
+// The glide's state: ONE record. The old code had four parallel fields
+// (`tl`, `usedMs`, `node`, `start`) whose combinations named "idle" vs
+// "gliding" vs "gliding with a dead node" — and the dead-node case was
+// invisible: `write` swallowed the throw and the timeline kept driving a
+// node that was already gone. The node and the distance it glides FROM are
+// the glide's state; the timeline and its duration are RESOURCES (the
+// timeline is rebuilt when the duration changes).
+export type GlidePhase = { kind: "idle" } | { kind: "gliding" };
+
+type GlideState = { kind: "idle" } | { kind: "gliding"; node: MaybeNode; start: number };
+
 export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
   // 0.6.0: per-renderer timeline engine (same rule as ui-grid-anim) — fakes
   // without a frame loop keep the legacy default-engine path below.
@@ -64,12 +75,15 @@ export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
     if (typeof ctx.renderer?.setFrameCallback === "function") owner = getTimelineEngine(ctx.renderer);
   } catch {}
   let tl: ReturnType<typeof createTimeline> | null = null;
-  let usedMs = -1;
+  // the duration the CURRENT timeline was built for (a glide with another
+  // duration gets its own timeline)
+  let tlMs = -1;
   const holder = { p: 0 };
-  let node: MaybeNode = null;
-  let start = 0;
+  let state: GlideState = { kind: "idle" };
 
   const write = (v: number): void => {
+    if (state.kind !== "gliding") return;
+    const node = state.node;
     if (!node || (node as { isDestroyed?: boolean }).isDestroyed) return;
     try {
       (node as { translateY?: number }).translateY = v;
@@ -77,27 +91,27 @@ export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
   };
 
   const stop = (): void => {
+    // snap the last driven node home (a no-op on a destroyed one) BEFORE the
+    // state is cleared — the write reads the node from the state
+    write(0);
     if (tl) {
       try {
         (owner ?? engine).unregister(tl);
       } catch {}
     }
     tl = null;
-    usedMs = -1;
-    // snap the last driven node home (a no-op on a destroyed one)
-    write(0);
-    node = null;
-    start = 0;
+    tlMs = -1;
+    state = { kind: "idle" };
   };
 
   const ensure = (ms: number): void => {
-    if (tl && usedMs === ms) return;
+    if (tl && tlMs === ms) return;
     if (tl) {
       try {
         (owner ?? engine).unregister(tl);
       } catch {}
     }
-    usedMs = ms;
+    tlMs = ms;
     tl = owner ? createTimeline({ autoplay: false }, ctx.renderer) : createTimeline({ autoplay: false });
     tl.add(holder, {
       p: 1,
@@ -106,7 +120,7 @@ export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
       // curve would front-load every restart into judder, while even segments
       // chain seamlessly
       ease: "linear",
-      onUpdate: (a: JSAnimation) => write(glideOffsetAt(start, a.progress)),
+      onUpdate: (a: JSAnimation) => write(glideOffsetAt(state.kind === "gliding" ? state.start : 0, a.progress)),
       onComplete: () => {
         write(0);
       },
@@ -123,10 +137,9 @@ export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
       if (!t || !Number.isFinite(deltaCells) || Math.round(deltaCells) === 0 || !(ms > 0)) {
         return;
       }
-      node = t;
-      start = Math.round(deltaCells);
+      state = { kind: "gliding", node: t, start: Math.round(deltaCells) };
       holder.p = 0;
-      write(start);
+      write(state.start);
       ensure(ms);
       tl?.restart();
     } catch {
@@ -134,7 +147,9 @@ export const makeSmoothGlide = (ctx: { renderer: CliRenderer }) => {
     }
   };
 
-  return { glide, stop };
+  const phase = (): GlidePhase => (state.kind === "gliding" ? { kind: "gliding" } : { kind: "idle" });
+
+  return { glide, stop, phase };
 };
 
 // --- Wheel stepping: the half of smooth scrolling the container glide can't
@@ -178,84 +193,133 @@ export const wheelBeatMs = (drainMs: number, remainingCells: number): number => 
   return Math.max(WHEEL_BEAT_MIN_MS, Math.min(WHEEL_BEAT_MAX_MS, Math.round(drainMs / cells)));
 };
 
+// The queue's state: ONE record. The old code had THREE nullable fields
+// (`target`, `timer`, `lastDriven`) whose COMBINATION named four states
+// (idle / queued / driving / dropped-by-an-external-write) — and whose
+// ILLEGAL combinations were reachable: a push that cancelled the queue
+// cleared `target` but LEFT `lastDriven`, so the next beat compared the
+// scroll position against a cell the smoother no longer owned and dropped
+// the queue — the user's wheel tick was swallowed.
+//
+//   kind    what the queue is
+//   target  the cell the fling is driving toward
+//   at      the cell the scroll is at, as far as the smoother knows: the
+//           cell it last LANDED on (driving) or the cell it observed when
+//           the queue was created (queued). It is the cell the smoother
+//           OWNS, so a position that is neither `at` nor `target` means
+//           somebody else moved the viewport.
+//
+// The timer rides in the record: a queue owns its pending beat, so "armed"
+// is not a second truth about the queue.
+export type WheelPhase =
+  | { kind: "idle" }
+  | { kind: "queued"; target: number }
+  | { kind: "driving"; target: number; at: number };
+
+type WheelState =
+  | { kind: "idle"; timer: null }
+  | { kind: "queued"; target: number; at: number; timer: unknown }
+  | { kind: "driving"; target: number; at: number; timer: unknown };
+
 export const makeWheelSmoother = (ctx: {
   scrollTop(): number;
   scrollBy(deltaCells: number): void;
   sched?: Scheduler;
 }) => {
   const sched: Scheduler = ctx.sched ?? globalThis;
-  let target: number | null = null;
-  let timer: unknown = null;
-  let lastDriven: number | null = null;
+  let state: WheelState = { kind: "idle", timer: null };
   // per-cell beat for the CURRENT drain, derived from the [ui]
   // smooth-scroll-ms budget when the queue was last pushed. Held constant for
   // the drain (even pacing) so the whole burst finishes within ~the budget —
   // recomputing per tick from the shrinking queue would slow the tail back to
-  // the lone-notch pace and stretch a spin's lag out again.
+  // the lone-notch pace and stretch a spin's lag out again. It is a TUNING
+  // value of the drain, not a state.
   let beat = WHEEL_BEAT_MAX_MS;
 
-  const clear = (): void => {
-    if (timer !== null && timer !== undefined) {
+  const setTimer = (timer: unknown): void => {
+    if (state.kind === "idle") return;
+    state =
+      state.kind === "queued"
+        ? { kind: "queued", target: state.target, at: state.at, timer }
+        : { kind: "driving", target: state.target, at: state.at, timer };
+  };
+
+  const goIdle = (): void => {
+    if (state.timer !== null && state.timer !== undefined) {
       try {
-        sched.clearTimeout(timer);
+        sched.clearTimeout(state.timer);
       } catch {}
     }
-    timer = null;
+    state = { kind: "idle", timer: null };
   };
 
   const arm = (): void => {
-    if (timer !== null || target === null) return;
+    if (state.kind === "idle" || state.timer !== null) return;
     try {
-      timer = sched.setTimeout(step, beat);
+      setTimer(sched.setTimeout(step, beat));
     } catch {
-      target = null;
-      lastDriven = null;
+      goIdle();
     }
   };
 
   const step = (): void => {
-    timer = null;
-    if (target === null) return;
+    if (state.kind === "idle") return;
+    // the beat fired — the queue owns no pending timer until it re-arms
+    if (state.timer !== null && state.timer !== undefined) {
+      try {
+        sched.clearTimeout(state.timer);
+      } catch {}
+      setTimer(null);
+    }
+    const target = state.target;
+    const owned = state.at;
     let cur = 0;
     try {
       cur = Math.round(ctx.scrollTop());
     } catch {
-      target = null;
-      lastDriven = null;
+      goIdle();
       return;
     }
     // an external write owns the viewport now — drop the queue (landing
-    // exactly on the target/previous step is a no-op drain, never a fight)
-    if (lastDriven !== null && cur !== lastDriven && cur !== target) {
-      target = null;
-      lastDriven = null;
+    // exactly on the target/the cell we own is a no-op drain, never a fight)
+    if (cur !== owned && cur !== target) {
+      goIdle();
       return;
     }
     if (cur === target) {
-      target = null;
-      lastDriven = null;
+      goIdle();
       return;
     }
     const next = cur + Math.sign(target - cur);
-    lastDriven = next;
     try {
       ctx.scrollBy(next - cur);
     } catch {
-      target = null;
-      lastDriven = null;
+      goIdle();
       return;
     }
-    // landed exactly (the common case — no clamp in the way): drain now
-    // instead of arming a trailing tick that would no-op. A clamped write
-    // leaves cur short of target, so the chain continues and the next tick's
-    // external-write check above drops it.
+    // read back where the scroll ACTUALLY landed: the write can be clamped
+    // (the list's edge) or shortened (a content resize), so the cell we
+    // ASKED for is not always the cell we GOT. Owning the landed cell (not
+    // the intended one) is what keeps a clamp from reading as an external
+    // write.
+    let landed = next;
     try {
-      if (Math.round(ctx.scrollTop()) === target) {
-        target = null;
-        lastDriven = null;
-        return;
-      }
-    } catch {}
+      landed = Math.round(ctx.scrollTop());
+    } catch {
+      landed = next;
+    }
+    if (landed === target) {
+      goIdle();
+      return;
+    }
+    if (landed === cur) {
+      // the scroll cannot move (the list's edge): the fling is done where it
+      // stands — settling HERE is the honest end state, and no beat is kept
+      // alive past it.
+      goIdle();
+      return;
+    }
+    state = { kind: "driving", target, at: landed, timer: null };
     arm();
   };
   // queue a relative move; nothing applies synchronously — the beat picks it
@@ -269,23 +333,36 @@ export const makeWheelSmoother = (ctx: {
       const cur = Math.round(ctx.scrollTop());
       if (!Number.isFinite(cur)) return;
       const cap = maxQueue > 0 ? maxQueue : WHEEL_QUEUE_CELLS;
-      const base = target ?? cur;
-      // a push landing between an external write and the step that would
-      // notice it must rebase — extending a stale target scrolls AWAY from
-      // where the user just jumped
-      const from = target !== null && lastDriven !== null && cur !== lastDriven && cur !== target ? cur : base;
+      // the cell the smoother owns: the one it landed on, or the one it
+      // observed when the queue was created
+      const owned = state.kind === "idle" ? cur : state.at;
+      // somebody else moved the viewport (a keyboard jump, a thumb drag): a
+      // push landing between that write and the beat that would notice it
+      // must REBASE — the tick the user just made is honored and the fling
+      // continues from where the view actually is (the old code kept the
+      // stale target AND the stale ownership, so the next beat dropped the
+      // whole queue and the tick was swallowed).
+      const external = state.kind !== "idle" && cur !== owned && cur !== state.target;
+      const from = external || state.kind === "idle" ? cur : state.target;
       let next = from + d;
       if (next > cur + cap) next = cur + cap;
       if (next < cur - cap) next = cur - cap;
-      target = Math.round(next);
+      const target = Math.round(next);
       if (target === cur) {
-        target = null;
+        // the tick cancels the fling exactly where the view already is
+        goIdle();
         return;
       }
       // derive the beat from the whole distance now queued, and hold it for
       // the drain (a deeper queue = proportionally faster beats within the
       // same budget; a lone notch = the snappy max pace)
-      beat = wheelBeatMs(drainMs, target - (lastDriven ?? cur));
+      beat = wheelBeatMs(drainMs, Math.abs(target - cur));
+      state = {
+        kind: state.kind === "driving" ? "driving" : "queued",
+        target,
+        at: external ? cur : owned,
+        timer: state.timer,
+      };
       arm();
     } catch {
       // scrolling must never break because the smoother did
@@ -293,12 +370,16 @@ export const makeWheelSmoother = (ctx: {
   };
 
   const stop = (): void => {
-    target = null;
-    lastDriven = null;
-    clear();
+    goIdle();
   };
 
-  return { push, stop };
+  const phase = (): WheelPhase => {
+    if (state.kind === "idle") return { kind: "idle" };
+    if (state.kind === "queued") return { kind: "queued", target: state.target };
+    return { kind: "driving", target: state.target, at: state.at };
+  };
+
+  return { push, stop, phase };
 };
 
 // --- Wheel interception: the handler wiring/io installs on each grid scroller.
@@ -348,21 +429,29 @@ export const makeGridWheelHandler =
 // Installs the wheel interception on a grid scroller: the typed scroll
 // listener decides, the wrapper around the box's own mouse handler suppresses
 // the instant jump when the tick was consumed.
+//
+// Returns the typed listener it installed, so a caller (and the test) can
+// drive the decision half on its own.
 export const installGridWheelHandler = (
   scroller: object,
   pane: 0 | 1,
   pushWheel: (pane: 0 | 1, dir: 1 | -1, cells: number) => boolean,
-): void => {
+): ((ev: WheelEventLike) => void) => {
   try {
     const target = scroller as {
       onMouseScroll?: (ev: WheelEventLike) => void;
       onMouseEvent?: (ev: { type?: string }) => void;
     };
     const handler = makeGridWheelHandler(pushWheel)(pane);
-    let consumed = false;
-    target.onMouseScroll = (ev: WheelEventLike) => {
-      consumed = handler(ev);
+    // The latch NAMES the event it was set for: the node-level handler runs
+    // right after the typed listener for the SAME event, so a latch that
+    // outlived its event (a node torn down between the two) could swallow the
+    // NEXT event's native jump.
+    let consumedFor: WheelEventLike | null = null;
+    const onScroll = (ev: WheelEventLike): void => {
+      consumedFor = handler(ev) ? ev : null;
     };
+    target.onMouseScroll = onScroll;
     // The box's own handler runs right after the typed listener, so the flag
     // is fresh by then. Only a "scroll" event is ever suppressed: the box's
     // handler does nothing else for that event type.
@@ -380,12 +469,15 @@ export const installGridWheelHandler = (
       }
     }
     if (typeof orig === "function") {
-      target.onMouseEvent = function (ev: { type?: string }) {
-        const skip = consumed && ev?.type === "scroll";
-        consumed = false;
+      target.onMouseEvent = function (ev: { type?: string } & WheelEventLike) {
+        const skip = consumedFor === ev && ev?.type === "scroll";
+        consumedFor = null;
         if (skip) return;
         orig.call(this, ev);
       };
     }
-  } catch {}
+    return onScroll;
+  } catch {
+    return () => {};
+  }
 };

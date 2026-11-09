@@ -90,6 +90,20 @@ describe("makeSmoothGlide (engine)", () => {
     }
   });
 
+  test("the glide names its state (idle → gliding → idle)", () => {
+    const node = t.renderer.root.findDescendantById("sm-inner") as any;
+    const glide = makeSmoothGlide({ renderer: t.renderer as any });
+    try {
+      expect(glide.phase()).toEqual({ kind: "idle" });
+      glide.glide(node, 4, 90);
+      expect(glide.phase()).toEqual({ kind: "gliding" });
+      glide.stop();
+      expect(glide.phase()).toEqual({ kind: "idle" });
+    } finally {
+      glide.stop();
+    }
+  });
+
   test("stop snaps back to rest and a retarget restarts the glide", async () => {
     const node = t.renderer.root.findDescendantById("sm-inner") as any;
     const glide = makeSmoothGlide({ renderer: t.renderer as any });
@@ -277,6 +291,80 @@ describe("makeWheelSmoother", () => {
     expect(clock.pending()).toBe(0);
   });
 
+  test("the phase names the smoother's state (idle → queued → driving → idle)", () => {
+    const clock = mkClock();
+    let top = 0;
+    const sm = makeWheelSmoother({
+      scrollTop: () => top,
+      scrollBy: (d: number) => {
+        top += d;
+      },
+      sched: clock.sched,
+    });
+    expect(sm.phase()).toEqual({ kind: "idle" });
+    sm.push(3, 160);
+    // a target is set, nothing has been driven yet
+    expect(sm.phase()).toEqual({ kind: "queued", target: 3 });
+    clock.fire();
+    // the queue drives: it owns the cell it landed on
+    expect(sm.phase()).toEqual({ kind: "driving", target: 3, at: 1 });
+    clock.fire();
+    clock.fire();
+    expect(sm.phase()).toEqual({ kind: "idle" });
+  });
+
+  test("a wheel tick after an external write is honored (the fling continues from the new position)", () => {
+    const clock = mkClock();
+    let top = 0;
+    const writes: number[] = [];
+    const sm = makeWheelSmoother({
+      scrollTop: () => top,
+      scrollBy: (d: number) => {
+        writes.push(d);
+        top += d;
+      },
+      sched: clock.sched,
+    });
+    sm.push(9, 160);
+    clock.fire();
+    expect(top).toBe(1);
+    top = 50; // a keyboard jump / a thumb drag lands between the beats
+    sm.push(2, 160); // the user wheels again BEFORE the next beat notices it
+    clock.fire();
+    // the tick moved the view: the old code compared the position against the
+    // cell it had INTENDED to reach, so the stale ownership read as an
+    // external write and the whole queue (the tick included) was dropped
+    expect(top).toBe(51);
+    expect(sm.phase()).toEqual({ kind: "driving", target: 52, at: 51 });
+  });
+
+  test("a fling at a list end does not stop short", () => {
+    const clock = mkClock();
+    let top = 0;
+    const sm = makeWheelSmoother({
+      scrollTop: () => top,
+      // the list ends at 3 — the scroll clamps every write past it
+      scrollBy: (d: number) => {
+        top = Math.max(0, Math.min(3, top + d));
+      },
+      sched: clock.sched,
+    });
+    sm.push(6, 160);
+    let beats = 0;
+    while (clock.pending() > 0) {
+      clock.fire();
+      beats++;
+    }
+    // the fling reached the list's end...
+    expect(top).toBe(3);
+    // ...and settled there: one beat per cell plus the beat that finds the
+    // scroll cannot move. The old code kept a beat alive past the end (the
+    // clamped write read as an external write, so the queue died one beat
+    // later).
+    expect(beats).toBe(4);
+    expect(clock.pending()).toBe(0);
+  });
+
   test("stop drops the queue and zero/NaN pushes are no-ops", () => {
     const clock = mkClock();
     let top = 0;
@@ -410,6 +498,33 @@ describe("makeGridWheelHandler (interception over a real ScrollBox)", () => {
       expect(scroller.scrollTop).toBe(3);
       expect(clock.pending()).toBe(0);
       smoother.stop();
+    } finally {
+      await teardownScroller(scroller);
+    }
+  });
+
+  test("the consumed latch names the event it consumed (a stale latch cannot swallow the next one)", async () => {
+    const scroller = await buildScroller();
+    try {
+      let consume = true;
+      const onScroll = installGridWheelHandler(scroller, 0, () => consume);
+      const scrollEvent = () =>
+        new MouseEvent(scroller, {
+          type: "scroll",
+          button: 0,
+          x: 5,
+          y: 5,
+          modifiers: { shift: false, alt: false, ctrl: false },
+          scroll: { direction: "down", delta: 1 },
+        });
+      // a scroll event whose typed listener runs but whose node-level handler
+      // never does — the latch must not survive into the NEXT event
+      onScroll(scrollEvent());
+      consume = false;
+      scroller.onMouseEvent(scrollEvent());
+      await t.renderOnce();
+      // the native jump happened: the stale latch did not swallow it
+      expect(scroller.scrollTop).toBe(1);
     } finally {
       await teardownScroller(scroller);
     }
