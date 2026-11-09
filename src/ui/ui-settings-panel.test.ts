@@ -1,56 +1,37 @@
 import { describe, expect, test } from "bun:test";
 import {
   clampToVisible,
-  ensureVisible,
   fitDescText,
   fitValueText,
   flatVisible,
+  scrollFor,
   sectionKey,
   SETTINGS_MAX_W,
   settingsPanelWidth,
   settingsWidths,
   settingsVisRows,
-  type SettingsPanelState,
 } from "./ui-settings-panel";
 import type { SettingRow } from "./settings";
-import { NO_CURSOR } from "../lib/uiutil";
 
 // Pure scroll-window math (the panel widget is pinned through makeEscMenu in
 // ui-settings.test.ts; this covers the no-cursor state in isolation).
 
-const panelState = (over: Partial<SettingsPanelState> = {}): SettingsPanelState => ({
-  catIdx: 0,
-  cursor: NO_CURSOR,
-  pane: "rows",
-  scrollOff: 3,
-  hoverCat: -1,
-  capturing: null,
-  swapOffer: null,
-  collapsed: new Set<string>(),
-  ...over,
-});
-
-describe("ensureVisible", () => {
+describe("scrollFor (the window offset that keeps the cursor visible)", () => {
   test("ignores the no-cursor state (never scrolls to -1)", () => {
-    const st = panelState({ cursor: NO_CURSOR, scrollOff: 3 });
-    ensureVisible(st, 5, 12, -1);
-    expect(st.scrollOff).toBe(3);
+    expect(scrollFor(5, 12, -1, 3)).toBe(3);
   });
 
   test("scrolls up/down to keep a real cursor visible", () => {
-    const up = panelState({ scrollOff: 3 });
-    ensureVisible(up, 5, 12, 1);
-    expect(up.scrollOff).toBe(1);
-
-    const down = panelState({ scrollOff: 3 });
-    ensureVisible(down, 5, 12, 9);
-    expect(down.scrollOff).toBe(5);
+    expect(scrollFor(5, 12, 1, 3)).toBe(1);
+    expect(scrollFor(5, 12, 9, 3)).toBe(5);
   });
 
   test("clamps the window to the visible total", () => {
-    const st = panelState({ scrollOff: 0 });
-    ensureVisible(st, 10, 4, 3);
-    expect(st.scrollOff).toBe(0);
+    expect(scrollFor(10, 4, 3, 0)).toBe(0);
+  });
+
+  test("keeps the offset when the cursor is already visible", () => {
+    expect(scrollFor(5, 12, 4, 3)).toBe(3);
   });
 });
 

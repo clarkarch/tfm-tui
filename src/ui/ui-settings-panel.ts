@@ -8,7 +8,7 @@
 // AGENTS.md). ---
 
 import { Box, type MouseEvent, Text } from "@opentui/core";
-import { cursorAt, cursorIndex, errMessage, type Cursor } from "../lib/uiutil";
+import { errMessage } from "../lib/uiutil";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
 import type { MakeIconSlot, SlotElement } from "./ui-slots";
 import { IconStateIdx } from "../lib/icon-state";
@@ -17,25 +17,43 @@ import type { NodeLike } from "../lib/node-like";
 import type { PointerStyle } from "../lib/pointer";
 import type { IconSpec } from "../lib/icon-state";
 
-export type SettingsPanelState = {
-  catIdx: number;
-  // the row cursor within the ACTIVE category (full-row index, never a
-  // hidden one) — an explicit value, not the `-1` sentinel
-  cursor: Cursor;
-  pane: "cats" | "rows";
-  scrollOff: number; // offset into the VISIBLE-row projection (see flatVisible), not the full rows array
-  // category currently under the mouse (highlight only — hovering never
-  // switches categories, that auto-nav was removed); -1 = none
-  hoverCat: number;
-  // keybind capture: flat row index within the active category being recorded
-  capturing: number | null;
-  // swap offer: the captured spec is owned by another action — enter steals
-  // it, esc returns to capture, any other key re-proposes. Always paired with
-  // capturing (the row being recorded); cleared with it.
-  swapOffer: { spec: string; ownerLabel: string } | null;
+// WHERE the menu's focus is — ONE record, owned by the shell. Every index
+// inside it has ONE meaning, named by its field:
+//   `item` — a ROOT-menu row
+//   `cat`  — a category of the settings/plugins panel
+//   `row`  — a row WITHIN the focused category (never a bare index)
+// The kind says which list the other fields index. The old code kept ONE
+// `cursor` field that meant three different things (a root item, a row of
+// the active category, and "unused" in the categories pane) and told them
+// apart only by the view + pane — so a stale index silently changed meaning.
+export type MenuFocus =
+  // no cursor at all (the root menu before its first move, the static views)
+  | { kind: "none" }
+  // the root menu's item cursor
+  | { kind: "root"; item: number }
+  // the CATEGORIES pane owns the focus: `row` is the row the rows pane
+  // remembers (restored when Tab returns to it), not a focused row
+  | { kind: "cat"; cat: number; row: number | null }
+  // the ROWS pane owns the focus: `row` is the focused row (null = none yet)
+  | { kind: "row"; cat: number; row: number | null };
+
+// the panel's READ-ONLY view of the shell's state. The renderer never
+// mutates it — every change goes back through the shell's actions, so the
+// shell stays the ONE owner of the panel's state.
+export type SettingsPanelView = {
+  readonly focus: MenuFocus;
+  // the category under the mouse (paint only — hovering never switches),
+  // keyed by the category's IDENTITY (its header), never by its index: the
+  // category list is rebuilt on every render and a plugin rescan can change
+  // it, so an index would name a DIFFERENT category after the rebuild
+  readonly hoverCat: string | null;
+  // the rows pane's window offset (into the visible-row projection)
+  readonly scrollOff: number;
   // collapsed subsections, keyed by sectionKey(category header, subsection)
-  // — session-only, never persisted to config.toml
-  collapsed: Set<string>;
+  readonly collapsed: ReadonlySet<string>;
+  // keybind capture: the row being recorded + the pending swap offer
+  readonly capturing: number | null;
+  readonly swapOffer: { spec: string; ownerLabel: string } | null;
 };
 
 // the keybind-conflict swap offer, painted in the footer AND the capturing
@@ -66,6 +84,17 @@ type SettingsPanelHooks = {
   toggleSection(key: string): void;
   // live description-footer repaint (by id, never a rebuild)
   paintDesc(text: string): void;
+  // --- the shell's actions (the panel NEVER mutates the state) ---
+  // focus a row (mouse hover / click) — returns true when the focus MOVED
+  focusRow(index: number): boolean;
+  // the category under the mouse (paint only) — null clears it. The key is
+  // the category's IDENTITY (its header), never its index.
+  hoverCat(key: string | null): void;
+  // scroll the rows pane (the wheel) — the shell owns the offset
+  scrollRows(delta: number): void;
+  // register a category's icon spec so the shell can flip its raster state
+  // (the category hover paints bg + icon together — one owner)
+  registerCatSpec(gi: number, spec: IconSpec): void;
   // mouse pointer shape (OSC 22 via the wiring's tty-guarded setter).
   // Absent = no pointer changes. Repeat-safe: the setter dedupes.
   setPointer?(style: PointerStyle): void;
@@ -113,12 +142,15 @@ const CAT_ICONS: Record<string, string> = {
   "add plugins": "plus",
 };
 
-export const ensureVisible = (st: SettingsPanelState, vis: number, total: number, pos: number): void => {
-  // no cursor yet (freshly opened) or cursor on a now-hidden row — nothing to scroll to
-  if (pos < 0) return;
-  if (pos < st.scrollOff) st.scrollOff = pos;
-  if (pos >= st.scrollOff + vis) st.scrollOff = pos - vis + 1;
-  st.scrollOff = Math.min(Math.max(0, total - vis), Math.max(0, st.scrollOff));
+// the window offset that keeps `pos` visible (PURE — the shell owns the
+// offset, the panel only reads it). A no cursor (pos < 0) keeps the current
+// offset: there is nothing to scroll to.
+export const scrollFor = (vis: number, total: number, pos: number, current: number): number => {
+  if (pos < 0) return current;
+  let off = current;
+  if (pos < off) off = pos;
+  if (pos >= off + vis) off = pos - vis + 1;
+  return Math.min(Math.max(0, total - vis), Math.max(0, off));
 };
 
 // --- collapsible subsections (pure projection over one category's rows) ---
@@ -129,7 +161,7 @@ export const ensureVisible = (st: SettingsPanelState, vis: number, total: number
 
 export const sectionKey = (categoryHeader: string, subsection: string): string => `${categoryHeader}::${subsection}`;
 
-export const flatVisible = (rows: SettingRow[], categoryHeader: string, collapsed: Set<string>): number[] => {
+export const flatVisible = (rows: SettingRow[], categoryHeader: string, collapsed: ReadonlySet<string>): number[] => {
   const out: number[] = [];
   let hidden = false;
   for (let i = 0; i < rows.length; i++) {
@@ -189,18 +221,21 @@ export const SET_TOGGLE_W = 6;
 export const renderSettingsPanel = (
   c: Theme,
   panel: NodeLike,
-  st: SettingsPanelState,
+  view: SettingsPanelView,
   h: SettingsPanelHooks,
   panelW: number = SETTINGS_MAX_W,
 ) => {
   const cats = h.groups();
   const vis = h.visRows();
   const w = settingsWidths(panelW);
-  const header = cats[st.catIdx]?.header ?? "";
-  const rows = cats[st.catIdx]?.rows ?? [];
-  const flat = flatVisible(rows, header, st.collapsed);
-  const cur = cursorIndex(st.cursor);
-  ensureVisible(st, vis, flat.length, cur < 0 ? -1 : visiblePos(flat, cur));
+  // the focus snapshot for THIS build (the handlers read the live view)
+  const focus = view.focus;
+  // the focused category (the right pane always shows it) — the shell always
+  // enters a panel view with a panel focus, so the fallback is a safe default
+  const catIdx = focus.kind === "cat" || focus.kind === "row" ? focus.cat : 0;
+  const header = cats[catIdx]?.header ?? "";
+  const rows = cats[catIdx]?.rows ?? [];
+  const flat = flatVisible(rows, header, view.collapsed);
   const canScroll = flat.length > vis;
   const wheelScroll = (ev: MouseEvent) => {
     if (!canScroll) return;
@@ -208,23 +243,20 @@ export const renderSettingsPanel = (
       ev.stopPropagation?.();
     } catch {}
     const d = ev.scroll?.direction === "up" ? -3 : 3;
-    const max = Math.max(0, flat.length - vis);
-    const next = Math.min(max, Math.max(0, st.scrollOff + d));
-    if (next !== st.scrollOff) {
-      st.scrollOff = next;
-      h.rebuild();
-    }
+    // the shell owns the offset (it clamps it against the CURRENT rows)
+    h.scrollRows(d);
   };
 
   // --- left pane: categories ---
   const catPane = Box({ width: CAT_W, flexDirection: "column" });
-  const catSpecs: IconSpec[] = [];
   cats.forEach((g, gi) => {
-    const active = gi === st.catIdx;
+    const active = gi === catIdx;
+    // the category's identity (the hover is keyed by it, not by the index)
+    const key = g.header ?? "";
     // hover is a pure highlight: it paints by id and flips the icon's
     // pre-rastered state — it NEVER switches category (the old auto-nav was
     // removed on purpose) and never rebuilds the panel.
-    const hot = active || st.hoverCat === gi;
+    const hot = active || view.hoverCat === key;
     const icon = g.icon ?? CAT_ICONS[g.header ?? ""] ?? "cog";
     const slot = h.makeIconSlot(
       icon,
@@ -237,7 +269,9 @@ export const renderSettingsPanel = (
       1,
       hot ? IconStateIdx.Active : IconStateIdx.Rest,
     );
-    catSpecs.push(slot.spec);
+    // the shell owns the category hover paint (bg + icon) — it needs the
+    // spec to flip the raster state
+    h.registerCatSpec(gi, slot.spec);
     catPane.add(
       Box(
         {
@@ -252,11 +286,11 @@ export const renderSettingsPanel = (
             try {
               ev.stopPropagation?.();
             } catch {}
-            if (st.capturing !== null) {
+            if (view.capturing !== null) {
               h.cancelCapture();
               return;
             }
-            if (st.catIdx !== gi) h.switchCategory(gi);
+            if (catIdx !== gi) h.switchCategory(gi);
             else h.rebuild();
           },
           // move, not over (a rebuild re-fires synthetic "over" on a
@@ -266,23 +300,16 @@ export const renderSettingsPanel = (
             // keyboard cursor may already sit here, in which case no repaint
             // runs but the shape must still set
             h.setPointer?.("pointer");
-            if (st.capturing !== null || st.hoverCat === gi) return;
-            const prev = st.hoverCat;
-            st.hoverCat = gi;
-            if (prev >= 0) {
-              h.paintCatAt(prev, false);
-              const prevSpec = catSpecs[prev];
-              if (prevSpec) h.setIconState(prevSpec, IconStateIdx.Rest);
-            }
-            h.paintCatAt(gi, true);
-            h.setIconState(slot.spec, IconStateIdx.Active);
+            if (view.capturing !== null) return;
+            h.hoverCat(key);
           },
           onMouseOut: () => {
-            if (st.hoverCat !== gi) return;
-            st.hoverCat = -1;
             h.setPointer?.("default");
-            h.paintCatAt(gi, false);
-            h.setIconState(slot.spec, active ? IconStateIdx.Active : IconStateIdx.Rest);
+            // a late out for a category that is no longer the hovered one
+            // says nothing about the current hover (the mouse already moved
+            // on) — only the hovered row's out clears it
+            if (view.hoverCat !== key) return;
+            h.hoverCat(null);
           },
         },
         slot.el,
@@ -306,23 +333,24 @@ export const renderSettingsPanel = (
       catPane,
       // --- right pane: rows (windowed over the visible projection) ---
       Box({ width: 1, flexDirection: "column" }),
-      renderRowPane(c, rows, header, vis, st, h, panelW, w),
+      renderRowPane(c, rows, header, vis, view, h, panelW, w),
     ),
   );
 
   // one-line description footer — the selected row's blurb in plain language.
   // Painted live by id on cursor/hover moves (paintDesc), never a rebuild.
+  const curRow = focus.kind === "row" ? focus.row : null;
   panel.add(
     Box(
       { width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
       Text({
         id: "tfm-set-desc",
         content: fitDescText(
-          st.swapOffer
-            ? swapOfferText(st.swapOffer.spec, st.swapOffer.ownerLabel)
-            : st.capturing !== null
+          view.swapOffer
+            ? swapOfferText(view.swapOffer.spec, view.swapOffer.ownerLabel)
+            : view.capturing !== null
               ? "press a key…"
-              : descText(cursorIndex(st.cursor) < 0 ? undefined : rows[cursorIndex(st.cursor)]),
+              : descText(curRow === null ? undefined : rows[curRow]),
           panelW,
         ),
         fg: c.sidebarFgMuted,
@@ -336,16 +364,15 @@ const renderRowPane = (
   rows: SettingRow[],
   categoryHeader: string,
   vis: number,
-  st: SettingsPanelState,
+  view: SettingsPanelView,
   h: SettingsPanelHooks,
   panelW: number,
   w: ReturnType<typeof settingsWidths>,
 ) => {
-  const flat = flatVisible(rows, categoryHeader, st.collapsed);
-  const cur = cursorIndex(st.cursor);
-  ensureVisible(st, vis, flat.length, cur < 0 ? -1 : visiblePos(flat, cur));
+  const flat = flatVisible(rows, categoryHeader, view.collapsed);
+  const focus = view.focus;
   const canScroll = flat.length > vis;
-  const start = Math.min(st.scrollOff, Math.max(0, flat.length - vis));
+  const start = Math.min(view.scrollOff, Math.max(0, flat.length - vis));
   const end = Math.min(flat.length, start + vis);
   const pane2 = Box({ flexGrow: 1, flexDirection: "column" });
 
@@ -355,13 +382,10 @@ const renderRowPane = (
     onMouseMove: () => {
       // position truth before change truth (see the category rows)
       h.setPointer?.("pointer");
-      if (st.capturing !== null || (st.pane === "rows" && cursorIndex(st.cursor) === index)) return;
-      const prev = st.pane === "rows" ? cursorIndex(st.cursor) : -1;
-      st.cursor = cursorAt(index);
-      st.pane = "rows";
-      if (prev >= 0 && prev !== index) h.paintRowAt(prev, false);
-      h.paintRowAt(index, true);
-      h.paintDesc(fitDescText(descText(rowSpec), panelW));
+      // while a keybind is being recorded the mouse must not steal the focus
+      if (view.capturing !== null) return;
+      // the shell owns the focus + the row paint (one owner)
+      if (h.focusRow(index)) h.paintDesc(fitDescText(descText(rowSpec), panelW));
     },
     onMouseOut: () => {
       h.setPointer?.("default");
@@ -373,7 +397,7 @@ const renderRowPane = (
   // highlights it like any row. The rule fills the live row width (right pane
   // minus the row's own padding), so a wider panel draws a wider rule.
   const headerNode = (rowSpec: Extract<SettingRow, { kind: "header" }>, index: number) => {
-    const active = st.pane === "rows" && cursorIndex(st.cursor) === index;
+    const active = focus.kind === "row" && focus.row === index;
     const key = sectionKey(categoryHeader, rowSpec.label);
     const shut = h.isCollapsed(key);
     const lead = ` ${shut ? "▶" : "▼"} ${rowSpec.label} `;
@@ -392,12 +416,11 @@ const renderRowPane = (
           try {
             ev.stopPropagation?.();
           } catch {}
-          if (st.capturing !== null) {
+          if (view.capturing !== null) {
             h.cancelCapture();
             return;
           }
-          st.cursor = cursorAt(index);
-          st.pane = "rows";
+          h.focusRow(index);
           h.toggleSection(key);
         },
         // move, not over (same synthetic-over trap as value rows below)
@@ -414,7 +437,12 @@ const renderRowPane = (
 
   const chevron = (dirText: "‹" | "›", active: boolean, index: number, rowSpec: SettingRow, dir: number) => {
     const tId = `tfm-chev-${index}-${dir}`;
-    const chevOn = (): boolean => st.pane === "rows" && cursorIndex(st.cursor) === index;
+    // the chevron follows the LIVE focus (a mouse move can move it between
+    // the build and the event)
+    const chevOn = (): boolean => {
+      const f = view.focus;
+      return f.kind === "row" && f.row === index;
+    };
     return Box(
       {
         width: 2,
@@ -423,7 +451,7 @@ const renderRowPane = (
           try {
             ev.stopPropagation?.();
           } catch {}
-          if (st.capturing !== null) {
+          if (view.capturing !== null) {
             h.cancelCapture();
             return;
           }
@@ -431,14 +459,9 @@ const renderRowPane = (
           // handler (every other row path — keypress, click, stepper — guards)
           try {
             const changed = applyAdjust(rowSpec, dir);
-            const at = cursorIndex(st.cursor);
-            if (!changed && at === index) return;
-            if (at !== index) {
-              if (st.pane === "rows") h.paintRowAt(at, false);
-              st.cursor = cursorAt(index);
-              st.pane = "rows";
-              h.paintRowAt(index, true);
-            }
+            // the shell owns the focus + the row paint (one owner)
+            const moved = h.focusRow(index);
+            if (!changed && !moved) return;
             h.paintDesc(fitDescText(descText(rowSpec), panelW));
             h.afterAdjust(index, rowSpec);
           } catch (err) {
@@ -466,22 +489,22 @@ const renderRowPane = (
   };
 
   const rowNode = (rowSpec: SettingRow, index: number) => {
-    const active = st.pane === "rows" && cursorIndex(st.cursor) === index;
-    const capturingThis = st.capturing === index;
+    const active = focus.kind === "row" && focus.row === index;
+    const capturingThis = view.capturing === index;
     const labelFg = c.white;
     let control: SlotElement;
     let onClick: (ev?: MouseEvent) => void = (ev?: MouseEvent) => {
       try {
         ev?.stopPropagation?.();
       } catch {}
-      st.cursor = cursorAt(index);
-      st.pane = "rows";
+      // the shell owns the focus + the row paint (one owner)
+      h.focusRow(index);
       h.paintDesc(fitDescText(descText(rowSpec), panelW));
       h.rowActivate(index);
     };
 
     if (capturingThis) {
-      const offer = st.swapOffer;
+      const offer = view.swapOffer;
       control = Box(
         { flexGrow: 1 },
         Text({
@@ -532,12 +555,11 @@ const renderRowPane = (
         try {
           ev?.stopPropagation?.();
         } catch {}
-        if (st.capturing !== null) {
+        if (view.capturing !== null) {
           h.cancelCapture();
           return;
         }
-        st.cursor = cursorAt(index);
-        st.pane = "rows";
+        h.focusRow(index);
         try {
           applyAdjust(rowSpec, 1);
           h.afterAdjust(index, rowSpec);

@@ -11,7 +11,7 @@
 // cancels capture.
 
 import { Box, type CliRenderer, type MouseEvent, Text } from "@opentui/core";
-import { advanceCursor, cursorAt, cursorIndex, errMessage, invokeIsolated, NO_CURSOR } from "../lib/uiutil";
+import { advanceCursor, cursorAt, cursorIndex, errMessage, invokeIsolated } from "../lib/uiutil";
 import type { UiStyle } from "../config/config-schema";
 import { makeModalScrim } from "./ui-dialogs";
 import { applyAdjust, type SettingGroup, type SettingRow } from "./settings";
@@ -25,18 +25,19 @@ import { pokeGc, type NativeStatsReach } from "../lib/mem-hygiene";
 import {
   clampToVisible,
   descText,
-  ensureVisible,
   fitDescText,
   fitValueText,
   flatVisible,
   renderSettingsPanel,
+  scrollFor,
   sectionKey,
   settingsPanelWidth,
   settingsVisRows,
   SET_TOGGLE_W,
   SET_VAL_W,
   visiblePos,
-  type SettingsPanelState,
+  type MenuFocus,
+  type SettingsPanelView,
 } from "./ui-settings-panel";
 import { helpPanelWidth, renderHelpPanel } from "./ui-help";
 import { aboutPanelWidth, renderAboutPanel, type AboutDetail } from "./ui-about";
@@ -94,16 +95,27 @@ type EscMenuCtx = {
 export const makeEscMenu = (ctx: EscMenuCtx) => {
   let menuOpen = false;
   let menuView: "root" | "settings" | "plugins" | "help" | "about" = "root";
-  // panel cursor state — rendered by ./ui-settings-panel, mutated by the ops here
-  const st: SettingsPanelState = {
-    catIdx: 0,
-    cursor: cursorAt(0),
-    pane: "rows",
+  // the menu's ONE state record — the shell owns it. The panel renderer gets
+  // a READ-ONLY live view of it and routes every change back through the
+  // actions below (the old code passed the record BY REFERENCE and the
+  // renderer mutated fields the shell also owned).
+  const st: {
+    focus: MenuFocus;
+    // the hovered category's IDENTITY (its header) — never its index: the
+    // category list is rebuilt on every render and a plugin rescan can
+    // change it, so an index would name a DIFFERENT category afterwards
+    hoverCat: string | null;
+    scrollOff: number;
+    collapsed: Set<string>;
+    capturing: number | null;
+    swapOffer: { spec: string; ownerLabel: string } | null;
+  } = {
+    focus: { kind: "none" },
+    hoverCat: null,
     scrollOff: 0,
-    hoverCat: -1,
+    collapsed: new Set<string>(),
     capturing: null,
     swapOffer: null,
-    collapsed: new Set<string>(),
   };
   // restart-toast dedupe: one "needs restart" toast per row per menu open —
   // holding ←/→ on a stepper otherwise floods the toast stack
@@ -119,6 +131,27 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // every keyboard/panel op below branches root vs panel — never on a single view
   const inPanelView = (): boolean => menuView !== "root";
 
+  // --- the focus record's readers (one meaning per index) ---
+  // the focused category (the right pane always shows it)
+  const activeCat = (): number => (st.focus.kind === "cat" || st.focus.kind === "row" ? st.focus.cat : 0);
+  // the focused row (null = none) — only the rows pane owns a row cursor
+  const activeRow = (): number | null => (st.focus.kind === "row" ? st.focus.row : null);
+  // the root menu's item cursor (-1 = none)
+  const activeItem = (): number => (st.focus.kind === "root" ? st.focus.item : -1);
+
+  // ONE reset for the menu's view state: the focus, the mouse hover and the
+  // window offset. Every entry point that shows a FRESH view calls it (open,
+  // close, view change) — the old code reset some fields in one place and
+  // not others, so a stale category hover survived into the next open (the
+  // category painted as hovered with the mouse elsewhere).
+  const resetViewState = (): void => {
+    st.focus = { kind: "none" };
+    st.hoverCat = null;
+    st.scrollOff = 0;
+    st.capturing = null;
+    st.swapOffer = null;
+  };
+
   // the help/about views are cursorless (static panels) — cursor ops no-op there
   const isHelpView = (): boolean => menuView === "help";
   const isAboutView = (): boolean => menuView === "about";
@@ -132,13 +165,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     menuView = view;
     // a fresh about entry always lands on main (detail never carries over)
     if (view === "about") aboutDetail = null;
-    st.catIdx = 0;
-    // no row cursor until the first arrow/hover (category highlight stays)
-    st.cursor = NO_CURSOR;
-    st.pane = "rows";
-    st.scrollOff = 0;
-    st.capturing = null;
-    st.swapOffer = null;
+    // ONE reset: the focus, the mouse hover, the window offset + the capture
+    resetViewState();
+    // the panel opens on its FIRST category with NO row selected (the
+    // category highlight stays until the first arrow/hover)
+    if (view === "settings" || view === "plugins") st.focus = { kind: "row", cat: 0, row: null };
     renderMenuContent();
   };
 
@@ -184,11 +215,18 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const switchCategory = (gi: number): void => {
     const n = groups().length;
-    st.catIdx = ((gi % n) + n) % n;
+    // no groups at all (every plugin removed while the view was open): the
+    // focus parks on an empty first category instead of a NaN index
+    if (n === 0) {
+      st.focus = { kind: "row", cat: 0, row: null };
+      st.scrollOff = 0;
+      renderMenuContent();
+      return;
+    }
+    const cat = ((gi % n) + n) % n;
     // land on the first VISIBLE row — headers take the cursor now (they
     // collapse/expand), hidden children are never landed on
-    st.cursor = cursorAt(visOf(st.catIdx)[0] ?? -1);
-    st.pane = "rows";
+    st.focus = { kind: "row", cat, row: visOf(cat)[0] ?? null };
     st.scrollOff = 0;
     renderMenuContent();
   };
@@ -198,10 +236,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   const toggleSection = (key: string): void => {
     if (st.collapsed.has(key)) st.collapsed.delete(key);
     else st.collapsed.add(key);
-    const flat = visOf(st.catIdx);
-    const at = cursorIndex(st.cursor);
-    if (at >= 0 && !flat.includes(at)) {
-      st.cursor = cursorAt([...flat].reverse().find((i) => i <= at) ?? flat[0] ?? -1);
+    const flat = visOf(activeCat());
+    const at = activeRow();
+    if (at !== null && !flat.includes(at)) {
+      const parked = clampToVisible(flat, at);
+      st.focus = { kind: "row", cat: activeCat(), row: parked < 0 ? null : parked };
     }
     renderMenuContent();
   };
@@ -212,29 +251,31 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (!inPanelView()) return;
     // the static views are cursorless — ←/→ do nothing there
     if (isStaticView()) return;
-    if (st.pane === "cats") {
-      switchCategory(st.catIdx + dir);
+    if (st.focus.kind === "cat") {
+      switchCategory(activeCat() + dir);
       return;
     }
-    const row = rowsOf(st.catIdx)[cursorIndex(st.cursor)];
+    const at = activeRow();
+    if (at === null) return;
+    const row = rowsOf(activeCat())[at];
     if (!row) return;
     // headers collapse/expand: → opens, ← closes (enter toggles via rowActivate)
     if (row.kind === "header") {
-      const key = sectionKey(headerOf(st.catIdx), row.label);
+      const key = sectionKey(headerOf(activeCat()), row.label);
       const shut = st.collapsed.has(key);
       if ((dir > 0 && shut) || (dir < 0 && !shut)) toggleSection(key);
       return;
     }
     // keybind/action rows have no left/right value — the arrows switch category
     if (row.kind === "keybind" || row.kind === "action") {
-      switchCategory(st.catIdx + dir);
+      switchCategory(activeCat() + dir);
       return;
     }
     // a throwing plugin row set()/get()/getIdx() must not throw out of the
     // keypress handler — afterAdjust re-reads the row, so it sits in the SAME
     // try, not after it
     try {
-      if (applyAdjust(row, dir)) afterAdjust(cursorIndex(st.cursor), row);
+      if (applyAdjust(row, dir)) afterAdjust(at, row);
     } catch {}
   };
 
@@ -247,7 +288,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   };
 
   const startCapture = (rowIdx: number): void => {
-    const row = rowsOf(st.catIdx)[rowIdx];
+    const row = rowsOf(activeCat())[rowIdx];
     if (row?.kind !== "keybind") return;
     st.capturing = rowIdx;
     renderMenuContent();
@@ -271,7 +312,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // a highlighted row and headers the wrong gray on hover-off).
   const paintRowAt = (idx: number, on: boolean): void => {
     const c = menuC;
-    const row = rowsOf(st.catIdx)[idx];
+    const row = rowsOf(activeCat())[idx];
     const isHeader = row?.kind === "header";
     setOnId(`tfm-set-row-${idx}`, (n) => {
       n.backgroundColor = on ? c.accentBg : undefined;
@@ -324,10 +365,108 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
   // never switches the active category (hover is visual feedback only)
   const paintCatAt = (gi: number, on: boolean): void => {
     const c = menuC;
-    const isActive = gi === st.catIdx;
+    const isActive = gi === activeCat();
     setOnId(`tfm-set-cat-${gi}`, (n) => {
       n.backgroundColor = on || isActive ? c.accentBg : undefined;
     });
+  };
+
+  // category icon specs, by index — the shell owns the category hover paint
+  // (bg + the icon's pre-rastered state), so it needs the spec the panel
+  // built. Lives at factory scope (like rootSpecs) so a hover can flip the
+  // raster without rebuilding the panel.
+  const catSpecs: (IconSpec | undefined)[] = [];
+
+  // --- the panel's actions (the renderer never mutates the state) ---
+  // focus a row (mouse hover / click) — the shell owns the focus record AND
+  // the row paint, so the state and the paint can never disagree. Returns
+  // true when the focus MOVED.
+  const focusRow = (index: number): boolean => {
+    const cat = activeCat();
+    const prev = activeRow();
+    const already = st.focus.kind === "row" && prev === index;
+    st.focus = { kind: "row", cat, row: index };
+    if (already) return false;
+    if (prev !== null && prev !== index) paintRowAt(prev, false);
+    paintRowAt(index, true);
+    return true;
+  };
+
+  // the category under the mouse (paint only — hovering never switches
+  // categories). The shell paints BOTH halves (the row bg + the icon's
+  // pre-rastered state), so they cannot drift apart. The hover is keyed by
+  // the category's IDENTITY (its header): the category list is rebuilt on
+  // every render and a plugin rescan can change it, so an index would name
+  // a DIFFERENT category after the rebuild.
+  const catIndexOf = (key: string): number => groups().findIndex((g) => (g.header ?? "") === key);
+  const hoverCatAt = (key: string | null): void => {
+    const prev = st.hoverCat;
+    if (prev === key) return;
+    st.hoverCat = key;
+    if (prev !== null) {
+      const gi = catIndexOf(prev);
+      if (gi >= 0) {
+        paintCatAt(gi, false);
+        const spec = catSpecs[gi];
+        if (spec) ctx.setIconState(spec, gi === activeCat() ? IconStateIdx.Active : IconStateIdx.Rest);
+      }
+    }
+    if (key !== null) {
+      const gi = catIndexOf(key);
+      if (gi >= 0) {
+        paintCatAt(gi, true);
+        const spec = catSpecs[gi];
+        if (spec) ctx.setIconState(spec, IconStateIdx.Active);
+      }
+    }
+  };
+
+  // scroll the rows pane (the wheel) — the shell owns the offset: it clamps
+  // it against the CURRENT rows and rebuilds only when it moved.
+  const scrollRows = (delta: number): void => {
+    const flat = visOf(activeCat());
+    const vis = visibleRows();
+    const max = Math.max(0, flat.length - vis);
+    const next = Math.min(max, Math.max(0, st.scrollOff + delta));
+    if (next === st.scrollOff) return;
+    st.scrollOff = next;
+    renderMenuContent();
+  };
+
+  // clamp the panel's state against the CURRENT group list — a plugin rescan
+  // can shrink the categories (the old cursor pointed past the end and the
+  // right pane rendered EMPTY), and the hovered category can name a row that
+  // no longer exists.
+  const clampPanelState = (): void => {
+    const gs = groups();
+    const n = gs.length;
+    if (st.focus.kind !== "cat" && st.focus.kind !== "row") {
+      // not in a panel view: a category index means nothing here
+      if (st.hoverCat !== null) st.hoverCat = null;
+      return;
+    }
+    if (n === 0) {
+      st.focus = { kind: "row", cat: 0, row: null };
+      st.hoverCat = null;
+      st.scrollOff = 0;
+      return;
+    }
+    const cat = Math.min(Math.max(0, st.focus.cat), n - 1);
+    const flat = visOf(cat);
+    // the focused row must still be VISIBLE (a plugin row can vanish, a
+    // section can collapse) — park it on the nearest visible row at or above
+    let row = st.focus.row;
+    if (row !== null && !flat.includes(row)) {
+      const parked = clampToVisible(flat, row);
+      row = parked < 0 ? null : parked;
+    }
+    st.focus = { kind: st.focus.kind, cat, row };
+    // the hovered category must still exist (a plugin group can vanish)
+    if (st.hoverCat !== null && catIndexOf(st.hoverCat) < 0) st.hoverCat = null;
+    // the window offset must fit the current rows and keep the focused row
+    // visible
+    const vis = visibleRows();
+    st.scrollOff = scrollFor(vis, flat.length, row === null ? -1 : visiblePos(flat, row), st.scrollOff);
   };
 
   // after applyAdjust on a value row: refresh JUST the value text by id.
@@ -348,7 +487,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       // a gating master may have hidden rows at/below the cursor (its own
       // children): park on the nearest still-visible row BEFORE the rebuild
       // paints highlights, or the cursor strands on a vanished row
-      if (cursorIndex(st.cursor) >= 0) st.cursor = cursorAt(clampToVisible(visOf(st.catIdx), cursorIndex(st.cursor)));
+      const at = activeRow();
+      if (at !== null) {
+        const parked = clampToVisible(visOf(activeCat()), at);
+        st.focus = { kind: "row", cat: activeCat(), row: parked < 0 ? null : parked };
+      }
       renderMenuContent();
       return;
     }
@@ -365,7 +508,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     setOnId(`tfm-set-rowv-${index}`, (n) => {
       n.content = value;
       // selected rows keep white values; unselected toggles keep the on/accent cue
-      if (st.pane === "rows" && cursorIndex(st.cursor) === index) n.fg = menuC.white;
+      if (activeRow() === index) n.fg = menuC.white;
       else if (row.kind === "toggle") n.fg = row.get() ? menuC.accent : menuC.sidebarFgMuted;
     });
   };
@@ -407,7 +550,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       // OpenTUI reports Enter as "return" (see the capture comment below) —
       // the same spelling the cancel branch matches, so both agree
       if (unmodified && e.name === "return") {
-        const row = rowsOf(st.catIdx)[st.capturing];
+        const row = rowsOf(activeCat())[st.capturing];
         const offer = st.swapOffer;
         if (row?.kind === "keybind" && row.swap) {
           st.swapOffer = null;
@@ -445,7 +588,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       if (droppedOffer) renderMenuContent();
       return true; // stay in capture so the user can retry
     }
-    const row = rowsOf(st.catIdx)[st.capturing];
+    const row = rowsOf(activeCat())[st.capturing];
     let outcome: unknown;
     try {
       if (row?.kind === "keybind") outcome = row.set([spec]);
@@ -471,11 +614,11 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       if (st.capturing !== rowIdx) cancelCapture();
       return;
     }
-    const row = rowsOf(st.catIdx)[rowIdx];
+    const row = rowsOf(activeCat())[rowIdx];
     if (!row) return;
     // headers collapse/expand in place (enter toggles; ←/→ handled in adjust)
     if (row.kind === "header") {
-      toggleSection(sectionKey(headerOf(st.catIdx), row.label));
+      toggleSection(sectionKey(headerOf(activeCat()), row.label));
       return;
     }
     if (row.kind === "toggle") {
@@ -534,15 +677,15 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // the static views are cursorless — enter is a no-op
     if (isStaticView()) return;
     if (inPanelView()) {
-      if (st.pane === "cats") {
-        switchCategory(st.catIdx);
+      if (st.focus.kind === "cat") {
+        switchCategory(activeCat());
         return;
       }
-      rowActivate(cursorIndex(st.cursor));
+      rowActivate(activeRow() ?? -1);
       return;
     }
     const items = rootMenuItems();
-    const it = items[cursorIndex(st.cursor)];
+    const it = items[activeItem()];
     if (!it) return;
     if (it.keepOpen) {
       it.action();
@@ -554,7 +697,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
 
   const menuTab = (): void => {
     if (!inPanelView() || st.capturing !== null) return;
-    st.pane = st.pane === "cats" ? "rows" : "cats";
+    // the pane that owns the focus IS the focus's kind — the row the rows
+    // pane had is remembered, so Tab back restores it
+    if (st.focus.kind === "row") st.focus = { kind: "cat", cat: st.focus.cat, row: st.focus.row };
+    else if (st.focus.kind === "cat") st.focus = { kind: "row", cat: st.focus.cat, row: st.focus.row };
     renderMenuContent();
   };
 
@@ -668,9 +814,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         // keyboard cursor may already sit here, in which case no repaint
         // runs but the shape must still set
         ctx.setPointer?.("pointer");
-        if (cursorIndex(st.cursor) === index) return;
-        const prev = cursorIndex(st.cursor);
-        st.cursor = cursorAt(index);
+        if (activeItem() === index) return;
+        const prev = activeItem();
+        st.focus = { kind: "root", item: index };
         if (prev >= 0) paintRootAt(prev, false);
         paintRootAt(index, true);
       };
@@ -678,7 +824,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         try {
           ev?.stopPropagation?.();
         } catch {}
-        st.cursor = cursorAt(index);
+        st.focus = { kind: "root", item: index };
         menuActivate();
       };
       const rootRow = (
@@ -732,7 +878,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         );
       const items = rootMenuItems();
       items.forEach((it, i) => {
-        panel.add(rootRow(it.icon, it.label, it.hint, i === cursorIndex(st.cursor), i, activateRow(i)));
+        panel.add(rootRow(it.icon, it.label, it.hint, i === activeItem(), i, activateRow(i)));
       });
     } else if (view === "help") {
       // static cheat sheet (no cursor, no settings rows) in a bounded
@@ -763,10 +909,39 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
         setPointer: ctx.setPointer,
       });
     } else {
+      // clamp the state against the CURRENT group list BEFORE the render (a
+      // plugin rescan can shrink the categories — the old cursor pointed past
+      // the end and the right pane rendered empty)
+      clampPanelState();
+      // the panel's read-only LIVE view of the shell's state: the getters
+      // read the CURRENT values, so a handler that runs after a rebuild sees
+      // the truth, not a stale snapshot
+      const view: SettingsPanelView = {
+        get focus() {
+          return st.focus;
+        },
+        get hoverCat() {
+          return st.hoverCat;
+        },
+        get scrollOff() {
+          return st.scrollOff;
+        },
+        get collapsed() {
+          return st.collapsed;
+        },
+        get capturing() {
+          return st.capturing;
+        },
+        get swapOffer() {
+          return st.swapOffer;
+        },
+      };
+      // the category specs are rebuilt with the panel — drop the old ones
+      catSpecs.length = 0;
       renderSettingsPanel(
         c,
         panel,
-        st,
+        view,
         {
           groups,
           visRows: visibleRows,
@@ -783,6 +958,12 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
           isCollapsed: (key) => st.collapsed.has(key),
           toggleSection,
           paintDesc,
+          focusRow,
+          hoverCat: hoverCatAt,
+          scrollRows,
+          registerCatSpec: (gi, spec) => {
+            catSpecs[gi] = spec;
+          },
           log: (message) => ctx.log?.(message),
           setPointer: ctx.setPointer,
         },
@@ -818,8 +999,10 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     // close and the next F1 takes the close branch (a no-op) instead of
     // reopening
     menuView = "root";
-    st.capturing = null;
-    st.swapOffer = null;
+    // ONE reset: the focus, the mouse hover, the window offset + the capture
+    // (a closed panel's hover must not survive into the next open — the
+    // mouse is somewhere else now)
+    resetViewState();
     aboutDetail = null;
     ctx.log?.("esc-menu close");
     // hovered rows have no out (their nodes are gone) — restore here or the
@@ -839,12 +1022,9 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     ctx.floats.open("escmenu", rawCloseMenu);
     menuOpen = true;
     menuView = "root";
-    st.cursor = NO_CURSOR;
-    st.catIdx = 0;
-    st.pane = "rows";
-    st.scrollOff = 0;
-    st.capturing = null;
-    st.swapOffer = null;
+    // ONE reset: the focus (the root opens with NO cursor), the mouse hover,
+    // the window offset + the capture
+    resetViewState();
     aboutDetail = null;
     restartWarned.clear();
     ctx.log?.("esc-menu open");
@@ -904,20 +1084,21 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     if (!inPanelView()) {
       const count = rootMenuItems().length;
       if (count === 0) return;
-      const prev = cursorIndex(st.cursor);
-      st.cursor = advanceCursor(st.cursor, delta, count);
+      const prev = activeItem();
+      // no cursor yet: down fills the first row, up the last
+      const now = cursorIndex(advanceCursor(cursorAt(prev), delta, count));
+      st.focus = { kind: "root", item: now };
       // the root rows are already on screen: repaint the two rows in place.
       // A rebuild per keypress churned ~20 native nodes for nothing.
-      const now = cursorIndex(st.cursor);
       if (prev >= 0 && prev !== now) paintRootAt(prev, false);
       paintRootAt(now, true);
       return;
     }
-    if (st.pane === "cats") {
-      switchCategory(st.catIdx + delta);
+    if (st.focus.kind === "cat") {
+      switchCategory(activeCat() + delta);
       return;
     }
-    const flat = visOf(st.catIdx);
+    const flat = visOf(activeCat());
     if (!flat.length) return;
     // NO cursor yet: down fills the first VISIBLE row, up the last.
     // Headers take the cursor (they collapse/expand); hidden children are
@@ -927,17 +1108,17 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
     const first = flat[0];
     const last = flat[flat.length - 1];
     if (first === undefined || last === undefined) return;
-    const prev = cursorIndex(st.cursor);
-    if (prev < 0 || !flat.includes(prev)) {
-      st.cursor = cursorAt(delta >= 0 ? first : last);
-    } else {
-      const pos = visiblePos(flat, prev);
-      st.cursor = cursorAt(flat[(pos + delta + flat.length) % flat.length] ?? first);
-    }
-    const now = cursorIndex(st.cursor);
+    const prev = activeRow();
+    const now =
+      prev === null || !flat.includes(prev)
+        ? delta >= 0
+          ? first
+          : last
+        : (flat[(visiblePos(flat, prev) + delta + flat.length) % flat.length] ?? first);
+    st.focus = { kind: "row", cat: activeCat(), row: now };
     const prevScroll = st.scrollOff;
-    ensureVisible(st, visibleRows(), flat.length, visiblePos(flat, now));
-    paintDesc(fitDescText(descText(rowsOf(st.catIdx)[now]), settingsPanelWidth(ctx.renderer().terminalWidth)));
+    st.scrollOff = scrollFor(visibleRows(), flat.length, visiblePos(flat, now), st.scrollOff);
+    paintDesc(fitDescText(descText(rowsOf(activeCat())[now]), settingsPanelWidth(ctx.renderer().terminalWidth)));
     // Moving the cursor is a REPAINT, not a rebuild: the rows are already on
     // screen. Rebuilding them per keypress churned ~60 native nodes (one
     // TextBuffer each) — at 30 key repeats/s that is ~1800 allocations/s,
@@ -948,7 +1129,7 @@ export const makeEscMenu = (ctx: EscMenuCtx) => {
       renderMenuContent();
       return;
     }
-    if (prev >= 0 && prev !== now) paintRowAt(prev, false);
+    if (prev !== null && prev !== now) paintRowAt(prev, false);
     paintRowAt(now, true);
   };
 

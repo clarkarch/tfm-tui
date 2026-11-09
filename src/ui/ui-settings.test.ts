@@ -1379,3 +1379,143 @@ describe("no initial cursor (fresh views)", () => {
     await t.renderOnce();
   });
 });
+
+describe("the panel's own state (one owner, one reset)", () => {
+  test("the mouse hover writes the SAME focus record the keyboard moves", async () => {
+    await openSettings();
+    // hover row 2 — the paint follows the focus record
+    (t.renderer.root.findDescendantById("tfm-set-row-2") as any).processMouseEvent({
+      type: "move",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+    expect(bgInts("tfm-set-row-2")).toEqual(hexInts(colors.accentBg));
+    // the keyboard continues from the hovered row (ONE focus, not two: the
+    // old code had the mouse write the cursor AND the renderer paint its own
+    // copy, so the two could drift)
+    menu.moveMenu(1);
+    await t.renderOnce();
+    expect(bgInts("tfm-set-row-2")).toEqual([0, 0, 0, 0]);
+    expect(bgInts("tfm-set-row-3")).toEqual(hexInts(colors.accentBg));
+  });
+
+  test("a category hover follows the CATEGORY, not its index (a rescan shifts the list)", async () => {
+    const g = (name: string): SettingGroup => ({
+      header: name,
+      rows: [{ kind: "toggle", label: `${name}-toggle`, get: () => false, set: () => {} }],
+    });
+    plugGroups = [g("plug-a"), g("plug-b"), g("plug-c")];
+    let release!: () => void;
+    reloadImpl = () => new Promise<void>((r) => (release = r));
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      await t.renderOnce();
+      menu.moveMenu(1); // root: no cursor -> Settings
+      menu.moveMenu(1); // Settings -> Plugins
+      menu.menuActivate();
+      await t.renderOnce();
+      // hover the THIRD category (the first one stays the active category —
+      // hovering never switches)
+      (t.renderer.root.findDescendantById("tfm-set-cat-2") as any).processMouseEvent({
+        type: "move",
+        button: 0,
+        x: 0,
+        y: 0,
+        modifiers: { shift: false, alt: false, ctrl: false },
+      });
+      await t.renderOnce();
+      expect(bgInts("tfm-set-cat-2")).toEqual(hexInts(colors.accentBg));
+
+      // the rescan removes the MIDDLE group: the hovered one moves up a row
+      plugGroups = [g("plug-a"), g("plug-c")];
+      release();
+      const deadline = Date.now() + 2000;
+      while (t.captureCharFrame().includes("plug-b") && Date.now() < deadline) await t.renderOnce();
+      expect(t.captureCharFrame()).not.toContain("plug-b");
+      // the hover followed the CATEGORY (plug-c), not the index (2)
+      expect(bgInts("tfm-set-cat-1")).toEqual(hexInts(colors.accentBg));
+    } finally {
+      menu.closeMenu();
+      await t.renderOnce();
+      reloadImpl = async () => {
+        reloadCalls++;
+      };
+      plugGroups = [];
+    }
+  });
+
+  test("reopening the menu does not paint a stale category hover", async () => {
+    await openSettings();
+    // the mouse hovers a category (motion paints it — hover is visual only)
+    (t.renderer.root.findDescendantById("tfm-set-cat-1") as any).processMouseEvent({
+      type: "move",
+      button: 0,
+      x: 0,
+      y: 0,
+      modifiers: { shift: false, alt: false, ctrl: false },
+    });
+    await t.renderOnce();
+    expect(bgInts("tfm-set-cat-1")).toEqual(hexInts(colors.accentBg));
+
+    // close + reopen: the pointer is somewhere else now. The hover is a
+    // MOUSE fact about a panel that no longer exists — it must not survive
+    // into the next open (the old code never reset it, so the category
+    // painted as hovered with the mouse elsewhere).
+    menu.closeMenu();
+    await t.renderOnce();
+    await openSettings();
+    expect(bgInts("tfm-set-cat-1")).toEqual([0, 0, 0, 0]);
+    menu.closeMenu();
+    await t.renderOnce();
+  });
+
+  test("a plugin rescan that shrinks the category list clamps the cursor", async () => {
+    // three plugin groups; the rescan lands with one group fewer while the
+    // menu is open — the cursor must not point past the end of the list
+    const g = (name: string): SettingGroup => ({
+      header: name,
+      rows: [{ kind: "toggle", label: `${name}-toggle`, get: () => false, set: () => {} }],
+    });
+    plugGroups = [g("plug-a"), g("plug-b"), g("plug-c")];
+    let release!: () => void;
+    reloadImpl = () => new Promise<void>((r) => (release = r));
+    try {
+      menu.closeMenu();
+      await t.renderOnce();
+      menu.openMenu();
+      await t.renderOnce();
+      menu.moveMenu(1); // root: no cursor -> Settings
+      menu.moveMenu(1); // Settings -> Plugins
+      menu.menuActivate();
+      await t.renderOnce();
+      menu.menuTab(); // rows pane -> categories pane
+      menu.moveMenu(1); // -> the second category
+      menu.menuTab(); // the category switch lands back on the rows pane
+      menu.moveMenu(1); // -> the third (last) category
+      await t.renderOnce();
+      expect(t.captureCharFrame()).toContain("plug-c-toggle");
+
+      // the rescan lands: the last group is gone
+      plugGroups = [g("plug-a"), g("plug-b")];
+      release();
+      const deadline = Date.now() + 2000;
+      while (!t.captureCharFrame().includes("plug-b-toggle") && Date.now() < deadline) await t.renderOnce();
+      const frame = t.captureCharFrame();
+      // the cursor was clamped to the LAST surviving category
+      expect(frame).toContain("plug-b-toggle");
+      expect(frame).not.toContain("plug-c-toggle");
+    } finally {
+      menu.closeMenu();
+      await t.renderOnce();
+      reloadImpl = async () => {
+        reloadCalls++;
+      };
+      plugGroups = [];
+    }
+  });
+});
