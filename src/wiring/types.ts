@@ -55,6 +55,10 @@ export type NavWiring = {
   quitAppForce: ReturnType<typeof makeQuit>;
   restartApp: ReturnType<typeof makeRestart>;
   setStatusMsg: ReturnType<typeof makeStatus>["setStatusMsg"];
+  // the selection summary's label write — routed through the status module so
+  // both writers consult the same phase (a live transient message wins until
+  // its deadline)
+  setStatusLabel: ReturnType<typeof makeStatus>["setStatusLabel"];
   tabModels: [ReturnType<typeof makeTabs>, ReturnType<typeof makeTabs>];
   nextTab: () => void;
   prevTab: () => void;

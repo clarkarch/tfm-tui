@@ -191,8 +191,11 @@ export const wireNav = (deps: {
   });
 
   // --- Status bar writes live in ./ui-status (tested). The refresh target is
-  // selection's, created further down the wiring — arrow defers it. ---
-  const { setStatusMsg } = makeStatus({
+  // selection's, created further down the wiring — arrow defers it. The
+  // summary writer goes to the selection module (grid-foundation) so BOTH
+  // writers consult the same phase: a live transient message must not be
+  // yanked by a selection-driven refresh. ---
+  const { setStatusMsg, setStatusLabel } = makeStatus({
     setText: core.lookup.setTextOnId,
     refresh: () => getGridFoundation().selection.updateSelectionStatusReal(),
   });
@@ -281,6 +284,7 @@ export const wireNav = (deps: {
     quitAppForce,
     restartApp,
     setStatusMsg,
+    setStatusLabel,
     canBack,
     canFwd,
     goBack,

@@ -27,7 +27,10 @@ export const wireGridFoundation = (deps: {
     makeSelection({
       colors: core.themeGet,
       byId: core.lookup.byId,
-      setText: core.lookup.setTextOnId,
+      // the selection's status line goes through the status module: it owns
+      // the phase, so a live transient message is not yanked by a selection
+      // refresh (the summary is rewritten when the message's window ends)
+      setText: nav.setStatusLabel,
       setIconState: core.slots.setIconState,
       isCutKey: core.isCutKey,
       scroller: () => core.scrollerRefs[pane].current,
