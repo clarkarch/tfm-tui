@@ -836,6 +836,7 @@ describe("makeTileHoverAnim (engine)", () => {
   const makeRefs = (tag: string, isCutKey?: (k: string) => boolean, lift = false) => {
     const refs = new Map<string, any>();
     refs.set(`/w/a-${tag}`, {
+      mounted: true,
       selected: false,
       iconSpec: { slotId: `slot-a-${tag}` },
       iconSlotId: `slot-a-${tag}`,
@@ -846,6 +847,7 @@ describe("makeTileHoverAnim (engine)", () => {
       hoverLift: lift,
     });
     refs.set(`/w/b-${tag}`, {
+      mounted: true,
       selected: false,
       iconSpec: { slotId: `slot-b-${tag}` },
       iconSlotId: `slot-b-${tag}`,
@@ -857,6 +859,7 @@ describe("makeTileHoverAnim (engine)", () => {
     });
     if (isCutKey)
       refs.set(`/w/cut-${tag}`, {
+        mounted: true,
         selected: false,
         iconSpec: { slotId: `slot-cut-${tag}` },
         iconSlotId: `slot-cut-${tag}`,
@@ -912,6 +915,7 @@ describe("makeTileHoverAnim (engine)", () => {
     const labelId = "lab-lift";
     const refs = new Map<string, any>();
     refs.set(key, {
+      mounted: true,
       selected: false,
       iconSpec: { slotId },
       iconSlotId: slotId,
@@ -982,6 +986,7 @@ describe("makeTileHoverAnim (engine)", () => {
     const labelId = "lab-glide";
     const refs = new Map<string, any>();
     refs.set(key, {
+      mounted: true,
       selected: false,
       iconSpec: { slotId },
       iconSlotId: slotId,
@@ -1155,6 +1160,90 @@ describe("makeTileHoverAnim (engine)", () => {
     await t.renderOnce();
     anim.playHover("/w/a-rebuild", true);
     expect((byId("tile-a-rebuild") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+  });
+
+  test("an unmounted (reaped) tile is not hover-painted", async () => {
+    // A window slide reaps the rows that leave the window: their nodes are
+    // destroyed, but the refs stay in tileRefs (the selection contract is
+    // window-blind). A hover aimed at such a row must paint NOTHING.
+    const { anim, iconCalls, byId, refs } = await setup("reaped");
+    const key = "/w/a-reaped";
+    refs.get(key).mounted = false;
+    anim.playHover(key, true);
+    expect(iconCalls).toEqual([]);
+    // the tile keeps its rest fill and the label its base color
+    expect((byId("tile-a-reaped") as any).backgroundColor.toInts()).toEqual([...REST] as any);
+    expect((byId("lab-a-reaped") as any).fg.toInts()).toEqual([192, 202, 245, 255]); // #c0caf5
+  });
+
+  test("a reaped hovered tile is not settled when the pointer sweeps away", async () => {
+    // The animator OWNS the hovered tile's paint. If the row is reaped while
+    // the pointer owns it, the sweep back to rest must not touch the dead
+    // nodes (and never name the dead icon spec).
+    const { anim, iconCalls, byId, refs } = await setup("sweep-reaped");
+    const key = "/w/a-sweep-reaped";
+    anim.playHover(key, true);
+    expect(iconCalls).toEqual([1]); // the hover-in paints
+    // the window slide reaps the row
+    refs.get(key).mounted = false;
+    iconCalls.length = 0;
+    // the pointer moves onto another tile: the old owner returns to rest —
+    // but the reaped tile is NOT settled (only the new tile's hover-in paints)
+    anim.playHover("/w/b-sweep-reaped", true);
+    expect(iconCalls).toEqual([1]);
+    expect((byId("tile-a-sweep-reaped") as any).backgroundColor.toInts()).toEqual([...HOVER] as any);
+  });
+
+  test("a reaped tile's glide never writes to the rebuilt row", async () => {
+    // The lift glides over `travel` cells: the tween writes the offset to the
+    // slot AND the label every frame. A row that is reaped mid-glide and
+    // REBUILT reuses the same absolute label id — the stale glide must not
+    // move the new label.
+    const key = "/w/glide-reaped";
+    const tileId = "tile-glide-reaped";
+    const slotId = "slot-glide-reaped";
+    const labelId = "lab-glide-reaped";
+    const refs = new Map<string, any>();
+    refs.set(key, {
+      mounted: true,
+      selected: false,
+      iconSpec: { slotId },
+      iconSlotId: slotId,
+      tileId,
+      labelId,
+      baseFg: "#c0caf5",
+      isDir: false,
+      hoverLift: true,
+    });
+    t.renderer.root.add(Box({ id: tileId, width: 8, height: 5, backgroundColor: "#1a1b26" }));
+    t.renderer.root.add(Box({ id: slotId, width: 4, height: 3 }));
+    t.renderer.root.add(Text({ id: labelId, content: "x", fg: "#c0caf5" }));
+    await t.renderOnce();
+    const anim = makeTileHoverAnim({
+      renderer: () => t.renderer,
+      byId: (id: string) => t.renderer.root.findDescendantById(id),
+      tileRefs: () => refs,
+      colors: () => ({ hoverBg: "#3b4261", bg: "#1a1b26", sidebarFgMuted: "#565f89", white: "#ffffff" }) as any,
+      uiStyle: () => "solid" as const,
+      setIconState: () => {},
+      hoverLiftOpts: () => ({
+        enabled: true,
+        ms: 120,
+        slideCells: 4,
+        ease: "linear",
+        direction: "up",
+        includeLabel: true,
+      }),
+    });
+    anim.playHover(key, true);
+    // the row is reaped and REBUILT: the same absolute label id, a new node
+    refs.get(key).mounted = false;
+    (t.renderer.root as any).remove?.(t.renderer.root.findDescendantById(labelId));
+    t.renderer.root.add(Text({ id: labelId, content: "x", fg: "#c0caf5" }));
+    await t.renderOnce();
+    getTimelineEngine(t.renderer).update(60); // linear half of 4 cells → -2
+    const label = () => t.renderer.root.findDescendantById(labelId) as any;
+    expect(label().translateY).toBe(0);
   });
 
   test("a cut (clipboard) tile keeps its dim after a hover cycle", async () => {

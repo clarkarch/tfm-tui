@@ -608,8 +608,12 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
 
   // A tile copied from a previous build may have been destroyed by a grid
   // rebuild, so only repaint the node refs when byId still resolves to them.
+  // An UNMOUNTED ref (a reaped window row) names dead nodes — the grid says
+  // so, so the animator never touches them (a rebuilt row reuses the same
+  // absolute ids, and a stale label write would land on the NEW node).
   const ownedNode = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
+    if (!cur.refs.mounted) return null;
     try {
       const node = ctx.byId(cur.refs.tileId);
       return node === cur.node ? node : null;
@@ -619,6 +623,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
   };
   const ownedSlot = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
+    if (!cur.refs.mounted) return null;
     try {
       return cur.refs.iconSlotId ? ctx.byId(cur.refs.iconSlotId) : null;
     } catch {
@@ -627,6 +632,7 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
   };
   const ownedLabel = (cur: HoverCur | null): MaybeNode => {
     if (!cur) return null;
+    if (!cur.refs.mounted) return null;
     try {
       return cur.refs.labelId ? ctx.byId(cur.refs.labelId) : null;
     } catch {
@@ -714,6 +720,8 @@ export const makeTileHoverAnim = (ctx: TileHoverCtx) => {
     try {
       const refs = ctx.tileRefs().get(key);
       if (!refs) return;
+      // an unmounted ref (a reaped window row) has no live nodes to paint
+      if (!refs.mounted) return;
       const node = ctx.byId(refs.tileId);
       if (!node) return;
       const opts = ctx.hoverLiftOpts();

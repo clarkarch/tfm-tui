@@ -49,6 +49,7 @@ const makeHarness = (over: Partial<KeyRouterCtx> | ((calls: string[]) => Partial
     keys.forEach((k, i) => {
       if (!selection.tileRefs.has(k)) {
         selection.tileRefs.set(k, {
+          mounted: true,
           selected: false,
           baseFg: COLORS.sidebarFg,
           tileId: `t${i}`,
@@ -1407,6 +1408,7 @@ describe("command table (everything is a command)", () => {
     const h = makeHarness();
     // an archive tile beyond the seeded files (extract filters by canExtract)
     h.selection.tileRefs.set("pack.zip", {
+      mounted: true,
       selected: false,
       baseFg: "#aaa",
       tileId: "tz",

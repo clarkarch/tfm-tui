@@ -15,6 +15,14 @@ import { IconStateIdx, type IconSpec } from "../lib/icon-state";
 import type { MaybeNode, ScrollerLike } from "../lib/node-like";
 
 export type SelTileRef = {
+  // Are this ref's nodes LIVE? The windowed grid registers a ref for EVERY
+  // entry up front (the selection contract is window-blind) and a row that
+  // slides out of the window is REAPED — its nodes are destroyed. The old
+  // encoding was the PRESENCE of the optional fields (iconSpec/iconSlotId):
+  // a reaped row KEPT them, so a paint aimed at it named a dead icon spec
+  // and wrote to destroyed renderables. ONE explicit flag, owned by the grid
+  // (it builds the rows and reaps them).
+  mounted: boolean;
   iconSpec?: IconSpec;
   iconSlotId?: string;
   selected: boolean;
@@ -188,6 +196,11 @@ export const makeSelection = (ctx: SelectionCtx) => {
   const setTileVisual = (key: string, mode: TileVisualMode): void => {
     const refs = tileRefs.get(key);
     if (!refs) return;
+    // a ref whose nodes are GONE (a reaped window row) is not painted: the
+    // icon-state event would name a dead spec and the node writes would land
+    // on destroyed renderables. The selection STATE (selected) still lives
+    // in the ref — it is re-painted when the row is built again.
+    if (!refs.mounted) return;
     const cut = mode === TileVisual.Rest && !refs.selected && ctx.isCutKey(key);
     ctx.setIconState(refs.iconSpec, cut ? IconStateIdx.Cut : mode);
     if (!refs.iconSpec) {

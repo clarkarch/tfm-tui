@@ -1037,6 +1037,20 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         else if (ctx.isCutKey(key)) selection.setTileVisual(key, TileVisual.Rest);
       }
     };
+    // the rows' nodes are GONE (destroyed by a slide or by a rebuild): their
+    // refs must say so, or a paint aimed at them names the dead icon spec and
+    // writes to destroyed renderables. The SELECTION state stays in the ref —
+    // it is re-painted when the row is built again.
+    const markUnmounted = (fromRow: number, toRow: number): void => {
+      const lo = isList ? fromRow : fromRow * cols;
+      const hi = isList ? toRow : Math.min(entries.length - 1, (toRow + 1) * cols - 1);
+      for (let i = lo; i <= hi; i++) {
+        const e = entries[i];
+        if (!e) continue;
+        const ref = selection.tileRefs.get(entryKey(e));
+        if (ref) ref.mounted = false;
+      }
+    };
     // a sub-row notch leaves the built window in place but can still push a
     // partially visible row's TOP cell into view — the reveal below must run
     // for those too, not just for slides (the range-equality repeats stay
@@ -1057,6 +1071,9 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
           ctx.smoothStop?.();
         } catch {}
         destroyChildren(scroller.content);
+        // the destroyed rows' refs name DEAD nodes: mark them unmounted BEFORE
+        // the rebuild, which re-registers the rows that come back
+        markUnmounted(old.r0, old.r1);
         scroller.content.add(buildInner(entries, isList, cols, rh, rows, r0, r1, visFirst, true));
         // the rebuilt inner carries NEW pads — re-anchor the identity contract
         // to them (keeping the stale anchor would make every later slide fall
@@ -1074,15 +1091,19 @@ export const makeGridRenderer = (ctx: GridRendererCtx) => {
         // not at the poke. A plain destroy() would free only the row Box:
         // OpenTUI detaches a node's children without destroying them, so the
         // walk down to the tiles lives in destroyNode (lib/uiutil).
-        const reapRow = (k: Renderable | undefined): void => {
+        const reapRow = (r: number, k: Renderable | undefined): void => {
           if (!k) return;
+          // the row's nodes are GONE: mark its refs unmounted FIRST, so a paint
+          // aimed at them (a cut refresh, a selection restore, a hover-out)
+          // cannot name the dead icon spec or write to destroyed renderables
+          markUnmounted(r, r);
           try {
             mounted.remove(k);
           } catch {}
           destroyNode(k);
         };
-        for (let r = old.r0; r < r0; r++) reapRow(kidAt(r));
-        for (let r = old.r1; r > r1; r--) reapRow(kidAt(r));
+        for (let r = old.r0; r < r0; r++) reapRow(r, kidAt(r));
+        for (let r = old.r1; r > r1; r--) reapRow(r, kidAt(r));
         for (let r = r0; r < old.r0; r++) mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), 1 + (r - r0));
         for (let r = Math.max(r0, old.r1 + 1); r <= r1; r++)
           mounted.add(buildRow(entries, isList, cols, rh, visFirst, r), mounted.getChildren().length - 1);

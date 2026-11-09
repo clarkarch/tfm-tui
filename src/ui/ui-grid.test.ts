@@ -21,6 +21,7 @@ import { RECENT_URI, STARRED_URI } from "../fs/uri";
 import { makeSelection } from "../input/selection";
 import type { Entry } from "../fs/listing";
 import type { TileMouseHandlers } from "../input/grid-input";
+import { TileVisual } from "../input/grid-input";
 import type { IconSlotHandle } from "./ui-slots";
 import { applySurface, tileSurface } from "./style";
 import { defaultConfig } from "../config/config-schema";
@@ -1878,6 +1879,96 @@ describe("renderGrid (windowed grid)", () => {
       expect(selBg).not.toEqual(sibBg);
     } finally {
       selection.clearTileSelection();
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a reaped row's ref is unmounted and is not painted", async () => {
+    // A window slide DESTROYS the rows that leave the window. Their refs stay
+    // in tileRefs (the selection contract is window-blind) and still name the
+    // dead nodes + the dead icon spec — so the grid must say "unmounted" and
+    // every paint aimed at that row must be refused.
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      ensureBig();
+      gridState.cwd = bigDir();
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      // row 0 is BUILT: its ref is mounted and its nodes are live
+      const reapedKey = bigFile(1);
+      expect(selection.tileRefs.get(reapedKey)!.mounted).toBe(true);
+      expect(byId("tfm-tile-0")).toBeTruthy();
+      // an entry OUTSIDE the window is registered (the selection contract is
+      // window-blind) but NOT built: its ref says so
+      expect(selection.tileRefs.get(bigFile(400))!.mounted).toBe(false);
+
+      // fling to row 50 (scrollTop 300 / TILE_H 6): rows 0..5 leave the
+      // window and are reaped
+      scroller.scrollTop = 300;
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-0")).toBeFalsy();
+      expect(selection.tileRefs.get(reapedKey)!.mounted).toBe(false);
+      // the rows that are still on screen stay mounted
+      expect(selection.tileRefs.get(bigFile(251))!.mounted).toBe(true);
+
+      // a paint aimed at the reaped row must not reach its dead icon spec
+      iconStateCalls.length = 0;
+      selection.setTileVisual(reapedKey, TileVisual.Selected);
+      expect(iconStateCalls).toEqual([]);
+
+      // ONE-row notch (the incremental slide): row 49 is REAPED row by row
+      // (the fling above was a full rebuild), row 56 is built
+      scroller.scrollTop = 306;
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-row-49")).toBeFalsy();
+      expect(byId("tfm-tile-row-56")).toBeTruthy();
+      expect(selection.tileRefs.get(bigFile(246))!.mounted).toBe(false); // row 49
+      expect(selection.tileRefs.get(bigFile(281))!.mounted).toBe(true); // row 56
+    } finally {
+      selection.clearTileSelection();
+      windowedGridOn = false;
+      scroller.scrollTop = 0;
+      gridState.cwd = prevCwd;
+      await renderGrid();
+    }
+  });
+
+  test("a reaped list row's ref is unmounted", async () => {
+    // list view rows ARE tiles: the reap math is a different branch (one entry
+    // per row), so it gets its own pin
+    const prevCwd = gridState.cwd;
+    windowedGridOn = true;
+    try {
+      ensureBig();
+      gridState.cwd = bigDir();
+      viewMode = "list";
+      scroller.scrollTop = 0;
+      await renderGrid();
+      await t.renderOnce();
+
+      // rows 0..13 are built (13 visible + 1 overscan), row 19 is registered
+      // but NOT built
+      expect(selection.tileRefs.get(bigFile(1))!.mounted).toBe(true);
+      expect(selection.tileRefs.get(bigFile(20))!.mounted).toBe(false);
+
+      // one-row notch (listRowH 2): row 0 leaves the window and is reaped
+      scroller.scrollTop = 4;
+      syncWindow();
+      await t.renderOnce();
+      expect(byId("tfm-tile-0")).toBeFalsy();
+      expect(selection.tileRefs.get(bigFile(1))!.mounted).toBe(false);
+      // the rows that entered are mounted again
+      expect(selection.tileRefs.get(bigFile(15))!.mounted).toBe(true);
+    } finally {
+      viewMode = "grid";
       windowedGridOn = false;
       scroller.scrollTop = 0;
       gridState.cwd = prevCwd;

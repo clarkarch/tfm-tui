@@ -101,12 +101,21 @@ const makeHarness = () => {
   };
   const sel = makeSelection(ctx);
 
-  const addTile = (key: string, isDir = false, withIconSpec = true): void => {
+  // `mounted` = the ref's nodes are LIVE. A windowed grid registers a ref for
+  // EVERY entry up front (the selection contract is window-blind) and a row
+  // that slides out of the window is REAPED — its nodes are destroyed while
+  // the ref keeps the dead icon spec and the dead node ids.
+  const addTile = (key: string, isDir = false, withIconSpec = true, mounted = true): void => {
     const tileId = `tile:${key}`;
     const labelId = `label:${key}`;
-    nodes.set(tileId, { id: tileId });
-    nodes.set(labelId, { id: labelId });
+    // an unmounted ref names nodes that no longer exist
+    if (mounted) {
+      nodes.set(tileId, { id: tileId });
+      nodes.set(labelId, { id: labelId });
+      if (!withIconSpec) nodes.set(`slot:${key}`, { id: `slot:${key}`, opacity: 1 });
+    }
     const ref: SelTileRef = {
+      mounted,
       selected: false,
       baseFg: COLORS.sidebarFg,
       tileId,
@@ -117,7 +126,6 @@ const makeHarness = () => {
           { iconSpec: { __key: key } as unknown as IconSpec }
         : { iconSlotId: `slot:${key}` }),
     };
-    if (!withIconSpec) nodes.set(`slot:${key}`, { id: `slot:${key}`, opacity: 1 });
     sel.tileRefs.set(key, ref);
   };
 
@@ -493,6 +501,25 @@ describe("setTileVisual", () => {
       { id: "tile:a", state: "rest", bg: "transparent" },
       { id: "tile:a", state: "selected", bg: COLORS.accentBg },
     ]);
+  });
+
+  test("a reaped row is not painted", () => {
+    const h = makeHarness();
+    // a BUILT tile: the icon state and the surface paint happen
+    h.addTile("live");
+    h.sel.setTileVisual("live", TileVisual.Selected);
+    expect(h.iconEvents).toEqual([{ key: "live", mode: 2 }]);
+    expect(h.paintCalls).toHaveLength(1);
+
+    // a REAPED row (the window slide destroyed its nodes): the ref still holds
+    // the dead icon spec and the dead node ids. Painting it would name a dead
+    // spec and write to destroyed renderables.
+    h.addTile("reaped", false, true, false);
+    h.iconEvents.length = 0;
+    h.paintCalls.length = 0;
+    h.sel.setTileVisual("reaped", TileVisual.Selected);
+    expect(h.iconEvents).toEqual([]);
+    expect(h.paintCalls).toEqual([]);
   });
 });
 

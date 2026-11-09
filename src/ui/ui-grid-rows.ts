@@ -140,6 +140,9 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     // WITHOUT the full render's prevSel snapshot — the flag must survive)
     const prevSel = selection.tileRefs.get(entryKey(entry))?.selected ?? false;
     selection.tileRefs.set(entryKey(entry), {
+      // REGISTERED, not built: the row may sit outside the window, so its
+      // nodes do not exist yet (a paint aimed at this ref is refused)
+      mounted: false,
       selected: prevSel,
       baseFg: dim ? colors.sidebarFgMuted : colors.sidebarFg,
       tileId,
@@ -318,6 +321,8 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     tile.add(labelText);
 
     selection.tileRefs.set(key, {
+      // BUILT: the ids below name LIVE nodes
+      mounted: true,
       iconSpec,
       iconSlotId: slotId,
       // survive window slides (the builder re-registers refs on every build;
@@ -418,6 +423,8 @@ export const makeGridBuilders = (ctx: GridRendererCtx) => {
     );
     row.add(Text({ id: `${rowId}-date`, content: fmtDateShort(entry.mtimeMs), fg: colors.sidebarFgMuted }));
     selection.tileRefs.set(key, {
+      // BUILT: the ids below name LIVE nodes
+      mounted: true,
       iconSpec,
       iconSlotId: slotId,
       selected: selection.tileRefs.get(key)?.selected ?? false,
