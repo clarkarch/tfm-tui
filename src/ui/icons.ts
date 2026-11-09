@@ -206,17 +206,49 @@ export const pickSvgRenderer = (hasInproc: boolean): SvgRendererKind => (hasInpr
 // name something else while later renders use in-process (key/salt mismatch).
 // A failed load (musl/minimal container) is remembered, never retried.
 type ResvgCtor = typeof import("@resvg/resvg-js").Resvg;
-let inprocResvg: ResvgCtor | null | undefined;
+
+// The renderer's lifecycle is a TAG, not a nullable value. The old shape kept
+// TWO states in ONE variable (`undefined` = "not tried yet", `null` = "tried
+// and failed"), so writing the failure value to mean "not loaded yet"
+// disabled the in-process renderer forever (the untried guard never fired)
+// AND changed the disk salt — a full re-raster of every cached icon. One
+// record names the phase; one function owns the transition.
+export type RendererPhase = "untried" | "failed" | "ready";
+export type RendererState = { phase: "untried" } | { phase: "failed" } | { phase: "ready"; ctor: ResvgCtor };
+
+let rendererState: RendererState = { phase: "untried" };
+
+// The transition out of "untried" is PURE: the ready phase means a USABLE
+// constructor. The addon can load its JS half and expose no Resvg (a broken
+// dlopen) — the old "not null" check called that "inproc", so the disk salt
+// promised in-process pixels while every render threw.
+export const rendererStateFor = (ctor: unknown): RendererState =>
+  typeof ctor === "function" ? { phase: "ready", ctor: ctor as ResvgCtor } : { phase: "failed" };
+
+// The ONLY transition owner: untried → ready | failed. A failed load is
+// remembered (never retried — the addon cannot appear mid-session).
 const loadInprocResvg = (): ResvgCtor | null => {
-  if (inprocResvg === undefined) {
+  if (rendererState.phase === "untried") {
     try {
-      inprocResvg = require("@resvg/resvg-js").Resvg as ResvgCtor;
+      rendererState = rendererStateFor(require("@resvg/resvg-js").Resvg);
     } catch {
-      inprocResvg = null;
+      rendererState = { phase: "failed" };
     }
   }
-  return inprocResvg;
+  return rendererState.phase === "ready" ? rendererState.ctor : null;
 };
+
+// The current phase — a PURE read (reading it never loads anything).
+const rendererPhase = (): RendererPhase => rendererState.phase;
+
+// The disk salt names the renderer identity, and the mapping is PURE so the
+// three phases can never collapse into one spelling: an UNRESOLVED renderer
+// ("untried") must not be spelled like a FAILED one ("none"), or a machine
+// that resolves the addon later would serve the other lane's pixels. The
+// settled spellings are the ones the disk cache already uses ("inproc" /
+// "none") — the fix must not re-key every cached icon on users' machines.
+export const rendererSaltFor = (phase: RendererPhase): string =>
+  phase === "ready" ? "inproc" : phase === "failed" ? "none" : "untried";
 
 const svgRenderer = (): SvgRendererKind => (loadInprocResvg() === null ? null : "inproc");
 
@@ -553,8 +585,10 @@ const thumbStore = makeStore(THUMB_CACHE_MAX, FAILED_THUMBS_MAX);
 const ICON_DISK_VER = "v5";
 // renderer identity is part of the salt: installing/switching the rasterizer
 // must invalidate whatever the OTHER one cached (a flat version bump only
-// covers the upgrade itself, not a later install)
-const iconSalt = (): string => `${ICON_DISK_VER}:${svgRenderer() ?? "none"}`;
+// covers the upgrade itself, not a later install). The salt is a PURE read
+// of the renderer's phase — the lane that builds the path settles the
+// renderer first, so the disk read and the disk write of one raster agree.
+const iconSalt = (): string => `${ICON_DISK_VER}:${rendererSaltFor(rendererPhase())}`;
 const iconDiskDir = (): string => path.join(process.env.XDG_CACHE_HOME ?? path.join(home, ".cache"), "tfm", "icons");
 const iconDiskPath = (key: string): string =>
   path.join(
@@ -589,6 +623,10 @@ export const iconPng = async (
   pxH: number,
   opts?: { transparent?: boolean; style?: IconStyle },
 ): Promise<Uint8Array> => {
+  // settle the renderer BEFORE the cache paths: the disk salt names the
+  // renderer identity and is a pure read of the phase, so the disk read and
+  // the disk write of one raster must see the SAME phase
+  loadInprocResvg();
   const transparent = opts?.transparent ?? false;
   const asset = resolveIconName(name, opts?.style ?? "filled");
   const key = iconCacheKey(asset, fg, bg, pxW, pxH, svgSourceMtime(asset), transparent);
@@ -639,6 +677,8 @@ export const iconPng = async (
 // so faithful and tinted rasters never share an entry. `bg === undefined`
 // keeps alpha (transparent modes); otherwise it flattens onto bg like icons.
 export const brandPng = async (name: string, pxW: number, pxH: number, bg?: string): Promise<Uint8Array> => {
+  // settle the renderer before the cache paths (same rule as iconPng above)
+  loadInprocResvg();
   const key = `brand:${name}:${pxW}x${pxH}|src${svgSourceMtime(name)}${bg === undefined ? "|t" : `|${bg}`}`;
   const hit = storeGet(brandStore, key);
   if (hit?.state === "ready") return hit.bytes;

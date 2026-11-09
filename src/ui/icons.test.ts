@@ -63,6 +63,57 @@ const ICO_4x4 =
 const TIFF_6x2 =
   "SUkqACwAAAD/AAD/AAD/AAD/AAD/AAD/AAAAAP8AAP8AAP8AAP8AAP8AAP8PAAABAwABAAAABgAAAAEBAwABAAAAAgAAAAIBAwADAAAA5gAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAAAoBAwABAAAAAQAAABEBBAABAAAACAAAABIBAwABAAAAAQAAABUBAwABAAAAAwAAABYBAwABAAAAAgAAABcBBAABAAAAJAAAABwBAwABAAAAAQAAACkBAwACAAAAAAABAD4BBQACAAAAHAEAAD8BBQAGAAAA7AAAAAAAAAAIAAgACACF61EAAACAAMP1qAAAAAACzcxMAAAAAAHNzEwAAACAAM3MTAAAAAACj8L1AAAAABA3GqAAAAAAAiuHCgAAACAA";
 
+// The module source with the comments stripped: the no-drift rules below
+// pin SHAPES (a state must stay a tag, not drift back into a nullable
+// pair), and a comment must never satisfy them.
+//
+// The stripper is a tiny scanner, not a regex pair: the naive pair ate
+// 300 lines of the file (the "assets/icons/*.svg" glob inside a line
+// comment opened a "block comment" that ran to the next JSDoc block), so
+// the rules were reading a TRUNCATED source and could miss a drift above
+// the cut. Strings and template literals are skipped so a URL or a glob
+// inside a literal cannot open a comment either.
+const stripComments = (src: string): string => {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i] ?? "";
+    const next = src[i + 1] ?? "";
+    if (c === "/" && next === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      out += c;
+      i++;
+      while (i < src.length) {
+        const ch = src[i] ?? "";
+        out += ch;
+        i++;
+        if (ch === "\\") {
+          out += src[i] ?? "";
+          i++;
+          continue;
+        }
+        if (ch === quote) break;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+};
+
+const readSrc = async (): Promise<string> => stripComments(await Bun.file(`${import.meta.dir}/icons.ts`).text());
+
 // sandbox the disk cache for the WHOLE file: iconPng/thumbPng read the real
 // ~/.cache/tfm before rasterizing, so an app-populated disk hit could make
 // the raster tests pass with a broken pipeline ("green suite lies") — and
@@ -836,9 +887,6 @@ describe("thumb lifecycle", () => {
 // .catch that deleted it ran after the rejection had propagated) and was
 // served to the next caller. The lifecycle is ONE tagged record per key now.
 describe("no-drift rule: the raster lifecycle is ONE record per key", () => {
-  const readSrc = async (): Promise<string> =>
-    (await Bun.file(`${import.meta.dir}/icons.ts`).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-
   test("no parallel ready/inflight/failed containers", async () => {
     const src = await readSrc();
     // the parallel containers must not come back
@@ -871,6 +919,75 @@ describe("no-drift rule: the raster lifecycle is ONE record per key", () => {
       expect(failedIdx).toBeGreaterThan(0);
       const rejectIdx = src.indexOf("job.reject(err)", failedIdx);
       expect(rejectIdx).toBeGreaterThan(failedIdx);
+    }
+  });
+});
+
+// The resvg loader kept ONE nullable variable for TWO states: "not tried
+// yet" and "tried and failed" — so writing the failure value to mean "not
+// loaded yet" disabled the in-process renderer forever AND changed the
+// disk salt (a full re-raster of every cached icon). The disk salt names
+// the renderer identity, so an UNRESOLVED renderer and a FAILED one must
+// be different strings.
+describe("renderer state", () => {
+  test("the disk salt distinguishes an unloaded renderer from a failed one", async () => {
+    const mod = (await import("./icons")) as unknown as {
+      rendererSaltFor?: (phase: "untried" | "failed" | "ready") => string;
+    };
+    const salt = mod.rendererSaltFor;
+    expect(typeof salt).toBe("function");
+    // the phases must not collapse into one spelling
+    expect(salt?.("untried")).not.toBe(salt?.("failed"));
+    expect(salt?.("failed")).not.toBe(salt?.("ready"));
+    // the settled spellings are the ones the disk cache already uses: the
+    // fix must not re-key every cached icon on users' machines
+    expect(salt?.("ready")).toBe("inproc");
+    expect(salt?.("failed")).toBe("none");
+  });
+
+  test("a broken addon is a FAILED renderer, not a ready one", async () => {
+    const mod = (await import("./icons")) as unknown as {
+      rendererStateFor?: (ctor: unknown) => { phase: string };
+    };
+    const stateFor = mod.rendererStateFor;
+    expect(typeof stateFor).toBe("function");
+    // the addon can load its JS half and expose no Resvg (a broken dlopen):
+    // claiming "inproc" there made the disk salt promise in-process pixels
+    // while every render threw
+    expect(stateFor?.(undefined).phase).toBe("failed");
+    expect(stateFor?.({}).phase).toBe("failed");
+    expect(stateFor?.(class {}).phase).toBe("ready");
+  });
+});
+
+describe("no-drift rule: the renderer loader is ONE tagged state", () => {
+  test("the loader state is a tag, not a nullable pair", async () => {
+    const src = await readSrc();
+    expect(/type\s+RendererState\s*=/.test(src)).toBe(true);
+    expect(/phase:\s*"untried"/.test(src)).toBe(true);
+    expect(/phase:\s*"failed"/.test(src)).toBe(true);
+    expect(/phase:\s*"ready"/.test(src)).toBe(true);
+    // the old nullable pair must not come back (two meanings in one
+    // variable: "not tried yet" and "tried and failed")
+    expect(/ResvgCtor\s*\|\s*null\s*\|\s*undefined/.test(src)).toBe(false);
+    expect(/inprocResvg/.test(src)).toBe(false);
+    // the guard tests the PHASE, not a null/undefined comparison
+    expect(/rendererState\.phase\s*===\s*"untried"/.test(src)).toBe(true);
+  });
+
+  test("the lanes settle the renderer before they compute a cache path", async () => {
+    const src = await readSrc();
+    // the salt is a PURE read of the phase now, so the lane that computes
+    // the path owns the settle: the disk read and the disk write of one
+    // raster must agree on the salt (otherwise the disk cache never hits)
+    for (const lane of ["iconPng", "brandPng"]) {
+      const start = src.indexOf(`export const ${lane} =`);
+      expect(start).toBeGreaterThan(0);
+      const body = src.slice(start);
+      const settleIdx = body.indexOf("loadInprocResvg()");
+      const pathIdx = body.indexOf("iconDiskPath(key)");
+      expect(settleIdx).toBeGreaterThan(0);
+      expect(pathIdx).toBeGreaterThan(settleIdx);
     }
   });
 });
