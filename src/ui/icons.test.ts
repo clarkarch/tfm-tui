@@ -696,6 +696,17 @@ describe("icon/thumb memory cache LRU", () => {
     expect(lruGet(m, "zz")).toBeUndefined();
     expect([...m.keys()]).toEqual(["a"]);
   });
+
+  test("lruSet reports the evicted key (the lane drops that key's record too)", () => {
+    const m = new Map<string, number>();
+    lruSet(m, "a", 1, 2);
+    lruSet(m, "b", 2, 2);
+    // the untouched head goes first — the caller needs the key to drop the
+    // matching record (the LRU index holds only the order)
+    expect(lruSet(m, "c", 3, 2)).toBe("a");
+    // nothing evicted under the cap
+    expect(lruSet(m, "d", 4, 3)).toBeUndefined();
+  });
 });
 
 // Files modified within the cool-off window are still being written: rendering
@@ -768,6 +779,100 @@ describe("thumb failure sentinel", () => {
     },
     20000,
   );
+});
+
+// The thumb lane's cache used to hold PROMISES: a rejected promise stayed in
+// the cache for one microtask (the .catch that deleted it ran AFTER the
+// rejection had propagated), so a caller that arrived in that window was
+// handed the DEAD promise — it saw the raw render error instead of the
+// failure sentinel, and the cache still claimed the key was being rendered.
+describe("thumb lifecycle", () => {
+  test("a rejected thumb promise is not served to a second caller", async () => {
+    // No video binary → the video lane's render rejects SYNCHRONOUSLY (the
+    // promise is already rejected when the job awaits it), so the rejection
+    // lands in a KNOWN microtask. That is the only way to step into the
+    // window between "the promise rejected" and "the cache forgot it" — a
+    // real renderer settles on its own schedule.
+    const prevPath = process.env.PATH;
+    const prevOverride = process.env.TFM_FFMPEG;
+    process.env.PATH = "";
+    delete process.env.TFM_FFMPEG;
+    resetVideoBin();
+    clearIconCaches();
+    const args = ["/nonexistent/tfm-thumb-missing.mp4", 5, 1, 48, 64, "#1a1b26", false, true] as const;
+    try {
+      const first = thumbPng(...args);
+      // the second caller lands in the window: the first promise has ALREADY
+      // rejected, but the cache has not noticed yet
+      const second = Promise.resolve().then(() => thumbPng(...args));
+      const firstErr = await first.then(
+        () => "",
+        (e: unknown) => String(e),
+      );
+      const secondErr = await second.then(
+        () => "",
+        (e: unknown) => String(e),
+      );
+      // the first caller sees the REAL render error
+      expect(firstErr).toContain("no video ffmpeg available");
+      expect(firstErr).not.toContain("previously failed");
+      // the second caller must see the SENTINEL — never the dead promise
+      expect(secondErr).toContain("previously failed");
+    } finally {
+      if (prevPath === undefined) delete process.env.PATH;
+      else process.env.PATH = prevPath;
+      if (prevOverride === undefined) delete process.env.TFM_FFMPEG;
+      else process.env.TFM_FFMPEG = prevOverride;
+      resetVideoBin();
+      clearIconCaches();
+    }
+  });
+});
+
+// The raster lanes kept SIX containers: per lane a map of ready bytes, a map
+// of in-flight promises and (for thumbs) a set of failure sentinels. WHICH
+// container held the key encoded the state, and the thumb lane stored
+// PROMISES — a rejected promise stayed in the cache for a microtask (the
+// .catch that deleted it ran after the rejection had propagated) and was
+// served to the next caller. The lifecycle is ONE tagged record per key now.
+describe("no-drift rule: the raster lifecycle is ONE record per key", () => {
+  const readSrc = async (): Promise<string> =>
+    (await Bun.file(`${import.meta.dir}/icons.ts`).text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  test("no parallel ready/inflight/failed containers", async () => {
+    const src = await readSrc();
+    // the parallel containers must not come back
+    expect(/inflightIcons|inflightBrand|failedThumbs/.test(src)).toBe(false);
+    expect(/new Map<string,\s*Uint8Array>\(\)/.test(src)).toBe(false);
+    expect(/new Map<string,\s*Promise<Uint8Array>>\(\)/.test(src)).toBe(false);
+    // ONE tagged record replaces them
+    expect(/type\s+RasterRecord\s*=/.test(src)).toBe(true);
+    expect(/state:\s*"inflight"/.test(src)).toBe(true);
+    expect(/state:\s*"ready"/.test(src)).toBe(true);
+    expect(/state:\s*"failed"/.test(src)).toBe(true);
+    // ONE record map holds the state; the eviction indexes carry no payload
+    // (they only keep the ready/failed budgets apart)
+    expect((src.match(/records:\s*new Map\(\)/g) ?? []).length).toBe(1);
+    expect(/readyOrder:\s*Map<string,\s*true>/.test(src)).toBe(true);
+    expect(/failedOrder:\s*Set<string>/.test(src)).toBe(true);
+  });
+
+  test("the transitions happen INSIDE the render body", async () => {
+    const src = await readSrc();
+    // the old shape settled the state in a SEPARATE promise reaction, which
+    // ran a microtask AFTER the rejection had propagated — the window in
+    // which the dead promise was served to the next caller
+    expect(/job\.promise\.catch\(/.test(src)).toBe(false);
+    expect(/\.finally\(.*storeSet/.test(src)).toBe(false);
+    // the failure transition runs BEFORE the rejection is handed to the
+    // caller, in every lane
+    for (const store of ["iconStore", "brandStore", "thumbStore"]) {
+      const failedIdx = src.indexOf(`storeSetFailed(${store}, key)`);
+      expect(failedIdx).toBeGreaterThan(0);
+      const rejectIdx = src.indexOf("job.reject(err)", failedIdx);
+      expect(rejectIdx).toBeGreaterThan(failedIdx);
+    }
+  });
 });
 
 // decoded 8-bit RGBA pixels (handles the truecolor outputs resvg produces:

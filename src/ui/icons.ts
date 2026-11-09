@@ -386,9 +386,6 @@ const rasterizeSvg = async (
   return renderInprocExact(tinted, pxW, pxH, transparent ? undefined : bg);
 };
 
-const iconCache = new Map<string, Uint8Array>();
-const inflightIcons = new Map<string, Promise<Uint8Array>>();
-
 // --- bounded LRU for the in-memory raster tiers (nautilus caps its icon/
 // texture caches at 100/200/1000; without a cap a long session that browsed
 // hundreds of folders/themes keeps every PNG forever). Map iteration order is
@@ -402,21 +399,146 @@ export const lruGet = <V>(m: Map<string, V>, k: string): V | undefined => {
   }
   return v;
 };
-export const lruSet = <V>(m: Map<string, V>, k: string, v: V, cap: number): void => {
+// Returns the key it evicted (undefined when nothing was evicted): the lane's
+// LRU index holds only the ORDER, the record itself lives in the lane's
+// record map, so the caller has to drop the evicted key's record too.
+export const lruSet = <V>(m: Map<string, V>, k: string, v: V, cap: number): string | undefined => {
   m.delete(k); // overwrite = recency refresh too (a no-op delete when new)
   m.set(k, v);
+  let evicted: string | undefined;
   while (m.size > cap) {
     const oldest = m.keys().next().value;
     if (oldest === undefined) break;
     m.delete(oldest);
+    evicted = oldest;
   }
+  return evicted;
 };
 const ICON_CACHE_MAX = 400;
-// ponytail: evicting an entry whose render is still in flight drops the dedupe,
-// so a watcher rebuild can double-spawn it (self-correcting, and bounded by the
-// 8 workers + the drain's slot-liveness skip). Raise past ~1 full folder of
-// thumbs if image-heavy dirs ever show visible re-raster flicker.
+const BRAND_CACHE_MAX = 8; // one logo, a few sizes — never a folder's worth
 const THUMB_CACHE_MAX = 200;
+// The failed sentinels get their own budget: a folder full of broken files
+// must not evict the good rasters, and the good rasters must not evict the
+// sentinels (the old design kept the two in separate containers for exactly
+// that reason).
+const FAILED_THUMBS_MAX = 4096;
+
+// --- The per-key raster lifecycle.
+//
+// ONE record per key per lane: absent → inflight → ready | failed.
+//
+// The old shape kept three containers per cache (six in total): the ready
+// bytes, the in-flight promise and (for thumbs) the failure sentinel. WHICH
+// container held the key encoded the state, and the thumb cache stored
+// PROMISES — so a rejected promise stayed in the cache for one microtask (the
+// .catch that deleted it ran after the rejection had propagated) and was
+// served to the next caller, who saw the raw render error instead of the
+// sentinel.
+//
+// The record makes the lifecycle explicit: every transition happens INSIDE
+// the render body, BEFORE the rejection propagates, so no caller can ever be
+// handed a promise that has already rejected.
+type RasterRecord =
+  | { state: "inflight"; promise: Promise<Uint8Array> }
+  | { state: "ready"; bytes: Uint8Array }
+  | { state: "failed" };
+
+// A cache is ONE record map plus the two eviction indexes. The indexes carry
+// no state (the record does) — they only keep the budgets apart: the READY
+// rasters are LRU-capped (hot pixels) and the FAILED sentinels have their
+// own cap.
+type RasterStore = {
+  records: Map<string, RasterRecord>;
+  readyOrder: Map<string, true>;
+  failedOrder: Set<string>;
+  readyCap: number;
+  failedCap: number;
+};
+
+const makeStore = (readyCap: number, failedCap: number): RasterStore => ({
+  records: new Map(),
+  readyOrder: new Map(),
+  failedOrder: new Set(),
+  readyCap,
+  failedCap,
+});
+
+// A READY hit touches the LRU order (the least-recently-used raster is the
+// first one evicted).
+const storeGet = (store: RasterStore, key: string): RasterRecord | undefined => {
+  const rec = store.records.get(key);
+  if (rec?.state === "ready") lruGet(store.readyOrder, key);
+  return rec;
+};
+
+const storeSetReady = (store: RasterStore, key: string, bytes: Uint8Array): void => {
+  store.records.set(key, { state: "ready", bytes });
+  store.failedOrder.delete(key);
+  const evicted = lruSet(store.readyOrder, key, true, store.readyCap);
+  if (evicted !== undefined) store.records.delete(evicted);
+};
+
+const storeSetInflight = (store: RasterStore, key: string, promise: Promise<Uint8Array>): void => {
+  store.records.set(key, { state: "inflight", promise });
+  store.readyOrder.delete(key);
+  store.failedOrder.delete(key);
+};
+
+// The failure transition runs INSIDE the render body: a caller that arrives
+// in the window between "the render failed" and "the rejection propagated"
+// finds the FAILED record (the sentinel) — never the dead promise.
+//
+// failedCap 0 → the cache keeps no sentinels: the key goes back to absent so
+// the next call retries. The icon caches use that: a failed raster must not
+// stick for the whole session (the drain's reset re-arms the slot, and the
+// cache must not serve the old failure).
+const storeSetFailed = (store: RasterStore, key: string): void => {
+  store.readyOrder.delete(key);
+  if (store.failedCap <= 0) {
+    store.records.delete(key);
+    return;
+  }
+  store.records.set(key, { state: "failed" });
+  store.failedOrder.add(key);
+  if (store.failedOrder.size >= store.failedCap) {
+    // wiped wholesale (the old failedThumbs.clear()): a lost sentinel costs
+    // one wasted spawn, nothing else
+    for (const k of store.failedOrder) store.records.delete(k);
+    store.failedOrder.clear();
+  }
+};
+
+const storeClear = (store: RasterStore): void => {
+  store.records.clear();
+  store.readyOrder.clear();
+  store.failedOrder.clear();
+};
+
+// only the FAILED records (the sentinels): a theme flip retries the broken
+// files without dropping the hot rasters
+const storeClearFailed = (store: RasterStore): void => {
+  for (const k of store.failedOrder) store.records.delete(k);
+  store.failedOrder.clear();
+};
+
+// A deferred promise: the cache's record goes INFLIGHT BEFORE the render
+// starts. The old code created the job first and wrote the inflight entry
+// after — correct only because every body happened to suspend before it
+// settled; a body that settled early would be overwritten by the inflight
+// entry (a dead promise stuck in the cache forever).
+const deferred = <T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } => {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
+const iconStore = makeStore(ICON_CACHE_MAX, 0);
+const brandStore = makeStore(BRAND_CACHE_MAX, 0);
+const thumbStore = makeStore(THUMB_CACHE_MAX, FAILED_THUMBS_MAX);
 
 // Disk cache for rendered rasters: keyed by everything that changes the output
 // (name, tint, bg, pixel size, SVG source version, transparency mode) plus a
@@ -470,37 +592,44 @@ export const iconPng = async (
   const transparent = opts?.transparent ?? false;
   const asset = resolveIconName(name, opts?.style ?? "filled");
   const key = iconCacheKey(asset, fg, bg, pxW, pxH, svgSourceMtime(asset), transparent);
-  const hit = lruGet(iconCache, key);
-  if (hit) return hit;
+  const hit = storeGet(iconStore, key);
+  if (hit?.state === "ready") return hit.bytes;
   // identical requests racing (e.g. 15 folder rows) share one render
-  const running = inflightIcons.get(key);
-  if (running) return running;
+  if (hit?.state === "inflight") return hit.promise;
   try {
     const cached = readFileSync(iconDiskPath(key));
     const bytes = new Uint8Array(cached);
-    lruSet(iconCache, key, bytes, ICON_CACHE_MAX);
+    storeSetReady(iconStore, key, bytes);
     return bytes;
   } catch {}
-  const job = (async () => {
-    await acquireRasterSlot();
+  const job = deferred<Uint8Array>();
+  storeSetInflight(iconStore, key, job.promise);
+  void (async () => {
     try {
-      const bytes = await rasterizeSvg(asset, fg, bg, pxW, pxH, transparent);
-      lruSet(iconCache, key, bytes, ICON_CACHE_MAX);
-      // path captured NOW: the write-behind must not re-read $XDG_CACHE_HOME
-      // after a sandbox re-pointed it — the late read let the previous test's
-      // write land in the NEXT test's fresh sandbox (fire-and-forget race)
-      const diskPath = iconDiskPath(key);
-      void ensureIconDir().then(() =>
-        atomicWriteFile(diskPath, bytes).catch((err) => swallow("icon disk cache write", err)),
-      );
-      return bytes;
-    } finally {
-      releaseRasterSlot();
+      await acquireRasterSlot();
+      try {
+        const bytes = await rasterizeSvg(asset, fg, bg, pxW, pxH, transparent);
+        storeSetReady(iconStore, key, bytes);
+        // path captured NOW: the write-behind must not re-read $XDG_CACHE_HOME
+        // after a sandbox re-pointed it — the late read let the previous test's
+        // write land in the NEXT test's fresh sandbox (fire-and-forget race)
+        const diskPath = iconDiskPath(key);
+        void ensureIconDir().then(() =>
+          atomicWriteFile(diskPath, bytes).catch((err) => swallow("icon disk cache write", err)),
+        );
+        job.resolve(bytes);
+      } finally {
+        releaseRasterSlot();
+      }
+    } catch (err) {
+      // the record leaves the inflight state HERE, inside the body: the
+      // rejection has not propagated yet, so a caller arriving in that
+      // window can never be handed the dead promise
+      storeSetFailed(iconStore, key);
+      job.reject(err);
     }
-  })();
-  inflightIcons.set(key, job);
-  job.finally(() => inflightIcons.delete(key)).catch(() => {});
-  return job;
+  })().catch((err) => job.reject(err));
+  return job.promise;
 };
 
 // --- Faithful brand raster (the About logo): the icon path above replaces
@@ -509,42 +638,42 @@ export const iconPng = async (
 // through the same in-process renderer, with its own `brand:` cache prefix
 // so faithful and tinted rasters never share an entry. `bg === undefined`
 // keeps alpha (transparent modes); otherwise it flattens onto bg like icons.
-const brandCache = new Map<string, Uint8Array>();
-const inflightBrand = new Map<string, Promise<Uint8Array>>();
-const BRAND_CACHE_MAX = 8; // one logo, a few sizes — never a folder's worth
-
 export const brandPng = async (name: string, pxW: number, pxH: number, bg?: string): Promise<Uint8Array> => {
   const key = `brand:${name}:${pxW}x${pxH}|src${svgSourceMtime(name)}${bg === undefined ? "|t" : `|${bg}`}`;
-  const hit = lruGet(brandCache, key);
-  if (hit) return hit;
-  const running = inflightBrand.get(key);
-  if (running) return running;
+  const hit = storeGet(brandStore, key);
+  if (hit?.state === "ready") return hit.bytes;
+  if (hit?.state === "inflight") return hit.promise;
   try {
     const cached = readFileSync(iconDiskPath(key));
     const bytes = new Uint8Array(cached);
-    lruSet(brandCache, key, bytes, BRAND_CACHE_MAX);
+    storeSetReady(brandStore, key, bytes);
     return bytes;
   } catch {}
-  const job = (async () => {
-    await acquireRasterSlot();
+  const job = deferred<Uint8Array>();
+  storeSetInflight(brandStore, key, job.promise);
+  void (async () => {
     try {
-      if (!svgRenderer()) throw new Error("no SVG rasterizer available (bun add @resvg/resvg-js)");
-      const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
-      const bytes = renderInprocExact(svg, pxW, pxH, bg);
-      lruSet(brandCache, key, bytes, BRAND_CACHE_MAX);
-      // path captured NOW (same write-behind race as the icon cache above)
-      const diskPath = iconDiskPath(key);
-      void ensureIconDir().then(() =>
-        atomicWriteFile(diskPath, bytes).catch((err) => swallow("brand disk cache write", err)),
-      );
-      return bytes;
-    } finally {
-      releaseRasterSlot();
+      await acquireRasterSlot();
+      try {
+        if (!svgRenderer()) throw new Error("no SVG rasterizer available (bun add @resvg/resvg-js)");
+        const svg = (await embeddedIconTexts()).get(name) ?? readFileSync(svgAssetPath(name), "utf8");
+        const bytes = renderInprocExact(svg, pxW, pxH, bg);
+        storeSetReady(brandStore, key, bytes);
+        // path captured NOW (same write-behind race as the icon cache above)
+        const diskPath = iconDiskPath(key);
+        void ensureIconDir().then(() =>
+          atomicWriteFile(diskPath, bytes).catch((err) => swallow("brand disk cache write", err)),
+        );
+        job.resolve(bytes);
+      } finally {
+        releaseRasterSlot();
+      }
+    } catch (err) {
+      storeSetFailed(brandStore, key);
+      job.reject(err);
     }
-  })();
-  inflightBrand.set(key, job);
-  job.finally(() => inflightBrand.delete(key)).catch(() => {});
-  return job;
+  })().catch((err) => job.reject(err));
+  return job.promise;
 };
 
 // --- Image thumbnails (vector-crisp via the shared svgRenderer, magick
@@ -570,7 +699,7 @@ export const pngFromProc = (proc: Subprocess, tool: string, timeoutMs = 30_000):
     };
     // a hung renderer must not occupy a RASTER_CONCURRENCY slot forever (12
     // simultaneous hangs = the whole icon/thumbnail pipeline stalls with no
-    // sentinel, since failedThumbs only fires on rejection)
+    // sentinel, since the FAILED record only lands on rejection)
     const timer = setTimeout(() => {
       try {
         proc.kill("SIGKILL");
@@ -763,7 +892,7 @@ const renderTiffPng = async (p: string, pxW: number, pxH: number): Promise<Uint8
 
 // heic-decode loads its libheif wasm on first import (~300ms) — memoized and
 // never retried, same policy as the resvg-js loader above (an import failure
-// is structural, and failedThumbs already sentinels per key).
+// is structural, and the thumb lane's FAILED record already sentinels per key).
 let heicDecodeP: Promise<typeof import("heic-decode")["default"]> | null = null;
 const renderHeicPng = async (p: string, pxW: number, pxH: number): Promise<Uint8Array> => {
   heicDecodeP ??= import("heic-decode").then((m) => m.default);
@@ -872,8 +1001,6 @@ const renderVideoPng = async (p: string, pxW: number, pxH: number): Promise<Uint
   }
 };
 
-const thumbCache = new Map<string, Promise<Uint8Array>>();
-
 // Nautilus refuses to thumbnail files modified <3s ago (THUMBNAIL_CREATION_
 // DELAY_SECS) — a mid-download file would otherwise re-spawn a renderer on
 // every watcher rebuild, always producing pixels for a version that's already
@@ -891,13 +1018,12 @@ export const thumbCooloffMs = (mtimeMs: number, now: number): number => {
   return wait > 0 ? Math.min(wait, THUMB_COOL_MS) : 0;
 };
 
-// Keys whose renderer already failed (corrupt jpg, magick choked). Without
-// this the self-evicting cache re-spawned the doomed renderer on EVERY rebuild
-// for as long as the folder was open. The key carries path+size+mtime, so any
-// real change to the file retries naturally. Wiped wholesale past the cap —
-// memory bound only; a lost sentinel costs one wasted spawn, nothing else.
-const failedThumbs = new Set<string>();
-const FAILED_THUMBS_MAX = 4096;
+// The FAILED state of the thumb lane (corrupt jpg, magick choked). Without
+// it the cache re-spawned the doomed renderer on EVERY rebuild for as long as
+// the folder was open. The key carries path+size+mtime, so any real change to
+// the file retries naturally. The sentinels have their own budget (they are
+// wiped wholesale past the cap — memory bound only; a lost sentinel costs one
+// wasted spawn, nothing else).
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // --- Disk cache keyed by everything that changes the output (path, mtime, size,
@@ -980,14 +1106,24 @@ export const thumbPng = (
         ? `raster:${lane}`
         : "raster";
   const key = thumbCacheKey(path, mtimeMs, size, pxW, pxH, bg, mode);
-  if (failedThumbs.has(key)) return Promise.reject(new Error(`thumb previously failed: ${path}`));
-  let p = lruGet(thumbCache, key);
-  if (!p) {
-    p = (async () => {
-      try {
-        const cached = readFileSync(thumbDiskPath(key));
-        return new Uint8Array(cached);
-      } catch {}
+  const hit = storeGet(thumbStore, key);
+  if (hit?.state === "ready") return Promise.resolve(hit.bytes);
+  if (hit?.state === "inflight") return hit.promise;
+  // a FAILED record → the sentinel: this exact version already failed, so it
+  // is not attempted again (the key carries path+size+mtime, so an edit
+  // retries naturally)
+  if (hit?.state === "failed") return Promise.reject(new Error(`thumb previously failed: ${path}`));
+  // the disk tier is consulted BEFORE the job starts: the render is the only
+  // async part, and a disk hit must not be overwritten by the inflight entry
+  try {
+    const bytes = new Uint8Array(readFileSync(thumbDiskPath(key)));
+    storeSetReady(thumbStore, key, bytes);
+    return Promise.resolve(bytes);
+  } catch {}
+  const job = deferred<Uint8Array>();
+  storeSetInflight(thumbStore, key, job.promise);
+  void (async () => {
+    try {
       // a disk hit means these pixels were already rendered once — never cool
       // off those, only the expensive live render
       const wait = thumbCooloffMs(mtimeMs, Date.now());
@@ -997,36 +1133,36 @@ export const thumbPng = (
         : vector
           ? renderVectorPng(path, pxW, pxH, bg)
           : renderRasterPng(path, pxW, pxH, bg));
+      storeSetReady(thumbStore, key, bytes);
       // write-behind: never block the render on the cache write
       // path captured NOW — same fire-and-forget race as the icon write above
       const diskPath = thumbDiskPath(key);
       void ensureThumbDir().then(() =>
         atomicWriteFile(diskPath, bytes).catch((err) => swallow("thumb disk cache write", err)),
       );
-      return bytes;
-    })();
-    p.catch(() => {
-      thumbCache.delete(key);
-      if (failedThumbs.size >= FAILED_THUMBS_MAX) failedThumbs.clear();
-      failedThumbs.add(key);
-    });
-    lruSet(thumbCache, key, p, THUMB_CACHE_MAX);
-  }
-  return p;
+      job.resolve(bytes);
+    } catch (err) {
+      // the sentinel lands HERE, inside the body: the rejection has not
+      // propagated yet, so a caller arriving in that window gets the
+      // sentinel — never the dead promise
+      storeSetFailed(thumbStore, key);
+      job.reject(err);
+    }
+  })().catch((err) => job.reject(err));
+  return job.promise;
 };
 
 // theme flips re-tint icons (their keys carry fg/bg, so old-theme entries
 // stay valid for cycling back — never wiped here); the disk cache still
 // serves new-theme misses — this only drops the in-memory layers
 export const clearIconCaches = (): void => {
-  iconCache.clear();
-  brandCache.clear();
-  thumbCache.clear();
-  failedThumbs.clear();
+  storeClear(iconStore);
+  storeClear(brandStore);
+  storeClear(thumbStore);
 };
 
 // theme-flip retry: a broken file deserves one fresh attempt per palette
 // without dropping every hot raster (the old full wipe made each flip cold)
 export const clearFailedThumbs = (): void => {
-  failedThumbs.clear();
+  storeClearFailed(thumbStore);
 };
