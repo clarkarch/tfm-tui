@@ -187,7 +187,8 @@ const variants: Variant[] = [
       const phase = (frame % 60) / 60;
       for (let i = 0; i < scene.tiles.length; i++) {
         const t = (i / scene.tiles.length + phase) % 1;
-        scene.tiles[i]!.box.opacity = 0.2 + 0.8 * t;
+        const tile = scene.tiles[i];
+        if (tile) tile.box.opacity = 0.2 + 0.8 * t;
       }
     },
   },
@@ -209,7 +210,8 @@ const variants: Variant[] = [
   },
 ];
 
-const pct = (sorted: number[], p: number): number => sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0;
+const pct = (sorted: number[], p: number): number =>
+  sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0;
 
 const report = (name: string, samples: number[]): void => {
   const sorted = [...samples].sort((a, b) => a - b);

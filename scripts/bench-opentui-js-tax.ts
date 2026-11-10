@@ -65,7 +65,8 @@ type Kind = "unchanged" | "glyph" | "background";
 const mutate = (target: Target, kind: Kind, frame: number): void => {
   const odd = frame % 2 === 1;
   if (kind === "glyph") target.spinner.content = odd ? "/" : "|";
-  if (kind === "background") target.spinner.backgroundColor = odd ? "#640000" : "#c80000";
+  // a TextRenderable has no backgroundColor — its own cell background is `bg`
+  if (kind === "background") target.spinner.bg = odd ? "#640000" : "#c80000";
 };
 
 const pct = (sorted: number[], p: number): number =>
