@@ -7,10 +7,13 @@ import {
   floatSurface,
   iconTransparent,
   islandSurface,
+  isChromeOutline,
+  isFloatingOutline,
   rowSurface,
   sideInnerWidth,
   slotBg,
   tileSurface,
+  type UiStyle,
 } from "./style";
 import type { Theme } from "../config/config";
 import { glyph, ensureGlyphFallbacks, glyphFor } from "./glyphs";
@@ -109,6 +112,33 @@ describe("surface builders", () => {
     expect(rowSurface("outline-partial", theme, "rest")).toEqual(rowSurface("outline", theme, "rest"));
     expect(btnSurface("outline-partial", theme, false)).toEqual(btnSurface("outline", theme, false));
     expect(slotBg("outline-partial", theme, theme.sidebarBg)).toBe(slotBg("outline", theme, theme.sidebarBg));
+  });
+});
+
+describe("style decisions", () => {
+  test("an unknown style degrades to the same decision on every surface role", () => {
+    // A style the app does not know (a future fourth style, a value that
+    // slipped past the parser) must not HALF-style the app: the chrome roles
+    // and the float roles have to agree, or the app paints borderless chrome
+    // under solid float islands (or the reverse) with nobody deciding it.
+    const unknown = "neon" as unknown as UiStyle;
+    const chrome = chromeSurface(unknown, theme, theme.sidebarBg);
+    const float = floatSurface(unknown, theme, theme.sidebarBg);
+    expect(!!chrome.border).toBe(!!float.border);
+    // and the degradation is the parser's own fallback for an unknown enum —
+    // the row default ("solid"): filled panels, filled floats
+    expect(chrome).toEqual(chromeSurface("solid", theme, theme.sidebarBg));
+    expect(float).toEqual(floatSurface("solid", theme, theme.sidebarBg));
+  });
+
+  test("every known style declares both roles explicitly", () => {
+    // the table IS the policy — one line per style, both roles named
+    expect(isChromeOutline("solid")).toBe(false);
+    expect(isFloatingOutline("solid")).toBe(false);
+    expect(isChromeOutline("outline")).toBe(true);
+    expect(isFloatingOutline("outline")).toBe(true);
+    expect(isChromeOutline("outline-partial")).toBe(true);
+    expect(isFloatingOutline("outline-partial")).toBe(false);
   });
 });
 

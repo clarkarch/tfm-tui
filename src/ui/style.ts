@@ -3,6 +3,11 @@
 // not hand-roll bg/border ternaries; add new surface roles HERE so the three
 // styles stay consistent.
 //
+// The styles' MEANING lives in ONE table (STYLE_DECISIONS, below): one line
+// per style, one decision per surface role (chrome / float). Every builder
+// below asks that table — never `=== "outline"` — so a style the app does
+// not know degrades the SAME way on every role.
+//
 // solid: every panel filled.
 // outline: chrome panels get a rounded border ring with NO rest-state fills
 //   (hover/selected/cut keep fills — tiles/rows/buttons are 1..5 rows tall
@@ -28,19 +33,53 @@ export const iconTransparent = (mode: IconMode, floatChild: boolean, transparent
   (mode === "transparent-partial" && !floatChild) ||
   (transparentBg === "force" && !floatChild);
 
-// outline-partial shares every BACKGROUND-chrome decision with outline —
-// only floating layers differ (floatSurface below). Branch background-chrome
-// choices on this, never on === "outline" directly, so a fourth style can't
+// --- the style decisions: ONE table ---
+// What a ui-style means for each surface role:
+//   chrome = the background panels (sidebar / main region / preview)
+//   float  = the floating layers (menus, dialogs, the cursor popup)
+//   solid:           chrome fill, float fill
+//   outline:         chrome border, float border (the frozen outline look)
+//   outline-partial: chrome border, float fill (readable islands)
+// The table is the ONLY place a style's meaning is written down: the two
+// roles used to be encoded separately (`style !== "solid"` for chrome,
+// `style === "outline"` for floats), so a style the app does not know
+// degraded DIFFERENTLY per role — borderless chrome under solid float
+// islands, with nobody deciding it.
+// A style outside the table degrades to the DEFAULT row, and the default row
+// decides the SAME way on every role — the parser's own fallback for an
+// unknown enum is the row default ("solid"), so the app and the parser agree
+// on what an unknown style means.
+type StylePaint = "fill" | "border";
+type StyleDecisions = { chrome: StylePaint; float: StylePaint };
+
+const STYLE_DECISIONS: Record<string, StyleDecisions> = {
+  solid: { chrome: "fill", float: "fill" },
+  outline: { chrome: "border", float: "border" },
+  "outline-partial": { chrome: "border", float: "fill" },
+};
+
+const DEFAULT_DECISIONS: StyleDecisions = { chrome: "fill", float: "fill" };
+
+const decisionsFor = (style: UiStyle): StyleDecisions => STYLE_DECISIONS[style] ?? DEFAULT_DECISIONS;
+
+// chrome roles: the sidebar / main region / preview panels. outline-partial
+// shares every BACKGROUND-chrome decision with outline — only floating layers
+// differ (floatSurface below). Branch background-chrome choices on this,
+// never on === "outline" directly, so a style that is not in the table cannot
 // silently fall through to solid fills.
-const isOutlineVariant = (style: UiStyle): boolean => style !== "solid";
+export const isChromeOutline = (style: UiStyle): boolean => decisionsFor(style).chrome === "border";
+
+// float roles: the floating layers (menus, cursor popup, dialogs). Only pure
+// outline floats are border-only; every other style paints an opaque island.
+export const isFloatingOutline = (style: UiStyle): boolean => decisionsFor(style).float === "border";
 
 // inner width available to children of the sidebar panel: outline variants'
 // border ring reserves one cell per side (yoga setBorder)
-export const sideInnerWidth = (style: UiStyle, sw: number): number => (isOutlineVariant(style) ? sw - 2 : sw);
+export const sideInnerWidth = (style: UiStyle, sw: number): number => (isChromeOutline(style) ? sw - 2 : sw);
 
 // list-row width slack beyond the sizing columns: outline variants dedicate
 // cells to the panel border rings, so they get a wider budget
-export const sidePadDelta = (style: UiStyle): number => (isOutlineVariant(style) ? 6 : 3);
+export const sidePadDelta = (style: UiStyle): number => (isChromeOutline(style) ? 6 : 3);
 
 type SurfaceState = "rest" | "hover" | "selected" | "cut";
 
@@ -58,7 +97,7 @@ type SurfaceOpts = {
 export const chromeSurface = (style: UiStyle, c: Theme, bg: string, transparentBg?: TransparentBgMode): SurfaceOpts =>
   transparentBg === "force"
     ? {}
-    : isOutlineVariant(style)
+    : isChromeOutline(style)
       ? { border: true, borderStyle: "rounded", borderColor: c.border }
       : { backgroundColor: bg };
 
@@ -66,7 +105,7 @@ export const chromeSurface = (style: UiStyle, c: Theme, bg: string, transparentB
 // desktop in every style EXCEPT pure outline, where they stay border-only
 // (frozen outline behavior — see outline-partial for the readable variant)
 export const floatSurface = (style: UiStyle, c: Theme, bg: string): SurfaceOpts =>
-  style === "outline" ? { border: true, borderStyle: "rounded", borderColor: c.border } : { backgroundColor: bg };
+  isFloatingOutline(style) ? { border: true, borderStyle: "rounded", borderColor: c.border } : { backgroundColor: bg };
 
 // dual-pane focus cue: NONE. A tinted inactive pane (sidebarBg) painted over
 // the main bg while that pane's tiles/empty states paint the main bg produced a
@@ -82,7 +121,7 @@ export const tileSurface = (
   transparentBg?: TransparentBgMode,
 ): SurfaceOpts => {
   if (transparentBg === "force" && (state === "rest" || state === "cut")) return {};
-  if (isOutlineVariant(style) && state === "rest") return {};
+  if (isChromeOutline(style) && state === "rest") return {};
   return {
     rest: { backgroundColor: c.bg },
     hover: { backgroundColor: c.hoverBg },
@@ -100,7 +139,7 @@ export const rowSurface = (
   transparentBg?: TransparentBgMode,
 ): SurfaceOpts => {
   if (transparentBg === "force" && (state === "rest" || state === "cut")) return {};
-  if (isOutlineVariant(style) && state === "rest") return {};
+  if (isChromeOutline(style) && state === "rest") return {};
   return {
     rest: { backgroundColor: c.sidebarBg },
     hover: { backgroundColor: c.hoverBg },
@@ -120,7 +159,7 @@ export const btnSurface = (
   restBg?: string,
   transparentBg?: TransparentBgMode,
 ): SurfaceOpts => {
-  if ((isOutlineVariant(style) || transparentBg === "force") && !hovered) return {};
+  if ((isChromeOutline(style) || transparentBg === "force") && !hovered) return {};
   return { backgroundColor: hovered ? c.hoverBg : (restBg ?? c.bg) };
 };
 
@@ -142,7 +181,7 @@ export const btnSurface = (
 // kept in IconState for call-site compat.
 export type SlotFillRole = "chrome" | "float";
 export const slotBg = (style: UiStyle, c: Theme, panelBg: string, role: SlotFillRole = "chrome"): string =>
-  role === "float" || !isOutlineVariant(style) ? panelBg : c.bg;
+  role === "float" || !isChromeOutline(style) ? panelBg : c.bg;
 
 // buttons/hover targets that live INSIDE an always-filled floating island (the
 // toast stack keeps its accentBg fill in EVERY style — there is no border-ring
